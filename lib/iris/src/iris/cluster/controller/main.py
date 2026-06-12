@@ -22,18 +22,18 @@ from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
+from iris.cluster.backends.factory import create_provider_bundle
 from iris.cluster.config import load_config, make_provider
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
-from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.autoscaler_factory import create_autoscaler
+from iris.cluster.controller.autoscaler.factory import create_autoscaler
+from iris.cluster.controller.backend import BackendCapability, TaskBackend
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
-from iris.cluster.providers.factory import create_provider_bundle
-from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.rpc import config_pb2
+from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,91 @@ def _resolve_cluster_endpoints(cluster_config: config_pb2.IrisClusterConfig) -> 
         uri, meta = derive_endpoint_uri(fcfg)
         resolved[LOG_SERVER_ENDPOINT_NAME] = resolve_endpoint_uri(uri, meta)
     return resolved
+
+
+def _build_worker_config(
+    worker_defaults: config_pb2.WorkerConfig,
+    platform: config_pb2.PlatformConfig,
+    *,
+    controller_address: str,
+    storage_prefix: str,
+    auth_token: str,
+) -> config_pb2.WorkerConfig:
+    """Build the worker config once instead of mutating a shared proto across bootstrap.
+
+    ``controller_address`` is pre-resolved by the caller (discovery runs only when the
+    configured default is empty).
+    """
+    worker_config = config_pb2.WorkerConfig()
+    worker_config.CopyFrom(worker_defaults)
+    worker_config.controller_address = controller_address
+    worker_config.platform.CopyFrom(platform)
+    worker_config.storage_prefix = storage_prefix
+    if auth_token:
+        worker_config.auth_token = auth_token
+    return worker_config
+
+
+def make_backend(
+    cluster_config: config_pb2.IrisClusterConfig,
+    *,
+    db: ControllerDB,
+    auth: ControllerAuth,
+    remote_state_dir: str,
+    dry_run: bool,
+) -> TaskBackend:
+    """Create the TaskBackend and, for Iris-provisioned-capacity backends, build,
+    restore, and attach the autoscaler.
+
+    Capacity-managing backends (k8s) provision their own pods, so no autoscaler is
+    attached. In dry-run both the autoscaler and the provider bundle are skipped
+    (bundle creation needs platform credentials unavailable on a dev machine).
+    """
+    provider = make_provider(cluster_config)
+    logger.info("Backend created: %s", type(provider).__name__)
+
+    if dry_run:
+        logger.info("Dry-run mode: skipping autoscaler and provider bundle creation")
+        return provider
+    if BackendCapability.IRIS_AUTOSCALER not in provider.capabilities:
+        return provider
+
+    bundle = create_provider_bundle(
+        platform_config=cluster_config.platform,
+        worker_port=cluster_config.defaults.worker.port,
+        cluster_config=cluster_config,
+        ssh_config=cluster_config.defaults.ssh,
+    )
+    workers = bundle.workers
+    logger.info("Provider bundle created")
+
+    base_worker_config = None
+    if cluster_config.defaults.worker.docker_image:
+        controller_address = cluster_config.defaults.worker.controller_address
+        if not controller_address:
+            controller_address = bundle.controller.discover_controller(cluster_config.controller)
+        base_worker_config = _build_worker_config(
+            cluster_config.defaults.worker,
+            cluster_config.platform,
+            controller_address=controller_address,
+            storage_prefix=remote_state_dir,
+            auth_token=auth.worker_token or "",
+        )
+
+    autoscaler = create_autoscaler(
+        platform=workers,
+        autoscaler_config=cluster_config.defaults.autoscaler,
+        scale_groups=cluster_config.scale_groups,
+        label_prefix=cluster_config.platform.label_prefix or "iris",
+        base_worker_config=base_worker_config,
+    )
+    logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
+
+    autoscaler.restore_from_db(db, workers)
+    logger.info("Autoscaler state restored from DB")
+
+    provider.attach_autoscaler(autoscaler)
+    return provider
 
 
 def run_controller_serve(
@@ -148,54 +233,8 @@ def run_controller_serve(
 
     db = ControllerDB(db_dir=db_dir)
 
-    # --- Create provider ---
-    provider = make_provider(cluster_config)
-    logger.info("Provider created: %s", type(provider).__name__)
-
-    # --- Create autoscaler (only for WorkerProvider; KubernetesProvider manages its own pods) ---
-    # In dry-run mode the autoscaler is fully gated anyway, and creating the
-    # provider bundle requires platform credentials (GCP SSH keys etc.) that
-    # are unavailable on a local dev machine.
-    autoscaler: Autoscaler | None = None
-    base_worker_config = None
-    if dry_run:
-        logger.info("Dry-run mode: skipping autoscaler and provider bundle creation")
-    elif not isinstance(provider, K8sTaskProvider):
-        bundle = create_provider_bundle(
-            platform_config=cluster_config.platform,
-            worker_port=cluster_config.defaults.worker.port,
-            cluster_config=cluster_config,
-            ssh_config=cluster_config.defaults.ssh,
-        )
-        workers = bundle.workers
-        logger.info("Provider bundle created")
-
-        if cluster_config.defaults.worker.docker_image:
-            base_worker_config = config_pb2.WorkerConfig()
-            base_worker_config.CopyFrom(cluster_config.defaults.worker)
-            if not base_worker_config.controller_address:
-                base_worker_config.controller_address = bundle.controller.discover_controller(cluster_config.controller)
-            base_worker_config.platform.CopyFrom(cluster_config.platform)
-
-        autoscaler = create_autoscaler(
-            platform=workers,
-            autoscaler_config=cluster_config.defaults.autoscaler,
-            scale_groups=cluster_config.scale_groups,
-            label_prefix=cluster_config.platform.label_prefix or "iris",
-            base_worker_config=base_worker_config,
-            db=db,
-        )
-        logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
-
-        # Restore autoscaler state (tracked slices/workers/backoff) from the DB
-        # so restarted controllers don't lose cloud resource tracking and
-        # scale up duplicates.
-        autoscaler.restore_from_db(db, workers)
-        logger.info("Autoscaler state restored from DB")
-
-    # Workers need the resolved remote_state_dir to upload task artifacts (profiles).
-    if base_worker_config is not None:
-        base_worker_config.storage_prefix = remote_state_dir
+    auth = create_controller_auth(cluster_config.auth, db=db)
+    provider = make_backend(cluster_config, db=db, auth=auth, remote_state_dir=remote_state_dir, dry_run=dry_run)
 
     if checkpoint_interval is None:
         checkpoint_interval = HOURLY_CHECKPOINT_SECONDS
@@ -203,15 +242,11 @@ def run_controller_serve(
 
     logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
 
-    auth = create_controller_auth(cluster_config.auth, db=db) if cluster_config else ControllerAuth()
-    if auth.worker_token and base_worker_config is not None:
-        base_worker_config.auth_token = auth.worker_token
-
     # Reconcile per-user budget tiers from the cluster config into the DB.
     # Runs after migrations have cleared user_budgets (see migration 0037).
     # Unlisted users are left without a row and fall through to
     # UserBudgetDefaults when the scheduler and launch-job guard look them up.
-    if cluster_config and cluster_config.user_budgets:
+    if cluster_config.user_budgets:
         reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
 
     config = ControllerConfig(
@@ -226,12 +261,12 @@ def run_controller_serve(
         dry_run=dry_run,
         log_service_address=log_service_address,
         endpoints=endpoints,
+        autoscaler_evaluation_interval=duration_from_proto(cluster_config.defaults.autoscaler.evaluation_interval),
     )
 
     controller = Controller(
         config=config,
         provider=provider,
-        autoscaler=autoscaler,
         db=db,
     )
     logger.info("Controller instance created")
@@ -301,7 +336,7 @@ def cli():
     "--checkpoint-interval",
     default=None,
     type=float,
-    help="Periodic checkpoint interval in seconds (default: no periodic checkpointing)",
+    help="Periodic checkpoint interval in seconds (default: 3600s (hourly))",
 )
 @click.option(
     "--dry-run",

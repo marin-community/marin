@@ -4,21 +4,28 @@
 """Tests for Worker class (includes PortAllocator and task management)."""
 
 import hashlib
+import json
 import socket
+import subprocess as sp
+import threading
 import time
 import zipfile
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from connectrpc.request import RequestContext
+from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import (
+    ContainerConfig,
     ContainerErrorKind,
     ContainerInfraError,
     ContainerPhase,
     ContainerStatus,
     DiscoveredContainer,
     ExecutionStage,
+    MountKind,
+    MountSpec,
 )
 from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.port_allocator import PortAllocator
@@ -27,9 +34,10 @@ from iris.cluster.worker.stats import IrisTaskStat, IrisWorkerStat
 from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
+from iris.managed_thread import ThreadContainer
 from iris.rpc import job_pb2, worker_pb2
 from iris.test_util import wait_for_condition
-from rigging.timing import Duration
+from rigging.timing import Deadline, Duration
 
 from tests.cluster.worker.conftest import (
     FakeContainerHandle,
@@ -66,8 +74,6 @@ def test_no_port_reuse_before_release(allocator):
 
 
 def test_concurrent_allocations(allocator):
-    import threading
-
     results = []
 
     def allocate_ports():
@@ -518,9 +524,9 @@ def test_stop_intent_by_uid_kills_live_twin(mock_worker, mock_runtime):
     live attempt by UID, then re-resolved by composite when killing — landing
     on the terminal twin, so the live attempt kept running.
     """
-    task_id, terminal, live = _terminal_and_live_twins(mock_worker, mock_runtime)
+    _task_id, terminal, live = _terminal_and_live_twins(mock_worker, mock_runtime)
 
-    mock_worker._process_stop_intent(task_id, 0, "uid-live")
+    mock_worker._process_stop_intent("uid-live")
 
     wait_for_condition(lambda: live.status == job_pb2.TASK_STATE_KILLED)
     live.thread.join(timeout=15.0)
@@ -766,8 +772,6 @@ def _worker_with_mock_client(config, mock_bundle_store, mock_runtime):
 def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_store, mock_runtime, tmp_path):
     """Worker known locally (e.g. via slice_id) attaches under worker_log_key
     *before* register so pre-register failures ship remote logs."""
-    from iris.cluster.log_keys import worker_log_key
-
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
@@ -801,8 +805,6 @@ def test_attach_log_handler_noop_without_worker_id(mock_bundle_store, mock_runti
 
 def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runtime, tmp_path):
     """Re-attach under a new worker_id renames the handler's key in place."""
-    from iris.cluster.log_keys import worker_log_key
-
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
@@ -829,7 +831,7 @@ def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runti
 
 
 # ============================================================================
-# Stats emission tests (iris.worker via handle_ping)
+# Stats emission tests (iris.worker via handle_reconcile)
 # ============================================================================
 
 
@@ -847,17 +849,13 @@ class _FakeStatsTable:
             raise self._raise_on_write
 
 
-def _ping_request() -> worker_pb2.Worker.PingRequest:
-    return worker_pb2.Worker.PingRequest()
-
-
-def test_handle_ping_emits_worker_stat(mock_worker):
-    """One handle_ping call produces one row on the iris.worker table."""
+def test_handle_reconcile_emits_worker_stat(mock_worker):
+    """One handle_reconcile call produces one row on the iris.worker table."""
     table = _FakeStatsTable()
     mock_worker._worker_stats_table = table
     mock_worker._worker_id = "w-test"
 
-    mock_worker.handle_ping(_ping_request())
+    mock_worker.handle_reconcile(worker_pb2.Worker.ReconcileRequest())
 
     assert len(table.writes) == 1
     rows = table.writes[0]
@@ -870,21 +868,33 @@ def test_handle_ping_emits_worker_stat(mock_worker):
     assert stat.cpu_pct >= 0.0
 
 
-def test_handle_ping_propagates_schema_error(mock_worker):
+def test_handle_reconcile_propagates_schema_error(mock_worker):
     """TypeError from schema validation must propagate (fail fast in tests)."""
     table = _FakeStatsTable(raise_on_write=TypeError("schema mismatch"))
     mock_worker._worker_stats_table = table
     mock_worker._worker_id = "w-test"
 
     with pytest.raises(TypeError, match="schema mismatch"):
-        mock_worker.handle_ping(_ping_request())
+        mock_worker.handle_reconcile(worker_pb2.Worker.ReconcileRequest())
 
 
-def test_handle_ping_no_table_is_noop(mock_worker):
-    """Worker with no stats table (no controller) must still answer pings."""
+def test_handle_reconcile_no_table_is_noop(mock_worker):
+    """Worker with no stats table (no controller) must still answer reconciles."""
     assert mock_worker._worker_stats_table is None
-    response = mock_worker.handle_ping(_ping_request())
+    response = mock_worker.handle_reconcile(worker_pb2.Worker.ReconcileRequest())
     assert response is not None
+
+
+def test_handle_reconcile_resets_heartbeat_deadline(mock_worker):
+    """Reconcile is the sole keep-alive: a worker receiving only Reconcile
+    traffic does not self-reset. An already-expired heartbeat deadline is pushed
+    out by ``heartbeat_timeout`` on every reconcile."""
+    mock_worker._heartbeat_deadline = Deadline.from_seconds(0.0)
+    assert mock_worker._heartbeat_deadline.expired()
+
+    mock_worker.handle_reconcile(worker_pb2.Worker.ReconcileRequest())
+
+    assert not mock_worker._heartbeat_deadline.expired()
 
 
 # ============================================================================
@@ -1244,8 +1254,6 @@ def test_preserve_containers_then_new_worker_adopts_with_live_log_client(mock_bu
     restart must end with adopted attempts pointed at the *new* worker's live
     client and tables.
     """
-    from iris.managed_thread import ThreadContainer
-
     container = _make_discovered_container(worker_id="worker-rt", attempt_uid="uid-roundtrip")
     # Same container survives across the stop/start; mock_runtime keeps reporting
     # it from discover_containers because preserve_containers=True leaves it
@@ -1411,10 +1419,6 @@ def test_task_attempt_adopt_factory():
 @pytest.mark.docker
 def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
     """Containers created by DockerRuntime should have adoption labels."""
-    import subprocess as sp
-
-    from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
-
     workdir = tmp_path / "workdir"
     workdir.mkdir()
 
@@ -1446,8 +1450,6 @@ def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
             check=True,
         )
 
-        import json
-
         labels = json.loads(result.stdout)
         assert labels["iris.managed"] == "true"
         assert labels["iris.task_id"] == "/test-user/test-job/0"
@@ -1463,8 +1465,6 @@ def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
 @pytest.mark.docker
 def test_docker_discover_containers(docker_runtime, tmp_path):
     """discover_containers() should find iris-managed containers."""
-    from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
-
     workdir = tmp_path / "workdir"
     workdir.mkdir()
 
@@ -1505,8 +1505,6 @@ def test_docker_discover_containers(docker_runtime, tmp_path):
 @pytest.mark.docker
 def test_docker_adopt_container(docker_runtime, tmp_path):
     """adopt_container() should wrap an existing container."""
-    from iris.cluster.runtime.types import ContainerConfig, ContainerPhase, MountKind, MountSpec
-
     workdir = tmp_path / "workdir"
     workdir.mkdir()
 
@@ -1547,9 +1545,6 @@ def test_docker_worker_restart_round_trip_adopts_surviving_container(docker_runt
     identity. This exercises the real discover_containers / adopt_container
     path through Worker.start(), which the mock-runtime test cannot.
     """
-    from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
-    from iris.managed_thread import ThreadContainer
-
     workdir = tmp_path / "workdir"
     workdir.mkdir()
 

@@ -28,7 +28,7 @@ from levanter.data._preprocessor import BatchProcessor
 from levanter.data.text import LmDatasetFormatBase, preprocessor_for_format
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from rigging.filesystem import url_to_fs
-from zephyr import Dataset, zephyr_worker_ctx
+from zephyr import Dataset, counters, zephyr_worker_ctx
 from zephyr.dataset import FileEntry
 from zephyr.readers import InputFileSpec
 
@@ -216,8 +216,11 @@ def tokenize_batches_with_id(
     for batch in batches:
         batch_count += 1
         for record in processor(batch):
+            n_tokens = len(record.get("input_ids", []))
+            counters.increment("tokenize/docs_out", 1)
+            counters.increment("tokenize/tokens_out", n_tokens)
             record_count += 1
-            token_count += len(record.get("input_ids", []))
+            token_count += n_tokens
             yield record
         if batch_count % 10 == 0:
             elapsed = time.monotonic() - start_time

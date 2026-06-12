@@ -11,7 +11,6 @@ observability, not state, so they do not flow through ``ControllerEffects``.
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
 
 from rigging.timing import Timestamp
 
@@ -23,6 +22,7 @@ from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
     ActiveTaskRow,
+    TaskDetailRow,
     task_is_finished,
 )
 from iris.cluster.types import (
@@ -43,14 +43,11 @@ logger = logging.getLogger(__name__)
 
 
 class TerminalKind(StrEnum):
-    """Variant tag for :class:`TerminalDecision`.
+    """Which terminal transition a :class:`TerminalDecision` requests.
 
-    Each kind drives a different per-task terminal transition inside
-    :meth:`ReconcileState.finalize_tasks`:
-
-    - ``PREEMPT``: mark the task PREEMPTED (or retry to PENDING if budget remains).
-    - ``TIMEOUT``: mark the task FAILED with no retry; cascade siblings.
-    - ``UNSCHEDULABLE``: mark the task UNSCHEDULABLE and recompute job state.
+    - ``PREEMPT``: the task should be preempted (retried if budget remains).
+    - ``TIMEOUT``: the task should fail without retry.
+    - ``UNSCHEDULABLE``: the task can never be placed.
     """
 
     PREEMPT = "preempt"
@@ -62,7 +59,7 @@ class TransitionSource(StrEnum):
     """Caller policy for side effects attached to task-state updates."""
 
     WORKER_RECONCILE = "worker_reconcile"
-    DIRECT_PROVIDER = "direct_provider"
+    DISPATCH = "dispatch"
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +92,7 @@ class TransitionOutcome:
 # ─── Snapshot lookups ───
 
 
-def task_is_finished_row(task: Any) -> bool:
+def task_is_finished_row(task: TaskDetailRow) -> bool:
     return task_is_finished(
         task.state,
         task.failure_count,
@@ -120,7 +117,26 @@ def active_row_from_snapshot(snapshot: TransitionSnapshot, task_id: JobName) -> 
 # ─── Per-attempt transitions ───
 
 
-def _merge_task_termination(
+def _backfill_attempt_finished_at(state: Overlay, task_id: JobName, attempt_id: int, now_ms: int) -> None:
+    """Stamp ``finished_at_ms`` on an attempt whose overlay value is still NULL.
+
+    Producer-style terminations leave the attempt's ``finished_at_ms`` NULL,
+    expecting the worker's next terminal status push to land the timestamp. When
+    that push is dropped we backfill it here so the scheduler releases capacity.
+    No-op if the overlay already has a ``finished_at`` for the attempt.
+    """
+    if state.attempt_finished_at(task_id, attempt_id) is not None:
+        return
+    state.merge_attempt(
+        AttemptRowDelta(
+            task_id=task_id,
+            attempt_id=attempt_id,
+            finished_at=Timestamp.from_ms(now_ms),
+        )
+    )
+
+
+def merge_task_termination(
     state: Overlay,
     task_id: str,
     attempt_id: int | None,
@@ -136,9 +152,9 @@ def _merge_task_termination(
     """Move a task to ``task_state`` and record its attempt + endpoint deletion.
 
     ``stamp_attempt_finished`` controls whether the attempt's ``finished_at_ms``
-    is stamped: finalizers stamp it (the attempt is truly done); producer-style
-    terminations leave it NULL so the worker's next terminal status update lands
-    the timestamp.
+    is stamped: finalizing callers stamp it (the attempt is truly done);
+    producer-style terminations leave it NULL so the worker's next terminal
+    status update lands the timestamp.
     """
     now = Timestamp.from_ms(now_ms)
     task_finished_at = None if task_state in ACTIVE_TASK_STATES or task_state == job_pb2.TASK_STATE_PENDING else now
@@ -167,60 +183,6 @@ def _merge_task_termination(
         )
     )
     state.emit_endpoint_deletion(task_name)
-
-
-def finalize_attempt(
-    state: Overlay,
-    task_id: str,
-    attempt_id: int | None,
-    task_state: int,
-    error: str | None,
-    now_ms: int,
-    *,
-    attempt_state: int | None = None,
-    failure_count: int | None = None,
-    preemption_count: int | None = None,
-) -> None:
-    """Move the task to ``task_state`` and stamp the attempt's ``finished_at_ms``."""
-    _merge_task_termination(
-        state,
-        task_id,
-        attempt_id,
-        task_state,
-        error,
-        now_ms,
-        stamp_attempt_finished=True,
-        attempt_state=attempt_state,
-        failure_count=failure_count,
-        preemption_count=preemption_count,
-    )
-
-
-def mark_task_terminating(
-    state: Overlay,
-    task_id: str,
-    attempt_id: int | None,
-    task_state: int,
-    error: str | None,
-    now_ms: int,
-    *,
-    attempt_state: int | None = None,
-    failure_count: int | None = None,
-    preemption_count: int | None = None,
-) -> None:
-    """Move the task to ``task_state`` without stamping the attempt's ``finished_at_ms``."""
-    _merge_task_termination(
-        state,
-        task_id,
-        attempt_id,
-        task_state,
-        error,
-        now_ms,
-        stamp_attempt_finished=False,
-        attempt_state=attempt_state,
-        failure_count=failure_count,
-        preemption_count=preemption_count,
-    )
 
 
 # ─── Per-task decision helpers ───
@@ -265,13 +227,14 @@ def unschedulable_one(
     if task is None:
         return None
     now_ms = snapshot.now.epoch_ms()
-    finalize_attempt(
+    merge_task_termination(
         state,
         task_id.to_wire(),
         None,
         job_pb2.TASK_STATE_UNSCHEDULABLE,
         reason,
         now_ms,
+        stamp_attempt_finished=True,
     )
     return task.job_id
 
@@ -298,13 +261,14 @@ def preempt_one(
         row.max_retries_preemption,
         job_pb2.TASK_STATE_PREEMPTED,
     )
-    mark_task_terminating(
+    merge_task_termination(
         state,
         task_id.to_wire(),
         row.current_attempt_id,
         new_state,
         reason,
         now_ms,
+        stamp_attempt_finished=False,
         attempt_state=job_pb2.TASK_STATE_PREEMPTED,
         preemption_count=preemption_count,
     )
@@ -376,15 +340,8 @@ def apply_one_transition(
             and update.attempt_id == task.current_attempt_id
         ):
             attempt = attempt_map.get((update.task_id, update.attempt_id))
-            overlay_finished_at = state.attempt_finished_at(update.task_id, update.attempt_id)
-            if attempt is not None and attempt.worker_id is not None and overlay_finished_at is None:
-                state.merge_attempt(
-                    AttemptRowDelta(
-                        task_id=update.task_id,
-                        attempt_id=update.attempt_id,
-                        finished_at=Timestamp.from_ms(now_ms),
-                    )
-                )
+            if attempt is not None and attempt.worker_id is not None:
+                _backfill_attempt_finished_at(state, update.task_id, update.attempt_id, now_ms)
         return None
 
     if update.attempt_id != task.current_attempt_id:
@@ -421,21 +378,14 @@ def apply_one_transition(
     # points at the dead attempt. Reviving it would produce an inconsistent
     # row where state contradicts finished_at_ms/error.
     if overlay_attempt_state is not None and overlay_attempt_state in TERMINAL_TASK_STATES:
-        overlay_finished_at = state.attempt_finished_at(update.task_id, update.attempt_id)
-        if overlay_finished_at is None and int(update.new_state) in TERMINAL_TASK_STATES:
-            state.merge_attempt(
-                AttemptRowDelta(
-                    task_id=update.task_id,
-                    attempt_id=update.attempt_id,
-                    finished_at=Timestamp.from_ms(now_ms),
-                )
-            )
+        if update.new_state in TERMINAL_TASK_STATES:
+            _backfill_attempt_finished_at(state, update.task_id, update.attempt_id, now_ms)
         logger.warning(
             "Dropping late update for terminal attempt: task=%s attempt=%d attempt_state=%d reported=%d",
             update.task_id,
             update.attempt_id,
             overlay_attempt_state,
-            int(update.new_state),
+            update.new_state,
         )
         return None
     attempt_worker_id = attempt.worker_id
@@ -456,6 +406,10 @@ def apply_one_transition(
         started_ms = now_ms
         task_state = job_pb2.TASK_STATE_RUNNING
     elif update.new_state == job_pb2.TASK_STATE_BUILDING:
+        # Stamp started_at_ms on BUILDING so the execution-timeout scan
+        # (gated on started_at_ms IS NOT NULL) can finalize wedged builds.
+        # COALESCE on the RUNNING write preserves this stamp. Issue #6077.
+        started_ms = now_ms
         task_state = job_pb2.TASK_STATE_BUILDING
     elif update.new_state in (
         job_pb2.TASK_STATE_FAILED,
@@ -465,7 +419,7 @@ def apply_one_transition(
         job_pb2.TASK_STATE_SUCCEEDED,
     ):
         terminal_ms = now_ms
-        task_state = int(update.new_state)
+        task_state = update.new_state
         if update.new_state == job_pb2.TASK_STATE_SUCCEEDED and task_exit is None:
             task_exit = 0
         if update.new_state == job_pb2.TASK_STATE_UNSCHEDULABLE and task_error is None:
@@ -510,7 +464,7 @@ def apply_one_transition(
     # An attempt is terminal whenever the update itself is terminal, even
     # if the TASK rolls back to PENDING for a retry. terminal_ms above
     # tracks the task's finished_at_ms; the attempt needs its own stamp.
-    attempt_finished_at = Timestamp.from_ms(now_ms) if int(update.new_state) in TERMINAL_TASK_STATES else None
+    attempt_finished_at = Timestamp.from_ms(now_ms) if update.new_state in TERMINAL_TASK_STATES else None
     started_at = Timestamp.from_ms(started_ms) if started_ms is not None else None
     task_finished_at = Timestamp.from_ms(terminal_ms) if terminal_ms is not None else None
 
@@ -518,7 +472,7 @@ def apply_one_transition(
         AttemptRowDelta(
             task_id=update.task_id,
             attempt_id=update.attempt_id,
-            state=int(update.new_state),
+            state=update.new_state,
             started_at=started_at,
             finished_at=attempt_finished_at,
             exit_code=task_exit,
@@ -543,7 +497,7 @@ def apply_one_transition(
         state.emit_endpoint_deletion(update.task_id)
 
     jc = state.job_config(task.job_id)
-    has_cosched = bool(jc is not None and jc.has_coscheduling and int(update.new_state) in FAILURE_TASK_STATES)
+    has_cosched = bool(jc is not None and jc.has_coscheduling and update.new_state in FAILURE_TASK_STATES)
 
     return TransitionOutcome(
         task_id=update.task_id,
@@ -564,12 +518,13 @@ def timeout_one(
     now_ms: int,
 ) -> None:
     """Mark one task FAILED via timeout. Per-task mutation only."""
-    mark_task_terminating(
+    merge_task_termination(
         state,
         row.task_id.to_wire(),
         row.current_attempt_id,
         job_pb2.TASK_STATE_FAILED,
         reason,
         now_ms,
+        stamp_attempt_finished=False,
         failure_count=row.failure_count + 1,
     )

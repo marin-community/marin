@@ -58,6 +58,7 @@ from levanter.utils.logging import silence_transformer_nag
 silence_transformer_nag()  # noqa
 
 T_co = TypeVar("T_co", covariant=True)
+T = TypeVar("T")
 
 logger = logging.getLogger("levanter.data.text")
 
@@ -208,6 +209,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
                 return example
 
             def _map(example: dict) -> GrugLmExample:
+                # pyrefly: ignore[bad-return]  # eqx.filter_jit wrapper types the call as returning Unknown
                 return _create_lm_example(example[input_ids_key])
 
         else:
@@ -226,6 +228,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
             def _map(example: dict) -> GrugLmExample:
                 loss_weight = example[loss_weights_key]
                 loss_weight = self.loss_weight_transform(loss_weight)
+                # pyrefly: ignore[bad-return, bad-argument-count]  # eqx.filter_jit wrapper hides the real signature
                 return _create_lm_example(example[input_ids_key], loss_weight)
 
         super().__init__(self.dataset, _map)
@@ -415,6 +418,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     tokens=tokens,
                     loss_weight=loss_weight,
                     segment_ids=seg_ids_raw,
+                    max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
@@ -432,6 +436,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     tokens=tokens,
                     loss_weight=loss_weight,
                     segment_ids=seg_ids_raw,
+                    max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
@@ -484,6 +489,7 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
                 tokens=tokens,
                 loss_weight=loss_weight,
                 segment_ids=seg_ids_raw,
+                max_segments=max_segments_per_example + 1,
                 block_cross_document_attention=block_cross_document_attention,
             )
             out = jax.lax.with_sharding_constraint(out, sharding)
@@ -581,8 +587,8 @@ def _component_cache_dir(name: str, component: DatasetComponent, default_root: s
 
 
 def _split_into_trainval_sets(
-    dataset: "AsyncDataset[LmExample]", num_validation_sequences: int, *, shuffle: bool = True
-) -> tuple["AsyncDataset[LmExample]", "AsyncDataset[LmExample]"]:
+    dataset: "AsyncDataset[T]", num_validation_sequences: int, *, shuffle: bool = True
+) -> tuple["AsyncDataset[T]", "AsyncDataset[T]"]:
     """Split a dataset into train/val portions, optionally shuffling first.
 
     When shuffle is True, a deterministic shuffle is applied before
@@ -938,8 +944,15 @@ class LmDataConfig:
                 return name, cache, None
 
             if cache_exists:
-                cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
-                return name, cache, None
+                try:
+                    cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
+                    return name, cache, None
+                except FileNotFoundError:
+                    logger.warning(
+                        f"Cache dir at {cache_path} exists but is unloadable (likely a "
+                        "partial build from a killed prior cache-build job); auto_build_caches "
+                        "is on, so falling through to rebuild."
+                    )
             return name, None, (cache_path, shard_source, component.format)
 
         caches: dict[str, TreeCache[dict]] = {}
@@ -1083,4 +1096,4 @@ if __name__ == "__main__":
                 metric = key.split("/")[4]
                 print(f"{name} {metric}: {value}")
 
-    main()
+    main()  # pyrefly: ignore[missing-argument]

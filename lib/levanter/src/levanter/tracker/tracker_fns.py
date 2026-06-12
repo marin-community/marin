@@ -15,12 +15,11 @@ import draccus
 import jax
 from jaxtyping import Scalar
 
-from levanter.tracker import CompositeTracker, Tracker
 from levanter.tracker.helpers import hparams_to_dict
 from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tensorboard import TensorboardTracker
 from levanter.tracker.trackio import TrackioTracker
-from levanter.tracker.tracker import DictTracker
+from levanter.tracker.tracker import CompositeTracker, DictTracker, Tracker
 from levanter.tracker.wandb import WandbTracker
 from levanter.utils.jax_utils import is_inside_jit
 

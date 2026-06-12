@@ -22,11 +22,11 @@ from marin.scaling_laws.eval_metrics_reader import read_eval_records
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 from experiments.common_pile.tokenize_common_pile import comma_main_mixture
-from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets.simple import downloads
 from experiments.scaling_law_sweeps import c_adamc as c_adamc_heuristic
 from experiments.scaling_law_sweeps import completed_adamh as completed_adamh_heuristic
+from experiments.tokenization import default_tokenize
 from experiments.tootsie.exp1295_32b import nemotron_mix
 
 logger = logging.getLogger(__name__)

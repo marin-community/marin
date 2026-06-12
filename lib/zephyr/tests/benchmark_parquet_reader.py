@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,6 +31,8 @@ from typing import Any
 import click
 import psutil
 import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.dataset as pads
 import pyarrow.parquet as pq
 from zephyr.readers import iter_parquet_row_groups
 
@@ -174,7 +177,6 @@ def _mem() -> dict[str, float]:
 
 def read_dataset_full(path: str, limit: int | None = None) -> dict[str, Any]:
     """Full scan via pyarrow.dataset.to_batches."""
-    import pyarrow.dataset as pads
 
     def run():
         ds = pads.dataset(path, format="parquet")
@@ -204,9 +206,6 @@ def read_rowgroups_full(path: str, limit: int | None = None) -> dict[str, Any]:
 
 def read_dataset_scatter(path: str, limit: int | None = None) -> dict[str, Any]:
     """Read one (shard, chunk) via dataset Scanner — the old scatter reader."""
-    import pyarrow.compute as pc
-    import pyarrow.dataset as pads
-
     target_shard = _NUM_SHARDS // 2
     target_chunk = _CHUNKS_PER_SHARD // 2
 
@@ -296,8 +295,6 @@ def main(
 
     if json_output:
         assert file_path and len(selected) == 1
-        import json
-
         result = READERS[selected[0]](file_path)
         print(json.dumps(result))
         return
@@ -330,8 +327,6 @@ def main(
         print_results(results)
     finally:
         if tmpdir and not keep_file:
-            import shutil
-
             shutil.rmtree(tmpdir)
             logger.info("Cleaned up %s", tmpdir)
         elif tmpdir:

@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _ASSIGNED_STATES: frozenset[int] = ACTIVE_TASK_STATES - EXECUTING_TASK_STATES
+# Terminal states that require a worker-directed stop (timeout, cosched
+# failure, unschedulable, failed). KILLED and PREEMPTED are excluded: each is
+# handled by its own explicit branch above.
 _TERMINAL_EXPECTED_STATES: frozenset[int] = TERMINAL_TASK_STATES - {
     job_pb2.TASK_STATE_KILLED,
     job_pb2.TASK_STATE_PREEMPTED,
@@ -73,17 +76,22 @@ class WorkerReconcilePlan:
 
 
 @dataclass(frozen=True)
-class ReconcileResult:
+class WorkerReconcileResult:
     """Unified per-worker reconcile outcome.
 
     ``observations`` is the (possibly empty) list of proto observations the
     apply layer should consume. ``error`` is set when the reconcile RPC
-    outright failed; ``observations`` is then empty.
+    outright failed; ``observations`` is then empty. ``self_healthy`` is the
+    worker's own health verdict from the Reconcile response (always ``True`` on
+    an RPC error, where it is meaningless): a worker that responds but reports
+    unhealthy — e.g. a failed disk — is still counted as a liveness failure so
+    it is eventually reaped.
     """
 
     worker_id: WorkerId
     observations: list[worker_pb2.Worker.AttemptObservation]
     error: str | None = None
+    self_healthy: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -119,8 +127,6 @@ def _reconcile_worker(
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
                     run=worker_pb2.Worker.AttemptSpec(request=req),
                 )
             )
@@ -128,8 +134,6 @@ def _reconcile_worker(
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
                     run=worker_pb2.Worker.AttemptSpec(),
                 )
             )
@@ -137,8 +141,6 @@ def _reconcile_worker(
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
                     stop=worker_pb2.Worker.STOP_REASON_CANCELLED,
                 )
             )
@@ -146,8 +148,6 @@ def _reconcile_worker(
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
                     stop=worker_pb2.Worker.STOP_REASON_PREEMPTED,
                 )
             )
@@ -170,8 +170,6 @@ def _reconcile_worker(
                 desired.append(
                     worker_pb2.Worker.DesiredAttempt(
                         attempt_uid=row.attempt_uid,
-                        task_id=wire_task_id,
-                        attempt_id=row.attempt_id,
                         stop=stop_reason,
                     )
                 )
@@ -184,8 +182,6 @@ def _reconcile_worker(
                 desired.append(
                     worker_pb2.Worker.DesiredAttempt(
                         attempt_uid=row.attempt_uid,
-                        task_id=wire_task_id,
-                        attempt_id=row.attempt_id,
                         run=worker_pb2.Worker.AttemptSpec(),
                     )
                 )
@@ -205,8 +201,6 @@ def _reconcile_worker(
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
                     stop=worker_pb2.Worker.STOP_REASON_PREEMPTED,
                 )
             )
@@ -261,6 +255,10 @@ def observations_to_updates(
             logger.warning("AttemptObservation uid=%s did not resolve to an attempt row; skipping", obs.attempt_uid)
             continue
         task_id, attempt_id = resolved
+        # proto3 has no presence for scalar ``exit_code``: an unset field and a
+        # genuine 0 both arrive as 0. Treat 0 as "no exit code reported" so a
+        # default-valued observation doesn't overwrite a previously recorded
+        # exit code; a real exit 0 is conveyed by the SUCCEEDED terminal state.
         exit_code: int | None = obs.exit_code if obs.exit_code != 0 else None
         error: str | None = obs.error or None
         container_id: str | None = obs.container_id or None

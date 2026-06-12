@@ -4,6 +4,7 @@
 """Shared fixtures for download tests."""
 
 import gzip
+import io
 import json
 import zipfile
 from pathlib import Path
@@ -155,8 +156,6 @@ def mock_hf_filesystem():
 
         def mock_open(path, mode="rb"):
             if path in files:
-                import io
-
                 return io.BytesIO(files[path])
             raise FileNotFoundError(f"File not found: {path}")
 

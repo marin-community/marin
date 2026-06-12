@@ -34,7 +34,7 @@ import tarfile
 import zipfile
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import zstandard
 from rigging.filesystem import atomic_rename, open_url
@@ -182,7 +182,7 @@ def _required_metadata_str_tuple(manifest: IngestionSourceManifest, key: str) ->
         raise ValueError(f"staging.metadata[{key!r}] must be a non-empty string list")
     if not all(isinstance(item, str) and item for item in value):
         raise ValueError(f"staging.metadata[{key!r}] must contain only non-empty strings")
-    return tuple(value)
+    return cast(tuple[str, ...], tuple(value))
 
 
 def _optional_metadata_str_tuple(manifest: IngestionSourceManifest, key: str) -> tuple[str, ...]:
@@ -191,7 +191,7 @@ def _optional_metadata_str_tuple(manifest: IngestionSourceManifest, key: str) ->
         raise ValueError(f"staging.metadata[{key!r}] must be a string list")
     if not all(isinstance(item, str) and item for item in value):
         raise ValueError(f"staging.metadata[{key!r}] must contain only non-empty strings")
-    return tuple(value)
+    return cast(tuple[str, ...], tuple(value))
 
 
 def _optional_metadata_str(manifest: IngestionSourceManifest, key: str, *, default: str | None = None) -> str | None:

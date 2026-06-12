@@ -7,7 +7,6 @@ from typing import Any, Callable, Dict, Generic, Iterable, Mapping, Sequence, Ty
 import numpy as np
 import pyarrow as pa
 
-
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
 T_contra = TypeVar("T_contra", contravariant=True)
@@ -96,122 +95,14 @@ class _BatchMapTransform(_DatasetTransform):
         self.output_exemplar = output_exemplar
 
 
-def as_record_batch(doc: BatchResult) -> pa.RecordBatch:
-    """Converts a document to an arrow-compatible record batch."""
+class _TransformedDataset:
+    """Marker mixin for datasets carrying a lazy ``_DatasetTransform``.
 
-    if isinstance(doc, pa.RecordBatch):
-        return doc
-
-    if isinstance(doc, Mapping):
-        # structure of arrays
-        def _as_array(x):
-            # for dumb reasons, pa.array doesn't support ndarrays with ndim > 1
-            if isinstance(x, np.ndarray) and x.ndim > 1:
-                return [_as_array(y) for y in x]
-            elif isinstance(x, np.ndarray):
-                return list(x)
-            else:
-                return pa.array(x)
-
-        names, columns = zip(*[(k, _as_array(v)) for k, v in doc.items()])
-
-        return pa.RecordBatch.from_arrays(list(columns), names)
-    elif isinstance(doc, Sequence):
-        return pa.RecordBatch.from_pylist(doc)
-    else:
-        raise ValueError(f"Cannot convert {type(doc)} to record batch")
-
-
-def _construct_composite_batch_processor(dataset):
-    """
-    Construct a batch processor from a dataset which has some chain of transforms applied to it. Also returns
-    the source dataset and the batch size.
+    ``source`` is a ``ShardedDataSource`` at runtime but left untyped here.
     """
 
-    def rec(dataset):
-        from levanter.data.sharded_datasource import _TransformedDataset  # circular import
-
-        if isinstance(dataset, _TransformedDataset):
-            source, transforms, batch_transform = rec(dataset.source)
-            match dataset._transform:
-                case _MapTransform():
-                    transforms = transforms + [dataset._transform]
-                case _BatchMapTransform():
-                    if batch_transform is not None:
-                        raise ValueError("Only one batch transform is allowed right now. sorry!")
-                    batch_transform = dataset._transform
-                    transforms = transforms + [dataset._transform]
-                case _DatasetTransform():
-                    raise ValueError(f"Unknown transform {dataset._transform}")
-            return source, transforms, batch_transform
-        else:
-            return dataset, [], None
-
-    source, transforms, batch_transform = rec(dataset)
-
-    cpus = batch_transform.num_cpus if batch_transform is not None else 1
-    gpus = batch_transform.num_gpus if batch_transform is not None else 0
-    resources = batch_transform.resources if batch_transform is not None else {}
-
-    return source, _CompositeBatchProcessor(transforms, cpus, gpus, resources)
-
-
-class _CompositeBatchProcessor(BatchProcessor):
-    def __init__(self, transforms, num_cpus, num_gpus, resources):
-        self.transforms = transforms
-        self._num_cpus = num_cpus
-        self._num_gpus = num_gpus
-        self._resources = resources
-
-    @property
-    def num_cpus(self):
-        return self._num_cpus
-
-    @property
-    def num_gpus(self):
-        return self._num_gpus
-
-    @property
-    def resources(self):
-        return self._resources
-
-    @property
-    def output_exemplar(self):
-        return self.transforms[-1].output_exemplar
-
-    def __call__(self, batch):
-        # batch is initially a list of elements, but after a BatchMapTransform
-        # it can be a recordbatch, dict of lists, or list of dicts
-        # if it's a dict of lists or record batch, we'll convert it to a list of dicts
-        # before applying the next transform
-        is_soa_form = False
-        for transform in self.transforms:
-            if is_soa_form:
-                batch = as_record_batch(batch)
-                batch = batch.to_pylist()
-                is_soa_form = False
-
-            match transform:
-                case _MapTransform(fn=fn):
-                    batch = [fn(x) for x in batch]
-                case _BatchMapTransform(fn=fn):
-                    batch = fn(batch)
-                    is_soa_form = isinstance(batch, dict) or isinstance(batch, pa.RecordBatch)
-                case _DatasetTransform():
-                    raise ValueError(f"Unknown transform {transform}")
-
-        if is_soa_form:
-            return batch
-
-        # mostly this is for map objects
-        if isinstance(batch, Iterable) and not isinstance(batch, Sequence):
-            batch = list(batch)
-
-        return batch
-
-    @property
-    def metadata(self):
-        return {}
+    source: Any
+    _transform: _DatasetTransform
 
 
 def dict_from_record_batch(b) -> dict:

@@ -18,9 +18,9 @@ from dataclasses import dataclass
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import writes
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.direct_provider import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.schema import (
     tasks_table,
     worker_attributes_table,

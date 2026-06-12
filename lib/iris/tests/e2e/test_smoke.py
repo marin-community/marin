@@ -20,9 +20,10 @@ from connectrpc.errors import ConnectError
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.client import IrisClient, iris_ctx
-from iris.cluster.config import connect_cluster, load_config, make_local_config
+from iris.cluster.backends.local.cluster import LocalCluster
+from iris.cluster.config import load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
-from iris.cluster.providers.local.cluster import LocalCluster
+from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ReservationEntry, ResourceSpec, gpu_device
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
@@ -154,7 +155,7 @@ def smoke_cluster(request):
 def smoke_page(smoke_cluster):
     """Module-scoped Playwright page for smoke dashboard tests."""
     try:
-        import playwright.sync_api as pw
+        import playwright.sync_api as pw  # noqa: PLC0415  # optional dep: playwright
 
         with pw.sync_playwright() as p:
             b = p.chromium.launch()
@@ -197,6 +198,21 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
     return capture
 
 
+def _await_stable_screenshot(page, check: str, *, arg=None) -> None:
+    """Wait for a screenshot-readiness predicate, settle briefly, then re-verify.
+
+    Dashboard pages render structural content only after their first RPC resolves,
+    and an SPA route swap (lazy-imported components) can leave the previous page's
+    DOM mounted while the next chunk loads. The settle + re-verify catches a
+    predicate that passes on such a transient state and then flips back, so the
+    screenshot lands on the stable loaded page. Timing lives here so both detail
+    pages share one cadence.
+    """
+    page.wait_for_function(check, arg=arg, timeout=15000)
+    page.wait_for_timeout(250)
+    page.wait_for_function(check, arg=arg, timeout=5000)
+
+
 def _wait_for_worker_detail_screenshot_ready(page, worker_id: str) -> None:
     # WorkerDetail.vue uniquely nulls `data` in its workerId watch, so a late
     # re-fire can flip the page back to the "Loading worker..." overlay after a
@@ -216,9 +232,7 @@ def _wait_for_worker_detail_screenshot_ready(page, worker_id: str) -> None:
                 && headings.includes("task history");
         }
     """
-    page.wait_for_function(check, arg=worker_id, timeout=15000)
-    page.wait_for_timeout(250)
-    page.wait_for_function(check, arg=worker_id, timeout=5000)
+    _await_stable_screenshot(page, check, arg=worker_id)
 
 
 def _wait_for_job_detail_screenshot_ready(page, job_id: str) -> None:
@@ -268,7 +282,7 @@ def capabilities(smoke_cluster) -> ClusterCapabilities:
 
 
 def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
-    """Jobs tab shows diverse states."""
+    """Landing page groups jobs by owner; drilling into the owner shows states."""
     quick = smoke_cluster.submit(TestJobs.quick, "smoke-simple")
     failed = smoke_cluster.submit(TestJobs.fail, "smoke-failed")
     running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 300)
@@ -277,12 +291,21 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
     smoke_cluster.wait(failed, timeout=smoke_cluster.job_timeout)
     smoke_cluster.wait_for_state(running, job_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
 
+    user = quick.job_id.user
+
+    # Landing page is the per-owner overview, not a flat job list.
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
+    wait_for_dashboard_ready(smoke_page)
+    assert_visible(smoke_page, f"text={user}")
+
+    # Drill into this owner to see their individual jobs and states.
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/#/?user={user}")
     wait_for_dashboard_ready(smoke_page)
     for name in ["smoke-simple", "smoke-failed", "smoke-running"]:
         assert_visible(smoke_page, f"text={name}")
     smoke_screenshot(
-        "jobs-tab", "Jobs tab listing smoke-simple (succeeded), smoke-failed (failed), and smoke-running (running)"
+        "jobs-tab",
+        f"Jobs for user {user}: smoke-simple (succeeded), smoke-failed (failed), and smoke-running (running)",
     )
 
     smoke_cluster.kill(running)
@@ -316,13 +339,19 @@ def test_dashboard_job_expand(smoke_cluster, smoke_page, smoke_screenshot):
     parent = smoke_cluster.submit(_parent_with_two_children, "smoke-expand-parent")
     smoke_cluster.wait(parent, timeout=smoke_cluster.job_timeout)
 
+    # Route through the owner overview first so the subsequent drill-in is a
+    # genuine hash change (the smoke page is shared module-scope and may already
+    # be parked on this owner's view from an earlier test).
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
+    wait_for_dashboard_ready(smoke_page)
+    # Open the owner's scoped job list (the landing page groups by owner).
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/#/?user={parent.job_id.user}")
     wait_for_dashboard_ready(smoke_page)
     assert_visible(smoke_page, "text=smoke-expand-parent")
 
-    # The parent should have an expand arrow (▶)
+    # The parent row exposes a keyboard-accessible expand toggle.
     row = smoke_page.locator("tr", has_text="smoke-expand-parent")
-    expand_btn = row.get_by_role("button", name="▶")
+    expand_btn = row.get_by_role("button", name="Expand children")
     expand_btn.click()
 
     # After clicking, children should appear (wait for the child names to render)
@@ -331,8 +360,8 @@ def test_dashboard_job_expand(smoke_cluster, smoke_page, smoke_screenshot):
         timeout=10000,
     )
 
-    # Verify the arrow changed to ▼
-    row.get_by_role("button", name="▼").wait_for(timeout=5000)
+    # Once expanded, the toggle flips to a collapse affordance.
+    row.get_by_role("button", name="Collapse children").wait_for(timeout=5000)
 
     smoke_screenshot("job-expand", "Jobs tab with expanded parent showing child-a and child-b indented beneath")
 
@@ -452,7 +481,8 @@ def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot, capa
 
 
 def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
-    """Worker detail page shows info, task history, metric cards."""
+    """Worker detail page shows info, task history, metric cards, and links each
+    task id to its task-detail page."""
     if not capabilities.has_workers:
         pytest.skip("No persistent workers")
     job = smoke_cluster.submit(TestJobs.quick, "smoke-worker-detail")
@@ -464,27 +494,51 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, ca
 
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
     wait_for_dashboard_ready(smoke_page)
-
     _wait_for_worker_detail_screenshot_ready(smoke_page, worker_id)
+
+    # The Task History task id links to the task-detail route — the
+    # "links to tasks" contract for this page.
+    smoke_page.wait_for_selector("a[href*='/task/']", timeout=10000)
+    href = smoke_page.locator("a[href*='/task/']").first.get_attribute("href")
+    assert href is not None and "/job/" in href and "/task/" in href
+
     smoke_screenshot(
-        "worker-detail", "Worker detail page with identity info, health badge, metric sparklines, and task history"
+        "worker-detail",
+        "Worker detail page with identity info, health badge, metric sparklines, "
+        "and task history with per-task resource columns and task-id links",
     )
+
+
+def _wait_for_autoscaler_screenshot_ready(page) -> None:
+    # AutoscalerTab.vue shows only a "Loading autoscaler status…" spinner until its
+    # first RPC resolves. Route components are lazy-imported, so during the SPA swap
+    # the previously-viewed page (e.g. worker detail, which renders "Scale Group" +
+    # the "local-cpu" group name) is still mounted while the autoscaler chunk loads.
+    # A body-text wait keyed on those strings false-positives on that stale DOM, so
+    # the screenshot then catches the autoscaler spinner. Anchor on the route hash
+    # plus the section headings that only render in the loaded (v-else) branch so the
+    # match can't be satisfied by another page.
+    check = """
+        () => {
+            const text = document.body.textContent || "";
+            const routeReady = decodeURIComponent(window.location.hash) === "#/autoscaler";
+            const headings = Array.from(document.querySelectorAll("h3"))
+                .map((heading) => (heading.textContent || "").trim().toLowerCase());
+            return routeReady
+                && !text.includes("Loading autoscaler status")
+                && headings.includes("waterfall routing")
+                && headings.includes("recent actions")
+                && headings.includes("autoscaler logs");
+        }
+    """
+    _await_stable_screenshot(page, check)
 
 
 def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
     wait_for_dashboard_ready(smoke_page)
-    # Wait for actual scale group content. The strict !Loading-autoscaler-status check
-    # blocks on the AutoscalerTab.vue placeholder so the screenshot isn't taken
-    # during a refetch cycle.
-    smoke_page.wait_for_function(
-        "() => !document.body.textContent.includes('Loading autoscaler status') && "
-        "(document.body.textContent.includes('Scale Group') || "
-        "document.body.textContent.includes('scale group') || "
-        "document.body.textContent.includes('local-cpu'))",
-        timeout=15000,
-    )
+    _wait_for_autoscaler_screenshot_ready(smoke_page)
     smoke_screenshot("autoscaler-tab", "Autoscaler tab showing scale group configuration")
 
 
@@ -566,10 +620,11 @@ def test_cancel_job_releases_resources(smoke_cluster):
 
     Regression test for #3553.
     """
-    # Use most of a single worker's CPU so the followup job can't schedule
-    # until the heavy job is cancelled. Local workers have 1000 cores, cloud
-    # TPU VMs have 128 — pick a value that works in both modes.
-    heavy_cpu = 8 if smoke_cluster.is_cloud else 900
+    # Use most of a single worker's CPU so the followup job can't schedule on
+    # that worker until the heavy job is cancelled. Workers now advertise their
+    # scale-group declared CPU (local-cpu: 8 cores; cloud TPU VMs: 128) rather
+    # than a probed host count — pick a value that fills most of one worker.
+    heavy_cpu = 8 if smoke_cluster.is_cloud else 7
 
     job = smoke_cluster.submit(TestJobs.sleep, "smoke-cancel-heavy", 30, cpu=heavy_cpu)
     smoke_cluster.wait_for_state(job, job_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
@@ -917,7 +972,7 @@ def test_dashboard_login_flow():
     """
 
     try:
-        import playwright.sync_api as pw
+        import playwright.sync_api as pw  # noqa: PLC0415  # optional dep: playwright
     except ImportError:
         pytest.skip("playwright not installed")
 

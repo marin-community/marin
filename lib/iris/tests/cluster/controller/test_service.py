@@ -15,10 +15,9 @@ from datetime import date, timedelta
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
-from iris.cluster.controller import direct_provider, ops, reads, writes
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
@@ -26,6 +25,7 @@ from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
+from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.schema import jobs_table, task_attempts_table
@@ -47,7 +47,6 @@ from rigging.timing import Duration, Timestamp
 from sqlalchemy import func
 from sqlalchemy import update as sa_update
 
-from tests.cluster.conftest import fake_log_client_from_service
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
@@ -191,6 +190,19 @@ def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state)
     assert len(job.bundle_id) == 64
 
 
+def test_launch_job_rejects_coscheduling_without_group_by(service):
+    """Coscheduling with an empty group_by is rejected at submit: group_by names the
+    topology level to gang on, and an empty one fails differently (and silently) on each
+    scheduling path downstream."""
+    request = make_job_request("no-group-by")
+    request.coscheduling.SetInParent()  # coscheduling present, group_by left empty
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
 def test_launch_job_rejects_tpu_chip_count_mismatch(service):
     """A job requesting fewer chips than the variant's chips_per_vm is rejected."""
     request = make_job_request("bad-tpu-chip-count")
@@ -260,7 +272,7 @@ def test_launch_job_externalizes_large_workdir_files(service, state):
 
     job_id = JobName.root("test-user", "big-pickle-job")
     with state._db.read_snapshot() as snap:
-        template = direct_provider.run_request_template(state._run_template_cache, snap, job_id)
+        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
     assert template is not None
     # Small file stays inline
     assert dict(template.entrypoint.workdir_files) == {"small.txt": small_file}
@@ -276,7 +288,7 @@ def test_launch_job_keeps_small_workdir_files_inline(service, state):
 
     job_id = JobName.root("test-user", "small-pickle-job")
     with state._db.read_snapshot() as snap:
-        template = direct_provider.run_request_template(state._run_template_cache, snap, job_id)
+        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
     assert template is not None
     assert dict(template.entrypoint.workdir_files) == {"_callable.pkl": small_file}
     assert "_callable.pkl" not in template.entrypoint.workdir_file_refs
@@ -403,7 +415,6 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
         finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted by prod tenant")],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -474,7 +485,6 @@ def test_existing_job_policy_keep_force_reaps_after_drain_wait(service, state, m
         finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted, worker stuck")],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -820,12 +830,12 @@ def test_terminate_job_allowed_by_owner(service):
     assert status.job.state == job_pb2.JOB_STATE_KILLED
 
 
-def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
+def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, log_client):
     """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
     auth_service = ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
-        log_client=fake_log_client_from_service(LogServiceImpl()),
+        log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),
@@ -849,12 +859,12 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
     assert status.job.state == job_pb2.JOB_STATE_PENDING
 
 
-def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_path):
+def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_path, log_client):
     """Cannot submit a child job under another user's hierarchy."""
     auth_service = ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
-        log_client=fake_log_client_from_service(LogServiceImpl()),
+        log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),
@@ -1458,7 +1468,7 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
 # =============================================================================
 
 
-def test_register_requires_worker_role(state, mock_controller, tmp_path):
+def test_register_requires_worker_role(state, mock_controller, tmp_path, log_client):
     """Non-worker user gets PERMISSION_DENIED on register()."""
     db = state._db
     now = Timestamp.now()
@@ -1469,7 +1479,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
     service = ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(LogServiceImpl()),
+        log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),
@@ -1493,7 +1503,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
         _verified_identity.reset(token)
 
 
-def test_register_allows_worker_role(state, mock_controller, tmp_path):
+def test_register_allows_worker_role(state, mock_controller, tmp_path, log_client):
     """Worker-role user can call register()."""
     db = state._db
     now = Timestamp.now()
@@ -1504,7 +1514,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
     service = ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(LogServiceImpl()),
+        log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),
@@ -1709,19 +1719,3 @@ def test_list_tasks_returns_current_attempt_timing(service, state):
     # exactly one attempt entry — the current one — even if more existed
     assert len(proto.attempts) == 1
     assert proto.attempts[0].attempt_id == proto.current_attempt_id
-
-
-def test_set_task_status_text_handler_is_noop(service):
-    """Deprecated handler must accept and discard the payload without error.
-
-    Old clients still call this RPC; new clients write to iris.task_status.
-    """
-    response = service.set_task_status_text(
-        job_pb2.SetTaskStatusTextRequest(
-            task_id="/u/job/0",
-            status_text_detail_md="ignored",
-            status_text_summary_md="ignored",
-        ),
-        None,
-    )
-    assert isinstance(response, job_pb2.SetTaskStatusTextResponse)

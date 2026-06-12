@@ -2,13 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from ._preprocessor import BatchProcessor
-from .dataset import AsyncDataset, ListAsyncDataset, MappedAsyncDataset, SyncDataset
+from .dataset import (
+    AsyncDataset,
+    BlockShufflingDataset,
+    ListAsyncDataset,
+    MappedAsyncDataset,
+    PermutationDataset,
+    SyncDataset,
+)
 from .loader import DataLoader
 from .mixture import ConcatDataset, MixtureDataset, StopStrategy
-from .permutation import BlockShufflingDataset, PermutationDataset
 from .sharded_datasource import ShardedDataSource, datasource_from_hf, datasource_from_json, datasource_from_jsonl
 from .utils import batched
-
 
 __all__ = [
     "AsyncDataset",

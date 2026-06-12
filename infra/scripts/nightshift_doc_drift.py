@@ -6,6 +6,12 @@
 import argparse
 import subprocess
 
+# Suppress Claude Code's default "Co-Authored-By: Claude" / "Generated with
+# Claude Code" trailers on the commits and PRs the agent creates. AGENTS.md
+# forbids self-credit, and a prose instruction alone does not reliably override
+# the harness default — this setting does.
+NO_SELF_CREDIT_SETTINGS = ("--settings", '{"attribution":{"commit":"","pr":""}}')
+
 DOC_DRIFT_PROMPT = """\
 You are the Nightshift Doc Drift detector.
 
@@ -22,7 +28,10 @@ Sample a single subfolder of `docs/` to focus on. Use your random seed
 to pick one at random. If the chosen subfolder has fewer than 3 markdown
 files, expand to its parent.
 
-Read `AGENTS.md` for project conventions.
+Read `AGENTS.md` and `.agents/skills/commit/SKILL.md` for project conventions,
+and follow them. Never credit yourself: no `Co-Authored-By: Claude` or "Generated
+with Claude Code" trailer in commits, and no self-attribution in the PR or issue
+you open.
 
 ## Mission
 
@@ -74,7 +83,7 @@ If meaningful drift is found:
   4. Pick a reviewer by finding who has recently touched the files you changed.
      Use GitHub login names (NOT emails):
      ```
-     gh api '/repos/{owner}/{repo}/commits?path=<changed_file>&per_page=20' \
+     gh api '/repos/{{owner}}/{{repo}}/commits?path=<changed_file>&per_page=20' \
        --jq '.[].author.login' | grep -v '\\[bot\\]' | sort | uniq -c | sort -rn | head -5
      ```
      Pick the top human contributor and request their review:
@@ -103,6 +112,7 @@ def main() -> None:
             "--model=opus",
             "--print",
             "--dangerously-skip-permissions",
+            *NO_SELF_CREDIT_SETTINGS,
             "--tools=Read,Write,Edit,Glob,Grep,Bash",
             "--max-turns",
             "600",

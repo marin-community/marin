@@ -15,21 +15,24 @@ from __future__ import annotations
 import copy
 import logging
 import os
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import fsspec
 import yaml
 from google.protobuf.json_format import ParseDict
 from rigging.timing import Duration
 
+from iris.cluster.backends.factory import create_provider_bundle
+from iris.cluster.backends.k8s.service import CloudK8sService
+from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, K8sTaskProvider
+from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
+from iris.cluster.backends.types import local_queue_name
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.worker_provider import WorkerProvider
-from iris.cluster.providers.k8s.tasks import K8sTaskProvider
+from iris.cluster.controller.backend import TaskBackend
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import parse_memory_string
-from iris.rpc import config_pb2
+from iris.rpc import config_pb2, job_pb2
 from iris.time_proto import duration_to_proto
 
 logger = logging.getLogger(__name__)
@@ -78,6 +81,14 @@ _COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
     "node.coreweave.cloud/",
 )
 
+# Maps the band names used as keys in KueueConfig.priority_classes to the
+# PriorityBand enum the provider stamps onto pods.
+_KUEUE_PRIORITY_BANDS = {
+    "production": job_pb2.PRIORITY_BAND_PRODUCTION,
+    "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
+    "batch": job_pb2.PRIORITY_BAND_BATCH,
+}
+
 
 def _normalize_accelerator_type_field(d: dict) -> None:
     """Normalize a single accelerator_type field from lowercase to proto enum format."""
@@ -115,7 +126,7 @@ def _validate_accelerator_types(config: config_pb2.IrisClusterConfig) -> None:
             raise ValueError(f"Scale group '{name}' must set resources.device_type to cpu, gpu, or tpu.")
 
 
-def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> None:
+def validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> None:
     """Validate that scale groups define per-VM resources and num_vms."""
     for name, sg_config in config.scale_groups.items():
         if not sg_config.HasField("resources"):
@@ -338,7 +349,7 @@ def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     """
     _validate_provider_platform_compat(config)
     _validate_accelerator_types(config)
-    _validate_scale_group_resources(config)
+    validate_scale_group_resources(config)
     _validate_slice_templates(config)
     _validate_worker_settings(config)
     _validate_worker_defaults(config)
@@ -369,7 +380,7 @@ def _validate_worker_defaults(config: config_pb2.IrisClusterConfig) -> None:
         raise ValueError(f"defaults.worker.runtime must be 'docker' or 'kubernetes', got {runtime!r}.")
 
 
-def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
+def scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
     config = config_pb2.IrisClusterConfig()
     for name, sg_config in scale_groups.items():
         config.scale_groups[name].CopyFrom(sg_config)
@@ -448,7 +459,7 @@ def _deep_merge_defaults(target: config_pb2.DefaultsConfig, source: config_pb2.D
         target.task_env[key] = value
 
 
-def _validate_autoscaler_config(config: config_pb2.AutoscalerConfig, context: str = "autoscaler") -> None:
+def validate_autoscaler_config(config: config_pb2.AutoscalerConfig, context: str = "autoscaler") -> None:
     """Validate that autoscaler config has valid timing values.
 
     Assumes defaults have already been applied, so all fields must be set.
@@ -523,7 +534,7 @@ def apply_defaults(config: config_pb2.IrisClusterConfig) -> config_pb2.IrisClust
 
     # Validate merged autoscaler config
     if merged.defaults.HasField("autoscaler"):
-        _validate_autoscaler_config(merged.defaults.autoscaler, context="config.defaults.autoscaler")
+        validate_autoscaler_config(merged.defaults.autoscaler, context="config.defaults.autoscaler")
 
     return merged
 
@@ -1089,8 +1100,6 @@ class IrisConfig:
         Returns:
             ProviderBundle with controller and optional workers
         """
-        from iris.cluster.providers.factory import create_provider_bundle
-
         return create_provider_bundle(
             platform_config=self._proto.platform,
             worker_port=self._proto.defaults.worker.port,
@@ -1120,68 +1129,51 @@ class IrisConfig:
         return ""
 
 
-@contextmanager
-def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
-    """Start controller, open tunnel, yield address, stop on exit.
-
-    Local mode uses LocalCluster directly (in-process controller + workers).
-    Remote modes delegate controller lifecycle to the platform (GCP, CoreWeave, etc.).
-    """
-    validate_config(config)
-    is_local = config.controller.WhichOneof("controller") == "local"
-
-    if is_local:
-        from iris.cluster.providers.local.cluster import LocalCluster
-
-        cluster = LocalCluster(config)
-        address = cluster.start()
-        try:
-            yield address
-        finally:
-            cluster.close()
-    else:
-        iris_config = IrisConfig(config)
-        bundle = iris_config.provider_bundle()
-        address = bundle.controller.start_controller(config)
-        try:
-            with bundle.controller.tunnel(address) as tunnel_url:
-                yield tunnel_url
-        finally:
-            bundle.controller.stop_controller(config)
-            bundle.controller.shutdown()
-
-
-def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvider | K8sTaskProvider:
-    """Create a TaskProvider from cluster configuration.
+def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> TaskBackend:
+    """Create a TaskBackend from cluster configuration.
 
     Returns a K8sTaskProvider when `kubernetes_provider` is configured,
-    or a WorkerProvider when `worker_provider` is configured.
+    or an RpcTaskBackend when `worker_provider` is configured.
     Raises ValueError if no provider is set.
     """
     which = cluster_config.WhichOneof("provider")
     if which == "kubernetes_provider":
-        from iris.cluster.providers.k8s.service import CloudK8sService
-
         kp = cluster_config.kubernetes_provider
         namespace = kp.namespace or "iris"
         label_prefix = cluster_config.platform.label_prefix
         managed_label = f"iris-{label_prefix}-managed" if label_prefix else ""
+        priority_classes: dict[int, str] = {}
+        for band_name, wpc in kp.kueue.priority_classes.items():
+            band = _KUEUE_PRIORITY_BANDS.get(band_name)
+            if band is None:
+                raise ValueError(
+                    f"Unknown Kueue priority band {band_name!r} in kueue.priority_classes; "
+                    f"valid bands: {sorted(_KUEUE_PRIORITY_BANDS)}"
+                )
+            priority_classes[band] = wpc
+        # Empty topologies falls back to the CoreWeave-convention defaults (the
+        # provider would otherwise be handed an empty map, suppressing them).
+        topologies = {group_by: (topo.node_label, topo.required) for group_by, topo in kp.kueue.topologies.items()}
+        # Kueue is enabled by a configured cluster_queue; the LocalQueue name Iris
+        # stamps and reconciles is derived from label_prefix, not configured.
+        local_queue = local_queue_name(label_prefix) if kp.kueue.cluster_queue else ""
         return K8sTaskProvider(
             kubectl=CloudK8sService(namespace=namespace, kubeconfig_path=kp.kubeconfig or None),
             namespace=namespace,
             default_image=kp.default_image,
-            colocation_topology_key=kp.colocation_topology_key or "coreweave.cloud/spine",
             service_account=kp.service_account or "",
             host_network=kp.host_network,
             cache_dir=kp.cache_dir or "/cache",
             controller_address=kp.controller_address or None,
             managed_label=managed_label,
             task_env=dict(cluster_config.defaults.task_env),
+            local_queue=local_queue,
+            kueue_priority_classes=priority_classes,
+            kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
+            preempt_namespaces=list(kp.preempt_namespaces),
         )
     if which == "worker_provider":
-        from iris.cluster.controller.worker_provider import RpcWorkerStubFactory
-
-        return WorkerProvider(stub_factory=RpcWorkerStubFactory())
+        return RpcTaskBackend(stub_factory=RpcWorkerStubFactory())
     raise ValueError(
         "IrisClusterConfig.provider must be set. Add either:\n"
         "  worker_provider: {}\n"
@@ -1195,8 +1187,6 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
 
 def clear_remote_state(remote_state_dir: str) -> None:
     """Remove all files under the remote state dir so the controller starts fresh."""
-    import fsspec
-
     fs, path = fsspec.core.url_to_fs(remote_state_dir)
     if fs.exists(path):
         fs.rm(path, recursive=True)

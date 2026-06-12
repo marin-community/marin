@@ -15,7 +15,7 @@ import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Literal, Self
+from typing import Any, Literal
 
 from fray.device_flops import device_flops as _device_flops
 
@@ -417,11 +417,15 @@ class ActorConfig:
     `max_task_retries` controls how many times a failed task (or actor
     initialisation) is retried before being marked as permanently failed.
     Maps to Iris's ``max_retries_failure``.
+
+    `priority` is forwarded to the underlying backend if supported. 0 leaves
+    the backend to use its default priority.
     """
 
     max_concurrency: int = 1
     max_restarts: int | None = None
     max_task_retries: int | None = None
+    priority: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -516,11 +520,11 @@ class Entrypoint:
         c: Callable[..., Any],
         args: Sequence[Any] = (),
         kwargs: dict[str, Any] | None = None,
-    ) -> Self:
+    ) -> Entrypoint:
         return Entrypoint(callable_entrypoint=CallableEntrypoint(callable=c, args=args, kwargs=kwargs or {}))
 
     @staticmethod
-    def from_binary(command: str, args: Sequence[str]) -> Self:
+    def from_binary(command: str, args: Sequence[str]) -> Entrypoint:
         return Entrypoint(binary_entrypoint=BinaryEntrypoint(command=command, args=args))
 
 
@@ -541,6 +545,8 @@ class JobRequest:
         replicas: Gang-scheduled replicas (e.g. TPU slices for multislice training)
         max_retries_failure: Max retries on failure
         max_retries_preemption: Max retries on preemption
+        priority: Forwarded to the underlying backend if supported. 0 leaves
+            the backend to use its default priority.
     """
 
     name: str
@@ -550,6 +556,7 @@ class JobRequest:
     replicas: int | None = None
     max_retries_failure: int = 0
     max_retries_preemption: int = 100
+    priority: int = 0
 
     def __post_init__(self):
         if " " in self.name:

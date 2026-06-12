@@ -261,10 +261,78 @@ def test_fuzzy_dups_rejects_duplicate_source(fox_corpus):
         )
 
 
+def test_text_cap_chars_truncates_mega_docs_only(tmp_path):
+    """``text_cap_chars`` should change the MinHash signature for docs above
+    the cap but leave smaller docs unaffected.
+
+    Mega documents (e.g. PDF text dumps with O(10M) shingles) otherwise produce
+    saturated MinHash signatures that band-collide with arbitrary other docs,
+    forming CC false-positive blobs. The cap bounds signature density per doc.
+    """
+    # Build a tiny normalized dataset with:
+    #   - one MEGA doc (text > cap → cap-buckets must differ from no-cap buckets)
+    #   - one SMALL doc (text < cap → cap-buckets must equal no-cap buckets)
+    cap_chars = 2_000  # small cap so we can easily exceed it without huge text
+    rng = random.Random(7)
+    alphabet = string.ascii_lowercase + " "
+    mega_text = "".join(rng.choice(alphabet) for _ in range(cap_chars * 3))
+    small_text = "".join(rng.choice(alphabet) for _ in range(cap_chars // 4))
+
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    write_jsonl_file(
+        [
+            {"id": "mega", "text": mega_text, "source": "t"},
+            {"id": "small", "text": small_text, "source": "t"},
+        ],
+        str(src_dir / "shard.jsonl.gz"),
+    )
+    norm = normalize_to_parquet(input_path=str(src_dir), output_path=str(tmp_path / "norm"))
+
+    cap_mh = compute_minhash_attrs(
+        source=norm,
+        output_path=str(tmp_path / "mh_cap"),
+        text_cap_chars=cap_chars,
+    )
+    nocap_mh = compute_minhash_attrs(
+        source=norm,
+        output_path=str(tmp_path / "mh_nocap"),
+        text_cap_chars=None,
+    )
+
+    cap_by_id = {r["id"]: r["buckets"] for r in _read_cluster_attrs(cap_mh.attr_dir)}
+    nocap_by_id = {r["id"]: r["buckets"] for r in _read_cluster_attrs(nocap_mh.attr_dir)}
+
+    # normalize_to_parquet generates a deterministic xxh3 id from text; the
+    # raw "mega"/"small" handles are renamed to source_id internally and
+    # don't appear in minhash attrs.
+    mega_id = generate_id(mega_text)
+    small_id = generate_id(small_text)
+    assert set(cap_by_id) == {mega_id, small_id} == set(nocap_by_id)
+
+    # Small doc (under cap) → unaffected.
+    assert sorted(cap_by_id[small_id]) == sorted(
+        nocap_by_id[small_id]
+    ), "doc smaller than the cap should produce identical buckets"
+    # Mega doc (over cap) → different signature, no band overlap.
+    cap_mega = set(cap_by_id[mega_id])
+    nocap_mega = set(nocap_by_id[mega_id])
+    assert cap_mega != nocap_mega, "doc over the cap should produce a different signature"
+    assert not (cap_mega & nocap_mega), (
+        "doc over the cap should share no LSH bands between cap / no-cap signatures "
+        f"(intersection: {cap_mega & nocap_mega})"
+    )
+
+    # Params + version metadata.
+    assert cap_mh.params.text_cap_chars == cap_chars
+    assert nocap_mh.params.text_cap_chars is None
+    assert cap_mh.version == "v2"
+
+
 # ---------------------------------------------------------------------------
 # Char-5-gram Jaccard recall / precision tests.
 #
-# The dupekit MinHash pipeline shingles by character (rust/dupekit/src/
+# The dupekit MinHash pipeline shingles by character (lib/dupekit/rust/src/
 # minhash_ops.rs:69-76: text.chars().windows(ngram_size)), so char-Jaccard
 # directly governs LSH collision probability. We construct text from a
 # lowercase-only alphabet so dupekit's CleanText (lowercase + strip punct +

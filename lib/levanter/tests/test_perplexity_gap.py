@@ -630,6 +630,9 @@ def test_score_main_writes_outputs_without_uploading_model_score_artifact(monkey
         tokenizer = FakeTokenizer()
         hf_tokenizer = FakeHfTokenizer()
 
+        def warmup(self):
+            pass
+
         def score_texts(self, texts):
             assert texts == ["abc"]
             return [

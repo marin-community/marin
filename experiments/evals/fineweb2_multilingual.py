@@ -16,8 +16,8 @@ from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_d
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
+from experiments.tokenization import default_tokenize
 
 FINEWEB2_DATASET_ID = "HuggingFaceFW/fineweb-2"
 FINEWEB2_PARQUET_REVISION = "345aeeb34ec379862323beb9b5530d9e7f94522d"

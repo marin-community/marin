@@ -18,7 +18,7 @@ from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjecti
 from iris.cluster.controller.reconcile import ControllerEffects, ReconcileState
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
-from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
+from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.schema import worker_attributes_table, workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import AttemptUid, JobName, WorkerId, get_gpu_count, get_tpu_count
@@ -27,23 +27,27 @@ from iris.rpc import job_pb2
 FAIL_WORKERS_CHUNK_SIZE = 10
 
 
-@dataclass(frozen=True, slots=True)
-class WorkerAttributeParams:
-    key: str
-    value_type: str
-    str_value: str | None
-    int_value: int | None
-    float_value: float | None
+def _attribute_value_cols(value: str | int | float) -> dict:
+    """Encode a Python attribute value into the ``worker_attributes`` value columns.
+
+    Inverse of :func:`codec.attribute_value_from_row`: exactly one of
+    ``str_value`` / ``int_value`` / ``float_value`` is set, the rest NULL.
+    """
+    if isinstance(value, int):
+        return {"value_type": "int", "str_value": None, "int_value": int(value), "float_value": None}
+    if isinstance(value, float):
+        return {"value_type": "float", "str_value": None, "int_value": None, "float_value": float(value)}
+    return {"value_type": "str", "str_value": str(value), "int_value": None, "float_value": None}
 
 
 @dataclass(frozen=True)
 class WorkerFailureBatchResult:
     """Narrow result for :func:`fail`: just the worker rows removed.
 
-    ``_terminate_workers`` calls ``provider.on_worker_failed`` for each entry
-    and forwards the IDs to the autoscaler for slice-sibling teardown. Per-
-    task kill targets and log events are already applied by ``commit_effects``
-    inside the batch, so they don't need to surface in the return value.
+    The controller's ``_fail_and_teardown`` forwards these IDs to
+    ``backend.autoscale`` for slice-sibling teardown. Per-task kill targets and
+    log events are already applied by ``commit_effects`` inside the batch, so
+    they don't need to surface in the return value.
     """
 
     removed_workers: list[tuple[WorkerId, str | None]]
@@ -62,15 +66,12 @@ def register(
     scale_group: str = "",
 ) -> None:
     """Register a new worker or refresh an existing one. Caller owns the transaction."""
-    attrs: list[WorkerAttributeParams] = []
+    attr_dict: dict[str, AttributeValue] = {}
+    attr_rows: list[dict] = []
     for key, proto in metadata.attributes.items():
-        value = AttributeValue.from_proto(proto).value
-        if isinstance(value, int):
-            attrs.append(WorkerAttributeParams(key, "int", None, int(value), None))
-        elif isinstance(value, float):
-            attrs.append(WorkerAttributeParams(key, "float", None, None, float(value)))
-        else:
-            attrs.append(WorkerAttributeParams(key, "str", str(value), None, None))
+        av = AttributeValue.from_proto(proto)
+        attr_dict[key] = av
+        attr_rows.append({"worker_id": worker_id, "key": key, **_attribute_value_cols(av.value)})
     now_ms = ts.epoch_ms()
     gpu_count = get_gpu_count(metadata.device)
     tpu_count = get_tpu_count(metadata.device)
@@ -116,29 +117,8 @@ def register(
     )
     cur.register(lambda: health.register(worker_id, now_ms=now_ms))
     cur.execute(delete(worker_attributes_table).where(worker_attributes_table.c.worker_id == worker_id))
-    if attrs:
-        cur.execute(
-            insert(worker_attributes_table),
-            [
-                {
-                    "worker_id": worker_id,
-                    "key": attr.key,
-                    "value_type": attr.value_type,
-                    "str_value": attr.str_value,
-                    "int_value": attr.int_value,
-                    "float_value": attr.float_value,
-                }
-                for attr in attrs
-            ],
-        )
-    attr_dict: dict[str, AttributeValue] = {}
-    for attr in attrs:
-        if attr.value_type == "int":
-            attr_dict[attr.key] = AttributeValue(int(attr.int_value))
-        elif attr.value_type == "float":
-            attr_dict[attr.key] = AttributeValue(float(attr.float_value))
-        else:
-            attr_dict[attr.key] = AttributeValue(str(attr.str_value or ""))
+    if attr_rows:
+        cur.execute(insert(worker_attributes_table), attr_rows)
     worker_attrs.set(cur, worker_id, attr_dict)
     cur.register(
         lambda: log_event(
@@ -171,12 +151,12 @@ def fail(
     if not worker_ids:
         return WorkerFailureBatchResult(removed_workers=[])
     with db.read_snapshot() as snap:
-        _liveness = health.all()
-        _active_ids = sorted(
+        liveness = health.all()
+        active_ids = sorted(
             {
                 WorkerId(str(wid))
                 for wid in worker_ids
-                if (e := _liveness.get(WorkerId(str(wid)))) is not None and e.active
+                if (e := liveness.get(WorkerId(str(wid)))) is not None and e.active
             }
         )
         rows = (
@@ -184,9 +164,9 @@ def fail(
                 select(*reads.WORKER_DETAIL_COLS).where(
                     workers_table.c.worker_id.in_(bindparam("worker_ids", expanding=True))
                 ),
-                {"worker_ids": _active_ids},
+                {"worker_ids": active_ids},
             ).all()
-            if _active_ids
+            if active_ids
             else []
         )
     failures: list[tuple[WorkerId, str | None, str]] = [(row.worker_id, row.address, reason) for row in rows]
@@ -238,9 +218,6 @@ def _apply_worker_failures_chunk(
     Per-chunk shape: one closed snapshot, one :class:`Overlay`, then
     ``writes.remove_worker`` after ``commit_effects``.
     """
-    if not failures:
-        return
-
     worker_ids = [wid for wid, _, _ in failures]
     # Seeding by worker closes every active task on the failed workers (plus
     # their jobs' peer/descendant graph), so the batch derives its per-worker
@@ -250,17 +227,15 @@ def _apply_worker_failures_chunk(
 
     # commit_effects before remove_worker: task mutations reference attempt rows
     # that would be CASCADE-deleted by remove_worker; order must be preserved.
-    commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
+    commit_effects(cur, effects, endpoints=endpoints)
     for worker_id, _, _ in failures:
         writes.remove_worker(cur, worker_id, health=health, worker_attrs=worker_attrs)
 
 
 def apply_reconcile(
     cur: Tx,
-    plans_by_worker: dict[WorkerId, WorkerReconcilePlan],
-    results: list[ReconcileResult],
+    plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
     *,
-    health: WorkerHealthTracker,
     endpoints: EndpointsProjection,
     now: Timestamp,
 ) -> ControllerEffects:
@@ -270,15 +245,12 @@ def apply_reconcile(
     all pairs so cascade kills triggered by earlier workers are visible to
     later ones.
     """
-    plan_results: list[tuple[WorkerReconcilePlan, ReconcileResult]] = []
     all_task_ids: list[JobName] = []
     all_attempt_keys: list[tuple[JobName, int]] = []
     all_attempt_uids: list[AttemptUid] = []
     all_worker_ids: list[WorkerId] = []
 
-    for result in results:
-        plan = plans_by_worker[result.worker_id]
-        plan_results.append((plan, result))
+    for plan, result in plan_results:
         all_worker_ids.append(plan.worker_id)
 
         if result.error is not None:
@@ -306,5 +278,5 @@ def apply_reconcile(
         extra_attempt_keys=all_attempt_keys,
     )
     effects = ReconcileState.open(snapshot).reconcile(plan_results, now)
-    commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
+    commit_effects(cur, effects, endpoints=endpoints)
     return effects

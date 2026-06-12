@@ -10,8 +10,8 @@ knowledge of logical operation types.
 
 from __future__ import annotations
 
+import functools
 import heapq
-import inspect
 import logging
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
@@ -19,12 +19,11 @@ from enum import StrEnum, auto
 from itertools import groupby, islice
 from typing import Any, Protocol
 
-import msgspec
-import xxhash
 from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
+from zephyr import counters
 from zephyr.dataset import (
     Dataset,
     FileEntry,
@@ -49,6 +48,9 @@ from zephyr.dataset import (
 from zephyr.expr import Expr, referenced_columns
 from zephyr.external_sort import compute_fan_in, compute_write_batch_size, external_sort_merge
 from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file, load_file_batch
+from zephyr.shard_keys import composite_sort_key
+from zephyr.shuffle import ScatterReader
+from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)
 
@@ -92,19 +94,23 @@ class Map:
         needs_shard_context: True if fn expects (stream, shard_info: ShardInfo).
     """
 
-    fn: Callable[[Iterator], Iterator]
+    fn: Callable[..., Iterator]
     needs_shard_context: bool = False
 
 
 @dataclass
 class Write:
-    """Write stream to file, return path."""
+    """Write a stream to a file and yield the output path.
+
+    ``write_fn`` is the bound writer callable ``(records, output_path) ->
+    metadata``. The planner resolves it from the logical op's writer type (and
+    schema) so ``run_stage`` dispatches no string and never imports concrete
+    writer functions — consistent with the other physical ops.
+    """
 
     output_pattern: Callable[[int, int], str]  # (shard_idx, total_shards) → path
-    writer_type: str  # For chunk aggregation: "jsonl", "parquet", "binary", "vortex"
+    write_fn: Callable[[Iterable, str], object]  # (records, output_path) → metadata
     skip_existing: bool = False
-    # Writer-specific parameters
-    schema: Any = None  # For parquet
 
 
 @dataclass
@@ -182,12 +188,19 @@ def _reduce_gen(
     sort_fn: Callable | None = None,
     external_sort_dir: str | None = None,
 ) -> Iterator:
-    is_gen = inspect.isgeneratorfunction(reducer_fn)
+    # The reducer contract is ``R | Iterator[R]``: it may return a single
+    # result or a stream of results. Discriminate on the actual return value,
+    # not ``inspect.isgeneratorfunction`` — that only recognises functions
+    # literally defined with ``yield`` and misses reducers that *return* an
+    # iterator (a generator expression, ``map``/``filter``, or a call to
+    # another generator function). Such a reducer would otherwise be emitted
+    # whole as one item and crash the downstream writer.
     for key, items_iter in _merge_sorted_chunks(shard, key_fn, sort_fn, external_sort_dir=external_sort_dir):
-        if is_gen:
-            yield from reducer_fn(key, items_iter)
+        result = reducer_fn(key, items_iter)
+        if isinstance(result, Iterator):
+            yield from result
         else:
-            yield reducer_fn(key, items_iter)
+            yield result
 
 
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
@@ -195,19 +208,10 @@ def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
         yield {k: item[k] for k in columns if k in item}
 
 
-def _load_file_batch_gen(stream: Iterator, *, include_file_paths: bool = False, file_path_column: str) -> Iterator:
+def _load_file_gen(stream: Iterator, loader: Callable, *, include_file_paths: bool, file_path_column: str) -> Iterator:
     for spec in stream:
         try:
-            yield from load_file_batch(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
-        except Exception as e:
-            e.add_note(f"While loading from {spec}")
-            raise
-
-
-def _load_file_gen(stream: Iterator, *, include_file_paths: bool = False, file_path_column: str) -> Iterator:
-    for spec in stream:
-        try:
-            yield from load_file(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
+            yield from loader(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
         except Exception as e:
             e.add_note(f"While loading from {spec}")
             raise
@@ -227,14 +231,13 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
     def pipeline(stream: Iterator, *, shard_idx: int = 0, total_shards: int = 1) -> Iterator:
         for op in operations:
             if isinstance(op, LoadFileOp):
-                if op.batch_mode:
-                    stream = _load_file_batch_gen(
-                        stream, include_file_paths=op.include_file_paths, file_path_column=op.file_path_column
-                    )
-                else:
-                    stream = _load_file_gen(
-                        stream, include_file_paths=op.include_file_paths, file_path_column=op.file_path_column
-                    )
+                loader = load_file_batch if op.batch_mode else load_file
+                stream = _load_file_gen(
+                    stream,
+                    loader,
+                    include_file_paths=op.include_file_paths,
+                    file_path_column=op.file_path_column,
+                )
             elif isinstance(op, MapOp):
                 stream = _map_gen(stream, op.fn)
             elif isinstance(op, FilterOp):
@@ -252,6 +255,23 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
         return stream
 
     return pipeline
+
+
+def _writer_for(writer_type: str, schema: Any) -> Callable[[Iterable, str], object]:
+    """Bind a logical writer type (and optional schema) to its writer callable.
+
+    Resolved once at plan time so ``run_stage`` neither dispatches on a string
+    nor imports concrete writer functions.
+    """
+    if writer_type == "jsonl":
+        return write_jsonl_file
+    if writer_type == "binary":
+        return write_binary_file
+    if writer_type == "parquet":
+        return functools.partial(write_parquet_file, schema=schema)
+    if writer_type == "vortex":
+        return functools.partial(write_vortex_file, schema=schema)
+    raise ValueError(f"Unknown writer_type: {writer_type}")
 
 
 def compose_join(
@@ -436,9 +456,8 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
             state.add_op(
                 Write(
                     output_pattern=op.output_pattern,
-                    writer_type=op.writer_type,
+                    write_fn=_writer_for(op.writer_type, op.schema),
                     skip_existing=op.skip_existing,
-                    schema=op.schema,
                 )
             )
 
@@ -536,22 +555,13 @@ def _compute_file_pushdown(
     for entry in files:
         path = entry.path
         is_parquet = load_op.format == "parquet" or (load_op.format == "auto" and path.endswith(".parquet"))
+        row_ranges: list[tuple[int | None, int | None]]
         if load_op.approx_shard_bytes is not None and is_parquet:
-            for row_start, row_end in compute_parquet_splits(path, load_op.approx_shard_bytes):
-                source_items.append(
-                    SourceItem(
-                        shard_idx=len(source_items),
-                        data=InputFileSpec(
-                            path=path,
-                            format=load_op.format,
-                            columns=select_columns,
-                            row_start=row_start,
-                            row_end=row_end,
-                            filter_expr=filter_expr,
-                        ),
-                    )
-                )
+            row_ranges = list(compute_parquet_splits(path, load_op.approx_shard_bytes))
         else:
+            # Whole-file read: a single span with no explicit row bounds.
+            row_ranges = [(None, None)]
+        for row_start, row_end in row_ranges:
             source_items.append(
                 SourceItem(
                     shard_idx=len(source_items),
@@ -559,6 +569,8 @@ def _compute_file_pushdown(
                         path=path,
                         format=load_op.format,
                         columns=select_columns,
+                        row_start=row_start,
+                        row_end=row_end,
                         filter_expr=filter_expr,
                     ),
                 )
@@ -601,12 +613,6 @@ def compute_plan(dataset: Dataset) -> PhysicalPlan:
 
     stages = _fuse_operations(operations)
     return PhysicalPlan(source_items=source_items, stages=stages)
-
-
-def deterministic_hash(obj: object) -> int:
-    """Compute a deterministic hash for an object."""
-    s = msgspec.msgpack.encode(obj, order="deterministic")
-    return xxhash.xxh3_64_intdigest(s)
 
 
 def make_windows(
@@ -665,20 +671,10 @@ def _merge_sorted_chunks(
         Tuples of (key, iterator_of_items) for each unique key
     """
     # Merge by composite key when sort_fn is provided, but group by key_fn only.
-    # Rebind to captured_sort_fn so pyrefly narrows the type inside the closure.
-    if sort_fn is not None:
-        captured_sort_fn = sort_fn
-
-        def merge_key(item):
-            return (key_fn(item), captured_sort_fn(item))
-
-    else:
-        merge_key = key_fn
+    merge_key = composite_sort_key(key_fn, sort_fn)
 
     # Check if external sort is needed BEFORE materializing all iterators.
     # ScatterReader can decide using manifest stats (no file opens needed).
-    from zephyr.shuffle import ScatterReader  # circular import: shuffle imports plan
-
     use_external = (
         external_sort_dir is not None
         and isinstance(shard, ScatterReader)
@@ -819,14 +815,6 @@ def run_stage(
 
     configure_logging(level=logging.INFO)
 
-    from zephyr import counters  # circular import: counters → execution → plan
-    from zephyr.writers import (  # circular import: writers → counters → execution → plan
-        write_binary_file,
-        write_jsonl_file,
-        write_parquet_file,
-        write_vortex_file,
-    )
-
     stream: Iterator = iter(ctx.shard)
 
     op_index = 0
@@ -850,17 +838,7 @@ def run_stage(
                     yield output_path
                     return
 
-            if op.writer_type == "jsonl":
-                write_jsonl_file(stream, output_path)
-            elif op.writer_type == "parquet":
-                write_parquet_file(stream, output_path, schema=op.schema)
-            elif op.writer_type == "binary":
-                write_binary_file(stream, output_path)
-            elif op.writer_type == "vortex":
-                write_vortex_file(stream, output_path, schema=op.schema)
-            else:
-                raise ValueError(f"Unknown writer_type: {op.writer_type}")
-
+            op.write_fn(stream, output_path)
             yield output_path
             return
 
@@ -874,8 +852,6 @@ def run_stage(
         elif isinstance(op, Reduce):
             # Build ScatterReader directly from per-mapper sidecars, then
             # merge sorted chunks and reduce per key.
-            from zephyr.shuffle import ScatterReader  # circular import: shuffle imports plan
-
             shard = ctx.shard
             if not isinstance(shard, ScatterReader):
                 # Shard contains every mapper's scatter-data path — reducer
