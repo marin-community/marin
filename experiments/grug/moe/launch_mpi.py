@@ -71,6 +71,7 @@ for _dim, _bs, _steps in _GATE1_CELLS:
                 seed=versioned(0),
                 mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
                 tracker=WandbConfig(
+                    entity="marin-community",
                     project="marin_moe",
                     tags=["moe", "moe_may_mpi", f"d{_dim}"],
                     group="moe-may-mpi",
