@@ -279,7 +279,6 @@ class GcpService(Protocol):
     def vm_delete(self, name: str, zone: str, *, wait: bool = False) -> None: ...
     def vm_describe(self, name: str, zone: str) -> VmInfo | None: ...
     def vm_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[VmInfo]: ...
-    def vm_reset(self, name: str, zone: str) -> None: ...
     def vm_update_labels(self, name: str, zone: str, labels: dict[str, str]) -> None: ...
     def vm_set_metadata(self, name: str, zone: str, metadata: dict[str, str]) -> None: ...
     def vm_get_serial_port_output(self, name: str, zone: str, start: int = 0) -> str: ...
@@ -326,26 +325,16 @@ def _extract_node_name(resource_name: str) -> str:
     return resource_name
 
 
-def _parse_tpu_created_at(tpu_data: dict) -> Timestamp:
-    create_time = tpu_data.get("createTime", "")
+def _parse_gcp_created_at(create_time: str) -> Timestamp:
+    """Parse a GCP RFC3339 creation timestamp, falling back to now() when absent or invalid.
+
+    TPU nodes expose this as ``createTime`` while Compute VMs use ``creationTimestamp``.
+    """
     if not create_time:
         return Timestamp.now()
     try:
         dt = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
-        epoch_ms = int(dt.timestamp() * 1000)
-        return Timestamp.from_ms(epoch_ms)
-    except (ValueError, AttributeError):
-        return Timestamp.now()
-
-
-def _parse_vm_created_at(vm_data: dict) -> Timestamp:
-    create_time = vm_data.get("creationTimestamp", "")
-    if not create_time:
-        return Timestamp.now()
-    try:
-        dt = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
-        epoch_ms = int(dt.timestamp() * 1000)
-        return Timestamp.from_ms(epoch_ms)
+        return Timestamp.from_ms(int(dt.timestamp() * 1000))
     except (ValueError, AttributeError):
         return Timestamp.now()
 
@@ -372,7 +361,7 @@ def _parse_tpu_info(tpu_data: dict, zone: str) -> TpuInfo:
         service_account=(tpu_data.get("serviceAccount", {}) or {}).get("email"),
         network_endpoints=ips,
         external_network_endpoints=external_ips,
-        created_at=_parse_tpu_created_at(tpu_data),
+        created_at=_parse_gcp_created_at(tpu_data.get("createTime", "")),
     )
 
 
@@ -410,7 +399,7 @@ def _parse_vm_info(vm_data: dict, fallback_zone: str = "") -> VmInfo:
         labels=vm_data.get("labels", {}),
         metadata=metadata,
         service_account=service_account_email,
-        created_at=_parse_vm_created_at(vm_data),
+        created_at=_parse_gcp_created_at(vm_data.get("creationTimestamp", "")),
     )
 
 
@@ -850,12 +839,6 @@ class CloudGcpService:
             op_name = resp.json().get("name", "")
             if op_name:
                 self._wait_zone_operation(zone, op_name)
-
-    def vm_reset(self, name: str, zone: str) -> None:
-        logger.info("Resetting VM: %s", name)
-        url = self._instance_url(zone, name) + "/reset"
-        resp = self._client.post(url, headers=self._headers())
-        self._classify_response(resp)
 
     def _instance_get(self, name: str, zone: str) -> dict:
         url = self._instance_url(zone, name)

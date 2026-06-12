@@ -518,7 +518,7 @@ class KueueConfig(_message.Message):
     def __init__(self, cluster_queue: _Optional[str] = ..., priority_classes: _Optional[_Mapping[str, str]] = ..., topologies: _Optional[_Mapping[str, KueueTopology]] = ...) -> None: ...
 
 class KubernetesProviderConfig(_message.Message):
-    __slots__ = ("namespace", "kubeconfig", "default_image", "service_account", "host_network", "cache_dir", "controller_address", "kueue")
+    __slots__ = ("namespace", "kubeconfig", "default_image", "service_account", "host_network", "cache_dir", "controller_address", "kueue", "preempt_namespaces")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     KUBECONFIG_FIELD_NUMBER: _ClassVar[int]
     DEFAULT_IMAGE_FIELD_NUMBER: _ClassVar[int]
@@ -527,6 +527,7 @@ class KubernetesProviderConfig(_message.Message):
     CACHE_DIR_FIELD_NUMBER: _ClassVar[int]
     CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
     KUEUE_FIELD_NUMBER: _ClassVar[int]
+    PREEMPT_NAMESPACES_FIELD_NUMBER: _ClassVar[int]
     namespace: str
     kubeconfig: str
     default_image: str
@@ -535,7 +536,8 @@ class KubernetesProviderConfig(_message.Message):
     cache_dir: str
     controller_address: str
     kueue: KueueConfig
-    def __init__(self, namespace: _Optional[str] = ..., kubeconfig: _Optional[str] = ..., default_image: _Optional[str] = ..., service_account: _Optional[str] = ..., host_network: _Optional[bool] = ..., cache_dir: _Optional[str] = ..., controller_address: _Optional[str] = ..., kueue: _Optional[_Union[KueueConfig, _Mapping]] = ...) -> None: ...
+    preempt_namespaces: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, namespace: _Optional[str] = ..., kubeconfig: _Optional[str] = ..., default_image: _Optional[str] = ..., service_account: _Optional[str] = ..., host_network: _Optional[bool] = ..., cache_dir: _Optional[str] = ..., controller_address: _Optional[str] = ..., kueue: _Optional[_Union[KueueConfig, _Mapping]] = ..., preempt_namespaces: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class UserBudgetTier(_message.Message):
     __slots__ = ("user_ids", "budget_limit", "max_band")

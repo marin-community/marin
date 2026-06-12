@@ -65,10 +65,6 @@ class _LocalWorkerHandle:
             return ""
         return f"http://{self._internal_address}:{self._port}"
 
-    @property
-    def external_address(self) -> str | None:
-        return None
-
     def status(self) -> WorkerStatus:
         return WorkerStatus(state=CloudWorkerState.RUNNING)
 
@@ -116,9 +112,6 @@ class _LocalWorkerHandle:
     @property
     def bootstrap_log(self) -> str:
         return "\n".join(self._bootstrap_log_lines)
-
-    def reboot(self) -> None:
-        logger.info("Reboot requested for local VM %s (no-op)", self._vm_id)
 
     def restart_worker(self, bootstrap_script: str) -> None:
         logger.info("Worker restart requested for local VM %s (no-op)", self._vm_id)

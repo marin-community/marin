@@ -9,6 +9,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 
 import dataclasses
 from dataclasses import dataclass
+from typing import Literal
 
 import equinox as eqx
 import jax
@@ -34,6 +35,7 @@ from levanter.grug.attention import (
     attention,
 )
 from levanter.grug.grug_moe import (
+    MOE_REMAT_SAVE_NAMES,
     MoeActivation,
     MoEExpertMlp,
     MoeImplementation,
@@ -61,12 +63,19 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
+RematMode = Literal["recompute_all", "save_moe"]
+
+
 def _batch_spec() -> P:
     return P(_BATCH_AXES)
 
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
+
+
+def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
+    return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
 
 
 @dataclass(frozen=True)
@@ -95,6 +104,10 @@ class GrugModelConfig:
     router_z_loss_coef: float = 0.001
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    remat_mode: RematMode = "recompute_all"
+    """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
+    backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
+    backward skips re-running expert dispatch and its EP collectives."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -400,8 +413,8 @@ class MoEMLP(eqx.Module):
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
         # Sharded QB: compute beta locally per device, then average.
-        s_minus_alpha = router_logits - qb_alpha
         mesh = get_abstract_mesh()
+        s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
         num_devices = 1
         for a in _BATCH_AXES:
             num_devices *= mesh.shape[a]
@@ -518,14 +531,19 @@ class Transformer(eqx.Module):
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
-        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
-        long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+        if not isinstance(mask, AttentionMask):
+            mask = AttentionMask.causal()
+        short_mask, long_mask = _layer_attention_masks(mask, sliding_window=cfg.sliding_window)
+
+        if cfg.remat_mode == "save_moe":
+            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+        else:
+            remat_policy = None
 
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask)
             moe_router_stats.append(router_stats)
 
         router_metrics = {

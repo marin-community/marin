@@ -127,8 +127,6 @@ def _reconcile_worker(
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
                     run=worker_pb2.Worker.AttemptSpec(request=req),
                 )
             )
@@ -136,8 +134,6 @@ def _reconcile_worker(
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
                     run=worker_pb2.Worker.AttemptSpec(),
                 )
             )
@@ -145,8 +141,6 @@ def _reconcile_worker(
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
                     stop=worker_pb2.Worker.STOP_REASON_CANCELLED,
                 )
             )
@@ -154,8 +148,6 @@ def _reconcile_worker(
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
                     stop=worker_pb2.Worker.STOP_REASON_PREEMPTED,
                 )
             )
@@ -178,8 +170,6 @@ def _reconcile_worker(
                 desired.append(
                     worker_pb2.Worker.DesiredAttempt(
                         attempt_uid=row.attempt_uid,
-                        task_id=wire_task_id,
-                        attempt_id=row.attempt_id,
                         stop=stop_reason,
                     )
                 )
@@ -192,8 +182,6 @@ def _reconcile_worker(
                 desired.append(
                     worker_pb2.Worker.DesiredAttempt(
                         attempt_uid=row.attempt_uid,
-                        task_id=wire_task_id,
-                        attempt_id=row.attempt_id,
                         run=worker_pb2.Worker.AttemptSpec(),
                     )
                 )
@@ -213,8 +201,6 @@ def _reconcile_worker(
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
                     stop=worker_pb2.Worker.STOP_REASON_PREEMPTED,
                 )
             )

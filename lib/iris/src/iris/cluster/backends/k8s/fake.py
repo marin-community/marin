@@ -283,6 +283,14 @@ class InMemoryK8sService:
         self._top_pod_overrides: dict[str, PodResourceUsage | None] = {}
         self._log_watermarks: dict[str, int] = {}  # pod_name -> bytes consumed
 
+        # Pods living outside the service's own namespace, keyed by
+        # (namespace, name). Seeded via seed_namespaced_pod and visible only
+        # through the explicit-namespace protocol methods.
+        self._namespaced_pods: dict[tuple[str, str], dict] = {}
+        # Every explicit-namespace pod call as (operation, namespace), so
+        # tests can assert the eviction feature stays silent when disabled.
+        self.namespaced_pod_calls: list[tuple[str, str]] = []
+
         # Node model
         self._nodes: dict[str, FakeNode] = {}
         self._node_pools: dict[str, NodePoolConfig] = {}
@@ -613,6 +621,10 @@ class InMemoryK8sService:
         """
         self._resources[(resource.plural, name)] = manifest
 
+    def seed_namespaced_pod(self, namespace: str, name: str, manifest: dict) -> None:
+        """Insert a pod in an arbitrary namespace (outside the service's own)."""
+        self._namespaced_pods[(namespace, name)] = manifest
+
     # -- Protocol methods --
 
     def _check_failure(self, operation: str) -> None:
@@ -721,6 +733,23 @@ class InMemoryK8sService:
                 to_delete.append(name)
         for name in to_delete:
             self.delete(resource, name)
+
+    def list_pods_in_namespace(self, namespace: str) -> list[dict]:
+        """List pods in an explicit namespace (not the service's own)."""
+        self._check_failure("list_pods_in_namespace")
+        self.namespaced_pod_calls.append(("list", namespace))
+        if namespace == self._namespace:
+            return self.list_json(K8sResource.PODS)
+        return [manifest for (ns, _), manifest in self._namespaced_pods.items() if ns == namespace]
+
+    def delete_pod_in_namespace(self, namespace: str, name: str) -> None:
+        """Delete a pod in an explicit namespace, ignoring NotFound."""
+        self._check_failure("delete_pod_in_namespace")
+        self.namespaced_pod_calls.append(("delete", namespace))
+        if namespace == self._namespace:
+            self.delete(K8sResource.PODS, name)
+            return
+        self._namespaced_pods.pop((namespace, name), None)
 
     def remove_finalizer(self, resource: K8sResource, name: str, finalizer: str) -> None:
         """Strip a single finalizer from a stored resource (no-op if absent)."""

@@ -4,9 +4,9 @@
 """Shared base for RemoteWorkerHandle implementations backed by remote execution.
 
 GCP and Manual platform handles share identical logic for run_command(),
-bootstrap(), wait_for_connection(), and reboot(). This base extracts that
-shared implementation so the concrete handles only need to add
-platform-specific operations (status queries, terminate, labels, etc.).
+bootstrap(), and wait_for_connection(). This base extracts that shared
+implementation so the concrete handles only need to add platform-specific
+operations (status queries, terminate, labels, etc.).
 
 Local handles use subprocess rather than SSH, so they do not use this base.
 """
@@ -34,8 +34,8 @@ logger = logging.getLogger(__name__)
 class RemoteExecWorkerBase:
     """Shared implementation for RemoteWorkerHandle backed by a RemoteExec connection.
 
-    Provides the five methods that are identical across GCP and Manual handles:
-    run_command, bootstrap, bootstrap_log, wait_for_connection, and reboot.
+    Provides the methods that are identical across GCP and Manual handles:
+    run_command, bootstrap, bootstrap_log, and wait_for_connection.
 
     Subclasses must implement status() and any platform-specific operations
     (terminate, set_labels, set_metadata).
@@ -45,7 +45,6 @@ class RemoteExecWorkerBase:
     _vm_id: str
     _internal_address: str
     _port: int
-    _external_address: str | None = None
     _bootstrap_log_lines: list[str] = field(default_factory=list)
 
     @property
@@ -65,10 +64,6 @@ class RemoteExecWorkerBase:
         if not self._internal_address:
             return ""
         return f"http://{self._internal_address}:{self._port}"
-
-    @property
-    def external_address(self) -> str | None:
-        return self._external_address
 
     def wait_for_connection(
         self,
@@ -108,9 +103,6 @@ class RemoteExecWorkerBase:
     @property
     def bootstrap_log(self) -> str:
         return "\n".join(self._bootstrap_log_lines)
-
-    def reboot(self) -> None:
-        self._remote_exec.run("sudo reboot", timeout=Duration.from_seconds(10))
 
     def restart_worker(self, bootstrap_script: str) -> None:
         """Restart the worker with a fresh bootstrap script.

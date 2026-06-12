@@ -44,6 +44,7 @@ from iris.cluster.backends.k8s.types import (
     PodResourceUsage,
     parse_k8s_cpu,
     parse_k8s_quantity,
+    parse_k8s_timestamp,
 )
 from iris.cluster.backends.types import find_free_port
 
@@ -88,6 +89,14 @@ class K8sService(Protocol):
 
     def delete_by_labels(self, resource: K8sResource, labels: dict[str, str], *, wait: bool = False) -> None:
         """Delete all resources matching the given label selector."""
+        ...
+
+    def list_pods_in_namespace(self, namespace: str) -> list[dict]:
+        """List pods in an explicit namespace (not the service's own)."""
+        ...
+
+    def delete_pod_in_namespace(self, namespace: str, name: str) -> None:
+        """Delete a pod in an explicit namespace, ignoring NotFound."""
         ...
 
     def remove_finalizer(self, resource: K8sResource, name: str, finalizer: str) -> None:
@@ -364,6 +373,37 @@ class CloudK8sService:
                 raise KubectlError(
                     f"delete_by_labels {resource.plural} -l {selector} failed ({e.status}): {e.reason}"
                 ) from e
+
+    # -- cross-namespace pod operations ---------------------------------------
+
+    def list_pods_in_namespace(self, namespace: str) -> list[dict]:
+        """List pods in an explicit namespace (not the service's own)."""
+        logger.info("k8s: LIST pods namespace=%s", namespace)
+        with slow_log(logger, f"list pods in {namespace}", threshold_ms=_SLOW_THRESHOLD_MS):
+            try:
+                result = self._resource_api(K8sResource.PODS).get(
+                    namespace=namespace,
+                    **self._request_timeout_kwargs(),
+                )
+                return [item.to_dict() for item in result.items]
+            except ApiException as e:
+                raise KubectlError(f"list pods in {namespace} failed ({e.status}): {e.reason}") from e
+
+    def delete_pod_in_namespace(self, namespace: str, name: str) -> None:
+        """Delete a pod in an explicit namespace, ignoring NotFound."""
+        logger.info("k8s: DELETE pod %s/%s", namespace, name)
+        with slow_log(logger, f"delete pod {namespace}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+            try:
+                self._resource_api(K8sResource.PODS).delete(
+                    name=name,
+                    namespace=namespace,
+                    body={"propagationPolicy": "Background"},
+                    **self._request_timeout_kwargs(),
+                )
+            except NotFoundError:
+                return
+            except ApiException as e:
+                raise KubectlError(f"delete pod {namespace}/{name} failed ({e.status}): {e.reason}") from e
 
     # -- remove_finalizer ----------------------------------------------------
 
@@ -807,9 +847,7 @@ def _parse_kubectl_log_line(line: str) -> KubectlLogLine:
     if len(parts) == 2:
         ts_str, payload = parts
         try:
-            if len(ts_str) > 27 and ts_str.endswith("Z"):
-                ts_str = ts_str[:26] + "Z"
-            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            ts = parse_k8s_timestamp(ts_str)
             return KubectlLogLine(timestamp=ts, stream="stdout", data=payload)
         except ValueError:
             logger.warning("Failed to parse timestamp from log line: %r", line[:120])

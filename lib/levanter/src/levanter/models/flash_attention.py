@@ -245,7 +245,12 @@ def _flash_attention_forward(
 
             if mask is not None:
                 mask_ij = _materialize_mask_slice(mask, i, j, QPos, KPos, block_size)
-                attn_ij = hax.where(mask_ij, attn_ij, -1e10)
+                # mask_ij is None when the AttentionMask carries no constraints
+                # (e.g. ``AttentionMask(is_causal=False)`` with no explicit_mask/
+                # segment_ids/sliding_window) — i.e. full bidirectional attention.
+                # Mirror splash_attention's TPU behavior and skip the mask op.
+                if mask_ij is not None:
+                    attn_ij = hax.where(mask_ij, attn_ij, -1e10)
 
             if dropout > 0 and not inference:
                 attn_ij = hax.nn.dropout(
@@ -373,7 +378,10 @@ def _flash_attention_backward(
 
             if mask is not None:
                 mask_ij = _materialize_mask_slice(mask, i, j, QPos, KPos, block_size)
-                attn_ij = hax.where(mask_ij, attn_ij, -1e10)
+                # See forward pass: a no-constraint AttentionMask materializes
+                # to None, i.e. full attention.
+                if mask_ij is not None:
+                    attn_ij = hax.where(mask_ij, attn_ij, -1e10)
 
             p_ij = hax.exp(attn_ij - L_i)
 

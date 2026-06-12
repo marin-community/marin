@@ -42,10 +42,6 @@ class _RestoredWorkerHandle:
         return f"http://{self._internal_address}:{self._port}"
 
     @property
-    def external_address(self) -> str | None:
-        return None
-
-    @property
     def bootstrap_log(self) -> str:
         return ""
 
@@ -60,9 +56,6 @@ class _RestoredWorkerHandle:
     ) -> CommandResult:
         del command, timeout, on_line
         raise NotImplementedError("RestoredWorkerHandle does not support run_command")
-
-    def reboot(self) -> None:
-        raise NotImplementedError("RestoredWorkerHandle does not support reboot")
 
 
 @dataclass(frozen=True)
