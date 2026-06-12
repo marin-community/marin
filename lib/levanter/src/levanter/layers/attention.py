@@ -72,6 +72,8 @@ class AttentionBackend(StrEnum):
 
 
 _SPLASH_FALLBACK_WARNINGS_EMITTED: set[str] = set()
+SPLASH_BATCH_AXIS_NAME = "splash_batch"
+SPLASH_HEAD_AXIS_NAME = "splash_head"
 
 
 def _warn_splash_fallback_once(message: str) -> None:
@@ -809,16 +811,16 @@ def _prepare_sinks_for_splash(attn_sink: NamedArray, q_class, physical_axes_q: P
             sink_axis_names.add(ax.name)
 
     if batch_axes:
-        sink = _maybe_flatten(sink, batch_axes, "splash_batch")
+        sink = _maybe_flatten(sink, batch_axes, SPLASH_BATCH_AXIS_NAME)
     else:
-        sink = _maybe_flatten(sink, (), "splash_batch")
+        sink = _maybe_flatten(sink, (), SPLASH_BATCH_AXIS_NAME)
 
     if head_axes:
-        sink = _maybe_flatten(sink, head_axes, "splash_head")
+        sink = _maybe_flatten(sink, head_axes, SPLASH_HEAD_AXIS_NAME)
     else:
-        sink = _maybe_flatten(sink, (), "splash_head")
+        sink = _maybe_flatten(sink, (), SPLASH_HEAD_AXIS_NAME)
 
-    sink = sink.rearrange(("splash_batch", "splash_head"))
+    sink = sink.rearrange((SPLASH_BATCH_AXIS_NAME, SPLASH_HEAD_AXIS_NAME))
 
     sinks_array = sink.astype(jnp.float32).array  # also cast to fp32 inside splash
     physical_axes_sink = PartitionSpec(physical_axes_q[0], physical_axes_q[1])
@@ -844,11 +846,11 @@ def _prepare_prefix_lengths_for_splash(prefix_lengths: NamedArray, q_class, phys
             length_axis_names.add(ax.name)
 
     if batch_axes:
-        lengths = _maybe_flatten(lengths, batch_axes, "splash_batch")
+        lengths = _maybe_flatten(lengths, batch_axes, SPLASH_BATCH_AXIS_NAME)
     else:
-        lengths = _maybe_flatten(lengths, (), "splash_batch")
+        lengths = _maybe_flatten(lengths, (), SPLASH_BATCH_AXIS_NAME)
 
-    lengths = lengths.rearrange(("splash_batch",))
+    lengths = lengths.rearrange((SPLASH_BATCH_AXIS_NAME,))
     return lengths.astype(jnp.int32).array, PartitionSpec(physical_axes_q[0])
 
 
@@ -881,11 +883,11 @@ def _prepare_prefix_mask_for_splash(
         raise ValueError(f"prefix_mask must contain key position axis {KPos.name}.")
 
     if batch_axes:
-        mask = _maybe_flatten(mask, batch_axes, "splash_batch")
+        mask = _maybe_flatten(mask, batch_axes, SPLASH_BATCH_AXIS_NAME)
     else:
-        mask = _maybe_flatten(mask, (), "splash_batch")
+        mask = _maybe_flatten(mask, (), SPLASH_BATCH_AXIS_NAME)
 
-    mask = mask.rearrange(("splash_batch", KPos.name))
+    mask = mask.rearrange((SPLASH_BATCH_AXIS_NAME, KPos.name))
     return mask.astype(jnp.bool_).array, PartitionSpec(physical_axes_q[0], physical_axes_k[2])
 
 
@@ -911,6 +913,22 @@ def _batched_splash_kernel_specs(
         return PartitionSpec(batch_spec, *([None] * (ndim - 1)))
 
     return jax.tree_util.tree_map(spec_for_leaf, kernel)
+
+
+def _splash_kernel_from_prefix_metadata(prefix_metadata, block_sizes, logits_soft_cap):
+    return splash_attention_kernel.SplashAttentionKernel(
+        prefix_metadata.fwd_mask_info,
+        None if block_sizes.use_fused_bwd_kernel else prefix_metadata.dq_mask_info,
+        prefix_metadata.dkv_mask_info,
+        block_sizes=block_sizes,
+        is_mqa=False,
+        save_residuals=False,
+        mask_value=splash_attention_kernel.DEFAULT_MASK_VALUE,
+        attn_logits_soft_cap=logits_soft_cap,
+        residual_checkpoint_name=None,
+        mask_function=None,
+        interpret=False,
+    )
 
 
 def _unflatten_bshd(attn_output, q_class, v_class):
@@ -1200,24 +1218,11 @@ def _tpu_splash_attention(
                 kv_segment_ids=kv_segment_ids,
                 q_seq_len=Sq,
                 kv_seq_len=Sk,
-                num_heads=Hq,
                 block_sizes=block_sizes,
                 head_shards=head_shards,
                 q_seq_shards=q_seq_shards,
             )
-            return splash_attention_kernel.SplashAttentionKernel(
-                prefix_metadata.fwd_mask_info,
-                None if block_sizes.use_fused_bwd_kernel else prefix_metadata.dq_mask_info,
-                prefix_metadata.dkv_mask_info,
-                block_sizes=block_sizes,
-                is_mqa=False,
-                save_residuals=False,
-                mask_value=splash_attention_kernel.DEFAULT_MASK_VALUE,
-                attn_logits_soft_cap=logits_soft_cap,
-                residual_checkpoint_name=None,
-                mask_function=None,
-                interpret=False,
-            )
+            return _splash_kernel_from_prefix_metadata(prefix_metadata, block_sizes, logits_soft_cap)
 
         splash_kernel = jax.vmap(
             make_packed_prefix_lm_kernel,
@@ -1243,19 +1248,7 @@ def _tpu_splash_attention(
                 num_heads=Hq,
                 block_sizes=block_sizes,
             )
-            return splash_attention_kernel.SplashAttentionKernel(
-                prefix_metadata.fwd_mask_info,
-                None if block_sizes.use_fused_bwd_kernel else prefix_metadata.dq_mask_info,
-                prefix_metadata.dkv_mask_info,
-                block_sizes=block_sizes,
-                is_mqa=False,
-                save_residuals=False,
-                mask_value=splash_attention_kernel.DEFAULT_MASK_VALUE,
-                attn_logits_soft_cap=logits_soft_cap,
-                residual_checkpoint_name=None,
-                mask_function=None,
-                interpret=False,
-            )
+            return _splash_kernel_from_prefix_metadata(prefix_metadata, block_sizes, logits_soft_cap)
 
         splash_kernel = jax.vmap(make_prefix_lm_kernel)(prefix_lengths)
         assert physical_axes_prefix_lengths is not None

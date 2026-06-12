@@ -136,7 +136,6 @@ def packed_prefix_lm_mask_infos(
     kv_segment_ids: jax.Array,
     q_seq_len: int,
     kv_seq_len: int,
-    num_heads: int,
     block_sizes: splash_attention_kernel.BlockSizes,
     head_shards: int = 1,
     q_seq_shards: int = 1,
@@ -147,7 +146,6 @@ def packed_prefix_lm_mask_infos(
     This supports packed docs by letting callers mark prefix tokens per key
     position while segment IDs keep those prefix tokens local to their document.
     """
-    del num_heads
     if not block_sizes.has_backward_blocks:
         raise ValueError("packed_prefix_lm_mask_infos requires backward block sizes.")
 

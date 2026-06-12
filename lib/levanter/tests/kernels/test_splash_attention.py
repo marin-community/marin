@@ -146,7 +146,6 @@ def test_packed_prefix_lm_mask_info_matches_dense_packed_prefix_lm():
         kv_segment_ids=segment_ids,
         q_seq_len=seq_len,
         kv_seq_len=seq_len,
-        num_heads=2,
         block_sizes=block_sizes,
     )
 
@@ -160,21 +159,23 @@ def test_packed_prefix_lm_mask_info_matches_dense_packed_prefix_lm():
             num_heads=2,
         )[0]
     )
-    actual_fwd = _materialize_dynamic_mask_info(
+    actual_fwd = _materialize_mask_info(
         metadata.fwd_mask_info,
         head=0,
         q_seq_len=seq_len,
         kv_seq_len=seq_len,
         block_q=block_size,
         block_kv=block_size,
+        dynamic_partial_blocks=True,
     )
-    actual_dkv = _materialize_dynamic_mask_info(
+    actual_dkv = _materialize_mask_info(
         metadata.dkv_mask_info,
         head=0,
         q_seq_len=seq_len,
         kv_seq_len=seq_len,
         block_q=block_size,
         block_kv=block_size,
+        dynamic_partial_blocks=True,
         transposed_partial_blocks=True,
     )
 
@@ -279,6 +280,7 @@ def _materialize_mask_info(
     kv_seq_len: int,
     block_q: int,
     block_kv: int,
+    dynamic_partial_blocks: bool = False,
     transposed_partial_blocks: bool = False,
 ):
     q_blocks = q_seq_len // block_q
@@ -295,37 +297,10 @@ def _materialize_mask_info(
             if block_kind == BLOCK_MASK_FULL:
                 out[q_slice, kv_slice] = True
             elif block_kind == BLOCK_MASK_PARTIAL:
-                partial_block = partial_mask_blocks[int(mask_next[head, q_block, kv_block])]
-                if transposed_partial_blocks:
-                    partial_block = partial_block.T
-                out[q_slice, kv_slice] = partial_block
-    return out
-
-
-def _materialize_dynamic_mask_info(
-    mask_info,
-    *,
-    head: int,
-    q_seq_len: int,
-    kv_seq_len: int,
-    block_q: int,
-    block_kv: int,
-    transposed_partial_blocks: bool = False,
-):
-    q_blocks = q_seq_len // block_q
-    kv_blocks = kv_seq_len // block_kv
-    out = np.zeros((q_seq_len, kv_seq_len), dtype=bool)
-    block_mask = np.asarray(mask_info.block_mask)
-    partial_mask_blocks = np.asarray(mask_info.partial_mask_blocks)
-    for q_block in range(q_blocks):
-        q_slice = slice(q_block * block_q, (q_block + 1) * block_q)
-        for kv_block in range(kv_blocks):
-            kv_slice = slice(kv_block * block_kv, (kv_block + 1) * block_kv)
-            block_kind = int(block_mask[head, q_block, kv_block])
-            if block_kind == BLOCK_MASK_FULL:
-                out[q_slice, kv_slice] = True
-            elif block_kind == BLOCK_MASK_PARTIAL:
-                partial_block = partial_mask_blocks[head, q_block, kv_block]
+                if dynamic_partial_blocks:
+                    partial_block = partial_mask_blocks[head, q_block, kv_block]
+                else:
+                    partial_block = partial_mask_blocks[int(mask_next[head, q_block, kv_block])]
                 if transposed_partial_blocks:
                     partial_block = partial_block.T
                 out[q_slice, kv_slice] = partial_block
