@@ -13,7 +13,7 @@
   - `lib/levanter/src/levanter/layers/attention.py`
   - `lib/levanter/src/levanter/layers/attention_mask.py`
   - `lib/levanter/src/levanter/grug/attention/_core.py`
-- Baseline numbers: TBD. PR #6314 merged the shared Splash mask lowering helper and passed a v4-8 Iris smoke test with existing causal/sliding/segment-ID masks.
+- Baseline numbers: TBD. The starting point had shared Splash mask lowering helpers and passed a v4-8 Iris smoke test with existing causal/sliding/segment-ID masks.
 
 ## Experiment Log
 ### 2026-06-11 00:00 - Kickoff on merged Splash helper
@@ -114,3 +114,22 @@
 - Result: Kernel metadata tests passed with `16 passed`. Attention subset passed locally with `3 passed, 2 skipped`; the new packed causal segment-ID TPU test skipped locally. Changed-file precommit passed.
 - Interpretation: Plain causal packed segment IDs now have a block-skipping Splash lowering for batched segment IDs. This is still the dynamic dense-mask metadata representation, so it is a correctness and first-performance path rather than the final compact THD-style segment-run representation.
 - Next action: Run the new TPU-gated test on v4-8/v5p when available and benchmark 8192/16384 packed causal layouts against the runtime-segment-ID path.
+
+### 2026-06-12 - Repeatable v4-8 packed mask benchmark harness
+- Hypothesis: A checked-in microbench for structured Splash masks will give a stable gate for deciding when to replace dynamic dense-mask metadata with compact segment-run metadata.
+- Command:
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-mask-bench allocate --tpu-type v4-8 --timeout 900`
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-mask-bench execute -- uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 8192 --block-size 512 --docs-per-sequence 4 --prefix-tokens-per-doc 256 --iterations 5 --warmup 2 --include-dense`
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-mask-bench execute --no-sync -- uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 16384 --block-size 512 --docs-per-sequence 4 --prefix-tokens-per-doc 512 --iterations 5 --warmup 2`
+- Config:
+  - Worker: `marin-tpu-v4-reserved-8-us-central2-b-20260612-0605-e5d92216`, v4-8, `us-central2-b`.
+  - `B=1`, `H=8`, `D=128`, BF16 inputs, block size `512`, four equal-length packed docs per sequence.
+  - The benchmark records compile-including time and five steady-state forward timings for static causal Splash, packed causal segment Splash, packed prefix-LM Splash, and optional dense materialized Haliax references.
+- Result:
+  - Added `lib/levanter/scripts/bench/bench_splash_attention_masks.py`.
+  - 8192 steady medians: static causal Splash `1.837 ms`; packed causal segment Splash `1.547 ms`; packed prefix-LM Splash `1.510 ms`; packed causal dense reference `3.769 ms`; packed prefix dense reference `3.745 ms`.
+  - 8192 compile-including: static causal Splash `0.959 s`; packed causal segment Splash `0.829 s`; packed prefix-LM Splash `0.851 s`; packed causal dense reference `12.542 s`; packed prefix dense reference `9.921 s`.
+  - 16384 Splash-only steady medians: static causal `5.809 ms`; packed causal segment `4.480 ms`; packed prefix-LM `4.462 ms`.
+  - 16384 Splash-only compile-including: static causal `2.334 s`; packed causal segment `1.167 s`; packed prefix-LM `1.247 s`.
+- Interpretation: The dynamic packed metadata path is already a useful long-sequence win on v4-8 for both packed prefix and pure causal segment IDs: about `2.4-2.5x` faster than dense materialized references at 8192, and faster than static causal Splash because cross-document blocks are skipped. The remaining compact segment-run work should target metadata construction/payload scalability rather than proving basic block-skipping value.
+- Next action: Run the same harness on v5p-8 when available, then design a compact segment-run `MaskInfo` builder with a fixed partial-block capacity derived from contiguous packed document boundaries.
