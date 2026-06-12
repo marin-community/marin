@@ -8,7 +8,7 @@ import math
 import warnings
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal, Optional, Union
+from typing import Literal, Optional, Union, cast
 
 import equinox as eqx
 import jax
@@ -941,10 +941,18 @@ class _SplashPrefixControls:
 
 @dataclass(frozen=True)
 class _SplashKernelPlan:
-    kernel: Any
-    kernel_specs: Any
+    kernel: object
+    kernel_specs: object
     kernel_vmap_axis: int | None
     segment_id_lowering: SplashSegmentIdsLowering
+
+
+@dataclass(frozen=True)
+class _PackedPrefixSegmentIds:
+    q: jax.Array
+    kv: jax.Array
+    q_vmap_axis: int | None
+    kv_vmap_axis: int | None
 
 
 def _flatten_partition_spec_entries(entries):
@@ -1057,18 +1065,18 @@ def _segment_ids_for_packed_prefix_mask(
     *,
     q_seq_len: int,
     kv_seq_len: int,
-) -> tuple[jax.Array, jax.Array, Any, Any]:
+) -> _PackedPrefixSegmentIds:
     if segment_id_lowering.segment_ids is None:
         q_segment_ids = jnp.zeros((q_seq_len,), dtype=jnp.int32)
         kv_segment_ids = jnp.zeros((kv_seq_len,), dtype=jnp.int32)
-        return q_segment_ids, kv_segment_ids, None, None
+        return _PackedPrefixSegmentIds(q=q_segment_ids, kv=kv_segment_ids, q_vmap_axis=None, kv_vmap_axis=None)
 
     assert segment_id_lowering.segment_batch_axis is not None
-    return (
-        segment_id_lowering.segment_ids.q,
-        segment_id_lowering.segment_ids.kv,
-        segment_id_lowering.segment_batch_axis.q,
-        segment_id_lowering.segment_batch_axis.kv,
+    return _PackedPrefixSegmentIds(
+        q=segment_id_lowering.segment_ids.q,
+        kv=segment_id_lowering.segment_ids.kv,
+        q_vmap_axis=cast(int | None, segment_id_lowering.segment_batch_axis.q),
+        kv_vmap_axis=cast(int | None, segment_id_lowering.segment_batch_axis.kv),
     )
 
 
@@ -1086,7 +1094,7 @@ def _packed_prefix_kernel_plan(
     physical_axes_q: PartitionSpec,
     logits_soft_cap: float | None,
 ) -> _SplashKernelPlan:
-    q_segment_ids, kv_segment_ids, q_segment_vmap_axis, kv_segment_vmap_axis = _segment_ids_for_packed_prefix_mask(
+    segment_ids = _segment_ids_for_packed_prefix_mask(
         segment_id_lowering,
         q_seq_len=q_seq_len,
         kv_seq_len=kv_seq_len,
@@ -1107,8 +1115,8 @@ def _packed_prefix_kernel_plan(
 
     splash_kernel = jax.vmap(
         make_packed_prefix_lm_kernel,
-        in_axes=(0, q_segment_vmap_axis, kv_segment_vmap_axis),
-    )(prefix_masks, q_segment_ids, kv_segment_ids)
+        in_axes=(0, segment_ids.q_vmap_axis, segment_ids.kv_vmap_axis),
+    )(prefix_masks, segment_ids.q, segment_ids.kv)
     kernel_specs = _batched_splash_kernel_specs(
         splash_kernel,
         batch_spec=physical_axes_prefix_mask[0],
