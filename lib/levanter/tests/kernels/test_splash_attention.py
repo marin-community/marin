@@ -90,6 +90,15 @@ def test_lower_splash_attention_mask_rejects_unsupported_structured_fields():
             q_seq_shards=1,
         )
 
+    with pytest.raises(NotImplementedError):
+        lower_splash_attention_mask(
+            mask=SplashAttentionMaskSpec(is_causal=True, has_prefix_lengths=True),
+            q_seq_len=128,
+            kv_seq_len=128,
+            num_heads=1,
+            q_seq_shards=1,
+        )
+
 
 def test_lower_splash_segment_ids_packages_arrays_specs_and_batch_axes():
     q_segment_ids = jnp.array([[0, 0, 1, 1]], dtype=jnp.int32)

@@ -84,6 +84,7 @@ class AttentionMask(eqx.Module):
     segment_ids: tuple[NamedArray, NamedArray] | None = None
     sliding_window: Optional[int] = eqx.field(default=None, static=True)
     prefix_length: Optional[int] = eqx.field(default=None, static=True)
+    prefix_lengths: Optional[NamedArray] = None
     prefix_mask: Optional[NamedArray] = None
     # CF https://github.com/jax-ml/jax/blob/47858c4ac2fd4757a3b6fc5bb2981b71a71f00c2/jax/experimental/pallas/ops/tpu/flash_attention.py#L34
     # TODO: add prefixlm
@@ -139,6 +140,13 @@ class AttentionMask(eqx.Module):
             prefix = hax.arange(sub_k) + k_slice.start < self.prefix_length
             prefix = prefix.broadcast_axis(QPos.resize(q_slice.size))
 
+        if self.prefix_lengths is not None:
+            sub_k = KPos.resize(k_slice.size)
+            kv_positions = hax.arange(sub_k) + k_slice.start
+            dynamic_prefix = kv_positions < self.prefix_lengths.broadcast_axis(sub_k)
+            dynamic_prefix = dynamic_prefix.broadcast_axis(QPos.resize(q_slice.size))
+            prefix = combine_masks_or(prefix, dynamic_prefix)
+
         if self.prefix_mask is not None:
             prefix_mask = self.prefix_mask.rename({QPos.name: KPos.name})[KPos.name, k_slice]
             prefix = combine_masks_or(prefix, prefix_mask.broadcast_axis(QPos.resize(q_slice.size)))
@@ -190,6 +198,7 @@ class AttentionMask(eqx.Module):
     def prefix_lm(
         *,
         prefix_length: int | None = None,
+        prefix_lengths: NamedArray | None = None,
         prefix_mask: NamedArray | None = None,
         sliding_window: Optional[int] = None,
         segment_ids: tuple[NamedArray, NamedArray] | None = None,
@@ -199,14 +208,15 @@ class AttentionMask(eqx.Module):
         Keys marked as prefix are visible to every query. Non-prefix keys use
         causal masking, optionally constrained by ``sliding_window``.
         """
-        if prefix_length is None and prefix_mask is None:
-            raise ValueError("prefix_lm requires prefix_length or prefix_mask.")
+        if prefix_length is None and prefix_lengths is None and prefix_mask is None:
+            raise ValueError("prefix_lm requires prefix_length, prefix_lengths, or prefix_mask.")
         if prefix_length is not None and prefix_length < 0:
             raise ValueError(f"prefix_length must be non-negative, got {prefix_length}.")
 
         return AttentionMask(
             is_causal=True,
             prefix_length=prefix_length,
+            prefix_lengths=prefix_lengths,
             prefix_mask=prefix_mask,
             sliding_window=sliding_window,
             segment_ids=segment_ids,
@@ -242,6 +252,7 @@ class AttentionMask(eqx.Module):
             segment_ids=seg_field,
             sliding_window=self.sliding_window,
             prefix_length=self.prefix_length,
+            prefix_lengths=self.prefix_lengths,
             prefix_mask=self.prefix_mask,
         )
 
@@ -254,6 +265,7 @@ class AttentionMask(eqx.Module):
             segment_ids=self.segment_ids,
             sliding_window=sliding_window,
             prefix_length=self.prefix_length,
+            prefix_lengths=self.prefix_lengths,
             prefix_mask=self.prefix_mask,
         )
 
@@ -283,6 +295,7 @@ class AttentionMask(eqx.Module):
         segment_ids = self._check_for_same_segment_ids(other)
         prefix_mask = combine_masks_and(self.prefix_mask, other.prefix_mask)
         prefix_length = _combine_prefix_lengths_and(self.prefix_length, other.prefix_length)
+        prefix_lengths = _combine_dynamic_prefix_lengths_and(self.prefix_lengths, other.prefix_lengths)
         if self.sliding_window is None:
             sliding_window = other.sliding_window
         elif other.sliding_window is None:
@@ -297,6 +310,7 @@ class AttentionMask(eqx.Module):
             segment_ids=segment_ids,
             sliding_window=sliding_window,
             prefix_length=prefix_length,
+            prefix_lengths=prefix_lengths,
             prefix_mask=prefix_mask,
         )
 
@@ -319,6 +333,7 @@ class AttentionMask(eqx.Module):
         segment_ids = self._check_for_same_segment_ids(other)
         prefix_mask = combine_masks_or(self.prefix_mask, other.prefix_mask)
         prefix_length = _combine_prefix_lengths_or(self.prefix_length, other.prefix_length)
+        prefix_lengths = _combine_dynamic_prefix_lengths_or(self.prefix_lengths, other.prefix_lengths)
         if self.sliding_window is None or other.sliding_window is None:
             sliding_window = None
         else:
@@ -330,6 +345,7 @@ class AttentionMask(eqx.Module):
             segment_ids=segment_ids,
             sliding_window=sliding_window,
             prefix_length=prefix_length,
+            prefix_lengths=prefix_lengths,
             prefix_mask=prefix_mask,
         )
 
@@ -376,6 +392,22 @@ def _combine_prefix_lengths_or(left: int | None, right: int | None) -> int | Non
     if right is None:
         return left
     return max(left, right)
+
+
+def _combine_dynamic_prefix_lengths_and(left: NamedArray | None, right: NamedArray | None) -> NamedArray | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return hax.minimum(left, right)
+
+
+def _combine_dynamic_prefix_lengths_or(left: NamedArray | None, right: NamedArray | None) -> NamedArray | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return hax.maximum(left, right)
 
 
 @overload

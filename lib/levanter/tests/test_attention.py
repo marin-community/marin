@@ -136,6 +136,22 @@ def test_prefix_lm_mask_keeps_prefix_outside_sliding_window():
     np.testing.assert_array_equal(np.asarray(mat.array), expected)
 
 
+def test_prefix_lm_mask_materializes_dynamic_prefix_lengths():
+    Batch = hax.Axis("batch", 2)
+    Pos = hax.Axis("pos", 8)
+    KeyPos = Pos.alias("key_pos")
+    prefix_lengths = hax.named(jnp.array([2, 5], dtype=jnp.int32), Batch)
+    mask = AttentionMask.prefix_lm(prefix_lengths=prefix_lengths)
+
+    mat = mask.materialize(Pos, KeyPos).rearrange((Batch, Pos, KeyPos))
+
+    q = np.arange(Pos.size)[None, :, None]
+    k = np.arange(KeyPos.size)[None, None, :]
+    lengths = np.array([2, 5])[:, None, None]
+    expected = (k <= q) | (k < lengths)
+    np.testing.assert_array_equal(np.asarray(mat.array), expected)
+
+
 def test_attention_sink():
     Pos = hax.Axis("position", 2)
     KeyPos = Pos.alias("key_pos")

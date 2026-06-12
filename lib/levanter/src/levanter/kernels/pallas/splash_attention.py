@@ -26,6 +26,7 @@ class SplashAttentionMaskSpec:
     causal_offset: int | None = None
     sliding_window: int | None = None
     prefix_length: int | None = None
+    has_prefix_lengths: bool = False
     has_prefix_mask: bool = False
     has_explicit_mask: bool = False
 
@@ -59,8 +60,8 @@ def lower_splash_attention_mask(
     if mask is None:
         base_mask = splash_attention_mask.FullMask(_shape=(q_seq_len, kv_seq_len))
     else:
-        if mask.has_prefix_mask:
-            raise NotImplementedError("Dynamic prefix masks are not yet supported for splash attention")
+        if mask.has_prefix_lengths or mask.has_prefix_mask:
+            raise NotImplementedError("Dynamic prefix-LM masks are not yet supported for splash attention")
         if mask.prefix_length is not None and not mask.is_causal:
             raise NotImplementedError("Splash prefix-LM masks must also be causal.")
 

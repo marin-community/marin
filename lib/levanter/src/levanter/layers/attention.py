@@ -1061,6 +1061,7 @@ def _tpu_splash_attention(
             causal_offset=mask.causal_offset,
             sliding_window=mask.sliding_window,
             prefix_length=mask.prefix_length,
+            has_prefix_lengths=mask.prefix_lengths is not None,
             has_prefix_mask=mask.prefix_mask is not None,
             has_explicit_mask=mask.explicit_mask is not None,
         )
