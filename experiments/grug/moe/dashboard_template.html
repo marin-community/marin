@@ -1,0 +1,736 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="300">
+<title>Grug-MoE Swarm Dashboard v2</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :root {
+    --fg: #1a1a1a; --muted: #555; --border: #ddd; --bg-panel: #fafafa;
+    --queued: #3a3a3a; --finished: #22c55e; --failed: #ef4444;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, sans-serif;
+    color: var(--fg); margin: 0; padding: clamp(12px, 3vw, 28px);
+    max-width: 1500px; margin: 0 auto;
+  }
+  h1 { font-size: clamp(18px, 3vw, 22px); margin: 0 0 4px; }
+  h2 { font-size: 1.05em; margin: 28px 0 8px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .meta { color: var(--muted); font-size: clamp(12px, 1.5vw, 13px); line-height: 1.4; margin-bottom: 10px; }
+  .panel { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 4px; padding: 12px; margin-bottom: 12px; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  .legend { font-size: 0.85em; color: var(--muted); display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .swatch { display: inline-block; width: 13px; height: 13px; border: 1px solid #222; margin-right: 4px; vertical-align: middle; }
+  .gradient {
+    display: inline-block; width: 120px; height: 13px; border: 1px solid #222; vertical-align: middle;
+    background: linear-gradient(to right, #1e40af, #84cc16);
+  }
+  /* Progress grid */
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(28, 22px);
+    gap: 2px; margin: 6px 0;
+  }
+  #grid .cell { width: 22px; height: 22px; border: 1px solid #000; cursor: pointer; }
+  #grid .cell:hover { outline: 2px solid #2563eb; outline-offset: 1px; }
+  /* Tooltip */
+  #tip {
+    position: fixed; pointer-events: none; z-index: 9999;
+    background: rgba(0,0,0,0.85); color: #fff;
+    font-size: 12px; padding: 6px 8px; border-radius: 3px;
+    line-height: 1.3; max-width: 320px; white-space: pre-line;
+    display: none;
+  }
+  select, input[type=text], input[type=number] {
+    font: inherit; padding: 4px 6px; border: 1px solid var(--border); border-radius: 3px;
+  }
+  label { font-size: 0.85em; color: var(--muted); margin-right: 8px; }
+  .control-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  /* Tabs */
+  .tabs { display: flex; gap: 0; border-bottom: 1px solid #ddd; margin: 6px 0 14px; }
+  .tab {
+    padding: 7px 14px; border: 1px solid transparent; border-bottom: none;
+    background: transparent; cursor: pointer; font: inherit; font-size: 13px;
+    color: #666; border-radius: 4px 4px 0 0;
+  }
+  .tab.active { border-color: #ddd; background: white; color: var(--fg); font-weight: 600; margin-bottom: -1px; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+  body[data-tab="corr"] .controls-shared { display: none; }
+  /* Sliders */
+  .section { margin-bottom: 14px; }
+  .section-title { font-weight: 600; font-size: 12px; margin: 0 0 4px; color: #333; text-transform: uppercase; letter-spacing: 0.04em; }
+  .slider-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 4px 14px;
+  }
+  .slider-row { display: flex; align-items: center; gap: 6px; font-size: 11px; line-height: 1.3; min-width: 0; }
+  .slider-label {
+    flex: 0 0 clamp(110px, 26%, 170px); white-space: normal; line-height: 1.2;
+    overflow: hidden; color: #333; overflow-wrap: anywhere;
+  }
+  .slider-label .quality { font-size: 9px; color: #888; font-style: italic; }
+  .slider-row input[type=range] {
+    flex: 1; min-width: 0; accent-color: #2c6aa0; touch-action: manipulation;
+  }
+  .slider-val { flex: 0 0 50px; text-align: right; font-variant-numeric: tabular-nums; color: #666; }
+  .run-info { font-weight: 600; margin: 12px 0 6px; font-size: 13px; }
+  .controls-shared { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0 12px; }
+  .controls-shared button { font: inherit; font-size: 13px; padding: 4px 10px; cursor: pointer; background: #f5f5f5; border: 1px solid #ccc; border-radius: 3px; }
+  .controls-shared button:hover { background: #ebebeb; }
+  #chart { margin-top: 12px; width: 100%; }
+  #chart-mix-detail { width: 100%; margin-top: 14px; }
+</style>
+</head>
+<body>
+<div id="tip"></div>
+
+<h1>Grug-MoE Fisher-DSP Swarm</h1>
+<div class="meta" id="header-meta">loading…</div>
+
+<div class="panel">
+  <div class="legend" id="grid-legend"></div>
+  <div id="grid"></div>
+</div>
+
+<h2>Final eval over finished candidates</h2>
+<div class="panel">
+  <div class="control-row">
+    <label>metric:</label>
+    <select id="eval-metric"></select>
+  </div>
+  <div class="row">
+    <div id="eval-histogram"></div>
+    <div id="eval-scatter"></div>
+  </div>
+</div>
+
+<h2>Pearson r: bucket weight ↔ eval metric</h2>
+<div class="panel">
+  <div class="control-row">
+    <span class="legend">phase:</span>
+    <button class="tab" data-corr-phase-top="phase_0">phase_0</button>
+    <button class="tab" data-corr-phase-top="phase_1">phase_1</button>
+    <button class="tab active" data-corr-phase-top="sum">phase_0+phase_1</button>
+    <label style="margin-left:16px;">filter metrics:</label>
+    <input id="corr-filter-top" type="text" placeholder="substring filter" />
+  </div>
+  <div class="meta">Sign-flipped so <b>blue = up-weighting helps</b>, red = hurts. Hover for r.</div>
+  <div id="correlation-top"></div>
+</div>
+
+<h2>Mixture explorer (DSP-fit predictive)</h2>
+<div class="panel">
+  <p class="meta" id="explorer-intro">
+    Three views on the finished candidates.
+    <b>By mixture</b> — per-(phase, bucket) weight sliders; drag any to set the
+    demanded mixture (others auto-adjust to keep Σw=1). Evaluates Calvin's DSP
+    fit and shows the <i>predicted</i> per-task percentile.
+    <b>By task results</b> — drag any task slider to take a gradient step on
+    the mixture toward that target percentile; other task sliders snap to the
+    new mixture's predictions.
+    <b>Rank correlations</b> — Pearson r heatmap, phase_0 / phase_1 / sum.
+  </p>
+  <div class="tabs">
+    <button class="tab" data-tab="mixture">By mixture</button>
+    <button class="tab active" data-tab="results">By task results</button>
+  </div>
+  <div id="tab-mixture" class="tab-content">
+    <div id="run-info-mix" class="run-info"></div>
+    <div id="sliders-mix"></div>
+  </div>
+  <div id="tab-results" class="tab-content active">
+    <div id="run-info-task" class="run-info"></div>
+    <div id="sliders"></div>
+  </div>
+  <div class="controls-shared">
+    <button id="reset-mix">Reset to proportional</button>
+    <button id="reset-pareto" title="DSP-optimised mixture predicted to beat proportional on every task by ≥+0.05 z">Reset to predicted Pareto-improver</button>
+    <label class="view-mode-control" style="margin-left:16px;">view:
+      <select id="view-mode">
+        <option value="delta" selected>Δ from proportional</option>
+        <option value="abs">Absolute weight</option>
+      </select>
+    </label>
+  </div>
+  <div id="chart"></div>
+  <div id="chart-mix-detail"></div>
+</div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+const data = await fetch("dashboard_data.json").then(r => r.json());
+const QUALITY = ["bottom 20%", "20–40%", "40–60%", "60–80%", "top 20%"];
+
+// ---------- D3 helpers ----------
+function newSvg(w, h) {
+  return d3.create("svg").attr("width", w).attr("height", h)
+    .style("font", "10px system-ui, sans-serif");
+}
+function addBottomAxis(g, scale, label) {
+  g.call(d3.axisBottom(scale).tickSizeOuter(0));
+  if (label) g.append("text").attr("x", scale.range()[1]).attr("y", 28)
+    .attr("text-anchor", "end").attr("fill", "#444").text(label);
+}
+function addLeftAxis(g, scale, label) {
+  g.call(d3.axisLeft(scale).tickSizeOuter(0));
+  if (label) g.append("text").attr("x", 0).attr("y", -8)
+    .attr("text-anchor", "start").attr("fill", "#444").text(label);
+}
+function tooltipTitle(sel, fn) { sel.append("title").text(fn); }
+
+// ---------- Header ----------
+const counts = data.candidates.reduce((acc, c) => { acc[c.state] = (acc[c.state]||0)+1; return acc; }, {});
+const inProgress = counts.in_progress || 0;
+const finished = counts.finished || 0;
+document.getElementById("header-meta").textContent =
+  `${data.candidates.length} candidates · ${finished} finished · ${inProgress} in progress · updated ${data.fetched_at}`;
+
+// ---------- Progress grid ----------
+const STATE_COLOR = { queued: "#3a3a3a", finished: "#22c55e", failed: "#ef4444" };
+function progressColor(pct) {
+  const s = [30, 64, 175], e = [132, 204, 22];
+  const t = Math.max(0, Math.min(1, pct));
+  return `rgb(${Math.round(s[0]+(e[0]-s[0])*t)},${Math.round(s[1]+(e[1]-s[1])*t)},${Math.round(s[2]+(e[2]-s[2])*t)})`;
+}
+const tip = document.getElementById("tip");
+function showTip(text, ev) {
+  tip.textContent = text;
+  tip.style.display = "block";
+  const pad = 12;
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + tip.offsetWidth > window.innerWidth) x = ev.clientX - tip.offsetWidth - pad;
+  if (y + tip.offsetHeight > window.innerHeight) y = ev.clientY - tip.offsetHeight - pad;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+function hideTip() { tip.style.display = "none"; }
+
+const gridDiv = document.getElementById("grid");
+for (const c of data.candidates) {
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  let color = STATE_COLOR[c.state] || "#888";
+  let stateLabel = c.state;
+  if (c.state === "in_progress") {
+    const pct = c.step / data.target_steps;
+    color = progressColor(pct);
+    stateLabel = `in_progress ${(pct*100).toFixed(0)}%`;
+  }
+  cell.style.background = color;
+  const evalBpb = c.evals && (c.evals["eval/paloma/bpb"] || c.evals["eval/paloma/macro_bpb"]);
+  const ageLine = (c.minutes_since_ckpt != null) ? `\nlast ckpt: ${c.minutes_since_ckpt.toFixed(0)} min ago` : "";
+  const evalLine = evalBpb != null ? `\npaloma bpb: ${evalBpb.toFixed(4)}` : "";
+  const tipText = `#${String(c.idx).padStart(3,"0")} (${stateLabel})\nstep ${c.step.toLocaleString()}/${data.target_steps.toLocaleString()} (${(100*c.step/data.target_steps).toFixed(1)}%)\nloss ${c.loss.toFixed(4)}${ageLine}${evalLine}`;
+  cell.addEventListener("mousemove", ev => showTip(tipText, ev));
+  cell.addEventListener("mouseleave", hideTip);
+  cell.addEventListener("click", () => { if (c.wandb_url) window.open(c.wandb_url, "_blank"); });
+  gridDiv.appendChild(cell);
+}
+const legend = document.getElementById("grid-legend");
+for (const [name, color] of Object.entries(STATE_COLOR))
+  legend.insertAdjacentHTML("beforeend", `<span><span class="swatch" style="background:${color}"></span>${name} (${counts[name]||0})</span>`);
+legend.insertAdjacentHTML("beforeend", `<span><span class="gradient"></span> in_progress (${inProgress}): 0% → 100%</span>`);
+legend.insertAdjacentHTML("beforeend", `<span style="margin-left:auto;color:#888">click a cell to open W&B run</span>`);
+
+// ---------- Bucket label helpers ----------
+function bucketLabel(b) {
+  if (!b.startsWith("c")) return b; // 'tail'
+  const c = parseInt(b.slice(1, 3), 10);
+  const q = parseInt(b.slice(4), 10);
+  const name = data.cluster_names[c] || `c${String(c).padStart(2,"0")}`;
+  return `${name} · ${QUALITY[q] || `q${q}`}`;
+}
+function bucketLabelHTML(b) {
+  if (!b.startsWith("c")) return `<span>${b}</span>`;
+  const c = parseInt(b.slice(1, 3), 10);
+  const q = parseInt(b.slice(4), 10);
+  const name = data.cluster_names[c] || `c${String(c).padStart(2,"0")}`;
+  return `${name}<br><span class="quality">${QUALITY[q] || `q${q}`}</span>`;
+}
+
+// ---------- Eval panel (raw distribution view) ----------
+const finishedWithEvals = data.candidates.filter(c => c.state === "finished" && c.evals && Object.keys(c.evals).length);
+const allEvalKeys = Array.from(new Set(finishedWithEvals.flatMap(c => Object.keys(c.evals)))).sort();
+const headlinePriority = [
+  "eval/paloma/bpb", "eval/paloma/macro_bpb", "eval/paloma/micro_loss", "eval/paloma/macro_loss",
+  "eval/uncheatable_eval/bpb", "eval/uncheatable_eval/macro_bpb", "eval/uncheatable_eval/micro_loss",
+  "eval/uncheatable_eval/macro_loss", "eval/bpb", "eval/macro_bpb", "eval/loss",
+];
+const orderedEvalKeys = [
+  ...headlinePriority.filter(k => allEvalKeys.includes(k)),
+  ...allEvalKeys.filter(k => !headlinePriority.includes(k)),
+];
+const sel = document.getElementById("eval-metric");
+for (const k of orderedEvalKeys) {
+  const opt = document.createElement("option");
+  opt.value = k; opt.textContent = k;
+  sel.appendChild(opt);
+}
+function renderEval(metric) {
+  const pts = finishedWithEvals.map(c => ({ idx: c.idx, loss: c.loss, v: c.evals[metric] })).filter(p => p.v != null);
+  document.getElementById("eval-histogram").replaceChildren(_evalHistogram(pts, metric));
+  document.getElementById("eval-scatter").replaceChildren(_evalScatter(pts, metric));
+}
+function _evalHistogram(pts, metric) {
+  const W = 600, H = 280, m = { top: 16, right: 16, bottom: 38, left: 50 };
+  const svg = newSvg(W, H);
+  if (!pts.length) return svg.node();
+  const x = d3.scaleLinear().domain(d3.extent(pts, d => d.v)).nice().range([m.left, W - m.right]);
+  const bins = d3.bin().value(d => d.v).domain(x.domain()).thresholds(30)(pts);
+  const y = d3.scaleLinear().domain([0, d3.max(bins, b => b.length)]).nice().range([H - m.bottom, m.top]);
+  svg.append("g").attr("transform", `translate(0,${H - m.bottom})`).call(g => addBottomAxis(g, x, metric));
+  svg.append("g").attr("transform", `translate(${m.left},0)`).call(g => addLeftAxis(g, y, "count"));
+  svg.append("g").attr("fill", "#22c55e").attr("stroke", "#222").selectAll("rect")
+    .data(bins).join("rect")
+    .attr("x", d => x(d.x0) + 0.5).attr("y", d => y(d.length))
+    .attr("width", d => Math.max(0, x(d.x1) - x(d.x0) - 1))
+    .attr("height", d => y(0) - y(d.length));
+  return svg.node();
+}
+function _evalScatter(pts, metric) {
+  const W = 600, H = 280, m = { top: 16, right: 16, bottom: 38, left: 60 };
+  const svg = newSvg(W, H);
+  if (!pts.length) return svg.node();
+  const x = d3.scaleLinear().domain(d3.extent(pts, d => d.loss)).nice().range([m.left, W - m.right]);
+  const y = d3.scaleLinear().domain(d3.extent(pts, d => d.v)).nice().range([H - m.bottom, m.top]);
+  svg.append("g").attr("transform", `translate(0,${H - m.bottom})`).call(g => addBottomAxis(g, x, "train/loss"));
+  svg.append("g").attr("transform", `translate(${m.left},0)`).call(g => addLeftAxis(g, y, metric));
+  const dots = svg.append("g").attr("fill", "#22c55e").attr("stroke", "#222").attr("stroke-width", 0.3)
+    .selectAll("circle").data(pts).join("circle")
+    .attr("cx", d => x(d.loss)).attr("cy", d => y(d.v)).attr("r", 3);
+  tooltipTitle(dots, d => `#${String(d.idx).padStart(3,"0")}\ntrain loss: ${d.loss.toFixed(3)}\n${metric}: ${d.v.toFixed(4)}`);
+  return svg.node();
+}
+sel.addEventListener("change", () => renderEval(sel.value));
+renderEval(orderedEvalKeys[0]);
+
+// ---------- Mixture explorer (DSP fit) ----------
+const DSP = data.dsp;
+if (!DSP) {
+  document.getElementById("chart").innerHTML =
+    `<p class="meta">DSP fit not available (need ≥30 finished candidates).</p>`;
+} else {
+  const intro = document.getElementById("explorer-intro");
+  if (intro) intro.firstChild.nodeValue = `Three views on the ${DSP.n_candidates_fit} finished candidates fit by the DSP form. `;
+  const TASKS = DSP.task_names;
+  const BUCKETS = DSP.bucket_names;
+  const D = BUCKETS.length;
+  const T = TASKS.length;
+  const C0 = DSP.c0, C1 = DSP.c1;
+
+  // Mutable demanded mixture (starts at proportional).
+  const MIX0 = DSP.w0_prop.slice();
+  const MIX1 = DSP.w1_prop.slice();
+
+  // ----- DSP math (port of gist) -----
+  function softplus(x) { return x > 0 ? x + Math.log1p(Math.exp(-x)) : Math.log1p(Math.exp(x)); }
+  function erf(x) {
+    const a1=0.254829592, a2=-0.284496736, a3=1.421413741, a4=-1.453152027, a5=1.061405429, p=0.3275911;
+    const s = x < 0 ? -1 : 1; x = Math.abs(x);
+    const t = 1/(1+p*x);
+    return s*(1-((((a5*t+a4)*t+a3)*t+a2)*t+a1)*t*Math.exp(-x*x));
+  }
+  function normCdf(x) { return 0.5 * (1 + erf(x / Math.SQRT2)); }
+
+  // Phase-0 and phase-1 buckets are independent regression domains, so each
+  // has its own rho/tau/a/p (see swarm_dashboard2._predict_dsp). dpred/dw0[d]
+  // depends only on (phase_0 params at d, w0[d], C0[d]); symmetrically for w1.
+  function _doseTerms(rho, a, pen, tau, w, c) {
+    const z = w * c;
+    const u = Math.log1p(z) - tau;
+    const sp = softplus(u);
+    const sig = 1 / (1 + Math.exp(-u));
+    const signal = a * (1 - Math.exp(-rho * z));
+    const penalty = pen * sp * sp;
+    const dpred_dz = a * rho * Math.exp(-rho * z) - pen * 2 * sp * sig / (1 + z);
+    return { signal, penalty, dpred_dz };
+  }
+  function predictDSP(p, w0, w1) {
+    let signalSum = 0, penaltySum = 0;
+    for (let i = 0; i < D; i++) {
+      const t0 = _doseTerms(softplus(p.log_rho_0[i]), softplus(p.log_a_0[i]),
+                             softplus(p.log_p_0[i]), p.tau_0[i], w0[i], C0[i]);
+      const t1 = _doseTerms(softplus(p.log_rho_1[i]), softplus(p.log_a_1[i]),
+                             softplus(p.log_p_1[i]), p.tau_1[i], w1[i], C1[i]);
+      signalSum += t0.signal + t1.signal;
+      penaltySum += t0.penalty + t1.penalty;
+    }
+    return -(p.b0 - signalSum + penaltySum);
+  }
+  function gradPredict(p, w0, w1) {
+    const g0 = new Array(D), g1 = new Array(D);
+    for (let d = 0; d < D; d++) {
+      const t0 = _doseTerms(softplus(p.log_rho_0[d]), softplus(p.log_a_0[d]),
+                             softplus(p.log_p_0[d]), p.tau_0[d], w0[d], C0[d]);
+      const t1 = _doseTerms(softplus(p.log_rho_1[d]), softplus(p.log_a_1[d]),
+                             softplus(p.log_p_1[d]), p.tau_1[d], w1[d], C1[d]);
+      g0[d] = t0.dpred_dz * C0[d];
+      g1[d] = t1.dpred_dz * C1[d];
+    }
+    return [g0, g1];
+  }
+
+  function predictAllWithUncertainty(w0, w1) {
+    return DSP.dsp_params.map(p => {
+      const z = predictDSP(p, w0, w1);
+      return { pct: normCdf(z) * 100, pctLow: normCdf(z - p.sigma) * 100, pctHi: normCdf(z + p.sigma) * 100 };
+    });
+  }
+
+  // Simplex projection: shift weight idx to newVal, scale others proportionally.
+  function redistribute(phase, idx, newVal) {
+    const mix = phase === 0 ? MIX0 : MIX1;
+    const oldVal = mix[idx];
+    newVal = Math.min(1, Math.max(0, newVal));
+    if (newVal >= 1) { for (let d = 0; d < D; d++) mix[d] = (d === idx) ? 1 : 0; return; }
+    const otherSum = 1 - oldVal;
+    if (otherSum <= 1e-9) {
+      const share = (1 - newVal) / (D - 1);
+      for (let d = 0; d < D; d++) mix[d] = (d === idx) ? newVal : share;
+      return;
+    }
+    const scale = (1 - newVal) / otherSum;
+    for (let d = 0; d < D; d++) mix[d] = (d === idx) ? newVal : mix[d] * scale;
+  }
+
+  // Task-tab gradient step: push MIX toward Δpct on a target task; project back.
+  function stepMixTowardTask(taskIdx, deltaPct) {
+    const p = DSP.dsp_params[taskIdx];
+    const curZ = predictDSP(p, MIX0, MIX1);
+    const phi = Math.exp(-curZ * curZ / 2) / Math.sqrt(2 * Math.PI);
+    const deltaZ = (deltaPct / 100) / Math.max(phi, 1e-4);
+    const [g0, g1] = gradPredict(p, MIX0, MIX1);
+    let n2 = 0;
+    for (let d = 0; d < D; d++) n2 += g0[d]*g0[d] + g1[d]*g1[d];
+    if (n2 < 1e-12) return;
+    const alpha = deltaZ / n2;
+    for (let d = 0; d < D; d++) {
+      MIX0[d] = Math.max(0, MIX0[d] + alpha * g0[d]);
+      MIX1[d] = Math.max(0, MIX1[d] + alpha * g1[d]);
+    }
+    let s0 = 0, s1 = 0;
+    for (let d = 0; d < D; d++) { s0 += MIX0[d]; s1 += MIX1[d]; }
+    if (s0 > 0) for (let d = 0; d < D; d++) MIX0[d] /= s0;
+    if (s1 > 0) for (let d = 0; d < D; d++) MIX1[d] /= s1;
+  }
+
+  // ----- Task sections -----
+  function sectionOf(name) {
+    if (name.startsWith("eval/paloma/")) return "paloma";
+    if (name.startsWith("eval/uncheatable_eval/")) return "uncheatable_eval";
+    return "eval";
+  }
+  function shortTask(name) {
+    return name.replace("eval/paloma/", "").replace("eval/uncheatable_eval/", "").replace("eval/", "");
+  }
+
+  // ----- Build per-bucket mixture sliders (phase 0 then phase 1) -----
+  // Order buckets by (cluster, quality) so same-cluster cells stay together.
+  const bucketOrder = BUCKETS.map((_, i) => i).sort((a, b) => {
+    const ba = BUCKETS[a], bb = BUCKETS[b];
+    const sa = ba.startsWith("c") ? [parseInt(ba.slice(1,3),10), parseInt(ba.slice(4),10)] : [999, 0];
+    const sb = bb.startsWith("c") ? [parseInt(bb.slice(1,3),10), parseInt(bb.slice(4),10)] : [999, 0];
+    return sa[0] - sb[0] || sa[1] - sb[1];
+  });
+
+  function buildMixSliders() {
+    const container = document.getElementById("sliders-mix");
+    container.innerHTML = "";
+    const arrs = [MIX0, MIX1];
+    ["phase 0", "phase 1"].forEach((label, phase) => {
+      const sec = document.createElement("div");
+      sec.className = "section";
+      sec.innerHTML = `<div class="section-title">${label} · ${D} buckets</div>`;
+      const grid = document.createElement("div");
+      grid.className = "slider-grid";
+      bucketOrder.forEach(i => {
+        const init = arrs[phase][i];
+        const row = document.createElement("div");
+        row.className = "slider-row";
+        row.innerHTML = `
+          <span class="slider-label" title="${BUCKETS[i]}">${bucketLabelHTML(BUCKETS[i])}</span>
+          <input type="range" min="0" max="1" step="0.001" value="${init}" id="m_${phase}_${i}">
+          <span class="slider-val" id="mv_${phase}_${i}">${init.toFixed(3)}</span>`;
+        grid.appendChild(row);
+        row.querySelector("input").addEventListener("input", e => {
+          redistribute(phase, i, parseFloat(e.target.value));
+          syncMixSliders(phase);
+          updateChart();
+        });
+      });
+      sec.appendChild(grid);
+      container.appendChild(sec);
+    });
+  }
+  function syncMixSliders(phase) {
+    const mix = phase === 0 ? MIX0 : MIX1;
+    for (let d = 0; d < D; d++) {
+      const sl = document.getElementById(`m_${phase}_${d}`);
+      const lbl = document.getElementById(`mv_${phase}_${d}`);
+      if (sl) sl.value = mix[d];
+      if (lbl) lbl.textContent = mix[d].toFixed(3);
+    }
+  }
+
+  // ----- Build per-task sliders -----
+  function buildTaskSliders() {
+    const container = document.getElementById("sliders");
+    container.innerHTML = "";
+    const groups = {paloma: [], uncheatable_eval: [], eval: []};
+    TASKS.forEach((name, idx) => groups[sectionOf(name)].push({name, idx}));
+    for (const [key, items] of Object.entries(groups)) {
+      if (!items.length) continue;
+      const sec = document.createElement("div");
+      sec.className = "section";
+      sec.innerHTML = `<div class="section-title">${key} · ${items.length}</div>`;
+      const grid = document.createElement("div");
+      grid.className = "slider-grid";
+      items.forEach(({name, idx}) => {
+        const z0 = predictDSP(DSP.dsp_params[idx], MIX0, MIX1);
+        const init = normCdf(z0) * 100;
+        const row = document.createElement("div");
+        row.className = "slider-row";
+        row.innerHTML = `
+          <span class="slider-label" title="${name}">${shortTask(name)}</span>
+          <input type="range" min="0" max="100" step="0.5" value="${init}" id="s_${idx}">
+          <span class="slider-val" id="v_${idx}">${init.toFixed(1)}</span>`;
+        grid.appendChild(row);
+        const sl = row.querySelector("input");
+        sl.addEventListener("input", () => {
+          const curZ = predictDSP(DSP.dsp_params[idx], MIX0, MIX1);
+          const curPct = normCdf(curZ) * 100;
+          stepMixTowardTask(idx, parseFloat(sl.value) - curPct);
+          syncTaskSlidersFromMix();
+          syncMixSliders(0); syncMixSliders(1);
+          updateChart();
+        });
+      });
+      sec.appendChild(grid);
+      container.appendChild(sec);
+    }
+  }
+  function syncTaskSlidersFromMix() {
+    for (let t = 0; t < T; t++) {
+      const z = predictDSP(DSP.dsp_params[t], MIX0, MIX1);
+      const pct = normCdf(z) * 100;
+      const sl = document.getElementById("s_" + t);
+      if (sl) sl.value = pct;
+      const lbl = document.getElementById("v_" + t);
+      if (lbl) lbl.textContent = pct.toFixed(1);
+    }
+    updateTaskInfo();
+  }
+
+  // ----- Render predicted-percentile chart -----
+  function renderPredictedChart() {
+    const preds = predictAllWithUncertainty(MIX0, MIX1);
+    const pcts = preds.map(p => p.pct);
+    const meanPct = pcts.reduce((a,b)=>a+b, 0) / pcts.length;
+    document.getElementById("run-info-mix").textContent =
+      `Predicted mean percentile ${meanPct.toFixed(1)} for the current demanded mixture`;
+    const order = [...pcts.keys()].sort((a, b) => pcts[b] - pcts[a]);
+    const rows = order.map(i => ({
+      task: shortTask(TASKS[i]), pct: preds[i].pct,
+      lo: preds[i].pctLow, hi: preds[i].pctHi,
+      sigma: DSP.dsp_params[i].sigma,
+    }));
+    const W = 1100, H = Math.max(420, rows.length * 14 + 60);
+    const m = { top: 30, right: 30, bottom: 30, left: 220 };
+    const svg = newSvg(W, H);
+    const x = d3.scaleLinear().domain([0, 100]).range([m.left, W - m.right]);
+    const y = d3.scaleBand().domain(rows.map(r => r.task)).range([m.top, H - m.bottom]).paddingInner(0.2);
+    // x-axis (top) + grid
+    svg.append("g").attr("transform", `translate(0,${m.top - 4})`)
+      .call(d3.axisTop(x)).select(".domain").remove();
+    svg.append("g").attr("stroke", "#eee").selectAll("line")
+      .data(x.ticks(10)).join("line")
+      .attr("x1", d => x(d)).attr("x2", d => x(d))
+      .attr("y1", m.top).attr("y2", H - m.bottom);
+    // y-axis (task labels)
+    svg.append("g").attr("transform", `translate(${m.left},0)`)
+      .call(d3.axisLeft(y).tickSizeOuter(0)).select(".domain").remove();
+    // dashed midline at 50
+    svg.append("line").attr("x1", x(50)).attr("x2", x(50))
+      .attr("y1", m.top).attr("y2", H - m.bottom)
+      .attr("stroke", "rgba(0,0,0,0.4)").attr("stroke-dasharray", "2,2");
+    // error bars (lo→hi)
+    svg.append("g").attr("stroke", "rgba(0,0,0,0.35)").selectAll("line.err")
+      .data(rows).join("line").attr("class", "err")
+      .attr("x1", d => x(d.lo)).attr("x2", d => x(d.hi))
+      .attr("y1", d => y(d.task) + y.bandwidth() / 2)
+      .attr("y2", d => y(d.task) + y.bandwidth() / 2);
+    // dots
+    const dots = svg.append("g").selectAll("circle").data(rows).join("circle")
+      .attr("cx", d => x(d.pct)).attr("cy", d => y(d.task) + y.bandwidth() / 2)
+      .attr("r", 4)
+      .attr("fill", d => d.pct >= 50 ? "rgba(44,160,44,0.85)" : "rgba(214,39,40,0.85)");
+    tooltipTitle(dots, d => `${d.task}\npct ${d.pct.toFixed(1)} (±1σ ${d.lo.toFixed(1)}–${d.hi.toFixed(1)}, σ=${d.sigma.toFixed(3)})`);
+    document.getElementById("chart").replaceChildren(svg.node());
+  }
+
+  function renderMixDetailChart() {
+    const mode = document.getElementById("view-mode").value;
+    const labels = bucketOrder.map(i => bucketLabel(BUCKETS[i]));
+    const cells = bucketOrder.map(i => {
+      const v0 = MIX0[i], v1 = MIX1[i], p0 = DSP.w0_prop[i], p1 = DSP.w1_prop[i];
+      return {
+        label: bucketLabel(BUCKETS[i]),
+        phase_0: mode === "delta" ? v0 - p0 : v0,
+        phase_1: mode === "delta" ? v1 - p1 : v1,
+      };
+    });
+    const xLabel = mode === "delta" ? "Δ from proportional" : "absolute weight";
+    const W = 1100, H = Math.max(420, D * 11 + 60);
+    const m = { top: 30, right: 30, bottom: 30, left: 220 };
+    const panelW = (W - m.left - m.right - 30) / 2; // 30px gutter
+    const svg = newSvg(W, H);
+    const xExt = d3.extent(cells.flatMap(c => [c.phase_0, c.phase_1]));
+    const xDom = [Math.min(0, xExt[0]), Math.max(0, xExt[1])];
+    const y = d3.scaleBand().domain(labels).range([m.top, H - m.bottom]).paddingInner(0.2);
+    const panelColors = { phase_0: "#1f77b4", phase_1: "#ff7f0e" };
+    ["phase_0", "phase_1"].forEach((phase, idx) => {
+      const x0 = m.left + idx * (panelW + 30);
+      const x = d3.scaleLinear().domain(xDom).nice().range([x0, x0 + panelW]);
+      // panel title
+      svg.append("text").attr("x", x0).attr("y", m.top - 14)
+        .attr("fill", panelColors[phase]).attr("font-weight", 600).text(phase);
+      // x-axis top + grid
+      svg.append("g").attr("transform", `translate(0,${m.top - 4})`)
+        .call(d3.axisTop(x).ticks(6)).select(".domain").remove();
+      svg.append("g").attr("stroke", "#eee").selectAll("line")
+        .data(x.ticks(6)).join("line")
+        .attr("x1", d => x(d)).attr("x2", d => x(d))
+        .attr("y1", m.top).attr("y2", H - m.bottom);
+      // y-axis (labels only on first panel)
+      if (idx === 0) {
+        svg.append("g").attr("transform", `translate(${m.left},0)`)
+          .call(d3.axisLeft(y).tickSizeOuter(0)).select(".domain").remove();
+      }
+      // zero rule
+      svg.append("line").attr("x1", x(0)).attr("x2", x(0))
+        .attr("y1", m.top).attr("y2", H - m.bottom).attr("stroke", "rgba(0,0,0,0.4)");
+      // bars
+      const bars = svg.append("g").selectAll("rect").data(cells).join("rect")
+        .attr("y", d => y(d.label)).attr("height", y.bandwidth())
+        .attr("x", d => x(Math.min(0, d[phase])))
+        .attr("width", d => Math.abs(x(d[phase]) - x(0)))
+        .attr("fill", d => {
+          if (mode !== "delta") return panelColors[phase];
+          if (d[phase] > 1e-6) return "rgba(44,160,44,0.85)";
+          if (d[phase] < -1e-6) return "rgba(214,39,40,0.85)";
+          return "rgba(160,160,160,0.5)";
+        });
+      tooltipTitle(bars, d => `${d.label}\n${phase}: ${d[phase].toFixed(4)}`);
+    });
+    // overall x label (centered under both panels)
+    svg.append("text").attr("x", (W) / 2).attr("y", H - 8)
+      .attr("text-anchor", "middle").attr("fill", "#444").text(xLabel);
+    document.getElementById("chart-mix-detail").replaceChildren(svg.node());
+  }
+
+  // ----- Standalone Pearson r heatmap (top-level section) -----
+  const corr = data.correlation;
+  let corrPhase = "sum", corrFilter = "";
+  function renderCorrelation() {
+    const el = document.getElementById("correlation-top");
+    el.innerHTML = "";
+    if (!corr) { el.textContent = "no correlation data"; return; }
+    let { eval_keys, buckets } = corr;
+    let mat = corr[corrPhase];
+    let rowIdx = eval_keys.map((_, i) => i)
+      .filter(i => !corrFilter || eval_keys[i].toLowerCase().includes(corrFilter.toLowerCase()))
+      .sort((a, b) => eval_keys[a].localeCompare(eval_keys[b]));
+
+    const rowH = 14, colW = 12;
+    const marginL = 280, marginR = 60, marginT = 80, marginB = 16;
+    const W = marginL + colW * buckets.length + marginR;
+    const H = marginT + rowH * rowIdx.length + marginB;
+    const color = d3.scaleSequential(d3.interpolateRdBu).domain([-0.5, 0.5]);
+    const svg = d3.select(el).append("svg").attr("width", W).attr("height", H);
+
+    svg.append("g").attr("transform", `translate(${marginL},${marginT})`)
+      .selectAll("text").data(buckets).join("text")
+      .attr("x", (_, i) => i * colW + colW/2).attr("y", -4)
+      .attr("text-anchor", "start")
+      .attr("transform", (_, i) => `rotate(-60, ${i*colW + colW/2}, -4)`)
+      .style("font-size", "8px")
+      .text(bucketLabel);
+    svg.append("g").attr("transform", `translate(${marginL-4},${marginT})`)
+      .selectAll("text").data(rowIdx).join("text")
+      .attr("x", 0).attr("y", (_, i) => i * rowH + rowH*0.7)
+      .attr("text-anchor", "end").style("font-size", "9px")
+      .text(i => eval_keys[i]);
+    const g = svg.append("g").attr("transform", `translate(${marginL},${marginT})`);
+    for (let r = 0; r < rowIdx.length; r++) {
+      const ek = eval_keys[rowIdx[r]];
+      const row = mat[rowIdx[r]];
+      for (let c = 0; c < buckets.length; c++) {
+        const v = row[c];
+        g.append("rect")
+          .attr("x", c*colW).attr("y", r*rowH)
+          .attr("width", colW-0.5).attr("height", rowH-0.5)
+          .attr("fill", color(Math.max(-0.5, Math.min(0.5, v))))
+          .on("mousemove", function(ev) {
+            showTip(`${bucketLabel(buckets[c])}\n${ek}\nr = ${v.toFixed(3)}`, ev);
+            d3.select(this).attr("stroke", "#000");
+          })
+          .on("mouseleave", function() { hideTip(); d3.select(this).attr("stroke", null); });
+      }
+    }
+  }
+  document.querySelectorAll("button[data-corr-phase-top]").forEach(b => {
+    b.addEventListener("click", () => {
+      document.querySelectorAll("button[data-corr-phase-top]").forEach(x => x.classList.remove("active"));
+      b.classList.add("active");
+      corrPhase = b.dataset.corrPhaseTop;
+      renderCorrelation();
+    });
+  });
+  document.getElementById("corr-filter-top").addEventListener("input", e => { corrFilter = e.target.value; renderCorrelation(); });
+
+  // ----- Tab switching -----
+  function activeTab() { return document.querySelector(".tab.active[data-tab]").dataset.tab; }
+  function updateChart() {
+    const t = activeTab();
+    if (t === "mixture") { renderPredictedChart(); renderMixDetailChart(); }
+    else if (t === "results") { renderPredictedChart(); renderMixDetailChart(); updateTaskInfo(); }
+  }
+  function updateTaskInfo() {
+    let sumZ = 0;
+    for (let t = 0; t < T; t++) sumZ += predictDSP(DSP.dsp_params[t], MIX0, MIX1);
+    const meanPct = normCdf(sumZ / T) * 100;
+    const el = document.getElementById("run-info-task");
+    if (el) el.textContent = `Predicted mean percentile ${meanPct.toFixed(1)} for the current demanded mixture`;
+  }
+  document.querySelectorAll(".tab[data-tab]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".tab[data-tab]").forEach(b => b.classList.toggle("active", b === btn));
+      document.querySelectorAll(".tab-content").forEach(c => c.classList.toggle("active", c.id === "tab-" + btn.dataset.tab));
+      document.body.dataset.tab = btn.dataset.tab;
+      updateChart();
+    });
+  });
+  document.body.dataset.tab = "results";
+
+  // Reset buttons
+  document.getElementById("reset-mix").addEventListener("click", () => {
+    for (let d = 0; d < D; d++) { MIX0[d] = DSP.w0_prop[d]; MIX1[d] = DSP.w1_prop[d]; }
+    syncMixSliders(0); syncMixSliders(1); syncTaskSlidersFromMix(); updateChart();
+  });
+  document.getElementById("reset-pareto").addEventListener("click", () => {
+    for (let d = 0; d < D; d++) { MIX0[d] = DSP.w0_pareto[d]; MIX1[d] = DSP.w1_pareto[d]; }
+    syncMixSliders(0); syncMixSliders(1); syncTaskSlidersFromMix(); updateChart();
+  });
+  document.getElementById("view-mode").addEventListener("change", updateChart);
+
+  buildMixSliders();
+  buildTaskSliders();
+  renderCorrelation();
+  updateChart();
+}
+</script>
+</body>
+</html>

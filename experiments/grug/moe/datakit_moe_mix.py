@@ -30,7 +30,8 @@ from levanter.data.text import (
     TextLmDatasetFormat,
 )
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, executor_main
+from marin.execution.types import this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
 from experiments.defaults import default_validation_sets

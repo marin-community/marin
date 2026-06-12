@@ -31,6 +31,7 @@ dependencies = [
     # a pre-built platform wheel rather than a pure-Python workspace member.
     # `scripts/rust_mode.py dev` swaps in an editable source for local hacking.
     "marin-finelog >= 0.2.0.dev0",
+    "scikit-learn>=1.8.0",
 ]
 
 [tool.uv]

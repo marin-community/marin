@@ -32,7 +32,8 @@ import fsspec
 from fray.cluster import ResourceConfig
 from levanter.data.text import LmDataConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.types import this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
 from experiments.defaults import default_validation_sets
@@ -158,7 +159,6 @@ if __name__ == "__main__":
             "Grug MoE swarm: 840 Fisher DSP-aligned (tau=20, lambda=0.25) two-phase mixtures on "
             "the us-central2 datakit store, D512 trained on ~100B tokens."
         ),
-        # Matches v4-reserved size 8 max_slices in marin.yaml; StepRunner's
-        # implicit default is 8, which would serialize the swarm.
-        max_concurrent=256,
+        # Leaves 16 v4-8 (= 2 v4-64 worth of chips) free for other users.
+        max_concurrent=240,
     )

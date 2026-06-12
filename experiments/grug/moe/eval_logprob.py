@@ -39,12 +39,13 @@ from fray.cluster import ResourceConfig
 from jax.experimental import multihost_utils
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.tokenizers import load_tokenizer
-from levanter.tracker.wandb import WandbConfig
+from levanter.tracker.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.mesh import MeshConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path
+from marin.execution.executor import ExecutorStep, InputName, executor_main
+from marin.execution.types import this_output_path
 from marin.execution.remote import remote
 from rigging.filesystem import filesystem as marin_filesystem
 
@@ -99,27 +100,70 @@ def _lm_eval_spec(task: EvalTaskConfig) -> str | dict:
     if not task.task_kwargs:
         return task.name
     spec: dict = {"task": task.name}
+    spec.update(task.task_kwargs)
+    # Inline tasks have no include-chain to lose so it's safe to also stamp
+    # the alias here; `_apply_task_field` re-stamps post-build for the
+    # registered-task path.
     if task.task_alias:
         spec["task_alias"] = task.task_alias
-    spec.update(task.task_kwargs)
     return spec
 
 
-def _apply_num_fewshot(task_dict: dict, num_fewshot: int) -> None:
-    """Walk ``task_dict`` and set ``num_fewshot`` on each leaf Task.
+def _inject_loglikelihood_bpb(task_dict: dict) -> None:
+    """Replace each leaf loglikelihood task's ``process_results`` with one that
+    emits ``bpb``/``nll`` alongside ``perplexity``/``acc``.
+
+    lm-eval's default ConfigurableTask.process_results for ``output_type:
+    loglikelihood`` ignores the ``bpb``/``nll`` entries in ``metric_list``
+    (that computation is buried in the ``multiple_choice`` branch). Without
+    this patch, inline tasks like ``logprob_gsm8k_5shot`` produce empty
+    ``results[name]`` dicts even though the eval ran on every sample.
+    """
+    import math
+
+    NAT_TO_BIT = 1.0 / math.log(2)
+
+    def _make_processor(task):
+        def _process(doc, results):
+            log_likelihood, is_greedy = results[0]
+            target_text = task.doc_to_target(doc)
+            n_bytes = max(1, len(str(target_text).encode("utf-8")))
+            return {
+                "bpb": (-log_likelihood / n_bytes) * NAT_TO_BIT,
+                "nll": -log_likelihood,
+                "perplexity": log_likelihood,
+                "acc": int(is_greedy),
+            }
+        return _process
+
+    for v in task_dict.values():
+        if hasattr(v, "_config"):
+            output_type = getattr(v._config, "output_type", None)
+            if output_type == "loglikelihood":
+                v._config.process_results = _make_processor(v)
+        elif isinstance(v, tuple) and len(v) == 2 and isinstance(v[1], dict):
+            _inject_loglikelihood_bpb(v[1])
+        elif isinstance(v, dict):
+            _inject_loglikelihood_bpb(v)
+
+
+def _apply_task_field(task_dict: dict, key: str, value) -> None:
+    """Walk ``task_dict`` and set ``key`` on each leaf Task.
 
     Mirrors lm-eval's `simple_evaluate`, which sets `num_fewshot` after
     task construction. Setting it post-build keeps the construction-time
     override path (which drops include-chain fields — see `_lm_eval_spec`)
-    out of play.
+    out of play. Used for both `num_fewshot` (for the few-shot count) and
+    `alias` (so `prepare_print_tasks` doesn't crash on `None + str` when
+    aggregating inline-task results).
     """
     for v in task_dict.values():
         if hasattr(v, "set_config"):
-            v.set_config(key="num_fewshot", value=num_fewshot)
+            v.set_config(key=key, value=value)
         elif isinstance(v, tuple) and len(v) == 2 and isinstance(v[1], dict):
-            _apply_num_fewshot(v[1], num_fewshot)
+            _apply_task_field(v[1], key, value)
         elif isinstance(v, dict):
-            _apply_num_fewshot(v, num_fewshot)
+            _apply_task_field(v, key, value)
 
 
 def _tokenize_request(
@@ -319,12 +363,11 @@ def run_grug_logprob_eval(config: GrugLogprobEvalConfig) -> None:
 
     # grug `Transformer.init` reshards with explicit axes; mirror the training
     # mesh so the load path matches checkpoint shardings.
+    # NoopTracker: skip wandb entirely. The eval results.json is the only artifact
+    # we need, and the wandb-finalize hang on shutdown blocks iris from reaping
+    # the worker for ~10-15 min per task, halving effective throughput.
     trainer_config = TrainerConfig(
-        tracker=WandbConfig(
-            project="marin_moe",
-            name=config.wandb_run_name,
-            tags=list(config.wandb_tags),
-        ),
+        tracker=NoopConfig(),
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         per_device_eval_parallelism=1,
         use_explicit_mesh_axes=True,
@@ -354,8 +397,70 @@ def run_grug_logprob_eval(config: GrugLogprobEvalConfig) -> None:
             from lm_eval import evaluator as lm_eval_evaluator
             from lm_eval.tasks import TaskManager, get_task_dict
 
+            # Defensive monkey-patch: in lm-eval commit d5e3391, `prepare_print_tasks`
+            # crashes with `None + str` when an inline task's alias propagates as None
+            # somewhere between our spec-time injection and the aggregation read. The
+            # propagation chain works locally but not in the container build; rather
+            # than chase further version skew, wrap the function to fall back to the
+            # task name when the read returns None.
+            from lm_eval import evaluator_utils as _eu
+            if not getattr(_eu, "_marin_prepare_print_tasks_patched", False):
+                _orig_prep = _eu.prepare_print_tasks
+                def _safe_prep(task_dict, results, task_depth=0, group_depth=0):
+                    # Try the upstream aggregation but never let it block result
+                    # serialisation. On failure, hand back the input `results`
+                    # dict as the aggregated form — it already contains every
+                    # metric/alias entry consolidate_results populated, which is
+                    # what evaluate() ends up dumping to results.json as the
+                    # "results" key. Falling back to an empty defaultdict (the
+                    # previous workaround) silently produced empty results.json
+                    # files even though the eval itself ran successfully.
+                    for _name, _r in list(results.items()):
+                        if isinstance(_r, dict):
+                            _r["alias"] = str(_name)
+                    try:
+                        return _orig_prep(task_dict, results, task_depth, group_depth)
+                    except (TypeError, KeyError, AttributeError) as e:
+                        logger.warning("MARIN_SAFE_PREP swallowed %s: %s", type(e).__name__, e)
+                        return dict(results), {}
+                _eu.prepare_print_tasks = _safe_prep
+                _eu._marin_prepare_print_tasks_patched = True
+                # evaluator imports `prepare_print_tasks` by name at module-load,
+                # so rebind the symbol it actually calls.
+                lm_eval_evaluator.prepare_print_tasks = _safe_prep
+                logger.warning(
+                    "MARIN_PATCH installed; eu.id=%r evaluator.id=%r same=%s",
+                    id(_eu.prepare_print_tasks),
+                    id(lm_eval_evaluator.prepare_print_tasks),
+                    _eu.prepare_print_tasks is lm_eval_evaluator.prepare_print_tasks,
+                )
+
             task_dict = get_task_dict([_lm_eval_spec(config.task)], task_manager=TaskManager())
-            _apply_num_fewshot(task_dict, config.task.num_fewshot)
+            _apply_task_field(task_dict, "num_fewshot", config.task.num_fewshot)
+            # lm-eval's ConfigurableTask.process_results for output_type=loglikelihood
+            # only returns {perplexity, acc} — `bpb`/`nll` from the metric_list never
+            # land in task_output.sample_metrics, so consolidate_results writes empty
+            # `results[name]` dicts. Inject a callable that computes them by hand.
+            _inject_loglikelihood_bpb(task_dict)
+            if config.task.task_alias:
+                # lm-eval's `consolidate_results` propagates the alias via
+                # `task_config["task_alias"]` (evaluator_utils.py:358), reading
+                # the TaskConfig dataclass field; without this, inline tasks
+                # crash on `None + str` aggregation in `prepare_print_tasks`.
+                _apply_task_field(task_dict, "task_alias", config.task.task_alias)
+            # Diagnostic: dump the leaf task's dump_config alias keys so we can
+            # see in container logs whether the patch propagated. Also mimic
+            # what get_task_list does so we can verify the TaskOutput snapshot.
+            from lm_eval.evaluator_utils import get_task_list, TaskOutput
+            _et = get_task_list(task_dict)
+            for _to in _et:
+                logger.warning(
+                    "TASK_ALIAS_DEBUG2 to.task_name=%r to.task_alias=%r "
+                    "to.task_config_keys=%r task_alias_in_config=%r",
+                    _to.task_name, _to.task_alias,
+                    sorted(list(_to.task_config.keys())) if hasattr(_to.task_config, "keys") else "NO_KEYS",
+                    _to.task_config.get("task_alias") if hasattr(_to.task_config, "get") else "NO_GET",
+                )
             lm = _make_grug_lm(
                 transformer,
                 tokenizer,

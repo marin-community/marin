@@ -45,7 +45,8 @@ from levanter.data.text import (
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
-from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, executor_main
+from marin.execution.types import this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.training.training import temporary_checkpoint_base_path
 
