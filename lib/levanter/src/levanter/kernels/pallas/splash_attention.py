@@ -6,6 +6,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol
 
 import jax
 import numpy as np
@@ -38,7 +39,7 @@ class SplashAttentionMaskSpec:
     """Static mask fields consumed by Splash Attention lowering."""
 
     is_causal: bool = False
-    causal_offset: int | None = None
+    causal_offset: object | None = None
     sliding_window: int | None = None
     prefix_length: int | None = None
     dynamic_prefix: SplashDynamicPrefixMask = SplashDynamicPrefixMask.NONE
@@ -53,7 +54,19 @@ class SplashAttentionMaskLowering:
     kernel_mask: splash_attention_mask.MultiHeadMask
 
 
-def splash_attention_mask_spec_from_attention_mask(mask) -> SplashAttentionMaskSpec:
+class SplashAttentionMaskLike(Protocol):
+    """Structured mask fields consumed by Splash Attention lowering."""
+
+    is_causal: bool
+    causal_offset: object | None
+    sliding_window: int | None
+    prefix_length: int | None
+    prefix_lengths: object | None
+    prefix_mask: object | None
+    explicit_mask: object | None
+
+
+def splash_attention_mask_spec_from_attention_mask(mask: SplashAttentionMaskLike) -> SplashAttentionMaskSpec:
     """Convert an AttentionMask-like object to the static fields used by Splash lowering."""
     dynamic_prefix = SplashDynamicPrefixMask.NONE
     if mask.prefix_lengths is not None and mask.prefix_mask is not None:
@@ -83,8 +96,8 @@ class SplashSegmentIdsLowering:
 
 
 @dataclass(frozen=True)
-class SplashPrefixLmMetadata:
-    """Compact block metadata for a dynamic prefix-LM mask."""
+class SplashDynamicMaskMetadata:
+    """Compact block metadata for a dynamic Splash mask."""
 
     fwd_mask_info: splash_attention_mask_info.MaskInfo
     dq_mask_info: splash_attention_mask_info.MaskInfo
@@ -99,6 +112,13 @@ class _PrefixLmMaskInfoComponents:
     partial_mask_blocks: jax.Array
 
 
+@dataclass(frozen=True)
+class _PackedSegmentMaskInputs:
+    q_positions: jax.Array
+    kv_positions: jax.Array
+    same_segment: jax.Array
+
+
 class _PrefixLmDataNextAxis(StrEnum):
     Q = "q"
     KV = "kv"
@@ -111,7 +131,7 @@ def prefix_lm_mask_infos(
     kv_seq_len: int,
     num_heads: int,
     block_sizes: splash_attention_kernel.BlockSizes,
-) -> SplashPrefixLmMetadata:
+) -> SplashDynamicMaskMetadata:
     """Build compact Splash mask metadata for dynamic prefix-LM attention."""
     if not block_sizes.has_backward_blocks:
         raise ValueError("prefix_lm_mask_infos requires backward block sizes.")
@@ -140,7 +160,7 @@ def prefix_lm_mask_infos(
         block_q=block_sizes.block_q_dkv,
         block_kv=block_sizes.block_kv_dkv,
     )
-    return SplashPrefixLmMetadata(
+    return SplashDynamicMaskMetadata(
         fwd_mask_info=fwd_mask_info,
         dq_mask_info=dq_mask_info,
         dkv_mask_info=dkv_mask_info,
@@ -157,7 +177,7 @@ def packed_prefix_lm_mask_infos(
     block_sizes: splash_attention_kernel.BlockSizes,
     head_shards: int = 1,
     q_seq_shards: int = 1,
-) -> SplashPrefixLmMetadata:
+) -> SplashDynamicMaskMetadata:
     """Build Splash metadata for packed prefix-LM masks.
 
     The represented mask is ``same_segment(q, kv) & (kv <= q | prefix_mask[kv])``.
@@ -178,31 +198,43 @@ def packed_prefix_lm_mask_infos(
         kv_seq_len=kv_seq_len,
         num_heads=1,
     )
-    fwd_mask_info = _dynamic_forward_dense_mask_info(
+    return _dynamic_dense_mask_infos(
         dense_mask,
-        block_q=block_sizes.block_q,
-        block_kv=block_sizes.block_kv,
+        block_sizes=block_sizes,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
-    dq_mask_info = _dynamic_forward_dense_mask_info(
+
+
+def packed_causal_segment_mask_infos(
+    *,
+    q_segment_ids: jax.Array,
+    kv_segment_ids: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_sizes: splash_attention_kernel.BlockSizes,
+    head_shards: int = 1,
+    q_seq_shards: int = 1,
+) -> SplashDynamicMaskMetadata:
+    """Build Splash metadata for packed causal masks.
+
+    The represented mask is ``same_segment(q, kv) & (kv <= q)``.
+    """
+    if not block_sizes.has_backward_blocks:
+        raise ValueError("packed_causal_segment_mask_infos requires backward block sizes.")
+
+    dense_mask = packed_causal_segment_dense_mask(
+        q_segment_ids=q_segment_ids,
+        kv_segment_ids=kv_segment_ids,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        num_heads=1,
+    )
+    return _dynamic_dense_mask_infos(
         dense_mask,
-        block_q=block_sizes.block_q_dq,
-        block_kv=block_sizes.block_kv_dq,
+        block_sizes=block_sizes,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
-    )
-    dkv_mask_info = _dynamic_dkv_dense_mask_info(
-        dense_mask,
-        block_q=block_sizes.block_q_dkv,
-        block_kv=block_sizes.block_kv_dkv,
-        head_shards=head_shards,
-        q_seq_shards=q_seq_shards,
-    )
-    return SplashPrefixLmMetadata(
-        fwd_mask_info=fwd_mask_info,
-        dq_mask_info=dq_mask_info,
-        dkv_mask_info=dkv_mask_info,
     )
 
 
@@ -229,6 +261,51 @@ def packed_prefix_lm_dense_mask(
         )
     if prefix_mask.shape[0] != kv_seq_len:
         raise ValueError(f"prefix_mask length {prefix_mask.shape[0]} must match kv_seq_len={kv_seq_len}.")
+    mask_inputs = _packed_segment_mask_inputs(
+        q_segment_ids=q_segment_ids,
+        kv_segment_ids=kv_segment_ids,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+    )
+    prefix_or_causal = (mask_inputs.kv_positions <= mask_inputs.q_positions) | prefix_mask[None, :]
+    mask = mask_inputs.same_segment & prefix_or_causal
+    return jnp.broadcast_to(mask[None, :, :], (num_heads, q_seq_len, kv_seq_len))
+
+
+def packed_causal_segment_dense_mask(
+    *,
+    q_segment_ids: jax.Array,
+    kv_segment_ids: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    num_heads: int,
+) -> jax.Array:
+    """Materialize the per-example dense mask used by packed causal segment lowering."""
+    mask_inputs = _packed_segment_mask_inputs(
+        q_segment_ids=q_segment_ids,
+        kv_segment_ids=kv_segment_ids,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+    )
+    mask = mask_inputs.same_segment & (mask_inputs.kv_positions <= mask_inputs.q_positions)
+    return jnp.broadcast_to(mask[None, :, :], (num_heads, q_seq_len, kv_seq_len))
+
+
+def _packed_segment_mask_inputs(
+    *,
+    q_segment_ids: jax.Array,
+    kv_segment_ids: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+) -> _PackedSegmentMaskInputs:
+    q_segment_ids = jnp.asarray(q_segment_ids)
+    kv_segment_ids = jnp.asarray(kv_segment_ids)
+
+    if q_segment_ids.ndim != 1 or kv_segment_ids.ndim != 1:
+        raise ValueError(
+            "q_segment_ids and kv_segment_ids must be rank 1 after batching, "
+            f"got {q_segment_ids.shape} and {kv_segment_ids.shape}."
+        )
     if q_segment_ids.shape[0] != q_seq_len:
         raise ValueError(f"q_segment_ids length {q_segment_ids.shape[0]} must match q_seq_len={q_seq_len}.")
     if kv_segment_ids.shape[0] != kv_seq_len:
@@ -237,41 +314,64 @@ def packed_prefix_lm_dense_mask(
     q_positions = jnp.arange(q_seq_len, dtype=jnp.int32)[:, None]
     kv_positions = jnp.arange(kv_seq_len, dtype=jnp.int32)[None, :]
     same_segment = q_segment_ids[:, None] == kv_segment_ids[None, :]
-    prefix_or_causal = (kv_positions <= q_positions) | prefix_mask[None, :]
-    mask = same_segment & prefix_or_causal
-    return jnp.broadcast_to(mask[None, :, :], (num_heads, q_seq_len, kv_seq_len))
+    return _PackedSegmentMaskInputs(
+        q_positions=q_positions,
+        kv_positions=kv_positions,
+        same_segment=same_segment,
+    )
 
 
-def _dynamic_forward_dense_mask_info(
+def _dynamic_dense_mask_infos(
     dense_mask: jax.Array,
     *,
-    block_q: int,
-    block_kv: int,
+    block_sizes: splash_attention_kernel.BlockSizes,
     head_shards: int,
     q_seq_shards: int,
-) -> splash_attention_mask_info.MaskInfo:
-    mask_info, _ = splash_attention_mask_info._process_dynamic_mask(
+) -> SplashDynamicMaskMetadata:
+    fwd_mask_info = _dynamic_dense_mask_info(
         dense_mask,
-        (block_q, block_kv),
+        block_q=block_sizes.block_q,
+        block_kv=block_sizes.block_kv,
         is_dkv=False,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
-    return mask_info
+    dq_mask_info = _dynamic_dense_mask_info(
+        dense_mask,
+        block_q=block_sizes.block_q_dq,
+        block_kv=block_sizes.block_kv_dq,
+        is_dkv=False,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+    )
+    dkv_mask_info = _dynamic_dense_mask_info(
+        dense_mask,
+        block_q=block_sizes.block_q_dkv,
+        block_kv=block_sizes.block_kv_dkv,
+        is_dkv=True,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+    )
+    return SplashDynamicMaskMetadata(
+        fwd_mask_info=fwd_mask_info,
+        dq_mask_info=dq_mask_info,
+        dkv_mask_info=dkv_mask_info,
+    )
 
 
-def _dynamic_dkv_dense_mask_info(
+def _dynamic_dense_mask_info(
     dense_mask: jax.Array,
     *,
     block_q: int,
     block_kv: int,
+    is_dkv: bool,
     head_shards: int,
     q_seq_shards: int,
 ) -> splash_attention_mask_info.MaskInfo:
     mask_info, _ = splash_attention_mask_info._process_dynamic_mask(
         dense_mask,
         (block_q, block_kv),
-        is_dkv=True,
+        is_dkv=is_dkv,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )

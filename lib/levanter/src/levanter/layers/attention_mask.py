@@ -5,13 +5,15 @@
 
 import warnings
 from numbers import Integral
-from typing import Optional, cast, overload
+from typing import Callable, Optional, TypeVar, cast, overload
 
 import equinox as eqx
 import haliax
 import haliax as hax
 from haliax import Axis, NamedArray
 from haliax.nn.attention import causal_mask, combine_masks_and, combine_masks_or
+
+T = TypeVar("T")
 
 
 def _materialize_segment_mask(
@@ -379,35 +381,27 @@ class AttentionMask(eqx.Module):
 
 
 def _combine_prefix_lengths_and(left: int | None, right: int | None) -> int | None:
-    if left is None:
-        return right
-    if right is None:
-        return left
-    return min(left, right)
+    return _combine_optional_prefix_values(left, right, min)
 
 
 def _combine_prefix_lengths_or(left: int | None, right: int | None) -> int | None:
-    if left is None:
-        return right
-    if right is None:
-        return left
-    return max(left, right)
+    return _combine_optional_prefix_values(left, right, max)
 
 
 def _combine_dynamic_prefix_lengths_and(left: NamedArray | None, right: NamedArray | None) -> NamedArray | None:
-    if left is None:
-        return right
-    if right is None:
-        return left
-    return hax.minimum(left, right)
+    return _combine_optional_prefix_values(left, right, hax.minimum)
 
 
 def _combine_dynamic_prefix_lengths_or(left: NamedArray | None, right: NamedArray | None) -> NamedArray | None:
+    return _combine_optional_prefix_values(left, right, hax.maximum)
+
+
+def _combine_optional_prefix_values(left: T | None, right: T | None, combine: Callable[[T, T], T]) -> T | None:
     if left is None:
         return right
     if right is None:
         return left
-    return hax.maximum(left, right)
+    return combine(left, right)
 
 
 @overload

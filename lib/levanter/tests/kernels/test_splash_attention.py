@@ -18,6 +18,7 @@ from levanter.kernels.pallas.splash_attention import (
     SplashDynamicPrefixMask,
     lower_splash_attention_mask,
     lower_splash_segment_ids,
+    packed_causal_segment_mask_infos,
     packed_prefix_lm_mask_infos,
     prefix_lm_dkv_mask_info,
     prefix_lm_forward_mask_info,
@@ -122,16 +123,72 @@ def test_prefix_lm_dkv_mask_info_matches_dense_prefix_lm(prefix_length):
 def test_packed_prefix_lm_mask_info_matches_dense_packed_prefix_lm():
     seq_len = 128
     block_size = 16
-    segment_ids = jnp.concatenate(
+    segment_ids = _two_segment_ids()
+    prefix_mask = jnp.zeros((seq_len,), dtype=jnp.bool_)
+    prefix_mask = prefix_mask.at[:20].set(True)
+    prefix_mask = prefix_mask.at[64:80].set(True)
+
+    metadata = packed_prefix_lm_mask_infos(
+        prefix_mask=prefix_mask,
+        q_segment_ids=segment_ids,
+        kv_segment_ids=segment_ids,
+        q_seq_len=seq_len,
+        kv_seq_len=seq_len,
+        block_sizes=_packed_metadata_test_block_sizes(block_size),
+    )
+
+    q = np.arange(seq_len)[:, None]
+    kv = np.arange(seq_len)[None, :]
+    segments = np.asarray(segment_ids)
+    expected = (segments[:, None] == segments[None, :]) & ((kv <= q) | np.asarray(prefix_mask)[None, :])
+    _assert_packed_metadata_matches_dense(
+        metadata,
+        expected,
+        seq_len=seq_len,
+        block_size=block_size,
+        partial_q_block=0,
+        partial_kv_block=1,
+    )
+
+
+def test_packed_causal_segment_mask_info_matches_dense_packed_causal():
+    seq_len = 128
+    block_size = 16
+    segment_ids = _two_segment_ids()
+
+    metadata = packed_causal_segment_mask_infos(
+        q_segment_ids=segment_ids,
+        kv_segment_ids=segment_ids,
+        q_seq_len=seq_len,
+        kv_seq_len=seq_len,
+        block_sizes=_packed_metadata_test_block_sizes(block_size),
+    )
+
+    q = np.arange(seq_len)[:, None]
+    kv = np.arange(seq_len)[None, :]
+    segments = np.asarray(segment_ids)
+    expected = (segments[:, None] == segments[None, :]) & (kv <= q)
+    _assert_packed_metadata_matches_dense(
+        metadata,
+        expected,
+        seq_len=seq_len,
+        block_size=block_size,
+        partial_q_block=1,
+        partial_kv_block=1,
+    )
+
+
+def _two_segment_ids():
+    return jnp.concatenate(
         [
             jnp.zeros((64,), dtype=jnp.int32),
             jnp.ones((64,), dtype=jnp.int32),
         ]
     )
-    prefix_mask = jnp.zeros((seq_len,), dtype=jnp.bool_)
-    prefix_mask = prefix_mask.at[:20].set(True)
-    prefix_mask = prefix_mask.at[64:80].set(True)
-    block_sizes = splash_attention_kernel.BlockSizes(
+
+
+def _packed_metadata_test_block_sizes(block_size):
+    return splash_attention_kernel.BlockSizes(
         block_q=block_size,
         block_kv_compute=block_size,
         block_kv=block_size,
@@ -142,19 +199,16 @@ def test_packed_prefix_lm_mask_info_matches_dense_packed_prefix_lm():
         block_kv_dq=block_size,
     )
 
-    metadata = packed_prefix_lm_mask_infos(
-        prefix_mask=prefix_mask,
-        q_segment_ids=segment_ids,
-        kv_segment_ids=segment_ids,
-        q_seq_len=seq_len,
-        kv_seq_len=seq_len,
-        block_sizes=block_sizes,
-    )
 
-    q = np.arange(seq_len)[:, None]
-    kv = np.arange(seq_len)[None, :]
-    segments = np.asarray(segment_ids)
-    expected = (segments[:, None] == segments[None, :]) & ((kv <= q) | np.asarray(prefix_mask)[None, :])
+def _assert_packed_metadata_matches_dense(
+    metadata,
+    expected,
+    *,
+    seq_len: int,
+    block_size: int,
+    partial_q_block: int,
+    partial_kv_block: int,
+):
     actual_fwd = _materialize_mask_info(
         metadata.fwd_mask_info,
         head=0,
@@ -181,7 +235,7 @@ def test_packed_prefix_lm_mask_info_matches_dense_packed_prefix_lm():
     # The helper's contract includes block skipping, not only dense mask parity.
     assert block_mask[0, 0, 4] == BLOCK_MASK_EMPTY  # noqa: ml-slop-test
     assert block_mask[0, 5, 4] == BLOCK_MASK_FULL  # noqa: ml-slop-test
-    assert block_mask[0, 0, 1] == BLOCK_MASK_PARTIAL  # noqa: ml-slop-test
+    assert block_mask[0, partial_q_block, partial_kv_block] == BLOCK_MASK_PARTIAL  # noqa: ml-slop-test
 
 
 def test_lower_splash_attention_mask_rejects_unsupported_structured_fields():

@@ -3,13 +3,13 @@
 ## Current Branch
 
 - Branch: `codex/splash-prefixlm-block-skipping`
-- Base: `origin/main` as of 2026-06-11, including merged PR #6314 and the 2026-06-11 `origin/main` updates through `87046a667`.
+- Base: current `origin/main` with the shared Splash Attention mask lowering in tree.
 - Research logbook: `.agents/logbooks/splash-prefixlm-block-skipping.md`
 - Experiment issue: https://github.com/marin-community/marin/issues/6332
 
 ## Goal
 
-Build on the shared Splash Attention mask lowering from PR #6314 to support:
+Build on the shared Splash Attention mask lowering to support:
 
 - Prefix-LM masks in Splash Attention.
 - Data-dependent prefix lengths under packing.
@@ -35,7 +35,7 @@ Files changed:
   - Sliding-window prefix-LM semantics are: prefix keys remain visible to every query, while non-prefix keys are causal and local-window constrained.
 
 - `lib/levanter/src/levanter/kernels/pallas/splash_attention.py`
-  - Adds `prefix_length`, `has_prefix_lengths`, and `has_prefix_mask` to `SplashAttentionMaskSpec`.
+  - Adds `prefix_length` and `dynamic_prefix` to `SplashAttentionMaskSpec`.
   - Adds `PrefixMask`, a sliceable Splash mask for static prefix keys.
   - Lowers static prefix-LM to `LogicalOr(causal_or_local_mask, PrefixMask)`, preserving Splash static mask processing and block skipping.
   - Adds compact `prefix_lm_mask_infos(...)` metadata for dynamic prefix lengths. The representation stores a full block grid but only `2 * q_blocks` partial blocks per example.
@@ -101,7 +101,7 @@ JAX Splash has two mask processing paths:
 
 `process_dynamic_mask` still computes `block_mask` and `data_next`, so it can skip fully empty blocks. However, it has no batch axis. Levanter’s current Splash path creates one `SplashAttentionKernel` outside `shard_map`, then vmaps the kernel call over batch, only varying `q`, `k`, `v`, `segment_ids`, and sinks.
 
-Dynamic prefix lengths are represented by a batched `SplashAttentionKernel` pytree. Packed prefix masks are represented by `prefix_mask + segment_ids` and now get Splash block metadata that encodes same-segment filtering, so off-document/off-causal blocks can be skipped. Pure causal segment-ID masks still use Splash runtime `segment_ids`, so they do not yet provide segment-ID block skipping.
+Dynamic prefix lengths are represented by a batched `SplashAttentionKernel` pytree. Packed prefix masks are represented by `prefix_mask + segment_ids` and now get Splash block metadata that encodes same-segment filtering, so off-document/off-causal blocks can be skipped. Pure causal packed segment-ID masks also have a first block-skipping path for batched segment IDs, still using dynamic dense-mask metadata rather than a final compact segment-run representation.
 
 ## Open Technical Question
 

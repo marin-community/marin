@@ -3,6 +3,7 @@
 
 import math
 from contextlib import ExitStack
+from dataclasses import dataclass
 
 import equinox
 import equinox as eqx
@@ -621,93 +622,105 @@ def _assert_tpu_splash_matches_reference(QPos, KPos, Key, q, k, v, mask, block_s
     assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
 
 
+@dataclass(frozen=True)
+class _TpuSplashMaskCase:
+    batch: Axis
+    head: Axis
+    key: Axis
+    q_pos: Axis
+    k_pos: Axis
+    block_size: int
+
+
+@dataclass(frozen=True)
+class _TpuSplashSegmentIds:
+    q: hax.NamedArray
+    kv: hax.NamedArray
+
+
+def _tpu_splash_mask_case() -> _TpuSplashMaskCase:
+    block_size = 256
+    return _TpuSplashMaskCase(
+        batch=hax.Axis("Batch", 2),
+        head=hax.Axis("Head", 8),
+        key=hax.Axis("Key", 128),
+        q_pos=hax.Axis("QPos", block_size * 2),
+        k_pos=hax.Axis("KPos", block_size * 2),
+        block_size=block_size,
+    )
+
+
+def _packed_segment_ids_for_splash_case(case: _TpuSplashMaskCase) -> _TpuSplashSegmentIds:
+    segment_ids = jnp.stack(
+        [
+            jnp.array([0] * case.block_size + [1] * case.block_size, dtype=jnp.int32),
+            jnp.array([2] * 128 + [3] * (case.block_size * 2 - 128), dtype=jnp.int32),
+        ]
+    )
+    return _TpuSplashSegmentIds(
+        q=hax.named(segment_ids, (case.batch, case.q_pos)),
+        kv=hax.named(segment_ids, (case.batch, case.k_pos)),
+    )
+
+
+def _run_batched_tpu_splash_mask_case(mask: AttentionMask, case: _TpuSplashMaskCase, seed: int):
+    with use_test_mesh():
+        q = hax.random.normal(jrandom.PRNGKey(seed), (case.batch, case.q_pos, case.head, case.key)) * 0.02
+        k = hax.random.normal(jrandom.PRNGKey(seed + 1), (case.batch, case.k_pos, case.head, case.key)) * 0.02
+        v = hax.random.normal(jrandom.PRNGKey(seed + 2), (case.batch, case.k_pos, case.head, case.key)) * 0.02
+        _assert_tpu_splash_matches_reference(case.q_pos, case.k_pos, case.key, q, k, v, mask, case.block_size)
+
+
 def test_tpu_splash_attention_dynamic_prefix_lm():
     if jax.default_backend() != "tpu":
         pytest.skip("TPU only")
 
-    BLOCK_SIZE = 256
-
-    Batch = hax.Axis("Batch", 2)
-    Head = hax.Axis("Head", 8)
-    Key = hax.Axis("Key", 128)
-    QPos = hax.Axis("QPos", BLOCK_SIZE * 2)
-    KPos = hax.Axis("KPos", BLOCK_SIZE * 2)
-    prefix_lengths = hax.named(jnp.array([0, 300], dtype=jnp.int32), Batch)
+    case = _tpu_splash_mask_case()
+    prefix_lengths = hax.named(jnp.array([0, 300], dtype=jnp.int32), case.batch)
     mask = AttentionMask.prefix_lm(prefix_lengths=prefix_lengths)
-
-    with use_test_mesh():
-        q = hax.random.normal(jrandom.PRNGKey(10), (Batch, QPos, Head, Key)) * 0.02
-        k = hax.random.normal(jrandom.PRNGKey(11), (Batch, KPos, Head, Key)) * 0.02
-        v = hax.random.normal(jrandom.PRNGKey(12), (Batch, KPos, Head, Key)) * 0.02
-        _assert_tpu_splash_matches_reference(QPos, KPos, Key, q, k, v, mask, BLOCK_SIZE)
+    _run_batched_tpu_splash_mask_case(mask, case, seed=10)
 
 
 def test_tpu_splash_attention_dynamic_prefix_lm_with_segment_ids():
     if jax.default_backend() != "tpu":
         pytest.skip("TPU only")
 
-    BLOCK_SIZE = 256
-
-    Batch = hax.Axis("Batch", 2)
-    Head = hax.Axis("Head", 8)
-    Key = hax.Axis("Key", 128)
-    QPos = hax.Axis("QPos", BLOCK_SIZE * 2)
-    KPos = hax.Axis("KPos", BLOCK_SIZE * 2)
-    prefix_lengths = hax.named(jnp.array([128, 300], dtype=jnp.int32), Batch)
-    segment_ids = jnp.stack(
-        [
-            jnp.array([0] * BLOCK_SIZE + [1] * BLOCK_SIZE, dtype=jnp.int32),
-            jnp.array([2] * 128 + [3] * (BLOCK_SIZE * 2 - 128), dtype=jnp.int32),
-        ]
-    )
-    q_segment_ids = hax.named(segment_ids, (Batch, QPos))
-    kv_segment_ids = hax.named(segment_ids, (Batch, KPos))
+    case = _tpu_splash_mask_case()
+    prefix_lengths = hax.named(jnp.array([128, 300], dtype=jnp.int32), case.batch)
+    segment_ids = _packed_segment_ids_for_splash_case(case)
     mask = AttentionMask.prefix_lm(
         prefix_lengths=prefix_lengths,
-        segment_ids=(q_segment_ids, kv_segment_ids),
+        segment_ids=(segment_ids.q, segment_ids.kv),
     )
-
-    with use_test_mesh():
-        q = hax.random.normal(jrandom.PRNGKey(20), (Batch, QPos, Head, Key)) * 0.02
-        k = hax.random.normal(jrandom.PRNGKey(21), (Batch, KPos, Head, Key)) * 0.02
-        v = hax.random.normal(jrandom.PRNGKey(22), (Batch, KPos, Head, Key)) * 0.02
-        _assert_tpu_splash_matches_reference(QPos, KPos, Key, q, k, v, mask, BLOCK_SIZE)
+    _run_batched_tpu_splash_mask_case(mask, case, seed=20)
 
 
 def test_tpu_splash_attention_packed_prefix_lm_with_prefix_mask():
     if jax.default_backend() != "tpu":
         pytest.skip("TPU only")
 
-    BLOCK_SIZE = 256
-
-    Batch = hax.Axis("Batch", 2)
-    Head = hax.Axis("Head", 8)
-    Key = hax.Axis("Key", 128)
-    QPos = hax.Axis("QPos", BLOCK_SIZE * 2)
-    KPos = hax.Axis("KPos", BLOCK_SIZE * 2)
-    segment_ids = jnp.stack(
-        [
-            jnp.array([0] * BLOCK_SIZE + [1] * BLOCK_SIZE, dtype=jnp.int32),
-            jnp.array([2] * 128 + [3] * (BLOCK_SIZE * 2 - 128), dtype=jnp.int32),
-        ]
-    )
-    prefix_mask = jnp.zeros((Batch.size, QPos.size), dtype=jnp.bool_)
+    case = _tpu_splash_mask_case()
+    prefix_mask = jnp.zeros((case.batch.size, case.q_pos.size), dtype=jnp.bool_)
     prefix_mask = prefix_mask.at[0, :64].set(True)
-    prefix_mask = prefix_mask.at[0, BLOCK_SIZE : BLOCK_SIZE + 96].set(True)
+    prefix_mask = prefix_mask.at[0, case.block_size : case.block_size + 96].set(True)
     prefix_mask = prefix_mask.at[1, :96].set(True)
     prefix_mask = prefix_mask.at[1, 128:192].set(True)
-    q_segment_ids = hax.named(segment_ids, (Batch, QPos))
-    kv_segment_ids = hax.named(segment_ids, (Batch, KPos))
+    segment_ids = _packed_segment_ids_for_splash_case(case)
     mask = AttentionMask.prefix_lm(
-        prefix_mask=hax.named(prefix_mask, (Batch, QPos)),
-        segment_ids=(q_segment_ids, kv_segment_ids),
+        prefix_mask=hax.named(prefix_mask, (case.batch, case.q_pos)),
+        segment_ids=(segment_ids.q, segment_ids.kv),
     )
+    _run_batched_tpu_splash_mask_case(mask, case, seed=23)
 
-    with use_test_mesh():
-        q = hax.random.normal(jrandom.PRNGKey(23), (Batch, QPos, Head, Key)) * 0.02
-        k = hax.random.normal(jrandom.PRNGKey(24), (Batch, KPos, Head, Key)) * 0.02
-        v = hax.random.normal(jrandom.PRNGKey(25), (Batch, KPos, Head, Key)) * 0.02
-        _assert_tpu_splash_matches_reference(QPos, KPos, Key, q, k, v, mask, BLOCK_SIZE)
+
+def test_tpu_splash_attention_packed_causal_segment_ids():
+    if jax.default_backend() != "tpu":
+        pytest.skip("TPU only")
+
+    case = _tpu_splash_mask_case()
+    segment_ids = _packed_segment_ids_for_splash_case(case)
+    mask = AttentionMask.causal(segment_ids=(segment_ids.q, segment_ids.kv))
+    _run_batched_tpu_splash_mask_case(mask, case, seed=26)
 
 
 @pytest.mark.parametrize("impl", ["default", "jax_flash", "vanilla"])

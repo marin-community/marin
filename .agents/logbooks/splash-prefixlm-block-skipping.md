@@ -103,3 +103,14 @@
   - v4-8 16384 Splash-only jitted forward: compile-including `1.315 s`, steady median `4.49 ms`.
 - Interpretation: Packed prefix-LM now has a working Splash path with block skipping for off-segment/off-causal blocks and long-shape v4 evidence. It still uses Splash's dynamic-mask representation, so partial-mask payload size grows with the block grid (`q_blocks * kv_blocks`) rather than with only segment boundaries. The shared-head optimization keeps it viable for the tested 8192/16384 cases, but a more compact THD/segment-run representation is still the next performance target.
 - Next action: Land this packed-prefix checkpoint, then replace the dynamic dense block payload with segment-run-derived compact partial blocks and extend the same machinery to pure causal segment-ID block skipping.
+
+### 2026-06-12 - Pure causal packed segment-ID block skipping
+- Hypothesis: The packed prefix-mask lowering can be reused for a first pure causal packed-doc path by generating dynamic Splash metadata for `same_segment(q, kv) & (kv <= q)`, then clearing runtime segment IDs so Splash can skip off-segment blocks directly.
+- Command:
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'packed_causal_segment or prefix_lm_mask_materializes or tpu_splash_attention_packed'`
+  - `./infra/pre-commit.py --changed-files --fix`
+- Config: Local CPU metadata reconstruction at `S=128`, block size `16`, two packed segments; TPU integration smoke added for `B=2`, `S=512`, `H=8`, `D=128`, block size `256`.
+- Result: Kernel metadata tests passed with `16 passed`. Attention subset passed locally with `3 passed, 2 skipped`; the new packed causal segment-ID TPU test skipped locally. Changed-file precommit passed.
+- Interpretation: Plain causal packed segment IDs now have a block-skipping Splash lowering for batched segment IDs. This is still the dynamic dense-mask metadata representation, so it is a correctness and first-performance path rather than the final compact THD-style segment-run representation.
+- Next action: Run the new TPU-gated test on v4-8/v5p when available and benchmark 8192/16384 packed causal layouts against the runtime-segment-ID path.
