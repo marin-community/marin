@@ -20,7 +20,7 @@ Areas covered:
   control-cycle   — the per-tick ControlSnapshot built via load_control_snapshot
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -1247,7 +1247,9 @@ def list_active_tasks_for_jobs(
 class WorkerLivenessSource(Protocol):
     """Read-only view over the in-memory worker liveness tracker."""
 
-    def all(self) -> dict[WorkerId, "_LivenessEntry"]: ...
+    # Mapping (covariant value) rather than dict (invariant) so a concrete
+    # tracker returning dict[WorkerId, WorkerLiveness] satisfies the protocol.
+    def all(self) -> Mapping[WorkerId, "_LivenessEntry"]: ...
 
 
 class _LivenessEntry(Protocol):
@@ -1260,7 +1262,7 @@ class _LivenessEntry(Protocol):
 class WorkerAttrsSource(Protocol):
     """Read-only view over the worker_attributes cache."""
 
-    def all(self) -> dict[WorkerId, dict[str, AttributeValue]]: ...
+    def all(self) -> Mapping[WorkerId, dict[str, AttributeValue]]: ...
 
 
 WORKER_DETAIL_COLS = (

@@ -231,6 +231,7 @@ project-includes = [
     "lib/haliax/src/**/*.py",
     "lib/fray/src/**/*.py",
     "lib/iris/src/**/*.py",
+    "lib/iris/scripts/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
     "scripts/workflows",
@@ -247,6 +248,9 @@ search-path = [
     "lib/zephyr/src",
     "lib/fray/src",
     "lib/iris/src",
+    # benchmark_controller.py imports controller test fixtures from lib/iris/tests
+    # (`from tests.cluster.controller... import`), run with lib/iris on sys.path.
+    "lib/iris",
 ]
 disable-search-path-heuristics = true
 
@@ -375,6 +379,13 @@ unbound-name = false
 matches = "lib/levanter/src/levanter/inference/jit_scheduler.py"
 [tool.pyrefly.sub_config.errors]
 unknown-name = false
+
+# Turn bad-argument-type ON for these controller-driving scripts (it is off
+# repo-wide) so a wrong-type call into the controller API fails type-checking.
+[[tool.pyrefly.sub_config]]
+matches = "lib/iris/scripts/**"
+[tool.pyrefly.sub_config.errors]
+bad-argument-type = true
 
 [tool.hatch.metadata]
 allow-direct-references = true

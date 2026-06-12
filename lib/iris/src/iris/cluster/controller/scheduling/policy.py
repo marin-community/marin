@@ -47,7 +47,7 @@ from iris.cluster.controller.codec import (
 )
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.reads import SchedulableWorker
+from iris.cluster.controller.reads import SchedulableWorker, WorkerAttrsSource
 from iris.cluster.controller.reconcile.policy import RESERVATION_HOLDER_JOB_NAME
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
@@ -932,7 +932,7 @@ def preference_pass(
 def build_scheduling_context(
     snap: Tx,
     health: WorkerHealthTracker,
-    worker_attrs: WorkerAttrsProjection,
+    worker_attrs: WorkerAttrsSource,
     defaults: UserBudgetDefaults,
     claims: dict[WorkerId, ReservationClaim],
     max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
