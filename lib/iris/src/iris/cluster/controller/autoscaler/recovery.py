@@ -4,7 +4,6 @@
 """Autoscaler checkpoint restore helpers."""
 
 import logging
-import threading
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -145,18 +144,15 @@ def restore_autoscaler_state(
 
 
 def _reclaim_dead_slice(handle: SliceHandle, state: CloudSliceState) -> None:
-    """Best-effort terminate of a dead slice in a daemon thread.
+    """Best-effort terminate of a dead slice during boot recovery.
 
-    Boot recovery must not block on or fail because of a stale cloud resource:
-    terminate() can hit transient API errors and is not guaranteed to be fast.
-    Errors are logged; on the next restart the slice will surface again.
+    ``terminate()`` is a bounded cloud request (an async delete that returns
+    immediately), issued in line here. Boot recovery must not fail because of a
+    stale cloud resource, so transient API errors are logged and swallowed; on
+    the next restart the slice will surface again.
     """
     logger.info("Reclaiming dead slice %s (state=%s, zone=%s)", handle.slice_id, state, handle.zone)
-
-    def _run() -> None:
-        try:
-            handle.terminate()
-        except Exception as e:
-            logger.warning("Failed to terminate dead slice %s: %s", handle.slice_id, e)
-
-    threading.Thread(target=_run, name=f"reclaim-{handle.slice_id}", daemon=True).start()
+    try:
+        handle.terminate()
+    except Exception as e:
+        logger.warning("Failed to terminate dead slice %s: %s", handle.slice_id, e)

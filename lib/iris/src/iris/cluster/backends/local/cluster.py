@@ -143,7 +143,6 @@ def create_local_autoscaler(
         scale_groups=scale_groups,
         config=config.defaults.autoscaler,
         platform=platform,
-        threads=threads,
         base_worker_config=base_worker_config,
     )
     return autoscaler, temp_dir
