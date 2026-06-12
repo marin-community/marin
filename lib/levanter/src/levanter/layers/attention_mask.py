@@ -83,6 +83,8 @@ class AttentionMask(eqx.Module):
     explicit_mask: Optional[NamedArray] = None
     segment_ids: tuple[NamedArray, NamedArray] | None = None
     sliding_window: Optional[int] = eqx.field(default=None, static=True)
+    prefix_length: Optional[int] = eqx.field(default=None, static=True)
+    prefix_mask: Optional[NamedArray] = None
     # CF https://github.com/jax-ml/jax/blob/47858c4ac2fd4757a3b6fc5bb2981b71a71f00c2/jax/experimental/pallas/ops/tpu/flash_attention.py#L34
     # TODO: add prefixlm
     # cf https://github.com/google-research/t5x/blob/51a99bff8696c373cc03918707ada1e98cbca407/t5x/examples/decoder_only/layers.py#L978
@@ -125,18 +127,30 @@ class AttentionMask(eqx.Module):
         else:
             causal = None
 
+        if self.sliding_window is not None:
+            sw_mask = _materialize_sliding_window_mask(
+                self.sliding_window, QPos, KPos, q_slice=q_slice, k_slice=k_slice
+            )
+            causal = combine_masks_and(causal, sw_mask)
+
+        prefix = None
+        if self.prefix_length is not None:
+            sub_k = KPos.resize(k_slice.size)
+            prefix = hax.arange(sub_k) + k_slice.start < self.prefix_length
+            prefix = prefix.broadcast_axis(QPos.resize(q_slice.size))
+
+        if self.prefix_mask is not None:
+            prefix_mask = self.prefix_mask.rename({QPos.name: KPos.name})[KPos.name, k_slice]
+            prefix = combine_masks_or(prefix, prefix_mask.broadcast_axis(QPos.resize(q_slice.size)))
+
+        causal = combine_masks_or(causal, prefix)
+
         if self.explicit_mask is not None:
             explicit = self.explicit_mask[QPos, q_slice, KPos, k_slice]
         else:
             explicit = None
 
         mask = combine_masks_and(causal, explicit)
-
-        if self.sliding_window is not None:
-            sw_mask = _materialize_sliding_window_mask(
-                self.sliding_window, QPos, KPos, q_slice=q_slice, k_slice=k_slice
-            )
-            mask = combine_masks_and(mask, sw_mask)
 
         if self.segment_ids is not None:
             segment_mask = _materialize_segment_mask(self.segment_ids, QPos, KPos, q_slice, k_slice)
@@ -173,6 +187,32 @@ class AttentionMask(eqx.Module):
         )
 
     @staticmethod
+    def prefix_lm(
+        *,
+        prefix_length: int | None = None,
+        prefix_mask: NamedArray | None = None,
+        sliding_window: Optional[int] = None,
+        segment_ids: tuple[NamedArray, NamedArray] | None = None,
+    ) -> "AttentionMask":
+        """Create a prefix-LM mask.
+
+        Keys marked as prefix are visible to every query. Non-prefix keys use
+        causal masking, optionally constrained by ``sliding_window``.
+        """
+        if prefix_length is None and prefix_mask is None:
+            raise ValueError("prefix_lm requires prefix_length or prefix_mask.")
+        if prefix_length is not None and prefix_length < 0:
+            raise ValueError(f"prefix_length must be non-negative, got {prefix_length}.")
+
+        return AttentionMask(
+            is_causal=True,
+            prefix_length=prefix_length,
+            prefix_mask=prefix_mask,
+            sliding_window=sliding_window,
+            segment_ids=segment_ids,
+        )
+
+    @staticmethod
     def explicit(mask: NamedArray) -> "AttentionMask":
         return AttentionMask(is_causal=False, causal_offset=None, explicit_mask=mask)
 
@@ -201,6 +241,8 @@ class AttentionMask(eqx.Module):
             explicit_mask=self.explicit_mask,
             segment_ids=seg_field,
             sliding_window=self.sliding_window,
+            prefix_length=self.prefix_length,
+            prefix_mask=self.prefix_mask,
         )
 
     def with_sliding_window(self, sliding_window: int | None) -> "AttentionMask":
@@ -211,6 +253,8 @@ class AttentionMask(eqx.Module):
             explicit_mask=self.explicit_mask,
             segment_ids=self.segment_ids,
             sliding_window=sliding_window,
+            prefix_length=self.prefix_length,
+            prefix_mask=self.prefix_mask,
         )
 
     def __and__(self, other) -> "AttentionMask":
@@ -237,6 +281,8 @@ class AttentionMask(eqx.Module):
             is_causal = False
         explicit_mask = combine_masks_and(self.explicit_mask, other.explicit_mask)
         segment_ids = self._check_for_same_segment_ids(other)
+        prefix_mask = combine_masks_and(self.prefix_mask, other.prefix_mask)
+        prefix_length = _combine_prefix_lengths_and(self.prefix_length, other.prefix_length)
         if self.sliding_window is None:
             sliding_window = other.sliding_window
         elif other.sliding_window is None:
@@ -250,6 +296,8 @@ class AttentionMask(eqx.Module):
             explicit_mask=explicit_mask,
             segment_ids=segment_ids,
             sliding_window=sliding_window,
+            prefix_length=prefix_length,
+            prefix_mask=prefix_mask,
         )
 
     def __or__(self, other) -> "AttentionMask":
@@ -269,6 +317,8 @@ class AttentionMask(eqx.Module):
             causal_offset = None
         explicit_mask = combine_masks_or(self.explicit_mask, other.explicit_mask)
         segment_ids = self._check_for_same_segment_ids(other)
+        prefix_mask = combine_masks_or(self.prefix_mask, other.prefix_mask)
+        prefix_length = _combine_prefix_lengths_or(self.prefix_length, other.prefix_length)
         if self.sliding_window is None or other.sliding_window is None:
             sliding_window = None
         else:
@@ -279,6 +329,8 @@ class AttentionMask(eqx.Module):
             explicit_mask=explicit_mask,
             segment_ids=segment_ids,
             sliding_window=sliding_window,
+            prefix_length=prefix_length,
+            prefix_mask=prefix_mask,
         )
 
     def _check_for_same_segment_ids(self, other):
@@ -308,6 +360,22 @@ class AttentionMask(eqx.Module):
         else:
             segment_ids = other_si
         return segment_ids
+
+
+def _combine_prefix_lengths_and(left: int | None, right: int | None) -> int | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return min(left, right)
+
+
+def _combine_prefix_lengths_or(left: int | None, right: int | None) -> int | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return max(left, right)
 
 
 @overload

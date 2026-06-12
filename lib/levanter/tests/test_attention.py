@@ -110,6 +110,32 @@ def test_sliding_window_mask():
     assert hax.all(mat == expected)
 
 
+def test_prefix_lm_mask_materializes_prefix_or_causal():
+    Pos = hax.Axis("pos", 8)
+    KeyPos = Pos.alias("key_pos")
+    mask = AttentionMask.prefix_lm(prefix_length=3)
+
+    mat = mask.materialize(Pos, KeyPos)
+
+    q = np.arange(Pos.size)[:, None]
+    k = np.arange(KeyPos.size)[None, :]
+    expected = (k <= q) | (k < 3)
+    np.testing.assert_array_equal(np.asarray(mat.array), expected)
+
+
+def test_prefix_lm_mask_keeps_prefix_outside_sliding_window():
+    Pos = hax.Axis("pos", 8)
+    KeyPos = Pos.alias("key_pos")
+    mask = AttentionMask.prefix_lm(prefix_length=2, sliding_window=3)
+
+    mat = mask.materialize(Pos, KeyPos)
+
+    q = np.arange(Pos.size)[:, None]
+    k = np.arange(KeyPos.size)[None, :]
+    expected = (k < 2) | ((k <= q) & (k >= q - 2))
+    np.testing.assert_array_equal(np.asarray(mat.array), expected)
+
+
 def test_attention_sink():
     Pos = hax.Axis("position", 2)
     KeyPos = Pos.alias("key_pos")
