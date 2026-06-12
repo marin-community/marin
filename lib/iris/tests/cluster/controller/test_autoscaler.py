@@ -24,7 +24,7 @@ from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
-from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
+from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
 from iris.cluster.types import WorkerStatus
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_proto import duration_to_proto
@@ -1614,7 +1614,7 @@ class TestAutoscalerHealthProbe:
         base_worker_config: config_pb2.WorkerConfig,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        """PING_FAILURE_THRESHOLD consecutive failures trip slice termination."""
+        """CONSECUTIVE_FAILURE_THRESHOLD consecutive failures trip slice termination."""
 
         autoscaler, group, _ = self._setup_ready_group(scale_group_config, base_worker_config)
         monkeypatch.setattr(
@@ -1622,8 +1622,8 @@ class TestAutoscalerHealthProbe:
             lambda url: False,
         )
 
-        # One probe per tick — need PING_FAILURE_THRESHOLD ticks to trip.
-        for _ in range(PING_FAILURE_THRESHOLD - 1):
+        # One probe per tick — need CONSECUTIVE_FAILURE_THRESHOLD ticks to trip.
+        for _ in range(CONSECUTIVE_FAILURE_THRESHOLD - 1):
             autoscaler.probe_health(Timestamp.from_ms(1_000))
         assert group.ready_slice_count() == 1, "should not have terminated yet"
 
@@ -1641,7 +1641,7 @@ class TestAutoscalerHealthProbe:
 
         autoscaler, group, _ = self._setup_ready_group(scale_group_config, base_worker_config)
 
-        # Alternating bad/good probes. We need to avoid hitting PING_FAILURE_THRESHOLD
+        # Alternating bad/good probes. We need to avoid hitting CONSECUTIVE_FAILURE_THRESHOLD
         # consecutive failures even after many ticks.
         toggle = {"healthy": False}
 
@@ -1651,7 +1651,7 @@ class TestAutoscalerHealthProbe:
 
         monkeypatch.setattr("iris.cluster.controller.autoscaler.runtime._probe_worker_health", _probe)
 
-        for _ in range(PING_FAILURE_THRESHOLD * 3):
+        for _ in range(CONSECUTIVE_FAILURE_THRESHOLD * 3):
             autoscaler.probe_health(Timestamp.from_ms(1_000))
 
         assert group.ready_slice_count() == 1
@@ -1697,7 +1697,7 @@ class TestAutoscalerHealthProbe:
         Reproduces the preempted-after-restart case: no cached worker URLs, and
         describe() resolves zero workers (tpu_describe returned None), so there
         is nothing to /health-probe and no heartbeat row to expire. The per-slice
-        no-worker counter must trip teardown after PING_FAILURE_THRESHOLD ticks.
+        no-worker counter must trip teardown after CONSECUTIVE_FAILURE_THRESHOLD ticks.
         """
         handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[handle])
@@ -1714,7 +1714,7 @@ class TestAutoscalerHealthProbe:
             lambda url: pytest.fail("a worker-less slice must not be probed"),
         )
 
-        for _ in range(PING_FAILURE_THRESHOLD - 1):
+        for _ in range(CONSECUTIVE_FAILURE_THRESHOLD - 1):
             autoscaler.probe_health(Timestamp.from_ms(1_000))
         assert group.ready_slice_count() == 1, "should not terminate before the threshold"
 
@@ -1747,7 +1747,7 @@ class TestAutoscalerHealthProbe:
 
         # Alternate "allocation gone" and "workers healthy" so the empty streak
         # never reaches the threshold.
-        for i in range(PING_FAILURE_THRESHOLD * 3):
+        for i in range(CONSECUTIVE_FAILURE_THRESHOLD * 3):
             handle._status = (
                 SliceStatus(state=CloudSliceState.UNKNOWN, worker_count=0, workers=[]) if i % 2 == 0 else ready_status
             )
@@ -1792,7 +1792,7 @@ class TestAutoscalerHealthProbe:
             lambda url: True,
         )
 
-        for _ in range(PING_FAILURE_THRESHOLD + 1):
+        for _ in range(CONSECUTIVE_FAILURE_THRESHOLD + 1):
             group.set_worker_urls(handle.slice_id, {})
             autoscaler.probe_health(Timestamp.from_ms(1_000))
 
@@ -1826,7 +1826,7 @@ class TestAutoscalerHealthProbe:
             lambda url: url != dead_url,
         )
 
-        for _ in range(PING_FAILURE_THRESHOLD):
+        for _ in range(CONSECUTIVE_FAILURE_THRESHOLD):
             autoscaler.probe_health(Timestamp.from_ms(1_000))
 
         assert group.ready_slice_count() == 0, "dead worker should trip the slice"
@@ -1863,8 +1863,8 @@ class TestAutoscalerHealthProbe:
             lambda url: True,
         )
 
-        # PING_FAILURE_THRESHOLD ticks while describe() raises must not terminate.
-        for _ in range(PING_FAILURE_THRESHOLD):
+        # CONSECUTIVE_FAILURE_THRESHOLD ticks while describe() raises must not terminate.
+        for _ in range(CONSECUTIVE_FAILURE_THRESHOLD):
             autoscaler.probe_health(Timestamp.from_ms(1_000))
         assert group.ready_slice_count() == 1
         assert group.get_slice("slice-001") is not None

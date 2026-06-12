@@ -52,11 +52,12 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     ActiveTaskRow,
+    RunningTaskEntry,
     TaskDetailRow,
     task_row_can_be_scheduled,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, PendingTask, WorkerId
+from iris.cluster.types import AttemptUid, JobName, PendingTask, WorkerId, WorkerStatusMap
 from iris.rpc import controller_pb2, job_pb2
 
 # ---------------------------------------------------------------------------
@@ -1253,6 +1254,7 @@ class _LivenessEntry(Protocol):
     healthy: bool
     active: bool
     last_heartbeat_ms: int
+    consecutive_failures: int
 
 
 class WorkerAttrsSource(Protocol):
@@ -1298,12 +1300,28 @@ def get_worker_detail(tx: Tx, worker_id: WorkerId):
 
 
 def _healthy_active_worker_ids(health: WorkerLivenessSource) -> set[WorkerId]:
-    """Healthy+active worker ids from the in-memory tracker.
+    """Reconcile-target worker ids: every healthy+active worker.
+
+    The reconcile pass must keep probing a worker that is mid-failure (so its
+    liveness can recover or cross the teardown threshold), so it targets all
+    active workers — a climbing ``consecutive_failures`` does NOT drop a worker
+    here. Scheduling placement uses the stricter :func:`_schedulable_worker_ids`.
 
     Callers post-filter the ``workers`` table in Python against this set rather than
     pushing a SQL ``IN`` — cheaper, since almost every persisted worker is healthy.
     """
     return {wid for wid, ent in health.all().items() if ent.healthy and ent.active}
+
+
+def _schedulable_worker_ids(health: WorkerLivenessSource) -> set[WorkerId]:
+    """Scheduling-placement worker ids: healthy+active AND not currently failing.
+
+    Excludes workers with any consecutive reconcile failures so new tasks stop
+    landing on an unreachable worker immediately, rather than for the whole
+    detection window before teardown. Reconcile keeps probing them
+    (:func:`_healthy_active_worker_ids`); only placement is gated.
+    """
+    return {wid for wid, ent in health.all().items() if ent.healthy and ent.active and ent.consecutive_failures == 0}
 
 
 def list_active_healthy_workers(tx: Tx, health: WorkerLivenessSource) -> dict[WorkerId, str]:
@@ -1369,13 +1387,14 @@ def healthy_active_workers_with_attributes(
     health: WorkerLivenessSource,
     attrs: WorkerAttrsSource,
 ) -> list[SchedulableWorker]:
-    """Return healthy + active workers with their attributes hydrated.
+    """Return schedulable workers (healthy, active, not failing) with attributes.
 
     Reads the full worker roster and post-filters with the in-memory health
-    tracker. See :func:`_healthy_active_worker_ids` for why we skip the
-    SQL-side ``IN (...)`` filter.
+    tracker via :func:`_schedulable_worker_ids` — a worker mid-failure is still
+    reconciled but is not a placement target. See :func:`_healthy_active_worker_ids`
+    for why we skip the SQL-side ``IN (...)`` filter.
     """
-    healthy_active = _healthy_active_worker_ids(health)
+    healthy_active = _schedulable_worker_ids(health)
     if not healthy_active:
         return []
     rows = tx.execute(
@@ -1586,27 +1605,38 @@ def load_reconcile_rows(tx: Tx, worker_ids: Iterable[WorkerId]) -> list[Reconcil
 
 @dataclass(frozen=True, slots=True)
 class ControlSnapshot:
-    """Per-cycle control-path state, built once via :func:`load_control_snapshot`.
+    """The DB-less per-tick input the controller hands to a :class:`TaskBackend`.
 
-    Carries the DB-sourced inputs the reconcile control tick consumes:
+    One snapshot type feeds all three uniform backend methods; each control loop
+    populates the section its phase needs and leaves the rest empty (the
+    ``scan_timeouts`` flag is the pattern). The backend reads its section and
+    never touches the database.
 
     * ``worker_addresses`` — ``{worker_id: address}`` for active + healthy workers.
     * ``reconcile_rows`` — live ``(task, attempt, worker)`` tuples across those
       workers (see :func:`load_reconcile_rows`).
     * ``timeout_rows`` — executing tasks past their declared deadline; empty
       unless the caller requested the timeout sweep this tick.
+    * ``job_specs`` — per-job ``RunTaskRequest`` templates for ASSIGNED reconcile
+      rows, so a worker-daemon backend can build its per-worker reconcile plans.
+    * ``worker_status_map`` — per-worker idle/running state for the autoscale
+      phase (built only on the autoscaler tick).
+    * ``tasks_to_run`` / ``running_tasks`` — the dispatch drain for a cluster
+      backend that owns placement (built only when that backend reconciles).
 
-    ``health`` is the one non-DB field: the controller's in-memory
-    :class:`WorkerHealthTracker`. Worker liveness is never persisted, so the
-    controller supplies its tracker — which the loader also uses to select the
-    live worker set — and it rides along on the snapshot so the reconcile apply
-    path consumes the same liveness view that scoped the snapshot.
+    Worker liveness is never persisted and never read off the snapshot: the
+    controller owns its in-memory :class:`WorkerHealthTracker` directly and folds
+    backend-observed health events into it. The tracker is passed to
+    :func:`load_control_snapshot` only to select the live worker set.
     """
 
     worker_addresses: dict[WorkerId, str]
     reconcile_rows: list[ReconcileRow]
     timeout_rows: Sequence[Row]
-    health: WorkerHealthTracker
+    job_specs: dict[JobName, job_pb2.RunTaskRequest] = field(default_factory=dict)
+    worker_status_map: WorkerStatusMap = field(default_factory=dict)
+    tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
+    running_tasks: list[RunningTaskEntry] = field(default_factory=list)
 
 
 def load_control_snapshot(
@@ -1617,9 +1647,9 @@ def load_control_snapshot(
 ) -> ControlSnapshot:
     """Build the per-cycle :class:`ControlSnapshot` in one read transaction.
 
-    ``health`` selects the live worker set (see :func:`list_active_healthy_workers`)
-    and is attached verbatim to the result as the snapshot's non-DB health view.
-    ``scan_timeouts`` includes the execution-timeout rows in the same snapshot.
+    ``health`` selects the live worker set (see :func:`list_active_healthy_workers`);
+    it is not stored on the snapshot. ``scan_timeouts`` includes the
+    execution-timeout rows in the same snapshot.
     """
     worker_addresses = list_active_healthy_workers(tx, health)
     reconcile_rows = load_reconcile_rows(tx, worker_addresses.keys()) if worker_addresses else []
@@ -1628,5 +1658,4 @@ def load_control_snapshot(
         worker_addresses=worker_addresses,
         reconcile_rows=reconcile_rows,
         timeout_rows=timeout_rows,
-        health=health,
     )

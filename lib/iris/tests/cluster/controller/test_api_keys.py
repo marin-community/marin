@@ -19,7 +19,7 @@ from iris.cluster.controller.auth import (
     create_controller_auth,
     list_api_keys,
 )
-from iris.cluster.controller.backend import PlacementOwner
+from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
@@ -49,7 +49,7 @@ def _make_service(db, log_client, auth=None):
     controller_mock.last_scheduling_context = None
     controller_mock.autoscaler = None
     controller_mock.provider = Mock()
-    controller_mock.placement = PlacementOwner.IRIS_CONTROLLER
+    controller_mock.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
 
     return ControllerServiceImpl(
         controller=controller_mock,

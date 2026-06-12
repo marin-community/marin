@@ -636,6 +636,13 @@ class InMemoryK8sService:
         self._validate_manifest(manifest)
         resource = K8sResource.from_kind(manifest["kind"])
         name = manifest["metadata"]["name"]
+
+        # Pods are create-if-absent (mirrors K8sService._apply_pod): an existing
+        # pod — in any phase — is the one we want, so re-applying it on a redrive
+        # is a no-op. Overwriting and rescheduling would reset a running pod.
+        if resource is K8sResource.PODS and (resource.plural, name) in self._resources:
+            return
+
         self._resources[(resource.plural, name)] = manifest
 
         # Run scheduling for pod-bearing manifests

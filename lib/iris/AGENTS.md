@@ -103,29 +103,42 @@ See https://github.com/marin-community/marin/issues/3859 for context.
 ### The TaskBackend contract
 
 A `TaskBackend` (`controller/backend.py`) is the control-plane driver for ONE
-cluster. It owns the backend-specific logic — `schedule`, `reconcile`,
-`manage_capacity`/`on_workers_failed`, and the on-demand one-offs
-(`get_process_status`, `profile_task`, `exec_in_container`) — and does the
-backend I/O (worker-daemon RPC fan-out, `kubectl apply`). The controller is a
+cluster. It implements one uniform set of phase methods — `schedule` (pure
+placement decision), `reconcile` (backend I/O: task observations + per-worker
+health events), `autoscale` (provision, or tear down dead workers' slices +
+healthy siblings) — plus the on-demand one-offs (`get_process_status`,
+`profile_task`, `exec_in_container`). Each phase returns its own frozen result
+type: `ScheduleResult`, `ReconcileResult`, `AutoscaleResult`. The controller is a
 thin dispatcher: it owns the database and the loop cadences, and each loop reads
-a DB snapshot → calls one backend method → commits the returned decisions/deltas.
-**The contract is DB-less**: backends take plain data in and return plain data
-out; they never touch the controller DB.
+a DB snapshot → calls one backend method → commits the returned result
+(dispatching within a method on which result field is non-empty, never by
+`isinstance`). **The contract is DB-less**: backends take plain data in and
+return plain data out; they never touch the controller DB.
 
-The controller selects its path by two declared capabilities, never by
-`isinstance`:
+A backend declares `capabilities: frozenset[BackendCapability]` — metadata the
+dashboard and on-demand RPC routing key on. The controller calls all three
+phases uniformly regardless, with one per-tick exception: `CLUSTER_VIEW` makes
+the controller drain the dispatch queue (a DB write it owns) into that backend's
+reconcile snapshot. The flags: `WORKER_DAEMON` (`"workers"`), `IRIS_AUTOSCALER`
+(`"autoscaler"`), `CLUSTER_VIEW` (`"cluster"`).
 
-- `placement` (`PlacementOwner.IRIS_CONTROLLER` vs `PlacementOwner.TASK_BACKEND`) — who schedules
-  task→node, and which reconcile apply path runs.
-- `manages_capacity` — whether the backend provisions its own nodes (then Iris
-  runs no autoscaler loop for it).
+Worker health is OBSERVED only by worker-daemon backends — REACHED / UNREACHABLE
+events on `ReconcileResult.health_events` — and OWNED by the controller, which
+folds them (together with BUILD_FAILED events it synthesizes from the reconcile
+kernel's effects) through the single `WorkerHealthTracker.apply` site; a worker
+over the failure threshold is reaped via `autoscale(dead_workers=...)`.
+There is no ping loop and no separate liveness channel — the reconcile RPC
+outcome is the only liveness signal. Cluster-view backends (Kubernetes) have no
+Iris workers, so they emit no health events; pod status flows back as neutral
+task `updates`.
 
 Two implementations satisfy it: `RpcTaskBackend` (`backends/rpc/backend.py`,
-`placement=IRIS_CONTROLLER`, owns the `Scheduler` + `Autoscaler`) for GCP/TPU, CoreWeave
-bare-metal, manual, and local; and `K8sTaskProvider` (`backends/k8s/tasks.py`,
-`placement=TASK_BACKEND`, `manages_capacity=True`) for Kubernetes (Kueue schedules,
-the cluster autoscaler provisions). The contract type lives in
-`controller/backend.py`; see `docs/architecture.md` "The TaskBackend contract".
+`{WORKER_DAEMON, IRIS_AUTOSCALER}`, owns the `Scheduler` + `Autoscaler`) for
+GCP/TPU, CoreWeave bare-metal, manual, and local; and `K8sTaskProvider`
+(`backends/k8s/tasks.py`, `{CLUSTER_VIEW}`) for Kubernetes (Kueue schedules, the
+cluster autoscaler provisions, so its `schedule`/`autoscale` are no-ops). The
+contract type lives in `controller/backend.py`; see `docs/architecture.md` "The
+TaskBackend contract".
 
 Resource model: CPU demand is fungible and can route to any group; GPU/TPU demand is non-fungible and must match device type (and optionally variant).
 

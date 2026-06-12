@@ -205,7 +205,7 @@ class LocalCluster:
         )
 
         # The backend owns the autoscaler; the controller drives it via
-        # manage_capacity and persists the returned state each tick.
+        # backend.autoscale and persists the returned state each tick.
         provider = RpcTaskBackend(stub_factory=RpcWorkerStubFactory())
         provider.attach_autoscaler(self._autoscaler)
 
@@ -214,12 +214,16 @@ class LocalCluster:
                 host="127.0.0.1",
                 port=port,
                 remote_state_dir=self._config.storage.remote_state_dir or f"file://{state_dir}",
-                heartbeat_interval=Duration.from_seconds(0.5),
                 local_state_dir=Path(self._db_dir.name),
                 auth_verifier=auth.verifier,
                 auth_provider=auth.provider,
                 auth=auth,
                 autoscaler_evaluation_interval=duration_from_proto(self._config.defaults.autoscaler.evaluation_interval),
+                # Fast worker-failure detection for local/e2e runs: ~10 unreachable
+                # reconcile passes (poll_interval default 1s) instead of the ~50s
+                # production grace. Mirrors the old fast ping tuning; the e2e chaos
+                # suite's RECONCILE_FAILURE_THRESHOLD must match round(grace / poll).
+                worker_unreachable_grace=Duration.from_seconds(10.0),
             ),
             provider=provider,
             threads=controller_threads,

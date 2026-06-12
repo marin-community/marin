@@ -319,11 +319,5 @@ class Overlay:
     def emit_log_event(self, event: LogEvent) -> None:
         self._effects.log_events.append(event)
 
-    def emit_worker_heartbeat(self, worker_ids: Iterable[WorkerId]) -> None:
-        self._effects.health.heartbeat.extend(worker_ids)
-
     def emit_worker_build_failed(self, worker_id: WorkerId) -> None:
         self._effects.health.build_failed.append(worker_id)
-
-    def emit_worker_make_unhealthy(self, worker_id: WorkerId) -> None:
-        self._effects.health.make_unhealthy.append(worker_id)

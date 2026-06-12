@@ -14,7 +14,7 @@ from iris.cluster.backends.k8s.tasks import (
     PodConfig,
 )
 from iris.cluster.backends.k8s.types import K8sResource
-from iris.cluster.controller.backend import BackendReconcileInput
+from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
 
@@ -54,6 +54,7 @@ def provider(k8s, log_client, task_stats_table):
         log_client=log_client,
         task_stats_table=task_stats_table,
         log_poll_interval=1.0,
+        cluster_scan_interval=0.0,
     )
     yield p
     p.close()
@@ -99,6 +100,7 @@ def make_run_req(
 
 def make_kueue_provider(k8s, *, local_queue: str = "iris-lq", **kwargs) -> K8sTaskProvider:
     """K8sTaskProvider with Kueue gang admission enabled (a configured LocalQueue)."""
+    kwargs.setdefault("cluster_scan_interval", 0.0)
     return K8sTaskProvider(
         kubectl=k8s,
         namespace="iris",
@@ -112,8 +114,11 @@ def make_kueue_provider(k8s, *, local_queue: str = "iris-lq", **kwargs) -> K8sTa
 def make_batch(
     tasks_to_run=None,
     running_tasks=None,
-) -> BackendReconcileInput:
-    return BackendReconcileInput(
+) -> ControlSnapshot:
+    return ControlSnapshot(
+        worker_addresses={},
+        reconcile_rows=[],
+        timeout_rows=[],
         running_tasks=running_tasks or [],
         tasks_to_run=tasks_to_run or [],
     )

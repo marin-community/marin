@@ -615,7 +615,6 @@ def test_preempted_task_retries():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -648,7 +647,6 @@ def test_preempted_task_exhausted_retries():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -995,7 +993,6 @@ def test_preempted_assigned_task_always_retries():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted while assigned")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1119,7 +1116,6 @@ def test_preemption_nonexistent_task_is_noop():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, JobName.from_wire("/ghost/job:0"), "does not exist")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1152,7 +1148,6 @@ def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted by /bob/prod-job:0")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1207,7 +1202,6 @@ def test_preemption_terminal_task_is_noop():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "too late")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1305,7 +1299,6 @@ def test_preempt_task_retries_when_budget_remains():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Evicted by /bob/prod:0")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1344,7 +1337,6 @@ def test_preempt_task_terminal_when_budget_exhausted():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "budget gone")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1395,7 +1387,6 @@ def test_preempt_task_requeues_coscheduled_siblings_on_retry():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "evicted")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1458,7 +1449,6 @@ def test_preempt_task_cascades_coscheduled_siblings():
             result0 = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "preempted by prod")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1551,7 +1541,6 @@ def test_preemption_retry_preserves_reservation_holder():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, parent_task.task_id, "Preempted by higher priority")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1620,7 +1609,6 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )

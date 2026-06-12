@@ -6,15 +6,16 @@
 from finelog.rpc import logging_pb2
 from iris.cluster.controller import ops
 from iris.cluster.controller.backend import (
-    BackendReconcileInput,
-    BackendReconcileResult,
-    PlacementOwner,
+    AutoscaleResult,
+    BackendCapability,
     ProviderUnsupportedError,
+    ReconcileResult,
     ScheduleInput,
     ScheduleResult,
     TaskTarget,
 )
 from iris.cluster.controller.ops.task import apply_dispatch_updates
+from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
@@ -33,35 +34,28 @@ from .conftest import (
 
 
 class FakeDirectProvider:
-    """Minimal BACKEND-placement TaskBackend (K8s-like) for testing."""
+    """Minimal cluster-view TaskBackend (K8s-like) for testing."""
 
     name = "kubernetes"
-    placement = PlacementOwner.TASK_BACKEND
-    manages_capacity = True
+    capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
 
     def __init__(self):
-        self.sync_calls: list[BackendReconcileInput] = []
-        self.sync_result = BackendReconcileResult()
+        self.sync_calls: list[ControlSnapshot] = []
+        self.sync_result = ReconcileResult()
         self.closed = False
 
-    def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
-        self.sync_calls.append(batch)
+    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
+        self.sync_calls.append(snapshot)
         return self.sync_result
 
     def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
         return ScheduleResult()
 
-    def capacity(self):
-        return None
-
-    def ping_workers(self, workers):
-        return []
+    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+        return AutoscaleResult()
 
     def get_process_status(self, target: TaskTarget, request):
         raise ProviderUnsupportedError("fake k8s")
-
-    def on_worker_failed(self, worker_id, address) -> None:
-        pass
 
     def set_log_sink(self, *args, **kwargs) -> None:
         pass
@@ -202,7 +196,6 @@ def test_drain_executing_goes_to_running_tasks(state):
         apply_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING)],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -234,7 +227,6 @@ def test_apply_running(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -257,7 +249,6 @@ def test_apply_succeeded(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -269,7 +260,6 @@ def test_apply_succeeded(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_SUCCEEDED),
             ],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -298,7 +288,6 @@ def test_apply_failed_with_retry(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -308,7 +297,6 @@ def test_apply_failed_with_retry(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
             ],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -338,7 +326,6 @@ def test_apply_failed_no_retry(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -348,7 +335,6 @@ def test_apply_failed_no_retry(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_FAILED, error="fatal"),
             ],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -376,7 +362,6 @@ def test_apply_failed_directly_from_assigned(state):
                     error="kubectl apply failed: RequestEntityTooLarge",
                 ),
             ],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -405,7 +390,6 @@ def test_apply_worker_failed_from_running_retries(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -415,7 +399,6 @@ def test_apply_worker_failed_from_running_retries(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_WORKER_FAILED),
             ],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -439,7 +422,6 @@ def test_apply_worker_failed_from_assigned(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_WORKER_FAILED),
             ],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -482,7 +464,6 @@ def test_apply_ignores_stale_attempt(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id + 99, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -617,7 +598,6 @@ def test_coscheduled_gang_requeue_keeps_siblings_in_lockstep(state):
         apply_dispatch_updates(
             cur,
             [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -627,7 +607,6 @@ def test_coscheduled_gang_requeue_keeps_siblings_in_lockstep(state):
         apply_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED)],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -663,7 +642,6 @@ def test_gang_requeue_bounces_assigned_sibling_off_old_generation(state):
         apply_dispatch_updates(
             cur,
             [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids[1:]],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -675,7 +653,6 @@ def test_gang_requeue_bounces_assigned_sibling_off_old_generation(state):
         apply_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_ids[1], attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED)],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -718,7 +695,6 @@ def test_apply_ignores_finished_task(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -728,7 +704,6 @@ def test_apply_ignores_finished_task(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_SUCCEEDED),
             ],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -740,7 +715,6 @@ def test_apply_ignores_finished_task(state):
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_FAILED),
             ],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )

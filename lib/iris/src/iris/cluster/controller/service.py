@@ -36,7 +36,7 @@ from iris.cluster.controller.auth import (
     revoke_login_keys_for_user,
 )
 from iris.cluster.controller.autoscaler.status import PendingHint
-from iris.cluster.controller.backend import PlacementOwner, ProviderError, TaskBackend, TaskTarget
+from iris.cluster.controller.backend import BackendCapability, ProviderError, TaskBackend, TaskTarget
 from iris.cluster.controller.budget import (
     compute_effective_band,
     compute_user_spend,
@@ -120,10 +120,10 @@ WORKDIR_FILE_OFFLOAD_THRESHOLD = 10 * 1024  # 10KB — externalize large workdir
 # Soft cap on how long launch_job waits for a replaced job's worker-bound
 # attempts to finalize before force-reaping them. Sized to exceed the worst-
 # case worker-death detection window so a vanished worker's attempts can be
-# self-finalized by the ping loop: heartbeat_interval (5s) *
-# PING_FAILURE_THRESHOLD (10) ≈ 50s, plus slack for the heartbeat to land.
-# Past this point we log a warning, CASCADE-delete the predecessor's rows,
-# and proceed with the replacement — a stuck heartbeat must not block the
+# self-finalized by the reconcile-driven health path: the default
+# worker_unreachable_grace (~50s) plus the per-RPC reconcile deadline and
+# teardown, with slack. Past this point we log a warning, CASCADE-delete the
+# rows, and proceed with the replacement — a vanished worker must not block the
 # new submission indefinitely.
 _JOB_REPLACEMENT_DRAIN_WAIT = Duration.from_seconds(120)
 
@@ -831,7 +831,7 @@ class ControllerProtocol(Protocol):
     def provider(self) -> Any: ...
 
     @property
-    def placement(self) -> PlacementOwner: ...
+    def capabilities(self) -> frozenset[BackendCapability]: ...
 
     @property
     def run_template_cache(self) -> RunTemplateCache: ...
@@ -1088,7 +1088,6 @@ class ControllerServiceImpl:
                             job_id=job_id,
                             reason="Replaced by new submission",
                             endpoints=self._endpoints,
-                            health=self._health,
                         )
                         # Cancel is a producer transition: attempts stay
                         # unfinished until the worker confirms termination.
@@ -1341,7 +1340,6 @@ class ControllerServiceImpl:
                 job_id=job_id,
                 reason="Terminated by user",
                 endpoints=self._endpoints,
-                health=self._health,
             )
         # The next polling tick reconciles each affected worker; the
         # cancellation appears in the desired-set diff so the worker stops
@@ -1565,7 +1563,7 @@ class ControllerServiceImpl:
         paging (preserves CLI callers that fetch the whole roster); ``limit > 0``
         is clamped to ``MAX_LIST_WORKERS_LIMIT``.
         """
-        if self._controller.placement is PlacementOwner.TASK_BACKEND:
+        if BackendCapability.WORKER_DAEMON not in self._controller.capabilities:
             return controller_pb2.Controller.ListWorkersResponse()
 
         query = controller_pb2.Controller.WorkerQuery()
@@ -1752,7 +1750,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> controller_pb2.Controller.GetAutoscalerStatusResponse:
         """Get current autoscaler status with worker info populated."""
-        if self._controller.placement is PlacementOwner.TASK_BACKEND:
+        if BackendCapability.IRIS_AUTOSCALER not in self._controller.capabilities:
             return controller_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
         autoscaler = self._controller.autoscaler
         if not autoscaler:
@@ -1802,7 +1800,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Get Kubernetes cluster status: node counts, capacity, and recent pod statuses."""
-        if self._controller.placement is not PlacementOwner.TASK_BACKEND:
+        if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
             return controller_pb2.Controller.GetKubernetesClusterStatusResponse()
 
         # KubernetesProvider exposes get_cluster_status().
@@ -1904,8 +1902,8 @@ class ControllerServiceImpl:
         attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
         task_worker_id = _task_worker_id(task)
         if not task_worker_id:
-            # BACKEND placement (K8s) chooses the node itself: route by task, no worker.
-            if self._controller.placement is not PlacementOwner.TASK_BACKEND:
+            # A cluster backend (K8s) chooses the node itself: route by task, no worker.
+            if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
                 raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
             task_target = TaskTarget(
                 task_id=task.task_id.to_wire(),
@@ -1970,7 +1968,7 @@ class ControllerServiceImpl:
         worker state (health, tasks, logs). VM status lives on the Autoscaler
         tab.
         """
-        if self._controller.placement is PlacementOwner.TASK_BACKEND:
+        if BackendCapability.WORKER_DAEMON not in self._controller.capabilities:
             raise ConnectError(Code.UNIMPLEMENTED, "Direct provider mode: no workers")
         if not request.id:
             raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
@@ -2237,8 +2235,8 @@ class ControllerServiceImpl:
 
         task_worker_id = _task_worker_id(task)
         if not task_worker_id:
-            # BACKEND placement (K8s) execs directly into the pod; no worker daemon.
-            if self._controller.placement is not PlacementOwner.TASK_BACKEND:
+            # A cluster backend (K8s) execs directly into the pod; no worker daemon.
+            if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
                 raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
             exec_target = TaskTarget(
                 task_id=task.task_id.to_wire(),

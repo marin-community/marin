@@ -53,7 +53,7 @@ from iris.cluster.controller.autoscaler.state import AutoscalerState, GroupPersi
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
+from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
 from iris.cluster.types import WorkerStatusMap
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2, vm_pb2
@@ -546,9 +546,10 @@ class Autoscaler:
         zero workers, so there is nothing to probe and no heartbeat row to expire,
         and the slice is reaped via a per-slice no-worker counter instead.
 
-        Per-worker counters live on SliceState. PING_FAILURE_THRESHOLD
-        consecutive failures (~100s at the default 10s evaluation interval,
-        matching the heartbeat-path threshold) trip termination. Worker URLs
+        Per-worker counters live on SliceState. CONSECUTIVE_FAILURE_THRESHOLD
+        consecutive failures (~100s at the default 10s evaluation interval) trip
+        termination — the same constant the controller's worker-liveness
+        tracker uses for its reconcile-failure threshold. Worker URLs
         come from the slice handle, refreshed lazily via ``handle.describe()``
         when SliceState has none cached (e.g. after a controller restart).
         Probes are fanned out across a thread pool so a partitioned AZ
@@ -560,7 +561,7 @@ class Autoscaler:
         # Phase 1: collect every (group, slice_id, worker_id, worker_url) probe
         # target. A READY slice that resolves to zero workers (cloud allocation
         # gone) has nothing to probe; it's tracked via a per-slice counter and
-        # torn down after PING_FAILURE_THRESHOLD sustained empty observations,
+        # torn down after CONSECUTIVE_FAILURE_THRESHOLD sustained empty observations,
         # which the per-worker counters never catch.
         probes: list[tuple[ScalingGroup, str, str, str]] = []
         tripped: dict[str, tuple[ScalingGroup, str]] = {}  # slice_id -> (group, reason)
@@ -573,7 +574,7 @@ class Autoscaler:
                     worker_urls = refreshed
                 if not worker_urls:
                     count = group.record_slice_no_workers(slice_id)
-                    if count >= PING_FAILURE_THRESHOLD and slice_id not in tripped:
+                    if count >= CONSECUTIVE_FAILURE_THRESHOLD and slice_id not in tripped:
                         reason = f"cloud allocation reports no workers ({count}x)"
                         logger.warning("Slice %s: %s; terminating", slice_id, reason)
                         tripped[slice_id] = (group, reason)
@@ -590,7 +591,7 @@ class Autoscaler:
             # Phase 3: record results and collect slices that tripped the threshold.
             for (group, slice_id, worker_id, _url), healthy in zip(probes, results, strict=True):
                 count = group.record_health_probe_result(slice_id, worker_id, healthy)
-                if count >= PING_FAILURE_THRESHOLD and slice_id not in tripped:
+                if count >= CONSECUTIVE_FAILURE_THRESHOLD and slice_id not in tripped:
                     reason = f"worker {worker_id} failed /health {count}x"
                     logger.warning("Slice %s: %s; terminating", slice_id, reason)
                     tripped[slice_id] = (group, reason)

@@ -1,22 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Controller-side reconcile-input builder for TASK_BACKEND placement.
+"""Controller-side dispatch drain for cluster backends that own placement.
 
-The counterpart to :mod:`reconcile.worker` (which builds per-worker plans for
-IRIS_CONTROLLER placement): this reads and writes the DB inside a controller
-transaction to produce the :class:`BackendReconcileInput` a TASK_BACKEND
-(Kueue today) reconciles against. It promotes PENDING tasks, builds per-job
+The counterpart to :mod:`reconcile.worker` (which builds per-worker plans for a
+worker-daemon backend): this reads and writes the DB inside a controller
+transaction to produce the :class:`DispatchBatch` a cluster backend (Kueue
+today) reconciles against. It promotes PENDING tasks, builds per-job
 ``RunTaskRequest`` templates (LRU-cached) and per-attempt requests, and
 snapshots the running set. Because it owns DB I/O it lives controller-side, not
-in the DB-less backend.
+in the DB-less backend; the controller rides its output on the reconcile
+``ControlSnapshot``.
 """
+
+from dataclasses import dataclass, field
 
 from rigging.timing import Timestamp
 from sqlalchemy import select
 
 from iris.cluster.controller import reads, writes
-from iris.cluster.controller.backend import BackendReconcileInput
 from iris.cluster.controller.codec import constraints_from_json, proto_from_json, resource_spec_from_scalars
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.reads import (
@@ -30,6 +32,20 @@ from iris.cluster.controller.schema import job_config_table, jobs_table, tasks_t
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEntry
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
+
+
+@dataclass(frozen=True)
+class DispatchBatch:
+    """The dispatch drain a cluster backend's reconcile tick consumes.
+
+    Rides on :class:`~iris.cluster.controller.reads.ControlSnapshot` as
+    ``tasks_to_run`` / ``running_tasks``: tasks the controller promoted to
+    ASSIGNED this tick plus the active null-worker roster to poll.
+    """
+
+    tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
+    running_tasks: list[RunningTaskEntry] = field(default_factory=list)
+
 
 DISPATCH_PROMOTION_RATE = 128
 """Token bucket capacity for task promotion (pods per minute).
@@ -190,7 +206,7 @@ def drain_for_dispatch(
     *,
     cache: RunTemplateCache,
     max_promotions: int = DISPATCH_PROMOTION_RATE,
-) -> BackendReconcileInput:
+) -> DispatchBatch:
     """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
 
     Builds RunTaskRequest for two row classes:
@@ -306,7 +322,7 @@ def drain_for_dispatch(
         for row in running_rows
     ]
 
-    return BackendReconcileInput(
+    return DispatchBatch(
         tasks_to_run=tasks_to_run,
         running_tasks=running_tasks,
     )

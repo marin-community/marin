@@ -147,9 +147,7 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     run_template_cache=transitions._run_template_cache,
                 )
             case CancelJob(job_id, reason):
-                return ops.job.cancel(
-                    cur, job_id=job_id, reason=reason, endpoints=transitions._endpoints, health=transitions._health
-                )
+                return ops.job.cancel(cur, job_id=job_id, reason=reason, endpoints=transitions._endpoints)
             case RegisterOrRefreshWorker(worker_id, address, metadata, ts, slice_id, scale_group):
                 return ops.worker.register(
                     cur,
@@ -176,7 +174,6 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                 return finalize(
                     cur,
                     [TerminalDecision(TerminalKind.PREEMPT, task_id, reason)],
-                    health=transitions._health,
                     endpoints=transitions._endpoints,
                     now=Timestamp.now(),
                 )
@@ -187,7 +184,6 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                         TerminalDecision(TerminalKind.TIMEOUT, tid, reason)
                         for tid in sorted(task_ids, key=lambda t: t.to_wire())
                     ],
-                    health=transitions._health,
                     endpoints=transitions._endpoints,
                     now=Timestamp.now(),
                 )
@@ -199,7 +195,6 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                 return apply_dispatch_updates(
                     cur,
                     updates,
-                    health=transitions._health,
                     endpoints=transitions._endpoints,
                     now=Timestamp.now(),
                 )

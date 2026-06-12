@@ -43,19 +43,17 @@ from iris.cluster.backends.k8s.types import (
     parse_k8s_timestamp,
 )
 from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.backend import (
-    BackendReconcileInput,
-    BackendReconcileResult,
-    CapacityInput,
-    CapacityResult,
-    PingResult,
-    PlacementOwner,
+    AutoscaleResult,
+    BackendCapability,
     ProviderUnsupportedError,
+    ReconcileResult,
     ScheduleInput,
     ScheduleResult,
     TaskTarget,
-    WorkersFailedResult,
 )
+from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.log_keys import task_log_key
@@ -1265,12 +1263,12 @@ class _K8sProfileDispatch:
 class K8sTaskProvider:
     """Executes tasks as Kubernetes Pods without worker daemons.
 
-    A ``PlacementOwner.TASK_BACKEND`` :class:`~iris.cluster.controller.backend.TaskBackend`:
-    the controller calls reconcile() with a BackendReconcileInput (desired
-    ``tasks_to_run`` + ``running_tasks``) and receives back a
-    BackendReconcileResult — Kueue owns placement, so no Iris scheduling and no
-    worker daemon are involved. K8s pods are launched and monitored directly via
-    kubectl rather than through a worker gRPC daemon.
+    A cluster :class:`~iris.cluster.controller.backend.TaskBackend`: Kueue owns
+    placement, so ``schedule`` and ``autoscale`` are no-ops; ``reconcile``
+    consumes the dispatch drain (``tasks_to_run`` + ``running_tasks``) carried on
+    the :class:`ControlSnapshot` and returns neutral task ``updates``. K8s pods
+    are launched and monitored directly via kubectl rather than through a worker
+    gRPC daemon.
 
     Capacity is derived from node allocatable resources minus running pod
     resource requests, queried via kubectl each sync cycle.
@@ -1278,8 +1276,7 @@ class K8sTaskProvider:
     Pod naming: iris-{task_id_sanitized}-{attempt_id}
     """
 
-    placement: ClassVar[PlacementOwner] = PlacementOwner.TASK_BACKEND
-    manages_capacity: ClassVar[bool] = True
+    capabilities: ClassVar[frozenset[BackendCapability]] = frozenset({BackendCapability.CLUSTER_VIEW})
 
     kubectl: K8sService
     namespace: str
@@ -1307,6 +1304,12 @@ class K8sTaskProvider:
     profile_table: Table | None = None
     poll_concurrency: int = 32
     log_poll_interval: float = 15.0
+    # Cluster-wide kubectl scans (pod list, stray-pod GC, pod poll, node refresh)
+    # are coarse-grained: the controller ticks reconcile at poll_interval (1s),
+    # but these LISTs run at most once per cluster_scan_interval to bound kubectl
+    # load. New-pod application (dispatch) is NOT gated — it runs every tick.
+    # Tests set this to 0.0 so every reconcile scans.
+    cluster_scan_interval: float = 5.0
     name: str = "kubernetes"
     # K8s provisions its own capacity (cluster autoscaler + Kueue); no Iris autoscaler.
     autoscaler: Autoscaler | None = field(default=None, init=False, repr=False)
@@ -1315,6 +1318,7 @@ class K8sTaskProvider:
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_gc_time: float = field(default=0.0, init=False, repr=False)
+    _last_cluster_scan: float = field(default=0.0, init=False, repr=False)
     _last_preempt_time: float = field(default=0.0, init=False, repr=False)
     _pending_gc_hashes: set[str] = field(default_factory=set, init=False, repr=False)
 
@@ -1338,19 +1342,21 @@ class K8sTaskProvider:
         """No-op: Kueue owns placement, so Iris makes no scheduling decisions."""
         return ScheduleResult()
 
-    def manage_capacity(self, snapshot: CapacityInput) -> CapacityResult:
-        """No-op: the cluster autoscaler + Kueue provision nodes for K8s."""
-        return CapacityResult()
-
-    def on_workers_failed(self, worker_ids: list[WorkerId]) -> WorkersFailedResult:
-        """No-op: K8s has no Iris-managed slices to tear down."""
-        return WorkersFailedResult()
+    def autoscale(
+        self,
+        snapshot: ControlSnapshot,
+        residual_demand: list[DemandEntry],
+        dead_workers: list[WorkerId],
+    ) -> AutoscaleResult:
+        """No-op: the cluster autoscaler + Kueue provision nodes; K8s has no
+        Iris-managed slices to tear down."""
+        return AutoscaleResult()
 
     def attach_autoscaler(self, autoscaler: Autoscaler) -> None:
         """Never called: K8s provisions its own capacity, so no autoscaler is attached."""
         raise AssertionError("K8sTaskProvider manages its own capacity; no autoscaler should be attached")
 
-    def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
+    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
         """Sync task state: apply new pods, delete strays, poll running pods.
 
         Kill targets are derived here, not buffered in the controller: any
@@ -1358,15 +1364,21 @@ class K8sTaskProvider:
         set (``tasks_to_run`` union ``running_tasks``) is deleted on this tick.
         Producing transitions only need to update ``tasks.state``; the next
         sync sees the diff.
+
+        New-pod application runs every tick so dispatch stays responsive; the
+        cluster-wide kubectl scans (pod list, stray-pod GC, pod poll, node
+        refresh, terminal GC) run at most once per ``cluster_scan_interval``,
+        and continue to run on an idle cluster (the controller never gates a
+        cluster backend's reconcile on having work) so orphaned pods are reaped.
         """
         # Free GPU capacity for incoming gangs before their pods are created:
         # Kueue TAS computes node capacity at admission, so blockers must be
         # gone (or terminating) by the time it evaluates the new Workload.
-        if self.preempt_namespaces and any(r.coscheduling.group_by for r in batch.tasks_to_run):
+        if self.preempt_namespaces and any(r.coscheduling.group_by for r in snapshot.tasks_to_run):
             self._evict_preemptible_blockers(reason="coscheduled gang submission", force=True)
 
         apply_failures: list[TaskUpdate] = []
-        for run_req in batch.tasks_to_run:
+        for run_req in snapshot.tasks_to_run:
             try:
                 self._apply_pod(run_req)
             except KubectlError as exc:
@@ -1385,6 +1397,11 @@ class K8sTaskProvider:
                     )
                 )
 
+        now = time.time()
+        if now - self._last_cluster_scan < self.cluster_scan_interval:
+            return ReconcileResult(updates=apply_failures)
+        self._last_cluster_scan = now
+
         # Single pod list for the entire cycle — excludes terminal pods via field selector.
         managed_pods = self.kubectl.list_json(
             K8sResource.PODS,
@@ -1398,12 +1415,12 @@ class K8sTaskProvider:
             self._evict_preemptible_blockers(reason="gang pods held SchedulingGated awaiting Kueue admission")
 
         desired_keys: set[tuple[str, int]] = set()
-        for run_req in batch.tasks_to_run:
+        for run_req in snapshot.tasks_to_run:
             desired_keys.add((_task_hash(run_req.task_id), int(run_req.attempt_id)))
-        for entry in batch.running_tasks:
+        for entry in snapshot.running_tasks:
             desired_keys.add((_task_hash(entry.task_id.to_wire()), int(entry.attempt_id)))
         self._delete_stray_pods(managed_pods, desired_keys)
-        updates = apply_failures + self._poll_pods(batch.running_tasks, managed_pods)
+        updates = apply_failures + self._poll_pods(snapshot.running_tasks, managed_pods)
 
         try:
             nodes = self.kubectl.list_json(K8sResource.NODES)
@@ -1416,7 +1433,7 @@ class K8sTaskProvider:
 
         self._maybe_gc_terminal_resources(managed_pods)
 
-        return BackendReconcileResult(updates=updates)
+        return ReconcileResult(updates=updates)
 
     def profile_task(
         self,
@@ -1485,19 +1502,12 @@ class K8sTaskProvider:
         except Exception as e:
             return worker_pb2.Worker.ExecInContainerResponse(error=str(e))
 
-    def ping_workers(self, workers: list[tuple[WorkerId, str | None]]) -> list[PingResult]:
-        """No worker daemons exist on K8s — there is nothing to ping."""
-        return []
-
     def get_process_status(
         self,
         target: TaskTarget,
         request: job_pb2.GetProcessStatusRequest,
     ) -> job_pb2.GetProcessStatusResponse:
         raise ProviderUnsupportedError("K8s backend does not support per-process status")
-
-    def on_worker_failed(self, worker_id: WorkerId, address: str | None) -> None:
-        """No cached worker-daemon connections on K8s — nothing to evict."""
 
     def set_log_sink(
         self,

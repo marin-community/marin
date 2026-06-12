@@ -32,7 +32,6 @@ from iris.cluster.controller.schema import (
     jobs_table,
     users_table,
 )
-from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
@@ -352,7 +351,6 @@ def cancel(
     job_id: JobName,
     reason: str,
     endpoints: EndpointsProjection,
-    health: WorkerHealthTracker,
 ) -> None:
     """Cancel ``job_id`` and its descendant subtree through the kernel.
 
@@ -374,7 +372,7 @@ def cancel(
     # No per-job state preload: the cascade-kill merge guard skips already-
     # terminal rows (excluding WORKER_FAILED, which cancel overwrites).
     effects = ReconcileState.open(snapshot).cancel_job(job_id, reason, now)
-    commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
+    commit_effects(cur, effects, endpoints=endpoints)
     # Sweep endpoints that survived because their owning task was already
     # terminal before cancel ran (kernel only emits EndpointDeletion for
     # tasks we actively killed). Derive the same subtree the kernel cancelled
