@@ -303,3 +303,18 @@
   - Attention segment-run slice passed (`1 passed, 5 skipped`); Splash helper tests passed (`19 passed`); changed-file precommit passed; lint review reported no findings.
 - Interpretation: We can now run synthetic profiles or feed measured packed lengths from a dataset/tokenizer pass into the same benchmark command.
 - Next action: Capture or choose representative Lima/Alpaca packed lengths, then run the updated harness on v4-8/v5p-8 when capacity is available.
+
+### 2026-06-12 - Packed-length sampling helper
+- Hypothesis: We should decouple dataset/tokenizer access from TPU timing, but still provide a reproducible path from Lima/Alpaca-style text data to `bench_splash_attention_masks.py --doc-lengths`.
+- Command:
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_sample_packed_doc_lengths.py lib/levanter/tests/kernels/test_bench_splash_attention_masks.py`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'segment_runs or batched_masks'`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `timeout 900 ./infra/pre-commit.py --review --agent-command='env RUST_LOG=error codex exec --ignore-user-config --ephemeral --dangerously-bypass-approvals-and-sandbox'`
+- Config: Added `sample_packed_doc_lengths.py`, which reads local JSONL, local text files, or HF datasets, tokenizes examples with a Marin tokenizer, greedily emits comma-separated packed document lengths, and pads each emitted sequence to `seq_len`.
+- Result:
+  - New sampling helper tests passed together with benchmark-profile tests (`10 passed`).
+  - Attention segment-run slice passed (`1 passed, 5 skipped`); Splash helper tests passed (`19 passed`); changed-file precommit passed; lint review reported no findings.
+- Interpretation: A dataset/tokenizer pass can now be run once on CPU to produce concrete packed lengths, then TPU timing can stay focused on kernel behavior using `--doc-lengths`.
+- Next action: Run the helper on a representative local/HF instruction dataset when network/tokenizer access is convenient, then benchmark those lengths on v4-8/v5p-8.
