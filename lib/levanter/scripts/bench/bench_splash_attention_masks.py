@@ -56,7 +56,7 @@ class BenchShape:
     docs_per_sequence: int
     prefix_tokens_per_doc: int
     doc_length_profile: str
-    doc_lengths: tuple[int, ...] | None
+    doc_lengths: tuple[tuple[int, ...], ...] | None
     dtype: jnp.dtype
 
 
@@ -72,6 +72,7 @@ class BenchResult:
     prefix_tokens_per_doc: int
     doc_length_profile: str
     doc_lengths: tuple[int, ...]
+    doc_lengths_by_batch: tuple[tuple[int, ...], ...]
     dtype: str
     device_kind: str
     num_devices: int
@@ -85,14 +86,16 @@ class BenchResult:
 def main() -> None:
     args = _parse_args()
     dtype = _parse_dtype(args.dtype)
-    doc_lengths = _parse_doc_lengths(args.doc_lengths)
+    doc_lengths = _parse_doc_length_batches(args.doc_lengths)
     shape = BenchShape(
         batch=args.batch,
         seq_len=args.seq_len,
         heads=args.heads,
         head_dim=args.head_dim,
         block_size=args.block_size,
-        docs_per_sequence=len(doc_lengths) if doc_lengths is not None else args.docs_per_sequence,
+        docs_per_sequence=(
+            max(len(lengths) for lengths in doc_lengths) if doc_lengths is not None else args.docs_per_sequence
+        ),
         prefix_tokens_per_doc=args.prefix_tokens_per_doc,
         doc_length_profile=args.doc_length_profile,
         doc_lengths=doc_lengths,
@@ -256,6 +259,7 @@ def _time_variant(
         prefix_tokens_per_doc=shape.prefix_tokens_per_doc,
         doc_length_profile=shape.doc_length_profile,
         doc_lengths=_doc_lengths(shape),
+        doc_lengths_by_batch=_doc_length_batches(shape),
         dtype=str(shape.dtype),
         device_kind=device_kind,
         num_devices=len(jax.devices()),
@@ -274,11 +278,15 @@ class _PackedSegmentIds:
 
 
 def _packed_segment_ids(shape: BenchShape, Batch: hax.Axis, Pos: hax.Axis, KPos: hax.Axis) -> _PackedSegmentIds:
-    doc_lengths = _doc_lengths(shape)
-    one_sequence = jnp.concatenate(
-        [jnp.full((doc_len,), doc_id, dtype=jnp.int32) for doc_id, doc_len in enumerate(doc_lengths)]
+    segment_ids = jnp.stack(
+        [
+            jnp.concatenate(
+                [jnp.full((doc_len,), doc_id, dtype=jnp.int32) for doc_id, doc_len in enumerate(doc_lengths)]
+            )
+            for doc_lengths in _doc_length_batches(shape)
+        ],
+        axis=0,
     )
-    segment_ids = jnp.broadcast_to(one_sequence[None, :], (shape.batch, shape.seq_len))
     return _PackedSegmentIds(
         q=hax.named(segment_ids, (Batch, Pos)),
         kv=hax.named(segment_ids, (Batch, KPos)),
@@ -286,22 +294,30 @@ def _packed_segment_ids(shape: BenchShape, Batch: hax.Axis, Pos: hax.Axis, KPos:
 
 
 def _packed_prefix_mask(shape: BenchShape, Batch: hax.Axis, Pos: hax.Axis) -> hax.NamedArray:
-    doc_lengths = _doc_lengths(shape)
-    prefix = jnp.concatenate(
-        [jnp.arange(doc_len, dtype=jnp.int32) < min(shape.prefix_tokens_per_doc, doc_len) for doc_len in doc_lengths]
+    prefix = jnp.stack(
+        [
+            jnp.concatenate(
+                [
+                    jnp.arange(doc_len, dtype=jnp.int32) < min(shape.prefix_tokens_per_doc, doc_len)
+                    for doc_len in doc_lengths
+                ]
+            )
+            for doc_lengths in _doc_length_batches(shape)
+        ],
+        axis=0,
     )
-    prefix = jnp.broadcast_to(prefix[None, :], (shape.batch, shape.seq_len))
     return hax.named(prefix, (Batch, Pos))
 
 
 def _doc_lengths(shape: BenchShape) -> tuple[int, ...]:
+    return _doc_length_batches(shape)[0]
+
+
+def _doc_length_batches(shape: BenchShape) -> tuple[tuple[int, ...], ...]:
     if shape.doc_lengths is not None:
-        if len(shape.doc_lengths) == 0:
-            raise ValueError("doc_lengths must not be empty.")
-        if any(doc_len <= 0 for doc_len in shape.doc_lengths):
-            raise ValueError("doc_lengths must all be positive.")
-        if sum(shape.doc_lengths) != shape.seq_len:
-            raise ValueError(f"doc_lengths must sum to seq_len={shape.seq_len}, got {sum(shape.doc_lengths)}.")
+        _validate_doc_length_batches(shape.doc_lengths, shape)
+        if len(shape.doc_lengths) == 1:
+            return (shape.doc_lengths[0],) * shape.batch
         return shape.doc_lengths
 
     if shape.docs_per_sequence <= 0:
@@ -313,7 +329,7 @@ def _doc_lengths(shape: BenchShape) -> tuple[int, ...]:
         if shape.seq_len % shape.docs_per_sequence != 0:
             raise ValueError("seq_len must be divisible by docs_per_sequence for equal doc lengths.")
         doc_len = shape.seq_len // shape.docs_per_sequence
-        return (doc_len,) * shape.docs_per_sequence
+        return ((doc_len,) * shape.docs_per_sequence,) * shape.batch
 
     if shape.doc_length_profile == DOC_LENGTH_PROFILE_STAGGERED:
         weights = tuple(range(1, shape.docs_per_sequence + 1))
@@ -322,7 +338,23 @@ def _doc_lengths(shape: BenchShape) -> tuple[int, ...]:
     else:
         raise ValueError(f"Unsupported doc_length_profile {shape.doc_length_profile!r}.")
 
-    return _integer_partition_from_weights(shape.seq_len, weights)
+    return (_integer_partition_from_weights(shape.seq_len, weights),) * shape.batch
+
+
+def _validate_doc_length_batches(doc_lengths: tuple[tuple[int, ...], ...], shape: BenchShape) -> None:
+    if len(doc_lengths) == 0:
+        raise ValueError("doc_lengths must not be empty.")
+    if len(doc_lengths) not in {1, shape.batch}:
+        raise ValueError(f"doc_lengths must provide either one layout or batch={shape.batch} layouts.")
+    for batch_index, batch_lengths in enumerate(doc_lengths):
+        if len(batch_lengths) == 0:
+            raise ValueError(f"doc_lengths layout {batch_index} must not be empty.")
+        if any(doc_len <= 0 for doc_len in batch_lengths):
+            raise ValueError(f"doc_lengths layout {batch_index} must contain only positive lengths.")
+        if sum(batch_lengths) != shape.seq_len:
+            raise ValueError(
+                f"doc_lengths layout {batch_index} must sum to seq_len={shape.seq_len}, got {sum(batch_lengths)}."
+            )
 
 
 def _integer_partition_from_weights(total: int, weights: tuple[int, ...]) -> tuple[int, ...]:
@@ -350,13 +382,17 @@ def _parse_dtype(dtype: str) -> jnp.dtype:
     raise ValueError(f"Unsupported dtype {dtype!r}.")
 
 
-def _parse_doc_lengths(doc_lengths: str | None) -> tuple[int, ...] | None:
+def _parse_doc_length_batches(doc_lengths: str | None) -> tuple[tuple[int, ...], ...] | None:
     if doc_lengths is None:
         return None
-    parsed_lengths = tuple(int(part.strip()) for part in doc_lengths.split(",") if part.strip())
-    if not parsed_lengths:
+    parsed_batches = tuple(
+        tuple(int(part.strip()) for part in batch_part.split(",") if part.strip())
+        for batch_part in doc_lengths.split(";")
+        if batch_part.strip()
+    )
+    if not parsed_batches:
         raise ValueError("--doc-lengths must contain at least one integer.")
-    return parsed_lengths
+    return parsed_batches
 
 
 def _parse_args() -> argparse.Namespace:
@@ -369,7 +405,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--docs-per-sequence", type=int, default=4)
     parser.add_argument("--prefix-tokens-per-doc", type=int, default=256)
     parser.add_argument("--doc-length-profile", choices=DOC_LENGTH_PROFILES, default=DOC_LENGTH_PROFILE_EQUAL)
-    parser.add_argument("--doc-lengths", type=str, default=None)
+    parser.add_argument(
+        "--doc-lengths",
+        type=str,
+        default=None,
+        help="Comma-separated lengths for one packed layout, or semicolon-separated layouts for each batch row.",
+    )
     parser.add_argument("--dtype", choices=DTYPE_NAMES, default=DEFAULT_DTYPE_NAME)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--iterations", type=int, default=5)

@@ -335,3 +335,17 @@
   - Direct `GAIR/lima` loading failed under the installed `datasets` package with `RuntimeError: Dataset scripts are no longer supported, but found lima.py`.
 - Interpretation: The Alpaca path is now reproducible without ad hoc preprocessing and gives concrete ragged packed-doc profiles for the TPU benchmark. The LIMA failure is a dataset packaging issue in the local HF stack, not a sampler logic failure; use a local JSONL export or a script-free mirror if LIMA lengths are still needed.
 - Next action: Run `bench_splash_attention_masks.py --doc-lengths <alpaca pack>` on v4-8/v5p-8 when Boyle or a later TPU reservation gets capacity.
+
+### 2026-06-12 - Per-batch packed-length benchmark layouts
+- Hypothesis: The sampler can emit multiple packed sequences, but benchmarking only one layout broadcast across batch under-tests the data-dependent packed-mask path. The benchmark should accept one explicit layout per batch row so segment-run metadata, prefix masks, and segment IDs vary across examples.
+- Command:
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_bench_splash_attention_masks.py lib/levanter/tests/kernels/test_sample_packed_doc_lengths.py`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'segment_runs or batched_masks or prefix_lm'`
+  - `./infra/pre-commit.py --changed-files --fix`
+- Config: Extended `--doc-lengths` parsing so `5,17,106;8,9,10,101` means two batch layouts. A single comma-separated list remains backward-compatible and is broadcast across batch.
+- Result:
+  - Benchmark/sampler tests passed with `13 passed`.
+  - Attention prefix/segment-run slice passed with `5 passed, 5 skipped`.
+  - Changed-file precommit passed.
+- Interpretation: TPU benchmark commands can now paste multiple lines from `sample_packed_doc_lengths.py` as a semicolon-separated batch, exercising per-example packed segment-run metadata instead of only repeated layouts.
+- Next action: Use the two Alpaca sampled rows as a `B=2 --doc-lengths '<row0>;<row1>'` TPU run when capacity is available.
