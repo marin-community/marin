@@ -89,11 +89,10 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
-        # `MoEMLP.init` calls `_mesh_axis_size(mesh, "expert")` which raises if
-        # the abstract mesh has no `expert` axis. The compact physical mesh
-        # only includes `expert` when expert parallelism > 1; declaring
-        # expert=1 here is what satisfies the model-init check.
-        mesh=MeshConfig(axes={"expert": 1}),
+        # See grug_moe_mix.py's identical block: expert=2 gives the compact
+        # mesh an `expert` axis so MoEMLP.init's `_mesh_axis_size(mesh,
+        # "expert")` check passes, with 2-way expert parallelism on v4-8.
+        mesh=MeshConfig(axes={"expert": 2}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         checkpointer=CheckpointerConfig(
