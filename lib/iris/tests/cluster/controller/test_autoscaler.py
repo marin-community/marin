@@ -10,8 +10,6 @@ Pure routing/packing logic is tested in test_demand_routing.py.
 Integration tests with real GcpWorkerProvider are in test_autoscaler_integration.py.
 """
 
-import time
-
 import pytest
 from iris.cluster.backends.types import (
     CloudSliceState,
@@ -399,7 +397,6 @@ class TestAutoscalerExecution:
         )
 
         empty_autoscaler.execute([decision], timestamp=Timestamp.from_ms(1000))
-        empty_autoscaler._wait_for_inflight()
 
         group = empty_autoscaler.groups["test-group"]
         assert group.slice_count() == 1
@@ -418,7 +415,6 @@ class TestAutoscalerExecution:
         )
 
         autoscaler.execute([decision], timestamp=Timestamp.from_ms(1000))
-        autoscaler._wait_for_inflight()
 
         # The create-failure decays the detector's health score below 1.0.
         # One failure at decay=0.7 → health ~0.7 (and recovery over 2 ms is negligible).
@@ -429,7 +425,6 @@ class TestAutoscalerExecution:
         demand = make_demand_entries(2, device_type=DeviceType.CPU, device_variant=None)
         vm_status_map = {}
         decisions = empty_autoscaler.run_once(demand, vm_status_map)
-        empty_autoscaler._wait_for_inflight()
 
         assert len(decisions) == 1
         assert decisions[0].action == ScalingAction.SCALE_UP
@@ -722,7 +717,6 @@ class TestAutoscalerQuotaHandling:
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         autoscaler.run_once(demand, {}, timestamp=Timestamp.from_ms(1000))
-        autoscaler._wait_for_inflight()
 
         state = group.availability(timestamp=Timestamp.from_ms(2000))
         assert state.status == GroupAvailability.QUOTA_EXCEEDED
@@ -748,7 +742,6 @@ class TestAutoscalerQuotaHandling:
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         autoscaler.run_once(demand, {}, timestamp=Timestamp.from_ms(1000))
-        autoscaler._wait_for_inflight()
 
         decisions = autoscaler.evaluate(demand, timestamp=Timestamp.from_ms(2000))
 
@@ -790,7 +783,6 @@ class TestAutoscalerQuotaHandling:
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         for i in range(5):
             autoscaler.run_once(demand, {}, timestamp=Timestamp.from_ms(1000 + i))
-            autoscaler._wait_for_inflight()
 
         state = group.availability(timestamp=Timestamp.from_ms(2000))
         assert state.status == GroupAvailability.BACKOFF
@@ -804,7 +796,6 @@ class TestAutoscalerActionLogging:
         """Verify scale-up actions are logged."""
         demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
         empty_autoscaler.run_once(demand, {})
-        empty_autoscaler._wait_for_inflight()
 
         status = empty_autoscaler.get_status()
         assert len(status.recent_actions) >= 1
@@ -823,7 +814,6 @@ class TestAutoscalerActionLogging:
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         autoscaler.run_once(demand, {})
-        autoscaler._wait_for_inflight()
 
         status = autoscaler.get_status()
         assert len(status.recent_actions) == 1
@@ -866,7 +856,6 @@ class TestAutoscalerActionLogging:
         """Verify get_status returns recent actions."""
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         empty_autoscaler.run_once(demand, {})
-        empty_autoscaler._wait_for_inflight()
 
         status = empty_autoscaler.get_status()
 
@@ -882,7 +871,6 @@ class TestAutoscalerActionLogging:
         before = Timestamp.now().epoch_ms()
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
         empty_autoscaler.run_once(demand, {})
-        empty_autoscaler._wait_for_inflight()
         after = Timestamp.now().epoch_ms()
 
         status = empty_autoscaler.get_status()
@@ -977,52 +965,31 @@ class TestScalingGroupRequestingState:
         assert status_by_group["group-2"].decision == "idle"
 
 
-class TestAutoscalerAsyncScaleUp:
-    """Tests for async scale-up behavior."""
+class TestAutoscalerSynchronousScaleUp:
+    """Tests for scale-up issuance: creates land before execute() returns (no detached threads)."""
 
-    def test_execute_scale_up_returns_immediately(self):
-        """_execute_scale_up returns immediately without blocking."""
+    def test_execute_scale_up_issues_create_synchronously(self):
+        """execute() issues the create in line and tracks the slice before returning."""
         config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
-
         platform = make_mock_platform()
-        original_create = platform.create_slice.side_effect
-
-        def slow_create(config, worker_config=None):
-            time.sleep(0.5)
-            return original_create(config, worker_config)
-
-        platform.create_slice.side_effect = slow_create
-
         group = ScalingGroup(config, platform)
         autoscaler = make_autoscaler({"test-group": group})
 
         decision = ScalingDecision(
             scale_group="test-group",
             action=ScalingAction.SCALE_UP,
-            reason="test async",
+            reason="test sync",
         )
 
-        start = time.time()
         autoscaler.execute([decision], timestamp=Timestamp.now())
-        elapsed = time.time() - start
 
-        assert elapsed < 0.1
+        platform.create_slice.assert_called_once()
+        assert group.slice_count() == 1
 
-        autoscaler._wait_for_inflight()
-
-    def test_group_marked_requesting_during_scale_up(self):
-        """Group shows REQUESTING immediately after execute(), cleared when done."""
-
+    def test_group_available_after_scale_up(self):
+        """The slice is tracked and the pending counter cleared once execute() returns."""
         config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
         platform = make_mock_platform()
-        original_create = platform.create_slice.side_effect
-
-        def slow_create(config, worker_config=None):
-            time.sleep(0.2)
-            return original_create(config, worker_config)
-
-        platform.create_slice.side_effect = slow_create
-
         group = ScalingGroup(config, platform)
         autoscaler = make_autoscaler({"test-group": group})
 
@@ -1035,33 +1002,16 @@ class TestAutoscalerAsyncScaleUp:
 
         autoscaler.execute([decision], timestamp=Timestamp.from_ms(ts))
 
-        # Pending counter is incremented, so availability shows REQUESTING
+        # The create is issued synchronously, so by the time execute() returns the
+        # pending counter is already resolved into a tracked slice.
         availability = group.availability(Timestamp.from_ms(ts))
-        assert availability.status == GroupAvailability.REQUESTING
-
-        autoscaler._wait_for_inflight()
-
-        # After completion, pending counter is decremented and slice is added
-        availability = group.availability(Timestamp.from_ms(ts + 300))
         assert availability.status == GroupAvailability.AVAILABLE
         assert group.slice_count() == 1
 
-    def test_autoscaler_shutdown_waits_for_scale_up(self):
-        """shutdown() waits for in-flight scale-ups to complete."""
+    def test_shutdown_after_scale_up_terminates_created_slice(self):
+        """The synchronously-created slice is terminated on shutdown."""
         config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
-
         platform = make_mock_platform()
-        original_create = platform.create_slice.side_effect
-        create_completed = []
-
-        def slow_create(config, worker_config=None):
-            time.sleep(0.2)
-            result = original_create(config, worker_config)
-            create_completed.append(True)
-            return result
-
-        platform.create_slice.side_effect = slow_create
-
         group = ScalingGroup(config, platform)
         autoscaler = make_autoscaler({"test-group": group})
 
@@ -1072,10 +1022,32 @@ class TestAutoscalerAsyncScaleUp:
         )
 
         autoscaler.execute([decision], timestamp=Timestamp.now())
+        assert group.slice_count() == 1
 
         autoscaler.shutdown()
+        assert group.slice_count() == 0
 
-        assert len(create_completed) == 1
+    def test_booting_slice_prevents_double_scale_up(self, scale_group_config):
+        """A slice issued in one cycle is tracked (BOOTING) before the next, so steady
+        demand does not double-provision."""
+        platform = make_mock_platform()
+        group = ScalingGroup(scale_group_config, platform)
+        autoscaler = make_autoscaler({"test-group": group})
+
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+
+        decisions1 = autoscaler.update(demand, Timestamp.from_ms(1_000))
+        assert len(decisions1) == 1
+        assert group.slice_count() == 1
+
+        # The created slice describes as BOOTING and counts toward capacity, so a
+        # second cycle with the same demand issues no further scale-up.
+        decisions2 = autoscaler.update(demand, Timestamp.from_ms(2_000))
+        assert len(decisions2) == 0, "BOOTING slice should satisfy demand and block re-scale"
+        assert group.slice_count() == 1
+        platform.create_slice.assert_called_once()
+
+        autoscaler.shutdown()
 
     def test_autoscaler_shutdown_terminates_all_slices(self):
         """shutdown() terminates all slices."""
