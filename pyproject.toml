@@ -380,14 +380,11 @@ matches = "lib/levanter/src/levanter/inference/jit_scheduler.py"
 [tool.pyrefly.sub_config.errors]
 unknown-name = false
 
-# A sub_config errors table replaces the global one rather than merging, so the
-# repo-wide disables are repeated alongside the bad-argument-type override.
+# Turn bad-argument-type ON for these controller-driving scripts (it is off
+# repo-wide) so a wrong-type call into the controller API fails type-checking.
 [[tool.pyrefly.sub_config]]
 matches = "lib/iris/scripts/**"
 [tool.pyrefly.sub_config.errors]
-missing-attribute = false
-no-matching-overload = false
-unbound-name = false
 bad-argument-type = true
 
 [tool.hatch.metadata]

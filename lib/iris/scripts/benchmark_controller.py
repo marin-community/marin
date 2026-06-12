@@ -49,26 +49,9 @@ import click
 import uvicorn
 import yaml
 from connectrpc.request import RequestContext
-from iris.cluster.controller import db as db_mod
-from iris.cluster.controller import reads
-from iris.cluster.controller.checkpoint import download_checkpoint_to_local
-from iris.cluster.controller.controller import (
-    Controller,
-    ControllerConfig,
-)
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.db import Tx as _Tx
-from iris.cluster.controller.reconcile import dispatch
-from iris.cluster.controller.run_template import new_run_template_cache
-from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
-from iris.managed_thread import ThreadContainer
-
-# Branch removed Tx.fetchall/fetchone; restore for this benchmark script.
-if not hasattr(_Tx, "fetchall"):
-    _Tx.fetchall = lambda self, stmt, params=None: self.execute(stmt, params).all()
-    _Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
-from iris.cluster.controller import ops
+from iris.cluster.controller import db as db_mod
+from iris.cluster.controller import ops, reads
 from iris.cluster.controller.backend import (
     AutoscaleResult,
     BackendCapability,
@@ -79,6 +62,12 @@ from iris.cluster.controller.backend import (
     plans_from_snapshot,
     run_scheduling_decision,
 )
+from iris.cluster.controller.checkpoint import download_checkpoint_to_local
+from iris.cluster.controller.controller import (
+    Controller,
+    ControllerConfig,
+)
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
@@ -87,6 +76,7 @@ from iris.cluster.controller.reads import (  # noqa: F401
     SchedulableWorker,
     healthy_active_workers_with_attributes,
 )
+from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
     ReconcileRow,
@@ -94,6 +84,7 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcileResult,
     build_reconcile_plans,
 )
+from iris.cluster.controller.run_template import new_run_template_cache
 from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
@@ -110,8 +101,10 @@ from iris.cluster.controller.service import (
     _tasks_for_listing,
     _worker_roster,
 )
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
 from iris.cluster.types import AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
@@ -607,7 +600,7 @@ def _seed_health(db: ControllerDB, health: WorkerHealthTracker) -> None:
 
 def _build_failure_batch(db: ControllerDB, n: int) -> list[tuple[WorkerId, str | None, str]]:
     with db.read_snapshot() as tx:
-        rows = tx.fetchall(select(workers_table.c.worker_id, workers_table.c.address).limit(n))
+        rows = tx.execute(select(workers_table.c.worker_id, workers_table.c.address).limit(n)).all()
     if not rows:
         return []
     return [
@@ -652,20 +645,20 @@ def _build_sample_worker_metadata() -> job_pb2.WorkerMetadata:
 def _active_task_sample(db: ControllerDB, limit: int) -> list[tuple[JobName, int]]:
     active_states = list(ACTIVE_TASK_STATES)
     with db.read_snapshot() as tx:
-        rows = tx.fetchall(
+        rows = tx.execute(
             select(tasks_table.c.task_id, tasks_table.c.current_attempt_id)
             .where(
                 tasks_table.c.state.in_(active_states),
                 tasks_table.c.current_attempt_id.is_not(None),
             )
             .limit(limit)
-        )
+        ).all()
     return [(row.task_id, int(row.current_attempt_id)) for row in rows]
 
 
 def _has_committed_columns(db: ControllerDB) -> bool:
     with db.read_snapshot() as tx:
-        rows = tx.fetchall(text("PRAGMA table_info(workers)"))
+        rows = tx.execute(text("PRAGMA table_info(workers)")).all()
     return "committed_cpu_millicores" in {r[1] for r in rows}
 
 
@@ -676,7 +669,7 @@ def _has_committed_columns(db: ControllerDB) -> bool:
 
 def load_get_job_state(harness: RpcHarness, db: ControllerDB, rps: float, batch: int = 1) -> RpcLoad | None:
     with db.read_snapshot() as tx:
-        rows = tx.fetchall(select(jobs_table.c.job_id).limit(50))
+        rows = tx.execute(select(jobs_table.c.job_id).limit(50)).all()
     if not rows:
         return None
     job_ids = [str(r.job_id) for r in rows[:batch]]
@@ -764,11 +757,11 @@ def load_launch_job(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoa
 
 def load_terminate_job(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
     with db.read_snapshot() as tx:
-        rows = tx.fetchall(
+        rows = tx.execute(
             select(jobs_table.c.job_id)
             .where(jobs_table.c.state == job_pb2.JOB_STATE_RUNNING, jobs_table.c.depth == 1)
             .limit(50)
-        )
+        ).all()
     if not rows:
         return None
     targets = [str(r.job_id) for r in rows]
@@ -816,7 +809,7 @@ def load_list_workers(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcL
 
 def load_list_tasks(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
     with db.read_snapshot() as tx:
-        rows = tx.fetchall(select(jobs_table.c.job_id).limit(1))
+        rows = tx.execute(select(jobs_table.c.job_id).limit(1)).all()
     if not rows:
         return None
     job_id = str(rows[0].job_id)
@@ -830,7 +823,7 @@ def load_list_tasks(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoa
 
 def load_get_job_status(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
     with db.read_snapshot() as tx:
-        rows = tx.fetchall(select(jobs_table.c.job_id).limit(1))
+        rows = tx.execute(select(jobs_table.c.job_id).limit(1)).all()
     if not rows:
         return None
     job_id = str(rows[0].job_id)
@@ -980,7 +973,7 @@ def benchmark_rpcs(db: ControllerDB) -> None:
     try:
         # ---- GetJobState (172k/day) — batched job-state lookup. ----
         with write_db.read_snapshot() as tx:
-            rows = tx.fetchall(select(jobs_table.c.job_id).limit(50))
+            rows = tx.execute(select(jobs_table.c.job_id).limit(50)).all()
         job_ids = [str(r.job_id) for r in rows]
         if job_ids:
             _bench_load(
@@ -1091,11 +1084,11 @@ def benchmark_rpcs(db: ControllerDB) -> None:
         terminate_load = load_terminate_job(harness, write_db, rps=0)
         if terminate_load is not None:
             with write_db.read_snapshot() as _tx:
-                running_rows = _tx.fetchall(
+                running_rows = _tx.execute(
                     select(jobs_table.c.job_id)
                     .where(jobs_table.c.state == job_pb2.JOB_STATE_RUNNING, jobs_table.c.depth == 1)
                     .limit(50)
-                )
+                ).all()
             n_cancel = len(running_rows)
             _bench_load(
                 f"RPC: TerminateJob (cancel_job, n={n_cancel} jobs)",
@@ -1133,9 +1126,9 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # the scheduler's main path. Pick up to 50 running jobs and revert their
     # first 3 tasks to PENDING.
     with db.read_snapshot() as _snap:
-        running_jobs = _snap.fetchall(
+        running_jobs = _snap.execute(
             select(jobs_table.c.job_id).where(jobs_table.c.state == job_pb2.JOB_STATE_RUNNING).limit(50)
-        )
+        ).all()
     pending_count = 0
     for job_row in running_jobs:
         jid = job_row.job_id
@@ -1177,12 +1170,12 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
         def _usage_old():
             with db.read_snapshot() as _tx:
-                _tx.fetchall(
+                _tx.execute(
                     text(
                         "SELECT worker_id, committed_cpu_millicores, committed_mem_bytes, "
                         "committed_gpu, committed_tpu FROM workers"
                     )
-                )
+                ).all()
 
         bench("Scheduling: workers.committed_* read (pre-Jumbo)", _usage_old)
     else:
@@ -1233,7 +1226,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
             def _save_state():
                 with write_db.read_snapshot() as _rtx:
-                    rows = _rtx.fetchall(
+                    rows = _rtx.execute(
                         select(
                             tasks_table.c.task_id,
                             tasks_table.c.state,
@@ -1242,7 +1235,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
                             tasks_table.c.current_worker_address,
                             tasks_table.c.started_at_ms,
                         ).where(tasks_table.c.task_id.in_(task_ids_jn))
-                    )
+                    ).all()
                 return [
                     (
                         row.task_id,
@@ -1371,7 +1364,7 @@ def benchmark_polling(db: ControllerDB) -> None:
         # tasks in one query. Use the same shape (no current_attempt_id join).
         _active = [job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_RUNNING]
         with db.read_snapshot() as _tx:
-            _tx.fetchall(
+            _tx.execute(
                 select(
                     tasks_table.c.current_worker_id,
                     tasks_table.c.task_id,
@@ -1381,21 +1374,21 @@ def benchmark_polling(db: ControllerDB) -> None:
                     tasks_table.c.state.in_(_active),
                     tasks_table.c.current_worker_id.is_not(None),
                 )
-            )
+            ).all()
 
     bench("Polling: poll_all_workers (pre-Jumbo single-shot read)", _poll_all_pre_jumbo)
 
     # ---- run_request_template (cached): dominates ASSIGNED rows in the tick. ----
     _active_states = [job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_RUNNING]
     with db.read_snapshot() as _rtx:
-        rows = _rtx.fetchall(
+        rows = _rtx.execute(
             select(tasks_table.c.job_id)
             .where(
                 tasks_table.c.state.in_(_active_states),
                 tasks_table.c.current_worker_id.is_not(None),
             )
             .limit(64)
-        )
+        ).all()
     sample_job_ids = list({row.job_id for row in rows})
     if sample_job_ids:
         first_job = sample_job_ids[0]
@@ -1423,7 +1416,7 @@ def benchmark_polling(db: ControllerDB) -> None:
     # tasks if possible, otherwise just any job.
     _drain_active = [job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_RUNNING]
     with db.read_snapshot() as _dtx:
-        drain_row = _dtx.fetchone(
+        drain_row = _dtx.execute(
             select(jobs_table.c.job_id)
             .join(tasks_table, tasks_table.c.job_id == jobs_table.c.job_id)
             .where(
@@ -1432,7 +1425,7 @@ def benchmark_polling(db: ControllerDB) -> None:
                 jobs_table.c.depth == 1,
             )
             .limit(1)
-        )
+        ).first()
     if drain_row:
         drain_jid = drain_row.job_id
 
@@ -1596,7 +1589,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
         # log attributes the 29s "apply results" phase to in #5470.
         fail_n = 50
         with write_db.read_snapshot() as _wtx:
-            worker_rows = _wtx.fetchall(select(workers_table.c.worker_id, workers_table.c.address).limit(fail_n))
+            worker_rows = _wtx.execute(select(workers_table.c.worker_id, workers_table.c.address).limit(fail_n)).all()
         if len(worker_rows) >= fail_n:
             target_wids = [WorkerId(str(r.worker_id)) for r in worker_rows]
             # Save full worker rows using the raw connection (SELECT *) so
@@ -1718,14 +1711,14 @@ def _run_apply_under_contention(
     """
     _active_states_contend = list(ACTIVE_TASK_STATES)
     with write_db.read_snapshot() as _ctx:
-        endpoint_tasks_rows = _ctx.fetchall(
+        endpoint_tasks_rows = _ctx.execute(
             select(tasks_table.c.task_id, tasks_table.c.current_attempt_id)
             .where(
                 tasks_table.c.state.in_(_active_states_contend),
                 tasks_table.c.current_attempt_id.is_not(None),
             )
             .limit(200)
-        )
+        ).all()
     endpoint_tasks = [(row.task_id, int(row.current_attempt_id)) for row in endpoint_tasks_rows]
 
     stop = threading.Event()
