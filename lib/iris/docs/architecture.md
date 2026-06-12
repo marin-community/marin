@@ -128,9 +128,11 @@ path dispatches on which result field is populated (e.g. a worker-daemon
 returns `updates`), never on the concrete backend type — there are no
 `isinstance` branches.
 
-A backend declares `capabilities: frozenset[BackendCapability]`, pure metadata
-the dashboard and on-demand RPC routing key on (it never gates the per-tick
-loops):
+A backend declares `capabilities: frozenset[BackendCapability]`, metadata the
+dashboard and on-demand RPC routing key on. The controller calls all three
+phases uniformly regardless, with one per-tick exception: `CLUSTER_VIEW` makes
+the controller drain the dispatch queue (a DB write it owns) into that backend's
+reconcile snapshot.
 
 | Capability | Meaning |
 |---|---|
@@ -140,9 +142,10 @@ loops):
 
 Worker health is **observed only by worker-daemon backends** and **owned by the
 controller**: a `WORKER_DAEMON` backend's `reconcile` returns `health_events`
-(REACHED / UNREACHABLE / BUILD_FAILED), the controller folds them through the
-single `WorkerHealthTracker.apply` site, and a worker over the failure threshold
-is failed and reaped via `autoscale(dead_workers=...)`. There is no ping loop and
+(REACHED / UNREACHABLE), the controller folds them — together with BUILD_FAILED
+events it synthesizes from the reconcile kernel's effects — through the single
+`WorkerHealthTracker.apply` site, and a worker over the failure threshold is
+failed and reaped via `autoscale(dead_workers=...)`. There is no ping loop and
 no separate liveness channel — the reconcile RPC outcome is the only liveness
 signal. Cluster-view (e.g. Kubernetes) backends have **no Iris workers**, so they
 emit **zero** health events; pod status flows back as neutral task `updates`, not

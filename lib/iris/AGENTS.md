@@ -115,15 +115,18 @@ a DB snapshot → calls one backend method → commits the returned result
 `isinstance`). **The contract is DB-less**: backends take plain data in and
 return plain data out; they never touch the controller DB.
 
-A backend declares `capabilities: frozenset[BackendCapability]` — pure metadata
-the dashboard and on-demand RPC routing key on, never a per-tick gate:
-`WORKER_DAEMON` (`"workers"`), `IRIS_AUTOSCALER` (`"autoscaler"`), `CLUSTER_VIEW`
-(`"cluster"`).
+A backend declares `capabilities: frozenset[BackendCapability]` — metadata the
+dashboard and on-demand RPC routing key on. The controller calls all three
+phases uniformly regardless, with one per-tick exception: `CLUSTER_VIEW` makes
+the controller drain the dispatch queue (a DB write it owns) into that backend's
+reconcile snapshot. The flags: `WORKER_DAEMON` (`"workers"`), `IRIS_AUTOSCALER`
+(`"autoscaler"`), `CLUSTER_VIEW` (`"cluster"`).
 
-Worker health is OBSERVED only by worker-daemon backends (REACHED / UNREACHABLE /
-BUILD_FAILED events on `ReconcileResult.health_events`) and OWNED by the
-controller, which folds them through the single `WorkerHealthTracker.apply` site;
-a worker over the failure threshold is reaped via `autoscale(dead_workers=...)`.
+Worker health is OBSERVED only by worker-daemon backends — REACHED / UNREACHABLE
+events on `ReconcileResult.health_events` — and OWNED by the controller, which
+folds them (together with BUILD_FAILED events it synthesizes from the reconcile
+kernel's effects) through the single `WorkerHealthTracker.apply` site; a worker
+over the failure threshold is reaped via `autoscale(dead_workers=...)`.
 There is no ping loop and no separate liveness channel — the reconcile RPC
 outcome is the only liveness signal. Cluster-view backends (Kubernetes) have no
 Iris workers, so they emit no health events; pod status flows back as neutral

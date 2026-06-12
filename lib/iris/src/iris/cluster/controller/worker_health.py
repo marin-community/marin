@@ -37,7 +37,7 @@ from iris.cluster.types import WorkerId
 
 logger = logging.getLogger(__name__)
 
-PING_FAILURE_THRESHOLD = 10
+CONSECUTIVE_FAILURE_THRESHOLD = 10
 BUILD_FAILURE_THRESHOLD = 10
 
 
@@ -83,7 +83,7 @@ class WorkerHealthTracker:
     def __init__(
         self,
         *,
-        reconcile_failure_threshold: int = PING_FAILURE_THRESHOLD,
+        reconcile_failure_threshold: int = CONSECUTIVE_FAILURE_THRESHOLD,
         build_threshold: int = BUILD_FAILURE_THRESHOLD,
     ) -> None:
         assert reconcile_failure_threshold > 0
@@ -121,9 +121,10 @@ class WorkerHealthTracker:
 
         REACHED bumps the heartbeat and resets the failure count; UNREACHABLE
         increments consecutive failures; BUILD_FAILED increments build failures.
-        Returns every worker currently at/over the ping- or build-failure
-        threshold so the controller fails and tears them down — workers are
-        forgotten on removal, so a returned worker does not repeat once gone.
+        Returns every worker currently at/over the reconcile-failure or
+        build-failure threshold so the controller fails and tears them down —
+        workers are forgotten on removal, so a returned worker does not repeat
+        once gone.
         """
         with self._lock:
             for event in events:

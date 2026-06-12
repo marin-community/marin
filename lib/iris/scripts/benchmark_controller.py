@@ -157,7 +157,7 @@ def _marin_remote_state_dir() -> str:
 
 
 class _FakeProvider:
-    """Minimal IRIS-placement TaskBackend that satisfies Controller's wiring
+    """Minimal worker-daemon TaskBackend that satisfies Controller's wiring
     without making real cluster calls. Mirrors
     tests/cluster/controller/conftest.py:FakeProvider.
 

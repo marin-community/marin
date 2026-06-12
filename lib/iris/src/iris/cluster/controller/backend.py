@@ -202,10 +202,10 @@ class ReconcileResult:
     """
 
     worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = field(default_factory=list)
-    """Worker-daemon reconcile outcomes. The apply path runs the overlay-aware
-    ``ReconcileState.reconcile`` (cross-worker same-batch cascades + worker-loss
-    synthesis), so each result rides back paired with the plan that produced it
-    — it cannot be pre-converted to neutral ``updates`` without the DB/overlay."""
+    """Worker-daemon reconcile outcomes, each paired with the plan that produced
+    it. The pairing is required because resolving these to task state needs the
+    DB/overlay (it is not a backend-side concern), so the backend cannot
+    pre-convert them to neutral ``updates``."""
     updates: list[TaskUpdate] = field(default_factory=list)
     """Neutral task-state updates from a direct (e.g. Kubernetes) provider."""
     health_events: list[WorkerHealthEvent] = field(default_factory=list)

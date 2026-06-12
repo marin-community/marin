@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.reads import healthy_active_workers_with_attributes
+from iris.cluster.controller.reads import healthy_active_workers_with_attributes, list_active_healthy_workers
 from iris.cluster.controller.schema import workers_table
 from iris.cluster.controller.worker_health import (
     WorkerHealthEvent,
@@ -23,6 +23,10 @@ from iris.cluster.controller.worker_health import (
 from iris.cluster.types import WorkerId
 from rigging.timing import Timestamp
 from sqlalchemy import insert, select
+
+from tests.cluster.controller._test_support import set_worker_consecutive_failures_for_test
+
+from .conftest import make_worker_metadata, register_worker
 
 
 @pytest.fixture
@@ -42,8 +46,8 @@ def _build_failed(tracker: WorkerHealthTracker, wid: WorkerId, *, now_ms: int = 
     return tracker.apply([WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED)], now_ms=now_ms)
 
 
-def test_ping_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
-    """9 consecutive failures are not enough; 10th trips; a healthy ping resets and requires 10 more."""
+def test_reconcile_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
+    """9 consecutive failures are not enough; 10th trips; a REACHED event resets and requires 10 more."""
     wid = WorkerId("w-1")
     over: list[WorkerId] = []
     for _ in range(9):
@@ -62,7 +66,7 @@ def test_ping_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
 
 
 def test_build_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
-    """9 build failures are not enough; 10th trips; a healthy ping does not reset the counter."""
+    """9 build failures are not enough; 10th trips; a REACHED event does not reset the counter."""
     wid = WorkerId("w-1")
     over: list[WorkerId] = []
     for _ in range(9):
@@ -70,11 +74,11 @@ def test_build_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
     assert over == []
     assert _build_failed(tracker, wid) == [wid]
 
-    # A REACHED event resets consecutive ping failures but NOT build failures.
+    # A REACHED event resets consecutive reconcile failures but NOT build failures.
     assert _reached(tracker, wid) == [wid]
 
 
-def test_ping_and_build_failures_are_independent(tracker: WorkerHealthTracker) -> None:
+def test_reconcile_and_build_failures_are_independent(tracker: WorkerHealthTracker) -> None:
     """A worker can trip via either path; tripping one does not affect the other counter."""
     wid = WorkerId("w-1")
     for _ in range(5):
@@ -82,7 +86,7 @@ def test_ping_and_build_failures_are_independent(tracker: WorkerHealthTracker) -
     for _ in range(5):
         _build_failed(tracker, wid)
     assert tracker.apply([], now_ms=0) == []
-    # 6 ping failures, still < 10; build still at 5.
+    # 6 reconcile failures, still < 10; build still at 5.
     assert _unreachable(tracker, wid) == []
 
 
@@ -163,3 +167,29 @@ def test_seeds_liveness_from_persisted_workers(tmp_path: Path) -> None:
         assert ids == {"w-seed-1", "w-seed-2"}
     finally:
         db.close()
+
+
+def test_failing_worker_excluded_from_scheduling_but_still_reconciled(state):
+    """A worker accruing reconcile failures stops getting new placements but is
+    still reconciled, so it can recover or cross the teardown threshold.
+
+    Pins the two-filter split: scheduling placement
+    (``healthy_active_workers_with_attributes``) drops a worker with
+    ``consecutive_failures > 0``, while the reconcile target set
+    (``list_active_healthy_workers``) keeps probing every active worker.
+    """
+    ok = register_worker(state, "w-ok", "w-ok:8080", make_worker_metadata())
+    failing = register_worker(state, "w-failing", "w-failing:8080", make_worker_metadata())
+
+    # Mid-failure: unreachable for one reconcile pass but not yet over threshold.
+    set_worker_consecutive_failures_for_test(state, failing, 1)
+
+    with state._db.read_snapshot() as tx:
+        schedulable = {
+            w.worker_id for w in healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
+        }
+        reconcile_targets = set(list_active_healthy_workers(tx, state._health))
+
+    assert ok in schedulable
+    assert failing not in schedulable, "a failing worker must not receive new placements"
+    assert {ok, failing} <= reconcile_targets, "a failing worker must still be reconciled/probed"

@@ -36,6 +36,9 @@ class WorkerService(Protocol):
     async def exec_in_container(self, request: worker__pb2.Worker.ExecInContainerRequest, ctx: RequestContext) -> worker__pb2.Worker.ExecInContainerResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def ping(self, request: worker__pb2.Worker.PingRequest, ctx: RequestContext) -> worker__pb2.Worker.PingResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def reconcile(self, request: worker__pb2.Worker.ReconcileRequest, ctx: RequestContext) -> worker__pb2.Worker.ReconcileResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -104,6 +107,16 @@ class WorkerServiceASGIApplication(ConnectASGIApplication[WorkerService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.exec_in_container,
+                ),
+                "/iris.cluster.WorkerService/Ping": Endpoint.unary(
+                    method=MethodInfo(
+                        name="Ping",
+                        service_name="iris.cluster.WorkerService",
+                        input=worker__pb2.Worker.PingRequest,
+                        output=worker__pb2.Worker.PingResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.ping,
                 ),
                 "/iris.cluster.WorkerService/Reconcile": Endpoint.unary(
                     method=MethodInfo(
@@ -248,6 +261,26 @@ class WorkerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def ping(
+        self,
+        request: worker__pb2.Worker.PingRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> worker__pb2.Worker.PingResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="Ping",
+                service_name="iris.cluster.WorkerService",
+                input=worker__pb2.Worker.PingRequest,
+                output=worker__pb2.Worker.PingResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
     async def reconcile(
         self,
         request: worker__pb2.Worker.ReconcileRequest,
@@ -281,6 +314,8 @@ class WorkerServiceSync(Protocol):
     def get_process_status(self, request: job__pb2.GetProcessStatusRequest, ctx: RequestContext) -> job__pb2.GetProcessStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def exec_in_container(self, request: worker__pb2.Worker.ExecInContainerRequest, ctx: RequestContext) -> worker__pb2.Worker.ExecInContainerResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def ping(self, request: worker__pb2.Worker.PingRequest, ctx: RequestContext) -> worker__pb2.Worker.PingResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def reconcile(self, request: worker__pb2.Worker.ReconcileRequest, ctx: RequestContext) -> worker__pb2.Worker.ReconcileResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -349,6 +384,16 @@ class WorkerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.exec_in_container,
+                ),
+                "/iris.cluster.WorkerService/Ping": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="Ping",
+                        service_name="iris.cluster.WorkerService",
+                        input=worker__pb2.Worker.PingRequest,
+                        output=worker__pb2.Worker.PingResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.ping,
                 ),
                 "/iris.cluster.WorkerService/Reconcile": EndpointSync.unary(
                     method=MethodInfo(
@@ -487,6 +532,26 @@ class WorkerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.WorkerService",
                 input=worker__pb2.Worker.ExecInContainerRequest,
                 output=worker__pb2.Worker.ExecInContainerResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def ping(
+        self,
+        request: worker__pb2.Worker.PingRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> worker__pb2.Worker.PingResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="Ping",
+                service_name="iris.cluster.WorkerService",
+                input=worker__pb2.Worker.PingRequest,
+                output=worker__pb2.Worker.PingResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
