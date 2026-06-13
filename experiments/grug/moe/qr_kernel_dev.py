@@ -83,6 +83,49 @@ def scqr(m, eps=1e-7):
     return jax.lax.cond(ortho_err < _SCQR_ORTHO_TOL, lambda: q, lambda: jnp.linalg.qr(m)[0])
 
 
+def _chol_shift(g, eps):
+    """Cholesky shift λ = eps * g[0,0] (top-left = spectral-norm proxy; qᵀGGq -> diagonal as q converges)."""
+    n = g.shape[-1]
+    return g + eps * g[..., :1, :1] * jnp.eye(n, dtype=g.dtype)
+
+
+def _orthonormalize_against_R(a, eps):
+    """Given A, return (A·R⁻¹, R) where RᵀR = chol(AᵀA + λI): one CholeskyQR pass (the orthonormal factor)."""
+    g = jnp.einsum("...ki,...kj->...ij", a, a)  # AᵀA
+    r = jnp.linalg.cholesky(_chol_shift(g, eps), upper=True)
+    q = jnp.swapaxes(
+        jax.scipy.linalg.solve_triangular(jnp.swapaxes(r, -1, -2), jnp.swapaxes(a, -1, -2), lower=True), -1, -2
+    )
+    return q
+
+
+def dual_scqr_refresh(gg, q, eps=1e-7):
+    """Dual-orthogonalization SCQR eigenbasis refresh (Su Jianlin Part 2/3, eq. 4), computed from the
+    Gram GG alone (no raw M). Returns q_new spanning the same space as qr(GG @ q) — projector-identical
+    to the single-QR refresh — but with each Cholesky seeing cond(GG), not cond(GG)².
+
+    Single QR `qr(GG@q)` via SCQR Choleskys (GG@q)ᵀ(GG@q) = qᵀGG²q  -> cond(GG)²  (ill-conditioned, fails).
+    Dual QR `qr(GGᵀ·qr(GG@q))` reorders (eq. 4) to:
+        A1 = GG @ q
+        R1 = chol(qᵀ·A1 + λI)        # = chol(qᵀ GG q)        -> cond(GG)
+        A2 = A1 · R1⁻¹               # whitened first level
+        q_new = A2 · R2⁻¹,  R2 = chol(A2ᵀA2 + λI)             -> cond(GG)
+    The extra QR is right-multiplication by an upper-triangular matrix, so it does NOT change the column
+    space (lossless); it only conditions the Cholesky. Fallback to exact qr(GG@q) gated on ‖QᵀQ-I‖.
+    """
+    n = q.shape[-1]
+    eye = jnp.eye(n, dtype=q.dtype)
+    a1 = jnp.einsum("...ij,...jk->...ik", gg, q)  # GG @ q
+    g1 = jnp.einsum("...ki,...kj->...ij", q, a1)  # qᵀ (GG q) = qᵀ GG q  (cond GG, not squared)
+    r1 = jnp.linalg.cholesky(_chol_shift(g1, eps), upper=True)
+    a2 = jnp.swapaxes(
+        jax.scipy.linalg.solve_triangular(jnp.swapaxes(r1, -1, -2), jnp.swapaxes(a1, -1, -2), lower=True), -1, -2
+    )
+    qn = _orthonormalize_against_R(a2, eps)  # second CholeskyQR pass on the whitened A2
+    ortho_err = jnp.max(jnp.abs(jnp.einsum("...ki,...kj->...ij", qn, qn) - eye))
+    return jax.lax.cond(ortho_err < _SCQR_ORTHO_TOL, lambda: qn, lambda: jnp.linalg.qr(a1)[0])
+
+
 def _orthonormality_error(q):
     n = q.shape[-1]
     eye = jnp.eye(n, dtype=q.dtype)
@@ -142,6 +185,7 @@ def bench(batch=256, n=512, seed=0):
     _time_fn(lambda q: jnp.linalg.qr(jnp.einsum("...ij,...jk->...ik", gg, q))[0], q0, "soap_qr")
     _time_fn(lambda q: cholesky_qr2(jnp.einsum("...ij,...jk->...ik", gg, q))[0], q0, "soap_cholqr2")
     _time_fn(lambda q: scqr(jnp.einsum("...ij,...jk->...ik", gg, q)), q0, "soap_scqr")
+    _time_fn(lambda q: dual_scqr_refresh(gg, q), q0, "soap_dual_scqr")
 
 
 if __name__ == "__main__":
