@@ -452,18 +452,21 @@ def run_grug_logprob_eval(config: GrugLogprobEvalConfig) -> None:
                 # crash on `None + str` aggregation in `prepare_print_tasks`.
                 _apply_task_field(task_dict, "task_alias", config.task.task_alias)
             # Diagnostic: dump the leaf task's dump_config alias keys so we can
-            # see in container logs whether the patch propagated. Also mimic
-            # what get_task_list does so we can verify the TaskOutput snapshot.
-            from lm_eval.evaluator_utils import get_task_list, TaskOutput
-            _et = get_task_list(task_dict)
-            for _to in _et:
-                logger.warning(
-                    "TASK_ALIAS_DEBUG2 to.task_name=%r to.task_alias=%r "
-                    "to.task_config_keys=%r task_alias_in_config=%r",
-                    _to.task_name, _to.task_alias,
-                    sorted(list(_to.task_config.keys())) if hasattr(_to.task_config, "keys") else "NO_KEYS",
-                    _to.task_config.get("task_alias") if hasattr(_to.task_config, "get") else "NO_GET",
-                )
+            # see in container logs whether the patch propagated. Best-effort
+            # only — bye-fork removed `get_task_list` and `TaskOutput` from
+            # `lm_eval.evaluator_utils`, so skip the dump if it's not there.
+            try:
+                from lm_eval.evaluator_utils import get_task_list, TaskOutput  # type: ignore
+                for _to in get_task_list(task_dict):
+                    logger.warning(
+                        "TASK_ALIAS_DEBUG2 to.task_name=%r to.task_alias=%r "
+                        "to.task_config_keys=%r task_alias_in_config=%r",
+                        _to.task_name, _to.task_alias,
+                        sorted(list(_to.task_config.keys())) if hasattr(_to.task_config, "keys") else "NO_KEYS",
+                        _to.task_config.get("task_alias") if hasattr(_to.task_config, "get") else "NO_GET",
+                    )
+            except ImportError:
+                pass
             lm = _make_grug_lm(
                 transformer,
                 tokenizer,
