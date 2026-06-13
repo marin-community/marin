@@ -91,7 +91,7 @@ _optimizer = GrugMoeKLSoapHConfig(
     # LR-schedule axis: KLSOAPH loses its mid-run lead in the decay-to-zero phase, so allow an
     # independent nonzero floor (min_lr_ratio) to keep it improving through the end.
     min_lr_ratio=_f("KLSOAPH_MIN_LR_RATIO", _muonh.min_lr_ratio),
-    lr_schedule=_muonh.lr_schedule,
+    lr_schedule=os.environ.get("KLSOAPH_LR_SCHEDULE", _muonh.lr_schedule),  # linear (MuonH) | cosine | inv_sqrt
     decay=_muonh.decay,
 )
 
