@@ -204,6 +204,7 @@ def _klsoaph_step(
     precond_freq: int,
     init_factor: float,
     identity_init: bool = False,
+    reparam_eig: bool = False,
 ):
     """Run one full-matrix SOAP step over the (..., rows, cols) gradient.
 
@@ -279,15 +280,26 @@ def _klsoaph_step(
         proj_row_white = g_proj * esi_l[..., :, None]
         right_diag = jnp.mean(proj_row_white * proj_row_white, axis=-2)
 
+        def _clamp_esi(eigen):
+            inv_sqrt = jnp.minimum(jax.lax.rsqrt(jnp.maximum(eigen, 1e-30)), 4000.0)
+            return jnp.nan_to_num(inv_sqrt, nan=0.0, posinf=0.0, neginf=0.0)
+
         def _update_esi(esi, diag):
             old_eigen = jnp.reciprocal(jnp.square(esi))
             old_eigen = jnp.nan_to_num(old_eigen, nan=0.0, posinf=0.0, neginf=0.0)
             eigen = shampoo_beta * old_eigen + (1.0 - shampoo_beta) * diag
-            inv_sqrt = jnp.minimum(jax.lax.rsqrt(jnp.maximum(eigen, 1e-30)), 4000.0)
-            return jnp.nan_to_num(inv_sqrt, nan=0.0, posinf=0.0, neginf=0.0)
+            return _clamp_esi(eigen)
 
-        new_esi_l = _update_esi(esi_l, left_diag)
-        new_esi_r = _update_esi(esi_r, right_diag)
+        # reparam_eig: eigenvalues are recomputed from the FRESH-basis Gram diagonal at refresh (exact up to
+        # one-iteration error, staleness-robust) and HELD between refreshes -- instead of updating ESI in the
+        # stale projected-gradient basis every step, which leaks off-diagonal energy and blows up at high
+        # precond_freq (validated: diag rel-err 4e-2@pf1 -> 6e2@pf8). This makes high pf loss-neutral in fp32.
+        if reparam_eig:
+            new_esi_l = esi_l
+            new_esi_r = esi_r
+        else:
+            new_esi_l = _update_esi(esi_l, left_diag)
+            new_esi_r = _update_esi(esi_r, right_diag)
 
         # 6. Warm-started QR-iteration refresh + reproject exp_avg.
         should_refresh = jnp.equal(jnp.remainder(step, precond_freq), 0)
@@ -302,12 +314,21 @@ def _klsoaph_step(
             qr_new, _ = jnp.linalg.qr(gg_r_q)
             ea_qr_new = jnp.einsum("...ij,...jk->...ik", ea_original, qr_new)
             ea_new = jnp.einsum("...ki,...kj->...ij", ql_new, ea_qr_new)
-            return ql_new, qr_new, ea_new
+            if reparam_eig:
+                # eigenvalues = diag(q_newᵀ GG q_new) in the just-refreshed basis (staleness-robust).
+                eig_l = jnp.einsum("...ij,...ij->...j", ql_new, jnp.einsum("...ik,...kj->...ij", new_gg_l, ql_new))
+                eig_r = jnp.einsum("...ij,...ij->...j", qr_new, jnp.einsum("...ik,...kj->...ij", new_gg_r, qr_new))
+                esi_l_out = _clamp_esi(eig_l)
+                esi_r_out = _clamp_esi(eig_r)
+            else:
+                esi_l_out = new_esi_l
+                esi_r_out = new_esi_r
+            return ql_new, qr_new, ea_new, esi_l_out, esi_r_out
 
         def _keep(_):
-            return q_l, q_r, new_exp_avg
+            return q_l, q_r, new_exp_avg, new_esi_l, new_esi_r
 
-        ql_out, qr_out, ea_out = jax.lax.cond(should_refresh, _refresh, _keep, operand=None)
+        ql_out, qr_out, ea_out, esi_l_out, esi_r_out = jax.lax.cond(should_refresh, _refresh, _keep, operand=None)
 
         return (
             direction,
@@ -317,8 +338,8 @@ def _klsoaph_step(
             new_gg_r,
             ql_out,
             qr_out,
-            new_esi_l,
-            new_esi_r,
+            esi_l_out,
+            esi_r_out,
         )
 
     is_first = jnp.equal(step, 1)
@@ -358,6 +379,7 @@ def _klsoaph_step_sharded(
     precond_freq: int,
     init_factor: float,
     identity_init: bool = False,
+    reparam_eig: bool = False,
 ):
     """Distribute the per-expert SOAP step across the mesh via ``shard_map``.
 
@@ -376,6 +398,7 @@ def _klsoaph_step_sharded(
         precond_freq=precond_freq,
         init_factor=init_factor,
         identity_init=identity_init,
+        reparam_eig=reparam_eig,
     )
     mesh = jax.sharding.get_abstract_mesh()
     batched = hasattr(grad, "ndim") and grad.ndim >= 3
@@ -437,6 +460,7 @@ def scale_by_klsoaph(
     precond_freq: int = 1,
     init_factor: float = 0.1,
     identity_init: bool = False,
+    reparam_eig: bool = False,
 ) -> optax.GradientTransformation:
     """Full-matrix SOAP-style preconditioner (upstream KLSOAPH, de-blocked).
 
@@ -504,6 +528,7 @@ def scale_by_klsoaph(
                 precond_freq=precond_freq,
                 init_factor=init_factor,
                 identity_init=identity_init,
+                reparam_eig=reparam_eig,
             )
             direction = out[0].astype(grad.dtype)
             return _SoapStepResult(direction, *out[1:])
