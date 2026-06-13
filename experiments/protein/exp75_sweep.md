@@ -199,14 +199,27 @@ below.
 _Append wave summaries and the per-epoch confirmed optima here as runs finish._
 
 ### epochs = 1
+- **Wave 1 launched 2026-06-13 ~03:25Z** (`v1` lock root). Coarse 4 LR × 3 WD = 12
+  runs; LR ×2 ladder anchored at #70's `3.5e-4`, WD on `{0.02, 0.05, 0.1}`.
+  Slice map (interleaved, 6 v6e-8 / 3 v5p-8 / 3 v6e-4 — all 1-epoch so v6e-4 OK):
+
+  | wd \ lr | 8.75e-5 | 1.75e-4 | 3.5e-4 | 7e-4 |
+  |---|---|---|---|---|
+  | **0.02** | v6e-8 | v5p-8 | v6e-8 | v6e-4 |
+  | **0.05** | v6e-8 | v5p-8 | v6e-8 | v6e-4 |
+  | **0.1**  | v6e-8 | v5p-8 | v6e-8 | v6e-4 |
+
 - Grid (final-step `eval/contacts-v1-val/loss`); rows = WD, cols = LR:
 
-  | wd \ lr | … | … | … | … |
+  | wd \ lr | 8.75e-5 | 1.75e-4 | 3.5e-4 | 7e-4 |
   |---|---|---|---|---|
-  | | | | | |
+  | **0.02** | | | | |
+  | **0.05** | | | | |
+  | **0.1**  | | | | |
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
-- Notes (edges extended, zoom, etc.):
+- Notes (edges extended, zoom, etc.): _2 v6e-4 runs (lr7e-4, wd0.05 & wd0.1)
+  pending on capacity at launch — left queued per the ≥1 h rule._
 
 ### epochs = 2
 - Grid:

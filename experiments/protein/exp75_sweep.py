@@ -75,7 +75,7 @@ logger = logging.getLogger(__name__)
 
 # Bump SWEEP_VERSION to fork run names + the (region-pinned) lock root for a
 # fresh campaign over the same recipe and caches.
-SWEEP_VERSION: str = "v0.1"
+SWEEP_VERSION: str = "v1"
 
 RUN_NAME_PREFIX: str = "prot-exp75"
 SWEEP_ROOT: str = f"gs://marin-us-east5/sweeps/prot-exp75-contacts-v1/run-{SWEEP_VERSION}"
