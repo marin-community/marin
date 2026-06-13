@@ -363,3 +363,16 @@ clamp 4000), warm-started QR refresh (qr(GG·Q) + old→new basis momentum repro
 zero first-step, intentional no-bias-correction — all FAITHFUL, no bugs. Cleaned stale block-wise
 docstrings/naming (commit). CPU smoke re-verified shapes + finiteness. So if a point returns weak,
 the cause is HP tuning, not the implementation.
+
+### NaN-AFTER-LOADING investigation (user goal, 2026-06-13) — save/load structure suspect
+User: optimizer emitting NaN is implausible; suspects checkpoint SAVE/LOAD logic. Load path
+(levanter.load_checkpoint): deserializes saved arrays INTO the template (optimizer.init) structure;
+allow_partial=True (grug default) KEEPS TEMPLATE INIT values for any leaf MISSING from the checkpoint.
+Hypothesis: KLSOAPH's per-leaf state has None leaves (non-matrix params) + a complex optax masked/
+inject_hyperparams structure; if some SOAP state arrays don't round-trip, allow_partial fills them with
+init (eye q / zero gg / esi=init^-0.5) → INCONSISTENT preconditioner (loaded q + reset gg/esi) → first
+post-load update explodes → NaN. This is a save/load structure bug, not an unsound optimizer (and the
+NaN-skip guard wouldn't fix it — it'd keep the inconsistent loaded state).
+Discriminator: inspect raw saved checkpoints — DEAD soapwu0p10 step-3748 (job 084828) vs HEALTHY
+beta2-0p95 step-10980 (finished clean, job 084849). If healthy raw checkpoint is finite but reload
+into-template NaNs → load/structure bug. If saved arrays already NaN → in-memory at save.
