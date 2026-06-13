@@ -296,12 +296,17 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
 
   | wd \ lr | 8.75e-5 | 1.75e-4 | 3.5e-4 | 7e-4 |
   |---|---|---|---|---|
-  | **0.02** | | | _(4459, finalizing)_ | |
-  | **0.05** | 3.1535 | | **3.0705** | |
-  | **0.1**  | | | _(4456, finalizing)_ | |
+  | **0.02** | | | **3.0623** | |
+  | **0.05** | 3.1535 | | 3.0705 | |
+  | **0.1**  | | | 3.0662 | |
 
-- Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ (early — 3.5e-4
-  clearly beats 8.75e-5 at final: 3.071 vs 3.154 at wd0.05)
+  _4 of 12 finals in (~22:15Z). `lr3.5e-4` wins at all 3 WD (3.062–3.071); `8.75e-5`
+  clearly worse (3.154). Within `3.5e-4`, wd0.02 nominally best (3.0623) but WD flat
+  (~0.008 spread). Need the 1.75e-4 & 7e-4 columns to bound the LR optimum (still
+  ≥3.5e-4) and the remaining 8 cells._
+
+- Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ (leaning
+  `lr3.5e-4/wd0.02`=3.0623, pending the 1.75e-4/7e-4 columns + WD neighbors)
 - Notes (edges extended, zoom, etc.): _12 launched, then **2 v6e-8 cells killed
   to get under the iris budget cap** — `lr8.75e-5 × wd0.02` and `lr8.75e-5 × wd0.1`
   (lowest-LR corners, least informative). SPENT 84,044 → 67,466 (cap 75,000). The
