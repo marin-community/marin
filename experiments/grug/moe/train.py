@@ -18,6 +18,7 @@ import levanter.tracker
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
+from jax.experimental.layout import Layout, with_layout_constraint
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -251,27 +252,24 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
-def _match_leaf_sharding(tree, ref):
-    """Constrain each array leaf of `tree` to the sharding of the corresponding leaf in `ref`.
+def _constrain_std_layout(tree):
+    """Pin each array leaf of `tree` to the standard row-major device layout.
 
     The jitted train step donates the train state (donate_argnums=0); donation only succeeds when the
-    OUTPUT state has the same sharding as the donated INPUT. The optimizer reshards its *updates* to the
-    param sharding (``_match_named_update_sharding``) but nothing pins the *state* leaves, so e.g. MuonH
-    momentum / adam moments for the attn/mlp params can come out in a layout that differs from how they
-    were stored -> donation fails (those buffers get reallocated every step). Pinning the output state to
-    the input state's sharding restores the invariant: buffers are reused and the sharding is stable across
-    steps. Pure layout (values unchanged) -> lossless.
+    OUTPUT state has the same memory LAYOUT as the donated INPUT (sharding already matches — the optimizer
+    reshards updates via _match_named_update_sharding). But the optimizer/SOAP einsums can emit non-square
+    state/param leaves (attn/mlp/router) in a transposed/non-default layout that differs from how they were
+    stored -> 'donated buffers were not usable' -> those buffers get reallocated every step. The stored
+    state comes from jnp.zeros init (standard row-major), so constraining the OUTPUT to row-major restores
+    the layout invariant -> buffers are reused. Pure layout (values unchanged) -> lossless.
     """
 
-    def m(x, r):
+    def m(x):
         if x is None or not hasattr(x, "ndim") or x.ndim == 0:
             return x
-        rs = getattr(r, "sharding", None)
-        if rs is None:
-            return x
-        return jax.lax.with_sharding_constraint(x, rs)
+        return with_layout_constraint(x, Layout(tuple(range(x.ndim))))
 
-    return jax.tree.map(m, tree, ref, is_leaf=lambda x: x is None)
+    return jax.tree.map(m, tree, is_leaf=lambda x: x is None)
 
 
 def initial_state(
@@ -368,9 +366,9 @@ def _make_train_step(
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
-            params=_match_leaf_sharding(params, state.params),
-            opt_state=_match_leaf_sharding(opt_state, state.opt_state),
-            ema_params=_match_leaf_sharding(ema_params, state.ema_params) if ema_params is not None else None,
+            params=_constrain_std_layout(params),
+            opt_state=_constrain_std_layout(opt_state),
+            ema_params=_constrain_std_layout(ema_params) if ema_params is not None else None,
             pending_qb_betas=metrics["qb_beta_per_layer"],
         )
 
