@@ -433,3 +433,11 @@ Incremental, validate-at-each-step:
 RISK: large rewrite of _klsoaph_step state+math → do as a NEW scale_by_klsoaph_reparam (flagged), validate
 bit-identical at STEP 1 before trusting; keep current optimizer as the winning-config default until validated.
 Defer adoption into the winning beta1=0.90 config until goal A is confirmed (stable comparison baseline).
+
+### beta1 axis — LOWER IS BETTER (2026-06-13 ~11:30); MuonH beat essentially in hand
+SOAP beta1 (projected-momentum EMA) is THE lever. Anchor 0.95 ties (3.5475). Monotonic improvement lowering it:
+- beta1=0.90: gaps vs MuonH −0.018@5k −0.009@6k −0.011@8k (running ~78%) → finishing ~3.53 < 3.5438.
+- beta1=0.85 / 0.80 (round-3b): paloma ~4.035 @3k vs anchor 4.109 (−0.074), both ~flat → minimum ≈ 0.80-0.85.
+Launched r4-beta1-0p70 (/113012) to bracket the min. Multiple configs tracking BELOW MuonH → beat confirmed
+pending step-10979 finals. After finals: pick best beta1, declare GOAL A, then re-check other axes from the
+new anchor + implement subspace-QR (MFU) against it.
