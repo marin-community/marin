@@ -66,7 +66,7 @@ Monitor each job (state / logs / stop) with the
 skill; keep a wave alive (auto-resubmit failed/killed runs) with
 [`monitor-sweep`](https://github.com/eric-czech/marin-agent-kb/blob/main/skills/monitor-sweep.md).
 
-## Budget & quota (stay under the cap — check before every launch)
+## Budget & quota (keep interactive roughly under cap)
 
 TPU usage is capped by a per-user **iris budget** (currently **75,000** units for
 `eczech`). Cost is **dominated by chips in flight**: each task costs
@@ -87,26 +87,25 @@ TPU usage is capped by a per-user **iris budget** (currently **75,000** units fo
 - **Other, unrelated jobs share this budget.** There are routinely non-sweep jobs
   running (e.g. 2 `dna-bolinas` jobs ≈ 8.6k as of launch). SPENT already includes
   them — so always gate on total SPENT, never on exp75 chips alone.
-- **Never exceed the cap.** Over budget, `interactive` jobs (our default band) get
-  downgraded to `batch` (preemptible), and a known bug then makes them
-  **preempt themselves** — burning compute with no progress. Keep SPENT under
-  75,000 **with margin** (target ≤ ~68k) so a new other-job or transient can't tip
-  it over.
-- **Before each launch:** read SPENT, add the new slice's cost, and submit only if
-  the total stays under cap-with-margin. Otherwise wait for a run to finish (frees
-  its chips) or pick a cheaper slice. **Resubmits are free of penalty** — the
-  10-min temp checkpoints + idempotent `v1` lock resume rather than restart, so a
-  run killed to stay under budget can be relaunched later with no lost data.
-- **Budget-bound ⇒ chip efficiency, not wall-clock, drives slice choice.** When the
-  *cap* (not the clock) is the binding constraint, a 4-chip slice fits ~2× more
-  cells per budget unit than `v6e-8`, and per-chip throughput actually favors
-  **v5p-8 > v6e-4 > v6e-8**. So under budget pressure prefer the 4-chip slices for
-  breadth and reserve `v6e-8` for clear headroom. This *inverts* the wall-clock
-  priority below — they agree only when budget is slack.
-- **Batch slices are off-budget.** The larger multi-host slices run in the `batch`
-  band and do **not** count toward SPENT — they add capacity *on top of* the
-  interactive budget. They get an operator-set cap instead (see **Batch big-slice
-  probe**). Strategy: keep interactive near the cap *and* run batch jobs on top.
+- **Keep interactive SPENT roughly under the cap — but don't babysit it.** Over
+  budget, `interactive` jobs auto-downgrade to `batch` (and a known bug can make a
+  downgraded job preempt itself), so *aim* to stay under 75,000. But mild, brief
+  overage is **not** a crisis — let iris bounce the overflow to batch rather than
+  frantically killing runs. Only intervene (kill the least-informative cell) if
+  SPENT sits well over for a sustained stretch. **The goal is to finish the sweep
+  fast, not to hit a budget number.** (Resubmits are penalty-free: 10-min temp
+  checkpoints + the lock-free launcher resume rather than restart.)
+- **Band is a free per-launch choice (`BAND` env), independent of slice.** Any
+  slice can run `interactive` (counts toward budget, not downgraded) or `batch`
+  (off-budget, lower priority). Use interactive budget as you see fit — fill it
+  with the best-throughput work — and run **more on batch on top** for free extra
+  capacity. There is **no** "multi-host must be batch" rule.
+- **Favor the best MEASURED throughput, and re-measure.** Choose slices by realized
+  `throughput/tokens_per_second` ([`exp75_throughput.md`](exp75_throughput.md)),
+  refreshed periodically — the fastest slice is **not always the biggest** (v6e at
+  scale has poor MFU). Be empirical and adaptive: when the numbers move, move the
+  favored slices. (For per-budget value on *interactive* specifically, tok/s **per
+  chip** is what counts — the v5p family leads there too.)
 
 ## TPU & region selection
 
@@ -123,22 +122,16 @@ TPU usage is capped by a per-user **iris budget** (currently **75,000** units fo
   (grad_accum at `PER_CHIP_MICROBATCH=4`). `tok/s` is **measured** (1-epoch smoke,
   steady `throughput/tokens_per_second` from W&B):
 
-  | TPU | resolved zone | grad_accum | tok/s | priority |
+  | TPU | resolved zone | grad_accum | tok/s | note |
   |---|---|---|---|---|
-  | `v6e-8` | us-east5-b | 2 | ~74k | **primary — fastest, start here** |
-  | `v5p-8` | us-east5-a | 2 | ~53k | 2nd choice |
-  | `v6e-4` | us-east5-b | 4 | ~41k | last resort, **≤ 2 epochs only** |
+  | `v6e-8` | us-east5-b | 2 | ~74k | fastest per run |
+  | `v5p-8` | us-east5-a | 2 | ~53k | best per-chip |
+  | `v6e-4` | us-east5-b | 4 | ~41k | slowest |
 
-- **Prioritize by throughput, gated on availability.** A run finishes sooner on
-  a faster slice, so use the **fastest slice that is actually schedulable**:
-  default `v6e-8`; if its pool is starved (child pending ≥ 1h, see below), drop
-  to `v5p-8`, then `v6e-4`. Balance the two forces — don't sit idle waiting on
-  `v6e-8` when a slower-but-free slice would finish the run sooner, but don't
-  thrash on short waits either. (Re-measure if the recipe changes: pull
-  `throughput/tokens_per_second` from the W&B run.)
-- **Never run `v6e-4` for jobs longer than 2 epochs.** It is the slowest slice
-  (4 chips, grad_accum 4); for any run > 2 epochs use `v6e-8` or `v5p-8`, and
-  reserve `v6e-4` for the cheap 1–2 epoch points.
+- **Slice choice is by measured throughput** — see **Scheduling — finish fast**
+  above, and don't thrash on short waits (≥ 1 h rule below). For interactive
+  single-host runs `v6e-8` is fastest per run and `v5p-8` the most chip-efficient;
+  `v6e-4` is slowest (grad_accum 4), rarely worth it for long runs.
 
 - **A started run stays put.** Once submitted on a slice, a run keeps its zone
   across preemption retries until it completes — never migrate an in-flight run.
@@ -166,41 +159,35 @@ TPU usage is capped by a per-user **iris budget** (currently **75,000** units fo
   [`run-iris-job`](https://github.com/eric-czech/marin-agent-kb/blob/main/skills/run-iris-job.md)
   skill.)
 
-## Batch big-slice probe (extra throughput, off-budget)
+## Scheduling — finish fast (empirical & adaptive)
 
-Larger **multi-host** slices run in the **`batch`** band — excluded from the budget
-cap (capacity *on top of* interactive) but lower priority (scheduled/preempted
-after interactive) and scarcer. The slice fixes the band in code, so `-e TPU
-v6e-32` is automatically batch; region is still always `--region us-east5`.
+The objective is to **complete the sweep as fast as possible** while meeting the
+search goals. Schedule for total throughput, not rigid rules:
 
-| slice | chips | hosts | pdp / grad_accum | band |
-|---|---|---|---|---|
-| `v5p-16` | 8 | 2 | −1 / 1 | batch |
-| `v5p-32` | 16 | 4 | −1 / 1 | batch |
-| `v5p-64` | 32 | 8 | −1 / 1 | batch |
-| `v6e-16` | 16 | 4 | −1 / 1 | batch |
-| `v6e-32` | 32 | 8 | −1 / 1 | batch |
-
-- **Operator cap (batch is off-budget, so nothing else bounds it).** Probe started
-  at 5 (one per type); **raised to 15** once multi-host proved out. Favor the
-  highest realized-throughput slices — by measurement the **v5p family** (v5p-64
-  best absolute ~333k tok/s, v5p-32 ~198k, v5p-16 ~102k; v6e batch MFU is only
-  ~10-12% so v6e-32 ~213k / v6e-16 ~130k lag). Don't pile a whole pool onto one
-  slice type — spread across the v5p and v6e preemptible pools so jobs actually
-  schedule (bigger = scarcer); the ≥1h-move rule relocates anything stuck.
-- **Record realized throughput** per `tpu × band` in
-  [`exp75_throughput.md`](exp75_throughput.md) as runs report
-  `throughput/tokens_per_second` — the reference for which slice to favor for new
-  jobs, and a keepsake of band/slice efficiency at the end.
-- **≥ 1 h pending → move, across bands.** Same rule as interactive: a child
-  pending/unschedulable ≥ 1 h → move that *new* launch to a different slice. That
-  may mean batch→interactive (if budget allows the cost), interactive→batch, or
-  another batch type. Never react to short waits; never migrate an in-flight run.
-- **Multi-host is more bug-prone.** If batch runs fail on a **multi-host bug** (not
-  a plain capacity pend / preemption), move those cells to the single-host slices
-  we know work and **notify the user with the bug's nature** — we fix it while
-  progress continues on the safe slices. Do not blind-resubmit a multi-host crash
-  onto the same slice type.
+- **Two bands, your discretion.** `interactive` (budget-bound, not downgraded) +
+  `batch` (off-budget, lower priority, more preemption/scarcity). Fill interactive
+  up to ~cap with high-value work; pile additional work on `batch` for free. Any
+  slice works on either band (`-e BAND interactive|batch`, default interactive).
+- **Pick slices by measured tok/s, re-measured periodically.** See
+  [`exp75_throughput.md`](exp75_throughput.md). Empirically the **v5p family** wins
+  (best absolute *and* per-chip; v6e MFU collapses at scale — v5p-64 ~333k,
+  v5p-32 ~198k, v5p-16 ~102k tok/s vs v6e-32 ~213k / v6e-16 ~130k). Re-pull
+  `throughput/tokens_per_second` every so often and re-favor — never assume bigger
+  is faster.
+- **Don't oversubscribe one preemptible pool.** Spread big-slice requests across
+  the v5p and v6e pools so they actually schedule (bigger = scarcer); excess just
+  pends harmlessly off-budget.
+- **≥ 1 h pending → relocate.** A child pending/unschedulable ≥ 1 h → move that
+  *new* launch to a slice that is actually scheduling (any band/size). Never react
+  to short waits; never migrate an in-flight run.
+- **Multi-host is more bug-prone.** If a multi-host run fails on a coordination bug
+  (not a capacity pend / preemption), move that point to a single-host slice and
+  **tell the user the bug's nature** — fix while progress continues elsewhere. (The
+  `claim_and_run` lock race is already fixed/disabled — issue #6365.)
+- **Record throughput** in [`exp75_throughput.md`](exp75_throughput.md) (by
+  `tpu × band`) as new slices/configs reach steady state — the reference for what
+  to favor and the end-of-sweep keepsake. Slice chips/pdp/grad_accum live in the
+  `TPUS` table in `exp75_sweep.py`.
 
 ## Pipeline the waves (don't let them block each other)
 
