@@ -21,6 +21,7 @@ import jax.numpy as jnp
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
+from experiments.grug.moe import klsoaph
 from experiments.grug.moe.klsoaph import scale_by_klsoaph
 
 # d512 May-recipe expert leaves (from MoEExpertMlpPspecs): w_gate_up [E, hidden, 2*inter],
@@ -49,49 +50,54 @@ def _params():
     return p
 
 
-def main():
-    mesh = _build_mesh()
-    print(f"dev={len(jax.devices())} mesh={dict(mesh.shape)} L={_LAYERS} freq={_FREQ} b1={_BETA1} subspace={_SUBSPACE}")
+def _time_backend(qr_impl, mesh, params, key):
+    """Time opt_step for one QR backend ('xla' or 'cholesky'). Re-jits so the module-level
+    _QR_IMPL switch is re-traced into the compiled step."""
+    klsoaph._QR_IMPL = qr_impl
     opt = scale_by_klsoaph(
         beta1=_BETA1, beta2=0.9, shampoo_beta=0.9, eps=1e-8, precond_freq=_FREQ, init_factor=0.1, subspace_frac=_SUBSPACE
     )
-    params = _params()
-    key = jax.random.PRNGKey(0)
 
     def shard(x):
         spec = P("expert", "data", None) if x.ndim == 3 else P(*((None,) * x.ndim))
         return jax.device_put(x, NamedSharding(mesh, spec))
 
+    def mkgrad(k):
+        return {kk: shard(jax.random.normal(jax.random.fold_in(k, hash(kk) % 997), v.shape)) for kk, v in params.items()}
+
+    state = opt.init(params)
+    step = jax.jit(lambda g, s: opt.update(g, s))
+
+    g0 = mkgrad(key)
+    t0 = time.perf_counter()
+    u, state = step(g0, state)
+    jax.block_until_ready(u)
+    t_compile = time.perf_counter() - t0
+
+    for i in range(10):
+        u, state = step(mkgrad(jax.random.fold_in(key, i + 1)), state)
+    jax.block_until_ready(u)
+    t0 = time.perf_counter()
+    for i in range(_STEPS):
+        u, state = step(mkgrad(jax.random.fold_in(key, 100 + i)), state)
+    jax.block_until_ready(u)
+    return t_compile, (time.perf_counter() - t0) / _STEPS
+
+
+def main():
+    mesh = _build_mesh()
+    print(f"dev={len(jax.devices())} mesh={dict(mesh.shape)} L={_LAYERS} freq={_FREQ} b1={_BETA1} subspace={_SUBSPACE}")
+    params = _params()
+    key = jax.random.PRNGKey(0)
+
     with jax.set_mesh(mesh):
-        state = opt.init(params)
-        step = jax.jit(lambda g, s: opt.update(g, s))
+        results = {qr: _time_backend(qr, mesh, params, key) for qr in ("xla", "cholesky")}
 
-        def mkgrad(k):
-            return {
-                kk: shard(jax.random.normal(jax.random.fold_in(k, hash(kk) % 997), v.shape)) for kk, v in params.items()
-            }
-
-        g0 = mkgrad(key)
-        t0 = time.perf_counter()
-        u, state = step(g0, state)
-        jax.block_until_ready(u)
-        t_compile = time.perf_counter() - t0
-
-        # warm a few (skip first ~10 for stabilization), then time
-        for i in range(10):
-            g = mkgrad(jax.random.fold_in(key, i + 1))
-            u, state = step(g, state)
-        jax.block_until_ready(u)
-        t0 = time.perf_counter()
-        for i in range(_STEPS):
-            g = mkgrad(jax.random.fold_in(key, 100 + i))
-            u, state = step(g, state)
-        jax.block_until_ready(u)
-        t_step = (time.perf_counter() - t0) / _STEPS
-
-    print(
-        f"RESULT compile={t_compile:.1f}s opt_step={t_step * 1e3:.1f}ms (L={_LAYERS} freq={_FREQ} subspace={_SUBSPACE})"
-    )
+    xc, xs = results["xla"]
+    cc, cs = results["cholesky"]
+    print(f"RESULT xla:      compile={xc:.1f}s opt_step={xs * 1e3:.1f}ms")
+    print(f"RESULT cholesky: compile={cc:.1f}s opt_step={cs * 1e3:.1f}ms")
+    print(f"RESULT speedup (xla/cholesky) = {xs / cs:.2f}x  (L={_LAYERS} freq={_FREQ})")
 
 
 if __name__ == "__main__":
