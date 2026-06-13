@@ -512,3 +512,17 @@ a persistent floor keeps perturbing → stalls). Floor lever ABANDONED, runs kil
 (min_lr→0, but keeps LR higher mid-run then drops steeply — may help KLSOAPH hold its mid-run lead through the
 tail where the linear schedule loses it). Launched sched-cosine (beta1=0.95, cosine, min_lr=0). If it doesn't
 beat 3.5438, conclude KLSOAPH full-matrix matches MuonH within +0.1% (3.5475) — likely intrinsic — and report.
+
+### MFU CALIBRATED (logged throughput/mfu, v5p-8) + 10%-MFU solution (2026-06-13 ~16:30)
+| variant | tok/s | MFU |
+|---|---|---|
+| replicated (v4) | 57k | 2.1% |
+| sharded shard_map frac=1.0 | 144k | **5.2%** |
+| subspace-QR frac=0.25 | 284k | **10.2%** |
+Sharding alone is only 5.2% (earlier '~10%' was wrong). The 10% target is hit ONLY by subspace-QR (10.2%).
+PROBLEM: my cyclic subspace-QR degrades loss (6.0 vs 4.0) — refreshing 1/4 of the eigenbasis/step is too stale
+for KL-SOAP's Adam-in-eigenbasis. SOLUTION = the paper's FULL reparam (store P=QᵀSQ, maintain incrementally,
+rotate in subspace) which keeps EIGENVALUES full-basis every step (the loss-preserving key my on-the-fly version
+skipped). Implementing that = 10.2% MFU at the anchor's loss. Also restarted soapwu0p05/0p10 (the NaN'd warmup
+runs) on NaN-safe code to verify the guard+sanitizer. NOTE: precond_freq>1 (freq=4→9%, freq=8→11% MFU) also
+cuts the QR cost but trades quality (stale basis) — same issue; subspace+full-reparam is the quality-preserving route.
