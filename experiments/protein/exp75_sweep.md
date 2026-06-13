@@ -51,8 +51,12 @@ skill; keep a wave alive (auto-resubmit failed/killed runs) with
   | TPU | resolved zone | grad_accum | use |
   |---|---|---|---|
   | `v6e-8` | us-east5-b | 2 | **primary — start here** |
-  | `v6e-4` | us-east5-b | 4 | fallback (equal priority) |
+  | `v6e-4` | us-east5-b | 4 | fallback, **≤ 2 epochs only** (see below) |
   | `v5p-8` | us-east5-a | 2 | fallback (equal priority) |
+
+- **Never run `v6e-4` for jobs longer than 2 epochs.** With only 4 chips and
+  grad_accum 4 it is too slow for long runs. For any run > 2 epochs use `v6e-8`
+  (primary) or `v5p-8`; reserve `v6e-4` for the cheap 1–2 epoch points.
 
 - **A started run stays put.** Once submitted on a slice, a run keeps its zone
   across preemption retries until it completes — never migrate an in-flight run.
