@@ -314,6 +314,23 @@ full compile). Confirm winners with real tok/s@step10. Keep a running-best; one 
    adopt if loss barely moves (user wants freq=1 for quality, so this is a last resort / diagnostic).
 Baseline opt_step time being measured by microbench (job 081251). Round 1 = persistent-sharded-state +
 cholesky_qr2 (both loss-neutral).
+MICROBENCH BASELINE: freq=1 opt_step=635ms (compile 139s), v5p-8, 6 layers — opt step is ~71% of the
+0.89s end-to-end (so SOAP linalg, not fwd/bwd, is the MFU target). freq{2,4,8} variants measuring.
+
+## 🐛 NaN INVESTIGATION + GUARD (user-flagged, 2026-06-13) — huge-risk fix
+r2-soapwu0p10 (worst variant, SOAP-warmup=0.10) DIED at step 3748: eval went all-NaN, run terminated,
+checkpoint saved. Scan of ALL runs: only soapwu0p10 NaN'd (not yet systemic) — but it's a latent risk for
+ANY run. Train loss was finite up to the NaN; wandb stopped logging at 3748 so we can't see post-3748 train
+from wandb. User: a transient eval NaN is a HUGE risk (corrupts the paloma metric / poisons the checkpoint →
+"NaN on reload") — must root-cause + guard so NO future run dies.
+**Likely cause:** a transient gradient spike / degenerate Gram→eigh/QR in KLSOAPH produces a non-finite SOAP
+direction+state, poisoning params + the persisted preconditioner → checkpoint corrupt (reload NaNs) + eval NaN.
+**FIX (committed b486485cc): NaN/Inf guard in _klsoaph_step** — if any output is non-finite, zero the direction
+and KEEP the old state (skip the step). No-op when finite (validated: normal unchanged; injected 1e30 grad
+skipped + state preserved + recovers next step). Protects ALL future runs from poisoned checkpoints / NaN eval.
+**Root-cause confirmation in flight:** inspect_checkpoint.py on step-3748 (east5 job 083711) reports which
+leaves are non-finite — params (optimizer poisoned → guard fixes) vs all-finite (eval-forward bf16 → need
+float32-eval fix instead). Will extend the fix per the verdict.
 
 ### Config-parity de-risk — weight decay (2026-06-12)
 Checked: MuonH baseline config stores weight_decay=0.1, BUT neither GrugMoeMuonHConfig.build() nor
