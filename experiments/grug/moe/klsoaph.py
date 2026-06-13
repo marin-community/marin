@@ -295,7 +295,22 @@ def _klsoaph_step(
         )
 
     is_first = jnp.equal(step, 1)
-    return jax.lax.cond(is_first, _init_branch, _normal_branch, operand=None)
+    result = jax.lax.cond(is_first, _init_branch, _normal_branch, operand=None)
+
+    # NaN/Inf guard: if this step produced ANY non-finite value (a transient gradient spike
+    # or a degenerate Gram/eigh/QR), skip it — zero the direction and KEEP the old state.
+    # Without this, one bad step poisons the params AND the persisted preconditioner, which
+    # silently corrupts the checkpoint (NaN on reload) and makes eval NaN. Keeping the last
+    # good state lets training continue cleanly. Scalar (per local leaf) for shape-uniformity.
+    direction = result[0]
+    new_state = result[1:]
+    old_state = (exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r)
+    finite = jnp.all(jnp.isfinite(direction))
+    for s in new_state:
+        finite = jnp.logical_and(finite, jnp.all(jnp.isfinite(s)))
+    safe_direction = jnp.where(finite, direction, jnp.zeros_like(direction))
+    safe_state = tuple(jnp.where(finite, n, o) for n, o in zip(new_state, old_state, strict=True))
+    return (safe_direction, *safe_state)
 
 
 def _klsoaph_step_sharded(
