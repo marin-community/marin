@@ -414,3 +414,22 @@ GOAL B: microbench opt_step (v5p-8, 6 layers): freq1 635ms / f2 430 / f4 356 / f
 ~10% (4× sharding). To push further (loss-preserving): subspace-QR (arxiv 2605.26327, reparam P=QᵀSQ, QR on
 B·d-col block) attacks the 337ms; bf16 projection matmuls + cholesky_qr2 attack both — validate loss-neutral
 + microbench before adopting. Defer big subspace-QR until beta1=0.90 confirms the MuonH beat (stable baseline).
+
+### Subspace-QR MFU implementation PLAN (arxiv 2605.26327) — goal B push beyond 10%
+Target: the QR-refresh path (~337ms = 53% of the 635ms opt_step). MFU already ~10% (4× sharding); this pushes further, LOSS-PRESERVING (paper: subspace update keeps a small effective decomposition interval).
+Incremental, validate-at-each-step:
+ STEP 1 — full-basis REPARAMETRIZATION (mathematically EQUIVALENT to current → bit-validatable):
+   store P_i = Q_iᵀ S_i Q_i instead of S_i (gg_l/gg_r). Updates (paper fig.2):
+   - covariance (every step): P ← (1-β2)P + β2·(Qᵀ Δ Q), reuse rotated grad G̃'=Q₁ᵀ G Q₂.
+   - eigenbasis refresh: O = qr(P); Q ← Q·O; P ← Oᵀ P O.  (replaces Q=qr(S·Q))
+   For KL-SOAP also keep ESI/eigenvalue (esi) updates in the FULL basis (Step 3) — already have.
+   VALIDATE: bit-identical loss vs current full-QR on CPU mesh over ~20 steps.
+ STEP 2 — SUBSPACE QR (the speedup, paper fig.3): pick index set I of d_sub=B·d columns (B≈1/4);
+   O_sub = qr(P[I,I]) (O(d_sub³), B² cost); Q[:,I] ← Q[:,I]·O_sub; rotate P rows/cols in subspace.
+   Column selection: cyclic (round-robin blocks) or largest-off-diagonal-mass. B and selection are HPs.
+   VALIDATE: microbench opt_step (expect ~B²× the QR cost → big cut); loss-validation RUN with beta1=0.90
+   (must still beat MuonH 3.5438). Sweep B∈{1,1/2,1/4} for the MFU/quality tradeoff.
+ STEP 3 — bf16 STORAGE of P,Q (paper: reparam makes bf16 stable). Validate loss + memory.
+RISK: large rewrite of _klsoaph_step state+math → do as a NEW scale_by_klsoaph_reparam (flagged), validate
+bit-identical at STEP 1 before trusting; keep current optimizer as the winning-config default until validated.
+Defer adoption into the winning beta1=0.90 config until goal A is confirmed (stable comparison baseline).
