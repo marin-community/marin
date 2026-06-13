@@ -283,6 +283,19 @@ grug training loop`, `jax._src.core.ShardingTypeError`, `RESOURCE_EXHAUSTED`, `O
 `No accelerator found` (excluding the benign draccus `weak reference` TypeError) — AND for a real tqdm step
 rate (success). Exits/notifies on either. This catches the whole failure class wandb misses.
 
+### 🔑 ROUND-1 near-final + ROUND-2 winner (2026-06-13 ~07:35) — beta1 is the lever
+**Anchor (beta2-0p95) gap to MuonH closes to ZERO:** +0.108@1k → +0.040@4k → +0.019@8k → +0.014@9k →
+**+0.007@10k**. After final LR decay it should ~TIE MuonH 3.5438 (final eval pending).
+**Round-2 @ step 2000 (matched-eval comparison vs anchor):**
+- **beta1=0.90: −0.031 vs anchor** (4.208 vs 4.239) — BEST. Monotonic: beta1 0.98 +0.085 (worse), 0.95 anchor,
+  0.90 −0.031 (better) ⇒ LOWER beta1 helps. beta1 is THE active axis.
+- shampoo0p99 −0.000, initf1p0 −0.000, eps1e6 +0.008 — neutral.
+- SOAP-warmup all HURT (soapwu 0.02 +0.006, 0.05 +0.017, 0.10 +0.048) ⇒ the early lag is NOT a warmup issue
+  (warmup hypothesis refuted); longer SOAP warmup just delays useful steps.
+Since the anchor ~ties MuonH and beta1=0.90 improves ~0.03, **beta1=0.90 should finish clearly < 3.5438**.
+**Round-3 launched:** push beta1 lower — r3-beta1-0p85 (/073633), r3-beta1-0p80 (/073654), v5p-8 east5.
+Re-anchor → beta1=0.90 (will reconfirm at later steps + pick best of {0.80,0.85,0.90}).
+
 ### Config-parity de-risk — weight decay (2026-06-12)
 Checked: MuonH baseline config stores weight_decay=0.1, BUT neither GrugMoeMuonHConfig.build() nor
 GrugMoeKLSoapHConfig.build() references add_decayed_weights/weight_decay — both custom build()s leave
