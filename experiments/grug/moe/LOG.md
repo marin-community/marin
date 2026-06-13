@@ -448,3 +448,13 @@ monotonic lower-better; **beta1=0.80 is the leading config**, tracking well belo
 decisively. beta1=0.90 (step ~9717, gap −0.005@9k) finishes first (~45min), a narrow beat/near-tie. beta1=0.70
 (/113012) bracketing. Winning config ≈ beta1=0.80. Await finals to declare GOAL A; then push 0.70/0.65 if 0.80
 not yet the min, and implement subspace-QR (MFU) against the beta1-winner.
+
+### Subspace-QR IMPLEMENTED + VALIDATED (2026-06-13 ~12:25) — goal B push
+Added subspace_frac to scale_by_klsoaph/_klsoaph_step (committed). _refresh now computes P=q.T@GG@q and
+q_new=_subspace_orthog(P,q,...): frac=1.0 → q@qr(P) (full); frac<1 → QR on the cyclic k×k diagonal block
+(k=frac*n) updating only those k basis columns, cycling over 1/frac refreshes (arxiv 2605.26327).
+VALIDATED on CPU: frac=1.0 direction == pre-subspace code (diff 4.8e-6, bit-identical → winning config
+UNCHANGED); sharded(frac=1.0)==replicated (0.0) on (data,expert) mesh; frac=0.25 q orthonormal (4e-7) +
+finite over steps, sharded finite. Microbench frac=1.0 vs 0.25 launched (jobs 122212/122232) to measure the
+opt_step cut on the 337ms (53%) QR-refresh. NEXT: if microbench shows a clear cut, loss-validation run with
+the winning beta1 + subspace_frac=0.25 (must still beat MuonH 3.5438); sweep frac∈{1,1/2,1/4} for MFU/quality.
