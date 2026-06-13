@@ -145,14 +145,14 @@ gpu = [
   # This module imports Triton directly; stay on the tested minor without
   # forcing an exact patch version.
   "triton>=3.6.0,<3.7; sys_platform == 'linux'",
-  "torch==2.12.0",
+  "torch==2.11.0",
   "torchvision==0.26.0",
 ]
-tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.39", "torch==2.12.0", "torchvision==0.25.0"]
+tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.39", "torch==2.10.0", "torchvision==0.25.0"]
 
 cpu = [
   "jax==0.9.2",
-  "torch==2.12.0",
+  "torch==2.10.0",
   # Linux x86_64
   "torchvision==0.25.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
   # Windows x86_64 (AMD64)
@@ -199,7 +199,7 @@ vllm = [
     "triton==3.6.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
     # Pin torch + torchvision explicitly so the per-extra source map below
     # routes them to the pytorch-cpu index during fresh Iris resolves.
-    "torch==2.12.0",
+    "torch==2.10.0",
     "torchvision==0.25.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torchvision==0.25.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
     "torchvision==0.25.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
