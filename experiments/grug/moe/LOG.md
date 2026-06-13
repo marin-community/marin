@@ -402,3 +402,15 @@ checkpoint → reload NaNs. Fix (both committed, tested):
 Together: NaN can neither be SAVED (guard) nor SURVIVE a load (sanitizer) → no future run dies from it.
 All FUTURE launches use this code (committed). Currently-running healthy runs predate it but are valid
 while finite (guard is a no-op when finite); relaunch with the fix only if one NaNs.
+
+### 🎯 RESULTS (2026-06-13 ~09:00) — GOAL A imminent, GOAL B headroom mapped
+GOAL A: round-1 anchor (beta2-0p95) FINISHED **3.5475** (ties MuonH 3.5438, +0.004 above — anchor alone
+doesn't beat). lr-1p4 3.5644, lr-1p8 3.5942 (worse). **beta1=0.90 @step5000 paloma 3.903 — BELOW MuonH's
+3.921 trajectory** (−0.018) and −0.055 vs anchor@5k; on track to finish < 3.5438 = the winning config
+(running, ~46%). Round-3 r3b-beta1-0p85 (/090618) + 0p80 (/090639) relaunched on NaN-safe code to find
+best beta1. beta1=0.98 worse → minimum is at/below 0.90.
+GOAL B: microbench opt_step (v5p-8, 6 layers): freq1 635ms / f2 430 / f4 356 / f8 298 → **QR-refresh path
+≈337ms = 53% of opt_step**; non-refresh (projections+gram+Adam+ESI+hyperball+reshard) ≈298ms. MFU already
+~10% (4× sharding). To push further (loss-preserving): subspace-QR (arxiv 2605.26327, reparam P=QᵀSQ, QR on
+B·d-col block) attacks the 337ms; bf16 projection matmuls + cholesky_qr2 attack both — validate loss-neutral
++ microbench before adopting. Defer big subspace-QR until beta1=0.90 confirms the MuonH beat (stable baseline).
