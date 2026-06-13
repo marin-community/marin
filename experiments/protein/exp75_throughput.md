@@ -18,17 +18,19 @@ Per-step tokens are constant, so **tok/s ∝ steps/h**; an epoch is 4,460 steps.
 
 ## Batch (multi-host, off-budget)
 
-_TBD — fill from the 5-slice probe (1 job per type). Bigger slices should finish a
-run faster (more chips, no grad-accum) but are scarcer and more bug-prone; we don't
-know a priori which wins on realized throughput or schedulability._
+First probe (E2 runs, ~13:50Z, **still ramping** — early steps, tok/s climbs as the
+compile amortizes; ranking is already clear). Needed the `claim_and_run` lock fix
+(every host now trains; see issue #6365). **`v5p-64` is the throughput champion**
+(~4.5× v6e-8), the v5p family is most chip-efficient (no grad-accum), and v5p-16
+already beats v6e-8 at equal chips. Favor **v5p-64 → v5p-32** for new batch jobs.
 
 | slice | chips | hosts | tok/s | s/it | h / epoch | n | notes |
 |---|---|---|---:|---:|---:|---:|---|
-| `v5p-16` | 8 | 2 | — | — | — | 0 | |
-| `v5p-32` | 16 | 4 | — | — | — | 0 | |
-| `v5p-64` | 32 | 8 | — | — | — | 0 | |
-| `v6e-16` | 16 | 4 | — | — | — | 0 | |
-| `v6e-32` | 32 | 8 | — | — | — | 0 | |
+| `v5p-64` | 32 | 8 | ~333k | 3.4 | ~4.2 | 1 | **fastest absolute**; ramping |
+| `v5p-32` | 16 | 4 | ~199k | 5.6 | ~6.9 | 1 | ramping |
+| `v6e-16` | 16 | 4 | ~130k | 8.8 | ~11 | 1 | ramping |
+| `v5p-16` | 8 | 2 | ~102k | 12.1 | ~15 | 1 | > v6e-8 at equal chips |
+| `v6e-32` | 32 | 8 | — | — | — | 0 | gang-pending (8 hosts scarce) |
 
 ## Per-chip efficiency (for budget-bound decisions)
 
