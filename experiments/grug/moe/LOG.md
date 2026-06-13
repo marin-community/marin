@@ -472,3 +472,14 @@ narrows ALL gaps toward ~0. Clean beat depends on lower beta1 (0.80 was −0.036
 margin through decay — finals ~3h out (they're at ~step 7300). beta1=0.70 (/113012) also in flight. So
 KLSOAPH full-matrix ≈ MATCHES MuonH (~3.54), best-beta1 marginally below/at-tie — need the 0.80/0.70 finals
 to confirm a clean < 3.5438. If all land ~tie, may need beta1=0.65 or re-check another axis from the beta1 anchor.
+
+### ⚠️ HONEST CORRECTION (2026-06-13 ~13:00) — MuonH NOT beaten yet; mid-run gaps misled
+beta1=0.90 FINAL@10979 = **3.5500** > MuonH 3.5438 (and worse than anchor 3.5475!). The mid-run lower-beta1
+advantage (−0.036@6k) DID NOT survive LR decay — gaps narrow + reverse in the final phase. @step9000 the betas
+are ~tied (0.85=3.6325, 0.90=3.6347, 0.80=3.6394), all converging ~3.55. So full-matrix KLSOAPH lands
+~3.547-3.550, **+0.004-0.006 ABOVE MuonH 3.5438 — NOT a beat.** Anchor (beta1=0.95)=3.5475 remains the best
+KLSOAPH. LESSON: must judge on step-10979 FINALS, not mid-run gaps (no-premature-conclusion).
+Beta1 axis ~exhausted (min ~0.90-0.95, all above 3.5438). NEXT LEVER = the DECAY phase (where KLSOAPH loses
+its mid-run lead): tune KLSOAPH's LR schedule independently (min_lr_ratio nonzero floor, or power decay — track_3
+Result#25 won with power-decay + nonzero floors) to hold the lead through the end. Await 0.80/0.85/0.70 finals
+to confirm beta1 axis, then sweep the schedule axis. GOAL A NOT yet met — continue coordinate descent relentlessly.
