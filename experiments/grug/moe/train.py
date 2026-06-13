@@ -251,6 +251,29 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
+def _match_leaf_sharding(tree, ref):
+    """Constrain each array leaf of `tree` to the sharding of the corresponding leaf in `ref`.
+
+    The jitted train step donates the train state (donate_argnums=0); donation only succeeds when the
+    OUTPUT state has the same sharding as the donated INPUT. The optimizer reshards its *updates* to the
+    param sharding (``_match_named_update_sharding``) but nothing pins the *state* leaves, so e.g. MuonH
+    momentum / adam moments for the attn/mlp params can come out in a layout that differs from how they
+    were stored -> donation fails (those buffers get reallocated every step). Pinning the output state to
+    the input state's sharding restores the invariant: buffers are reused and the sharding is stable across
+    steps. Pure layout (values unchanged) -> lossless.
+    """
+
+    def m(x, r):
+        if x is None or not hasattr(x, "ndim") or x.ndim == 0:
+            return x
+        rs = getattr(r, "sharding", None)
+        if rs is None:
+            return x
+        return jax.lax.with_sharding_constraint(x, rs)
+
+    return jax.tree.map(m, tree, ref, is_leaf=lambda x: x is None)
+
+
 def initial_state(
     model_config: GrugModelConfig,
     *,
@@ -340,12 +363,14 @@ def _make_train_step(
                 model_tree_type=type(state.params),
             )
 
+        # Pin the output state's sharding to the donated input state's, so jit can reuse the donated
+        # buffers (donate_argnums=0) instead of reallocating mismatched-sharding leaves every step.
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
-            params=params,
-            opt_state=opt_state,
-            ema_params=ema_params,
+            params=_match_leaf_sharding(params, state.params),
+            opt_state=_match_leaf_sharding(opt_state, state.opt_state),
+            ema_params=_match_leaf_sharding(ema_params, state.ema_params) if ema_params is not None else None,
             pending_qb_betas=metrics["qb_beta_per_layer"],
         )
 
