@@ -88,7 +88,9 @@ _optimizer = GrugMoeKLSoapHConfig(
     # (it has an early preconditioner-estimation lag). Both default to the MuonH warmup.
     warmup=_f("KLSOAPH_ADAM_WARMUP", _muonh.warmup),
     klsoaph_warmup=_f("KLSOAPH_SOAP_WARMUP", _muonh.warmup),
-    min_lr_ratio=_muonh.min_lr_ratio,
+    # LR-schedule axis: KLSOAPH loses its mid-run lead in the decay-to-zero phase, so allow an
+    # independent nonzero floor (min_lr_ratio) to keep it improving through the end.
+    min_lr_ratio=_f("KLSOAPH_MIN_LR_RATIO", _muonh.min_lr_ratio),
     lr_schedule=_muonh.lr_schedule,
     decay=_muonh.decay,
 )
