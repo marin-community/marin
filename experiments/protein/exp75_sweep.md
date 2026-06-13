@@ -100,12 +100,10 @@ TPU usage is capped by a per-user **iris budget** (currently **75,000** units fo
   (off-budget, lower priority). Use interactive budget as you see fit — fill it
   with the best-throughput work — and run **more on batch on top** for free extra
   capacity. There is **no** "multi-host must be batch" rule.
-- **Favor the best MEASURED throughput, and re-measure.** Choose slices by realized
-  `throughput/tokens_per_second` ([`exp75_throughput.md`](exp75_throughput.md)),
-  refreshed periodically — the fastest slice is **not always the biggest** (v6e at
-  scale has poor MFU). Be empirical and adaptive: when the numbers move, move the
-  favored slices. (For per-budget value on *interactive* specifically, tok/s **per
-  chip** is what counts — the v5p family leads there too.)
+- **Favor slices by measured throughput, re-measured.** Decide on **`wts`**
+  (wall-clock tokens/sec) — see **Scheduling — finish fast** below and
+  [`exp75_throughput.md`](exp75_throughput.md). The fastest slice is **not always
+  the biggest**; be empirical and adaptive.
 
 ## TPU & region selection
 
@@ -168,12 +166,15 @@ search goals. Schedule for total throughput, not rigid rules:
   `batch` (off-budget, lower priority, more preemption/scarcity). Fill interactive
   up to ~cap with high-value work; pile additional work on `batch` for free. Any
   slice works on either band (`-e BAND interactive|batch`, default interactive).
-- **Pick slices by measured tok/s, re-measured periodically.** See
-  [`exp75_throughput.md`](exp75_throughput.md). Empirically the **v5p family** wins
-  (best absolute *and* per-chip; v6e MFU collapses at scale — v5p-64 ~333k,
-  v5p-32 ~198k, v5p-16 ~102k tok/s vs v6e-32 ~213k / v6e-16 ~130k). Re-pull
-  `throughput/tokens_per_second` every so often and re-favor — never assume bigger
-  is faster.
+- **Decide on `wts`; track four metrics.** Per slice, record in
+  [`exp75_throughput.md`](exp75_throughput.md): **`wts`** (wall-clock tok/s, incl.
+  availability/preemption — **the decision metric**), **`ats`** (active tok/s),
+  **`tts`** (training tok/s), and **MFU**. **Schedule on `wts`** unless there's a
+  specific reason otherwise — it is the real progress rate, so it already folds in
+  the v5p-vs-v6e speed gap *and* big-slice scarcity/preemption. The rest are
+  diagnostic: `tts` is the upside a slice would give if always available, `ats`
+  isolates in-run overhead, MFU is mostly irrelevant but worth a glance. Re-measure
+  periodically and re-favor; never assume bigger = faster.
 - **Don't oversubscribe one preemptible pool.** Spread big-slice requests across
   the v5p and v6e pools so they actually schedule (bigger = scarcer); excess just
   pends harmlessly off-budget.
@@ -184,10 +185,6 @@ search goals. Schedule for total throughput, not rigid rules:
   (not a capacity pend / preemption), move that point to a single-host slice and
   **tell the user the bug's nature** — fix while progress continues elsewhere. (The
   `claim_and_run` lock race is already fixed/disabled — issue #6365.)
-- **Record throughput** in [`exp75_throughput.md`](exp75_throughput.md) (by
-  `tpu × band`) as new slices/configs reach steady state — the reference for what
-  to favor and the end-of-sweep keepsake. Slice chips/pdp/grad_accum live in the
-  `TPUS` table in `exp75_sweep.py`.
 
 ## Pipeline the waves (don't let them block each other)
 
