@@ -280,7 +280,7 @@ class ScaleGroupConfig(_message.Message):
     def __init__(self, name: _Optional[str] = ..., buffer_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., resources: _Optional[_Union[ScaleGroupResources, _Mapping]] = ..., num_vms: _Optional[int] = ..., priority: _Optional[int] = ..., scale_up_rate_limit: _Optional[int] = ..., scale_down_rate_limit: _Optional[int] = ..., slice_template: _Optional[_Union[SliceConfig, _Mapping]] = ..., worker: _Optional[_Union[WorkerSettings, _Mapping]] = ..., quota_pool: _Optional[str] = ..., allocation_tier: _Optional[int] = ...) -> None: ...
 
 class WorkerConfig(_message.Message):
-    __slots__ = ("docker_image", "host", "port", "port_range", "worker_id", "controller_address", "cache_dir", "default_task_image", "task_env", "runtime", "accelerator_type", "accelerator_variant", "gpu_count", "capacity_type", "worker_attributes", "poll_interval", "heartbeat_timeout", "slice_id", "platform", "storage_prefix", "auth_token")
+    __slots__ = ("docker_image", "host", "port", "port_range", "worker_id", "controller_address", "cache_dir", "default_task_image", "task_env", "runtime", "accelerator_type", "accelerator_variant", "gpu_count", "capacity_type", "cpu_millicores", "worker_attributes", "poll_interval", "heartbeat_timeout", "slice_id", "platform", "storage_prefix", "auth_token")
     class TaskEnvEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -309,6 +309,7 @@ class WorkerConfig(_message.Message):
     ACCELERATOR_VARIANT_FIELD_NUMBER: _ClassVar[int]
     GPU_COUNT_FIELD_NUMBER: _ClassVar[int]
     CAPACITY_TYPE_FIELD_NUMBER: _ClassVar[int]
+    CPU_MILLICORES_FIELD_NUMBER: _ClassVar[int]
     WORKER_ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
     POLL_INTERVAL_FIELD_NUMBER: _ClassVar[int]
     HEARTBEAT_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
@@ -330,6 +331,7 @@ class WorkerConfig(_message.Message):
     accelerator_variant: str
     gpu_count: int
     capacity_type: CapacityType
+    cpu_millicores: int
     worker_attributes: _containers.ScalarMap[str, str]
     poll_interval: _time_pb2.Duration
     heartbeat_timeout: _time_pb2.Duration
@@ -337,7 +339,7 @@ class WorkerConfig(_message.Message):
     platform: PlatformConfig
     storage_prefix: str
     auth_token: str
-    def __init__(self, docker_image: _Optional[str] = ..., host: _Optional[str] = ..., port: _Optional[int] = ..., port_range: _Optional[str] = ..., worker_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., cache_dir: _Optional[str] = ..., default_task_image: _Optional[str] = ..., task_env: _Optional[_Mapping[str, str]] = ..., runtime: _Optional[str] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., gpu_count: _Optional[int] = ..., capacity_type: _Optional[_Union[CapacityType, str]] = ..., worker_attributes: _Optional[_Mapping[str, str]] = ..., poll_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., slice_id: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., storage_prefix: _Optional[str] = ..., auth_token: _Optional[str] = ...) -> None: ...
+    def __init__(self, docker_image: _Optional[str] = ..., host: _Optional[str] = ..., port: _Optional[int] = ..., port_range: _Optional[str] = ..., worker_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., cache_dir: _Optional[str] = ..., default_task_image: _Optional[str] = ..., task_env: _Optional[_Mapping[str, str]] = ..., runtime: _Optional[str] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., gpu_count: _Optional[int] = ..., capacity_type: _Optional[_Union[CapacityType, str]] = ..., cpu_millicores: _Optional[int] = ..., worker_attributes: _Optional[_Mapping[str, str]] = ..., poll_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., slice_id: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., storage_prefix: _Optional[str] = ..., auth_token: _Optional[str] = ...) -> None: ...
 
 class SshConfig(_message.Message):
     __slots__ = ("user", "key_file", "port", "connect_timeout", "impersonate_service_account")
@@ -516,7 +518,7 @@ class KueueConfig(_message.Message):
     def __init__(self, cluster_queue: _Optional[str] = ..., priority_classes: _Optional[_Mapping[str, str]] = ..., topologies: _Optional[_Mapping[str, KueueTopology]] = ...) -> None: ...
 
 class KubernetesProviderConfig(_message.Message):
-    __slots__ = ("namespace", "kubeconfig", "default_image", "service_account", "host_network", "cache_dir", "controller_address", "kueue")
+    __slots__ = ("namespace", "kubeconfig", "default_image", "service_account", "host_network", "cache_dir", "controller_address", "kueue", "preempt_namespaces")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     KUBECONFIG_FIELD_NUMBER: _ClassVar[int]
     DEFAULT_IMAGE_FIELD_NUMBER: _ClassVar[int]
@@ -525,6 +527,7 @@ class KubernetesProviderConfig(_message.Message):
     CACHE_DIR_FIELD_NUMBER: _ClassVar[int]
     CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
     KUEUE_FIELD_NUMBER: _ClassVar[int]
+    PREEMPT_NAMESPACES_FIELD_NUMBER: _ClassVar[int]
     namespace: str
     kubeconfig: str
     default_image: str
@@ -533,7 +536,8 @@ class KubernetesProviderConfig(_message.Message):
     cache_dir: str
     controller_address: str
     kueue: KueueConfig
-    def __init__(self, namespace: _Optional[str] = ..., kubeconfig: _Optional[str] = ..., default_image: _Optional[str] = ..., service_account: _Optional[str] = ..., host_network: _Optional[bool] = ..., cache_dir: _Optional[str] = ..., controller_address: _Optional[str] = ..., kueue: _Optional[_Union[KueueConfig, _Mapping]] = ...) -> None: ...
+    preempt_namespaces: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, namespace: _Optional[str] = ..., kubeconfig: _Optional[str] = ..., default_image: _Optional[str] = ..., service_account: _Optional[str] = ..., host_network: _Optional[bool] = ..., cache_dir: _Optional[str] = ..., controller_address: _Optional[str] = ..., kueue: _Optional[_Union[KueueConfig, _Mapping]] = ..., preempt_namespaces: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class UserBudgetTier(_message.Message):
     __slots__ = ("user_ids", "budget_limit", "max_band")

@@ -1412,17 +1412,15 @@ def _field_counts_from_data_sizes(data_sizes) -> Dict[str, int]:
 
 
 def _render_path_elem(path_elem) -> str:
-    match path_elem:
-        case jtu.DictKey(key):
-            return str(key)
-        case jtu.GetAttrKey(key):
-            return str(key)
-        case jtu.SequenceKey(i):
-            return str(i)
-        case jtu.FlattenedIndexKey(i):
-            return str(i)
-        case _:
-            return str(path_elem)
+    if isinstance(path_elem, jtu.DictKey):
+        return str(path_elem.key)
+    if isinstance(path_elem, jtu.GetAttrKey):
+        return str(path_elem.name)
+    if isinstance(path_elem, jtu.SequenceKey):
+        return str(path_elem.idx)
+    if isinstance(path_elem, jtu.FlattenedIndexKey):
+        return str(path_elem.key)
+    return str(path_elem)
 
 
 def _sanitize_shard_name(name: str) -> str:

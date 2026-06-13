@@ -18,6 +18,7 @@ pub mod reconcile;
 pub mod remote;
 pub mod schema;
 pub mod segment;
+pub mod trigram;
 // The orchestration module is named `store`; the re-export below gives callers
 // `finelog::store::Store` without the extra path.
 #[allow(clippy::module_inception)]

@@ -312,6 +312,8 @@ def _dump_http_log(log: list[HttpLog]) -> str:
 
 
 def test_vm_full_lifecycle(svc: CloudGcpService, backend: GcpFakeBackend):
+    # wait=True: this test exercises the controller-VM bootstrap path that needs
+    # the instance IP immediately after create.
     vm = svc.vm_create(
         VmCreateRequest(
             name="ctrl-vm",
@@ -320,7 +322,8 @@ def test_vm_full_lifecycle(svc: CloudGcpService, backend: GcpFakeBackend):
             labels={"iris-managed": "true"},
             startup_script="#!/bin/bash\necho hello",
             service_account="sa@test.iam.gserviceaccount.com",
-        )
+        ),
+        wait=True,
     )
 
     assert vm.name == "ctrl-vm", f"Expected ctrl-vm, got {vm.name}\n{_dump_http_log(backend.http_log)}"

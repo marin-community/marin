@@ -15,13 +15,13 @@ those methods directly when needed.
 from dataclasses import dataclass
 from typing import Any
 
-from iris.cluster.controller import ops, reads, writes
+from iris.cluster.controller import ops, writes
 from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates, finalize
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.scheduling.policy import claim_workers_for_reservations, cleanup_stale_claims
+from iris.cluster.controller.scheduling.policy import refresh_reservation_claims_in_tx
 from iris.cluster.controller.schema import ReservationClaim
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
@@ -147,9 +147,7 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     run_template_cache=transitions._run_template_cache,
                 )
             case CancelJob(job_id, reason):
-                return ops.job.cancel(
-                    cur, job_id=job_id, reason=reason, endpoints=transitions._endpoints, health=transitions._health
-                )
+                return ops.job.cancel(cur, job_id=job_id, reason=reason, endpoints=transitions._endpoints)
             case RegisterOrRefreshWorker(worker_id, address, metadata, ts, slice_id, scale_group):
                 return ops.worker.register(
                     cur,
@@ -176,7 +174,6 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                 return finalize(
                     cur,
                     [TerminalDecision(TerminalKind.PREEMPT, task_id, reason)],
-                    health=transitions._health,
                     endpoints=transitions._endpoints,
                     now=Timestamp.now(),
                 )
@@ -187,7 +184,6 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                         TerminalDecision(TerminalKind.TIMEOUT, tid, reason)
                         for tid in sorted(task_ids, key=lambda t: t.to_wire())
                     ],
-                    health=transitions._health,
                     endpoints=transitions._endpoints,
                     now=Timestamp.now(),
                 )
@@ -199,7 +195,6 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                 return apply_dispatch_updates(
                     cur,
                     updates,
-                    health=transitions._health,
                     endpoints=transitions._endpoints,
                     now=Timestamp.now(),
                 )
@@ -210,17 +205,11 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
             case ReplaceReservationClaims(claims):
                 return writes.replace_reservation_claims(cur, claims)
             case RunReservationClaimCycle():
-                # Persist through the caller's ``cur`` rather than the standalone
-                # ``refresh_reservation_claims`` write transaction, which would
-                # nest inside this open one. Reads use the separate read engine.
-                claims = reads.list_claims(cur)
-                changed = cleanup_stale_claims(claims, transitions._db, transitions._health)
-                changed = (
-                    claim_workers_for_reservations(
-                        claims, transitions._db, transitions._health, transitions._worker_attrs
-                    )
-                    or changed
-                )
+                # Run the claim refresh and persist through the caller's open
+                # ``cur`` rather than the standalone ``refresh_reservation_claims``
+                # write transaction, which would nest inside this one. The refresh
+                # reads through ``cur`` too.
+                claims, changed = refresh_reservation_claims_in_tx(cur, transitions._health, transitions._worker_attrs)
                 if changed:
                     writes.replace_reservation_claims(cur, claims)
                 return claims

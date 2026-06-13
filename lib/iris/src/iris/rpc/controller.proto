@@ -254,7 +254,7 @@ message Controller {
     repeated string running_job_ids = 5;
     string address = 6;                    // Worker RPC address (host:port)
     iris.job.WorkerMetadata metadata = 7;           // Full worker metadata
-    string status_message = 8;             // Error or status message (e.g., "Ping timeout", "Worker crashed")
+    string status_message = 8;             // Error or status message (e.g., "Reconcile timeout", "Worker crashed")
   }
 
   // Sort fields for worker listing
@@ -587,8 +587,4 @@ service ControllerService {
   // Scheduler state (dashboard)
   rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
 
-  // Deprecated. Discards the payload; status text now writes to the
-  // iris.task_status finelog namespace. Kept one release so pre-cutover
-  // clients don't crash; removal tracked by the iris-status-cleanup cron.
-  rpc SetTaskStatusText(iris.job.SetTaskStatusTextRequest) returns (iris.job.SetTaskStatusTextResponse);
 }

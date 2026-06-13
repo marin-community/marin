@@ -191,6 +191,27 @@ def _check_csrf(request: Request) -> bool:
     return origin == expected_origin
 
 
+# Path scoping the session cookie. set/delete must use the same path or the
+# browser will not match them, so both go through this constant.
+SESSION_COOKIE_PATH = "/"
+
+
+def _set_session_cookie(response: Response, token: str, request: Request) -> None:
+    """Attach the session cookie with the standard security attributes.
+
+    Centralizes the cookie flags so the bootstrap (redirect) and auth-session
+    (fetch) paths cannot drift apart on security-sensitive attributes.
+    """
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        httponly=True,
+        samesite="strict",
+        secure=request.url.scheme == "https",
+        path=SESSION_COOKIE_PATH,
+    )
+
+
 class _DashboardAuthInterceptor:
     """RPC auth interceptor that uses resolve_auth() — same policy as HTTP middleware.
 
@@ -568,14 +589,7 @@ class ControllerDashboard:
         except ValueError:
             return JSONResponse({"error": "invalid token"}, status_code=401)
         response = RedirectResponse("/", status_code=302)
-        response.set_cookie(
-            SESSION_COOKIE,
-            token,
-            httponly=True,
-            samesite="strict",
-            secure=request.url.scheme == "https",
-            path="/",
-        )
+        _set_session_cookie(response, token, request)
         return response
 
     @public
@@ -590,8 +604,6 @@ class ControllerDashboard:
                 "has_session": has_session,
                 "backend": {
                     "name": descriptor.name,
-                    "placement": descriptor.placement.value,
-                    "manages_capacity": descriptor.manages_capacity,
                     "capabilities": descriptor.capabilities,
                 },
                 "optional": self._auth_optional,
@@ -615,14 +627,7 @@ class ControllerDashboard:
             except ValueError:
                 return JSONResponse({"error": "invalid token"}, status_code=401)
         response = JSONResponse({"ok": True})
-        response.set_cookie(
-            SESSION_COOKIE,
-            token,
-            httponly=True,
-            samesite="strict",
-            secure=request.url.scheme == "https",
-            path="/",
-        )
+        _set_session_cookie(response, token, request)
         return response
 
     @public
@@ -631,7 +636,7 @@ class ControllerDashboard:
         if not _check_csrf(request):
             return JSONResponse({"error": "CSRF check failed"}, status_code=403)
         response = JSONResponse({"ok": True})
-        response.delete_cookie(SESSION_COOKIE, path="/")
+        response.delete_cookie(SESSION_COOKIE, path=SESSION_COOKIE_PATH)
         return response
 
     @public

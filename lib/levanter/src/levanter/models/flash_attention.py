@@ -4,22 +4,21 @@
 # cf https://github.com/lucidrains/flash-attention-jax
 # cf https://tridao.me/publications/flash2/flash2.pdf
 # cf https://arxiv.org/pdf/2205.14135.pdf
-from typing import Optional, Tuple
+from typing import Optional, Tuple, cast
 
 import equinox
+import haliax as hax
+import haliax.nn as hnn
 import jax
 import jax.numpy as jnp
 from equinox import filter_eval_shape
-from jaxtyping import PRNGKeyArray
-
-import haliax as hax
-import haliax.nn as hnn
 from haliax import AxisSelection, AxisSpec, ds
 from haliax.jax_utils import named_call
 from haliax.types import PrecisionLike
+from jaxtyping import PRNGKeyArray
 
-from levanter.layers.attention import AttentionMask, dot_product_attention, materialize_mask
-
+from levanter.layers.attention import dot_product_attention
+from levanter.layers.attention_mask import AttentionMask, materialize_mask
 
 BLOCK_SIZE = 1024
 
@@ -174,7 +173,7 @@ def _flash_attention_forward(
     Tc = KPos.size // block_size
 
     # Row axes: everything in q except (QPos, Key)
-    q_batch_axes: Tuple[hax.Axis, ...] = hax.eliminate_axes(q.axes, (QPos, Key))
+    q_batch_axes: Tuple[hax.Axis, ...] = cast(Tuple[hax.Axis, ...], hax.eliminate_axes(q.axes, (QPos, Key)))
 
     # output variables: O is the attention output, ell is the per-position log normalizer
     o_shape = _infer_attention_output_block_shape(QPos, KPos, Key, q, k, v)
@@ -246,7 +245,12 @@ def _flash_attention_forward(
 
             if mask is not None:
                 mask_ij = _materialize_mask_slice(mask, i, j, QPos, KPos, block_size)
-                attn_ij = hax.where(mask_ij, attn_ij, -1e10)
+                # mask_ij is None when the AttentionMask carries no constraints
+                # (e.g. ``AttentionMask(is_causal=False)`` with no explicit_mask/
+                # segment_ids/sliding_window) — i.e. full bidirectional attention.
+                # Mirror splash_attention's TPU behavior and skip the mask op.
+                if mask_ij is not None:
+                    attn_ij = hax.where(mask_ij, attn_ij, -1e10)
 
             if dropout > 0 and not inference:
                 attn_ij = hax.nn.dropout(
@@ -374,7 +378,10 @@ def _flash_attention_backward(
 
             if mask is not None:
                 mask_ij = _materialize_mask_slice(mask, i, j, QPos, KPos, block_size)
-                attn_ij = hax.where(mask_ij, attn_ij, -1e10)
+                # See forward pass: a no-constraint AttentionMask materializes
+                # to None, i.e. full attention.
+                if mask_ij is not None:
+                    attn_ij = hax.where(mask_ij, attn_ij, -1e10)
 
             p_ij = hax.exp(attn_ij - L_i)
 
@@ -421,7 +428,7 @@ def _flash_attention_backward(
     j, dQ, dK, dV = jax.lax.while_loop(lambda state: state[0] < Tc, do_kv_block, (0, dQ, dK, dV))
 
     if attn_sink is not None:
-        q_batch_axes: Tuple[hax.Axis, ...] = hax.eliminate_axes(q.axes, (QPos, Key))
+        q_batch_axes: Tuple[hax.Axis, ...] = cast(Tuple[hax.Axis, ...], hax.eliminate_axes(q.axes, (QPos, Key)))
         sink_prefix = attn_sink
         for ax in q_batch_axes:
             if ax not in sink_prefix.axes:

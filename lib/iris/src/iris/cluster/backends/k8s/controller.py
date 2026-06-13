@@ -17,15 +17,15 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
-from datetime import datetime
 from urllib.parse import urlparse
 
 import fsspec.config
+import s3fs
 from rigging.timing import Deadline
 
 from iris.cluster.backends.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
-from iris.cluster.backends.k8s.service import K8sService
-from iris.cluster.backends.k8s.types import K8sResource
+from iris.cluster.backends.k8s.service import CloudK8sService, K8sService
+from iris.cluster.backends.k8s.types import K8sResource, parse_k8s_timestamp
 from iris.cluster.backends.types import InfraError, Labels, local_queue_name
 from iris.cluster.config_serde import config_to_dict
 from iris.rpc import config_pb2
@@ -97,12 +97,7 @@ def configure_client_s3(config: config_pb2.IrisClusterConfig) -> None:
 
     # Flush fsspec/s3fs cached instances so they pick up the new config.
     fsspec.config.set_conf_env(fsspec.config.conf)
-    try:
-        import s3fs
-
-        s3fs.S3FileSystem.clear_instance_cache()
-    except ImportError:
-        pass
+    s3fs.S3FileSystem.clear_instance_cache()
 
 
 # ============================================================================
@@ -234,8 +229,6 @@ class K8sControllerProvider:
         if kubectl is not None:
             self._kubectl: K8sService = kubectl
         else:
-            from iris.cluster.backends.k8s.service import CloudK8sService
-
             self._kubectl = CloudK8sService(
                 namespace=self._namespace,
                 kubeconfig_path=None if os.environ.get("KUBECONFIG") else (config.kubeconfig_path or None),
@@ -493,6 +486,10 @@ class K8sControllerProvider:
                     "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
                 },
                 {
+                    # Bound via ClusterRoleBinding, so this grants pod access in
+                    # ALL namespaces — required for blocker eviction in
+                    # kubernetes_provider.preempt_namespaces, not just the Iris
+                    # namespace.
                     "apiGroups": [""],
                     "resources": ["pods", "pods/exec", "pods/log"],
                     "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
@@ -893,8 +890,8 @@ class K8sControllerProvider:
                     last_ts = event.get("lastTimestamp", "")
                     if first_ts and last_ts:
                         try:
-                            first = datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
-                            last = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+                            first = parse_k8s_timestamp(first_ts)
+                            last = parse_k8s_timestamp(last_ts)
                             span = (last - first).total_seconds()
                             if span >= self._MOUNT_FAILURE_GRACE_SECONDS:
                                 raise InfraError(

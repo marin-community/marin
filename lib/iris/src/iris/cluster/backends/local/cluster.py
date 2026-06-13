@@ -85,6 +85,7 @@ def create_local_autoscaler(
     # that InMemoryGcpService(LOCAL) can propagate them to local workers.
     worker_attributes_by_group: dict[str, dict[str, str | int | float]] = {}
     gpu_count_by_group: dict[str, int] = {}
+    cpu_millicores_by_group: dict[str, int] = {}
     for name, sg_config in config.scale_groups.items():
         attrs: dict[str, str | int | float] = {}
         if sg_config.HasField("resources"):
@@ -94,6 +95,8 @@ def create_local_autoscaler(
         worker_attributes_by_group[name] = attrs
         if sg_config.resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and sg_config.resources.device_count > 0:
             gpu_count_by_group[name] = sg_config.resources.device_count
+        if sg_config.resources.cpu_millicores > 0:
+            cpu_millicores_by_group[name] = sg_config.resources.cpu_millicores
 
     storage_prefix = config.storage.remote_state_dir or ""
 
@@ -107,6 +110,7 @@ def create_local_autoscaler(
         threads=threads,
         worker_attributes_by_group=worker_attributes_by_group,
         gpu_count_by_group=gpu_count_by_group,
+        cpu_millicores_by_group=cpu_millicores_by_group,
         storage_prefix=storage_prefix,
         label_prefix=label_prefix,
     )
@@ -139,7 +143,6 @@ def create_local_autoscaler(
         scale_groups=scale_groups,
         config=config.defaults.autoscaler,
         platform=platform,
-        threads=threads,
         base_worker_config=base_worker_config,
     )
     return autoscaler, temp_dir
@@ -201,7 +204,7 @@ class LocalCluster:
         )
 
         # The backend owns the autoscaler; the controller drives it via
-        # manage_capacity and persists the returned state each tick.
+        # backend.autoscale and persists the returned state each tick.
         provider = RpcTaskBackend(stub_factory=RpcWorkerStubFactory())
         provider.attach_autoscaler(self._autoscaler)
 
@@ -210,12 +213,16 @@ class LocalCluster:
                 host="127.0.0.1",
                 port=port,
                 remote_state_dir=self._config.storage.remote_state_dir or f"file://{state_dir}",
-                heartbeat_interval=Duration.from_seconds(0.5),
                 local_state_dir=Path(self._db_dir.name),
                 auth_verifier=auth.verifier,
                 auth_provider=auth.provider,
                 auth=auth,
                 autoscaler_evaluation_interval=duration_from_proto(self._config.defaults.autoscaler.evaluation_interval),
+                # Fast worker-failure detection for local/e2e runs: ~10 unreachable
+                # reconcile passes (poll_interval default 1s) instead of the ~50s
+                # production grace. Mirrors the old fast ping tuning; the e2e chaos
+                # suite's RECONCILE_FAILURE_THRESHOLD must match round(grace / poll).
+                worker_unreachable_grace=Duration.from_seconds(10.0),
             ),
             provider=provider,
             threads=controller_threads,

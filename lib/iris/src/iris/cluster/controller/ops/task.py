@@ -125,7 +125,6 @@ def apply_dispatch_updates(
     cur: Tx,
     updates: list[TaskUpdate],
     *,
-    health: WorkerHealthTracker,
     endpoints: EndpointsProjection,
     now: Timestamp,
 ) -> ControllerEffects:
@@ -143,7 +142,7 @@ def apply_dispatch_updates(
         extra_attempt_keys=attempt_keys,
     )
     effects = ReconcileState.open(snapshot).record_updates(updates)
-    commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
+    commit_effects(cur, effects, endpoints=endpoints)
     return effects
 
 
@@ -151,7 +150,6 @@ def finalize(
     cur: Tx,
     decisions: list[TerminalDecision],
     *,
-    health: WorkerHealthTracker,
     endpoints: EndpointsProjection,
     now: Timestamp,
 ) -> ControllerEffects:
@@ -168,5 +166,5 @@ def finalize(
     all_task_ids: list[JobName] = sorted({d.task_id for d in decisions}, key=lambda tid: tid.to_wire())
     snapshot = load_closed_snapshot(cur, now=now, seed_task_ids=all_task_ids)
     effects = ReconcileState.open(snapshot).finalize_tasks(decisions)
-    commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
+    commit_effects(cur, effects, endpoints=endpoints)
     return effects

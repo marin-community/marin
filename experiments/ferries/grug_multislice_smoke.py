@@ -18,14 +18,20 @@ forwarded to the Iris parent job.
 """
 
 import dataclasses
+import logging
 import os
 
+import fsspec
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.executor import unwrap_versioned_value
+from marin.execution.executor import compute_output_path, unwrap_versioned_value
 from marin.execution.types import this_output_path, versioned
 
-from experiments.grug.base.launch import grug_base_launch, train_grug
+from experiments.grug.base.launch import GrugBaseLaunchConfig, grug_base_launch, train_grug
+
+logger = logging.getLogger(__name__)
+
+CANARY_STEP_NAME = "grug/multislice-smoke"
 
 DEFAULT_REGION = "us-east5"
 DEFAULT_TPU_TYPE = "v6e-8"
@@ -98,11 +104,64 @@ def _child_env_vars() -> dict[str, str]:
     return {key: value for key in CHILD_ENV_KEYS if (value := os.environ.get(key))}
 
 
+def _override_output_path() -> str | None:
+    """Read ``GRUG_MULTISLICE_OUTPUT_PATH`` and validate it.
+
+    If the env var is unset, returns ``None`` and the canary falls back to
+    its deterministic content-addressed path. If the env var is set, it
+    must be non-empty: an empty value would be interpreted by
+    :func:`compute_output_path` as a relative override joined with
+    ``MARIN_PREFIX``, which would point the pre-submit wipe at the prefix
+    root (e.g. ``gs://marin-us-east5``) and recursively delete it.
+    """
+    if "GRUG_MULTISLICE_OUTPUT_PATH" not in os.environ:
+        return None
+    value = os.environ["GRUG_MULTISLICE_OUTPUT_PATH"]
+    if not value:
+        raise ValueError(
+            "GRUG_MULTISLICE_OUTPUT_PATH is set but empty; "
+            "unset it to use the default canary path, or provide an absolute output path."
+        )
+    return value
+
+
+def wipe_path_if_exists(path: str) -> None:
+    """Recursively delete ``path`` via fsspec if it exists; no-op otherwise."""
+    fs, _, (plain_path,) = fsspec.get_fs_token_paths(path)
+    if not fs.exists(plain_path):
+        logger.info("Canary output path %s does not exist; nothing to wipe.", path)
+        return
+    logger.info("Wiping canary output directory %s before submit.", path)
+    fs.rm(plain_path, recursive=True)
+
+
+def _wipe_canary_output(
+    name: str,
+    launch: GrugBaseLaunchConfig,
+    override_output_path: str | None,
+) -> None:
+    """Delete the canary's deterministic output directory if it exists.
+
+    The canary writes to a content-addressed path that is stable across runs
+    (e.g. ``gs://marin-us-east5/grug/multislice-smoke-<hash>/``). When a
+    previous run left a checkpoint behind, Levanter resumes it and then the
+    final forced checkpoint write trips TensorStore's ``chunk_shape`` lock if
+    the sharding has drifted since the prior write (see issue #6253). The
+    canary is meant to be self-contained, so wipe the directory before
+    submitting the training job — each invocation starts from an empty path.
+    """
+    output_path = compute_output_path(name, launch, override_output_path=override_output_path)
+    wipe_path_if_exists(output_path)
+
+
 def main() -> None:
+    launch = multislice_smoke_launch()
+    override_output_path = _override_output_path()
+    _wipe_canary_output(CANARY_STEP_NAME, launch, override_output_path)
     train_grug(
-        "grug/multislice-smoke",
-        multislice_smoke_launch(),
-        override_output_path=os.environ.get("GRUG_MULTISLICE_OUTPUT_PATH"),
+        CANARY_STEP_NAME,
+        launch,
+        override_output_path=override_output_path,
         env_vars=_child_env_vars(),
     )
 

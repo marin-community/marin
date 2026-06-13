@@ -76,6 +76,7 @@ class InMemoryGcpService:
         threads: ThreadContainer | None = None,
         worker_attributes_by_group: dict[str, dict[str, str | int | float]] | None = None,
         gpu_count_by_group: dict[str, int] | None = None,
+        cpu_millicores_by_group: dict[str, int] | None = None,
         storage_prefix: str = "",
         label_prefix: str = "iris",
     ) -> None:
@@ -112,6 +113,7 @@ class InMemoryGcpService:
         self._threads = threads or (ThreadContainer(name="gcp-service-local") if mode == ServiceMode.LOCAL else None)
         self._worker_attributes_by_group = worker_attributes_by_group or {}
         self._gpu_count_by_group = gpu_count_by_group or {}
+        self._cpu_millicores_by_group = cpu_millicores_by_group or {}
         self._storage_prefix = storage_prefix
         self._label_prefix = label_prefix
         self._iris_labels = Labels(label_prefix) if mode == ServiceMode.LOCAL else None
@@ -164,6 +166,21 @@ class InMemoryGcpService:
         if key not in self._tpus:
             raise ValueError(f"TPU {name!r} not found in {zone}")
         self._tpus[key] = dataclasses.replace(self._tpus[key], state=state)
+
+    def advance_vm_state(self, name: str, zone: str, status: str = "RUNNING") -> None:
+        """Transition a VM to a new status string (DRY_RUN/LOCAL only).
+
+        Also sets a plausible internal_ip when advancing to RUNNING so that
+        describe() tests can assert on the IP field.
+        """
+        key = (name, zone)
+        if key not in self._vms:
+            raise ValueError(f"VM {name!r} not found in {zone}")
+        vm = self._vms[key]
+        updated_ip = vm.internal_ip
+        if status == "RUNNING" and not updated_ip:
+            updated_ip = f"10.1.{len(self._vms)}.1"
+        self._vms[key] = dataclasses.replace(vm, status=status, internal_ip=updated_ip)
 
     def _check_injected_failure(self, operation: str) -> None:
         err = self._injected_failures.pop(operation, None)
@@ -308,7 +325,7 @@ class InMemoryGcpService:
     # VM operations
     # ========================================================================
 
-    def vm_create(self, request: VmCreateRequest) -> VmInfo:
+    def vm_create(self, request: VmCreateRequest, *, wait: bool = False) -> VmInfo:
         self._check_injected_failure("vm_create")
 
         if self._mode == ServiceMode.LOCAL:
@@ -346,10 +363,6 @@ class InMemoryGcpService:
     def vm_delete(self, name: str, zone: str, *, wait: bool = False) -> None:
         self._check_injected_failure("vm_delete")
         self._vms.pop((name, zone), None)
-
-    def vm_reset(self, name: str, zone: str) -> None:
-        self._check_injected_failure("vm_reset")
-        # DRY_RUN / LOCAL: no-op (VM stays in same state)
 
     def vm_describe(self, name: str, zone: str) -> VmInfo | None:
         self._check_injected_failure("vm_describe")
@@ -507,6 +520,7 @@ class InMemoryGcpService:
                 gpu_count_override=gpu_count,
                 capacity_type=capacity_type_val,
                 worker_attributes=extra_attrs,
+                cpu_millicores=self._cpu_millicores_by_group.get(sg_name, 0),
             )
 
             env_provider = FixedEnvironmentProvider(metadata)

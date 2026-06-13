@@ -26,7 +26,7 @@ from iris.cluster.backends.factory import create_provider_bundle
 from iris.cluster.config import load_config, make_provider
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
-from iris.cluster.controller.backend import TaskBackend
+from iris.cluster.controller.backend import BackendCapability, TaskBackend
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import Controller, ControllerConfig
@@ -114,7 +114,7 @@ def make_backend(
     if dry_run:
         logger.info("Dry-run mode: skipping autoscaler and provider bundle creation")
         return provider
-    if provider.manages_capacity:
+    if BackendCapability.IRIS_AUTOSCALER not in provider.capabilities:
         return provider
 
     bundle = create_provider_bundle(

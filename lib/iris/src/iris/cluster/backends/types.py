@@ -258,11 +258,6 @@ class RemoteWorkerHandle(Protocol):
         ...
 
     @property
-    def external_address(self) -> str | None:
-        """External/public IP address, if available."""
-        ...
-
-    @property
     def bootstrap_log(self) -> str:
         """Most recent bootstrap output captured for this worker."""
         ...
@@ -278,10 +273,6 @@ class RemoteWorkerHandle(Protocol):
         on_line: Callable[[str], None] | None = None,
     ) -> CommandResult:
         """Run a command on the worker. Optionally stream output lines."""
-        ...
-
-    def reboot(self) -> None:
-        """Reboot the worker."""
         ...
 
     def restart_worker(self, bootstrap_script: str) -> None:

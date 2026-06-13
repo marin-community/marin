@@ -47,8 +47,8 @@ dependencies = [
     "chex>=0.1.86",
     "optax>=0.1.9,<0.2.7",
     "wandb>0.24.0",
-    "draccus>=0.11.5",
-    "pyarrow>=11.0.0",
+    "draccus>=0.11.6",
+    "pyarrow>=23.0.0",
     "zstandard>=0.18.0",
     "datasets>=3.1.0,<5.0",
     "gcsfs>=2024.2,<2027",
@@ -84,6 +84,9 @@ gpu = [
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
   "nvidia-nccl-cu13>=2.28.3; sys_platform == 'linux'",
+  # FA4 CuTe/THD attention backends.
+  "nvidia-cutlass-dsl[cu13]>=4.5.2,<4.6; sys_platform == 'linux'",
+  "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
   # Optional raw Sonic MoE gather/combine backend. Keep jax-triton exact:
   # 0.3.0 is missing the CUDA backend API needed by our current stack.
   "jax-triton==0.3.1; sys_platform == 'linux'",
@@ -183,10 +186,11 @@ target-version = "py311"
 extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
-# Local-import hygiene (issue #6219), mirrored from the root config so these
-# rules apply repo-wide: TID252 (absolute over parent-relative imports) and
+# Mirror the root config's extra rules on top of ruff's default E/F set so they
+# apply repo-wide: PLC0415 (no function-local imports), and the issue #6219
+# local-import hygiene pair TID252 (absolute over parent-relative imports) and
 # ICN001 (conventional import aliases, e.g. `import numpy as np`).
-extend-select = ["TID252", "ICN001"]
+extend-select = ["PLC0415", "TID252", "ICN001"]
 ignore = [
   "E203", "E501", "W605", "F821", "E266", "F722", "E731", "E741"
 ]

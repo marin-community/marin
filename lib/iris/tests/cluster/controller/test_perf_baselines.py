@@ -3,7 +3,7 @@
 
 """Performance baselines for the SA Core data-layer migration.
 
-Gates the SA Core path of ``_jobs_with_reservations`` and the scheduler
+Gates the SA Core path of ``reads.jobs_with_reservations`` and the scheduler
 reads (``resource_usage_by_worker`` and the inline reconcile-rows query)
 against a fixed workload to catch regressions. The legacy comparison path
 has been deleted — only the SA Core timings are measured.
@@ -18,7 +18,6 @@ from time import perf_counter
 import pytest
 from iris.cluster.controller import db, ops, reads
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.scheduling.policy import _jobs_with_reservations
 from iris.cluster.controller.schema import task_attempts_table, tasks_table
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
@@ -107,11 +106,12 @@ def _measure(callable_, ticks: int) -> float:
 
 
 def test_jobs_with_reservations_perf(seeded_db: ControllerDB) -> None:
-    """Gate SA _jobs_with_reservations below a fixed µs ceiling."""
+    """Gate SA reads.jobs_with_reservations below a fixed µs ceiling."""
     states = (job_pb2.JOB_STATE_RUNNING,)
 
     def _sa_call() -> int:
-        return len(_jobs_with_reservations(seeded_db, states))
+        with seeded_db.read_snapshot() as tx:
+            return len(reads.jobs_with_reservations(tx, states))
 
     assert _sa_call() == _RESERVATION_JOB_COUNT
 
@@ -119,7 +119,7 @@ def test_jobs_with_reservations_perf(seeded_db: ControllerDB) -> None:
     max_us = _SA_JOBS_WITH_RESERVATIONS_MAX_US
 
     assert sa_per_call * 1e6 <= max_us, (
-        f"SA _jobs_with_reservations too slow: "
+        f"SA reads.jobs_with_reservations too slow: "
         f"sa={sa_per_call * 1e6:.1f} µs/call > {max_us} µs gate "
         f"(200 reservation-holders + 200 plain jobs; {_TICKS} iterations)."
     )

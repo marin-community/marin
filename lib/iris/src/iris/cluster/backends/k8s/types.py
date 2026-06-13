@@ -151,3 +151,14 @@ def parse_k8s_cpu(value: str) -> int:
     if value.endswith("m"):
         return int(value[:-1])
     return int(float(value) * 1000)
+
+
+def parse_k8s_timestamp(value: str) -> datetime:
+    """Parse a Kubernetes RFC3339 timestamp into an aware UTC datetime.
+
+    Accepts the ``Z`` zulu suffix that the Kubernetes API emits (e.g.
+    ``2024-01-01T00:00:00Z``); fractional seconds beyond microsecond
+    precision are truncated by ``datetime.fromisoformat``. Raises
+    ``ValueError`` on malformed input.
+    """
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))

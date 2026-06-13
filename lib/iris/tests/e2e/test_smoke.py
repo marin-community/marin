@@ -21,8 +21,9 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.backends.local.cluster import LocalCluster
-from iris.cluster.config import connect_cluster, load_config, make_local_config
+from iris.cluster.config import load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
+from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ReservationEntry, ResourceSpec, gpu_device
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
@@ -154,7 +155,7 @@ def smoke_cluster(request):
 def smoke_page(smoke_cluster):
     """Module-scoped Playwright page for smoke dashboard tests."""
     try:
-        import playwright.sync_api as pw
+        import playwright.sync_api as pw  # noqa: PLC0415  # optional dep: playwright
 
         with pw.sync_playwright() as p:
             b = p.chromium.launch()
@@ -197,6 +198,21 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
     return capture
 
 
+def _await_stable_screenshot(page, check: str, *, arg=None) -> None:
+    """Wait for a screenshot-readiness predicate, settle briefly, then re-verify.
+
+    Dashboard pages render structural content only after their first RPC resolves,
+    and an SPA route swap (lazy-imported components) can leave the previous page's
+    DOM mounted while the next chunk loads. The settle + re-verify catches a
+    predicate that passes on such a transient state and then flips back, so the
+    screenshot lands on the stable loaded page. Timing lives here so both detail
+    pages share one cadence.
+    """
+    page.wait_for_function(check, arg=arg, timeout=15000)
+    page.wait_for_timeout(250)
+    page.wait_for_function(check, arg=arg, timeout=5000)
+
+
 def _wait_for_worker_detail_screenshot_ready(page, worker_id: str) -> None:
     # WorkerDetail.vue uniquely nulls `data` in its workerId watch, so a late
     # re-fire can flip the page back to the "Loading worker..." overlay after a
@@ -216,9 +232,7 @@ def _wait_for_worker_detail_screenshot_ready(page, worker_id: str) -> None:
                 && headings.includes("task history");
         }
     """
-    page.wait_for_function(check, arg=worker_id, timeout=15000)
-    page.wait_for_timeout(250)
-    page.wait_for_function(check, arg=worker_id, timeout=5000)
+    _await_stable_screenshot(page, check, arg=worker_id)
 
 
 def _wait_for_job_detail_screenshot_ready(page, job_id: str) -> None:
@@ -495,20 +509,36 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, ca
     )
 
 
+def _wait_for_autoscaler_screenshot_ready(page) -> None:
+    # AutoscalerTab.vue shows only a "Loading autoscaler status…" spinner until its
+    # first RPC resolves. Route components are lazy-imported, so during the SPA swap
+    # the previously-viewed page (e.g. worker detail, which renders "Scale Group" +
+    # the "local-cpu" group name) is still mounted while the autoscaler chunk loads.
+    # A body-text wait keyed on those strings false-positives on that stale DOM, so
+    # the screenshot then catches the autoscaler spinner. Anchor on the route hash
+    # plus the section headings that only render in the loaded (v-else) branch so the
+    # match can't be satisfied by another page.
+    check = """
+        () => {
+            const text = document.body.textContent || "";
+            const routeReady = decodeURIComponent(window.location.hash) === "#/autoscaler";
+            const headings = Array.from(document.querySelectorAll("h3"))
+                .map((heading) => (heading.textContent || "").trim().toLowerCase());
+            return routeReady
+                && !text.includes("Loading autoscaler status")
+                && headings.includes("waterfall routing")
+                && headings.includes("recent actions")
+                && headings.includes("autoscaler logs");
+        }
+    """
+    _await_stable_screenshot(page, check)
+
+
 def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
     wait_for_dashboard_ready(smoke_page)
-    # Wait for actual scale group content. The strict !Loading-autoscaler-status check
-    # blocks on the AutoscalerTab.vue placeholder so the screenshot isn't taken
-    # during a refetch cycle.
-    smoke_page.wait_for_function(
-        "() => !document.body.textContent.includes('Loading autoscaler status') && "
-        "(document.body.textContent.includes('Scale Group') || "
-        "document.body.textContent.includes('scale group') || "
-        "document.body.textContent.includes('local-cpu'))",
-        timeout=15000,
-    )
+    _wait_for_autoscaler_screenshot_ready(smoke_page)
     smoke_screenshot("autoscaler-tab", "Autoscaler tab showing scale group configuration")
 
 
@@ -590,10 +620,11 @@ def test_cancel_job_releases_resources(smoke_cluster):
 
     Regression test for #3553.
     """
-    # Use most of a single worker's CPU so the followup job can't schedule
-    # until the heavy job is cancelled. Local workers have 1000 cores, cloud
-    # TPU VMs have 128 — pick a value that works in both modes.
-    heavy_cpu = 8 if smoke_cluster.is_cloud else 900
+    # Use most of a single worker's CPU so the followup job can't schedule on
+    # that worker until the heavy job is cancelled. Workers now advertise their
+    # scale-group declared CPU (local-cpu: 8 cores; cloud TPU VMs: 128) rather
+    # than a probed host count — pick a value that fills most of one worker.
+    heavy_cpu = 8 if smoke_cluster.is_cloud else 7
 
     job = smoke_cluster.submit(TestJobs.sleep, "smoke-cancel-heavy", 30, cpu=heavy_cpu)
     smoke_cluster.wait_for_state(job, job_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
@@ -941,7 +972,7 @@ def test_dashboard_login_flow():
     """
 
     try:
-        import playwright.sync_api as pw
+        import playwright.sync_api as pw  # noqa: PLC0415  # optional dep: playwright
     except ImportError:
         pytest.skip("playwright not installed")
 

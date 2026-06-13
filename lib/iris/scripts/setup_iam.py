@@ -363,7 +363,7 @@ def init(
     controller_sa_member = f"serviceAccount:{controller_sa}"
     worker_sa_member = f"serviceAccount:{worker_sa}"
 
-    summary = {
+    summary: dict[str, object] = {
         "project": project,
         "dry_run": dry_run,
         "controller_service_account": controller_sa,

@@ -21,7 +21,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
-from sqlalchemy import bindparam, func, select, text, tuple_
+from sqlalchemy import bindparam, case, func, select, text, tuple_
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
@@ -36,7 +36,7 @@ from iris.cluster.controller.auth import (
     revoke_login_keys_for_user,
 )
 from iris.cluster.controller.autoscaler.status import PendingHint
-from iris.cluster.controller.backend import PlacementOwner, ProviderError, TaskBackend, TaskTarget
+from iris.cluster.controller.backend import BackendCapability, ProviderError, TaskBackend, TaskTarget
 from iris.cluster.controller.budget import (
     compute_effective_band,
     compute_user_spend,
@@ -120,10 +120,10 @@ WORKDIR_FILE_OFFLOAD_THRESHOLD = 10 * 1024  # 10KB — externalize large workdir
 # Soft cap on how long launch_job waits for a replaced job's worker-bound
 # attempts to finalize before force-reaping them. Sized to exceed the worst-
 # case worker-death detection window so a vanished worker's attempts can be
-# self-finalized by the ping loop: heartbeat_interval (5s) *
-# PING_FAILURE_THRESHOLD (10) ≈ 50s, plus slack for the heartbeat to land.
-# Past this point we log a warning, CASCADE-delete the predecessor's rows,
-# and proceed with the replacement — a stuck heartbeat must not block the
+# self-finalized by the reconcile-driven health path: the default
+# worker_unreachable_grace (~50s) plus the per-RPC reconcile deadline and
+# teardown, with slack. Past this point we log a warning, CASCADE-delete the
+# rows, and proceed with the replacement — a vanished worker must not block the
 # new submission indefinitely.
 _JOB_REPLACEMENT_DRAIN_WAIT = Duration.from_seconds(120)
 
@@ -726,8 +726,6 @@ def _attempts_for_worker(
     independent state/duration per attempt rather than inheriting from the
     parent task (which produced bogus duplicate-RUNNING rows).
     """
-    from sqlalchemy import case
-
     with db.read_snapshot() as tx:
         raw_rows = tx.execute(
             select(*reads.ATTEMPT_COLS)
@@ -833,7 +831,7 @@ class ControllerProtocol(Protocol):
     def provider(self) -> Any: ...
 
     @property
-    def placement(self) -> PlacementOwner: ...
+    def capabilities(self) -> frozenset[BackendCapability]: ...
 
     @property
     def run_template_cache(self) -> RunTemplateCache: ...
@@ -1090,7 +1088,6 @@ class ControllerServiceImpl:
                             job_id=job_id,
                             reason="Replaced by new submission",
                             endpoints=self._endpoints,
-                            health=self._health,
                         )
                         # Cancel is a producer transition: attempts stay
                         # unfinished until the worker confirms termination.
@@ -1343,7 +1340,6 @@ class ControllerServiceImpl:
                 job_id=job_id,
                 reason="Terminated by user",
                 endpoints=self._endpoints,
-                health=self._health,
             )
         # The next polling tick reconciles each affected worker; the
         # cancellation appears in the desired-set diff so the worker stops
@@ -1567,7 +1563,7 @@ class ControllerServiceImpl:
         paging (preserves CLI callers that fetch the whole roster); ``limit > 0``
         is clamped to ``MAX_LIST_WORKERS_LIMIT``.
         """
-        if self._controller.placement is PlacementOwner.TASK_BACKEND:
+        if BackendCapability.WORKER_DAEMON not in self._controller.capabilities:
             return controller_pb2.Controller.ListWorkersResponse()
 
         query = controller_pb2.Controller.WorkerQuery()
@@ -1754,7 +1750,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> controller_pb2.Controller.GetAutoscalerStatusResponse:
         """Get current autoscaler status with worker info populated."""
-        if self._controller.placement is PlacementOwner.TASK_BACKEND:
+        if BackendCapability.IRIS_AUTOSCALER not in self._controller.capabilities:
             return controller_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
         autoscaler = self._controller.autoscaler
         if not autoscaler:
@@ -1804,7 +1800,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Get Kubernetes cluster status: node counts, capacity, and recent pod statuses."""
-        if self._controller.placement is not PlacementOwner.TASK_BACKEND:
+        if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
             return controller_pb2.Controller.GetKubernetesClusterStatusResponse()
 
         # KubernetesProvider exposes get_cluster_status().
@@ -1906,8 +1902,8 @@ class ControllerServiceImpl:
         attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
         task_worker_id = _task_worker_id(task)
         if not task_worker_id:
-            # BACKEND placement (K8s) chooses the node itself: route by task, no worker.
-            if self._controller.placement is not PlacementOwner.TASK_BACKEND:
+            # A cluster backend (K8s) chooses the node itself: route by task, no worker.
+            if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
                 raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
             task_target = TaskTarget(
                 task_id=task.task_id.to_wire(),
@@ -1972,7 +1968,7 @@ class ControllerServiceImpl:
         worker state (health, tasks, logs). VM status lives on the Autoscaler
         tab.
         """
-        if self._controller.placement is PlacementOwner.TASK_BACKEND:
+        if BackendCapability.WORKER_DAEMON not in self._controller.capabilities:
             raise ConnectError(Code.UNIMPLEMENTED, "Direct provider mode: no workers")
         if not request.id:
             raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
@@ -2239,8 +2235,8 @@ class ControllerServiceImpl:
 
         task_worker_id = _task_worker_id(task)
         if not task_worker_id:
-            # BACKEND placement (K8s) execs directly into the pod; no worker daemon.
-            if self._controller.placement is not PlacementOwner.TASK_BACKEND:
+            # A cluster backend (K8s) execs directly into the pod; no worker daemon.
+            if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
                 raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
             exec_target = TaskTarget(
                 task_id=task.task_id.to_wire(),
@@ -2380,25 +2376,10 @@ class ControllerServiceImpl:
             budget_limits: dict[str, int] = {b.user_id: b.budget_limit for b in budgets}
             user_spend = compute_user_spend(snap)
 
-            # Pending tasks: columns needed for task_row_can_be_scheduled.
-            # No ORDER BY — we aggregate, not display.
-            _TASK_ROW_COLS = (
-                tasks_table.c.task_id,
-                tasks_table.c.job_id,
-                tasks_table.c.state,
-                tasks_table.c.current_attempt_id,
-                tasks_table.c.failure_count,
-                tasks_table.c.preemption_count,
-                tasks_table.c.max_retries_failure,
-                tasks_table.c.max_retries_preemption,
-                tasks_table.c.submitted_at_ms,
-                tasks_table.c.priority_band,
-                tasks_table.c.priority_neg_depth,
-                tasks_table.c.priority_root_submitted_ms,
-                tasks_table.c.priority_insertion,
-            )
+            # Pending tasks: the scheduler's pending-task projection, reused here for
+            # task_row_can_be_scheduled + band aggregation. No ORDER BY — we aggregate, not display.
             pending_raw = snap.execute(
-                select(*_TASK_ROW_COLS).where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
+                select(*reads.PENDING_TASK_COLS).where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
             ).all()
             pending_rows = pending_raw
             pending_requested_bands = reads.get_priority_bands(snap, {row.job_id for row in pending_rows})
@@ -2510,16 +2491,3 @@ class ControllerServiceImpl:
             pending_buckets=pending_buckets,
             running_buckets=running_buckets,
         )
-
-    def set_task_status_text(
-        self,
-        _request: job_pb2.SetTaskStatusTextRequest,
-        _ctx: Any,
-    ) -> job_pb2.SetTaskStatusTextResponse:
-        """Deprecated no-op kept so pre-cutover clients don't crash.
-
-        Status text now flows through the iris.task_status finelog namespace
-        via RemoteClusterClient.report_task_status_text. Remove this handler
-        and its RPC/messages on the date in the iris-status-cleanup cron.
-        """
-        return job_pb2.SetTaskStatusTextResponse()

@@ -19,29 +19,38 @@ dependencies = [
     "marin-zephyr",
     # top level deps. try to keep these small.
     "watchdog",
-    # `>= X.Y.Z.dev0` opts uv into pre-releases for these native (maturin)
-    # packages so the daily nightly wheels (`X.Y.Z.dev<YYYYMMDDhhmm>`) are
-    # picked up by `uv lock` automatically. Cut a stable tag
-    # (`dupekit-v<X.Y.Z>` / `finelog-v<X.Y.Z>`) when promoting; uv prefers the
-    # higher version, so a stable supersedes any earlier dev of the same Z.
+    # marin-dupekit and marin-finelog are native (maturin) packages shipped as
+    # pre-built platform wheels (built by their *-release-wheels.yaml workflows)
+    # rather than pure-Python workspace members. A `>= X.Y.Z.dev0` floor opts uv
+    # into the daily nightly wheels (`X.Y.Z.dev<YYYYMMDDhhmm>`); a plain
+    # `>= X.Y.Z` floor pins to a stable tag (`dupekit-v<X.Y.Z>` /
+    # `finelog-v<X.Y.Z>`). uv prefers the higher version, so a stable supersedes
+    # any earlier dev of the same Z; bump the floor to whichever is newest.
     # Published by .github/workflows/dupekit-release-wheels.yaml.
-    "marin-dupekit >= 0.1.0.dev0",
-    # Published by .github/workflows/finelog-release-wheels.yaml. marin-finelog
-    # carries a native in-process server ext (finelog._native), so it ships as
-    # a pre-built platform wheel rather than a pure-Python workspace member.
-    # `scripts/rust_mode.py dev` swaps in an editable source for local hacking.
-    "marin-finelog >= 0.2.0.dev0",
+    "marin-dupekit >= 0.1.2.dev202606060824",
+    # finelog carries an in-process server ext (finelog._native) the controller
+    # starts; `scripts/rust_mode.py dev` swaps in an editable source locally.
+    "marin-finelog >= 0.2.9",
 ]
 
 [tool.uv]
 fork-strategy = "fewest"
-# Allow pre-releases globally so `uv lock` resolves marin-dupekit to its
-# latest nightly (`X.Y.Z.dev<timestamp>` published by the dupekit release
-# workflow). uv has no per-package prerelease config; in practice almost
-# none of our other dependencies publish pre-releases on PyPI, so this
-# only affects dupekit and the already-pinned `omegaconf>=2.4.0.dev4`
-# below.
-prerelease = "allow"
+# "explicit": allow pre-releases only for packages whose declared specifier
+# names one, so our intentional pre-releases resolve while everything else stays
+# on its latest stable release. (A global "allow" would instead promote any
+# transitive dependency's newest beta/rc into the lock.) Opted in: the
+# marin-dupekit nightly (above); the omegaconf dev pin in override-dependencies
+# below; and the prerelease-only transitive deps in constraint-dependencies
+# (tfp-nightly / opentelemetry-semantic-conventions publish no stable release).
+prerelease = "explicit"
+constraint-dependencies = [
+    # Enable pre-releases for transitive deps that publish no stable release at
+    # all. A constraint intersects (rather than replaces) the upstream
+    # specifier, so the resolved version still follows whatever requires them;
+    # the pre-release component here only flips uv's per-package opt-in.
+    "tfp-nightly>=0.1.dev0",
+    "opentelemetry-semantic-conventions>=0.1b0",
+]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "aiofiles>=24.1.0",
@@ -125,11 +134,19 @@ marin-levanter = { workspace = true }
 marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
+nvidia-cutlass-dsl = { index = "nvidia" }
+nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
+nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
+explicit = true
 
 
 [tool.black]
@@ -164,11 +181,13 @@ extend-include = ["scripts/workflows/**/*.py"]
 #   RET502  -> "Explicit returns mixed with implicit returns" (bare `return` value path)
 #   RET503  -> "Explicit returns mixed with implicit returns" (missing explicit return)
 #   SIM115  -> "File is not always closed" (open() without a context manager)
+#   PLC0415 -> "import should be at the top-level of a file" (no function-local
+#              imports except to break a circular import or guard an optional dep)
 # B018 (already via "B") and F401/F841/F811 (via "F") cover the rest of the
 # actionable CodeQL maintainability set; B018 correctly ignores `...`/docstrings.
 select = [
     "A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W",
-    "N805", "PLR0124", "PLR1722", "RET502", "RET503", "SIM115",
+    "N805", "PLR0124", "PLR1722", "RET502", "RET503", "SIM115", "PLC0415",
     # Local-import hygiene (issue #6219):
     #   TID252 -> "relative-imports" (prefer absolute over parent-relative imports)
     #   ICN001 -> "unconventional-import-alias" (e.g. `import numpy as np`)
@@ -180,6 +199,9 @@ ignore = ["F722", "B008", "UP015", "A005", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
+# Notebook cells legitimately interleave imports with computation as they are
+# executed top-to-bottom; PLC0415's top-of-file rule does not apply to cells.
+"*.ipynb" = ["PLC0415"]
 # Bloom filter tests deliberately compare an object with itself to exercise its
 # reflexive comparison operators (==, <=, >=, ...), so PLR0124 is expected here.
 "lib/dupekit/tests/test_bloom.py" = ["PLR0124"]
@@ -209,6 +231,7 @@ project-includes = [
     "lib/haliax/src/**/*.py",
     "lib/fray/src/**/*.py",
     "lib/iris/src/**/*.py",
+    "lib/iris/scripts/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
     "scripts/workflows",
@@ -225,6 +248,9 @@ search-path = [
     "lib/zephyr/src",
     "lib/fray/src",
     "lib/iris/src",
+    # benchmark_controller.py imports controller test fixtures from lib/iris/tests
+    # (`from tests.cluster.controller... import`), run with lib/iris on sys.path.
+    "lib/iris",
 ]
 disable-search-path-heuristics = true
 
@@ -296,7 +322,6 @@ project-excludes = [
     "scripts/datakit/**",
     "scripts/debug/**",
     "scripts/ferries/**",
-    "scripts/gcp-ssh/**",
     "scripts/gcs-reorganization/**",
     "scripts/gpu_eval/**",
     "scripts/iris/**",
@@ -344,6 +369,23 @@ unbound-name = false
 # Kept enabled (high signal): bad-override, bad-assignment, bad-return,
 # unsupported-operation, not-callable. Pre-existing instances are suppressed via
 # .pyrefly-baseline.json.
+
+# jit_scheduler.py annotates eqx.Module fields with single-axis haxtyping shapes,
+# e.g. `ht.i32[NamedArray, "position"]`. tensor-shapes = true parses multi-token
+# shape strings ("seq page") correctly, but reads a lone bare-identifier axis
+# ("position", "seq") as a forward reference, yielding false unknown-name errors.
+# Scope the disable to this one file rather than scattering 17 inline ignores.
+[[tool.pyrefly.sub_config]]
+matches = "lib/levanter/src/levanter/inference/jit_scheduler.py"
+[tool.pyrefly.sub_config.errors]
+unknown-name = false
+
+# Turn bad-argument-type ON for these controller-driving scripts (it is off
+# repo-wide) so a wrong-type call into the controller API fails type-checking.
+[[tool.pyrefly.sub_config]]
+matches = "lib/iris/scripts/**"
+[tool.pyrefly.sub_config.errors]
+bad-argument-type = true
 
 [tool.hatch.metadata]
 allow-direct-references = true

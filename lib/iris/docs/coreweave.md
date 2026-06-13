@@ -2,13 +2,71 @@
 
 **Issue**: [#2822 -- Iris: Implement CoreWeave platform](https://github.com/marin-community/marin/issues/2822)
 
+## 0. Quickstart — `marin-gpu` (US-EAST-02A)
+
+Zero to a running job on the `marin-gpu` H100 cluster. The rest of this document
+is the full operator runbook (RBAC, NodePools, troubleshooting, other regions).
+
+**Cluster:** `marin-gpu`, region US-EAST-02A — 32× H100 (256 GPUs) + 4× CPU
+Genoa, all pinned warm. Iris config: `lib/iris/config/cw-us-east-02a.yaml`
+(cluster name `cw-us-east-02a`).
+
+Console links:
+- Tokens (kubeconfig): https://console.coreweave.com/tokens
+- Cluster details: https://console.coreweave.com/zones/US-EAST-02A/clusters/marin-gpu#details
+- Health dashboard: https://cks-grafana.coreweave.com/d/cluster-health/cluster-health?var-cluster-org=208261&var-cluster=marin-gpu&var-region=US-EAST-02
+
+**1. Make a token / kubeconfig.** In the [Tokens console](https://console.coreweave.com/tokens),
+create a token for `marin-gpu` and download its kubeconfig.
+
+**2. Install the kubeconfig** at `~/.kube/coreweave-iris-gpu` (context
+`marin-gpu_US-EAST-02A`), plus controller extras and R2 credentials:
+
+```bash
+mkdir -p ~/.kube
+mv ~/Downloads/kubeconfig.yaml ~/.kube/coreweave-iris-gpu
+export KUBECONFIG=~/.kube/coreweave-iris-gpu
+kubectl cluster-info   # sanity check
+
+uv pip install 'marin-iris[controller]'
+export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
+export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
+```
+
+**3. Check cluster status.** `--cluster=cw-us-east-02a` resolves the in-tree
+config and opens a `kubectl port-forward` to the controller for you:
+
+```bash
+uv run iris --cluster=cw-us-east-02a cluster status
+```
+
+If the controller isn't up yet, start it (idempotent):
+`uv run iris --cluster=cw-us-east-02a cluster start`.
+
+**4. Hello world.**
+
+```bash
+# CPU
+uv run iris --cluster=cw-us-east-02a job run \
+  --cpu 1 --memory 2GB --extra cpu \
+  -- python -c "print('Hello from CoreWeave!')"
+
+# One H100, proving JAX sees the GPU
+uv run iris --cluster=cw-us-east-02a job run \
+  --cpu 8 --memory 64GB --gpu H100x1 --enable-extra-resources --extra gpu \
+  -- python -c "import jax; print(jax.devices())"
+```
+
+Follow logs of a detached job with
+`uv run iris --cluster=cw-us-east-02a job logs <job-id> -f`.
+
 ## 1. Overview
 
 Iris runs on CoreWeave CKS (bare-metal Kubernetes) using a shared NodePool model.
 Each Iris scale group maps to one CoreWeave NodePool with autoscaling enabled.
 CoreWeave manages node provisioning and deprovisioning; Iris manages only Pods.
-Tasks execute as independent Kubernetes Pods via `KubernetesRuntime` (Pod-per-task),
-which replaced an originally-planned containerd/crictl approach during implementation.
+Tasks execute as independent Kubernetes Pods via `KubernetesRuntime`
+(Pod-per-task).
 
 Example config: `lib/iris/config/coreweave.yaml`
 
@@ -53,13 +111,14 @@ Example config: `lib/iris/config/coreweave.yaml`
 
 Key architectural properties:
 
-- **TASK_BACKEND-placement `TaskBackend`**: When the cluster config sets
+- **`CLUSTER_VIEW` `TaskBackend`**: When the cluster config sets
   `kubernetes_provider`, the controller runs `K8sTaskProvider`
-  (`src/iris/cluster/backends/k8s/tasks.py`) — a `PlacementOwner.TASK_BACKEND`
-  `TaskBackend` with `manages_capacity=True`. Kueue performs scheduling and the
-  cluster autoscaler provisions nodes, so Iris runs no scheduling or autoscaler
-  loop for this backend; the controller only reconciles desired vs. observed Pods
-  each tick. The dashboard reflects this via the backend descriptor served by
+  (`src/iris/cluster/backends/k8s/tasks.py`) — a `TaskBackend` whose
+  `capabilities` is `{CLUSTER_VIEW}`. Kueue performs scheduling and the cluster
+  autoscaler provisions nodes, so its `schedule`/`autoscale` are effectively
+  no-ops and `reconcile` only reconciles desired vs. observed Pods each tick. The
+  controller calls the same three uniform phase methods regardless. The dashboard
+  reflects this via the backend descriptor served by
   `/auth/config`: capability `cluster` shows the **Cluster** panel, and the
   Workers/Autoscaler panels are hidden (no worker daemons, no Iris autoscaler).
   See `docs/architecture.md` "The TaskBackend contract".
@@ -114,47 +173,35 @@ and Network (traffic, latency). No setup required.
 
 ## 4. Operator Setup Guide
 
+§0 is the quickstart for the `marin-gpu` cluster. This section is the generic
+operator reference (any `--cluster=NAME`) and the lifecycle details behind it.
+
 ### Prerequisites
 
 - A CoreWeave CKS cluster (created via Console or Terraform)
-- A kubeconfig downloaded from CoreWeave Console > Tokens
+- A kubeconfig downloaded from CoreWeave Console > Tokens (see §0)
 - Images pushed to `ghcr.io/marin-community/`
-- Controller extras in the local Iris venv:
-  `uv pip install 'marin-iris[controller]'`
+- Controller extras: `uv pip install 'marin-iris[controller]'`
 
-This document is the canonical runbook for day-to-day CoreWeave operations.
-
-### Step 1: Save kubeconfig
-
-```bash
-mkdir -p ~/.kube
-mv ~/Downloads/kubeconfig.yaml ~/.kube/coreweave-iris
-export KUBECONFIG=~/.kube/coreweave-iris
-kubectl cluster-info
-```
-
-### Step 2: Set S3 credentials (if using S3 storage)
-
-```bash
-export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
-export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
-```
-
-`iris cluster start` creates a K8s Secret (`iris-s3-credentials`) from these
-environment variables automatically.
+For S3 storage, export `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`;
+`iris cluster start` turns them into the `iris-s3-credentials` Secret.
 
 > **Note**: CoreWeave AI Object Storage (`cwobject.com`, `cwlota.com`) uses
-> virtual-hosted-style S3 addressing, which is auto-detected and configured.
-> However, this addressing style is incompatible with JAX's GCS/S3 backend.
-> Use Cloudflare R2 or another path-style-compatible endpoint for JAX workloads.
+> virtual-hosted-style S3 addressing, which is auto-detected and configured but
+> is incompatible with JAX's GCS/S3 backend. Use Cloudflare R2 or another
+> path-style-compatible endpoint for JAX workloads.
 
-### Step 3: Start the cluster
+### Lifecycle
 
 ```bash
-iris --cluster=coreweave cluster start
+iris --cluster=<name> cluster start      # idempotent; reconciles everything below
+iris --cluster=<name> cluster status
+iris --cluster=<name> cluster dashboard
+iris --cluster=<name> cluster stop       # deletes Pods + controller; NodePools survive
 ```
 
-This is fully idempotent. It creates/reconciles:
+`cluster start` creates/reconciles, in order:
+
 1. Namespace (`iris`) and RBAC (ServiceAccount, ClusterRole, ClusterRoleBinding)
 2. S3 credentials Secret (if S3 storage URIs are configured)
 3. ConfigMap (`iris-cluster-config`) with the cluster config as JSON
@@ -162,21 +209,8 @@ This is fully idempotent. It creates/reconciles:
 5. Controller Deployment (`iris-controller`) — images are built and pushed automatically
 6. Controller Service (`iris-controller-svc`, ClusterIP)
 
-### Step 4: Use the cluster
-
-```bash
-iris --cluster=coreweave cluster status
-iris --cluster=coreweave cluster dashboard
-```
-
-### Step 5: Stop
-
-```bash
-iris --cluster=coreweave cluster stop
-```
-
-Deletes worker Pods and controller resources. NodePools are left in place (they
-scale to zero when idle).
+`cluster stop` leaves NodePools in place; they scale to zero when idle (but
+still bill — see the NodePool cleanup under §4 Gotchas).
 
 ### Connecting
 

@@ -44,6 +44,7 @@ from iris.cluster.backends.k8s.types import (
     PodResourceUsage,
     parse_k8s_cpu,
     parse_k8s_quantity,
+    parse_k8s_timestamp,
 )
 from iris.cluster.backends.types import find_free_port
 
@@ -82,12 +83,24 @@ class K8sService(Protocol):
 
     def delete(self, resource: K8sResource, name: str, *, force: bool = False, wait: bool = True) -> None: ...
 
-    def delete_many(self, resource: K8sResource, names: list[str], *, wait: bool = False) -> None:
+    def delete_many(self, resource: K8sResource, names: list[str], *, force: bool = False, wait: bool = False) -> None:
         """Delete multiple resources by name."""
         ...
 
     def delete_by_labels(self, resource: K8sResource, labels: dict[str, str], *, wait: bool = False) -> None:
         """Delete all resources matching the given label selector."""
+        ...
+
+    def list_pods_in_namespace(self, namespace: str) -> list[dict]:
+        """List pods in an explicit namespace (not the service's own)."""
+        ...
+
+    def delete_pod_in_namespace(self, namespace: str, name: str) -> None:
+        """Delete a pod in an explicit namespace, ignoring NotFound."""
+        ...
+
+    def remove_finalizer(self, resource: K8sResource, name: str, finalizer: str) -> None:
+        """Strip a single finalizer from a resource so it can be reclaimed."""
         ...
 
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str: ...
@@ -256,15 +269,29 @@ class CloudK8sService:
                 raise KubectlError(f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}") from e
 
     def _apply_pod(self, res: K8sResource, name: str, ns: str | None, manifest: dict) -> None:
-        """Apply a Pod manifest. Pods are mostly immutable, so delete-then-create."""
+        """Create the Pod if it is not already present (create-if-absent).
+
+        A task attempt's pod name is stable and its manifest deterministic, so a
+        pod that already exists — in any phase — is the one we want; we must NOT
+        delete and recreate it. Delete-then-create would destroy a running task
+        on every redrive and, because the delete and the create race, fail with
+        409 AlreadyExists ("object is being deleted") while the prior pod is
+        still Terminating — which the dispatch loop then mistakes for worker loss
+        and retries, churning the task through attempts until it fails. A pod
+        that genuinely needs to change comes from a new attempt (new name); one
+        that should go away is removed by stray-pod GC.
+        """
         api = self._resource_api(res)
         ns_kw = {"namespace": ns} if ns else {}
         timeout_kw = self._request_timeout_kwargs()
         try:
-            api.delete(name=name, **timeout_kw, **ns_kw)
-        except (NotFoundError, ApiException):
-            pass
-        api.create(body=manifest, **timeout_kw, **ns_kw)
+            api.create(body=manifest, **timeout_kw, **ns_kw)
+        except ApiException as e:
+            if e.status == 409:
+                # Pod already present (or a prior generation still terminating);
+                # leave it. A later reconcile re-applies once any deletion lands.
+                return
+            raise
 
     # -- get -----------------------------------------------------------------
 
@@ -328,14 +355,14 @@ class CloudK8sService:
             except ApiException as e:
                 raise KubectlError(f"delete {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
 
-    def delete_many(self, resource: K8sResource, names: list[str], *, wait: bool = False) -> None:
+    def delete_many(self, resource: K8sResource, names: list[str], *, force: bool = False, wait: bool = False) -> None:
         """Delete multiple resources by name."""
         if not names:
             return
-        logger.info("k8s: DELETE_MANY %s count=%d", resource.plural, len(names))
+        logger.info("k8s: DELETE_MANY %s count=%d force=%s", resource.plural, len(names), force)
         with slow_log(logger, f"delete_many {resource.plural} ({len(names)})", threshold_ms=_SLOW_THRESHOLD_MS):
             for name in names:
-                self.delete(resource, name, wait=wait)
+                self.delete(resource, name, force=force, wait=wait)
 
     def delete_by_labels(self, resource: K8sResource, labels: dict[str, str], *, wait: bool = False) -> None:
         """Delete all resources matching the given label selector."""
@@ -360,6 +387,69 @@ class CloudK8sService:
                 raise KubectlError(
                     f"delete_by_labels {resource.plural} -l {selector} failed ({e.status}): {e.reason}"
                 ) from e
+
+    # -- cross-namespace pod operations ---------------------------------------
+
+    def list_pods_in_namespace(self, namespace: str) -> list[dict]:
+        """List pods in an explicit namespace (not the service's own)."""
+        logger.info("k8s: LIST pods namespace=%s", namespace)
+        with slow_log(logger, f"list pods in {namespace}", threshold_ms=_SLOW_THRESHOLD_MS):
+            try:
+                result = self._resource_api(K8sResource.PODS).get(
+                    namespace=namespace,
+                    **self._request_timeout_kwargs(),
+                )
+                return [item.to_dict() for item in result.items]
+            except ApiException as e:
+                raise KubectlError(f"list pods in {namespace} failed ({e.status}): {e.reason}") from e
+
+    def delete_pod_in_namespace(self, namespace: str, name: str) -> None:
+        """Delete a pod in an explicit namespace, ignoring NotFound."""
+        logger.info("k8s: DELETE pod %s/%s", namespace, name)
+        with slow_log(logger, f"delete pod {namespace}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+            try:
+                self._resource_api(K8sResource.PODS).delete(
+                    name=name,
+                    namespace=namespace,
+                    body={"propagationPolicy": "Background"},
+                    **self._request_timeout_kwargs(),
+                )
+            except NotFoundError:
+                return
+            except ApiException as e:
+                raise KubectlError(f"delete pod {namespace}/{name} failed ({e.status}): {e.reason}") from e
+
+    # -- remove_finalizer ----------------------------------------------------
+
+    def remove_finalizer(self, resource: K8sResource, name: str, finalizer: str) -> None:
+        """Strip a single finalizer from a resource via JSON merge patch.
+
+        Reads the object, drops ``finalizer`` from ``metadata.finalizers``, and
+        patches the full list back. No-op when the resource is gone or does not
+        carry the finalizer. A merge patch replaces the array wholesale, so the
+        recomputed list (possibly empty) is the authoritative new value.
+        """
+        obj = self.get_json(resource, name)
+        if obj is None:
+            return
+        finalizers = obj.get("metadata", {}).get("finalizers") or []
+        if finalizer not in finalizers:
+            return
+        remaining = [f for f in finalizers if f != finalizer]
+        logger.info("k8s: PATCH remove finalizer %s from %s/%s", finalizer, resource.plural, name)
+        with slow_log(logger, f"remove_finalizer {resource.plural}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+            try:
+                self._resource_api(resource).patch(
+                    body={"metadata": {"finalizers": remaining}},
+                    name=name,
+                    content_type="application/merge-patch+json",
+                    **self._request_timeout_kwargs(),
+                    **self._ns_kwargs(resource),
+                )
+            except NotFoundError:
+                return
+            except ApiException as e:
+                raise KubectlError(f"remove_finalizer {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
 
     # -- set_image -----------------------------------------------------------
 
@@ -771,9 +861,7 @@ def _parse_kubectl_log_line(line: str) -> KubectlLogLine:
     if len(parts) == 2:
         ts_str, payload = parts
         try:
-            if len(ts_str) > 27 and ts_str.endswith("Z"):
-                ts_str = ts_str[:26] + "Z"
-            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            ts = parse_k8s_timestamp(ts_str)
             return KubectlLogLine(timestamp=ts, stream="stdout", data=payload)
         except ValueError:
             logger.warning("Failed to parse timestamp from log line: %r", line[:120])

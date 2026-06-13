@@ -21,7 +21,10 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
-from zephyr.execution import CounterSnapshot, ListShard, ShardTask, TaskResult, ZephyrCoordinator
+from zephyr.execution import ZephyrCoordinator
+from zephyr.shuffle import ListShard
+from zephyr.stage_io import ShardTask, TaskResult
+from zephyr.worker_context import CounterSnapshot
 
 
 @pytest.fixture

@@ -11,17 +11,20 @@ from unittest.mock import Mock
 
 import pytest
 from finelog.client.proxy import LogServiceProxy
+from finelog.rpc import logging_pb2
+from iris.cluster.backends.k8s.fake import InMemoryK8sService
+from iris.cluster.backends.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE, K8sTaskProvider
 from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint
-from iris.cluster.controller.backend import PlacementOwner
+from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
-from iris.cluster.controller.reads import healthy_active_workers_with_attributes
+from iris.cluster.controller.reads import ControlSnapshot, healthy_active_workers_with_attributes
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
@@ -35,6 +38,7 @@ from iris.cluster.controller.schema import jobs_table, task_attempts_table, task
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
+from iris.rpc.auth import StaticTokenVerifier
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
 from sqlalchemy import func, select
@@ -80,8 +84,6 @@ def set_job_state(
     """Directly set job state in DB for dashboard-only read-model tests."""
     values: dict = {"state": new_state}
     if started_at_ms is not None:
-        from rigging.timing import Timestamp
-
         values["started_at_ms"] = Timestamp.from_ms(started_at_ms)
     with state._db.transaction() as tx:
         tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(**values))
@@ -194,9 +196,10 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
     controller_mock.last_scheduling_context = None
     controller_mock.autoscaler = autoscaler
-    controller_mock.provider = Mock(name="worker", placement=PlacementOwner.IRIS_CONTROLLER, manages_capacity=False)
+    worker_caps = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+    controller_mock.provider = Mock(capabilities=worker_caps)
     controller_mock.provider.name = "worker"
-    controller_mock.placement = PlacementOwner.IRIS_CONTROLLER
+    controller_mock.capabilities = worker_caps
     return controller_mock
 
 
@@ -1144,8 +1147,6 @@ def test_fetch_logs_backward_compat_proxy(client):
 
 def test_fetch_logs_backward_compat_proxy_proto_binary(client):
     """Old clients using default Connect proto encoding hit the compat endpoint."""
-    from finelog.rpc import logging_pb2
-
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     req = logging_pb2.FetchLogsRequest(
         source=f"{task_id}:",
@@ -1313,8 +1314,6 @@ def test_auth_config_returns_disabled_by_default(client):
 
 def test_auth_config_returns_enabled_when_verifier_set(service, log_service):
     """Auth config endpoint reports auth enabled with provider name."""
-    from iris.rpc.auth import StaticTokenVerifier
-
     verifier = StaticTokenVerifier({"test-token": "test-user"})
     dashboard = ControllerDashboard(service, log_service=log_service, auth_verifier=verifier, auth_provider="gcp")
     authed_client = TestClient(dashboard.app)
@@ -1332,8 +1331,8 @@ def test_auth_config_worker_capabilities(client):
     assert resp.status_code == 200
     backend = resp.json()["backend"]
     assert backend["name"] == "worker"
-    assert backend["placement"] == "iris_controller"
-    assert backend["manages_capacity"] is False
+    assert "placement" not in backend
+    assert "manages_capacity" not in backend
     assert "workers" in backend["capabilities"]
     assert "autoscaler" in backend["capabilities"]
     assert "cluster" not in backend["capabilities"]
@@ -1342,8 +1341,9 @@ def test_auth_config_worker_capabilities(client):
 def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, embedded_log_server, log_client):
     """auth/config advertises the cluster capability for a backend-placed (k8s) backend."""
     controller_mock = _make_controller_mock(state, scheduler)
-    controller_mock.placement = PlacementOwner.TASK_BACKEND
-    controller_mock.provider = Mock(placement=PlacementOwner.TASK_BACKEND, manages_capacity=True)
+    cluster_caps = frozenset({BackendCapability.CLUSTER_VIEW})
+    controller_mock.capabilities = cluster_caps
+    controller_mock.provider = Mock(capabilities=cluster_caps)
     controller_mock.provider.name = "kubernetes"
     log_service = LogServiceProxy(embedded_log_server.address)
     svc = ControllerServiceImpl(
@@ -1362,8 +1362,8 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, embedde
     assert resp.status_code == 200
     backend = resp.json()["backend"]
     assert backend["name"] == "kubernetes"
-    assert backend["placement"] == "task_backend"
-    assert backend["manages_capacity"] is True
+    assert "placement" not in backend
+    assert "manages_capacity" not in backend
     assert "cluster" in backend["capabilities"]
     assert "workers" not in backend["capabilities"]
     assert "autoscaler" not in backend["capabilities"]
@@ -1376,13 +1376,10 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, embedde
 
 def _make_k8s_dashboard_client(state, scheduler, tmp_path, embedded_log_server, log_client):
     """Build a TestClient wired to a real K8sTaskProvider backed by InMemoryK8sService."""
-    from iris.cluster.backends.k8s.fake import InMemoryK8sService
-    from iris.cluster.backends.k8s.tasks import K8sTaskProvider
-
     k8s = InMemoryK8sService(namespace="iris")
-    provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
+    provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest", cluster_scan_interval=0.0)
     controller_mock = _make_controller_mock(state, scheduler)
-    controller_mock.placement = PlacementOwner.TASK_BACKEND
+    controller_mock.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     controller_mock.provider = provider
     log_service = LogServiceProxy(embedded_log_server.address)
     svc = ControllerServiceImpl(
@@ -1400,9 +1397,6 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, embedded_log_server, 
 
 def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path, embedded_log_server, log_client):
     """GetKubernetesClusterStatus returns node capacity and pod statuses after sync."""
-    from iris.cluster.backends.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
-    from iris.cluster.controller.backend import BackendReconcileInput
-
     client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, embedded_log_server, log_client)
 
     # Seed nodes and a pod.
@@ -1434,7 +1428,13 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path, e
     )
 
     # Reconcile to populate ClusterState.
-    provider.reconcile(BackendReconcileInput(tasks_to_run=[], running_tasks=[]))
+    provider.reconcile(
+        ControlSnapshot(
+            worker_addresses={},
+            reconcile_rows=[],
+            timeout_rows=[],
+        )
+    )
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetKubernetesClusterStatus",

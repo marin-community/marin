@@ -9,13 +9,11 @@
 ``exit_status`` (``Submitted``, ``incomplete``, etc.).
 """
 
-import hashlib
-
 from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import load_parquet_batched, render_role_message
+from marin.datakit.download.rollout_transforms import load_parquet_batched, render_role_message, text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -32,13 +30,7 @@ def row_to_doc(row: dict) -> list[dict]:
     text = "\n\n".join(render_role_message(m) for m in messages)
 
     counters.increment("swe_zero_12m/kept")
-    return [
-        {
-            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "text": text,
-            "source": HF_DATASET_ID,
-        }
-    ]
+    return [text_document(text, HF_DATASET_ID)]
 
 
 def transform(input_path: str, output_path: str) -> None:
