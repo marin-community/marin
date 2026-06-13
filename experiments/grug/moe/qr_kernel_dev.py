@@ -53,10 +53,10 @@ def cholesky_qr2(m):
     return q2, jnp.einsum("...ij,...jk->...ik", r2, r1)
 
 
-# max|QᵀQ - I| above which we fall back to exact jnp.linalg.qr. Exact QR in f32 floors at ~1e-6 and
-# good single-pass SCQR matches it (~9e-7); 1e-5 gives one order of margin for f32 noise while rejecting
-# any real orthogonality degradation (1e-4 was too soft — it would let a meaningfully-skewed basis through).
-_SCQR_ORTHO_TOL = 1e-5
+# max|QᵀQ - I| above which we fall back to exact jnp.linalg.qr. Exact QR in f32 floors at ~9e-7 and good
+# single-pass SCQR matches it; 3e-6 is ~3x that floor — tight enough that any accepted Q is essentially as
+# orthonormal as exact QR, so the SOAP eigenbasis never silently degrades (1e-5/1e-4 were too soft).
+_SCQR_ORTHO_TOL = 3e-6
 
 
 def scqr(m, eps=1e-7):
