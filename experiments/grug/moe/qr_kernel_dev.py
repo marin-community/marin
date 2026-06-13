@@ -41,9 +41,7 @@ def cholesky_qr(m):
     r = jnp.swapaxes(chol, -1, -2)  # upper R = Lᵀ
     # Q = M R⁻¹  via triangular solve  (Q Rᵀ ... solve Xᵀ): solve R for Qᵀ from Mᵀ.
     # Solve Q from Q R = M  ->  Rᵀ Qᵀ = Mᵀ. Use jax.scipy triangular solve.
-    qt = jax.scipy.linalg.solve_triangular(
-        jnp.swapaxes(r, -1, -2), jnp.swapaxes(m, -1, -2), lower=True
-    )
+    qt = jax.scipy.linalg.solve_triangular(jnp.swapaxes(r, -1, -2), jnp.swapaxes(m, -1, -2), lower=True)
     q = jnp.swapaxes(qt, -1, -2)
     return q, r
 
@@ -53,6 +51,36 @@ def cholesky_qr2(m):
     q1, r1 = cholesky_qr(m)
     q2, r2 = cholesky_qr(q1)
     return q2, jnp.einsum("...ij,...jk->...ik", r2, r1)
+
+
+# max|QᵀQ - I| above which we fall back to exact jnp.linalg.qr. Exact QR in f32 floors at ~1e-6 and
+# good single-pass SCQR matches it (~9e-7); 1e-5 gives one order of margin for f32 noise while rejecting
+# any real orthogonality degradation (1e-4 was too soft — it would let a meaningfully-skewed basis through).
+_SCQR_ORTHO_TOL = 1e-5
+
+
+def scqr(m, eps=1e-7):
+    """SINGLE-pass Shifted Cholesky QR (Su Jianlin, su.md): one Cholesky + one triangular solve,
+    with an ORTHONORMALITY-checked fallback to jnp.linalg.qr. Returns Q (orthonormal columns of `m`).
+
+    The shift is λ = eps * gram[0,0] (the top-left Gram element as a spectral-norm proxy) — valid in
+    warm-started power iteration because qᵀ·GG·q converges to diagonal with the largest eigenvalue at
+    [0,0]. This regularizes the Cholesky against the cond² blow-up of forming MᵀM, so a SINGLE pass
+    suffices; the prior two-pass CholeskyQR2 did ~2x the work (and benched 0.66x = slower than XLA QR).
+
+    Fallback is gated on ‖QᵀQ - I‖, NOT isfinite: an ill-conditioned Cholesky can return a finite but
+    non-orthonormal Q, which would silently degrade the SOAP eigenbasis (the failure mode that stalls
+    training). Only an orthonormality check catches that — finiteness is too soft.
+    """
+    gram = jnp.einsum("...ki,...kj->...ij", m, m)  # Mᵀ M
+    n = m.shape[-1]
+    eye = jnp.eye(n, dtype=m.dtype)
+    shift = eps * gram[..., :1, :1] * eye
+    r = jnp.linalg.cholesky(gram + shift, upper=True)  # upper-tri R, MᵀM ≈ RᵀR
+    qt = jax.scipy.linalg.solve_triangular(jnp.swapaxes(r, -1, -2), jnp.swapaxes(m, -1, -2), lower=True)
+    q = jnp.swapaxes(qt, -1, -2)
+    ortho_err = jnp.max(jnp.abs(jnp.einsum("...ki,...kj->...ij", q, q) - eye))
+    return jax.lax.cond(ortho_err < _SCQR_ORTHO_TOL, lambda: q, lambda: jnp.linalg.qr(m)[0])
 
 
 def _orthonormality_error(q):
@@ -71,14 +99,18 @@ def check_correctness(batch=8, n=512, seed=0):
     m = jax.random.normal(key, (batch, n, n), dtype=jnp.float32)
     q_ref, r_ref = jnp.linalg.qr(m)
     q_c, r_c = cholesky_qr2(m)
+    q_s = scqr(m)
     print(f"[correctness n={n} batch={batch}]")
-    print(f"  jnp.qr      : ortho_err={_orthonormality_error(q_ref):.2e} recon_err={_reconstruction_error(q_ref, r_ref, m):.2e}")
-    print(f"  choleskyQR2 : ortho_err={_orthonormality_error(q_c):.2e} recon_err={_reconstruction_error(q_c, r_c, m):.2e}")
+    print(f"  jnp.qr      : ortho={_orthonormality_error(q_ref):.2e} recon={_reconstruction_error(q_ref, r_ref, m):.2e}")
+    print(f"  choleskyQR2 : ortho={_orthonormality_error(q_c):.2e} recon={_reconstruction_error(q_c, r_c, m):.2e}")
+    print(f"  scqr (1pass): ortho={_orthonormality_error(q_s):.2e}")
     # SOAP only needs an orthonormal basis of the same column space; signs/order may
     # differ vs Householder QR. Verify the projector Q Qᵀ matches (basis-invariant).
     proj_ref = jnp.einsum("...ij,...kj->...ik", q_ref, q_ref)
     proj_c = jnp.einsum("...ij,...kj->...ik", q_c, q_c)
-    print(f"  projector match (QQᵀ) max|Δ| = {float(jnp.max(jnp.abs(proj_ref - proj_c))):.2e}")
+    proj_s = jnp.einsum("...ij,...kj->...ik", q_s, q_s)
+    print(f"  projector match choleskyQR2 (QQᵀ) max|Δ| = {float(jnp.max(jnp.abs(proj_ref - proj_c))):.2e}")
+    print(f"  projector match scqr       (QQᵀ) max|Δ| = {float(jnp.max(jnp.abs(proj_ref - proj_s))):.2e}")
 
 
 def _time_fn(fn, m, label, iters=5):
@@ -108,7 +140,8 @@ def bench(batch=256, n=512, seed=0):
     q0 = jnp.linalg.qr(m)[0]
     gg = sym
     _time_fn(lambda q: jnp.linalg.qr(jnp.einsum("...ij,...jk->...ik", gg, q))[0], q0, "soap_qr")
-    _time_fn(lambda q: cholesky_qr2(jnp.einsum("...ij,...jk->...ik", gg, q))[0], q0, "soap_cholqr")
+    _time_fn(lambda q: cholesky_qr2(jnp.einsum("...ij,...jk->...ik", gg, q))[0], q0, "soap_cholqr2")
+    _time_fn(lambda q: scqr(jnp.einsum("...ij,...jk->...ik", gg, q)), q0, "soap_scqr")
 
 
 if __name__ == "__main__":
