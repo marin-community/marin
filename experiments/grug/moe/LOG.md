@@ -264,6 +264,25 @@ tok/s vs replicated center (38.8k); same HPs so loss must match center too (end-
 Next: if tok/s up ~Nx (N=mesh size), MFU goal progressing; if comm dominates, amortize eigh (coupled-Newton)
 or tune which axes shard E.
 
+### sharded-anchor v1 FAILED on real mesh — two fixes (2026-06-13 ~06:30)
+v1 (062036) crashed: `ShardingTypeError: Contracting dimensions are sharded` at the gram einsum, via the
+2D-leaf fallback path. Cause: my refactor dropped replication for 2D attn leaves whose native sharding
+leaves a CONTRACTING dim on "model" → ambiguous einsum. (8-device test missed it: only had a 3D leaf.)
+**Fix 1:** 2D-leaf fallback now reshards to replicated before the local step (small matrices; necessary —
+a single matrix's eigh can't be split). **Fix 2 (answers "must you replicate? it's wasteful"):** shard the
+expert axis over ALL size>1 mesh axes so every device owns a DISJOINT set of experts (no redundant expert
+compute) — not "expert"-only (which left the data-axis devices duplicating work). Excludes size-1 axes to
+avoid the involuntary-full-remat that flattening the trivial "model" axis triggered. Validated correct +
+no remat on (data,expert)=(2,2) and (2,2,2) CPU meshes. Only remaining replication: necessary matrix-dim
+gather (eigh needs each [n,n] whole) + tiny 2D attn leaves. Relaunched sharded-anchor-v2 (063753).
+
+### MONITORING FIX — detect failures without the user
+Old monitor watched ONLY wandb summary → a compile-time crash (no wandb run yet) = silent timeout. The user
+had to report the failure. New monitor watches the CHILD LOG for unambiguous fatal markers — `Fatal error in
+grug training loop`, `jax._src.core.ShardingTypeError`, `RESOURCE_EXHAUSTED`, `OOM killed by the kernel`,
+`No accelerator found` (excluding the benign draccus `weak reference` TypeError) — AND for a real tqdm step
+rate (success). Exits/notifies on either. This catches the whole failure class wandb misses.
+
 ### Config-parity de-risk — weight decay (2026-06-12)
 Checked: MuonH baseline config stores weight_decay=0.1, BUT neither GrugMoeMuonHConfig.build() nor
 GrugMoeKLSoapHConfig.build() references add_decayed_weights/weight_decay — both custom build()s leave
