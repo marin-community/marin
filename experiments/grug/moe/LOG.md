@@ -143,6 +143,23 @@ Conflict: "no block-wise" + precond_freq=1 + "no routing dominant params away" �
 **USER DECISION (23:55): WAIT on the full-matrix compile** — confirm whether XLA finishes (est. +30-60min)
 and measure per-step rate before deciding. Runs kept alive; poller armed for first-step / crash.
 
+### ✅ CORRECTION 00:13 UTC — NOT stuck, it was a long compile; runs ARE training
+The ~45-min "silence" was iris log-STREAMING LAG during the long full-matrix XLA compile — which COMPLETED.
+center (v4) is training: step 191, loss 7.43→6.28 (healthy), **~3.6 s/step, tok/s ~38.8k**. So full-matrix
+KLSOAPH is FEASIBLE, just slow: ~3.6s/step → ~11h for 10980 steps; ~13× slower than MuonH (530k tok/s) —
+the ~4% MFU regime from project_klsoaph_kernel_status. The 5 v5p-8 points are still finishing their compile
+(~12min behind center). So round-1 WILL produce paloma results (~11h); the pain is the 45-min compile + low MFU.
+
+### Pallas/CholeskyQR2 QR-acceleration work (user: "write a pallas QR")
+Hot op = `Q,_ = jnp.linalg.qr(GG@Q)` batched [256,n,n] every step (n∈{256,512}); init uses jnp.linalg.eigh.
+Both are the slow-to-compile/run XLA linalg lowerings on TPU. Plan: replace with **CholeskyQR2** (G=MᵀM matmul →
+chol → triangular-solve; all MXU-friendly), the standard accelerator QR. It IS a true QR factorization, so it
+preserves upstream fidelity (not an algorithm swap). CholeskyQR2 correctness VALIDATED on CPU: projector QQᵀ
+matches jnp.qr to 2.6e-6 (identical column space — all SOAP needs), orthonormality 6e-5.
+- qr_kernel_dev.py: correctness + TPU compile/runtime bench (jnp.qr vs choleskyQR2 vs eigh vs soap-refresh).
+- TPU bench job /kaiyue/iris-run-job-20260613-001305 (v5p-8 east5) launched to quantify the win before wiring in.
+- If plain-jnp CholeskyQR2 doesn't cut compile/runtime enough, escalate to a true Pallas kernel.
+
 ### Config-parity de-risk — weight decay (2026-06-12)
 Checked: MuonH baseline config stores weight_decay=0.1, BUT neither GrugMoeMuonHConfig.build() nor
 GrugMoeKLSoapHConfig.build() references add_decayed_weights/weight_decay — both custom build()s leave
