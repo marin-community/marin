@@ -148,6 +148,24 @@ def _expert_shard_pspec(ndim: int, mesh, batched: bool) -> P:
     return _replicated_pspec(ndim)
 
 
+def _shard_expert_state_leaf(x):
+    """Place an init optimizer-state leaf in the expert-sharded (mat_p) layout.
+
+    The SOAP group is all per-expert leaves ([E, n, n] grams/eigenbases, [E, n] esi), so every leaf
+    with ndim>=2 shards its leading (expert) axis over the mesh. Storing the state sharded from init
+    (rather than replicated) means: (1) the per-step reshards in ``_klsoaph_step_sharded`` are no-ops
+    instead of replicated->mat_p->replicated round trips, and (2) the train step compiles ONCE -- a
+    replicated init forces a different input sharding at step 1 (replicated) vs step 2+ (mat_p from the
+    step's out_specs), triggering a second full compile. Also cuts opt-state HBM by the mesh size.
+    """
+    if x is None or not hasattr(x, "ndim") or x.ndim < 2:
+        return x
+    mesh = jax.sharding.get_abstract_mesh()
+    if mesh.empty:
+        return x
+    return jax.reshard(x, _expert_shard_pspec(x.ndim, mesh, True))
+
+
 def _flipped_eigh(matrix):
     """eigh on a symmetric matrix; return eigenvectors in DESCENDING order.
 
@@ -430,7 +448,7 @@ def scale_by_klsoaph(
     """
 
     def init_fn(params):
-        return ScaleByKLSoapHState(
+        state = ScaleByKLSoapHState(
             count=jnp.zeros([], jnp.int32),
             exp_avg=jax.tree.map(_zeros_mn, params, is_leaf=lambda x: x is None),
             exp_avg_sq=jax.tree.map(_zeros_mn, params, is_leaf=lambda x: x is None),
@@ -441,6 +459,9 @@ def scale_by_klsoaph(
             esi_l=jax.tree.map(lambda p: _esi_init(p, -2, init_factor), params, is_leaf=lambda x: x is None),
             esi_r=jax.tree.map(lambda p: _esi_init(p, -1, init_factor), params, is_leaf=lambda x: x is None),
         )
+        # Store the per-expert state sharded from init (not replicated) -> per-step reshards become
+        # no-ops and the train step compiles once (no step-1-vs-step-2+ input-sharding change).
+        return jax.tree.map(_shard_expert_state_leaf, state, is_leaf=lambda x: x is None)
 
     def update_fn(updates, state, params=None):
         del params
