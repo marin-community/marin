@@ -188,13 +188,53 @@ def bench(batch=256, n=512, seed=0):
     _time_fn(lambda q: dual_scqr_refresh(gg, q), q0, "soap_dual_scqr")
 
 
+def reparam_staleness_demo(n=64, steps=40, rotate=0.02, seed=0):
+    """Quantify why a reparam helps at high precond_freq (fp32, no bf16 involved).
+
+    Stream a slowly-rotating PSD Gram GG_t and hold a basis Q refreshed every K steps via qr(GG@Q).
+    Between refreshes Q is stale. Compare two eigenvalue estimators in the stale basis vs the truth:
+      - KLSOAPH-style:  diag(Qᵀ GG_t Q)        -- leaks off-diagonal energy as Q goes stale
+      - reparam:        eigvals(Qᵀ GG_t Q)     -- == eigvals(GG_t) by similarity, EXACT for any staleness
+    Reports the max relative eigenvalue error of each at K in {1,4,8}. If the reparam error stays ~0 while
+    the diag error grows with K, maintaining the projected Gram (re-diagonalized) makes high pf loss-neutral.
+    """
+    key = jax.random.PRNGKey(seed)
+    U0, _ = jnp.linalg.qr(jax.random.normal(key, (n, n)))
+    spec = jnp.logspace(0, -4, n)  # cond ~1e4
+    gen = jax.random.normal(jax.random.fold_in(key, 1), (n, n))
+    gen = gen - gen.T  # skew -> rotation generator
+
+    def gg_at(t):
+        rot = jax.scipy.linalg.expm(rotate * t * gen)
+        U = rot @ U0
+        return (U * spec) @ U.T
+
+    for k in (1, 4, 8):
+        q = U0
+        diag_err = 0.0
+        reparam_err = 0.0
+        for t in range(1, steps + 1):
+            gg = gg_at(t)
+            if (t - 1) % k == 0:  # refresh basis every k steps
+                q = jnp.linalg.qr(gg @ q)[0]
+            p = q.T @ gg @ q  # projected Gram in the (possibly stale) basis
+            true_eig = jnp.sort(jnp.linalg.eigvalsh(gg))[::-1]
+            diag_est = jnp.sort(jnp.diag(p))[::-1]
+            reparam_est = jnp.sort(jnp.linalg.eigvalsh(p))[::-1]
+            diag_err = max(diag_err, float(jnp.max(jnp.abs(diag_est - true_eig) / true_eig)))
+            reparam_err = max(reparam_err, float(jnp.max(jnp.abs(reparam_est - true_eig) / true_eig)))
+        print(f"  pf={k}: eigenvalue rel-err  diag(QᵀGGQ)={diag_err:.2e}   eigvals(QᵀGGQ)={reparam_err:.2e}")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["correctness", "bench"], default="correctness")
+    ap.add_argument("--mode", choices=["correctness", "bench", "reparam"], default="correctness")
     ap.add_argument("--batch", type=int, default=None)
     ap.add_argument("--n", type=int, default=512)
     args = ap.parse_args()
     if args.mode == "correctness":
         check_correctness(batch=args.batch or 8, n=args.n)
+    elif args.mode == "reparam":
+        reparam_staleness_demo(n=args.n if args.n != 512 else 64)
     else:
         bench(batch=args.batch or 256, n=args.n)
