@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import jax
 import jax.numpy as jnp
@@ -392,12 +392,18 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
     adam_beta2: float = 0.999
     adam_epsilon: float = 1e-15
     max_grad_norm: float | None = None
+    # SOAP-group warmup, SEPARATE from the inherited ``warmup`` (which governs the adamh/adam groups).
+    # The SOAP group has an early preconditioner-estimation lag, so it may want a longer warmup than the
+    # Adam groups. Defaults to 0.01 (= MuonH) so behavior matches the Adam warmup unless overridden.
+    klsoaph_warmup: float = 0.01
 
     def build(self, num_train_steps):
+        # adamh/adam groups use the inherited ``warmup``; the klsoaph (SOAP) group gets its own warmup.
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        klsoaph_lr_schedule = replace(self, warmup=self.klsoaph_warmup).lr_scheduler(num_train_steps)
 
-        def optimizer(learning_rate, adam_lr):
+        def optimizer(klsoaph_lr, learning_rate, adam_lr):
             def klsoaph_transform():
                 components = []
                 if self.max_grad_norm:
@@ -410,7 +416,7 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
                         eps=self.epsilon,
                         precond_freq=self.precond_freq,
                         init_factor=self.init_factor,
-                        learning_rate=learning_rate,
+                        learning_rate=klsoaph_lr,
                     )
                 )
                 components.append(_match_named_update_sharding())
@@ -441,6 +447,7 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
             )
 
         return optax.inject_hyperparams(optimizer)(
+            klsoaph_lr=klsoaph_lr_schedule,
             learning_rate=learning_rate_schedule,
             adam_lr=adam_lr_schedule,
         )

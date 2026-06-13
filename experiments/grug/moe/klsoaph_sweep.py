@@ -83,7 +83,10 @@ _optimizer = GrugMoeKLSoapHConfig(
     adam_beta2=_f("KLSOAPH_ADAM_BETA2", _muonh.beta2),
     adam_epsilon=_f("KLSOAPH_ADAM_EPS", _muonh.epsilon),
     max_grad_norm=_maybe_none_float("KLSOAPH_MAXGN", _muonh.max_grad_norm),
-    warmup=_muonh.warmup,
+    # Separate warmups: adam groups keep the MuonH warmup; the SOAP group can warm up longer
+    # (it has an early preconditioner-estimation lag). Both default to the MuonH warmup.
+    warmup=_f("KLSOAPH_ADAM_WARMUP", _muonh.warmup),
+    klsoaph_warmup=_f("KLSOAPH_SOAP_WARMUP", _muonh.warmup),
     min_lr_ratio=_muonh.min_lr_ratio,
     lr_schedule=_muonh.lr_schedule,
     decay=_muonh.decay,
