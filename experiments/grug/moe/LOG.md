@@ -211,6 +211,30 @@ NEW axes (shampoo_beta=preconditioner EMA [most promising for the early-lag], be
 beta2; maybe lr×0.85). If the gap STALLS, rethink (the early-slow SOAP warmup may be the structural cost).
 Compute note: contended preemptible v5p-8 saturates capacity, so round-2 likely runs AFTER round-1 frees slots.
 
+### Round-1 mid-run gap (steps 1k-6k) — gap PLATEAUED at ~+0.04, not closing to 0
+center: +0.109/+0.058/+0.050/+0.041 (1k-4k). beta2-0p95: +0.108/+0.059/+0.040/+0.039/+0.037/**+0.048** (1k-6k).
+lr-1p4: +0.189→+0.138 (clearly worse, never closes). → Anchor tracks MuonH ~+0.04 behind and plateaus
+(slightly widens @6k). Projecting: ~3.59 final vs MuonH 3.5438 — anchor alone does NOT beat MuonH. Need
+round-2 to close +0.04 (or the final LR-decay phase closes it).
+
+### Round-2 LAUNCHED (2026-06-13 ~04:40 UTC) — new axes from anchor, v5p-8 east5 (48 slots free)
+All from anchor (lr×1.0, beta2=0.9, shampoo=0.9, beta1=0.95, eps=1e-8, initf=0.1), one axis changed:
+| tag | delta | coordinator |
+|---|---|---|
+| r2-shampoo0p95 | shampoo_beta 0.9→0.95 | /kaiyue/iris-run-job-20260613-043606 |
+| r2-shampoo0p99 | shampoo_beta 0.9→0.99 | /kaiyue/iris-run-job-20260613-043628 |
+| r2-beta1-0p90 | beta1 0.95→0.90 | /kaiyue/iris-run-job-20260613-043642 |
+| r2-beta1-0p98 | beta1 0.95→0.98 | /kaiyue/iris-run-job-20260613-043712 |
+| r2-initf1p0 | init_factor 0.1→1.0 | /kaiyue/iris-run-job-20260613-043726 |
+| r2-eps1e6 | eps 1e-8→1e-6 | /kaiyue/iris-run-job-20260613-043739 |
+| r2-soapwu0p02 | SOAP warmup 0.01→0.02 (adam stays 0.01) | /kaiyue/iris-run-job-20260613-044114 |
+| r2-soapwu0p05 | SOAP warmup 0.01→0.05 | /kaiyue/iris-run-job-20260613-044132 |
+| r2-soapwu0p10 | SOAP warmup 0.01→0.10 | /kaiyue/iris-run-job-20260613-044145 |
+NEW CODE: separate `klsoaph_warmup` (SOAP group) from inherited `warmup` (adam groups) — user insight that
+the SOAP preconditioner lag wants a longer warmup while adam groups stay apples-to-apples (commit). Verified:
+SOAP warmup 0.05 → SOAP lr still warming at step 110 (0.0020) while adam peaked (0.0098). Watching whether any
+round-2 point tracks MuonH tighter than the anchor's +0.04 plateau. Round-1 still running for the final-gap read.
+
 ### Config-parity de-risk — weight decay (2026-06-12)
 Checked: MuonH baseline config stores weight_decay=0.1, BUT neither GrugMoeMuonHConfig.build() nor
 GrugMoeKLSoapHConfig.build() references add_decayed_weights/weight_decay — both custom build()s leave
