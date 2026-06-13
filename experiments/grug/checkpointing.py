@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -12,12 +13,49 @@ from typing import TypeVar
 
 import fsspec
 import jax
+import jax.numpy as jnp
 from fsspec import AbstractFileSystem
 from levanter.checkpoint import load_checkpoint
 
 logger = logging.getLogger(__name__)
 
 StateT = TypeVar("StateT")
+
+
+def _count_non_finite(tree) -> int:
+    leaves = [x for x in jax.tree_util.tree_leaves(tree) if hasattr(x, "shape")]
+    return sum(int(jnp.sum(~jnp.isfinite(x))) for x in leaves)
+
+
+def _sanitize_loaded_state(loaded: StateT, init_template: StateT) -> StateT:
+    """Guard against a NaN-poisoned checkpoint surviving a reload.
+
+    Even though training never *should* persist a non-finite state (the optimizer skips
+    non-finite steps), a checkpoint written just as a transient spike occurred could carry
+    NaN/Inf. Resetting non-finite OPTIMIZER-STATE entries to their fresh init value (finite)
+    lets the run resume cleanly (it only loses a little preconditioner history). Non-finite
+    PARAMS are unrecoverable from this checkpoint, so we reject it (the caller then falls back
+    to an older checkpoint).
+    """
+    if not (hasattr(loaded, "opt_state") and hasattr(loaded, "params")):
+        return loaded
+
+    param_bad = _count_non_finite(loaded.params)
+    if param_bad:
+        raise ValueError(f"Loaded checkpoint has {param_bad} non-finite param entries; rejecting as corrupt.")
+
+    opt_bad = _count_non_finite(loaded.opt_state)
+    if opt_bad:
+        logger.warning("Loaded checkpoint has %d non-finite optimizer-state entries; resetting them to init.", opt_bad)
+
+        def _fix(loaded_leaf, init_leaf):
+            if not hasattr(loaded_leaf, "shape"):
+                return loaded_leaf
+            return jnp.where(jnp.isfinite(loaded_leaf), loaded_leaf, init_leaf)
+
+        new_opt = jax.tree.map(_fix, loaded.opt_state, init_template.opt_state, is_leaf=lambda x: x is None)
+        loaded = dataclasses.replace(loaded, opt_state=new_opt)
+    return loaded
 
 
 def _get_fs_and_plain_path(path: str) -> tuple[AbstractFileSystem, str]:
@@ -110,8 +148,9 @@ def restore_grug_state_from_checkpoint(
             if candidate not in checkpoint_search_paths:
                 logger.info("Loaded checkpoint from %s while searching %s", candidate, checkpoint_search_paths)
             return loaded
-        except FileNotFoundError as exc:
-            last_error = exc
+        except (FileNotFoundError, ValueError) as exc:
+            # ValueError == checkpoint rejected as corrupt (non-finite params); fall back to older.
+            last_error = exc if isinstance(exc, FileNotFoundError) else FileNotFoundError(str(exc))
             logger.warning(
                 "Checkpoint candidate %s could not be loaded (%s). Trying an older checkpoint.", candidate, exc
             )
@@ -138,7 +177,7 @@ def _load_candidate_state(
     load_fn: Callable[..., StateT],
 ) -> StateT:
     try:
-        return load_fn(
+        loaded = load_fn(
             state,
             candidate,
             axis_mapping=None,
@@ -155,4 +194,5 @@ def _load_candidate_state(
             allow_partial=allow_partial,
         )
         logger.info("Loaded legacy wrapped grug checkpoint format from %s", candidate)
-        return wrapped["train_state"]  # type: ignore[index]
+        loaded = wrapped["train_state"]  # type: ignore[index]
+    return _sanitize_loaded_state(loaded, state)
