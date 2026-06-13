@@ -26,6 +26,7 @@
 # in ``optimizer.py``, mirroring the muonh / normuonh pattern.
 
 import functools
+import os
 from typing import NamedTuple
 
 import chex
@@ -168,7 +169,29 @@ def _symmetrize(matrix):
     return 0.5 * (matrix + jnp.swapaxes(matrix, -1, -2))
 
 
+_QR_IMPL = os.environ.get("KLSOAPH_QR", "xla")  # "xla" (jnp.linalg.qr) | "cholesky" (CholeskyQR2, MXU-native)
+
+
+def _cholesky_qr_once(m):
+    """Single CholeskyQR pass: returns orthonormal Q with M = Q R (matmul + Cholesky + triangular solve)."""
+    n = m.shape[-1]
+    gram = jnp.einsum("...ki,...kj->...ij", m, m)  # Mᵀ M
+    eye = jnp.eye(n, dtype=m.dtype)
+    jitter = 1e-6 * jnp.einsum("...ii->...", gram)[..., None, None] / n
+    r_upper = jnp.swapaxes(jnp.linalg.cholesky(gram + jitter * eye), -1, -2)  # G = LLᵀ, R = Lᵀ
+    qt = jax.scipy.linalg.solve_triangular(jnp.swapaxes(r_upper, -1, -2), jnp.swapaxes(m, -1, -2), lower=True)
+    return jnp.swapaxes(qt, -1, -2)
+
+
 def _qr_Q(matrix):
+    """Orthonormal factor of `matrix`. CholeskyQR2 (MXU-native, lossless QR) or XLA's jnp.linalg.qr.
+
+    CholeskyQR2 = two CholeskyQR passes (the second orthonormalizes the near-orthonormal first pass for
+    numerical accuracy); it computes the same QR factorization as Householder QR up to column signs, which
+    the SOAP orthogonal-iteration is invariant to (validated projector-identical).
+    """
+    if _QR_IMPL == "cholesky":
+        return _cholesky_qr_once(_cholesky_qr_once(matrix))
     q, _ = jnp.linalg.qr(matrix)
     return q
 
