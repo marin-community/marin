@@ -41,17 +41,19 @@ _EXTRA_LOGPROB_TASKS: tuple[EvalTaskConfig, ...] = (
     EvalTaskConfig("hellaswag", 0, task_alias="hellaswag_0shot"),
     EvalTaskConfig("winogrande", 0, task_alias="winogrande_0shot"),
     EvalTaskConfig("piqa", 0, task_alias="piqa_0shot"),
-    EvalTaskConfig("social_iqa", 0, task_alias="socialiqa_0shot"),
+    # social_iqa skipped: HF script-loader deprecated in datasets>=4.0;
+    # bye-fork doesn't host a parquet copy.
     EvalTaskConfig("sciq", 0, task_alias="sciq_0shot"),
     EvalTaskConfig("openbookqa", 0, task_alias="openbookqa_0shot"),
     EvalTaskConfig("boolq", 0, task_alias="boolq_0shot"),
     EvalTaskConfig("commonsense_qa", 0, task_alias="csqa_0shot"),
     EvalTaskConfig("lambada_openai", 0, task_alias="lambada_0shot"),
-    EvalTaskConfig("wsc273", 0, task_alias="wsc273_0shot"),
+    # wsc273 skipped: same HF script-loader issue (winograd_wsc.py).
     EvalTaskConfig("copa", 0, task_alias="copa_0shot"),
     EvalTaskConfig("truthfulqa_mc1", 0, task_alias="truthfulqa_mc1_0shot"),
     EvalTaskConfig("truthfulqa_mc2", 0, task_alias="truthfulqa_mc2_0shot"),
-    EvalTaskConfig("logiqa", 0, task_alias="logiqa_0shot"),
+    # logiqa skipped: same HF script-loader issue (logiqa.py).
+    # logiqa2 keeps: uses parquet-hosted datasets.
 )
 
 # MMLU 0/5-shot + GSM8K 5-shot + HumanEval 10-shot + arc_easy 0-shot.

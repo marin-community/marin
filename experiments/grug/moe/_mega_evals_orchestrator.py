@@ -42,18 +42,17 @@ _TASKS_TO_ADD: list[tuple[str, int, str]] = [
     ("hellaswag", 0, "hellaswag_0shot"),
     ("winogrande", 0, "winogrande_0shot"),
     ("piqa", 0, "piqa_0shot"),
-    ("social_iqa", 0, "socialiqa_0shot"),
+    # social_iqa dropped: HF script-loader deprecated, no parquet copy.
     ("sciq", 0, "sciq_0shot"),
     ("openbookqa", 0, "openbookqa_0shot"),
     ("boolq", 0, "boolq_0shot"),
     ("commonsense_qa", 0, "csqa_0shot"),
     ("lambada_openai", 0, "lambada_0shot"),
-    ("wsc273", 0, "wsc273_0shot"),
+    # wsc273 dropped: same HF script-loader issue.
     ("copa", 0, "copa_0shot"),
     ("truthfulqa_mc1", 0, "truthfulqa_mc1_0shot"),
     ("truthfulqa_mc2", 0, "truthfulqa_mc2_0shot"),
-    ("logiqa", 0, "logiqa_0shot"),
-    ("logiqa2", 0, "logiqa2_0shot"),
+    # logiqa + logiqa2 both dropped: same HF script-loader issue.
 ]
 
 _PPL_PREFIX = "gs://marin-us-central2/evaluation/grug_logprob/"
