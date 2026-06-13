@@ -23,7 +23,7 @@ issue templates — these structures live here.
 |---|---|---|
 | **bug** | A bug or regression was found | `bug`, `agent-generated` |
 | **task** | An improvement, refactor, or feature request | `agent-generated` + priority if known |
-| **experiment** | An experiment needs tracking | `experiment`, `agent-generated` (use `.agents/skills/run-research/SKILL.md` for the body) |
+| **experiment** | An experiment needs tracking | `experiment`, `agent-generated` (use `.agents/skills/task-logbook/SKILL.md` for the body) |
 
 ### Bug body
 
@@ -54,7 +54,7 @@ issue templates — these structures live here.
 
 ### Experiment body
 
-Use the "Experiment Issue Template" in `.agents/skills/run-research/SKILL.md`.
+Use the "Issue kickoff body" in `.agents/skills/task-logbook/SKILL.md`.
 
 ## Workflow
 
