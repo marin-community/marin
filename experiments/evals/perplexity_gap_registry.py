@@ -31,6 +31,7 @@ from experiments.evals.code_interpretation_ppl import code_interpretation_valida
 from experiments.evals.fineweb2_multilingual import fineweb2_multilingual_raw_validation_sets
 from experiments.evals.formal_hardware_ppl import formal_hardware_raw_validation_sets
 from experiments.evals.long_context_ppl import long_context_validation_sets
+from experiments.evals.ppl_circuit_coverage_v2 import ppl_circuit_coverage_v2_raw_validation_sets
 from experiments.evals.prompt_format_sensitivity import prompt_format_sensitivity_validation_sets
 from experiments.evals.web_markup_image_text_ppl import web_markup_image_text_raw_validation_sets
 from experiments.marin_models import marin_tokenizer
@@ -158,6 +159,15 @@ def code_interpretation_bundle() -> PerplexityGapBundle:
     )
 
 
+def ppl_circuit_coverage_v2_bundle() -> PerplexityGapBundle:
+    return PerplexityGapBundle(
+        key="ppl_circuit_coverage_v2",
+        description="Deterministic target-only probes for exact symbolic transforms, state machines, and formatting.",
+        datasets_factory=ppl_circuit_coverage_v2_raw_validation_sets,
+        max_docs_per_dataset=None,
+    )
+
+
 def registered_perplexity_gap_bundles() -> tuple[PerplexityGapBundle, ...]:
     return (
         base_raw_bundle(),
@@ -168,6 +178,7 @@ def registered_perplexity_gap_bundles() -> tuple[PerplexityGapBundle, ...]:
         long_context_bundle(),
         prompt_format_sensitivity_bundle(),
         code_interpretation_bundle(),
+        ppl_circuit_coverage_v2_bundle(),
     )
 
 
