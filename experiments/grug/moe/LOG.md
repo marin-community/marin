@@ -464,3 +464,11 @@ Microbench (v5p-8, 6 layers): opt_step 642.8ms@frac1.0 → **311.4ms@frac0.25** 
 53% of step, slashed). End-to-end est: step ~0.89s→~0.56s → tok/s ~234k → **~16% MFU** (vs ~10% sharding-only,
 ~2-4% replicated). Clears the 10% goal. Launched loss-validation run ss0p25-b80 (beta1=0.80 + subspace_frac=0.25)
 on v5p-8 east5 to confirm it STILL beats MuonH 3.5438 (compare to r3b-beta1-0p80 frac=1.0) + measure real tok/s.
+
+### Goal A is a TIGHT race — gaps narrow in LR decay (2026-06-13 ~12:45)
+beta1=0.90 @step10000 = 3.5856 vs MuonH 3.585 (≈tied); extrapolating MuonH's last-979-step decay (−0.041)
+→ beta1=0.90 final ~3.544 = marginal MISS (beats anchor 3.5475 but not clearly < 3.5438). The decay phase
+narrows ALL gaps toward ~0. Clean beat depends on lower beta1 (0.80 was −0.036@6k, 0.85 −0.029@6k) HOLDING
+margin through decay — finals ~3h out (they're at ~step 7300). beta1=0.70 (/113012) also in flight. So
+KLSOAPH full-matrix ≈ MATCHES MuonH (~3.54), best-beta1 marginally below/at-tie — need the 0.80/0.70 finals
+to confirm a clean < 3.5438. If all land ~tie, may need beta1=0.65 or re-check another axis from the beta1 anchor.
