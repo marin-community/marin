@@ -188,6 +188,14 @@ LOSS not throughput — focus compute on the sweep. CholeskyQR2 validated+availa
 Step 1000 of 10980 (~9%) — NOT comparable to MuonH FINAL 3.5438. Ranking: lr↑ hurts; SOAP-beta2 0.95≈anchor.
 Too early to re-anchor; let all run, re-evaluate ~step 3000-5000 when trajectories separate. No early-stop.
 
+### Status ~01:10 UTC — beta2-0p99 preempted + auto-restarted
+beta2-0p99 (preemptible v5p-8 east5) was PREEMPTED ~01:01 (was at step ~935, loss 4.2); iris AUTO-RESTARTED
+the child ~01:03 — now recompiling (~45min) + resuming from ~step-900 checkpoint. wandb run shows "crashed"
+(first attempt's wandb session died) but training is recovering; NO manual resubmit needed (child re-dispatched).
+Will lag the others ~45min. The beta2 trend (0.9≈0.95 best, 0.999 slightly worse) is already clear from the
+other two points, so this lag doesn't block re-anchoring. Watching for a preemption PATTERN (preemptible +
+45-min recompile is fragile); if it recurs, consider more-stable capacity. Other 5 runs healthy/advancing.
+
 ### Config-parity de-risk — weight decay (2026-06-12)
 Checked: MuonH baseline config stores weight_decay=0.1, BUT neither GrugMoeMuonHConfig.build() nor
 GrugMoeKLSoapHConfig.build() references add_decayed_weights/weight_decay — both custom build()s leave
