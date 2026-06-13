@@ -5,8 +5,8 @@ import dataclasses
 from types import SimpleNamespace
 
 import pytest
-from levanter.checkpoint import CheckpointDebugConfig
 from levanter.adaptor.lora import LoraConfig
+from levanter.checkpoint import CheckpointDebugConfig
 from levanter.models.llama import LlamaConfig
 from marin.execution.artifact import PathMetadata
 from marin.execution.types import ExecutorStep, output_path_of
@@ -15,8 +15,8 @@ from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.model_utils import is_hf_checkpoint
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
-    RLJob,
     RLExperimentConfig,
+    RLJob,
     RLStepConfig,
     _build_rl_job_config,
     _run_rl_experiment_step,

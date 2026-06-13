@@ -10,9 +10,9 @@ from urllib.parse import urlparse
 
 import jmp
 from fray.types import ResourceConfig
+from levanter.adaptor.lora import LoraConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
-from levanter.adaptor.lora import LoraConfig
 from levanter.layers.attention import AttentionBackend
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig

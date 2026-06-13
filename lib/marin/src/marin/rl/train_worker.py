@@ -24,13 +24,6 @@ import jax.random as jrandom
 import levanter
 import wandb
 from levanter import callbacks
-from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook
-from levanter.checkpoint import (
-    discover_latest_checkpoint,
-    is_checkpoint_path,
-    register_debug_checkpointer_state_provider,
-    unregister_debug_checkpointer_state_provider,
-)
 from levanter.adaptor.lora import (
     LoraConfig,
     lora_trainable_params_filter,
@@ -38,6 +31,13 @@ from levanter.adaptor.lora import (
     merge_lora_modules,
     save_merged_hf_model,
     save_peft_pretrained,
+)
+from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook
+from levanter.checkpoint import (
+    discover_latest_checkpoint,
+    is_checkpoint_path,
+    register_debug_checkpointer_state_provider,
+    unregister_debug_checkpointer_state_provider,
 )
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.kernels.pallas.splash_attention import DEFAULT_SPLASH_BLOCK_SIZE
