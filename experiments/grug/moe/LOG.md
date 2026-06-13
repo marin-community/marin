@@ -594,3 +594,9 @@ contention is blocking diagnostics; using reserved v4 serially.
 DONATION ("buffers not usable"): all-non-square leaves -> a LAYOUT mismatch (sharding matched; with_sharding_constraint
 was a no-op). Fix: with_layout_constraint pinning output train-state to row-major (matches jnp.zeros-init buffers).
 Testing on reserved v4.
+
+### CORRECTION: anchor does NOT beat MuonH (2026-06-13 ~22:10)
+Earlier "anchor 3.5204 < MuonH" was train/loss vs paloma — INVALID. Clean anchor FINISHED:
+eval/paloma/macro_loss = **3.5496** (train/loss 3.264). MuonH baseline 3.5438. So anchor is +0.0058 ABOVE
+MuonH (matches pre-pollution 3.5475). Loss criterion (beat MuonH) NOT met at anchor -> needs coordinate-descent
+HP tuning AFTER the efficiency baseline. Efficiency baseline <0.001 regression is measured vs ANCHOR=3.5496.
