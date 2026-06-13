@@ -321,9 +321,31 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   **resubmitted `lr8.75e-5 × wd0.02` on v5p-8** (w1b, pending on pool capacity);
   `lr8.75e-5 × wd0.1` still parked, waiting on a v6e-8 finisher for durable
   headroom._
+  _Update ~13:18Z: both dna-bolinas jobs finished (all spend now exp75). Last
+  parked cell **`lr8.75e-5 × wd0.1` relaunched on interactive v6e-8** → **all 12
+  E1 cells now in flight**. Partial evals (half-epoch) so far: lr3.5e-4 leads
+  (wd0.02 3.150, wd0.1 3.156, wd0.05 3.175) vs lr8.75e-5/wd0.05 3.216; 7e-4 &
+  1.75e-4 not yet evaled._
 
 ### epochs = 2
-- Grid:
+- **Pulled forward ~13:20Z as a speculative cross** (pipelining — see that section),
+  on the off-budget **batch multi-host slices**, 1 point per slice type, centered on
+  the partial-E1 leading region (lr≈3.5e-4, wd flat ~0.02–0.1) with the warm-start
+  prior (lr↓/wd↓ as epochs double):
+
+  | E2 point (epochs=2) | slice | role | state @launch |
+  |---|---|---|---|
+  | lr 3.5e-4, wd 0.05 | v6e-32 | center | pending (gang: need 8 hosts) |
+  | lr 2.5e-4, wd 0.05 | v5p-64 | LR− | pending (no workers free) |
+  | lr 5e-4,   wd 0.05 | v6e-16 | LR+ | pending (no workers free) |
+  | lr 3.5e-4, wd 0.02 | v5p-32 | WD− | **running** (multi-host OK) |
+  | lr 3.5e-4, wd 0.1  | v5p-16 | WD+ | pending (no workers free) |
+
+  First multi-host run (v5p-32) initialized `jax.distributed` cleanly — multi-host
+  path works. Availability is the expected bottleneck (bigger = scarcer). The cross
+  gives all 4 axis-neighbors of the center → start of the E2 interior-optimum check;
+  extend as E1 firms up and the higher-LR (7e-4) E1 evals land.
+- Grid (final-step `eval/contacts-v1-val/loss`):
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
 - Measured drift 1→2: `Δlog lr=…, Δlog wd=…`
 - Notes:
