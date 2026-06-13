@@ -5,6 +5,33 @@ contacts-v1 1.5B recipe. The launcher (`exp75_sweep.py`) trains **one explicit
 point per invocation**; this doc holds the search method and the running log.
 Update the log as runs finish.
 
+## Status & dependencies (read first)
+
+- **Where we are:** the launcher is **smoke-validated end-to-end on all three
+  slices** (1-epoch test, `PER_CHIP_MICROBATCH=4`, no OOM, decreasing loss).
+  **No real search runs have happened yet** — the Running log below is empty.
+  Start with the epochs=1 wave.
+- **Critical dependency — do not lose this commit.** Reusing #70's token caches
+  only works because of a fix in vendored levanter
+  (`lib/levanter/src/levanter/store/cache.py`, commit `a51453f1a`) that flattens
+  the cache reader's exemplar with `heuristic_is_leaf`. Without it, every run
+  dies at cache load with `ValueError: Sharded cache ledger missing input_ids/0
+  count for shard ...`. Preserve it on any rebase / cherry-pick.
+- **Throughput (early, includes JIT compile):** v6e-8 ~19 s/it, v6e-4 ~32 s/it,
+  v5p-8 slower. So 1 epoch (~4,460 steps) ≈ ~24 h on v6e-8 — size wave
+  wall-clock from this (and it's why >2-epoch runs must avoid v6e-4).
+- **W&B:** entity/project come from the launch env (`eric-czech/marin`), group
+  `exp75-contacts-v1-tune`, run name = trial name. Read the final-step
+  `eval/contacts-v1-val/loss` there.
+- **Benign log noise (ignore):** `Metadata mismatch ... preprocessor_metadata`
+  (the reused caches predate that field) and a background wandb
+  `log_artifact ... config.yaml FileNotFoundError` (the config-snapshot artifact
+  fails to upload; metrics still log fine).
+- **Microbatch:** `PER_CHIP_MICROBATCH=4` — PCM 4–6 give the identical plan; 7
+  would lift v5p-8 to full 32/chip (grad_accum 1); 8 OOMs the v6e slices (a
+  32 GiB chip overflows at 16/chip for this model). See the table in
+  `exp75_sweep.py`.
+
 ## Objective
 
 Minimize the **final-step** `eval/contacts-v1-val/loss` (unmasked LM loss on the
