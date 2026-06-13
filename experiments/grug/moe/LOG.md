@@ -131,6 +131,18 @@ All 6 wandb runs RUNNING, no loss yet (compiling). v5p-8 child confirmed reading
 failure (can't encode the `model` field); training proceeds, structured config still logs to wandb.config.
 Do NOT treat that traceback as a failure. No OOM on v5p-8 so far.
 
+### ⚠️ Status 23:55 UTC — full-matrix COMPILE STALL (the de-block bottleneck)
+ALL 6 runs reach the initial step-1 checkpoint (center v4 @23:35 after ~27min; beta2-0p999 v5p-8 @23:49)
+then go SILENT — center 18+ min, zero training steps logged anywhere (wandb history_rows=0 for all 6,
+tqdm stuck at elapsed:00:00 rate:-). The first real train step is compiling the full KLSOAPH graph:
+per-expert Gram + batched eigh/QR over [256,512,512] (256 experts, d512: hidden=512, intermediate=256)
+EVERY step (precond_freq=1). This is the exact "256 independent eigh … JIT-compile-heavy on TPU" the
+block tiling existed to avoid (cf. removed docstring + project_klsoaph_kernel_status: full-fidelity klsoaph
+~4% MFU). Block-wise PROVABLY trained last session (3.789/4.145 d512); full-matrix is stuck in XLA compile.
+Conflict: "no block-wise" + precond_freq=1 + "no routing dominant params away" ⇒ infeasible compile.
+**USER DECISION (23:55): WAIT on the full-matrix compile** — confirm whether XLA finishes (est. +30-60min)
+and measure per-step rate before deciding. Runs kept alive; poller armed for first-step / crash.
+
 ### Config-parity de-risk — weight decay (2026-06-12)
 Checked: MuonH baseline config stores weight_decay=0.1, BUT neither GrugMoeMuonHConfig.build() nor
 GrugMoeKLSoapHConfig.build() references add_decayed_weights/weight_decay — both custom build()s leave
