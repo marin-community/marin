@@ -483,3 +483,13 @@ Beta1 axis ~exhausted (min ~0.90-0.95, all above 3.5438). NEXT LEVER = the DECAY
 its mid-run lead): tune KLSOAPH's LR schedule independently (min_lr_ratio nonzero floor, or power decay — track_3
 Result#25 won with power-decay + nonzero floors) to hold the lead through the end. Await 0.80/0.85/0.70 finals
 to confirm beta1 axis, then sweep the schedule axis. GOAL A NOT yet met — continue coordinate descent relentlessly.
+
+### beta1 FINALS — trend REVERSED, axis converged at 0.95 (2026-06-13 ~13:30)
+Final@10979: beta1 0.95(anchor)=3.5475 < 0.90=3.5500 < 0.85=3.5555 < 0.80=3.5680. HIGHER beta1 better at the
+final (opposite of mid-run). beta1 axis CONVERGED at 0.95 = best KLSOAPH = 3.5475, **+0.0037 above MuonH 3.5438**
+(0.98/0.99 excluded: worse mid-run + 0.99 historically diverged). lr↑ worse (lr-1p4=3.5644, lr-1p8=3.5942).
+So coordinate descent on {beta1,beta2,shampoo,eps,init,warmup,lr} caps at ~3.5475 — MuonH NOT beaten; the gap
+opens entirely in the LR-decay tail. Active lever: LR-schedule (min_lr_ratio floor 0.05/0.10, running ~11h).
+GOAL B CONFIRMED: subspace-QR ss0p25-b80 = **284,662 tok/s** (1.93× sharded 147.9k, 7.3× replicated 38.8k,
+~16-20% MFU) — 2× opt-step cut realized end-to-end. Loss-neutrality vs r3b-beta1-0p80 (frac=1.0, 3.5680)
+pending its finish.
