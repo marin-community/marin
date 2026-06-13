@@ -265,6 +265,10 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   (lowest-LR corners, least informative). SPENT 84,044 → 67,466 (cap 75,000). The
   2 killed cells are TODO — resubmit on a cheap (4-chip) slice once budget frees,
   before E1 can be confirmed. 10 cells currently training._
+  _Update ~11:48Z: an unrelated job freed budget (SPENT 67.5k→63k), so
+  **resubmitted `lr8.75e-5 × wd0.02` on v5p-8** (w1b, pending on pool capacity);
+  `lr8.75e-5 × wd0.1` still parked, waiting on a v6e-8 finisher for durable
+  headroom._
 
 ### epochs = 2
 - Grid:
