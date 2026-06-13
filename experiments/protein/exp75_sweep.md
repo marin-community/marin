@@ -43,8 +43,10 @@ that eval only on the confirmed per-epoch winners — not part of the tuning loo
 
 ## Launching a run
 
-One point per invocation; **keep ≤ 12 runs in flight at once** (one wave). Each
-point is a separate `iris job run`:
+One point per invocation. Concurrency is bounded by the **iris budget, not a run
+count** — keep total SPENT under the cap with margin (see **Budget & quota**
+below; the old "≤ 12 in flight" was just a rough proxy and at this chip mix runs
+*over* the cap). Each point is a separate `iris job run`:
 
 ```bash
 source ~/marin.env && uv run iris --cluster marin job run \
@@ -63,6 +65,44 @@ Monitor each job (state / logs / stop) with the
 [`run-iris-job`](https://github.com/eric-czech/marin-agent-kb/blob/main/skills/run-iris-job.md)
 skill; keep a wave alive (auto-resubmit failed/killed runs) with
 [`monitor-sweep`](https://github.com/eric-czech/marin-agent-kb/blob/main/skills/monitor-sweep.md).
+
+## Budget & quota (stay under the cap — check before every launch)
+
+TPU usage is capped by a per-user **iris budget** (currently **75,000** units for
+`eczech`). Cost is **dominated by chips in flight**: each task costs
+`1000 × chips + ~288` (the RAM/CPU add-on is marginal), so the cap is effectively
+**~75 chips total**. Per slice:
+
+| slice | chips | cost ≈ |
+|---|---|---|
+| `v6e-8` | 8 | 8,288 |
+| `v5p-8` | 4 | 4,288 |
+| `v6e-4` | 4 | 4,288 |
+
+- **Track actual SPENT, don't guess from a run count.**
+  `uv run iris --cluster marin user budget get "$USERNAME"` (or `user budget list`)
+  prints LIMIT / SPENT / MAX BAND. **SPENT is the number that matters.** The old
+  "≤ 12 runs in flight" was only a crude proxy and at this chip mix actually
+  *exceeds* the cap (12 runs ≈ 75.5k on their own). Read SPENT every monitor tick.
+- **Other, unrelated jobs share this budget.** There are routinely non-sweep jobs
+  running (e.g. 2 `dna-bolinas` jobs ≈ 8.6k as of launch). SPENT already includes
+  them — so always gate on total SPENT, never on exp75 chips alone.
+- **Never exceed the cap.** Over budget, `interactive` jobs (our default band) get
+  downgraded to `batch` (preemptible), and a known bug then makes them
+  **preempt themselves** — burning compute with no progress. Keep SPENT under
+  75,000 **with margin** (target ≤ ~68k) so a new other-job or transient can't tip
+  it over.
+- **Before each launch:** read SPENT, add the new slice's cost, and submit only if
+  the total stays under cap-with-margin. Otherwise wait for a run to finish (frees
+  its chips) or pick a cheaper slice. **Resubmits are free of penalty** — the
+  10-min temp checkpoints + idempotent `v1` lock resume rather than restart, so a
+  run killed to stay under budget can be relaunched later with no lost data.
+- **Budget-bound ⇒ chip efficiency, not wall-clock, drives slice choice.** When the
+  *cap* (not the clock) is the binding constraint, a 4-chip slice fits ~2× more
+  cells per budget unit than `v6e-8`, and per-chip throughput actually favors
+  **v5p-8 > v6e-4 > v6e-8**. So under budget pressure prefer the 4-chip slices for
+  breadth and reserve `v6e-8` for clear headroom. This *inverts* the wall-clock
+  priority below — they agree only when budget is slack.
 
 ## TPU & region selection
 
@@ -183,7 +223,9 @@ producing confirmed optima.
 | 3 | 4 | 3×3 at extrapolated center (+ edge fills) | 5–9 |
 | 4 | 8 | 3×3 at extrapolated center (+ edge fills) | 5–9 |
 
-Always ≤ 12 in flight. Review each wave before designing the next.
+Concurrency gated by **budget**, not run count (see **Budget & quota**): keep
+total SPENT under the cap with margin — at the current chip mix that is fewer than
+12 in flight. Review each wave before designing the next.
 
 ## Reading results
 
@@ -218,8 +260,11 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   | **0.1**  | | | | |
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
-- Notes (edges extended, zoom, etc.): _2 v6e-4 runs (lr7e-4, wd0.05 & wd0.1)
-  pending on capacity at launch — left queued per the ≥1 h rule._
+- Notes (edges extended, zoom, etc.): _12 launched, then **2 v6e-8 cells killed
+  to get under the iris budget cap** — `lr8.75e-5 × wd0.02` and `lr8.75e-5 × wd0.1`
+  (lowest-LR corners, least informative). SPENT 84,044 → 67,466 (cap 75,000). The
+  2 killed cells are TODO — resubmit on a cheap (4-chip) slice once budget frees,
+  before E1 can be confirmed. 10 cells currently training._
 
 ### epochs = 2
 - Grid:
