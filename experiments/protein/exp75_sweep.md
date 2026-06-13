@@ -17,9 +17,11 @@ Update the log as runs finish.
   the cache reader's exemplar with `heuristic_is_leaf`. Without it, every run
   dies at cache load with `ValueError: Sharded cache ledger missing input_ids/0
   count for shard ...`. Preserve it on any rebase / cherry-pick.
-- **Throughput (early, includes JIT compile):** v6e-8 ~19 s/it, v6e-4 ~32 s/it,
-  v5p-8 slower. So 1 epoch (~4,460 steps) ≈ ~24 h on v6e-8 — size wave
-  wall-clock from this (and it's why >2-epoch runs must avoid v6e-4).
+- **Throughput (measured steady `throughput/tokens_per_second` from the smoke
+  runs):** v6e-8 ~74k, v5p-8 ~53k, v6e-4 ~41k → fallback priority is
+  **v6e-8 > v5p-8 > v6e-4**. At ~1.05M tok/step, 1 epoch (~4,460 steps) ≈ ~18 h
+  on v6e-8, ~24 h on v5p-8, ~32 h on v6e-4 — size wave wall-clock from this, and
+  keep >2-epoch runs off v6e-4.
 - **W&B:** entity/project come from the launch env (`eric-czech/marin`), group
   `exp75-contacts-v1-tune`, run name = trial name. Read the final-step
   `eval/contacts-v1-val/loss` there.
@@ -73,17 +75,25 @@ skill; keep a wave alive (auto-resubmit failed/killed runs) with
   in its zone — no `--zone` needed:
 - **Three slices** (chosen with `-e TPU`). Global batch is 128 on all, so
   val-loss results are directly comparable across slices (grad_accum at
-  `PER_CHIP_MICROBATCH=6`):
+  `PER_CHIP_MICROBATCH=4`). `tok/s` is **measured** (1-epoch smoke, steady
+  `throughput/tokens_per_second` from W&B):
 
-  | TPU | resolved zone | grad_accum | use |
-  |---|---|---|---|
-  | `v6e-8` | us-east5-b | 2 | **primary — start here** |
-  | `v6e-4` | us-east5-b | 4 | fallback, **≤ 2 epochs only** (see below) |
-  | `v5p-8` | us-east5-a | 2 | fallback (equal priority) |
+  | TPU | resolved zone | grad_accum | tok/s | priority |
+  |---|---|---|---|---|
+  | `v6e-8` | us-east5-b | 2 | ~74k | **primary — fastest, start here** |
+  | `v5p-8` | us-east5-a | 2 | ~53k | 2nd choice |
+  | `v6e-4` | us-east5-b | 4 | ~41k | last resort, **≤ 2 epochs only** |
 
-- **Never run `v6e-4` for jobs longer than 2 epochs.** With only 4 chips and
-  grad_accum 4 it is too slow for long runs. For any run > 2 epochs use `v6e-8`
-  (primary) or `v5p-8`; reserve `v6e-4` for the cheap 1–2 epoch points.
+- **Prioritize by throughput, gated on availability.** A run finishes sooner on
+  a faster slice, so use the **fastest slice that is actually schedulable**:
+  default `v6e-8`; if its pool is starved (child pending ≥ 1h, see below), drop
+  to `v5p-8`, then `v6e-4`. Balance the two forces — don't sit idle waiting on
+  `v6e-8` when a slower-but-free slice would finish the run sooner, but don't
+  thrash on short waits either. (Re-measure if the recipe changes: pull
+  `throughput/tokens_per_second` from the W&B run.)
+- **Never run `v6e-4` for jobs longer than 2 epochs.** It is the slowest slice
+  (4 chips, grad_accum 4); for any run > 2 epochs use `v6e-8` or `v5p-8`, and
+  reserve `v6e-4` for the cheap 1–2 epoch points.
 
 - **A started run stays put.** Once submitted on a slice, a run keeps its zone
   across preemption retries until it completes — never migrate an in-flight run.

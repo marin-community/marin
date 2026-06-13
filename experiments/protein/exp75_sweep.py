@@ -167,13 +167,13 @@ class TpuStats:
     tflops: int
 
 
-# Supported single-host slices, in priority order: (chips, HBM GiB, bf16
-# TFLOP/s per chip). Membership here is the allow-list -- resources() rejects
-# anything else.
+# Supported single-host slices, in throughput priority order (fastest measured
+# tok/s first; see exp75_sweep.md): (chips, HBM GiB, bf16 TFLOP/s per chip).
+# Membership here is the allow-list -- resources() rejects anything else.
 TPUS: dict[str, TpuStats] = {
-    "v6e-8": TpuStats(chips=8, hbm_gib=32, tflops=918),  # primary
-    "v6e-4": TpuStats(chips=4, hbm_gib=32, tflops=918),  # fallback
-    "v5p-8": TpuStats(chips=4, hbm_gib=95, tflops=459),  # fallback
+    "v6e-8": TpuStats(chips=8, hbm_gib=32, tflops=918),  # primary, ~74k tok/s
+    "v5p-8": TpuStats(chips=4, hbm_gib=95, tflops=459),  # 2nd,     ~53k tok/s
+    "v6e-4": TpuStats(chips=4, hbm_gib=32, tflops=918),  # last,    ~41k tok/s; <=2 epochs only
 }
 
 HBM_FLOOR_GIB: int = 16
@@ -230,8 +230,8 @@ def plan_batch(res: ResourceConfig) -> BatchPlan:
 # `iris job run` command (`--region us-east5`). Within us-east5 the marin
 # preemptible pools have exactly one zone per family (v5p -> us-east5-a,
 # v6e -> us-east5-b), so `--region us-east5` alone fixes the zone. Primary is
-# v6e-8; fall back to v6e-4 or v5p-8 (equal priority) when the v6e-8 pool is
-# capacity-starved (see exp75_sweep.md "TPU & region selection").
+# v6e-8 (fastest); fall back to v5p-8 then v6e-4 (by measured throughput) when
+# the v6e-8 pool is capacity-starved (see exp75_sweep.md "TPU & region selection").
 DEFAULT_TPU: str = "v6e-8"
 
 
