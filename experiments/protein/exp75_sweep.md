@@ -181,10 +181,13 @@ v6e-32` is automatically batch; region is still always `--region us-east5`.
 | `v6e-16` | 16 | 4 | −1 / 1 | batch |
 | `v6e-32` | 32 | 8 | −1 / 1 | batch |
 
-- **Operator cap (batch is off-budget, so nothing else bounds it).** **Start at 5
-  total — one job on each of the five new types** — to probe availability and
-  realized throughput in parallel, then grow whichever wins. A priori it's unknown
-  which gives the most throughput or is even schedulable (bigger = scarcer).
+- **Operator cap (batch is off-budget, so nothing else bounds it).** Probe started
+  at 5 (one per type); **raised to 15** once multi-host proved out. Favor the
+  highest realized-throughput slices — by measurement the **v5p family** (v5p-64
+  best absolute ~333k tok/s, v5p-32 ~198k, v5p-16 ~102k; v6e batch MFU is only
+  ~10-12% so v6e-32 ~213k / v6e-16 ~130k lag). Don't pile a whole pool onto one
+  slice type — spread across the v5p and v6e preemptible pools so jobs actually
+  schedule (bigger = scarcer); the ≥1h-move rule relocates anything stuck.
 - **Record realized throughput** per `tpu × band` in
   [`exp75_throughput.md`](exp75_throughput.md) as runs report
   `throughput/tokens_per_second` — the reference for which slice to favor for new
@@ -345,6 +348,12 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   path works. Availability is the expected bottleneck (bigger = scarcer). The cross
   gives all 4 axis-neighbors of the center → start of the E2 interior-optimum check;
   extend as E1 firms up and the higher-LR (7e-4) E1 evals land.
+- **Update ~15:03Z — cap raised 5→15, 10 more E2 batch jobs (`w2d`)** to fill out a
+  full **5 LR × 3 WD** grid: LR ∈ {1.75e-4, 2.5e-4, 3.5e-4, 5e-4, 7e-4} × WD ∈
+  {0.02, 0.05, 0.1}. High-LR points (5e-4, 7e-4 — most decision-relevant given E1's
+  optimum is ≥3.5e-4) placed on the fastest slices (v5p-64, v6e-32); v5p favored 7/10
+  (best throughput + MFU), 3 on the v6e pool to avoid oversubscribing one pool. All
+  10 pending at launch (scarcity); ≥1h-move relocates any stuck.
 - Grid (final-step `eval/contacts-v1-val/loss`):
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
 - Measured drift 1→2: `Δlog lr=…, Δlog wd=…`
