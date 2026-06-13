@@ -183,15 +183,24 @@ def _cholesky_qr_once(m):
     return jnp.swapaxes(qt, -1, -2)
 
 
+_CHOLQR_ORTHO_TOL = 1e-3  # max|QᵀQ - I|; above this, fall back to robust jnp.linalg.qr
+
+
 def _qr_Q(matrix):
     """Orthonormal factor of `matrix`. CholeskyQR2 (MXU-native, lossless QR) or XLA's jnp.linalg.qr.
 
     CholeskyQR2 = two CholeskyQR passes (the second orthonormalizes the near-orthonormal first pass for
     numerical accuracy); it computes the same QR factorization as Householder QR up to column signs, which
-    the SOAP orthogonal-iteration is invariant to (validated projector-identical).
+    the SOAP orthogonal-iteration is invariant to (validated projector-identical). CholeskyQR2 forms MᵀM,
+    squaring the condition number, so it can be inaccurate for ill-conditioned matrices — we CHECK the
+    orthonormality of its output and fall back to the slower-but-robust Householder QR when it is too far off.
     """
     if _QR_IMPL == "cholesky":
-        return _cholesky_qr_once(_cholesky_qr_once(matrix))
+        q = _cholesky_qr_once(_cholesky_qr_once(matrix))
+        n = q.shape[-1]
+        eye = jnp.eye(n, dtype=q.dtype)
+        ortho_err = jnp.max(jnp.abs(jnp.einsum("...ki,...kj->...ij", q, q) - eye))
+        return jax.lax.cond(ortho_err < _CHOLQR_ORTHO_TOL, lambda: q, lambda: jnp.linalg.qr(matrix)[0])
     q, _ = jnp.linalg.qr(matrix)
     return q
 
