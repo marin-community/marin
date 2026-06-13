@@ -704,6 +704,55 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
         data_seed=23,
         checkpoints_per_run=5,
     ),
+    # Chained continuation from exp135-zoonomia-m3.2 at step-53235 (~75% through
+    # m3.2's absolute span of 70984, the nearest permanent checkpoint at/just
+    # before m3.2's cooldown starts at step 56787 = 0.8 * 70984). Same
+    # upstream-heavy 0.25/0.1875×4 mixture and cds-sized new portion as m3.2.
+    # No rewarmup — picks up at peak LR; combined run cools down over its last
+    # 20%.
+    MixConfig(
+        name="exp135-zoonomia-m3.3",
+        weights={
+            "cds": 0.1875,
+            "upstream": 0.25,
+            "downstream": 0.1875,
+            "ncrna_exon": 0.1875,
+            "ccre_non_promoter": 0.1875,
+        },
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["cds"],
+        continuation=ResumeBeforeCooldown(
+            checkpoint_path=(
+                "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i27-exp135-zoonomia-m3.2-da7a05/checkpoints/step-53235/"
+            ),
+            parent_step=53235,
+        ),
+        data_seed=24,
+        checkpoints_per_run=5,
+    ),
+    # Chained continuation from exp135-zoonomia-m1.2 at step-53244 (~75% through
+    # m1.2's absolute span of 70992, the nearest permanent checkpoint at/just
+    # before m1.2's cooldown starts at step 56794 = 0.8 * 70992). Same uniform
+    # 1/5 mixture and cds-sized new portion as m1.2. No rewarmup — picks up at
+    # peak LR; combined run cools down over its last 20%.
+    MixConfig(
+        name="exp135-zoonomia-m1.3",
+        weights={
+            "cds": 1 / 5,
+            "upstream": 1 / 5,
+            "downstream": 1 / 5,
+            "ncrna_exon": 1 / 5,
+            "ccre_non_promoter": 1 / 5,
+        },
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["cds"],
+        continuation=ResumeBeforeCooldown(
+            checkpoint_path=(
+                "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i28-exp135-zoonomia-m1.2-b52d8b/checkpoints/step-53244/"
+            ),
+            parent_step=53244,
+        ),
+        data_seed=25,
+        checkpoints_per_run=5,
+    ),
 )
 
 
