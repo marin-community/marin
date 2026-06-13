@@ -572,3 +572,25 @@ SCQR fails. BUT v4 isolated bench (full f32): jnp.qr 120ms, choleskyQR2 95ms, si
 **dual_scqr 215ms** (slowest — ortho-check QᵀQ + lax.cond + extra matmuls). So dual-SCQR is NOT a per-step
 MFU win; QR is only ~120/642ms of the opt-step anyway. Parked: only useful if it cuts COMPILE (cholesky vs
 XLA qr/eigh lowering) and amortized via precond_freq>1. MFU levers are sharding + precond_freq + bf16, not QR.
+
+### Efficiency baseline progress + corrected metrics (2026-06-13 ~21:15)
+GOAL refined: throughput/tokens_per_second >= 330k (0.99-EMA "time_average_factor=0.99"), compile <10min,
+loss regression <0.001 vs anchor, beat MuonH (3.5438).
+
+THROUGHPUT (0.99-EMA tok/s, the goal metric): anchor pf1=145k; pf2=236k; **pf8=305k** (peak 334k). pf>1 makes
+per-step MFU/tok bimodal (refresh step ~5% / non-refresh ~12%); judge by TIME-AVERAGE not peak (pf2 peak 12%
+but avg 8.5%). Ceiling ~334k = the f32 non-refresh step. -> need pf16/32 (approach ceiling) to clear 330k, OR
+push the ceiling (bf16/block-wise). Launched reparam_eig pf4/8/16/32 to (a) hit 330k via high pf, (b) verify
+loss-neutrality (reparam = eigenvalues from fresh-basis Gram diag at refresh, staleness-robust).
+
+LOSS: clean anchor (pf1) = **3.5204 < MuonH 3.5438** -> loss criterion met at baseline; need efficiency config to hold.
+
+COMPILE: measured via system/tpu.hloQueueSize.tensor_core_7 stably>10 (NOT log markers, NOT the TPU-alloc wait).
+identity_init (skip step-1 eigh) cuts compile ~90min -> ~28min (eigh lowering was a major cost) -- a REAL win,
+my earlier log-marker estimate was wrong. Still >10min; need more. JAX_LOG_COMPILES=1 gives per-function compile
+breakdown (clean, wait-independent) -> next compile lever (block-wise SOAP shrinks QR/grams). east5 preemptible
+contention is blocking diagnostics; using reserved v4 serially.
+
+DONATION ("buffers not usable"): all-non-square leaves -> a LAYOUT mismatch (sharding matched; with_sharding_constraint
+was a no-op). Fix: with_layout_constraint pinning output train-state to row-major (matches jnp.zeros-init buffers).
+Testing on reserved v4.
