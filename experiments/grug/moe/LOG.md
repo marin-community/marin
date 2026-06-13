@@ -503,3 +503,12 @@ consistent). The 2× opt-step speedup (285k tok/s) is real but trades quality. K
 **Goal B resolution: the clean LOSS-NEUTRAL ~10% MFU is the SHARDING (shard_map 4×, bit-identical) — meets the
 10% target.** A loss-free >10% needs the full reparametrization (store P, incremental update, rotate in subspace)
 or better subspace selection — deferred (substantial). subspace_frac stays in code (default 1.0 = bit-identical).
+
+### Schedule axis: min_lr FLOOR HURTS; trying cosine SHAPE (2026-06-13 ~14:00)
+sched-floor0p05/0p10 (anchor + min_lr_ratio=0.05/0.10) STALLED at train ~6.0 (vs anchor 4.2 @step1000) —
+started identical (@100≈9.1) then diverged after warmup. LR schedule verified identical early + frac=1.0
+bit-identical, so a nonzero LR FLOOR genuinely hurts KLSOAPH (2nd-order method needs to decay fully to settle;
+a persistent floor keeps perturbing → stalls). Floor lever ABANDONED, runs killed. Next: cosine decay SHAPE
+(min_lr→0, but keeps LR higher mid-run then drops steeply — may help KLSOAPH hold its mid-run lead through the
+tail where the linear schedule loses it). Launched sched-cosine (beta1=0.95, cosine, min_lr=0). If it doesn't
+beat 3.5438, conclude KLSOAPH full-matrix matches MuonH within +0.1% (3.5475) — likely intrinsic — and report.
