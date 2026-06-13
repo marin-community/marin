@@ -404,7 +404,10 @@ def run_grug_logprob_eval(config: GrugLogprobEvalConfig) -> None:
             # than chase further version skew, wrap the function to fall back to the
             # task name when the read returns None.
             from lm_eval import evaluator_utils as _eu
-            if not getattr(_eu, "_marin_prepare_print_tasks_patched", False):
+            # bye-fork removed `prepare_print_tasks` entirely. If the symbol
+            # isn't there, the upstream bug we're patching around doesn't
+            # apply on this lm-eval revision, so we just skip the patch.
+            if hasattr(_eu, "prepare_print_tasks") and not getattr(_eu, "_marin_prepare_print_tasks_patched", False):
                 _orig_prep = _eu.prepare_print_tasks
                 def _safe_prep(task_dict, results, task_depth=0, group_depth=0):
                     # Try the upstream aggregation but never let it block result
