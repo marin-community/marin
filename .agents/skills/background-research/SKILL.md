@@ -1,0 +1,194 @@
+---
+name: background-research
+description: "Forage prior work before or during Marin research threads: search internal Marin artifacts and external literature/code; produce a cited brief with negative results and ranked experiment hypotheses."
+---
+
+# Skill: Background Research
+
+Use this when a research, design, or experiment thread needs a compact prior-work
+pass before choosing hypotheses, drafting a design, or launching runs. This is a
+subroutine, not an outer loop: compose it with `run-research`, `change-grug`,
+`write-design-doc`, or a domain skill when the work needs context.
+
+The value is Marin's spin, not generic search advice. Agents are already good at
+web search; this skill makes them search Marin's own scientific record, preserve
+provenance, and hand off experiment-ready hypotheses.
+
+## Effort
+
+Pick an effort level and state it at the top of the output. These are
+approximate targets, not hard timers. Stop earlier when new sources no longer
+change the ranked hypotheses; go longer only when the user asks or the decision
+is expensive enough to justify it.
+
+- `low` (3-7 min): current issue/logbook, obvious local refs, and a few external
+  sources. Use for small follow-ups or when the user provides strong context.
+- `medium` (10-15 min): default. Search internal Marin sources plus targeted
+  external literature/code, include a contradiction pass, and produce a source
+  ledger plus ranked next experiments.
+- `high` (30-60 min): for expensive runs, architecture changes, data/eval
+  decisions, or public claims. Use subagents for independent tracks when useful:
+  internal Marin corpus, external literature/code, and W&B/report sources.
+  Record query strings and rejected-source notes.
+
+Effort changes breadth and provenance depth, not claim quality. Even `low`
+effort must cite sources and distinguish evidence from speculation.
+
+## Search Order
+
+Search internal and external sources in parallel when possible, but do not skip
+the internal pass. Prefer durable artifacts over transient conversation.
+
+1. Current issue, PR, research logbook, or design file.
+2. GitHub issues and PRs, especially experiment issues and linked comments.
+3. `docs/reports/index.md`, `docs/reports/`, `docs/experiments/`, model cards.
+4. Existing logbook files and `.agents/projects/*/research.md`.
+5. Relevant code and experiment definitions under `experiments/`, `lib/`, and
+   long-lived research branches or tags.
+6. W&B reports/runs and Data Browser links surfaced from issues, reports, or
+   logbooks.
+7. External papers, blog posts, official docs, codebases, arXiv, OpenReview,
+   Semantic Scholar, and cited references.
+
+For external search, include at least one adversarial query family for
+`medium`/`high`: terms like `failure`, `negative result`, `ablation`, `does not
+improve`, `regression`, `replication`, or `implementation detail`.
+
+## Design-Doc Mode
+
+When `write-design-doc` uses this skill, the output usually lands in
+`.agents/projects/<slug>/research.md`. Keep it focused on design inputs, not
+experiment execution.
+
+Include:
+
+- Relevant files with line numbers; the design must reference real code.
+- Related designs in `.agents/projects/`, with overlap and differences.
+- Related GitHub issues/PRs when known or discoverable.
+- Existing utilities or abstractions the proposal might reuse.
+- Prior-art shape when the proposal reinvents a category of system such as a
+  logger, stats store, queue, scheduler, KV store, service-discovery layer, or
+  workflow engine.
+- What surprised you and what remains unclear.
+
+For design-doc prior art, use `low` or `medium` effort by default. The goal is
+to surface obvious patterns and reviewer reference points, not to run a full
+literature review. Skip external prior art for narrow in-repo refactors,
+internal API tweaks, or designs where the category is novel to this repo rather
+than novel to the world.
+
+## Source Handling
+
+- Keep raw sources as ground truth. The brief is derived and may be wrong.
+- Prefer primary sources: papers, official docs, code, issues, W&B runs, reports.
+- Record source version/date when it affects interpretation.
+- Grade evidence by claim, not by source prestige. Directness to Marin's regime
+  matters: model scale, hardware, data, objective, optimizer, context length,
+  evaluation harness, and implementation constraints.
+- Treat contradictions and negative results as first-class evidence.
+- Record meaningful "not found" results when a search was expected to find
+  something and did not.
+
+## Output Contract
+
+Write a compact brief in the research logbook, issue comment, or
+`.agents/projects/<slug>/research.md`, depending on the parent workflow. If an
+experiment issue exists, also provide a short issue-ready `Prior work` block.
+
+```md
+## Background Research Brief
+
+- Effort:
+- Stop rule:
+- Date:
+
+### Question
+
+### Current Marin Context
+
+### Internal Prior Work
+
+### External Prior Art
+
+### Negative / Failed Leads
+
+### Evidence Map
+
+#### Claim: <short claim>
+- Support:
+  - <source>: <one-line evidence>
+- Contradictions:
+  - <source>: <one-line caveat or failed result>
+- Directness to Marin:
+- Confidence:
+- Action:
+
+### Recommended Next Experiments
+
+#### 1. <hypothesis>
+- Minimum experiment:
+- Baseline/control:
+- Expected signal:
+- Falsifier:
+- Cost/risk:
+- Sources:
+
+### Hypothesis Queue Update
+- Add:
+- Revise:
+- Falsify / stop:
+- Promote:
+
+### Source Ledger
+| Source | Type | Location | Claim used for | Confidence | Notes |
+|---|---|---|---|---|---|
+
+### Handoff
+- Suggested issue `Prior work` block:
+- Suggested logbook entry:
+- Open questions:
+- Stop reason:
+```
+
+Use source types such as `paper`, `external code`, `official docs`, `GitHub
+issue`, `PR`, `report`, `logbook`, `W&B`, `Data Browser`, and `Marin code`.
+
+Use tables only for compact metadata. For claims, caveats, hypotheses, or any
+cell likely to contain prose, use block-style cards so GitHub remains readable.
+
+For research threads with a logbook, treat the hypothesis queue as a living
+index derived from append-only entries. New hypotheses can be added and old
+hypotheses can be revised, falsified, or promoted in the queue, but the evidence
+that caused each state change must remain linked to an append-only logbook
+entry, issue comment, W&B run, commit, or tag.
+
+## Hypothesis Quality
+
+Recommended experiments should be actionable without re-reading the full source
+set. Each candidate needs:
+
+- A falsifiable hypothesis.
+- The smallest experiment that could change the decision.
+- Baseline or control.
+- Primary metric and expected direction.
+- Cost/risk.
+- Source links.
+- Confidence: `exploratory`, `replicated`, or `stable` when evidence supports
+  those labels; otherwise say why confidence is weak.
+
+## What To Skip
+
+- Do not build a global Marin paper library or LLM wiki unless explicitly asked.
+- Do not add new MCP servers or ingestion tools as part of this skill.
+- Do not paste long paper summaries when a claim-level evidence table is enough.
+- Do not use transient conversation as the durable record; file the synthesis in
+  the issue/logbook/research file.
+- Do not overrun into experiment execution unless the parent skill asks for it.
+
+## LLM-Wiki Pattern
+
+Borrow the principle, not the product. A background-research brief is a tiny
+scoped wiki page: raw sources remain immutable ground truth, the source ledger
+is the index, and the brief is derived synthesis. If accumulated briefs become
+hard to navigate, add an index later; do not start with global knowledge-base
+machinery.

@@ -23,15 +23,15 @@ When posting a snapshot to an issue or PR, include:
 - Pinned GitHub tree/file links for logbooks, benchmark outputs, configs, and
   reports.
 - Exact command(s).
-- Hardware/cluster and device count.
-- Critical environment variables.
-- Primary comparison table or a link to W&B/report artifacts.
+- Relevant details like: hardware/cluster and device count; critical, durable, non-secret environment variables; primary comparison table or a link to W&B/report artifacts.
 
 Pinned GitHub tree links should include the commit or tag, for example:
 
 ```text
 https://github.com/marin-community/marin/tree/<commit-or-tag>/.agents/logbooks/foo.md
 ```
+
+Prefer to use anchor text, even if it's just the filename.
 
 ## Validation
 
@@ -40,4 +40,4 @@ Before presenting a snapshot as evidence:
 - The command is reproducible from the snapshot.
 - Shapes/configs and environment are explicit.
 - The logbook and issue link to the same result.
-- Dense data has an artifact or W&B link.
+- Dense data has an artifact, W&B, or dashboard link.

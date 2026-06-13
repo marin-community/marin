@@ -1,9 +1,9 @@
 ---
-name: task-docs
+name: update-docs
 description: "Update documentation, runbooks, and reusable task guidance when implementation work or experiments change behavior or operational practice."
 ---
 
-# Skill: Task Docs
+# Skill: Update Docs
 
 Use this when a task changes behavior, reveals stale instructions, creates a new
 operational pattern, or produces guidance that should survive outside the issue
@@ -26,8 +26,6 @@ unfocused.
 
 - Describe current behavior, not aspiration.
 - Include exact commands and paths for operational procedures.
-- Link to issues, PRs, W&B reports, logbooks, or pinned code when they are part
-  of the evidence trail.
 - Remove or correct stale instructions rather than adding caveats around them.
 - Keep broad docs concise; put detailed run notes in logbooks or issue comments.
 
@@ -38,3 +36,7 @@ unfocused.
   the whole issue thread.
 - Any generated guidance is generalized enough to reuse and specific enough to
   act on.
+
+## Related Skills
+
+Follow `.agents/skills/writing-style/SKILL.md` for writing-style guidance.

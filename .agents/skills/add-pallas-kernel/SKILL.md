@@ -8,9 +8,10 @@ description: Add, modify, or autotune a TPU/GPU Pallas kernel.
 This is a specialization of `.agents/skills/run-research/SKILL.md`.
 
 Use `run-research` for the generic research lifecycle. It composes the reusable
-logbook, issue-update, W&B reporting, docs, and snapshot skills. This skill adds
-kernel-specific standards for numerics and gradient safety, backend/fallback API
-design, TPU/GPU performance diagnosis, and block-size autotuning.
+logbook and issue-update guidance, W&B reporting, snapshot, and update-docs
+skills. This skill adds kernel-specific standards for numerics and gradient
+safety, backend/fallback API design, TPU/GPU performance diagnosis, and
+block-size autotuning.
 
 ## How to apply this skill
 
@@ -110,6 +111,9 @@ Minimum checks: value parity over a shape/dtype grid, gradient parity on small s
 
 For in-tree kernels, add/extend tests under `lib/levanter/tests/kernels/`. Compare the default implementation against the reference on small CPU shapes and accelerator-aligned shapes for fast paths.
 
+
+
+
 ## Cost Estimate Requirement
 
 Add `cost_estimate=` to each `pl.pallas_call`:
@@ -143,7 +147,13 @@ Use the execution environment guidance and cadence from `run-research`; this sec
 
 Key iteration loop: `profile -> hypothesis -> change -> tests -> microbench -> profile`
 
+Run one-axis sweeps first, then interaction sweeps. Keep comparisons
+apples-to-apples: same shape, dtype, pass mode, backend, device count, and
+environment unless that axis is under test. Only move the baseline after enough
+repeated evidence, and note the change explicitly.
+
 Always report: compile-including timing (`time-to-first-step`), steady-state timing, and exact hardware type and shape/dtype grid.
+
 
 ## Autotuning Workflow
 
@@ -222,6 +232,26 @@ Tokamax kernels are useful references for API and kernel structure comparisons.
 - Compare numerics/perf on identical shapes/dtypes before drawing conclusions.
 - Parse `absl.flags` before accessing Tokamax modules that depend on flags.
 - Tokamax Mosaic kernels can OOM VMEM at larger shapes; reduce shape/tile sizes for controlled comparisons.
+
+## Rules
+
+- Separate measurement code from the production path whenever possible.
+- Prefer persistent remote shells/scripts for long sweeps.
+- Check accelerator contention before attributing regressions to code.
+- For long remote runs, track a monotonic progress signal and tail recent logs
+  for context.
+- Validate machine-readable extraction before publishing: expected row counts,
+  key uniqueness, and de-duplication.
+
+Ops hygiene checklist before claiming a regression:
+
+- No stale benchmark process is still occupying the accelerator.
+- Lockfiles/state are clean.
+- Comparison uses the same device count.
+- Command/config/env are identical except the tested axis.
+
+
+
 
 ## Further Reading
 
