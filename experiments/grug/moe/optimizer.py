@@ -331,6 +331,7 @@ def scale_with_grug_klsoaph(
     eps: float = 1e-8,
     precond_freq: int = 1,
     init_factor: float = 0.1,
+    subspace_frac: float = 1.0,
     learning_rate: float = 0.018,
 ) -> optax.GradientTransformation:
     """KL Soap H: full-matrix SOAP-eigenbasis Adam direction + hyperball post-step.
@@ -347,6 +348,7 @@ def scale_with_grug_klsoaph(
         eps=eps,
         precond_freq=precond_freq,
         init_factor=init_factor,
+        subspace_frac=subspace_frac,
     )
 
     def init_fn(params):
@@ -384,6 +386,7 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
     epsilon: float = 1e-8  # SOAP eigenbasis Adam eps (upstream PR #290)
     precond_freq: int = 1
     init_factor: float = 0.1
+    subspace_frac: float = 1.0  # <1 => cyclic subspace QR refresh (MFU); 1.0 = full QR (default)
     # Real-Adam settings for the NON-SOAP groups (adamh: lm_head/output_proj; adam: embeddings/router),
     # kept SEPARATE from the SOAP eigenbasis betas/eps above so the SOAP group is the only variable
     # vs the MuonH baseline. Defaults match the d512 MuonH run (heuristic beta1=0.9062, beta2=0.999,
@@ -416,6 +419,7 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
                         eps=self.epsilon,
                         precond_freq=self.precond_freq,
                         init_factor=self.init_factor,
+                        subspace_frac=self.subspace_frac,
                         learning_rate=klsoaph_lr,
                     )
                 )
