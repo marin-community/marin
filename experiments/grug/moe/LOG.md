@@ -296,6 +296,25 @@ Since the anchor ~ties MuonH and beta1=0.90 improves ~0.03, **beta1=0.90 should 
 **Round-3 launched:** push beta1 lower — r3-beta1-0p85 (/073633), r3-beta1-0p80 (/073654), v5p-8 east5.
 Re-anchor → beta1=0.90 (will reconfirm at later steps + pick best of {0.80,0.85,0.90}).
 
+## MFU HILL-CLIMB (continuous) — 2026-06-13 ~08:10
+sharded-anchor-v2 (shard_map per-expert distribution) hit **147.9k tok/s ≈ 0.89 s/step = 4.0× the
+replicated 38.8k** (MFU ~2%→~8-10%). Stabilizes by ~step 10 (per user). "Still not great" vs MuonH
+(530k tok/s ≈ 0.25 s/step) — residual ~0.64 s/step is SOAP overhead (projections+QR+reshard), 3.6× MuonH.
+**Methodology:** hill-climb like the loss coordinate descent. Fast inner loop = `soap_mfu_bench.py` (times
+ONLY scale_by_klsoaph.update() on real d512 expert shapes under a (data,expert) mesh — minutes, no 45-min
+full compile). Confirm winners with real tok/s@step10. Keep a running-best; one axis per variant.
+**Axes (loss-impact noted; prefer loss-NEUTRAL, validate bit-identical):**
+1. [neutral] persistent sharded optimizer STATE — init_fn currently makes replicated state, so each step
+   reshards state replicated->sharded->replicated (gather round-trip). Store state expert-sharded -> per-step
+   reshards only the GRAD (gather matrix dims), not the state. Likely the biggest comm win.
+2. [neutral, validated] cholesky_qr2 instead of jnp.linalg.qr (~12% on the 75ms QR; projector-identical).
+3. [near-neutral] bf16 for the projection/gram MATMULS, keep eigh/QR f32 (MXU 2× on the matmul bulk).
+4. [neutral] reduce per-leaf shard_map overhead (12 expert leaves each reshard+shard_map separately; batch).
+5. [loss-affecting] precond_freq>1 (skip QR-refresh/eigh most steps) — measure MFU gain AND loss cost; only
+   adopt if loss barely moves (user wants freq=1 for quality, so this is a last resort / diagnostic).
+Baseline opt_step time being measured by microbench (job 081251). Round 1 = persistent-sharded-state +
+cholesky_qr2 (both loss-neutral).
+
 ### Config-parity de-risk — weight decay (2026-06-12)
 Checked: MuonH baseline config stores weight_decay=0.1, BUT neither GrugMoeMuonHConfig.build() nor
 GrugMoeKLSoapHConfig.build() references add_decayed_weights/weight_decay — both custom build()s leave
