@@ -376,3 +376,16 @@ NaN-skip guard wouldn't fix it — it'd keep the inconsistent loaded state).
 Discriminator: inspect raw saved checkpoints — DEAD soapwu0p10 step-3748 (job 084828) vs HEALTHY
 beta2-0p95 step-10980 (finished clean, job 084849). If healthy raw checkpoint is finite but reload
 into-template NaNs → load/structure bug. If saved arrays already NaN → in-memory at save.
+
+### NaN-after-loading: ROUND-TRIP TEST CLEAN (2026-06-13) — save/load is NOT the cause
+Built real GrugMoeKLSoapHConfig optimizer, populated SOAP state (3 steps), saved via levanter
+save_checkpoint, reloaded into a FRESH template with allow_partial=True (trainer's resume path):
+**32/32 opt-state leaves loaded, 0 non-finite, 0 reset-to-init, 0 structure mismatch, post-load step finite.**
+=> levanter save/load does NOT introduce NaN and allow_partial does NOT drop KLSOAPH leaves. A FINITE
+checkpoint reloads cleanly. (The orbax "incomplete checkpoint" earlier = orbax can't read levanter's
+tensorstore format; red herring.)
+CONCLUSION: the NaN originates IN-MEMORY (transient SOAP gram/eigh overflow at step 3748 on the unstable
+long-warmup soapwu0p10 trajectory), then gets SAVED -> any reload of that poisoned checkpoint NaNs
+("nan on loading" symptom). Root = NaN state persisted, NOT load logic. The NaN-guard (skip non-finite
+step, keep last-good state) PREVENTS NaN from ever entering state/checkpoint => checkpoints stay finite =>
+reload always clean. So the guard fixes BOTH the in-process death AND nan-after-loading, by prevention.
