@@ -235,6 +235,14 @@ the SOAP preconditioner lag wants a longer warmup while adam groups stay apples-
 SOAP warmup 0.05 → SOAP lr still warming at step 110 (0.0020) while adam peaked (0.0098). Watching whether any
 round-2 point tracks MuonH tighter than the anchor's +0.04 plateau. Round-1 still running for the final-gap read.
 
+### 🔑 UPDATE ~05:44 UTC — gap CLOSING AGAIN in the LR-decay phase (plateau was mid-run only)
+beta2-0p95 (round-1 leader) gap-vs-MuonH: @1k +0.108, @2k +0.059, @3-5k ~+0.038, @6k +0.048, **@8k +0.019**.
+The mid-run +0.04 plateau was NOT the end — the LR-decay phase (6k→8k) is closing the gap (3.729 vs MuonH
+3.71 @8k). If it continues to step 10979, the anchor family could land AT or BELOW MuonH 3.5438. So the
+earlier "won't beat it" was premature — final post-decay number is the verdict (~2.5h out). center (v4) lags
+in steps but tracks the same (beta2 neutral). Round-2 (9 pts) just past compile (~step 300, no evals yet).
+Decision deferred to: (a) round-1 FINAL gap, (b) round-2 gap-at-matched-steps vs this trajectory.
+
 ### Config-parity de-risk — weight decay (2026-06-12)
 Checked: MuonH baseline config stores weight_decay=0.1, BUT neither GrugMoeMuonHConfig.build() nor
 GrugMoeKLSoapHConfig.build() references add_decayed_weights/weight_decay — both custom build()s leave
