@@ -32,6 +32,50 @@ misses iris **queue/pending** time before a run starts — scarce-slice scheduli
 latency (e.g. v5p-64) is handled separately by the ≥1 h relocate rule. Re-measure
 periodically; never assume bigger = faster.
 
+### How to compute it (do it exactly this way every time)
+
+Every input is a **single W&B summary scalar per run** — no history scan, no
+per-step work. Per run, then token-weighted per slice:
+
+```python
+import wandb
+from datetime import datetime, timezone
+
+def to_unix(iso):                      # run.created_at is an ISO string, not a summary key
+    return datetime.fromisoformat(iso.replace("Z", "+00:00")).replace(tzinfo=timezone.utc).timestamp()
+
+api = wandb.Api()
+runs = api.runs("eric-czech/marin", filters={"group": "exp75-contacts-v1-tune"})
+agg = {}                               # key = (tpu, band)
+for r in runs:
+    if not r.name.endswith("-v1"):     # current campaign only (skip v0/v0.1 smoke)
+        continue
+    s = r.summary
+    tok  = s.get("throughput/total_tokens")        # cumulative tokens (= step * 1.05M)
+    rt   = s.get("_runtime")                        # ACTIVE seconds (excludes dead time)
+    wall = s.get("_timestamp") - to_unix(r.created_at)   # elapsed incl. preemption
+    if not tok or not rt or wall <= 0:             # skip not-yet-started runs
+        continue
+    tts = s.get("throughput/tokens_per_second")     # instantaneous rate
+    mfu = s.get("throughput/mfu")                    # instantaneous %
+    tags = dict(x.split("=", 1) for x in (r.tags or []) if "=" in x)
+    a = agg.setdefault((tags.get("tpu"), tags.get("band")),
+                       dict(tok=0, wall=0, rt=0, tts=[], mfu=[]))
+    a["tok"] += tok; a["wall"] += wall; a["rt"] += rt          # SUM cumulative scalars
+    a["tts"].append(tts); a["mfu"].append(mfu)                 # AVERAGE rates (never sum)
+
+# per slice:
+#   wts  = a.tok / a.wall          <- DECISION METRIC, rank slices by this (desc)
+#   ats  = a.tok / a.rt
+#   tts  = mean(a.tts)             # mfu = mean(a.mfu)
+#   dead% = (a.wall - a.rt) / a.wall
+```
+
+Summing `tok`/`wall`/`rt` across a slice's runs is safe **because each point is one
+wandb object** (0 multi-object points). If that ever changes (a point splits into
+separate `crashed`+resumed objects), dedup per point first (cumulative `tok` would
+double-count). `tts`/`mfu` are rates → **average, never sum**.
+
 All tables backfilled & verified ~18:00Z, **ranked by `wts`** (token-weighted over
 all v1 runs on each slice). `dead% = (wall − _runtime)/wall` = fraction of elapsed
 clock the run was preempted/dead.
