@@ -203,6 +203,7 @@ def _klsoaph_step(
     eps: float,
     precond_freq: int,
     init_factor: float,
+    identity_init: bool = False,
 ):
     """Run one full-matrix SOAP step over the (..., rows, cols) gradient.
 
@@ -225,8 +226,15 @@ def _klsoaph_step(
         new_gg_r = jnp.einsum("...ki,...kj->...ij", g32, g32) / inner_rows
         new_gg_l = _symmetrize(new_gg_l)
         new_gg_r = _symmetrize(new_gg_r)
-        new_q_l = _flipped_eigh(new_gg_l)
-        new_q_r = _flipped_eigh(new_gg_r)
+        # eigh gives the exact initial eigenbasis but is the single heaviest XLA lowering (compiled into
+        # the graph though it runs only at step 1). identity_init skips it: keep q = I (the init_fn value)
+        # and let the warm-started QR refresh converge it over the first steps -> much faster compile.
+        if identity_init:
+            new_q_l = q_l
+            new_q_r = q_r
+        else:
+            new_q_l = _flipped_eigh(new_gg_l)
+            new_q_r = _flipped_eigh(new_gg_r)
         new_esi_l = jnp.full_like(esi_l, init_factor**-0.5)
         new_esi_r = jnp.full_like(esi_r, init_factor**-0.5)
         zero_dir = jnp.zeros_like(g32)
@@ -349,6 +357,7 @@ def _klsoaph_step_sharded(
     eps: float,
     precond_freq: int,
     init_factor: float,
+    identity_init: bool = False,
 ):
     """Distribute the per-expert SOAP step across the mesh via ``shard_map``.
 
@@ -366,6 +375,7 @@ def _klsoaph_step_sharded(
         eps=eps,
         precond_freq=precond_freq,
         init_factor=init_factor,
+        identity_init=identity_init,
     )
     mesh = jax.sharding.get_abstract_mesh()
     batched = hasattr(grad, "ndim") and grad.ndim >= 3
@@ -426,6 +436,7 @@ def scale_by_klsoaph(
     eps: float = 1e-8,
     precond_freq: int = 1,
     init_factor: float = 0.1,
+    identity_init: bool = False,
 ) -> optax.GradientTransformation:
     """Full-matrix SOAP-style preconditioner (upstream KLSOAPH, de-blocked).
 
@@ -492,6 +503,7 @@ def scale_by_klsoaph(
                 eps=eps,
                 precond_freq=precond_freq,
                 init_factor=init_factor,
+                identity_init=identity_init,
             )
             direction = out[0].astype(grad.dtype)
             return _SoapStepResult(direction, *out[1:])

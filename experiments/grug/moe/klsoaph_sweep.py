@@ -77,6 +77,7 @@ _optimizer = GrugMoeKLSoapHConfig(
     epsilon=_f("KLSOAPH_EPS", 1e-8),
     precond_freq=int(os.environ.get("KLSOAPH_PRECOND_FREQ", "1")),
     init_factor=_f("KLSOAPH_INITF", 0.1),
+    identity_init=os.environ.get("KLSOAPH_IDENTITY_INIT", "0").lower() in ("1", "true", "yes"),
     # Non-SOAP groups pinned to the d512 MuonH baseline (apples-to-apples) — env-overridable:
     adam_lr=_f("KLSOAPH_ADAM_LR", _muonh.adam_lr),
     adam_beta1=_f("KLSOAPH_ADAM_BETA1", _muonh.beta1),
