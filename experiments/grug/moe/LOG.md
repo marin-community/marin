@@ -526,3 +526,23 @@ rotate in subspace) which keeps EIGENVALUES full-basis every step (the loss-pres
 skipped). Implementing that = 10.2% MFU at the anchor's loss. Also restarted soapwu0p05/0p10 (the NaN'd warmup
 runs) on NaN-safe code to verify the guard+sanitizer. NOTE: precond_freq>1 (freq=4→9%, freq=8→11% MFU) also
 cuts the QR cost but trades quality (stale basis) — same issue; subspace+full-reparam is the quality-preserving route.
+
+### Lossless-MFU lever: CholeskyQR2 QR backend + precision guard (2026-06-13 ~16:55)
+Per user steer ("first think faster QR losslessly + better sharding, not subspace"), the subspace-QR
+quality loss is avoided. New lossless QR path: KLSOAPH_QR=cholesky uses CholeskyQR2 (G=MᵀM -> Cholesky ->
+triangular-solve, two passes), which is MXU-native (matmul-heavy) vs XLA's sequential-reflection Householder
+QR. The subspace-QR(0.25) MFU jump (5.2->10.2%) showed QR DOMINATES opt-step time, so a faster *full* QR is
+the right lossless lever. CholeskyQR2 forms MᵀM (squares cond number) -> inaccurate on ill-conditioned grams,
+so _qr_Q now CHECKS max|QᵀQ-I| < 1e-3 and falls back to jnp.linalg.qr (robust) when the Cholesky path is too
+far off — keeps QR bit-accurate while fast on the well-conditioned common case. Validated on CPU: well-cond
+input -> cholesky (ortho_err 1e-6), cond~1e12 -> falls back to jnp.qr (3.5e-7); both orthonormal. Direction
+diff vs xla-QR ~3e-4 over 40 steps (loss-neutral).
+Microbench reworked to time BOTH backends in one job (monkeypatch _QR_IMPL + re-jit) -> single apples-to-apples
+speedup number. v5p-8 microbenches (164335 xla / 164352 cholesky) stuck PENDING behind 6 east5 sweep finals;
+relaunched the both-backend bench on the IDLE reserved v4-32 central2 (165749) for the cholesky-vs-xla ratio.
+
+### Compute-contention status (2026-06-13 ~16:55)
+10 of my jobs running, all 6 Goal-A/NaN-fix finals on east5 v5p-8 preemptible (adamlr2x/0p5, adamb2-0p99,
+soapeps1e6, soapwu0p05-v2, soapwu0p10-v2) — all cold-starting (train children not yet RUNNING). sched-cosine
+restarted at step 8 (was preempted). r4-beta1-0p70 near done @10475 paloma macro 3.612 (beta1=0.70 = known-wrong
+direction, won't beat 3.5438). No premature conclusions under contention — let them finish.
