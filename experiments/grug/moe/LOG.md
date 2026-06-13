@@ -546,3 +546,29 @@ relaunched the both-backend bench on the IDLE reserved v4-32 central2 (165749) f
 soapeps1e6, soapwu0p05-v2, soapwu0p10-v2) — all cold-starting (train children not yet RUNNING). sched-cosine
 restarted at step 8 (was preempted). r4-beta1-0p70 near done @10475 paloma macro 3.612 (beta1=0.70 = known-wrong
 direction, won't beat 3.5438). No premature conclusions under contention — let them finish.
+
+### NEW criterion: compile < 10 min + understanding the ~24-min compile (2026-06-13 ~18:15)
+Goal updated: the d512 run must also COMPILE in <10 min (was ~24-30). Root-cause analysis (not blind):
+per-step linalg in `_klsoaph_step` = `jnp.linalg.qr ×2` (refresh branch) + `_flipped_eigh` (eigh) ×2
+(init branch — compiled even though it only RUNS at step 1, since lax.cond compiles all branches).
+Isolated v4 compiles: eigh 13s, qr 3.5-10s — none is 24min alone, so 24min is the FULL graph (6 layers
+× 2 leaves × {eigh-init + qr-refresh}, nested lax.cond, shard_map). Prime suspects: batched-eigh lowering
+(heaviest, runs once but compiled) and a **DOUBLE COMPILE**: `_init_state` jit has no out_shardings ->
+opt.init produces REPLICATED state, but `_klsoaph_step_sharded` returns mat_p (out_specs) -> step-1 input
+(replicated) differs from step-2+ input (mat_p) -> train_step compiles TWICE.
+
+### Lossless lever 1: persistent expert-sharded opt-state (compile + MFU) — TESTING (job 181654 fix-shard)
+Fix: init_fn now reshards every per-expert leaf (gg/q [E,n,n], esi [E,n]) to mat_p, so the state is STORED
+sharded from step 0. Eliminates (a) the step1-vs-step2 double-compile, (b) the per-step replicated<->mat_p
+reshard round-trip, (c) ~mesh-size× opt-state HBM. Pure layout = lossless. Verified on 4-dev CPU mesh:
+gg_l init P(('data','expert'),..), persists across steps, finite. Launched fix-shard on v5p-8 east5 to
+measure compile time + MFU + loss vs fix-anchor (which has the replicated-init code).
+
+### QR oracle study (Su Jianlin streaming-power-iteration, muon_streaming_power_iteration.md) (2026-06-13)
+KLSOAPH refresh `qr(GG@q)` == the article's NAIVE single QR (SCQR Cholesky sees qᵀGG²q -> cond(GG)²).
+Implemented dual-orthogonalization SCQR (eq.4, from GG alone): projector-IDENTICAL to qr(GG@q) (projΔ=0.0
+CPU, cond 1e3 AND 1e6) with each Cholesky at cond(GG) not cond². LOSSLESS + well-conditioned where single
+SCQR fails. BUT v4 isolated bench (full f32): jnp.qr 120ms, choleskyQR2 95ms, single-scqr 166ms,
+**dual_scqr 215ms** (slowest — ortho-check QᵀQ + lax.cond + extra matmuls). So dual-SCQR is NOT a per-step
+MFU win; QR is only ~120/642ms of the opt-step anyway. Parked: only useful if it cuts COMPILE (cholesky vs
+XLA qr/eigh lowering) and amortized via precond_freq>1. MFU levers are sharding + precond_freq + bf16, not QR.
