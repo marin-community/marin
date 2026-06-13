@@ -458,3 +458,9 @@ UNCHANGED); sharded(frac=1.0)==replicated (0.0) on (data,expert) mesh; frac=0.25
 finite over steps, sharded finite. Microbench frac=1.0 vs 0.25 launched (jobs 122212/122232) to measure the
 opt_step cut on the 337ms (53%) QR-refresh. NEXT: if microbench shows a clear cut, loss-validation run with
 the winning beta1 + subspace_frac=0.25 (must still beat MuonH 3.5438); sweep frac∈{1,1/2,1/4} for MFU/quality.
+
+### 🚀 Subspace-QR MFU RESULT (2026-06-13) — 2× opt-step cut → ~16% MFU
+Microbench (v5p-8, 6 layers): opt_step 642.8ms@frac1.0 → **311.4ms@frac0.25** = 2.06× cut (the QR-refresh,
+53% of step, slashed). End-to-end est: step ~0.89s→~0.56s → tok/s ~234k → **~16% MFU** (vs ~10% sharding-only,
+~2-4% replicated). Clears the 10% goal. Launched loss-validation run ss0p25-b80 (beta1=0.80 + subspace_frac=0.25)
+on v5p-8 east5 to confirm it STILL beats MuonH 3.5438 (compare to r3b-beta1-0p80 frac=1.0) + measure real tok/s.
