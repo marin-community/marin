@@ -38,6 +38,20 @@ _BUDGET = 840
 _EXTRA_LOGPROB_TASKS: tuple[EvalTaskConfig, ...] = (
     EvalTaskConfig("arc_easy", 0, task_alias="arc_easy_0shot"),
     EvalTaskConfig("arc_challenge", 0, task_alias="arc_challenge_0shot"),
+    EvalTaskConfig("hellaswag", 0, task_alias="hellaswag_0shot"),
+    EvalTaskConfig("winogrande", 0, task_alias="winogrande_0shot"),
+    EvalTaskConfig("piqa", 0, task_alias="piqa_0shot"),
+    EvalTaskConfig("social_iqa", 0, task_alias="socialiqa_0shot"),
+    EvalTaskConfig("sciq", 0, task_alias="sciq_0shot"),
+    EvalTaskConfig("openbookqa", 0, task_alias="openbookqa_0shot"),
+    EvalTaskConfig("boolq", 0, task_alias="boolq_0shot"),
+    EvalTaskConfig("commonsense_qa", 0, task_alias="csqa_0shot"),
+    EvalTaskConfig("lambada_openai", 0, task_alias="lambada_0shot"),
+    EvalTaskConfig("wsc273", 0, task_alias="wsc273_0shot"),
+    EvalTaskConfig("copa", 0, task_alias="copa_0shot"),
+    EvalTaskConfig("truthfulqa_mc1", 0, task_alias="truthfulqa_mc1_0shot"),
+    EvalTaskConfig("truthfulqa_mc2", 0, task_alias="truthfulqa_mc2_0shot"),
+    EvalTaskConfig("logiqa", 0, task_alias="logiqa_0shot"),
 )
 
 # MMLU 0/5-shot + GSM8K 5-shot + HumanEval 10-shot + arc_easy 0-shot.
