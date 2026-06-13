@@ -441,3 +441,10 @@ SOAP beta1 (projected-momentum EMA) is THE lever. Anchor 0.95 ties (3.5475). Mon
 Launched r4-beta1-0p70 (/113012) to bracket the min. Multiple configs tracking BELOW MuonH → beat confirmed
 pending step-10979 finals. After finals: pick best beta1, declare GOAL A, then re-check other axes from the
 new anchor + implement subspace-QR (MFU) against it.
+
+### beta1 finals approaching (2026-06-13 ~12:15) — beta1=0.80 leads, beat decisive
+@step6000 gaps vs MuonH: beta1=0.80 −0.036, 0.85 −0.029, 0.90 −0.009 (vs anchor 0.95 which TIES). Clear
+monotonic lower-better; **beta1=0.80 is the leading config**, tracking well below MuonH → will finish < 3.5438
+decisively. beta1=0.90 (step ~9717, gap −0.005@9k) finishes first (~45min), a narrow beat/near-tie. beta1=0.70
+(/113012) bracketing. Winning config ≈ beta1=0.80. Await finals to declare GOAL A; then push 0.70/0.65 if 0.80
+not yet the min, and implement subspace-QR (MFU) against the beta1-winner.
