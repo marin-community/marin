@@ -168,6 +168,35 @@ def _symmetrize(matrix):
     return 0.5 * (matrix + jnp.swapaxes(matrix, -1, -2))
 
 
+def _qr_Q(matrix):
+    q, _ = jnp.linalg.qr(matrix)
+    return q
+
+
+def _subspace_orthog(P, q, step, precond_freq, subspace_frac: float):
+    """One warm-started orthogonal-iteration refresh of the eigenbasis q, optionally on a subspace.
+
+    P = q.T @ GG @ q (the Gram in the current eigenbasis). The full update is q_new = q @ qr(P), which is
+    bit-identical to the upstream q_new = qr(GG @ q) (since GG @ q = q @ P and q is orthogonal). For
+    ``subspace_frac < 1`` we update only a cyclic block of k = subspace_frac*n basis vectors per refresh
+    (QR on the k-by-k diagonal block of P, cost ~B^2 of full), cycling through all blocks over 1/B refreshes
+    -- the arxiv:2605.26327 subspace scheme that cuts the dominant QR cost while keeping the basis fresh.
+    """
+    n = P.shape[-1]
+    k = max(1, round(subspace_frac * n))
+    if k >= n or n % k != 0:
+        return jnp.einsum("...ij,...jk->...ik", q, _qr_Q(P))
+    nblocks = n // k
+    blk = jnp.remainder(step // max(1, precond_freq), nblocks)
+    start = blk * k
+    lead = P.ndim - 2
+    p_sub = jax.lax.dynamic_slice(P, (*((0,) * lead), start, start), (*P.shape[:-2], k, k))
+    o_sub = _qr_Q(_symmetrize(p_sub))  # [..., k, k]
+    q_blk = jax.lax.dynamic_slice(q, (*((0,) * lead), 0, start), (*q.shape[:-2], n, k))  # q[:, block]
+    q_blk_new = jnp.einsum("...ij,...jk->...ik", q_blk, o_sub)
+    return jax.lax.dynamic_update_slice(q, q_blk_new, (*((0,) * lead), 0, start))
+
+
 def _klsoaph_step(
     grad: jnp.ndarray,
     exp_avg: jnp.ndarray,
@@ -185,6 +214,7 @@ def _klsoaph_step(
     eps: float,
     precond_freq: int,
     init_factor: float,
+    subspace_frac: float = 1.0,
 ):
     """Run one full-matrix SOAP step over the (..., rows, cols) gradient.
 
@@ -271,8 +301,12 @@ def _klsoaph_step(
             ea_original = jnp.einsum("...ij,...jk->...ik", q_l, ea_qrT)
             gg_l_q = jnp.einsum("...ij,...jk->...ik", new_gg_l, q_l)
             gg_r_q = jnp.einsum("...ij,...jk->...ik", new_gg_r, q_r)
-            ql_new, _ = jnp.linalg.qr(gg_l_q)
-            qr_new, _ = jnp.linalg.qr(gg_r_q)
+            # P = q.T @ GG @ q (Gram in the current eigenbasis); q_new = q @ qr(P) == qr(GG @ q) at frac=1,
+            # and a cyclic subspace QR for frac<1 (cuts the dominant QR-refresh cost).
+            p_l = jnp.einsum("...ki,...kj->...ij", q_l, gg_l_q)
+            p_r = jnp.einsum("...ki,...kj->...ij", q_r, gg_r_q)
+            ql_new = _subspace_orthog(p_l, q_l, step, precond_freq, subspace_frac)
+            qr_new = _subspace_orthog(p_r, q_r, step, precond_freq, subspace_frac)
             ea_qr_new = jnp.einsum("...ij,...jk->...ik", ea_original, qr_new)
             ea_new = jnp.einsum("...ki,...kj->...ij", ql_new, ea_qr_new)
             return ql_new, qr_new, ea_new
@@ -330,6 +364,7 @@ def _klsoaph_step_sharded(
     eps: float,
     precond_freq: int,
     init_factor: float,
+    subspace_frac: float = 1.0,
 ):
     """Distribute the per-expert SOAP step across the mesh via ``shard_map``.
 
@@ -347,6 +382,7 @@ def _klsoaph_step_sharded(
         eps=eps,
         precond_freq=precond_freq,
         init_factor=init_factor,
+        subspace_frac=subspace_frac,
     )
     mesh = jax.sharding.get_abstract_mesh()
     batched = hasattr(grad, "ndim") and grad.ndim >= 3
@@ -407,6 +443,7 @@ def scale_by_klsoaph(
     eps: float = 1e-8,
     precond_freq: int = 1,
     init_factor: float = 0.1,
+    subspace_frac: float = 1.0,
 ) -> optax.GradientTransformation:
     """Full-matrix SOAP-style preconditioner (upstream KLSOAPH, de-blocked).
 
@@ -470,6 +507,7 @@ def scale_by_klsoaph(
                 eps=eps,
                 precond_freq=precond_freq,
                 init_factor=init_factor,
+                subspace_frac=subspace_frac,
             )
             direction = out[0].astype(grad.dtype)
             return _SoapStepResult(direction, *out[1:])
