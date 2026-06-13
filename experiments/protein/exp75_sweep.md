@@ -103,6 +103,10 @@ TPU usage is capped by a per-user **iris budget** (currently **75,000** units fo
   **v5p-8 > v6e-4 > v6e-8**. So under budget pressure prefer the 4-chip slices for
   breadth and reserve `v6e-8` for clear headroom. This *inverts* the wall-clock
   priority below — they agree only when budget is slack.
+- **Batch slices are off-budget.** The larger multi-host slices run in the `batch`
+  band and do **not** count toward SPENT — they add capacity *on top of* the
+  interactive budget. They get an operator-set cap instead (see **Batch big-slice
+  probe**). Strategy: keep interactive near the cap *and* run batch jobs on top.
 
 ## TPU & region selection
 
@@ -113,10 +117,11 @@ TPU usage is capped by a per-user **iris budget** (currently **75,000** units fo
 - **The region forces the zone.** Within us-east5 the marin preemptible pools
   have exactly one zone per family, so `--region us-east5` alone lands each slice
   in its zone — no `--zone` needed:
-- **Three slices** (chosen with `-e TPU`). Global batch is 128 on all, so
-  val-loss results are directly comparable across slices (grad_accum at
-  `PER_CHIP_MICROBATCH=4`). `tok/s` is **measured** (1-epoch smoke, steady
-  `throughput/tokens_per_second` from W&B):
+- **Three interactive (budget) slices** (chosen with `-e TPU`; the off-budget
+  batch slices are in **Batch big-slice probe** above). Global batch is 128 on all
+  slices and bands, so val-loss results are directly comparable everywhere
+  (grad_accum at `PER_CHIP_MICROBATCH=4`). `tok/s` is **measured** (1-epoch smoke,
+  steady `throughput/tokens_per_second` from W&B):
 
   | TPU | resolved zone | grad_accum | tok/s | priority |
   |---|---|---|---|---|
@@ -160,6 +165,53 @@ TPU usage is capped by a per-user **iris budget** (currently **75,000** units fo
   react to short waits. In-flight runs are untouched. (Watch state with the
   [`run-iris-job`](https://github.com/eric-czech/marin-agent-kb/blob/main/skills/run-iris-job.md)
   skill.)
+
+## Batch big-slice probe (extra throughput, off-budget)
+
+Larger **multi-host** slices run in the **`batch`** band — excluded from the budget
+cap (capacity *on top of* interactive) but lower priority (scheduled/preempted
+after interactive) and scarcer. The slice fixes the band in code, so `-e TPU
+v6e-32` is automatically batch; region is still always `--region us-east5`.
+
+| slice | chips | hosts | pdp / grad_accum | band |
+|---|---|---|---|---|
+| `v5p-16` | 8 | 2 | −1 / 1 | batch |
+| `v5p-32` | 16 | 4 | −1 / 1 | batch |
+| `v5p-64` | 32 | 8 | −1 / 1 | batch |
+| `v6e-16` | 16 | 4 | −1 / 1 | batch |
+| `v6e-32` | 32 | 8 | −1 / 1 | batch |
+
+- **Operator cap (batch is off-budget, so nothing else bounds it).** **Start at 5
+  total — one job on each of the five new types** — to probe availability and
+  realized throughput in parallel, then grow whichever wins. A priori it's unknown
+  which gives the most throughput or is even schedulable (bigger = scarcer).
+- **Record realized throughput** per `tpu × band` in
+  [`exp75_throughput.md`](exp75_throughput.md) as runs report
+  `throughput/tokens_per_second` — the reference for which slice to favor for new
+  jobs, and a keepsake of band/slice efficiency at the end.
+- **≥ 1 h pending → move, across bands.** Same rule as interactive: a child
+  pending/unschedulable ≥ 1 h → move that *new* launch to a different slice. That
+  may mean batch→interactive (if budget allows the cost), interactive→batch, or
+  another batch type. Never react to short waits; never migrate an in-flight run.
+- **Multi-host is more bug-prone.** If batch runs fail on a **multi-host bug** (not
+  a plain capacity pend / preemption), move those cells to the single-host slices
+  we know work and **notify the user with the bug's nature** — we fix it while
+  progress continues on the safe slices. Do not blind-resubmit a multi-host crash
+  onto the same slice type.
+
+## Pipeline the waves (don't let them block each other)
+
+Waves **overlap** — they are not run to completion one at a time. Each wave has
+stragglers (slow slices, preemptions), and the next wave does **not** need the
+prior optimum *confirmed* to start, only a good-enough leading region. As soon as
+a few runs of a wave cross ~50% and give usable `eval/loss`, parameterize the next
+(higher-epoch) wave speculatively from that partial signal and launch it — on the
+off-budget **batch** slices when interactive budget is full — so expensive runs
+are already in flight while the cheap wave finishes. **Incorporate information as
+it lands:** refine/extend the next wave's grid as the prior optimum firms up, and
+accept that some speculative runs are wasted (cheap insurance against serial
+blocking). Confirmation (neighbor-dominance) is still required before a result is
+*accepted* — but never before the next wave is *started*.
 
 ## Grid conventions (so "neighbor" is well-defined)
 

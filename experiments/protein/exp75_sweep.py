@@ -25,9 +25,11 @@ is a single run, so a wave is up to 12 separate ``iris job run`` submissions.
 
 Required env per launch: ``EPOCHS`` (int >= 1), ``LR`` (float > 0), ``WD``
 (float >= 0). ``PREVIEW=yes`` resolves the point and submits nothing. ``TPU``
-picks the slice -- ``v6e-8`` (default/primary), ``v6e-4`` or ``v5p-8``.
-Region/zone are set on the iris command (``--region us-east5``), never here. See
-exp75_sweep.md for slice priority and when to flip.
+picks the slice; the slice also fixes the iris priority band (set in code, not
+inherited): the single-host ``v6e-8`` (default) / ``v5p-8`` / ``v6e-4`` run
+``interactive`` (count toward budget), the larger multi-host ``v5p-16/32/64`` and
+``v6e-16/32`` run ``batch`` (excluded from budget, lower priority). Region/zone are
+set on the iris command (``--region us-east5``), never here. See exp75_sweep.md.
 
 Preview one point::
 
@@ -52,9 +54,11 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import timedelta
+from enum import StrEnum
 
 from fray import ResourceConfig, current_client
 from fray.types import Entrypoint, JobRequest, create_environment
+from iris.rpc import job_pb2
 from levanter.callbacks.watch import WatchConfig
 from levanter.data.text import DatasetComponent, LmDataConfig, TextLmDatasetFormat, UrlDatasetSourceConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
@@ -99,9 +103,7 @@ VOCAB_SIZE: int = 2845
 # prefix (us-east5). The train cache holds ``train/`` and the val cache holds
 # ``validation/``. We point cache-only components straight at them -- no
 # tokenize step runs in this sweep.
-_CONTACTS_V1_CACHE_BASE: str = (
-    "gs://marin-us-east5/protein-structure/MarinFold/exp67_contacts_v1_1_5b/tokenized"
-)
+_CONTACTS_V1_CACHE_BASE: str = "gs://marin-us-east5/protein-structure/MarinFold/exp67_contacts_v1_1_5b/tokenized"
 TRAIN_CACHE: str = f"{_CONTACTS_V1_CACHE_BASE}/contacts-v1-663ba6"
 VAL_CACHE: str = f"{_CONTACTS_V1_CACHE_BASE}/contacts-v1-val-92827b"
 
@@ -160,35 +162,74 @@ TEMP_CHECKPOINT_INTERVAL = timedelta(minutes=10)
 # --- TPU sizing (size-tpu-train-config skill; ported from exp49) -------------
 
 
+class Band(StrEnum):
+    """iris priority band a slice is submitted under (see exp75_sweep.md).
+
+    INTERACTIVE counts toward the per-user budget cap; BATCH is excluded from
+    budget but lower priority (scheduled/preempted after interactive).
+    """
+
+    INTERACTIVE = "interactive"
+    BATCH = "batch"
+
+
+# Our band -> the iris proto enum, forwarded straight through as JobRequest.priority.
+_BAND_TO_PRIORITY: dict[Band, int] = {
+    Band.INTERACTIVE: job_pb2.PRIORITY_BAND_INTERACTIVE,
+    Band.BATCH: job_pb2.PRIORITY_BAND_BATCH,
+}
+
+
 @dataclass(frozen=True)
 class TpuStats:
     chips: int
     hbm_gib: int
     tflops: int
+    band: Band  # always submitted under this band (fixed policy, not per-launch)
 
 
-# Supported single-host slices, in throughput priority order (fastest measured
-# tok/s first; see exp75_sweep.md): (chips, HBM GiB, bf16 TFLOP/s per chip).
-# Membership here is the allow-list -- resources() rejects anything else.
+# Allow-list of slices (resources() rejects anything else), in two tiers:
+#   * INTERACTIVE single-host slices -- count toward the ~75k budget cap; the
+#     primary capacity, in measured-throughput order (see "Budget & quota").
+#   * BATCH larger multi-host slices -- excluded from budget, lower priority with
+#     more preemption/availability churn and more multi-host bug exposure; usage
+#     bounded by an operator-set cap and a fall-back-to-single-host rule on
+#     multi-host failures (see exp75_sweep.md "Batch big-slice probe").
+# (chips, HBM GiB/chip, bf16 TFLOP/s/chip, band). chips per fray TPU_TOPOLOGIES
+# (v5p-N = N/2 chips, v6e-N = N chips); HBM/TFLOPs per chip from tpu-stats.
 TPUS: dict[str, TpuStats] = {
-    "v6e-8": TpuStats(chips=8, hbm_gib=32, tflops=918),  # primary, ~74k tok/s
-    "v5p-8": TpuStats(chips=4, hbm_gib=95, tflops=459),  # 2nd,     ~53k tok/s
-    "v6e-4": TpuStats(chips=4, hbm_gib=32, tflops=918),  # last,    ~41k tok/s; <=2 epochs only
+    # interactive (budget) -- measured tok/s, in throughput priority order
+    "v6e-8": TpuStats(chips=8, hbm_gib=32, tflops=918, band=Band.INTERACTIVE),  # ~74k tok/s
+    "v5p-8": TpuStats(chips=4, hbm_gib=95, tflops=459, band=Band.INTERACTIVE),  # ~53k tok/s
+    "v6e-4": TpuStats(chips=4, hbm_gib=32, tflops=918, band=Band.INTERACTIVE),  # ~41k tok/s; <=2 epochs only
+    # batch (no budget) -- multi-host; realized throughput TBD (see exp75_throughput.md)
+    "v5p-16": TpuStats(chips=8, hbm_gib=95, tflops=459, band=Band.BATCH),
+    "v5p-32": TpuStats(chips=16, hbm_gib=95, tflops=459, band=Band.BATCH),
+    "v5p-64": TpuStats(chips=32, hbm_gib=95, tflops=459, band=Band.BATCH),
+    "v6e-16": TpuStats(chips=16, hbm_gib=32, tflops=918, band=Band.BATCH),
+    "v6e-32": TpuStats(chips=32, hbm_gib=32, tflops=918, band=Band.BATCH),
 }
 
 HBM_FLOOR_GIB: int = 16
 # Examples/chip that fit a 16 GiB chip for this 1.47B / seq-8192 model, scaled by
-# HBM per slice (cap = PER_CHIP_MICROBATCH * hbm_gib // 16). The resulting
-# per-device parallelism (pdp) and grad-accum at global batch 128, per slice in
-# TPUS (full = 128 // chips; pdp = -1 when the full per-chip load fits the cap
-# -- no accumulation -- else the largest divisor of full <= cap):
-#   tpu      chips  hbm  cap  full  pdp  grad_accum
-#   v6e-8        8   32    8    16    8       2   (primary)
-#   v6e-4        4   32    8    32    8       4
-#   v5p-8        4   95   20    32   16       2
-# NB: PCM 4-6 all yield this same plan (divisor rounding). v6e tops out at 8/chip
-# -- 16/chip OOMs a 32 GiB chip for this model (verified). PCM=7 lifts v5p-8 to
-# full 32/chip (grad_accum 1) while leaving v6e at 8/chip; PCM=8 OOMs v6e.
+# HBM per slice (cap = PER_CHIP_MICROBATCH * hbm_gib // 16). Per-device
+# parallelism (pdp) and grad-accum at global batch 128 (full = 128 // chips;
+# pdp = -1 when the full per-chip load fits the cap -- no accumulation -- else the
+# largest divisor of full <= cap). Code-verified (PREVIEW):
+#   tpu       chips  hbm  cap  full  pdp  grad_accum  band
+#   v6e-8         8   32    8    16    8       2       interactive (primary)
+#   v6e-4         4   32    8    32    8       4       interactive
+#   v5p-8         4   95   20    32   16       2       interactive
+#   v5p-16        8   95   20    16   -1       1       batch
+#   v5p-32       16   95   20     8   -1       1       batch
+#   v5p-64       32   95   20     4   -1       1       batch
+#   v6e-16       16   32    8     8   -1       1       batch
+#   v6e-32       32   32    8     4   -1       1       batch
+# The batch slices all have >= 8 chips, so the full per-chip load (<= 16) fits the
+# cap with NO accumulation (grad_accum 1) -- the cleanest plan. v6e-16 sits at
+# exactly 8/chip (the known v6e ceiling; 16/chip OOMs a 32 GiB chip). Global batch
+# stays 128 on every slice, so val loss is comparable across all slices and bands.
+# NB: PCM 4-6 yield this same plan; PCM=7 lifts v5p-8 to full 32/chip; PCM=8 OOMs v6e.
 PER_CHIP_MICROBATCH: int = 4
 
 
@@ -227,11 +268,11 @@ def plan_batch(res: ResourceConfig) -> BatchPlan:
 # --- Resources ---------------------------------------------------------------
 
 # Slice selection only -- region/zone are NEVER set here; pass them on the
-# `iris job run` command (`--region us-east5`). Within us-east5 the marin
-# preemptible pools have exactly one zone per family (v5p -> us-east5-a,
-# v6e -> us-east5-b), so `--region us-east5` alone fixes the zone. Primary is
-# v6e-8 (fastest); fall back to v5p-8 then v6e-4 (by measured throughput) when
-# the v6e-8 pool is capacity-starved (see exp75_sweep.md "TPU & region selection").
+# `iris job run` command (`--region us-east5`, always). The priority BAND, by
+# contrast, IS set here (forwarded as JobRequest.priority): a fray-submitted child
+# does not inherit the driver's band, and it is fixed per slice in TPUS, so the
+# `-e TPU` choice alone determines interactive-vs-batch. Default is the
+# interactive v6e-8 (fastest); see exp75_sweep.md "TPU & region selection".
 DEFAULT_TPU: str = "v6e-8"
 
 
@@ -244,6 +285,11 @@ def resources() -> ResourceConfig:
     if name not in TPUS:
         raise ValueError(f"unsupported TPU {name!r}; supported: {list(TPUS)}")
     return ResourceConfig.with_tpu(name)
+
+
+def band() -> Band:
+    """Priority band for the selected slice (interactive vs batch; fixed policy)."""
+    return TPUS[tpu()].band
 
 
 # --- A single trial point ----------------------------------------------------
@@ -411,6 +457,7 @@ def build_trial(config: Config, res: ResourceConfig) -> tuple[str, object]:
         f"tokens_exact={tokens}",
         f"steps={num_train_steps}",
         f"tpu={res.device.variant}",
+        f"band={TPUS[res.device.variant].band}",
         f"grad_accum={plan.grad_accum_steps}",
     ]
     job_name, raw_config = prepare_lm_train(
@@ -458,8 +505,8 @@ def print_preview(config: Config, res: ResourceConfig) -> None:
         f"  steps={config.num_train_steps} (steps/epoch={STEPS_PER_EPOCH}) "
         f"steps/eval={STEPS_PER_EVAL} tokens={tokens}\n"
         f"  model={fmt_count(params)} params schedule={LR_SCHEDULE} warmup={WARMUP}\n"
-        f"  tpu={res.device.variant} chips={res.chip_count()} per_device={pdp} "
-        f"grad_accum={plan.grad_accum_steps}",
+        f"  tpu={res.device.variant} band={TPUS[res.device.variant].band} "
+        f"chips={res.chip_count()} per_device={pdp} grad_accum={plan.grad_accum_steps}",
         flush=True,
     )
 
@@ -504,6 +551,7 @@ def main() -> None:
         entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[SWEEP_ROOT, [target], res]),
         resources=res,
         environment=create_environment(env_vars=env, extras=extras),
+        priority=_BAND_TO_PRIORITY[TPUS[res.device.variant].band],
     )
     client = current_client()
     handle = client.submit(request)
