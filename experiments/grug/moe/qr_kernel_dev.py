@@ -98,9 +98,17 @@ def _time_fn(fn, m, label, iters=5):
 def bench(batch=256, n=512, seed=0):
     key = jax.random.PRNGKey(seed)
     m = jax.random.normal(key, (batch, n, n), dtype=jnp.float32)
+    # Symmetric PSD input for eigh (matches the SOAP Gram); reuse m for qr benches.
+    sym = jnp.einsum("...ki,...kj->...ij", m, m)
     print(f"[bench n={n} batch={batch} on {jax.devices()[0].platform}]")
     _time_fn(lambda x: jnp.linalg.qr(x)[0], m, "jnp.qr")
     _time_fn(lambda x: cholesky_qr2(x)[0], m, "choleskyQR2")
+    _time_fn(lambda x: jnp.linalg.eigh(x)[1], sym, "jnp.eigh")
+    # SOAP per-step op exactly: Q,_ = qr(GG @ Q) vs cholesky_qr2(GG @ Q).
+    q0 = jnp.linalg.qr(m)[0]
+    gg = sym
+    _time_fn(lambda q: jnp.linalg.qr(jnp.einsum("...ij,...jk->...ik", gg, q))[0], q0, "soap_qr")
+    _time_fn(lambda q: cholesky_qr2(jnp.einsum("...ij,...jk->...ik", gg, q))[0], q0, "soap_cholqr")
 
 
 if __name__ == "__main__":
