@@ -212,3 +212,61 @@ def test_restore_supports_legacy_wrapped_and_current_checkpoint_formats(tmp_path
     )
     assert int(loaded_current["step"]) == 8
     assert jnp.array_equal(loaded_current["value"], current_state["value"])
+
+
+import dataclasses as _dataclasses  # noqa: E402
+
+
+@_dataclasses.dataclass
+class _FakeState:
+    params: dict
+    opt_state: dict
+
+
+def test_restore_resets_nonfinite_opt_state_to_init(tmp_path: Path):
+    """A checkpoint with NaN optimizer state loads with those entries reset to init (finite)."""
+    root = tmp_path / "checkpoints"
+    _write_checkpoint_metadata(root / "step-100", step=100, timestamp="2026-03-17T00:00:00")
+    init = _FakeState(params={"w": jnp.ones((2, 2))}, opt_state={"gg": jnp.zeros((2, 2))})
+
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
+        return _FakeState(
+            params={"w": jnp.ones((2, 2)) * 3},
+            opt_state={"gg": jnp.ones((2, 2)).at[0, 0].set(jnp.nan)},
+        )
+
+    loaded = restore_grug_state_from_checkpoint(
+        init,
+        checkpoint_search_paths=[str(root)],
+        load_checkpoint_setting=True,
+        mesh=None,
+        allow_partial=True,
+        _load_fn=fake_load,
+    )
+    assert bool(jnp.all(jnp.isfinite(loaded.opt_state["gg"])))
+    assert float(loaded.opt_state["gg"][0, 0]) == 0.0  # reset to init
+    assert float(loaded.opt_state["gg"][1, 1]) == 1.0  # finite entry preserved
+    assert float(loaded.params["w"][0, 0]) == 3.0  # params untouched
+
+
+def test_restore_rejects_nonfinite_params_and_falls_back(tmp_path: Path):
+    """A checkpoint with NaN params is rejected; restore falls back to an older finite one."""
+    root = tmp_path / "checkpoints"
+    _write_checkpoint_metadata(root / "step-100", step=100, timestamp="2026-03-17T00:00:00")
+    _write_checkpoint_metadata(root / "step-50", step=50, timestamp="2026-03-17T00:00:00")
+    init = _FakeState(params={"w": jnp.ones((2, 2))}, opt_state={"gg": jnp.zeros((2, 2))})
+
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
+        if "step-100" in path:
+            return _FakeState(params={"w": jnp.full((2, 2), jnp.nan)}, opt_state={"gg": jnp.zeros((2, 2))})
+        return _FakeState(params={"w": jnp.ones((2, 2)) * 7}, opt_state={"gg": jnp.zeros((2, 2))})
+
+    loaded = restore_grug_state_from_checkpoint(
+        init,
+        checkpoint_search_paths=[str(root)],
+        load_checkpoint_setting=True,
+        mesh=None,
+        allow_partial=True,
+        _load_fn=fake_load,
+    )
+    assert float(loaded.params["w"][0, 0]) == 7.0  # fell back to step-50
