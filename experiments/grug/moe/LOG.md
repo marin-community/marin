@@ -196,6 +196,21 @@ Will lag the others ~45min. The beta2 trend (0.9≈0.95 best, 0.999 slightly wor
 other two points, so this lag doesn't block re-anchoring. Watching for a preemption PATTERN (preemptible +
 45-min recompile is fragile); if it recurs, consider more-stable capacity. Other 5 runs healthy/advancing.
 
+### 🔑 KEY CALIBRATION vs MuonH trajectory (step 2000, ~01:55 UTC)
+MuonH baseline paloma trajectory: @1k 4.452, @2k 4.180, @3k 4.069, @4k 3.997, @5k 3.921, ... FINAL 3.5438.
+KLSOAPH (anchor/best) vs MuonH: @1k 4.560 vs 4.452 (gap **+0.108**); @2k 4.237 vs 4.180 (gap **+0.057**).
+**Gap HALVED in 1000 steps** — classic SOAP: slow early (estimating Gram/eigenbasis preconditioner), then
+faster 2nd-order convergence. If the trend holds, KLSOAPH crosses MuonH mid-run → plausibly finishes < 3.5438.
+NOT a lost cause. Round-1 consolidated read:
+- **beta2 axis NEUTRAL** (0.9/0.95/0.999 all 4.236-4.239 @2k, within match-threshold 2e-3) — "undertuned beta2"
+  hypothesis REFUTED; hyperball normalization makes the eigenbasis 2nd-moment EMA insensitive. Drop from grid.
+- **lr↑ HURTS** monotonically (×1.0 4.239 < ×1.4 4.356 < ×1.8 4.463 @2k). Anchor lr×1.0 best.
+- → Anchor (lr×1.0, beta2=0.9, shampoo=0.9) HOLDS; no round-1 point beats it.
+DECISION POINT = step 4000 (MuonH 3.997): if anchor ≤~4.0 the gap kept closing → on track, launch round-2 on
+NEW axes (shampoo_beta=preconditioner EMA [most promising for the early-lag], beta1, eps, init_factor; skip
+beta2; maybe lr×0.85). If the gap STALLS, rethink (the early-slow SOAP warmup may be the structural cost).
+Compute note: contended preemptible v5p-8 saturates capacity, so round-2 likely runs AFTER round-1 frees slots.
+
 ### Config-parity de-risk — weight decay (2026-06-12)
 Checked: MuonH baseline config stores weight_decay=0.1, BUT neither GrugMoeMuonHConfig.build() nor
 GrugMoeKLSoapHConfig.build() references add_decayed_weights/weight_decay — both custom build()s leave
