@@ -243,6 +243,27 @@ earlier "won't beat it" was premature — final post-decay number is the verdict
 in steps but tracks the same (beta2 neutral). Round-2 (9 pts) just past compile (~step 300, no evals yet).
 Decision deferred to: (a) round-1 FINAL gap, (b) round-2 gap-at-matched-steps vs this trajectory.
 
+## MFU WORK (goal v2: ~10% MFU on v5p-8, vs current ~2-4%) — 2026-06-13
+Read scalable_shampoo (google-research) + distributed_kron (evanatyourservice): the canonical pattern is
+DISTRIBUTE the per-parameter preconditioner linalg across devices (pmap/shard each device computes a subset,
+then all-gather), use matmul-based coupled-Newton instead of dense eigh, and separate stat-update vs
+precond-recompute frequencies.
+**Root cause of low MFU found:** `_klsoaph_step` RESHARDED everything to FULLY REPLICATED → every v5p chip
+redundantly computed ALL 256 experts' eigh/QR (4× wasted on v5p-8). The bench had already shown QR=75ms is
+cheap, so the cost was this redundant replication across the expert axis, not the QR kernel itself.
+**Fix (commit):** distribute the per-expert SOAP via `shard_map` over the mesh —
+- `_klsoaph_step` is now PURE-LOCAL (no reshard/out_sharding; batched-local einsum+eigh+qr).
+- `_klsoaph_step_sharded` reshards all inputs to a uniform expert-sharded spec `P(mesh.axis_names, None, None)`
+  (shard E across every mesh axis, replicate the [n,n] matrix dims that eigh/QR need whole), then `shard_map`s
+  the local step. Each device does only E/num_devices experts. 2D attn leaves + no-mesh fall through to replicated.
+- shard_map (not explicit-mesh resharding through qr) sidesteps the `select`-sharding error that `jnp.linalg.qr`
+  hits when a batch axis is sharded under an explicit mesh.
+**Validated:** bit-identical (0.00e+00 over 3 steps) to the replicated reference on an 8-device (data,expert)
+CPU mesh. Launched sharded-anchor (anchor HPs) /kaiyue/iris-run-job-20260613-062036 on v5p-8 east5 to measure
+tok/s vs replicated center (38.8k); same HPs so loss must match center too (end-to-end correctness check).
+Next: if tok/s up ~Nx (N=mesh size), MFU goal progressing; if comm dominates, amortize eigh (coupled-Newton)
+or tune which axes shard E.
+
 ### Config-parity de-risk — weight decay (2026-06-12)
 Checked: MuonH baseline config stores weight_decay=0.1, BUT neither GrugMoeMuonHConfig.build() nor
 GrugMoeKLSoapHConfig.build() references add_decayed_weights/weight_decay — both custom build()s leave
