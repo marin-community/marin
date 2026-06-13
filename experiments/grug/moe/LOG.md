@@ -389,3 +389,16 @@ long-warmup soapwu0p10 trajectory), then gets SAVED -> any reload of that poison
 ("nan on loading" symptom). Root = NaN state persisted, NOT load logic. The NaN-guard (skip non-finite
 step, keep last-good state) PREVENTS NaN from ever entering state/checkpoint => checkpoints stay finite =>
 reload always clean. So the guard fixes BOTH the in-process death AND nan-after-loading, by prevention.
+
+### NaN-after-loading: COMPLETE TWO-LAYER FIX (2026-06-13)
+Investigation conclusion: levanter save/load is CLEAN (round-trip: 0 non-finite, 0 reset, post-load step
+finite); the NaN originates in-memory (transient SOAP gram/eigh spike) and, if persisted, poisons the
+checkpoint → reload NaNs. Fix (both committed, tested):
+1. TRAINING GUARD (klsoaph.py): _klsoaph_step skips any non-finite step (zero direction, keep last-good
+   state) → NaN never enters state → checkpoints always finite.
+2. LOAD SANITIZER (grug/checkpointing.py): on restore, reset non-finite OPT-STATE entries elementwise to
+   fresh init (resume cleanly, lose a little preconditioner history); reject non-finite PARAMS → restore
+   loop falls back to an older checkpoint. Tests added (tests/test_grug_checkpointing.py, 9 pass).
+Together: NaN can neither be SAVED (guard) nor SURVIVE a load (sanitizer) → no future run dies from it.
+All FUTURE launches use this code (committed). Currently-running healthy runs predate it but are valid
+while finite (guard is a no-op when finite); relaunch with the fix only if one NaNs.
