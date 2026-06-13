@@ -160,6 +160,34 @@ matches jnp.qr to 2.6e-6 (identical column space — all SOAP needs), orthonorma
 - TPU bench job /kaiyue/iris-run-job-20260613-001305 (v5p-8 east5) launched to quantify the win before wiring in.
 - If plain-jnp CholeskyQR2 doesn't cut compile/runtime enough, escalate to a true Pallas kernel.
 
+### TPU QR bench RESULTS (01:02 UTC, v5p-8, [256,512,512]) — QR is NOT the bottleneck
+| op | compile | run/iter |
+|---|---|---|
+| jnp.qr | 3.86s | 75 ms |
+| cholesky_qr2 | 3.12s | 63 ms |
+| jnp.eigh | 9.04s | **2568 ms** |
+| soap_qr = qr(GG@Q) | 8.42s | 75 ms |
+| soap_cholqr | 8.09s | 66 ms |
+**Conclusion: a Pallas/Cholesky QR saves only ~12% on a 75ms op — NOT worth building.** The expensive
+linalg is `eigh` (2568ms, ~34× QR) but it runs ONLY at init (step 1), not per-step. So the ~3.6s/step is
+inherent full-matrix SOAP overhead (projections + QR across ~12 expert [256,512,512] tensors + fwd/bwd) —
+the cost block-tiling reduced, NOT a single replaceable kernel. Only meaningful kernel lever: swap the
+init `eigh` → cholesky-QR basis (2568→63ms runtime, 9→3s compile) but that deviates from upstream init
+fidelity. DECISION: don't build the Pallas QR (data-driven); runs train fine at ~3.6s/step (~11h), goal is
+LOSS not throughput — focus compute on the sweep. CholeskyQR2 validated+available if ever needed (free 12%).
+
+### Round-1 FIRST paloma evals @ step 1000 (01:05 UTC) — early ranking
+| point | paloma@1k | note |
+|---|---|---|
+| beta2-0p95 | 4.560 | co-leader |
+| center (anchor) | 4.561 | co-leader |
+| beta2-0p999 | 4.569 | ~neutral |
+| lr-1p4 | 4.641 | worse |
+| lr-1p8 | 4.718 | worst (lr overshoot) |
+| beta2-0p99 | pending | |
+Step 1000 of 10980 (~9%) — NOT comparable to MuonH FINAL 3.5438. Ranking: lr↑ hurts; SOAP-beta2 0.95≈anchor.
+Too early to re-anchor; let all run, re-evaluate ~step 3000-5000 when trajectories separate. No early-stop.
+
 ### Config-parity de-risk — weight decay (2026-06-12)
 Checked: MuonH baseline config stores weight_decay=0.1, BUT neither GrugMoeMuonHConfig.build() nor
 GrugMoeKLSoapHConfig.build() references add_decayed_weights/weight_decay — both custom build()s leave
