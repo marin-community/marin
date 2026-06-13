@@ -123,19 +123,28 @@ def _replicated_pspec(ndim: int) -> P:
     return P(*(None,) * ndim)
 
 
-def _expert_shard_pspec(ndim: int, mesh, batched: bool) -> P:
-    """Shard the leading (expert) axis across the whole mesh, replicate the rest.
+def _mesh_shard_axes(mesh) -> tuple[str, ...]:
+    """Mesh axes with size > 1 — the axes worth sharding the expert dim over.
 
-    For batched expert tensors (leaf ndim>=3 -> [E, n, n] state with ndim>=2), the
-    per-expert eigh/QR are independent, so we distribute the E axis over every mesh
-    axis (max data-parallelism) and keep the trailing matrix dims whole on each device
-    (eigh/QR need the full [n, n]). This replaces full replication, which made every
-    device redundantly compute all E experts. Non-batched 2D leaves (attn matrices)
-    have no expert axis, so they stay replicated (a single small matrix).
+    Excludes size-1 axes (e.g. a trivial "model" axis) whose inclusion forces an
+    "involuntary full rematerialization" when flattened into one tensor axis.
     """
-    axis_names = tuple(mesh.axis_names)
-    if batched and axis_names and ndim >= 2:
-        return P(axis_names, *((None,) * (ndim - 1)))
+    shape = mesh.shape
+    return tuple(name for name in mesh.axis_names if shape[name] > 1)
+
+
+def _expert_shard_pspec(ndim: int, mesh, batched: bool) -> P:
+    """Shard the leading (expert) axis over ALL non-trivial mesh axes; replicate the rest.
+
+    For batched expert tensors (leaf ndim>=3 -> [E, n, n] state, ndim>=2), the per-expert
+    eigh/QR are independent, so every device should own a DISJOINT slice of experts (no
+    redundant compute). We shard E over all size>1 mesh axes and gather the trailing matrix
+    dims (eigh/QR need each [n, n] whole). This replaces full replication, where every device
+    redundantly computed all E experts. 2D leaves (attn) have no expert axis -> replicated.
+    """
+    shard_axes = _mesh_shard_axes(mesh)
+    if batched and shard_axes and ndim >= 2:
+        return P(shard_axes, *((None,) * (ndim - 1)))
     return _replicated_pspec(ndim)
 
 
@@ -326,8 +335,27 @@ def _klsoaph_step_sharded(
     )
     mesh = jax.sharding.get_abstract_mesh()
     batched = hasattr(grad, "ndim") and grad.ndim >= 3
-    if mesh.empty or not batched:
+    if mesh.empty:
         return bound(grad, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r, step)
+    if not batched:
+        # 2D leaves (attn/dense matrices) have no expert axis to shard, and their native
+        # sharding can leave a CONTRACTING dim sharded (e.g. over "model"), which makes the
+        # gram einsums ambiguous. Replicate them (small matrices) before the local step.
+        def _repl(x):
+            return jax.reshard(x, P(*((None,) * x.ndim)))
+
+        return bound(
+            _repl(grad),
+            _repl(exp_avg),
+            _repl(exp_avg_sq),
+            _repl(gg_l),
+            _repl(gg_r),
+            _repl(q_l),
+            _repl(q_r),
+            _repl(esi_l),
+            _repl(esi_r),
+            jax.reshard(step, P()),
+        )
 
     mat_p = _expert_shard_pspec(3, mesh, True)  # [E, n, n]
     esi_p = _expert_shard_pspec(2, mesh, True)  # [E, n]
