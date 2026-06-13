@@ -493,3 +493,13 @@ opens entirely in the LR-decay tail. Active lever: LR-schedule (min_lr_ratio flo
 GOAL B CONFIRMED: subspace-QR ss0p25-b80 = **284,662 tok/s** (1.93× sharded 147.9k, 7.3× replicated 38.8k,
 ~16-20% MFU) — 2× opt-step cut realized end-to-end. Loss-neutrality vs r3b-beta1-0p80 (frac=1.0, 3.5680)
 pending its finish.
+
+### ⚠️ Subspace-QR frac=0.25 DEGRADES LOSS (2026-06-13 ~13:45) — not loss-neutral as implemented
+ss0p25-b80 (beta1=0.80, subspace_frac=0.25) paloma 5.54/6.04/5.90 @1k/2k/3k vs r3b-beta1-0p80 (frac=1.0)
+~4.0 — Δ +1.0..+1.9 and RISING. So my cyclic-block subspace-QR is NOT loss-preserving: refreshing only 1/4
+of the eigenbasis per step ≈ precond_freq-4 staleness (which hurts), and the off-block P coupling isn't
+resolved (the on-the-fly P version skipped the paper's full P=QᵀSQ reparam that keeps eigenvalues+basis
+consistent). The 2× opt-step speedup (285k tok/s) is real but trades quality. Killed ss0p25-b80.
+**Goal B resolution: the clean LOSS-NEUTRAL ~10% MFU is the SHARDING (shard_map 4×, bit-identical) — meets the
+10% target.** A loss-free >10% needs the full reparametrization (store P, incremental update, rotate in subspace)
+or better subspace selection — deferred (substantial). subspace_frac stays in code (default 1.0 = bit-identical).
