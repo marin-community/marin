@@ -63,7 +63,7 @@ from levanter.callbacks.watch import WatchConfig
 from levanter.data.text import DatasetComponent, LmDataConfig, TextLmDatasetFormat, UrlDatasetSourceConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
-from marin.execution.sweep import SweepTarget, claim_and_run
+from marin.execution.sweep import SweepTarget
 from marin.execution.types import versioned
 from marin.training.run_environment import extras_for_resources
 from marin.training.training import resolve_training_env
@@ -522,14 +522,21 @@ def _run_one(target: SweepTarget, res: ResourceConfig) -> None:
 
 
 def _sweep_worker_entrypoint(sweep_root: str, targets: list[SweepTarget], res: ResourceConfig) -> None:
-    """One TPU worker: claim its single target via the lock and train inline.
+    """Train the single target inline on every host of the slice.
 
-    ``targets`` is always a SINGLE-element list (one run per launch), so the
-    worker trains one trial then exits -- jax cannot re-initialize a second
-    trial in the same process. ``claim_and_run`` guards idempotency: a target a
-    prior submission already finished is a no-op (safe to resubmit).
+    ``targets`` is always a SINGLE-element list (one run per launch).
+
+    NB: ``claim_and_run`` is intentionally DISABLED for now. It takes a GCS lock
+    keyed on ``target_id``; on a MULTI-HOST slice every host runs this entrypoint
+    and races that one lock -- one wins, the rest die with "Lost lock race ..."
+    and the gang fails. We manage runs individually (one launch per point), so the
+    dedup/idempotency guard isn't needed. CAVEAT: with the lock off there is no
+    guard against running the same (epochs, lr, wd) twice -- don't double-submit a
+    point. To re-enable, restore the ``claim_and_run`` import + call below.
+    #   claim_and_run(sweep_root, targets, lambda t: _run_one(t, res))
     """
-    claim_and_run(sweep_root, targets, lambda t: _run_one(t, res))
+    for target in targets:
+        _run_one(target, res)
 
 
 def main() -> None:
