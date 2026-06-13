@@ -9,39 +9,54 @@ Per W&B run (`eric-czech/marin`, group `exp75-contacts-v1-tune`):
 
 | metric | what | from W&B keys |
 |---|---|---|
-| **`wts`** | **wall-clock tok/s** — tokens / total elapsed, incl. queue/preemption/availability | `throughput/total_tokens` ÷ (`heartbeatAt` − `createdAt`) |
-| `ats` | active tok/s — tokens / time the run was connected/active | `throughput/total_tokens` ÷ `_runtime` |
+| **`wts`** | **wall-clock tok/s** — tokens / elapsed clock from train start, incl. **in-run preemption/dead time** | `throughput/total_tokens` ÷ (`_timestamp` − `createdAt`) |
+| `ats` | active tok/s — tokens / time the run process was alive/connected | `throughput/total_tokens` ÷ `_runtime` |
 | `tts` | training tok/s — compute throughput during steps | `throughput/tokens_per_second` |
-| `mfu` | model FLOPs utilization | `throughput/mfu` |
+| `mfu` | model FLOPs utilization (%) | `throughput/mfu` |
 
 Ordering always `tts ≥ ats ≥ wts` (compute ⊂ active ⊂ wall). **`wts` is the
-decision metric** — it is the real "how fast will this finish" rate, so it already
-folds in slice speed *and* scarcity/preemption. Use the others only as diagnostics:
-`tts` = the upside a slice would give *if always available* (the case for chasing a
-scarce fast slice), `ats` isolates in-run overhead (eval/loading), **MFU is mostly
-irrelevant** but worth a glance. `wts ≪ tts` flags a slice that's fast when up but
-rarely scheduled. Re-measure periodically; never assume bigger = faster.
+decision metric** — the real "how fast will this finish" rate, folding in slice
+speed *and* preemption. Diagnostics: `tts` = upside *if always available*, `ats`
+isolates in-run overhead (eval/loading); `wts ≪ tts` flags a fast-but-preempted
+slice; **MFU is mostly irrelevant** but explains *why* v6e big slices underperform.
+
+**Verified semantics (don't assume — these were checked):** `throughput/total_tokens`
+is **cumulative** (`= step × 1.05M`; ratio 1.000 across runs). `_runtime` is
+**active time and excludes dead/preempted time** — proven on a preempted run where a
+gap advanced wall +34,929 s but `_runtime` only +179 s. `tts`/`mfu` are
+**instantaneous** (flat across steps), so they're averaged, not summed. Each point is
+a **single wandb object** (resumes its own id through preemption — 0 multi-object
+points), so per-slice `wts = Σtokens / Σwall` sums over *distinct* points (no
+double-count). **Caveat:** `createdAt` is *training start* (post-scheduling), so `wts`
+misses iris **queue/pending** time before a run starts — scarce-slice scheduling
+latency (e.g. v5p-64) is handled separately by the ≥1 h relocate rule. Re-measure
+periodically; never assume bigger = faster.
+
+All tables backfilled & verified ~18:00Z, **ranked by `wts`** (token-weighted over
+all v1 runs on each slice). `dead% = (wall − _runtime)/wall` = fraction of elapsed
+clock the run was preempted/dead.
 
 ## Interactive (single-host, counts toward budget)
 
-| slice | chips | tts | ats | wts | mfu | n | notes |
-|---|---|---:|---:|---:|---:|---:|---|
-| `v6e-8` | 8 | ~73.4k | — | — | ~14% | 5 | fastest single run |
-| `v5p-8` | 4 | ~53.6k | — | — | — | 4 | best tts/chip (~13.4k) |
-| `v6e-4` | 4 | ~40.6k | — | — | — | 3 | slowest |
+| slice | chips | wts | ats | tts | mfu | dead% | n | notes |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| `v6e-8` | 8 | **~71k** | ~71k | ~73k | 14% | 0% | 4 | reliable (one budget-bounced cell ran 65% dead → wts 25k) |
+| `v5p-8` | 4 | **~41k** | ~50k | ~54k | 40% | 18% | 4 | some preemption |
+| `v6e-4` | 4 | **~40k** | ~40k | ~41k | 15% | 0% | 3 | reliable, slowest |
 
 ## Batch (multi-host, off-budget)
 
-| slice | chips | hosts | tts | ats | wts | mfu | n | notes |
-|---|---|---|---:|---:|---:|---:|---:|---|
-| `v5p-64` | 32 | 8 | ~333k | — | — | ~31% | 1 | fastest `tts`; 8-host gang = preemption-prone |
-| `v6e-32` | 32 | 8 | ~213k | — | — | ~10% | 1 | low mfu; preemption-prone |
-| `v5p-32` | 16 | 4 | ~198k | — | — | ~37% | 1 | reliable 4-host |
-| `v6e-16` | 16 | 4 | ~130k | — | — | ~12% | 1 | low mfu |
-| `v5p-16` | 8 | 2 | ~102k | — | — | ~38% | 1 | > v6e-8 at equal chips |
+| slice | chips | hosts | wts | ats | tts | mfu | dead% | n | notes |
+|---|---|---|---:|---:|---:|---:|---:|---:|---|
+| `v5p-64` | 32 | 8 | **~192k** | ~294k | ~333k | 31% | 34% | 1 | top wts but scarce/preempted (8-host gang) |
+| `v5p-32` | 16 | 4 | **~154k** | ~171k | ~198k | 37% | 10% | 4 | **best risk-adjusted — high wts + reliable** |
+| `v6e-16` | 16 | 4 | **~111k** | ~124k | ~130k | 12% | 11% | 4 | solid, reliable |
+| `v5p-16` | 8 | 2 | **~95k** | ~97k | ~102k | 38% | 2% | 3 | most reliable; modest |
+| `v6e-32` | 32 | 8 | **~74k** | ~195k | ~213k | 10% | **62%** | 3 | **AVOID — 62% dead; wts ≈ interactive despite 213k tts** |
 
-`tts` is measured (steady, post-warmup). **`ats`/`wts` are TODO** — backfill with
-the formulas above; `wts` is expected well below `tts` on the big v6e/8-host gangs
-(frequent preemption) and is what should actually drive slice choice. v5p MFU
-~31–38% vs v6e ~10–12% (the only reason MFU is worth tracking: it confirms why v6e
-big slices underperform their chip count).
+**The wts re-ranking flips the tts story.** `v6e-32` is #2 by tts (213k) but its
+8-host gang is preempted **62% of the wall clock**, so its real `wts` (~74k) is the
+*worst* batch slice — no better than plain interactive `v6e-8`. **Stop sending work
+to v6e-32.** Favored order by wts: **`v5p-64` > `v5p-32` > `v6e-16` > `v5p-16` ≫
+`v6e-32`**; `v5p-32` is the best risk-adjusted pick (high wts, only 10% dead). v5p
+MFU ~31–40% vs v6e ~10–15% explains why the v6e gangs underperform their chip count.
