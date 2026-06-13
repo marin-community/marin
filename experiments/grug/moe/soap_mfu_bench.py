@@ -48,12 +48,25 @@ def _params():
     return p
 
 
-def main():
-    mesh = _build_mesh()
-    print(f"dev={len(jax.devices())} mesh={dict(mesh.shape)} L={_LAYERS} freq={_FREQ} b1={_BETA1}")
-    params = _params()
-    key = jax.random.PRNGKey(0)
-    opt = scale_by_klsoaph(beta1=_BETA1, beta2=0.9, shampoo_beta=0.9, eps=1e-8, precond_freq=_FREQ, init_factor=0.1)
+def _state_layout_fn(layout):
+    """Reshard one optimizer-state leaf to the target storage layout. ``replicate`` mimics a trainer
+    that stores opt_state un-sharded (each step pays a replicated->mat_p->replicated round trip);
+    ``persist`` stores it expert-sharded (leading axis over all mesh axes) so the per-step reshards
+    in _klsoaph_step_sharded are no-ops. The delta isolates the per-step state-reshard cost."""
+
+    def fn(x):
+        if not hasattr(x, "ndim") or x.ndim == 0:
+            return jax.sharding.reshard(x, P())
+        if layout == "replicate":
+            return jax.sharding.reshard(x, P(*((None,) * x.ndim)))
+        return jax.sharding.reshard(x, P(("data", "expert"), *((None,) * (x.ndim - 1))))  # persist: shard E
+
+    return fn
+
+
+def _time_layout(layout, opt, params, mesh, key):
+    """Time opt_step with opt_state STORED in `layout` between steps (re-jit so the out-sharding differs)."""
+    shard_state = _state_layout_fn(layout)
 
     def shard(x):
         spec = P("expert", "data", None) if x.ndim == 3 else P(*((None,) * x.ndim))
@@ -62,26 +75,44 @@ def main():
     def mkgrad(k):
         return {kk: shard(jax.random.normal(jax.random.fold_in(k, hash(kk) % 997), v.shape)) for kk, v in params.items()}
 
+    def step(g, s):
+        u, ns = opt.update(g, s)
+        return u, jax.tree.map(shard_state, ns)  # force the trainer's storage layout each step
+
+    jstep = jax.jit(step)
+    state = jax.tree.map(shard_state, opt.init(params))
+
+    g0 = mkgrad(key)
+    t0 = time.perf_counter()
+    u, state = jstep(g0, state)
+    jax.block_until_ready(u)
+    t_compile = time.perf_counter() - t0
+
+    for i in range(10):
+        u, state = jstep(mkgrad(jax.random.fold_in(key, i + 1)), state)
+    jax.block_until_ready(u)
+    t0 = time.perf_counter()
+    for i in range(_STEPS):
+        u, state = jstep(mkgrad(jax.random.fold_in(key, 100 + i)), state)
+    jax.block_until_ready(u)
+    return t_compile, (time.perf_counter() - t0) / _STEPS
+
+
+def main():
+    mesh = _build_mesh()
+    print(f"dev={len(jax.devices())} mesh={dict(mesh.shape)} L={_LAYERS} freq={_FREQ} b1={_BETA1}")
+    params = _params()
+    key = jax.random.PRNGKey(0)
+    opt = scale_by_klsoaph(beta1=_BETA1, beta2=0.9, shampoo_beta=0.9, eps=1e-8, precond_freq=_FREQ, init_factor=0.1)
+
     with jax.set_mesh(mesh):
-        state = opt.init(params)
-        step = jax.jit(lambda g, s: opt.update(g, s))
+        results = {layout: _time_layout(layout, opt, params, mesh, key) for layout in ("replicate", "persist")}
 
-        g0 = mkgrad(key)
-        t0 = time.perf_counter()
-        u, state = step(g0, state)
-        jax.block_until_ready(u)
-        t_compile = time.perf_counter() - t0
-
-        for i in range(10):
-            u, state = step(mkgrad(jax.random.fold_in(key, i + 1)), state)
-        jax.block_until_ready(u)
-        t0 = time.perf_counter()
-        for i in range(_STEPS):
-            u, state = step(mkgrad(jax.random.fold_in(key, 100 + i)), state)
-        jax.block_until_ready(u)
-        t_step = (time.perf_counter() - t0) / _STEPS
-
-    print(f"RESULT compile={t_compile:.1f}s opt_step={t_step * 1e3:.1f}ms (L={_LAYERS} freq={_FREQ})")
+    rc, rs = results["replicate"]
+    pc, ps = results["persist"]
+    print(f"RESULT replicate-state: compile={rc:.1f}s opt_step={rs * 1e3:.1f}ms")
+    print(f"RESULT persist-state:   compile={pc:.1f}s opt_step={ps * 1e3:.1f}ms")
+    print(f"RESULT speedup (replicate/persist) = {rs / ps:.2f}x  (reshard cost removed = {(rs - ps) * 1e3:.1f}ms/step)")
 
 
 if __name__ == "__main__":
