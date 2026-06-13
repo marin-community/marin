@@ -25,6 +25,7 @@
 # shape). The hyperball post-step is applied by ``scale_with_grug_klsoaph``
 # in ``optimizer.py``, mirroring the muonh / normuonh pattern.
 
+import functools
 from typing import NamedTuple
 
 import chex
@@ -32,7 +33,6 @@ import jax
 import jax.numpy as jnp
 import optax
 from jax.sharding import PartitionSpec as P
-from jax.sharding import reshard
 
 
 class ScaleByKLSoapHState(NamedTuple):
@@ -123,6 +123,22 @@ def _replicated_pspec(ndim: int) -> P:
     return P(*(None,) * ndim)
 
 
+def _expert_shard_pspec(ndim: int, mesh, batched: bool) -> P:
+    """Shard the leading (expert) axis across the whole mesh, replicate the rest.
+
+    For batched expert tensors (leaf ndim>=3 -> [E, n, n] state with ndim>=2), the
+    per-expert eigh/QR are independent, so we distribute the E axis over every mesh
+    axis (max data-parallelism) and keep the trailing matrix dims whole on each device
+    (eigh/QR need the full [n, n]). This replaces full replication, which made every
+    device redundantly compute all E experts. Non-batched 2D leaves (attn matrices)
+    have no expert axis, so they stay replicated (a single small matrix).
+    """
+    axis_names = tuple(mesh.axis_names)
+    if batched and axis_names and ndim >= 2:
+        return P(axis_names, *((None,) * (ndim - 1)))
+    return _replicated_pspec(ndim)
+
+
 def _flipped_eigh(matrix):
     """eigh on a symmetric matrix; return eigenvectors in DESCENDING order.
 
@@ -163,37 +179,23 @@ def _klsoaph_step(
 ):
     """Run one full-matrix SOAP step over the (..., rows, cols) gradient.
 
-    Every leading axis is treated independently; eigh / qr operate on the
-    trailing (rows, rows) / (cols, cols) Grams only. Replicates all
-    intermediates across the mesh to keep contracting-dim sharding
-    unambiguous; the parameter-sharding for the externally-visible direction
-    is restored downstream by ``_match_named_update_sharding`` in ``optimizer.py``.
+    PURE-LOCAL: no mesh / reshard / out_sharding here. Every leading axis is treated
+    independently (einsum ellipsis; eigh / qr batched over the trailing (n, n)). Expert
+    distribution is handled by ``_klsoaph_step_sharded`` via ``shard_map`` — each device
+    runs this on its local slice of experts with single-device semantics, which sidesteps
+    the explicit-mesh ``select``-sharding errors that arise when a batch axis is sharded
+    through ``jnp.linalg.qr``/``eigh``.
     """
     # The trailing two dims of g32 are the actual (rows, cols); gg_l/q_l are
     # (rows, rows), gg_r/q_r are (cols, cols).
     inner_rows = grad.shape[-2]
     inner_cols = grad.shape[-1]
-
-    has_mesh = not jax.sharding.get_abstract_mesh().empty
     g32 = grad.astype(jnp.float32)
-    if has_mesh:
-        repl = _replicated_pspec(g32.ndim)
-        g32 = reshard(g32, repl)
-        gg_l = reshard(gg_l, repl)
-        gg_r = reshard(gg_r, repl)
-        q_l = reshard(q_l, repl)
-        q_r = reshard(q_r, repl)
-        exp_avg = reshard(exp_avg, repl)
-        exp_avg_sq = reshard(exp_avg_sq, repl)
-        esi_repl = _replicated_pspec(esi_l.ndim)
-        esi_l = reshard(esi_l, esi_repl)
-        esi_r = reshard(esi_r, esi_repl)
-    out_p = _replicated_pspec(g32.ndim) if has_mesh else None
 
     def _init_branch(_):
         # GG = [g g.T / cols, g.T g / rows] on the trailing (rows, cols) of each leaf.
-        new_gg_l = jnp.einsum("...ik,...jk->...ij", g32, g32, out_sharding=out_p) / inner_cols
-        new_gg_r = jnp.einsum("...ki,...kj->...ij", g32, g32, out_sharding=out_p) / inner_rows
+        new_gg_l = jnp.einsum("...ik,...jk->...ij", g32, g32) / inner_cols
+        new_gg_r = jnp.einsum("...ki,...kj->...ij", g32, g32) / inner_rows
         new_gg_l = _symmetrize(new_gg_l)
         new_gg_r = _symmetrize(new_gg_r)
         new_q_l = _flipped_eigh(new_gg_l)
@@ -215,8 +217,8 @@ def _klsoaph_step(
 
     def _normal_branch(_):
         # 1. Project: g_proj = q_l.T @ g @ q_r.
-        g_qr = jnp.einsum("...ij,...jk->...ik", g32, q_r, out_sharding=out_p)
-        g_proj = jnp.einsum("...ki,...kj->...ij", q_l, g_qr, out_sharding=out_p)
+        g_qr = jnp.einsum("...ij,...jk->...ik", g32, q_r)
+        g_proj = jnp.einsum("...ki,...kj->...ij", q_l, g_qr)
 
         # 2. Adam in projected basis.
         new_exp_avg = beta1 * exp_avg + (1.0 - beta1) * g_proj
@@ -224,15 +226,15 @@ def _klsoaph_step(
         precond_proj = new_exp_avg / (jnp.sqrt(new_exp_avg_sq) + eps)
 
         # 3. Direction = q_l @ precond_proj @ q_r.T.
-        p_qrt = jnp.einsum("...ij,...kj->...ik", precond_proj, q_r, out_sharding=out_p)
-        direction = jnp.einsum("...ij,...jk->...ik", q_l, p_qrt, out_sharding=out_p)
+        p_qrt = jnp.einsum("...ij,...kj->...ik", precond_proj, q_r)
+        direction = jnp.einsum("...ij,...jk->...ik", q_l, p_qrt)
 
         # 4. Whitened Gram update.
         g_qr_white = g_qr * esi_r[..., None, :]
-        left_target = jnp.einsum("...ik,...jk->...ij", g_qr_white, g_qr_white, out_sharding=out_p) / inner_cols
-        qlT_g = jnp.einsum("...ki,...kj->...ij", q_l, g32, out_sharding=out_p)
+        left_target = jnp.einsum("...ik,...jk->...ij", g_qr_white, g_qr_white) / inner_cols
+        qlT_g = jnp.einsum("...ki,...kj->...ij", q_l, g32)
         qlT_g_white = qlT_g * esi_l[..., :, None]
-        right_target = jnp.einsum("...ki,...kj->...ij", qlT_g_white, qlT_g_white, out_sharding=out_p) / inner_rows
+        right_target = jnp.einsum("...ki,...kj->...ij", qlT_g_white, qlT_g_white) / inner_rows
         new_gg_l = _symmetrize(shampoo_beta * gg_l + (1.0 - shampoo_beta) * left_target)
         new_gg_r = _symmetrize(shampoo_beta * gg_r + (1.0 - shampoo_beta) * right_target)
 
@@ -256,14 +258,14 @@ def _klsoaph_step(
         should_refresh = jnp.equal(jnp.remainder(step, precond_freq), 0)
 
         def _refresh(_):
-            ea_qrT = jnp.einsum("...ij,...kj->...ik", new_exp_avg, q_r, out_sharding=out_p)
-            ea_original = jnp.einsum("...ij,...jk->...ik", q_l, ea_qrT, out_sharding=out_p)
-            gg_l_q = jnp.einsum("...ij,...jk->...ik", new_gg_l, q_l, out_sharding=out_p)
-            gg_r_q = jnp.einsum("...ij,...jk->...ik", new_gg_r, q_r, out_sharding=out_p)
+            ea_qrT = jnp.einsum("...ij,...kj->...ik", new_exp_avg, q_r)
+            ea_original = jnp.einsum("...ij,...jk->...ik", q_l, ea_qrT)
+            gg_l_q = jnp.einsum("...ij,...jk->...ik", new_gg_l, q_l)
+            gg_r_q = jnp.einsum("...ij,...jk->...ik", new_gg_r, q_r)
             ql_new, _ = jnp.linalg.qr(gg_l_q)
             qr_new, _ = jnp.linalg.qr(gg_r_q)
-            ea_qr_new = jnp.einsum("...ij,...jk->...ik", ea_original, qr_new, out_sharding=out_p)
-            ea_new = jnp.einsum("...ki,...kj->...ij", ql_new, ea_qr_new, out_sharding=out_p)
+            ea_qr_new = jnp.einsum("...ij,...jk->...ik", ea_original, qr_new)
+            ea_new = jnp.einsum("...ki,...kj->...ij", ql_new, ea_qr_new)
             return ql_new, qr_new, ea_new
 
         def _keep(_):
@@ -285,6 +287,74 @@ def _klsoaph_step(
 
     is_first = jnp.equal(step, 1)
     return jax.lax.cond(is_first, _init_branch, _normal_branch, operand=None)
+
+
+def _klsoaph_step_sharded(
+    grad,
+    exp_avg,
+    exp_avg_sq,
+    gg_l,
+    gg_r,
+    q_l,
+    q_r,
+    esi_l,
+    esi_r,
+    step,
+    beta1: float,
+    beta2: float,
+    shampoo_beta: float,
+    eps: float,
+    precond_freq: int,
+    init_factor: float,
+):
+    """Distribute the per-expert SOAP step across the mesh via ``shard_map``.
+
+    For batched expert leaves ([E, n, n]) the per-expert eigh/QR are independent, so we
+    shard the E axis over every mesh axis: each device runs ``_klsoaph_step`` on its E/N
+    local experts with single-device semantics (the linalg sees no sharded batch axis,
+    avoiding the explicit-mesh ``select`` errors). 2D leaves and the no-mesh case fall
+    through to a plain replicated call.
+    """
+    bound = functools.partial(
+        _klsoaph_step,
+        beta1=beta1,
+        beta2=beta2,
+        shampoo_beta=shampoo_beta,
+        eps=eps,
+        precond_freq=precond_freq,
+        init_factor=init_factor,
+    )
+    mesh = jax.sharding.get_abstract_mesh()
+    batched = hasattr(grad, "ndim") and grad.ndim >= 3
+    if mesh.empty or not batched:
+        return bound(grad, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r, step)
+
+    mat_p = _expert_shard_pspec(3, mesh, True)  # [E, n, n]
+    esi_p = _expert_shard_pspec(2, mesh, True)  # [E, n]
+    rep = P()  # replicated scalar (step)
+    # shard_map requires in_specs to MATCH each input's sharding (it does not reshard).
+    # The grad arrives sharded as the param (P("expert", "data", ...)) and the state as
+    # whatever init produced (often replicated), so reshard all to the uniform target first.
+    grad = jax.reshard(grad, mat_p)
+    exp_avg = jax.reshard(exp_avg, mat_p)
+    exp_avg_sq = jax.reshard(exp_avg_sq, mat_p)
+    gg_l = jax.reshard(gg_l, mat_p)
+    gg_r = jax.reshard(gg_r, mat_p)
+    q_l = jax.reshard(q_l, mat_p)
+    q_r = jax.reshard(q_r, mat_p)
+    esi_l = jax.reshard(esi_l, esi_p)
+    esi_r = jax.reshard(esi_r, esi_p)
+    step = jax.reshard(step, rep)
+    in_specs = (mat_p, mat_p, mat_p, mat_p, mat_p, mat_p, mat_p, esi_p, esi_p, rep)
+    out_specs = (mat_p, mat_p, mat_p, mat_p, mat_p, mat_p, mat_p, esi_p, esi_p)
+    sharded = jax.shard_map(
+        lambda *a: bound(*a),
+        mesh=mesh,
+        in_specs=in_specs,
+        out_specs=out_specs,
+        check_vma=False,
+    )
+    return sharded(grad, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r, step)
 
 
 def scale_by_klsoaph(
@@ -336,10 +406,11 @@ def scale_by_klsoaph(
             if grad is None or exp_avg is None:
                 return _SoapStepResult(grad, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r)
 
-            # Full-matrix SOAP: run the step directly on the (..., rows, cols) gradient.
-            # The step replicates state internally for the eigh/qr; the parameter
-            # sharding is restored downstream via _match_named_update_sharding.
-            out = _klsoaph_step(
+            # Full-matrix SOAP. For batched expert leaves the per-expert linalg is
+            # distributed across the mesh via shard_map (each device does E/N experts);
+            # 2D leaves run replicated. Param sharding is restored downstream via
+            # _match_named_update_sharding.
+            out = _klsoaph_step_sharded(
                 grad.astype(jnp.float32),
                 exp_avg,
                 exp_avg_sq,
