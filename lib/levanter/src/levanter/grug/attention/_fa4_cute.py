@@ -4,7 +4,6 @@
 import math
 from dataclasses import replace
 
-import equinox as eqx
 import jax
 from jax import numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
@@ -96,16 +95,8 @@ def _packed_self_attention_segment_ids(
     if mask.sliding_window is not None and mask.sliding_window <= 0:
         raise ValueError(f"sliding_window must be positive, got {mask.sliding_window}")
 
-    q_segment_ids, kv_segment_ids = mask.segment_ids
-    same_segment_ids = q_segment_ids is kv_segment_ids
+    q_segment_ids, _ = mask.segment_ids
     q_segment_ids = _batched_segment_ids(q_segment_ids, batch_size=q.shape[0], seq_len=q.shape[1])
-    if not same_segment_ids:
-        kv_segment_ids = _batched_segment_ids(kv_segment_ids, batch_size=k.shape[0], seq_len=k.shape[1])
-        q_segment_ids = eqx.error_if(
-            q_segment_ids,
-            jnp.any(q_segment_ids != kv_segment_ids),
-            f"{backend_name} requires matching q/kv segment_ids for packed self-attention.",
-        )
     return q_segment_ids
 
 

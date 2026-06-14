@@ -114,3 +114,24 @@
 - Result: focused tests, changed-file pre-commit, Pyrefly, and the wrapper dry run passed. GM2560-MFU-003 remains running with 32/32 worker tasks and no W&B history rows or profile artifact yet.
 - Interpretation: sharded optimizer state was already present; this adds the next precision-storage A/B without relaunching the active baseline. Current GM2560-MFU-003 logs show XLA SPMD partitioning warnings about involuntary full rematerialization from replicated/maximal or batch-sharded tensors into the 256-way batch/expert layout, so sharding transitions should be checked in the first profile.
 - Next action: keep waiting for GM2560-MFU-003 to finish first compile and emit step metrics/profile, then decide whether the first follow-up is `compute_with_master`, a sharding/remat fix, or an MoE/attention change.
+
+### 2026-06-13 23:11 PDT - GM2560-MFU-003 rank-0 W&B artifact bounce
+- Hypothesis: a non-terminal Iris retry can still preserve the FA4 profile attempt if the second attempt reaches the profiler window.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --config lib/iris/config/cw-us-east-02a.yaml job summary --json /dlwh/iris-run-job-20260614-054507/grug-train-GM2560-MFU-003-cw-20260613-2245`
+  - `uv run --package marin-iris --extra controller iris --config lib/iris/config/cw-us-east-02a.yaml job logs --since-seconds 900 /dlwh/iris-run-job-20260614-054507 | rg -n -C 30 "FileNotFoundError|config\\.yaml|Traceback|Exception|Error"`
+- Config: GM2560-MFU-003, FA4 attention (`MAY_ATTENTION_IMPLEMENTATION=gpu_fa4_cute`), 32 H100 nodes, source head `c3af352ce`.
+- Result: child job is still running with 32/32 tasks, but `failure_count=1`. Rank 0 hit a background W&B artifact upload `FileNotFoundError` for `/tmp/tmpogy38bhr/config.yaml`; Iris bounced the coscheduled group and relaunched all ranks. W&B remains running with `last_history_step=-1`, code/requirements artifacts from both attempts, and no profile artifact yet.
+- Interpretation: no manual relaunch is justified yet. This is a retryable launch/tracker artifact failure unless it repeats; the active run should continue until it either reaches metrics/profile or fails terminally.
+- Next action: keep babysitting GM2560-MFU-003; if the same artifact-path failure repeats, report before any recovery.
+
+### 2026-06-13 23:16 PDT - next-run attention layout fixes
+- Hypothesis: GM2560-MFU-003 is compiling the FA4 path with two avoidable SPMD layout hazards: a runtime q/kv segment-id equality guard that lowers through `conditional`, and three separate q/k/v projections that each force the same attention-input layout movement.
+- Command:
+  - `uv run pytest tests/test_grug_variant_contracts.py::test_grug_moe_may_recipe_attention_flags_lower tests/test_grug_variant_contracts.py::test_grug_moe_compute_live_params_one_step_lowers -q`
+  - `uv run pytest lib/levanter/tests/grug/test_fa4_cute_attention.py::test_fa4_frontend_uses_query_segment_ids_without_dynamic_equality_check -q`
+  - `uv run python -m py_compile experiments/grug/moe/model.py lib/levanter/src/levanter/grug/attention/_fa4_cute.py`
+- Config: local code only; active GM2560-MFU-003 still runs source head `c3af352ce`, so it does not include these changes.
+- Result: removed the FA4/CuTe dynamic q/kv segment-id equality check for packed self-attention and fused the MoE variant q/k/v projection into one `einsum` plus splits. Focused tests and py_compile passed. GM2560-MFU-003 still has no W&B history rows and is emitting repeated old-code `[SPMD] ... get-tuple-element(%conditional)` warnings.
+- Interpretation: the old-code run is unlikely to be the right baseline if it never reaches a step soon; the next profile should relaunch from this patched commit with FA4 and default `live_param_mode=param`, then use `compute_with_master` only if the profile shows parameter movement or optimizer/update overhead.
+- Next action: run changed-file checks, commit/push, then stop and relaunch the FA4 profile if GM2560-MFU-003 has not reached step metrics.

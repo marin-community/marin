@@ -11,6 +11,7 @@ from levanter.grug.attention import (
     gpu_fa4_cute_attention,
     reference_attention,
 )
+from levanter.grug.attention._fa4_cute import _packed_self_attention_segment_ids
 
 
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):
@@ -22,19 +23,16 @@ def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 
     return q, k, v
 
 
-def test_fa4_frontend_rejects_mismatched_q_kv_segment_ids():
-    if jax.default_backend() != "gpu":
-        pytest.skip("FA4/CuTe validation requires a GPU backend.")
+def test_fa4_frontend_uses_query_segment_ids_without_dynamic_equality_check():
     q, k, v = _make_qkv(batch=1, q_len=4, k_len=4, q_heads=2, kv_heads=1)
-    q = q.astype(jnp.bfloat16)
-    k = k.astype(jnp.bfloat16)
-    v = v.astype(jnp.bfloat16)
+    del v
     q_segment_ids = jnp.array([[1, 1, 2, 2]], dtype=jnp.int32)
     kv_segment_ids = jnp.array([[1, 1, 3, 3]], dtype=jnp.int32)
     mask = AttentionMask.causal().with_segment_ids(q_segment_ids, kv_segment_ids)
 
-    with pytest.raises(Exception, match="requires matching q/kv segment_ids"):
-        jax.block_until_ready(gpu_fa4_cute_attention(q, k, v, mask))
+    actual = _packed_self_attention_segment_ids(q, k, mask, backend_name="gpu_fa4_cute_attention")
+
+    np.testing.assert_array_equal(actual, q_segment_ids)
 
 
 @pytest.mark.parametrize(("q_heads", "kv_heads"), [(4, 1), (2, 2)])

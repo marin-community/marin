@@ -210,9 +210,17 @@ class CausalSelfAttention(eqx.Module):
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        q_features = self.cfg.num_heads * head_dim
+        kv_features = self.cfg.num_kv_heads * head_dim
+        qkv_weight = jnp.concatenate([self.w_q, self.w_k, self.w_v], axis=1)
+        q_raw, k_raw, v_raw = jnp.split(
+            jnp.einsum("bsh,hd->bsd", x, qkv_weight),
+            [q_features, q_features + kv_features],
+            axis=-1,
+        )
+        q = rearrange(q_raw, "... (n d) -> ... n d", d=head_dim)
+        k = rearrange(k_raw, "... (m d) -> ... m d", d=head_dim)
+        v = rearrange(v_raw, "... (m d) -> ... m d", d=head_dim)
         if use_pko:
             half = head_dim // 2
             k_stationary = k[..., half:]
