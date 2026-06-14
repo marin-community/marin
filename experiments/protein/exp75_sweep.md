@@ -296,14 +296,14 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
 
   | wd \ lr | 8.75e-5 | 1.75e-4 | 3.5e-4 | 7e-4 |
   |---|---|---|---|---|
-  | **0.02** | | | **3.0623** | |
+  | **0.02** | | 3.112 | **3.0623** | |
   | **0.05** | 3.1535 | | 3.0705 | |
   | **0.1**  | | | 3.0662 | |
 
-  _4 of 12 finals in (~22:15Z). `lr3.5e-4` wins at all 3 WD (3.062–3.071); `8.75e-5`
-  clearly worse (3.154). Within `3.5e-4`, wd0.02 nominally best (3.0623) but WD flat
-  (~0.008 spread). Need the 1.75e-4 & 7e-4 columns to bound the LR optimum (still
-  ≥3.5e-4) and the remaining 8 cells._
+  _5 of 12 finals in (~00:45Z). `lr3.5e-4` wins everywhere so far (3.062–3.071); flanks
+  worse — `8.75e-5`=3.154, `1.75e-4`=3.112 (at wd0.02). WD flat (~0.008). LR optimum
+  holds ≥3.5e-4; **the 7e-4 column (on slow v6e-4) is the long pole** to bound it
+  above. Remaining: 7 cells._
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ (leaning
   `lr3.5e-4/wd0.02`=3.0623, pending the 1.75e-4/7e-4 columns + WD neighbors)
@@ -346,9 +346,19 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   optimum is ≥3.5e-4) placed on the fastest slices (v5p-64, v6e-32); v5p favored 7/10
   (best throughput + MFU), 3 on the v6e pool to avoid oversubscribing one pool. All
   10 pending at launch (scarcity); ≥1h-move relocates any stuck.
-- Grid (final-step `eval/contacts-v1-val/loss`):
+- Grid (**final-step** `eval/contacts-v1-val/loss`, step 8920). Rows = WD, cols = LR.
+  Filling as runs finish (~00:45Z, 1 of 15 — E2 cells are the long pole, preemption-
+  stretched on batch). **Do not read mid-flight E2 values** — they're confounded by
+  completion (cosine decay); only finals here.
+
+  | wd \ lr | 1.75e-4 | 2.5e-4 | 3.5e-4 | 5e-4 | 7e-4 |
+  |---|---|---|---|---|---|
+  | **0.02** | | | | | |
+  | **0.05** | | 3.021 | | | |
+  | **0.1**  | | | | | |
+
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
-- Measured drift 1→2: `Δlog lr=…, Δlog wd=…`
+- Measured drift 1→2: `Δlog lr=…, Δlog wd=…` (E2 3.021 < E1 ~3.06 → 2 epochs helps)
 - Notes:
 
 ### epochs = 4
