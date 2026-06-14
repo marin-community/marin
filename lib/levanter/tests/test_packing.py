@@ -73,6 +73,9 @@ def test_add_example_and_pack():
     np.testing.assert_array_equal(packed.tokens.array, expected_tokens)
     np.testing.assert_array_equal(packed.attn_mask.segment_ids[0].array, expected_segment_ids)
     np.testing.assert_array_equal(packed.loss_weight.array, expected_loss_weight)
+    assert packed.attn_mask.segment_run_metadata is not None
+    np.testing.assert_array_equal(packed.attn_mask.segment_run_metadata.segment_lengths.array, [3, 7, 0])
+    np.testing.assert_array_equal(packed.attn_mask.segment_run_metadata.num_segments.array, 2)
 
 
 def test_exceed_max_pack_size():
@@ -103,6 +106,9 @@ def test_empty_sequence():
     np.testing.assert_array_equal(packed.tokens.array, expected_tokens)
     np.testing.assert_array_equal(packed.attn_mask.segment_ids[0].array, expected_segment_ids)
     np.testing.assert_array_equal(packed.loss_weight.array, expected_loss_weight)
+    assert packed.attn_mask.segment_run_metadata is not None
+    np.testing.assert_array_equal(packed.attn_mask.segment_run_metadata.segment_lengths.array, [10, 0, 0])
+    np.testing.assert_array_equal(packed.attn_mask.segment_run_metadata.num_segments.array, 1)
 
 
 def test_packing_multiple_examples():
@@ -123,6 +129,9 @@ def test_packing_multiple_examples():
     np.testing.assert_array_equal(packed.tokens.array, expected_tokens)
     np.testing.assert_array_equal(packed.attn_mask.segment_ids[0].array, expected_segment_ids)
     np.testing.assert_array_equal(packed.loss_weight.array, expected_loss_weight)
+    assert packed.attn_mask.segment_run_metadata is not None
+    np.testing.assert_array_equal(packed.attn_mask.segment_run_metadata.segment_lengths.array, [2, 3, 5])
+    np.testing.assert_array_equal(packed.attn_mask.segment_run_metadata.num_segments.array, 3)
 
 
 def test_pack_prompt_completions_simple():
@@ -150,6 +159,9 @@ def test_pack_prompt_completions_simple():
     np.testing.assert_array_equal(packed_1.tokens.array, expected_tokens_1)
     np.testing.assert_array_equal(packed_1.attn_mask.segment_ids[0].array, expected_segment_ids_1)
     np.testing.assert_array_equal(packed_1.loss_weight.array, expected_loss_weight_1)
+    assert packed_1.attn_mask.segment_run_metadata is not None
+    np.testing.assert_array_equal(packed_1.attn_mask.segment_run_metadata.segment_lengths.array, [3, 2, 5])
+    np.testing.assert_array_equal(packed_1.attn_mask.segment_run_metadata.num_segments.array, 3)
 
     # Check the second packed example
     packed_2 = results[1]
