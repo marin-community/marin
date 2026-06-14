@@ -43,36 +43,50 @@ import uuid
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, NotRequired, TypedDict, cast
 
 import click
 import uvicorn
 import yaml
 from connectrpc.request import RequestContext
+from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.controller import db as db_mod
-from iris.cluster.controller import reads
+from iris.cluster.controller import ops, reads
+from iris.cluster.controller.backend import (
+    AutoscaleResult,
+    BackendCapability,
+    ReconcileResult,
+    ScheduleInput,
+    ScheduleResult,
+    TaskBackend,
+    plans_from_snapshot,
+    run_scheduling_decision,
+)
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     Controller,
     ControllerConfig,
-    compute_demand_entries,
 )
-from iris.cluster.controller.controller import (
-    _pending_tasks_with_jobs as _schedulable_tasks,
-)
-from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.reconcile import ReconcileResult
-from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
-from iris.managed_thread import ThreadContainer
-
-# Branch removed Tx.fetchall/fetchone; restore for this benchmark script.
-if not hasattr(Tx, "fetchall"):
-    Tx.fetchall = lambda self, stmt, params=None: self.execute(stmt, params).all()
-    Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.ops.task import Assignment
+from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
-from iris.cluster.controller.reads import SchedulableWorker, healthy_active_workers_with_attributes  # noqa: F401
-from iris.cluster.controller.reconcile import ReconcileInputs, ReconcileRow, reconcile_workers
-from iris.cluster.controller.scheduler import Scheduler
+from iris.cluster.controller.reads import (  # noqa: F401
+    ControlSnapshot,
+    SchedulableWorker,
+    healthy_active_workers_with_attributes,
+)
+from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile.worker import (
+    ReconcileInputs,
+    ReconcileRow,
+    WorkerReconcilePlan,
+    WorkerReconcileResult,
+    build_reconcile_plans,
+)
+from iris.cluster.controller.run_template import new_run_template_cache
+from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
+from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     endpoints_table,
     job_config_table,
@@ -87,22 +101,18 @@ from iris.cluster.controller.service import (
     _tasks_for_listing,
     _worker_roster,
 )
-from iris.cluster.controller.transitions import (
-    Assignment,
-    ControllerTransitions,
-    HeartbeatApplyRequest,
-    TaskUpdate,
-)
-from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
-from iris.cluster.types import AttemptUid, JobName, WorkerId
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
+from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
+from iris.cluster.types import AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.worker_connect import WorkerServiceASGIApplication
+from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
 from iris.version import client_revision_date
 from rigging.timing import Timestamp
 from sqlalchemy import func, select, text, update
+from tests.cluster.controller._test_support import ControllerTestState
 
 
 def _worker_addresses_for_tasks(db, tasks):
@@ -142,30 +152,50 @@ def _marin_remote_state_dir() -> str:
 
 
 class _FakeProvider:
-    """Minimal TaskProvider that satisfies Controller's wiring without making
-    real cluster calls. Mirrors tests/cluster/controller/conftest.py:FakeProvider.
+    """Minimal worker-daemon TaskBackend that satisfies Controller's wiring
+    without making real cluster calls. Mirrors
+    tests/cluster/controller/conftest.py:FakeProvider.
 
     Used in combination with ``dry_run=True`` so the polling loop's reconcile
     short-circuits before it would ever call the provider — but we still need a
     real provider object to satisfy the constructor's type contract.
     """
 
-    def get_process_status(self, worker_id, address, request):
+    name = "worker"
+    capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+    autoscaler = None
+
+    def __init__(self) -> None:
+        self._scheduler = Scheduler()
+
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
+        return run_scheduling_decision(self._scheduler, snapshot)
+
+    def get_process_status(self, target, request):
         raise RuntimeError("fake provider")
 
-    def on_worker_failed(self, worker_id, address):
+    def attach_autoscaler(self, autoscaler) -> None:
         pass
 
-    def profile_task(self, address, request, timeout_ms):
+    def set_log_sink(self, *args, **kwargs):
+        pass
+
+    def profile_task(self, target, request, timeout_ms):
         raise RuntimeError("fake provider")
 
-    def ping_workers(self, workers):
-        return []
-
-    def reconcile_workers(self, plans, addresses):
+    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
         # Same shape the test-suite FakeProvider returns. Only exercised if
         # someone disables dry_run on the harness.
-        return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
+        plans = plans_from_snapshot(snapshot)
+        return ReconcileResult(
+            worker_results=[
+                (p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans
+            ],
+            health_events=[WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans],
+        )
+
+    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+        return AutoscaleResult()
 
     def close(self):
         pass
@@ -502,32 +532,49 @@ def clone_db(source: ControllerDB) -> ControllerDB:
 # ---------------------------------------------------------------------------
 
 
-def _build_heartbeat_requests(db: ControllerDB) -> list[HeartbeatApplyRequest]:
-    """One HeartbeatApplyRequest per active worker, RUNNING update per active task."""
+def _build_reconcile_inputs(
+    db: ControllerDB,
+) -> list[tuple[WorkerReconcilePlan, WorkerReconcileResult]]:
+    """Per active worker: a (plan, result) pair where the plan lists the worker's
+    attempts as desired and the result reports each RUNNING. Drives the
+    production reconcile-observation verb (``ops.worker.apply_reconcile``).
+    """
     health = WorkerHealthTracker()
     _seed_health(db, health)
     with db.read_snapshot() as tx:
         workers = reads.healthy_active_workers_with_attributes(tx, health, _NoAttrs())
     active_states = list(ACTIVE_TASK_STATES)
-    requests: list[HeartbeatApplyRequest] = []
+    plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = []
     for w in workers:
         with db.read_snapshot() as tx:
             rows = tx.execute(
-                select(tasks_table.c.task_id, tasks_table.c.current_attempt_id).where(
+                select(task_attempts_table.c.attempt_uid)
+                .select_from(
+                    task_attempts_table.join(
+                        tasks_table,
+                        (tasks_table.c.task_id == task_attempts_table.c.task_id)
+                        & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
+                    )
+                )
+                .where(
                     tasks_table.c.current_worker_id == w.worker_id,
                     tasks_table.c.state.in_(active_states),
                 )
             ).all()
-        updates = [
-            TaskUpdate(
-                task_id=row.task_id,
-                attempt_id=int(row.current_attempt_id),
-                new_state=job_pb2.TASK_STATE_RUNNING,
-            )
-            for row in rows
+        uids = [row.attempt_uid for row in rows]
+        desired = [
+            worker_pb2.Worker.DesiredAttempt(attempt_uid=uid, run=worker_pb2.Worker.AttemptSpec()) for uid in uids
         ]
-        requests.append(HeartbeatApplyRequest(worker_id=w.worker_id, updates=updates))
-    return requests
+        observations = [
+            worker_pb2.Worker.AttemptObservation(attempt_uid=uid, state=job_pb2.TASK_STATE_RUNNING) for uid in uids
+        ]
+        plan = WorkerReconcilePlan(
+            worker_id=w.worker_id,
+            request=worker_pb2.Worker.ReconcileRequest(worker_id=str(w.worker_id), desired=desired),
+        )
+        result = WorkerReconcileResult(worker_id=w.worker_id, observations=observations, error=None)
+        plan_results.append((plan, result))
+    return plan_results
 
 
 class _NoAttrs:
@@ -553,7 +600,7 @@ def _seed_health(db: ControllerDB, health: WorkerHealthTracker) -> None:
 
 def _build_failure_batch(db: ControllerDB, n: int) -> list[tuple[WorkerId, str | None, str]]:
     with db.read_snapshot() as tx:
-        rows = tx.fetchall(select(workers_table.c.worker_id, workers_table.c.address).limit(n))
+        rows = tx.execute(select(workers_table.c.worker_id, workers_table.c.address).limit(n)).all()
     if not rows:
         return []
     return [
@@ -598,20 +645,20 @@ def _build_sample_worker_metadata() -> job_pb2.WorkerMetadata:
 def _active_task_sample(db: ControllerDB, limit: int) -> list[tuple[JobName, int]]:
     active_states = list(ACTIVE_TASK_STATES)
     with db.read_snapshot() as tx:
-        rows = tx.fetchall(
+        rows = tx.execute(
             select(tasks_table.c.task_id, tasks_table.c.current_attempt_id)
             .where(
                 tasks_table.c.state.in_(active_states),
                 tasks_table.c.current_attempt_id.is_not(None),
             )
             .limit(limit)
-        )
+        ).all()
     return [(row.task_id, int(row.current_attempt_id)) for row in rows]
 
 
 def _has_committed_columns(db: ControllerDB) -> bool:
     with db.read_snapshot() as tx:
-        rows = tx.fetchall(text("PRAGMA table_info(workers)"))
+        rows = tx.execute(text("PRAGMA table_info(workers)")).all()
     return "committed_cpu_millicores" in {r[1] for r in rows}
 
 
@@ -622,7 +669,7 @@ def _has_committed_columns(db: ControllerDB) -> bool:
 
 def load_get_job_state(harness: RpcHarness, db: ControllerDB, rps: float, batch: int = 1) -> RpcLoad | None:
     with db.read_snapshot() as tx:
-        rows = tx.fetchall(select(jobs_table.c.job_id).limit(50))
+        rows = tx.execute(select(jobs_table.c.job_id).limit(50)).all()
     if not rows:
         return None
     job_ids = [str(r.job_id) for r in rows[:batch]]
@@ -710,11 +757,11 @@ def load_launch_job(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoa
 
 def load_terminate_job(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
     with db.read_snapshot() as tx:
-        rows = tx.fetchall(
+        rows = tx.execute(
             select(jobs_table.c.job_id)
             .where(jobs_table.c.state == job_pb2.JOB_STATE_RUNNING, jobs_table.c.depth == 1)
             .limit(50)
-        )
+        ).all()
     if not rows:
         return None
     targets = [str(r.job_id) for r in rows]
@@ -762,7 +809,7 @@ def load_list_workers(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcL
 
 def load_list_tasks(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
     with db.read_snapshot() as tx:
-        rows = tx.fetchall(select(jobs_table.c.job_id).limit(1))
+        rows = tx.execute(select(jobs_table.c.job_id).limit(1)).all()
     if not rows:
         return None
     job_id = str(rows[0].job_id)
@@ -776,7 +823,7 @@ def load_list_tasks(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoa
 
 def load_get_job_status(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
     with db.read_snapshot() as tx:
-        rows = tx.fetchall(select(jobs_table.c.job_id).limit(1))
+        rows = tx.execute(select(jobs_table.c.job_id).limit(1)).all()
     if not rows:
         return None
     job_id = str(rows[0].job_id)
@@ -926,7 +973,7 @@ def benchmark_rpcs(db: ControllerDB) -> None:
     try:
         # ---- GetJobState (172k/day) — batched job-state lookup. ----
         with write_db.read_snapshot() as tx:
-            rows = tx.fetchall(select(jobs_table.c.job_id).limit(50))
+            rows = tx.execute(select(jobs_table.c.job_id).limit(50)).all()
         job_ids = [str(r.job_id) for r in rows]
         if job_ids:
             _bench_load(
@@ -1037,11 +1084,11 @@ def benchmark_rpcs(db: ControllerDB) -> None:
         terminate_load = load_terminate_job(harness, write_db, rps=0)
         if terminate_load is not None:
             with write_db.read_snapshot() as _tx:
-                running_rows = _tx.fetchall(
+                running_rows = _tx.execute(
                     select(jobs_table.c.job_id)
                     .where(jobs_table.c.state == job_pb2.JOB_STATE_RUNNING, jobs_table.c.depth == 1)
                     .limit(50)
-                )
+                ).all()
             n_cancel = len(running_rows)
             _bench_load(
                 f"RPC: TerminateJob (cancel_job, n={n_cancel} jobs)",
@@ -1079,9 +1126,9 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # the scheduler's main path. Pick up to 50 running jobs and revert their
     # first 3 tasks to PENDING.
     with db.read_snapshot() as _snap:
-        running_jobs = _snap.fetchall(
+        running_jobs = _snap.execute(
             select(jobs_table.c.job_id).where(jobs_table.c.state == job_pb2.JOB_STATE_RUNNING).limit(50)
-        )
+        ).all()
     pending_count = 0
     for job_row in running_jobs:
         jid = job_row.job_id
@@ -1100,7 +1147,8 @@ def benchmark_scheduling(db: ControllerDB) -> None:
                 },
             )
             pending_count += int(_tx.execute(text("SELECT changes() AS c")).scalar() or 0)
-    pending_tasks = _schedulable_tasks(db)
+    with db.read_snapshot() as _ptx:
+        pending_tasks = reads.pending_tasks_with_jobs(_ptx)
     with db.read_snapshot() as _wtx:
         workers = reads.healthy_active_workers_with_attributes(_wtx, health, _NoAttrs())
     print(
@@ -1122,12 +1170,12 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
         def _usage_old():
             with db.read_snapshot() as _tx:
-                _tx.fetchall(
+                _tx.execute(
                     text(
                         "SELECT worker_id, committed_cpu_millicores, committed_mem_bytes, "
                         "committed_gpu, committed_tpu FROM workers"
                     )
-                )
+                ).all()
 
         bench("Scheduling: workers.committed_* read (pre-Jumbo)", _usage_old)
     else:
@@ -1135,7 +1183,8 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
     # ---- Full tick: _read_scheduling_state-style aggregate ----
     def _state_read():
-        _schedulable_tasks(db)
+        with db.read_snapshot() as _ptx:
+            reads.pending_tasks_with_jobs(_ptx)
         with db.read_snapshot() as _rtx:
             ws = reads.healthy_active_workers_with_attributes(_rtx, health, _NoAttrs())
         with db_mod.read_snapshot(db.sa_read_engine) as snap:
@@ -1145,10 +1194,16 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     bench("Scheduling: state read (pending+workers+usage)", _state_read)
 
     # ---- Autoscaler demand path (compute_demand_entries) ----
+    # Demand is now a pure function over the per-tick scheduling context; build it
+    # once (as the scheduling pass does) and benchmark only the demand computation.
+    # SchedulingContext carries plain data built eagerly, so it is safe to use after
+    # the snapshot closes.
     sched = Scheduler()
+    with db.read_snapshot() as _sched_snap:
+        demand_ctx = build_scheduling_context(_sched_snap, health, _NoAttrs(), UserBudgetDefaults(), {})
 
     def _demand():
-        compute_demand_entries(db, scheduler=sched, workers=workers, reservation_claims={})
+        compute_demand_entries(demand_ctx, sched, {})
 
     bench(
         f"Scheduling: compute_demand_entries (w={len(workers)}, t={len(pending_tasks)})",
@@ -1157,9 +1212,9 @@ def benchmark_scheduling(db: ControllerDB) -> None:
         min_time_s=1.0,
     )
 
-    # ---- queue_assignments WRITE path ----
+    # ---- assign WRITE path ----
     write_db = clone_db(db)
-    write_txns = ControllerTransitions(write_db)
+    write_txns = ControllerTestState(write_db)
     try:
         if pending_tasks and workers:
             worker_list = list(workers)
@@ -1171,7 +1226,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
             def _save_state():
                 with write_db.read_snapshot() as _rtx:
-                    rows = _rtx.fetchall(
+                    rows = _rtx.execute(
                         select(
                             tasks_table.c.task_id,
                             tasks_table.c.state,
@@ -1180,7 +1235,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
                             tasks_table.c.current_worker_address,
                             tasks_table.c.started_at_ms,
                         ).where(tasks_table.c.task_id.in_(task_ids_jn))
-                    )
+                    ).all()
                 return [
                     (
                         row.task_id,
@@ -1216,10 +1271,10 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
             def _do_queue():
                 with write_db.transaction() as cur:
-                    write_txns.queue_assignments(cur, sample_assignments)
+                    ops.task.assign(cur, sample_assignments, health=write_txns._health)
 
             bench(
-                f"Scheduling: queue_assignments (n={len(sample_assignments)} tasks, WRITE)",
+                f"Scheduling: assign (n={len(sample_assignments)} tasks, WRITE)",
                 _do_queue,
                 reset=_reset,
             )
@@ -1242,7 +1297,7 @@ def benchmark_polling(db: ControllerDB) -> None:
     """
     health = WorkerHealthTracker()
     _seed_health(db, health)
-    txns = ControllerTransitions(db, health=health)
+    txns = ControllerTestState(db, health=health)
 
     with db.read_snapshot() as snap:
         addresses = reads.list_active_healthy_workers(snap, health)
@@ -1309,7 +1364,7 @@ def benchmark_polling(db: ControllerDB) -> None:
         # tasks in one query. Use the same shape (no current_attempt_id join).
         _active = [job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_RUNNING]
         with db.read_snapshot() as _tx:
-            _tx.fetchall(
+            _tx.execute(
                 select(
                     tasks_table.c.current_worker_id,
                     tasks_table.c.task_id,
@@ -1319,40 +1374,40 @@ def benchmark_polling(db: ControllerDB) -> None:
                     tasks_table.c.state.in_(_active),
                     tasks_table.c.current_worker_id.is_not(None),
                 )
-            )
+            ).all()
 
     bench("Polling: poll_all_workers (pre-Jumbo single-shot read)", _poll_all_pre_jumbo)
 
     # ---- run_request_template (cached): dominates ASSIGNED rows in the tick. ----
     _active_states = [job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_RUNNING]
     with db.read_snapshot() as _rtx:
-        rows = _rtx.fetchall(
+        rows = _rtx.execute(
             select(tasks_table.c.job_id)
             .where(
                 tasks_table.c.state.in_(_active_states),
                 tasks_table.c.current_worker_id.is_not(None),
             )
             .limit(64)
-        )
+        ).all()
     sample_job_ids = list({row.job_id for row in rows})
     if sample_job_ids:
         first_job = sample_job_ids[0]
 
         def _template_first():
-            # Fresh transitions to defeat the LRU cache on every call.
-            local = ControllerTransitions(db, health=health)
+            # Fresh cache to defeat the LRU cache on every call.
+            cold_cache = new_run_template_cache()
             with db.read_snapshot() as snap:
-                local.run_request_template(snap, first_job)
+                dispatch.run_request_template(cold_cache, snap, first_job)
 
         bench("Polling: run_request_template (cold, per-job build)", _template_first)
 
         # Warm cache: same job repeatedly.
         with db.read_snapshot() as snap:
-            txns.run_request_template(snap, first_job)
+            dispatch.run_request_template(txns._run_template_cache, snap, first_job)
 
         def _template_warm():
             with db.read_snapshot() as snap:
-                txns.run_request_template(snap, first_job)
+                dispatch.run_request_template(txns._run_template_cache, snap, first_job)
 
         bench("Polling: run_request_template (cached hit)", _template_warm)
 
@@ -1361,7 +1416,7 @@ def benchmark_polling(db: ControllerDB) -> None:
     # tasks if possible, otherwise just any job.
     _drain_active = [job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_RUNNING]
     with db.read_snapshot() as _dtx:
-        drain_row = _dtx.fetchone(
+        drain_row = _dtx.execute(
             select(jobs_table.c.job_id)
             .join(tasks_table, tasks_table.c.job_id == jobs_table.c.job_id)
             .where(
@@ -1370,13 +1425,11 @@ def benchmark_polling(db: ControllerDB) -> None:
                 jobs_table.c.depth == 1,
             )
             .limit(1)
-        )
+        ).first()
     if drain_row:
         drain_jid = drain_row.job_id
 
         def _has_unfinished():
-            from iris.cluster.controller import db as db_mod
-
             with db_mod.read_snapshot(db.sa_read_engine) as snap:
                 reads.has_unfinished_worker_attempts(snap, drain_jid)
 
@@ -1486,7 +1539,9 @@ def benchmark_endpoints(db: ControllerDB) -> None:
 
     write_db = clone_db(db)
     write_endpoints = EndpointsProjection(write_db)
-    write_txns = ControllerTransitions(write_db, endpoints=write_endpoints)
+    write_txns = ControllerTestState(write_db, endpoints=write_endpoints)
+    # ops.worker.fail only acts on workers the tracker considers active.
+    _seed_health(write_db, write_txns._health)
 
     try:
         sample = _active_task_sample(write_db, limit=300)
@@ -1507,7 +1562,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
             def _per_txn(tasks=tasks_for_burst):
                 for t, aid in tasks:
                     with write_db.transaction() as cur:
-                        write_txns.add_endpoint(cur, _make_endpoint(t, aid))
+                        write_endpoints.add(cur, _make_endpoint(t, aid))
 
             bench(
                 f"Endpoints: add_endpoint burst x{burst_n} (per-txn, WRITE)",
@@ -1534,17 +1589,9 @@ def benchmark_endpoints(db: ControllerDB) -> None:
         # log attributes the 29s "apply results" phase to in #5470.
         fail_n = 50
         with write_db.read_snapshot() as _wtx:
-            worker_rows = _wtx.fetchall(select(workers_table.c.worker_id, workers_table.c.address).limit(fail_n))
+            worker_rows = _wtx.execute(select(workers_table.c.worker_id, workers_table.c.address).limit(fail_n)).all()
         if len(worker_rows) >= fail_n:
             target_wids = [WorkerId(str(r.worker_id)) for r in worker_rows]
-            failures: list[tuple[WorkerId, str | None, str]] = [
-                (
-                    WorkerId(str(r.worker_id)),
-                    str(r.address) if r.address is not None else None,
-                    "benchmark: simulated provider-sync failure",
-                )
-                for r in worker_rows
-            ]
             # Save full worker rows using the raw connection (SELECT *) so
             # INSERT OR REPLACE can restore all columns without listing them.
             raw_conn = write_db.sa_read_engine.raw_connection()
@@ -1567,6 +1614,9 @@ def benchmark_endpoints(db: ControllerDB) -> None:
             def _reset_fail(saved_w=saved_workers_raw, saved_t=saved_tasks_raw):
                 if not saved_w and not saved_t:
                     return
+                # Re-activate restored workers: ops.worker.fail deactivated them
+                # in the tracker, so the next timed call would otherwise no-op.
+                _seed_health(write_db, write_txns._health)
                 raw = write_db.sa_write_engine.raw_connection()
                 try:
                     raw.execute("BEGIN IMMEDIATE")
@@ -1592,7 +1642,14 @@ def benchmark_endpoints(db: ControllerDB) -> None:
 
             bench(
                 f"Endpoints: fail_workers x{fail_n} (slice-reap, WRITE)",
-                lambda f=failures: write_txns.fail_workers(f),
+                lambda wids=[str(w) for w in target_wids]: ops.worker.fail(
+                    write_db,
+                    worker_ids=wids,
+                    reason="benchmark: simulated provider-sync failure",
+                    health=write_txns._health,
+                    endpoints=write_txns._endpoints,
+                    worker_attrs=write_txns._worker_attrs,
+                ),
                 reset=_reset_fail,
                 min_runs=3,
                 min_time_s=1.0,
@@ -1623,12 +1680,23 @@ def _print_latency_distribution(name: str, latencies: list[float]) -> None:
     )
 
 
+class _ContentionScenario(TypedDict):
+    """Per-scenario overrides spread into :func:`_run_apply_under_contention` via ``**``."""
+
+    name: str
+    fail_threads: NotRequired[int]
+    fail_chunk: NotRequired[int]
+    fail_interval_s: NotRequired[float]
+    register_threads: NotRequired[int]
+    endpoint_threads: NotRequired[int]
+
+
 def _run_apply_under_contention(
     *,
     name: str,
     write_db: ControllerDB,
-    write_txns: ControllerTransitions,
-    heartbeat_requests: list[HeartbeatApplyRequest],
+    write_txns: ControllerTestState,
+    plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
     fail_threads: int = 0,
     fail_n: int = 50,
     fail_chunk: int = 50,
@@ -1638,19 +1706,19 @@ def _run_apply_under_contention(
     endpoint_threads: int = 0,
     duration_s: float = 6.0,
 ) -> None:
-    """Run apply_heartbeats_batch on a victim thread while configurable write
-    storms hammer the same DB. Reports p50/p95/p99/max of the victim.
+    """Run apply_reconcile on a victim thread while configurable
+    write storms hammer the same DB. Reports p50/p95/p99/max of the victim.
     """
     _active_states_contend = list(ACTIVE_TASK_STATES)
     with write_db.read_snapshot() as _ctx:
-        endpoint_tasks_rows = _ctx.fetchall(
+        endpoint_tasks_rows = _ctx.execute(
             select(tasks_table.c.task_id, tasks_table.c.current_attempt_id)
             .where(
                 tasks_table.c.state.in_(_active_states_contend),
                 tasks_table.c.current_attempt_id.is_not(None),
             )
             .limit(200)
-        )
+        ).all()
     endpoint_tasks = [(row.task_id, int(row.current_attempt_id)) for row in endpoint_tasks_rows]
 
     stop = threading.Event()
@@ -1662,7 +1730,12 @@ def _run_apply_under_contention(
             while not stop.is_set():
                 t0 = time.perf_counter()
                 with write_db.transaction() as cur:
-                    write_txns.apply_heartbeats_batch(cur, heartbeat_requests)
+                    ops.worker.apply_reconcile(
+                        cur,
+                        plan_results,
+                        endpoints=write_txns._endpoints,
+                        now=Timestamp.now(),
+                    )
                 victim_latencies.append((time.perf_counter() - t0) * 1000)
         except BaseException as e:
             errors.append(e)
@@ -1672,7 +1745,16 @@ def _run_apply_under_contention(
             while not stop.is_set():
                 failures = _build_failure_batch(write_db, fail_n)
                 if failures:
-                    write_txns.fail_workers(failures, chunk_size=fail_chunk)
+                    # fail_chunk is ignored: chunking is now a fixed module
+                    # constant (FAIL_WORKERS_CHUNK_SIZE) in ops.worker.fail.
+                    ops.worker.fail(
+                        write_db,
+                        worker_ids=[str(wid) for wid, _addr, _reason in failures],
+                        reason="benchmark: simulated provider-sync failure",
+                        health=write_txns._health,
+                        endpoints=write_txns._endpoints,
+                        worker_attrs=write_txns._worker_attrs,
+                    )
                 stop.wait(fail_interval_s)
         except BaseException as e:
             errors.append(e)
@@ -1684,12 +1766,14 @@ def _run_apply_under_contention(
                 base = f"bench-contend-{uuid.uuid4().hex[:8]}"
                 for i in range(register_burst):
                     with write_db.transaction() as cur:
-                        write_txns.register_worker(
+                        ops.worker.register(
                             cur,
                             worker_id=WorkerId(f"{base}-{i}"),
                             address=f"tcp://{base}-{i}:1234",
                             metadata=meta,
                             ts=Timestamp.now(),
+                            health=write_txns._health,
+                            worker_attrs=write_txns._worker_attrs,
                             slice_id="",
                             scale_group="bench",
                         )
@@ -1704,7 +1788,7 @@ def _run_apply_under_contention(
             while not stop.is_set():
                 t, aid = endpoint_tasks[i % len(endpoint_tasks)]
                 with write_db.transaction() as cur:
-                    write_txns.add_endpoint(cur, _make_endpoint(t, aid))
+                    write_txns._endpoints.add(cur, _make_endpoint(t, aid))
                 i += 1
         except BaseException as e:
             errors.append(e)
@@ -1730,29 +1814,29 @@ def _run_apply_under_contention(
 
 
 def benchmark_apply_contention(db: ControllerDB) -> None:
-    """Reproduce the production tail when apply_heartbeats_batch contends
+    """Reproduce the production tail when apply_reconcile contends
     with provider-sync failure storms and other write RPCs.
     """
-    heartbeat_requests = _build_heartbeat_requests(db)
-    total_tasks = sum(len(r.updates) for r in heartbeat_requests)
-    print(f"  (victim heartbeat batch: {len(heartbeat_requests)} workers, {total_tasks} tasks)")
+    plan_results = _build_reconcile_inputs(db)
+    total_tasks = sum(len(result.observations) for _plan, result in plan_results)
+    print(f"  (victim reconcile batch: {len(plan_results)} workers, {total_tasks} tasks)")
 
-    if not heartbeat_requests:
+    if not plan_results:
         print("  (skipped, no workers)")
         return
 
-    scenarios = [
-        dict(name="Contention: apply @ baseline (no contention)"),
-        dict(name="Contention: apply + fail_workers", fail_threads=1),
-        dict(name="Contention: apply + register burst", register_threads=1),
-        dict(name="Contention: apply + add_endpoint storm", endpoint_threads=1),
-        dict(
+    scenarios: list[_ContentionScenario] = [
+        _ContentionScenario(name="Contention: apply @ baseline (no contention)"),
+        _ContentionScenario(name="Contention: apply + fail_workers", fail_threads=1),
+        _ContentionScenario(name="Contention: apply + register burst", register_threads=1),
+        _ContentionScenario(name="Contention: apply + add_endpoint storm", endpoint_threads=1),
+        _ContentionScenario(
             name="Contention: apply + prod-mix (fail+reg+ep)",
             fail_threads=1,
             register_threads=1,
             endpoint_threads=1,
         ),
-        dict(
+        _ContentionScenario(
             name="Contention: apply + heavy storm (2f/2r/2e, chunk=200)",
             fail_threads=2,
             fail_chunk=200,
@@ -1763,13 +1847,15 @@ def benchmark_apply_contention(db: ControllerDB) -> None:
     ]
 
     write_db = clone_db(db)
-    write_txns = ControllerTransitions(write_db)
+    write_txns = ControllerTestState(write_db)
+    # The fail-storm path (ops.worker.fail) only acts on tracker-active workers.
+    _seed_health(write_db, write_txns._health)
     try:
         for scenario in scenarios:
             _run_apply_under_contention(
                 write_db=write_db,
                 write_txns=write_txns,
-                heartbeat_requests=heartbeat_requests,
+                plan_results=plan_results,
                 **scenario,
             )
     finally:
@@ -2063,7 +2149,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         checkpoint_interval=None,
     )
     threads = ThreadContainer("bench-serve")
-    controller = Controller(config=config, provider=_FakeProvider(), db=db, threads=threads)
+    controller = Controller(config=config, provider=cast(TaskBackend, _FakeProvider()), db=db, threads=threads)
     controller.start()
     deadline = time.time() + 10.0
     while time.time() < deadline:
@@ -2098,13 +2184,13 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
 #
 #     1. ``_snapshot_reconcile_inputs`` (DB read + per-job RunTaskRequest
 #        template build).
-#     2. ``reconcile_workers(inputs)`` (pure-compute: copies the spec proto
-#        into a ``DesiredAttempt`` for every ASSIGNED row).
-#     3. ``WorkerProvider.reconcile_workers(plans, addresses)`` (async fanout
-#        over Connect RPC to a single in-process fake worker that echoes
-#        observations back).
-#     4. ``ControllerTransitions.apply_reconcile_result`` (one DB transaction
-#        fanning all per-worker results in).
+#     2. building the ``ControlSnapshot`` the backend reconciles against
+#        (flattening per-worker rows + job specs).
+#     3. ``RpcTaskBackend.reconcile(ControlSnapshot)`` (builds the per-worker
+#        plans via ``plans_from_snapshot``, then async fanout over Connect RPC
+#        to a single in-process fake worker that echoes observations back).
+#     4. ``apply_reconcile`` (one DB transaction fanning all per-worker
+#        results in as a single batched apply).
 #
 # A single uvicorn-backed fake worker is mounted on localhost; every
 # ``worker_id`` in the DB resolves to that address, isolating the cost of the
@@ -2161,7 +2247,7 @@ def _reconcile_launch_request(
 @dataclasses.dataclass
 class SyntheticReconcileState:
     db: ControllerDB
-    txns: ControllerTransitions
+    txns: ControllerTestState
     health: WorkerHealthTracker
     job_id: JobName
     worker_ids: list[WorkerId]
@@ -2187,7 +2273,7 @@ def _build_synthetic_reconcile_state(
     db = ControllerDB(db_dir=db_dir)
     db.apply_migrations()
     health = WorkerHealthTracker()
-    txns = ControllerTransitions(db, health=health)
+    txns = ControllerTestState(db, health=health)
 
     job_id = JobName.root("bench", "zephyr")
     request = _reconcile_launch_request(job_id, replicas=num_tasks, payload_bytes=payload_bytes)
@@ -2201,19 +2287,21 @@ def _build_synthetic_reconcile_state(
             for i in range(chunk_start, min(chunk_start + chunk, num_workers)):
                 wid = WorkerId(f"w-{i:05d}")
                 worker_ids.append(wid)
-                txns.register_or_refresh_worker(
+                ops.worker.register(
                     cur,
                     worker_id=wid,
                     address=worker_address,
                     metadata=meta,
                     ts=now,
+                    health=txns._health,
+                    worker_attrs=txns._worker_attrs,
                     slice_id="",
                     scale_group="bench",
                 )
     health.heartbeat(worker_ids, now.epoch_ms())
 
     with db.transaction() as cur:
-        txns.submit_job(cur, job_id, request, now)
+        ops.job.submit(cur, job_id=job_id, request=request, ts=now, run_template_cache=txns._run_template_cache)
 
     with db.read_snapshot() as tx:
         task_rows = tx.execute(
@@ -2229,7 +2317,7 @@ def _build_synthetic_reconcile_state(
             for i, tid in enumerate(slice_tasks)
         ]
         with db.transaction() as cur:
-            txns.queue_assignments(cur, assignments)
+            ops.task.assign(cur, assignments, health=txns._health)
 
     return SyntheticReconcileState(
         db=db, txns=txns, health=health, job_id=job_id, worker_ids=worker_ids, task_ids=task_ids, address=worker_address
@@ -2290,9 +2378,6 @@ class _EchoWorker:
     async def exec_in_container(self, request, ctx):
         raise NotImplementedError
 
-    async def ping(self, request, ctx):
-        return worker_pb2.Worker.PingResponse(healthy=True)
-
     async def start_tasks(self, request, ctx):
         raise NotImplementedError
 
@@ -2306,7 +2391,7 @@ class _EchoWorker:
 @contextmanager
 def _serve_fake_worker():
     app = WorkerServiceASGIApplication(
-        _EchoWorker(),
+        cast(WorkerService, _EchoWorker()),
         compressions=IRIS_RPC_COMPRESSIONS,
     )
     config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error", log_config=None, timeout_keep_alive=120)
@@ -2410,7 +2495,7 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
             if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
                 continue
             if row.job_id not in templates_by_job:
-                templates_by_job[row.job_id] = txns.run_request_template(snap, row.job_id)
+                templates_by_job[row.job_id] = dispatch.run_request_template(txns._run_template_cache, snap, row.job_id)
 
     rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in worker_ids}
     for row in rows:
@@ -2430,28 +2515,35 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
     return inputs, addresses
 
 
-def _one_reconcile_tick(state: SyntheticReconcileState, provider: WorkerProvider) -> tuple[float, float, float, float]:
+def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend) -> tuple[float, float, float, float]:
     """Run one full reconcile tick. Returns (snapshot, compute, rpc, apply) ms."""
     t0 = time.perf_counter()
     inputs, addresses = _snapshot_reconcile_inputs(state)
     t1 = time.perf_counter()
-    plans = reconcile_workers(inputs)
+    snapshot = ControlSnapshot(
+        worker_addresses=addresses,
+        reconcile_rows=[row for rows in inputs.rows_by_worker.values() for row in rows],
+        timeout_rows=[],
+        job_specs=inputs.job_specs,
+    )
     t2 = time.perf_counter()
-    results = provider.reconcile_workers(plans, addresses, use_reconcile_rpc=True)
+    worker_results = provider.reconcile(snapshot).worker_results
     t3 = time.perf_counter()
-    plan_by_worker = {p.worker_id: p for p in plans}
     now = Timestamp.now()
     with state.db.transaction() as cur:
-        for result in results:
-            plan = plan_by_worker[result.worker_id]
-            state.txns.apply_reconcile_result(cur, plan, result, now)
+        apply_reconcile(
+            cur,
+            worker_results,
+            endpoints=state.txns._endpoints,
+            now=now,
+        )
     t4 = time.perf_counter()
     return (t1 - t0) * 1000, (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000
 
 
 def _measure_full_tick(
     state: SyntheticReconcileState,
-    provider: WorkerProvider,
+    provider: RpcTaskBackend,
     *,
     n_iters: int,
 ) -> tuple[_StageTimings, _StageTimings]:
@@ -2486,15 +2578,15 @@ def _measure_full_tick(
 
 
 def _measure_compute_only(state: SyntheticReconcileState, *, n_iters: int) -> tuple[list[float], int]:
-    """Time just ``reconcile_workers`` (pure compute) — no RPC, no DB transaction."""
+    """Time just ``build_reconcile_plans`` (pure compute) — no RPC, no DB transaction."""
     inputs, _addresses = _snapshot_reconcile_inputs(state)
-    plans = reconcile_workers(inputs)  # warmup
+    plans = build_reconcile_plans(inputs)  # warmup
     total_bytes = _serialized_bytes(plans)
 
     times: list[float] = []
     for _ in range(n_iters):
         t0 = time.perf_counter()
-        _plans = reconcile_workers(inputs)
+        _plans = build_reconcile_plans(inputs)
         times.append((time.perf_counter() - t0) * 1000)
     return times, total_bytes
 
@@ -2549,7 +2641,7 @@ def _run_reconcile_scenario(
             print(f"  build:                       {build_s * 1000:.0f} ms")
 
             stub_factory = RpcWorkerStubFactory()
-            provider = WorkerProvider(stub_factory=stub_factory, parallelism=parallelism)
+            provider = RpcTaskBackend(stub_factory=stub_factory, parallelism=parallelism)
             try:
                 compute_ms, total_bytes = _measure_compute_only(state, n_iters=n_iters)
                 per_worker_avg = total_bytes / max(1, len(state.worker_ids))
@@ -2557,7 +2649,7 @@ def _run_reconcile_scenario(
                     f"  ReconcileRequest payload:    total={_human_bytes(total_bytes)}  "
                     f"avg/worker={_human_bytes(int(per_worker_avg))}"
                 )
-                print("  " + _summarize_reconcile("compute (reconcile_workers)", compute_ms))
+                print("  " + _summarize_reconcile("compute (build_reconcile_plans)", compute_ms))
 
                 dispatch, steady = _measure_full_tick(state, provider, n_iters=n_iters)
                 print("  -- dispatch tick (all ASSIGNED, full spec on the wire) --")

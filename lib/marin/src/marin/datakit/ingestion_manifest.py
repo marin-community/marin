@@ -12,9 +12,8 @@ from enum import StrEnum, auto
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem import open_url
+from rigging.filesystem import atomic_rename, open_url
 from typing_extensions import TypeAliasType
-from zephyr.writers import atomic_rename
 
 from marin.utils import fsspec_mkdirs
 

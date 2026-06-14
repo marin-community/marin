@@ -66,7 +66,11 @@ class ProfileTrigger(StrEnum):
 class IrisProfile:
     """One row per profile capture. Written by worker / k8s provider / controller; read by dashboard."""
 
-    key_column: ClassVar[str] = "captured_at"
+    # The dashboard lists captures per source (a task, a worker, or every task
+    # under a job via a source prefix) ordered by captured_at. Clustering segments
+    # by source lets parquet row-group min/max prune to the few segments holding
+    # that source instead of scanning the whole namespace.
+    key_column: ClassVar[str] = "source"
 
     source: str
     attempt_id: int | None
@@ -446,7 +450,7 @@ def _run_memray_profile(pid: str, duration_seconds: int, memory_config: job_pb2.
     ptrace/SYS_PTRACE requirements that fail when profiling the controller or
     worker's own process from within a container.
     """
-    import memray
+    import memray  # noqa: PLC0415  # optional dep: memray
 
     spec = resolve_memory_spec(memory_config, duration_seconds, pid=pid)
     file_format = memray.FileFormat.AGGREGATED_ALLOCATIONS if spec.leaks else memray.FileFormat.ALL_ALLOCATIONS

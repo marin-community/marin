@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import jax
 import numpy as np
@@ -283,7 +283,7 @@ class MathEnv(MarinEnv):
     def training_data(self) -> Iterator[DataExample]:
         train_dataset = _get_hendrycks_math_train()
 
-        for idx, item in enumerate(train_dataset):
+        for idx, item in enumerate(cast(Iterable[dict[str, Any]], train_dataset)):
             raw_prompt = item["problem"]
             raw_answer = item["solution"]
             example_id = f"train_{idx}"
@@ -293,7 +293,7 @@ class MathEnv(MarinEnv):
     def eval_data(self) -> Iterator[DataExample]:
         test_dataset = _get_hendrycks_math_test()
 
-        for idx, item in enumerate(test_dataset):
+        for idx, item in enumerate(cast(Iterable[dict[str, Any]], test_dataset)):
             raw_prompt = item["problem"]
             raw_answer = item["solution"]
             example_id = f"test_{idx}"

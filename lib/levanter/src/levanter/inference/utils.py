@@ -61,7 +61,7 @@ def is_stop_signal(tail_tokens: ht.i32[NamedArray, "position"], stop_sequences: 
     return hax.any(valid_stop_sequences & count_match)
 
 
-def purge_raw(array: jnp.array, mask, max_nnz=None, invalid=INVALID) -> jnp.ndarray:
+def purge_raw(array: jnp.ndarray, mask, max_nnz=None, invalid=INVALID) -> jnp.ndarray:
     """
     Set elements of the array to `invalid` where the `mask` is True and slides the rest to the front.
 

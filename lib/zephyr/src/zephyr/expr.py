@@ -127,22 +127,29 @@ class LiteralExpr(Expr):
         return f"lit({self.value!r})"
 
 
-_COMPARE_OPS: dict[str, Callable[[Any, Any], bool]] = {
-    "eq": operator.eq,
-    "ne": operator.ne,
-    "lt": operator.lt,
-    "le": operator.le,
-    "gt": operator.gt,
-    "ge": operator.ge,
-}
+@dataclass(frozen=True)
+class _BinaryOp:
+    """Single source of truth for one binary operator.
 
-_COMPARE_SYMBOLS: dict[str, str] = {
-    "eq": "==",
-    "ne": "!=",
-    "lt": "<",
-    "le": "<=",
-    "gt": ">",
-    "ge": ">=",
+    Bundles the three things that must stay in sync for an operator: the
+    Python callable used to evaluate against dicts, the symbol used in
+    ``repr``, and the PyArrow compute callable used for pushdown. Defining
+    each operator once here prevents drift between the eval, repr, and
+    PyArrow code paths.
+    """
+
+    evaluate: Callable[[Any, Any], Any]
+    symbol: str
+    pyarrow: Callable[[Any, Any], pc.Expression]
+
+
+_COMPARE_OPS: dict[str, _BinaryOp] = {
+    "eq": _BinaryOp(operator.eq, "==", pc.equal),
+    "ne": _BinaryOp(operator.ne, "!=", pc.not_equal),
+    "lt": _BinaryOp(operator.lt, "<", pc.less),
+    "le": _BinaryOp(operator.le, "<=", pc.less_equal),
+    "gt": _BinaryOp(operator.gt, ">", pc.greater),
+    "ge": _BinaryOp(operator.ge, ">=", pc.greater_equal),
 }
 
 
@@ -157,10 +164,10 @@ class CompareExpr(Expr):
     def evaluate(self, record: dict) -> bool:
         left_val = self.left.evaluate(record)
         right_val = self.right.evaluate(record)
-        return _COMPARE_OPS[self.op](left_val, right_val)
+        return _COMPARE_OPS[self.op].evaluate(left_val, right_val)
 
     def __repr__(self) -> str:
-        return f"({self.left} {_COMPARE_SYMBOLS[self.op]} {self.right})"
+        return f"({self.left} {_COMPARE_OPS[self.op].symbol} {self.right})"
 
 
 @dataclass(eq=False)
@@ -208,18 +215,11 @@ class IsNullExpr(Expr):
         return f"{self.child}.is_null()"
 
 
-_ARITHMETIC_OPS: dict[str, Callable[[Any, Any], Any]] = {
-    "add": operator.add,
-    "sub": operator.sub,
-    "mul": operator.mul,
-    "truediv": operator.truediv,
-}
-
-_ARITHMETIC_SYMBOLS: dict[str, str] = {
-    "add": "+",
-    "sub": "-",
-    "mul": "*",
-    "truediv": "/",
+_ARITHMETIC_OPS: dict[str, _BinaryOp] = {
+    "add": _BinaryOp(operator.add, "+", pc.add),
+    "sub": _BinaryOp(operator.sub, "-", pc.subtract),
+    "mul": _BinaryOp(operator.mul, "*", pc.multiply),
+    "truediv": _BinaryOp(operator.truediv, "/", pc.divide),
 }
 
 
@@ -232,10 +232,10 @@ class ArithmeticExpr(Expr):
     op: Literal["add", "sub", "mul", "truediv"]
 
     def evaluate(self, record: dict) -> Any:
-        return _ARITHMETIC_OPS[self.op](self.left.evaluate(record), self.right.evaluate(record))
+        return _ARITHMETIC_OPS[self.op].evaluate(self.left.evaluate(record), self.right.evaluate(record))
 
     def __repr__(self) -> str:
-        return f"({self.left} {_ARITHMETIC_SYMBOLS[self.op]} {self.right})"
+        return f"({self.left} {_ARITHMETIC_OPS[self.op].symbol} {self.right})"
 
 
 @dataclass(eq=False)
@@ -314,15 +314,7 @@ def to_pyarrow_expr(expr: Expr) -> pc.Expression:
     elif isinstance(expr, CompareExpr):
         left = to_pyarrow_expr(expr.left)
         right = to_pyarrow_expr(expr.right)
-        ops = {
-            "eq": pc.equal,
-            "ne": pc.not_equal,
-            "lt": pc.less,
-            "le": pc.less_equal,
-            "gt": pc.greater,
-            "ge": pc.greater_equal,
-        }
-        return ops[expr.op](left, right)
+        return _COMPARE_OPS[expr.op].pyarrow(left, right)
     elif isinstance(expr, LogicalExpr):
         left = to_pyarrow_expr(expr.left)
         right = to_pyarrow_expr(expr.right)
@@ -336,13 +328,7 @@ def to_pyarrow_expr(expr: Expr) -> pc.Expression:
     elif isinstance(expr, ArithmeticExpr):
         left = to_pyarrow_expr(expr.left)
         right = to_pyarrow_expr(expr.right)
-        ops = {
-            "add": pc.add,
-            "sub": pc.subtract,
-            "mul": pc.multiply,
-            "truediv": pc.divide,
-        }
-        return ops[expr.op](left, right)
+        return _ARITHMETIC_OPS[expr.op].pyarrow(left, right)
     elif isinstance(expr, FieldAccessExpr):
         # PyArrow uses struct_field for nested access
         parent = to_pyarrow_expr(expr.parent)

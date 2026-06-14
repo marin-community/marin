@@ -156,15 +156,6 @@ class SpillReader:
         self._batch_size = batch_size
 
     @property
-    def path(self) -> str:
-        return self._path
-
-    @property
-    def num_rows(self) -> int:
-        with fsspec.open(self._path, "rb") as f:
-            return pq.ParquetFile(f).metadata.num_rows
-
-    @property
     def approx_item_bytes(self) -> int:
         """Uncompressed payload bytes per item, read from file metadata.
 

@@ -32,16 +32,16 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 
 import pytest
-from iris.cluster.controller.vm_lifecycle import (
-    _build_controller_vm_config,
-    start_controller,
-    stop_controller,
-)
-from iris.cluster.providers.types import (
+from iris.cluster.backends.types import (
     CloudWorkerState,
     CommandResult,
     SliceHandle,
     WorkerStatus,
+)
+from iris.cluster.backends.vm_lifecycle import (
+    _build_controller_vm_config,
+    start_controller,
+    stop_controller,
 )
 from iris.rpc import config_pb2
 from rigging.timing import Duration
@@ -95,10 +95,6 @@ class FakeWorkerHandle:
         return f"http://{self._internal_address}:10001"
 
     @property
-    def external_address(self) -> str | None:
-        return None
-
-    @property
     def bootstrap_log(self) -> str:
         return ""
 
@@ -128,9 +124,6 @@ class FakeWorkerHandle:
 
     def bootstrap(self, script: str) -> None:
         self.bootstrap_calls.append(script)
-
-    def reboot(self) -> None:
-        pass
 
     def terminate(self, *, wait: bool = False) -> None:
         self.terminated = True

@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 from jax import random
 from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
+from transformers import AutoModelForCausalLM
 
 from levanter.layers.attention import AttentionMask
 from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
@@ -197,9 +198,11 @@ def test_olmo3_sliding_window_config():
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_olmo3_attention_vs_hf(use_yarn, num_kv_heads):
     """Test attention matches HuggingFace implementation."""
-    import torch
-    from transformers.models.olmo3.modeling_olmo3 import Olmo3Attention as HFOlmo3Attention
-    from transformers.models.olmo3.modeling_olmo3 import Olmo3RotaryEmbedding as HFOlmo3RotaryEmbedding
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.olmo3 import modeling_olmo3  # noqa: PLC0415  # optional dep: torch
+
+    HFOlmo3Attention = modeling_olmo3.Olmo3Attention
+    HFOlmo3RotaryEmbedding = modeling_olmo3.Olmo3RotaryEmbedding
 
     if use_yarn:
         rope_config = YarnRotaryEmbeddingsConfig(
@@ -260,9 +263,11 @@ def test_olmo3_attention_layer_type_detection(layer_idx):
 @pytest.mark.parametrize("layer_idx", [0, 3])  # Test both sliding and full attention layers
 def test_olmo3_decoder_layer_vs_hf(num_kv_heads, layer_idx):
     """Test decoder layer matches HuggingFace implementation."""
-    import torch
-    from transformers.models.olmo3.modeling_olmo3 import Olmo3DecoderLayer as HFOlmo3DecoderLayer
-    from transformers.models.olmo3.modeling_olmo3 import Olmo3RotaryEmbedding as HFOlmo3RotaryEmbedding
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.olmo3 import modeling_olmo3  # noqa: PLC0415  # optional dep: torch
+
+    HFOlmo3DecoderLayer = modeling_olmo3.Olmo3DecoderLayer
+    HFOlmo3RotaryEmbedding = modeling_olmo3.Olmo3RotaryEmbedding
 
     olmo3_config = _get_olmo3_config(num_kv_heads=num_kv_heads, seq_len=256)
     key = random.PRNGKey(0)
@@ -336,7 +341,7 @@ def test_olmo3_sliding_vs_full_attention_differ():
 @skip_if_no_torch
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
-def test_olmo3_roundtrip(scan_layers, num_kv_heads):
+def test_olmo3_roundtrip(scan_layers, num_kv_heads, local_gpt2_tokenizer_path):
     """Test save/load roundtrip with HuggingFace.
 
     Uses config parameters from allenai/OLMo-3-1025-7B but with scaled-down
@@ -350,10 +355,12 @@ def test_olmo3_roundtrip(scan_layers, num_kv_heads):
     - sliding_window=4096, rms_norm_eps=1e-6
     - tie_word_embeddings=False, attention_bias=False
     """
-    import torch
-    from transformers import AutoModelForCausalLM, Olmo3ForCausalLM
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers import Olmo3ForCausalLM  # noqa: PLC0415  # optional dep: torch
 
-    converter = Olmo3Config().hf_checkpoint_converter()
+    # Local tokenizer + no remote reference keeps the roundtrip off the Hub; the
+    # tokenizer is incidental (random inputs, logit-equivalence only).
+    converter = Olmo3Config(reference_checkpoint=None, tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
 
     # YARN config from allenai/OLMo-3-1025-7B with scaled-down original_max_position_embeddings
     # Real: original_max_position_embeddings=8192, but we scale down proportionally
@@ -431,7 +438,7 @@ def test_olmo3_roundtrip(scan_layers, num_kv_heads):
         assert np.isclose(torch_out, np.array(jax_out), rtol=1e-4, atol=1e-4).all(), f"{torch_out} != {jax_out}"
 
         # Save our model
-        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False, save_tokenizer=False)
 
         # Load saved model into HF
         torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
@@ -456,7 +463,7 @@ def test_olmo3_param_counts_dont_change_with_seqlen():
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_olmo3_state_dict_consistency(num_kv_heads):
     """Test state dict keys match HuggingFace."""
-    from transformers import Olmo3ForCausalLM
+    from transformers import Olmo3ForCausalLM  # noqa: PLC0415  # optional dep: torch
 
     config = Olmo3Config(
         max_seq_len=128,

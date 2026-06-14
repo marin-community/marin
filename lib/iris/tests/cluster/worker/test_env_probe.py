@@ -209,6 +209,24 @@ def test_cpu_fallback_when_no_config():
     assert attrs[WellKnownAttribute.PREEMPTIBLE].string_value == "false"
 
 
+def test_advertised_cpu_count_from_scale_group_overrides_probe():
+    """Scale-group declared CPU is the advertised capacity, over-committing the host."""
+    hardware = _make_hardware(cpu_count=2)
+
+    metadata = build_worker_metadata(hardware=hardware, cpu_millicores=8000)
+
+    assert metadata.cpu_count == 8
+
+
+def test_advertised_cpu_count_falls_back_to_probe_without_config():
+    """Without a declared CPU capacity, the worker advertises its probed host count."""
+    hardware = _make_hardware(cpu_count=2)
+
+    metadata = build_worker_metadata(hardware=hardware)
+
+    assert metadata.cpu_count == 2
+
+
 def test_custom_worker_attributes_merged():
     """Custom user attributes from YAML worker.attributes are merged into the attributes map."""
     hardware = _make_hardware()

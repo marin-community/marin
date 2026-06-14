@@ -15,8 +15,6 @@ cache that ``healthy_active_workers_with_attributes`` reads on the scheduler hot
 path.
 """
 
-from __future__ import annotations
-
 import logging
 import threading
 from collections.abc import Callable
@@ -26,6 +24,7 @@ from sqlalchemy import select
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import db
+from iris.cluster.controller.codec import WorkerAttributeRow, attribute_value_from_row
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.schema import worker_attributes_table
@@ -47,24 +46,19 @@ class PostCommitRegistrar(Protocol):
 logger = logging.getLogger(__name__)
 
 
-def _decode_value(row) -> AttributeValue:
+def _decode_value(row: WorkerAttributeRow) -> AttributeValue:
     """Decode a single ``worker_attributes`` SA row to an ``AttributeValue``.
 
-    ``value_type`` is a plain string column (CHECK 'str'/'int'/'float');
-    no TypeDecorator handles the three-way dispatch so it is done here.
+    Shares the str/int/float dispatch with :func:`codec.attribute_value_from_row`.
     """
-    if row.value_type == "int":
-        return AttributeValue(int(row.int_value))
-    if row.value_type == "float":
-        return AttributeValue(float(row.float_value))
-    return AttributeValue(str(row.str_value or ""))
+    return AttributeValue(attribute_value_from_row(row))
 
 
 class WorkerAttrsProjection:
     """Process-local write-through cache over the ``worker_attributes`` table.
 
     Reads serve the latest committed snapshot from an in-memory dict guarded
-    by a ``threading.Lock``. Writes register an ``on_commit`` hook that
+    by a ``threading.Lock``. Writes register a post-commit hook that
     updates the dict atomically with the surrounding SQL commit; the hook
     fires under the DB write lock so concurrent readers cannot observe
     torn state.
@@ -139,21 +133,10 @@ class WorkerAttrsProjection:
 
         cur.register(apply)
 
-    def remove(self, cur: PostCommitRegistrar, worker_id: WorkerId) -> None:
-        """Schedule a dict pop for ``worker_id`` after commit."""
-
-        def apply() -> None:
-            with self._lock:
-                self._cache.pop(worker_id, None)
-
-        cur.register(apply)
-
     def invalidate_for_worker(self, tx: PostCommitRegistrar, worker_id: WorkerId) -> None:
         """Drop ``worker_id`` from the cache after commit (FK-cascade hook).
 
-        Semantically distinct from :meth:`remove`: ``remove`` is used by the
-        explicit worker-removal path, while ``invalidate_for_worker`` is the
-        hook for callers that delete from ``workers`` and rely on the
+        Used by callers that delete from ``workers`` and rely on the
         ``ON DELETE CASCADE`` to clear ``worker_attributes``.
         """
 

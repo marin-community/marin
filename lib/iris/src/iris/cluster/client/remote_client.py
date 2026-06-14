@@ -18,8 +18,10 @@ from finelog.rpc import logging_pb2
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.cluster.client.bundle import BundleCreator
-from iris.cluster.log_store_helpers import build_log_source
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
+from iris.cluster.runtime.env import with_slice_topology_env
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
 from iris.cluster.worker.stats import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
 from iris.rpc import controller_pb2, job_pb2
@@ -30,6 +32,7 @@ from iris.time_proto import duration_to_proto
 from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)
+
 
 # How long to tolerate controller unavailability before giving up on monitoring.
 # The job itself keeps running server-side; this only affects the client's ability
@@ -71,6 +74,7 @@ class RemoteClusterClient:
         workspace: Path | None = None,
         timeout_ms: int = 30000,
         interceptors: Iterable[InterceptorSync] = (),
+        use_controller_proxy: bool = True,
     ):
         """Initialize RPC cluster operations.
 
@@ -80,12 +84,20 @@ class RemoteClusterClient:
             workspace: Path to workspace directory. Bundle is created lazily on first job submission.
             timeout_ms: RPC timeout in milliseconds
             interceptors: Client-side interceptors (e.g. AuthTokenInjector for token auth)
+            use_controller_proxy: Route service RPCs (currently finelog
+                logs/stats) through the controller instead of resolving the
+                backing service's address from the controller's endpoint
+                registry and connecting straight to it. The direct path is only
+                safe for clients running *inside* the cluster, which can reach
+                internal service addresses; external clients (CLI over a
+                tunnel) cannot and must keep the default proxied path.
         """
         self._address = controller_address
         self._bundle_id = bundle_id
         self._workspace = workspace.resolve() if workspace is not None else None
         self._bundle_blob: bytes | None = None
         self._timeout_ms = timeout_ms
+        self._use_controller_proxy = use_controller_proxy
         self._client = ControllerServiceClientSync(
             address=controller_address,
             timeout_ms=timeout_ms,
@@ -93,8 +105,14 @@ class RemoteClusterClient:
             accept_compression=IRIS_RPC_COMPRESSIONS,
             send_compression=None,
         )
+        # In-cluster clients resolve the finelog endpoint and write direct so
+        # task-status pushes don't pile up on the controller's RPC thread pool;
+        # external clients route through the controller, the only ingress they
+        # can reach. The resolver fires lazily on first table/log use, so this
+        # adds no RPC for CLI calls that never touch logs.
         self._log_client = LogClient.connect(
-            controller_address,
+            LOG_SERVER_ENDPOINT_NAME,
+            resolver=self._resolve_endpoint,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
         )
@@ -129,7 +147,7 @@ class RemoteClusterClient:
 
         if environment is None:
             environment = EnvironmentSpec().to_proto()
-        env_config = environment
+        env_config = with_slice_topology_env(environment, resources, replicas)
 
         runtime_ep = build_runtime_entrypoint(entrypoint, env_config)
 
@@ -184,7 +202,7 @@ class RemoteClusterClient:
 
         return call_with_retry(f"get_job_status({job_id})", _call)
 
-    def get_job_states(self, job_ids: list[JobName]) -> dict[str, int]:
+    def get_job_states(self, job_ids: list[JobName]) -> dict[str, job_pb2.JobState]:
         """Lightweight batch query returning only the state enum per job."""
 
         def _call():
@@ -196,7 +214,7 @@ class RemoteClusterClient:
 
         return call_with_retry(f"get_job_states({len(job_ids)} jobs)", _call)
 
-    def _poll_job_state(self, job_id: JobName) -> int:
+    def _poll_job_state(self, job_id: JobName) -> job_pb2.JobState:
         """Fetch only the state enum for a single job via the lightweight RPC."""
         states = self.get_job_states([job_id])
         wire_id = job_id.to_wire()
@@ -388,11 +406,31 @@ class RemoteClusterClient:
 
         return call_with_retry("list_endpoints", _call)
 
-    def list_workers(self) -> list[controller_pb2.Controller.WorkerHealthStatus]:
+    def _resolve_endpoint(self, endpoint_name: str) -> str:
+        """Resolve ``endpoint_name`` to a service address.
+
+        When ``use_controller_proxy`` is set (external clients), returns the
+        controller address so RPCs flow through its proxies; otherwise looks
+        the name up in the controller's endpoint registry and returns the
+        backing service's direct address.
+        """
+        if self._use_controller_proxy:
+            return self._address
+        endpoints = self.list_endpoints(endpoint_name, exact=True)
+        if not endpoints:
+            raise ConnectionError(f"No {endpoint_name!r} endpoint registered on controller")
+        return endpoints[0].address
+
+    def list_workers(
+        self,
+        query: controller_pb2.Controller.WorkerQuery | None = None,
+    ) -> list[controller_pb2.Controller.WorkerHealthStatus]:
         """List all workers registered with the controller."""
 
         def _call():
             request = controller_pb2.Controller.ListWorkersRequest()
+            if query is not None:
+                request.query.CopyFrom(query)
             response = self._client.list_workers(request)
             return list(response.workers)
 

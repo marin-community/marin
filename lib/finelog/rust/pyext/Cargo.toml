@@ -1,0 +1,23 @@
+[package]
+name = "finelog-native"
+version = "0.1.0"
+edition = "2021"
+
+# PyO3 extension module wrapping the `finelog` server library: lets Python
+# start/stop an in-process finelog server (the same axum app the
+# `finelog-server` binary serves). Iris's controller uses it as its local
+# log-server fallback. The heavy server/store code lives in the `finelog` lib
+# (the sibling crate); this is a thin runtime + lifecycle shim over it.
+#
+# Unlike the `finelog-server` binary, this cdylib does NOT install a custom
+# global allocator (jemalloc is binary-only in `main.rs`) — the host Python
+# process owns the allocator.
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+finelog = { path = ".." }
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py311"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
+axum = "0.7"

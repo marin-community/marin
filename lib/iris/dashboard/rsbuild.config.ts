@@ -14,6 +14,11 @@ export default defineConfig({
       root: 'dist',
     },
     assetPrefix: '/',
+    // Vendor speedscope's prebuilt SPA from its npm package into the dashboard's
+    // static assets so the controller serves it at /static/speedscope/ for
+    // one-click profile viewing. Sourcing it from node_modules keeps the ~1MB
+    // bundle out of the repo — `npm ci` fetches it at build time instead.
+    copy: [{ from: 'node_modules/speedscope/dist/release', to: 'static/speedscope' }],
   },
   html: {
     template: './src/template.html',
@@ -27,6 +32,7 @@ export default defineConfig({
       '/iris.cluster.ControllerService': 'http://localhost:8080',
       '/finelog.logging.LogService': 'http://localhost:8080',
       '/iris.cluster.WorkerService': 'http://localhost:8081',
+      '/proxy': 'http://localhost:8080',
       '/bundles': 'http://localhost:8080',
       '/blobs': 'http://localhost:8080',
       '/health': 'http://localhost:8080',

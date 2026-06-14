@@ -4,22 +4,20 @@
 import json
 import tempfile
 
+import haliax as hax
 import numpy as np
 import jax.numpy as jnp
 from jax import random
-
-import haliax as hax
+from test_utils import skip_if_no_torch, use_test_mesh
+from transformers import Qwen2Config
 
 from levanter.inference.jit_scheduler import SequenceTable
 from levanter.inference.page_table import PageTable
 from levanter.layers.attention import AttentionMask
 from levanter.models.qwen import QwenConfig, QwenLMHeadModel
-from test_utils import skip_if_no_torch, use_test_mesh
 
 
 def get_config(vocab_size=1000):
-    from transformers import Qwen2Config
-
     qwen_cfg = json.loads(
         """
         {
@@ -70,14 +68,16 @@ def get_config(vocab_size=1000):
 
 
 @skip_if_no_torch
-def test_qwen_roundtrip():
-    import torch
-    from transformers import Qwen2ForCausalLM
+def test_qwen_roundtrip(local_gpt2_tokenizer_path):
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers import Qwen2ForCausalLM  # noqa: PLC0415  # optional dep: torch
 
     Vocab = hax.Axis("vocab", 1000)
     hf_config = get_config(Vocab.size)
 
-    converter = QwenConfig().hf_checkpoint_converter()
+    # Local tokenizer + no remote reference keeps the roundtrip off the Hub; the
+    # tokenizer is incidental (random inputs, logit-equivalence only).
+    converter = QwenConfig(reference_checkpoint=None, tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
 
     # Make input and attn_mask
     input = hax.random.randint(random.PRNGKey(0), {"position": 128}, 0, Vocab.size)
@@ -113,7 +113,7 @@ def test_qwen_roundtrip():
         # now we're going to magnify the model parameters enough that differences should actualy show up
         jax_out = compute(model, input).array
 
-        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False, save_tokenizer=False)
         torch_model2 = Qwen2ForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()
 
