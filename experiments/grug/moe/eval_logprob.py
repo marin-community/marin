@@ -147,6 +147,29 @@ def _inject_loglikelihood_bpb(task_dict: dict) -> None:
             _inject_loglikelihood_bpb(v)
 
 
+def _inject_bpb_into_metric_list(task_dict: dict) -> None:
+    """Ensure every leaf task's ``metric_list`` includes ``bpb``.
+
+    Most lm-eval task YAMLs only declare ``acc``/``acc_norm`` in their
+    metric_list; ``bpb`` is computed by ``ConfigurableTask.process_results``
+    only when it's an explicit entry in the list. Appending it at runtime
+    means every multiple-choice task we evaluate emits ``bpb,none`` in its
+    results.json, which is the metric the dashboard's per-bucket heatmap
+    actually plots.
+    """
+    bpb_entry = {"metric": "bpb", "aggregation": "mean", "higher_is_better": False}
+    for v in task_dict.values():
+        if hasattr(v, "_config"):
+            mlist = list(v._config.metric_list or [])
+            if not any(isinstance(m, dict) and m.get("metric") == "bpb" for m in mlist):
+                mlist.append(bpb_entry)
+                v._config.metric_list = mlist
+        elif isinstance(v, tuple) and len(v) == 2 and isinstance(v[1], dict):
+            _inject_bpb_into_metric_list(v[1])
+        elif isinstance(v, dict):
+            _inject_bpb_into_metric_list(v)
+
+
 def _apply_task_field(task_dict: dict, key: str, value) -> None:
     """Walk ``task_dict`` and set ``key`` on each leaf Task.
 
@@ -445,6 +468,7 @@ def run_grug_logprob_eval(config: GrugLogprobEvalConfig) -> None:
             # land in task_output.sample_metrics, so consolidate_results writes empty
             # `results[name]` dicts. Inject a callable that computes them by hand.
             _inject_loglikelihood_bpb(task_dict)
+            _inject_bpb_into_metric_list(task_dict)
             if config.task.task_alias:
                 # lm-eval's `consolidate_results` propagates the alias via
                 # `task_config["task_alias"]` (evaluator_utils.py:358), reading
