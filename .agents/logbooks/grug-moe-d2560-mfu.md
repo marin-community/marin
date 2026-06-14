@@ -224,3 +224,18 @@
 - Result: abstract-state sizing shows fp32 params are about 249.9 GiB global / 1.34 GiB local, optimizer state about 252.4 GiB global / 1.48 GiB local, and `compute_with_master` adds about 0.67 GiB local bf16 live params. The wrapper dry run now forwards `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95` to Iris.
 - Interpretation: params, fp32 master params, and optimizer state are already sharded enough that they cannot explain a 60 GiB per-GPU allocation. The next full-shape attempt should keep `live_param_mode=param`, force XLA CE, and expand the XLA GPU pool before switching remat or reducing batch.
 - Next action: validate the launcher change, commit/push it, then launch GM2560-MFU-006 with `--ce-implementation xla --live-param-mode param --xla-memory-fraction 0.95` and babysit it to first metrics/profile or terminal failure.
+
+### 2026-06-14 00:35 PDT - GM2560-MFU-006 launched with 0.95 XLA memory fraction
+- Hypothesis: increasing the JAX/XLA GPU memory pool from the default 75% to 95% should allow the full-shape compiled train-step temp arena to coexist with the already-sharded params and optimizer state.
+- Command:
+  - `experiments/grug/moe/run_cw_may_d2560.sh --submit --run-id GM2560-MFU-006-cw-20260614-0035 --ce-implementation xla --live-param-mode param --xla-memory-fraction 0.95`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job list --json --prefix /dlwh/iris-run-job-20260614-073514`
+- Config:
+  - Parent: `/dlwh/iris-run-job-20260614-073514`
+  - Child: `/dlwh/iris-run-job-20260614-073514/grug-train-GM2560-MFU-006-cw-20260614-0035`
+  - Commit: `77c87b0fe`
+  - Same 32-node shape: `MAY_EXPERT_AXIS=8`, `MAY_REPLICA_AXIS=1`, `MAY_BATCH=256`, `MAY_SEQ_LEN=4096`, `MAY_STEPS=30`, `MAY_PROFILER_START=12`, `MAY_PROFILER_STEPS=8`
+  - Attention/precision: `MAY_ATTENTION_IMPLEMENTATION=gpu_fa4_cute`, `MAY_CE_IMPLEMENTATION=xla`, `MAY_LIVE_PARAM_MODE=param`, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95`, `MAY_MP=params=float32,compute=bfloat16,output=bfloat16`
+- Result: dispatcher submitted successfully. First child poll showed the child running with 32/32 tasks, zero failures, and W&B not visible yet.
+- Interpretation: this is the active full-shape first-profile candidate after the allocator-pool fix.
+- Next action: Hooke is babysitting on a 10-minute heartbeat; watch for W&B visibility, first scalar metrics, profile artifact, or another pre-step OOM.
