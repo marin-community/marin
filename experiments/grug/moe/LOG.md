@@ -655,3 +655,10 @@ All at deliverable config (identity_init+pf8) so the winner is ONE end-to-end ru
 eff-baseline (064417) = identity_init+pf8 control (verifies identity_init loss-neutral vs fix-pf8=3.5544).
 Pick best at finish, re-anchor, next axes (adam_lr, learning_rate, lr_schedule). NOTE: identity_init loss-
 neutrality still unverified until eff-baseline finishes.
+
+### SOAP-MuonH variant added (2026-06-14 ~07:07)
+inner_muon: SOAP eigenbasis + eigenvalue (esi) whitening of projected momentum, rotate back to full space,
+THEN msign (Newton-Schulz quintic). msign AFTER rotate-back (not in-basis): q is only approx-orthonormal
+under pf>1, so msign must orthogonalize the ACTUAL full-space update (in-basis msign == plain Muon only for
+exactly-orthonormal q). CPU-verified finite + msign orthogonalizes. Launched hp-soapmuonh (070647) at the
+deliverable config (identity_init+pf8) -> if its paloma < MuonH 3.5438, that single run is the deliverable.
