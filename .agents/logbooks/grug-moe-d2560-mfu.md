@@ -239,3 +239,31 @@
 - Result: dispatcher submitted successfully. First child poll showed the child running with 32/32 tasks, zero failures, and W&B not visible yet.
 - Interpretation: this is the active full-shape first-profile candidate after the allocator-pool fix.
 - Next action: Hooke is babysitting on a 10-minute heartbeat; watch for W&B visibility, first scalar metrics, profile artifact, or another pre-step OOM.
+
+### 2026-06-14 01:00 PDT - GM2560-MFU-006 first attempt hit collective-permute rendezvous abort
+- Hypothesis: GM2560-MFU-006's first retry point will distinguish the old 60 GiB allocator failure from a sharding/collective failure in the full d2560 train-step executable.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --config lib/iris/config/cw-us-east-02a.yaml job list --json --prefix /dlwh/iris-run-job-20260614-073514`
+  - `uv run --package marin-iris --extra controller iris --config lib/iris/config/cw-us-east-02a.yaml job bug-report --tail 80 /dlwh/iris-run-job-20260614-073514/grug-train-GM2560-MFU-006-cw-20260614-0035`
+  - `uv run --package marin-iris --extra controller iris --config lib/iris/config/cw-us-east-02a.yaml job logs --since-seconds 3600 --max-lines 5000 /dlwh/iris-run-job-20260614-073514/grug-train-GM2560-MFU-006-cw-20260614-0035 | rg "task=.*/1 \\|" | sed -n '1,260p'`
+  - `uv run pytest tests/test_grug_variant_contracts.py -q`
+  - `uv run python -m py_compile experiments/grug/moe/model.py lib/levanter/src/levanter/grug/sharding.py`
+  - `./infra/pre-commit.py --changed-files --fix`
+- Config:
+  - Live run: GM2560-MFU-006, commit `77c87b0fe`, 32 H100 nodes, `MAY_EXPERT_AXIS=8`, `MAY_REPLICA_AXIS=1`, `MAY_BATCH=256`, `MAY_SEQ_LEN=4096`, `MAY_CE_IMPLEMENTATION=xla`, `MAY_LIVE_PARAM_MODE=param`, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95`.
+  - Local patch candidate: keep persistent params sharded, but fully replicate the non-MoE attention/shared-MLP weights at matmul call sites using `unshard`; leave routed MoE expert weights on the existing expert-parallel path.
+- Result: GM2560-MFU-006 is still running after Iris retried the coscheduled group, but `failure_count=1`. The failed first attempt did not show the previous 60 GiB BFC allocator OOM. Task 1 exited 139 after XLA rendezvous reported `first call after collective operation: kind=kCollectivePermute`; only 4 of 8 local threads arrived by the 40s termination timeout. The same attempt emitted the known SPMD warning for `%fake_parameter.2 = bf16[1,4096,2560]`, moving from batch sharding `{devices=[256,1,1]}` to hidden/data sharding `{devices=[1,1,32,8] last_tile_dim_replicate}`. The active retry has no W&B history rows or profile artifact yet.
+- Interpretation: the 0.95 memory pool likely moved past the old allocator reservation, but the full-shape executable is now exposing a sharding-induced collective-permute/rendezvous failure before step 0. The suspicious path is non-MoE dense matmuls whose weights are sharded on the input hidden dimension over `data`, forcing XLA to move batch-sharded activations to hidden-dimension sharding. The local patch makes those dense weights temporary-all-gathered at call sites instead, preserving sharded persistent state while avoiding that activation reshard for attention/shared MLP. Focused compile, full Grug contract tests, rank-2 `unshard` sanity check, and changed-file pre-commit passed.
+- Next action: keep babysitting GM2560-MFU-006's active retry until it reaches metrics/profile or repeats the collective failure. If it repeats or stalls terminally, launch the next full-shape candidate from the dense-weight all-gather patch with the same config.
+
+### 2026-06-14 01:05 PDT - GM2560-MFU-006 retry also stuck before metrics
+- Hypothesis: if the retry is healthy, it should either emit W&B scalar history or reach the profiler window; if it is the same failure mode, logs should show XLA clique/rendezvous symptoms before step 0.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --config lib/iris/config/cw-us-east-02a.yaml job list --json --prefix /dlwh/iris-run-job-20260614-073514`
+  - `uv run --package marin-iris --extra controller iris --config lib/iris/config/cw-us-east-02a.yaml job summary --json /dlwh/iris-run-job-20260614-073514/grug-train-GM2560-MFU-006-cw-20260614-0035`
+  - `uv run --package marin-iris --extra controller iris --config lib/iris/config/cw-us-east-02a.yaml job logs --since-seconds 7200 --max-lines 8000 /dlwh/iris-run-job-20260614-073514/grug-train-GM2560-MFU-006-cw-20260614-0035 | rg -i -e "Progress on:train|loss|global_step|step|profile|profiler|wandb|RESOURCE_EXHAUSTED|Out of memory|trying to allocate|collective|rendezvous|Termination timeout|Fatal error|Traceback|Exception|exit 139|segmentation|failed"`
+  - `uv run python - <<'PY' ... wandb.Api().run("marin-community/marin_moe/GM2560-MFU-006-cw-20260614-0035") ... PY`
+- Config: same live GM2560-MFU-006 retry as above, still from commit `77c87b0fe`.
+- Result: parent and child remain `JOB_STATE_RUNNING`; child has 32/32 tasks running, `failure_count=1`, and `preemption_count=0`. W&B state is still `running`, but it has no history rows, no `_step`, no scalar summary, and no `jax_profile` artifact. Logs from the retry show many XLA `Initialize clique` rendezvous warnings where all local threads joined but the leader did not complete the rendezvous; there is still no training progress beyond startup.
+- Interpretation: the retry has not disproved the sharding/collective hypothesis. It is no longer presenting as the 60 GiB allocator-pool failure; the current signal is distributed clique/rendezvous startup fragility before metrics/profile.
+- Next action: commit and push the dense-weight all-gather patch so the next candidate can run from a stable snapshot after GM2560-MFU-006 terminates or the user explicitly authorizes replacing it.

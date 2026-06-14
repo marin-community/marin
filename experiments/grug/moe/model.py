@@ -225,7 +225,7 @@ class CausalSelfAttention(eqx.Module):
 
         q_features = self.cfg.num_heads * head_dim
         kv_features = self.cfg.num_kv_heads * head_dim
-        qkv_weight = jnp.concatenate([self.w_q, self.w_k, self.w_v], axis=1)
+        qkv_weight = unshard(jnp.concatenate([self.w_q, self.w_k, self.w_v], axis=1))
         q_raw, k_raw, v_raw = jnp.split(
             jnp.einsum("bsh,hd->bsd", x, qkv_weight),
             [q_features, q_features + kv_features],
@@ -269,7 +269,7 @@ class CausalSelfAttention(eqx.Module):
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        return jnp.einsum("bsh,hd->bsd", attn_out, unshard(self.w_o), out_sharding=batch_spec)
 
 
 class RMSNorm(eqx.Module):
@@ -343,9 +343,14 @@ class DenseMLP(eqx.Module):
 
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
-        gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
-        up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
+        gate = jnp.einsum("td,dm->tm", x_flat, unshard(self.w_gate))
+        up = jnp.einsum("td,dm->tm", x_flat, unshard(self.w_up))
+        out_flat = jnp.einsum(
+            "tm,md->td",
+            activation_fn(gate) * up,
+            unshard(self.w_down),
+            out_sharding=_batch_spec(),
+        )
         # Reshard after the reshape so the shared-expert output carries the same
         # canonical batch sharding as the routed MoE output (MoEMLP reshards its
         # routed result identically). Splitting the fused
