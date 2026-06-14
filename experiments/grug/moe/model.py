@@ -49,6 +49,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
+_CROSS_ENTROPY_IMPLEMENTATIONS = ("pallas_gpu", "pallas_tpu", "xla", "reference")
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -65,6 +66,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 
 
 RematMode = Literal["recompute_all", "save_moe"]
+CrossEntropyImplementation = Literal["pallas_gpu", "pallas_tpu", "xla", "reference"]
 
 
 def _batch_spec() -> P:
@@ -112,6 +114,8 @@ class GrugModelConfig:
     pko_on_last_layer: bool = True
     """When ``use_pko`` is enabled, also treat the final layer as a long-attention/PKO layer."""
     attention_implementation: GrugAttentionImplementation | None = None
+    cross_entropy_implementation: CrossEntropyImplementation | None = None
+    """Optional backend override for fused linear cross-entropy."""
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
@@ -127,6 +131,14 @@ class GrugModelConfig:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
             raise ValueError("max_seq_len must be positive")
+        if (
+            self.cross_entropy_implementation is not None
+            and self.cross_entropy_implementation not in _CROSS_ENTROPY_IMPLEMENTATIONS
+        ):
+            raise ValueError(
+                "cross_entropy_implementation must be one of "
+                f"{_CROSS_ENTROPY_IMPLEMENTATIONS}, got {self.cross_entropy_implementation!r}"
+            )
         if self.num_experts <= 0:
             raise ValueError("num_experts must be positive")
         if self.num_experts_per_token <= 0:
@@ -668,6 +680,7 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
+            implementation=self.config.cross_entropy_implementation,
         )
         # No load-balancing loss; router z-loss only.
         num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
@@ -708,6 +721,7 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
 __all__ = [
     "Block",
     "CausalSelfAttention",
+    "CrossEntropyImplementation",
     "DenseMLP",
     "GatedNorm",
     "GrugModelConfig",

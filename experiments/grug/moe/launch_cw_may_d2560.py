@@ -14,6 +14,7 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_STEPS=50             throughput/profiling length
     MAY_CHECKPOINTS=local    avoid object-store checkpoint stalls
     MAY_MP=params=float32,compute=bfloat16,output=bfloat16
+    MAY_CE_IMPLEMENTATION=   empty = default; xla forces streaming XLA CE
 
 The default parameter policy keeps one sharded fp32 parameter tree plus sharded
 optimizer state. Set ``MAY_LIVE_PARAM_MODE=compute_with_master`` to keep a
@@ -42,7 +43,7 @@ from experiments.grug.moe.launch import (
     run_grug_moe_trial,
     slimpajama_6b_data,
 )
-from experiments.grug.moe.model import GrugModelConfig, RematMode
+from experiments.grug.moe.model import CrossEntropyImplementation, GrugModelConfig, RematMode
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig, LiveParamMode
 
@@ -90,6 +91,7 @@ def build_may_model() -> GrugModelConfig:
     if remat_mode not in ("recompute_all", "save_moe"):
         raise ValueError(f"MAY_REMAT={remat_mode!r} must be 'recompute_all' or 'save_moe'")
     attention_implementation = os.environ.get("MAY_ATTENTION_IMPLEMENTATION", "gpu_fa4_cute")
+    cross_entropy_implementation = os.environ.get("MAY_CE_IMPLEMENTATION") or None
 
     model = MAY_HEURISTIC.build_model_config(hidden_dim, seq_len=seq_len)
     return dataclasses.replace(
@@ -103,6 +105,7 @@ def build_may_model() -> GrugModelConfig:
         pko_on_last_layer=True,
         moe_implementation=cast(str, os.environ.get("MAY_MOE_IMPLEMENTATION", "ring")),
         attention_implementation=cast(str, attention_implementation or None),
+        cross_entropy_implementation=cast(CrossEntropyImplementation | None, cross_entropy_implementation),
         remat_mode=cast(RematMode, remat_mode),
     )
 

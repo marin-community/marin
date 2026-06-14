@@ -255,6 +255,7 @@ def test_grug_moe_may_recipe_attention_flags_lower():
         routing_renorm_sum=2.5,
         use_half_rope=True,
         use_pko=True,
+        cross_entropy_implementation="xla",
         router_z_loss_coef=0.0,
     )
     optimizer = optax.adam(1e-2)

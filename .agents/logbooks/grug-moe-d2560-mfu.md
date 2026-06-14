@@ -163,3 +163,28 @@
 - Result: added `Fa4CuteMetadata`, cached the short/long packed FA4 metadata once per transformer call, and taught `gpu_fa4_cute_attention` to reuse it. Focused tests, py_compile, changed-file pre-commit, and Pyrefly passed. GM2560-MFU-004 remains healthy with 32/32 tasks running, zero failures/preemptions, current W&B heartbeat, and no scalar metrics or profile artifact yet.
 - Interpretation: this is the next low-risk relaunch candidate if GM2560-MFU-004 stalls or profiles compile/shape overhead in FA4 metadata construction. GM2560-MFU-004 logs still show `[SPMD] Involuntary full rematerialization` for `%fake_parameter.2 = bf16[1,4096,2560]` from `{devices=[256,1,1]}` to `{devices=[1,1,32,8] last_tile_dim_replicate}`, so the remaining compiler-visible issue is attention-input/projection sharding rather than the removed q/kv guard.
 - Next action: keep GM2560-MFU-004 running until it reaches metrics/profile or terminal failure; in parallel inspect the activation/projection sharding mismatch before launching any GM2560-MFU-005.
+
+### 2026-06-13 23:43 PDT - GM2560-MFU-004 killed after startup OOM
+- Hypothesis: the patched FA4 run still exceeded per-rank memory before the first completed train step, so a blind relaunch with the same shape is unlikely to produce an MFU profile.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --config lib/iris/config/cw-us-east-02a.yaml job list --json --prefix /dlwh/iris-run-job-20260614-061825`
+  - `uv run --package marin-iris --extra controller iris --config lib/iris/config/cw-us-east-02a.yaml job summary --json /dlwh/iris-run-job-20260614-061825/grug-train-GM2560-MFU-004-cw-20260613-2318`
+  - `uv run --package marin-iris --extra controller iris --config lib/iris/config/cw-us-east-02a.yaml job logs --since-seconds 900 /dlwh/iris-run-job-20260614-061825 | rg -i -e "RESOURCE_EXHAUSTED|Out of memory|Very slow compile|Progress on:train|wandb|profile|profiler"`
+- Config: GM2560-MFU-004, 32 H100 nodes, source head `88dad4287`, `MAY_ATTENTION_IMPLEMENTATION=gpu_fa4_cute`, `MAY_EXPERT_AXIS=8`, `MAY_REPLICA_AXIS=1`, `MAY_BATCH=256`, `MAY_SEQ_LEN=4096`, `MAY_LIVE_PARAM_MODE=param`.
+- Result: parent and child ended `JOB_STATE_KILLED` with `error="Terminated by user"`. The child had `failure_count=1`, `task_state_counts={"killed": 32}`, and no preemptions. Logs show the first attempt reached `Progress on:train -/30` after about 16:47 elapsed, then multiple ranks hit `jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 60.91GiB` from the JAX profiler wrapper. Iris then reported coordination `CANCELLED`/connection-refused messages and began a fresh `syncing deps` attempt, but the job was killed before recovery. W&B is failed with `last_history_step=-1`, code/requirements artifacts only, and no profile artifact.
+- Interpretation: GM2560-MFU-004 did not produce usable scalar metrics or a profile. The immediate blocker is memory at the d2560/batch256/expert_axis8 shape, not merely missing instrumentation.
+- Next action: do not relaunch this exact config. Reduce the HBM requirement first, likely by fixing the remaining attention/projection sharding rematerialization and/or switching the next run to the lower-memory live-parameter/optimizer layout before considering GM2560-MFU-005.
+
+### 2026-06-13 23:49 PDT - force streaming XLA CE for next H100 profile
+- Hypothesis: GM2560-MFU-004 selected the GPU pallas CE path and then died on a 60.91 GiB allocation before step 0; forcing the streaming XLA CE backend should avoid a full-logits-shaped allocation while preserving the d2560/batch256 profile target. Pairing this with `compute_with_master` tests the sharded bf16 live-parameter layout with a sharded fp32 master tree.
+- Command:
+  - `uv run pytest tests/test_grug_variant_contracts.py::test_grug_moe_may_recipe_attention_flags_lower tests/test_grug_variant_contracts.py::test_grug_moe_compute_live_params_one_step_lowers -q`
+  - `uv run pytest lib/levanter/tests/grug/test_fa4_cute_attention.py::test_fa4_cute_metadata_is_precomputed_per_sliding_window -q`
+  - `uv run python -m py_compile experiments/grug/moe/model.py experiments/grug/moe/launch_cw_may_d2560.py`
+  - `experiments/grug/moe/run_cw_may_d2560.sh --run-id dry-run-ce-xla --ce-implementation xla`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `uvx pyrefly@1.0.0 check --baseline .pyrefly-baseline.json`
+- Config: local code only so far; added `MAY_CE_IMPLEMENTATION` / `--ce-implementation` and set the May lowering contract to exercise `cross_entropy_implementation="xla"`.
+- Result: root tests, Levanter FA4 metadata test, py_compile, dry-run wrapper, changed-file pre-commit, and Pyrefly passed. A mixed root+lib pytest invocation hit the repo's conftest import mismatch, so the same tests were rerun as separate invocations.
+- Interpretation: GM2560-MFU-005 should launch from this commit with `--ce-implementation xla --live-param-mode compute_with_master` before reducing batch or expert axis. If it still OOMs, the remaining likely levers are `--remat recompute_all` and/or smaller batch.
+- Next action: commit/push the CE override, launch GM2560-MFU-005, and babysit until first metrics/profile or terminal failure.

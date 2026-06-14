@@ -30,6 +30,7 @@ REMAT="save_moe"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 LIVE_PARAM_MODE="param"
 ATTENTION_IMPLEMENTATION="gpu_fa4_cute"
+CE_IMPLEMENTATION=""
 TRACKER="wandb"
 PROFILER_START=12
 PROFILER_STEPS=8
@@ -64,6 +65,7 @@ Options:
   --mp POLICY               MAY_MP policy string.
   --live-param-mode MODE    MAY_LIVE_PARAM_MODE: param or compute_with_master (default: param).
   --attention NAME          MAY_ATTENTION_IMPLEMENTATION (default: gpu_fa4_cute).
+  --ce-implementation NAME  MAY_CE_IMPLEMENTATION: pallas_gpu, xla, reference, or empty default.
   -h, --help                Show this help.
 
 This wrapper forwards explicit MAY_* environment variables to Iris; local shell
@@ -158,6 +160,10 @@ while [ "$#" -gt 0 ]; do
             ATTENTION_IMPLEMENTATION="$2"
             shift 2
             ;;
+        --ce-implementation)
+            CE_IMPLEMENTATION="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -210,6 +216,7 @@ ENV_ARGS=(
     -e MAY_MP "$MP"
     -e MAY_LIVE_PARAM_MODE "$LIVE_PARAM_MODE"
     -e MAY_ATTENTION_IMPLEMENTATION "$ATTENTION_IMPLEMENTATION"
+    -e MAY_CE_IMPLEMENTATION "$CE_IMPLEMENTATION"
     -e MAY_TRACKER "$TRACKER"
     -e MAY_PROFILER_START "$PROFILER_START"
     -e MAY_PROFILER_STEPS "$PROFILER_STEPS"
@@ -250,6 +257,7 @@ profiler: start=$PROFILER_START steps=$PROFILER_STEPS hlo_proto=$ENABLE_HLO_PROT
 mp: $MP
 live_param_mode: $LIVE_PARAM_MODE
 attention: $ATTENTION_IMPLEMENTATION
+ce_implementation: ${CE_IMPLEMENTATION:-default}
 
 Command shape:
   uv run --package marin-iris --extra controller iris --cluster=$CLUSTER job run --no-wait ... -- python -m experiments.grug.moe.launch_cw_may_d2560

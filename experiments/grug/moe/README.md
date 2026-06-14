@@ -189,6 +189,9 @@ nodes, `MAY_EXPERT_AXIS=8`, `MAY_REPLICA_AXIS=1`, `MAY_BATCH=256`,
 `MAY_MP=params=float32,compute=bfloat16,output=bfloat16`. FA4 CuTe is the H100
 attention baseline because packed SlimPajama examples carry segment IDs and the
 GPU default attention path otherwise falls back to dense reference attention.
+If the GPU pallas cross-entropy path OOMs before the first step, use
+`--ce-implementation xla` to force the streaming XLA CE backend while keeping
+the same model and batch shape.
 The precision policy keeps the fp32 parameter tree and optimizer state sharded;
 set `--live-param-mode compute_with_master` to keep a live bf16 parameter tree
 for forward/backward plus a sharded fp32 master tree for optimizer state and
