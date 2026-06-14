@@ -298,12 +298,12 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   |---|---|---|---|---|
   | **0.02** | | 3.112 | **3.0623** | |
   | **0.05** | 3.1535 | | 3.0705 | |
-  | **0.1**  | | | 3.0662 | |
+  | **0.1**  | | 3.113 | 3.0662 | |
 
-  _5 of 12 finals in (~00:45Z). `lr3.5e-4` wins everywhere so far (3.062–3.071); flanks
-  worse — `8.75e-5`=3.154, `1.75e-4`=3.112 (at wd0.02). WD flat (~0.008). LR optimum
-  holds ≥3.5e-4; **the 7e-4 column (on slow v6e-4) is the long pole** to bound it
-  above. Remaining: 7 cells._
+  _6 of 12 finals in (~06:15Z). `lr3.5e-4` wins everywhere (3.062–3.071); both flanks
+  clearly worse — `1.75e-4`≈3.112–3.113, `8.75e-5`=3.154. WD flat (~0.008). LR optimum
+  holds at 3.5e-4; **the 7e-4 column (on slow v6e-4) is the long pole** to bound it
+  above. Remaining: 8.75e-5 (wd0.02/0.1), 1.75e-4/wd0.05, 7e-4 column._
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ (leaning
   `lr3.5e-4/wd0.02`=3.0623, pending the 1.75e-4/7e-4 columns + WD neighbors)
