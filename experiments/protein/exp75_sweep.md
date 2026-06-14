@@ -357,14 +357,13 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   | wd \ lr | 1.75e-4 | 2.5e-4 | 3.5e-4 | 5e-4 | 7e-4 | 1e-3 |
   |---|---|---|---|---|---|---|
   | **0.02** | | 3.011 | 3.001 | 2.986 | 2.980 | _(run)_ |
-  | **0.05** | | 3.021 | 3.000 | 2.982 | **2.979** | _(run)_ |
-  | **0.1**  | | 3.016 | 2.997 | 2.986 | _(run)_ | _(run)_ |
+  | **0.05** | | 3.021 | 3.000 | 2.982 | 2.979 | _(run)_ |
+  | **0.1**  | | 3.016 | 2.997 | 2.986 | **2.970** | _(run)_ |
 
-  _11 of 15 E2 finals (~21:15Z). **7e-4 is the best column (2.979/2.980)**, edging 5e-4
-  (~2.98); 3.5e-4 column ~3.00. Like E1, E2 optimum on the **7e-4 top edge**. `1e-3` column
-  (w2q, moved to v6e-8 after v5p-32 zombie) running to bound it. Both waves agree good-LR
-  region is ≥7e-4, well above #70's 3.5e-4; top is flat (5e-4≈7e-4 ~2.98). Remaining base:
-  1.75e-4 column + 7e-4/wd0.1._
+  _12 of 15 E2 finals (~23:45Z). **7e-4 column complete (2.970–2.980) and clearly best**;
+  best E2 = `7e-4/wd0.1`=**2.970** (high LR + high WD). E2 optimum on the **7e-4 top edge**,
+  like E1. `1e-3` column (w2q, v6e-8) running to bound it. Both waves agree good-LR ≥7e-4,
+  well above #70's 3.5e-4. Remaining base: 1.75e-4 column (lowest LR)._
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
 - Measured drift 1→2: `Δlog lr=…, Δlog wd=…` (E2 3.021 < E1 ~3.06 → 2 epochs helps)
