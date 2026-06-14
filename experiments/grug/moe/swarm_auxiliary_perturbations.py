@@ -22,6 +22,7 @@ weights auditable while preserving the live executor semantics.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 
 import numpy as np
 from fray.cluster import ResourceConfig
@@ -59,6 +60,7 @@ UNIMAX_EPOCH_CAPS: tuple[float, ...] = (1.0, 4.0, 8.0, 16.0)
 PHASE0_FRACTION = 0.8
 PHASE1_FRACTION = 0.2
 MAX_CONCURRENT_AUXILIARY_STEPS = 240
+CANDIDATE_INDICES_ENV = "GRUG_MOE_AUX_CANDIDATE_INDICES"
 
 _SWARM_WANDB_GROUP = "swarm_fisher_dsp_tau20_lam0p25_uscentral2"
 
@@ -310,12 +312,46 @@ AUXILIARY_CANDIDATES: list[AuxiliaryCandidate] = build_auxiliary_candidates()
 swarm_auxiliary_perturbation_steps: list[ExecutorStep] = [_build_step(c) for c in AUXILIARY_CANDIDATES]
 
 
+def _parse_candidate_indices(value: str) -> frozenset[int]:
+    indices: set[int] = set()
+    for part in value.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if "-" in token:
+            start_text, end_text = token.split("-", 1)
+            start = int(start_text)
+            end = int(end_text)
+            if end < start:
+                raise ValueError(f"Candidate index range must be increasing, got {token!r}")
+            indices.update(range(start, end + 1))
+        else:
+            indices.add(int(token))
+    if not indices:
+        raise ValueError(f"{CANDIDATE_INDICES_ENV} did not contain any indices")
+    return frozenset(indices)
+
+
+def _selected_steps_from_env() -> list[ExecutorStep]:
+    selected = os.environ.get(CANDIDATE_INDICES_ENV)
+    if selected is None:
+        return swarm_auxiliary_perturbation_steps
+
+    requested = _parse_candidate_indices(selected)
+    by_index = {candidate.index: step for candidate, step in zip(AUXILIARY_CANDIDATES, swarm_auxiliary_perturbation_steps)}
+    missing = sorted(requested.difference(by_index))
+    if missing:
+        raise ValueError(f"Unknown auxiliary candidate indices in {CANDIDATE_INDICES_ENV}: {missing}")
+    return [by_index[index] for index in sorted(requested)]
+
+
 if __name__ == "__main__":
+    selected_steps = _selected_steps_from_env()
     executor_main(
-        steps=swarm_auxiliary_perturbation_steps,
+        steps=selected_steps,
         description=(
             "Grug MoE production-swarm auxiliary perturbations: baselines, one partition ablation per "
             "central2 datakit bucket, and paired random central logit tilts at D512 on ~100B tokens."
         ),
-        max_concurrent=MAX_CONCURRENT_AUXILIARY_STEPS,
+        max_concurrent=min(MAX_CONCURRENT_AUXILIARY_STEPS, len(selected_steps)),
     )

@@ -115,8 +115,6 @@ def _compact_grug_mesh_shape(
         )
 
     data_axis_size = global_device_count // fixed_axes
-    if expert_axis_size == 1:
-        return (replica_axis_size, data_axis_size, model_axis_size)
     return (replica_axis_size, data_axis_size, expert_axis_size, model_axis_size)
 
 
@@ -128,9 +126,11 @@ def compact_grug_mesh(
 ) -> Mesh:
     """Return the compact explicit mesh used by raw Grug PartitionSpecs.
 
-    The expert axis is third when present. Unlike the old local-only layout,
-    ``expert_axis_size`` may span multiple processes, e.g. a 32-process job
-    with 4 local devices can build an effective ``(4, 2, 16)`` Grug mesh.
+    The mesh is always ``(replica_dcn, data, expert, model)``; length-1 axes are
+    kept so downstream PartitionSpecs can name "expert" unconditionally. Unlike
+    the old local-only layout, ``expert_axis_size`` may span multiple processes,
+    e.g. a 32-process job with 4 local devices can build an effective
+    ``(4, 2, 16, 1)`` Grug mesh.
     """
     if replica_axis_size is None:
         replica_axis_size = jax.process_count()
@@ -143,10 +143,7 @@ def compact_grug_mesh(
         model_axis_size=model_axis_size,
     )
     devices = np.array(jax.devices(), dtype=object).reshape(shape)
-    axis_names = ("replica_dcn", "data", "model")
-    axis_types = (AxisType.Explicit, AxisType.Explicit, AxisType.Explicit)
-    if expert_axis_size != 1:
-        axis_names = ("replica_dcn", "data", "expert", "model")
-        axis_types = (AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit)
+    axis_names = ("replica_dcn", "data", "expert", "model")
+    axis_types = tuple(AxisType.Explicit for _ in axis_names)
 
     return Mesh(devices, axis_names, axis_types=axis_types)

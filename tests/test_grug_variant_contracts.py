@@ -67,6 +67,17 @@ def test_compact_grug_mesh_shape_allows_expert_axis_to_span_processes():
     ) == (4, 2, 16, 1)
 
 
+def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
+    """Standardized contract: compact_grug_mesh always carries the expert axis."""
+    assert _compact_grug_mesh_shape(
+        process_count=1,
+        local_device_count=4,
+        expert_axis_size=1,
+        replica_axis_size=1,
+        model_axis_size=1,
+    ) == (1, 4, 1, 1)
+
+
 def _variant_has_noverify(variant_dir: Path) -> bool:
     train_file = variant_dir / "train.py"
     if not train_file.is_file():
@@ -193,18 +204,12 @@ def test_grug_moe_variant_threads_moe_implementation_to_kernel():
 
 
 def test_grug_moe_data_loaders_build_against_single_expert_mesh():
-    """Regression: build_train_loader / build_tagged_evaluator must work when the
-    compact mesh has no "expert" axis (i.e. expert_axis_size == 1).
-
-    See https://github.com/marin-community/marin/issues/6252 — canary configurations
-    always have expert_axis_size == 1, so compact_grug_mesh drops the "expert" axis
-    entirely. The batch pspec must be derived from the actual mesh.
-    """
+    """Regression: data loaders must work with size-1 expert-axis meshes."""
     train_module = importlib.import_module("experiments.grug.moe.train")
     compact_grug_mesh = importlib.import_module("levanter.grug.sharding").compact_grug_mesh
 
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
-    assert "expert" not in mesh.shape, "fixture must reproduce the canary single-expert layout"
+    assert mesh.shape["expert"] == 1, "fixture must reproduce the single-expert layout"
 
     dataset = ListAsyncDataset(
         [
@@ -222,6 +227,42 @@ def test_grug_moe_data_loaders_build_against_single_expert_mesh():
     # This used to raise: "Resource axis: expert ... is not found in mesh: (..., model)".
     loader = train_module.build_train_loader(dataset, batch_schedule=batch_schedule, mesh=mesh)
     assert loader is not None
+
+
+def test_grug_moe_initial_state_builds_against_single_expert_mesh():
+    """Regression: MoE parameter init specs must resolve with expert axis size 1."""
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    compact_grug_mesh = importlib.import_module("levanter.grug.sharding").compact_grug_mesh
+
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+    assert mesh.shape["expert"] == 1, "fixture must reproduce the single-expert layout"
+
+    cfg = model_module.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=16,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=32,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=2,
+        max_seq_len=32,
+        sliding_window=32,
+        moe_implementation="sonic",
+    )
+
+    with jax.set_mesh(mesh):
+        state = train_module.initial_state(
+            cfg,
+            optimizer=optax.adam(1e-3),
+            mp=jmp.get_policy("f32"),
+            key=jax.random.PRNGKey(0),
+            ema_beta=None,
+        )
+
+    assert state.step.shape == ()
 
 
 @pytest.mark.parametrize(

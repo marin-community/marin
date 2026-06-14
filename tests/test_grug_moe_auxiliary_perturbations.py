@@ -135,3 +135,26 @@ def test_executor_steps_preserve_live_swarm_naming_and_region() -> None:
         assert step.config.tracker.group == "swarm_fisher_dsp_tau20_lam0p25_uscentral2"
         assert "auxiliary_perturbation" in step.config.tracker.tags
         assert candidate.candidate_type in step.config.tracker.tags
+
+
+def test_candidate_index_selector_supports_canary_and_ranges(monkeypatch) -> None:
+    monkeypatch.setenv(aux.CANDIDATE_INDICES_ENV, "840,842-843")
+
+    steps = aux._selected_steps_from_env()
+
+    assert [step.config.run_id for step in steps] == [
+        "swarm_fisher_dsp_d512_000840",
+        "swarm_fisher_dsp_d512_000842",
+        "swarm_fisher_dsp_d512_000843",
+    ]
+
+
+def test_candidate_index_selector_rejects_unknown_indices(monkeypatch) -> None:
+    monkeypatch.setenv(aux.CANDIDATE_INDICES_ENV, "839")
+
+    try:
+        aux._selected_steps_from_env()
+    except ValueError as exc:
+        assert "Unknown auxiliary candidate indices" in str(exc)
+    else:
+        raise AssertionError("unknown candidate index should fail before submission")
