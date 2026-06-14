@@ -188,3 +188,18 @@
 - Result: root tests, Levanter FA4 metadata test, py_compile, dry-run wrapper, changed-file pre-commit, and Pyrefly passed. A mixed root+lib pytest invocation hit the repo's conftest import mismatch, so the same tests were rerun as separate invocations.
 - Interpretation: GM2560-MFU-005 should launch from this commit with `--ce-implementation xla --live-param-mode compute_with_master` before reducing batch or expert axis. If it still OOMs, the remaining likely levers are `--remat recompute_all` and/or smaller batch.
 - Next action: commit/push the CE override, launch GM2560-MFU-005, and babysit until first metrics/profile or terminal failure.
+
+### 2026-06-13 23:48 PDT - GM2560-MFU-005 launched with XLA CE and bf16 live params
+- Hypothesis: streaming XLA CE removes the GM2560-MFU-004 full-logits-shaped HBM allocation, while `compute_with_master` avoids repeated fp32-to-bf16 parameter casts in the forward/backward path.
+- Command:
+  - `experiments/grug/moe/run_cw_may_d2560.sh --submit --run-id GM2560-MFU-005-cw-20260613-2350 --ce-implementation xla --live-param-mode compute_with_master`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job list --json --prefix /dlwh/iris-run-job-20260614-064720`
+- Config:
+  - Parent: `/dlwh/iris-run-job-20260614-064720`
+  - Child: `/dlwh/iris-run-job-20260614-064720/grug-train-GM2560-MFU-005-cw-20260613-2350`
+  - Commit: `bbba806e9`
+  - Same 32-node shape: `MAY_EXPERT_AXIS=8`, `MAY_REPLICA_AXIS=1`, `MAY_BATCH=256`, `MAY_SEQ_LEN=4096`, `MAY_STEPS=30`, `MAY_PROFILER_START=12`, `MAY_PROFILER_STEPS=8`
+  - Attention/precision: `MAY_ATTENTION_IMPLEMENTATION=gpu_fa4_cute`, `MAY_CE_IMPLEMENTATION=xla`, `MAY_LIVE_PARAM_MODE=compute_with_master`, `MAY_MP=params=float32,compute=bfloat16,output=bfloat16`
+- Result: dispatcher submitted successfully. First poll showed the parent running and the child running with 32 tasks in `building`; W&B was not visible yet.
+- Interpretation: GM2560-MFU-005 is the active first-profile candidate after the CE OOM fix.
+- Next action: Hooke is babysitting on a 10-minute heartbeat; watch for W&B visibility, first scalar metrics, profile artifact, or another pre-step OOM.
