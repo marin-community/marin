@@ -31,6 +31,7 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
                         output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
+    SCALE_DATA          slimpajama | synthetic (default slimpajama)
     SCALE_PROFILER_STEPS  >0 enables a jax_profile capture window of N steps
                           (use SCALE_TRACKER=wandb so the artifact uploads)
     SCALE_PROFILER_START  profiler start step (default 8, past compile/warmup)
@@ -54,7 +55,13 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
-from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_data
+from experiments.grug.moe.launch import (
+    GrugMoeLaunchConfig,
+    env_int,
+    run_grug_moe_trial,
+    slimpajama_6b_data,
+    synthetic_grug_data,
+)
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.train import GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
@@ -82,6 +89,21 @@ SCALE_OPTIMIZER = AdamConfig(
 )
 
 SCALE_TRAINER_DEFAULTS = dict(z_loss_weight=1e-4, ema_beta=None, log_every=1)
+
+
+def build_data(model: GrugModelConfig):
+    data = os.environ.get("SCALE_DATA", "slimpajama").lower()
+    if data == "slimpajama":
+        return slimpajama_6b_data()
+    if data == "synthetic":
+        return synthetic_grug_data(
+            seq_len=model.max_seq_len,
+            vocab_size=model.vocab_size,
+            num_examples=env_int("SCALE_SYNTHETIC_EXAMPLES", 1 << 20),
+            eos_id=env_int("SCALE_SYNTHETIC_EOS_ID", model.vocab_size - 1),
+            eos_interval=env_int("SCALE_SYNTHETIC_EOS_INTERVAL", 0),
+        )
+    raise ValueError(f"SCALE_DATA={data!r} must be 'slimpajama' or 'synthetic'")
 
 
 def build_scale_model() -> GrugModelConfig:
@@ -191,7 +213,7 @@ def build_scale_step() -> ExecutorStep:
         fn=run_grug_moe_trial,
         config=GrugMoeLaunchConfig(
             model=versioned(model),
-            data=slimpajama_6b_data(),
+            data=build_data(model),
             output_path=this_output_path(),
             run_id=run_id,
             resources=versioned(resources),

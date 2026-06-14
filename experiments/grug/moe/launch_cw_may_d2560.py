@@ -43,6 +43,7 @@ from experiments.grug.moe.launch import (
     env_int,
     run_grug_moe_trial,
     slimpajama_6b_data,
+    synthetic_grug_data,
 )
 from experiments.grug.moe.model import CrossEntropyImplementation, GrugModelConfig, RematMode
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
@@ -129,13 +130,21 @@ def build_may_optimizer(*, batch_size: int, seq_len: int) -> GrugMoeMuonHConfig:
     )
 
 
-def build_data():
+def build_data(model: GrugModelConfig):
     data = os.environ.get("MAY_DATA", "slimpajama").lower()
     if data == "slimpajama":
         return slimpajama_6b_data()
     if data == "nemotron":
         return NEMOTRON_MIX_WITH_DEFAULT_VALIDATION
-    raise ValueError(f"MAY_DATA={data!r} must be 'slimpajama' or 'nemotron'")
+    if data == "synthetic":
+        return synthetic_grug_data(
+            seq_len=model.max_seq_len,
+            vocab_size=model.vocab_size,
+            num_examples=env_int("MAY_SYNTHETIC_EXAMPLES", 1 << 20),
+            eos_id=env_int("MAY_SYNTHETIC_EOS_ID", model.vocab_size - 1),
+            eos_interval=env_int("MAY_SYNTHETIC_EOS_INTERVAL", 0),
+        )
+    raise ValueError(f"MAY_DATA={data!r} must be 'slimpajama', 'nemotron', or 'synthetic'")
 
 
 def build_tracker(run_id: str):
@@ -236,7 +245,7 @@ def build_may_step() -> ExecutorStep:
         fn=run_grug_moe_trial,
         config=GrugMoeLaunchConfig(
             model=versioned(model),
-            data=build_data(),
+            data=build_data(model),
             output_path=this_output_path(),
             run_id=run_id,
             resources=versioned(resources),

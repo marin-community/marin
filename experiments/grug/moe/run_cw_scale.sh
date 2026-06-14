@@ -19,6 +19,7 @@ MODE="smoke"
 SUBMIT=false
 RUN_ID=""
 WORKER_CPU=32
+DATA="slimpajama"
 
 usage() {
     cat <<'EOF'
@@ -35,6 +36,7 @@ Options:
   --cluster NAME        Iris cluster name (default: cw-us-east-02a).
   --kubeconfig PATH     Kubeconfig path (default: $KUBECONFIG or ~/.kube/coreweave-iris-gpu).
   --worker-cpu N        SCALE_CPU_PER_REPLICA for each H100 worker pod (default: 32).
+  --data NAME           SCALE_DATA: slimpajama or synthetic (default: slimpajama).
   -h, --help            Show this help.
 
 Credential input:
@@ -83,6 +85,10 @@ while [ "$#" -gt 0 ]; do
             WORKER_CPU="$2"
             shift 2
             ;;
+        --data)
+            DATA="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -117,6 +123,7 @@ COMMON_ENV=(
     -e AWS_ENDPOINT_URL_S3 "$AWS_ENDPOINT_URL_S3"
     -e SCALE_TRACKER json_logger
     -e SCALE_CPU_PER_REPLICA "$WORKER_CPU"
+    -e SCALE_DATA "$DATA"
 )
 
 SCALE_ENV=()
@@ -136,9 +143,11 @@ CMD=(
     job run --no-wait
     --memory=2G --disk=4G --cpu=1 --extra=cpu
     "${COMMON_ENV[@]}"
-    "${SCALE_ENV[@]}"
-    -- python -m experiments.grug.moe.launch_cw_scale
 )
+if [ "${#SCALE_ENV[@]}" -gt 0 ]; then
+    CMD+=("${SCALE_ENV[@]}")
+fi
+CMD+=(-- python -m experiments.grug.moe.launch_cw_scale)
 
 if [ "$SUBMIT" != true ]; then
     cat <<EOF
@@ -150,6 +159,7 @@ kubeconfig: $KUBECONFIG
 prefix: $MARIN_PREFIX
 r2_endpoint: $AWS_ENDPOINT_URL
 worker_cpu: $WORKER_CPU
+data: $DATA
 
 Command shape:
   uv run --package marin-iris --extra controller iris --cluster=$CLUSTER job run --no-wait ... -- python -m experiments.grug.moe.launch_cw_scale

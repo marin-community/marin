@@ -9,14 +9,24 @@ the MoE variant can be iterated independently from the dense base template.
 
 import dataclasses
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+import jax.numpy as jnp
 import jmp
+import numpy as np
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import BlockShuffleConfig, LmDataConfig, TextLmDatasetFormat
+from levanter.data import AsyncDataset
+from levanter.data.text import (
+    BlockShuffleConfig,
+    DirectDatasetComponent,
+    GrugLmExample,
+    LmDataConfig,
+    TextLmDatasetFormat,
+)
 from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -99,6 +109,81 @@ def slimpajama_6b_data() -> LmDataConfig:
     return lm_data_config(
         training_set=tokenize_step,
         shuffle=BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel"),
+    )
+
+
+@dataclass(frozen=True)
+class SyntheticGrugDataset(AsyncDataset[GrugLmExample]):
+    """Deterministic in-memory token stream for distributed systems probes."""
+
+    seq_len: int
+    vocab_size: int
+    num_examples: int
+    eos_id: int | None = None
+    eos_interval: int = 0
+    block_cross_document_attention: bool = True
+
+    def __post_init__(self) -> None:
+        if self.seq_len <= 0:
+            raise ValueError(f"seq_len must be positive, got {self.seq_len}")
+        if self.vocab_size <= 1:
+            raise ValueError(f"vocab_size must be greater than 1, got {self.vocab_size}")
+        if self.num_examples <= 0:
+            raise ValueError(f"num_examples must be positive, got {self.num_examples}")
+        if self.eos_interval < 0:
+            raise ValueError(f"eos_interval must be non-negative, got {self.eos_interval}")
+        if self.eos_interval > 0 and self.eos_id is None:
+            raise ValueError("eos_id must be set when eos_interval is positive")
+
+    async def async_len(self) -> int:
+        return self.num_examples
+
+    def is_finite(self) -> bool:
+        return True
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[GrugLmExample]:
+        return [self._example(int(index)) for index in indices]
+
+    def _example(self, index: int) -> GrugLmExample:
+        tokens = (np.arange(self.seq_len, dtype=np.int32) + index * 9973) % self.vocab_size
+        eos_id = None
+        if self.eos_interval > 0:
+            eos_id = self.eos_id
+            tokens[self.eos_interval - 1 :: self.eos_interval] = eos_id
+
+        return GrugLmExample.causal(
+            jnp.asarray(tokens, dtype=jnp.int32),
+            eos_id=eos_id,
+            block_cross_document_attention=self.block_cross_document_attention,
+        )
+
+
+def synthetic_grug_data(
+    *,
+    seq_len: int,
+    vocab_size: int,
+    num_examples: int,
+    eos_id: int | None = None,
+    eos_interval: int = 0,
+    block_cross_document_attention: bool = True,
+) -> LmDataConfig:
+    dataset = SyntheticGrugDataset(
+        seq_len=seq_len,
+        vocab_size=vocab_size,
+        num_examples=num_examples,
+        eos_id=eos_id,
+        eos_interval=eos_interval,
+        block_cross_document_attention=block_cross_document_attention,
+    )
+    return LmDataConfig(
+        tokenizer="passthrough",
+        vocab_size=vocab_size,
+        cache_dir=None,
+        auto_build_caches=False,
+        shuffle=False,
+        block_cross_document_attention=block_cross_document_attention,
+        components={"synthetic": DirectDatasetComponent(datasets={"train": dataset, "validation": dataset})},
+        train_weights={"synthetic": 1.0},
     )
 
 

@@ -63,7 +63,7 @@ Options:
   --profiler-steps N        MAY_PROFILER_STEPS (default: 8; set 0 to disable).
   --xla-memory-fraction F   XLA_PYTHON_CLIENT_MEM_FRACTION (default: 0.95).
   --tracker NAME            MAY_TRACKER: wandb or json_logger (default: wandb).
-  --data NAME               MAY_DATA: slimpajama or nemotron (default: slimpajama).
+  --data NAME               MAY_DATA: slimpajama, nemotron, or synthetic (default: slimpajama).
   --checkpoints MODE        MAY_CHECKPOINTS: local or s3 (default: local).
   --remat MODE              MAY_REMAT: save_moe or recompute_all (default: save_moe).
   --mp POLICY               MAY_MP policy string.
@@ -274,6 +274,7 @@ mp: $MP
 live_param_mode: $LIVE_PARAM_MODE
 attention: $ATTENTION_IMPLEMENTATION
 ce_implementation: ${CE_IMPLEMENTATION:-default}
+data: $DATA
 
 Command shape:
   uv run --package marin-iris --extra controller iris --cluster=$CLUSTER job run --no-wait ... -- python -m experiments.grug.moe.launch_cw_may_d2560
