@@ -89,6 +89,7 @@ def build_may_model() -> GrugModelConfig:
     remat_mode = os.environ.get("MAY_REMAT", "save_moe")
     if remat_mode not in ("recompute_all", "save_moe"):
         raise ValueError(f"MAY_REMAT={remat_mode!r} must be 'recompute_all' or 'save_moe'")
+    attention_implementation = os.environ.get("MAY_ATTENTION_IMPLEMENTATION", "gpu_fa4_cute")
 
     model = MAY_HEURISTIC.build_model_config(hidden_dim, seq_len=seq_len)
     return dataclasses.replace(
@@ -101,7 +102,7 @@ def build_may_model() -> GrugModelConfig:
         use_pko=True,
         pko_on_last_layer=True,
         moe_implementation=cast(str, os.environ.get("MAY_MOE_IMPLEMENTATION", "ring")),
-        attention_implementation=cast(str, os.environ.get("MAY_ATTENTION_IMPLEMENTATION") or None),
+        attention_implementation=cast(str, attention_implementation or None),
         remat_mode=cast(RematMode, remat_mode),
     )
 

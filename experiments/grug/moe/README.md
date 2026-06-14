@@ -185,12 +185,15 @@ The first command is a dry run. The profile wrapper defaults to all 32 H100
 nodes, `MAY_EXPERT_AXIS=8`, `MAY_REPLICA_AXIS=1`, `MAY_BATCH=256`,
 `MAY_SEQ_LEN=4096`, `MAY_STEPS=30`, `MAY_PROFILER_START=12`,
 `MAY_PROFILER_STEPS=8`, `MAY_REMAT=save_moe`, local checkpoints, W&B tracking,
-and `MAY_MP=params=float32,compute=bfloat16,output=bfloat16`. That keeps the
-fp32 parameter tree and optimizer state sharded; persistent bf16 train params
-plus a separate fp32 master copy is not currently a Grug train-state mode. It
-defaults to `MAY_DATA=slimpajama` for an R2-friendly speed run; set
-`--data nemotron` only when the Nemotron tokenized inputs are available where
-the CoreWeave job will read them.
+`MAY_ATTENTION_IMPLEMENTATION=gpu_fa4_cute`, and
+`MAY_MP=params=float32,compute=bfloat16,output=bfloat16`. FA4 CuTe is the H100
+attention baseline because packed SlimPajama examples carry segment IDs and the
+GPU default attention path otherwise falls back to dense reference attention.
+The precision policy keeps the fp32 parameter tree and optimizer state sharded;
+persistent bf16 train params plus a separate fp32 master copy is not currently a
+Grug train-state mode. It defaults to `MAY_DATA=slimpajama` for an R2-friendly
+speed run; set `--data nemotron` only when the Nemotron tokenized inputs are
+available where the CoreWeave job will read them.
 
 ### R2 credentials
 

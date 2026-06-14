@@ -28,6 +28,7 @@ CHECKPOINTS="local"
 DATA="slimpajama"
 REMAT="save_moe"
 MP="params=float32,compute=bfloat16,output=bfloat16"
+ATTENTION_IMPLEMENTATION="gpu_fa4_cute"
 TRACKER="wandb"
 PROFILER_START=12
 PROFILER_STEPS=8
@@ -60,6 +61,7 @@ Options:
   --checkpoints MODE        MAY_CHECKPOINTS: local or s3 (default: local).
   --remat MODE              MAY_REMAT: save_moe or recompute_all (default: save_moe).
   --mp POLICY               MAY_MP policy string.
+  --attention NAME          MAY_ATTENTION_IMPLEMENTATION (default: gpu_fa4_cute).
   -h, --help                Show this help.
 
 This wrapper forwards explicit MAY_* environment variables to Iris; local shell
@@ -146,6 +148,10 @@ while [ "$#" -gt 0 ]; do
             MP="$2"
             shift 2
             ;;
+        --attention)
+            ATTENTION_IMPLEMENTATION="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -187,6 +193,7 @@ ENV_ARGS=(
     -e MAY_DATA "$DATA"
     -e MAY_REMAT "$REMAT"
     -e MAY_MP "$MP"
+    -e MAY_ATTENTION_IMPLEMENTATION "$ATTENTION_IMPLEMENTATION"
     -e MAY_TRACKER "$TRACKER"
     -e MAY_PROFILER_START "$PROFILER_START"
     -e MAY_PROFILER_STEPS "$PROFILER_STEPS"
@@ -225,6 +232,7 @@ steps: $STEPS
 tracker: $TRACKER
 profiler: start=$PROFILER_START steps=$PROFILER_STEPS hlo_proto=$ENABLE_HLO_PROTO
 mp: $MP
+attention: $ATTENTION_IMPLEMENTATION
 
 Command shape:
   uv run --package marin-iris --extra controller iris --cluster=$CLUSTER job run --no-wait ... -- python -m experiments.grug.moe.launch_cw_may_d2560

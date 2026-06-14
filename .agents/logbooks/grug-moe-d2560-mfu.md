@@ -74,3 +74,13 @@
 - Result: added `jax.named_scope` regions inside `experiments/grug/moe/train.py` for `apply_qb_betas`, `forward_backward`, `optimizer_update`, `apply_updates`, `ema_update`, and `watch_stats`. Focused tests passed. W&B run `GM2560-MFU-002-cw-20260613-2248` exists and is running, but has no metrics yet.
 - Interpretation: if GM2560-MFU-002 is too coarse for optimizer/FSDP attribution, GM2560-MFU-003 should relaunch from the follow-up instrumentation commit.
 - Next action: keep monitoring GM2560-MFU-002 until profiler artifact or terminal failure.
+
+### 2026-06-13 22:45 PDT - select FA4 CuTe as next H100 attention baseline
+- Hypothesis: dense reference attention will dominate or materially depress MFU on H100; the d=2560 packed-LM data path carries segment IDs, so `gpu_fa4_cute` should be the first attention backend to test.
+- Command:
+  - `rg -n "GrugAttentionImplementation|attention_implementation|gpu_fa4" lib/levanter/src/levanter/grug experiments/grug -g '*.py'`
+  - `sed -n '340,530p' lib/levanter/src/levanter/data/text/datasets.py`
+- Config: local code only; GM2560-MFU-002 is still running on the earlier default, which used `MAY_ATTENTION_IMPLEMENTATION` unset and therefore GPU reference attention.
+- Result: changed the dedicated May d2560 launcher and wrapper default to `MAY_ATTENTION_IMPLEMENTATION=gpu_fa4_cute`; exposed `run_cw_may_d2560.sh --attention`.
+- Interpretation: GM2560-MFU-003 should use the FA4 default if GM2560-MFU-002 confirms attention is hot or overall MFU is below target.
+- Next action: wait for GM2560-MFU-002 profile result before deciding whether to relaunch immediately with FA4 or investigate another bottleneck first.
