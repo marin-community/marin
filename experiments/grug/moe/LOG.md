@@ -635,3 +635,12 @@ FINISHED runs, paloma/macro vs anchor 3.5496:
    bottleneck (QR step ~145k vs non-refresh ~350k). 3 criteria in tension.
 PATH: reduce the pf-staleness loss to <0.001. Candidate: at refresh, reproject exp_avg_SQ too (current code
 reprojects exp_avg only -> Adam 2nd moment misaligns with rotated basis at high pf). Validate math+CPU first.
+
+### DECISION: efficiency baseline = identity_init + pf8 (loss ~pf8), move to HP tuning (2026-06-14 ~06:45)
+<0.001 loss-neutrality not achievable via pf (anchor noise ~0.002; pf costs +0.003-0.005). Per user: deliver
+end-to-end run with ALL efficiency features at loss comparable to pf8, then tune. Efficiency baseline =
+identity_init (compile 7.3min<10) + pf8 (331k tok/s >=330) + donation-fix (0 warnings), NO reparam_eig
+(it hurt loss). Launched eff-baseline (064417) to confirm all 3 end-to-end. Loss ref for tuning = pf8 (~3.5544).
+PHASE 2 (coordinate descent to beat MuonH 3.5438): config = efficiency baseline (identity_init+pf8). Axis 1:
+shampoo_beta {0.9 anchor, 0.95, 0.99} (064435/064448). Then beta2, epsilon, adam_lr, learning_rate, init_factor.
+NOTE: pf8 baseline 3.5544 is +0.0106 above MuonH -> beating MuonH needs sizable HP gains (pre-pollution best 3.5475).
