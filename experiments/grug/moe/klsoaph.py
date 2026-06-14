@@ -168,6 +168,23 @@ def _symmetrize(matrix):
     return 0.5 * (matrix + jnp.swapaxes(matrix, -1, -2))
 
 
+def _msign(m, steps: int = 5):
+    """Newton-Schulz quintic orthogonalization (Muon's msign), batched over leading axes.
+
+    Returns the orthogonal polar factor (singular values -> 1) of each trailing (..., a, b) matrix.
+    Pure matmul (no iterative-linalg lowering). Used by the SOAP-MuonH inner step: msign of the
+    SOAP-eigenvalue-whitened projected momentum (the whitening breaks msign's rotation-equivariance,
+    so this is a genuine SOAP+Muon hybrid, not plain Muon).
+    """
+    a, b, c = 3.4445, -4.7750, 2.0315  # Keller Jordan quintic coefficients
+    x = m / (jnp.linalg.norm(m, axis=(-2, -1), keepdims=True) + 1e-7)
+    for _ in range(steps):
+        gram = jnp.einsum("...ij,...kj->...ik", x, x)  # x xᵀ
+        poly = b * gram + c * jnp.einsum("...ij,...jk->...ik", gram, gram)
+        x = a * x + jnp.einsum("...ij,...jk->...ik", poly, x)
+    return x
+
+
 def _klsoaph_step(
     grad: jnp.ndarray,
     exp_avg: jnp.ndarray,
@@ -187,6 +204,7 @@ def _klsoaph_step(
     init_factor: float,
     identity_init: bool = False,
     reparam_eig: bool = False,
+    inner_muon: bool = False,
 ):
     """Run one full-matrix SOAP step over the (..., rows, cols) gradient.
 
@@ -238,14 +256,23 @@ def _klsoaph_step(
         g_qr = jnp.einsum("...ij,...jk->...ik", g32, q_r)
         g_proj = jnp.einsum("...ki,...kj->...ij", q_l, g_qr)
 
-        # 2. Adam in projected basis.
+        # 2. Inner optimizer in projected basis: Adam (default) or SOAP-MuonH whitening.
         new_exp_avg = beta1 * exp_avg + (1.0 - beta1) * g_proj
         new_exp_avg_sq = beta2 * exp_avg_sq + (1.0 - beta2) * g_proj * g_proj
-        precond_proj = new_exp_avg / (jnp.sqrt(new_exp_avg_sq) + eps)
+        if inner_muon:
+            # SOAP-MuonH: whiten the projected momentum by the SOAP eigenvalues (esi = eig^-0.5);
+            # msign is applied AFTER rotating back (below), to the full-space update -- because q is only
+            # approximately orthonormal (stale under pf>1), so msign must orthogonalize the ACTUAL update,
+            # not the eigenbasis proxy (in-basis msign would equal plain Muon only for exactly-orthonormal q).
+            precond_proj = new_exp_avg * esi_l[..., :, None] * esi_r[..., None, :]
+        else:
+            precond_proj = new_exp_avg / (jnp.sqrt(new_exp_avg_sq) + eps)
 
-        # 3. Direction = q_l @ precond_proj @ q_r.T.
+        # 3. Direction = q_l @ precond_proj @ q_r.T  (rotate back to full parameter space).
         p_qrt = jnp.einsum("...ij,...kj->...ik", precond_proj, q_r)
         direction = jnp.einsum("...ij,...jk->...ik", q_l, p_qrt)
+        if inner_muon:
+            direction = _msign(direction)  # SOAP-MuonH: orthogonalize the full-space update (after rotation)
 
         # 4. Whitened Gram update.
         g_qr_white = g_qr * esi_r[..., None, :]
@@ -362,6 +389,7 @@ def _klsoaph_step_sharded(
     init_factor: float,
     identity_init: bool = False,
     reparam_eig: bool = False,
+    inner_muon: bool = False,
 ):
     """Distribute the per-expert SOAP step across the mesh via ``shard_map``.
 
@@ -381,6 +409,7 @@ def _klsoaph_step_sharded(
         init_factor=init_factor,
         identity_init=identity_init,
         reparam_eig=reparam_eig,
+        inner_muon=inner_muon,
     )
     mesh = jax.sharding.get_abstract_mesh()
     batched = hasattr(grad, "ndim") and grad.ndim >= 3
@@ -443,6 +472,7 @@ def scale_by_klsoaph(
     init_factor: float = 0.1,
     identity_init: bool = False,
     reparam_eig: bool = False,
+    inner_muon: bool = False,
 ) -> optax.GradientTransformation:
     """Full-matrix SOAP-style preconditioner (upstream KLSOAPH, de-blocked).
 
@@ -508,6 +538,7 @@ def scale_by_klsoaph(
                 init_factor=init_factor,
                 identity_init=identity_init,
                 reparam_eig=reparam_eig,
+                inner_muon=inner_muon,
             )
             direction = out[0].astype(grad.dtype)
             return _SoapStepResult(direction, *out[1:])
