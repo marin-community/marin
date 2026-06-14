@@ -353,14 +353,14 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
 
   | wd \ lr | 1.75e-4 | 2.5e-4 | 3.5e-4 | 5e-4 | 7e-4 |
   |---|---|---|---|---|---|
-  | **0.02** | | | 3.001 | | |
+  | **0.02** | | 3.011 | 3.001 | | |
   | **0.05** | | 3.021 | | **2.982** | |
   | **0.1**  | | | | 2.986 | |
 
-  _4 of 15 E2 finals (~10:15Z). **`5e-4` is winning** (2.982, 2.986) over 3.5e-4 (3.001)
-  and 2.5e-4 (3.021) → E2 optimum is firming at **higher LR (≥5e-4)** than E1's 3.5e-4
-  (opposite the lr↓ warm-start prior). 5e-4 still interior — await the 7e-4 column; if
-  7e-4 wins, **extend E2 LR up to 1e-3**. All E2 beat every E1 final, confirming 2ep helps._
+  _5 of 15 E2 finals (~10:45Z). Monotone in LR so far: **`5e-4` (2.982/2.986) > `3.5e-4`
+  (3.001) > `2.5e-4` (3.011/3.021)** → E2 optimum firming at **higher LR (≥5e-4)** than
+  E1's 3.5e-4 (opposite the lr↓ warm-start prior). 5e-4 still interior — await the 7e-4
+  column; if 7e-4 wins, **extend E2 LR up to 1e-3**. All E2 beat every E1, 2ep helps._
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
 - Measured drift 1→2: `Δlog lr=…, Δlog wd=…` (E2 3.021 < E1 ~3.06 → 2 epochs helps)
