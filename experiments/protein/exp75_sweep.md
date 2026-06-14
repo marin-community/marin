@@ -353,9 +353,14 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
 
   | wd \ lr | 1.75e-4 | 2.5e-4 | 3.5e-4 | 5e-4 | 7e-4 |
   |---|---|---|---|---|---|
-  | **0.02** | | | **3.001** | | |
+  | **0.02** | | | 3.001 | | |
   | **0.05** | | 3.021 | | | |
-  | **0.1**  | | | | | |
+  | **0.1**  | | | | **2.986** | |
+
+  _3 of 15 E2 finals (~09:45Z). Best so far `5e-4/wd0.1`=2.986 < `3.5e-4/wd0.02`=3.001 —
+  a tentative hint E2 favors **higher LR** than E1's 3.5e-4 (opposite the warm-start
+  prior of lr↓), but only 3 cells and WD-confounded; not a verdict. All 3 beat every
+  E1 final (~3.06+), confirming 2 epochs helps._
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
 - Measured drift 1→2: `Δlog lr=…, Δlog wd=…` (E2 3.021 < E1 ~3.06 → 2 epochs helps)
