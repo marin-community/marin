@@ -30,6 +30,7 @@ jobs:
             relevant:
               - 'docs/**'
               - 'mkdocs.yml'
+              - 'lib/marin/src/**'  # mkdocstrings renders API reference from these docstrings
               - '.github/workflows/marin-docs.yaml'
 
   marin-docs:
