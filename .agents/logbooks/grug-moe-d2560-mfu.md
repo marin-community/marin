@@ -64,3 +64,13 @@
 - Result: dispatcher job submitted; profile babysitting assigned to subagent Hooke (`019ec4a1-9e0d-7633-920e-edb54757dec1`).
 - Interpretation: this should produce the first W&B-backed `jax_profile` artifact if the run reaches step 20.
 - Next action: monitor job state, capture W&B/profile artifact, ingest with `lib/marin/tools/profile_summary.py`, and classify MoE/attention/FSDP/optimizer overhead.
+
+### 2026-06-13 22:40 PDT - train-step profiling labels for follow-up runs
+- Hypothesis: the first profile may distinguish MoE and attention internals but leave optimizer/update overhead hard to read if the whole JIT step appears as one region.
+- Command:
+  - `uv run pytest experiments/grug/moe/test_optimizer.py tests/test_grug_variant_contracts.py::test_grug_moe_may_recipe_attention_flags_lower -q`
+  - `uv run python - <<'PY' ... wandb.Api() ...`
+- Config: local code only; the already-running GM2560-MFU-002 job is still on commit `5d5bc369a4b858551f8f36c35ca9f52122cd87f2`.
+- Result: added `jax.named_scope` regions inside `experiments/grug/moe/train.py` for `apply_qb_betas`, `forward_backward`, `optimizer_update`, `apply_updates`, `ema_update`, and `watch_stats`. Focused tests passed. W&B run `GM2560-MFU-002-cw-20260613-2248` exists and is running, but has no metrics yet.
+- Interpretation: if GM2560-MFU-002 is too coarse for optimizer/FSDP attribution, GM2560-MFU-003 should relaunch from the follow-up instrumentation commit.
+- Next action: keep monitoring GM2560-MFU-002 until profiler artifact or terminal failure.

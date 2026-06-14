@@ -306,11 +306,12 @@ def _make_train_step(
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
-        qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
-        if ema_beta is not None:
-            qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
-        else:
-            qb_ema_params = None
+        with jax.named_scope("apply_qb_betas"):
+            qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
+            if ema_beta is not None:
+                qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
+            else:
+                qb_ema_params = None
 
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
@@ -323,36 +324,41 @@ def _make_train_step(
                 return_router_metrics=True,
             )
 
-        (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
+        with jax.named_scope("forward_backward"):
+            (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
-        updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
-        params = optax.apply_updates(qb_params, updates)
+        with jax.named_scope("optimizer_update"):
+            updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
+        with jax.named_scope("apply_updates"):
+            params = optax.apply_updates(qb_params, updates)
 
-        if ema_beta is None:
-            ema_params = None
-        else:
-            if qb_ema_params is None:
-                raise ValueError("ema_params must be initialized when ema_beta is set.")
-            ema_params = jax.tree_util.tree_map(
-                lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
-                qb_ema_params,
-                params,
-            )
+        with jax.named_scope("ema_update"):
+            if ema_beta is None:
+                ema_params = None
+            else:
+                if qb_ema_params is None:
+                    raise ValueError("ema_params must be initialized when ema_beta is set.")
+                ema_params = jax.tree_util.tree_map(
+                    lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
+                    qb_ema_params,
+                    params,
+                )
 
         watch_stats = None
         if watch_config is not None and compute_watch:
-            watch_stats = compute_watch_stats(
-                watch_targets=watch_targets,
-                include_norms=watch_config.include_norms,
-                include_per_parameter_norms=watch_config.include_per_parameter_norms,
-                include_histogram=watch_config.include_histograms,
-                split_scan_layers=watch_config.split_scan_layers,
-                params=qb_params,
-                grads=grads,
-                updates=updates,
-                opt_state=state.opt_state,
-                model_tree_type=type(state.params),
-            )
+            with jax.named_scope("watch_stats"):
+                watch_stats = compute_watch_stats(
+                    watch_targets=watch_targets,
+                    include_norms=watch_config.include_norms,
+                    include_per_parameter_norms=watch_config.include_per_parameter_norms,
+                    include_histogram=watch_config.include_histograms,
+                    split_scan_layers=watch_config.split_scan_layers,
+                    params=qb_params,
+                    grads=grads,
+                    updates=updates,
+                    opt_state=state.opt_state,
+                    model_tree_type=type(state.params),
+                )
 
         next_state = dataclasses.replace(
             state,
