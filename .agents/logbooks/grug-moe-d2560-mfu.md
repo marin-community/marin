@@ -278,4 +278,34 @@
 - Config: live GM2560-MFU-006 is still the pre-patch commit `77c87b0fe`. Local branch head is the next candidate commit `ce06fd232`.
 - Result: as of 2026-06-14 01:10 PDT, GM2560-MFU-006 is still `JOB_STATE_RUNNING`; child has 32/32 tasks running, `failure_count=1`, `preemption_count=0`, and no pending reason. W&B remains `running` with zero history rows, no scalar summaries, and no profile artifact. Hooke's latest handoff agrees and reports no new OOM/allocator/fatal signature; the last material child logs are `Initialize clique` rendezvous warnings around 08:02:37 UTC. The SPMD warning source/target is exactly `%fake_parameter.2 = bf16[1,4096,2560]`, from `{devices=[256,1,1]}` to `{devices=[1,1,32,8] last_tile_dim_replicate}`.
 - Interpretation: source `{devices=[256,1,1]}` is the local `[batch, seq, hidden]` activation sharded over the full batch axis; target `{devices=[1,1,32,8] last_tile_dim_replicate}` is hidden-dimension sharding over `data` replicated over `expert`. That matches the dense qkv/output/shared-MLP weight sharding fixed by `ce06fd232`, rather than params/optimizer state, CE logits, or the intended MoE expert-parallel path. The output CE wrapper already reshards `lm_head` to `P(None, None)` inside its shard map, so no additional CE patch is justified before the `ce06fd232` run.
-- Next action: do not stop GM2560-MFU-006 without user approval while it is still live. If it terminales, launch the same full-shape candidate from `ce06fd232` with `--ce-implementation xla --live-param-mode param --xla-memory-fraction 0.95`; if it remains live-but-stalled, ask for approval before replacing it.
+- Next action: do not stop GM2560-MFU-006 without user approval while it is still live. If it terminates, launch the same full-shape candidate from `ce06fd232` with `--ce-implementation xla --live-param-mode param --xla-memory-fraction 0.95`; if it remains live-but-stalled, ask for approval before replacing it.
+
+### 2026-06-14 15:17 PDT - GM2560-MFU-006 killed after long clique stall
+- Hypothesis: after GM2560-MFU-006 spent many hours with no scalar metrics, no profile artifact, and repeated XLA clique/rendezvous warnings, replacing it with a minimizer would yield more information than continuing to burn the same 32-node slot.
+- Command:
+  - `uv run iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-job-20260614-073514`
+  - `uv run iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-job-20260614-073514/grug-train-GM2560-MFU-006-cw-20260614-0035`
+  - `uv run iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260614-073514`
+  - `uv run iris --cluster=cw-us-east-02a job list --json --prefix /dlwh/iris-run-job-20260614-073514`
+- Config: GM2560-MFU-006, source commit `77c87b0fe`, 32 H100 nodes, `MAY_EXPERT_AXIS=8`, `MAY_REPLICA_AXIS=1`, `MAY_BATCH=256`, `MAY_SEQ_LEN=4096`, `MAY_CE_IMPLEMENTATION=xla`, `MAY_LIVE_PARAM_MODE=param`, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95`.
+- Result: with user approval, stopped parent `/dlwh/iris-run-job-20260614-073514` and child `/dlwh/iris-run-job-20260614-073514/grug-train-GM2560-MFU-006-cw-20260614-0035`. Final child state was `JOB_STATE_KILLED`, 32 killed tasks, `failure_count=1`, `preemption_count=0`; parent was also `JOB_STATE_KILLED`. W&B had no scalar history rows and no `jax_profile` artifact.
+- Interpretation: GM2560-MFU-006 is a negative result for the full d2560 candidate: raising the memory pool avoided the earlier explicit 60 GiB allocator failure, but the run then wedged before metrics in XLA collective/clique initialization. This still leaves the dense activation-reshard patch at `ce06fd232` unvalidated on a full-shape run.
+- Next action: launch a topology-preserving minimizer to determine whether the clique failure is tied to the 32-node communicator shape itself or to the full d2560 executable.
+
+### 2026-06-14 15:18 PDT - GM2560-MIN-001 32-node d128 minimizer launched
+- Hypothesis: a tiny model on the same 32-node H100 topology can separate distributed clique/setup problems from full d2560 memory/sharding problems. If the minimizer wedges, the bad path is likely topology/collective setup; if it reaches steps, the next full-shape attempt should use the `ce06fd232` dense-weight all-gather patch.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --memory=2G --disk=4G --cpu=1 --extra=cpu -e ... -- python -m experiments.grug.moe.launch_cw_scale`
+  - `uv run iris --cluster=cw-us-east-02a job list --json --prefix /dlwh/iris-run-job-20260614-221814`
+  - `uv run iris --cluster=cw-us-east-02a job logs --tail --max-lines 500 /dlwh/iris-run-job-20260614-221814`
+- Config:
+  - Run id: `GM2560-MIN-001-cw-20260614-1518`
+  - Parent: `/dlwh/iris-run-job-20260614-221814`
+  - Child: `/dlwh/iris-run-job-20260614-221814/grug-train-GM2560-MIN-001-cw-20260614-1518`
+  - Topology: `SCALE_GPU_REPLICAS=32`, `SCALE_EXPERT_AXIS=8`, `SCALE_REPLICA_AXIS=1`
+  - Tiny model: `SCALE_HIDDEN_DIM=128`, `SCALE_NUM_LAYERS=1`, `SCALE_NUM_EXPERTS=8`, `SCALE_TOP_K=1`
+  - Tiny workload: `SCALE_BATCH=256`, `SCALE_SEQ_LEN=16`, `SCALE_STEPS=2`
+  - Runtime: `SCALE_CHECKPOINTS=local`, `SCALE_TRACKER=json_logger`, `SCALE_MP=params=float32,compute=bfloat16,output=bfloat16`
+- Result: dispatcher submitted successfully. Parent is `JOB_STATE_RUNNING`; child is `JOB_STATE_RUNNING` with 32 tasks in `building`, `failure_count=0`, and `preemption_count=0` as of 2026-06-14 15:24 PDT. Parent logs show the tokenized SlimPajama input step was skipped as already succeeded, the Grug training step lock was acquired, and the child Fray job was dispatched. The child had not emitted training logs yet at the latest poll.
+- Interpretation: this is not an MFU/profile candidate; it is a distributed-path minimizer. Its outcome will decide whether to immediately relaunch full d2560 from `ce06fd232` or keep minimizing the collective/clique path.
+- Next action: Hooke is babysitting the minimizer on a 10-minute heartbeat. If it reaches steps, launch the next full-shape candidate from `ce06fd232` with `--ce-implementation xla --live-param-mode param --xla-memory-fraction 0.95`; if it wedges with the same clique symptoms, minimize further before spending another full d2560 compile.
