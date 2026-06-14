@@ -621,3 +621,17 @@ THROUGHPUT >=330k (0.99-EMA): pf8=305k, pf16=321k, pf32=323k -- shrinking increm
 ~325k < 330k. pf alone likely insufficient (testing pf64/128). Non-refresh step is f32 optimizer matmuls
 (gram/projection/direction) -> need bf16 (Wu Lin reparam: q orthonormal cond=1 -> bf16-safe) to raise ceiling.
 LOSS <0.001 vs anchor(3.5496): pf-reparam runs not finished yet; bf16 must also be loss-neutral.
+
+### Efficiency-baseline Pareto: throughput vs loss TENSION (2026-06-14 ~01:00)
+FINISHED runs, paloma/macro vs anchor 3.5496:
+  pf1 (anchor): 145k tok/s, 3.5496 (+0)
+  pf2:  329.6k, 3.5530 (+0.0034)
+  pf8:  331.4k, 3.5544 (+0.0048)
+  pf16-reparam: 331.9k, 3.6032@10k (~+0.01, running)
+=> Criterion 1 (>=330k): MET (pf8=331k; earlier 305-323k were early-0.99-EMA artifacts that washed out).
+   Criterion 2 (compile<10min): MET (identity_init 7.3min clean).
+   Criterion 3 (loss<0.001 vs anchor): NOT met -- pf-skipping costs +0.003..0.005 (staleness); reparam_eig
+   did NOT help (pf16-reparam looks worse). pf1 (loss-neutral) is only 145k; the QR refresh is the per-step
+   bottleneck (QR step ~145k vs non-refresh ~350k). 3 criteria in tension.
+PATH: reduce the pf-staleness loss to <0.001. Candidate: at refresh, reproject exp_avg_SQ too (current code
+reprojects exp_avg only -> Adam 2nd moment misaligns with rotated basis at high pf). Validate math+CPU first.
