@@ -18,7 +18,6 @@ import levanter.tracker
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
-from jax.experimental.layout import Layout, with_layout_constraint
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -252,24 +251,31 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
-def _constrain_std_layout(tree):
-    """Pin each array leaf of `tree` to the standard row-major device layout.
+def _relayout_state_for_donation(train_step, state, batch, max_iters: int = 3):
+    """Relayout the train state to ``train_step``'s donation-stable output layout.
 
-    The jitted train step donates the train state (donate_argnums=0); donation only succeeds when the
-    OUTPUT state has the same memory LAYOUT as the donated INPUT (sharding already matches — the optimizer
-    reshards updates via _match_named_update_sharding). But the optimizer/SOAP einsums can emit non-square
-    state/param leaves (attn/mlp/router) in a transposed/non-default layout that differs from how they were
-    stored -> 'donated buffers were not usable' -> those buffers get reallocated every step. The stored
-    state comes from jnp.zeros init (standard row-major), so constraining the OUTPUT to row-major restores
-    the layout invariant -> buffers are reused. Pure layout (values unchanged) -> lossless.
+    The jitted train step donates the state (donate_argnums=0); XLA can only alias a donated input
+    buffer to an output buffer when their memory LAYOUTS match. The SOAP optimizer's einsums make XLA
+    prefer a transposed (non-row-major) layout for some opt_state leaves (exp_avg / gg / esi), which
+    differs from how ``_init_state`` (free output layout) stored them -> "donated buffers were not
+    usable" -> realloc every step. Forcing a fixed layout (e.g. row-major) on the output does NOT help:
+    it inserts a transpose-copy whose result XLA refuses to alias.
+
+    Instead, let the step keep its natural output layout and move the STATE to that layout: compile the
+    step to read its output layout, ``device_put`` the state into it, and repeat to the fixed point
+    where input layout == output layout (usually 1-2 iters). Then the loop's compiled step donates in
+    place. Pure layout (values unchanged); costs a couple of throwaway compiles at startup.
     """
-
-    def m(x):
-        if x is None or not hasattr(x, "ndim") or x.ndim == 0:
-            return x
-        return with_layout_constraint(x, Layout(tuple(range(x.ndim))))
-
-    return jax.tree.map(m, tree, is_leaf=lambda x: x is None)
+    for _ in range(max_iters):
+        compiled = train_step.lower(state, batch, compute_watch=False).compile()
+        in_fmt = compiled.input_formats[0]  # positional arg 0 == state
+        out_fmt = compiled.output_formats[0]  # return elem 0 == next_state
+        in_layouts = [f.layout for f in jax.tree.leaves(in_fmt)]
+        out_layouts = [f.layout for f in jax.tree.leaves(out_fmt)]
+        if in_layouts == out_layouts:
+            return state
+        state = jax.device_put(state, out_fmt)
+    return state
 
 
 def initial_state(
@@ -361,14 +367,16 @@ def _make_train_step(
                 model_tree_type=type(state.params),
             )
 
-        # Pin the output state's sharding to the donated input state's, so jit can reuse the donated
-        # buffers (donate_argnums=0) instead of reallocating mismatched-sharding leaves every step.
+        # Output state keeps its NATURAL layout (no forced row-major). Donation is enabled by relaying
+        # the INIT state to this natural output layout once at startup (see _relayout_state_for_donation),
+        # so input layout == output layout and the donated buffers alias in-place. Forcing a fixed layout
+        # here instead would insert a transpose-copy whose result XLA refuses to alias -> donation fails.
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
-            params=_constrain_std_layout(params),
-            opt_state=_constrain_std_layout(opt_state),
-            ema_params=_constrain_std_layout(ema_params) if ema_params is not None else None,
+            params=params,
+            opt_state=opt_state,
+            ema_params=ema_params,
             pending_qb_betas=metrics["qb_beta_per_layer"],
         )
 
@@ -421,24 +429,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         @jax.jit
         def _init_state(model_rng):
-            s = initial_state(
+            return initial_state(
                 config.model,
                 optimizer=optimizer,
                 mp=trainer.mp,
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
-            )
-            # Pin the INIT state to the same row-major layout that train_step pins its OUTPUT to.
-            # _init_state is jitted with free output layout, so XLA otherwise materializes the SOAP
-            # expert opt_state (exp_avg / gg / esi) in its natural transposed layout. That layout then
-            # differs from train_step's forced row-major output -> the donated input buffers can't alias
-            # the outputs -> "donated buffers were not usable". Constraining BOTH sides to row-major makes
-            # input layout == output layout so donation aliases in-place. Pure layout (values unchanged).
-            return dataclasses.replace(
-                s,
-                params=_constrain_std_layout(s.params),
-                opt_state=_constrain_std_layout(s.opt_state),
-                ema_params=_constrain_std_layout(s.ema_params) if s.ema_params is not None else None,
             )
 
         state = _init_state(model_key)
@@ -514,11 +510,20 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
 
+        # Relayout the state so the jitted train step can alias its donated buffers (donate_argnums=0).
+        # Uses the first batch, which is then reused as the loop's first batch (no data dropped).
+        pending_first_batch = next(iterator)
+        state = _relayout_state_for_donation(train_step, state, pending_first_batch)
+
         # Main optimization loop.
         try:
             while int(state.step) < trainer.num_train_steps:
-                with jax.profiler.TraceAnnotation("load_batch"):
-                    batch = next(iterator)
+                if pending_first_batch is not None:
+                    batch = pending_first_batch
+                    pending_first_batch = None
+                else:
+                    with jax.profiler.TraceAnnotation("load_batch"):
+                        batch = next(iterator)
                 step_start = time.perf_counter()
                 current_step = int(state.step)
                 # grad_watch runs only on its configured interval.
