@@ -21,6 +21,7 @@ from levanter.kernels.pallas.splash_attention import (
     lower_splash_segment_ids,
     packed_causal_segment_mask_infos,
     packed_causal_segment_run_mask_infos,
+    packed_prefix_lm_segment_run_mask_infos,
     packed_prefix_lm_mask_infos,
     prefix_lm_dkv_mask_info,
     prefix_lm_forward_mask_info,
@@ -233,6 +234,41 @@ def test_packed_causal_segment_run_mask_info_uses_compact_partial_payload(
 
     block_count = seq_len // block_size
     assert metadata.fwd_mask_info.partial_mask_blocks.shape[0] < block_count * block_count
+
+
+def test_packed_prefix_lm_segment_run_mask_info_matches_dense_packed_prefix_lm():
+    seq_len = 128
+    block_size = 16
+    segment_lengths = jnp.array([64, 64], dtype=jnp.int32)
+    prefix_lengths = jnp.array([20, 16], dtype=jnp.int32)
+    num_segments = jnp.array(2, dtype=jnp.int32)
+
+    metadata = packed_prefix_lm_segment_run_mask_infos(
+        prefix_lengths=prefix_lengths,
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        q_seq_len=seq_len,
+        kv_seq_len=seq_len,
+        block_sizes=_packed_metadata_test_block_sizes(block_size),
+    )
+
+    segment_ids = np.repeat(np.arange(segment_lengths.shape[0], dtype=np.int32), np.asarray(segment_lengths))
+    prefix_mask = np.zeros((seq_len,), dtype=bool)
+    prefix_mask[:20] = True
+    prefix_mask[64:80] = True
+    q = np.arange(seq_len)[:, None]
+    kv = np.arange(seq_len)[None, :]
+    expected = (segment_ids[:, None] == segment_ids[None, :]) & ((kv <= q) | prefix_mask[None, :])
+    _assert_packed_metadata_matches_dense(
+        metadata,
+        expected,
+        seq_len=seq_len,
+        block_size=block_size,
+        partial_q_block=0,
+        partial_kv_block=1,
+        full_q_block=1,
+        full_kv_block=0,
+    )
 
 
 def _two_segment_ids():

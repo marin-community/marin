@@ -24,6 +24,7 @@ from levanter.kernels.pallas.splash_attention import (
     lower_splash_segment_ids,
     packed_causal_segment_mask_infos,
     packed_causal_segment_run_mask_infos,
+    packed_prefix_lm_segment_run_mask_infos,
     packed_prefix_lm_mask_infos,
     prefix_lm_mask_infos,
     splash_attention_block_sizes,
@@ -942,6 +943,8 @@ def _splash_kernel_from_dynamic_metadata(metadata, block_sizes, logits_soft_cap)
 class _SplashPrefixControls:
     prefix_lengths: jax.Array | None
     physical_axes_prefix_lengths: PartitionSpec | None
+    prefix_lengths_per_segment: jax.Array | None
+    physical_axes_prefix_lengths_per_segment: PartitionSpec | None
     prefix_masks: jax.Array | None
     physical_axes_prefix_mask: PartitionSpec | None
 
@@ -1048,10 +1051,42 @@ def _prepare_splash_prefix_controls(
 ) -> _SplashPrefixControls:
     prefix_lengths = None
     physical_axes_prefix_lengths = None
+    prefix_lengths_per_segment = None
+    physical_axes_prefix_lengths_per_segment = None
     prefix_masks = None
     physical_axes_prefix_mask = None
 
     prefix_lm = mask.prefix_lm_spec if isinstance(mask, AttentionMask) else None
+    if prefix_lm is not None and prefix_lm.prefix_lengths_per_segment is not None:
+        if (
+            prefix_lm.prefix_length is not None
+            or prefix_lm.prefix_lengths is not None
+            or prefix_lm.prefix_mask is not None
+        ):
+            raise NotImplementedError(
+                "Splash attention does not support prefix_lengths_per_segment combined with other prefix controls."
+            )
+        if mask.sliding_window is not None:
+            raise NotImplementedError(
+                "Splash attention does not support prefix_lengths_per_segment with sliding windows."
+            )
+        if mask.segment_run_metadata is None:
+            raise ValueError("prefix_lengths_per_segment requires segment-run metadata for Splash attention.")
+
+        batch_axes = tuple(q_class["B"])
+        segment_run_axis = prefix_lm.prefix_lengths_per_segment.axes[-1]
+        prefix_lengths_per_segment = _prepare_splash_batch_value(
+            prefix_lm.prefix_lengths_per_segment,
+            batch_axes=batch_axes,
+            allowed_axis_names={ax.name for ax in batch_axes + (segment_run_axis,)},
+            value_name="Per-segment prefix lengths",
+        )
+        prefix_lengths_per_segment = prefix_lengths_per_segment.rearrange(
+            (SPLASH_BATCH_AXIS_NAME, segment_run_axis.name)
+        )
+        prefix_lengths_per_segment = prefix_lengths_per_segment.astype(jnp.int32).array
+        physical_axes_prefix_lengths_per_segment = PartitionSpec(physical_axes_q[0], None)
+
     if prefix_lm is not None and prefix_lm.prefix_lengths is not None:
         if prefix_lm.prefix_mask is not None:
             raise NotImplementedError("Splash attention does not support prefix_lengths combined with prefix_mask.")
@@ -1083,6 +1118,8 @@ def _prepare_splash_prefix_controls(
     return _SplashPrefixControls(
         prefix_lengths=prefix_lengths,
         physical_axes_prefix_lengths=physical_axes_prefix_lengths,
+        prefix_lengths_per_segment=prefix_lengths_per_segment,
+        physical_axes_prefix_lengths_per_segment=physical_axes_prefix_lengths_per_segment,
         prefix_masks=prefix_masks,
         physical_axes_prefix_mask=physical_axes_prefix_mask,
     )
@@ -1298,7 +1335,37 @@ def _is_plain_causal_splash_mask(
         and mask.prefix_lm_spec is None
         and mask.explicit_mask is None
         and prefix_controls.prefix_lengths is None
+        and prefix_controls.prefix_lengths_per_segment is None
         and prefix_controls.prefix_masks is None
+    )
+
+
+def _can_use_packed_prefix_lm_segment_run_kernel(
+    *,
+    mask: Optional[Union[NamedArray, "AttentionMask"]],
+    prefix_controls: _SplashPrefixControls,
+    segment_run_controls: _SplashSegmentRunControls,
+    context: _SplashKernelContext,
+) -> bool:
+    if not isinstance(mask, AttentionMask):
+        return False
+    if context.q_seq_shards != 1:
+        return False
+    if context.q_seq_len != context.kv_seq_len:
+        return False
+    if segment_run_controls.segment_lengths is None or segment_run_controls.num_segments is None:
+        return False
+    prefix_lm = mask.prefix_lm_spec
+    return (
+        mask.is_causal
+        and mask.causal_offset is None
+        and mask.sliding_window is None
+        and mask.explicit_mask is None
+        and prefix_lm is not None
+        and prefix_lm.prefix_length is None
+        and prefix_lm.prefix_lengths is None
+        and prefix_lm.prefix_mask is None
+        and prefix_controls.prefix_lengths_per_segment is not None
     )
 
 
@@ -1347,6 +1414,44 @@ def _packed_causal_segment_run_kernel_plan(
         metadata_in_axes=(0, 0),
         metadata_builder=make_kernel,
         batch_spec=segment_run_controls.physical_axes_segment_lengths[0],
+        segment_id_lowering=lower_splash_segment_ids(),
+    )
+
+
+def _packed_prefix_lm_segment_run_kernel_plan(
+    *,
+    prefix_controls: _SplashPrefixControls,
+    segment_run_controls: _SplashSegmentRunControls,
+    context: _SplashKernelContext,
+) -> _SplashKernelPlan:
+    assert prefix_controls.prefix_lengths_per_segment is not None
+    assert prefix_controls.physical_axes_prefix_lengths_per_segment is not None
+    assert segment_run_controls.segment_lengths is not None
+    assert segment_run_controls.num_segments is not None
+
+    def make_kernel(prefix_lengths_per_segment, segment_lengths, num_segments):
+        metadata = packed_prefix_lm_segment_run_mask_infos(
+            prefix_lengths=prefix_lengths_per_segment,
+            segment_lengths=segment_lengths,
+            num_segments=num_segments,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
+            block_sizes=context.block_sizes,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+        )
+        return _splash_kernel_from_dynamic_metadata(metadata, context.block_sizes, context.logits_soft_cap)
+
+    return _dynamic_metadata_kernel_plan(
+        context=context,
+        metadata_values=(
+            prefix_controls.prefix_lengths_per_segment,
+            segment_run_controls.segment_lengths,
+            segment_run_controls.num_segments,
+        ),
+        metadata_in_axes=(0, 0, 0),
+        metadata_builder=make_kernel,
+        batch_spec=prefix_controls.physical_axes_prefix_lengths_per_segment[0],
         segment_id_lowering=lower_splash_segment_ids(),
     )
 
@@ -1465,6 +1570,21 @@ def _splash_kernel_plan(
     context: _SplashKernelContext,
     mesh,
 ) -> _SplashKernelPlan:
+    if _can_use_packed_prefix_lm_segment_run_kernel(
+        mask=mask,
+        prefix_controls=prefix_controls,
+        segment_run_controls=segment_run_controls,
+        context=context,
+    ):
+        return _packed_prefix_lm_segment_run_kernel_plan(
+            prefix_controls=prefix_controls,
+            segment_run_controls=segment_run_controls,
+            context=context,
+        )
+
+    if prefix_controls.prefix_lengths_per_segment is not None:
+        raise NotImplementedError("Splash attention could not use the packed prefix-LM segment-run fast path.")
+
     if prefix_controls.prefix_masks is not None:
         assert prefix_controls.physical_axes_prefix_mask is not None
         return _packed_prefix_kernel_plan(

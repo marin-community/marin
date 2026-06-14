@@ -20,6 +20,7 @@ _BENCH_SPEC.loader.exec_module(bench_splash_attention_masks)
 BenchShape = bench_splash_attention_masks.BenchShape
 _doc_length_batches = bench_splash_attention_masks._doc_length_batches
 _doc_lengths = bench_splash_attention_masks._doc_lengths
+_packed_prefix_lengths_per_segment = bench_splash_attention_masks._packed_prefix_lengths_per_segment
 _packed_prefix_mask = bench_splash_attention_masks._packed_prefix_mask
 _packed_segment_ids = bench_splash_attention_masks._packed_segment_ids
 _parse_doc_length_batches = bench_splash_attention_masks._parse_doc_length_batches
@@ -67,6 +68,13 @@ def test_packed_doc_profiles_feed_segment_run_metadata(profile, expected_lengths
     assert (metadata.segment_lengths.array[0] == jnp.asarray(expected_lengths)).all()
     assert (prefix_mask.array[:, : min(shape.prefix_tokens_per_doc, expected_lengths[0])]).all()
     assert (segment_run_mask.materialize(Pos, KPos).array == segment_id_mask.materialize(Pos, KPos).array).all()
+
+    prefix_lengths_per_segment = _packed_prefix_lengths_per_segment(shape, Batch, metadata.segment_lengths.axes[-1])
+    packed_prefix_mask = AttentionMask.prefix_lm(prefix_mask=prefix_mask, segment_ids=(segment_ids.q, segment_ids.kv))
+    segment_run_prefix_mask = segment_run_mask.with_prefix_lengths_per_segment(prefix_lengths_per_segment)
+    assert (
+        segment_run_prefix_mask.materialize(Pos, KPos).array == packed_prefix_mask.materialize(Pos, KPos).array
+    ).all()
 
 
 def test_explicit_doc_lengths_override_profile_and_docs_per_sequence():
@@ -136,6 +144,13 @@ def test_explicit_doc_lengths_can_vary_by_batch():
     assert int(metadata.num_segments.array[1]) == 4
     assert (prefix_mask.array[0, :5]).all()
     assert (prefix_mask.array[1, :8]).all()
+
+    prefix_lengths_per_segment = _packed_prefix_lengths_per_segment(shape, Batch, metadata.segment_lengths.axes[-1])
+    packed_prefix_mask = AttentionMask.prefix_lm(prefix_mask=prefix_mask, segment_ids=(segment_ids.q, segment_ids.kv))
+    segment_run_prefix_mask = segment_run_mask.with_prefix_lengths_per_segment(prefix_lengths_per_segment)
+    assert (
+        segment_run_prefix_mask.materialize(Pos, KPos).array == packed_prefix_mask.materialize(Pos, KPos).array
+    ).all()
 
 
 def test_parse_doc_lengths_supports_per_batch_layouts():

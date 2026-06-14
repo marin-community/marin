@@ -285,6 +285,88 @@ def packed_prefix_lm_block_mask_blocks(
     return mask_inputs.same_segment & (causal_or_prefix | prefix)
 
 
+def packed_prefix_lm_segment_run_mask_infos(
+    *,
+    prefix_lengths: jax.Array,
+    segment_lengths: jax.Array,
+    num_segments: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_sizes: splash_attention_kernel.BlockSizes,
+    head_shards: int = 1,
+    q_seq_shards: int = 1,
+) -> SplashDynamicMaskMetadata:
+    """Build packed prefix-LM metadata from contiguous segment lengths and per-segment prefix lengths."""
+    if q_seq_len != kv_seq_len:
+        raise NotImplementedError("Segment-run Splash metadata currently supports self-attention only.")
+    context = _packed_dynamic_mask_context(
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        block_sizes=block_sizes,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+        caller="packed_prefix_lm_segment_run_mask_infos",
+    )
+
+    prefix_lengths = jnp.asarray(prefix_lengths, dtype=jnp.int32)
+    segment_lengths = jnp.asarray(segment_lengths, dtype=jnp.int32)
+    if prefix_lengths.ndim != 1:
+        raise ValueError(f"prefix_lengths must be rank 1 after batching, got shape {prefix_lengths.shape}.")
+    if segment_lengths.ndim != 1:
+        raise ValueError(f"segment_lengths must be rank 1 after batching, got shape {segment_lengths.shape}.")
+    if prefix_lengths.shape != segment_lengths.shape:
+        raise ValueError(
+            f"prefix_lengths shape {prefix_lengths.shape} must match segment_lengths shape {segment_lengths.shape}."
+        )
+
+    max_segments = segment_lengths.shape[0]
+    partial_capacities = _segment_run_partial_capacities(
+        q_seq_len=context.q_seq_len,
+        kv_seq_len=context.kv_seq_len,
+        block_sizes=context.block_sizes,
+        max_segments=max_segments,
+    )
+
+    return SplashDynamicMaskMetadata(
+        fwd_mask_info=_segment_run_prefix_lm_dynamic_mask_info(
+            prefix_lengths=prefix_lengths,
+            segment_lengths=segment_lengths,
+            num_segments=num_segments,
+            seq_len=context.q_seq_len,
+            block_q=context.block_sizes.block_q,
+            block_kv=context.block_sizes.block_kv,
+            role=_DynamicMaskInfoRole.FWD_OR_DQ,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+            partial_capacity=partial_capacities.fwd,
+        ),
+        dq_mask_info=_segment_run_prefix_lm_dynamic_mask_info(
+            prefix_lengths=prefix_lengths,
+            segment_lengths=segment_lengths,
+            num_segments=num_segments,
+            seq_len=context.q_seq_len,
+            block_q=_required_block_size(context.block_sizes.block_q_dq, "block_q_dq"),
+            block_kv=_required_block_size(context.block_sizes.block_kv_dq, "block_kv_dq"),
+            role=_DynamicMaskInfoRole.FWD_OR_DQ,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+            partial_capacity=partial_capacities.dq,
+        ),
+        dkv_mask_info=_segment_run_prefix_lm_dynamic_mask_info(
+            prefix_lengths=prefix_lengths,
+            segment_lengths=segment_lengths,
+            num_segments=num_segments,
+            seq_len=context.q_seq_len,
+            block_q=_required_block_size(context.block_sizes.block_q_dkv, "block_q_dkv"),
+            block_kv=_required_block_size(context.block_sizes.block_kv_dkv, "block_kv_dkv"),
+            role=_DynamicMaskInfoRole.DKV,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+            partial_capacity=partial_capacities.dkv,
+        ),
+    )
+
+
 def packed_causal_segment_block_mask_blocks(
     *,
     q_segment_ids: jax.Array,
@@ -697,6 +779,77 @@ def _segment_run_dynamic_mask_info(
     )
 
 
+def _segment_run_prefix_lm_dynamic_mask_info(
+    *,
+    prefix_lengths: jax.Array,
+    segment_lengths: jax.Array,
+    num_segments: jax.Array,
+    seq_len: int,
+    block_q: int,
+    block_kv: int,
+    role: _DynamicMaskInfoRole,
+    head_shards: int,
+    q_seq_shards: int,
+    partial_capacity: int,
+) -> splash_attention_mask_info.MaskInfo:
+    if head_shards != 1:
+        raise NotImplementedError("Packed dynamic Splash metadata with shared heads currently requires head_shards=1.")
+    if seq_len % block_q != 0:
+        raise ValueError(f"block_q={block_q} must divide seq_len={seq_len}.")
+    if seq_len % block_kv != 0:
+        raise ValueError(f"block_kv={block_kv} must divide seq_len={seq_len}.")
+
+    q_blocks = seq_len // block_q
+    kv_blocks = seq_len // block_kv
+    if q_blocks % q_seq_shards != 0:
+        raise ValueError(f"q_seq_shards={q_seq_shards} must divide q block count {q_blocks}.")
+
+    boundaries = _segment_run_boundaries(
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        seq_len=seq_len,
+    )
+    block_mask = _segment_run_prefix_lm_block_mask(
+        active=boundaries.active,
+        segment_starts=boundaries.starts,
+        segment_ends=boundaries.ends,
+        prefix_lengths=jnp.minimum(prefix_lengths, segment_lengths),
+        q_blocks=q_blocks,
+        kv_blocks=kv_blocks,
+        block_q=block_q,
+        block_kv=block_kv,
+    )
+    partial_indexing = _partial_block_indexing(block_mask, q_blocks=q_blocks, kv_blocks=kv_blocks)
+
+    compact_mask_blocks = _segment_run_prefix_lm_partial_mask_blocks(
+        prefix_lengths=prefix_lengths,
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        seq_len=seq_len,
+        kv_blocks=kv_blocks,
+        block_q=block_q,
+        block_kv=block_kv,
+        is_partial=partial_indexing.is_partial,
+        num_partial=partial_indexing.num_partial,
+        partial_capacity=partial_capacity,
+    )
+    compact_mask_blocks = eqx.error_if(
+        compact_mask_blocks,
+        partial_indexing.num_partial > partial_capacity,
+        PARTIAL_BLOCK_CAPACITY_ERROR,
+    )
+
+    return _packed_dynamic_mask_info_from_components(
+        block_mask=block_mask,
+        compact_mask_blocks=compact_mask_blocks,
+        mask_next=partial_indexing.mask_next,
+        q_blocks=q_blocks,
+        kv_blocks=kv_blocks,
+        role=role,
+        partial_capacity=partial_capacity,
+    )
+
+
 def _segment_run_boundaries(
     *,
     segment_lengths: jax.Array,
@@ -751,6 +904,48 @@ def _segment_run_block_mask(
     return block_mask[None, :, :].astype(jnp.int32)
 
 
+def _segment_run_prefix_lm_block_mask(
+    *,
+    active: jax.Array,
+    segment_starts: jax.Array,
+    segment_ends: jax.Array,
+    prefix_lengths: jax.Array,
+    q_blocks: int,
+    kv_blocks: int,
+    block_q: int,
+    block_kv: int,
+) -> jax.Array:
+    q_start = (jnp.arange(q_blocks, dtype=jnp.int32) * block_q)[:, None, None]
+    q_end = q_start + block_q - 1
+    kv_start = (jnp.arange(kv_blocks, dtype=jnp.int32) * block_kv)[None, :, None]
+    kv_end = kv_start + block_kv - 1
+    segment_start = segment_starts[None, None, :]
+    segment_end = segment_ends[None, None, :] - 1
+    prefix_end = segment_start + prefix_lengths[None, None, :]
+    active = active[None, None, :]
+
+    q_overlap_start = jnp.maximum(q_start, segment_start)
+    q_overlap_end = jnp.minimum(q_end, segment_end)
+    kv_overlap_start = jnp.maximum(kv_start, segment_start)
+    kv_overlap_end = jnp.minimum(kv_end, segment_end)
+
+    q_intersects = q_overlap_start <= q_overlap_end
+    kv_intersects = kv_overlap_start <= kv_overlap_end
+    causal_non_empty = kv_overlap_start <= q_overlap_end
+    prefix_non_empty = kv_overlap_start < prefix_end
+    non_empty = active & q_intersects & kv_intersects & (causal_non_empty | prefix_non_empty)
+
+    same_segment_block = (
+        (q_start >= segment_start) & (q_end <= segment_end) & (kv_start >= segment_start) & (kv_end <= segment_end)
+    )
+    full = active & same_segment_block & ((kv_end <= q_start) | (kv_end < prefix_end))
+
+    any_non_empty = jnp.any(non_empty, axis=-1)
+    any_full = jnp.any(full, axis=-1)
+    block_mask = jnp.where(any_full, BLOCK_MASK_FULL, jnp.where(any_non_empty, BLOCK_MASK_PARTIAL, BLOCK_MASK_EMPTY))
+    return block_mask[None, :, :].astype(jnp.int32)
+
+
 def _segment_run_partial_mask_blocks(
     *,
     segment_lengths: jax.Array,
@@ -778,6 +973,46 @@ def _segment_run_partial_mask_blocks(
     kv_segment_ids = segment_ids[kv_positions]
     compact_blocks = (q_segment_ids[:, :, None] == kv_segment_ids[:, None, :]) & (
         kv_positions[:, None, :] <= q_positions[:, :, None]
+    )
+    valid_slots = jnp.arange(partial_capacity, dtype=jnp.int32) < num_partial
+    return jnp.where(valid_slots[:, None, None], compact_blocks, False)
+
+
+def _segment_run_prefix_lm_partial_mask_blocks(
+    *,
+    prefix_lengths: jax.Array,
+    segment_lengths: jax.Array,
+    num_segments: jax.Array,
+    seq_len: int,
+    kv_blocks: int,
+    block_q: int,
+    block_kv: int,
+    is_partial: jax.Array,
+    num_partial: jax.Array,
+    partial_capacity: int,
+) -> jax.Array:
+    partial_flat_indices = jnp.nonzero(is_partial, size=partial_capacity, fill_value=0)[0]
+    q_block_ids = partial_flat_indices // kv_blocks
+    kv_block_ids = partial_flat_indices % kv_blocks
+
+    q_positions = q_block_ids[:, None] * block_q + jnp.arange(block_q, dtype=jnp.int32)[None, :]
+    kv_positions = kv_block_ids[:, None] * block_kv + jnp.arange(block_kv, dtype=jnp.int32)[None, :]
+    segment_ids = _segment_ids_from_lengths(
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        seq_len=seq_len,
+    )
+    q_segment_ids = segment_ids[q_positions]
+    kv_segment_ids = segment_ids[kv_positions]
+    boundaries = _segment_run_boundaries(
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        seq_len=seq_len,
+    )
+    prefix_ends = boundaries.starts + jnp.minimum(prefix_lengths, segment_lengths)
+    kv_prefix_ends = prefix_ends[kv_segment_ids]
+    compact_blocks = (q_segment_ids[:, :, None] == kv_segment_ids[:, None, :]) & (
+        (kv_positions[:, None, :] <= q_positions[:, :, None]) | (kv_positions[:, None, :] < kv_prefix_ends[:, None, :])
     )
     valid_slots = jnp.arange(partial_capacity, dtype=jnp.int32) < num_partial
     return jnp.where(valid_slots[:, None, None], compact_blocks, False)

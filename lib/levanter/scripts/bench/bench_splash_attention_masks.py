@@ -168,19 +168,24 @@ def run_benchmarks(
     v = hax.random.normal(value_rng, (Batch, KPos, Heads, Key)).astype(shape.dtype) * INPUT_SCALE
 
     segment_ids = _packed_segment_ids(shape, Batch, Pos, KPos)
-    prefix_mask = _packed_prefix_mask(shape, Batch, Pos)
+    packed_segment_run_mask = AttentionMask.causal().with_segment_runs(
+        segment_ids.q,
+        kv_segment_ids=segment_ids.kv,
+        max_segments=shape.docs_per_sequence,
+    )
+    assert packed_segment_run_mask.segment_run_metadata is not None
+    prefix_lengths_per_segment = _packed_prefix_lengths_per_segment(
+        shape,
+        Batch,
+        packed_segment_run_mask.segment_run_metadata.segment_lengths.axes[-1],
+    )
     masks = {
         STATIC_CAUSAL_SPLASH_VARIANT: AttentionMask.causal(),
         STATIC_PREFIX_LM_SPLASH_VARIANT: AttentionMask.prefix_lm(prefix_length=shape.prefix_tokens_per_doc),
         PACKED_CAUSAL_SEGMENT_SPLASH_VARIANT: AttentionMask.causal(segment_ids=(segment_ids.q, segment_ids.kv)),
-        PACKED_CAUSAL_SEGMENT_RUNS_SPLASH_VARIANT: AttentionMask.causal().with_segment_runs(
-            segment_ids.q,
-            kv_segment_ids=segment_ids.kv,
-            max_segments=shape.docs_per_sequence,
-        ),
-        PACKED_PREFIX_LM_SPLASH_VARIANT: AttentionMask.prefix_lm(
-            prefix_mask=prefix_mask,
-            segment_ids=(segment_ids.q, segment_ids.kv),
+        PACKED_CAUSAL_SEGMENT_RUNS_SPLASH_VARIANT: packed_segment_run_mask,
+        PACKED_PREFIX_LM_SPLASH_VARIANT: packed_segment_run_mask.with_prefix_lengths_per_segment(
+            prefix_lengths_per_segment
         ),
     }
 
@@ -572,6 +577,25 @@ def _packed_prefix_mask(shape: BenchShape, Batch: hax.Axis, Pos: hax.Axis) -> ha
         axis=0,
     )
     return hax.named(prefix, (Batch, Pos))
+
+
+def _packed_prefix_lengths_per_segment(
+    shape: BenchShape,
+    Batch: hax.Axis,
+    SegmentRun: hax.Axis,
+) -> hax.NamedArray:
+    prefix_lengths = jnp.stack(
+        [
+            jnp.asarray(
+                [min(shape.prefix_tokens_per_doc, doc_len) for doc_len in doc_lengths]
+                + [0] * (SegmentRun.size - len(doc_lengths)),
+                dtype=jnp.int32,
+            )
+            for doc_lengths in _doc_length_batches(shape)
+        ],
+        axis=0,
+    )
+    return hax.named(prefix_lengths, (Batch, SegmentRun))
 
 
 def _doc_lengths(shape: BenchShape) -> tuple[int, ...]:

@@ -171,6 +171,32 @@ def test_prefix_lm_mask_materializes_packed_prefix_mask_with_segment_ids():
     np.testing.assert_array_equal(np.asarray(mat.array), expected)
 
 
+def test_prefix_lm_mask_materializes_segment_run_prefix_lengths_with_segment_ids():
+    Pos = hax.Axis("pos", 8)
+    KeyPos = Pos.alias("key_pos")
+    segment_ids = hax.named(jnp.array([0, 0, 0, 1, 1, 1, 1, 2], dtype=jnp.int32), Pos)
+    kv_segment_ids = hax.named(segment_ids.array, KeyPos)
+    prefix_mask = hax.named(jnp.array([True, True, False, True, False, False, False, False]), Pos)
+    generic_mask = AttentionMask.prefix_lm(prefix_mask=prefix_mask, segment_ids=(segment_ids, kv_segment_ids))
+
+    structured_mask = AttentionMask.causal().with_segment_runs(
+        segment_ids,
+        kv_segment_ids=kv_segment_ids,
+        max_segments=3,
+    )
+    assert structured_mask.segment_run_metadata is not None
+    prefix_lengths_per_segment = hax.named(
+        jnp.array([2, 1, 0], dtype=jnp.int32),
+        structured_mask.segment_run_metadata.segment_lengths.axes,
+    )
+    structured_mask = structured_mask.with_prefix_lengths_per_segment(prefix_lengths_per_segment)
+
+    np.testing.assert_array_equal(
+        np.asarray(structured_mask.materialize(Pos, KeyPos).array),
+        np.asarray(generic_mask.materialize(Pos, KeyPos).array),
+    )
+
+
 def test_attention_sink():
     Pos = hax.Axis("position", 2)
     KeyPos = Pos.alias("key_pos")
@@ -710,6 +736,21 @@ def _packed_prefix_lm_with_prefix_mask(case: _TpuSplashMaskCase) -> AttentionMas
     )
 
 
+def _packed_prefix_lm_with_segment_runs_mask(case: _TpuSplashMaskCase) -> AttentionMask:
+    segment_ids = _packed_segment_ids_for_splash_case(case)
+    mask = AttentionMask.causal().with_segment_runs(
+        segment_ids.q,
+        kv_segment_ids=segment_ids.kv,
+        max_segments=2,
+    )
+    assert mask.segment_run_metadata is not None
+    prefix_lengths_per_segment = hax.named(
+        jnp.array([[64, 96], [96, 64]], dtype=jnp.int32),
+        mask.segment_run_metadata.segment_lengths.axes,
+    )
+    return mask.with_prefix_lengths_per_segment(prefix_lengths_per_segment)
+
+
 def _packed_causal_segment_ids_mask(case: _TpuSplashMaskCase) -> AttentionMask:
     segment_ids = _packed_segment_ids_for_splash_case(case)
     return AttentionMask.causal(segment_ids=(segment_ids.q, segment_ids.kv))
@@ -730,6 +771,7 @@ def _packed_causal_segment_runs_mask(case: _TpuSplashMaskCase) -> AttentionMask:
         (_dynamic_prefix_lm_mask, 10),
         (_dynamic_prefix_lm_with_segment_ids_mask, 20),
         (_packed_prefix_lm_with_prefix_mask, 23),
+        (_packed_prefix_lm_with_segment_runs_mask, 24),
         (_packed_causal_segment_ids_mask, 26),
         (_packed_causal_segment_runs_mask, 28),
     ],
@@ -737,6 +779,7 @@ def _packed_causal_segment_runs_mask(case: _TpuSplashMaskCase) -> AttentionMask:
         "dynamic-prefix-lm",
         "dynamic-prefix-lm-segment-ids",
         "packed-prefix-lm-prefix-mask",
+        "packed-prefix-lm-segment-runs",
         "packed-causal-segment-ids",
         "packed-causal-segment-runs",
     ],
