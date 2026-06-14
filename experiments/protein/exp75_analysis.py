@@ -63,6 +63,42 @@ TAG_KEYS = ["epochs", "lr", "wd", "params_exact", "tokens_exact", "tpu", "band"]
 # Stable, colorblind-friendly color per epoch rung.
 EPOCH_COLORS = {1: "#4C72B0", 2: "#DD8452", 4: "#55A868", 8: "#C44E52"}
 
+# Val-loss values above this are uninteresting (mostly early/in-progress runs); the y-axis
+# tops out here and any higher point is pinned to the line and drawn as an up-triangle (^)
+# to signal "actually higher", so a few bad runs don't compress the scale for everything else.
+CLIP_HIGH = 3.18
+
+
+def _scatter_clipped(ax, sub, *, size, edgewidth, zorder, alpha=1.0, color, label=None):
+    """Scatter ``sub`` (rows with completed_dt/val_loss), pinning val_loss > CLIP_HIGH to the
+    clip line as up-triangles. The circle layer always carries ``label`` so the legend entry
+    survives even when every point of a group is clipped."""
+    below = sub[sub["val_loss"] <= CLIP_HIGH]
+    above = sub[sub["val_loss"] > CLIP_HIGH]
+    ax.scatter(
+        below["completed_dt"],
+        below["val_loss"],
+        s=size,
+        color=color,
+        edgecolor="white",
+        linewidth=edgewidth,
+        alpha=alpha,
+        zorder=zorder,
+        label=label,
+    )
+    if not above.empty:
+        ax.scatter(
+            above["completed_dt"],
+            [CLIP_HIGH] * len(above),
+            s=size * 1.25,
+            marker="^",
+            color=color,
+            edgecolor="white",
+            linewidth=edgewidth,
+            alpha=alpha,
+            zorder=zorder,
+        )
+
 
 def _iso_to_unix(iso: str | None) -> float | None:
     if not iso:
@@ -156,6 +192,11 @@ def plot(df: pd.DataFrame, version: str, baseline: dict | None = None) -> None:
     done["completed_dt"] = pd.to_datetime(done["completed_at"], utc=True)
     done = done.sort_values("completed_dt").reset_index(drop=True)
 
+    # In-progress runs: plotted at their last-heartbeat time with current (partial) val loss.
+    # Shown faint and kept out of the best-so-far frontier / best annotation — not yet meaningful.
+    running = df[(df["state"] == "running") & df["val_loss"].notna() & df["completed_at"].notna()].copy()
+    running["completed_dt"] = pd.to_datetime(running["completed_at"], utc=True)
+
     plt.rcParams.update(
         {
             "font.size": 11,
@@ -176,14 +217,13 @@ def plot(df: pd.DataFrame, version: str, baseline: dict | None = None) -> None:
     else:
         for ep in sorted(done["epochs"].dropna().unique()):
             sub = done[done["epochs"] == ep]
-            ax.scatter(
-                sub["completed_dt"],
-                sub["val_loss"],
-                s=95,
-                color=EPOCH_COLORS.get(int(ep), "#8c8c8c"),
-                edgecolor="white",
-                linewidth=1.3,
+            _scatter_clipped(
+                ax,
+                sub,
+                size=95,
+                edgewidth=1.3,
                 zorder=3,
+                color=EPOCH_COLORS.get(int(ep), "#8c8c8c"),
                 label=f"{int(ep)} epoch" + ("" if ep == 1 else "s"),
             )
 
@@ -209,7 +249,7 @@ def plot(df: pd.DataFrame, version: str, baseline: dict | None = None) -> None:
             f"best  {best['val_loss']:.4f}\nlr={best['lr']:.2e}\nwd={best['wd']:.2e}\n{int(best['epochs'])} epochs",
             (best["completed_dt"], best["val_loss"]),
             textcoords="offset points",
-            xytext=(46, 54),
+            xytext=(74, 54),
             fontsize=10,
             bbox=dict(boxstyle="round,pad=0.35", fc="#fff7e0", ec="#b5172f", alpha=0.95),
             arrowprops=dict(arrowstyle="->", color="#b5172f", lw=1.4),
@@ -218,6 +258,21 @@ def plot(df: pd.DataFrame, version: str, baseline: dict | None = None) -> None:
         loc = mdates.AutoDateLocator()
         ax.xaxis.set_major_locator(loc)
         ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(loc, tz=timezone.utc))
+
+    if not running.empty:
+        for ep in sorted(running["epochs"].dropna().unique()):
+            sub = running[running["epochs"] == ep]
+            _scatter_clipped(
+                ax, sub, size=70, edgewidth=0.8, zorder=2.2, alpha=0.22, color=EPOCH_COLORS.get(int(ep), "#8c8c8c")
+            )
+        # Single grey proxy so the legend explains the faint points without per-epoch duplicates.
+        ax.scatter([], [], s=70, color="#8c8c8c", edgecolor="white", alpha=0.45, label=f"in progress ({len(running)})")
+
+    # Clip line + a triangle proxy so the up-triangles read as "value is above the cap".
+    if (df["val_loss"] > CLIP_HIGH).any():
+        ax.axhline(CLIP_HIGH, color="#cccccc", lw=0.9, zorder=1)
+        ax.scatter([], [], marker="^", s=80, color="#8c8c8c", edgecolor="white", label=f"≥ {CLIP_HIGH:.2f} (clipped)")
+        ax.set_ylim(top=CLIP_HIGH + 0.012)
 
     if baseline and baseline.get("val_loss") is not None:
         bl = baseline["val_loss"]
@@ -246,7 +301,16 @@ def plot(df: pd.DataFrame, version: str, baseline: dict | None = None) -> None:
     n_done = 0 if done.empty else len(done)
     ax.set_title(f"exp75 {version} — final val loss by completion time   ({n_done} completed runs)")
     ax.grid(True, which="major", axis="both", alpha=0.3)
-    ax.legend(frameon=True, framealpha=0.92, loc="upper right", edgecolor="#dddddd")
+    # Placed just outside the axes (top-right) so it never overlaps the in-progress dots;
+    # savefig(bbox_inches="tight") expands the export to include it.
+    ax.legend(
+        frameon=True,
+        framealpha=0.92,
+        loc="upper left",
+        bbox_to_anchor=(1.01, 1.0),
+        borderaxespad=0,
+        edgecolor="#dddddd",
+    )
     fig.tight_layout()
 
     outdir = RESULTS_DIR / version
