@@ -421,12 +421,24 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         @jax.jit
         def _init_state(model_rng):
-            return initial_state(
+            s = initial_state(
                 config.model,
                 optimizer=optimizer,
                 mp=trainer.mp,
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
+            )
+            # Pin the INIT state to the same row-major layout that train_step pins its OUTPUT to.
+            # _init_state is jitted with free output layout, so XLA otherwise materializes the SOAP
+            # expert opt_state (exp_avg / gg / esi) in its natural transposed layout. That layout then
+            # differs from train_step's forced row-major output -> the donated input buffers can't alias
+            # the outputs -> "donated buffers were not usable". Constraining BOTH sides to row-major makes
+            # input layout == output layout so donation aliases in-place. Pure layout (values unchanged).
+            return dataclasses.replace(
+                s,
+                params=_constrain_std_layout(s.params),
+                opt_state=_constrain_std_layout(s.opt_state),
+                ema_params=_constrain_std_layout(s.ema_params) if s.ema_params is not None else None,
             )
 
         state = _init_state(model_key)
