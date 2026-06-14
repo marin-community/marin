@@ -19,9 +19,13 @@ Usage::
 Outputs (gitignored) under ``experiments/protein/exp75_results/<version>/``:
 
     exp75_runs.csv               every run of the sweep version, any state (one row each)
+    baseline.json                snapshot of the 1.5B unmasked baseline run's current
+                                 ``eval/contacts-v1-val/loss`` and step (that run is still
+                                 training, so the value/step move until it finishes)
     loss_vs_completion.{png,svg} final ``eval/contacts-v1-val/loss`` vs run completion
                                  time, colored by epoch, with the best-so-far frontier
-                                 traced. COMPLETED runs only (may loosen later).
+                                 traced and the 1.5B baseline drawn as a horizontal line.
+                                 COMPLETED runs only (may loosen later).
 
 The CSV carries ``run_progress``, ``tokens_exact``, ``params_exact``, ``epochs``,
 ``lr`` and ``wd`` (epochs/lr/wd/*_exact lifted from W&B tags) so other analyses can
@@ -31,6 +35,7 @@ reuse it without re-querying.
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,6 +51,11 @@ PROJECT = "marin"
 GROUP = "exp75-contacts-v1-tune"
 VAL_LOSS_KEY = "eval/contacts-v1-val/loss"
 RESULTS_DIR = Path(__file__).parent / "exp75_results"
+
+# 1.5B unmasked run on the same eval — the baseline exp75 is trying to beat. Lives in a
+# different entity/project and is still training, so we record its current step alongside
+# the value (the horizontal line is a moving target until that run finishes).
+BASELINE_RUN = "open-athena/MarinFold/protein-contacts-1_5b-3.5e-4-contacts-v1-unmasked-3b5cf2"
 
 # Tag keys lifted into their own CSV columns (see exp75_sweep.build_trial tags).
 TAG_KEYS = ["epochs", "lr", "wd", "params_exact", "tokens_exact", "tpu", "band"]
@@ -112,7 +122,35 @@ def load_or_refresh(version: str, refresh: bool) -> pd.DataFrame:
     return df
 
 
-def plot(df: pd.DataFrame, version: str) -> None:
+def fetch_baseline() -> dict:
+    """Current val loss + step of the 1.5B baseline run (still training, so a snapshot)."""
+    import wandb  # noqa: PLC0415 -- lazy: only --refresh touches W&B; plotting reads the JSON
+
+    api = wandb.Api()
+    run = api.run(BASELINE_RUN)
+    s = run.summary
+    return {
+        "name": run.name,
+        "state": run.state,
+        "val_loss": s.get(VAL_LOSS_KEY),
+        "step": s.get("_step"),
+    }
+
+
+def load_or_refresh_baseline(version: str, refresh: bool) -> dict | None:
+    path = RESULTS_DIR / version / "baseline.json"
+    if refresh or not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        baseline = fetch_baseline()
+        path.write_text(json.dumps(baseline, indent=2))
+        print(f"fetched baseline {baseline['name']} loss={baseline['val_loss']} step={baseline['step']} -> {path}")
+        return baseline
+    baseline = json.loads(path.read_text())
+    print(f"read baseline <- {path} (pass --refresh to re-fetch)")
+    return baseline
+
+
+def plot(df: pd.DataFrame, version: str, baseline: dict | None = None) -> None:
     """Final val loss vs run completion time, colored by epoch, best-so-far traced."""
     done = df[(df["state"] == "finished") & df["val_loss"].notna() & df["completed_at"].notna()].copy()
     done["completed_dt"] = pd.to_datetime(done["completed_at"], utc=True)
@@ -168,10 +206,10 @@ def plot(df: pd.DataFrame, version: str) -> None:
 
         best = done.loc[done["val_loss"].idxmin()]
         ax.annotate(
-            f"best  {best['val_loss']:.4f}\nlr={best['lr']:.2e}  wd={best['wd']:.2e}  {int(best['epochs'])}ep",
+            f"best  {best['val_loss']:.4f}\nlr={best['lr']:.2e}\nwd={best['wd']:.2e}\n{int(best['epochs'])} epochs",
             (best["completed_dt"], best["val_loss"]),
             textcoords="offset points",
-            xytext=(12, 16),
+            xytext=(46, 54),
             fontsize=10,
             bbox=dict(boxstyle="round,pad=0.35", fc="#fff7e0", ec="#b5172f", alpha=0.95),
             arrowprops=dict(arrowstyle="->", color="#b5172f", lw=1.4),
@@ -180,6 +218,28 @@ def plot(df: pd.DataFrame, version: str) -> None:
         loc = mdates.AutoDateLocator()
         ax.xaxis.set_major_locator(loc)
         ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(loc, tz=timezone.utc))
+
+    if baseline and baseline.get("val_loss") is not None:
+        bl = baseline["val_loss"]
+        step = baseline.get("step")
+        if step is None:
+            step_note = baseline.get("state", "")
+        else:
+            step_note = f"step {int(step):,}" + (", still running" if baseline.get("state") == "running" else "")
+        ax.axhline(bl, color="#555555", lw=1.6, ls=":", zorder=1.5)
+        # Detail sits above the line, flush to the y-axis (x in axes coords, y in data coords).
+        run_id = BASELINE_RUN.split("/")[-1]
+        label_tx = mpl.transforms.blended_transform_factory(ax.transAxes, ax.transData)
+        ax.text(
+            0.006,
+            bl,
+            f"1.5B baseline  {bl:.4f}  ({step_note})\n{run_id}",
+            transform=label_tx,
+            ha="left",
+            va="bottom",
+            fontsize=9.5,
+            color="#333333",
+        )
 
     ax.set_xlabel("run completion time (UTC)")
     ax.set_ylabel("final  eval/contacts-v1-val/loss")
@@ -204,7 +264,8 @@ def main() -> None:
     ap.add_argument("--version", default="v1", help="sweep version to analyze; partitions the output dir")
     args = ap.parse_args()
     df = load_or_refresh(args.version, args.refresh)
-    plot(df, args.version)
+    baseline = load_or_refresh_baseline(args.version, args.refresh)
+    plot(df, args.version, baseline)
 
 
 if __name__ == "__main__":
