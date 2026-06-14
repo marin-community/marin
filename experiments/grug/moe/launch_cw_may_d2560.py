@@ -197,7 +197,14 @@ def build_may_step() -> ExecutorStep:
     if batch_size % batch_shards != 0:
         raise ValueError(f"MAY_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
-    resources = ResourceConfig.with_gpu("H100", count=GPUS_PER_NODE, cpu=32, ram="256g", disk="256g", replicas=replicas)
+    resources = ResourceConfig.with_gpu(
+        "H100",
+        count=GPUS_PER_NODE,
+        cpu=env_int("MAY_CPU_PER_REPLICA", 32),
+        ram="256g",
+        disk="256g",
+        replicas=replicas,
+    )
     grug_trainer = GrugTrainerConfig(
         expert_axis_size=expert_axis,
         replica_axis_size=replica_axis,

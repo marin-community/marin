@@ -38,6 +38,7 @@ ENABLE_HLO_PROTO=true
 HOST_TRACER_LEVEL=1
 PYTHON_TRACER_LEVEL=0
 XLA_MEMORY_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.95}"
+WORKER_CPU=32
 
 usage() {
     cat <<'EOF'
@@ -52,6 +53,7 @@ Options:
   --cluster NAME            Iris cluster name (default: cw-us-east-02a).
   --kubeconfig PATH         Kubeconfig path (default: $KUBECONFIG or ~/.kube/coreweave-iris-gpu).
   --nodes N                 H100 node count / MAY_GPU_REPLICAS (default: 32).
+  --worker-cpu N            MAY_CPU_PER_REPLICA for each H100 worker pod (default: 32).
   --expert-axis N           MAY_EXPERT_AXIS (default: 8).
   --replica-axis N          MAY_REPLICA_AXIS (default: 1).
   --batch N                 MAY_BATCH (default: 256).
@@ -104,6 +106,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --nodes)
             GPU_REPLICAS="$2"
+            shift 2
+            ;;
+        --worker-cpu)
+            WORKER_CPU="$2"
             shift 2
             ;;
         --expert-axis)
@@ -211,6 +217,7 @@ ENV_ARGS=(
     -e AWS_ENDPOINT_URL "$AWS_ENDPOINT_URL"
     -e AWS_ENDPOINT_URL_S3 "$AWS_ENDPOINT_URL_S3"
     -e MAY_GPU_REPLICAS "$GPU_REPLICAS"
+    -e MAY_CPU_PER_REPLICA "$WORKER_CPU"
     -e MAY_EXPERT_AXIS "$EXPERT_AXIS"
     -e MAY_REPLICA_AXIS "$REPLICA_AXIS"
     -e MAY_BATCH "$BATCH"
@@ -255,6 +262,7 @@ kubeconfig: $KUBECONFIG
 prefix: $MARIN_PREFIX
 r2_endpoint: $AWS_ENDPOINT_URL
 nodes: $GPU_REPLICAS
+worker_cpu: $WORKER_CPU
 mesh axes: replica=$REPLICA_AXIS expert=$EXPERT_AXIS
 batch: $BATCH
 seq_len: $SEQ_LEN

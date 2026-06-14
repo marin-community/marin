@@ -155,7 +155,14 @@ def build_scale_step() -> ExecutorStep:
     if batch_size % batch_shards != 0:
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
-    resources = ResourceConfig.with_gpu("H100", count=GPUS_PER_NODE, cpu=32, ram="256g", disk="256g", replicas=replicas)
+    resources = ResourceConfig.with_gpu(
+        "H100",
+        count=GPUS_PER_NODE,
+        cpu=env_int("SCALE_CPU_PER_REPLICA", 32),
+        ram="256g",
+        disk="256g",
+        replicas=replicas,
+    )
 
     if os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb":
         tracker = WandbConfig(

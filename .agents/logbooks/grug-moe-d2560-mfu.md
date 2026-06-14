@@ -309,3 +309,18 @@
 - Result: dispatcher submitted successfully. Parent is `JOB_STATE_RUNNING`; child is `JOB_STATE_RUNNING` with 32 tasks in `building`, `failure_count=0`, and `preemption_count=0` as of 2026-06-14 15:24 PDT. Parent logs show the tokenized SlimPajama input step was skipped as already succeeded, the Grug training step lock was acquired, and the child Fray job was dispatched. The child had not emitted training logs yet at the latest poll.
 - Interpretation: this is not an MFU/profile candidate; it is a distributed-path minimizer. Its outcome will decide whether to immediately relaunch full d2560 from `ce06fd232` or keep minimizing the collective/clique path.
 - Next action: Hooke is babysitting the minimizer on a 10-minute heartbeat. If it reaches steps, launch the next full-shape candidate from `ce06fd232` with `--ce-implementation xla --live-param-mode param --xla-memory-fraction 0.95`; if it wedges with the same clique symptoms, minimize further before spending another full d2560 compile.
+
+### 2026-06-14 15:30 PDT - minimizer blocked by Kueue CPU admission, not JAX
+- Hypothesis: the minimizer's `building` state might be slow dependency setup, but Kubernetes can distinguish unadmitted pods from running init containers.
+- Command:
+  - `KUBECONFIG=$HOME/.kube/coreweave-iris-gpu kubectl get pods -n iris -o wide | rg -i 'NAME|gm2560-min|221814|grug-train'`
+  - `KUBECONFIG=$HOME/.kube/coreweave-iris-gpu kubectl describe pod -n iris iris-dlwh-iris-run-job-20260614-221814-grug-train-gm-030c618c-0`
+  - `KUBECONFIG=$HOME/.kube/coreweave-iris-gpu kubectl describe workload -n iris iris-pg-9e48e2f0ec8df97c-0`
+  - `uv run python -m py_compile experiments/grug/moe/launch_cw_scale.py experiments/grug/moe/launch_cw_may_d2560.py`
+  - `experiments/grug/moe/run_cw_scale.sh --run-id dry-run-worker-cpu --worker-cpu 8 --smoke`
+  - `experiments/grug/moe/run_cw_may_d2560.sh --run-id dry-run-worker-cpu --worker-cpu 8 --tracker json_logger --profiler-steps 0`
+  - `./infra/pre-commit.py --changed-files --fix`
+- Config: active minimizer still requests 32 CPU per H100 pod because `launch_cw_scale.py` hard-coded `cpu=32`. Local follow-up adds `SCALE_CPU_PER_REPLICA` and `MAY_CPU_PER_REPLICA`, exposed as `--worker-cpu` in both CoreWeave wrappers.
+- Result: all 32 minimizer child pods are `SchedulingGated`, not running init containers. The Kueue workload reports `couldn't assign flavors ... topology "infiniband" ... excluded: resource "cpu"` and at one point could fit only 14 of 32 pods. There is also unrelated Iris controller probe churn in the event tail, but the direct blocker for the child pod group is CPU admission. The CPU knob py_compile, wrapper dry-runs, and diff-scoped pre-commit passed.
+- Interpretation: GM2560-MIN-001 has not tested the clique path yet. The current job may admit if other pods release CPU, but a faster diagnostic is to relaunch the minimizer with a lower per-worker CPU request after explicit approval. The same knob will also help the next full d2560 candidate avoid admission stalls if CPU contention persists.
+- Next action: ask before stopping/relaunching GM2560-MIN-001. Recommended replacement is the same minimizer with `--worker-cpu 8` after committing/pushing the CPU-request knob.

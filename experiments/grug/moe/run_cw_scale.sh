@@ -18,6 +18,7 @@ MARIN_PREFIX="s3://marin-na/marin/"
 MODE="smoke"
 SUBMIT=false
 RUN_ID=""
+WORKER_CPU=32
 
 usage() {
     cat <<'EOF'
@@ -33,6 +34,7 @@ Options:
   --prefix URI          MARIN_PREFIX for outputs (default: s3://marin-na/marin/).
   --cluster NAME        Iris cluster name (default: cw-us-east-02a).
   --kubeconfig PATH     Kubeconfig path (default: $KUBECONFIG or ~/.kube/coreweave-iris-gpu).
+  --worker-cpu N        SCALE_CPU_PER_REPLICA for each H100 worker pod (default: 32).
   -h, --help            Show this help.
 
 Credential input:
@@ -77,6 +79,10 @@ while [ "$#" -gt 0 ]; do
             KUBECONFIG_PATH="$2"
             shift 2
             ;;
+        --worker-cpu)
+            WORKER_CPU="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -110,6 +116,7 @@ COMMON_ENV=(
     -e AWS_ENDPOINT_URL "$AWS_ENDPOINT_URL"
     -e AWS_ENDPOINT_URL_S3 "$AWS_ENDPOINT_URL_S3"
     -e SCALE_TRACKER json_logger
+    -e SCALE_CPU_PER_REPLICA "$WORKER_CPU"
 )
 
 SCALE_ENV=()
@@ -142,6 +149,7 @@ run_id: $RUN_ID
 kubeconfig: $KUBECONFIG
 prefix: $MARIN_PREFIX
 r2_endpoint: $AWS_ENDPOINT_URL
+worker_cpu: $WORKER_CPU
 
 Command shape:
   uv run --package marin-iris --extra controller iris --cluster=$CLUSTER job run --no-wait ... -- python -m experiments.grug.moe.launch_cw_scale
