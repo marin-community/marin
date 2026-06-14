@@ -94,11 +94,6 @@ def _scope_client_address(scope: Scope) -> str | None:
     return f"{client[0]}:{client[1]}"
 
 
-def _extract_token_from_scope(scope: Scope) -> str | None:
-    """Extract auth token from ASGI scope (cookie or Authorization header)."""
-    return extract_bearer_token(_scope_headers(scope))
-
-
 async def _enforce_http_auth(
     scope: Scope,
     receive: Receive,
