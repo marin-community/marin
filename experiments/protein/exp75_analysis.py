@@ -168,7 +168,7 @@ def plot(df: pd.DataFrame, version: str) -> None:
 
         best = done.loc[done["val_loss"].idxmin()]
         ax.annotate(
-            f"best  {best['val_loss']:.4f}\nlr={best['lr']:g}  wd={best['wd']:g}  {int(best['epochs'])}ep",
+            f"best  {best['val_loss']:.4f}\nlr={best['lr']:.2e}  wd={best['wd']:.2e}  {int(best['epochs'])}ep",
             (best["completed_dt"], best["val_loss"]),
             textcoords="offset points",
             xytext=(12, 16),
