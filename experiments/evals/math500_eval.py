@@ -26,11 +26,11 @@ import fsspec
 from marin.utils import fsspec_exists
 
 from fray.cluster import ResourceConfig
+from marin.execution.executor import executor_main
 from marin.execution.remote import remote
-from marin.execution.executor import (
+from marin.execution.types import (
     ExecutorStep,
     InputName,
-    executor_main,
     output_path_of,
     this_output_path,
 )

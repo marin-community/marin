@@ -46,6 +46,7 @@ def make_eval_step(
     model_path: str | InputName | MirroredValue,
     task: EvalTask,
     alg: CompletionAlgorithm,
+    skip_grades: bool = False,
 ) -> ExecutorStep:
     prompts = task.make_prompts_step()
     prompts_path = output_path_of(prompts) / PROMPTS_FILENAME
@@ -55,6 +56,9 @@ def make_eval_step(
         model_path=model_path,
         prompts_path=prompts_path,
     )
+
+    if skip_grades:
+        return completions
 
     return task.make_grade_step(
         name=f"{name}/grade",

@@ -54,6 +54,8 @@ TEMPERATURE = 0.4
 TOP_K = 16
 BARRIER_TIMEOUT_S = 600.0
 CHUNK_SIZE = 64
+TENSOR_PARALLEL_SIZE = 1
+DATA_PARALLEL_SIZE = 1
 
 DELPHI_SLUGS = ["1e22"]
 
@@ -74,6 +76,8 @@ class VllmGpuCompletionStepConfig:
     enable_prefix_caching: bool
     enforce_eager: bool
     chunk_size: int
+    tensor_parallel_size: int
+    data_parallel_size: int
 
 
 def run_vllm_gpu_completions(config: VllmGpuCompletionStepConfig) -> None:
@@ -86,21 +90,13 @@ def run_vllm_gpu_completions(config: VllmGpuCompletionStepConfig) -> None:
     llm = LLM(
         model=config.model_path,
         trust_remote_code=True,
-        tensor_parallel_size=1,
+        tensor_parallel_size=config.tensor_parallel_size,
+        data_parallel_size=config.data_parallel_size,
         max_model_len=config.max_model_len,
         gpu_memory_utilization=config.gpu_memory_utilization,
         enable_prefix_caching=config.enable_prefix_caching,
         enforce_eager=config.enforce_eager,
         seed=config.seed,
-    )
-    sampling_params = SamplingParams(
-        n=1,
-        max_tokens=config.max_tokens,
-        temperature=config.temperature,
-        top_k=config.top_k,
-        seed=config.seed,
-        stop=list(config.stop) if config.stop else None,
-        ignore_eos=False,
     )
 
     n_chunks = (len(flat) + config.chunk_size - 1) // config.chunk_size
@@ -115,8 +111,20 @@ def run_vllm_gpu_completions(config: VllmGpuCompletionStepConfig) -> None:
         end = min(start + config.chunk_size, len(flat))
         chunk_flat = flat[start:end]
         chunk_prompts = prompts[start:end]
+        chunk_sampling_params = [
+            SamplingParams(
+                n=1,
+                max_tokens=config.max_tokens,
+                temperature=config.temperature,
+                top_k=config.top_k,
+                seed=config.seed + request_index,
+                stop=list(config.stop) if config.stop else None,
+                ignore_eos=False,
+            )
+            for request_index in range(start, end)
+        ]
         t0 = time.monotonic()
-        outputs = llm.generate(chunk_prompts, sampling_params)
+        outputs = llm.generate(chunk_prompts, chunk_sampling_params)
         with fsspec.open(chunk_file, "wt", compression="gzip") as f:
             for (row, sample_index), output in zip(chunk_flat, outputs, strict=True):
                 completion = output.outputs[0]
@@ -159,6 +167,8 @@ class VllmGpuCompletionAlgorithm:
     enable_prefix_caching: bool = False
     enforce_eager: bool = True
     chunk_size: int = CHUNK_SIZE
+    tensor_parallel_size: int = TENSOR_PARALLEL_SIZE
+    data_parallel_size: int = DATA_PARALLEL_SIZE
 
     def make_completions_step(
         self,
@@ -185,6 +195,8 @@ class VllmGpuCompletionAlgorithm:
                 enable_prefix_caching=versioned(self.enable_prefix_caching),  # type: ignore[arg-type]
                 enforce_eager=versioned(self.enforce_eager),  # type: ignore[arg-type]
                 chunk_size=versioned(self.chunk_size),  # type: ignore[arg-type]
+                tensor_parallel_size=self.tensor_parallel_size,
+                data_parallel_size=self.data_parallel_size,
             ),
         )
 
