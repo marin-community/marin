@@ -56,6 +56,14 @@ class ThdSegmentMetadata(eqx.Module):
     num_segments: Int[Array, "..."]
 
 
+class Fa4CuteMetadata(eqx.Module):
+    """Precomputed packed metadata for FA4/CuTe segmented self-attention."""
+
+    lower_bounds: Int[Array, "B S"]
+    valid: Bool[Array, "B S"]
+    sliding_window: int | None = eqx.field(default=None, static=True)
+
+
 def thd_segment_metadata_from_segment_ids(
     segment_ids: Int[Array, "... S"],
     *,
@@ -104,6 +112,7 @@ class AttentionMask(eqx.Module):
     is_causal: bool = eqx.field(default=False, static=True)
     segment_ids: tuple[jax.Array, jax.Array] | None = None
     thd_segment_metadata: ThdSegmentMetadata | None = None
+    fa4_cute_metadata: Fa4CuteMetadata | None = None
     sliding_window: int | None = eqx.field(default=None, static=True)
 
     @classmethod
@@ -141,14 +150,19 @@ class AttentionMask(eqx.Module):
             is_causal=self.is_causal,
             segment_ids=(q_segment_ids, kv_ids),
             thd_segment_metadata=thd_segment_metadata,
+            fa4_cute_metadata=None,
             sliding_window=self.sliding_window,
         )
 
     def with_sliding_window(self, sliding_window: int | None) -> "AttentionMask":
+        fa4_cute_metadata = self.fa4_cute_metadata
+        if fa4_cute_metadata is not None and fa4_cute_metadata.sliding_window != sliding_window:
+            fa4_cute_metadata = None
         return AttentionMask(
             is_causal=self.is_causal,
             segment_ids=self.segment_ids,
             thd_segment_metadata=self.thd_segment_metadata,
+            fa4_cute_metadata=fa4_cute_metadata,
             sliding_window=sliding_window,
         )
 

@@ -10,8 +10,9 @@ from levanter.grug.attention import (
     AttentionMask,
     gpu_fa4_cute_attention,
     reference_attention,
+    with_fa4_cute_metadata,
 )
-from levanter.grug.attention._fa4_cute import _packed_self_attention_segment_ids
+from levanter.grug.attention._fa4_cute import _packed_segment_causal_lower_bounds, _packed_self_attention_segment_ids
 
 
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):
@@ -33,6 +34,26 @@ def test_fa4_frontend_uses_query_segment_ids_without_dynamic_equality_check():
     actual = _packed_self_attention_segment_ids(q, k, mask, backend_name="gpu_fa4_cute_attention")
 
     np.testing.assert_array_equal(actual, q_segment_ids)
+
+
+def test_fa4_cute_metadata_is_precomputed_per_sliding_window():
+    segment_ids = jnp.array([[7, 7, 8, 8, 8, -1]], dtype=jnp.int32)
+    mask = AttentionMask.causal(sliding_window=3).with_segment_ids(segment_ids)
+
+    mask = with_fa4_cute_metadata(mask, batch_size=1, seq_len=6)
+
+    assert mask.fa4_cute_metadata is not None
+    expected_lower_bounds, expected_valid = _packed_segment_causal_lower_bounds(
+        segment_ids,
+        batch_size=1,
+        seq_len=6,
+        sliding_window=3,
+    )
+    np.testing.assert_array_equal(mask.fa4_cute_metadata.lower_bounds, expected_lower_bounds)
+    np.testing.assert_array_equal(mask.fa4_cute_metadata.valid, expected_valid)
+
+    changed_window = mask.with_sliding_window(4)
+    assert changed_window.fa4_cute_metadata is None
 
 
 @pytest.mark.parametrize(("q_heads", "kv_heads"), [(4, 1), (2, 2)])

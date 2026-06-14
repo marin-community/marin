@@ -150,3 +150,16 @@
 - Result: GM2560-MFU-003 was stopped before any W&B history or profile artifact. GM2560-MFU-004 dispatcher submitted successfully.
 - Interpretation: GM2560-MFU-004 is now the active first-profile candidate; `compute_with_master` remains a follow-up A/B only after this profile shows parameter or optimizer overhead.
 - Next action: babysit GM2560-MFU-004 through startup, first metrics, and profile artifact upload.
+
+### 2026-06-13 23:33 PDT - FA4 packed metadata precompute follow-up
+- Hypothesis: the FA4/CuTe path still rebuilds packed causal `lower_bounds` and validity metadata inside every attention layer even though the short and long packed masks are shape-stable for a step; caching those arrays on the mask should remove repeated per-layer shape/index work without changing attention semantics.
+- Command:
+  - `uv run pytest lib/levanter/tests/grug/test_fa4_cute_attention.py::test_fa4_frontend_uses_query_segment_ids_without_dynamic_equality_check lib/levanter/tests/grug/test_fa4_cute_attention.py::test_fa4_cute_metadata_is_precomputed_per_sliding_window -q`
+  - `uv run pytest tests/test_grug_variant_contracts.py::test_grug_moe_may_recipe_attention_flags_lower tests/test_grug_variant_contracts.py::test_grug_moe_compute_live_params_one_step_lowers -q`
+  - `uv run python -m py_compile experiments/grug/moe/model.py lib/levanter/src/levanter/grug/attention/_core.py lib/levanter/src/levanter/grug/attention/_fa4_cute.py lib/levanter/src/levanter/grug/attention/__init__.py`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `uvx pyrefly@1.0.0 check --baseline .pyrefly-baseline.json`
+- Config: local code only; active GM2560-MFU-004 is still running source head `88dad4287` and does not include this metadata-cache follow-up.
+- Result: added `Fa4CuteMetadata`, cached the short/long packed FA4 metadata once per transformer call, and taught `gpu_fa4_cute_attention` to reuse it. Focused tests, py_compile, changed-file pre-commit, and Pyrefly passed. GM2560-MFU-004 remains healthy with 32/32 tasks running, zero failures/preemptions, current W&B heartbeat, and no scalar metrics or profile artifact yet.
+- Interpretation: this is the next low-risk relaunch candidate if GM2560-MFU-004 stalls or profiles compile/shape overhead in FA4 metadata construction. GM2560-MFU-004 logs still show `[SPMD] Involuntary full rematerialization` for `%fake_parameter.2 = bf16[1,4096,2560]` from `{devices=[256,1,1]}` to `{devices=[1,1,32,8] last_tile_dim_replicate}`, so the remaining compiler-visible issue is attention-input/projection sharding rather than the removed q/kv guard.
+- Next action: keep GM2560-MFU-004 running until it reaches metrics/profile or terminal failure; in parallel inspect the activation/projection sharding mismatch before launching any GM2560-MFU-005.

@@ -8,7 +8,7 @@ import jax
 from jax import numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
-from levanter.grug.attention._core import AttentionMask
+from levanter.grug.attention._core import AttentionMask, Fa4CuteMetadata
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
 from levanter.grug.attention._fa4_cute_config import flash4_cute_kernel_config
 
@@ -75,6 +75,36 @@ def _packed_segment_causal_lower_bounds(
     return jnp.where(valid, lower_bounds, seq_len), valid
 
 
+def _validate_packed_self_attention_mask(
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    backend_name: str,
+) -> AttentionMask:
+    if isinstance(mask, jax.Array):
+        raise NotImplementedError(f"{backend_name} does not support dense masks.")
+    if not isinstance(mask, AttentionMask) or mask.segment_ids is None:
+        raise NotImplementedError(f"{backend_name} currently requires packed segment_ids.")
+    if not mask.is_causal:
+        raise NotImplementedError(f"{backend_name} currently supports only causal packed self-attention.")
+    if mask.sliding_window is not None and mask.sliding_window <= 0:
+        raise ValueError(f"sliding_window must be positive, got {mask.sliding_window}")
+    return mask
+
+
+def _packed_self_attention_segment_ids_from_mask(
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    batch_size: int,
+    seq_len: int,
+    backend_name: str,
+) -> Int[Array, "B S"]:
+    mask = _validate_packed_self_attention_mask(mask, backend_name=backend_name)
+    segment_ids = mask.segment_ids
+    assert segment_ids is not None
+    q_segment_ids, _ = segment_ids
+    return _batched_segment_ids(q_segment_ids, batch_size=batch_size, seq_len=seq_len)
+
+
 def _packed_self_attention_segment_ids(
     q: jax.Array,
     k: jax.Array,
@@ -82,27 +112,56 @@ def _packed_self_attention_segment_ids(
     *,
     backend_name: str,
 ) -> Int[Array, "B S"]:
-    if isinstance(mask, jax.Array):
-        raise NotImplementedError(f"{backend_name} does not support dense masks.")
-    if not isinstance(mask, AttentionMask) or mask.segment_ids is None:
-        raise NotImplementedError(f"{backend_name} currently requires packed segment_ids.")
-    if not mask.is_causal:
-        raise NotImplementedError(f"{backend_name} currently supports only causal packed self-attention.")
-    if q.shape[0] != k.shape[0]:
-        raise NotImplementedError(f"{backend_name} requires matching q/kv batch sizes.")
-    if q.shape[1] != k.shape[1]:
-        raise NotImplementedError(f"{backend_name} requires self-attention q_len == k_len.")
-    if mask.sliding_window is not None and mask.sliding_window <= 0:
-        raise ValueError(f"sliding_window must be positive, got {mask.sliding_window}")
-
-    q_segment_ids, _ = mask.segment_ids
-    q_segment_ids = _batched_segment_ids(q_segment_ids, batch_size=q.shape[0], seq_len=q.shape[1])
-    return q_segment_ids
+    _validate_self_attention_shape(q, k, backend_name=backend_name)
+    return _packed_self_attention_segment_ids_from_mask(
+        mask,
+        batch_size=q.shape[0],
+        seq_len=q.shape[1],
+        backend_name=backend_name,
+    )
 
 
 def _validate_head_layout(q: jax.Array, k: jax.Array, *, backend_name: str) -> None:
     if q.shape[2] % k.shape[2] != 0:
         raise ValueError(f"{backend_name} requires Hq divisible by Hkv, got q={q.shape}, k={k.shape}")
+
+
+def _validate_self_attention_shape(q: jax.Array, k: jax.Array, *, backend_name: str) -> None:
+    if q.shape[0] != k.shape[0]:
+        raise NotImplementedError(f"{backend_name} requires matching q/kv batch sizes.")
+    if q.shape[1] != k.shape[1]:
+        raise NotImplementedError(f"{backend_name} requires self-attention q_len == k_len.")
+
+
+def with_fa4_cute_metadata(
+    mask: AttentionMask,
+    *,
+    batch_size: int,
+    seq_len: int,
+) -> AttentionMask:
+    q_segment_ids = _packed_self_attention_segment_ids_from_mask(
+        mask,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        backend_name="gpu_fa4_cute_attention",
+    )
+    lower_bounds, valid = _packed_segment_causal_lower_bounds(
+        q_segment_ids,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        sliding_window=mask.sliding_window,
+    )
+    return AttentionMask(
+        is_causal=mask.is_causal,
+        segment_ids=mask.segment_ids,
+        thd_segment_metadata=mask.thd_segment_metadata,
+        fa4_cute_metadata=Fa4CuteMetadata(
+            lower_bounds=lower_bounds,
+            valid=valid,
+            sliding_window=mask.sliding_window,
+        ),
+        sliding_window=mask.sliding_window,
+    )
 
 
 def _gpu_compute_arch() -> int:
@@ -144,14 +203,28 @@ def gpu_fa4_cute_attention(
         raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
 
     _validate_head_layout(q, k, backend_name="gpu_fa4_cute_attention")
-    q_segment_ids = _packed_self_attention_segment_ids(q, k, mask, backend_name="gpu_fa4_cute_attention")
-    assert isinstance(mask, AttentionMask)
-    lower_bounds, valid = _packed_segment_causal_lower_bounds(
-        q_segment_ids,
-        batch_size=q.shape[0],
-        seq_len=q.shape[1],
-        sliding_window=mask.sliding_window,
-    )
+    _validate_self_attention_shape(q, k, backend_name="gpu_fa4_cute_attention")
+    mask = _validate_packed_self_attention_mask(mask, backend_name="gpu_fa4_cute_attention")
+    if mask.fa4_cute_metadata is not None:
+        if (
+            mask.fa4_cute_metadata.lower_bounds.shape != q.shape[:2]
+            or mask.fa4_cute_metadata.valid.shape != q.shape[:2]
+        ):
+            raise ValueError(
+                "gpu_fa4_cute_attention metadata shape must match the q batch and sequence dimensions, "
+                f"got lower_bounds={mask.fa4_cute_metadata.lower_bounds.shape}, "
+                f"valid={mask.fa4_cute_metadata.valid.shape}, q={q.shape}"
+            )
+        lower_bounds = mask.fa4_cute_metadata.lower_bounds
+        valid = mask.fa4_cute_metadata.valid
+    else:
+        q_segment_ids = _packed_self_attention_segment_ids(q, k, mask, backend_name="gpu_fa4_cute_attention")
+        lower_bounds, valid = _packed_segment_causal_lower_bounds(
+            q_segment_ids,
+            batch_size=q.shape[0],
+            seq_len=q.shape[1],
+            sliding_window=mask.sliding_window,
+        )
     kernel_config = _segmented_kernel_config(q.shape[-1])
 
     return fa4_cute_attention_forward(
@@ -167,4 +240,5 @@ def gpu_fa4_cute_attention(
 
 __all__ = [
     "gpu_fa4_cute_attention",
+    "with_fa4_cute_metadata",
 ]

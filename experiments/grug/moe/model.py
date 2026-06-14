@@ -33,6 +33,7 @@ from levanter.grug.attention import (
     align_kv_heads,
     apply_rotary_embedding,
     attention,
+    with_fa4_cute_metadata,
 )
 from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
@@ -605,6 +606,10 @@ class Transformer(eqx.Module):
         if not isinstance(mask, AttentionMask):
             mask = AttentionMask.causal()
         short_mask, long_mask = _layer_attention_masks(mask, sliding_window=cfg.sliding_window)
+        if cfg.attention_implementation == "gpu_fa4_cute":
+            batch_size, seq_len = hidden.shape[:2]
+            short_mask = with_fa4_cute_metadata(short_mask, batch_size=batch_size, seq_len=seq_len)
+            long_mask = with_fa4_cute_metadata(long_mask, batch_size=batch_size, seq_len=seq_len)
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
