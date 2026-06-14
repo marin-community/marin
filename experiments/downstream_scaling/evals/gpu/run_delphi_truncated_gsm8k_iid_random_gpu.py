@@ -31,7 +31,7 @@ from experiments.llama import llama3_tokenizer
 
 logger = logging.getLogger(__name__)
 
-N_SAMPLES = 32
+N_SAMPLES = 128
 N_TRUNCATION_SAMPLES = N_SAMPLES * 11
 N_PROBLEMS = 256
 NUM_FEWSHOT = 5
