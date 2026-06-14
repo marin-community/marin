@@ -171,10 +171,11 @@ def _symmetrize(matrix):
 def _msign(m, steps: int = 5):
     """Newton-Schulz quintic orthogonalization (Muon's msign), batched over leading axes.
 
-    Returns the orthogonal polar factor (singular values -> 1) of each trailing (..., a, b) matrix.
-    Pure matmul (no iterative-linalg lowering). Used by the SOAP-MuonH inner step: msign of the
-    SOAP-eigenvalue-whitened projected momentum (the whitening breaks msign's rotation-equivariance,
-    so this is a genuine SOAP+Muon hybrid, not plain Muon).
+    Returns the orthogonal polar factor (singular values -> 1) of each trailing (..., a, b)
+    matrix via pure matmul (no iterative-linalg lowering). Used by the SOAP-Muon variant
+    (KellerJordan/modded-nanogpt PR #278/#321) to orthogonalize the Adam-preconditioned
+    update after rotating it back to full parameter space. msign normalizes the input scale
+    on its first line, so any scalar prefactor (e.g. a Frobenius rescale) is washed out.
     """
     a, b, c = 3.4445, -4.7750, 2.0315  # Keller Jordan quintic coefficients
     x = m / (jnp.linalg.norm(m, axis=(-2, -1), keepdims=True) + 1e-7)
@@ -204,7 +205,8 @@ def _klsoaph_step(
     init_factor: float,
     identity_init: bool = False,
     reparam_eig: bool = False,
-    inner_muon: bool = False,
+    nesterov: bool = False,
+    soap_muon: bool = False,
 ):
     """Run one full-matrix SOAP step over the (..., rows, cols) gradient.
 
@@ -256,23 +258,27 @@ def _klsoaph_step(
         g_qr = jnp.einsum("...ij,...jk->...ik", g32, q_r)
         g_proj = jnp.einsum("...ki,...kj->...ij", q_l, g_qr)
 
-        # 2. Inner optimizer in projected basis: Adam (default) or SOAP-MuonH whitening.
+        # 2. Inner Adam in the projected eigenbasis.
         new_exp_avg = beta1 * exp_avg + (1.0 - beta1) * g_proj
         new_exp_avg_sq = beta2 * exp_avg_sq + (1.0 - beta2) * g_proj * g_proj
-        if inner_muon:
-            # SOAP-MuonH: whiten the projected momentum by the SOAP eigenvalues (esi = eig^-0.5);
-            # msign is applied AFTER rotating back (below), to the full-space update -- because q is only
-            # approximately orthonormal (stale under pf>1), so msign must orthogonalize the ACTUAL update,
-            # not the eigenbasis proxy (in-basis msign would equal plain Muon only for exactly-orthonormal q).
-            precond_proj = new_exp_avg * esi_l[..., :, None] * esi_r[..., None, :]
-        else:
-            precond_proj = new_exp_avg / (jnp.sqrt(new_exp_avg_sq) + eps)
+        # Nesterov look-ahead (Nadam-style): use the blended momentum b1*m_t + (1-b1)*g_t as the
+        # numerator instead of the plain EMA, while the second moment keeps the true EMA. Equivalent
+        # to the Nesterov trick in modded-nanogpt Muon; gives the update an extra fraction of the
+        # current gradient so it anticipates the next step.
+        m_eff = beta1 * new_exp_avg + (1.0 - beta1) * g_proj if nesterov else new_exp_avg
+        precond_proj = m_eff / (jnp.sqrt(new_exp_avg_sq) + eps)
 
         # 3. Direction = q_l @ precond_proj @ q_r.T  (rotate back to full parameter space).
         p_qrt = jnp.einsum("...ij,...kj->...ik", precond_proj, q_r)
         direction = jnp.einsum("...ij,...jk->...ik", q_l, p_qrt)
-        if inner_muon:
-            direction = _msign(direction)  # SOAP-MuonH: orthogonalize the full-space update (after rotation)
+        if soap_muon:
+            # SOAP-Muon (modded-nanogpt PR #278/#321): orthogonalize the Adam-preconditioned,
+            # rotated-back update with Newton-Schulz. The Adam second-moment denom is KEPT (it
+            # precedes msign in the eigenbasis); msign is applied in FULL space (after rotate-back)
+            # because q is only approximately orthonormal under precond_freq>1. #278's pre-msign
+            # Frobenius rescale is omitted: msign is scale-invariant and the downstream hyperball
+            # post-step re-normalizes the update, so the rescale is a no-op here.
+            direction = _msign(direction)
 
         # 4. Whitened Gram update.
         g_qr_white = g_qr * esi_r[..., None, :]
@@ -389,7 +395,8 @@ def _klsoaph_step_sharded(
     init_factor: float,
     identity_init: bool = False,
     reparam_eig: bool = False,
-    inner_muon: bool = False,
+    nesterov: bool = False,
+    soap_muon: bool = False,
 ):
     """Distribute the per-expert SOAP step across the mesh via ``shard_map``.
 
@@ -409,7 +416,8 @@ def _klsoaph_step_sharded(
         init_factor=init_factor,
         identity_init=identity_init,
         reparam_eig=reparam_eig,
-        inner_muon=inner_muon,
+        nesterov=nesterov,
+        soap_muon=soap_muon,
     )
     mesh = jax.sharding.get_abstract_mesh()
     batched = hasattr(grad, "ndim") and grad.ndim >= 3
@@ -472,7 +480,8 @@ def scale_by_klsoaph(
     init_factor: float = 0.1,
     identity_init: bool = False,
     reparam_eig: bool = False,
-    inner_muon: bool = False,
+    nesterov: bool = False,
+    soap_muon: bool = False,
 ) -> optax.GradientTransformation:
     """Full-matrix SOAP-style preconditioner (upstream KLSOAPH, de-blocked).
 
@@ -538,7 +547,8 @@ def scale_by_klsoaph(
                 init_factor=init_factor,
                 identity_init=identity_init,
                 reparam_eig=reparam_eig,
-                inner_muon=inner_muon,
+                nesterov=nesterov,
+                soap_muon=soap_muon,
             )
             direction = out[0].astype(grad.dtype)
             return _SoapStepResult(direction, *out[1:])
