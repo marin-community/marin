@@ -1,2 +1,6 @@
 # Local W&B + plot cache for exp11_data_mix_analysis.py.
 exp11_data_mix_results/
+
+# Generated exp75 analysis outputs (run CSVs + figures), partitioned by sweep
+# version. Reproducible from W&B via exp75_analysis.py --refresh; not committed.
+exp75_results/
