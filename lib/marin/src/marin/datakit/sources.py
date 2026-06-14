@@ -18,6 +18,10 @@ from dataclasses import dataclass
 from functools import cache
 
 from marin.datakit.canonical.safety_pretraining import safety_pretraining_normalize_steps
+from marin.datakit.download.automathtext_v2 import (
+    AUTOMATHTEXT_V2_ROUGH_TOKENS_B,
+    automathtext_v2_normalize_steps,
+)
 from marin.datakit.download.biodiversity import biodiversity_normalize_steps
 from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
 from marin.datakit.download.coderforge import coderforge_normalize_steps
@@ -158,6 +162,14 @@ def all_sources() -> dict[str, DatakitSource]:
         ("swe-rebench-openhands", swe_rebench_openhands_normalize_steps, 2.47),
         ("swe-zero-12m", swe_zero_12m_normalize_steps, 106.91),
         ("synthetic-1", synthetic1_normalize_steps, 7.32),
+    )
+
+    # AutoMathText-V2: keep the math/science web and reasoning-QA domains as
+    # separate mixture components. Do not register the aggregate quality buckets
+    # here; they include domains outside the selected math/reasoning slice.
+    automathtext_v2 = _rows_flat(
+        automathtext_v2_normalize_steps,
+        AUTOMATHTEXT_V2_ROUGH_TOKENS_B,
     )
 
     # StarCoder2-Extras: 5 of 6 subsets advertised (ir_low_resource isn't in
@@ -342,6 +354,7 @@ def all_sources() -> dict[str, DatakitSource]:
 
     all_rows: tuple[_SourceRow, ...] = (
         *single_sources,
+        *automathtext_v2,
         *starcoder2_extras,
         *common_pile,
         *finepdfs,
