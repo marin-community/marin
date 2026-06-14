@@ -613,3 +613,11 @@ invalid (CPU: polar doesn't diagonalize qᵀGGq). Next: localize/cut the deps+da
 
 DONATION ("buffers not usable"): FIXED. _constrain_std_layout (pin output train-state to row-major) ->
 0 donation warnings on BOTH v4c and v5p (fix-diag-v5p). Confirmed on target hardware, no crash.
+
+### Criterion status (2026-06-14 ~00:12)
+COMPILE <10min: **MET**. fix-diag-v4c (reserved v4, no alloc-wait) reached first train step at _runtime=7.3min
+with identity_init. east5 "~30min" was TPU-alloc-wait. train_step XLA compile 3min + deps/data ~4min = 7.3min.
+THROUGHPUT >=330k (0.99-EMA): pf8=305k, pf16=321k, pf32=323k -- shrinking increments -> non-refresh step ceiling
+~325k < 330k. pf alone likely insufficient (testing pf64/128). Non-refresh step is f32 optimizer matmuls
+(gram/projection/direction) -> need bf16 (Wu Lin reparam: q orthonormal cond=1 -> bf16-safe) to raise ceiling.
+LOSS <0.001 vs anchor(3.5496): pf-reparam runs not finished yet; bf16 must also be loss-neutral.
