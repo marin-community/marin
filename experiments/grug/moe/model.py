@@ -102,6 +102,14 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    routing_renorm_sum: float | None = None
+    """If set, renormalize the selected top-k sigmoid routing weights to this per-token sum."""
+    use_half_rope: bool = False
+    """Apply RoPE only to the first half of each Q/K head, leaving the second half stationary."""
+    use_pko: bool = False
+    """On long-attention layers, shift the stationary half of K by one token with document-start zeroing."""
+    pko_on_last_layer: bool = True
+    """When ``use_pko`` is enabled, also treat the final layer as a long-attention/PKO layer."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
@@ -126,6 +134,10 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.routing_renorm_sum is not None and self.routing_renorm_sum <= 0:
+            raise ValueError("routing_renorm_sum must be positive when set")
+        if (self.use_half_rope or self.use_pko) and self.inferred_head_dim % 4 != 0:
+            raise ValueError("use_half_rope/use_pko require head_dim to be divisible by 4")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -143,6 +155,26 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     """Non-parametric RMS norm over the last dimension."""
     variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
+
+
+def _segment_start_mask(mask: AttentionMask | jax.Array, *, batch_size: int, seq_len: int) -> jax.Array:
+    """Return [B, S] true at packed-document starts, falling back to sequence starts."""
+    if not isinstance(mask, AttentionMask) or mask.segment_ids is None:
+        starts = jnp.zeros((seq_len,), dtype=bool).at[0].set(True)
+        return jnp.broadcast_to(starts[None, :], (batch_size, seq_len))
+
+    q_segment_ids, _ = mask.segment_ids
+    if q_segment_ids.ndim == 1:
+        previous = jnp.concatenate([q_segment_ids[:1], q_segment_ids[:-1]], axis=0)
+        starts = (q_segment_ids >= 0) & ((jnp.arange(seq_len) == 0) | (q_segment_ids != previous))
+        return jnp.broadcast_to(starts[None, :], (batch_size, seq_len))
+    if q_segment_ids.ndim == 2:
+        if q_segment_ids.shape[0] == 1 and batch_size != 1:
+            q_segment_ids = jnp.broadcast_to(q_segment_ids, (batch_size, seq_len))
+        previous = jnp.concatenate([q_segment_ids[:, :1], q_segment_ids[:, :-1]], axis=1)
+        first = jnp.zeros((batch_size, seq_len), dtype=bool).at[:, 0].set(True)
+        return (q_segment_ids >= 0) & (first | (q_segment_ids != previous))
+    raise ValueError(f"segment_ids must be 1D or 2D, got ndim={q_segment_ids.ndim}")
 
 
 class CausalSelfAttention(eqx.Module):
@@ -167,7 +199,13 @@ class CausalSelfAttention(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        *,
+        use_pko: bool = False,
+    ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -175,9 +213,28 @@ class CausalSelfAttention(eqx.Module):
         q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        if use_pko:
+            half = head_dim // 2
+            k_stationary = k[..., half:]
+            k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
+            doc_starts = _segment_start_mask(mask, batch_size=k.shape[0], seq_len=seq_len)
+            k_shifted = jnp.where(doc_starts[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
+            k = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
         q = rms_norm(q)
         k = rms_norm(k)
-        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        if self.cfg.use_half_rope:
+            half = head_dim // 2
+            q_rot, k_rot = apply_rotary_embedding(
+                q[..., :half],
+                k[..., :half],
+                seq_len=seq_len,
+                head_dim=half,
+                rope=self.cfg.rope,
+            )
+            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
+            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+        else:
+            q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -404,7 +461,11 @@ class MoEMLP(eqx.Module):
         selected_experts = selected_experts[:, :-1]
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
+        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+        if self.cfg.routing_renorm_sum is not None:
+            denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+            combine_weights_f = combine_weights_f * (self.cfg.routing_renorm_sum / (denom + 1e-9))
+        combine_weights = combine_weights_f.astype(x.dtype)
         router_stats = _routing_stats(
             selected_experts,
             router_probs,
@@ -477,9 +538,11 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        *,
+        use_pko: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = _batch_reshard(x + self.attn(attn_in, mask))
+        x = _batch_reshard(x + self.attn(attn_in, mask, use_pko=use_pko))
         mlp_in = _batch_reshard(self.mlp_gated_norm(self.rms_mlp(x)))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -541,9 +604,12 @@ class Transformer(eqx.Module):
             remat_policy = None
 
         moe_router_stats: list[dict[str, jax.Array]] = []
+        num_blocks = len(self.blocks)
         for i, block in enumerate(self.blocks):
-            layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask)
+            use_long_layer = i % 4 == 3 or (cfg.use_pko and cfg.pko_on_last_layer and i == num_blocks - 1)
+            layer_mask = long_mask if use_long_layer else short_mask
+            use_pko = cfg.use_pko and use_long_layer
+            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask, use_pko=use_pko)
             moe_router_stats.append(router_stats)
 
         router_metrics = {

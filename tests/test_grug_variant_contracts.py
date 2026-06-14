@@ -240,6 +240,50 @@ def test_grug_moe_variant_threads_moe_implementation_to_kernel():
     assert "ragged_all_to_all" in str(closed_jaxpr)
 
 
+def test_grug_moe_may_recipe_attention_flags_lower():
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    make_train_step = train_module._make_train_step
+    initial_state = train_module.initial_state
+    mesh_fn = getattr(model_module, "debug_mesh_and_token_pspec", None)
+    if mesh_fn is None:
+        raise AssertionError("experiments.grug.moe.model must define debug_mesh_and_token_pspec")
+
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+    cfg = dataclasses.replace(
+        cfg,
+        routing_renorm_sum=2.5,
+        use_half_rope=True,
+        use_pko=True,
+        router_z_loss_coef=0.0,
+    )
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+    train_step = make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
+    mesh, token_pspec = mesh_fn(num_devices=4)
+    segment_ids = jnp.array([[0, 0, 1, 1], [2, 2, 3, 3], [4, 4, 5, 5], [6, 6, 7, 7]], dtype=jnp.int32)
+    batch = GrugLmExample(
+        tokens=jnp.zeros((4, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((4, 4), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal().with_segment_ids(segment_ids),
+    )
+
+    def one_step():
+        sharded_batch = dataclasses.replace(
+            batch,
+            tokens=jax.sharding.reshard(batch.tokens, token_pspec),
+            loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
+        )
+        state = initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
+        return train_step(state, sharded_batch, compute_watch=False)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        out_state_shape, out_metrics_shape, _ = eqx.filter_eval_shape(one_step)
+
+    assert out_state_shape.step.shape == ()
+    assert "train/loss" in out_metrics_shape
+
+
 def test_grug_moe_data_loaders_build_against_single_expert_mesh():
     """Regression: build_train_loader / build_tagged_evaluator must work when the
     compact mesh's expert axis has size 1 (canary configuration).

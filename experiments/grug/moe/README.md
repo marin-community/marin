@@ -153,6 +153,76 @@ conservative and easier to reason about.
 
 Predicted macro uses `loss(C) = 1.6 + 95.18 · C^(-0.0941)`.
 
+## CoreWeave scale launch
+
+`launch_cw_scale.py` is the 256xH100 CoreWeave scale launcher for the
+90B-total / 5B-active sparse MoE. It defaults to the full 32-node shape; use the
+wrapper below for a safer 4-node sanity run first:
+
+```bash
+experiments/grug/moe/run_cw_scale.sh
+experiments/grug/moe/run_cw_scale.sh --submit
+```
+
+The first command is a dry run. The second submits the smoke configuration:
+`SCALE_GPU_REPLICAS=4`, `SCALE_HIDDEN_DIM=1024`, `SCALE_NUM_LAYERS=16`,
+`SCALE_BATCH=64`, `SCALE_STEPS=10`, and `SCALE_CHECKPOINTS=local`.
+
+Use `--full --submit` only when you intend to launch the full 32-node recipe.
+The script passes R2 credentials to Iris as `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL`, and `AWS_ENDPOINT_URL_S3`, with
+`MARIN_PREFIX=s3://marin-na/marin/` by default.
+
+For the May Recipe d=2560 architecture from issue #6044, launch the dedicated
+CoreWeave wrapper instead:
+
+```bash
+experiments/grug/moe/run_cw_may_d2560.sh
+experiments/grug/moe/run_cw_may_d2560.sh --submit
+```
+
+The first command is a dry run. The profile wrapper defaults to all 32 H100
+nodes, `MAY_EXPERT_AXIS=8`, `MAY_REPLICA_AXIS=1`, `MAY_BATCH=256`,
+`MAY_SEQ_LEN=4096`, `MAY_STEPS=30`, `MAY_PROFILER_START=12`,
+`MAY_PROFILER_STEPS=8`, `MAY_REMAT=save_moe`, local checkpoints, W&B tracking,
+and `MAY_MP=params=float32,compute=bfloat16,output=bfloat16`. That keeps the
+fp32 parameter tree and optimizer state sharded; persistent bf16 train params
+plus a separate fp32 master copy is not currently a Grug train-state mode. It
+defaults to `MAY_DATA=slimpajama` for an R2-friendly speed run; set
+`--data nemotron` only when the Nemotron tokenized inputs are available where
+the CoreWeave job will read them.
+
+### R2 credentials
+
+The direct dashboard path is:
+
+1. Open Cloudflare R2 object storage.
+2. Under account details, manage API tokens.
+3. Create an account or user R2 token with Object Read & Write access scoped to
+   the `marin-na` bucket.
+4. Copy the one-time `Access Key ID` and `Secret Access Key`.
+5. Export:
+
+```bash
+export R2_ACCESS_KEY_ID=...
+export R2_SECRET_ACCESS_KEY=...
+export R2_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
+```
+
+If `~/.config/marin/marin-r2.env` instead contains `CLOUDFLARE_ACCOUNT_ID`
+and an R2-capable `CLOUDFLARE_API_TOKEN`, derive the S3-compatible variables
+with:
+
+```bash
+eval "$(scripts/iris/cloudflare_r2_env.sh)"
+```
+
+Cloudflare's R2 API-token mapping is `R2_ACCESS_KEY_ID = token id` and
+`R2_SECRET_ACCESS_KEY = sha256(token value)`. If the token does not have R2
+bucket access, the derivation will still produce values, but S3 operations will
+fail with an authorization error; create a bucket-scoped R2 token in the
+dashboard in that case.
+
 ## Files
 
 - [`model.py`](./model.py) — `GrugModelConfig` + transformer implementation.
