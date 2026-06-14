@@ -644,3 +644,14 @@ identity_init (compile 7.3min<10) + pf8 (331k tok/s >=330) + donation-fix (0 war
 PHASE 2 (coordinate descent to beat MuonH 3.5438): config = efficiency baseline (identity_init+pf8). Axis 1:
 shampoo_beta {0.9 anchor, 0.95, 0.99} (064435/064448). Then beta2, epsilon, adam_lr, learning_rate, init_factor.
 NOTE: pf8 baseline 3.5544 is +0.0106 above MuonH -> beating MuonH needs sizable HP gains (pre-pollution best 3.5475).
+
+### Phase-2 HP sweep launched (parallel, identity_init+pf8) (2026-06-14 ~06:55)
+All at deliverable config (identity_init+pf8) so the winner is ONE end-to-end run. Anchor pf8=3.5544; target
+< MuonH 3.5438 (need >0.0106 gain). Axes from anchor (beta1=0.95,beta2=0.9,shampoo=0.9,eps=1e-8,initf=0.1):
+  shampoo_beta: 0.95 (064435), 0.99 (064448)
+  beta2: 0.95 (065320), 0.99 (065338)
+  soap eps: 1e-6 (065352)
+  init_factor: 0.2 (065405)
+eff-baseline (064417) = identity_init+pf8 control (verifies identity_init loss-neutral vs fix-pf8=3.5544).
+Pick best at finish, re-anchor, next axes (adam_lr, learning_rate, lr_schedule). NOTE: identity_init loss-
+neutrality still unverified until eff-baseline finishes.
