@@ -357,14 +357,14 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
 
   | wd \ lr | 1.75e-4 | 2.5e-4 | 3.5e-4 | 5e-4 | 7e-4 |
   |---|---|---|---|---|---|
-  | **0.02** | | 3.011 | 3.001 | | |
-  | **0.05** | | 3.021 | | **2.982** | |
+  | **0.02** | | 3.011 | 3.001 | **2.986** | |
+  | **0.05** | | 3.021 | | 2.982 | |
   | **0.1**  | | 3.016 | | 2.986 | |
 
-  _6 of 15 E2 finals (~12:15Z). Monotone in LR: **`5e-4` (2.982/2.986) > `3.5e-4` (3.001)
-  > `2.5e-4` (3.011/3.016/3.021)**; 2.5e-4 column complete. E2 optimum firming at **higher
-  LR (≥5e-4)** than E1's 3.5e-4 (opposite the lr↓ prior). 5e-4 still interior — await the
-  7e-4 column; if 7e-4 wins, **extend E2 LR up to 1e-3**. All E2 beat every E1, 2ep helps._
+  _7 of 15 E2 finals (~13:15Z). **5e-4 column complete (2.982–2.986), the best E2 region**;
+  monotone `5e-4 > 3.5e-4 (3.001) > 2.5e-4 (~3.01–3.02)`. E2 optimum ≥5e-4 (higher than
+  E1's anchor). 5e-4 still interior — await the 7e-4 column (resubmitted w2o + others); if
+  7e-4 wins, **extend E2 LR to 1e-3** (mirrors the E1 edge extension). All E2 beat every E1._
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
 - Measured drift 1→2: `Δlog lr=…, Δlog wd=…` (E2 3.021 < E1 ~3.06 → 2 epochs helps)
