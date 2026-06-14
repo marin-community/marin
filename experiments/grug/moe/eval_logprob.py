@@ -148,15 +148,19 @@ def _inject_loglikelihood_bpb(task_dict: dict) -> None:
 
 
 def _inject_bpb_into_metric_list(task_dict: dict) -> None:
-    """Ensure every leaf task's ``metric_list`` includes ``bpb``.
+    """Ensure every leaf task's ``metric_list`` and ``_metric_fn_list``
+    include ``bpb``.
 
     Most lm-eval task YAMLs only declare ``acc``/``acc_norm`` in their
-    metric_list; ``bpb`` is computed by ``ConfigurableTask.process_results``
-    only when it's an explicit entry in the list. Appending it at runtime
-    means every multiple-choice task we evaluate emits ``bpb,none`` in its
-    results.json, which is the metric the dashboard's per-bucket heatmap
-    actually plots.
+    metric_list; for ``multiple_choice`` output_type,
+    ``ConfigurableTask.process_results`` only emits ``bpb`` when
+    ``"bpb" in self._metric_fn_list.keys()``. That dict is built once at
+    task construction from ``metric_list``, so we patch both: append a
+    metric_list entry (for downstream introspection / config dumps) AND
+    insert the bpb metric_fn into ``_metric_fn_list`` (what the runtime
+    actually reads at line task.py:1463).
     """
+    from lm_eval.api.registry import get_metric, get_aggregation
     bpb_entry = {"metric": "bpb", "aggregation": "mean", "higher_is_better": False}
     for v in task_dict.values():
         if hasattr(v, "_config"):
@@ -164,6 +168,19 @@ def _inject_bpb_into_metric_list(task_dict: dict) -> None:
             if not any(isinstance(m, dict) and m.get("metric") == "bpb" for m in mlist):
                 mlist.append(bpb_entry)
                 v._config.metric_list = mlist
+            # Runtime path: ConfigurableTask.process_results uses
+            # `self._metric_fn_list.keys()` to decide which metrics to emit.
+            # Insert the bpb fn directly so it picks up post-construction.
+            if hasattr(v, "_metric_fn_list") and "bpb" not in v._metric_fn_list:
+                v._metric_fn_list["bpb"] = get_metric("bpb")
+                # Aggregation registry too — `aggregation()` reads from
+                # `self._aggregation_list` when computing rolled-up scores.
+                if hasattr(v, "_aggregation_list"):
+                    v._aggregation_list["bpb"] = get_aggregation("mean")
+                if hasattr(v, "_higher_is_better"):
+                    v._higher_is_better["bpb"] = False
+                if hasattr(v, "_metric_fn_kwargs"):
+                    v._metric_fn_kwargs["bpb"] = {}
         elif isinstance(v, tuple) and len(v) == 2 and isinstance(v[1], dict):
             _inject_bpb_into_metric_list(v[1])
         elif isinstance(v, dict):
