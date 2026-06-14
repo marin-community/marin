@@ -296,16 +296,15 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
 
   | wd \ lr | 8.75e-5 | 1.75e-4 | 3.5e-4 | 7e-4 | 1e-3 |
   |---|---|---|---|---|---|
-  | **0.02** | | 3.112 | 3.0623 | 3.084 | _(w1d)_ |
+  | **0.02** | 3.153 | 3.112 | 3.0623 | 3.084 | _(w1d)_ |
   | **0.05** | 3.1535 | 3.116 | 3.0705 | **3.046** | _(w1d)_ |
   | **0.1**  | 3.152 | 3.113 | 3.0662 | 3.052 | _(w1d)_ |
 
-  _11 of 12 finals (~12:45Z). **The 7e-4 column flips the conclusion: 7e-4 beats 3.5e-4 at
-  wd0.05 (3.046 vs 3.070) and wd0.1 (3.052 vs 3.066)** — so the E1 LR optimum is on the
-  **top edge (≥7e-4), not 3.5e-4**. Best E1 so far = `7e-4/wd0.05`=**3.046**. Per the
-  edge-extension rule, **launched the `1e-3` column** (w1d, ~12:48Z, v5p-32 batch). At
-  wd0.02, 3.5e-4 (3.062) still beats 7e-4 (3.084) — an LR×WD interaction (lower WD favors
-  lower LR). Last base cell `8.75e-5/wd0.02` still running._
+  _**Base 12/12 complete** (~14:45Z). **7e-4 beats 3.5e-4 at wd0.05 (3.046 vs 3.070) and
+  wd0.1 (3.052 vs 3.066)** → E1 LR optimum is on the **top edge (≥7e-4)**, not the #70
+  anchor 3.5e-4. Best E1 = `7e-4/wd0.05`=**3.046**. `1e-3` column (w1d) running to bound
+  it. LR×WD interaction: at wd0.02, 3.5e-4 (3.062) still beats 7e-4 (3.084) — lower WD
+  favors lower LR. 8.75e-5 column worst (~3.15)._
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ — **NOT yet
   confirmed**: leader is `7e-4/wd0.05`=3.046 but 7e-4 is the **top edge** (extending to
@@ -357,14 +356,14 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
 
   | wd \ lr | 1.75e-4 | 2.5e-4 | 3.5e-4 | 5e-4 | 7e-4 | 1e-3 |
   |---|---|---|---|---|---|---|
-  | **0.02** | | 3.011 | 3.001 | 2.986 | | _(w2p)_ |
+  | **0.02** | | 3.011 | 3.001 | 2.986 | 2.980 | _(w2p)_ |
   | **0.05** | | 3.021 | 3.000 | 2.982 | **2.979** | _(w2p)_ |
   | **0.1**  | | 3.016 | | 2.986 | | _(w2p)_ |
 
-  _9 of 15 E2 finals (~13:45Z). **`7e-4/wd0.05`=2.979 is now best**, edging 5e-4 (2.982) —
-  so like E1, the E2 optimum is on the **7e-4 top edge**. Per the edge rule, **launched the
-  E2 `1e-3` column** (w2p, ~13:47Z, v5p-32 batch). Both waves now agree the good-LR region
-  is ≥7e-4, well above the #70 anchor 3.5e-4. Top is fairly flat (5e-4≈7e-4 ~2.98)._
+  _10 of 15 E2 finals (~14:45Z). **7e-4 is the best column (2.979/2.980)**, edging 5e-4
+  (~2.98) — like E1, the E2 optimum is on the **7e-4 top edge**. `1e-3` column (w2p)
+  running to bound it. Both waves agree the good-LR region is ≥7e-4, well above the #70
+  anchor 3.5e-4; the top is flat (5e-4≈7e-4 ~2.98)._
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
 - Measured drift 1→2: `Δlog lr=…, Δlog wd=…` (E2 3.021 < E1 ~3.06 → 2 epochs helps)
