@@ -20,8 +20,8 @@ Outputs (gitignored) under ``experiments/protein/exp75_results/<version>/``:
 
     exp75_runs.csv               every run of the sweep version, any state (one row each)
     baseline.json                snapshot of the 1.5B unmasked baseline run's current
-                                 ``eval/contacts-v1-val/loss`` and step (that run is still
-                                 training, so the value/step move until it finishes)
+                                 ``eval/contacts-v1-val/loss`` and run_progress (that run is
+                                 still training, so the value/progress move until it finishes)
     loss_vs_completion.{png,svg} final ``eval/contacts-v1-val/loss`` vs run completion
                                  time, colored by epoch, with the best-so-far frontier
                                  traced and the 1.5B baseline drawn as a horizontal line.
@@ -169,7 +169,7 @@ def fetch_baseline() -> dict:
         "name": run.name,
         "state": run.state,
         "val_loss": s.get(VAL_LOSS_KEY),
-        "step": s.get("_step"),
+        "run_progress": s.get("run_progress"),
     }
 
 
@@ -179,7 +179,10 @@ def load_or_refresh_baseline(version: str, refresh: bool) -> dict | None:
         path.parent.mkdir(parents=True, exist_ok=True)
         baseline = fetch_baseline()
         path.write_text(json.dumps(baseline, indent=2))
-        print(f"fetched baseline {baseline['name']} loss={baseline['val_loss']} step={baseline['step']} -> {path}")
+        print(
+            f"fetched baseline {baseline['name']} loss={baseline['val_loss']} "
+            f"progress={baseline['run_progress']} -> {path}"
+        )
         return baseline
     baseline = json.loads(path.read_text())
     print(f"read baseline <- {path} (pass --refresh to re-fetch)")
@@ -245,11 +248,16 @@ def plot(df: pd.DataFrame, version: str, baseline: dict | None = None) -> None:
         )
 
         best = done.loc[done["val_loss"].idxmin()]
+        # Box parked in the right margin, left edge aligned with the legend (x=1.01 in axes
+        # coords); the arrow still points back to the best run in the data.
         ax.annotate(
             f"best  {best['val_loss']:.4f}\nlr={best['lr']:.2e}\nwd={best['wd']:.2e}\n{int(best['epochs'])} epochs",
             (best["completed_dt"], best["val_loss"]),
-            textcoords="offset points",
-            xytext=(74, 54),
+            xycoords="data",
+            textcoords=ax.transAxes,
+            xytext=(1.01, 0.52),
+            ha="left",
+            va="top",
             fontsize=10,
             bbox=dict(boxstyle="round,pad=0.35", fc="#fff7e0", ec="#b5172f", alpha=0.95),
             arrowprops=dict(arrowstyle="->", color="#b5172f", lw=1.4),
@@ -276,24 +284,29 @@ def plot(df: pd.DataFrame, version: str, baseline: dict | None = None) -> None:
 
     if baseline and baseline.get("val_loss") is not None:
         bl = baseline["val_loss"]
-        step = baseline.get("step")
-        if step is None:
-            step_note = baseline.get("state", "")
+        progress = baseline.get("run_progress")
+        if progress is None:
+            progress_note = baseline.get("state", "")
         else:
-            step_note = f"step {int(step):,}" + (", still running" if baseline.get("state") == "running" else "")
-        ax.axhline(bl, color="#555555", lw=1.6, ls=":", zorder=1.5)
+            tail = ", still running" if baseline.get("state") == "running" else ""
+            progress_note = f"{progress:.0%} progress{tail}"
+        # Solid seaborn-deep purple: stands out yet sits in the same family as the epoch colors.
+        ax.axhline(bl, color="#8172B3", lw=2.0, ls="-", zorder=1.5)
         # Detail sits above the line, flush to the y-axis (x in axes coords, y in data coords).
         run_id = BASELINE_RUN.split("/")[-1]
-        label_tx = mpl.transforms.blended_transform_factory(ax.transAxes, ax.transData)
+        # x in axes coords, y in data coords, lifted a few points off the line so text doesn't touch it.
+        label_tx = mpl.transforms.offset_copy(
+            mpl.transforms.blended_transform_factory(ax.transAxes, ax.transData), fig=fig, y=3, units="points"
+        )
         ax.text(
             0.006,
             bl,
-            f"1.5B baseline  {bl:.4f}  ({step_note})\n{run_id}",
+            f"1.5B baseline  {bl:.4f}  ({progress_note})\n{run_id}",
             transform=label_tx,
             ha="left",
             va="bottom",
             fontsize=9.5,
-            color="#333333",
+            color="#5e4b8b",
         )
 
     ax.set_xlabel("run completion time (UTC)")
