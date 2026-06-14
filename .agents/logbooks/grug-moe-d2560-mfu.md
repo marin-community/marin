@@ -84,3 +84,18 @@
 - Result: changed the dedicated May d2560 launcher and wrapper default to `MAY_ATTENTION_IMPLEMENTATION=gpu_fa4_cute`; exposed `run_cw_may_d2560.sh --attention`.
 - Interpretation: GM2560-MFU-003 should use the FA4 default if GM2560-MFU-002 confirms attention is hot or overall MFU is below target.
 - Next action: wait for GM2560-MFU-002 profile result before deciding whether to relaunch immediately with FA4 or investigate another bottleneck first.
+
+### 2026-06-13 22:45 PDT - GM2560-MFU-002 stopped, GM2560-MFU-003 FA4 profile launched
+- Hypothesis: GM2560-MFU-002 was spending 32 H100 nodes on a known-slow attention baseline before any metrics or profile artifacts existed; stopping it before the profiler window and relaunching with FA4 is a better use of the same profiling budget.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260614-053509`
+  - `experiments/grug/moe/run_cw_may_d2560.sh --submit --run-id GM2560-MFU-003-cw-20260613-2245 --attention gpu_fa4_cute`
+- Config:
+  - Stopped reference-attention parent: `/dlwh/iris-run-job-20260614-053509`
+  - Stopped reference-attention child: `/dlwh/iris-run-job-20260614-053509/grug-train-GM2560-MFU-002-cw-20260613-2248`
+  - New FA4 parent: `/dlwh/iris-run-job-20260614-054507`
+  - Commit: `c3af352ce`
+  - Key change from GM2560-MFU-002: `MAY_ATTENTION_IMPLEMENTATION=gpu_fa4_cute`
+- Result: GM2560-MFU-002 was terminated before any W&B scalar metrics or profile artifacts. GM2560-MFU-003 dispatcher submitted successfully.
+- Interpretation: GM2560-MFU-003 is now the first serious H100 fast-path profile candidate for the >=20% MFU target.
+- Next action: monitor GM2560-MFU-003 for startup failures from FA4 dependencies, then ingest the W&B `jax_profile` artifact if it reaches the profile window.
