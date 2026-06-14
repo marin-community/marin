@@ -680,3 +680,11 @@ its lower @10000 was misleading mid-run). Schedule lever closed. KLSOAPH plateau
 +0.0037 from MuonH 3.5438. Untested: lr-DOWN (pre-pollution only tested lr-up=worse). Re-launched lr0.85
 (125634) + lr0.70 (125654) to completion (lr0.85 was promising mid-run before east5 crash). If lr-down doesn't
 break 3.547, KLSOAPH ~matches but does not beat MuonH (honest negative for the loss criterion).
+
+### *** KLSOAPH BEATS MuonH via lr-down (2026-06-14 ~15:05) ***
+hp-combo-lr0p70 {identity_init, pf8, beta2=0.95, initf=0.2, LR_MULT=0.70} FINAL paloma = **3.5407**
+(ΔvsMuon = -0.0031, BELOW 3.5438). lr-DOWN was the missing lever (pre-pollution only tested lr-up=worse).
+Loss progression: pf8 baseline 3.5523 -> beta2=0.95 3.5475 -> +lr0.70 3.5407 (beats MuonH).
+tok/s of that run = 293k (contention-dragged, max 319k) -> NOT the clean throughput; the FINAL single
+deliverable must run low-contention to show >=330k. Mapping LR curve (0.55/0.60/0.80, 150834/55/08) for the
+optimum, then run the winning config ALONE for the clean >=330k + 3min-compile + <3.5438 in ONE run.
