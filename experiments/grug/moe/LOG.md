@@ -600,3 +600,16 @@ Earlier "anchor 3.5204 < MuonH" was train/loss vs paloma — INVALID. Clean anch
 eval/paloma/macro_loss = **3.5496** (train/loss 3.264). MuonH baseline 3.5438. So anchor is +0.0058 ABOVE
 MuonH (matches pre-pollution 3.5475). Loss criterion (beat MuonH) NOT met at anchor -> needs coordinate-descent
 HP tuning AFTER the efficiency baseline. Efficiency baseline <0.001 regression is measured vs ANCHOR=3.5496.
+
+### COMPILE ROOT-CAUSE NAILED + donation fixed (2026-06-14 ~00:10)
+Measured train_step XLA compile DIRECTLY via JAX_LOG_COMPILES (clean, wait-independent):
+- WITH identity_init (fix-diag-v5p, v5p-8): jit(train_step) XLA compile = **167s (~3min)**; v4: 173s.
+- WITHOUT (anchor, eigh): hloQueueSize ~90min; with identity_init ~28min.
+=> identity_init (skip step-1 batched eigh) cuts train_step XLA compile ~65min -> 3min. The batched-eigh
+lowering WAS the compile beast. train_step is now 3min (<10min). The remaining ~25min (hloQueueSize) is
+NON-train_step startup: deps install + data-cache load + (east5) TPU-alloc-wait -- NOT the optimizer.
+=> Optimizer-compile restructure (batch-QR / block-wise / Newton-Schulz) is UNNECESSARY. NS also proven
+invalid (CPU: polar doesn't diagonalize qᵀGGq). Next: localize/cut the deps+data startup if it counts.
+
+DONATION ("buffers not usable"): FIXED. _constrain_std_layout (pin output train-state to row-major) ->
+0 donation warnings on BOTH v4c and v5p (fix-diag-v5p). Confirmed on target hardware, no crash.
