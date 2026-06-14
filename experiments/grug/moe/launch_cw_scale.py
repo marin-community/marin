@@ -26,6 +26,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
                         tagged MoE dispatch tensors for backward so the EP
                         collectives are not re-run during recompute
+    SCALE_CPU_PER_REPLICA
+                        CPU request for each 8xH100 worker pod (default 32)
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
                         output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
@@ -122,6 +124,7 @@ def build_scale_step() -> ExecutorStep:
     replica_axis = env_int("SCALE_REPLICA_AXIS", 1)
     batch_size = env_int("SCALE_BATCH", DEFAULT_BATCH)
     steps = env_int("SCALE_STEPS", 50)
+    worker_cpu = env_int("SCALE_CPU_PER_REPLICA", 32)
     # SCALE_PROFILER_STEPS > 0 captures a jax_profile window of that many steps
     # (uploaded via the tracker, so pair with SCALE_TRACKER=wandb to retrieve it).
     profiler_steps = env_int("SCALE_PROFILER_STEPS", 0)
@@ -158,7 +161,7 @@ def build_scale_step() -> ExecutorStep:
     resources = ResourceConfig.with_gpu(
         "H100",
         count=GPUS_PER_NODE,
-        cpu=env_int("SCALE_CPU_PER_REPLICA", 32),
+        cpu=worker_cpu,
         ram="256g",
         disk="256g",
         replicas=replicas,
@@ -182,7 +185,7 @@ def build_scale_step() -> ExecutorStep:
         **SCALE_TRAINER_DEFAULTS,
     )
 
-    name = f"grug-moe-cw-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}"
+    name = f"grug-moe-cw-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}-cpu{worker_cpu}"
     return ExecutorStep(
         name=f"{name}-{run_id}",
         fn=run_grug_moe_trial,

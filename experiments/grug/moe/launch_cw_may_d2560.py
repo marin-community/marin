@@ -12,6 +12,7 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_REPLICA_AXIS=1       FSDP over the whole data axis
     MAY_BATCH=256            seq=4096 context; raise only after profiling memory
     MAY_STEPS=50             throughput/profiling length
+    MAY_CPU_PER_REPLICA=32   CPU request for each 8xH100 worker pod
     MAY_CHECKPOINTS=local    avoid object-store checkpoint stalls
     MAY_MP=params=float32,compute=bfloat16,output=bfloat16
     MAY_CE_IMPLEMENTATION=   empty = default; xla forces streaming XLA CE
@@ -186,6 +187,7 @@ def build_may_step() -> ExecutorStep:
     replica_axis = env_int("MAY_REPLICA_AXIS", 1)
     batch_size = env_int("MAY_BATCH", DEFAULT_BATCH)
     steps = env_int("MAY_STEPS", DEFAULT_STEPS)
+    worker_cpu = env_int("MAY_CPU_PER_REPLICA", 32)
     profiler_steps = env_int("MAY_PROFILER_STEPS", 0)
 
     model = build_may_model()
@@ -200,7 +202,7 @@ def build_may_step() -> ExecutorStep:
     resources = ResourceConfig.with_gpu(
         "H100",
         count=GPUS_PER_NODE,
-        cpu=env_int("MAY_CPU_PER_REPLICA", 32),
+        cpu=worker_cpu,
         ram="256g",
         disk="256g",
         replicas=replicas,
@@ -228,7 +230,7 @@ def build_may_step() -> ExecutorStep:
     )
     eval_cfg = build_eval()
 
-    name = f"grug-moe-cw-may-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}"
+    name = f"grug-moe-cw-may-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}-cpu{worker_cpu}"
     return ExecutorStep(
         name=f"{name}-{run_id}",
         fn=run_grug_moe_trial,
