@@ -355,16 +355,16 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   stretched on batch). **Do not read mid-flight E2 values** — they're confounded by
   completion (cosine decay); only finals here.
 
-  | wd \ lr | 1.75e-4 | 2.5e-4 | 3.5e-4 | 5e-4 | 7e-4 |
-  |---|---|---|---|---|---|
-  | **0.02** | | 3.011 | 3.001 | **2.986** | |
-  | **0.05** | | 3.021 | | 2.982 | |
-  | **0.1**  | | 3.016 | | 2.986 | |
+  | wd \ lr | 1.75e-4 | 2.5e-4 | 3.5e-4 | 5e-4 | 7e-4 | 1e-3 |
+  |---|---|---|---|---|---|---|
+  | **0.02** | | 3.011 | 3.001 | 2.986 | | _(w2p)_ |
+  | **0.05** | | 3.021 | 3.000 | 2.982 | **2.979** | _(w2p)_ |
+  | **0.1**  | | 3.016 | | 2.986 | | _(w2p)_ |
 
-  _7 of 15 E2 finals (~13:15Z). **5e-4 column complete (2.982–2.986), the best E2 region**;
-  monotone `5e-4 > 3.5e-4 (3.001) > 2.5e-4 (~3.01–3.02)`. E2 optimum ≥5e-4 (higher than
-  E1's anchor). 5e-4 still interior — await the 7e-4 column (resubmitted w2o + others); if
-  7e-4 wins, **extend E2 LR to 1e-3** (mirrors the E1 edge extension). All E2 beat every E1._
+  _9 of 15 E2 finals (~13:45Z). **`7e-4/wd0.05`=2.979 is now best**, edging 5e-4 (2.982) —
+  so like E1, the E2 optimum is on the **7e-4 top edge**. Per the edge rule, **launched the
+  E2 `1e-3` column** (w2p, ~13:47Z, v5p-32 batch). Both waves now agree the good-LR region
+  is ≥7e-4, well above the #70 anchor 3.5e-4. Top is fairly flat (5e-4≈7e-4 ~2.98)._
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
 - Measured drift 1→2: `Δlog lr=…, Δlog wd=…` (E2 3.021 < E1 ~3.06 → 2 epochs helps)
