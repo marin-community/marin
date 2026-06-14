@@ -294,19 +294,23 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   ~0.08 higher via cosine decay, so only true finals go here). Rows = WD, cols = LR.
   Filling in as runs finish (~21:15Z, 2 of 12 done):
 
-  | wd \ lr | 8.75e-5 | 1.75e-4 | 3.5e-4 | 7e-4 |
-  |---|---|---|---|---|
-  | **0.02** | | 3.112 | **3.0623** | |
-  | **0.05** | 3.1535 | 3.116 | 3.0705 | |
-  | **0.1**  | 3.152 | 3.113 | 3.0662 | |
+  | wd \ lr | 8.75e-5 | 1.75e-4 | 3.5e-4 | 7e-4 | 1e-3 |
+  |---|---|---|---|---|---|
+  | **0.02** | | 3.112 | 3.0623 | 3.084 | _(w1d)_ |
+  | **0.05** | 3.1535 | 3.116 | 3.0705 | **3.046** | _(w1d)_ |
+  | **0.1**  | 3.152 | 3.113 | 3.0662 | 3.052 | _(w1d)_ |
 
-  _8 of 12 finals in (~07:45Z). `lr3.5e-4` wins everywhere (3.062–3.071); both flanks
-  clearly worse — `1.75e-4`≈3.11–3.12, `8.75e-5`≈3.15. WD flat (~0.008). LR optimum holds
-  at 3.5e-4; **the 7e-4 column (slow v6e-4) is the long pole** to bound it above.
-  Remaining: 8.75e-5/wd0.02, 7e-4 column._
+  _11 of 12 finals (~12:45Z). **The 7e-4 column flips the conclusion: 7e-4 beats 3.5e-4 at
+  wd0.05 (3.046 vs 3.070) and wd0.1 (3.052 vs 3.066)** — so the E1 LR optimum is on the
+  **top edge (≥7e-4), not 3.5e-4**. Best E1 so far = `7e-4/wd0.05`=**3.046**. Per the
+  edge-extension rule, **launched the `1e-3` column** (w1d, ~12:48Z, v5p-32 batch). At
+  wd0.02, 3.5e-4 (3.062) still beats 7e-4 (3.084) — an LR×WD interaction (lower WD favors
+  lower LR). Last base cell `8.75e-5/wd0.02` still running._
 
-- Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ (leaning
-  `lr3.5e-4/wd0.02`=3.0623, pending the 1.75e-4/7e-4 columns + WD neighbors)
+- Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ — **NOT yet
+  confirmed**: leader is `7e-4/wd0.05`=3.046 but 7e-4 is the **top edge** (extending to
+  1e-3 via w1d). If 1e-3 ≥ 7e-4, optimum is interior near 7e-4; if 1e-3 still improving,
+  extend again.
 - Notes (edges extended, zoom, etc.): _12 launched, then **2 v6e-8 cells killed
   to get under the iris budget cap** — `lr8.75e-5 × wd0.02` and `lr8.75e-5 × wd0.1`
   (lowest-LR corners, least informative). SPENT 84,044 → 67,466 (cap 75,000). The
