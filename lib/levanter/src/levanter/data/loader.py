@@ -3,7 +3,6 @@
 
 import asyncio
 import dataclasses
-import functools
 import logging
 import time
 import warnings
@@ -560,9 +559,18 @@ class _JaxCpuBackgroundIterator(BackgroundIterator[Ex]):
             super()._fill_queue_with_batches()
 
 
-# @equinox.filter_jit
-@functools.partial(jax.jit, static_argnums=(0,))
 def stack_tree(batch_name, individual_datums):
+    # Deliberately NOT jitted. This runs from two mesh contexts: the data-loader
+    # producer thread under `local_cpu_mesh()` (CPU mesh) and the consumer in
+    # `_batchify_local_data` (main trainer thread) under the device mesh (TPU). A
+    # module-level `@jax.jit` here bakes the active mesh into the cached
+    # compilation; whichever context traces first wins, and the other context's
+    # later call hits that cached compilation with a mismatched context mesh —
+    # on multi-host TPU that raises "Received incompatible devices" at the first
+    # in-training eval boundary (intermittent, since it races on first-touch
+    # across trainer restarts). Eager `hax.stack`/`jnp.stack` dispatch on each
+    # input's own devices, so there is no compiled mesh to mismatch. The fan-in
+    # stacks are cheap enough that the lost fusion is not worth the bug.
     def _stack_leaves_unchecked(*leaves):
         if is_named_array(leaves[0]):
             return hax.stack(batch_name, leaves)
