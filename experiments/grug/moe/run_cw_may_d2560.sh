@@ -37,6 +37,7 @@ PROFILER_STEPS=8
 ENABLE_HLO_PROTO=true
 HOST_TRACER_LEVEL=1
 PYTHON_TRACER_LEVEL=0
+XLA_MEMORY_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.95}"
 
 usage() {
     cat <<'EOF'
@@ -58,6 +59,7 @@ Options:
   --steps N                 MAY_STEPS (default: 30).
   --profiler-start N        MAY_PROFILER_START (default: 12).
   --profiler-steps N        MAY_PROFILER_STEPS (default: 8; set 0 to disable).
+  --xla-memory-fraction F   XLA_PYTHON_CLIENT_MEM_FRACTION (default: 0.95).
   --tracker NAME            MAY_TRACKER: wandb or json_logger (default: wandb).
   --data NAME               MAY_DATA: slimpajama or nemotron (default: slimpajama).
   --checkpoints MODE        MAY_CHECKPOINTS: local or s3 (default: local).
@@ -130,6 +132,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --profiler-steps)
             PROFILER_STEPS="$2"
+            shift 2
+            ;;
+        --xla-memory-fraction)
+            XLA_MEMORY_FRACTION="$2"
             shift 2
             ;;
         --tracker)
@@ -223,6 +229,7 @@ ENV_ARGS=(
     -e MAY_PROFILER_ENABLE_HLO_PROTO "$ENABLE_HLO_PROTO"
     -e MAY_PROFILER_HOST_TRACER_LEVEL "$HOST_TRACER_LEVEL"
     -e MAY_PROFILER_PYTHON_TRACER_LEVEL "$PYTHON_TRACER_LEVEL"
+    -e XLA_PYTHON_CLIENT_MEM_FRACTION "$XLA_MEMORY_FRACTION"
 )
 
 for maybe_env in WANDB_API_KEY WANDB_ENTITY WANDB_PROJECT MAY_WANDB_GROUP; do
@@ -254,6 +261,7 @@ seq_len: $SEQ_LEN
 steps: $STEPS
 tracker: $TRACKER
 profiler: start=$PROFILER_START steps=$PROFILER_STEPS hlo_proto=$ENABLE_HLO_PROTO
+xla_memory_fraction: $XLA_MEMORY_FRACTION
 mp: $MP
 live_param_mode: $LIVE_PARAM_MODE
 attention: $ATTENTION_IMPLEMENTATION

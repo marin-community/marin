@@ -203,3 +203,24 @@
 - Result: dispatcher submitted successfully. First poll showed the parent running and the child running with 32 tasks in `building`; W&B was not visible yet.
 - Interpretation: GM2560-MFU-005 is the active first-profile candidate after the CE OOM fix.
 - Next action: Hooke is babysitting on a 10-minute heartbeat; watch for W&B visibility, first scalar metrics, profile artifact, or another pre-step OOM.
+
+### 2026-06-14 00:10 PDT - GM2560-MFU-005 killed after XLA CE startup OOM
+- Hypothesis: forcing XLA CE removed the exact pallas CE path but did not reduce the d2560/batch256 peak enough; `compute_with_master` is not a guaranteed memory reduction for this shape.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --config lib/iris/config/cw-us-east-02a.yaml job list --json --prefix /dlwh/iris-run-job-20260614-064720`
+  - `uv run --package marin-iris --extra controller iris --config lib/iris/config/cw-us-east-02a.yaml job summary --json /dlwh/iris-run-job-20260614-064720/grug-train-GM2560-MFU-005-cw-20260613-2350`
+  - `uv run --package marin-iris --extra controller iris --config lib/iris/config/cw-us-east-02a.yaml job logs --since-seconds 1200 /dlwh/iris-run-job-20260614-064720/grug-train-GM2560-MFU-005-cw-20260613-2350 | rg -i -e "Progress on:train|RESOURCE_EXHAUSTED|Out of memory|trying to allocate 60|Fatal error|train.py|step = int|WatchTasksAsync failed|wandb|profile|profiler"`
+- Config: GM2560-MFU-005, 32 H100 nodes, source head `bbba806e9`, `MAY_ATTENTION_IMPLEMENTATION=gpu_fa4_cute`, `MAY_EXPERT_AXIS=8`, `MAY_REPLICA_AXIS=1`, `MAY_BATCH=256`, `MAY_SEQ_LEN=4096`, `MAY_CE_IMPLEMENTATION=xla`, `MAY_LIVE_PARAM_MODE=compute_with_master`, `MAY_REMAT=save_moe`.
+- Result: parent and child ended `JOB_STATE_KILLED` with `error="Terminated by user"`. The child had `task_state_counts={"killed": 32}`, `failure_count=0`, and no preemptions. Logs show train progress still at `-/30`, with elapsed around 15:22-15:50, then multiple ranks hit BFC allocator OOMs trying to allocate `60.23GiB`; the fatal stack raises `jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED` while converting `state.step` in `experiments/grug/moe/train.py:556`. W&B is failed with `last_history_step=-1`, only source/requirements artifacts, and no scalar metrics or profile artifact.
+- Interpretation: GM2560-MFU-005 did not solve the startup HBM peak. The failure is still pre-step and therefore no MFU/profile data exists.
+- Next action: do not blind relaunch. The next sensible axes are default `live_param_mode=param` with XLA CE to isolate the `compute_with_master` memory tradeoff, then `--remat recompute_all` and/or smaller batch if the default live-param layout still OOMs.
+
+### 2026-06-14 00:33 PDT - explicit H100 XLA memory fraction for GM2560-MFU-006
+- Hypothesis: the `60.23GiB` allocator request is the compiled executable's temp arena colliding with JAX's default 75% H100 memory pool, not a single logits tensor. `60.23GiB / 0.75` is about 80.3 GiB, matching H100 HBM scale.
+- Command:
+  - `uv run python - <<'PY' ... abstract-state sharding summary ... PY`
+  - `experiments/grug/moe/run_cw_may_d2560.sh --run-id dry-run-memory-fraction --ce-implementation xla --live-param-mode param --xla-memory-fraction 0.95`
+- Config: local validation only. The abstract mesh was `(replica_dcn=1, data=32, expert=8, model=1)` with the same d=2560, 256-expert May model and MuonH optimizer as GM005.
+- Result: abstract-state sizing shows fp32 params are about 249.9 GiB global / 1.34 GiB local, optimizer state about 252.4 GiB global / 1.48 GiB local, and `compute_with_master` adds about 0.67 GiB local bf16 live params. The wrapper dry run now forwards `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95` to Iris.
+- Interpretation: params, fp32 master params, and optimizer state are already sharded enough that they cannot explain a 60 GiB per-GPU allocation. The next full-shape attempt should keep `live_param_mode=param`, force XLA CE, and expand the XLA GPU pool before switching remat or reducing batch.
+- Next action: validate the launcher change, commit/push it, then launch GM2560-MFU-006 with `--ce-implementation xla --live-param-mode param --xla-memory-fraction 0.95` and babysit it to first metrics/profile or terminal failure.

@@ -191,7 +191,10 @@ attention baseline because packed SlimPajama examples carry segment IDs and the
 GPU default attention path otherwise falls back to dense reference attention.
 If the GPU pallas cross-entropy path OOMs before the first step, use
 `--ce-implementation xla` to force the streaming XLA CE backend while keeping
-the same model and batch shape.
+the same model and batch shape. The wrapper also sets
+`XLA_PYTHON_CLIENT_MEM_FRACTION=0.95` by default because the first d=2560 H100
+attempts needed an executable temp arena close to JAX's default 75% HBM pool;
+override it with `--xla-memory-fraction` for allocator diagnostics.
 The precision policy keeps the fp32 parameter tree and optimizer state sharded;
 set `--live-param-mode compute_with_master` to keep a live bf16 parameter tree
 for forward/backward plus a sharded fp32 master tree for optimizer state and
