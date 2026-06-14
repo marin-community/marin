@@ -662,3 +662,13 @@ THEN msign (Newton-Schulz quintic). msign AFTER rotate-back (not in-basis): q is
 under pf>1, so msign must orthogonalize the ACTUAL full-space update (in-basis msign == plain Muon only for
 exactly-orthonormal q). CPU-verified finite + msign orthogonalizes. Launched hp-soapmuonh (070647) at the
 deliverable config (identity_init+pf8) -> if its paloma < MuonH 3.5438, that single run is the deliverable.
+
+### HP coordinate-descent round 1 results + re-anchor (2026-06-14 ~10:35)
+All at identity_init+pf8, final paloma vs MuonH 3.5438 (baseline eff/pf8=3.5523):
+  beta2=0.95: 3.5475 (-0.0048)  *** | init_factor=0.2: 3.5472 (-0.0051) *** | shampoo=0.95: 3.5527 (~0)
+  beta2=0.99: 3.5537 | shampoo=0.99: 3.5588 | soap_eps=1e-6: 3.5694 | SOAP-MuonH: 3.5572 (no help)
+identity_init CONFIRMED loss-neutral: eff-baseline 3.5523 == fix-pf8 3.5544 (within noise).
+RE-ANCHOR: {beta2=0.95, init_factor=0.2} -> 3.5475 (= pre-pollution best, +0.0037 from MuonH). Round 2 from
+combo: verify combo (103642), lr_schedule=cosine (103701, decay-tail lever), LR_MULT 0.85/1.15 (103714/27).
+THROUGHPUT note: deliverable tok/s contention-sensitive (eff-baseline 316k under 9-way self-contention vs
+fix-pf8 331k); FINAL deliverable must run low-contention to show >=330k. Tuning runs OK contended (loss unaffected).
