@@ -135,3 +135,18 @@
 - Result: removed the FA4/CuTe dynamic q/kv segment-id equality check for packed self-attention and fused the MoE variant q/k/v projection into one `einsum` plus splits. Focused tests and py_compile passed. GM2560-MFU-003 still has no W&B history rows and is emitting repeated old-code `[SPMD] ... get-tuple-element(%conditional)` warnings.
 - Interpretation: the old-code run is unlikely to be the right baseline if it never reaches a step soon; the next profile should relaunch from this patched commit with FA4 and default `live_param_mode=param`, then use `compute_with_master` only if the profile shows parameter movement or optimizer/update overhead.
 - Next action: run changed-file checks, commit/push, then stop and relaunch the FA4 profile if GM2560-MFU-003 has not reached step metrics.
+
+### 2026-06-13 23:18 PDT - GM2560-MFU-004 patched FA4 profile launch
+- Hypothesis: the patched FA4 metadata path and fused q/k/v projection should reduce compile-time SPMD layout churn enough to get a cleaner first H100 profile.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260614-054507`
+  - `experiments/grug/moe/run_cw_may_d2560.sh --submit --run-id GM2560-MFU-004-cw-20260613-2318 --attention gpu_fa4_cute`
+- Config:
+  - Stopped stale parent: `/dlwh/iris-run-job-20260614-054507`
+  - New parent: `/dlwh/iris-run-job-20260614-061825`
+  - Commit: `88dad4287e9e78458d469e02684563307640afe7`
+  - Same profile shape: 32 H100 nodes, `MAY_EXPERT_AXIS=8`, `MAY_REPLICA_AXIS=1`, `MAY_BATCH=256`, `MAY_SEQ_LEN=4096`, `MAY_STEPS=30`, `MAY_PROFILER_START=12`, `MAY_PROFILER_STEPS=8`
+  - Attention/precision: `MAY_ATTENTION_IMPLEMENTATION=gpu_fa4_cute`, `MAY_MP=params=float32,compute=bfloat16,output=bfloat16`, `MAY_LIVE_PARAM_MODE=param`
+- Result: GM2560-MFU-003 was stopped before any W&B history or profile artifact. GM2560-MFU-004 dispatcher submitted successfully.
+- Interpretation: GM2560-MFU-004 is now the active first-profile candidate; `compute_with_master` remains a follow-up A/B only after this profile shows parameter or optimizer overhead.
+- Next action: babysit GM2560-MFU-004 through startup, first metrics, and profile artifact upload.
