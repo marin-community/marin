@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import dataclasses
-import functools
 import logging
 import time
 from dataclasses import dataclass, field
@@ -251,8 +250,11 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
-def _relayout_state_for_donation(train_step, state, batch, max_iters: int = 3):
-    """Relayout the train state to ``train_step``'s donation-stable output layout.
+def _relayout_state_for_donation(discovery_step, state, batch, max_iters: int = 3):
+    """Relayout the train state to the step's donation-stable output layout.
+
+    ``discovery_step`` is the NON-donating twin of the loop's train step (same computation, hence the
+    same layout assignment) so these throwaway compiles don't themselves emit the donation warning.
 
     The jitted train step donates the state (donate_argnums=0); XLA can only alias a donated input
     buffer to an output buffer when their memory LAYOUTS match. The SOAP optimizer's einsums make XLA
@@ -267,7 +269,7 @@ def _relayout_state_for_donation(train_step, state, batch, max_iters: int = 3):
     place. Pure layout (values unchanged); costs a couple of throwaway compiles at startup.
     """
     for _ in range(max_iters):
-        compiled = train_step.lower(state, batch, compute_watch=False).compile()
+        compiled = discovery_step.lower(state, batch, compute_watch=False).compile()
         in_fmt = compiled.input_formats[0]  # positional arg 0 == state
         out_fmt = compiled.output_formats[0]  # return elem 0 == next_state
         in_layouts = [f.layout for f in jax.tree.leaves(in_fmt)]
@@ -315,8 +317,7 @@ def _make_train_step(
     else:
         watch_targets = ()
 
-    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
-    def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
+    def _step_impl(state: GrugTrainState, batch, *, compute_watch: bool = False):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
         qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
@@ -382,7 +383,14 @@ def _make_train_step(
 
         return next_state, metrics, watch_stats
 
-    return train_step
+    # Donating step for the loop, plus a non-donating twin used ONLY for layout discovery in
+    # _relayout_state_for_donation (it compiles the step to read the natural output layout; compiling
+    # the donating step there would emit a spurious "donated buffers not usable" warning at the
+    # pre-relayout layout). Layout assignment is identical with/without donation, so the twin yields
+    # the same layouts.
+    train_step = jax.jit(_step_impl, donate_argnums=(0,), static_argnames=("compute_watch",))
+    train_step_nodonate = jax.jit(_step_impl, static_argnames=("compute_watch",))
+    return train_step, train_step_nodonate
 
 
 def _run_grug_local(config: GrugRunConfig) -> None:
@@ -397,7 +405,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
     watch_config = trainer.watch
-    train_step = _make_train_step(
+    train_step, train_step_nodonate = _make_train_step(
         optimizer,
         trainer.mp,
         z_loss_weight=config.trainer.z_loss_weight,
@@ -513,7 +521,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         # Relayout the state so the jitted train step can alias its donated buffers (donate_argnums=0).
         # Uses the first batch, which is then reused as the loop's first batch (no data dropped).
         pending_first_batch = next(iterator)
-        state = _relayout_state_for_donation(train_step, state, pending_first_batch)
+        state = _relayout_state_for_donation(train_step_nodonate, state, pending_first_batch)
 
         # Main optimization loop.
         try:
