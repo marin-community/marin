@@ -16,9 +16,9 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_MP=params=float32,compute=bfloat16,output=bfloat16
 
 The default parameter policy keeps one sharded fp32 parameter tree plus sharded
-optimizer state. A persistent bf16-params + fp32-master split is not currently a
-Grug train-state mode; use ``MAY_MP=params=bfloat16,...`` only for a risky
-throughput experiment that gives up the fp32 master copy.
+optimizer state. Set ``MAY_LIVE_PARAM_MODE=compute_with_master`` to keep a
+live bf16 parameter tree for forward/backward plus a sharded fp32 master tree
+for optimizer state and updates.
 """
 
 import dataclasses
@@ -44,7 +44,7 @@ from experiments.grug.moe.launch import (
 )
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
-from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
+from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig, LiveParamMode
 
 GPUS_PER_NODE = 8
 DEFAULT_HIDDEN_DIM = 2560
@@ -198,6 +198,7 @@ def build_may_step() -> ExecutorStep:
     grug_trainer = GrugTrainerConfig(
         expert_axis_size=expert_axis,
         replica_axis_size=replica_axis,
+        live_param_mode=cast(LiveParamMode, os.environ.get("MAY_LIVE_PARAM_MODE", "param")),
         z_loss_weight=0.0,
         ema_beta=None,
         log_every=1,

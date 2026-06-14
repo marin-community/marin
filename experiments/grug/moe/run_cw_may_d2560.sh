@@ -28,6 +28,7 @@ CHECKPOINTS="local"
 DATA="slimpajama"
 REMAT="save_moe"
 MP="params=float32,compute=bfloat16,output=bfloat16"
+LIVE_PARAM_MODE="param"
 ATTENTION_IMPLEMENTATION="gpu_fa4_cute"
 TRACKER="wandb"
 PROFILER_START=12
@@ -61,6 +62,7 @@ Options:
   --checkpoints MODE        MAY_CHECKPOINTS: local or s3 (default: local).
   --remat MODE              MAY_REMAT: save_moe or recompute_all (default: save_moe).
   --mp POLICY               MAY_MP policy string.
+  --live-param-mode MODE    MAY_LIVE_PARAM_MODE: param or compute_with_master (default: param).
   --attention NAME          MAY_ATTENTION_IMPLEMENTATION (default: gpu_fa4_cute).
   -h, --help                Show this help.
 
@@ -148,6 +150,10 @@ while [ "$#" -gt 0 ]; do
             MP="$2"
             shift 2
             ;;
+        --live-param-mode)
+            LIVE_PARAM_MODE="$2"
+            shift 2
+            ;;
         --attention)
             ATTENTION_IMPLEMENTATION="$2"
             shift 2
@@ -163,6 +169,15 @@ while [ "$#" -gt 0 ]; do
             ;;
     esac
 done
+
+case "$LIVE_PARAM_MODE" in
+    param|compute_with_master)
+        ;;
+    *)
+        echo "ERROR: --live-param-mode must be param or compute_with_master, got: $LIVE_PARAM_MODE" >&2
+        exit 1
+        ;;
+esac
 
 if [ -f "$ENV_FILE" ] || [ "$ENV_FILE_EXPLICIT" = true ]; then
     R2_EXPORTS="$("${REPO_ROOT}/scripts/iris/cloudflare_r2_env.sh" "$ENV_FILE")"
@@ -193,6 +208,7 @@ ENV_ARGS=(
     -e MAY_DATA "$DATA"
     -e MAY_REMAT "$REMAT"
     -e MAY_MP "$MP"
+    -e MAY_LIVE_PARAM_MODE "$LIVE_PARAM_MODE"
     -e MAY_ATTENTION_IMPLEMENTATION "$ATTENTION_IMPLEMENTATION"
     -e MAY_TRACKER "$TRACKER"
     -e MAY_PROFILER_START "$PROFILER_START"
@@ -232,6 +248,7 @@ steps: $STEPS
 tracker: $TRACKER
 profiler: start=$PROFILER_START steps=$PROFILER_STEPS hlo_proto=$ENABLE_HLO_PROTO
 mp: $MP
+live_param_mode: $LIVE_PARAM_MODE
 attention: $ATTENTION_IMPLEMENTATION
 
 Command shape:

@@ -8,6 +8,7 @@ import functools
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Literal
 
 import equinox as eqx
 import jax
@@ -50,6 +51,9 @@ from experiments.grug.moe.model import GrugModelConfig, Transformer
 logger = logging.getLogger(__name__)
 
 
+LiveParamMode = Literal["param", "compute_with_master"]
+
+
 @dataclass(frozen=True)
 class GrugTrainerConfig:
     """Runtime knobs for grug training."""
@@ -69,6 +73,14 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
+    live_param_mode: LiveParamMode = "param"
+    """Parameter storage mode.
+
+    "param" keeps the train state parameter tree in the jmp param dtype.
+    "compute_with_master" keeps a live compute-dtype parameter tree for
+    forward/backward and a separate param-dtype master tree for optimizer state
+    and updates.
+    """
 
 
 @dataclass(frozen=True)
@@ -245,6 +257,7 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
 class GrugTrainState:
     step: jax.Array
     params: Transformer
+    master_params: Transformer | None
     opt_state: optax.OptState
     ema_params: Transformer | None
     pending_qb_betas: jax.Array
@@ -272,13 +285,24 @@ def initial_state(
     mp: jmp.Policy,
     key: PRNGKeyArray,
     ema_beta: float | None,
+    live_param_mode: LiveParamMode = "param",
 ) -> GrugTrainState:
-    params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    param_params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    if live_param_mode == "param":
+        params = param_params
+        master_params = None
+    elif live_param_mode == "compute_with_master":
+        params = mp.cast_to_compute(param_params)
+        master_params = param_params
+    else:
+        raise ValueError(f"Unknown live_param_mode={live_param_mode!r}")
+
     num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
-        opt_state=optimizer.init(params),
+        master_params=master_params,
+        opt_state=optimizer.init(param_params),
         ema_params=params if ema_beta is not None else None,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
     )
@@ -308,6 +332,11 @@ def _make_train_step(
         # host-side TPU kernel launches that can cause SPMD sync issues).
         with jax.named_scope("apply_qb_betas"):
             qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
+            if state.master_params is None:
+                qb_master_params = qb_params
+            else:
+                qb_master_params = _apply_qb_betas(state.master_params, state.pending_qb_betas)
+
             if ema_beta is not None:
                 qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
             else:
@@ -328,9 +357,14 @@ def _make_train_step(
             (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
         with jax.named_scope("optimizer_update"):
-            updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
+            updates, opt_state = optimizer.update(grads, state.opt_state, qb_master_params)
         with jax.named_scope("apply_updates"):
-            params = optax.apply_updates(qb_params, updates)
+            if state.master_params is None:
+                params = optax.apply_updates(qb_params, updates)
+                master_params = None
+            else:
+                master_params = optax.apply_updates(qb_master_params, updates)
+                params = mp.cast_to_compute(master_params)
 
         with jax.named_scope("ema_update"):
             if ema_beta is None:
@@ -364,6 +398,7 @@ def _make_train_step(
             state,
             step=state.step + one,
             params=params,
+            master_params=master_params,
             opt_state=opt_state,
             ema_params=ema_params,
             pending_qb_betas=metrics["qb_beta_per_layer"],
@@ -429,6 +464,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 mp=trainer.mp,
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
+                live_param_mode=config.trainer.live_param_mode,
             )
 
         state = _init_state(model_key)
@@ -585,6 +621,7 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "LiveParamMode",
     "initial_state",
     "run_grug",
 ]

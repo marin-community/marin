@@ -190,10 +190,11 @@ nodes, `MAY_EXPERT_AXIS=8`, `MAY_REPLICA_AXIS=1`, `MAY_BATCH=256`,
 attention baseline because packed SlimPajama examples carry segment IDs and the
 GPU default attention path otherwise falls back to dense reference attention.
 The precision policy keeps the fp32 parameter tree and optimizer state sharded;
-persistent bf16 train params plus a separate fp32 master copy is not currently a
-Grug train-state mode. It defaults to `MAY_DATA=slimpajama` for an R2-friendly
-speed run; set `--data nemotron` only when the Nemotron tokenized inputs are
-available where the CoreWeave job will read them.
+set `--live-param-mode compute_with_master` to keep a live bf16 parameter tree
+for forward/backward plus a sharded fp32 master tree for optimizer state and
+updates. It defaults to `MAY_DATA=slimpajama` for an R2-friendly speed run; set
+`--data nemotron` only when the Nemotron tokenized inputs are available where
+the CoreWeave job will read them.
 
 ### R2 credentials
 

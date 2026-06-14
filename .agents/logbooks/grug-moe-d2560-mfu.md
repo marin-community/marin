@@ -99,3 +99,18 @@
 - Result: GM2560-MFU-002 was terminated before any W&B scalar metrics or profile artifacts. GM2560-MFU-003 dispatcher submitted successfully.
 - Interpretation: GM2560-MFU-003 is now the first serious H100 fast-path profile candidate for the >=20% MFU target.
 - Next action: monitor GM2560-MFU-003 for startup failures from FA4 dependencies, then ingest the W&B `jax_profile` artifact if it reaches the profile window.
+
+### 2026-06-13 22:58 PDT - fp32-master/bf16-live A/B knob added while GM2560-MFU-003 compiles
+- Hypothesis: if the GM2560-MFU-003 profile shows FSDP parameter movement or fp32 parameter gathers are hot, a persistent bf16 live parameter tree with a sharded fp32 master tree should reduce forward/backward parameter traffic without giving up fp32 optimizer updates.
+- Command:
+  - `uv run pytest tests/test_grug_variant_contracts.py::test_grug_moe_compute_live_params_keep_fp32_master tests/test_grug_variant_contracts.py::test_grug_moe_compute_live_params_one_step_lowers tests/test_grug_variant_contracts.py::test_grug_moe_may_recipe_attention_flags_lower experiments/grug/moe/test_optimizer.py -q`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `uvx pyrefly@1.0.0 check --baseline .pyrefly-baseline.json`
+  - `experiments/grug/moe/run_cw_may_d2560.sh --live-param-mode compute_with_master --run-id dry-run-live-param-mode-test`
+- Config:
+  - New opt-in mode: `GrugTrainerConfig.live_param_mode="compute_with_master"`
+  - Wrapper flag: `experiments/grug/moe/run_cw_may_d2560.sh --live-param-mode compute_with_master`
+  - Default remains `live_param_mode=param`, so GM2560-MFU-003 is unchanged.
+- Result: focused tests, changed-file pre-commit, Pyrefly, and the wrapper dry run passed. GM2560-MFU-003 remains running with 32/32 worker tasks and no W&B history rows or profile artifact yet.
+- Interpretation: sharded optimizer state was already present; this adds the next precision-storage A/B without relaunching the active baseline. Current GM2560-MFU-003 logs show XLA SPMD partitioning warnings about involuntary full rematerialization from replicated/maximal or batch-sharded tensors into the 256-way batch/expert layout, so sharding transitions should be checked in the first profile.
+- Next action: keep waiting for GM2560-MFU-003 to finish first compile and emit step metrics/profile, then decide whether the first follow-up is `compute_with_master`, a sharding/remat fix, or an MoE/attention change.
