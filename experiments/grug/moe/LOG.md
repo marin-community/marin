@@ -672,3 +672,11 @@ RE-ANCHOR: {beta2=0.95, init_factor=0.2} -> 3.5475 (= pre-pollution best, +0.003
 combo: verify combo (103642), lr_schedule=cosine (103701, decay-tail lever), LR_MULT 0.85/1.15 (103714/27).
 THROUGHPUT note: deliverable tok/s contention-sensitive (eff-baseline 316k under 9-way self-contention vs
 fix-pf8 331k); FINAL deliverable must run low-contention to show >=330k. Tuning runs OK contended (loss unaffected).
+
+### HP round 2 results: combo no-stack, cosine hurts -> KLSOAPH plateau ~3.547 (2026-06-14 ~12:55)
+hp-combo (beta2=0.95+initf=0.2) FINAL = 3.5477 (+0.0039 vs MuonH) -- init_factor does NOT stack on beta2
+(same ~3.547 floor). hp-combo-cosine = 3.5642 (+0.0205) -- cosine schedule HURTS at final (linear-to-0 best;
+its lower @10000 was misleading mid-run). Schedule lever closed. KLSOAPH plateaus ~3.547 = pre-pollution best,
++0.0037 from MuonH 3.5438. Untested: lr-DOWN (pre-pollution only tested lr-up=worse). Re-launched lr0.85
+(125634) + lr0.70 (125654) to completion (lr0.85 was promising mid-run before east5 crash). If lr-down doesn't
+break 3.547, KLSOAPH ~matches but does not beat MuonH (honest negative for the loss criterion).
