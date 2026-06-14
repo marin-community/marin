@@ -46,3 +46,21 @@
 - Result: source recipe verified from the GitHub comment; no duplicate open issue found for `d2560 Grug MoE MFU profile`.
 - Interpretation: kickoff artifacts should track the speed work separately from the original architecture summary.
 - Next action: launch or prepare GM2560-MFU-002 with profiler settings.
+
+### 2026-06-13 22:36 PDT - GM2560-MFU-002 H100 profile launch
+- Hypothesis: the 32-node H100 baseline with `expert_axis=8`, `save_moe`, sharded fp32 params, and bf16 compute will reveal the dominant gap to 20% MFU.
+- Command:
+  - `experiments/grug/moe/run_cw_may_d2560.sh --submit --run-id GM2560-MFU-002-cw-20260613-2248`
+- Config:
+  - Job id: `/dlwh/iris-run-job-20260614-053509`
+  - Commit: `5d5bc369a4b858551f8f36c35ca9f52122cd87f2`
+  - Cluster: `cw-us-east-02a`
+  - Nodes: 32 H100 nodes, 8 GPUs per node
+  - Mesh: `MAY_REPLICA_AXIS=1`, `MAY_EXPERT_AXIS=8`
+  - Batch/sequence: `MAY_BATCH=256`, `MAY_SEQ_LEN=4096`
+  - Steps/profile: `MAY_STEPS=30`, `MAY_PROFILER_START=12`, `MAY_PROFILER_STEPS=8`, `MAY_PROFILER_ENABLE_HLO_PROTO=true`
+  - Precision/remat: `MAY_MP=params=float32,compute=bfloat16,output=bfloat16`, `MAY_REMAT=save_moe`
+  - Tracker/checkpoints/data: `MAY_TRACKER=wandb`, `MAY_CHECKPOINTS=local`, `MAY_DATA=slimpajama`
+- Result: dispatcher job submitted; profile babysitting assigned to subagent Hooke (`019ec4a1-9e0d-7633-920e-edb54757dec1`).
+- Interpretation: this should produce the first W&B-backed `jax_profile` artifact if the run reaches step 20.
+- Next action: monitor job state, capture W&B/profile artifact, ingest with `lib/marin/tools/profile_summary.py`, and classify MoE/attention/FSDP/optimizer overhead.
