@@ -428,9 +428,19 @@ message AuthConfig {
   // When true, authentication is attempted but not required. Requests with
   // valid tokens get the authenticated identity; requests without tokens
   // fall through as anonymous admin. Invalid tokens are still rejected.
-  // This allows gradual rollout of auth on clusters that currently rely on
-  // SSH tunnels.
+  // This trusts tokenless requests from ANY origin, so it is safe only for
+  // private clusters. For a public controller use trust_loopback instead.
   bool optional = 4;
+
+  // When true, tokenless requests that arrive over a genuine loopback
+  // connection (SSH tunnel / on-host) are trusted and may declare their
+  // identity via the X-Iris-User header (granted the admin role). Public
+  // connections still require a valid token. This is the SSH-tunnel
+  // transition path for a public controller; see
+  // docs/auth-loopback-transition.md. Unlike `optional`, loopback origin is
+  // verified from the transport peer and cannot be spoofed via
+  // X-Forwarded-For.
+  bool trust_loopback = 5;
 }
 
 // ============================================================================

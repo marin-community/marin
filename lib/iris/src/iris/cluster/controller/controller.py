@@ -408,6 +408,7 @@ class Controller:
             auth_verifier=config.auth_verifier,
             auth_provider=config.auth_provider,
             auth_optional=config.auth.optional if config.auth else False,
+            auth_trust_loopback=config.auth.trust_loopback if config.auth else False,
             finelog_stats_service=self._remote_stats_service,
         )
 

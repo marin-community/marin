@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -103,12 +104,22 @@ def _load_store(store_path: Path) -> dict:
 
 def _save_store(store_path: Path, data: dict) -> None:
     store_path.parent.mkdir(parents=True, exist_ok=True)
-    # Atomic write via rename to prevent readers from seeing a truncated file
-    # when concurrent processes (e.g. pytest-xdist workers) access the store.
-    tmp_path = store_path.with_suffix(".tmp")
-    tmp_path.write_text(json.dumps(data, indent=2) + "\n")
-    os.chmod(tmp_path, 0o600)
-    tmp_path.rename(store_path)
+    # Atomic write via os.replace to prevent readers from seeing a truncated
+    # file. The temp file must be uniquely named per writer: concurrent
+    # processes (e.g. pytest-xdist workers, parallel CLI invocations) sharing a
+    # single ``tokens.tmp`` would race — the first rename wins and the rest fail
+    # with FileNotFoundError. mkstemp gives each writer its own temp file in the
+    # same directory, so os.replace is atomic and last-writer-wins.
+    fd, tmp_name = tempfile.mkstemp(dir=store_path.parent, prefix=store_path.name + ".", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(data, indent=2) + "\n")
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, store_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def _maybe_migrate_legacy(store_path: Path) -> None:

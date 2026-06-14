@@ -13,6 +13,8 @@ pass through as the anonymous admin user.
 """
 
 import contextlib
+import getpass
+import ipaddress
 import logging
 import time
 from contextvars import ContextVar
@@ -30,6 +32,15 @@ from connectrpc.errors import ConnectError
 logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "iris_session"
+
+# Header a trusted-loopback caller uses to declare the identity its requests act
+# as. Honoured only on genuine loopback connections; see is_trusted_loopback.
+IRIS_USER_HEADER = "x-iris-user"
+
+# Identity granted to a trusted-loopback caller that does not declare a user.
+# Mirrors the null-auth default so existing SSH-tunnel users see no change.
+DEFAULT_LOOPBACK_USER = "anonymous"
+LOOPBACK_ROLE = "admin"
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,21 +241,66 @@ class CompositeTokenVerifier:
         raise ValueError(f"All verifiers failed: {'; '.join(errors)}")
 
 
+def is_trusted_loopback(client_address: str | None, headers: dict) -> bool:
+    """Return True if the request arrived over a genuine loopback connection.
+
+    A connection is trusted-loopback iff its transport peer is a loopback
+    address (127.0.0.0/8 or ::1) on a nonzero port *and* it carries no
+    ``X-Forwarded-For`` header.
+
+    The two conditions are individually sufficient and kept together as
+    defence in depth. The controller runs uvicorn with
+    ``forwarded_allow_ips="*"``, so when the client is derived from a forwarded
+    header uvicorn rewrites ``scope["client"]`` to the attacker-controllable
+    leftmost ``X-Forwarded-For`` entry and zeroes the port (it cannot recover
+    the forwarded client's port). A public request spoofing
+    ``X-Forwarded-For: 127.0.0.1`` therefore presents as ``("127.0.0.1", 0)``
+    with the header present — rejected on both counts. Only a direct transport
+    peer on the loopback interface (SSH tunnel / on-host) passes. See
+    ``docs/auth-loopback-transition.md``.
+    """
+    if not client_address:
+        return False
+    if headers.get("x-forwarded-for"):
+        return False
+    host, _, port = client_address.rpartition(":")
+    if not host or not port:
+        return False
+    try:
+        if int(port) == 0:
+            return False
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def resolve_auth(
     token: str | None,
     verifier: TokenVerifier,
     optional: bool,
+    *,
+    client_address: str | None = None,
+    headers: dict | None = None,
+    trust_loopback: bool = False,
 ) -> VerifiedIdentity | None:
     """Shared auth policy for gRPC interceptors and HTTP middleware.
 
     Returns VerifiedIdentity on success, None for anonymous passthrough.
     Raises ValueError on rejected tokens (invalid token, or missing when required).
+
+    A present token always wins. When no token is present and
+    ``trust_loopback`` is set, a genuine loopback connection is trusted and
+    may declare its identity via the ``X-Iris-User`` header (granted the admin
+    role); see ``is_trusted_loopback``.
     """
-    if token is None:
-        if optional:
-            return None
-        raise ValueError("Missing authentication")
-    return verifier.verify(token)
+    if token is not None:
+        return verifier.verify(token)
+    if trust_loopback and is_trusted_loopback(client_address, headers or {}):
+        user = (headers or {}).get(IRIS_USER_HEADER) or DEFAULT_LOOPBACK_USER
+        return VerifiedIdentity(user_id=user, role=LOOPBACK_ROLE)
+    if optional:
+        return None
+    raise ValueError("Missing authentication")
 
 
 class AuthInterceptor:
@@ -352,6 +408,36 @@ class AuthTokenInjector:
         if token:
             ctx.request_headers()["authorization"] = f"Bearer {token}"
         return call_next(request, ctx)
+
+
+class LoopbackUserInjector:
+    """Client-side interceptor that declares the acting user over loopback.
+
+    Attaches ``X-Iris-User`` so a controller running in loopback-trust mode
+    attributes tokenless SSH-tunnel requests to the right user. The header is
+    honoured by the controller only on genuine loopback connections with no
+    bearer token, so it is always safe to send — a public controller ignores
+    it and still demands a token.
+    """
+
+    def __init__(self, user: str):
+        self._user = user
+
+    def intercept_unary_sync(self, call_next, request, ctx):
+        ctx.request_headers()[IRIS_USER_HEADER] = self._user
+        return call_next(request, ctx)
+
+
+def client_interceptors(token_provider: "TokenProvider | None") -> list:
+    """Build the client-side RPC interceptor chain.
+
+    With a token provider, attach the bearer token. Without one (the SSH-tunnel
+    case), declare the local OS user via ``X-Iris-User`` so a loopback-trust
+    controller attributes requests correctly.
+    """
+    if token_provider is not None:
+        return [AuthTokenInjector(token_provider)]
+    return [LoopbackUserInjector(getpass.getuser())]
 
 
 class TokenProvider(Protocol):

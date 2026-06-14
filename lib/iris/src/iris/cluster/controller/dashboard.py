@@ -76,10 +76,27 @@ from iris.rpc.stats_service import RpcStatsService
 logger = logging.getLogger(__name__)
 
 
+def _scope_headers(scope: Scope) -> dict[str, str]:
+    """Lowercase header dict from an ASGI scope."""
+    return {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+
+
+def _scope_client_address(scope: Scope) -> str | None:
+    """Return the transport peer as ``host:port``, or None.
+
+    This is uvicorn's ``scope["client"]`` — the genuine peer for a direct
+    connection, or a forwarded value (port 0) when derived from
+    ``X-Forwarded-For``. ``is_trusted_loopback`` relies on that distinction.
+    """
+    client = scope.get("client")
+    if not client:
+        return None
+    return f"{client[0]}:{client[1]}"
+
+
 def _extract_token_from_scope(scope: Scope) -> str | None:
     """Extract auth token from ASGI scope (cookie or Authorization header)."""
-    headers = {k.decode(): v.decode() for k, v in scope.get("headers", [])}
-    return extract_bearer_token(headers)
+    return extract_bearer_token(_scope_headers(scope))
 
 
 async def _enforce_http_auth(
@@ -88,6 +105,7 @@ async def _enforce_http_auth(
     send: Send,
     verifier: TokenVerifier,
     optional: bool,
+    trust_loopback: bool = False,
 ) -> bool:
     """Resolve auth for an ASGI scope; on failure send a 401 and return False.
 
@@ -96,9 +114,17 @@ async def _enforce_http_auth(
     runs against route-annotated requests) and ``_SubdomainProxyMiddleware``
     (which intercepts before any route can match).
     """
-    token = _extract_token_from_scope(scope)
+    headers = _scope_headers(scope)
+    token = extract_bearer_token(headers)
     try:
-        identity = resolve_auth(token, verifier, optional)
+        identity = resolve_auth(
+            token,
+            verifier,
+            optional,
+            client_address=_scope_client_address(scope),
+            headers=headers,
+            trust_loopback=trust_loopback,
+        )
     except ValueError:
         response = JSONResponse({"error": "authentication required"}, status_code=401)
         await response(scope, receive, send)
@@ -120,10 +146,11 @@ class _RouteAuthMiddleware:
     so HTTP and gRPC layers agree on allow/deny for every token state.
     """
 
-    def __init__(self, app: Starlette, verifier: TokenVerifier, optional: bool = False):
+    def __init__(self, app: Starlette, verifier: TokenVerifier, optional: bool = False, trust_loopback: bool = False):
         self._app = app
         self._verifier = verifier
         self._optional = optional
+        self._trust_loopback = trust_loopback
         self._router = app.router
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -164,7 +191,7 @@ class _RouteAuthMiddleware:
         return "skip"
 
     async def _check_auth(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if not await _enforce_http_auth(scope, receive, send, self._verifier, self._optional):
+        if not await _enforce_http_auth(scope, receive, send, self._verifier, self._optional, self._trust_loopback):
             return
         await self._app(scope, receive, send)
 
@@ -223,17 +250,26 @@ class _DashboardAuthInterceptor:
     - no token + required → rejected
     """
 
-    def __init__(self, verifier: TokenVerifier, optional: bool = False):
+    def __init__(self, verifier: TokenVerifier, optional: bool = False, trust_loopback: bool = False):
         self._verifier = verifier
         self._optional = optional
+        self._trust_loopback = trust_loopback
         self._null = NullAuthInterceptor(verifier=verifier)
 
     def _resolve_or_raise(self, ctx):
         """Returns (identity, fallback_to_null). Raises ConnectError on rejection."""
 
-        token = extract_bearer_token(ctx.request_headers())
+        headers = ctx.request_headers()
+        token = extract_bearer_token(headers)
         try:
-            identity = resolve_auth(token, self._verifier, self._optional)
+            identity = resolve_auth(
+                token,
+                self._verifier,
+                self._optional,
+                client_address=ctx.client_address(),
+                headers=headers,
+                trust_loopback=self._trust_loopback,
+            )
         except ValueError as exc:
             if token is None:
                 raise ConnectError(Code.UNAUTHENTICATED, str(exc)) from exc
@@ -318,11 +354,13 @@ class _SubdomainProxyMiddleware:
         endpoint_proxy: EndpointProxy,
         auth_verifier: TokenVerifier | None = None,
         auth_optional: bool = False,
+        auth_trust_loopback: bool = False,
     ):
         self._app = app
         self._endpoint_proxy = endpoint_proxy
         self._auth_verifier = auth_verifier
         self._auth_optional = auth_optional
+        self._auth_trust_loopback = auth_trust_loopback
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -335,7 +373,9 @@ class _SubdomainProxyMiddleware:
             return
 
         if self._auth_verifier is not None:
-            if not await _enforce_http_auth(scope, receive, send, self._auth_verifier, self._auth_optional):
+            if not await _enforce_http_auth(
+                scope, receive, send, self._auth_verifier, self._auth_optional, self._auth_trust_loopback
+            ):
                 return
 
         request = Request(scope, receive=receive)
@@ -397,6 +437,7 @@ class ControllerDashboard:
         auth_verifier: TokenVerifier | None = None,
         auth_provider: str | None = None,
         auth_optional: bool = False,
+        auth_trust_loopback: bool = False,
         finelog_stats_service: StatsServiceProxy | None = None,
     ):
         self._service = service
@@ -407,6 +448,7 @@ class ControllerDashboard:
         self._auth_verifier = auth_verifier
         self._auth_provider = auth_provider
         self._auth_optional = auth_optional
+        self._auth_trust_loopback = auth_trust_loopback
         # In-process RPC statistics. Fed by RequestTimingInterceptor on the
         # ControllerService chain only; LogService's chatty FetchLogs traffic
         # would dominate the numbers if included.
@@ -431,7 +473,9 @@ class ControllerDashboard:
         controller_timing = RequestTimingInterceptor(include_traceback=include_tb, collector=self._stats_collector)
         log_timing = RequestTimingInterceptor(include_traceback=include_tb)
         if self._auth_provider is not None and self._auth_verifier is not None:
-            auth_interceptor = _DashboardAuthInterceptor(self._auth_verifier, optional=self._auth_optional)
+            auth_interceptor = _DashboardAuthInterceptor(
+                self._auth_verifier, optional=self._auth_optional, trust_loopback=self._auth_trust_loopback
+            )
         else:
             # Null-auth mode: no provider configured. Verify worker tokens
             # when present but treat everything as anonymous/admin.
@@ -558,7 +602,9 @@ class ControllerDashboard:
         app.router.redirect_slashes = False
         wrapped: ASGIApp = app
         if self._auth_verifier is not None and self._auth_provider is not None:
-            wrapped = _RouteAuthMiddleware(app, self._auth_verifier, optional=self._auth_optional)
+            wrapped = _RouteAuthMiddleware(
+                app, self._auth_verifier, optional=self._auth_optional, trust_loopback=self._auth_trust_loopback
+            )
         # Wrap auth so the legacy FetchLogs rewrite happens before route
         # matching: auth and routing both see the canonical path.
         wrapped = _LegacyFetchLogsRedirect(wrapped)
@@ -570,6 +616,7 @@ class ControllerDashboard:
             endpoint_proxy=self._endpoint_proxy,
             auth_verifier=self._auth_verifier,
             auth_optional=self._auth_optional,
+            auth_trust_loopback=self._auth_trust_loopback,
         )
         return wrapped
 
