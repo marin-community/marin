@@ -216,6 +216,10 @@ archive/
 wandb
 artifacts
 
+# local W&B export cache + generated midtrain analysis reports (large)
+midtrain_wandb_data/
+sk_midtrain_analysis_fable/
+
 # Ignore generated credentials from google-github-actions/auth
 gha-creds-*.json
 

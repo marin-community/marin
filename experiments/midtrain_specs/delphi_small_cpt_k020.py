@@ -129,15 +129,24 @@ DEFAULT_TPU: dict[str, str] = {
 # endorsements for full sweeps. Keep probe runs visibly tagged/suffixed so W&B
 # charts do not get mixed into quality comparisons by accident.
 ALLOWED_TPUS_PER_BASE: dict[str, frozenset[str]] = {
-    "3e18": frozenset({"v5p-8", "v5p-16"}),
-    "9e18": frozenset({"v5p-8", "v5p-16", "v6e-4", "v6e-8"}),
-    "2e19": frozenset({"v5p-8", "v5p-16", "v6e-4", "v6e-8"}),
-    "3e19": frozenset({"v5p-8", "v5p-16", "v5p-32", "v6e-4", "v6e-8"}),
-    "9e19": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v6e-8"}),
-    "2e20": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64"}),
-    "3e20": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64"}),
-    "1e21": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v5p-128", "v5p-256", "v5p-512"}),
-    "1e22": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v5p-128", "v5p-256", "v5p-512"}),
+    # v4 entries: 32 GB HBM/chip (v4-8 = 4 chips/128 GB, v4-32 = 16 chips/512 GB).
+    # CPT loads the model from HF, so any region's slices work; cap activation
+    # memory with --per-device-parallelism on the bigger bases (see iso-token
+    # ladder notes in .agents/logbooks/debug_midtrain.md).
+    "3e18": frozenset({"v5p-8", "v5p-16", "v6e-8", "v4-8"}),
+    "9e18": frozenset({"v5p-8", "v5p-16", "v6e-4", "v6e-8", "v4-8"}),
+    "2e19": frozenset({"v5p-8", "v5p-16", "v6e-4", "v6e-8", "v4-8"}),
+    "3e19": frozenset({"v5p-8", "v5p-16", "v5p-32", "v6e-4", "v6e-8", "v4-8"}),
+    "9e19": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v6e-8", "v4-8", "v4-16"}),
+    "2e20": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v4-8", "v4-16"}),
+    "3e20": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v4-8", "v4-16", "v4-32"}),
+    "1e21": frozenset(
+        {"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v5p-128", "v5p-256", "v5p-512", "v4-8", "v4-16", "v4-32"}
+    ),
+    "1e22": frozenset(
+        {"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v5p-128", "v5p-256", "v5p-512"}
+        | {"v4-16", "v4-32", "v4-64", "v4-128", "v6e-16", "v6e-32"}
+    ),
 }
 
 # Identity env vars that the redesign doc forbids — run_id must come from
@@ -238,6 +247,7 @@ def build_spec(
     per_device_parallelism: int = -1,
     region: str = REGION,
     child_preemptible: bool = True,
+    expected_min_step: int | None = None,
 ) -> MidtrainSpec:
     """Construct a :class:`MidtrainSpec` for one cell of the sweep.
 
@@ -263,6 +273,7 @@ def build_spec(
     return MidtrainSpec(
         base=base,
         run=run,
+        expected_min_step=expected_min_step,
         compute=ComputeProfile(
             tpu_type=tpu,
             batch_size=base.batch_size,
@@ -492,6 +503,17 @@ def main(argv: list[str] | None = None) -> int:
             "of competing for scarcer reserved quota."
         ),
     )
+    parser.add_argument(
+        "--expected-min-step",
+        type=int,
+        default=None,
+        help=(
+            "Resume an existing run id (same --attempt) from its GCS checkpoint instead of refusing the "
+            "fresh launch. Set to a step at or below the latest saved checkpoint; preflight verifies a "
+            "checkpoint >= this step exists, then training resumes from it (GCS ckpt + W&B step counter). "
+            "Use to move a preempted cell onto fresh capacity without losing progress."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="Plan only; no submission.")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -513,6 +535,7 @@ def main(argv: list[str] | None = None) -> int:
         per_device_parallelism=args.per_device_parallelism,
         region=args.region,
         child_preemptible=args.child_preemptible,
+        expected_min_step=args.expected_min_step,
     )
     resolved = resolve_midtrain_spec(spec)
     validate_midtrain_spec(resolved, allow_cross_region_data=args.region != REGION)

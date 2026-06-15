@@ -141,7 +141,9 @@ def resolve_cpt_budget(
 
 
 def default_budget_label(tokens: int) -> str:
-    """Compact human-readable label, e.g. ``9p25b`` for 9.25 B tokens."""
+    """Compact human-readable label, e.g. ``2b`` / ``500m`` / ``9p25b``."""
     if tokens % 1_000_000_000 == 0:
         return f"{tokens // 1_000_000_000}b"
+    if tokens < 1_000_000_000 and tokens % 1_000_000 == 0:
+        return f"{tokens // 1_000_000}m"
     return f"{tokens / 1_000_000_000:.2f}b".replace(".", "p")
