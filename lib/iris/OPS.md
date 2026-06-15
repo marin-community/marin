@@ -27,7 +27,7 @@ Workflow: dry-run locally (`iris cluster controller serve --dry-run`) -> capture
 
 If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
 
-**Shipping a code change ≠ restarting.** marin pins `iris-controller:latest` (`config/marin.yaml:33`), so a restart only re-pulls whatever `:latest` currently is. To deploy a merged controller fix you must first rebuild the image (`gh workflow run "Ops - Docker Images"`, or wait for the Sunday build) and *then* restart — restarting against a stale `:latest` ships nothing. Confirm the controller is running the `:<git-short-hash>` you expect, not just that it came back up. Skipping the rebuild cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
+**Deploying a merged fix is not just a restart.** marin pins `iris-controller:latest`, so a restart only re-pulls whatever `:latest` currently is — you must rebuild the image first, then restart, then verify the running git-hash. Full procedure and the stale-`:latest` trap (which cost ~5 red-canary days): `.agents/runbooks/deploy-controller-fix.md`.
 
 ## Job Management
 
@@ -207,7 +207,7 @@ iris key list / iris key revoke       # manage API keys
 
 | Symptom | Diagnostic |
 |---------|-----------|
-| Job stuck PENDING | `iris rpc controller get-scheduler-state` for constraints. Check quota: `iris query "SELECT name, consecutive_failures, quota_reason FROM scaling_groups WHERE quota_reason != ''"` |
+| Job stuck PENDING | First read the *spread* of pending-reasons (uniform text across unrelated jobs ⇒ frozen scheduler, not capacity). Decision tree: `.agents/runbooks/diagnose-stuck-pending-job.md`. Quick capacity check: `iris rpc controller get-scheduler-state`; quota: `iris query "SELECT name, consecutive_failures, quota_reason FROM scaling_groups WHERE quota_reason != ''"` |
 | Workers not joining (GCP) | `iris cluster vm status` for slice lifecycle. SSH to VM, check bootstrap logs. |
 | Autoscaler not scaling | `iris rpc controller get-autoscaler-status` — check `backoff_until_ms`, `consecutive_failures`. |
 | Task retrying | `iris job bug-report /user/job` — full attempt history with per-attempt errors. |
@@ -256,10 +256,12 @@ gcloud compute tpus tpu-vm list --project=hai-gcp-models --zone=- \
 
 ### TPU Bad-Node Recovery
 
-**Trigger patterns** (bad node, not a code bug):
+**Trigger patterns:**
 - `RuntimeError: No accelerator found. Please run on a TPU or GPU.`
 - `FAILED_PRECONDITION`
 - `Device or resource busy`
+
+> **Before you delete a node:** these same strings are also produced by a *wedged iris-managed container* still holding the iommu group on an otherwise healthy node — deleting the node then wastes a live slice and does not fix the wedge. Rule that out first via `.agents/runbooks/triage-tpu-worker-failure.md`; the recipe below is the genuinely-bad-node branch.
 
 **Recovery:** extract worker IP from logs -> map to VM name (`gcloud compute tpus tpu-vm list --zone <ZONE> --format="table(name,networkEndpoints[0].ipAddress)"`) -> delete bad node (`gcloud compute tpus tpu-vm delete <NAME> --zone <ZONE> --quiet`) -> resubmit job.
 

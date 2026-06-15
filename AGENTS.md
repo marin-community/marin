@@ -17,6 +17,11 @@ For debugging and operating live infrastructure, read the relevant OPS.md:
 
 Zephyr OPS.md references Iris OPS.md for shared infrastructure commands — read Iris first when debugging zephyr jobs on Iris.
 
+For step-by-step handling of a recurring operational *situation* (deploy a
+controller fix, a job stuck PENDING, a wedged TPU node), read the matching
+**runbook** in `.agents/runbooks/` (index: `.agents/runbooks/README.md`). OPS.md
+owns the command/SQL reference; runbooks own the procedure and link back to it.
+
 ## Workflow Playbooks
 
 Skills are task-focused playbooks in `.agents/skills/` (also accessible as
@@ -44,7 +49,7 @@ uv run pyrefly
 ```
 
 - Python >=3.12. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
-- NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
+- NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission. (Controller-only vs full restart, and how to deploy a merged fix safely, are owned by [`.agents/runbooks/deploy-controller-fix.md`](.agents/runbooks/deploy-controller-fix.md).)
 - In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
 
