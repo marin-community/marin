@@ -31,6 +31,7 @@ from typing import NamedTuple
 import chex
 import jax
 import jax.numpy as jnp
+import jax.scipy.linalg
 import optax
 from jax.sharding import PartitionSpec as P
 
@@ -168,6 +169,34 @@ def _symmetrize(matrix):
     return 0.5 * (matrix + jnp.swapaxes(matrix, -1, -2))
 
 
+_SCQR_ORTHO_TOL = 3e-6
+
+
+def _scqr(m, eps: float = 1e-7):
+    """Single-pass Shifted Cholesky QR (Su Jianlin): orthonormal Q of ``m`` via matmul + Cholesky +
+    triangular solve -- all MXU-friendly, unlike ``jnp.linalg.qr`` (Householder, sequential, MXU-poor).
+
+    This is the MFU lever for the eigenbasis refresh: the per-step SOAP work is fwd/bwd-bound, but the
+    1-in-precond_freq refresh step is dominated by the QR wall-clock (not FLOPs). SCQR runs that step at
+    MXU speed. Shift λ = eps*gram[0,0] regularizes the cond^2 of forming MᵀM so a single pass suffices.
+    Falls back to jnp.linalg.qr when the result isn't orthonormal (gated on ‖QᵀQ-I‖, not finiteness --
+    an ill-conditioned Cholesky can return a finite but non-orthonormal Q that would degrade the basis).
+    """
+    gram = jnp.einsum("...ki,...kj->...ij", m, m)  # Mᵀ M
+    n = m.shape[-1]
+    eye = jnp.eye(n, dtype=m.dtype)
+    if m.ndim > 2:
+        eye_b = jnp.broadcast_to(eye, (*m.shape[:-2], n, n))
+    else:
+        eye_b = eye
+    shift = eps * gram[..., :1, :1] * eye
+    r = jnp.linalg.cholesky(gram + shift, upper=True)  # upper-tri R, MᵀM ≈ RᵀR
+    qt = jax.scipy.linalg.solve_triangular(jnp.swapaxes(r, -1, -2), jnp.swapaxes(m, -1, -2), lower=True)
+    q = jnp.swapaxes(qt, -1, -2)
+    ortho_err = jnp.max(jnp.abs(jnp.einsum("...ki,...kj->...ij", q, q) - eye_b))
+    return jax.lax.cond(ortho_err < _SCQR_ORTHO_TOL, lambda: q, lambda: jnp.linalg.qr(m)[0])
+
+
 def _blockable(shape, block_size: int) -> bool:
     """Block-wise SOAP applies to any matrix leaf (ndim>=2) whose trailing dims tile evenly.
 
@@ -249,6 +278,7 @@ def _klsoaph_step(
     nesterov: bool = False,
     soap_muon: bool = False,
     kl: bool = True,
+    use_scqr: bool = False,
 ):
     """Run one full-matrix SOAP step over the (..., rows, cols) gradient.
 
@@ -371,9 +401,16 @@ def _klsoaph_step(
             ea_original = jnp.einsum("...ij,...jk->...ik", q_l, ea_qrT)
             gg_l_q = jnp.einsum("...ij,...jk->...ik", new_gg_l, q_l)
             gg_r_q = jnp.einsum("...ij,...jk->...ik", new_gg_r, q_r)
-            # Warm-started orthogonal iteration: q_new = qr(GG @ q) (upstream KLSOAPH refresh).
-            ql_new, _ = jnp.linalg.qr(gg_l_q)
-            qr_new, _ = jnp.linalg.qr(gg_r_q)
+            # Warm-started orthogonal iteration: q_new = orthonormalize(GG @ q). The orthonormal factor
+            # (column space) is identical whether by Householder QR or Shifted-Cholesky QR, so SCQR is a
+            # faithful drop-in -- but it is all-matmul (MXU-friendly), which is the whole MFU win on the
+            # refresh step (jnp.linalg.qr's Householder is MXU-poor and dominates the refresh wall-clock).
+            if use_scqr:
+                ql_new = _scqr(gg_l_q)
+                qr_new = _scqr(gg_r_q)
+            else:
+                ql_new, _ = jnp.linalg.qr(gg_l_q)
+                qr_new, _ = jnp.linalg.qr(gg_r_q)
             ea_qr_new = jnp.einsum("...ij,...jk->...ik", ea_original, qr_new)
             ea_new = jnp.einsum("...ki,...kj->...ij", ql_new, ea_qr_new)
             if reparam_eig:
@@ -445,6 +482,7 @@ def _klsoaph_step_sharded(
     nesterov: bool = False,
     soap_muon: bool = False,
     kl: bool = True,
+    use_scqr: bool = False,
     shard_expert: bool | None = None,
     block_size: int = 0,
 ):
@@ -474,6 +512,7 @@ def _klsoaph_step_sharded(
         nesterov=nesterov,
         soap_muon=soap_muon,
         kl=kl,
+        use_scqr=use_scqr,
     )
 
     def _call(g, ea, eas, gl, gr, ql, qr, el, er, st):
@@ -555,6 +594,7 @@ def scale_by_klsoaph(
     nesterov: bool = False,
     soap_muon: bool = False,
     kl: bool = True,
+    use_scqr: bool = False,
     block_size: int = 0,
 ) -> optax.GradientTransformation:
     """Full-matrix SOAP-style preconditioner (upstream KLSOAPH, de-blocked).
@@ -646,6 +686,7 @@ def scale_by_klsoaph(
                 nesterov=nesterov,
                 soap_muon=soap_muon,
                 kl=kl,
+                use_scqr=use_scqr,
                 shard_expert=shard_expert,
                 block_size=block_size,
             )
