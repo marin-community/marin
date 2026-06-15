@@ -29,6 +29,11 @@ _DEFAULT_MAX_LOGPROB_DELTA = 5.0
 _DEFAULT_ROUTING_MARGIN_TOLERANCE = 1e-2
 _ROUTING_MISMATCH_PRINT_LIMIT = 20
 _ROUTING_FULL_DETAILS_TOKEN_LAYER_LIMIT = 64
+_ROUTING_DEBUG_VECTOR_LIMIT = 16
+_ROUTING_DEBUG_ENV = "GRUGMOE_ROUTING_DEBUG"
+_ROUTING_DEBUG_LAYER_ENV = "GRUGMOE_ROUTING_DEBUG_LAYER"
+_ROUTING_DEBUG_TOKEN_POSITION_ENV = "GRUGMOE_ROUTING_DEBUG_TOKEN_POSITION"
+_ROUTING_DEBUG_VECTOR_LIMIT_ENV = "GRUGMOE_ROUTING_DEBUG_VECTOR_LIMIT"
 
 
 def _direct_url(package: str) -> str:
@@ -99,11 +104,56 @@ def _configure_vllm_env() -> None:
     os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 
 
+def _configure_routing_debug_env(
+    *,
+    enabled: bool,
+    token_position: int,
+    layer: int,
+    vector_limit: int,
+) -> None:
+    keys = (
+        _ROUTING_DEBUG_ENV,
+        _ROUTING_DEBUG_LAYER_ENV,
+        _ROUTING_DEBUG_TOKEN_POSITION_ENV,
+        _ROUTING_DEBUG_VECTOR_LIMIT_ENV,
+    )
+    if not enabled:
+        for key in keys:
+            os.environ.pop(key, None)
+        return
+    os.environ[_ROUTING_DEBUG_ENV] = "1"
+    os.environ[_ROUTING_DEBUG_LAYER_ENV] = str(layer)
+    os.environ[_ROUTING_DEBUG_TOKEN_POSITION_ENV] = str(token_position)
+    os.environ[_ROUTING_DEBUG_VECTOR_LIMIT_ENV] = str(vector_limit)
+    print(
+        "routing_debug_env="
+        + json.dumps(
+            {
+                _ROUTING_DEBUG_ENV: os.environ[_ROUTING_DEBUG_ENV],
+                _ROUTING_DEBUG_LAYER_ENV: os.environ[_ROUTING_DEBUG_LAYER_ENV],
+                _ROUTING_DEBUG_TOKEN_POSITION_ENV: os.environ[_ROUTING_DEBUG_TOKEN_POSITION_ENV],
+                _ROUTING_DEBUG_VECTOR_LIMIT_ENV: os.environ[_ROUTING_DEBUG_VECTOR_LIMIT_ENV],
+            },
+            sort_keys=True,
+        )
+    )
+
+
 def _server_base_url(server_url: str) -> str:
     return server_url.removesuffix("/v1")
 
 
-def export_artifact(output_dir: Path, *, model_size: str, max_shard_size: int, generation_tokens: int) -> None:
+def export_artifact(
+    output_dir: Path,
+    *,
+    model_size: str,
+    max_shard_size: int,
+    generation_tokens: int,
+    routing_debug: bool,
+    routing_debug_token_position: int,
+    routing_debug_layer: int,
+    routing_debug_vector_limit: int,
+) -> None:
     if os.environ.get("PYTHONPATH"):
         raise SystemExit(f"PYTHONPATH unexpectedly set: {os.environ['PYTHONPATH']}")
 
@@ -122,6 +172,9 @@ def export_artifact(output_dir: Path, *, model_size: str, max_shard_size: int, g
         max_shard_size=max_shard_size,
         generation_tokens=generation_tokens,
         reference_output_path=_reference_path(output_dir),
+        routing_debug_token_position=routing_debug_token_position if routing_debug else None,
+        routing_debug_layer=routing_debug_layer if routing_debug else None,
+        routing_debug_vector_limit=routing_debug_vector_limit,
     )
     print("artifact_generation_process=completed")
 
@@ -356,16 +409,56 @@ def _compare_routing(
         )
 
 
+def _print_reported_routed_experts_debug(
+    *,
+    reference: dict[str, Any],
+    routed_experts: Any,
+    token_position: int,
+    layer: int,
+) -> None:
+    if routed_experts is None:
+        print("vllm_reported_routed_experts_debug=null")
+        return
+    actual = np.asarray(routed_experts, dtype=np.int64)
+    score_token_ids = [int(token_id) for token_id in reference["score_token_ids"]]
+    payload: dict[str, Any] = {
+        "source": "vLLM CompletionOutput.routed_experts",
+        "shape": list(actual.shape),
+        "token_position": int(token_position),
+        "layer": int(layer),
+    }
+    if 0 <= token_position < actual.shape[0]:
+        payload["token_id"] = score_token_ids[token_position]
+        payload["token_routes_all_layers"] = actual[token_position].astype(int).tolist()
+        if 0 <= layer < actual.shape[1]:
+            payload["reported_topk_expert_ids"] = actual[token_position, layer].astype(int).tolist()
+    levanter_debug = reference.get("levanter_routing_debug")
+    if isinstance(levanter_debug, dict):
+        payload["levanter_topk_expert_ids"] = levanter_debug.get("topk_expert_ids")
+        payload["levanter_router_margin"] = levanter_debug.get("router_margin")
+    print("vllm_reported_routed_experts_debug=" + json.dumps(payload, sort_keys=True))
+
+
 def score_artifact(
     artifact_dir: Path,
     reference_path: Path,
     *,
     max_logprob_delta: float,
     routing_margin_tolerance: float,
+    routing_debug: bool,
+    routing_debug_token_position: int,
+    routing_debug_layer: int,
+    routing_debug_vector_limit: int,
 ) -> None:
     if os.environ.get("PYTHONPATH"):
         raise SystemExit(f"PYTHONPATH unexpectedly set: {os.environ['PYTHONPATH']}")
     _configure_vllm_env()
+    _configure_routing_debug_env(
+        enabled=routing_debug,
+        token_position=routing_debug_token_position,
+        layer=routing_debug_layer,
+        vector_limit=routing_debug_vector_limit,
+    )
 
     from vllm import LLM, SamplingParams
 
@@ -439,6 +532,13 @@ def score_artifact(
         generated_token_ids=generated_by_prefix,
         max_logprob_delta=max_logprob_delta,
     )
+    if routing_debug:
+        _print_reported_routed_experts_debug(
+            reference=reference,
+            routed_experts=completion.routed_experts,
+            token_position=routing_debug_token_position,
+            layer=routing_debug_layer,
+        )
     _compare_routing(
         reference=reference,
         routed_experts=completion.routed_experts,
@@ -543,6 +643,10 @@ def _run_phase_subprocess(
     server_timeout_seconds: int,
     max_logprob_delta: float,
     routing_margin_tolerance: float,
+    routing_debug: bool,
+    routing_debug_token_position: int,
+    routing_debug_layer: int,
+    routing_debug_vector_limit: int,
 ) -> None:
     args = [
         sys.executable,
@@ -567,6 +671,18 @@ def _run_phase_subprocess(
         "--routing-margin-tolerance",
         str(routing_margin_tolerance),
     ]
+    if routing_debug:
+        args.extend(
+            [
+                "--routing-debug",
+                "--routing-debug-token-position",
+                str(routing_debug_token_position),
+                "--routing-debug-layer",
+                str(routing_debug_layer),
+                "--routing-debug-vector-limit",
+                str(routing_debug_vector_limit),
+            ]
+        )
     if artifact_dir is not None:
         args.extend(["--artifact-dir", str(artifact_dir)])
     if reference_path is not None:
@@ -584,9 +700,25 @@ def run(
     server_timeout_seconds: int,
     max_logprob_delta: float,
     routing_margin_tolerance: float,
+    routing_debug: bool,
+    routing_debug_token_position: int,
+    routing_debug_layer: int,
+    routing_debug_vector_limit: int,
 ) -> None:
     _print_runtime_header()
     print("installed_model_size=" + model_size)
+    print(
+        "installed_routing_debug="
+        + json.dumps(
+            {
+                "enabled": bool(routing_debug),
+                "token_position": int(routing_debug_token_position),
+                "layer": int(routing_debug_layer),
+                "vector_limit": int(routing_debug_vector_limit),
+            },
+            sort_keys=True,
+        )
+    )
 
     if output_dir.exists():
         shutil.rmtree(output_dir)
@@ -600,6 +732,10 @@ def run(
         server_timeout_seconds=server_timeout_seconds,
         max_logprob_delta=max_logprob_delta,
         routing_margin_tolerance=routing_margin_tolerance,
+        routing_debug=routing_debug,
+        routing_debug_token_position=routing_debug_token_position,
+        routing_debug_layer=routing_debug_layer,
+        routing_debug_vector_limit=routing_debug_vector_limit,
     )
 
     artifact_dir = _artifact_dir(output_dir)
@@ -622,6 +758,10 @@ def run(
         server_timeout_seconds=server_timeout_seconds,
         max_logprob_delta=max_logprob_delta,
         routing_margin_tolerance=routing_margin_tolerance,
+        routing_debug=routing_debug,
+        routing_debug_token_position=routing_debug_token_position,
+        routing_debug_layer=routing_debug_layer,
+        routing_debug_vector_limit=routing_debug_vector_limit,
     )
     _run_phase_subprocess(
         "score",
@@ -635,6 +775,10 @@ def run(
         server_timeout_seconds=server_timeout_seconds,
         max_logprob_delta=max_logprob_delta,
         routing_margin_tolerance=routing_margin_tolerance,
+        routing_debug=routing_debug,
+        routing_debug_token_position=routing_debug_token_position,
+        routing_debug_layer=routing_debug_layer,
+        routing_debug_vector_limit=routing_debug_vector_limit,
     )
 
 
@@ -670,6 +814,14 @@ def main() -> None:
     parser.add_argument("--server-timeout-seconds", type=int, default=1800)
     parser.add_argument("--max-logprob-delta", type=float, default=_DEFAULT_MAX_LOGPROB_DELTA)
     parser.add_argument("--routing-margin-tolerance", type=float, default=_DEFAULT_ROUTING_MARGIN_TOLERANCE)
+    parser.add_argument(
+        "--routing-debug",
+        action="store_true",
+        help="Emit Levanter, tpu-inference, and final-output routing debug records for one token/layer.",
+    )
+    parser.add_argument("--routing-debug-token-position", type=int, default=0)
+    parser.add_argument("--routing-debug-layer", type=int, default=0)
+    parser.add_argument("--routing-debug-vector-limit", type=int, default=_ROUTING_DEBUG_VECTOR_LIMIT)
     args = parser.parse_args()
 
     if args.phase == "export":
@@ -679,6 +831,10 @@ def main() -> None:
             model_size=args.model_size,
             max_shard_size=args.max_shard_size,
             generation_tokens=args.generation_tokens,
+            routing_debug=args.routing_debug,
+            routing_debug_token_position=args.routing_debug_token_position,
+            routing_debug_layer=args.routing_debug_layer,
+            routing_debug_vector_limit=args.routing_debug_vector_limit,
         )
     elif args.phase == "score":
         _print_runtime_header()
@@ -687,6 +843,10 @@ def main() -> None:
             args.reference_path or _reference_path(args.output_dir),
             max_logprob_delta=args.max_logprob_delta,
             routing_margin_tolerance=args.routing_margin_tolerance,
+            routing_debug=args.routing_debug,
+            routing_debug_token_position=args.routing_debug_token_position,
+            routing_debug_layer=args.routing_debug_layer,
+            routing_debug_vector_limit=args.routing_debug_vector_limit,
         )
     elif args.phase == "serve":
         _print_runtime_header()
@@ -707,6 +867,10 @@ def main() -> None:
             server_timeout_seconds=args.server_timeout_seconds,
             max_logprob_delta=args.max_logprob_delta,
             routing_margin_tolerance=args.routing_margin_tolerance,
+            routing_debug=args.routing_debug,
+            routing_debug_token_position=args.routing_debug_token_position,
+            routing_debug_layer=args.routing_debug_layer,
+            routing_debug_vector_limit=args.routing_debug_vector_limit,
         )
 
 
