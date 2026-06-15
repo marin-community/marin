@@ -1106,3 +1106,79 @@
 - Result: dry run matched the intended reduced-batch profile/MFU run. Submit created parent `/dlwh/iris-run-job-20260615-062547`.
 - Interpretation: this run intentionally trades off the original B256 global batch to get the full seq4096/L26 shape executing and profiled quickly, per the updated direction to reduce batch rather than add train-time microbatching.
 - Next action: babysit for child creation, W&B run/link, hparams confirmation, first post-compile throughput/MFU rows, profiler artifact, terminal success, or OOM/runtime failure. Subagent `Chandrasekhar` (`019ec9f5-9e21-71b3-b75a-c53609e795b0`) owns babysitting, and heartbeat `poll-grug-d2560-may032-babysitter` now points at MAY-033.
+
+### 2026-06-14 23:36 PDT - MAY-033 replaced with earlier profile window
+- Hypothesis: MAY-033's `profiler_start=6` would delay profile capture too long on the slow B128 fitting path; using the earliest callback-eligible profile start should produce a usable profile and MFU rows faster.
+- Command:
+  - W&B check: `uv run python - <<'PY' ... api.run('marin-community/marin_moe/GM2560-MAY-033B128-PROFILE-N16-cw-20260615-0625') ...`
+  - Stop: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260615-062547`
+- Config:
+  - Parent: `/dlwh/iris-run-job-20260615-062547`
+  - Child: `/dlwh/iris-run-job-20260615-062547/grug-train-gm2560-may-033b128-profile-n16-cw-20260615-0625`
+  - W&B: `https://wandb.ai/marin-community/marin_moe/runs/GM2560-MAY-033B128-PROFILE-N16-cw-20260615-0625`
+- Result: MAY-033 was healthy but still had no scalar history after W&B initialization and early training setup. Iris showed parent and child `JOB_STATE_RUNNING`, child 16/16 tasks running, failures/preemptions 0/0. The W&B run existed and was `running`, but history was empty. Logs showed one non-fatal W&B background artifact upload warning for a transient `/tmp/.../config.yaml` file, then continued to mesh setup and XLA CE selection. The run was intentionally stopped before the first metric/profile to avoid waiting until step 6 for profiling.
+- Interpretation: this is an operator replacement, not a model/runtime failure. The profile callback runner skips hooks until completed step 2, so the earliest useful profiler configuration is `profiler_start=3`; `profiler_start=1` would not fire under the current callback gating.
+- Next action: relaunch as MAY-034 with the same full-sequence B128 fitting shape but `MAY_STEPS=4`, `MAY_PROFILER_START=3`, `MAY_PROFILER_STEPS=1`, and `MAY_PROFILER_ENABLE_HLO_PROTO=true`.
+
+### 2026-06-14 23:36 PDT - MAY-034 B128 fast-profile run launched
+- Hypothesis: full-sequence B128 should fit as before, and profiling only the first callback-eligible step should produce a profile artifact much faster than MAY-033 while still giving enough completed steps for throughput callbacks.
+- Command:
+  - Dry run: `MAY_PROFILER_ENABLE_HLO_PROTO=true experiments/grug/moe/run_cw_may_d2560.sh --run-id GM2560-MAY-034B128-FASTPROFILE-N16-cw-20260615-0636 --nodes 16 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 1 --expert-axis 8 --replica-axis 1 --batch 128 --seq-len 4096 --steps 4 --profiler-start 3 --profiler-steps 1 --tracker wandb --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --ce-implementation xla --moe-implementation ring --input-embed-sharding replicated --output-proj-sharding replicated --live-param-mode compute_with_master --remat save_moe`
+  - Submit: `MAY_PROFILER_ENABLE_HLO_PROTO=true experiments/grug/moe/run_cw_may_d2560.sh --run-id GM2560-MAY-034B128-FASTPROFILE-N16-cw-20260615-0636 --nodes 16 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 1 --expert-axis 8 --replica-axis 1 --batch 128 --seq-len 4096 --steps 4 --profiler-start 3 --profiler-steps 1 --tracker wandb --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --ce-implementation xla --moe-implementation ring --input-embed-sharding replicated --output-proj-sharding replicated --live-param-mode compute_with_master --remat save_moe --submit`
+- Config:
+  - Parent: `/dlwh/iris-run-job-20260615-063648`
+  - Expected child: `/dlwh/iris-run-job-20260615-063648/grug-train-GM2560-MAY-034B128-FASTPROFILE-N16-cw-20260615-0636`
+  - Same fitting shape as MAY-033: full May d2560/L26, seq_len 4096, batch 128, synthetic data, W&B tracker, checkpoints disabled, 16 H100 nodes, `expert_axis=8`, `model_axis=1`, `replica_axis=1`, ring MoE, FA4/CuTe attention, XLA CE, replicated input/output embeddings, `live_param_mode=compute_with_master`, `remat_mode=save_moe`.
+  - Profile change: `MAY_STEPS=4`, `MAY_PROFILER_START=3`, `MAY_PROFILER_STEPS=1`, `MAY_PROFILER_ENABLE_HLO_PROTO=true`.
+- Result: dry run matched the intended replacement profile run. Submit created parent `/dlwh/iris-run-job-20260615-063648`.
+- Interpretation: this run should reach the first useful MFU/profile evidence with fewer B128 steps while preserving the same compute path as MAY-033.
+- Next action: babysit for child creation, W&B run/link, hparams confirmation, completed-step throughput/MFU, profile artifact, terminal success, or OOM/runtime failure. Subagent `Chandrasekhar` (`019ec9f5-9e21-71b3-b75a-c53609e795b0`) and heartbeat `poll-grug-d2560-may032-babysitter` now point at MAY-034.
+
+### 2026-06-14 23:47 PDT - MAY-034 stopped after 128-device clique stall
+- Hypothesis: if MAY-034 remained quiet only because of compile/first-step latency, another short polling window should eventually show either first-step metrics/profile progress or a terminal allocator/runtime failure.
+- Command:
+  - Status: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job list --json --prefix /dlwh/iris-run-job-20260615-063648`
+  - Log scan: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260615-063648 --since-seconds 1200 --max-lines 500000 | rg -i -m 500 -C 2 'Progress on:train|train/loss|throughput/mfu|profile|RESOURCE_EXHAUSTED|Initialize clique|rendezvous|Traceback|Terminated'`
+  - W&B check: `uv run python - <<'PY' ... api.run('marin-community/marin_moe/GM2560-MAY-034B128-FASTPROFILE-N16-cw-20260615-0636') ...`
+  - Stop: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260615-063648`
+- Config:
+  - Parent: `/dlwh/iris-run-job-20260615-063648`
+  - Child: `/dlwh/iris-run-job-20260615-063648/grug-train-gm2560-may-034b128-fastprofile-n16-cw-20260615-0636`
+  - W&B: `https://wandb.ai/marin-community/marin_moe/runs/GM2560-MAY-034B128-FASTPROFILE-N16-cw-20260615-0636`
+  - Full May d2560/L26, seq_len 4096, batch 128, 16 H100 nodes, `expert_axis=8`, `model_axis=1`, `replica_axis=1`, W&B, profiler start 3 for 1 step, HLO proto enabled.
+- Result: MAY-034 remained `JOB_STATE_RUNNING` with 16/16 child tasks running, zero failures, and zero preemptions, but made no metric/profile progress. W&B stayed `running` with zero scalar history rows and only code/requirements artifacts. Logs reached the intended mesh and XLA CE setup, then emitted repeated pre-step XLA rendezvous warnings beginning around 06:45 UTC: `Initialize clique: devices=128` with all 8 local threads joined while the leader had not marked rendezvous complete. The job was intentionally stopped to avoid holding 16 H100 nodes in a pre-step clique stall.
+- Interpretation: this is not MFU evidence and not a model-level profile. It is a negative result for the 128-device launch path in this exact configuration. The next profile attempt should reduce the clique size while preserving the reduced-batch full-sequence compute path as much as possible.
+- Next action: relaunch as MAY-035 on 8 nodes / 64 H100s with the same B128, seq4096, EP8/model1, early-profile configuration.
+
+### 2026-06-14 23:47 PDT - MAY-035 B128 N8 fast-profile launched
+- Hypothesis: reducing the launch from 16 nodes / 128 H100s to 8 nodes / 64 H100s avoids the pre-step 128-device clique stall while preserving the full-sequence B128 model path, EP8 ring MoE, and early profile window.
+- Command:
+  - Dry run: `MAY_PROFILER_ENABLE_HLO_PROTO=true experiments/grug/moe/run_cw_may_d2560.sh --run-id GM2560-MAY-035B128-N8-FASTPROFILE-cw-20260615-0647 --nodes 8 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 1 --expert-axis 8 --replica-axis 1 --batch 128 --seq-len 4096 --steps 4 --profiler-start 3 --profiler-steps 1 --tracker wandb --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --ce-implementation xla --moe-implementation ring --input-embed-sharding replicated --output-proj-sharding replicated --live-param-mode compute_with_master --remat save_moe`
+  - Submit: `MAY_PROFILER_ENABLE_HLO_PROTO=true experiments/grug/moe/run_cw_may_d2560.sh --run-id GM2560-MAY-035B128-N8-FASTPROFILE-cw-20260615-0647 --nodes 8 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 1 --expert-axis 8 --replica-axis 1 --batch 128 --seq-len 4096 --steps 4 --profiler-start 3 --profiler-steps 1 --tracker wandb --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --ce-implementation xla --moe-implementation ring --input-embed-sharding replicated --output-proj-sharding replicated --live-param-mode compute_with_master --remat save_moe --submit`
+- Config:
+  - Parent: `/dlwh/iris-run-job-20260615-064720`
+  - Expected child: `/dlwh/iris-run-job-20260615-064720/grug-train-GM2560-MAY-035B128-N8-FASTPROFILE-cw-20260615-0647`
+  - Same fitting reduced-batch profile shape as MAY-034 except `MAY_GPU_REPLICAS=8`: full May d2560/L26, seq_len 4096, batch 128, synthetic data, W&B tracker, checkpoints disabled, `expert_axis=8`, `model_axis=1`, `replica_axis=1`, ring MoE, FA4/CuTe attention, XLA CE, replicated input/output embeddings, `live_param_mode=compute_with_master`, `remat_mode=save_moe`, `MAY_STEPS=4`, `MAY_PROFILER_START=3`, `MAY_PROFILER_STEPS=1`, and `MAY_PROFILER_ENABLE_HLO_PROTO=true`.
+- Result: dry run matched the intended smaller-clique one-axis relaunch. Submit created parent `/dlwh/iris-run-job-20260615-064720`.
+- Interpretation: this is the fastest path to usable MFU/profile evidence after the 128-device clique stall. MFU on N8 is not a final N16 scaling claim, but it should identify whether attention, MoE EP communication, FSDP/update, or optimizer work dominates once the model actually steps.
+- Next action: babysit MAY-035 for child creation, W&B run/link, first metrics/MFU, profile artifact, terminal success, OOM, or another clique/rendezvous stall. Subagent `Chandrasekhar` (`019ec9f5-9e21-71b3-b75a-c53609e795b0`) and heartbeat `poll-grug-d2560-may032-babysitter` now point at MAY-035.
+
+### 2026-06-14 23:55 PDT - MAY-035 stopped; MAY-036 B64 N8 fast-profile launched
+- Hypothesis: if the B128/N8 run is still memory- or pre-step-workspace-limited, lowering global batch to 64 is the cleanest next axis because it avoids adding a train-time microbatch/accumulation path while preserving the full seq4096/L26 model, EP8 ring MoE, and profile setup.
+- Command:
+  - MAY-035 status: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job list --json --prefix /dlwh/iris-run-job-20260615-064720`
+  - MAY-035 log scan: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs --since-seconds 360 /dlwh/iris-run-job-20260615-064720 | rg -i "loss|mfu|tokens_per|throughput|profile|profiler|trace|error|traceback|exception|resource_exhausted|oom|out of memory|clique|rendezvous|compiler_base|program hbm|largest program allocations|Progress on:train|Fused cross-entropy|Data loader"`
+  - MAY-035 W&B check: `uv run python - <<'PY' ... api.run('marin-community/marin_moe/GM2560-MAY-035B128-N8-FASTPROFILE-cw-20260615-0647') ...`
+  - Stop MAY-035: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260615-064720`
+  - MAY-036 dry run: `experiments/grug/moe/run_cw_may_d2560.sh --run-id GM2560-MAY-036B64-N8-FASTPROFILE-cw-DRYRUN --nodes 8 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 1 --expert-axis 8 --replica-axis 1 --batch 64 --seq-len 4096 --steps 4 --profiler-start 3 --profiler-steps 1 --tracker wandb --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --ce-implementation xla --moe-implementation ring --input-embed-sharding replicated --output-proj-sharding replicated --live-param-mode compute_with_master --remat save_moe`
+  - Submit MAY-036: `MAY_PROFILER_ENABLE_HLO_PROTO=true experiments/grug/moe/run_cw_may_d2560.sh --run-id GM2560-MAY-036B64-N8-FASTPROFILE-cw-20260615-0655 --nodes 8 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 1 --expert-axis 8 --replica-axis 1 --batch 64 --seq-len 4096 --steps 4 --profiler-start 3 --profiler-steps 1 --tracker wandb --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --ce-implementation xla --moe-implementation ring --input-embed-sharding replicated --output-proj-sharding replicated --live-param-mode compute_with_master --remat save_moe --submit`
+- Config:
+  - MAY-035 parent: `/dlwh/iris-run-job-20260615-064720`
+  - MAY-035 W&B: `https://wandb.ai/marin-community/marin_moe/runs/GM2560-MAY-035B128-N8-FASTPROFILE-cw-20260615-0647`
+  - MAY-036 parent: `/dlwh/iris-run-job-20260615-065544`
+  - MAY-036 expected child: `/dlwh/iris-run-job-20260615-065544/grug-train-GM2560-MAY-036B64-N8-FASTPROFILE-cw-20260615-0655`
+  - MAY-036 W&B: `https://wandb.ai/marin-community/marin_moe/runs/GM2560-MAY-036B64-N8-FASTPROFILE-cw-20260615-0655`
+  - Same as MAY-035 except `train_batch_size=64`: full May d2560/L26, seq_len 4096, synthetic data, W&B tracker, checkpoints disabled, 8 H100 nodes, `expert_axis=8`, `model_axis=1`, `replica_axis=1`, ring MoE, FA4/CuTe attention, XLA CE, replicated input/output embeddings, `live_param_mode=compute_with_master`, `remat_mode=save_moe`, `MAY_STEPS=4`, `MAY_PROFILER_START=3`, `MAY_PROFILER_STEPS=1`, and `MAY_PROFILER_ENABLE_HLO_PROTO=true`.
+- Result: MAY-035 stayed `JOB_STATE_RUNNING` with 8/8 child tasks running, zero failures, and zero preemptions, but remained pre-first-step after the additional short window. W&B stayed `running` with zero scalar history rows; logs reached mesh setup and XLA CE selection but showed no new progress after `Fused cross-entropy selected implementation: xla`. MAY-035 was intentionally stopped. The B64 dry run matched the intended one-axis batch reduction, and submit created parent `/dlwh/iris-run-job-20260615-065544`.
+- Interpretation: MAY-035 is another operator-stopped pre-step run, not MFU/profile evidence. MAY-036 implements the updated direction to reduce batch size instead of adding microbatching. On 64 GPUs, B64 gives per-batch-shard size 1 instead of B128's 2, so this should remove the batch-scaled activation/workspace pressure at the cost of lower per-step work.
+- Next action: babysit MAY-036 for child creation, W&B run/link, first metrics/MFU, profile artifact, terminal success, OOM, or another pre-step stall. Subagent `Chandrasekhar` (`019ec9f5-9e21-71b3-b75a-c53609e795b0`) and heartbeat `poll-grug-d2560-may032-babysitter` now point at MAY-036.
