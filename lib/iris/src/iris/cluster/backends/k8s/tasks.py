@@ -331,6 +331,9 @@ class PodConfig:
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
+    # Name of a Secret whose keys are projected into every task container via
+    # envFrom (operator-injected env, defaults.inject_env). Empty disables it.
+    env_secret_name: str = ""
     # Kueue LocalQueue for coscheduled gang admission. Coscheduled jobs REQUIRE
     # this: dispatching one with no LocalQueue configured raises (Kueue or
     # nothing — there is no non-Kueue colocation fallback).
@@ -563,6 +566,10 @@ def _build_pod_manifest(
         "volumeMounts": vol_mounts,
         "command": ["bash", "-lc", _build_task_script(run_req)],
     }
+    # Operator-injected env (defaults.inject_env). envFrom is the lowest
+    # precedence in K8s, so explicit env entries above (user -e, iris vars) win.
+    if config.env_secret_name:
+        container["envFrom"] = [{"secretRef": {"name": config.env_secret_name, "optional": True}}]
 
     # SYS_PTRACE for profiling; SYS_RESOURCE for TPU memlock ulimits.
     capabilities = ["SYS_PTRACE"]
@@ -1287,6 +1294,7 @@ class K8sTaskProvider:
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
+    env_secret_name: str = ""
     local_queue: str = ""
     kueue_priority_classes: dict[int, str] = field(default_factory=dict)
     kueue_topologies: dict[str, tuple[str, bool]] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
@@ -1550,6 +1558,7 @@ class K8sTaskProvider:
             controller_address=self.controller_address,
             managed_label=self.managed_label,
             task_env=self.task_env,
+            env_secret_name=self.env_secret_name,
             local_queue=self.local_queue,
             kueue_priority_classes=self.kueue_priority_classes,
             kueue_topologies=self.kueue_topologies,

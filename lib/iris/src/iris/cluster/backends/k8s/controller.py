@@ -28,6 +28,7 @@ from iris.cluster.backends.k8s.service import CloudK8sService, K8sService
 from iris.cluster.backends.k8s.types import K8sResource, parse_k8s_timestamp
 from iris.cluster.backends.types import InfraError, Labels, local_queue_name
 from iris.cluster.config_serde import config_to_dict
+from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,7 @@ def _build_controller_deployment(
     port: int,
     node_selector: dict[str, str],
     s3_env_vars: list[dict],
+    inject_env_secret: bool = False,
     fresh: bool = False,
 ) -> dict:
     """Build the controller Deployment manifest as a dict."""
@@ -163,6 +165,13 @@ def _build_controller_deployment(
                         ],
                         "ports": [{"containerPort": port}],
                         "env": s3_env_vars,
+                        # optional=true so a controller-only restart that predates
+                        # the Secret does not crash-loop.
+                        **(
+                            {"envFrom": [{"secretRef": {"name": TASK_ENV_SECRET_NAME, "optional": True}}]}
+                            if inject_env_secret
+                            else {}
+                        ),
                         "securityContext": {"capabilities": {"add": ["SYS_PTRACE"]}},
                         "resources": controller_resources,
                         "volumeMounts": [
@@ -287,6 +296,12 @@ class K8sControllerProvider:
         if self._s3_enabled:
             self.ensure_s3_credentials_secret()
 
+        # Resolve operator-injected env from this shell (the controller can never
+        # do this — it lacks the operator's secrets) and stash it in a Secret.
+        inject_env = collect_inject_env(config.defaults.inject_env)
+        if inject_env:
+            self.ensure_task_env_secret(inject_env)
+
         config_json = self._config_json_for_configmap(config)
         configmap_manifest = {
             "apiVersion": "v1",
@@ -307,6 +322,7 @@ class K8sControllerProvider:
             port=port,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
             s3_env_vars=s3_env,
+            inject_env_secret=bool(config.defaults.inject_env),
             fresh=fresh,
         )
         if fresh:
@@ -379,6 +395,8 @@ class K8sControllerProvider:
         self._kubectl.delete(K8sResource.CONFIGMAPS, "iris-cluster-config")
         if self.uses_s3_storage(config):
             self._kubectl.delete(K8sResource.SECRETS, _S3_SECRET_NAME)
+        if config.defaults.inject_env:
+            self._kubectl.delete(K8sResource.SECRETS, TASK_ENV_SECRET_NAME)
 
         cluster_role_name = self.rbac_cluster_role_name()
         self._kubectl.delete(K8sResource.CLUSTER_ROLE_BINDINGS, cluster_role_name)
@@ -747,6 +765,24 @@ class K8sControllerProvider:
             fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
             env.append({"name": "FSSPEC_S3", "value": json.dumps(fsspec_conf)})
         return env
+
+    # -- Operator-injected env (defaults.inject_env) --------------------------
+
+    def ensure_task_env_secret(self, injected: dict[str, str]) -> None:
+        """Create the iris-task-env Secret from operator-injected env values.
+
+        Task pods and the controller reference this Secret via envFrom, so the
+        values reach containers without ever passing through the ConfigMap.
+        """
+        self._kubectl.apply_json(
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {"name": TASK_ENV_SECRET_NAME, "namespace": self._namespace},
+                "type": "Opaque",
+                "data": {k: base64.b64encode(v.encode()).decode() for k, v in injected.items()},
+            }
+        )
 
     # -- Deployment readiness --------------------------------------------------
 

@@ -11,6 +11,7 @@ K8sControllerProvider).
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
 import time
@@ -168,6 +169,48 @@ def test_start_controller_creates_all_resources():
     assert "GOOGLE_APPLICATION_CREDENTIALS" not in env_names
     assert container["resources"]["requests"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
     assert container["resources"]["limits"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
+
+    t.join(timeout=5)
+    provider.shutdown()
+
+
+def test_start_controller_injects_operator_env(monkeypatch):
+    """inject_env writes the iris-task-env Secret and wires the controller envFrom."""
+    monkeypatch.setenv("WANDB_API_KEY", "wb-secret")
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+    cluster_config.defaults.inject_env.append("WANDB_API_KEY")
+
+    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
+    t.start()
+    provider.start_controller(cluster_config)
+
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
+    assert secret is not None
+    # Values are base64-encoded in the Secret, never in the ConfigMap.
+    assert base64.b64decode(secret["data"]["WANDB_API_KEY"]).decode() == "wb-secret"
+    configmap = k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config")
+    assert "wb-secret" not in json.dumps(configmap)
+
+    container = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")["spec"]["template"]["spec"]["containers"][0]
+    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
+
+    t.join(timeout=5)
+    provider.shutdown()
+
+
+def test_start_controller_no_inject_env_omits_secret():
+    """Without inject_env, no task-env Secret or envFrom is created."""
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+
+    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
+    t.start()
+    provider.start_controller(cluster_config)
+
+    assert k8s.get_json(K8sResource.SECRETS, "iris-task-env") is None
+    container = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")["spec"]["template"]["spec"]["containers"][0]
+    assert "envFrom" not in container
 
     t.join(timeout=5)
     provider.shutdown()

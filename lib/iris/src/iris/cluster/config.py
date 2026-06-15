@@ -30,6 +30,7 @@ from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFacto
 from iris.cluster.backends.types import local_queue_name
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.backend import TaskBackend
+from iris.cluster.inject_env import TASK_ENV_SECRET_NAME
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import parse_memory_string
 from iris.rpc import config_pb2, job_pb2
@@ -437,9 +438,13 @@ def _deep_merge_defaults(target: config_pb2.DefaultsConfig, source: config_pb2.D
         source: DefaultsConfig to merge from
     """
     # Merge top-level scalar fields.
-    # We skip message fields here since sub-messages need deep merging below.
+    # We skip message fields here since sub-messages need deep merging below, and
+    # repeated/map fields (e.g. inject_env, task_env) which have no presence and
+    # are merged explicitly below.
     for field_desc in source.DESCRIPTOR.fields:
         if field_desc.message_type is not None:
+            continue
+        if field_desc.label == field_desc.LABEL_REPEATED:
             continue
         if source.HasField(field_desc.name):
             setattr(target, field_desc.name, getattr(source, field_desc.name))
@@ -457,6 +462,11 @@ def _deep_merge_defaults(target: config_pb2.DefaultsConfig, source: config_pb2.D
     # task_env is a top-level map on DefaultsConfig
     for key, value in source.task_env.items():
         target.task_env[key] = value
+    # inject_env is a repeated string; replace wholesale when the user set it so
+    # an explicit (possibly empty) list overrides the default rather than appending.
+    if source.inject_env:
+        del target.inject_env[:]
+        target.inject_env.extend(source.inject_env)
 
 
 def validate_autoscaler_config(config: config_pb2.AutoscalerConfig, context: str = "autoscaler") -> None:
@@ -1157,6 +1167,9 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> TaskBackend:
         # Kueue is enabled by a configured cluster_queue; the LocalQueue name Iris
         # stamps and reconciles is derived from label_prefix, not configured.
         local_queue = local_queue_name(label_prefix) if kp.kueue.cluster_queue else ""
+        # Operator-injected env (defaults.inject_env) is projected into task pods
+        # via envFrom on the iris-task-env Secret the launcher creates.
+        env_secret_name = TASK_ENV_SECRET_NAME if cluster_config.defaults.inject_env else ""
         return K8sTaskProvider(
             kubectl=CloudK8sService(namespace=namespace, kubeconfig_path=kp.kubeconfig or None),
             namespace=namespace,
@@ -1167,6 +1180,7 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> TaskBackend:
             controller_address=kp.controller_address or None,
             managed_label=managed_label,
             task_env=dict(cluster_config.defaults.task_env),
+            env_secret_name=env_secret_name,
             local_queue=local_queue,
             kueue_priority_classes=priority_classes,
             kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
