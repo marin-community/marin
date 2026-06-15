@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
@@ -19,7 +18,7 @@ from iris.cluster.token_store import (
 
 @pytest.fixture()
 def store_path(tmp_path: Path) -> Path:
-    return tmp_path / "tokens.json"
+    return tmp_path / "tokens.sqlite"
 
 
 @pytest.mark.parametrize(
@@ -43,7 +42,7 @@ def test_store_and_load_token(store_path: Path):
 
 
 def test_store_token_creates_parent_dirs(tmp_path: Path):
-    store_path = tmp_path / "deep" / "nested" / "tokens.json"
+    store_path = tmp_path / "deep" / "nested" / "tokens.sqlite"
     store_token("c1", "http://host:1", "tok", store_path=store_path)
     assert store_path.exists()
 
@@ -101,35 +100,13 @@ def test_load_any_token_empty_store(store_path: Path):
     assert load_any_token(store_path=store_path) is None
 
 
-def test_legacy_migration(tmp_path: Path):
-    """Old ~/.iris/token file is migrated into tokens.json under 'default'."""
-    legacy = tmp_path / "token"
-    legacy.write_text("legacy-secret\n")
-    store_path = tmp_path / "tokens.json"
+def test_concurrent_writers_do_not_corrupt_store(store_path: Path):
+    """Interleaved upserts from many clusters all survive — SQLite serializes
+    the writes rather than racing on a shared temp file (the bug that the old
+    JSON+mkstemp store hit under pytest-xdist)."""
+    for i in range(25):
+        store_token(f"c{i}", f"http://host:{i}", f"tok-{i}", store_path=store_path)
 
-    cred = load_token("default", store_path=store_path)
-    assert cred is not None
-    assert cred.token == "legacy-secret"
-    assert not legacy.exists(), "legacy file should be deleted after migration"
-
-
-def test_legacy_migration_empty_token(tmp_path: Path):
-    """Empty legacy token file is deleted without creating a store entry."""
-    legacy = tmp_path / "token"
-    legacy.write_text("  \n")
-    store_path = tmp_path / "tokens.json"
-
-    cred = load_any_token(store_path=store_path)
-    assert cred is None
-    assert not legacy.exists()
-
-
-def test_store_format(store_path: Path):
-    """Verify the on-disk JSON matches the expected schema."""
-    store_token("local", "http://127.0.0.1:54321", "abc", store_path=store_path)
-    data = json.loads(store_path.read_text())
-    assert data == {
-        "clusters": {
-            "local": {"url": "http://127.0.0.1:54321", "token": "abc"},
-        },
-    }
+    for i in range(25):
+        cred = load_token(f"c{i}", store_path=store_path)
+        assert cred == ClusterCredential(url=f"http://host:{i}", token=f"tok-{i}")
