@@ -108,10 +108,26 @@ class GrugModelConfig:
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
+    num_prelude_layers: int = 0
+    """Re-entrant structure: leading unique (non-looped) layers. 0 = no prelude."""
+    num_coda_layers: int = 0
+    """Re-entrant structure: trailing unique (non-looped) layers. 0 = no coda."""
+    recurrence_steps: int = 1
+    """Times the shared core stack (layers between prelude and coda) is applied per
+    forward. 1 = plain stack (no recurrence); >1 = weight-tied re-entrant looping.
+    Effective depth = num_prelude_layers + num_core_layers * recurrence_steps + num_coda_layers."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
+        if self.num_prelude_layers < 0 or self.num_coda_layers < 0:
+            raise ValueError("num_prelude_layers and num_coda_layers must be non-negative")
+        if self.num_prelude_layers + self.num_coda_layers > self.num_layers:
+            raise ValueError("num_prelude_layers + num_coda_layers must be <= num_layers")
+        if self.recurrence_steps < 1:
+            raise ValueError("recurrence_steps must be >= 1")
+        if self.recurrence_steps > 1 and self.num_core_layers <= 0:
+            raise ValueError("recurrence_steps > 1 requires at least one core layer")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.vocab_size <= 0:
@@ -137,6 +153,16 @@ class GrugModelConfig:
                 f"hidden_dim={self.hidden_dim} is not divisible by num_heads={self.num_heads}; set head_dim explicitly"
             )
         return self.hidden_dim // self.num_heads
+
+    @property
+    def num_core_layers(self) -> int:
+        """Unique layers in the shared, looped core (everything between prelude and coda)."""
+        return self.num_layers - self.num_prelude_layers - self.num_coda_layers
+
+    @property
+    def effective_depth(self) -> int:
+        """Number of block applications per forward (compute depth)."""
+        return self.num_prelude_layers + self.num_core_layers * self.recurrence_steps + self.num_coda_layers
 
 
 def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
@@ -488,6 +514,19 @@ class Block(eqx.Module):
         return x, router_stats
 
 
+def _mean_router_stats(stats_per_iter: list[dict[str, jax.Array]]) -> dict[str, jax.Array]:
+    """Mean-aggregate a shared core block's per-iteration router stats into one entry.
+
+    A weight-tied core block is applied ``recurrence_steps`` times per forward but has a
+    single set of router params; collapsing its per-iteration stats to one keeps
+    ``qb_beta_per_layer`` (and the rest of ``router_metrics``) 1:1 with the unique blocks
+    that ``_apply_qb_betas`` nudges. With a single iteration this is the identity.
+    """
+    if len(stats_per_iter) == 1:
+        return stats_per_iter[0]
+    return {k: jnp.mean(jnp.stack([s[k] for s in stats_per_iter], axis=0), axis=0) for k in stats_per_iter[0]}
+
+
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
@@ -540,18 +579,52 @@ class Transformer(eqx.Module):
         else:
             remat_policy = None
 
-        moe_router_stats: list[dict[str, jax.Array]] = []
-        for i, block in enumerate(self.blocks):
-            layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask)
-            moe_router_stats.append(router_stats)
+        # Re-entrant structure: prelude blocks (once) -> shared core stack (looped
+        # recurrence_steps times, weight-tied) -> coda blocks (once). With the
+        # default config (prelude=coda=0, recurrence_steps=1) this is exactly the
+        # plain stack over self.blocks. `self.blocks` stays a flat tuple of the
+        # unique blocks, so per-block router stats (and the QB bias update in
+        # _apply_qb_betas) remain 1:1 with the unique blocks: a looped core block's
+        # per-iteration stats are mean-aggregated back to a single entry below.
+        prelude = cfg.num_prelude_layers
+        core = cfg.num_core_layers
+        prelude_blocks = self.blocks[:prelude]
+        core_blocks = self.blocks[prelude : prelude + core]
+        coda_blocks = self.blocks[prelude + core :]
+
+        # `eff_idx` counts block applications (effective depth) so the every-4th-layer
+        # long-attention pattern is preserved across the unrolled core.
+        eff_idx = 0
+
+        def apply_block(block: "Block", h: jax.Array, idx: int) -> tuple[jax.Array, dict[str, jax.Array]]:
+            layer_mask = long_mask if idx % 4 == 3 else short_mask
+            return eqx.filter_checkpoint(block, policy=remat_policy)(h, layer_mask)
+
+        per_block_stats: list[dict[str, jax.Array]] = []
+        for block in prelude_blocks:
+            hidden, stats = apply_block(block, hidden, eff_idx)
+            per_block_stats.append(stats)
+            eff_idx += 1
+
+        core_iter_stats: list[list[dict[str, jax.Array]]] = [[] for _ in core_blocks]
+        for _ in range(cfg.recurrence_steps):
+            for c, block in enumerate(core_blocks):
+                hidden, stats = apply_block(block, hidden, eff_idx)
+                core_iter_stats[c].append(stats)
+                eff_idx += 1
+        per_block_stats.extend(_mean_router_stats(s) for s in core_iter_stats)
+
+        for block in coda_blocks:
+            hidden, stats = apply_block(block, hidden, eff_idx)
+            per_block_stats.append(stats)
+            eff_idx += 1
 
         router_metrics = {
-            "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
-            "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in moe_router_stats], axis=0),
-            "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
-            "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
-            "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
+            "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in per_block_stats], axis=0),
+            "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in per_block_stats], axis=0),
+            "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in per_block_stats], axis=0),
+            "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in per_block_stats], axis=0),
+            "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in per_block_stats], axis=0),
         }
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics

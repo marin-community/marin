@@ -220,8 +220,25 @@ e0_baseline = reentrant_step(
     tags=["moe", "reentrant", "e0-baseline"],
 )
 
+# E1 — basic re-entrant: 1 prelude + 1 weight-tied core looped 4x + 1 coda.
+# Effective depth 6 (compute-matched to E0) with 3 unique blocks (~half the block
+# params). Tests Saunshi's "looped k-layer ~= kL-layer" at fixed compute.
+_E1_MODEL = dataclasses.replace(
+    _baseline_model,
+    num_layers=3,
+    num_prelude_layers=1,
+    num_coda_layers=1,
+    recurrence_steps=4,
+)
+e1_reentrant = reentrant_step(
+    name="grug/reentrant_e1_loop4",
+    run_id=_resolve_run_id("reentrant_e1_loop4"),
+    model=_E1_MODEL,
+    tags=["moe", "reentrant", "e1-loop4"],
+)
+
 # Experiment registry. Select with GRUG_EXPERIMENT (comma-separated names); default E0.
-_STEPS = {"e0": e0_baseline}
+_STEPS = {"e0": e0_baseline, "e1": e1_reentrant}
 
 
 if __name__ == "__main__":
