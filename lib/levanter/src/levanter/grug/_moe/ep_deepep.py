@@ -19,6 +19,8 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
+    MOE_REMAT_SAVE_NAMES,
+    MoERematMode,
     split_moe_w13_output,
 )
 from levanter.kernels.deepep import deepep_combine_intranode, deepep_dispatch_intranode, deepep_get_dispatch_layout
@@ -38,6 +40,65 @@ class DeepEPLocalAssignments(NamedTuple):
     assignment_weights: Float[Array, "TK"]
     recv_token_indices: Int[Array, "TK"]
     local_group_sizes: Int[Array, "EL"]
+
+
+def _deepep_moe_up_down(
+    x_dispatch: Float[Array, "TK D"],
+    local_group_sizes: Int[Array, "EL"],
+    moe_w13_local: Float[Array, "EL D I2"],
+    moe_w2_local: Float[Array, "EL I D"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> Float[Array, "TK D"]:
+    with jax.named_scope("moe_up_down"):
+        w13_out = tree_checkpoint_name(
+            ragged_dot(x_dispatch, moe_w13_local, local_group_sizes), _CHECKPOINT_EXPERT_HIDDEN
+        )
+        moe_dim = moe_w2_local.shape[1]
+        gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
+        return tree_checkpoint_name(
+            ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes),
+            _CHECKPOINT_DISPATCH_OUTPUT,
+        )
+
+
+def _deepep_moe_up_down_remat(
+    x_dispatch: Float[Array, "TK D"],
+    local_group_sizes: Int[Array, "EL"],
+    moe_w13_local: Float[Array, "EL D I2"],
+    moe_w2_local: Float[Array, "EL I D"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    remat_mode: MoERematMode,
+) -> Float[Array, "TK D"]:
+    if remat_mode == "none":
+        return _deepep_moe_up_down(
+            x_dispatch,
+            local_group_sizes,
+            moe_w13_local,
+            moe_w2_local,
+            activation_fn=activation_fn,
+        )
+
+    policy = None
+    if remat_mode == "save_moe":
+        policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+
+    def compute(
+        remat_x_dispatch: jax.Array,
+        remat_local_group_sizes: jax.Array,
+        remat_moe_w13_local: jax.Array,
+        remat_moe_w2_local: jax.Array,
+    ) -> jax.Array:
+        return _deepep_moe_up_down(
+            remat_x_dispatch,
+            remat_local_group_sizes,
+            remat_moe_w13_local,
+            remat_moe_w2_local,
+            activation_fn=activation_fn,
+        )
+
+    return jax.checkpoint(compute, policy=policy)(x_dispatch, local_group_sizes, moe_w13_local, moe_w2_local)
 
 
 def _pack_deepep_local_assignments(
@@ -107,6 +168,7 @@ def _moe_mlp_ep_deepep_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    remat_mode: MoERematMode = "none",
 ) -> tuple[Float[Array, "TL D"], Int[Array, ""]]:
     """DeepEP dispatch/combine path for an intranode expert mesh."""
     del capacity_factor
@@ -160,16 +222,14 @@ def _moe_mlp_ep_deepep_local(
         )
         x_dispatch = tree_checkpoint_name(local_assignments.x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
 
-    with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(
-            ragged_dot(x_dispatch, moe_w13_local, local_assignments.local_group_sizes), _CHECKPOINT_EXPERT_HIDDEN
-        )
-        moe_dim = moe_w2_local.shape[1]
-        gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
-        out_dispatch = tree_checkpoint_name(
-            ragged_dot(activation_fn(gate) * up, moe_w2_local, local_assignments.local_group_sizes),
-            _CHECKPOINT_DISPATCH_OUTPUT,
-        )
+    out_dispatch = _deepep_moe_up_down_remat(
+        x_dispatch,
+        local_assignments.local_group_sizes,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        remat_mode=remat_mode,
+    )
 
     with jax.named_scope("combine"):
         recv_out = _collapse_deepep_local_assignments(

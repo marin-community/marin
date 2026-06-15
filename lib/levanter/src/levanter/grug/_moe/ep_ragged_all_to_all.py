@@ -34,7 +34,9 @@ def _moe_mlp_ep_ragged_a2a_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    remat_mode: str = "none",
 ) -> tuple[jax.Array, jax.Array]:
+    del remat_mode
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(

@@ -31,8 +31,10 @@ def _moe_mlp_ep_ring_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    remat_mode: str = "none",
 ) -> tuple[Float[Array, "TL D"], Int[Array, ""]]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
+    del remat_mode
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
     with jax.named_scope("gather"):

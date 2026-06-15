@@ -25,8 +25,10 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_REMAT=save_moe       none | recompute_all | save_moe
     MAY_USE_PKO=true         enable PKO/doc-start mask path on long layers
     MAY_PKO_ON_LAST_LAYER=true
+    MAY_BLOCK_CROSS_DOCUMENT_ATTENTION=true  synthetic data segment-id diagnostic
     MAY_INPUT_EMBED_SHARDING=hidden_batch  hidden_batch | replicated diagnostic
     MAY_OUTPUT_PROJ_SHARDING=lm_head  lm_head | replicated diagnostic
+    MAY_EXPERT_3D_OPTIMIZER=muonh  muonh | adamh diagnostic for routed expert weights
 
 The default parameter policy keeps one sharded fp32 parameter tree plus sharded
 optimizer state. Set ``MAY_LIVE_PARAM_MODE=compute_with_master`` to keep a
@@ -69,7 +71,7 @@ from experiments.grug.moe.model import (
     OutputProjSharding,
     RematMode,
 )
-from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
+from experiments.grug.moe.optimizer import VALID_EXPERT_3D_OPTIMIZERS, Expert3DOptimizer, GrugMoeMuonHConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig, LiveParamMode
 
 GPUS_PER_NODE = 8
@@ -149,6 +151,10 @@ def build_may_model() -> GrugModelConfig:
 def build_may_optimizer(*, batch_size: int, seq_len: int) -> GrugMoeMuonHConfig:
     total_tokens = env_float("MAY_TOTAL_TOKENS", DEFAULT_TOTAL_TOKENS)
     hidden_dim = env_int("MAY_HIDDEN_DIM", DEFAULT_HIDDEN_DIM)
+    expert_3d_optimizer = os.environ.get("MAY_EXPERT_3D_OPTIMIZER", "muonh")
+    if expert_3d_optimizer not in VALID_EXPERT_3D_OPTIMIZERS:
+        valid = ", ".join(VALID_EXPERT_3D_OPTIMIZERS)
+        raise ValueError(f"MAY_EXPERT_3D_OPTIMIZER={expert_3d_optimizer!r} must be one of {valid}")
     base_optimizer = MAY_HEURISTIC.build_optimizer_config(batch_size, total_tokens, hidden_dim, seq_len=seq_len)
     return GrugMoeMuonHConfig(
         learning_rate=base_optimizer.learning_rate,
@@ -161,6 +167,7 @@ def build_may_optimizer(*, batch_size: int, seq_len: int) -> GrugMoeMuonHConfig:
         max_grad_norm=None,
         lr_schedule=base_optimizer.lr_schedule,
         decay=base_optimizer.decay,
+        expert_3d_optimizer=cast(Expert3DOptimizer, expert_3d_optimizer),
     )
 
 
@@ -177,6 +184,7 @@ def build_data(model: GrugModelConfig):
             num_examples=env_int("MAY_SYNTHETIC_EXAMPLES", 1 << 20),
             eos_id=env_int("MAY_SYNTHETIC_EOS_ID", model.vocab_size - 1),
             eos_interval=env_int("MAY_SYNTHETIC_EOS_INTERVAL", 0),
+            block_cross_document_attention=env_bool("MAY_BLOCK_CROSS_DOCUMENT_ATTENTION", True),
         )
     raise ValueError(f"MAY_DATA={data!r} must be 'slimpajama', 'nemotron', or 'synthetic'")
 
@@ -278,6 +286,7 @@ def build_may_step() -> ExecutorStep:
         ram="256g",
         disk="256g",
         replicas=replicas,
+        image=os.environ.get("MAY_TASK_IMAGE") or None,
     )
     grug_trainer = GrugTrainerConfig(
         expert_axis_size=expert_axis,
