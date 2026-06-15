@@ -189,11 +189,21 @@ def test_build_job_constraints_preemptible_true_overrides_heuristic():
 def test_job_run_cli_accepts_task_image_override(monkeypatch):
     captured: dict[str, object] = {}
 
-    def fake_submit_and_wait_job(**kwargs):
-        captured.update(kwargs)
-        return 0
+    class FakeJob:
+        job_id = "test-job"
 
-    monkeypatch.setattr("iris.cli.job._submit_and_wait_job", fake_submit_and_wait_job)
+    class FakeClient:
+        def submit(self, **kwargs):
+            captured.update(kwargs)
+            return FakeJob()
+
+    def fake_remote(controller_url, workspace, token_provider):
+        captured["controller_url"] = controller_url
+        captured["workspace"] = workspace
+        captured["token_provider"] = token_provider
+        return FakeClient()
+
+    monkeypatch.setattr("iris.cli.job.IrisClient.remote", fake_remote)
 
     result = CliRunner().invoke(
         run,
@@ -210,8 +220,8 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert captured["task_image"] == "ghcr.io/marin-community/iris-task-cuda-devel:test"
-    assert captured["command"] == ["python", "train.py"]
-    assert captured["wait"] is False
+    assert captured["controller_url"] == "http://controller.test"
+    assert captured["entrypoint"].command == ["python", "train.py"]
 
 
 # --tpu multi-variant parsing
