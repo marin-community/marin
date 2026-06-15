@@ -27,6 +27,33 @@ Workflow: dry-run locally (`iris cluster controller serve --dry-run`) -> capture
 
 If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
 
+### Updating the Controller Image
+
+The prod (marin) controller pins `image: ghcr.io/marin-community/iris-controller:latest`
+(`lib/iris/config/marin.yaml:33`). That image is rebuilt and pushed to GHCR by the
+`.github/workflows/ops-docker-images.yaml` workflow — on manual `workflow_dispatch`, or
+weekly (Sundays 02:00 UTC). Each build tags `:latest`, `:<date>` (UTC `YYYYMMDD`), and
+`:<git-short-hash>`.
+
+The dev controller is auto-restarted daily at 05:00 UTC by
+`.github/workflows/iris-dev-restart.yaml`. **Prod/marin has no scheduled restart.**
+
+**The trap: merging a controller fix does NOT deploy it.** Two things must both happen:
+
+1. **Rebuild `:latest`.** Trigger `ops-docker-images` via `workflow_dispatch` — don't wait
+   for the Sunday build. Until this runs, `:latest` still points at the old code.
+2. **Restart the controller** so it re-pulls `:latest`: `iris cluster controller restart`
+   (controller-only — see above). A restart against a stale `:latest` deploys nothing new.
+
+Doing only (2) is the failure mode that cost ~5 red-canary days
+(`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
+
+**Verify the running controller matches HEAD.** The image carries a git-hash tag (built
+from the `IRIS_GIT_HASH` build arg), so confirm the controller is running the
+`:<git-short-hash>` for the commit you expect — not just that it restarted. For the
+GHCR → Artifact Registry pull-through mechanics (prod VMs pull from an AR remote cache,
+not GHCR directly), see `lib/iris/docs/image-push.md`.
+
 ## Job Management
 
 ```bash
