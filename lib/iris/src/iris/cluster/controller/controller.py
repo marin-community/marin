@@ -949,7 +949,9 @@ class Controller:
             drained_control = self._drain_dispatch_snapshot()
 
         inputs = _TickInputs()
-        with self._db.read_snapshot() as snap:
+        # Dedicated control pool: the tick's snapshot must not queue behind a slow
+        # dashboard read for a connection.
+        with self._db.control_read_snapshot() as snap:
             if run_schedule:
                 claims, changed = refresh_reservation_claims_in_tx(snap, self._health, self._worker_attrs)
                 inputs.claims = claims
@@ -1077,7 +1079,7 @@ class Controller:
         trace = self._scheduling_round % _SCHEDULING_TRACE_INTERVAL == 0
 
         claims = self._refresh_reservation_claims()
-        with self._db.read_snapshot() as snap:
+        with self._db.control_read_snapshot() as snap:
             ctx = build_scheduling_context(
                 snap,
                 self._health,
@@ -1291,7 +1293,7 @@ class Controller:
         if self._backend_drains_dispatch:
             return self._drain_dispatch_snapshot()
 
-        with self._db.read_snapshot() as snap:
+        with self._db.control_read_snapshot() as snap:
             control = reads.load_control_snapshot(snap, self._health, scan_timeouts=scan_timeouts)
             job_specs = self._build_run_templates(snap, control.reconcile_rows)
         return dataclasses.replace(control, job_specs=job_specs)
@@ -1459,7 +1461,7 @@ class Controller:
 
     def _build_worker_status_map(self) -> WorkerStatusMap:
         """Build a map of worker_id to worker status for autoscaler idle tracking."""
-        with self._db.read_snapshot() as tx:
+        with self._db.control_read_snapshot() as tx:
             return self._worker_status_map_from_tx(tx)
 
     def _worker_status_map_from_tx(self, tx: Tx) -> WorkerStatusMap:

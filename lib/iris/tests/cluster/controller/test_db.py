@@ -69,6 +69,29 @@ def test_read_snapshot_returns_consistent_data(db: ControllerDB) -> None:
     assert len(all_rows) == 2
 
 
+def test_control_read_snapshot_reads_committed_data_via_dedicated_pool(db: ControllerDB) -> None:
+    """control_read_snapshot reads committed data from its own (non-shared) pool."""
+    _create_simple_table(db)
+    with db.transaction() as cur:
+        cur.execute(text("INSERT INTO kv (key, value) VALUES (:k, :v)"), {"k": "a", "v": "1"})
+
+    # Backed by a distinct engine so the control loop never shares connections
+    # with RPC-handler reads.
+    assert db.sa_control_read_engine is not db.sa_read_engine
+
+    with db.control_read_snapshot() as q:
+        rows = q.execute(text("SELECT key FROM kv")).all()
+    assert [r[0] for r in rows] == ["a"]
+
+
+def test_control_read_snapshot_is_read_only(db: ControllerDB) -> None:
+    """The control pool pins query_only, so writes through it are rejected."""
+    _create_simple_table(db)
+    with pytest.raises(Exception, match=r"readonly|read-only|query_only"):
+        with db.control_read_snapshot() as q:
+            q.execute(text("INSERT INTO kv (key, value) VALUES (:k, :v)"), {"k": "x", "v": "1"})
+
+
 def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
     """replace_from() must re-attach the auth DB so auth tables remain accessible."""
     db = ControllerDB(db_dir=tmp_path)
