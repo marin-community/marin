@@ -1021,3 +1021,31 @@
 - Result: dry run matched the intended one-axis remat probe. Submit created parent `/dlwh/iris-run-job-20260615-050534`.
 - Interpretation: this is the direct remat/liveness test for the original B256 full-depth OOM.
 - Next action: babysit for child creation, hparams confirmation (`remat_mode=recompute_all`), first step, MFU if any, terminal success, or allocator failure and requested size.
+
+### 2026-06-14 22:20 PDT - MAY-030 recompute-all still OOMs
+- Hypothesis: if the full-depth B256 OOM is caused mostly by saved activation/remat liveness under `save_moe`, switching only `MAY_REMAT` to `recompute_all` should reduce HBM enough to move the original B256 shape past the first step.
+- Command:
+  - Final state: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job list --json --prefix /dlwh/iris-run-job-20260615-050534`
+  - Log scan: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260615-050534 --since-seconds 7200 --max-lines 800000 | rg -v '"event": "hparams"|xla_bridge Unable to initialize backend|pip install jax\\[k8s' | rg -i -m 80 -C 3 'RESOURCE_EXHAUSTED|Out of memory|trying to allocate|rounded to|Fatal error|Traceback|JaxRuntimeError|failed|Exception|remat_mode|seq_len|train_batch_size'`
+- Config:
+  - Parent: `/dlwh/iris-run-job-20260615-050534`
+  - Child: `/dlwh/iris-run-job-20260615-050534/grug-train-gm2560-may-030recomp-b256-n16-cw-20260615-0508`
+  - Source checkpoint: `5353b2eea767bb05a41603a213c9c457b1e07ecb`
+  - Same as MAY-026 except `MAY_REMAT=recompute_all`: full May d2560/L26, seq_len 4096, batch 256, synthetic data, checkpoints disabled, no profiler, 16 H100 nodes, `expert_axis=8`, `model_axis=1`, `replica_axis=1`, ring MoE, FA4/CuTe attention, XLA CE, replicated input/output embeddings, `live_param_mode=compute_with_master`.
+- Result: the child and parent are terminal `JOB_STATE_KILLED` after manual stop of the deterministic retry. The first attempt reproduced the first-step allocator failure at `experiments/grug/moe/train.py:580` on `jax.block_until_ready(metrics["train/loss"])`: `RESOURCE_EXHAUSTED: Out of memory while trying to allocate 72.03GiB`, with BFC lines `rounded to 77344390144` across local GPUs. Child summary via `job list` showed `task_count=16`, `completed_count=16`, `failure_count=1`, `preemption_count=0`, `task_state_counts={"killed": 16}`, and `pending_reason="Terminated by user"`.
+- Interpretation: `recompute_all` helped only modestly versus the previous full-depth B256 failures (~74.4 GiB -> 72.03 GiB) and is not enough to make the target full-sequence B256 shape fit. Since B128/full-depth fits and B256/one-layer fits, the next one-axis test should scale sequence length while keeping B256/full-depth and `recompute_all` to localize whether the remaining request is token/activation sized.
+- Next action: launch MAY-031 with the same full-depth B256/N16/EP8/model1 settings as MAY-030, changing only `seq_len=2048`.
+
+### 2026-06-14 22:21 PDT - MAY-031 seq-len 2048 diagnostic launched
+- Hypothesis: if the remaining 72.03 GiB first-step allocation is primarily token/activation sized, halving sequence length from 4096 to 2048 while keeping full depth, B256, N16/EP8/model1, `recompute_all`, and the same loss/embedding sharding should fit or reduce the allocator request substantially. If it OOMs near the same size, the bad path is less sequence-scaled and the next axis should be model/vocab or parameter/update liveness.
+- Command:
+  - Submit: `experiments/grug/moe/run_cw_may_d2560.sh --run-id GM2560-MAY-031S2048-B256-N16-cw-20260615-0520 --nodes 16 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 1 --expert-axis 8 --replica-axis 1 --batch 256 --seq-len 2048 --steps 4 --profiler-steps 0 --tracker json_logger --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --ce-implementation xla --moe-implementation ring --input-embed-sharding replicated --output-proj-sharding replicated --live-param-mode compute_with_master --remat recompute_all --submit`
+  - Initial state: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job list --json --prefix /dlwh/iris-run-job-20260615-052048`
+- Config:
+  - Parent: `/dlwh/iris-run-job-20260615-052048`
+  - Child: `/dlwh/iris-run-job-20260615-052048/grug-train-gm2560-may-031s2048-b256-n16-cw-20260615-0520`
+  - Source checkpoint: `5353b2eea767bb05a41603a213c9c457b1e07ecb`
+  - Same as MAY-030 except `MAY_SEQ_LEN=2048`: full May d2560/L26, batch 256, synthetic data, checkpoints disabled, no profiler, 16 H100 nodes, `expert_axis=8`, `model_axis=1`, `replica_axis=1`, ring MoE, FA4/CuTe attention, XLA CE, replicated input/output embeddings, `live_param_mode=compute_with_master`, `remat_mode=recompute_all`.
+- Result: submit created parent `/dlwh/iris-run-job-20260615-052048`. Initial Iris poll found parent and child both `JOB_STATE_RUNNING`; the child had `task_count=16`, `completed_count=0`, `failure_count=0`, `preemption_count=0`, and `task_state_counts={"running": 16}`.
+- Interpretation: the one-axis sequence-length diagnostic is live and not yet at a decision point.
+- Next action: monitor for hparams confirmation (`seq_len=2048`, `train_batch_size=256`, `num_layers=26`, `remat_mode=recompute_all`), first train step/MFU, terminal success, or an allocator failure and requested size. Subagent `Mill` (`019ec9ba-17b9-7bf3-8cda-68fbd574152a`) owns read-only babysitting, and heartbeat `poll-grug-d2560-gm006-babysitter` now points at MAY-031.
