@@ -25,9 +25,15 @@ have no tokens yet and would be locked out mid-transition.
 We need a path where:
 
 - **Public** connections (through the load balancer) require a valid token.
-- **Loopback** connections (SSH tunnels, on-host clients) are trusted and may
-  declare which user they are acting as, so jobs get correct ownership without a
-  token.
+- **Loopback** connections (SSH tunnels, on-host clients) are trusted as the
+  admin user without a token, so existing SSH workflows keep working unchanged.
+
+This loopback trust is **always on** — there is no config flag. Reaching the
+controller's loopback interface already requires SSH/host access, which is
+itself privileged, so a genuine loopback peer is treated as the admin user
+regardless of auth configuration. Jobs are still attributed per-user: the
+client stamps the job name's owner segment with `$USER`, and an admin's
+requested owner is authoritative (see "Job attribution" below).
 
 ## Why "trust loopback" is safe — and the trap that makes it unsafe
 
@@ -83,83 +89,63 @@ is provably safe given the discriminator above.
 
 ## Behaviour matrix
 
-With auth **enabled** (`provider` set) and `trust_loopback=true`:
+With auth **enabled** (`provider` set):
 
-| Caller                | Token         | Result                                                       |
-|-----------------------|---------------|--------------------------------------------------------------|
-| Public                | valid         | authenticated as token identity                              |
-| Public                | invalid       | **rejected** (401 / UNAUTHENTICATED)                         |
-| Public                | none          | **rejected** (401 / UNAUTHENTICATED)                         |
-| Loopback              | valid         | authenticated as token identity (token wins)                 |
-| Loopback              | none + `X-Iris-User: alice` | trusted as `alice`, role `admin`               |
-| Loopback              | none, no header | trusted as `anonymous`, role `admin`                       |
+| Caller    | Token   | Result                                          |
+|-----------|---------|-------------------------------------------------|
+| Public    | valid   | authenticated as token identity                 |
+| Public    | invalid | **rejected** (401 / UNAUTHENTICATED)            |
+| Public    | none    | **rejected** (401 / UNAUTHENTICATED)            |
+| Loopback  | valid   | authenticated as token identity (token wins)    |
+| Loopback  | invalid | **rejected** (a present token is always verified)|
+| Loopback  | none    | trusted as `anonymous`, role `admin`            |
 
-`trust_loopback` is independent of the older `optional` flag:
+A present token is always verified first, so a bad token is rejected even over
+loopback; only a **tokenless** loopback request gets the admin fallback.
 
-- `optional=true` trusts **tokenless requests from anywhere** as anonymous admin
-  — fine for a private dev cluster, **unsafe for a public one**.
-- `trust_loopback=true` trusts tokenless requests **only from genuine loopback**,
-  and lets them declare an identity.
+This is independent of the older `optional` flag, which trusts tokenless
+requests from **anywhere** as anonymous admin — fine for a private dev cluster,
+**unsafe for a public one**. For the public rollout leave `optional=false`;
+loopback trust still applies because it is keyed on the verified transport peer,
+not on `optional`.
 
-For the public rollout set `optional=false` and `trust_loopback=true`.
+## Job attribution
 
-## How a user declares their identity
+Loopback callers resolve to a single principal (`anonymous`, role `admin`), so
+how do jobs get the right owner? Through the job name, not the connection
+identity:
 
-Trusted-loopback callers set the `X-Iris-User` header to the username they want
-their jobs owned by. The Iris CLI does this automatically: when no token
-provider is configured it attaches `X-Iris-User: $USER`. Because the header is
-honoured **only** on trusted-loopback connections, the CLI can always send it —
-a public controller ignores it and still demands a token.
+- The client stamps the job name's owner segment with the local `$USER`
+  (`resolve_job_user`), producing names like `/alice/train-run`.
+- `LaunchJob` reconciles the requested owner against the caller's role
+  (`controller/service.py`): a **non-admin** token caller is pinned to their own
+  verified identity (so they cannot submit `/someone-else/job`), while an
+  **admin** — including every loopback caller — keeps the requested owner.
 
-Trusted-loopback identities are granted the `admin` role, preserving the
-full-control behaviour these operators had under null-auth.
-
-### Principal vs. acting owner
-
-Two identities are in play and the controller keeps them separate:
-
-- **Principal** — who you are, from the verified identity. Over loopback this is
-  the `X-Iris-User` value (the local `$USER`); it is what `GetCurrentUser`
-  returns and what audit attributes the connection to.
-- **Acting owner** — the user a submitted job is owned by, taken from the job
-  name's leading segment (`/<owner>/<job>`).
-
-`LaunchJob` reconciles the two by role (`controller/service.py`):
-
-- A **non-admin** (token) caller may only act as themselves: the owner segment is
-  overwritten with the principal, so a token user cannot submit `/someone-else/job`.
-- An **admin** — including every trusted-loopback caller — may submit on behalf of
-  any user, so the requested owner segment stands. This reproduces the null-auth
-  behaviour SSH users rely on (the name is authoritative); the CLI defaults the
-  segment to `$USER`, so ordinary submissions are still attributed to the caller.
-
-This is a transition affordance, not the end state: once users have real tokens
-(`iris login`), drop `trust_loopback` and let the provider assign roles per user.
+So a loopback caller is admin (full control of the cluster) but their jobs are
+still attributed to `$USER` via the name — exactly the null-auth behaviour SSH
+users have today. `GetCurrentUser` returns the `anonymous`/`admin` principal.
 
 ## Operator workflow
 
 ```mermaid
 flowchart TD
-    A[null-auth cluster, SSH tunnels] --> B[Enable gcp provider + trust_loopback=true]
+    A[null-auth cluster, SSH tunnels] --> B[Enable gcp provider]
     B --> C{Connection origin}
     C -->|Public via LB| D[Require valid token]
-    C -->|Loopback / SSH tunnel| E[Trust; X-Iris-User sets identity]
-    E --> F[Users run `iris login` to obtain tokens]
-    F --> G[Set trust_loopback=false]
-    G --> H[All callers authenticated; transition complete]
+    C -->|Loopback / SSH tunnel| E[Trusted as admin, no token]
+    E --> F[Users run `iris login` to obtain tokens for public access]
 ```
 
 1. **Stand up the public ingress.** Put the controller behind IAP + HTTPS LB.
    Keep `proxy_headers=True, forwarded_allow_ips="*"` (needed for correct
    redirect URLs).
-2. **Enable auth in transition mode.** In the cluster `AuthConfig`, set the
-   `gcp` provider (with `project_id`) and `trust_loopback=true`, `optional=false`.
-   Public users now need tokens; SSH-tunnel users keep working and get correct
-   ownership via `X-Iris-User`.
+2. **Enable auth.** In the cluster `AuthConfig`, set the `gcp` provider (with
+   `project_id`) and `optional=false`. Public users now need tokens; SSH-tunnel
+   users keep working as admin and jobs stay attributed to `$USER`.
 3. **Onboard users.** Each user runs `iris login` once to mint a JWT from their
-   GCP identity. They can keep using the SSH tunnel during this window.
-4. **Close the transition.** Once everyone has tokens, set `trust_loopback=false`.
-   Loopback connections then require tokens like everyone else.
+   GCP identity, then uses the public endpoint. The SSH tunnel keeps working
+   throughout — there is no flag-flip cutover.
 
 ## Config reference
 
@@ -168,21 +154,19 @@ auth {
   gcp { project_id: "my-project" }
   admin_users: "alice@example.com"
   optional: false          # do NOT trust tokenless public requests
-  trust_loopback: true     # trust tokenless loopback requests (transition)
 }
 ```
 
+(Loopback trust is unconditional — there is no config field for it.)
+
 ## Implementation map
 
-- `lib/iris/src/iris/rpc/config.proto` — `AuthConfig.trust_loopback`.
-- `lib/iris/src/iris/rpc/auth.py` — `is_trusted_loopback()`, `IRIS_USER_HEADER`,
-  `resolve_auth()` extended with the loopback path.
-- `lib/iris/src/iris/cluster/controller/auth.py` — `ControllerAuth.trust_loopback`,
-  wired from the proto in `create_controller_auth()`.
+- `lib/iris/src/iris/rpc/auth.py` — `is_trusted_loopback()`, `LOOPBACK_IDENTITY`,
+  and `resolve_auth()` (tokenless loopback → admin).
 - `lib/iris/src/iris/cluster/controller/dashboard.py` — `_DashboardAuthInterceptor`
   and `_enforce_http_auth()` pass the transport peer + headers into the shared
   resolver.
 - `lib/iris/src/iris/cluster/controller/service.py` — `LaunchJob` reconciles the
   principal against the requested owner segment (admins act-as; non-admins pinned).
-- `lib/iris/src/iris/cli/main.py` — client attaches `X-Iris-User` when no token
-  provider is configured.
+- `lib/iris/src/iris/cluster/client/job_info.py` — `resolve_job_user()` stamps
+  the job name's owner segment with `$USER`.

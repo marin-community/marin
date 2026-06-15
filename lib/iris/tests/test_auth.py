@@ -8,9 +8,7 @@ from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import (
-    IRIS_USER_HEADER,
     AuthTokenInjector,
-    LoopbackUserInjector,
     StaticTokenProvider,
     StaticTokenVerifier,
     is_trusted_loopback,
@@ -40,7 +38,8 @@ def _quick():
 
 
 def test_static_auth_rpc_access():
-    """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid JWT."""
+    """Static auth over loopback: a tokenless request is trusted as admin
+    (loopback trust), a wrong token is rejected, a valid JWT is accepted."""
 
     config = _make_controller_only_config()
     config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
@@ -50,9 +49,10 @@ def test_static_auth_rpc_access():
     try:
         list_req = controller_pb2.Controller.ListWorkersRequest()
 
+        # The test client connects over loopback, so a tokenless request is
+        # trusted as the anonymous admin rather than rejected.
         unauth_client = ControllerServiceClientSync(address=url, timeout_ms=5000)
-        with pytest.raises(ConnectError, match=r"(?i)(authorization|authenticat)"):
-            unauth_client.list_workers(list_req)
+        assert unauth_client.list_workers(list_req) is not None
         unauth_client.close()
 
         wrong_injector = AuthTokenInjector(StaticTokenProvider("wrong-token"))
@@ -145,61 +145,25 @@ def test_is_trusted_loopback(client_address, headers, expected):
 
 
 def test_resolve_auth_token_wins_over_loopback():
-    """A present token is verified even on a trusted-loopback connection."""
+    """A present token is verified even on a loopback connection."""
     verifier = StaticTokenVerifier({"tok": "alice"})
-    identity = resolve_auth(
-        "tok",
-        verifier,
-        optional=False,
-        client_address="127.0.0.1:54321",
-        headers={IRIS_USER_HEADER: "mallory"},
-        trust_loopback=True,
-    )
+    identity = resolve_auth("tok", verifier, optional=False, client_address="127.0.0.1:54321", headers={})
     assert identity is not None
     assert identity.user_id == "alice"
 
 
-def test_resolve_auth_loopback_uses_declared_user():
-    """Tokenless loopback caller is trusted as the X-Iris-User it declares."""
-    verifier = StaticTokenVerifier({})
-    identity = resolve_auth(
-        None,
-        verifier,
-        optional=False,
-        client_address="127.0.0.1:54321",
-        headers={IRIS_USER_HEADER: "alice"},
-        trust_loopback=True,
-    )
+def test_resolve_auth_loopback_is_admin():
+    """A tokenless loopback caller is always trusted as the anonymous admin."""
+    identity = resolve_auth(None, StaticTokenVerifier({}), optional=False, client_address="127.0.0.1:54321", headers={})
     assert identity is not None
-    assert identity.user_id == "alice"
+    assert identity.user_id == "anonymous"
     assert identity.role == "admin"
 
 
-def test_resolve_auth_loopback_defaults_to_anonymous():
-    """Tokenless loopback caller without a header falls back to anonymous admin."""
-    identity = resolve_auth(
-        None,
-        StaticTokenVerifier({}),
-        optional=False,
-        client_address="127.0.0.1:54321",
-        headers={},
-        trust_loopback=True,
-    )
-    assert identity is not None
-    assert identity.user_id == "anonymous"
-
-
-def test_resolve_auth_public_tokenless_rejected_with_trust_loopback():
-    """trust_loopback must NOT trust tokenless non-loopback (public) requests."""
+def test_resolve_auth_public_tokenless_rejected():
+    """A tokenless non-loopback (public) request is rejected when auth is required."""
     with pytest.raises(ValueError, match="Missing authentication"):
-        resolve_auth(
-            None,
-            StaticTokenVerifier({}),
-            optional=False,
-            client_address="203.0.113.7:443",
-            headers={IRIS_USER_HEADER: "mallory"},
-            trust_loopback=True,
-        )
+        resolve_auth(None, StaticTokenVerifier({}), optional=False, client_address="203.0.113.7:443", headers={})
 
 
 def test_resolve_auth_spoofed_loopback_rejected():
@@ -214,46 +178,40 @@ def test_resolve_auth_spoofed_loopback_rejected():
             StaticTokenVerifier({}),
             optional=False,
             client_address="127.0.0.1:0",
-            headers={"x-forwarded-for": "127.0.0.1", IRIS_USER_HEADER: "mallory"},
-            trust_loopback=True,
+            headers={"x-forwarded-for": "127.0.0.1"},
         )
 
 
-def test_loopback_trust_resolves_declared_identity():
-    """End-to-end: with trust_loopback on, a tokenless loopback client is
-    resolved as the X-Iris-User it declares, with the admin role."""
+def test_loopback_resolves_as_admin():
+    """End-to-end: a tokenless loopback client is resolved as the anonymous admin."""
 
     config = _make_controller_only_config()
     config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
-    config.auth.trust_loopback = True
     controller = LocalCluster(config)
     url = controller.start()
 
     try:
-        client = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[LoopbackUserInjector("alice")])
+        client = ControllerServiceClientSync(address=url, timeout_ms=10000)
         resp = client.get_current_user(job_pb2.GetCurrentUserRequest())
-        assert resp.user_id == "alice"
+        assert resp.user_id == "anonymous"
         assert resp.role == "admin"
         client.close()
     finally:
         controller.close()
 
 
-def test_loopback_admin_submits_as_other_user():
-    """A trusted-loopback caller (admin) may attribute a job to any user.
-
-    Loopback identity is self-asserted and carries the admin role, so the job
-    name's owner segment is authoritative — matching the null-auth behaviour
-    SSH-tunnel users rely on, rather than being pinned to the declared user."""
+def test_loopback_admin_submits_as_named_user():
+    """A tokenless loopback caller is admin, so the job name's owner segment is
+    authoritative — jobs are attributed to the user the client names (the CLI
+    fills this with $USER), matching the null-auth behaviour SSH users rely on."""
 
     config = _make_controller_only_config()
     config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
-    config.auth.trust_loopback = True
     controller = LocalCluster(config)
     url = controller.start()
 
     try:
-        client = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[LoopbackUserInjector("alice")])
+        client = ControllerServiceClientSync(address=url, timeout_ms=10000)
         launch_req = controller_pb2.Controller.LaunchJobRequest(
             name="/bob/acted-job",
             entrypoint=Entrypoint.from_callable(_quick).to_proto(),
@@ -289,24 +247,6 @@ def test_token_user_owner_pinned_to_principal():
         )
         resp = client.launch_job(launch_req)
         assert resp.job_id.startswith("/carol/"), resp.job_id
-        client.close()
-    finally:
-        controller.close()
-
-
-def test_loopback_trust_disabled_rejects_tokenless():
-    """Without trust_loopback, tokenless loopback requests are rejected when auth is on."""
-
-    config = _make_controller_only_config()
-    config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
-    # trust_loopback defaults to False.
-    controller = LocalCluster(config)
-    url = controller.start()
-
-    try:
-        client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[LoopbackUserInjector("alice")])
-        with pytest.raises(ConnectError, match=r"(?i)(authorization|authenticat)"):
-            client.list_workers(controller_pb2.Controller.ListWorkersRequest())
         client.close()
     finally:
         controller.close()

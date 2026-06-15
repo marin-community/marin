@@ -281,7 +281,6 @@ class ControllerAuth:
     gcp_project_id: str | None = None
     jwt_manager: JwtTokenManager | None = None
     optional: bool = False
-    trust_loopback: bool = False
 
 
 def create_controller_auth(
@@ -354,14 +353,12 @@ def create_controller_auth(
         login_verifier = StaticTokenVerifier(static_tokens)
 
     optional = auth_config.optional
-    trust_loopback = auth_config.trust_loopback
     logger.info(
-        "Auth enabled: provider=%s, db=%s, jwt=%s, optional=%s, trust_loopback=%s",
+        "Auth enabled: provider=%s, db=%s, jwt=%s, optional=%s (loopback always trusted as admin)",
         provider,
         "yes" if db else "no",
         "yes" if jwt_mgr else "no",
         optional,
-        trust_loopback,
     )
     return ControllerAuth(
         verifier=verifier,
@@ -371,7 +368,6 @@ def create_controller_auth(
         gcp_project_id=gcp_project_id,
         jwt_manager=jwt_mgr,
         optional=optional,
-        trust_loopback=trust_loopback,
     )
 
 

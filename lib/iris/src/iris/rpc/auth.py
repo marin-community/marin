@@ -13,7 +13,6 @@ pass through as the anonymous admin user.
 """
 
 import contextlib
-import getpass
 import ipaddress
 import logging
 import time
@@ -33,15 +32,6 @@ logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "iris_session"
 
-# Header a trusted-loopback caller uses to declare the identity its requests act
-# as. Honoured only on genuine loopback connections; see is_trusted_loopback.
-IRIS_USER_HEADER = "x-iris-user"
-
-# Identity granted to a trusted-loopback caller that does not declare a user.
-# Mirrors the null-auth default so existing SSH-tunnel users see no change.
-DEFAULT_LOOPBACK_USER = "anonymous"
-LOOPBACK_ROLE = "admin"
-
 
 @dataclass(frozen=True, slots=True)
 class VerifiedIdentity:
@@ -49,6 +39,13 @@ class VerifiedIdentity:
 
     user_id: str
     role: str
+
+
+# Identity granted to any tokenless caller on a genuine loopback connection.
+# Mirrors the null-auth default: reaching the loopback interface (SSH tunnel /
+# on-host) already implies host-level trust, so the caller is the admin user.
+# Jobs are still attributed per-user via the job name's owner segment.
+LOOPBACK_IDENTITY = VerifiedIdentity(user_id="anonymous", role="admin")
 
 
 def _extract_cookie(cookie_header: str, name: str) -> str | None:
@@ -281,23 +278,21 @@ def resolve_auth(
     *,
     client_address: str | None = None,
     headers: dict | None = None,
-    trust_loopback: bool = False,
 ) -> VerifiedIdentity | None:
     """Shared auth policy for gRPC interceptors and HTTP middleware.
 
     Returns VerifiedIdentity on success, None for anonymous passthrough.
     Raises ValueError on rejected tokens (invalid token, or missing when required).
 
-    A present token always wins. When no token is present and
-    ``trust_loopback`` is set, a genuine loopback connection is trusted and
-    may declare its identity via the ``X-Iris-User`` header (granted the admin
-    role); see ``is_trusted_loopback``.
+    A present token always wins. A tokenless request over a genuine loopback
+    connection is always trusted as the admin user (see ``is_trusted_loopback``
+    and ``LOOPBACK_IDENTITY``) — the SSH-tunnel transition path. Otherwise a
+    missing token is allowed only when ``optional`` is set.
     """
     if token is not None:
         return verifier.verify(token)
-    if trust_loopback and is_trusted_loopback(client_address, headers or {}):
-        user = (headers or {}).get(IRIS_USER_HEADER) or DEFAULT_LOOPBACK_USER
-        return VerifiedIdentity(user_id=user, role=LOOPBACK_ROLE)
+    if is_trusted_loopback(client_address, headers or {}):
+        return LOOPBACK_IDENTITY
     if optional:
         return None
     raise ValueError("Missing authentication")
@@ -410,34 +405,16 @@ class AuthTokenInjector:
         return call_next(request, ctx)
 
 
-class LoopbackUserInjector:
-    """Client-side interceptor that declares the acting user over loopback.
-
-    Attaches ``X-Iris-User`` so a controller running in loopback-trust mode
-    attributes tokenless SSH-tunnel requests to the right user. The header is
-    honoured by the controller only on genuine loopback connections with no
-    bearer token, so it is always safe to send — a public controller ignores
-    it and still demands a token.
-    """
-
-    def __init__(self, user: str):
-        self._user = user
-
-    def intercept_unary_sync(self, call_next, request, ctx):
-        ctx.request_headers()[IRIS_USER_HEADER] = self._user
-        return call_next(request, ctx)
-
-
 def client_interceptors(token_provider: "TokenProvider | None") -> list:
     """Build the client-side RPC interceptor chain.
 
     With a token provider, attach the bearer token. Without one (the SSH-tunnel
-    case), declare the local OS user via ``X-Iris-User`` so a loopback-trust
-    controller attributes requests correctly.
+    case), send nothing: a loopback-trust controller authenticates the
+    connection by its transport peer, and job ownership comes from the job name.
     """
     if token_provider is not None:
         return [AuthTokenInjector(token_provider)]
-    return [LoopbackUserInjector(getpass.getuser())]
+    return []
 
 
 class TokenProvider(Protocol):

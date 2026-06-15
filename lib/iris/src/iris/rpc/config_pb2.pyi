@@ -470,18 +470,16 @@ class StaticAuthConfig(_message.Message):
     def __init__(self, tokens: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class AuthConfig(_message.Message):
-    __slots__ = ("gcp", "static", "admin_users", "optional", "trust_loopback")
+    __slots__ = ("gcp", "static", "admin_users", "optional")
     GCP_FIELD_NUMBER: _ClassVar[int]
     STATIC_FIELD_NUMBER: _ClassVar[int]
     ADMIN_USERS_FIELD_NUMBER: _ClassVar[int]
     OPTIONAL_FIELD_NUMBER: _ClassVar[int]
-    TRUST_LOOPBACK_FIELD_NUMBER: _ClassVar[int]
     gcp: GcpAuthConfig
     static: StaticAuthConfig
     admin_users: _containers.RepeatedScalarFieldContainer[str]
     optional: bool
-    trust_loopback: bool
-    def __init__(self, gcp: _Optional[_Union[GcpAuthConfig, _Mapping]] = ..., static: _Optional[_Union[StaticAuthConfig, _Mapping]] = ..., admin_users: _Optional[_Iterable[str]] = ..., optional: _Optional[bool] = ..., trust_loopback: _Optional[bool] = ...) -> None: ...
+    def __init__(self, gcp: _Optional[_Union[GcpAuthConfig, _Mapping]] = ..., static: _Optional[_Union[StaticAuthConfig, _Mapping]] = ..., admin_users: _Optional[_Iterable[str]] = ..., optional: _Optional[bool] = ...) -> None: ...
 
 class WorkerProviderConfig(_message.Message):
     __slots__ = ()
