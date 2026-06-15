@@ -22,7 +22,9 @@ gang's tasks share it while separate gang jobs stay isolated.
 
 from __future__ import annotations
 
+import json
 import logging
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
@@ -34,26 +36,25 @@ logger = logging.getLogger(__name__)
 # once, so a follower polling ``sweep_round_{seq}`` reads an unambiguous value.
 _ROUND_ENDPOINT = "sweep_round_{seq}"
 
-# A round's registry value is tagged so the stop signal can never collide with a
-# target id: a target is published as ``run:<target_id>`` and the terminal stop
-# as ``stop``. Any target id — including one literally equal to ``stop`` — is
-# carried under the ``run:`` prefix and so stays distinct.
-_STOP = "stop"
-_RUN_PREFIX = "run:"
 
+@dataclass(frozen=True)
+class Round:
+    """One round the leader announces to its followers.
 
-def _encode_round(target_id: str | None) -> str:
-    """Encode a round's registry value. ``None`` is the terminal stop."""
-    return _STOP if target_id is None else f"{_RUN_PREFIX}{target_id}"
+    ``target_id is None`` is the terminal stop signal. The registry stores a
+    string ``address``, so a round travels as JSON; the target id is a field
+    value and so can never be confused with the stop signal, whatever it
+    contains.
+    """
 
+    target_id: str | None
 
-def _decode_round(value: str) -> str | None:
-    """Decode a round value back to a target id, or ``None`` for stop."""
-    if value == _STOP:
-        return None
-    if value.startswith(_RUN_PREFIX):
-        return value[len(_RUN_PREFIX) :]
-    raise ValueError(f"Malformed sweep round value: {value!r}")
+    def to_wire(self) -> str:
+        return json.dumps({"target_id": self.target_id})
+
+    @classmethod
+    def from_wire(cls, value: str) -> Round:
+        return cls(target_id=json.loads(value)["target_id"])
 
 
 class GangRole(StrEnum):
@@ -134,7 +135,7 @@ class GangCoordinator:
     def publish(self, seq: int, target_id: str | None) -> None:
         if not self._active:
             return
-        value = _encode_round(target_id)
+        value = Round(target_id).to_wire()
         # Best-effort cleanup is handled by the controller's cascade delete on
         # task teardown, as in jax_init — we do not unregister per round.
         self._context().registry.register(_ROUND_ENDPOINT.format(seq=seq), value)
@@ -148,7 +149,7 @@ class GangCoordinator:
             poll_timeout=self._poll_timeout,
             waiting_log=f"Waiting for leader to publish sweep round {seq} ...",
         )
-        return _decode_round(value)
+        return Round.from_wire(value).target_id
 
 
 def gang_coordinator() -> SweepCoordinator:

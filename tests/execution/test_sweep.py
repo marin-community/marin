@@ -19,19 +19,14 @@ from marin.execution.executor_step_status import (
     StatusFile,
 )
 from marin.execution.sweep import SweepTarget, claim_and_run
-from marin.execution.sweep_coordination import _STOP, GangRole, _decode_round, _encode_round
+from marin.execution.sweep_coordination import GangRole, Round
 
 
-@pytest.mark.parametrize("target_id", ["t01", "stop", _STOP, "run:t01", "weird id/with.chars"])
-def test_round_codec_round_trips_any_target_id(target_id):
-    """A target id round-trips through the wire encoding, including one equal to
-    the stop sentinel — the ``run:`` prefix keeps targets and stop disjoint."""
-    assert _decode_round(_encode_round(target_id)) == target_id
-
-
-def test_round_codec_stop_is_none():
-    assert _decode_round(_encode_round(None)) is None
-    assert _encode_round(None) == _STOP
+@pytest.mark.parametrize("target_id", ["t01", "stop", "weird id/with.chars", None])
+def test_round_wire_round_trips(target_id):
+    """A round survives the JSON wire format; the target id is a field value, so
+    it can never be confused with the ``None`` stop signal."""
+    assert Round.from_wire(Round(target_id).to_wire()).target_id == target_id
 
 
 def _make_targets(n: int) -> list[SweepTarget]:
