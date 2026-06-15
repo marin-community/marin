@@ -122,6 +122,14 @@ class GrugModelConfig:
     the iteration step and core-layer index. Gives one weight-tied block a
     coarse-to-fine schedule at ~free parameter cost. Initialized to identity, so at
     step 0 the model is numerically identical to the iteration_film=False variant."""
+    randomize_recurrence: bool = False
+    """E3: when True, training samples the core loop count per step from
+    recurrence_choices (the model forward is called with a per-step recurrence
+    override). Trains one weight-tied core to be correct at many depths, enabling
+    test-time depth scaling. recurrence_steps stays the default/eval loop count."""
+    recurrence_choices: tuple[int, ...] = ()
+    """E3: the set of loop counts to sample among when randomize_recurrence is True
+    (e.g. (2, 4, 8)). Empty unless randomize_recurrence."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -134,6 +142,13 @@ class GrugModelConfig:
             raise ValueError("recurrence_steps must be >= 1")
         if self.recurrence_steps > 1 and self.num_core_layers <= 0:
             raise ValueError("recurrence_steps > 1 requires at least one core layer")
+        if self.randomize_recurrence:
+            if not self.recurrence_choices:
+                raise ValueError("randomize_recurrence requires a non-empty recurrence_choices")
+            if any(choice < 1 for choice in self.recurrence_choices):
+                raise ValueError("recurrence_choices must all be >= 1")
+            if self.num_core_layers < 1:
+                raise ValueError("randomize_recurrence requires at least one core layer")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.vocab_size <= 0:
@@ -590,6 +605,7 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        recurrence_steps: int | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
@@ -640,12 +656,19 @@ class Transformer(eqx.Module):
             per_block_stats.append(stats)
             eff_idx += 1
 
+        # E3: a per-call override of the core loop count (randomized depth during
+        # training; deeper-than-trained eval at test time). None reproduces the
+        # config default exactly, so E0/E1/E2 are unchanged.
+        n_recurrence = recurrence_steps if recurrence_steps is not None else cfg.recurrence_steps
         core_iter_stats: list[list[dict[str, jax.Array]]] = [[] for _ in core_blocks]
-        for t in range(cfg.recurrence_steps):
+        for t in range(n_recurrence):
             for c, block in enumerate(core_blocks):
                 film = None
                 if self.core_film_scale is not None:
-                    film = (self.core_film_scale[t, c], self.core_film_shift[t, c])
+                    # The FiLM tables are sized for cfg.recurrence_steps; for an
+                    # override deeper than trained, reuse the last iteration's FiLM.
+                    film_t = min(t, cfg.recurrence_steps - 1)
+                    film = (self.core_film_scale[film_t, c], self.core_film_shift[film_t, c])
                 hidden, stats = apply_block(block, hidden, eff_idx, film)
                 core_iter_stats[c].append(stats)
                 eff_idx += 1
@@ -671,9 +694,10 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        recurrence_steps: int | None = None,
     ) -> Float[Array, "B S V"]:
         batch_spec = _batch_spec()
-        hidden, _ = self(token_ids, mask=mask)
+        hidden, _ = self(token_ids, mask=mask, recurrence_steps=recurrence_steps)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
 
     def next_token_loss(
@@ -686,8 +710,9 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
+        recurrence_steps: int | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        hidden, router_metrics = self(token_ids, mask=mask)
+        hidden, router_metrics = self(token_ids, mask=mask, recurrence_steps=recurrence_steps)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 

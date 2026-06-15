@@ -15,6 +15,7 @@ import jax.numpy as jnp
 import jmp
 import levanter.callbacks as callbacks
 import levanter.tracker
+import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
@@ -302,8 +303,8 @@ def _make_train_step(
     else:
         watch_targets = ()
 
-    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
-    def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
+    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch", "recurrence_steps"))
+    def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False, recurrence_steps: int | None = None):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
         qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
@@ -321,6 +322,7 @@ def _make_train_step(
                 reduction="mean",
                 logsumexp_weight=z_loss,
                 return_router_metrics=True,
+                recurrence_steps=recurrence_steps,
             )
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
@@ -509,7 +511,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
-                state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
+                recurrence_override = None
+                if config.model.randomize_recurrence:
+                    # Deterministic per-step sample (reproducible across resumes): seed by (seed, step).
+                    rng = np.random.default_rng([trainer.seed, current_step])
+                    recurrence_override = int(rng.choice(config.model.recurrence_choices))
+                state, metrics, watch_stats = train_step(
+                    state, batch, compute_watch=compute_watch, recurrence_steps=recurrence_override
+                )
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])

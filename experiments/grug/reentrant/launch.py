@@ -251,8 +251,24 @@ e2_reentrant = reentrant_step(
     tags=["moe", "reentrant", "e2-film-loop4"],
 )
 
+# E3 — randomized-depth re-entrant: E1 with the core loop count sampled per step
+# from {2,4,8} during training. Trains one weight-tied core to be correct at many
+# depths so the SAME checkpoint can be evaluated at higher loop counts at test time
+# (the depth-scaling experiment). recurrence_steps=4 stays the default/eval depth.
+_E3_MODEL = dataclasses.replace(
+    _E1_MODEL,
+    randomize_recurrence=True,
+    recurrence_choices=(2, 4, 8),
+)
+e3_reentrant = reentrant_step(
+    name="grug/reentrant_e3_randdepth",
+    run_id=_resolve_run_id("reentrant_e3_randdepth"),
+    model=_E3_MODEL,
+    tags=["moe", "reentrant", "e3-randdepth"],
+)
+
 # Experiment registry. Select with GRUG_EXPERIMENT (comma-separated names); default E0.
-_STEPS = {"e0": e0_baseline, "e1": e1_reentrant, "e2": e2_reentrant}
+_STEPS = {"e0": e0_baseline, "e1": e1_reentrant, "e2": e2_reentrant, "e3": e3_reentrant}
 
 
 if __name__ == "__main__":

@@ -532,3 +532,62 @@ def test_reentrant_iteration_film_is_identity_at_init():
 
     # Identity FiLM => bit-identical forward outputs from the same key.
     assert jnp.array_equal(logits_e1, logits_e2)
+
+
+def test_reentrant_recurrence_override_changes_effective_depth():
+    """E3's per-call recurrence override must change the effective loop depth:
+
+    - Passing the config default (recurrence_steps=4) is a no-op (numerically
+      identical to passing nothing), so E0/E1/E2 paths are unchanged.
+    - Passing a smaller/larger count (2 or 8) changes the computation: the SAME
+      weights run through fewer/more core-loop iterations, producing finite outputs
+      of the right shape that differ from the R=4 output. This is the mechanism the
+      depth-scaling experiment relies on.
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+
+    # 1 prelude + 1 core looped 4x + 1 coda => 3 unique blocks. FiLM off (E3 path).
+    cfg = model_module.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=64,
+        num_layers=3,
+        num_prelude_layers=1,
+        num_coda_layers=1,
+        recurrence_steps=4,
+        iteration_film=False,
+        num_heads=2,
+        num_kv_heads=2,
+        num_experts=4,
+        num_experts_per_token=2,
+        shared_expert_intermediate_dim=64,
+        max_seq_len=8,
+    )
+
+    mesh = compact_grug_mesh()
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(2 * 8, dtype=jnp.int32).reshape(2, 8) % cfg.vocab_size
+    token_pspec = jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None)
+
+    def logits_at(model, sharded_tokens, recurrence_steps):
+        return jax.jit(lambda m, t: m.logits(t, recurrence_steps=recurrence_steps))(model, sharded_tokens)
+
+    with _reset_abstract_mesh(), set_mesh(mesh):
+        sharded_tokens = jax.sharding.reshard(tokens, token_pspec)
+        model = model_module.Transformer.init(cfg, key=key)
+        logits_default = jax.jit(lambda m, t: m.logits(t))(model, sharded_tokens)
+        logits_r4 = logits_at(model, sharded_tokens, 4)
+        logits_r2 = logits_at(model, sharded_tokens, 2)
+        logits_r8 = logits_at(model, sharded_tokens, 8)
+
+    expected_shape = (2, 8, cfg.vocab_size)
+    assert logits_default.shape == expected_shape
+
+    # Overriding with the config default is a numerical no-op.
+    assert jnp.array_equal(logits_default, logits_r4)
+
+    # Fewer / more loops change the computation but stay finite and correctly shaped.
+    for logits in (logits_r2, logits_r8):
+        assert logits.shape == expected_shape
+        assert jnp.all(jnp.isfinite(logits))
+        assert not jnp.array_equal(logits, logits_r4)
