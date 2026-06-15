@@ -755,3 +755,78 @@
   - `./infra/pre-commit.py --changed-files --fix` -> OK
 - Interpretation: the old full-depth SPMD/clique symptom is no longer the only blocker; the current `gpu_fa4_cute` backward is itself not compiling on the deployed CUTLASS DSL for this shape. `gpu_fa4_thd` is not a full-model fallback yet because the model only builds FA4/CuTe metadata and THD rejects the short sliding-window layers. The next diagnostic should bypass FA4/CuTe backward with `--attention reference` and `--layers 1` to test whether MoE/optimizer/CE can still step from the new launcher checkpoint. If that works, escalate layer count/reference only enough to preserve cluster productivity while the FA4 backward atomic path is fixed.
 - Next action: commit/push the queued attention, CE, and diagnostic launcher changes, launch `GM2560-MAY-023L1REF-cw-20260615-0238`, and babysit it for train progress or a non-attention failure.
+
+### 2026-06-14 20:15 PDT - LAYOUT-004 disproved output-head-only SPMD hypothesis
+- Hypothesis: the `%fake_parameter.2 = bf16[2,4096,2560]` full-rematerialization warning might be caused by the output projection/lm-head sharding path; replicating the output projection should remove the warning if that is the root cause.
+- Command:
+  - `experiments/grug/moe/run_cw_may_d2560.sh --run-id GM2560-LAYOUT-004OUTREP-ref-rematnone-n16-20260615-0301 --nodes 16 --layers 1 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 1 --expert-axis 8 --replica-axis 16 --batch 256 --seq-len 4096 --steps 2 --profiler-steps 0 --tracker json_logger --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --attention reference --ce-implementation xla --moe-implementation ring --remat none --use-pko false --pko-on-last-layer false --output-proj-sharding replicated --submit`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-job-20260615-030119/grug-train-GM2560-LAYOUT-004OUTREP-ref-rematnone-n16-20260615-0301`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260615-030119/grug-train-GM2560-LAYOUT-004OUTREP-ref-rematnone-n16-20260615-0301 --since-seconds 7200 --max-lines 200000 | rg -i -m 20 'spmd|fake_parameter|involuntary full rematerialization|This may be solved by using maximal sharding'`
+- Config:
+  - Parent: `/dlwh/iris-run-job-20260615-030119`
+  - Child: `/dlwh/iris-run-job-20260615-030119/grug-train-GM2560-LAYOUT-004OUTREP-ref-rematnone-n16-20260615-0301`
+  - Source checkpoint: `2b2070d03`
+  - Shape: d2560, 1 layer, reference attention, no PKO, `remat=none`, XLA CE, ring MoE, synthetic data, no checkpoints, no profiler.
+  - Topology: 16 H100 nodes, `expert_axis=8`, `model_axis=1`, `replica_axis=16`, so `data=1` and `batch_shards=128`.
+  - Diagnostic knob: `output_proj_sharding=replicated`.
+- Result: The run succeeded with `16/16` tasks, zero failures, and zero preemptions. It completed `2/2` train steps. The output-projection replication did not remove the warning: every task still logged `[SPMD] Involuntary full rematerialization` for `%fake_parameter.2 = bf16[2,4096,2560]`, moving from `{devices=[128,1,1]<=[128]}` to `{devices=[1,1,16,8]<=[128] last_tile_dim_replicate}`. Rank-local finish summaries reported duplicated one-sample values with `min_mfu=4.07199`, `p50_mfu=4.34803`, `mean_mfu=4.54394`, and `max_mfu=7.22924`; the max is a clear one-sample outlier.
+- Interpretation: output head sharding is not sufficient to explain the warning. The target layout shards the hidden dimension over a cross-slice axis while replicating over expert, so the next likely suspects are embedding/hidden-axis parameter layouts or a transpose-like backward path, not logits materialization. Because this probe used reference attention and no remat, the warning is also not specific to FA4/CuTe or checkpoint boundaries.
+- Next action: run a one-axis diagnostic that changes tensor/model layout without reintroducing FA4 or remat. The next candidate is L1/reference/remat-none with `model_axis=2` on 16 H100 nodes to see whether moving hidden/channel sharding off `replica_dcn` changes or removes the `%fake_parameter.2` warning.
+
+### 2026-06-14 20:19 PDT - LAYOUT-005M2 invalid under local EP/model group rule
+- Hypothesis: `model_axis=2` with `expert_axis=8` would test whether moving hidden/channel sharding off the cross-slice `replica_dcn` axis changes the `%fake_parameter.2` warning while otherwise matching LAYOUT-004.
+- Command:
+  - `experiments/grug/moe/run_cw_may_d2560.sh --run-id GM2560-LAYOUT-005M2-ref-rematnone-n16-20260615-0322 --nodes 16 --layers 1 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 2 --expert-axis 8 --replica-axis 1 --batch 256 --seq-len 4096 --steps 2 --profiler-steps 0 --tracker json_logger --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --attention reference --ce-implementation xla --moe-implementation ring --remat none --use-pko false --pko-on-last-layer false --output-proj-sharding replicated --submit`
+- Config:
+  - Parent: `/dlwh/iris-run-job-20260615-031750`
+  - Intended topology: 16 H100 nodes, `expert_axis=8`, `model_axis=2`, `replica_axis=1`.
+- Result: The dispatcher failed before child submission with `ValueError: MAY_EXPERT_AXIS * MAY_MODEL_AXIS must divide the 8 GPUs on each worker so expert/model groups stay local; got 8 * 2 = 16.`
+- Interpretation: this run is launcher-constraint evidence only, not model evidence. The current local-group rule prevents testing model parallelism while keeping EP8 on 8-GPU H100 nodes.
+- Next action: use either a valid approximation (`expert_axis=4`, `model_axis=2`) to test hidden/model-axis layout effects, or add a separate embedding-sharding diagnostic that keeps EP8 fixed.
+
+### 2026-06-14 20:22 PDT - LAYOUT-006 failed the ring MoE model-axis guard before child submission
+- Hypothesis: reducing expert parallelism to `expert_axis=4` while using `model_axis=2` would keep expert/model groups local on 8-GPU H100 workers and allow a one-layer/reference diagnostic to test whether hidden/model-axis layout changes the `%fake_parameter.2` SPMD warning.
+- Command:
+  - Parent summary: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-job-20260615-032039 | jq '{state, task_count, completed_count, failure_count, preemption_count, task_state_counts, has_children: (.children != null and (.children|length > 0)), children}'`
+  - Parent list: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job list --json --prefix /dlwh/iris-run-job-20260615-032039 | jq '[.[] | {name, state, task_count, completed_count, failure_count, preemption_count, task_state_counts}]'`
+  - Parent logs: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260615-032039 --since-seconds 7200 --max-lines 200000 | rg -i "GM2560-LAYOUT-006EP4M2|grug-train|Job submitted|iris-run-job|child|submitted|state|failed|traceback|exception|error|warning|fake_parameter|spmd|mfu|train/progress"`
+- Config:
+  - Run id: `GM2560-LAYOUT-006EP4M2-ref-rematnone-n16-20260615-0321`
+  - Parent: `/dlwh/iris-run-job-20260615-032039`
+  - Child: none created.
+  - Intended shape: d2560, 1 layer, reference attention, no remat, XLA CE, ring MoE, `model_axis=2`, `expert_axis=4`, `replica_axis=1`, `output_proj_sharding=replicated`, 16 H100 nodes.
+- Result: The parent failed after one task and did not create a child job (`has_children=false`). Iris summary reported `state=failed`, `failure_count=1`, `preemption_count=0`, `task_count=1`, `completed_count=0`, and task state counts `{"failed": 1}`. Logs show `ValueError: MAY_MOE_IMPLEMENTATION=ring currently requires either MAY_EXPERT_AXIS=1 or MAY_MODEL_AXIS=1 on CoreWeave H100s; got MAY_EXPERT_AXIS=4, MAY_MODEL_AXIS=2. Use model_axis>1 only for attention/model-axis diagnostics with expert_axis=1, or keep model_axis=1 for ring expert-parallel runs.`
+- Interpretation: LAYOUT-006 did not admit/start and produced no SPMD warning or MFU metrics. The remaining valid model-axis diagnostic must use `expert_axis=1, model_axis=2`; any ring MoE EP diagnostic must keep `model_axis=1`.
+- Next action: run the model-axis diagnostic with `expert_axis=1, model_axis=2` if the immediate question is hidden/model-axis layout, or keep `expert_axis=8, model_axis=1` and inspect HLO/sharding dumps to localize the `%fake_parameter.2` source without changing ring EP.
+
+### 2026-06-14 20:25 PDT - LAYOUT-007 EP8 input-embedding replication launched
+- Hypothesis: the persistent LAYOUT-004 warning comes from input embedding hidden-batch sharding rather than output head sharding. Replicating both input embedding and output projection should remove or change `%fake_parameter.2` if embedding gradient/layout is responsible, while preserving the EP8/model1 topology.
+- Command:
+  - `uv run pytest tests/test_grug_variant_contracts.py::test_grug_moe_may_launcher_diagnostic_overrides -q`
+  - `uv run python -m py_compile experiments/grug/moe/model.py experiments/grug/moe/launch_cw_may_d2560.py`
+  - `experiments/grug/moe/run_cw_may_d2560.sh --run-id DRYRUN-EMBED-REPL --nodes 16 --layers 1 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 1 --expert-axis 8 --replica-axis 16 --batch 256 --seq-len 4096 --steps 2 --profiler-steps 0 --tracker json_logger --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --attention reference --ce-implementation xla --moe-implementation ring --remat none --use-pko false --pko-on-last-layer false --input-embed-sharding replicated --output-proj-sharding replicated`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `experiments/grug/moe/run_cw_may_d2560.sh --run-id GM2560-LAYOUT-007EMBREP-ref-rematnone-n16-20260615-0333 --nodes 16 --layers 1 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 1 --expert-axis 8 --replica-axis 16 --batch 256 --seq-len 4096 --steps 2 --profiler-steps 0 --tracker json_logger --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --attention reference --ce-implementation xla --moe-implementation ring --remat none --use-pko false --pko-on-last-layer false --input-embed-sharding replicated --output-proj-sharding replicated --submit`
+- Config:
+  - Parent: `/dlwh/iris-run-job-20260615-032423`
+  - Source: dirty worktree with new `input_embed_sharding` diagnostic knob, validated by focused test, py_compile, dry run, and changed-file pre-commit.
+  - Shape/topology: same as LAYOUT-004 except `input_embed_sharding=replicated` and `output_proj_sharding=replicated`.
+- Result: parent submitted successfully and passed the immediate validation window; at first poll parent was `JOB_STATE_RUNNING`, `failure_count=0`, with no child visible yet.
+- Interpretation: this is the first EP8-preserving diagnostic that directly tests the embedding-hidden-sharding hypothesis.
+- Next action: babysit LAYOUT-007 for child discovery, SPMD warning presence/source-target sharding, and MFU metrics if it succeeds.
+
+### 2026-06-14 20:28 PDT - LAYOUT-007 succeeded and removed the fake_parameter.2 warning
+- Hypothesis: the persistent LAYOUT-004 warning came from input embedding hidden-batch sharding rather than output head sharding. Replicating both input embedding and output projection should remove or change `%fake_parameter.2` if embedding gradient/layout was responsible, while preserving the EP8/model1 topology.
+- Command:
+  - Child discovery: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job list --json --prefix /dlwh/iris-run-job-20260615-032423`
+  - Child summary: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-job-20260615-032423/grug-train-GM2560-LAYOUT-007EMBREP-ref-rematnone-n16-20260615-0333`
+  - Warning scan: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260615-032423/grug-train-GM2560-LAYOUT-007EMBREP-ref-rematnone-n16-20260615-0333 --since-seconds 3600 --max-lines 400000 | rg -n -C 4 "fake_parameter\\.2|Involuntary full rematerialization|source sharding|target sharding|spmd_partitioner|compiler_base\\.cc:2587"`
+  - MFU extraction: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260615-032423/grug-train-GM2560-LAYOUT-007EMBREP-ref-rematnone-n16-20260615-0333 --since-seconds 3600 --max-lines 400000 | rg -o '"throughput/mfu": [0-9.]+' | sed 's/.*: //' | sort -n -u`
+- Config:
+  - Parent: `/dlwh/iris-run-job-20260615-032423`
+  - Child: `/dlwh/iris-run-job-20260615-032423/grug-train-GM2560-LAYOUT-007EMBREP-ref-rematnone-n16-20260615-0333`
+  - Shape/topology: d2560, 1 layer, reference attention, no PKO, `remat=none`, XLA CE, ring MoE, synthetic data, no checkpoints, no profiler, 16 H100 nodes, `expert_axis=8`, `model_axis=1`, `replica_axis=16`, `data=1`, `batch_shards=128`.
+  - Diagnostic knobs: `input_embed_sharding=replicated`, `output_proj_sharding=replicated`.
+- Result: parent and child both reached `JOB_STATE_SUCCEEDED`. The child had `task_count=16`, `completed_count=16`, `failure_count=0`, `preemption_count=0`, and `task_state_counts={"succeeded": 16}`. The warning scan returned no matches for `%fake_parameter.2`, involuntary full rematerialization, source/target sharding, `spmd_partitioner`, or `compiler_base.cc:2587`. Final per-rank one-sample MFU values were `3.500033, 3.618005, 3.677199, 3.832916, 3.900821, 3.935097, 3.980240, 4.115334, 4.122488, 4.124135, 4.186020, 4.190615, 4.443462, 4.638330, 5.774185, 7.422358`; deduped rank summary `count=16`, `min=3.500033`, median bracket `4.115334..4.122488`, `mean=4.341327`, `max=7.422358`.
+- Interpretation: replicated input embedding is the first EP8-preserving change that removes the `%fake_parameter.2` SPMD rematerialization warning. This strongly implicates the input embedding hidden/batch sharding or its gradient path, not the output projection alone. It does not improve MFU by itself; this short L1/reference diagnostic is still around 4.34 mean MFU with one outlier rank.
+- Next action: keep `input_embed_sharding=replicated` for subsequent EP8 diagnostics, then re-enable FA4/CuTe after the segmented-backward atomic fix and compare against the LAYOUT-004 reference baseline.

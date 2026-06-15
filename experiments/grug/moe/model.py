@@ -70,6 +70,8 @@ VALID_REMAT_MODES: tuple[RematMode, ...] = ("none", "recompute_all", "save_moe")
 CrossEntropyImplementation = Literal["pallas_gpu", "pallas_tpu", "xla", "reference"]
 OutputProjSharding = Literal["lm_head", "replicated"]
 VALID_OUTPUT_PROJ_SHARDINGS: tuple[OutputProjSharding, ...] = ("lm_head", "replicated")
+InputEmbedSharding = Literal["hidden_batch", "replicated"]
+VALID_INPUT_EMBED_SHARDINGS: tuple[InputEmbedSharding, ...] = ("hidden_batch", "replicated")
 
 
 def _batch_spec() -> P:
@@ -101,6 +103,14 @@ def _output_proj_pspec(cfg: "GrugModelConfig") -> P:
     if cfg.output_proj_sharding == "replicated":
         return P(None, None)
     raise ValueError(f"Unknown output_proj_sharding={cfg.output_proj_sharding!r}")
+
+
+def _input_embed_pspec(cfg: "GrugModelConfig") -> P:
+    if cfg.input_embed_sharding == "hidden_batch":
+        return Pembed_vocab
+    if cfg.input_embed_sharding == "replicated":
+        return P(None, None)
+    raise ValueError(f"Unknown input_embed_sharding={cfg.input_embed_sharding!r}")
 
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
@@ -142,6 +152,8 @@ class GrugModelConfig:
     attention_implementation: GrugAttentionImplementation | None = None
     cross_entropy_implementation: CrossEntropyImplementation | None = None
     """Optional backend override for fused linear cross-entropy."""
+    input_embed_sharding: InputEmbedSharding = "hidden_batch"
+    """Input embedding parameter sharding. Use "replicated" only for layout diagnostics."""
     output_proj_sharding: OutputProjSharding = "lm_head"
     """Output projection parameter sharding. Use "replicated" only for layout diagnostics."""
     moe_implementation: MoeImplementation | None = None
@@ -177,6 +189,11 @@ class GrugModelConfig:
             raise ValueError(
                 f"output_proj_sharding must be one of {VALID_OUTPUT_PROJ_SHARDINGS}, "
                 f"got {self.output_proj_sharding!r}"
+            )
+        if self.input_embed_sharding not in VALID_INPUT_EMBED_SHARDINGS:
+            raise ValueError(
+                f"input_embed_sharding must be one of {VALID_INPUT_EMBED_SHARDINGS}, "
+                f"got {self.input_embed_sharding!r}"
             )
         if self.num_experts <= 0:
             raise ValueError("num_experts must be positive")
@@ -639,7 +656,8 @@ class Transformer(eqx.Module):
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Transformer":
         embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
         token_embed = reshard(
-            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
+            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std),
+            _input_embed_pspec(cfg),
         )
         output_proj = reshard(
             _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std),

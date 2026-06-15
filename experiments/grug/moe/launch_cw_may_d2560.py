@@ -25,6 +25,7 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_REMAT=save_moe       none | recompute_all | save_moe
     MAY_USE_PKO=true         enable PKO/doc-start mask path on long layers
     MAY_PKO_ON_LAST_LAYER=true
+    MAY_INPUT_EMBED_SHARDING=hidden_batch  hidden_batch | replicated diagnostic
     MAY_OUTPUT_PROJ_SHARDING=lm_head  lm_head | replicated diagnostic
 
 The default parameter policy keeps one sharded fp32 parameter tree plus sharded
@@ -59,10 +60,12 @@ from experiments.grug.moe.launch import (
     validate_ring_expert_model_axes,
 )
 from experiments.grug.moe.model import (
+    VALID_INPUT_EMBED_SHARDINGS,
     VALID_OUTPUT_PROJ_SHARDINGS,
     VALID_REMAT_MODES,
     CrossEntropyImplementation,
     GrugModelConfig,
+    InputEmbedSharding,
     OutputProjSharding,
     RematMode,
 )
@@ -116,6 +119,10 @@ def build_may_model() -> GrugModelConfig:
     if output_proj_sharding not in VALID_OUTPUT_PROJ_SHARDINGS:
         valid = ", ".join(VALID_OUTPUT_PROJ_SHARDINGS)
         raise ValueError(f"MAY_OUTPUT_PROJ_SHARDING={output_proj_sharding!r} must be one of {valid}")
+    input_embed_sharding = os.environ.get("MAY_INPUT_EMBED_SHARDING", "hidden_batch")
+    if input_embed_sharding not in VALID_INPUT_EMBED_SHARDINGS:
+        valid = ", ".join(VALID_INPUT_EMBED_SHARDINGS)
+        raise ValueError(f"MAY_INPUT_EMBED_SHARDING={input_embed_sharding!r} must be one of {valid}")
     attention_implementation = os.environ.get("MAY_ATTENTION_IMPLEMENTATION", "gpu_fa4_cute")
     cross_entropy_implementation = os.environ.get("MAY_CE_IMPLEMENTATION") or None
 
@@ -133,6 +140,7 @@ def build_may_model() -> GrugModelConfig:
         moe_implementation=cast(str, os.environ.get("MAY_MOE_IMPLEMENTATION", "ring")),
         attention_implementation=cast(str, attention_implementation or None),
         cross_entropy_implementation=cast(CrossEntropyImplementation | None, cross_entropy_implementation),
+        input_embed_sharding=cast(InputEmbedSharding, input_embed_sharding),
         output_proj_sharding=cast(OutputProjSharding, output_proj_sharding),
         remat_mode=cast(RematMode, remat_mode),
     )
