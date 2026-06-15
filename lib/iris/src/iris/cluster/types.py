@@ -527,8 +527,10 @@ class ResourceSpec:
     disk: str | int = 0
     device: job_pb2.DeviceConfig | None = None
 
-    # Accelerator tasks need enough CPU to avoid bottlenecking on data loading.
-    MIN_ACCELERATOR_CPU_MILLICORES = 32_000
+    # Accelerator tasks default to enough CPU to avoid bottlenecking on data
+    # loading, but explicit CPU requests are preserved for quota-constrained
+    # queues and diagnostic runs.
+    MIN_ACCELERATOR_CPU_MILLICORES = 4_000
 
     def to_proto(self) -> job_pb2.ResourceSpecProto:
         """Convert to wire format."""
