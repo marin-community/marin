@@ -145,20 +145,31 @@ if it's unreachable.
 
 ### Ferry workflows
 
-Ferry workflows live in `server/sources/githubActions.ts`:
+Ferries live in `server/sources/githubActions.ts`. Each ferry is one card
+and groups one or more tiers; a tier maps to a single workflow file. Most
+ferries have a single tier; the datakit ferry stacks three (tier1/2/3) as
+separate strips under one card:
 
 ```ts
-export const FERRY_WORKFLOWS = [
-  { name: "Canary ferry", file: "marin-canary-ferry.yaml" },
-  { name: "CW ferry", file: "marin-canary-ferry-coreweave.yaml" },
-  { name: "Datakit ferry", file: "marin-canary-datakit-tier1.yaml" },
-] as const;
+export const FERRY_GROUPS: FerryGroupConfig[] = [
+  { name: "Canary ferry", tiers: [{ label: null, file: "marin-canary-ferry.yaml" }] },
+  { name: "CW ferry", tiers: [{ label: null, file: "marin-canary-ferry-coreweave.yaml" }] },
+  {
+    name: "Datakit ferry",
+    tiers: [
+      { label: "tier1", file: "marin-canary-datakit-tier1.yaml" },
+      { label: "tier2", file: "marin-canary-datakit-tier2.yaml" },
+      { label: "tier3", file: "marin-canary-datakit-tier3.yaml" },
+    ],
+  },
+];
 ```
 
-Add more by appending to the array. `file` is the workflow filename
-under `.github/workflows/`. The `main`-branch filter is hardcoded in
-`fetchWorkflowStatus`; the 10-day history window is set in
-`server/main.ts`.
+Add ferries or tiers by appending to the array. `file` is the workflow
+filename under `.github/workflows/`; `label` captions the strip in a
+multi-tier card (use `null` for single-tier ferries, where the file is
+shown as the subtitle). The `main`-branch filter is hardcoded in
+`fetchTierStatus`; the 10-day history window is set in `server/main.ts`.
 
 ### Build panel
 
