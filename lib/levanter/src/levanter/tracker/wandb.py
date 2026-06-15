@@ -405,7 +405,10 @@ class WandbConfig(TrackerConfig):
                 suppress_logging=not is_primary_process,
                 minimum_log_step=minimum_log_step,
             ),
-            enabled=self.background,
+            # Only the primary process actually logs; a suppressed tracker no-ops every
+            # call, so wrapping it in a background thread is pure overhead — and would
+            # make non-primary hosts stage (copy) large profile artifacts they discard.
+            enabled=self.background and is_primary_process,
             max_queue_size=self.background_max_queue_size,
             finish_timeout=self.background_finish_timeout,
         )

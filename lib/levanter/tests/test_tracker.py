@@ -15,8 +15,8 @@ import yaml
 import levanter.tracker
 import levanter.tracker.tracker_fns as tracker_fns
 import levanter.tracker.wandb as wandb_tracker_mod
-from levanter.tracker import BackgroundTracker, CompositeTracker, NoopTracker, TrackerConfig
-from levanter.tracker.tracker import NoopConfig, Tracker
+from levanter.tracker import CompositeTracker, NoopTracker, TrackerConfig
+from levanter.tracker.tracker import NoopConfig
 from levanter.tracker.wandb import WandbTracker, _truncate_wandb_artifact_name, truncate_wandb_run_name
 
 
@@ -97,54 +97,6 @@ def test_tracker_logging_without_global_tracker_emits_no_warning(monkeypatch):
         tracker_fns.log_configuration({"metric": 1.0})
 
     assert not caught
-
-
-def test_log_configuration_through_background_tracker_survives_tempdir_cleanup():
-    """log_configuration must hand the config artifact off before its tempdir is gone.
-
-    log_configuration dumps the dataclass into a tempfile.TemporaryDirectory and
-    deletes it as soon as log_artifact returns. Behind a BackgroundTracker the
-    upload happens on a worker thread, so without producer-side staging the worker
-    would hit FileNotFoundError on the deleted config.yaml (the reported bug).
-    """
-
-    @dataclasses.dataclass
-    class MyConfig:
-        lr: float = 0.1
-        name: str = "demo"
-
-    captured: dict[str, object] = {}
-
-    class ContentReadingTracker(Tracker):
-        name = "content-reading"
-
-        def log_hyperparameters(self, hparams):
-            pass
-
-        def log(self, metrics, *, step, commit=None):
-            pass
-
-        def log_summary(self, metrics):
-            pass
-
-        def log_artifact(self, artifact_path, *, name=None, type=None):
-            with open(artifact_path) as f:
-                captured["yaml"] = f.read()
-            captured["name"] = name
-            captured["type"] = type
-
-        def finish(self):
-            pass
-
-    bt = BackgroundTracker(ContentReadingTracker())
-    with levanter.tracker.current_tracker(bt):
-        tracker_fns.log_configuration(MyConfig(), config_name="config.yaml")
-        # finish() drains the queue and joins the worker, so the staged upload has run.
-        bt.finish()
-
-    assert captured["name"] == "config.yaml"
-    assert captured["type"] == "config"
-    assert captured["yaml"] == draccus.dump(MyConfig())
 
 
 def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch):

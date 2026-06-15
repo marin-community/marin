@@ -34,6 +34,7 @@ should refuse to start.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import queue
@@ -48,6 +49,41 @@ from levanter.tracker.tracker import Tracker
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass(frozen=True)
+class _StagedArtifact:
+    """A producer-thread copy of an artifact, living in its own temp dir.
+
+    Callers routinely build an artifact inside a ``tempfile.TemporaryDirectory``
+    and delete it as soon as ``log_artifact`` returns. Staging copies the bytes
+    synchronously so the source can vanish immediately; the worker uploads
+    :attr:`path`, then calls :meth:`cleanup` to remove the temp dir.
+    """
+
+    path: str
+
+    @classmethod
+    def stage(cls, source) -> Optional["_StagedArtifact"]:
+        """Copy ``source`` into a fresh temp dir, or return ``None`` if it is missing.
+
+        The basename is preserved so the artifact's contents and W&B's default
+        artifact name are unchanged. Raises ``OSError`` if the copy itself fails.
+        """
+        src = os.fspath(source)
+        if not os.path.exists(src):
+            return None
+        staging_dir = tempfile.mkdtemp(prefix="levanter-artifact-")
+        dst = os.path.join(staging_dir, os.path.basename(src.rstrip("/\\")) or "artifact")
+        try:
+            (shutil.copytree if os.path.isdir(src) else shutil.copy2)(src, dst)
+        except OSError:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            raise
+        return cls(dst)
+
+    def cleanup(self) -> None:
+        shutil.rmtree(os.path.dirname(self.path), ignore_errors=True)
 
 
 class _Shutdown:
@@ -181,54 +217,29 @@ class BackgroundTracker(Tracker):
         name: Optional[str] = None,
         type: Optional[str] = None,
     ) -> None:
-        # Stage the artifact synchronously so the caller may delete the source the
-        # moment this returns (callers often build it inside a TemporaryDirectory).
-        # The worker uploads the staged copy and then removes it.
-        staged_path = self._stage_artifact(artifact_path)
-        if staged_path is None:
-            return
-        if not self._enqueue(self._upload_staged_artifact, staged_path, name=name, type=type):
-            shutil.rmtree(os.path.dirname(staged_path), ignore_errors=True)
-
-    def _upload_staged_artifact(self, staged_path, *, name: Optional[str], type: Optional[str]) -> None:
-        """Worker-side: upload a staged artifact, then remove its staging dir."""
+        # Stage the bytes on the producer thread so the caller may delete the source
+        # the moment this returns (callers often build it in a TemporaryDirectory).
         try:
-            self.wrapped.log_artifact(staged_path, name=name, type=type)
-        finally:
-            shutil.rmtree(os.path.dirname(staged_path), ignore_errors=True)
-
-    def _stage_artifact(self, artifact_path) -> Optional[str]:
-        """Copy ``artifact_path`` into a tracker-owned temp dir on the calling thread.
-
-        Returns the staged path (preserving the original basename so the artifact's
-        contents and default name are unchanged), or ``None`` if the source is
-        missing or cannot be copied — in which case the update is dropped.
-        """
-        src = os.fspath(artifact_path)
-        if not os.path.exists(src):
-            logger.warning(
-                "Background tracker '%s': artifact path %s does not exist; dropping log_artifact.",
-                self.name,
-                src,
-            )
-            return None
-
-        staging_dir = tempfile.mkdtemp(prefix="levanter-artifact-")
-        dst = os.path.join(staging_dir, os.path.basename(src.rstrip("/\\")) or "artifact")
-        try:
-            if os.path.isdir(src):
-                shutil.copytree(src, dst)
-            else:
-                shutil.copy2(src, dst)
+            staged = _StagedArtifact.stage(artifact_path)
         except OSError:
             logger.exception(
-                "Background tracker '%s': failed to stage artifact %s; dropping log_artifact.",
-                self.name,
-                src,
+                "Background tracker '%s': failed to stage artifact %s; dropping it.", self.name, artifact_path
             )
-            shutil.rmtree(staging_dir, ignore_errors=True)
-            return None
-        return dst
+            return
+        if staged is None:
+            logger.warning(
+                "Background tracker '%s': artifact %s does not exist; dropping it.", self.name, artifact_path
+            )
+            return
+        if not self._enqueue(self._upload_staged_artifact, staged, name=name, type=type):
+            staged.cleanup()
+
+    def _upload_staged_artifact(self, staged: _StagedArtifact, *, name: Optional[str], type: Optional[str]) -> None:
+        """Worker-side: upload a staged artifact, then remove its staging dir."""
+        try:
+            self.wrapped.log_artifact(staged.path, name=name, type=type)
+        finally:
+            staged.cleanup()
 
     def finish(self) -> None:
         with self._lock:
