@@ -635,3 +635,20 @@
 - Result: MIN-017 reached worker startup, then task 0 failed twice before training with `RuntimeError: jax.distributed.initialize() must be called before any JAX calls that might initialise the XLA backend`. The child was still non-terminal and flapping (`failure_count=2`) when stopped. The likely cause was `SyntheticGrugDataset` carrying a cached `_loss_weight` as a `jax.Array` inside the Iris-submitted config; unpickling that config on the worker can initialize XLA before `trainer.initialize()`. The fix keeps synthetic dataset caches NumPy-only until `get_batch()` materializes `GrugLmExample`s after distributed init. Regression coverage verifies dataclass replaceability, pickle round-trip serialization with no `jax.Array` runtime attrs, and batch materialization. Focused synthetic/train tests passed (`5 passed`); FA4 tests passed (`8 passed, 2 skipped`); py_compile passed.
 - Interpretation: MIN-017 is not model evidence. It never reached compile or the SPMD/clique path.
 - Next action: relaunch the same one-layer d2560 minimizer as MIN-018 with the serialization fix and the current shared-dense token-sharding patch.
+
+### 2026-06-14 18:29 PDT - MIN-018 waiting for placement; next sharding patch queued
+- Hypothesis: after the synthetic serialization fix, MIN-018 should get past the pre-init JAX failure; remaining one-layer failure evidence should be a true model compile/runtime signal.
+- Command:
+  - `env SCALE_GPU_REPLICAS=32 SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS=1 SCALE_HIDDEN_DIM=2560 SCALE_NUM_LAYERS=1 SCALE_NUM_EXPERTS=256 SCALE_TOP_K=4 SCALE_BATCH=256 SCALE_SEQ_LEN=4096 SCALE_STEPS=2 SCALE_REMAT=save_moe SCALE_PROFILER_STEPS=0 experiments/grug/moe/run_cw_scale.sh --full --data synthetic --checkpoints none --worker-cpu 32 --model-axis 1 --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --ce-implementation xla --moe-implementation ring --run-id GM2560-MIN-018-cw-20260614-1820 --submit`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job list --json --prefix /dlwh/iris-run-job-20260615-012036`
+  - `uv run pytest tests/test_grug_variant_contracts.py -q`
+  - `uv run pytest lib/levanter/tests/grug/test_loss.py -q`
+  - `./infra/pre-commit.py --changed-files --fix`
+- Config:
+  - Run id: `GM2560-MIN-018-cw-20260614-1820`
+  - Parent: `/dlwh/iris-run-job-20260615-012036`
+  - Child: `/dlwh/iris-run-job-20260615-012036/grug-train-GM2560-MIN-018-cw-20260614-1820`
+  - Same one-layer full-activation shape/topology as MIN-017, from checkpoint `7d7c78aba`.
+- Result: MIN-018 submitted successfully and created the child job. As of the 18:29 PDT poll, parent and child are both running; the child is still `32/32 building`, with `failure_count=0`, `preemption_count=0`, no worker ids, and no child logs. This is placement wait, not model evidence yet. While waiting, added a local follow-up candidate that pins `GatedNorm` dense gate outputs and the attention head gate to the canonical batch/token sharding to remove two remaining unannotated `[B,S,*]` dense paths. Validation passed: Grug variant contracts `28 passed`, focused GatedNorm/attention/live-param tests `3 passed`, loss tests `3 passed, 1 skipped`, and changed-file pre-commit passed.
+- Interpretation: keep MIN-018 running until it reaches worker startup/compile or fails. The new GatedNorm/attention-gate sharding patch is not in MIN-018 and should only be used for a replacement run if MIN-018 reproduces an activation-layout failure or must be relaunched for another reason.
+- Next action: babysit MIN-018 for first worker logs. If it still fails with the `[1,4096,2560]` full-rematerialization/clique path, relaunch from the GatedNorm/attention-gate sharding checkpoint.

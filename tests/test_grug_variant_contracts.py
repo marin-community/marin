@@ -411,6 +411,25 @@ def test_grug_moe_shared_dense_intermediates_keep_token_sharding():
     assert dot_specs == [P(("replica_dcn", "data", "expert"), None)] * 3
 
 
+def test_grug_moe_gated_norm_intermediates_keep_batch_sharding():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)
+    gated_norm = model_module.GatedNorm(
+        w_down=jnp.ones((32, 8), dtype=jnp.bfloat16),
+        w_up=jnp.ones((8, 32), dtype=jnp.bfloat16),
+    )
+    x = jnp.ones((8, 4, 32), dtype=jnp.bfloat16)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        closed_jaxpr = jax.make_jaxpr(lambda y: gated_norm(y))(x)
+
+    dot_specs = [
+        eqn.outvars[0].aval.sharding.spec for eqn in closed_jaxpr.jaxpr.eqns if eqn.primitive.name == "dot_general"
+    ]
+
+    assert dot_specs == [P(("replica_dcn", "data", "expert"), None, None)] * 2
+
+
 def test_grug_moe_data_loaders_build_against_single_expert_mesh():
     """Regression: build_train_loader / build_tagged_evaluator must work when the
     compact mesh's expert axis has size 1 (canary configuration).

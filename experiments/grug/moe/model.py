@@ -274,7 +274,8 @@ class CausalSelfAttention(eqx.Module):
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+        gate_logits = jnp.einsum("bsd,dn->bsn", x, self.attn_gate, out_sharding=_token_spec())
+        gate = 2 * jax.nn.sigmoid(gate_logits)[..., None]
         attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         return jnp.einsum("bsh,hd->bsd", attn_out, unshard(self.w_o), out_sharding=batch_spec)
@@ -315,11 +316,12 @@ class GatedNorm(eqx.Module):
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
+        out_sharding = _batch_spec() if x.ndim == 3 else None
+        gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down, out_sharding=out_sharding)
         # TODO: silu activation here isn't explored, just cargo-culted from Qwen. Likely low-hanging ablation fruit
         # (e.g. compare no activation, relu, etc.).
         gate_hidden = jax.nn.silu(gate_hidden)
-        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
+        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up, out_sharding=out_sharding))
         return x * gate.astype(x.dtype)
 
 
