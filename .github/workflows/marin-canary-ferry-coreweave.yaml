@@ -67,6 +67,7 @@ jobs:
       CANARY_TARGET_TOKENS: "6553600"
       CANARY_MIN_STEPS: "40"
       CANARY_MAX_LOSS: "8.0"
+      CANARY_OUTPUT_TTL_DAYS: "7"
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/config/coreweave-ci.yaml
@@ -138,6 +139,7 @@ jobs:
             -e CANARY_GPU_REPLICAS "$CANARY_GPU_REPLICAS" \
             -e CANARY_PROFILER_NUM_STEPS "$CANARY_PROFILER_NUM_STEPS" \
             -e CANARY_TARGET_TOKENS "$CANARY_TARGET_TOKENS" \
+            -e CANARY_OUTPUT_TTL_DAYS "$CANARY_OUTPUT_TTL_DAYS" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
@@ -176,22 +178,6 @@ jobs:
         continue-on-error: ${{ inputs.target_tokens != '' }}
         shell: bash -l {0}
         run: .venv/bin/python scripts/canary/validate_canary_metrics.py
-        env:
-          MARIN_PREFIX: s3://marin-na/marin/
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
-
-      # Canary runs write one output dir per run to R2 and nothing reads them
-      # after the gate above resolves the current run by version hash, so they
-      # accumulate unboundedly. Prune outputs older than 7 days. The age cutoff
-      # leaves recent (incl. in-flight debugging) runs untouched, so this is
-      # safe on manual dispatches too. continue-on-error so a prune hiccup never
-      # fails the canary.
-      - name: Prune stale canary outputs
-        continue-on-error: true
-        shell: bash -l {0}
-        run: .venv/bin/python scripts/canary/prune_canary_outputs.py --max-age-days 7
         env:
           MARIN_PREFIX: s3://marin-na/marin/
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

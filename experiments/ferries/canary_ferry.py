@@ -24,6 +24,9 @@ to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
     CANARY_CACHE_COPY_MAX_WORKERS gpu-only cache-copy worker cap
     CANARY_TARGET_TOKENS total training tokens
     CANARY_TRACKER       wandb | json_logger
+    CANARY_OUTPUT_TTL_DAYS  when >0, write per-run outputs to the region-local
+                         TTL temp bucket (tmp/ttl=Nd/) so bucket lifecycle rules
+                         auto-delete them; 0/unset keeps outputs under MARIN_PREFIX
     RUN_ID               unique run identifier
 """
 
@@ -41,6 +44,7 @@ from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
+from rigging.filesystem import marin_temp_bucket
 
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import (
@@ -93,9 +97,9 @@ _HEURISTIC_BUDGET = 1e18
 # stays divisible by the heuristic's hidden_head_ratio (128).
 _CANARY_TPU_HIDDEN_DIM = 768
 
-# Subdirectory of MARIN_PREFIX the canary writes per-run output dirs into, so
-# they stay out of the root. scripts/canary/prune_canary_outputs.py imports this
-# to sweep the same subdir.
+# Subdirectory the canary writes per-run output dirs into, so they stay out of
+# the storage root. With CANARY_OUTPUT_TTL_DAYS set these land under the TTL temp
+# bucket (lifecycle-managed cleanup); otherwise under MARIN_PREFIX.
 CANARY_OUTPUT_SUBDIR = "canary"
 
 
@@ -242,8 +246,19 @@ def _build_step_from_env() -> ExecutorStep:
     profiler_start_step = env_int("CANARY_PROFILER_START_STEP", 5)
     profiler_num_steps = env_int("CANARY_PROFILER_NUM_STEPS", 25)
 
+    step_name = f"{CANARY_OUTPUT_SUBDIR}/{name}-{run_id}"
+    # When CANARY_OUTPUT_TTL_DAYS is set (the CoreWeave daily canary), redirect the
+    # per-run training output to the region-local TTL temp bucket so the bucket
+    # lifecycle rules sweep it after N days instead of a manual prune step. The
+    # SlimPajama tokenize cache is a separate dependency step, so it stays under
+    # MARIN_PREFIX regardless. validate_canary_metrics.py imports this same step,
+    # so the override travels with it and both resolve the identical path.
+    output_ttl_days = env_int("CANARY_OUTPUT_TTL_DAYS", 0)
+    override_output_path = marin_temp_bucket(ttl_days=output_ttl_days, prefix=step_name) if output_ttl_days else None
+
     return ExecutorStep(
-        name=f"{CANARY_OUTPUT_SUBDIR}/{name}-{run_id}",
+        name=step_name,
+        override_output_path=override_output_path,
         fn=run_grug_moe_trial,
         config=GrugMoeLaunchConfig(
             model=versioned(model),
