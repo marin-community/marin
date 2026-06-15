@@ -3,18 +3,18 @@
     "reentrant"
   ],
   "base_sha": "22174fe203cdb70b03dc0fc52e019864c7f4c016",
-  "head_sha": "5ac79940e664518fadb85ee93cecb48b983b8703",
+  "head_sha": "6bbec59d01a976cdf52b961c753f2db0d93b4456",
   "report_count": 1,
   "reports": [
     {
       "closest_variant": "moe",
-      "distance_score": 153,
+      "distance_score": 269,
       "report_relpath": "reentrant/index.html",
       "status_counts": {
         "added": 0,
-        "changed": 6,
+        "changed": 7,
         "removed": 0,
-        "unchanged": 5
+        "unchanged": 4
       },
       "variant": "reentrant"
     }
