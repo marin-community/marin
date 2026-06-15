@@ -114,6 +114,10 @@ SHARED_READ_POOL_SIZE = 4
 SHARED_READ_MAX_OVERFLOW = 4
 CONTROL_READ_POOL_SIZE = 2
 CONTROL_READ_MAX_OVERFLOW = 2
+# Auth reads are low-volume (token/key lookups) against a separate WAL; keep
+# the pool small and pinned rather than inheriting the shared default.
+AUTH_READ_POOL_SIZE = 2
+AUTH_READ_MAX_OVERFLOW = 2
 
 
 def _make_write_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
@@ -249,7 +253,9 @@ class ControllerDB:
         )
         # Dedicated read engine backed by the auth DB file directly so auth
         # read functions do not go through the write connection.
-        self._sa_auth_read_engine: Engine = _make_read_engine(self._auth_db_path, None)
+        self._sa_auth_read_engine: Engine = _make_read_engine(
+            self._auth_db_path, None, pool_size=AUTH_READ_POOL_SIZE, max_overflow=AUTH_READ_MAX_OVERFLOW
+        )
         logger.info("SA engines initialized in %.2fs", time.monotonic() - t0)
 
         t0 = time.monotonic()
@@ -369,9 +375,10 @@ class ControllerDB:
         """Read-only snapshot for the control loop, backed by a dedicated engine.
 
         Identical to :meth:`read_snapshot` but checks out from the control-only
-        pool, so the single schedule/reconcile/autoscale driver thread never
-        queues behind RPC-handler reads for a connection. Use only from the
-        control-loop thread.
+        pool, so the schedule/reconcile/autoscale tick never queues behind
+        RPC-handler reads for a connection. Use only from control-plane threads
+        (the single control-loop thread, or the scheduling/autoscaler loops on
+        the legacy path).
         """
         with read_snapshot(self._sa_control_read_engine) as tx:
             yield tx
@@ -633,7 +640,9 @@ class ControllerDB:
             self._sa_control_read_engine = _make_read_engine(
                 self._db_path, None, pool_size=CONTROL_READ_POOL_SIZE, max_overflow=CONTROL_READ_MAX_OVERFLOW
             )
-            self._sa_auth_read_engine = _make_read_engine(self._auth_db_path, None)
+            self._sa_auth_read_engine = _make_read_engine(
+                self._auth_db_path, None, pool_size=AUTH_READ_POOL_SIZE, max_overflow=AUTH_READ_MAX_OVERFLOW
+            )
 
         self.apply_migrations()
         for hook in self._reopen_hooks:
