@@ -189,6 +189,21 @@ def test_marin_temp_bucket_r2_uses_source_prefix_bucket():
         )
 
 
+def test_marin_temp_bucket_r2_source_prefix_overrides_gcs_launcher():
+    """An explicit R2 source_prefix wins over a gs:// MARIN_PREFIX and GCP metadata."""
+    with (
+        patch(
+            "rigging.filesystem.urllib.request.urlopen",
+            return_value=_mock_urlopen(b"projects/12345/zones/us-central1-a"),
+        ),
+        patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
+    ):
+        assert (
+            marin_temp_bucket(ttl_days=7, prefix="out", source_prefix="s3://marin-na/experiments/grug")
+            == "s3://marin-na/tmp/ttl=7d/out"
+        )
+
+
 def test_marin_temp_bucket_unknown_s3_bucket_falls_back_to_flat_path():
     """Unknown S3 buckets have no lifecycle rules, so they get the flat non-TTL fallback."""
     with (

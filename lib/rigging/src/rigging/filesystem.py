@@ -250,9 +250,17 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
 
     mp = marin_prefix()
 
-    region = region_from_prefix(source_prefix) if source_prefix is not None else None
-    if region is None and mp.startswith("gs://"):
-        region = marin_region()
+    # An explicit source_prefix fully determines the backend and region; it must
+    # win over the ambient marin prefix / VM metadata. Otherwise an R2
+    # source_prefix on a GCP launcher (gs:// MARIN_PREFIX) would resolve to a GCS
+    # temp bucket the R2-only job can't write. Only when source_prefix is absent
+    # do we fall back to the marin prefix (and metadata for the GCS region).
+    if source_prefix is not None:
+        region = region_from_prefix(source_prefix)
+        s3_bucket = _s3_bucket_from_prefix(source_prefix)
+    else:
+        region = marin_region() if mp.startswith("gs://") else None
+        s3_bucket = _s3_bucket_from_prefix(mp)
 
     if region:
         canonical = _REGION_ALIASES.get(region, region)
@@ -265,7 +273,6 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
     # `tmp/ttl=Nd/` lifecycle prefix configured by infra/configure_buckets.py
     # applies — note the runtime marin prefix on R2 is `s3://marin-na/marin`,
     # so we deliberately strip the `marin/` data subdir here.
-    s3_bucket = _s3_bucket_from_prefix(source_prefix) or _s3_bucket_from_prefix(mp)
     if s3_bucket:
         path = f"s3://{s3_bucket}/{TEMP_PATH_PREFIX}/ttl={ttl_days}d"
         return _append_path_prefix(path, prefix)
