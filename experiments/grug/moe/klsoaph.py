@@ -216,6 +216,7 @@ def _klsoaph_step(
     reparam_eig: bool = False,
     nesterov: bool = False,
     soap_muon: bool = False,
+    kl: bool = True,
 ):
     """Run one full-matrix SOAP step over the (..., rows, cols) gradient.
 
@@ -289,20 +290,19 @@ def _klsoaph_step(
             # post-step re-normalizes the update, so the rescale is a no-op here.
             direction = _msign(direction)
 
-        # 4. Whitened Gram update.
-        g_qr_white = g_qr * esi_r[..., None, :]
-        left_target = jnp.einsum("...ik,...jk->...ij", g_qr_white, g_qr_white) / inner_cols
-        qlT_g = jnp.einsum("...ki,...kj->...ij", q_l, g32)
-        qlT_g_white = qlT_g * esi_l[..., :, None]
-        right_target = jnp.einsum("...ki,...kj->...ij", qlT_g_white, qlT_g_white) / inner_rows
+        # 4. Gram update. KL whitens the gradient by ESI in the q-projected space before accumulating;
+        #    non-KL uses the RAW gradient outer products (G Gᵀ, Gᵀ G) -- canonical SOAP (Vyas et al.).
+        if kl:
+            g_qr_white = g_qr * esi_r[..., None, :]
+            left_target = jnp.einsum("...ik,...jk->...ij", g_qr_white, g_qr_white) / inner_cols
+            qlT_g = jnp.einsum("...ki,...kj->...ij", q_l, g32)
+            qlT_g_white = qlT_g * esi_l[..., :, None]
+            right_target = jnp.einsum("...ki,...kj->...ij", qlT_g_white, qlT_g_white) / inner_rows
+        else:
+            left_target = jnp.einsum("...ik,...jk->...ij", g32, g32) / inner_cols
+            right_target = jnp.einsum("...ki,...kj->...ij", g32, g32) / inner_rows
         new_gg_l = _symmetrize(shampoo_beta * gg_l + (1.0 - shampoo_beta) * left_target)
         new_gg_r = _symmetrize(shampoo_beta * gg_r + (1.0 - shampoo_beta) * right_target)
-
-        # 5. ESI update from projected-gradient diagonals.
-        proj_col_white = g_proj * esi_r[..., None, :]
-        left_diag = jnp.mean(proj_col_white * proj_col_white, axis=-1)
-        proj_row_white = g_proj * esi_l[..., :, None]
-        right_diag = jnp.mean(proj_row_white * proj_row_white, axis=-2)
 
         def _clamp_esi(eigen):
             inv_sqrt = jnp.minimum(jax.lax.rsqrt(jnp.maximum(eigen, 1e-30)), 4000.0)
@@ -314,16 +314,22 @@ def _klsoaph_step(
             eigen = shampoo_beta * old_eigen + (1.0 - shampoo_beta) * diag
             return _clamp_esi(eigen)
 
+        # 5. ESI update from projected-gradient diagonals. ESI is KL-only (it whitens the Gram above and,
+        #    for soap_muon, the direction); non-KL leaves esi at its init constant, unused in the Adam path.
         # reparam_eig: eigenvalues are recomputed from the FRESH-basis Gram diagonal at refresh (exact up to
         # one-iteration error, staleness-robust) and HELD between refreshes -- instead of updating ESI in the
         # stale projected-gradient basis every step, which leaks off-diagonal energy and blows up at high
         # precond_freq (validated: diag rel-err 4e-2@pf1 -> 6e2@pf8). This makes high pf loss-neutral in fp32.
-        if reparam_eig:
-            new_esi_l = esi_l
-            new_esi_r = esi_r
-        else:
+        if kl and not reparam_eig:
+            proj_col_white = g_proj * esi_r[..., None, :]
+            left_diag = jnp.mean(proj_col_white * proj_col_white, axis=-1)
+            proj_row_white = g_proj * esi_l[..., :, None]
+            right_diag = jnp.mean(proj_row_white * proj_row_white, axis=-2)
             new_esi_l = _update_esi(esi_l, left_diag)
             new_esi_r = _update_esi(esi_r, right_diag)
+        else:
+            new_esi_l = esi_l
+            new_esi_r = esi_r
 
         # 6. Warm-started QR-iteration refresh + reproject exp_avg.
         should_refresh = jnp.equal(jnp.remainder(step, precond_freq), 0)
@@ -406,6 +412,7 @@ def _klsoaph_step_sharded(
     reparam_eig: bool = False,
     nesterov: bool = False,
     soap_muon: bool = False,
+    kl: bool = True,
 ):
     """Distribute the per-expert SOAP step across the mesh via ``shard_map``.
 
@@ -427,6 +434,7 @@ def _klsoaph_step_sharded(
         reparam_eig=reparam_eig,
         nesterov=nesterov,
         soap_muon=soap_muon,
+        kl=kl,
     )
     mesh = jax.sharding.get_abstract_mesh()
     batched = hasattr(grad, "ndim") and grad.ndim >= 3
@@ -491,6 +499,7 @@ def scale_by_klsoaph(
     reparam_eig: bool = False,
     nesterov: bool = False,
     soap_muon: bool = False,
+    kl: bool = True,
 ) -> optax.GradientTransformation:
     """Full-matrix SOAP-style preconditioner (upstream KLSOAPH, de-blocked).
 
@@ -558,6 +567,7 @@ def scale_by_klsoaph(
                 reparam_eig=reparam_eig,
                 nesterov=nesterov,
                 soap_muon=soap_muon,
+                kl=kl,
             )
             direction = out[0].astype(grad.dtype)
             return _SoapStepResult(direction, *out[1:])

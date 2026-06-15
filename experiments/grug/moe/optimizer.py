@@ -335,6 +335,7 @@ def scale_with_grug_klsoaph(
     reparam_eig: bool = False,
     nesterov: bool = False,
     soap_muon: bool = False,
+    kl: bool = True,
     learning_rate: float = 0.018,
 ) -> optax.GradientTransformation:
     """KL Soap H: full-matrix SOAP-eigenbasis Adam direction + hyperball post-step.
@@ -343,6 +344,10 @@ def scale_with_grug_klsoaph(
     per-leaf matrix (no block tiling). The scale-invariant ("hyperball")
     post-step normalizes the full update. Default (beta1, beta2, shampoo_beta)
     = (0.95, 0.9, 0.9) matches upstream's passing tuple; precond_freq=1.
+
+    ``kl=False`` gives non-KL SOAP-H: the Gram is accumulated from RAW gradient
+    outer products (G Gᵀ, Gᵀ G) as in canonical SOAP (Vyas et al.), with no ESI
+    eigenvalue-whitening of the Gram. The hyperball ("H") post-step is unchanged.
     """
     soap_transform = scale_by_klsoaph(
         beta1=beta1,
@@ -355,6 +360,7 @@ def scale_with_grug_klsoaph(
         reparam_eig=reparam_eig,
         nesterov=nesterov,
         soap_muon=soap_muon,
+        kl=kl,
     )
 
     def init_fn(params):
@@ -396,6 +402,7 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
     reparam_eig: bool = False  # eigenvalues from fresh-basis Gram diag at refresh -> high precond_freq loss-neutral
     nesterov: bool = False  # Nadam-style look-ahead: precond numerator = b1*m_t+(1-b1)*g_t instead of plain EMA
     soap_muon: bool = False  # SOAP-Muon (modded-nanogpt PR #278/#321): msign the Adam-precond update after rotate-back
+    kl: bool = True  # False -> non-KL SOAP-H: raw Gram (G Gᵀ, Gᵀ G), no ESI whitening (canonical SOAP) + hyperball
     # Real-Adam settings for the NON-SOAP groups (adamh: lm_head/output_proj; adam: embeddings/router),
     # kept SEPARATE from the SOAP eigenbasis betas/eps above so the SOAP group is the only variable
     # vs the MuonH baseline. Defaults match the d512 MuonH run (heuristic beta1=0.9062, beta2=0.999,
@@ -432,6 +439,7 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
                         reparam_eig=self.reparam_eig,
                         nesterov=self.nesterov,
                         soap_muon=self.soap_muon,
+                        kl=self.kl,
                         learning_rate=klsoaph_lr,
                     )
                 )
