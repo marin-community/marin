@@ -21,11 +21,9 @@ import os
 
 from rigging.filesystem import url_to_fs
 
-logger = logging.getLogger(__name__)
+from experiments.ferries.canary_ferry import CANARY_OUTPUT_SUBDIR
 
-# Subdirectory of MARIN_PREFIX the canary writes per-run output dirs into. Keep
-# in sync with CANARY_OUTPUT_SUBDIR in experiments/ferries/canary_ferry.py.
-CANARY_OUTPUT_SUBDIR = "canary"
+logger = logging.getLogger(__name__)
 
 
 def _latest_mtime(fs, directory: str) -> datetime.datetime | None:

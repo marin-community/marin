@@ -94,8 +94,8 @@ _HEURISTIC_BUDGET = 1e18
 _CANARY_TPU_HIDDEN_DIM = 768
 
 # Subdirectory of MARIN_PREFIX the canary writes per-run output dirs into, so
-# they stay out of the root. scripts/canary/prune_canary_outputs.py sweeps this
-# same subdir — keep the two in sync.
+# they stay out of the root. scripts/canary/prune_canary_outputs.py imports this
+# to sweep the same subdir.
 CANARY_OUTPUT_SUBDIR = "canary"
 
 
