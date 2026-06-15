@@ -1502,6 +1502,203 @@ Conclusion:
 - Routing replay is still out of scope; the next debugging step should inspect
   route alignment/precision in the installed vLLM TPU path before adding replay.
 
+## 2026-06-15 - Small Diagnostic GrugMoE Installed vLLM TPU Validation
+
+Follow-on branch:
+
+- Marin branch `codex/grugmoe-small-diagnostic-20260615`, based on
+  `codex/grugmoe-correctness-validation-20260615`.
+- vLLM remains pinned to
+  `c6f0608ddadb6bdd39a16b857b5affe660b1259e`.
+- tpu-inference remains pinned to
+  `d8c4579d3409d50ccaa4a81df44b0d62c9e9b958`.
+
+Code changes:
+
+- Added `small-diagnostic` to the realistic GrugMoE parity/export config set.
+- Exposed `--model-size {full-canary,small-diagnostic}` in the installed
+  validation harness. The default remains `full-canary`.
+- Preserved the existing full-canary path and checks. The small diagnostic is an
+  explicit opt-in mode.
+- Added model-shape metadata to the installed reference JSON and score logs.
+- Routing mismatch details now print all mismatches when the token/layer grid is
+  small enough; the full canary still caps details at the existing limit.
+
+Small diagnostic shape:
+
+```text
+vocab_size=4096
+hidden_dim=512
+intermediate_dim=1024
+shared_expert_intermediate_dim=512
+num_layers=2
+num_heads=4
+num_kv_heads=1
+head_dim=128
+num_experts=4
+num_experts_per_token=2
+max_seq_len=16
+sliding_window=8
+initializer_std=0.03125
+qk_mult=1.3
+moe_implementation=scatter
+```
+
+Local checks:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-small-diagnostic-20260615
+python -m py_compile \
+  experiments/grug/moe/vllm_tpu_parity.py \
+  experiments/grug/moe/installed_vllm_full_canary_smoke.py
+VLLM_TARGET_DEVICE=tpu uv lock --check
+./infra/pre-commit.py \
+  experiments/grug/moe/vllm_tpu_parity.py \
+  experiments/grug/moe/installed_vllm_full_canary_smoke.py
+env -u PYTHONPATH VLLM_TARGET_DEVICE=tpu \
+  uv run --locked --package marin-core --extra vllm --extra eval \
+  python -m experiments.grug.moe.installed_vllm_full_canary_smoke --help
+env -u PYTHONPATH VLLM_TARGET_DEVICE=tpu \
+  uv run --locked --package marin-core --extra vllm --extra eval \
+  python -m experiments.grug.moe.vllm_tpu_parity --help
+```
+
+Result: all checks passed.
+
+TPU command:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-small-diagnostic-20260615
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 7200 \
+  --cpu 16 \
+  --memory 256GB \
+  --disk 300GB \
+  --job-name grugmoe-small-diagnostic-installed-vllm-$(date +%Y%m%d-%H%M%S) \
+  -e VLLM_TARGET_DEVICE tpu \
+  -- env -u PYTHONPATH \
+    VLLM_TARGET_DEVICE=tpu \
+    PYTHONUNBUFFERED=1 \
+    LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304 \
+    uv run --locked --package marin-core --extra vllm --extra eval \
+    python -m experiments.grug.moe.installed_vllm_full_canary_smoke \
+    --model-size small-diagnostic \
+    --output-dir /tmp/grugmoe-small-diagnostic-installed-vllm \
+    --max-shard-size 4194304 \
+    --generation-tokens 3
+```
+
+Final TPU job:
+
+- `/romain/grugmoe-small-diagnostic-installed-vllm-20260615-221844`.
+- State: failed after score, task exit `1`, duration
+  `3 minutes and 40.29 seconds`.
+- Failure reason: the diagnostic routing guard found suspicious routed-expert
+  mismatches after export/load, installed serve, and selected-token logprob
+  comparison completed.
+
+Installed dependency identity:
+
+- `vllm_direct_url` commit
+  `c6f0608ddadb6bdd39a16b857b5affe660b1259e`.
+- `tpu-inference_direct_url` commit
+  `d8c4579d3409d50ccaa4a81df44b0d62c9e9b958`.
+
+Export/load evidence:
+
+- Config source: `small diagnostic GrugMoE`.
+- Levanter/native full-forward fixed continuation:
+  `[3045, 2536, 3106]`.
+- Reference continuation logprobs:
+  `[-6.945110321044922, -6.994075775146484, -7.133152961730957]`.
+- Sharded export/load:
+  `checkpoint_bytes=82052339`, `artifact_bytes=81845277`,
+  `shard_count=14`, `max_shard_size=4194304`,
+  `expected_tensors=46 consumed_tensors=46 missing=[] unexpected=[]`.
+
+Installed serve/generate evidence:
+
+- `vllm_server_initialized=True`.
+- `vllm_generate_status_code=200`.
+- Installed vLLM serve generated:
+  `installed_full_canary_generated=[([1, 42, 128, 2048, 17, 3072, 5, 63],
+  [3045, 2536, 223], '')]`.
+- `installed_path_result=works:full_canary_generate`.
+
+Installed vLLM score evidence:
+
+- `score_full_vocab_logprobs=4096`.
+- `score_prompt_token_ids=[1, 42, 128, 2048, 17, 3072, 5, 63, 3045, 2536, 3106]`.
+- `score_generated_token_ids=[2951]`.
+- `score_continuation_generated_token_ids=[3045, 2536, 3106]`.
+- Selected-token logprob summary:
+  `count=3`, `max_abs_delta=0.0033097267150878906`,
+  `mean_abs_delta=0.0019470850626627605`,
+  `max_allowed_abs_delta=5.0`.
+- Per-token selected logprob deltas:
+  - token `3045` at position `8`: Levanter `-6.945110321044922`, vLLM
+    `-6.941800594329834`, delta `0.0033097267150878906`;
+  - token `2536` at position `9`: Levanter `-6.994075775146484`, vLLM
+    `-6.996557712554932`, delta `0.0024819374084472656`;
+  - token `3106` at position `10`: Levanter `-7.133152961730957`, vLLM
+    `-7.133103370666504`, delta `4.9591064453125e-05`.
+
+Routed-expert diagnostic:
+
+- `token_layer_count=22`, `top_k=2`.
+- `ordered_topk_match_count=17`, `ordered_topk_match_rate=0.7727272727272727`.
+- `unordered_full_match_count=19`,
+  `unordered_full_match_rate=0.8636363636363636`.
+- `mean_unordered_overlap=0.9318181818181818`.
+- `top1_match_count=19`, `top1_match_rate=0.8636363636363636`.
+- `mismatch_count=5`.
+- `low_margin_boundary_mismatch_count=0`.
+- `suspicious_mismatch_count=3`.
+- `routing_mismatch_print_limit=22`, so all five mismatch locations printed.
+
+Full routing mismatch list:
+
+```json
+[
+  {"layer": 0, "levanter": [1, 2], "router_margin": 0.02071744203567505, "token_id": 1, "token_position": 0, "top1_match": false, "unordered_overlap": 1, "vllm": [0, 1]},
+  {"layer": 1, "levanter": [3, 0], "router_margin": 0.21385124325752258, "token_id": 1, "token_position": 0, "top1_match": true, "unordered_overlap": 1, "vllm": [3, 1]},
+  {"layer": 0, "levanter": [1, 0], "router_margin": 0.11697107553482056, "token_id": 42, "token_position": 1, "top1_match": false, "unordered_overlap": 2, "vllm": [0, 1]},
+  {"layer": 1, "levanter": [2, 3], "router_margin": 0.1284528374671936, "token_id": 42, "token_position": 1, "top1_match": true, "unordered_overlap": 1, "vllm": [2, 1]},
+  {"layer": 1, "levanter": [3, 1], "router_margin": 0.7457730770111084, "token_id": 128, "token_position": 2, "top1_match": false, "unordered_overlap": 2, "vllm": [1, 3]}
+]
+```
+
+Conclusion:
+
+- The small model reproduces the routed-expert divergence while making it much
+  easier to inspect: only five ordered mismatches and three suspicious
+  unordered mismatches across 22 token/layer comparisons.
+- Selected-token logprobs are much closer than in the full canary run, with max
+  delta about `0.00331`, so the mismatch appears concentrated in routed expert
+  ID ordering/selection rather than gross logit corruption.
+- The next recommended debugging step is to instrument one failing token/layer
+  in the installed vLLM TPU path, starting with token position `0`, layer `0`
+  (`levanter=[1,2]`, `vllm=[0,1]`). Compare raw router logits, router bias,
+  biased logits, and top-k tie/order behavior immediately before
+  `jax.lax.top_k` in Levanter/manual reference versus tpu-inference/vLLM.
+
+Sharp edges:
+
+- The compact artifact would not necessarily exercise indexed safetensors with
+  the full-canary `256MiB` shard size, so the TPU run used
+  `--max-shard-size 4194304` and produced 14 shards.
+- The installed serve path still labels legacy output markers as
+  `full_canary_*` for compatibility, even when `--model-size small-diagnostic`
+  is selected.
+- Iris still runs from `/app`, so `git rev-parse HEAD` remains unavailable
+  inside the job; use the pushed branch commit and installed package direct URLs
+  for identity.
+
 ## Scope
 
 In scope:
