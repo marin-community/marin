@@ -169,7 +169,8 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-      # The triage-canary skill handles both lanes; CANARY_LANE selects datakit-smoke vs tpu.
+      # lane id must be unique per canary: it flows into the [canary-{lane}] issue
+      # title, so a shared id would collide with another tier's triage dedup.
       - name: Claude triage
         id: claude_triage
         if: (failure() || cancelled()) && github.event_name == 'schedule'
