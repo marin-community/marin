@@ -1699,6 +1699,192 @@ Sharp edges:
   inside the job; use the pushed branch commit and installed package direct URLs
   for identity.
 
+## 2026-06-15 - Small Diagnostic Routing Mismatch Localization
+
+Goal: determine whether the first small-diagnostic mismatch at token position
+`0`, layer `0` is introduced inside installed GrugMoE model math or later in
+route capture, token/layer ordering, scheduler slicing, or output plumbing.
+
+Branches and commits:
+
+- Marin: `codex/grugmoe-routing-localize-20260615` at
+  `45697caf1c6d5cedbf2caea7ec74735be61470f9`.
+- vLLM: unchanged at `c6f0608ddadb6bdd39a16b857b5affe660b1259e`.
+- tpu-inference diagnostic branch: `codex/grugmoe-routing-debug-tpu-20260615`
+  at `0cf0ed8cb92f1731ec9fb7bc1c291c9ab00364af`.
+
+Diagnostic code changes:
+
+- Added opt-in installed harness flags:
+  `--routing-debug`, `--routing-debug-token-position`,
+  `--routing-debug-layer`, and `--routing-debug-vector-limit`.
+- The Levanter reference JSON now optionally records, for one token/layer, the
+  router input hidden state summary, raw router logits, router bias, biased
+  logits, top-k expert IDs, boundary expert/logit, router margin, and combine
+  weights.
+- The installed score phase sets `GRUGMOE_ROUTING_DEBUG=1` for the selected
+  token/layer and prints the final `CompletionOutput.routed_experts` slice.
+- The tpu-inference diagnostic branch adds a gated `jax.debug.callback` in
+  `GrugMoeMLP.route` and prints the same route-point record from the installed
+  TPU model.
+
+Local checks:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-routing-debug-tpu-20260615
+python -m py_compile tpu_inference/models/jax/grugmoe.py
+pre-commit run --files tpu_inference/models/jax/grugmoe.py
+git diff --check
+
+cd /home/romain/dev/marin-wt/grugmoe-routing-localize-20260615
+python -m py_compile \
+  experiments/grug/moe/vllm_tpu_parity.py \
+  experiments/grug/moe/installed_vllm_full_canary_smoke.py
+VLLM_TARGET_DEVICE=tpu uv lock --check
+./infra/pre-commit.py \
+  experiments/grug/moe/vllm_tpu_parity.py \
+  experiments/grug/moe/installed_vllm_full_canary_smoke.py \
+  pyproject.toml \
+  uv.lock
+env -u PYTHONPATH VLLM_TARGET_DEVICE=tpu \
+  uv run --locked --package marin-core --extra vllm --extra eval \
+  python -m experiments.grug.moe.installed_vllm_full_canary_smoke --help
+env -u PYTHONPATH VLLM_TARGET_DEVICE=tpu \
+  uv run --locked --package marin-core --extra vllm --extra eval \
+  python -m experiments.grug.moe.vllm_tpu_parity --help
+```
+
+Result: all local checks passed.
+
+TPU command:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-routing-localize-20260615
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 7200 \
+  --cpu 16 \
+  --memory 256GB \
+  --disk 300GB \
+  --job-name grugmoe-routing-localize-installed-vllm-$(date +%Y%m%d-%H%M%S) \
+  -e VLLM_TARGET_DEVICE tpu \
+  -- env -u PYTHONPATH \
+    VLLM_TARGET_DEVICE=tpu \
+    PYTHONUNBUFFERED=1 \
+    LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304 \
+    uv run --locked --package marin-core --extra vllm --extra eval \
+    python -m experiments.grug.moe.installed_vllm_full_canary_smoke \
+    --model-size small-diagnostic \
+    --output-dir /tmp/grugmoe-routing-localize-installed-vllm \
+    --max-shard-size 4194304 \
+    --generation-tokens 3 \
+    --routing-debug \
+    --routing-debug-token-position 0 \
+    --routing-debug-layer 0 \
+    --routing-debug-vector-limit 16
+```
+
+Final TPU job:
+
+- `/romain/grugmoe-routing-localize-installed-vllm-20260615-225420`.
+- Region/TPU: `europe-west4`, `v6e-4`.
+- Final state: failed in the expected score-phase diagnostic guard with
+  `AssertionError: 3 routed-expert mismatches had boundary margin > 0.01`.
+- Duration: `3 minutes and 39.9 seconds`.
+- Installed dependency identity:
+  - vLLM: `c6f0608ddadb6bdd39a16b857b5affe660b1259e`.
+  - tpu-inference: `0cf0ed8cb92f1731ec9fb7bc1c291c9ab00364af`.
+
+Export/load and serve evidence:
+
+- Config source: `small diagnostic GrugMoE`.
+- Artifact/load: `artifact_bytes=81845277`, `shard_count=14`,
+  `expected_tensors=46`, `consumed_tensors=46`, `missing=[]`,
+  `unexpected=[]`.
+- Serve/generate: `vllm_generate_status_code=200`.
+- Installed vLLM serve generated `[3045, 2536, 223]` for prompt
+  `[1, 42, 128, 2048, 17, 3072, 5, 63]`.
+- Score prompt token IDs:
+  `[1, 42, 128, 2048, 17, 3072, 5, 63, 3045, 2536, 3106]`.
+- Score generated token IDs: `[2951]`.
+- Fixed-continuation generated token IDs: `[3045, 2536, 3106]`.
+- Selected-token logprobs stayed close:
+  `max_abs_delta=0.0033097267150878906`,
+  `mean_abs_delta=0.0019470850626627605`.
+
+First failing token/layer evidence:
+
+- Target: token position `0`, token ID `1`, layer `0`, top-k `2`.
+- Levanter/manual reference:
+  - router input hidden state dtype `float32`, shape `[512]`, first values
+    `[0.8003653287887573, 0.9361541867256165, 0.4786311388015747,
+    0.3288799822330475, 0.019369488582015038, -0.6378109455108643,
+    0.14827126264572144, -0.4013029634952545]`, `l2=11.270750380335834`.
+  - raw router logits:
+    `[0.11579327285289764, 0.18306951224803925,
+    0.1365107148885727, -0.06385284662246704]`.
+  - router bias: `[0.0, 0.0, 0.0, 0.0]`.
+  - biased router logits match raw logits.
+  - top-k with boundary: experts `[1, 2, 0]`, logits
+    `[0.18306951224803925, 0.1365107148885727,
+    0.11579327285289764]`.
+  - selected top-k experts: `[1, 2]`.
+  - combine weights: `[0.5456399917602539, 0.5340747833251953]`.
+  - router margin: `0.02071744203567505`.
+- Installed tpu-inference route point:
+  - router input hidden state dtype `bfloat16`, shape `[512]`, first values
+    `[0.8515625, 0.98828125, 0.455078125, 0.349609375,
+    0.1943359375, -0.4921875, 0.1845703125, -0.578125]`,
+    `l2=11.272372436733875`.
+  - raw router logits:
+    `[0.19308093190193176, 0.13528966903686523,
+    0.0202304869890213, -0.030783653259277344]`.
+  - router bias: `[0.0, 0.0, 0.0, 0.0]`.
+  - biased router logits match raw logits.
+  - top-k with boundary: experts `[0, 1, 2]`, logits
+    `[0.19308093190193176, 0.13528966903686523,
+    0.0202304869890213]`.
+  - selected top-k experts: `[0, 1]`.
+  - combine weights: `[0.546875, 0.53515625]`.
+  - router margin: `0.11505918204784393`.
+- Final vLLM output plumbing:
+  - `CompletionOutput.routed_experts` shape `[11, 2, 2]`.
+  - token position `0`, all layer routes: `[[0, 1], [3, 1]]`.
+  - token position `0`, layer `0`, reported top-k: `[0, 1]`.
+
+Routing summary remained the same as the previous small diagnostic:
+
+- `token_layer_count=22`, `top_k=2`.
+- `ordered_topk_match_count=17`, `ordered_topk_match_rate=0.7727272727272727`.
+- `unordered_full_match_count=19`,
+  `unordered_full_match_rate=0.8636363636363636`.
+- `top1_match_count=19`, `top1_match_rate=0.8636363636363636`.
+- `mismatch_count=5`, `suspicious_mismatch_count=3`.
+
+Conclusion:
+
+- The first known mismatch appears before route capture or scheduler plumbing.
+  The installed tpu-inference model's own route calculation for token `0`,
+  layer `0` selects `[0, 1]`, and final vLLM `routed_experts` reports the same
+  `[0, 1]` with shape/order `[token, layer, top_k]`.
+- The mismatch first appears in the model math before top-k selection: the
+  router input hidden state already differs between the Levanter/manual
+  reference and installed TPU path, and the raw router logits differ before any
+  router bias is applied. Router bias is zero on both paths.
+- This is not evidence of token ordering, layer ordering, scheduler slicing, or
+  output-plumbing corruption.
+- I do not see a clean correctness fix in scheduler/output code. The likely
+  next fix is to align the validation reference with the precision actually
+  used by installed vLLM TPU (`dtype="bfloat16"`) or, if exact Levanter fp32
+  routed-expert IDs are the serving contract, run/keep more of the installed
+  model path in float32. A useful next experiment is to add a temporary
+  `--vllm-dtype float32` score mode or to emit a bfloat16 native-reference
+  route record, then rerun the same small diagnostic.
+
 ## Scope
 
 In scope:
