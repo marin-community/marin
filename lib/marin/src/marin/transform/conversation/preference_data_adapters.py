@@ -8,16 +8,8 @@ from marin.core.conversation import OpenAIChatMessage
 
 
 @dataclass
-class PreferenceDatasetFormat:
-    """Format of the Preference Dataset (DPO, RM, etc)."""
-
-    CHOSEN_REJECTED: str = "chosen_rejected"
-
-
-@dataclass
 class PreferenceTransformAdapter:
     source: str
-    dataset_format: str = PreferenceDatasetFormat.CHOSEN_REJECTED
     chosen_column: str = "chosen"
     rejected_column: str = "rejected"
     role_key: str = "role"
@@ -53,7 +45,6 @@ def get_preference_adapter(source: str) -> PreferenceTransformAdapter | None:
 register_preference_adapter(
     PreferenceTransformAdapter(
         source="HuggingFaceH4/ultrafeedback_binarized",
-        dataset_format=PreferenceDatasetFormat.CHOSEN_REJECTED,
         chosen_column="chosen",
         rejected_column="rejected",
         role_key="role",
@@ -64,7 +55,6 @@ register_preference_adapter(
 register_preference_adapter(
     PreferenceTransformAdapter(
         source="allenai/olmo-2-1124-7b-preference-mix",
-        dataset_format=PreferenceDatasetFormat.CHOSEN_REJECTED,
         chosen_column="chosen",
         rejected_column="rejected",
         role_key="role",
