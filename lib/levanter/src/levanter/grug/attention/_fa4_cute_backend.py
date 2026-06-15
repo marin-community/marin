@@ -178,7 +178,7 @@ def _cutlass_attention_forward_specs(
     tensor_spec = modules.cjax.TensorSpec
     qkv_spec = tensor_spec(mode=(1, 3, 2, 0), divisibility=(1, 1, 1, vector_elems), static=True)
     lse_spec = tensor_spec(divisibility=(1, 1, 1), static=True)
-    metadata_spec = tensor_spec(static=True)
+    metadata_spec = tensor_spec(mode=(0, 1), static=True)
     return (qkv_spec, qkv_spec, qkv_spec, metadata_spec), (qkv_spec, lse_spec)
 
 

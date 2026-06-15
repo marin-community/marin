@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -19,6 +21,7 @@ from levanter.grug.attention._fa4_cute import (
     _packed_segment_causal_lower_bounds,
     _packed_self_attention_segment_ids,
 )
+from levanter.grug.attention._fa4_cute_backend import _cutlass_attention_forward_specs
 
 
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):
@@ -197,6 +200,14 @@ def test_gpu_fa4_cute_attention_does_not_retrace_for_dynamic_segment_ids(monkeyp
     np.testing.assert_array_equal(run_attention(second_segments), q)
     np.testing.assert_array_equal(run_attention(first_segments), q)
     assert trace_count == 1
+
+
+def test_cutlass_forward_metadata_spec_keeps_b_s_layout():
+    fake_modules = SimpleNamespace(cjax=SimpleNamespace(TensorSpec=lambda **kwargs: kwargs))
+
+    input_specs, _ = _cutlass_attention_forward_specs(fake_modules, vector_elems=8)
+
+    assert input_specs[3] == {"mode": (0, 1), "static": True}
 
 
 @pytest.mark.parametrize(("q_heads", "kv_heads"), [(4, 1), (2, 2)])

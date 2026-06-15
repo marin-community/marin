@@ -547,6 +547,30 @@ def test_device_key_tpu_v5_lite_maps_to_v5e():
     assert tuned_block_sizes._device_key("TPU v5litepod") == "TPU v5e"
 
 
+@pytest.mark.parametrize("batch", [4096, 8192])
+def test_h100_d2560_pallas_gpu_block_sizes_fit_nvidia_tile_budget(batch: int, monkeypatch: pytest.MonkeyPatch):
+    block_sizes, has_tuned_match = tuned_block_sizes.infer_block_sizes_with_tuned_match(
+        batch,
+        2560,
+        128256,
+        dtype=jnp.float32,
+        x_dtype=jnp.bfloat16,
+        w_dtype=jnp.bfloat16,
+        device_kind="NVIDIA H100",
+    )
+
+    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
+
+    assert has_tuned_match
+    assert block_sizes.b_block_size == 256
+    pallas_gpu._validate_launch_feasibility(
+        w_dtype=jnp.float32,
+        h_block_size=block_sizes.h_block_size,
+        v_block_size=block_sizes.v_block_size,
+        num_h_blocks=2560 // block_sizes.h_block_size,
+    )
+
+
 def test_pallas_tpu_backward_uses_pallas_by_default(monkeypatch):
     monkeypatch.delenv("LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH", raising=False)
     captured: dict[str, bool] = {}

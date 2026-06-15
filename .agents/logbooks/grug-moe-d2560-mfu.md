@@ -710,3 +710,48 @@
   - `./infra/pre-commit.py --changed-files --fix` -> OK
 - Interpretation: full depth, not one-layer, still triggers the SPMD/clique/heartbeat failure. The 60 GiB logits hypothesis remains unlikely because XLA CE was selected before failure and the observed warning is a `[1,4096,2560]` activation-layout tensor, not a vocab logits tile. The next attempt should first remove the extra FA4 validity metadata and pin lower-bound metadata sharding, because that is low-risk and directly reduces per-layer dynamic-segment metadata traffic. If that still fails, use a one-layer or few-layer `MAY_REMAT=none` diagnostic to test whether the checkpoint boundary is generating the `%fake_parameter.2` source sharding.
 - Next action: commit/push the queued attention/remat/CE patches, then relaunch a short full-May synthetic gate from that new checkpoint with `save_moe`, XLA CE, EP=8, CPU=8, and no profiler.
+
+### 2026-06-14 19:20 PDT - MAY-021 blocked on 32-node topology; launched N16 diagnostic
+- Hypothesis: the replacement checkpoint `7af0c01b8` should be tested against the same full-May shape as MAY-020. If 32 H100 nodes are not immediately admissible, a 16-node full-depth diagnostic with EP=8 should still test whether the FA4 lower-bound metadata patch changes the compile/clique path while keeping capacity productive.
+- Command:
+  - `experiments/grug/moe/run_cw_may_d2560.sh --run-id GM2560-MAY-021-cw-20260615-0210 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 1 --expert-axis 8 --replica-axis 1 --steps 4 --profiler-steps 0 --tracker json_logger --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --ce-implementation xla --moe-implementation ring --submit`
+  - `KUBECONFIG=$HOME/.kube/coreweave-iris-gpu kubectl get workload.kueue.x-k8s.io -n iris iris-pg-20b235ffcfca4a51-0 -o json | jq '{metadata:{name:.metadata.name,creationTimestamp:.metadata.creationTimestamp}, spec:{queueName:.spec.queueName, podSets:.spec.podSets}, status:.status}'`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260615-021028/grug-train-GM2560-MAY-021-cw-20260615-0210`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260615-021028`
+  - `experiments/grug/moe/run_cw_may_d2560.sh --run-id GM2560-MAY-022N16-cw-20260615-0220 --nodes 16 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 1 --expert-axis 8 --replica-axis 1 --steps 4 --profiler-steps 0 --tracker json_logger --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --ce-implementation xla --moe-implementation ring --submit`
+- Config:
+  - Stopped 32-node parent: `/dlwh/iris-run-job-20260615-021028`
+  - Stopped 32-node child: `/dlwh/iris-run-job-20260615-021028/grug-train-GM2560-MAY-021-cw-20260615-0210`
+  - New 16-node parent: `/dlwh/iris-run-job-20260615-021953`
+  - Run id: `GM2560-MAY-022N16-cw-20260615-0220`
+  - Source checkpoint: `7af0c01b8`
+  - Same full-May d=2560/L26/seq4096/batch256/EP8/model1/save_moe/XLA-CE/ring/synthetic/no-profiler config as MAY-021 except `MAY_GPU_REPLICAS=16`.
+- Result: MAY-021 created child workload `iris-pg-20b235ffcfca4a51-0`, but Kueue reported topology `infiniband` could fit only `26` of `32` pods. Resource requests were `cpu=256`, `memory=8Ti`, `nvidia.com/gpu=256`, `rdma/ib=256`, and no worker pods existed. I stopped the 32-node parent/child before any model logs. MAY-022N16 submitted successfully; child/admission still pending at the time of this entry.
+- Interpretation: MAY-021 did not test the replacement code. The N16 run is a capacity workaround and not the final target, but it preserves the critical code variable from MAY-020 to isolate whether the FA4 metadata sharding patch changes compile behavior at full depth.
+- Next action: babysit MAY-022N16 for admission, hparams, SPMD warning presence/absence, clique/rendezvous behavior, and train progress. If N16 succeeds, retry 32 nodes when topology can fit them. If N16 still fails with the same `[1,4096,2560]` warning, switch to `MAY_REMAT=none` or lower depth to isolate the checkpoint boundary.
+
+### 2026-06-14 19:35 PDT - MAY-022N16 exposed FA4/CuTe backward compiler failure
+- Hypothesis: if the FA4 metadata sharding patch changes the full-depth failure mode, the 16-node full-May diagnostic should either reach first train progress or fail before the old 256-device clique path.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260615-021953/grug-train-GM2560-MAY-022N16-cw-20260615-0220 --since-seconds 360 --max-lines 300 | tail -n 120`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260615-021953/grug-train-GM2560-MAY-022N16-cw-20260615-0220`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260615-021953`
+  - Dry-run for next diagnostic: `experiments/grug/moe/run_cw_may_d2560.sh --run-id GM2560-MAY-023L1REF-cw-20260615-0238 --nodes 16 --layers 1 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 1 --expert-axis 8 --replica-axis 1 --steps 4 --profiler-steps 0 --tracker json_logger --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --attention reference --ce-implementation xla --moe-implementation ring`
+- Config:
+  - Run id: `GM2560-MAY-022N16-cw-20260615-0220`
+  - Parent: `/dlwh/iris-run-job-20260615-021953`
+  - Child: `/dlwh/iris-run-job-20260615-021953/grug-train-GM2560-MAY-022N16-cw-20260615-0220`
+  - Source checkpoint: `7af0c01b8`
+  - Shape: full May d=2560/L26/seq4096/batch256/EP8/model1/save_moe/XLA-CE/ring/synthetic/no-profiler on 16 H100 nodes.
+- Result: The run admitted and started 16/16 workers with `failure_count=0` until compile. It emitted the exact target hparams and `parameter_count=67078882816`; XLA CE selected on ranks. It then failed in the FA4/CuTe segmented backward compiler, not in the earlier clique path: `_fa4_cute_segmented_bwd.py:1285` calls `cute.arch.atomic_add(utils.elem_pointer(tdQgdQaccum_atomic, i), acc_dQ_atomic[i])`, and CUTLASS DSL raised `TypeError: atomicrmw() missing 1 required positional argument: 'a'` while compiling the dQ atomic-add loop. I stopped the child and parent to avoid retry churn.
+- Sidecar/code changes queued:
+  - Attention: Ptolemy pinned the forward FA4 lower-bound metadata FFI spec to `TensorSpec(mode=(0, 1), static=True)`, matching backward metadata layout. Validation: `uv run pytest lib/levanter/tests/grug/test_fa4_cute_attention.py -q` -> `10 passed, 2 skipped`; changed-file pre-commit OK.
+  - CE/output: Turing added H100/A100/GB10 tuned Pallas GPU CE blocks for `H=2560,V=128256` local `B in {4096,8192}` so the Pallas comparison is launch-viable. Mainline remains XLA CE because it avoids full logits and should use larger vocab tiles. Validation: focused H100 test `2 passed`; changed-file pre-commit OK.
+  - Diagnostics: the May launcher now accepts `MAY_NUM_LAYERS` / `--layers` plus `MAY_USE_PKO` and `MAY_PKO_ON_LAST_LAYER` toggles, so narrow full-width probes can isolate attention, PKO, remat, and MoE without changing the default issue shape.
+- Validation:
+  - `uv run pytest tests/test_grug_variant_contracts.py::test_grug_moe_may_launcher_diagnostic_overrides -q` -> `1 passed`
+  - `uv run pytest lib/levanter/tests/grug/test_fa4_cute_attention.py -q` -> `10 passed, 2 skipped`
+  - `uv run pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py::test_h100_d2560_pallas_gpu_block_sizes_fit_nvidia_tile_budget -q` -> `2 passed`
+  - `./infra/pre-commit.py --changed-files --fix` -> OK
+- Interpretation: the old full-depth SPMD/clique symptom is no longer the only blocker; the current `gpu_fa4_cute` backward is itself not compiling on the deployed CUTLASS DSL for this shape. `gpu_fa4_thd` is not a full-model fallback yet because the model only builds FA4/CuTe metadata and THD rejects the short sliding-window layers. The next diagnostic should bypass FA4/CuTe backward with `--attention reference` and `--layers 1` to test whether MoE/optimizer/CE can still step from the new launcher checkpoint. If that works, escalate layer count/reference only enough to preserve cluster productivity while the FA4 backward atomic path is fixed.
+- Next action: commit/push the queued attention, CE, and diagnostic launcher changes, launch `GM2560-MAY-023L1REF-cw-20260615-0238`, and babysit it for train progress or a non-attention failure.

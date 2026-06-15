@@ -461,6 +461,19 @@ def test_grug_moe_remat_mode_controls_checkpoint_boundary(remat_mode: str, expec
     assert _jaxpr_has_primitive(closed_jaxpr, "remat2") is expects_remat
 
 
+def test_grug_moe_may_launcher_diagnostic_overrides(monkeypatch):
+    monkeypatch.setenv("MAY_NUM_LAYERS", "3")
+    monkeypatch.setenv("MAY_USE_PKO", "false")
+    monkeypatch.setenv("MAY_PKO_ON_LAST_LAYER", "false")
+
+    launch_module = importlib.import_module("experiments.grug.moe.launch_cw_may_d2560")
+    model = launch_module.build_may_model()
+
+    assert model.num_layers == 3
+    assert model.use_pko is False
+    assert model.pko_on_last_layer is False
+
+
 def test_grug_moe_pko_attention_accepts_precomputed_segment_starts(monkeypatch):
     model_module = importlib.import_module("experiments.grug.moe.model")
     mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)

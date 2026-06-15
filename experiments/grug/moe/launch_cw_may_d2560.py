@@ -12,6 +12,7 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_REPLICA_AXIS=1       FSDP over the whole data axis
     MAY_MODEL_AXIS=1         tensor/model-parallel axis size
     MAY_BATCH=256            seq=4096 context; raise only after profiling memory
+    MAY_NUM_LAYERS=26        override layer count for narrow diagnostics
     MAY_STEPS=50             throughput/profiling length
     MAY_CPU_PER_REPLICA=32   CPU request for each 8xH100 worker pod
     MAY_CHECKPOINTS=none     disable checkpoint restore/saves for throughput probes
@@ -22,6 +23,8 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_LOG_JAXPRS=false     disable JAXPR dumps for throughput probes
     MAY_LOG_XLA_HLO=false    disable HLO dumps for throughput probes
     MAY_REMAT=save_moe       none | recompute_all | save_moe
+    MAY_USE_PKO=true         enable PKO/doc-start mask path on long layers
+    MAY_PKO_ON_LAST_LAYER=true
 
 The default parameter policy keeps one sharded fp32 parameter tree plus sharded
 optimizer state. Set ``MAY_LIVE_PARAM_MODE=compute_with_master`` to keep a
@@ -107,13 +110,14 @@ def build_may_model() -> GrugModelConfig:
     model = MAY_HEURISTIC.build_model_config(hidden_dim, seq_len=seq_len)
     return dataclasses.replace(
         model,
+        num_layers=env_int("MAY_NUM_LAYERS", model.num_layers),
         num_experts=env_int("MAY_NUM_EXPERTS", 256),
         num_experts_per_token=env_int("MAY_TOP_K", 4),
         router_z_loss_coef=0.0,
         routing_renorm_sum=env_float("MAY_ROUTING_RENORM_SUM", 2.5),
         use_half_rope=True,
-        use_pko=True,
-        pko_on_last_layer=True,
+        use_pko=env_bool("MAY_USE_PKO", True),
+        pko_on_last_layer=env_bool("MAY_PKO_ON_LAST_LAYER", True),
         moe_implementation=cast(str, os.environ.get("MAY_MOE_IMPLEMENTATION", "ring")),
         attention_implementation=cast(str, attention_implementation or None),
         cross_entropy_implementation=cast(CrossEntropyImplementation | None, cross_entropy_implementation),

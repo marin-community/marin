@@ -24,10 +24,13 @@ REPLICA_AXIS=1
 MODEL_AXIS=1
 BATCH=256
 SEQ_LEN=4096
+NUM_LAYERS=""
 STEPS=30
 CHECKPOINTS="none"
 DATA="slimpajama"
 REMAT="save_moe"
+USE_PKO="${MAY_USE_PKO:-true}"
+PKO_ON_LAST_LAYER="${MAY_PKO_ON_LAST_LAYER:-true}"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 LIVE_PARAM_MODE="param"
 ATTENTION_IMPLEMENTATION="gpu_fa4_cute"
@@ -65,6 +68,7 @@ Options:
   --model-axis N            MAY_MODEL_AXIS tensor/model-parallel axis size (default: 1).
   --batch N                 MAY_BATCH (default: 256).
   --seq-len N               MAY_SEQ_LEN (default: 4096).
+  --layers N                MAY_NUM_LAYERS diagnostic override (default: May heuristic).
   --steps N                 MAY_STEPS (default: 30).
   --profiler-start N        MAY_PROFILER_START (default: 12).
   --profiler-steps N        MAY_PROFILER_STEPS (default: 8; set 0 to disable).
@@ -73,6 +77,8 @@ Options:
   --data NAME               MAY_DATA: slimpajama, nemotron, or synthetic (default: slimpajama).
   --checkpoints MODE        MAY_CHECKPOINTS: none, local, or s3 (default: none).
   --remat MODE              MAY_REMAT: save_moe or recompute_all (default: save_moe).
+  --use-pko BOOL            MAY_USE_PKO diagnostic toggle (default: true).
+  --pko-on-last-layer BOOL  MAY_PKO_ON_LAST_LAYER diagnostic toggle (default: true).
   --mp POLICY               MAY_MP policy string.
   --live-param-mode MODE    MAY_LIVE_PARAM_MODE: param or compute_with_master (default: param).
   --attention NAME          MAY_ATTENTION_IMPLEMENTATION (default: gpu_fa4_cute).
@@ -144,6 +150,10 @@ while [ "$#" -gt 0 ]; do
             SEQ_LEN="$2"
             shift 2
             ;;
+        --layers)
+            NUM_LAYERS="$2"
+            shift 2
+            ;;
         --steps)
             STEPS="$2"
             shift 2
@@ -174,6 +184,14 @@ while [ "$#" -gt 0 ]; do
             ;;
         --remat)
             REMAT="$2"
+            shift 2
+            ;;
+        --use-pko)
+            USE_PKO="$2"
+            shift 2
+            ;;
+        --pko-on-last-layer)
+            PKO_ON_LAST_LAYER="$2"
             shift 2
             ;;
         --mp)
@@ -259,10 +277,13 @@ ENV_ARGS=(
     -e MAY_MODEL_AXIS "$MODEL_AXIS"
     -e MAY_BATCH "$BATCH"
     -e MAY_SEQ_LEN "$SEQ_LEN"
+    -e MAY_NUM_LAYERS "$NUM_LAYERS"
     -e MAY_STEPS "$STEPS"
     -e MAY_CHECKPOINTS "$CHECKPOINTS"
     -e MAY_DATA "$DATA"
     -e MAY_REMAT "$REMAT"
+    -e MAY_USE_PKO "$USE_PKO"
+    -e MAY_PKO_ON_LAST_LAYER "$PKO_ON_LAST_LAYER"
     -e MAY_MP "$MP"
     -e MAY_LIVE_PARAM_MODE "$LIVE_PARAM_MODE"
     -e MAY_ATTENTION_IMPLEMENTATION "$ATTENTION_IMPLEMENTATION"
@@ -308,6 +329,7 @@ worker_cpu: $WORKER_CPU
 mesh axes: replica=$REPLICA_AXIS expert=$EXPERT_AXIS model=$MODEL_AXIS
 batch: $BATCH
 seq_len: $SEQ_LEN
+layers: ${NUM_LAYERS:-default}
 steps: $STEPS
 tracker: $TRACKER
 profiler: start=$PROFILER_START steps=$PROFILER_STEPS hlo_proto=$ENABLE_HLO_PROTO
@@ -319,6 +341,8 @@ watch_interval: $WATCH_INTERVAL
 log_every: $LOG_EVERY
 log_jaxprs: $LOG_JAXPRS
 log_xla_hlo: $LOG_XLA_HLO
+use_pko: $USE_PKO
+pko_on_last_layer: $PKO_ON_LAST_LAYER
 attention: $ATTENTION_IMPLEMENTATION
 ce_implementation: ${CE_IMPLEMENTATION:-default}
 moe_implementation: $MOE_IMPLEMENTATION
