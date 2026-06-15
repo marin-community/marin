@@ -3,10 +3,12 @@
 
 """Tests for `PassthroughTokenizer`.
 
-In particular, `encode` must accept non-integer probe strings (e.g. ".") so
-that callers like `levanter.utils.hf_utils.byte_length_of_token` — and by
-extension `_calculate_bytes_per_token_type` / `cb_tagged_lm_evaluate` — can
-initialize against pre-tokenized integer corpora without crashing.
+`encode` stays strict — a non-integer token is a corpus-format error and must
+raise, not silently map to a token id. The byte-length probe in
+`levanter.utils.hf_utils.byte_length_of_token` (which feeds
+`_calculate_bytes_per_token_type` / `cb_tagged_lm_evaluate`) is handled at its
+own source so it can run against pre-tokenized integer corpora without
+weakening `encode`.
 """
 
 import pytest
@@ -29,22 +31,17 @@ def test_encode_empty_string(tokenizer):
     assert tokenizer.encode("   ") == []
 
 
-def test_encode_non_integer_returns_placeholder(tokenizer):
-    # Non-integer probe strings used by Levanter's bytes-per-token estimator
-    # must not crash; they fall back to vocab id 0.
-    assert tokenizer.encode(".") == [0]
-    assert tokenizer.encode("hello") == [0]
+@pytest.mark.parametrize("text", [".", "hello", "1 . 2"])
+def test_encode_non_integer_raises(tokenizer, text):
+    # A non-integer token is a corpus-format error; encode must fail fast
+    # rather than mask it as a valid token id.
+    with pytest.raises(ValueError):
+        tokenizer.encode(text)
 
 
-def test_encode_mixed_falls_back_per_token(tokenizer):
-    assert tokenizer.encode("1 . 2") == [1, 0, 2]
-
-
-def test_byte_length_of_token_does_not_crash(tokenizer):
-    # The probe inside `byte_length_of_token` calls `encode(".")[0]`, which
-    # used to raise `ValueError: invalid literal for int(): '.'`. After the
-    # fix, the helper returns a finite byte length for every vocab id.
-    for idx in (0, 1, 42, tokenizer.vocab_size - 1):
-        length = byte_length_of_token(tokenizer, idx)
-        assert isinstance(length, int)
-        assert length >= 0
+@pytest.mark.parametrize("idx, expected", [(0, 1), (5, 1), (42, 2), (255, 3)])
+def test_byte_length_of_token_is_digit_count(tokenizer, idx, expected):
+    # The "." prefix probe in byte_length_of_token can't be encoded by an
+    # integer-only tokenizer; the helper falls back to decoding the token
+    # directly, so the byte length is exactly the integer's digit count.
+    assert byte_length_of_token(tokenizer, idx) == expected

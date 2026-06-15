@@ -34,7 +34,14 @@ def byte_length_of_token(tokenizer: MarinTokenizer, idx: int) -> int:
     if m := re.match(r"<0x([0-9A-Fa-f]+)>", token_repr):
         return len(bytes.fromhex(m.group(1)))
 
-    extra_token = tokenizer.encode(".", add_special_tokens=False)[0]
+    try:
+        extra_token = tokenizer.encode(".", add_special_tokens=False)[0]
+    except ValueError:
+        # Tokenizers that only accept integer text (e.g. PassthroughTokenizer
+        # for pre-tokenized corpora) can't encode the "." prefix probe. The
+        # prefix trick only exists to preserve leading spaces, which such
+        # tokenizers don't model, so decode the token directly instead.
+        return len(tokenizer.decode([idx]).encode("utf-8"))
     excess_bytes = len(".".encode("utf-8"))
     decoded = tokenizer.decode([extra_token, idx]).encode("utf-8")
     return len(decoded) - excess_bytes
