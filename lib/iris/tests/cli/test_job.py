@@ -5,6 +5,7 @@
 
 import click
 import pytest
+from click.testing import CliRunner
 from iris.cli.job import (
     _parse_tpu_alternatives,
     _render_job_summary_text,
@@ -12,7 +13,7 @@ from iris.cli.job import (
     build_job_summary,
     build_resources,
     build_tpu_alternatives,
-    run_iris_job,
+    run,
     validate_extra_resources,
     validate_region_zone,
 )
@@ -185,25 +186,32 @@ def test_build_job_constraints_preemptible_true_overrides_heuristic():
     assert _preemptible_values(constraints) == ["true"]
 
 
-def test_run_iris_job_passes_task_image_override(monkeypatch):
-    captured: dict[str, str | None] = {}
+def test_job_run_cli_accepts_task_image_override(monkeypatch):
+    captured: dict[str, object] = {}
 
     def fake_submit_and_wait_job(**kwargs):
-        captured["task_image"] = kwargs["task_image"]
+        captured.update(kwargs)
         return 0
 
     monkeypatch.setattr("iris.cli.job._submit_and_wait_job", fake_submit_and_wait_job)
 
-    exit_code = run_iris_job(
-        command=["python", "train.py"],
-        env_vars={},
-        controller_url="http://controller.test",
-        wait=False,
-        task_image="ghcr.io/marin-community/iris-task-cuda-devel:test",
+    result = CliRunner().invoke(
+        run,
+        [
+            "--task-image",
+            "ghcr.io/marin-community/iris-task-cuda-devel:test",
+            "--no-wait",
+            "--",
+            "python",
+            "train.py",
+        ],
+        obj={"controller_url": "http://controller.test", "config": None, "token_provider": None},
     )
 
-    assert exit_code == 0
-    assert captured == {"task_image": "ghcr.io/marin-community/iris-task-cuda-devel:test"}
+    assert result.exit_code == 0, result.output
+    assert captured["task_image"] == "ghcr.io/marin-community/iris-task-cuda-devel:test"
+    assert captured["command"] == ["python", "train.py"]
+    assert captured["wait"] is False
 
 
 # --tpu multi-variant parsing
