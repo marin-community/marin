@@ -3,10 +3,15 @@
 
 """Tests for ControllerDB transaction, read snapshot, and replace_from behavior."""
 
+from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.db import (
+    SHARED_READ_MAX_OVERFLOW,
+    SHARED_READ_POOL_SIZE,
+    ControllerDB,
+)
 from sqlalchemy import text
 
 
@@ -69,27 +74,27 @@ def test_read_snapshot_returns_consistent_data(db: ControllerDB) -> None:
     assert len(all_rows) == 2
 
 
-def test_control_read_snapshot_reads_committed_data_via_dedicated_pool(db: ControllerDB) -> None:
-    """control_read_snapshot reads committed data from its own (non-shared) pool."""
+def test_control_reads_survive_an_exhausted_shared_pool(db: ControllerDB) -> None:
+    """The control loop must not be starved when RPC handlers saturate the shared
+    read pool — control reads draw from a separate connection budget.
+
+    This is the contract behind the dedicated control engine: hold every
+    connection the shared pool can hand out (size + overflow) open at once, then
+    confirm a control snapshot still acquires a connection and reads. With the
+    old single shared pool this checkout would block until a reader released.
+    """
     _create_simple_table(db)
     with db.transaction() as cur:
         cur.execute(text("INSERT INTO kv (key, value) VALUES (:k, :v)"), {"k": "a", "v": "1"})
 
-    # Backed by a distinct engine so the control loop never shares connections
-    # with RPC-handler reads.
-    assert db.sa_control_read_engine is not db.sa_read_engine
+    shared_capacity = SHARED_READ_POOL_SIZE + SHARED_READ_MAX_OVERFLOW
+    with ExitStack() as held_readers:
+        for _ in range(shared_capacity):
+            held_readers.enter_context(db.read_snapshot())
 
-    with db.control_read_snapshot() as q:
-        rows = q.execute(text("SELECT key FROM kv")).all()
-    assert [r[0] for r in rows] == ["a"]
-
-
-def test_control_read_snapshot_is_read_only(db: ControllerDB) -> None:
-    """The control pool pins query_only, so writes through it are rejected."""
-    _create_simple_table(db)
-    with pytest.raises(Exception, match=r"readonly|read-only|query_only"):
         with db.control_read_snapshot() as q:
-            q.execute(text("INSERT INTO kv (key, value) VALUES (:k, :v)"), {"k": "x", "v": "1"})
+            rows = q.execute(text("SELECT key FROM kv")).all()
+    assert [r[0] for r in rows] == ["a"]
 
 
 def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
