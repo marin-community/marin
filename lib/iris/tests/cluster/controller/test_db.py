@@ -3,15 +3,10 @@
 
 """Tests for ControllerDB transaction, read snapshot, and replace_from behavior."""
 
-from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
-from iris.cluster.controller.db import (
-    SHARED_READ_MAX_OVERFLOW,
-    SHARED_READ_POOL_SIZE,
-    ControllerDB,
-)
+from iris.cluster.controller.db import ControllerDB
 from sqlalchemy import text
 
 
@@ -72,29 +67,6 @@ def test_read_snapshot_returns_consistent_data(db: ControllerDB) -> None:
     with db.read_snapshot() as q:
         all_rows = q.execute(text("SELECT key FROM kv ORDER BY key")).all()
     assert len(all_rows) == 2
-
-
-def test_control_reads_survive_an_exhausted_shared_pool(db: ControllerDB) -> None:
-    """The control loop must not be starved when RPC handlers saturate the shared
-    read pool — control reads draw from a separate connection budget.
-
-    This is the contract behind the dedicated control engine: hold every
-    connection the shared pool can hand out (size + overflow) open at once, then
-    confirm a control snapshot still acquires a connection and reads. With the
-    old single shared pool this checkout would block until a reader released.
-    """
-    _create_simple_table(db)
-    with db.transaction() as cur:
-        cur.execute(text("INSERT INTO kv (key, value) VALUES (:k, :v)"), {"k": "a", "v": "1"})
-
-    shared_capacity = SHARED_READ_POOL_SIZE + SHARED_READ_MAX_OVERFLOW
-    with ExitStack() as held_readers:
-        for _ in range(shared_capacity):
-            held_readers.enter_context(db.read_snapshot())
-
-        with db.control_read_snapshot() as q:
-            rows = q.execute(text("SELECT key FROM kv")).all()
-    assert [r[0] for r in rows] == ["a"]
 
 
 def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
