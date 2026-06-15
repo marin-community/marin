@@ -23,6 +23,7 @@ import jmp
 import optax
 import pytest
 from fray.cluster import ResourceConfig
+from haliax.partitioning import set_mesh
 from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
@@ -31,7 +32,7 @@ from levanter.data.text import DatasetComponent, DirectDatasetComponent, LmDataC
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
-from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.grug.sharding import _compact_grug_mesh_shape, compact_grug_mesh
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
@@ -470,3 +471,64 @@ def test_reentrant_recurrent_config_lowers_and_keeps_router_stats_per_unique_blo
     assert out_metrics_shape["qb_beta_per_layer"].shape[0] == cfg.num_layers
     # pending_qb_betas in the next state must match the unique-block router biases.
     assert out_state_shape.pending_qb_betas.shape[0] == cfg.num_layers
+
+
+def test_reentrant_iteration_film_is_identity_at_init():
+    """E2's per-iteration FiLM must be identity at init: a model built with
+    ``iteration_film=True`` and one with ``iteration_film=False`` from the SAME
+    PRNG key must produce numerically identical forward outputs.
+
+    FiLM is initialized to zeros and consumes no PRNG key, so every other param is
+    bit-identical and ``x * (1 + 0) + 0 == x``. This is the contract that lets E2 be
+    a strict superset of E1 (it can only diverge once the FiLM tables learn).
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+
+    # Same small re-entrant config as the recurrence test: 1 prelude + 1 core looped
+    # 4x + 1 coda => 3 unique blocks, effective depth 6.
+    base_kwargs = dict(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=64,
+        num_layers=3,
+        num_prelude_layers=1,
+        num_coda_layers=1,
+        recurrence_steps=4,
+        num_heads=2,
+        num_kv_heads=2,
+        num_experts=4,
+        num_experts_per_token=2,
+        shared_expert_intermediate_dim=64,
+        max_seq_len=8,
+    )
+    cfg_e1 = model_module.GrugModelConfig(iteration_film=False, **base_kwargs)
+    cfg_e2 = model_module.GrugModelConfig(iteration_film=True, **base_kwargs)
+
+    # Concrete mesh so we can compare actual forward values (not just shapes). The
+    # default expert_axis_size=1 mesh works on a single CPU device; FiLM identity
+    # holds independent of mesh shape.
+    mesh = compact_grug_mesh()
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(2 * 8, dtype=jnp.int32).reshape(2, 8) % base_kwargs["vocab_size"]
+    token_pspec = jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None)
+
+    def forward(cfg):
+        sharded_tokens = jax.sharding.reshard(tokens, token_pspec)
+        model = model_module.Transformer.init(cfg, key=key)
+        return model, jax.jit(lambda m, t: m.logits(t))(model, sharded_tokens)
+
+    with _reset_abstract_mesh(), set_mesh(mesh):
+        model_e1, logits_e1 = forward(cfg_e1)
+        model_e2, logits_e2 = forward(cfg_e2)
+
+    # E1 carries no FiLM tables; E2 carries zero-initialized ones of the expected shape.
+    assert model_e1.core_film_scale is None
+    assert model_e1.core_film_shift is None
+    assert model_e2.core_film_scale is not None
+    assert model_e2.core_film_shift is not None
+    expected_film_shape = (cfg_e2.recurrence_steps, cfg_e2.num_core_layers, cfg_e2.hidden_dim)
+    assert model_e2.core_film_scale.shape == expected_film_shape
+    assert model_e2.core_film_shift.shape == expected_film_shape
+
+    # Identity FiLM => bit-identical forward outputs from the same key.
+    assert jnp.array_equal(logits_e1, logits_e2)

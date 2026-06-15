@@ -240,8 +240,19 @@ e1_reentrant = reentrant_step(
     tags=["moe", "reentrant", "e1-loop4"],
 )
 
+# E2 — iteration-conditioned re-entrant: E1 + per-iteration FiLM (adaLN) on the
+# shared core block. Tests whether telling the looped block which step it is on
+# (coarse-to-fine) helps, at ~free parameter cost. Identity at init == E1.
+_E2_MODEL = dataclasses.replace(_E1_MODEL, iteration_film=True)
+e2_reentrant = reentrant_step(
+    name="grug/reentrant_e2_filmloop4",
+    run_id=_resolve_run_id("reentrant_e2_filmloop4"),
+    model=_E2_MODEL,
+    tags=["moe", "reentrant", "e2-film-loop4"],
+)
+
 # Experiment registry. Select with GRUG_EXPERIMENT (comma-separated names); default E0.
-_STEPS = {"e0": e0_baseline, "e1": e1_reentrant}
+_STEPS = {"e0": e0_baseline, "e1": e1_reentrant, "e2": e2_reentrant}
 
 
 if __name__ == "__main__":

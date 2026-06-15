@@ -116,6 +116,12 @@ class GrugModelConfig:
     """Times the shared core stack (layers between prelude and coda) is applied per
     forward. 1 = plain stack (no recurrence); >1 = weight-tied re-entrant looping.
     Effective depth = num_prelude_layers + num_core_layers * recurrence_steps + num_coda_layers."""
+    iteration_film: bool = False
+    """When True and recurrence_steps > 1, modulate the shared core block per loop
+    iteration with a learned FiLM (adaLN-style per-feature scale+shift) indexed by
+    the iteration step and core-layer index. Gives one weight-tied block a
+    coarse-to-fine schedule at ~free parameter cost. Initialized to identity, so at
+    step 0 the model is numerically identical to the iteration_film=False variant."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -503,10 +509,19 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        film: tuple[jax.Array, jax.Array] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        # `film` is an optional (scale, shift) pair, each shape (D,), broadcast over
+        # (B, S, D). The same modulation is applied after both gated-norms so a
+        # weight-tied core block can be told which loop iteration it is on (E2).
         attn_in = self.attn_gated_norm(self.rms_attn(x))
+        if film is not None:
+            scale, shift = film
+            attn_in = attn_in * (1.0 + scale) + shift
         x = _batch_reshard(x + self.attn(attn_in, mask))
         mlp_in = _batch_reshard(self.mlp_gated_norm(self.rms_mlp(x)))
+        if film is not None:
+            mlp_in = mlp_in * (1.0 + scale) + shift
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -535,6 +550,8 @@ class Transformer(eqx.Module):
     blocks: tuple[Block, ...]
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
+    core_film_scale: jax.Array | None
+    core_film_shift: jax.Array | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -545,6 +562,16 @@ class Transformer(eqx.Module):
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+        # Per-iteration FiLM tables for the shared core block. Zeros => identity
+        # (Block applies x*(1+scale)+shift), so consuming no PRNG key keeps every
+        # other param bit-identical to the iteration_film=False model. Replicated
+        # like RMSNorm weights: tiny per-feature params, no sharding.
+        core_film_scale = None
+        core_film_shift = None
+        if cfg.iteration_film and cfg.recurrence_steps > 1:
+            film_shape = (cfg.recurrence_steps, cfg.num_core_layers, cfg.hidden_dim)
+            core_film_scale = reshard(jnp.zeros(film_shape, dtype=jnp.float32), P(None, None, None))
+            core_film_shift = reshard(jnp.zeros(film_shape, dtype=jnp.float32), P(None, None, None))
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -553,6 +580,8 @@ class Transformer(eqx.Module):
             blocks=blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
+            core_film_scale=core_film_scale,
+            core_film_shift=core_film_shift,
             config=cfg,
         )
 
@@ -596,9 +625,14 @@ class Transformer(eqx.Module):
         # long-attention pattern is preserved across the unrolled core.
         eff_idx = 0
 
-        def apply_block(block: "Block", h: jax.Array, idx: int) -> tuple[jax.Array, dict[str, jax.Array]]:
+        def apply_block(
+            block: "Block",
+            h: jax.Array,
+            idx: int,
+            film: tuple[jax.Array, jax.Array] | None = None,
+        ) -> tuple[jax.Array, dict[str, jax.Array]]:
             layer_mask = long_mask if idx % 4 == 3 else short_mask
-            return eqx.filter_checkpoint(block, policy=remat_policy)(h, layer_mask)
+            return eqx.filter_checkpoint(block, policy=remat_policy)(h, layer_mask, film)
 
         per_block_stats: list[dict[str, jax.Array]] = []
         for block in prelude_blocks:
@@ -607,9 +641,12 @@ class Transformer(eqx.Module):
             eff_idx += 1
 
         core_iter_stats: list[list[dict[str, jax.Array]]] = [[] for _ in core_blocks]
-        for _ in range(cfg.recurrence_steps):
+        for t in range(cfg.recurrence_steps):
             for c, block in enumerate(core_blocks):
-                hidden, stats = apply_block(block, hidden, eff_idx)
+                film = None
+                if self.core_film_scale is not None:
+                    film = (self.core_film_scale[t, c], self.core_film_shift[t, c])
+                hidden, stats = apply_block(block, hidden, eff_idx, film)
                 core_iter_stats[c].append(stats)
                 eff_idx += 1
         per_block_stats.extend(_mean_router_stats(s) for s in core_iter_stats)
