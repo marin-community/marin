@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -101,12 +102,25 @@ def test_load_any_token_empty_store(store_path: Path):
 
 
 def test_concurrent_writers_do_not_corrupt_store(store_path: Path):
-    """Interleaved upserts from many clusters all survive — SQLite serializes
-    the writes rather than racing on a shared temp file (the bug that the old
-    JSON+mkstemp store hit under pytest-xdist)."""
-    for i in range(25):
-        store_token(f"c{i}", f"http://host:{i}", f"tok-{i}", store_path=store_path)
+    """Writers on separate threads — each with its own SQLite connection —
+    serialize on the database lock instead of racing on a shared temp file (the
+    bug that the old JSON+mkstemp store hit under pytest-xdist). Half the writers
+    target distinct keys, half collide on one key to exercise ON CONFLICT."""
 
-    for i in range(25):
-        cred = load_token(f"c{i}", store_path=store_path)
-        assert cred == ClusterCredential(url=f"http://host:{i}", token=f"tok-{i}")
+    def write(i: int) -> None:
+        # Even workers insert distinct rows; odd workers all upsert "shared".
+        if i % 2 == 0:
+            store_token(f"c{i}", f"http://host:{i}", f"tok-{i}", store_path=store_path)
+        else:
+            store_token("shared", f"http://shared:{i}", f"tok-{i}", store_path=store_path)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(write, range(40)))
+
+    # Every distinct key survived intact, and the contended key resolved to one
+    # of the writers' values (last-writer-wins) without corrupting the store.
+    for i in range(0, 40, 2):
+        assert load_token(f"c{i}", store_path=store_path) == ClusterCredential(url=f"http://host:{i}", token=f"tok-{i}")
+    shared = load_token("shared", store_path=store_path)
+    assert shared is not None
+    assert shared.url.startswith("http://shared:")
