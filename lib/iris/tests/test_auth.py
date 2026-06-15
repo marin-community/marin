@@ -234,16 +234,61 @@ def test_loopback_trust_resolves_declared_identity():
         resp = client.get_current_user(job_pb2.GetCurrentUserRequest())
         assert resp.user_id == "alice"
         assert resp.role == "admin"
+        client.close()
+    finally:
+        controller.close()
 
-        # Jobs launched over the trusted loopback connection are attributed to
-        # the declared user.
+
+def test_loopback_admin_submits_as_other_user():
+    """A trusted-loopback caller (admin) may attribute a job to any user.
+
+    Loopback identity is self-asserted and carries the admin role, so the job
+    name's owner segment is authoritative — matching the null-auth behaviour
+    SSH-tunnel users rely on, rather than being pinned to the declared user."""
+
+    config = _make_controller_only_config()
+    config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
+    config.auth.trust_loopback = True
+    controller = LocalCluster(config)
+    url = controller.start()
+
+    try:
+        client = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[LoopbackUserInjector("alice")])
         launch_req = controller_pb2.Controller.LaunchJobRequest(
-            name="/alice/loopback-job",
+            name="/bob/acted-job",
             entrypoint=Entrypoint.from_callable(_quick).to_proto(),
             resources=ResourceSpec(cpu=1, memory="1g").to_proto(),
             client_revision_date=client_revision_date(),
         )
-        client.launch_job(launch_req)
+        resp = client.launch_job(launch_req)
+        assert resp.job_id.startswith("/bob/"), resp.job_id
+        client.close()
+    finally:
+        controller.close()
+
+
+def test_token_user_owner_pinned_to_principal():
+    """A non-admin token caller cannot impersonate: the job owner is forced to
+    the verified principal regardless of the name segment they request."""
+
+    config = _make_controller_only_config()
+    config.auth.static.tokens["carol-token"] = "carol"  # role defaults to "user"
+    controller = LocalCluster(config)
+    url = controller.start()
+
+    try:
+        jwt = _login_for_jwt(url, "carol-token")
+        client = ControllerServiceClientSync(
+            address=url, timeout_ms=10000, interceptors=[AuthTokenInjector(StaticTokenProvider(jwt))]
+        )
+        launch_req = controller_pb2.Controller.LaunchJobRequest(
+            name="/bob/impersonated-job",
+            entrypoint=Entrypoint.from_callable(_quick).to_proto(),
+            resources=ResourceSpec(cpu=1, memory="1g").to_proto(),
+            client_revision_date=client_revision_date(),
+        )
+        resp = client.launch_job(launch_req)
+        assert resp.job_id.startswith("/carol/"), resp.job_id
         client.close()
     finally:
         controller.close()

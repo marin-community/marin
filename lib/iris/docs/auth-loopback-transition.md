@@ -112,10 +112,29 @@ honoured **only** on trusted-loopback connections, the CLI can always send it �
 a public controller ignores it and still demands a token.
 
 Trusted-loopback identities are granted the `admin` role, preserving the
-full-control behaviour these operators had under null-auth. The declared
-username drives job ownership and audit attribution. This is a transition
-affordance, not the end state: once users have real tokens (`iris login`), drop
-`trust_loopback` and let the provider assign roles per user.
+full-control behaviour these operators had under null-auth.
+
+### Principal vs. acting owner
+
+Two identities are in play and the controller keeps them separate:
+
+- **Principal** — who you are, from the verified identity. Over loopback this is
+  the `X-Iris-User` value (the local `$USER`); it is what `GetCurrentUser`
+  returns and what audit attributes the connection to.
+- **Acting owner** — the user a submitted job is owned by, taken from the job
+  name's leading segment (`/<owner>/<job>`).
+
+`LaunchJob` reconciles the two by role (`controller/service.py`):
+
+- A **non-admin** (token) caller may only act as themselves: the owner segment is
+  overwritten with the principal, so a token user cannot submit `/someone-else/job`.
+- An **admin** — including every trusted-loopback caller — may submit on behalf of
+  any user, so the requested owner segment stands. This reproduces the null-auth
+  behaviour SSH users rely on (the name is authoritative); the CLI defaults the
+  segment to `$USER`, so ordinary submissions are still attributed to the caller.
+
+This is a transition affordance, not the end state: once users have real tokens
+(`iris login`), drop `trust_loopback` and let the provider assign roles per user.
 
 ## Operator workflow
 
@@ -163,5 +182,7 @@ auth {
 - `lib/iris/src/iris/cluster/controller/dashboard.py` — `_DashboardAuthInterceptor`
   and `_enforce_http_auth()` pass the transport peer + headers into the shared
   resolver.
+- `lib/iris/src/iris/cluster/controller/service.py` — `LaunchJob` reconciles the
+  principal against the requested owner segment (admins act-as; non-admins pinned).
 - `lib/iris/src/iris/cli/main.py` — client attaches `X-Iris-User` when no token
   provider is configured.
