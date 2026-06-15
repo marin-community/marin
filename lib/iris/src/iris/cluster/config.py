@@ -462,8 +462,9 @@ def _deep_merge_defaults(target: config_pb2.DefaultsConfig, source: config_pb2.D
     # task_env is a top-level map on DefaultsConfig
     for key, value in source.task_env.items():
         target.task_env[key] = value
-    # inject_env is a repeated string; replace wholesale when the user set it so
-    # an explicit (possibly empty) list overrides the default rather than appending.
+    # inject_env is a repeated string; replace wholesale when the user provides a
+    # non-empty list so it overrides the default rather than appending. (proto3
+    # repeated has no presence, so an empty list cannot clear an inherited default.)
     if source.inject_env:
         del target.inject_env[:]
         target.inject_env.extend(source.inject_env)

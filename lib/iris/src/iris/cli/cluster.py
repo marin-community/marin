@@ -44,6 +44,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 from iris.cluster.controller.dashboard import ProxyControllerDashboard
 from iris.cluster.controller.main import run_controller_serve
 from iris.cluster.dashboard_common import VUE_DIST_DIR
+from iris.cluster.inject_env import with_injected_task_env
 from iris.rpc import config_pb2, controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
@@ -561,8 +562,10 @@ def cluster_create_slice(ctx, scale_group_name: str):
     slice_config = prepare_slice_config(sg_config.slice_template, sg_config, label_prefix)
     slice_config.labels[labels.iris_manual] = "true"
 
+    # Fold operator-injected env (defaults.inject_env) into task_env so manually
+    # created slices match autoscaler-provisioned workers.
     base_worker_config = config_pb2.WorkerConfig()
-    base_worker_config.CopyFrom(config.defaults.worker)
+    base_worker_config.CopyFrom(with_injected_task_env(config).defaults.worker)
     if not base_worker_config.controller_address:
         base_worker_config.controller_address = worker_controller_address
     base_worker_config.platform.CopyFrom(config.platform)
@@ -1096,8 +1099,10 @@ def worker_restart(
     if not worker_controller_address:
         worker_controller_address = bundle.controller.discover_controller(config.controller)
 
+    # Fold operator-injected env (defaults.inject_env) into task_env so restarted
+    # workers match autoscaler-provisioned ones.
     base_worker_config = config_pb2.WorkerConfig()
-    base_worker_config.CopyFrom(config.defaults.worker)
+    base_worker_config.CopyFrom(with_injected_task_env(config).defaults.worker)
     if not base_worker_config.controller_address:
         base_worker_config.controller_address = worker_controller_address
     base_worker_config.platform.CopyFrom(config.platform)
