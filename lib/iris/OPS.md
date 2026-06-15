@@ -27,32 +27,7 @@ Workflow: dry-run locally (`iris cluster controller serve --dry-run`) -> capture
 
 If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
 
-### Updating the Controller Image
-
-The prod (marin) controller pins `image: ghcr.io/marin-community/iris-controller:latest`
-(`lib/iris/config/marin.yaml:33`). That image is rebuilt and pushed to GHCR by the
-`.github/workflows/ops-docker-images.yaml` workflow — on manual `workflow_dispatch`, or
-weekly (Sundays 02:00 UTC). Each build tags `:latest`, `:<date>` (UTC `YYYYMMDD`), and
-`:<git-short-hash>`.
-
-The dev controller is auto-restarted daily at 05:00 UTC by
-`.github/workflows/iris-dev-restart.yaml`. **Prod/marin has no scheduled restart.**
-
-**The trap: merging a controller fix does NOT deploy it.** Two things must both happen:
-
-1. **Rebuild `:latest`.** Trigger `ops-docker-images` via `workflow_dispatch` — don't wait
-   for the Sunday build. Until this runs, `:latest` still points at the old code.
-2. **Restart the controller** so it re-pulls `:latest`: `iris cluster controller restart`
-   (controller-only — see above). A restart against a stale `:latest` deploys nothing new.
-
-Doing only (2) is the failure mode that cost ~5 red-canary days
-(`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
-
-**Verify the running controller matches HEAD.** The image carries a git-hash tag (built
-from the `IRIS_GIT_HASH` build arg), so confirm the controller is running the
-`:<git-short-hash>` for the commit you expect — not just that it restarted. For the
-GHCR → Artifact Registry pull-through mechanics (prod VMs pull from an AR remote cache,
-not GHCR directly), see `lib/iris/docs/image-push.md`.
+**Shipping a code change ≠ restarting.** marin pins `iris-controller:latest` (`config/marin.yaml:33`), so a restart only re-pulls whatever `:latest` currently is. To deploy a merged controller fix you must first rebuild the image (`gh workflow run "Ops - Docker Images"`, or wait for the Sunday build) and *then* restart — restarting against a stale `:latest` ships nothing. Confirm the controller is running the `:<git-short-hash>` you expect, not just that it came back up. Skipping the rebuild cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
 
 ## Job Management
 
@@ -316,6 +291,7 @@ cluster configs.
 | `marin-canary-ferry-coreweave.yaml` | Daily 10AM UTC | GPU canary on CW — shares `iris-ci` controller + H100 nodepool with `iris-smoke-coreweave.yaml` (concurrency group `iris-coreweave-ci-shared`) |
 | `iris-smoke-gcp.yaml` | PRs touching `lib/iris/` | GCP smoke test (ephemeral cluster) |
 | `iris-smoke-coreweave.yaml` | PRs touching `lib/iris/` | CW integration tests (warm cluster) |
+| `ops-docker-images.yaml` | `workflow_dispatch` / Sun 02:00 UTC | Rebuilds + pushes `iris-{controller,worker,task}:latest` to GHCR (see Controller Restart) |
 
 ```bash
 # Trigger manually
