@@ -20,6 +20,7 @@ import logging
 import os
 
 from rigging.filesystem import url_to_fs
+from rigging.log_setup import configure_logging
 
 from experiments.ferries.canary_ferry import CANARY_OUTPUT_SUBDIR
 
@@ -71,7 +72,7 @@ def main() -> None:
     if not args.prefix:
         raise ValueError("No prefix given; set --prefix or MARIN_PREFIX.")
 
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    configure_logging(level=logging.INFO)
 
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=args.max_age_days)
     fs, path = url_to_fs(args.prefix)
