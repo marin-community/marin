@@ -1078,3 +1078,31 @@
 - Result: dry run matched the intended one-axis diagnostic. Submit created parent `/dlwh/iris-run-job-20260615-061003`.
 - Interpretation: the run is not at a decision point yet. This launch intentionally brackets memory rather than seeking an MFU/profile result.
 - Next action: babysit for child creation, hparams confirmation (`seq_len=3072`, `train_batch_size=256`, `num_layers=26`, `remat_mode=recompute_all`), terminal success, first loss/MFU if it appears, or allocator failure and requested size. Subagent `Lorentz` (`019ec9e7-0ad5-70b1-8911-01f190c46ccf`) owns read-only monitoring, with heartbeat `poll-grug-d2560-may032-babysitter`.
+
+### 2026-06-14 23:24 PDT - MAY-032 killed before decision point
+- Hypothesis: if the MAY-030 allocation scales roughly with sequence length, `seq_len=3072` should either fit or fail with an allocator size between the seq2048 success and seq4096 72.03 GiB failure.
+- Command:
+  - Final state: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job list --json --prefix /dlwh/iris-run-job-20260615-061003`
+  - Log scan: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260615-061003 --since-seconds 7200 --max-lines 600000 | rg -v '"event": "hparams"|xla_bridge Unable to initialize backend|pip install jax\\[k8s' | rg -i -m 400 -C 2 'Dispatching grug|Grug compact mesh|max_seq_len|train_batch_size|num_layers|remat_mode|expert_axis_size|model_axis_size|Fused cross-entropy|Progress on:train|First train step completed|"event": "log"|train/loss|throughput/mfu|RESOURCE_EXHAUSTED|Out of memory|trying to allocate|rounded to|Fatal error|Traceback|JaxRuntimeError|Initialize clique|rendezvous|failed|Exception|succeeded|Terminated by user'`
+- Config:
+  - Parent: `/dlwh/iris-run-job-20260615-061003`
+  - Child: `/dlwh/iris-run-job-20260615-061003/grug-train-gm2560-may-032s3072-b256-n16-cw-20260615-0550`
+  - Source checkpoint: `d9d653511`
+  - Same as MAY-031 except `MAY_SEQ_LEN=3072`: full May d2560/L26, batch 256, synthetic data, checkpoints disabled, no profiler, 16 H100 nodes, `expert_axis=8`, `model_axis=1`, `replica_axis=1`, ring MoE, FA4/CuTe attention, XLA CE, replicated input/output embeddings, `live_param_mode=compute_with_master`, `remat_mode=recompute_all`.
+- Result: parent and child are terminal `JOB_STATE_KILLED` with `pending_reason="Terminated by user"` and `error="Terminated by user"`. The child had `task_count=16`, `completed_count=16`, `failure_count=0`, `preemption_count=0`, and `task_state_counts={"killed": 16}`. Logs confirmed the dispatcher launched the intended run and workers reached mesh setup (`replica_dcn=1`, `data=16`, `expert=8`, `model=1`, `batch_shards=128`). No first-step loss/MFU, profile artifact, `RESOURCE_EXHAUSTED`, allocator request, clique/rendezvous failure, traceback, or task failure appeared before termination.
+- Interpretation: MAY-032 is not evidence for or against seq3072 memory. Given the updated direction to reduce batch size rather than add train-time microbatch accumulation, the next actionable path is a longer full-sequence B128 run that emits MFU and a profile. B128 already fit once, but the short JSON gate did not run long enough to produce standard throughput callback rows.
+- Next action: launch a B128/seq4096 profile-bearing run on the fitting topology, using enough steps for post-compile throughput logging and profiler capture.
+
+### 2026-06-14 23:25 PDT - MAY-033 B128 profile/MFU run launched
+- Hypothesis: reducing the full-sequence batch from 256 to 128 is the simplest fitting path after the B256 sequence/depth memory localization. A longer B128 run should produce W&B throughput rows and a profiler artifact, unlike the short JSON B128 gate.
+- Command:
+  - Dry run: `experiments/grug/moe/run_cw_may_d2560.sh --run-id GM2560-MAY-033B128-PROFILE-N16-cw-20260615-0625 --nodes 16 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 1 --expert-axis 8 --replica-axis 1 --batch 128 --seq-len 4096 --steps 20 --profiler-start 6 --profiler-steps 4 --tracker wandb --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --ce-implementation xla --moe-implementation ring --input-embed-sharding replicated --output-proj-sharding replicated --live-param-mode compute_with_master --remat save_moe`
+  - Submit: `experiments/grug/moe/run_cw_may_d2560.sh --run-id GM2560-MAY-033B128-PROFILE-N16-cw-20260615-0625 --nodes 16 --data synthetic --checkpoints none --worker-cpu 8 --model-axis 1 --expert-axis 8 --replica-axis 1 --batch 128 --seq-len 4096 --steps 20 --profiler-start 6 --profiler-steps 4 --tracker wandb --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --ce-implementation xla --moe-implementation ring --input-embed-sharding replicated --output-proj-sharding replicated --live-param-mode compute_with_master --remat save_moe --submit`
+- Config:
+  - Parent: `/dlwh/iris-run-job-20260615-062547`
+  - Expected child: `/dlwh/iris-run-job-20260615-062547/grug-train-GM2560-MAY-033B128-PROFILE-N16-cw-20260615-0625`
+  - Source checkpoint: `d9d653511` plus local task-image/CoreWeave wrapper edits in this worktree.
+  - Full May d2560/L26, seq_len 4096, batch 128, synthetic data, W&B tracker, profiler start step 6 for 4 steps, checkpoints disabled, 16 H100 nodes, `expert_axis=8`, `model_axis=1`, `replica_axis=1`, ring MoE, FA4/CuTe attention, XLA CE, replicated input/output embeddings, `live_param_mode=compute_with_master`, `remat_mode=save_moe`.
+- Result: dry run matched the intended reduced-batch profile/MFU run. Submit created parent `/dlwh/iris-run-job-20260615-062547`.
+- Interpretation: this run intentionally trades off the original B256 global batch to get the full seq4096/L26 shape executing and profiled quickly, per the updated direction to reduce batch rather than add train-time microbatching.
+- Next action: babysit for child creation, W&B run/link, hparams confirmation, first post-compile throughput/MFU rows, profiler artifact, terminal success, or OOM/runtime failure. Subagent `Chandrasekhar` (`019ec9f5-9e21-71b3-b75a-c53609e795b0`) owns babysitting, and heartbeat `poll-grug-d2560-may032-babysitter` now points at MAY-033.
