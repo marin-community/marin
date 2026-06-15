@@ -198,8 +198,14 @@ RUNS = [
 DATA_SECTION_EXTRA_KEYS = ("experiment_budget", "target_budget")
 
 
-def build_data_config() -> LmDataConfig:
-    """Anchor component verbatim from the p33m67 data section + 3 decon caches."""
+def build_data_config(decon_cache_root: str = DECON_CACHE_ROOT) -> LmDataConfig:
+    """Anchor component verbatim from the p33m67 data section + the decon caches.
+
+    ``decon_cache_root`` selects which decon-cache family the nine ``decon_j0XX``
+    components read from — the canonical union sets (default) or the 4plus-only
+    sets at ``nemotron_math_val_decon_4plus``. The anchor (original val) is
+    identical regardless, so anchor-vs-decon deltas stay directly comparable.
+    """
     section = json.loads(DATA_SECTION.read_text())
     for key in DATA_SECTION_EXTRA_KEYS:
         section.pop(key, None)
@@ -212,7 +218,7 @@ def build_data_config() -> LmDataConfig:
     for tag in DECON_TAGS:
         name = f"decon_{tag}"
         section["components"][name] = {
-            "cache_dir": f"{DECON_CACHE_ROOT}/{tag}",
+            "cache_dir": f"{decon_cache_root}/{tag}",
             "format": {"text_key": "text"},
             "pack": None,
             "source": None,
@@ -292,6 +298,16 @@ def main() -> None:
         default=EVAL_OUT_ROOT,
         help="Root for the per-run JSON tracker output; the 9-cutoff sweep writes to a distinct root.",
     )
+    parser.add_argument(
+        "--decon-cache-root",
+        default=DECON_CACHE_ROOT,
+        help="Decon-cache family the decon_j0XX components read from (union default, or the 4plus-only sets).",
+    )
+    parser.add_argument(
+        "--wandb-tag",
+        default="decon_val_eval",
+        help="W&B tag + name discriminator so a variant eval does not overwrite the union run.",
+    )
     parser.add_argument("--force", action="store_true", help="Re-run even if the output metrics file exists.")
     args = parser.parse_args()
 
@@ -302,14 +318,15 @@ def main() -> None:
     model = load_model_config(args.run, step)
     assert model.max_seq_len >= SEQ_LEN, f"model max_seq_len {model.max_seq_len} < {SEQ_LEN}"
 
+    wandb_name = f"decon-eval-{args.run}" if args.wandb_tag == "decon_val_eval" else f"{args.wandb_tag}-{args.run}"
     config = EvalLmConfig(
         hf_checkpoint=RepoRef.from_string(f"{CHECKPOINT_ROOT}/{args.run}/hf/step-{step}"),
         model=model,
-        data=build_data_config(),
+        data=build_data_config(args.decon_cache_root),
         max_eval_length=SEQ_LEN,
         trainer=TrainerConfig(
             tracker=(
-                WandbConfig(project="marin", tags=["decon_val_eval", args.run], name=f"decon-eval-{args.run}"),
+                WandbConfig(project="marin", tags=[args.wandb_tag, args.run], name=wandb_name),
                 JsonFileTrackerConfig(output_path=out_path),
             ),
             # Match training-time eval: params f32, compute bf16.

@@ -63,21 +63,21 @@ RUNS = [
 ]
 
 
-def latest_eval_results(run: str) -> dict:
+def latest_eval_results(run: str, eval_root: str) -> dict:
     """Read the newest-step eval_results.json for a run."""
-    candidates = fsspec_glob(f"{EVAL_OUT_ROOT}/{run}/step-*/metrics.jsonl/eval_results.json")
+    candidates = fsspec_glob(f"{eval_root}/{run}/step-*/metrics.jsonl/eval_results.json")
     if not candidates:
-        raise FileNotFoundError(f"no eval_results.json under {EVAL_OUT_ROOT}/{run}/")
+        raise FileNotFoundError(f"no eval_results.json under {eval_root}/{run}/")
     by_step = {int(m.group(1)): p for p in candidates if (m := re.search(r"step-(\d+)/", p))}
     with fsspec.open(by_step[max(by_step)]) as f:
         return json.load(f)
 
 
-def collect_losses() -> list[dict]:
+def collect_losses(eval_root: str) -> list[dict]:
     """Per-scale anchor + 9 decon losses, in budget order."""
     rows = []
     for scale, run in RUNS:
-        results = latest_eval_results(run)
+        results = latest_eval_results(run, eval_root)
         row = {"scale": scale, "run": run, "anchor": results[ANCHOR_KEY]}
         for tag in DECON_TAGS:
             row[tag] = results[f"eval/decon_{tag}/loss"]
@@ -94,7 +94,7 @@ def write_csv(rows: list[dict], path: Path) -> None:
         writer.writerows(rows)
 
 
-def make_plot(rows: list[dict], path: Path) -> None:
+def make_plot(rows: list[dict], path: Path, slice_label: str) -> None:
     fig, ax = plt.subplots(figsize=(9, 6))
     cmap = plt.get_cmap("viridis")
     anchor_x = 0.95  # park the no-filter anchor just right of the tau sweep
@@ -109,7 +109,7 @@ def make_plot(rows: list[dict], path: Path) -> None:
     ax.set_xlabel("Jaccard decontamination cutoff τ  (drop docs with max train J ≥ τ; right = more aggressive)")
     ax.set_ylabel("math val loss (nats/token)")
     ax.set_title(
-        f"Val loss vs decontamination cutoff — {SLICE}\n"
+        f"Val loss vs decontamination cutoff — {slice_label}\n"
         "(★ = original 'no-filter' val; its short-doc distribution differs from the paranoid sets)"
     )
     ax.set_xticks([*CUTOFFS, anchor_x])
@@ -126,13 +126,15 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument("--out-dir", default="plots", help="Local output directory for the PNG + CSV.")
+    parser.add_argument("--eval-root", default=EVAL_OUT_ROOT, help="GCS root of the per-run eval_results.json.")
+    parser.add_argument("--slice", dest="slice_label", default=SLICE, help="Slice label for filename + title.")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(exist_ok=True)
-    rows = collect_losses()
-    write_csv(rows, out_dir / f"decon_val_loss_vs_cutoff_{SLICE}.csv")
-    make_plot(rows, out_dir / f"decon_val_loss_vs_cutoff_{SLICE}.png")
+    rows = collect_losses(args.eval_root)
+    write_csv(rows, out_dir / f"decon_val_loss_vs_cutoff_{args.slice_label}.csv")
+    make_plot(rows, out_dir / f"decon_val_loss_vs_cutoff_{args.slice_label}.png", args.slice_label)
 
 
 if __name__ == "__main__":
