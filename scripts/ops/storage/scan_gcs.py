@@ -91,6 +91,14 @@ MAX_SCAN_SECONDS = 90 * 60
 DRAIN_TASK_THRESHOLD = 100
 DRAIN_GRACE_SECONDS = 300
 
+# Lower bound on elapsed wall-clock before the drain-based early finish is even
+# considered. Early in a run the in-flight count can briefly dip to/below
+# DRAIN_TASK_THRESHOLD before adaptive splitting fans the queue back out, so
+# without a floor we could finalize prematurely and miss large swaths of the
+# namespace. Below this threshold we never take the early exit; the no-progress
+# straggler timeout and the MAX_SCAN_SECONDS cap still apply as backstops.
+DRAIN_MIN_SCAN_SECONDS = 45 * 60
+
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -666,7 +674,11 @@ def run_distributed(
             if status["done"]:
                 break
 
-            if remaining <= DRAIN_TASK_THRESHOLD:
+            # Only consider the drain-based early finish after a minimum
+            # elapsed time, so a transient early dip in the in-flight count
+            # (before adaptive splitting fans the queue back out) can't finalize
+            # the scan prematurely.
+            if elapsed >= DRAIN_MIN_SCAN_SECONDS and remaining <= DRAIN_TASK_THRESHOLD:
                 if drained_since is None:
                     drained_since = time.monotonic()
                 elif time.monotonic() - drained_since >= DRAIN_GRACE_SECONDS:
