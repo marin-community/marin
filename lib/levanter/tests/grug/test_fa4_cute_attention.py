@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import jax
@@ -208,6 +209,14 @@ def test_cutlass_forward_metadata_spec_keeps_b_s_layout():
     input_specs, _ = _cutlass_attention_forward_specs(fake_modules, vector_elems=8)
 
     assert input_specs[3] == {"mode": (0, 1), "static": True}
+
+
+def test_segmented_backward_uses_cutlass_atomic_add_wrapper():
+    kernel_source = Path(fa4_cute.__file__).with_name("_fa4_cute_segmented_bwd.py")
+    source = kernel_source.read_text()
+
+    assert "utils.atomic_add_fp32" not in source
+    assert source.count("cute.arch.atomic_add(") == 3
 
 
 @pytest.mark.parametrize(("q_heads", "kv_heads"), [(4, 1), (2, 2)])

@@ -1282,7 +1282,7 @@ class SegmentedFlashAttentionBackwardSm80:
             tdQgdQaccum_atomic = gmem_copy_params.tdQgdQaccum[None, None, m_block]
             assert cute.size(acc_dQ_atomic) == cute.size(tdQgdQaccum_atomic)
             for i in cutlass.range(cute.size(acc_dQ_atomic), unroll_full=True):
-                utils.atomic_add_fp32(acc_dQ_atomic[i], utils.elem_pointer(tdQgdQaccum_atomic, i))
+                cute.arch.atomic_add(utils.elem_pointer(tdQgdQaccum_atomic, i), Float32(acc_dQ_atomic[i]))
             # if cute.arch.thread_idx()[0] == 64 and cute.arch.block_idx()[0] == bidx: cute.print_tensor(acc_dQ)
 
         # If num_stages_Q == 1, we want to do Mma_dK first so we can start loading Q for the next iteration
@@ -1440,9 +1440,9 @@ class SegmentedFlashAttentionBackwardSm80:
             assert cute.size(acc_dV_atomic) == cute.size(tdVgdVaccum)
             assert cute.size(acc_dK_atomic) == cute.size(tdKgdKaccum)
             for i in cutlass.range(cute.size(acc_dV_atomic), unroll_full=True):
-                utils.atomic_add_fp32(acc_dV_atomic[i], utils.elem_pointer(tdVgdVaccum, i))
+                cute.arch.atomic_add(utils.elem_pointer(tdVgdVaccum, i), Float32(acc_dV_atomic[i]))
             for i in cutlass.range(cute.size(acc_dK_atomic), unroll_full=True):
-                utils.atomic_add_fp32(acc_dK_atomic[i], utils.elem_pointer(tdKgdKaccum, i))
+                cute.arch.atomic_add(utils.elem_pointer(tdKgdKaccum, i), Float32(acc_dK_atomic[i]))
 
     @cute.jit
     def advance_pipeline(self, pipeline_index, num_stages: cutlass.Constexpr):
