@@ -28,7 +28,7 @@ from iris.cluster.backends.k8s.service import CloudK8sService, K8sService
 from iris.cluster.backends.k8s.types import K8sResource, parse_k8s_timestamp
 from iris.cluster.backends.types import InfraError, Labels, local_queue_name
 from iris.cluster.config_serde import config_to_dict
-from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env
+from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -320,7 +320,7 @@ class K8sControllerProvider:
             image=config.controller.image,
             port=port,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
-            task_env_secret=bool(default_env),
+            task_env_secret=projects_task_env_secret(config),
             fresh=fresh,
         )
         if fresh:

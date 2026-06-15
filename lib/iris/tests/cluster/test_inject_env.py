@@ -10,6 +10,7 @@ from iris.cluster.config import load_config
 from iris.cluster.inject_env import (
     collect_inject_env,
     merge_injected_into_task_env,
+    projects_task_env_secret,
     with_injected_task_env,
 )
 from iris.rpc import config_pb2
@@ -61,6 +62,21 @@ def test_with_injected_task_env_copies_and_folds(monkeypatch):
     assert merged is not config  # original is left untouched
     assert "WANDB_API_KEY" not in config.defaults.task_env
     assert merged.defaults.task_env["WANDB_API_KEY"] == "from-shell"
+
+
+def test_projects_task_env_secret_predicate():
+    s3 = config_pb2.IrisClusterConfig()
+    s3.storage.remote_state_dir = "s3://bucket/state"
+    assert projects_task_env_secret(s3)
+
+    injected = config_pb2.IrisClusterConfig()
+    injected.storage.remote_state_dir = "gs://bucket/state"
+    injected.defaults.inject_env.append("WANDB_API_KEY")
+    assert projects_task_env_secret(injected)
+
+    neither = config_pb2.IrisClusterConfig()
+    neither.storage.remote_state_dir = "gs://bucket/state"
+    assert not projects_task_env_secret(neither)
 
 
 def test_inject_env_round_trips_through_load_config(tmp_path: Path):

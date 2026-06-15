@@ -30,7 +30,7 @@ from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFacto
 from iris.cluster.backends.types import local_queue_name
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.backend import TaskBackend
-from iris.cluster.inject_env import TASK_ENV_SECRET_NAME
+from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import parse_memory_string
 from iris.rpc import config_pb2, job_pb2
@@ -1170,9 +1170,9 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> TaskBackend:
         local_queue = local_queue_name(label_prefix) if kp.kueue.cluster_queue else ""
         # The cluster default env (S3 storage auth + operator-injected vars) is
         # projected into task pods via envFrom on the iris-task-env Secret the
-        # launcher creates. Present when s3 storage is used or inject_env is set.
-        s3_enabled = cluster_config.storage.remote_state_dir.startswith("s3://")
-        env_secret_name = TASK_ENV_SECRET_NAME if (s3_enabled or cluster_config.defaults.inject_env) else ""
+        # launcher creates. projects_task_env_secret is the shared predicate the
+        # controller uses to decide whether the Secret exists.
+        env_secret_name = TASK_ENV_SECRET_NAME if projects_task_env_secret(cluster_config) else ""
         return K8sTaskProvider(
             kubectl=CloudK8sService(namespace=namespace, kubeconfig_path=kp.kubeconfig or None),
             namespace=namespace,

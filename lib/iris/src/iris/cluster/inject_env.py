@@ -16,9 +16,21 @@ from collections.abc import Sequence
 
 from iris.rpc import config_pb2
 
-# Secret holding operator-injected env (defaults.inject_env), projected into task
-# pods (and the controller) via envFrom on Kubernetes.
+# Secret holding the cluster default env (S3 storage auth + operator-injected
+# vars), projected into task pods and the controller via envFrom on Kubernetes.
 TASK_ENV_SECRET_NAME = "iris-task-env"
+
+
+def projects_task_env_secret(config: config_pb2.IrisClusterConfig) -> bool:
+    """Whether the cluster populates the iris-task-env Secret.
+
+    True when S3 storage auth must be injected or operator env is declared. The
+    K8s controller creates the Secret exactly when this holds, and task pods /
+    the controller add the `envFrom` reference only then — so both decisions
+    share this single predicate rather than each re-deriving it (a drift would
+    leave envFrom dereferencing a missing Secret).
+    """
+    return config.storage.remote_state_dir.startswith("s3://") or bool(config.defaults.inject_env)
 
 
 def collect_inject_env(names: Sequence[str]) -> dict[str, str]:
