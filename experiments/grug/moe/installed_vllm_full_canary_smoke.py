@@ -19,10 +19,16 @@ from typing import Any
 import numpy as np
 
 _PROMPT_IDS = [1, 42, 128, 2048, 17, 3072, 5, 63]
+_DEFAULT_MODEL_SIZE = "full-canary"
+_MODEL_SIZE_TO_PARITY_CONFIG = {
+    "full-canary": "canary",
+    "small-diagnostic": "small-diagnostic",
+}
 _REFERENCE_JSON_NAME = "installed_vllm_reference.json"
 _DEFAULT_MAX_LOGPROB_DELTA = 5.0
 _DEFAULT_ROUTING_MARGIN_TOLERANCE = 1e-2
 _ROUTING_MISMATCH_PRINT_LIMIT = 20
+_ROUTING_FULL_DETAILS_TOKEN_LAYER_LIMIT = 64
 
 
 def _direct_url(package: str) -> str:
@@ -97,7 +103,7 @@ def _server_base_url(server_url: str) -> str:
     return server_url.removesuffix("/v1")
 
 
-def export_artifact(output_dir: Path, *, max_shard_size: int, generation_tokens: int) -> None:
+def export_artifact(output_dir: Path, *, model_size: str, max_shard_size: int, generation_tokens: int) -> None:
     if os.environ.get("PYTHONPATH"):
         raise SystemExit(f"PYTHONPATH unexpectedly set: {os.environ['PYTHONPATH']}")
 
@@ -105,10 +111,13 @@ def export_artifact(output_dir: Path, *, max_shard_size: int, generation_tokens:
 
     from experiments.grug.moe import vllm_tpu_parity as parity
 
+    config_name = _MODEL_SIZE_TO_PARITY_CONFIG[model_size]
     print("artifact_generation_process=started")
+    print("artifact_model_size=" + model_size)
+    print("artifact_parity_config=" + config_name)
     parity.check_realistic_training_state_roundtrip(
         tpu_grugmoe,
-        config_name="canary",
+        config_name=config_name,
         output_dir=output_dir,
         max_shard_size=max_shard_size,
         generation_tokens=generation_tokens,
@@ -283,6 +292,9 @@ def _compare_routing(
 
     top_k = int(expected.shape[2])
     token_layers = int(expected.shape[0] * expected.shape[1])
+    mismatch_print_limit = (
+        token_layers if token_layers <= _ROUTING_FULL_DETAILS_TOKEN_LAYER_LIMIT else _ROUTING_MISMATCH_PRINT_LIMIT
+    )
     ordered_matches = np.all(actual == expected, axis=-1)
     top1_matches = actual[..., 0] == expected[..., 0]
     overlap_counts = np.zeros(expected.shape[:2], dtype=np.int64)
@@ -309,11 +321,11 @@ def _compare_routing(
                     "router_margin": margin,
                     "top1_match": bool(top1_matches[token_idx, layer_idx]),
                 }
-                if len(mismatch_locations) < _ROUTING_MISMATCH_PRINT_LIMIT:
+                if len(mismatch_locations) < mismatch_print_limit:
                     mismatch_locations.append(item)
                 if overlap < top_k and margin > routing_margin_tolerance:
                     suspicious_mismatch_count += 1
-                    if len(suspicious_locations) < _ROUTING_MISMATCH_PRINT_LIMIT:
+                    if len(suspicious_locations) < mismatch_print_limit:
                         suspicious_locations.append(item)
                 elif overlap < top_k:
                     low_margin_boundary_mismatches += 1
@@ -333,6 +345,7 @@ def _compare_routing(
         "low_margin_boundary_mismatch_count": int(low_margin_boundary_mismatches),
         "suspicious_mismatch_count": int(suspicious_mismatch_count),
         "routing_margin_tolerance": float(routing_margin_tolerance),
+        "routing_mismatch_print_limit": int(mismatch_print_limit),
     }
     print("routing_summary=" + json.dumps(summary, sort_keys=True))
     print("routing_mismatch_locations=" + json.dumps(mismatch_locations, sort_keys=True))
@@ -364,6 +377,25 @@ def score_artifact(
 
     with reference_path.open() as f:
         reference = json.load(f)
+    model_config = reference.get("model_config")
+    if isinstance(model_config, dict):
+        shape_keys = (
+            "vocab_size",
+            "hidden_dim",
+            "intermediate_dim",
+            "shared_expert_intermediate_dim",
+            "num_layers",
+            "num_heads",
+            "num_kv_heads",
+            "head_dim",
+            "num_experts",
+            "num_experts_per_token",
+            "max_seq_len",
+            "sliding_window",
+        )
+        shape = {key: model_config.get(key) for key in shape_keys}
+        print("score_model_shape=" + json.dumps(shape, sort_keys=True))
+        print("score_model_config=" + json.dumps(model_config, sort_keys=True))
     score_token_ids = [int(token_id) for token_id in reference["score_token_ids"]]
     vocab_size = _artifact_vocab_size(artifact_dir)
     max_model_len = max(16, len(score_token_ids) + 1)
@@ -418,6 +450,7 @@ def score_artifact(
 def serve_artifact(
     artifact_dir: Path,
     *,
+    model_size: str,
     generation_tokens: int,
     server_port: int,
     server_timeout_seconds: int,
@@ -431,12 +464,13 @@ def serve_artifact(
     from marin.inference.vllm_server import VllmEnvironment
 
     print("serve_artifact_dir=" + str(artifact_dir))
+    print("serve_model_size=" + model_size)
     for package in ("vllm", "tpu-inference"):
         print(f"serve_{package}_direct_url=" + _direct_url(package))
     print("serve_grugmoe_spec=" + repr(importlib.util.find_spec("tpu_inference.models.jax.grugmoe")))
 
     model = ModelConfig(
-        name="grugmoe-full-canary",
+        name=f"grugmoe-{model_size}",
         path=str(artifact_dir),
         engine_kwargs={
             "max_model_len": 16,
@@ -500,6 +534,7 @@ def _run_phase_subprocess(
     phase: str,
     *,
     output_dir: Path,
+    model_size: str,
     artifact_dir: Path | None = None,
     reference_path: Path | None = None,
     max_shard_size: int,
@@ -517,6 +552,8 @@ def _run_phase_subprocess(
         phase,
         "--output-dir",
         str(output_dir),
+        "--model-size",
+        model_size,
         "--max-shard-size",
         str(max_shard_size),
         "--generation-tokens",
@@ -540,6 +577,7 @@ def _run_phase_subprocess(
 def run(
     output_dir: Path,
     *,
+    model_size: str,
     max_shard_size: int,
     generation_tokens: int,
     server_port: int,
@@ -548,12 +586,14 @@ def run(
     routing_margin_tolerance: float,
 ) -> None:
     _print_runtime_header()
+    print("installed_model_size=" + model_size)
 
     if output_dir.exists():
         shutil.rmtree(output_dir)
     _run_phase_subprocess(
         "export",
         output_dir=output_dir,
+        model_size=model_size,
         max_shard_size=max_shard_size,
         generation_tokens=generation_tokens,
         server_port=server_port,
@@ -564,6 +604,8 @@ def run(
 
     artifact_dir = _artifact_dir(output_dir)
     reference_path = _reference_path(output_dir)
+    print("installed_artifact_dir=" + str(artifact_dir))
+    print("installed_reference_json=" + str(reference_path))
     print("full_canary_artifact_dir=" + str(artifact_dir))
     print("full_canary_reference_json=" + str(reference_path))
     print("full_canary_artifact_bytes=" + str(_directory_size_bytes(artifact_dir)))
@@ -572,6 +614,7 @@ def run(
     _run_phase_subprocess(
         "serve",
         output_dir=output_dir,
+        model_size=model_size,
         artifact_dir=artifact_dir,
         max_shard_size=max_shard_size,
         generation_tokens=generation_tokens,
@@ -583,6 +626,7 @@ def run(
     _run_phase_subprocess(
         "score",
         output_dir=output_dir,
+        model_size=model_size,
         artifact_dir=artifact_dir,
         reference_path=reference_path,
         max_shard_size=max_shard_size,
@@ -601,6 +645,12 @@ def main() -> None:
         "--output-dir",
         type=Path,
         default=Path("/tmp/grugmoe-installed-vllm-full-canary"),
+    )
+    parser.add_argument(
+        "--model-size",
+        choices=tuple(_MODEL_SIZE_TO_PARITY_CONFIG),
+        default=_DEFAULT_MODEL_SIZE,
+        help="Installed-path validation profile to export, serve, and score.",
     )
     parser.add_argument(
         "--artifact-dir",
@@ -626,6 +676,7 @@ def main() -> None:
         _print_runtime_header()
         export_artifact(
             args.output_dir,
+            model_size=args.model_size,
             max_shard_size=args.max_shard_size,
             generation_tokens=args.generation_tokens,
         )
@@ -641,6 +692,7 @@ def main() -> None:
         _print_runtime_header()
         serve_artifact(
             args.artifact_dir or _artifact_dir(args.output_dir),
+            model_size=args.model_size,
             generation_tokens=args.generation_tokens,
             server_port=args.server_port,
             server_timeout_seconds=args.server_timeout_seconds,
@@ -648,6 +700,7 @@ def main() -> None:
     else:
         run(
             args.output_dir,
+            model_size=args.model_size,
             max_shard_size=args.max_shard_size,
             generation_tokens=args.generation_tokens,
             server_port=args.server_port,

@@ -232,6 +232,26 @@ def _scaled_realistic_cfg() -> GrugModelConfig:
     )
 
 
+def _small_diagnostic_cfg() -> GrugModelConfig:
+    return GrugModelConfig(
+        vocab_size=4096,
+        hidden_dim=512,
+        intermediate_dim=1024,
+        shared_expert_intermediate_dim=512,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=1,
+        head_dim=128,
+        max_seq_len=16,
+        sliding_window=8,
+        initializer_std=0.5 / 16,
+        qk_mult=1.3,
+        moe_implementation="scatter",
+    )
+
+
 def _canary_cfg_optimizer_steps() -> tuple[GrugModelConfig, Any, int]:
     # Import launch lazily so simple module import/py_compile does not construct
     # the full executor step and data mixture unless the canary validation runs.
@@ -594,6 +614,7 @@ def _write_installed_vllm_reference(
         )
 
     payload = {
+        "model_config": json.loads(json.dumps(dataclasses.asdict(lev_model.config), default=str)),
         "prompt_ids": np.asarray(prompt_ids).tolist()[0],
         "continuation_ids": [int(token_id) for token_id in continuation_ids],
         "score_token_ids": np.asarray(score_token_ids).tolist()[0],
@@ -842,6 +863,8 @@ def _realistic_cfg_optimizer_steps(config_name: str) -> tuple[GrugModelConfig, A
         return canary_cfg, optimizer_config, steps, "GRUG_MOE_TRIAL_MODEL"
     if config_name == "scaled":
         return _scaled_realistic_cfg(), optimizer_config, steps, "scaled production-structured fallback"
+    if config_name == "small-diagnostic":
+        return _small_diagnostic_cfg(), optimizer_config, steps, "small diagnostic GrugMoE"
     raise ValueError(f"unknown realistic config {config_name!r}")
 
 
@@ -1063,7 +1086,8 @@ def check_realistic_training_state_roundtrip(
 ) -> None:
     attention_metadata_mod = importlib.import_module("tpu_inference.layers.common.attention_metadata")
     cfg, optimizer_config, num_train_steps, config_source = _realistic_cfg_optimizer_steps(config_name)
-    _assert_production_relevant_structure(cfg)
+    if config_name != "small-diagnostic":
+        _assert_production_relevant_structure(cfg)
     token_ids = _realistic_prompt_ids(cfg)
     if generation_tokens <= 0:
         raise ValueError(f"generation_tokens must be positive, got {generation_tokens}")
@@ -1257,11 +1281,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--realistic-config",
-        choices=("canary", "scaled"),
+        choices=("canary", "scaled", "small-diagnostic"),
         default="canary",
         help=(
-            "Use the full GRUG_MOE_TRIAL_MODEL canary config, or a smaller config "
-            "that preserves its MoE/GQA structure."
+            "Use the full GRUG_MOE_TRIAL_MODEL canary config, a smaller config "
+            "that preserves its production MoE/GQA structure, or a compact diagnostic config."
         ),
     )
     parser.add_argument(
