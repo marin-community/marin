@@ -881,6 +881,9 @@ def test_fused_cross_entropy_pallas_gpu_requires_gpu():
 
 
 def test_pallas_gpu_backward_streaming_from_lse_matches_reference_gradients():
+    if jax.default_backend() == "tpu":
+        pytest.skip("pallas_gpu custom backward helper is covered by CPU/GPU precision paths")
+
     key = jax.random.PRNGKey(17)
     key_x, key_w, key_y, key_loss, key_lse = jax.random.split(key, 5)
     x = jax.random.normal(key_x, (5, 3), dtype=jnp.float32)
