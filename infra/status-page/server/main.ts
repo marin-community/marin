@@ -22,6 +22,7 @@ import { IrisPingHistory, ServiceHealthHistory, WorkerHistory } from "./history.
 import {
   FERRY_GROUPS,
   fetchTierStatus,
+  type FerryGroupStatus,
   type FerryTierStatus,
 } from "./sources/githubActions.js";
 import { fetchBuildsOnMain, type BuildsResponse } from "./sources/githubCommits.js";
@@ -137,7 +138,7 @@ const app = new Hono();
 app.get("/api/health", (c) => c.json({ status: "ok" }));
 
 app.get("/api/ferry", async (c) => {
-  const groups = await Promise.all(
+  const groups: FerryGroupStatus[] = await Promise.all(
     FERRY_GROUPS.map(async (group) => ({
       name: group.name,
       tiers: await Promise.all(
