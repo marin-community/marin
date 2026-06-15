@@ -39,6 +39,7 @@ import importlib
 import json
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar
@@ -300,13 +301,30 @@ def _route_jax(
     *,
     num_experts_per_token: int,
 ) -> tuple[jax.Array, jax.Array]:
+    selected, combine_weights, _router_margin = _route_jax_with_margin(
+        x,
+        router,
+        router_bias,
+        num_experts_per_token=num_experts_per_token,
+    )
+    return selected, combine_weights
+
+
+def _route_jax_with_margin(
+    x: jax.Array,
+    router: jax.Array,
+    router_bias: jax.Array,
+    *,
+    num_experts_per_token: int,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
     router_logits = jnp.einsum("td,de->te", x, router).astype(jnp.float32)
     biased_logits = router_logits + router_bias.astype(jnp.float32)
-    _, selected = jax.lax.top_k(biased_logits, num_experts_per_token + 1)
+    topk_logits, selected = jax.lax.top_k(biased_logits, num_experts_per_token + 1)
+    router_margin = topk_logits[:, num_experts_per_token - 1] - topk_logits[:, num_experts_per_token]
     selected = selected[:, :num_experts_per_token]
     unbiased_topk = jnp.take_along_axis(router_logits, selected, axis=-1)
     combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
-    return selected.astype(jnp.int32), combine_weights
+    return selected.astype(jnp.int32), combine_weights, router_margin
 
 
 def _jax_rms_norm(
@@ -422,6 +440,27 @@ def _jax_moe_mlp(mlp: Any, x: jax.Array) -> tuple[jax.Array, jax.Array]:
     return out.reshape(bsz, seq_len, hidden_dim), selected
 
 
+def _jax_moe_mlp_with_margin(mlp: Any, x: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
+    cfg = mlp.cfg
+    bsz, seq_len, hidden_dim = x.shape
+    x_flat = x.reshape(bsz * seq_len, hidden_dim)
+    selected, combine_weights, router_margin = _route_jax_with_margin(
+        x_flat,
+        mlp.router,
+        mlp.router_bias,
+        num_experts_per_token=cfg.num_experts_per_token,
+    )
+    out = _direct_moe_mlp(
+        x_flat,
+        selected,
+        combine_weights,
+        mlp.expert_mlp.w_gate_up,
+        mlp.expert_mlp.w_down,
+        activation=jax.nn.silu,
+    )
+    return out.reshape(bsz, seq_len, hidden_dim), selected, router_margin
+
+
 def _jax_full_forward(model: Transformer, token_ids: jax.Array) -> tuple[jax.Array, jax.Array]:
     cfg = model.config
     _bsz, seq_len = token_ids.shape
@@ -449,6 +488,39 @@ def _jax_full_forward(model: Transformer, token_ids: jax.Array) -> tuple[jax.Arr
         _jax_rms_norm(hidden, model.final_norm.weight, model.final_norm.eps),
     )
     return hidden, jnp.stack(expert_ids_by_layer, axis=0)
+
+
+def _jax_full_forward_with_router_margins(
+    model: Transformer, token_ids: jax.Array
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    cfg = model.config
+    _bsz, seq_len = token_ids.shape
+    positions = jnp.broadcast_to(jnp.arange(seq_len, dtype=jnp.int32)[None, :], token_ids.shape)
+    hidden = model.token_embed[token_ids]
+    hidden = _jax_gated_norm(model.embed_gated_norm, _jax_rms_norm(hidden, model.embed_norm.weight, cfg.layer_norm_eps))
+
+    expert_ids_by_layer = []
+    router_margins_by_layer = []
+    for i, block in enumerate(model.blocks):
+        layer_window = _layer_sliding_window(cfg, i)
+        attn_in = _jax_gated_norm(
+            block.attn_gated_norm,
+            _jax_rms_norm(hidden, block.rms_attn.weight, block.rms_attn.eps),
+        )
+        hidden = hidden + _jax_attention(block.attn, attn_in, positions, layer_window)
+        mlp_in = _jax_gated_norm(block.mlp_gated_norm, _jax_rms_norm(hidden, block.rms_mlp.weight, block.rms_mlp.eps))
+        mlp_out, expert_ids, router_margin = _jax_moe_mlp_with_margin(block.mlp, mlp_in)
+        expert_ids_by_layer.append(expert_ids)
+        router_margins_by_layer.append(router_margin)
+        if block.shared is not None:
+            mlp_out = mlp_out + _jax_dense_mlp(block.shared, mlp_in)
+        hidden = hidden + mlp_out
+
+    hidden = _jax_gated_norm(
+        model.final_gated_norm,
+        _jax_rms_norm(hidden, model.final_norm.weight, model.final_norm.eps),
+    )
+    return hidden, jnp.stack(expert_ids_by_layer, axis=0), jnp.stack(router_margins_by_layer, axis=0)
 
 
 def _jax_logits(model: Transformer, hidden: jax.Array) -> jax.Array:
@@ -486,6 +558,57 @@ def _levanter_greedy_generation_reference(
         np.stack(next_token_logits, axis=0),
         token_ids,
     )
+
+
+def _write_installed_vllm_reference(
+    lev_model: Transformer,
+    prompt_ids: jax.Array,
+    continuation_ids: Sequence[int],
+    output_path: Path,
+) -> None:
+    if prompt_ids.shape[0] != 1:
+        raise ValueError(f"installed-vLLM reference expects batch size 1, got {prompt_ids.shape[0]}")
+    continuation = jnp.asarray([list(continuation_ids)], dtype=prompt_ids.dtype)
+    score_token_ids = jnp.concatenate([prompt_ids, continuation], axis=1)
+    if score_token_ids.shape[1] <= prompt_ids.shape[1]:
+        raise ValueError("installed-vLLM reference needs at least one continuation token")
+
+    hidden, expert_ids, router_margins = jax.jit(_jax_full_forward_with_router_margins)(lev_model, score_token_ids)
+    logits = _jax_logits(lev_model, hidden)[0]
+    log_probs = jax.nn.log_softmax(logits[:-1].astype(jnp.float32), axis=-1)
+    targets = score_token_ids[0, 1:]
+    selected_logprobs = jnp.take_along_axis(log_probs, targets[:, None], axis=-1).squeeze(axis=-1)
+
+    prompt_len = int(prompt_ids.shape[1])
+    score_len = int(score_token_ids.shape[1])
+    continuation_positions = list(range(prompt_len, score_len))
+    full_selected_logprobs_np = _np(selected_logprobs)
+    continuation_logprobs_np = full_selected_logprobs_np[prompt_len - 1 :]
+    expert_ids_np = _np(expert_ids)
+    router_margins_np = _np(router_margins)
+    if expert_ids_np.shape[1] != score_len:
+        raise AssertionError(f"reference expert IDs have shape {expert_ids_np.shape}, expected sequence {score_len}")
+    if router_margins_np.shape[1] != score_len:
+        raise AssertionError(
+            f"reference router margins have shape {router_margins_np.shape}, expected sequence {score_len}"
+        )
+
+    payload = {
+        "prompt_ids": np.asarray(prompt_ids).tolist()[0],
+        "continuation_ids": [int(token_id) for token_id in continuation_ids],
+        "score_token_ids": np.asarray(score_token_ids).tolist()[0],
+        "logprob_token_positions": continuation_positions,
+        "levanter_full_selected_logprobs": full_selected_logprobs_np.astype(np.float64).tolist(),
+        "levanter_continuation_logprobs": continuation_logprobs_np.astype(np.float64).tolist(),
+        "levanter_routed_experts": np.transpose(expert_ids_np, (1, 0, 2)).astype(np.int64).tolist(),
+        "levanter_router_margin": np.transpose(router_margins_np, (1, 0)).astype(np.float64).tolist(),
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w") as f:
+        json.dump(payload, f, sort_keys=True)
+    print(f"reference_json={output_path}")
+    print(f"reference_score_token_ids={payload['score_token_ids']}")
+    print(f"reference_continuation_logprobs={payload['levanter_continuation_logprobs']}")
 
 
 def _native_greedy_generation(
@@ -936,6 +1059,7 @@ def check_realistic_training_state_roundtrip(
     output_dir: Path | None,
     max_shard_size: int,
     generation_tokens: int,
+    reference_output_path: Path | None = None,
 ) -> None:
     attention_metadata_mod = importlib.import_module("tpu_inference.layers.common.attention_metadata")
     cfg, optimizer_config, num_train_steps, config_source = _realistic_cfg_optimizer_steps(config_name)
@@ -1022,6 +1146,13 @@ def check_realistic_training_state_roundtrip(
         f"generated_ids={expected_generated_ids.tolist()} "
         f"final_token_ids={_np(expected_generation_token_ids).tolist()[0]}"
     )
+    if reference_output_path is not None:
+        _write_installed_vllm_reference(
+            lev_model,
+            token_ids,
+            expected_generated_ids.tolist(),
+            reference_output_path,
+        )
 
     del manual_model
     del lev_model

@@ -1387,6 +1387,121 @@ Sharp edges from this PR-stack validation:
   disabled on TPU, duplicate op registration, quantization overwrites, and JAX
   buffer-donation warnings.
 
+## 2026-06-15 - GrugMoE Installed vLLM Logprob/Routing Validation
+
+Branches and fork-stack commits:
+
+- vLLM branch `codex/grugmoe-expert-indices-vllm-20260615`, commit
+  `c6f0608ddadb6bdd39a16b857b5affe660b1259e`.
+- tpu-inference branch `codex/grugmoe-expert-indices-tpu-20260615`, commit
+  `d8c4579d3409d50ccaa4a81df44b0d62c9e9b958`.
+- Marin branch `codex/grugmoe-correctness-validation-20260615` pins those
+  commits in `pyproject.toml` / `uv.lock`.
+
+Code changes under validation:
+
+- vLLM now has first-class `ModelRunnerOutput.expert_indices` support for
+  model runners that return routed experts while
+  `enable_return_routed_experts=True`.
+- vLLM scheduler accumulates runner-provided routed experts per request and
+  still uses the existing GPU `RoutedExpertsReader` path for non-TPU devices.
+- tpu-inference no longer monkeypatches vLLM scheduler internals; its TPU
+  runner continues to populate `model_runner_output.expert_indices`.
+- Marin installed smoke now writes a Levanter reference JSON with fixed prompt,
+  fixed continuation, selected-token logprobs, routed experts, and router
+  margins. The installed validation exports the full canary artifact, serves it
+  through Marin `VllmEnvironment`, scores fixed continuation logprobs through
+  installed vLLM, and compares routed experts.
+
+Local checks:
+
+- vLLM: `python -m py_compile ...`; `pre-commit run ruff-check`; `pre-commit
+  run ruff-format`; focused scheduler test
+  `tests/v1/core/test_scheduler.py::test_model_runner_expert_indices_are_returned_when_request_finishes`.
+- tpu-inference: `python -m py_compile`; `pre-commit run ruff`; `pre-commit
+  run isort`; no remaining references to the old scheduler monkeypatch helper.
+- Marin: `VLLM_TARGET_DEVICE=tpu uv lock --check`; `./infra/pre-commit.py
+  experiments/grug/moe/vllm_tpu_parity.py
+  experiments/grug/moe/installed_vllm_full_canary_smoke.py pyproject.toml
+  uv.lock`; `python -m py_compile`; installed-environment CLI smoke via
+  `env -u PYTHONPATH VLLM_TARGET_DEVICE=tpu uv run --locked --package
+  marin-core --extra vllm --extra eval python -m
+  experiments.grug.moe.installed_vllm_full_canary_smoke --help`.
+
+TPU jobs and sharp edges:
+
+- `/romain/grugmoe-correctness-installed-vllm-20260615-190509`: failed in
+  score because TPU vLLM returned `prompt_logprobs` length `1` for an 11-token
+  scored prompt. Adjusted harness to score fixed continuation targets through
+  one-token completion logprobs instead of prompt logprobs.
+- `/romain/grugmoe-correctness-installed-vllm-20260615-192504`: failed because
+  TPU sample logprobs ignored `logprob_token_ids`; the returned dict contained
+  only the sampled token (`available=[91542]`) and not target `57524`.
+- `/romain/grugmoe-correctness-installed-vllm-20260615-193932`: failed because
+  `SamplingParams(logprobs=-1)` produced an empty completion logprob list on
+  TPU. Adjusted to set `max_logprobs=vocab_size` and request
+  `logprobs=vocab_size`.
+- `/romain/grugmoe-correctness-installed-vllm-20260615-195315`: produced the
+  desired logprob and routing summaries, then failed on suspicious routing
+  mismatches before the serve phase. Reordered all-phase validation to serve
+  before score so serving evidence is retained when routing fails.
+- `/romain/grugmoe-correctness-installed-vllm-20260615-200749`: final
+  all-phase run. It served/generated successfully, then failed as intended on
+  routed-expert mismatches beyond the `0.01` router-margin tolerance.
+
+Final TPU evidence from
+`/romain/grugmoe-correctness-installed-vllm-20260615-200749`:
+
+- Full canary config source: `GRUG_MOE_TRIAL_MODEL`.
+- Levanter/native full-forward generated continuation:
+  `[57524, 45040, 67859]`.
+- Reference continuation logprobs:
+  `[-10.659404754638672, -10.7232666015625, -10.627751350402832]`.
+- Sharded export/load:
+  `artifact_bytes=5762169526`, `full_canary_shard_count=26`,
+  `expected_tensors=217 consumed_tensors=217 missing=[] unexpected=[]`.
+- Installed Marin serve smoke:
+  `vllm_server_initialized=True`, `vllm_generate_status_code=200`,
+  `installed_full_canary_generated=[([1, 42, 128, 2048, 17, 3072, 5, 63],
+  [91542, 58518, 8334], '')]`,
+  `installed_path_result=works:full_canary_generate`.
+- Installed vLLM selected-token logprobs for the fixed continuation were
+  collected with full-vocab completion logprobs:
+  `score_full_vocab_logprobs=128256`,
+  `score_continuation_generated_token_ids=[91542, 93785, 83484]`,
+  `max_abs_delta=0.21515655517578125`,
+  `mean_abs_delta=0.1790914535522461`, `max_allowed_abs_delta=5.0`.
+- Per-token logprob deltas:
+  - token `57524` at position `8`: Levanter `-10.659404754638672`, vLLM
+    `-10.849434852600098`, delta `0.19003009796142578`;
+  - token `45040` at position `9`: Levanter `-10.7232666015625`, vLLM
+    `-10.855354309082031`, delta `0.13208770751953125`;
+  - token `67859` at position `10`: Levanter `-10.627751350402832`, vLLM
+    `-10.842907905578613`, delta `0.21515655517578125`.
+- Routed-expert diagnostic:
+  `token_layer_count=121`, `top_k=4`, `ordered_topk_match_count=8`,
+  `ordered_topk_match_rate=0.06611570247933884`,
+  `unordered_full_match_count=20`,
+  `unordered_full_match_rate=0.1652892561983471`,
+  `mean_unordered_overlap=0.7086776859504132`,
+  `top1_match_count=81`, `top1_match_rate=0.6694214876033058`,
+  `low_margin_boundary_mismatch_count=30`,
+  `suspicious_mismatch_count=71`.
+
+Conclusion:
+
+- The vLLM/tpu-inference scheduler monkeypatch can be removed: TPU routed
+  experts are now carried through the first-class runner output path.
+- Installed `marin-core[vllm]` can export, serve, and generate the full GrugMoE
+  canary on v6e-4 with the fork-stack pins.
+- Fixed-continuation selected-token logprobs are close under the intentionally
+  loose correctness threshold.
+- Routed experts diverge substantially, including many mismatches with router
+  boundary margins greater than `0.01`; this is not only low-margin drift. The
+  validation intentionally fails after recording the serve and logprob evidence.
+- Routing replay is still out of scope; the next debugging step should inspect
+  route alignment/precision in the installed vLLM TPU path before adding replay.
+
 ## Scope
 
 In scope:

@@ -5140,13 +5140,13 @@ requires-dist = [
     { name = "torchvision", marker = "platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'cpu'", specifier = "==0.25.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-core", extra = "cpu" } },
     { name = "torchvision", marker = "platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'vllm'", specifier = "==0.26.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-core", extra = "vllm" } },
     { name = "torchvision", marker = "extra == 'tpu'", specifier = "==0.25.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-core", extra = "tpu" } },
-    { name = "tpu-inference", marker = "extra == 'vllm'", git = "https://github.com/marin-community/tpu-inference.git?rev=80bc72a68a216ddf86367db9d93263e0b2a288ce" },
+    { name = "tpu-inference", marker = "extra == 'vllm'", git = "https://github.com/marin-community/tpu-inference.git?rev=d8c4579d3409d50ccaa4a81df44b0d62c9e9b958" },
     { name = "tqdm" },
     { name = "tqdm-loggable" },
     { name = "triton", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'vllm'", specifier = "==3.6.0" },
     { name = "triton", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=3.6.0,<3.7" },
     { name = "verifiers", marker = "extra == 'rl'", specifier = "==0.1.5" },
-    { name = "vllm", marker = "extra == 'vllm'", git = "https://github.com/marin-community/vllm.git?rev=c0010021cfc7d4439eab0bf2a6564c38444fa2e3" },
+    { name = "vllm", marker = "extra == 'vllm'", git = "https://github.com/marin-community/vllm.git?rev=c6f0608ddadb6bdd39a16b857b5affe660b1259e" },
     { name = "wandb", specifier = ">0.24.0" },
     { name = "warcio" },
 ]
@@ -11385,7 +11385,7 @@ wheels = [
 [[package]]
 name = "tpu-inference"
 version = "0.0.0"
-source = { git = "https://github.com/marin-community/tpu-inference.git?rev=80bc72a68a216ddf86367db9d93263e0b2a288ce#80bc72a68a216ddf86367db9d93263e0b2a288ce" }
+source = { git = "https://github.com/marin-community/tpu-inference.git?rev=d8c4579d3409d50ccaa4a81df44b0d62c9e9b958#d8c4579d3409d50ccaa4a81df44b0d62c9e9b958" }
 dependencies = [
     { name = "absl-py" },
     { name = "flax" },
@@ -11819,8 +11819,8 @@ wheels = [
 
 [[package]]
 name = "vllm"
-version = "0.20.1rc1.dev146+gc0010021c.tpu"
-source = { git = "https://github.com/marin-community/vllm.git?rev=c0010021cfc7d4439eab0bf2a6564c38444fa2e3#c0010021cfc7d4439eab0bf2a6564c38444fa2e3" }
+version = "0.20.1rc1.dev147+gc6f0608dd.tpu"
+source = { git = "https://github.com/marin-community/vllm.git?rev=c6f0608ddadb6bdd39a16b857b5affe660b1259e#c6f0608ddadb6bdd39a16b857b5affe660b1259e" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anthropic" },
