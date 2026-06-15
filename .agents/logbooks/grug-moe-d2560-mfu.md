@@ -324,3 +324,297 @@
 - Result: all 32 minimizer child pods are `SchedulingGated`, not running init containers. The Kueue workload reports `couldn't assign flavors ... topology "infiniband" ... excluded: resource "cpu"` and at one point could fit only 14 of 32 pods. There is also unrelated Iris controller probe churn in the event tail, but the direct blocker for the child pod group is CPU admission. The CPU knob py_compile, wrapper dry-runs, and diff-scoped pre-commit passed.
 - Interpretation: GM2560-MIN-001 has not tested the clique path yet. The current job may admit if other pods release CPU, but a faster diagnostic is to relaunch the minimizer with a lower per-worker CPU request after explicit approval. The same knob will also help the next full d2560 candidate avoid admission stalls if CPU contention persists.
 - Next action: ask before stopping/relaunching GM2560-MIN-001. Recommended replacement is the same minimizer with `--worker-cpu 8` after committing/pushing the CPU-request knob.
+
+### 2026-06-14 16:06 PDT - synthetic topology probe support and GM2560-MIN-006
+- Hypothesis: the 32-node clique/rendezvous symptoms should be separated from real-data loading and tokenized-cache behavior before another full d2560 compile.
+- Command:
+  - `experiments/grug/moe/run_cw_scale.sh --full --worker-cpu 2 --data synthetic --run-id dry-synthetic`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --memory=2G --disk=4G --cpu=1 --extra=cpu -e ... -- python -m experiments.grug.moe.launch_cw_scale`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260614-230656`
+- Config:
+  - Run id: `GM2560-MIN-006-cw-20260614-1606`
+  - Parent: `/dlwh/iris-run-job-20260614-230656`
+  - Child: `/dlwh/iris-run-job-20260614-230656/grug-train-GM2560-MIN-006-cw-20260614-1606`
+  - Topology: `SCALE_GPU_REPLICAS=32`, `SCALE_EXPERT_AXIS=8`, `SCALE_REPLICA_AXIS=1`
+  - Tiny model/data: `SCALE_HIDDEN_DIM=128`, `SCALE_NUM_LAYERS=1`, `SCALE_NUM_EXPERTS=8`, `SCALE_TOP_K=1`, `SCALE_BATCH=256`, `SCALE_SEQ_LEN=16`, `SCALE_DATA=synthetic`
+  - Runtime: `SCALE_CPU_PER_REPLICA=2`, `SCALE_CHECKPOINTS=local`, `SCALE_TRACKER=json_logger`
+- Result: the synthetic run admitted 32/32 tasks and emitted hparams/static summaries, proving the CPU admission and real-data stall were separate from the basic 32-node launch path. It still reached no train-step metrics before being stopped. Logs showed the same SPMD full-rematerialization warning family as the full run, now on tiny activations: moving batch-sharded tensors from `{devices=[256,1,1]}` to `{devices=[1,1,32,8] last_tile_dim_replicate}` around RMSNorm/forward-backward. No clique, OOM, or long data-loader stall appeared before stop.
+- Interpretation: the remaining critical path is activation layout/sharding, not R2/data loading. Synthetic data is now available for cheap topology-preserving probes.
+- Next action: try a model-axis probe to reduce the data-axis hidden-sharding pressure, and disable watch stats for throughput probes so step-0 compilation is less polluted.
+
+### 2026-06-14 16:21 PDT - GM2560-MIN-007 invalid model-axis probe
+- Hypothesis: adding a model/tensor-parallel axis may reduce the bad activation reshards by separating hidden/vocab work from the batch/expert axes.
+- Command:
+  - `SCALE_MODEL_AXIS=8 SCALE_HIDDEN_DIM=128 ... python -m experiments.grug.moe.launch_cw_scale`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260614-231809`
+- Config:
+  - Run id: `GM2560-MIN-007-cw-20260614-1618`
+  - Parent: `/dlwh/iris-run-job-20260614-231809`
+  - Child: `/dlwh/iris-run-job-20260614-231809/grug-train-GM2560-MIN-007-cw-20260614-1618`
+  - New knobs: `SCALE_MODEL_AXIS=8`, `SCALE_WATCH_INTERVAL=0`; otherwise the same tiny synthetic topology as MIN-006.
+- Result: the run failed before a train step with `ValueError: Sharding spec ('model',) implies that array axis 2 is partitioned 8 times, but does not evenly divide the dimension size 1`, on shape `(256, 16, 1, 128)` and spec `P(('replica_dcn', 'data', 'expert'), None, 'model', None)`. The failure is deterministic: this Grug attention code shards the attention head axis over `model`, and the tiny d128 probe has one head. May d2560 has 20 heads, so `model_axis=8` would also be invalid.
+- Interpretation: model-axis is still worth testing, but the valid May-aligned choice is `model_axis=4`, not 8. Added launch/train validation so bad model-axis choices fail locally or in the dispatcher before allocating the 32-worker child group.
+- Next action: launch `GM2560-MIN-008` with `SCALE_MODEL_AXIS=4` and `SCALE_HIDDEN_DIM=512` so the proxy has four attention heads.
+
+### 2026-06-14 16:31 PDT - GM2560-MIN-008 stopped during pallas CE autotune
+- Hypothesis: a valid `model_axis=4` proxy with four attention heads should reveal whether tensor/model parallelism removes the tiny-shape SPMD rematerialization path seen in MIN-006.
+- Command:
+  - `env SCALE_GPU_REPLICAS=32 SCALE_HIDDEN_DIM=512 SCALE_NUM_LAYERS=1 SCALE_NUM_EXPERTS=8 SCALE_TOP_K=1 SCALE_BATCH=256 SCALE_SEQ_LEN=16 SCALE_STEPS=2 SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS=1 SCALE_CHECKPOINTS=local experiments/grug/moe/run_cw_scale.sh --full --worker-cpu 2 --data synthetic --model-axis 4 --watch-interval 0 --run-id GM2560-MIN-008-cw-20260614-1623 --submit`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260614-232401`
+- Config:
+  - Run id: `GM2560-MIN-008-cw-20260614-1623`
+  - Parent: `/dlwh/iris-run-job-20260614-232401`
+  - Child: `/dlwh/iris-run-job-20260614-232401/grug-train-GM2560-MIN-008-cw-20260614-1623`
+  - Topology: 32 H100 nodes, `SCALE_EXPERT_AXIS=8`, `SCALE_REPLICA_AXIS=1`, `SCALE_MODEL_AXIS=4`
+  - Proxy shape: d512, 1 layer, 8 experts, top-1, batch 256, seq 16, synthetic data
+- Result: the child admitted and ran 32/32 tasks with zero failures/preemptions. It got past the MIN-007 model-axis divisibility error and emitted hparams/static summaries. It then spent the useful observation window in pallas GPU fused-CE autotuning (`Fused CE autotune miss for pallas_gpu. Sweeping 7 block-size candidates`) and produced no train-step metrics before being stopped.
+- Interpretation: `model_axis=4` is valid for the proxy, but pallas CE autotune is unnecessary noise for sharding minimizers. This run did not answer the SPMD-remat question.
+- Next action: relaunch the same proxy as `GM2560-MIN-009` with `SCALE_CE_IMPLEMENTATION=xla`, and keep the pallas CE path as a separate throughput/profile question.
+
+### 2026-06-14 16:32 PDT - GM2560-MIN-009 XLA-CE model-axis probe launched
+- Hypothesis: replacing pallas CE with XLA CE in the tiny proxy should get to the train-step compile/run path faster, making model-axis sharding effects easier to observe.
+- Command:
+  - `env SCALE_GPU_REPLICAS=32 SCALE_HIDDEN_DIM=512 SCALE_NUM_LAYERS=1 SCALE_NUM_EXPERTS=8 SCALE_TOP_K=1 SCALE_BATCH=256 SCALE_SEQ_LEN=16 SCALE_STEPS=2 SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS=1 SCALE_CHECKPOINTS=local experiments/grug/moe/run_cw_scale.sh --full --worker-cpu 2 --data synthetic --model-axis 4 --watch-interval 0 --ce-implementation xla --run-id GM2560-MIN-009-cw-20260614-1632 --submit`
+- Config:
+  - Run id: `GM2560-MIN-009-cw-20260614-1632`
+  - Parent: `/dlwh/iris-run-job-20260614-233208`
+  - Topology/shape: same as MIN-008, with `SCALE_CE_IMPLEMENTATION=xla`
+- Result: parent submitted successfully. The child admitted after Curie's one-node EP sidecar was stopped to free a topology slot, then ran 32/32 tasks. The remote hparams confirmed `cross_entropy_implementation="xla"`, `model_axis_size=4`, `expert_axis_size=8`, and `watch.interval=0`. Before any train-step metric, the compiler still emitted SPMD full-rematerialization warnings between `{devices=[64,1,1,4]}` and `{devices=[1,1,8,32]}` for `[4,16,512]` activations. At 23:42:05 UTC, the first attempt aborted with local XLA rendezvous timeouts after `kCollectivePermute` (`Expected 8 threads ... only 4-7 arrived` on multiple tasks). The parent/child were then stopped while Iris was assigning a retry.
+- Interpretation: `SCALE_CE_IMPLEMENTATION=xla` removes pallas CE autotune noise, but `model_axis=4` does not remove the bad activation layout transition. More importantly, with the current `(replica_dcn, data, expert, model)` device layout, `expert_axis=8` and `model_axis=4` cannot both be intra-node on 8-GPU workers; the effective expert ring spans nodes and reproduces the collective-permute/rendezvous failure.
+- Next action: launch `GM2560-MIN-010` with the same tiny proxy and `SCALE_MODEL_AXIS=4`, but set `SCALE_EXPERT_AXIS=1` to isolate whether the failure is the cross-node EP path.
+
+### 2026-06-14 16:49 PDT - GM2560-MIN-010 isolates model-axis from EP
+- Hypothesis: if the MIN-009 failure is caused by `expert_axis=8` spanning nodes when combined with `model_axis=4`, then the same d512 proxy with `expert_axis=1` should reach train steps.
+- Command:
+  - `env SCALE_GPU_REPLICAS=32 SCALE_HIDDEN_DIM=512 SCALE_NUM_LAYERS=1 SCALE_NUM_EXPERTS=8 SCALE_TOP_K=1 SCALE_BATCH=256 SCALE_SEQ_LEN=16 SCALE_STEPS=2 SCALE_EXPERT_AXIS=1 SCALE_REPLICA_AXIS=1 SCALE_CHECKPOINTS=local experiments/grug/moe/run_cw_scale.sh --full --worker-cpu 2 --data synthetic --model-axis 4 --watch-interval 0 --ce-implementation xla --run-id GM2560-MIN-010-cw-20260614-1643 --submit`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-job-20260614-234410/grug-train-GM2560-MIN-010-cw-20260614-1643`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs --since-seconds 7200 --max-lines 3000 /dlwh/iris-run-job-20260614-234410/grug-train-GM2560-MIN-010-cw-20260614-1643 | rg -i 'Grug compact mesh|train/loss|throughput|Progress on:train|SPMD|kCollectivePermute|Traceback|RESOURCE_EXHAUSTED|OOM'`
+- Config:
+  - Run id: `GM2560-MIN-010-cw-20260614-1643`
+  - Parent: `/dlwh/iris-run-job-20260614-234410`
+  - Child: `/dlwh/iris-run-job-20260614-234410/grug-train-GM2560-MIN-010-cw-20260614-1643`
+  - Topology: 32 H100 nodes, `SCALE_REPLICA_AXIS=1`, `SCALE_EXPERT_AXIS=1`, `SCALE_MODEL_AXIS=4`
+  - Proxy shape: d512, 1 layer, 8 experts, top-1, batch 256, seq 16, synthetic data, XLA CE, local checkpoints, watch disabled.
+- Result: parent and child succeeded; child completed 32/32 tasks with `failure_count=0` and `preemption_count=0`. The logged compact mesh was `{'replica_dcn': 1, 'data': 64, 'expert': 1, 'model': 4}`, `batch_shards=64`, with `parameter_count=136060936`. It reached `2/2` train progress with `train/loss ~= 11.8`; representative final per-task throughput was roughly 290-294 examples/s, 4.65-4.70k tokens/s, and MFU around `7.4e-4` for this tiny diagnostic.
+- Interpretation: `model_axis=4` is not by itself enough to trigger the local `kCollectivePermute` failure. The MIN-009 failure is much more likely the cross-node EP path created by trying to fit `expert_axis=8` and `model_axis=4` onto 8-GPU nodes.
+- Next action: test `SCALE_EXPERT_AXIS=2` with `SCALE_MODEL_AXIS=4`. The product `expert_axis * model_axis = 8` should remain local to each H100 worker, while still exercising nontrivial EP.
+
+### 2026-06-14 16:52 PDT - GM2560-MIN-011 local EP2/model4 probe launched
+- Hypothesis: `expert_axis=2, model_axis=4` keeps the model and expert axes within each 8-GPU H100 worker, so it should avoid the MIN-009 local collective-permute timeout while retaining some expert parallelism.
+- Command:
+  - `env SCALE_GPU_REPLICAS=32 SCALE_EXPERT_AXIS=2 SCALE_REPLICA_AXIS=1 SCALE_HIDDEN_DIM=512 SCALE_NUM_LAYERS=1 SCALE_NUM_EXPERTS=8 SCALE_TOP_K=1 SCALE_BATCH=256 SCALE_SEQ_LEN=16 SCALE_STEPS=2 SCALE_CHECKPOINTS=local experiments/grug/moe/run_cw_scale.sh --full --worker-cpu 2 --data synthetic --model-axis 4 --watch-interval 0 --ce-implementation xla --run-id GM2560-MIN-011-cw-20260614-1652 --submit`
+- Config:
+  - Run id: `GM2560-MIN-011-cw-20260614-1652`
+  - Parent: `/dlwh/iris-run-job-20260614-235241`
+  - Intended topology: 32 H100 nodes, `SCALE_REPLICA_AXIS=1`, `SCALE_EXPERT_AXIS=2`, `SCALE_MODEL_AXIS=4`
+  - Proxy shape: d512, 1 layer, 8 experts, top-1, batch 256, seq 16, synthetic data, XLA CE, local checkpoints, watch disabled.
+- Result: submitted successfully at 16:52 PDT; initial parent state was `running/building` with no failures.
+- Result: the child reached the train loop and logged compact mesh `{'replica_dcn': 1, 'data': 32, 'expert': 2, 'model': 4}`, `batch_shards=64`. It then failed before any train-step metric. Logs showed NCCL communicator creation failures (`ncclCommInitRankConfig`, CUDA error 999), `Initialize clique` waits over 64-device groups, `Acquire clique` waits over 4-device local groups, then fatal `kCollectivePermute` rendezvous termination: expected 8 threads but only 1 arrived. The parent and child were stopped after the decisive failure.
+- Interpretation: keeping `expert_axis * model_axis = 8` is not sufficient for the model4 path. With `model_axis=4`, even EP2 introduces enough collective structure to reproduce the bad `kCollectivePermute` failure; only `expert_axis=1` has succeeded so far.
+- Next action: test `SCALE_EXPERT_AXIS=4`, `SCALE_MODEL_AXIS=2`, which is a more plausible full-model compromise if it can step.
+
+### 2026-06-14 16:59 PDT - GM2560-MIN-012 EP4/model2 probe launched
+- Hypothesis: `expert_axis=4, model_axis=2` keeps the product local to each 8-GPU worker while reducing model-axis collective pressure relative to `expert_axis=2, model_axis=4`.
+- Command:
+  - `env SCALE_GPU_REPLICAS=32 SCALE_EXPERT_AXIS=4 SCALE_REPLICA_AXIS=1 SCALE_HIDDEN_DIM=512 SCALE_NUM_LAYERS=1 SCALE_NUM_EXPERTS=8 SCALE_TOP_K=1 SCALE_BATCH=256 SCALE_SEQ_LEN=16 SCALE_STEPS=2 SCALE_CHECKPOINTS=local experiments/grug/moe/run_cw_scale.sh --full --worker-cpu 2 --data synthetic --model-axis 2 --watch-interval 0 --ce-implementation xla --run-id GM2560-MIN-012-cw-20260614-1659 --submit`
+- Config:
+  - Run id: `GM2560-MIN-012-cw-20260614-1659`
+  - Parent: `/dlwh/iris-run-job-20260614-235834`
+  - Intended topology: 32 H100 nodes, `SCALE_REPLICA_AXIS=1`, `SCALE_EXPERT_AXIS=4`, `SCALE_MODEL_AXIS=2`
+  - Proxy shape: d512, 1 layer, 8 experts, top-1, batch 256, seq 16, synthetic data, XLA CE, local checkpoints, watch disabled.
+- Result: the child reached 32/32 running tasks and logged compact mesh `{'replica_dcn': 1, 'data': 32, 'expert': 4, 'model': 2}`, `batch_shards=128`. It reached `Progress on:train -/2`, then produced repeated 64-device `Initialize clique` waits and 64-device `Acquire clique` waits with `local_participants=2`; no train-step metric appeared. The parent and child were stopped after the decisive pre-metrics collective stall.
+- Interpretation: default ring MoE is not compatible with any simultaneous `expert_axis > 1` and `model_axis > 1` layout observed so far. The only model-axis run that steps is `expert_axis=1, model_axis=4`; the ring EP path should keep `model_axis=1`.
+- Next action: do not spend more 32-node probes on mixed ring-EP/model-axis layouts unless the MoE implementation changes. Continue with either EP-only (`expert_axis=8, model_axis=1`) throughput probes or model-axis-only (`expert_axis=1, model_axis=4`) attention/CE diagnostics.
+
+### 2026-06-14 16:58 PDT - local expert/model axis guard added
+- Hypothesis: MIN-009 failed because `SCALE_EXPERT_AXIS=8` and `SCALE_MODEL_AXIS=4` made `expert_axis * model_axis = 32`, so the expert/model axes could not fit inside one 8-GPU H100 worker. MIN-010 succeeded because `expert_axis=1`, `model_axis=4` kept that product local.
+- Command:
+  - `uv run pytest tests/test_grug_variant_contracts.py::test_grug_coreweave_axes_keep_expert_and_model_groups_local tests/test_grug_variant_contracts.py::test_grug_coreweave_axes_reject_cross_node_expert_model_product -q`
+  - `uv run pytest lib/levanter/tests/grug/test_fa4_cute_attention.py -q`
+  - `uv run python -m py_compile experiments/grug/moe/launch.py experiments/grug/moe/launch_cw_may_d2560.py experiments/grug/moe/launch_cw_scale.py lib/levanter/src/levanter/grug/attention/_fa4_cute.py experiments/grug/moe/train.py tests/test_grug_variant_contracts.py`
+  - `./infra/pre-commit.py --changed-files --fix`
+- Config: local code only. Added a shared launcher validation that requires `expert_axis * model_axis` to divide the 8 GPUs on each CoreWeave worker. The guard rejects `8 * 4 = 32` before remote allocation and accepts the intended `2 * 4 = 8` probe.
+- Result: focused topology tests passed, FA4 CuTe tests passed locally (`3 passed, 2 skipped` GPU-only), py_compile passed, changed-file pre-commit passed. Existing GM2560-MIN-011 was still running with 32/32 tasks and zero failures at the status check; logs had reached `Grug compact mesh shape: {'replica_dcn': 1, 'data': 32, 'expert': 2, 'model': 4}` and still showed SPMD activation rematerialization warnings, but no `kCollectivePermute`, OOM, or traceback in the first observation window.
+- Interpretation: the launcher now encodes the topology lesson from MIN-009/MIN-010. `expert_axis=2, model_axis=4` remains the right next topology probe, but the SPMD activation layout warning is still present and should be treated as a separate attention/projection sharding bottleneck.
+- Next action: let GM2560-MIN-011 reach terminal state or a decisive failure, then only consider a full d2560 probe with `--expert-axis 2 --model-axis 4 --ce-implementation xla --watch-interval 0 --live-param-mode param --xla-memory-fraction 0.95` after checking HBM impact from lower EP.
+
+### 2026-06-14 17:00 PDT - GM2560-MIN-011 also hit ring EP collective timeout
+- Hypothesis: if `expert_axis=2, model_axis=4` keeps EP/model groups local, then the prior MIN-009 failure was only cross-node EP. If it still fails, default ring EP likely cannot be combined with model parallelism yet.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-job-20260614-235241/grug-train-GM2560-MIN-011-cw-20260614-1652`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs --since-seconds 3600 --max-lines 5000 /dlwh/iris-run-job-20260614-235241/grug-train-GM2560-MIN-011-cw-20260614-1652 | rg -i 'Progress on:train|train/loss|throughput|SPMD|kCollectivePermute|rendezvous|RESOURCE_EXHAUSTED|OOM|Traceback|Terminated|killed|Fatal|segmentation|exit 139'`
+  - `uv run pytest tests/test_grug_variant_contracts.py::test_grug_coreweave_ring_ep_rejects_simultaneous_expert_and_model_axes tests/test_grug_variant_contracts.py::test_grug_coreweave_non_ring_backend_can_try_simultaneous_expert_and_model_axes -q`
+- Config: existing GM2560-MIN-011, `SCALE_EXPERT_AXIS=2`, `SCALE_MODEL_AXIS=4`, d512 tiny synthetic proxy, XLA CE, watch disabled. No new job was launched by this check.
+- Result: child ended `JOB_STATE_KILLED` with `failure_count=1`, `preemption_count=0`, and all 32 tasks killed. Logs reached train setup and throughput summaries, then emitted the same SPMD activation rematerialization warnings. It then hit local XLA rendezvous timeouts after `kCollectivePermute`; task 10 and task 21 exceeded the 40s termination timeout with only 1 of 8 expected threads arrived and aborted. I did not stop this run. Added launcher validation to reject simultaneous `expert_axis > 1` and `model_axis > 1` for the default ring MoE backend while allowing explicit alternate backend experiments.
+- Interpretation: the earlier hypothesis was too weak. Keeping `expert_axis * model_axis == 8` local is not sufficient for the current default ring EP backend. The robust rule for now is: use `model_axis > 1` only with `expert_axis=1` for attention/model-axis diagnostics, or use `expert_axis > 1` only with `model_axis=1` for ring-EP diagnostics. Treat simultaneous ring EP and model-axis sharding as a separate backend bug, not a throughput tuning knob.
+- Next action: do not spend a full d2560 run on `expert_axis=2, model_axis=4`. For attention throughput, use `expert_axis=1, model_axis=4` if memory permits or a smaller synthetic proxy; for production MoE EP, stay with `expert_axis=8, model_axis=1` until ring EP + model-axis collectives are fixed or an alternate MoE backend is validated.
+
+### 2026-06-14 17:14 PDT - one-node EP8 ring and ragged sidecars completed
+- Hypothesis: EP8 is viable when the entire expert axis stays on one 8xH100 worker with `model_axis=1`; ring should be the safer default, while `ragged_all_to_all` may reduce communication but has more runtime/compiler risk.
+- Commands:
+  - `env SCALE_GPU_REPLICAS=1 SCALE_HIDDEN_DIM=512 SCALE_NUM_LAYERS=4 SCALE_NUM_EXPERTS=8 SCALE_TOP_K=4 SCALE_BATCH=64 SCALE_SEQ_LEN=256 SCALE_STEPS=6 SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS=1 SCALE_CHECKPOINTS=local SCALE_REMAT=save_moe experiments/grug/moe/run_cw_scale.sh --full --worker-cpu 2 --data synthetic --model-axis 1 --watch-interval 0 --ce-implementation xla --moe-implementation ring --run-id GM-EP8-RING-001-cw-20260614-1658 --submit`
+  - `env SCALE_GPU_REPLICAS=1 SCALE_HIDDEN_DIM=512 SCALE_NUM_LAYERS=4 SCALE_NUM_EXPERTS=8 SCALE_TOP_K=4 SCALE_BATCH=64 SCALE_SEQ_LEN=256 SCALE_STEPS=6 SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS=1 SCALE_CHECKPOINTS=local SCALE_REMAT=save_moe experiments/grug/moe/run_cw_scale.sh --full --worker-cpu 2 --data synthetic --model-axis 1 --watch-interval 0 --ce-implementation xla --moe-implementation ragged_all_to_all --run-id GM-EP8-RAGGED-001-cw-20260614-1703 --submit`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-job-20260614-235731/grug-train-GM-EP8-RING-001-cw-20260614-1658`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-job-20260615-000259/grug-train-GM-EP8-RAGGED-001-cw-20260614-1703`
+- Config:
+  - Ring child: `/dlwh/iris-run-job-20260614-235731/grug-train-GM-EP8-RING-001-cw-20260614-1658`
+  - Ragged child: `/dlwh/iris-run-job-20260615-000259/grug-train-GM-EP8-RAGGED-001-cw-20260614-1703`
+  - Shared topology/shape: one 8xH100 worker, `SCALE_EXPERT_AXIS=8`, `SCALE_MODEL_AXIS=1`, `SCALE_REPLICA_AXIS=1`, d512, 4 layers, 8 experts, top-4, batch 64, sequence 256, 6 train steps, synthetic data, XLA CE, `save_moe`, local checkpoints, watch disabled.
+- Result: both sidecars succeeded with `failure_count=0` and `preemption_count=0`. Both logged compact mesh `{'replica_dcn': 1, 'data': 1, 'expert': 8, 'model': 1}`, `batch_shards=8`, and `parameter_count=149451808`. Ring completed in about 146s and ended with final logged throughput `568052 tokens/s`, `throughput/mfu=3.32496`, `train/loss=11.7375`. Ragged completed in about 226s and ended with final logged throughput `326453 tokens/s`, `throughput/mfu=1.91081`, `train/loss=11.7364`. Unique post-warmup step samples were roughly 769k, 642k, 436k, 568k tokens/s for ring and 577k, 599k, 343k, 326k tokens/s for ragged. The absolute MFU is not meaningful for this tiny synthetic proxy because it reports values over 1, but relative tokens/s and job duration consistently favored ring.
+- Implementation note: default `ring` all-gathers activations and routing data over the expert axis, computes local ragged expert GEMMs, then `psum_scatter`s outputs. `ragged_all_to_all` sorts local assignments, exchanges ragged token buffers, computes local ragged expert GEMMs, exchanges outputs back, then unpermutes. Ragged should reduce payload when top-k is much smaller than EP, but this short EP8 H100 sidecar did not realize that advantage.
+- Interpretation: EP8-local itself is healthy on H100 when `model_axis=1`. The failures seen in MIN-009/MIN-011/MIN-012 are not caused by EP8 alone; they are caused by combining ring EP with `model_axis > 1` or otherwise forcing expert/model collectives into the bad topology path. For now, the recommended EP8 throughput setting is `expert_axis=8`, `model_axis=1`, XLA CE for probes, synthetic data, local checkpoints, and `ring`.
+- Next action: use the new MoE implementation launch knob only for explicit backend experiments. Continue main throughput work with ring EP8-local unless a larger replicated ragged test overturns this result.
+
+### 2026-06-14 17:12 PDT - GM2560-MIN-013 failed during workdir staging
+- Hypothesis: after the mixed ring-EP/model-axis failures, a 32-node EP-only probe with `expert_axis=8` and `model_axis=1` should tell whether the ring EP path is healthy across the full CoreWeave topology.
+- Command:
+  - `env SCALE_GPU_REPLICAS=32 SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS=1 SCALE_HIDDEN_DIM=512 SCALE_NUM_LAYERS=1 SCALE_NUM_EXPERTS=8 SCALE_TOP_K=1 SCALE_BATCH=256 SCALE_SEQ_LEN=16 SCALE_STEPS=2 SCALE_CHECKPOINTS=local experiments/grug/moe/run_cw_scale.sh --full --worker-cpu 2 --data synthetic --model-axis 1 --watch-interval 0 --ce-implementation xla --run-id GM2560-MIN-013-cw-20260614-1706 --submit`
+  - `KUBECONFIG=$HOME/.kube/coreweave-iris-gpu kubectl get pod -n iris iris-dlwh-iris-run-job-20260615-000555-0-4b7f1d5e-0 -o json | jq '{phase:.status.phase, conditions:.status.conditions, initContainerStatuses:.status.initContainerStatuses, containerStatuses:.status.containerStatuses}'`
+  - `KUBECONFIG=$HOME/.kube/coreweave-iris-gpu kubectl logs -n iris iris-dlwh-iris-run-job-20260615-000555-0-4b7f1d5e-0 -c stage-workdir --tail=200`
+- Config:
+  - Run id: `GM2560-MIN-013-cw-20260614-1706`
+  - Parent: `/dlwh/iris-run-job-20260615-000555`
+  - Intended topology: 32 H100 nodes, `SCALE_REPLICA_AXIS=1`, `SCALE_EXPERT_AXIS=8`, `SCALE_MODEL_AXIS=1`
+  - Proxy shape: d512, 1 layer, 8 experts, top-1, batch 256, seq 16, synthetic data, XLA CE, local checkpoints, watch disabled.
+- Result: the parent failed before the user task container started and never dispatched a child job. Kubernetes showed the `stage-workdir` init container terminated with exit code 1 while the main task container remained in `PodInitializing`. The init log showed two bundle fetch retries followed by `urllib.error.URLError: <urlopen error [Errno 113] No route to host>`.
+- Interpretation: MIN-013 is not evidence about Grug, XLA, EP, or model sharding. It is an Iris/Kubernetes bundle-staging network failure before Python user code ran.
+- Next action: relaunch the same EP-only 32-node probe with a new run id.
+
+### 2026-06-14 17:14 PDT - GM2560-MIN-014 32-node EP8/model1 probe succeeded
+- Hypothesis: ring EP8 should work across 32 nodes when `model_axis=1`; if this reaches train steps, it confirms the recent collective failures are specific to mixed ring EP plus model-axis sharding.
+- Command:
+  - `env SCALE_GPU_REPLICAS=32 SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS=1 SCALE_HIDDEN_DIM=512 SCALE_NUM_LAYERS=1 SCALE_NUM_EXPERTS=8 SCALE_TOP_K=1 SCALE_BATCH=256 SCALE_SEQ_LEN=16 SCALE_STEPS=2 SCALE_CHECKPOINTS=local experiments/grug/moe/run_cw_scale.sh --full --worker-cpu 2 --data synthetic --model-axis 1 --watch-interval 0 --ce-implementation xla --run-id GM2560-MIN-014-cw-20260614-1713 --submit`
+  - `uv run iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-job-20260615-001248`
+  - `uv run iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260615-001248 --tail --max-lines 160`
+  - `uv run iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-job-20260615-001248/grug-train-GM2560-MIN-014-cw-20260614-1713`
+- Config:
+  - Run id: `GM2560-MIN-014-cw-20260614-1713`
+  - Parent: `/dlwh/iris-run-job-20260615-001248`
+  - Child: `/dlwh/iris-run-job-20260615-001248/grug-train-GM2560-MIN-014-cw-20260614-1713`
+  - Topology: 32 H100 nodes, `SCALE_REPLICA_AXIS=1`, `SCALE_EXPERT_AXIS=8`, `SCALE_MODEL_AXIS=1`
+  - Proxy shape: d512, 1 layer, 8 experts, top-1, batch 256, seq 16, synthetic data, XLA CE, local checkpoints, watch disabled.
+- Result: parent submitted and dispatched the child. The child succeeded with 32/32 tasks succeeded, `failure_count=0`, and `preemption_count=0`. It logged compact mesh `{'replica_dcn': 1, 'data': 32, 'expert': 8, 'model': 1}`, `batch_shards=256`, and `parameter_count=136060936`. Rank 0 reached `2/2` train progress with final `train/loss=11.7991`. The one post-warmup tiny-proxy throughput sample was `1720.5 examples/s`, `27528 tokens/s`, and `throughput/mfu=0.004377`. The PJRT `WatchTasksAsync` connection-refused messages appeared after completion during coordination-service shutdown, not as a job failure.
+- Interpretation: the 32-node EP8 ring topology is healthy when `model_axis=1`. The recent clique/rendezvous failures are not caused by 32-node EP8 alone; they are specific to mixed ring EP plus model-axis sharding or full-shape executable pressure.
+- Next action: use `expert_axis=8`, `model_axis=1`, XLA CE, synthetic or controlled data, local checkpoints, and watch disabled for the next full d2560 memory/throughput attempt. Continue treating mixed ring EP/model-axis as invalid unless a non-ring backend probe succeeds.
+
+### 2026-06-14 17:20 PDT - GM2560-MFU-007 full d2560 synthetic probe launched
+- Hypothesis: after MIN-014 proved the 32-node EP8/model1 topology, the next failure boundary is the full d2560 executable/memory footprint rather than distributed setup. Use a short synthetic no-checkpoint/no-profile run to test whether the full issue #6044 shape can step before paying for a profiling window.
+- Command:
+  - `experiments/grug/moe/run_cw_may_d2560.sh --data synthetic --tracker json_logger --profiler-steps 0 --checkpoints none --watch-interval 0 --worker-cpu 32 --ce-implementation xla --model-axis 1 --expert-axis 8 --steps 4 --run-id GM2560-MFU-007-cw-20260614-1720 --submit`
+- Config:
+  - Run id: `GM2560-MFU-007-cw-20260614-1720`
+  - Parent: `/dlwh/iris-run-job-20260615-001940`
+  - Topology: 32 H100 nodes, `MAY_REPLICA_AXIS=1`, `MAY_EXPERT_AXIS=8`, `MAY_MODEL_AXIS=1`
+  - Model/workload: May d2560 issue #6044 shape, 256 experts, top-4, batch 256, seq 4096, 4 train steps, synthetic data, XLA CE.
+  - Runtime: json logger, profiler disabled, checkpointing disabled, watch disabled, `live_param_mode=param`, `MAY_MP=params=float32,compute=bfloat16,output=bfloat16`, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95`.
+- Result: parent submitted successfully. Child not yet discovered at launch time.
+- Interpretation: this run is the current full-shape memory/executable gate. If it steps, relaunch a W&B/profile version with the same topology; if it OOMs or wedges, inspect whether the full d2560 issue is activation layout, optimizer state/update, or CE/attention memory.
+
+### 2026-06-14 17:34 PDT - MFU-007 active; issue and sidecar lanes refreshed
+- Hypothesis: if GM2560-MFU-007 is past the old allocator and topology failures, it should next either complete a train step, produce a new full-shape failure signature, or spend long enough pre-step to justify minimizing the full executable path.
+- Command:
+  - `uv run iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-job-20260615-001940/grug-train-GM2560-MFU-007-cw-20260614-1720 | jq '{job_id:(.job_id // .id), state:(.state // .status), task_count:(.tasks|length? // .task_count), states:([.tasks[]? | (.state // .status)] | group_by(.) | map({state:.[0], count:length})), failure_count, preemption_count, error:(.error // .status_message // null)}'`
+  - `uv run iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260615-001940/grug-train-GM2560-MFU-007-cw-20260614-1720 --since-seconds 900 --max-lines 8000 | rg -i 'Progress on:train|train/loss|throughput/total_tokens|throughput/tokens_per_second|throughput/mfu|parameter_count|flops_per_token|RESOURCE_EXHAUSTED|OOM|out of memory|Traceback|Fatal|kCollectivePermute|rendezvous|clique|failed|Error|compil|memory|allocation|buffer|rematerialization|Data loader stalled'`
+  - `gh issue view 6367 --repo marin-community/marin --json number,title,state,labels,body,url,comments`
+- Config:
+  - Active run: `GM2560-MFU-007-cw-20260614-1720`
+  - Parent: `/dlwh/iris-run-job-20260615-001940`
+  - Child: `/dlwh/iris-run-job-20260615-001940/grug-train-GM2560-MFU-007-cw-20260614-1720`
+  - Full May d2560 shape, 32 H100 nodes, `expert_axis=8`, `model_axis=1`, synthetic data, XLA CE, ring MoE, profiler/checkpoints/watch disabled.
+- Result: child is `running` with 32/32 tasks running, `failure_count=0`, and `preemption_count=0`. Logs reached full static train summaries on ranks, including `parameter_count=67078882816`, `throughput/flops_per_token_analytic=5706711040.0`, and `Progress on:train -/4`, but no completed train-step metric appeared in the sampled logs. No fresh OOM, traceback, clique/rendezvous, or `kCollectivePermute` error appeared in the latest samples. Issue #6367 body was updated to reflect MFU-007 as the active gate instead of the obsolete MIN-001/Kueue CPU state.
+- Sidecar status:
+  - Fermat completed read-only bottleneck scouting. Added likely lanes: data/host stalls even with synthetic, per-step metric/logging overhead, CE/lm-head sharding, router/QB bookkeeping, and startup HLO/JAXPR logging/cache overhead.
+  - Franklin completed an attention patch: FA4 metadata reuse for matching shape/window, stale window refresh, and stale metadata rejection at the kernel boundary. Validation reported `uv run pytest lib/levanter/tests/grug/test_fa4_cute_attention.py -q` -> `6 passed, 2 skipped`, py_compile passed, and focused pre-commit passed.
+  - New sidecars: Meitner owns data/host synthetic-loader overhead; Bernoulli owns CE/lm-head sharding.
+- Interpretation: the public tracking issue is current again, and the active run remains a live full-shape gate rather than a terminal result. The next decision should wait for either a completed step metric or a decisive failure/stall window. If it steps, launch a W&B/profile repeat with the same topology and profile scopes for attention, MoE, CE, router/QB, optimizer/update, FSDP/reshards, and host/data. If it fails on HBM, try `--remat recompute_all`; if it remains pre-step without errors, minimize full-shape executable components before another 32-node full profile.
+- Next action: keep babysitting MFU-007; poll active sidecars; run changed-file validation after sidecar patches settle.
+
+### 2026-06-14 17:38 PDT - MFU-007 still compiling; activation reshard warning persists
+- Hypothesis: if the full d2560 executable is still following the bad activation layout path, logs should reproduce the SPMD full-rematerialization warning before any step metric.
+- Command:
+  - `uv run iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-job-20260615-001940/grug-train-GM2560-MFU-007-cw-20260614-1720 | jq '{job_id:(.job_id // .id), state:(.state // .status), task_count:(.tasks|length? // .task_count), states:([.tasks[]? | (.state // .status)] | group_by(.) | map({state:.[0], count:length})), failure_count, preemption_count, error:(.error // .status_message // null)}'`
+  - `uv run iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260615-001940/grug-train-GM2560-MFU-007-cw-20260614-1720 --since-seconds 600 --max-lines 6000 | rg -i 'Progress on:train|train/loss|throughput/total_tokens|throughput/tokens_per_second|throughput/mfu|parameter_count|flops_per_token|RESOURCE_EXHAUSTED|OOM|out of memory|Traceback|Fatal|kCollectivePermute|rendezvous|clique|failed|Error|compil|memory|allocation|buffer|rematerialization|Data loader stalled'`
+- Config: same GM2560-MFU-007 full-shape synthetic gate.
+- Result: child remains `running` with 32/32 tasks running, `failure_count=0`, and `preemption_count=0`. No completed train-step metric appeared. Logs now show repeated XLA SPMD warnings across ranks for `%fake_parameter.2 = bf16[1,4096,2560]`, moving from `{devices=[256,1,1]}` to `{devices=[1,1,32,8] last_tile_dim_replicate}` via involuntary full rematerialization. No fresh OOM, traceback, clique/rendezvous, or `kCollectivePermute` error appeared in this sample.
+- Local code progress: added launcher controls for `MAY_LOG_EVERY`, `MAY_LOG_JAXPRS`, `MAY_LOG_XLA_HLO`, and the matching `SCALE_*` controls. Defaults for the CoreWeave launchers now disable JAXPR/HLO dumps for throughput probes unless explicitly re-enabled. Validation so far: py_compile passed for touched Python files, `bash -n` passed for both wrappers, and both May/scale dry-runs forwarded `log_every=10`, `log_jaxprs=false`, and `log_xla_hlo=false`.
+- Interpretation: MFU-007 has not failed, but the full d2560 compile is still exercising the known dense activation reshard path. If it reaches steps, this warning becomes a profile target; if it remains pre-step much longer, the next minimizer should isolate the non-MoE dense projection/shared-MLP activation sharding at full seq/batch before another full d2560 profile.
+- Next action: continue babysitting until a step metric, terminal failure, or a long enough pre-step stall to justify replacing the job.
+
+### 2026-06-14 17:43 PDT - XLA CE model-axis sharded vocab path
+- Hypothesis: the current XLA CE path reshards `lm_head` to fully replicated inside the CE `shard_map`; that is safe for `model_axis=1` but becomes a bottleneck if a future non-ring or model-axis-only profile uses `model_axis>1`.
+- Command:
+  - `uv run pytest lib/levanter/tests/grug/test_loss.py -q`
+  - `XLA_FLAGS=--xla_force_host_platform_device_count=2 uv run pytest lib/levanter/tests/grug/test_loss.py -q`
+  - `uv run python -m py_compile lib/levanter/src/levanter/grug/loss.py lib/levanter/tests/grug/test_loss.py`
+  - `./infra/pre-commit.py --changed-files --fix`
+- Config: local code only; active MFU-007 uses `model_axis=1`, so this patch does not affect the live job.
+- Result: added an XLA-only CE path that keeps `lm_head` as `P(None, "model")` when `implementation="xla"` and mesh `model` axis size is >1. Each model shard computes local XLA CE and logsumexp over its vocab slice, then combines the global logsumexp and selected-label logit across the `model` axis. Added value and gradient parity tests for model-sharded vocab CE. Validation passed: normal test run `3 passed, 1 skipped`; forced two-device host mesh `4 passed`; py_compile passed; changed-file pre-commit passed. Pytest emitted JAX GC cleanup warnings after test completion, but exited 0.
+- Interpretation: this is a safe future-path patch for model-axis CE profiles. It does not solve MFU-007's current CE/lm-head replication because `model_axis=1` leaves no vocab/model axis to shard over. If a profile shows CE HBM or `lm_head` reshard/all-gather hot, the next experiment should use a topology where a non-ring backend or model-axis-only diagnostic can exercise this sharded CE path.
+- Next action: keep current full-shape gate on EP8/model1; only use this CE path after a viable model-axis topology exists or for isolated CE diagnostics.
+
+### 2026-06-14 17:50 PDT - MFU-007 failed in 256-device clique init and was stopped
+- Hypothesis: if MFU-007 is following the same bad path as GM006, it should either remain pre-step in clique/rendezvous init or hit a distributed coordination fatal before producing train-step metrics.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-job-20260615-001940/grug-train-GM2560-MFU-007-cw-20260614-1720`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260615-001940/grug-train-GM2560-MFU-007-cw-20260614-1720 --since-seconds 5400 --max-lines 50000 > /tmp/mfu007-full.log`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job bug-report /dlwh/iris-run-job-20260615-001940/grug-train-GM2560-MFU-007-cw-20260614-1720 > /tmp/mfu007-bug-report.txt`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260615-001940`
+- Config:
+  - Run id: `GM2560-MFU-007-cw-20260614-1720`
+  - Parent: `/dlwh/iris-run-job-20260615-001940`
+  - Child: `/dlwh/iris-run-job-20260615-001940/grug-train-GM2560-MFU-007-cw-20260614-1720`
+  - Full May d2560 shape, 32 H100 nodes, `expert_axis=8`, `model_axis=1`, synthetic data, XLA CE, ring MoE.
+- Result: no train step completed. Logs reached `Progress on:train -/4`, selected XLA CE, and emitted the SPMD involuntary full-rematerialization warning for `%fake_parameter.2 = bf16[1,4096,2560]` from `{devices=[256,1,1]}` to `{devices=[1,1,32,8] last_tile_dim_replicate}`. At ~00:44 UTC, ranks emitted 256-device `Initialize clique` warnings; at ~00:45 UTC the JAX coordination service declared tasks 17, 21, and 9 unhealthy, then the remaining tasks terminated with `UNAVAILABLE: The following tasks are unhealthy (stopped sending heartbeats)`. Iris showed the child as `running` but all 32 tasks back in `building`, `failure_count=1`, task 0 `Error`, and the other tasks bounced for atomic re-scheduling. The parent and child were stopped to avoid rebuilding the same failed full-shape attempt.
+- Sidecar result: Kierkegaard's one-node EP8 ring/ragged probes (`GM2560-EP8-RING-D2560ISH-001` and `GM2560-EP8-RAGGED-D2560ISH-002`) never got a worker/container and were stopped from `BUILDING`; they add no runtime evidence, only a capacity/placement note.
+- Interpretation: MFU-007 is a failed full-shape gate, not a slow compile. The signal points at the large `[1,4096,2560]` activation reshard / 256-device clique initialization path. It is still not an allocator OOM; it is a distributed executable/runtime failure after SPMD partitioning.
+- Next action: launch a 32-node one-layer d2560 minimizer that preserves seq4096, batch256, e256/top4, EP8/model1, ring, XLA CE, and disables JAXPR/HLO dumps. If one layer fails the same way, fix activation sharding before more full-depth runs; if it steps, increase layers/depth to find the threshold.
+
+### 2026-06-14 17:51 PDT - MIN-015 one-layer full-activation minimizer launched
+- Hypothesis: preserving the full `[batch, seq, hidden] = [256,4096,2560]` activation shape with only one layer will tell us whether the bad sharding/clique path is independent of full 26-layer depth.
+- Command:
+  - `env SCALE_GPU_REPLICAS=32 SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS=1 SCALE_HIDDEN_DIM=2560 SCALE_NUM_LAYERS=1 SCALE_NUM_EXPERTS=256 SCALE_TOP_K=4 SCALE_BATCH=256 SCALE_SEQ_LEN=4096 SCALE_STEPS=2 SCALE_REMAT=save_moe SCALE_PROFILER_STEPS=0 experiments/grug/moe/run_cw_scale.sh --full --data synthetic --checkpoints none --worker-cpu 32 --model-axis 1 --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --ce-implementation xla --moe-implementation ring --run-id GM2560-MIN-015-cw-20260614-1752 --submit`
+- Config:
+  - Run id: `GM2560-MIN-015-cw-20260614-1752`
+  - Parent: `/dlwh/iris-run-job-20260615-005101`
+  - Shape/topology: d2560, 1 layer, 256 experts, top-4, batch 256, seq 4096, 32 H100 nodes, `expert_axis=8`, `model_axis=1`, `replica_axis=1`, ring MoE, XLA CE.
+  - Runtime: synthetic data, no checkpoints, watch disabled, profiler disabled, JAXPR/HLO dumps explicitly disabled.
+- Result: parent submitted successfully. Child not yet discovered at launch time.
+- Interpretation: this is the active minimizer for the MFU-007 failure boundary.
+- Next action: babysit MIN-015 for child discovery, task placement, first-step metrics, or the same SPMD/clique/fatal signature.
+
+### 2026-06-14 17:56 PDT - MIN-015 launcher bug fixed; MIN-016 replacement launched
+- Hypothesis: MIN-015's failure was a launcher/config-versioning bug, not evidence about the d2560 one-layer executable.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs /dlwh/iris-run-job-20260615-005101 --tail --max-lines 260`
+  - `uv run pytest tests/test_grug_variant_contracts.py::test_grug_moe_synthetic_dataset_is_dataclass_replaceable tests/test_grug_variant_contracts.py::test_grug_moe_synthetic_dataset_vectorizes_token_generation tests/test_grug_variant_contracts.py::test_grug_moe_synthetic_dataset_preserves_eos_segments -q`
+  - `uv run python -m py_compile experiments/grug/moe/launch.py tests/test_grug_variant_contracts.py`
+  - `env SCALE_GPU_REPLICAS=32 SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS=1 SCALE_HIDDEN_DIM=2560 SCALE_NUM_LAYERS=1 SCALE_NUM_EXPERTS=256 SCALE_TOP_K=4 SCALE_BATCH=256 SCALE_SEQ_LEN=4096 SCALE_STEPS=2 SCALE_REMAT=save_moe SCALE_PROFILER_STEPS=0 experiments/grug/moe/run_cw_scale.sh --full --data synthetic --checkpoints none --worker-cpu 32 --model-axis 1 --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --ce-implementation xla --moe-implementation ring --run-id GM2560-MIN-016-cw-20260614-1758 --submit`
+- Config:
+  - Failed run id: `GM2560-MIN-015-cw-20260614-1752`
+  - Failed parent: `/dlwh/iris-run-job-20260615-005101`
+  - Replacement run id: `GM2560-MIN-016-cw-20260614-1758`
+  - Replacement parent: `/dlwh/iris-run-job-20260615-005537`
+  - Same one-layer full-activation shape/topology as MIN-015.
+- Result: MIN-015 failed in the parent dispatcher before child launch with `ValueError: field _positions is declared with init=False, it cannot be specified with replace()`. The cause was `SyntheticGrugDataset` caching runtime arrays as dataclass `init=False` fields while Marin executor recursively versions configs through `dataclasses.replace`. Fixed the caches to be runtime attributes outside dataclass fields and added a regression test that the synthetic dataset is `dataclasses.replace`-safe. Focused tests passed (`3 passed`) and py_compile passed. MIN-016 submitted successfully; first poll showed the parent `pending` with no failures and no logs yet.
+- Sidecar results:
+  - Halley completed the attention lane: dynamic segment-id values do not retrace the jitted FA4 frontend; added `fa4_cute_metadata`, `fa4_cute_prepare_metadata`, and `fa4_cute_kernel` profiler scopes and a regression test. Validation: FA4 tests `7 passed, 2 skipped`, py_compile and focused pre-commit passed.
+  - Harvey completed the host-overhead lane: gated explicit loop tracker writes by `log_every` and replaced repeated per-step `int(state.step)` reads with a Python loop counter. Validation: focused log-every test passed, full `tests/test_grug_variant_contracts.py` passed, and focused pre-commit passed.
+- Interpretation: MIN-015 is not model evidence. MIN-016 is now the active one-layer full-activation minimizer, using the fixed synthetic dataset path and the same no-JAXPR/no-HLO controls.
+- Next action: babysit MIN-016 for dispatcher launch, child placement, and either first-step metrics or the MFU-007 SPMD/clique/fatal signature.
+
+### 2026-06-14 18:05 PDT - qkv output sharding patch; MIN-017 replacement launched
+- Hypothesis: the `%fake_parameter.2 = bf16[1,4096,2560]` rematerialization warning may come from the first attention qkv projection: the qkv weight was replicated, but the `einsum` had no explicit output sharding, leaving XLA free to choose a hidden-dimension-sharded activation layout from the original weight layout.
+- Command:
+  - `uv run pytest tests/test_grug_variant_contracts.py::test_grug_moe_compute_live_params_one_step_lowers -q`
+  - `uv run pytest tests/test_grug_variant_contracts.py::test_grug_moe_compute_live_params_keep_fp32_master -q`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260615-005537`
+  - `env SCALE_GPU_REPLICAS=32 SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS=1 SCALE_HIDDEN_DIM=2560 SCALE_NUM_LAYERS=1 SCALE_NUM_EXPERTS=256 SCALE_TOP_K=4 SCALE_BATCH=256 SCALE_SEQ_LEN=4096 SCALE_STEPS=2 SCALE_REMAT=save_moe SCALE_PROFILER_STEPS=0 experiments/grug/moe/run_cw_scale.sh --full --data synthetic --checkpoints none --worker-cpu 32 --model-axis 1 --watch-interval 0 --log-every 1 --log-jaxprs false --log-xla-hlo false --ce-implementation xla --moe-implementation ring --run-id GM2560-MIN-017-cw-20260614-1806 --submit`
+- Config:
+  - Stopped stale parent: `/dlwh/iris-run-job-20260615-005537`
+  - Stopped stale child: `/dlwh/iris-run-job-20260615-005537/grug-train-GM2560-MIN-016-cw-20260614-1758`
+  - New run id: `GM2560-MIN-017-cw-20260614-1806`
+  - New parent: `/dlwh/iris-run-job-20260615-010535`
+  - Same one-layer full-activation shape/topology as MIN-016.
+- Result: MIN-016 got past dispatcher launch and created a child, but all 32 child tasks were still `building` with no worker assignment and zero failures/preemptions. Because it had not taken GPUs yet, it was stopped before placement. Added `out_sharding=_batch_spec()` to the attention qkv projection. Focused compile/lowering tests passed. MIN-017 submitted successfully from the patched bundle.
+- Interpretation: MIN-017 supersedes MIN-016. It tests the same one-layer full-activation minimizer while also forcing qkv projection output back to canonical batch sharding, which should reduce the chance of the known hidden-dimension activation reshard.
+- Next action: babysit MIN-017 for child discovery, task placement, and either first-step metrics or the MFU-007 SPMD/clique/fatal signature.

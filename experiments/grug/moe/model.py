@@ -227,7 +227,7 @@ class CausalSelfAttention(eqx.Module):
         kv_features = self.cfg.num_kv_heads * head_dim
         qkv_weight = unshard(jnp.concatenate([self.w_q, self.w_k, self.w_v], axis=1))
         q_raw, k_raw, v_raw = jnp.split(
-            jnp.einsum("bsh,hd->bsd", x, qkv_weight),
+            jnp.einsum("bsh,hd->bsd", x, qkv_weight, out_sharding=batch_spec),
             [q_features, q_features + kv_features],
             axis=-1,
         )

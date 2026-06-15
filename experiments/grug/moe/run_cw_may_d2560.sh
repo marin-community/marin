@@ -21,24 +21,30 @@ SUBMIT=false
 GPU_REPLICAS=32
 EXPERT_AXIS=8
 REPLICA_AXIS=1
+MODEL_AXIS=1
 BATCH=256
 SEQ_LEN=4096
 STEPS=30
-CHECKPOINTS="local"
+CHECKPOINTS="none"
 DATA="slimpajama"
 REMAT="save_moe"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 LIVE_PARAM_MODE="param"
 ATTENTION_IMPLEMENTATION="gpu_fa4_cute"
 CE_IMPLEMENTATION=""
+MOE_IMPLEMENTATION="${MAY_MOE_IMPLEMENTATION:-ring}"
 TRACKER="wandb"
 PROFILER_START=12
 PROFILER_STEPS=8
-ENABLE_HLO_PROTO=true
-HOST_TRACER_LEVEL=1
-PYTHON_TRACER_LEVEL=0
+ENABLE_HLO_PROTO="${MAY_PROFILER_ENABLE_HLO_PROTO:-false}"
+HOST_TRACER_LEVEL="${MAY_PROFILER_HOST_TRACER_LEVEL:-1}"
+PYTHON_TRACER_LEVEL="${MAY_PROFILER_PYTHON_TRACER_LEVEL:-0}"
 XLA_MEMORY_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.95}"
 WORKER_CPU=32
+WATCH_INTERVAL=0
+LOG_EVERY=1
+LOG_JAXPRS="${MAY_LOG_JAXPRS:-false}"
+LOG_XLA_HLO="${MAY_LOG_XLA_HLO:-false}"
 
 usage() {
     cat <<'EOF'
@@ -56,6 +62,7 @@ Options:
   --worker-cpu N            MAY_CPU_PER_REPLICA for each H100 worker pod (default: 32).
   --expert-axis N           MAY_EXPERT_AXIS (default: 8).
   --replica-axis N          MAY_REPLICA_AXIS (default: 1).
+  --model-axis N            MAY_MODEL_AXIS tensor/model-parallel axis size (default: 1).
   --batch N                 MAY_BATCH (default: 256).
   --seq-len N               MAY_SEQ_LEN (default: 4096).
   --steps N                 MAY_STEPS (default: 30).
@@ -64,12 +71,17 @@ Options:
   --xla-memory-fraction F   XLA_PYTHON_CLIENT_MEM_FRACTION (default: 0.95).
   --tracker NAME            MAY_TRACKER: wandb or json_logger (default: wandb).
   --data NAME               MAY_DATA: slimpajama, nemotron, or synthetic (default: slimpajama).
-  --checkpoints MODE        MAY_CHECKPOINTS: local or s3 (default: local).
+  --checkpoints MODE        MAY_CHECKPOINTS: none, local, or s3 (default: none).
   --remat MODE              MAY_REMAT: save_moe or recompute_all (default: save_moe).
   --mp POLICY               MAY_MP policy string.
   --live-param-mode MODE    MAY_LIVE_PARAM_MODE: param or compute_with_master (default: param).
   --attention NAME          MAY_ATTENTION_IMPLEMENTATION (default: gpu_fa4_cute).
   --ce-implementation NAME  MAY_CE_IMPLEMENTATION: pallas_gpu, xla, reference, or empty default.
+  --moe-implementation NAME MAY_MOE_IMPLEMENTATION: ring, ragged_all_to_all, or deepep (default: ring).
+  --watch-interval N        MAY_WATCH_INTERVAL; 0 disables grad/param watch stats (default: 0).
+  --log-every N             MAY_LOG_EVERY train progress/scalar logging cadence (default: 1).
+  --log-jaxprs BOOL         MAY_LOG_JAXPRS; true dumps JAXPRs (default: false).
+  --log-xla-hlo BOOL        MAY_LOG_XLA_HLO; true dumps XLA HLO (default: false).
   -h, --help                Show this help.
 
 This wrapper forwards explicit MAY_* environment variables to Iris; local shell
@@ -118,6 +130,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --replica-axis)
             REPLICA_AXIS="$2"
+            shift 2
+            ;;
+        --model-axis)
+            MODEL_AXIS="$2"
             shift 2
             ;;
         --batch)
@@ -176,6 +192,26 @@ while [ "$#" -gt 0 ]; do
             CE_IMPLEMENTATION="$2"
             shift 2
             ;;
+        --moe-implementation)
+            MOE_IMPLEMENTATION="$2"
+            shift 2
+            ;;
+        --watch-interval)
+            WATCH_INTERVAL="$2"
+            shift 2
+            ;;
+        --log-every)
+            LOG_EVERY="$2"
+            shift 2
+            ;;
+        --log-jaxprs)
+            LOG_JAXPRS="$2"
+            shift 2
+            ;;
+        --log-xla-hlo)
+            LOG_XLA_HLO="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -220,6 +256,7 @@ ENV_ARGS=(
     -e MAY_CPU_PER_REPLICA "$WORKER_CPU"
     -e MAY_EXPERT_AXIS "$EXPERT_AXIS"
     -e MAY_REPLICA_AXIS "$REPLICA_AXIS"
+    -e MAY_MODEL_AXIS "$MODEL_AXIS"
     -e MAY_BATCH "$BATCH"
     -e MAY_SEQ_LEN "$SEQ_LEN"
     -e MAY_STEPS "$STEPS"
@@ -230,12 +267,17 @@ ENV_ARGS=(
     -e MAY_LIVE_PARAM_MODE "$LIVE_PARAM_MODE"
     -e MAY_ATTENTION_IMPLEMENTATION "$ATTENTION_IMPLEMENTATION"
     -e MAY_CE_IMPLEMENTATION "$CE_IMPLEMENTATION"
+    -e MAY_MOE_IMPLEMENTATION "$MOE_IMPLEMENTATION"
     -e MAY_TRACKER "$TRACKER"
     -e MAY_PROFILER_START "$PROFILER_START"
     -e MAY_PROFILER_STEPS "$PROFILER_STEPS"
     -e MAY_PROFILER_ENABLE_HLO_PROTO "$ENABLE_HLO_PROTO"
     -e MAY_PROFILER_HOST_TRACER_LEVEL "$HOST_TRACER_LEVEL"
     -e MAY_PROFILER_PYTHON_TRACER_LEVEL "$PYTHON_TRACER_LEVEL"
+    -e MAY_WATCH_INTERVAL "$WATCH_INTERVAL"
+    -e MAY_LOG_EVERY "$LOG_EVERY"
+    -e MAY_LOG_JAXPRS "$LOG_JAXPRS"
+    -e MAY_LOG_XLA_HLO "$LOG_XLA_HLO"
     -e XLA_PYTHON_CLIENT_MEM_FRACTION "$XLA_MEMORY_FRACTION"
 )
 
@@ -263,17 +305,23 @@ prefix: $MARIN_PREFIX
 r2_endpoint: $AWS_ENDPOINT_URL
 nodes: $GPU_REPLICAS
 worker_cpu: $WORKER_CPU
-mesh axes: replica=$REPLICA_AXIS expert=$EXPERT_AXIS
+mesh axes: replica=$REPLICA_AXIS expert=$EXPERT_AXIS model=$MODEL_AXIS
 batch: $BATCH
 seq_len: $SEQ_LEN
 steps: $STEPS
 tracker: $TRACKER
 profiler: start=$PROFILER_START steps=$PROFILER_STEPS hlo_proto=$ENABLE_HLO_PROTO
+checkpoints: $CHECKPOINTS
 xla_memory_fraction: $XLA_MEMORY_FRACTION
 mp: $MP
 live_param_mode: $LIVE_PARAM_MODE
+watch_interval: $WATCH_INTERVAL
+log_every: $LOG_EVERY
+log_jaxprs: $LOG_JAXPRS
+log_xla_hlo: $LOG_XLA_HLO
 attention: $ATTENTION_IMPLEMENTATION
 ce_implementation: ${CE_IMPLEMENTATION:-default}
+moe_implementation: $MOE_IMPLEMENTATION
 data: $DATA
 
 Command shape:

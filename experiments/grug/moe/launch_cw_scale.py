@@ -18,6 +18,7 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_GPU_REPLICAS  number of 8xH100 nodes (default 32 -> 256 GPUs)
     SCALE_EXPERT_AXIS   expert-parallel axis size, intra-node (default 8)
     SCALE_REPLICA_AXIS  cross-node replication; 1 = pure FSDP (default 1)
+    SCALE_MODEL_AXIS    tensor/model-parallel axis size (default 1)
     SCALE_BATCH         global batch in sequences (default 256)
     SCALE_SEQ_LEN       sequence length (default 2048)
     SCALE_STEPS         training steps (default 50)
@@ -30,15 +31,25 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
                         CPU request for each 8xH100 worker pod (default 32)
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
                         output=bfloat16); params=bfloat16 halves FSDP gather bytes
+    SCALE_CE_IMPLEMENTATION
+                        empty = default; xla skips pallas CE autotune for quick
+                        sharding/debug probes
+    SCALE_MOE_IMPLEMENTATION
+                        empty = default ring EP backend; ragged_all_to_all tests
+                        the ragged all-to-all EP backend
     SCALE_TRACKER       wandb | json_logger (default json_logger)
     SCALE_DATA          slimpajama | synthetic (default slimpajama)
     SCALE_PROFILER_STEPS  >0 enables a jax_profile capture window of N steps
                           (use SCALE_TRACKER=wandb so the artifact uploads)
     SCALE_PROFILER_START  profiler start step (default 8, past compile/warmup)
-    SCALE_CHECKPOINTS   s3 (default) | local. local writes checkpoints to
-                        node-local disk with no periodic saves -- for throughput
-                        experiments where the checkpoint is disposable and a
-                        slow S3 commit must not wedge the end-of-run barrier
+    SCALE_WATCH_INTERVAL  grad/param watch interval; 0 disables (default 0)
+    SCALE_LOG_EVERY     train progress/scalar logging cadence (default 1)
+    SCALE_LOG_JAXPRS    true | false, JAXPR dump toggle (default false)
+    SCALE_LOG_XLA_HLO   true | false, HLO dump toggle (default false)
+    SCALE_CHECKPOINTS   none (default) | local | s3. none disables restore and
+                        all saves for disposable throughput probes; local writes
+                        only the final forced checkpoint to node-local disk; s3
+                        uses the default output-path checkpointer.
     RUN_ID              unique run identifier
 """
 
@@ -48,6 +59,7 @@ from typing import cast
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -57,12 +69,15 @@ from marin.execution.types import ExecutorStep, this_output_path, versioned
 
 from experiments.grug.moe.launch import (
     GrugMoeLaunchConfig,
+    env_bool,
     env_int,
     run_grug_moe_trial,
     slimpajama_6b_data,
     synthetic_grug_data,
+    validate_local_expert_model_axes,
+    validate_ring_expert_model_axes,
 )
-from experiments.grug.moe.model import GrugModelConfig, RematMode
+from experiments.grug.moe.model import CrossEntropyImplementation, GrugModelConfig, RematMode
 from experiments.grug.moe.train import GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
 
@@ -88,7 +103,7 @@ SCALE_OPTIMIZER = AdamConfig(
     min_lr_ratio=0.1,
 )
 
-SCALE_TRAINER_DEFAULTS = dict(z_loss_weight=1e-4, ema_beta=None, log_every=1)
+SCALE_TRAINER_DEFAULTS = dict(z_loss_weight=1e-4, ema_beta=None)
 
 
 def build_data(model: GrugModelConfig):
@@ -121,6 +136,8 @@ def build_scale_model() -> GrugModelConfig:
     remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
     if remat_mode not in ("recompute_all", "save_moe"):
         raise ValueError(f"SCALE_REMAT={remat_mode!r} must be 'recompute_all' or 'save_moe'")
+    cross_entropy_implementation = os.environ.get("SCALE_CE_IMPLEMENTATION") or None
+    moe_implementation = os.environ.get("SCALE_MOE_IMPLEMENTATION") or None
     return GrugModelConfig(
         vocab_size=VOCAB_SIZE,
         hidden_dim=hidden_dim,
@@ -134,6 +151,8 @@ def build_scale_model() -> GrugModelConfig:
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         max_seq_len=seq_len,
         sliding_window=seq_len,
+        cross_entropy_implementation=cast(CrossEntropyImplementation | None, cross_entropy_implementation),
+        moe_implementation=cast(str | None, moe_implementation),
         remat_mode=cast(RematMode, remat_mode),
     )
 
@@ -144,6 +163,7 @@ def build_scale_step() -> ExecutorStep:
     replicas = env_int("SCALE_GPU_REPLICAS", 32)
     expert_axis = env_int("SCALE_EXPERT_AXIS", 8)
     replica_axis = env_int("SCALE_REPLICA_AXIS", 1)
+    model_axis = env_int("SCALE_MODEL_AXIS", 1)
     batch_size = env_int("SCALE_BATCH", DEFAULT_BATCH)
     steps = env_int("SCALE_STEPS", 50)
     worker_cpu = env_int("SCALE_CPU_PER_REPLICA", 32)
@@ -156,7 +176,8 @@ def build_scale_step() -> ExecutorStep:
         num_steps=profiler_steps,
     )
 
-    checkpoint_mode = os.environ.get("SCALE_CHECKPOINTS", "s3").lower()
+    checkpoint_mode = os.environ.get("SCALE_CHECKPOINTS", "none").lower()
+    checkpointing_enabled = True
     if checkpoint_mode == "local":
         checkpointer = CheckpointerConfig(
             base_path=f"/tmp/grug-scale-ckpt/{run_id}",
@@ -166,16 +187,43 @@ def build_scale_step() -> ExecutorStep:
         )
     elif checkpoint_mode == "s3":
         checkpointer = None
+    elif checkpoint_mode in ("none", "off", "disabled"):
+        checkpointer = None
+        checkpointing_enabled = False
     else:
-        raise ValueError(f"SCALE_CHECKPOINTS={checkpoint_mode!r} must be 's3' or 'local'")
+        raise ValueError(f"SCALE_CHECKPOINTS={checkpoint_mode!r} must be 'none', 'local', or 's3'")
 
     model = build_scale_model()
     if model.num_experts % expert_axis != 0:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by SCALE_EXPERT_AXIS={expert_axis}")
+    if model.num_heads % model_axis != 0:
+        raise ValueError(f"num_heads={model.num_heads} must be divisible by SCALE_MODEL_AXIS={model_axis}")
+    validate_local_expert_model_axes(
+        expert_axis=expert_axis,
+        model_axis=model_axis,
+        local_device_count=GPUS_PER_NODE,
+        env_prefix="SCALE",
+    )
+    validate_ring_expert_model_axes(
+        expert_axis=expert_axis,
+        model_axis=model_axis,
+        moe_implementation=model.moe_implementation,
+        env_prefix="SCALE",
+    )
 
-    # Batch is sharded over the (replica_dcn, data, expert) axes; data absorbs the
-    # rest of the 8*replicas devices. Require the global batch to cover every shard.
-    data_axis = (replicas * GPUS_PER_NODE) // (replica_axis * expert_axis)
+    global_devices = replicas * GPUS_PER_NODE
+    fixed_axes = replica_axis * expert_axis * model_axis
+    if global_devices % fixed_axes != 0:
+        raise ValueError(
+            f"global devices={global_devices} must be divisible by "
+            f"SCALE_REPLICA_AXIS={replica_axis} * SCALE_EXPERT_AXIS={expert_axis} * "
+            f"SCALE_MODEL_AXIS={model_axis}"
+        )
+
+    # Batch is sharded over the (replica_dcn, data, expert) axes. The model axis
+    # does tensor/model parallel work, so it reduces the residual data axis but
+    # does not itself increase the number of batch shards.
+    data_axis = global_devices // fixed_axes
     batch_shards = replica_axis * data_axis * expert_axis
     if batch_size % batch_shards != 0:
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
@@ -204,6 +252,8 @@ def build_scale_step() -> ExecutorStep:
     grug_trainer = GrugTrainerConfig(
         expert_axis_size=expert_axis,
         replica_axis_size=replica_axis,
+        model_axis_size=model_axis,
+        log_every=env_int("SCALE_LOG_EVERY", 1),
         **SCALE_TRAINER_DEFAULTS,
     )
 
@@ -226,7 +276,11 @@ def build_scale_step() -> ExecutorStep:
             grug_trainer=versioned(grug_trainer),
             eval=None,
             profiler=profiler,
+            watch=WatchConfig(interval=env_int("SCALE_WATCH_INTERVAL", 0)),
+            checkpointing_enabled=checkpointing_enabled,
             checkpointer=checkpointer,
+            log_jaxprs=env_bool("SCALE_LOG_JAXPRS", False),
+            log_xla_hlo=env_bool("SCALE_LOG_XLA_HLO", False),
         ),
     )
 

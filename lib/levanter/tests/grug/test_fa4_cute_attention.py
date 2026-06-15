@@ -6,13 +6,19 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+import levanter.grug.attention._fa4_cute as fa4_cute
 from levanter.grug.attention import (
     AttentionMask,
+    Fa4CuteMetadata,
     gpu_fa4_cute_attention,
     reference_attention,
     with_fa4_cute_metadata,
 )
-from levanter.grug.attention._fa4_cute import _packed_segment_causal_lower_bounds, _packed_self_attention_segment_ids
+from levanter.grug.attention._fa4_cute import (
+    _causal_lower_bounds,
+    _packed_segment_causal_lower_bounds,
+    _packed_self_attention_segment_ids,
+)
 
 
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):
@@ -54,6 +60,106 @@ def test_fa4_cute_metadata_is_precomputed_per_sliding_window():
 
     changed_window = mask.with_sliding_window(4)
     assert changed_window.fa4_cute_metadata is None
+
+
+def test_fa4_cute_metadata_supports_unsegmented_causal_masks():
+    mask = AttentionMask.causal(sliding_window=3)
+
+    mask = with_fa4_cute_metadata(mask, batch_size=2, seq_len=6)
+
+    assert mask.fa4_cute_metadata is not None
+    expected_lower_bounds, expected_valid = _causal_lower_bounds(batch_size=2, seq_len=6, sliding_window=3)
+    np.testing.assert_array_equal(mask.fa4_cute_metadata.lower_bounds, expected_lower_bounds)
+    np.testing.assert_array_equal(mask.fa4_cute_metadata.valid, expected_valid)
+    np.testing.assert_array_equal(
+        mask.fa4_cute_metadata.lower_bounds,
+        jnp.array([[0, 0, 0, 1, 2, 3], [0, 0, 0, 1, 2, 3]], dtype=jnp.int32),
+    )
+
+    changed_window = mask.with_sliding_window(4)
+    assert changed_window.fa4_cute_metadata is None
+
+
+def test_fa4_cute_metadata_reuses_compatible_metadata():
+    segment_ids = jnp.array([[7, 7, 8, 8, 8, -1]], dtype=jnp.int32)
+    mask = AttentionMask.causal(sliding_window=3).with_segment_ids(segment_ids)
+    mask = with_fa4_cute_metadata(mask, batch_size=1, seq_len=6)
+
+    reused = with_fa4_cute_metadata(mask, batch_size=1, seq_len=6)
+
+    assert reused is mask
+
+
+def test_fa4_cute_metadata_refreshes_stale_window_metadata():
+    stale_lower_bounds = jnp.zeros((1, 6), dtype=jnp.int32)
+    stale_valid = jnp.ones((1, 6), dtype=jnp.bool_)
+    mask = AttentionMask(
+        is_causal=True,
+        fa4_cute_metadata=Fa4CuteMetadata(
+            lower_bounds=stale_lower_bounds,
+            valid=stale_valid,
+            sliding_window=4,
+        ),
+        sliding_window=3,
+    )
+
+    refreshed = with_fa4_cute_metadata(mask, batch_size=1, seq_len=6)
+
+    assert refreshed.fa4_cute_metadata is not None
+    np.testing.assert_array_equal(
+        refreshed.fa4_cute_metadata.lower_bounds,
+        jnp.array([[0, 0, 0, 1, 2, 3]], dtype=jnp.int32),
+    )
+    assert refreshed.fa4_cute_metadata.sliding_window == 3
+
+
+def test_gpu_fa4_cute_attention_rejects_stale_metadata_window(monkeypatch):
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    q, k, v = _make_qkv(batch=1, q_len=6, k_len=6, q_heads=2, kv_heads=1)
+    mask = AttentionMask(
+        is_causal=True,
+        fa4_cute_metadata=Fa4CuteMetadata(
+            lower_bounds=jnp.zeros((1, 6), dtype=jnp.int32),
+            valid=jnp.ones((1, 6), dtype=jnp.bool_),
+            sliding_window=4,
+        ),
+        sliding_window=3,
+    )
+
+    with pytest.raises(ValueError, match="metadata sliding_window"):
+        gpu_fa4_cute_attention(q, k, v, mask)
+
+
+def test_gpu_fa4_cute_attention_does_not_retrace_for_dynamic_segment_ids(monkeypatch):
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+
+    trace_count = 0
+
+    def fake_attention_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config):
+        nonlocal trace_count
+        del k, v, sm_scale, kernel_config
+        trace_count += 1
+        metadata_dependency = lower_bounds.astype(q.dtype)[..., None, None] * jnp.asarray(0, dtype=q.dtype)
+        validity_dependency = valid.astype(q.dtype)[..., None, None] * jnp.asarray(0, dtype=q.dtype)
+        return q + metadata_dependency + validity_dependency
+
+    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", fake_attention_forward)
+    q, k, v = _make_qkv(batch=1, q_len=6, k_len=6, q_heads=2, kv_heads=1)
+
+    @jax.jit
+    def run_attention(segment_ids):
+        mask = AttentionMask.causal(sliding_window=3).with_segment_ids(segment_ids)
+        mask = with_fa4_cute_metadata(mask, batch_size=1, seq_len=6)
+        return gpu_fa4_cute_attention(q, k, v, mask)
+
+    first_segments = jnp.array([[0, 0, 1, 1, 1, -1]], dtype=jnp.int32)
+    second_segments = jnp.array([[5, 5, 6, 6, 7, -1]], dtype=jnp.int32)
+
+    np.testing.assert_array_equal(run_attention(first_segments), q)
+    np.testing.assert_array_equal(run_attention(second_segments), q)
+    np.testing.assert_array_equal(run_attention(first_segments), q)
+    assert trace_count == 1
 
 
 @pytest.mark.parametrize(("q_heads", "kv_heads"), [(4, 1), (2, 2)])

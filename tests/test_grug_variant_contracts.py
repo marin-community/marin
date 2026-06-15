@@ -8,6 +8,7 @@ These checks are intentionally variant-discovered: if a subdirectory contains
 lowering and training contracts.
 """
 
+import asyncio
 import dataclasses
 import importlib
 import json
@@ -82,6 +83,95 @@ def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
         replica_axis_size=1,
         model_axis_size=1,
     ) == (1, 4, 1, 1)
+
+
+def test_grug_coreweave_axes_keep_expert_and_model_groups_local():
+    launch_module = importlib.import_module("experiments.grug.moe.launch")
+
+    launch_module.validate_local_expert_model_axes(
+        expert_axis=2,
+        model_axis=4,
+        local_device_count=8,
+        env_prefix="SCALE",
+    )
+
+
+def test_grug_coreweave_axes_reject_cross_node_expert_model_product():
+    launch_module = importlib.import_module("experiments.grug.moe.launch")
+
+    with pytest.raises(ValueError, match="SCALE_EXPERT_AXIS \\* SCALE_MODEL_AXIS"):
+        launch_module.validate_local_expert_model_axes(
+            expert_axis=8,
+            model_axis=4,
+            local_device_count=8,
+            env_prefix="SCALE",
+        )
+
+
+def test_grug_coreweave_ring_ep_rejects_simultaneous_expert_and_model_axes():
+    launch_module = importlib.import_module("experiments.grug.moe.launch")
+
+    with pytest.raises(ValueError, match="SCALE_MOE_IMPLEMENTATION=ring"):
+        launch_module.validate_ring_expert_model_axes(
+            expert_axis=2,
+            model_axis=4,
+            moe_implementation="ring",
+            env_prefix="SCALE",
+        )
+
+
+def test_grug_coreweave_non_ring_backend_can_try_simultaneous_expert_and_model_axes():
+    launch_module = importlib.import_module("experiments.grug.moe.launch")
+
+    launch_module.validate_ring_expert_model_axes(
+        expert_axis=2,
+        model_axis=4,
+        moe_implementation="ragged_all_to_all",
+        env_prefix="SCALE",
+    )
+
+
+def test_grug_moe_synthetic_dataset_vectorizes_token_generation():
+    launch_module = importlib.import_module("experiments.grug.moe.launch")
+    dataset = launch_module.SyntheticGrugDataset(seq_len=8, vocab_size=128, num_examples=16)
+
+    examples = asyncio.run(dataset.get_batch([0, 3, 5]))
+
+    assert len(examples) == 3
+    for index, example in zip([0, 3, 5], examples, strict=True):
+        expected_tokens = (jnp.arange(8, dtype=jnp.int32) + index * 9973) % 128
+        assert jnp.array_equal(example.tokens, expected_tokens)
+        assert jnp.array_equal(example.loss_weight, GrugLmExample.causal_loss_mask(8).astype(jnp.float32))
+        assert example.attn_mask.segment_ids is None
+
+
+def test_grug_moe_synthetic_dataset_preserves_eos_segments():
+    launch_module = importlib.import_module("experiments.grug.moe.launch")
+    dataset = launch_module.SyntheticGrugDataset(seq_len=8, vocab_size=16, num_examples=16, eos_id=15, eos_interval=4)
+
+    [example] = asyncio.run(dataset.get_batch([1]))
+    expected_tokens = (jnp.arange(8, dtype=jnp.int32) + 9973) % 16
+    expected_tokens = expected_tokens.at[3::4].set(15)
+    expected = GrugLmExample.causal(expected_tokens, eos_id=15)
+
+    assert jnp.array_equal(example.tokens, expected.tokens)
+    assert jnp.array_equal(example.loss_weight, expected.loss_weight)
+    assert example.attn_mask.segment_ids is not None
+    assert expected.attn_mask.segment_ids is not None
+    assert jnp.array_equal(example.attn_mask.segment_ids[0], expected.attn_mask.segment_ids[0])
+
+
+def test_grug_moe_synthetic_dataset_is_dataclass_replaceable():
+    launch_module = importlib.import_module("experiments.grug.moe.launch")
+    dataset = launch_module.SyntheticGrugDataset(seq_len=8, vocab_size=128, num_examples=16)
+
+    replaced = dataclasses.replace(dataset, num_examples=32)
+
+    field_names = {field.name for field in dataclasses.fields(replaced)}
+    assert "_positions" not in field_names
+    assert "_loss_weight" not in field_names
+    assert "_attn_mask" not in field_names
+    assert asyncio.run(replaced.async_len()) == 32
 
 
 def _variant_has_noverify(variant_dir: Path) -> bool:
@@ -424,6 +514,87 @@ def test_grug_moe_compute_live_params_one_step_lowers():
     assert _floating_leaf_dtypes(out_state_shape.params) == {jnp.dtype(jnp.bfloat16)}
     assert _floating_leaf_dtypes(out_state_shape.master_params) == {jnp.dtype(jnp.float32)}
     assert "train/loss" in out_metrics_shape
+
+
+def test_grug_moe_log_every_gates_explicit_loop_metrics(tmp_path: Path):
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    launch_module = importlib.import_module("experiments.grug.moe.launch")
+
+    vocab_size = 128
+    seq_len = 8
+    examples = []
+    for i in range(8):
+        tokens = (jnp.arange(seq_len, dtype=jnp.int32) + i) % vocab_size
+        examples.append(GrugLmExample.causal(tokens))
+
+    train_dataset = ListAsyncDataset(examples)
+    data_config = LmDataConfig(
+        components={"direct": DirectDatasetComponent(datasets={"train": train_dataset})},
+        vocab_size=vocab_size,
+        tokenizer="passthrough",
+    )
+
+    logger_name = f"test_grug_json_tracker_moe_{uuid.uuid4().hex}"
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    logger = logging.getLogger(logger_name)
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+    try:
+        variant_tmp = tmp_path / "moe"
+        variant_tmp.mkdir(parents=True, exist_ok=True)
+        trainer_config = TrainerConfig(
+            id="test-grug-moe-log-every",
+            num_train_steps=3,
+            train_batch_size=max(1, len(jax.devices())),
+            tracker=JsonLoggerConfig(logger_name=logger_name),
+            require_accelerator=False,
+            use_explicit_mesh_axes=True,
+            distributed=DistributedConfig(initialize_jax_distributed=False),
+            log_dir=variant_tmp / "logs",
+            checkpointer=launch_module.DisabledCheckpointerConfig(base_path=str(variant_tmp / "checkpoints")),
+            load_checkpoint=False,
+            log_jaxprs=False,
+            log_xla_hlo=False,
+        )
+
+        model_config = _small_model_config(model_module.GrugModelConfig, vocab_size=vocab_size, seq_len=seq_len)
+        model_config = dataclasses.replace(
+            model_config,
+            cross_entropy_implementation="xla",
+            router_z_loss_coef=0.0,
+        )
+        run_cfg = train_module.GrugRunConfig(
+            model=model_config,
+            data=data_config,
+            resources=ResourceConfig.with_cpu(),
+            trainer=train_module.GrugTrainerConfig(
+                trainer=trainer_config,
+                log_every=2,
+                z_loss_weight=0.0,
+                ema_beta=None,
+                expert_axis_size=1,
+                replica_axis_size=1,
+            ),
+            eval=None,
+        )
+        train_module.run_grug(run_cfg)
+    finally:
+        logger.removeHandler(handler)
+
+    records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+    log_records = [record for record in records if record.get("event") == "log"]
+
+    def steps_with_metric(metric_name: str) -> list[int]:
+        return [record["step"] for record in log_records if metric_name in record.get("metrics", {})]
+
+    assert steps_with_metric("throughput/loading_time") == [0, 2]
+    assert steps_with_metric("train/cross_entropy_loss") == [0, 2]
+    assert steps_with_metric("train/router/router_z_loss") == [0, 2]
 
 
 @pytest.mark.parametrize(

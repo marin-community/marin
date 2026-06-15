@@ -10,12 +10,17 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_GPU_REPLICAS=32      32 gd-8xh100ib nodes, 256 H100s
     MAY_EXPERT_AXIS=8        expert parallelism inside each NVLink node
     MAY_REPLICA_AXIS=1       FSDP over the whole data axis
+    MAY_MODEL_AXIS=1         tensor/model-parallel axis size
     MAY_BATCH=256            seq=4096 context; raise only after profiling memory
     MAY_STEPS=50             throughput/profiling length
     MAY_CPU_PER_REPLICA=32   CPU request for each 8xH100 worker pod
-    MAY_CHECKPOINTS=local    avoid object-store checkpoint stalls
+    MAY_CHECKPOINTS=none     disable checkpoint restore/saves for throughput probes
     MAY_MP=params=float32,compute=bfloat16,output=bfloat16
     MAY_CE_IMPLEMENTATION=   empty = default; xla forces streaming XLA CE
+    MAY_WATCH_INTERVAL=0     grad/param watch interval; 0 disables
+    MAY_LOG_EVERY=1          train progress/scalar logging cadence
+    MAY_LOG_JAXPRS=false     disable JAXPR dumps for throughput probes
+    MAY_LOG_XLA_HLO=false    disable HLO dumps for throughput probes
 
 The default parameter policy keeps one sharded fp32 parameter tree plus sharded
 optimizer state. Set ``MAY_LIVE_PARAM_MODE=compute_with_master`` to keep a
@@ -30,6 +35,7 @@ from typing import cast
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -44,6 +50,8 @@ from experiments.grug.moe.launch import (
     run_grug_moe_trial,
     slimpajama_6b_data,
     synthetic_grug_data,
+    validate_local_expert_model_axes,
+    validate_ring_expert_model_axes,
 )
 from experiments.grug.moe.model import CrossEntropyImplementation, GrugModelConfig, RematMode
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
@@ -160,18 +168,23 @@ def build_tracker(run_id: str):
     return JsonLoggerConfig(logger_name=os.environ.get("MAY_JSON_LOGGER", "grug_moe_cw_may.metrics"))
 
 
-def build_checkpointer(run_id: str) -> CheckpointerConfig | None:
-    checkpoint_mode = os.environ.get("MAY_CHECKPOINTS", "local").lower()
+def build_checkpointer(run_id: str) -> tuple[CheckpointerConfig | None, bool]:
+    checkpoint_mode = os.environ.get("MAY_CHECKPOINTS", "none").lower()
     if checkpoint_mode == "local":
-        return CheckpointerConfig(
-            base_path=f"/tmp/grug-may-d2560-ckpt/{run_id}",
-            append_run_id_to_base_path=False,
-            save_interval=None,
-            keep=None,
+        return (
+            CheckpointerConfig(
+                base_path=f"/tmp/grug-may-d2560-ckpt/{run_id}",
+                append_run_id_to_base_path=False,
+                save_interval=None,
+                keep=None,
+            ),
+            True,
         )
     if checkpoint_mode == "s3":
-        return None
-    raise ValueError(f"MAY_CHECKPOINTS={checkpoint_mode!r} must be 'local' or 's3'")
+        return None, True
+    if checkpoint_mode in ("none", "off", "disabled"):
+        return None, False
+    raise ValueError(f"MAY_CHECKPOINTS={checkpoint_mode!r} must be 'none', 'local', or 's3'")
 
 
 def build_eval() -> GrugEvalConfig | None:
@@ -194,6 +207,7 @@ def build_may_step() -> ExecutorStep:
     replicas = env_int("MAY_GPU_REPLICAS", 32)
     expert_axis = env_int("MAY_EXPERT_AXIS", 8)
     replica_axis = env_int("MAY_REPLICA_AXIS", 1)
+    model_axis = env_int("MAY_MODEL_AXIS", 1)
     batch_size = env_int("MAY_BATCH", DEFAULT_BATCH)
     steps = env_int("MAY_STEPS", DEFAULT_STEPS)
     worker_cpu = env_int("MAY_CPU_PER_REPLICA", 32)
@@ -202,8 +216,31 @@ def build_may_step() -> ExecutorStep:
     model = build_may_model()
     if model.num_experts % expert_axis != 0:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by MAY_EXPERT_AXIS={expert_axis}")
+    if model.num_heads % model_axis != 0:
+        raise ValueError(f"num_heads={model.num_heads} must be divisible by MAY_MODEL_AXIS={model_axis}")
+    validate_local_expert_model_axes(
+        expert_axis=expert_axis,
+        model_axis=model_axis,
+        local_device_count=GPUS_PER_NODE,
+        env_prefix="MAY",
+    )
+    validate_ring_expert_model_axes(
+        expert_axis=expert_axis,
+        model_axis=model_axis,
+        moe_implementation=model.moe_implementation,
+        env_prefix="MAY",
+    )
 
-    data_axis = (replicas * GPUS_PER_NODE) // (replica_axis * expert_axis)
+    global_devices = replicas * GPUS_PER_NODE
+    fixed_axes = replica_axis * expert_axis * model_axis
+    if global_devices % fixed_axes != 0:
+        raise ValueError(
+            f"global devices={global_devices} must be divisible by "
+            f"MAY_REPLICA_AXIS={replica_axis} * MAY_EXPERT_AXIS={expert_axis} * "
+            f"MAY_MODEL_AXIS={model_axis}"
+        )
+
+    data_axis = global_devices // fixed_axes
     batch_shards = replica_axis * data_axis * expert_axis
     if batch_size % batch_shards != 0:
         raise ValueError(f"MAY_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
@@ -219,10 +256,11 @@ def build_may_step() -> ExecutorStep:
     grug_trainer = GrugTrainerConfig(
         expert_axis_size=expert_axis,
         replica_axis_size=replica_axis,
+        model_axis_size=model_axis,
         live_param_mode=cast(LiveParamMode, os.environ.get("MAY_LIVE_PARAM_MODE", "param")),
         z_loss_weight=0.0,
         ema_beta=None,
-        log_every=1,
+        log_every=env_int("MAY_LOG_EVERY", 1),
     )
     profiler = ProfilerConfig(
         enabled=profiler_steps > 0,
@@ -233,11 +271,12 @@ def build_may_step() -> ExecutorStep:
             host_tracer_level=env_optional_int("MAY_PROFILER_HOST_TRACER_LEVEL"),
             python_tracer_level=env_optional_int("MAY_PROFILER_PYTHON_TRACER_LEVEL"),
             device_tracer_level=env_optional_int("MAY_PROFILER_DEVICE_TRACER_LEVEL"),
-            enable_hlo_proto=env_bool("MAY_PROFILER_ENABLE_HLO_PROTO", profiler_steps > 0),
+            enable_hlo_proto=env_bool("MAY_PROFILER_ENABLE_HLO_PROTO", False),
             include_dataset_ops=env_bool("MAY_PROFILER_INCLUDE_DATASET_OPS", False),
         ),
     )
     eval_cfg = build_eval()
+    checkpointer, checkpointing_enabled = build_checkpointer(run_id)
 
     name = f"grug-moe-cw-may-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}-cpu{worker_cpu}"
     return ExecutorStep(
@@ -258,7 +297,11 @@ def build_may_step() -> ExecutorStep:
             grug_trainer=versioned(grug_trainer),
             eval=versioned(eval_cfg) if eval_cfg is not None else None,
             profiler=profiler,
-            checkpointer=build_checkpointer(run_id),
+            watch=WatchConfig(interval=env_int("MAY_WATCH_INTERVAL", 0)),
+            checkpointing_enabled=checkpointing_enabled,
+            checkpointer=checkpointer,
+            log_jaxprs=env_bool("MAY_LOG_JAXPRS", False),
+            log_xla_hlo=env_bool("MAY_LOG_XLA_HLO", False),
         ),
     )
 

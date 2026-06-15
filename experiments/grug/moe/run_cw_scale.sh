@@ -20,6 +20,14 @@ SUBMIT=false
 RUN_ID=""
 WORKER_CPU=32
 DATA="slimpajama"
+MODEL_AXIS=1
+WATCH_INTERVAL=0
+LOG_EVERY=1
+LOG_JAXPRS="${SCALE_LOG_JAXPRS:-false}"
+LOG_XLA_HLO="${SCALE_LOG_XLA_HLO:-false}"
+CE_IMPLEMENTATION=""
+MOE_IMPLEMENTATION="${SCALE_MOE_IMPLEMENTATION:-}"
+CHECKPOINTS=""
 
 usage() {
     cat <<'EOF'
@@ -37,7 +45,23 @@ Options:
   --kubeconfig PATH     Kubeconfig path (default: $KUBECONFIG or ~/.kube/coreweave-iris-gpu).
   --worker-cpu N        SCALE_CPU_PER_REPLICA for each H100 worker pod (default: 32).
   --data NAME           SCALE_DATA: slimpajama or synthetic (default: slimpajama).
+  --checkpoints MODE    SCALE_CHECKPOINTS: none, local, or s3 (default: launcher default none).
+  --model-axis N        SCALE_MODEL_AXIS tensor/model-parallel axis size (default: 1).
+  --watch-interval N    SCALE_WATCH_INTERVAL; 0 disables grad/param watch stats (default: 0).
+  --log-every N         SCALE_LOG_EVERY train progress/scalar logging cadence (default: 1).
+  --log-jaxprs BOOL     SCALE_LOG_JAXPRS; true dumps JAXPRs (default: false).
+  --log-xla-hlo BOOL    SCALE_LOG_XLA_HLO; true dumps XLA HLO (default: false).
+  --ce-implementation NAME
+                        SCALE_CE_IMPLEMENTATION: pallas_gpu, xla, reference, or empty default.
+  --moe-implementation NAME
+                        SCALE_MOE_IMPLEMENTATION: ring, ragged_all_to_all, deepep, or empty default.
   -h, --help            Show this help.
+
+Advanced shape/debug overrides:
+  Set SCALE_GPU_REPLICAS, SCALE_HIDDEN_DIM, SCALE_NUM_LAYERS, SCALE_NUM_EXPERTS,
+  SCALE_TOP_K, SCALE_BATCH, SCALE_SEQ_LEN, SCALE_STEPS, SCALE_CHECKPOINTS,
+  SCALE_REMAT, SCALE_MP, SCALE_PROFILER_STEPS, or SCALE_PROFILER_START in the
+  environment; this wrapper forwards them to the remote launcher.
 
 Credential input:
   The env file may contain R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_ENDPOINT_URL.
@@ -89,6 +113,38 @@ while [ "$#" -gt 0 ]; do
             DATA="$2"
             shift 2
             ;;
+        --checkpoints)
+            CHECKPOINTS="$2"
+            shift 2
+            ;;
+        --model-axis)
+            MODEL_AXIS="$2"
+            shift 2
+            ;;
+        --watch-interval)
+            WATCH_INTERVAL="$2"
+            shift 2
+            ;;
+        --log-every)
+            LOG_EVERY="$2"
+            shift 2
+            ;;
+        --log-jaxprs)
+            LOG_JAXPRS="$2"
+            shift 2
+            ;;
+        --log-xla-hlo)
+            LOG_XLA_HLO="$2"
+            shift 2
+            ;;
+        --ce-implementation)
+            CE_IMPLEMENTATION="$2"
+            shift 2
+            ;;
+        --moe-implementation)
+            MOE_IMPLEMENTATION="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -124,7 +180,47 @@ COMMON_ENV=(
     -e SCALE_TRACKER json_logger
     -e SCALE_CPU_PER_REPLICA "$WORKER_CPU"
     -e SCALE_DATA "$DATA"
+    -e SCALE_MODEL_AXIS "$MODEL_AXIS"
+    -e SCALE_WATCH_INTERVAL "$WATCH_INTERVAL"
+    -e SCALE_LOG_EVERY "$LOG_EVERY"
+    -e SCALE_LOG_JAXPRS "$LOG_JAXPRS"
+    -e SCALE_LOG_XLA_HLO "$LOG_XLA_HLO"
+    -e SCALE_CE_IMPLEMENTATION "$CE_IMPLEMENTATION"
+    -e SCALE_MOE_IMPLEMENTATION "$MOE_IMPLEMENTATION"
 )
+if [ -n "$CHECKPOINTS" ]; then
+    COMMON_ENV+=(-e SCALE_CHECKPOINTS "$CHECKPOINTS")
+fi
+
+OPTIONAL_SCALE_ENV_NAMES=(
+    SCALE_GPU_REPLICAS
+    SCALE_EXPERT_AXIS
+    SCALE_REPLICA_AXIS
+    SCALE_HIDDEN_DIM
+    SCALE_NUM_LAYERS
+    SCALE_NUM_EXPERTS
+    SCALE_TOP_K
+    SCALE_BATCH
+    SCALE_SEQ_LEN
+    SCALE_STEPS
+    SCALE_CHECKPOINTS
+    SCALE_REMAT
+    SCALE_MP
+    SCALE_PROFILER_STEPS
+    SCALE_PROFILER_START
+    SCALE_SYNTHETIC_EXAMPLES
+    SCALE_SYNTHETIC_EOS_ID
+    SCALE_SYNTHETIC_EOS_INTERVAL
+)
+for optional_name in "${OPTIONAL_SCALE_ENV_NAMES[@]}"; do
+    if [ "$optional_name" = "SCALE_CHECKPOINTS" ] && [ -n "$CHECKPOINTS" ]; then
+        continue
+    fi
+    optional_value="${!optional_name-}"
+    if [ -n "$optional_value" ]; then
+        COMMON_ENV+=(-e "$optional_name" "$optional_value")
+    fi
+done
 
 SCALE_ENV=()
 if [ "$MODE" = "smoke" ]; then
@@ -134,8 +230,10 @@ if [ "$MODE" = "smoke" ]; then
         -e SCALE_NUM_LAYERS 16
         -e SCALE_BATCH 64
         -e SCALE_STEPS 10
-        -e SCALE_CHECKPOINTS local
     )
+    if [ -z "$CHECKPOINTS" ] && [ -z "${SCALE_CHECKPOINTS:-}" ]; then
+        SCALE_ENV+=(-e SCALE_CHECKPOINTS none)
+    fi
 fi
 
 CMD=(
@@ -160,6 +258,14 @@ prefix: $MARIN_PREFIX
 r2_endpoint: $AWS_ENDPOINT_URL
 worker_cpu: $WORKER_CPU
 data: $DATA
+model_axis: $MODEL_AXIS
+watch_interval: $WATCH_INTERVAL
+log_every: $LOG_EVERY
+log_jaxprs: $LOG_JAXPRS
+log_xla_hlo: $LOG_XLA_HLO
+ce_implementation: ${CE_IMPLEMENTATION:-default}
+moe_implementation: ${MOE_IMPLEMENTATION:-default}
+checkpoints: ${CHECKPOINTS:-${SCALE_CHECKPOINTS:-none}}
 
 Command shape:
   uv run --package marin-iris --extra controller iris --cluster=$CLUSTER job run --no-wait ... -- python -m experiments.grug.moe.launch_cw_scale

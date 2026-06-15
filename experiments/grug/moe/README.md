@@ -166,7 +166,7 @@ experiments/grug/moe/run_cw_scale.sh --submit
 
 The first command is a dry run. The second submits the smoke configuration:
 `SCALE_GPU_REPLICAS=4`, `SCALE_HIDDEN_DIM=1024`, `SCALE_NUM_LAYERS=16`,
-`SCALE_BATCH=64`, `SCALE_STEPS=10`, and `SCALE_CHECKPOINTS=local`.
+`SCALE_BATCH=64`, `SCALE_STEPS=10`, and `SCALE_CHECKPOINTS=none`.
 
 Use `--full --submit` only when you intend to launch the full 32-node recipe.
 The script passes R2 credentials to Iris as `AWS_ACCESS_KEY_ID`,
@@ -184,8 +184,8 @@ experiments/grug/moe/run_cw_may_d2560.sh --submit
 The first command is a dry run. The profile wrapper defaults to all 32 H100
 nodes, `MAY_EXPERT_AXIS=8`, `MAY_REPLICA_AXIS=1`, `MAY_BATCH=256`,
 `MAY_SEQ_LEN=4096`, `MAY_STEPS=30`, `MAY_PROFILER_START=12`,
-`MAY_PROFILER_STEPS=8`, `MAY_REMAT=save_moe`, local checkpoints, W&B tracking,
-`MAY_ATTENTION_IMPLEMENTATION=gpu_fa4_cute`, and
+`MAY_PROFILER_STEPS=8`, `MAY_REMAT=save_moe`, checkpointing disabled, W&B
+tracking, `MAY_ATTENTION_IMPLEMENTATION=gpu_fa4_cute`, and
 `MAY_MP=params=float32,compute=bfloat16,output=bfloat16`. FA4 CuTe is the H100
 attention baseline because packed SlimPajama examples carry segment IDs and the
 GPU default attention path otherwise falls back to dense reference attention.

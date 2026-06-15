@@ -73,6 +73,7 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
+    model_axis_size: int = 1
     live_param_mode: LiveParamMode = "param"
     """Parameter storage mode.
 
@@ -250,6 +251,10 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
         last_mixture_stage = stage
 
     return log_mixture_stage
+
+
+def _should_log_loop_metrics(*, step: int, log_every: int) -> bool:
+    return step % log_every == 0
 
 
 @register_dataclass
@@ -433,6 +438,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if config.trainer.data_seed is not None:
         data_key = jax.random.PRNGKey(config.trainer.data_seed)
 
+    if config.model.num_heads % config.trainer.model_axis_size != 0:
+        raise ValueError(
+            f"num_heads={config.model.num_heads} must be divisible by "
+            f"model_axis_size={config.trainer.model_axis_size}; attention shards the head axis over model"
+        )
+
     # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
     # Keep the mesh compact so the batch pspec derived by `_batch_spec(mesh)` spans slices directly.
     # replica_axis_size=None lets compact_grug_mesh default to jax.process_count() (full
@@ -440,6 +451,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     mesh = compact_grug_mesh(
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
+        model_axis_size=config.trainer.model_axis_size,
+    )
+    mesh_shape = {axis: int(size) for axis, size in mesh.shape.items()}
+    batch_shards = mesh_shape["replica_dcn"] * mesh_shape["data"] * mesh_shape["expert"]
+    logger.info("Grug compact mesh shape: %s; batch_shards=%s", mesh_shape, batch_shards)
+    levanter.tracker.log_summary(
+        {
+            **{f"grug/mesh/{axis}": size for axis, size in mesh_shape.items()},
+            "grug/mesh/batch_shards": batch_shards,
+        }
     )
     with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule
@@ -543,22 +564,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         # Main optimization loop.
         try:
-            while int(state.step) < trainer.num_train_steps:
+            current_step = int(state.step)
+            while current_step < trainer.num_train_steps:
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
                 step_start = time.perf_counter()
-                current_step = int(state.step)
                 # grad_watch runs only on its configured interval.
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
                 state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
-                step = int(state.step) - 1
+                step = current_step
+                current_step += 1
 
                 jax.block_until_ready(metrics["train/loss"])
 
                 if jnp.isnan(metrics["train/loss"]):
-                    logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
+                    logger.error("NaN loss at step %s. Stopping training.", current_step)
                     break
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
@@ -566,27 +588,28 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
                     last_loss = metrics["train/loss"]
                     last_step_duration = duration
-                    levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
-                    levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
-                    router_metrics = {
-                        key: value
-                        for key, value in metrics.items()
-                        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
-                        and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
-                    }
-                    if router_metrics:
-                        levanter.tracker.log(router_metrics, step=step)
-                    if "train/cross_entropy_loss" in metrics:
-                        levanter.tracker.log(
-                            {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
-                            step=step,
-                        )
+                    if _should_log_loop_metrics(step=step, log_every=log_every):
+                        levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
+                        levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
+                        router_metrics = {
+                            key: value
+                            for key, value in metrics.items()
+                            if (key.startswith("train/router/") or key.startswith("moe_bias/"))
+                            and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
+                        }
+                        if router_metrics:
+                            levanter.tracker.log(router_metrics, step=step)
+                        if "train/cross_entropy_loss" in metrics:
+                            levanter.tracker.log(
+                                {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
+                                step=step,
+                            )
 
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
                 if checkpointer is not None:
-                    checkpointer.on_step(tree=state, step=int(state.step))
+                    checkpointer.on_step(tree=state, step=current_step)
         except BaseException:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
