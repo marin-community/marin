@@ -28,6 +28,7 @@ from iris.cluster.backends.gcp.workers import (
     GcpWorkerProvider,
     _run_tpu_bootstrap,
     _run_vm_slice_bootstrap,
+    _spawn_bootstrap_thread,
     _validate_slice_config,
 )
 from iris.cluster.backends.manual.provider import ManualControllerProvider, ManualWorkerProvider
@@ -1235,3 +1236,61 @@ def test_tpu_bootstrap_aborts_when_slice_enters_deleting():
 )
 def test_composite_slice_state(cloud_state, bootstrap_state, expected):
     assert _composite_slice_state(cloud_state, bootstrap_state) == expected
+
+
+def _bootstrapping_tpu_handle(gcp_service, slice_id="slice-x"):
+    return GcpSliceHandle(
+        _slice_id=slice_id,
+        _zone="us-east5-b",
+        _project_id="test-project",
+        _labels={Labels("iris").iris_managed: "true"},
+        _created_at=Timestamp.from_ms(0),
+        _label_prefix="iris",
+        _worker_port=10001,
+        _accelerator_variant="v5litepod-8",
+        _gcp_service=gcp_service,
+        _bootstrapping=True,
+    )
+
+
+def test_describe_surfaces_bootstrap_failure_reason():
+    """A bootstrap failure's reason (e.g. the create-LRO stockout) is surfaced via
+    describe().error_message so the autoscaler can classify the outcome."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    handle = _bootstrapping_tpu_handle(gcp_service)
+
+    # In progress: no failure reason surfaced.
+    assert handle.describe().error_message == ""
+
+    with handle._bootstrap_lock:
+        handle._bootstrap_state = CloudSliceState.FAILED
+        handle._bootstrap_error = 'There is no more capacity in the zone "us-east5-b"'
+
+    status = handle.describe()
+    assert status.state == CloudSliceState.FAILED
+    assert "no more capacity" in status.error_message
+
+
+def test_bootstrap_thread_captures_failure_reason(monkeypatch):
+    """The bootstrap watcher keeps the failure reason, not just the FAILED state,
+    so a create-LRO stockout isn't reduced to a generic 'bootstrap failed'."""
+
+    class _SyncThread:
+        def __init__(self, target, name=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr("iris.cluster.backends.gcp.workers.threading.Thread", _SyncThread)
+
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    handle = _bootstrapping_tpu_handle(gcp_service)
+
+    def boom():
+        raise QuotaExhaustedError('There is no more capacity in the zone "us-east5-b"')
+
+    _spawn_bootstrap_thread(handle, boom)
+
+    assert handle._bootstrap_state == CloudSliceState.FAILED
+    assert "no more capacity" in handle._bootstrap_error
