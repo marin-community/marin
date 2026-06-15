@@ -149,12 +149,13 @@ class GangLeader:
         job_info = get_job_info()
         assert job_info is not None, "GangLeader requires an Iris job context"
         self._num_followers = num_followers
+        self._registry = ctx.registry
         self._actor = SweepLeaderActor()
         self._server = ActorServer(host="0.0.0.0", port=ctx.get_port(_ACTOR_PORT))
         self._server.register(_LEADER_ACTOR, self._actor)
         actual_port = self._server.serve_background()
         address = f"http://{job_info.advertise_host}:{actual_port}"
-        ctx.registry.register(_LEADER_ACTOR, address)
+        self._endpoint_id = ctx.registry.register(_LEADER_ACTOR, address)
         logger.info("Sweep leader actor serving at %s for %d follower(s)", address, num_followers)
 
     @property
@@ -172,7 +173,11 @@ class GangLeader:
         self._actor.wait_for_followers(seq, self._num_followers)
 
     def close(self) -> None:
+        # Stop the server first so the resource is released even if unregister
+        # fails; the registry entry is best-effort and the controller's cascade
+        # delete reclaims it on task teardown regardless.
         self._server.stop()
+        self._registry.unregister(self._endpoint_id)
 
 
 class GangFollower:
