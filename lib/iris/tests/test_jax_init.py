@@ -13,7 +13,7 @@ pytest.importorskip("jax")
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
-from iris.runtime.jax_init import _poll_for_coordinator, initialize_jax
+from iris.runtime.jax_init import initialize_jax
 
 
 @dataclass
@@ -205,34 +205,3 @@ def test_initialize_jax_poll_timeout(
         initialize_jax(poll_timeout=0.1, poll_interval=0.01)
 
     mock_jax_init.assert_not_called()
-
-
-def test_poll_for_coordinator_default_interval() -> None:
-    """_poll_for_coordinator works with the default poll_interval=2.0 (must not crash on ExponentialBackoff)."""
-    found = ResolveResult(
-        name="coord",
-        endpoints=[ResolvedEndpoint(url="1.2.3.4:8476", actor_id="ep-1")],
-    )
-    resolver = FakeResolver(results=[found])
-    address = _poll_for_coordinator(resolver, "coord", timeout=10.0, poll_interval=2.0)
-    assert address == "1.2.3.4:8476"
-
-
-def test_poll_for_coordinator_returns_url() -> None:
-    """_poll_for_coordinator returns the url from the first resolved endpoint."""
-    found = ResolveResult(
-        name="coord",
-        endpoints=[ResolvedEndpoint(url="1.2.3.4:8476", actor_id="ep-1")],
-    )
-    resolver = FakeResolver(results=[found])
-    address = _poll_for_coordinator(resolver, "coord", timeout=5.0, poll_interval=0.01)
-    assert address == "1.2.3.4:8476"
-
-
-def test_poll_for_coordinator_timeout() -> None:
-    """_poll_for_coordinator raises TimeoutError when endpoint never appears."""
-    empty = ResolveResult(name="coord", endpoints=[])
-    resolver = FakeResolver(results=[empty])
-
-    with pytest.raises(TimeoutError, match="Timed out"):
-        _poll_for_coordinator(resolver, "coord", timeout=0.1, poll_interval=0.01)

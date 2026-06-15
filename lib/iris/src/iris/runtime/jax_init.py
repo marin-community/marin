@@ -14,13 +14,10 @@ from __future__ import annotations
 import atexit
 import logging
 import os
-import time
 
-from rigging.timing import Deadline, Duration, ExponentialBackoff
-
-from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from iris.runtime.endpoint_poll import poll_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -58,39 +55,6 @@ def _log_jax_bootstrap_inputs(job_info, *, port: int, endpoint_name: str) -> Non
         port,
         env_snapshot or "none",
     )
-
-
-def _poll_for_coordinator(
-    resolver: Resolver,
-    endpoint_name: str,
-    timeout: float,
-    poll_interval: float,
-) -> str:
-    """Poll the endpoint registry until the coordinator address appears.
-
-    Args:
-        resolver: Namespaced resolver for this job.
-        endpoint_name: Name of the coordinator endpoint.
-        timeout: Maximum seconds to wait.
-        poll_interval: Initial backoff delay in seconds.
-
-    Returns:
-        The coordinator address string (host:port).
-
-    Raises:
-        TimeoutError: If the coordinator is not found within timeout.
-    """
-    backoff = ExponentialBackoff(initial=poll_interval, maximum=max(poll_interval, 30.0))
-    deadline = Deadline.from_now(Duration.from_seconds(timeout))
-    while True:
-        resolved = resolver.resolve(endpoint_name)
-        if not resolved.is_empty:
-            return resolved.first().url
-        if deadline.expired():
-            raise TimeoutError(f"Timed out after {timeout}s waiting for coordinator endpoint '{endpoint_name}'")
-        interval = min(backoff.next_interval(), deadline.remaining_seconds())
-        if interval > 0:
-            time.sleep(interval)
 
 
 def initialize_jax(
@@ -173,5 +137,5 @@ def initialize_jax(
         atexit.register(ctx.registry.unregister, endpoint_id)
         jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)
     else:
-        coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
+        coordinator = poll_endpoint(ctx.resolver, endpoint_name, poll_interval=poll_interval, poll_timeout=poll_timeout)
         jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)

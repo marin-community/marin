@@ -30,7 +30,8 @@ pytest.importorskip("jax")
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
-from iris.runtime.jax_init import _poll_for_coordinator, initialize_jax
+from iris.runtime.endpoint_poll import poll_endpoint
+from iris.runtime.jax_init import initialize_jax
 
 
 @dataclass
@@ -94,7 +95,7 @@ def test_concurrent_registration_and_resolution_converge():
     """Task 0 registers coordinator endpoint; task 1 polls and resolves the same address.
 
     Runs both tasks concurrently with task 0 registering after a brief delay,
-    verifying that _poll_for_coordinator converges when the endpoint appears.
+    verifying that poll_endpoint converges when the endpoint appears.
     """
     store = ThreadSafeEndpointStore()
     expected_address = "10.0.0.1:8476"
@@ -106,11 +107,11 @@ def test_concurrent_registration_and_resolution_converge():
         registration_event.set()
 
     def task1() -> str:
-        return _poll_for_coordinator(
-            resolver=store,
-            endpoint_name="jax_coordinator",
-            timeout=5.0,
+        return poll_endpoint(
+            store,
+            "jax_coordinator",
             poll_interval=0.01,
+            poll_timeout=5.0,
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -180,11 +181,11 @@ def test_task0_restart_reregisters_and_task1_resolves_new_address():
     store.register("jax_coordinator", "10.0.0.2:8476")
 
     # Task 1 resolves — should see the new address
-    resolved = _poll_for_coordinator(
-        resolver=store,
-        endpoint_name="jax_coordinator",
-        timeout=5.0,
+    resolved = poll_endpoint(
+        store,
+        "jax_coordinator",
         poll_interval=0.01,
+        poll_timeout=5.0,
     )
     assert resolved == "10.0.0.2:8476"
 
@@ -208,11 +209,11 @@ def test_concurrent_restart_reconvergence():
         store.register("jax_coordinator", "10.0.0.3:8476")
 
     def task1_poll() -> str:
-        return _poll_for_coordinator(
-            resolver=store,
-            endpoint_name="jax_coordinator",
-            timeout=5.0,
+        return poll_endpoint(
+            store,
+            "jax_coordinator",
             poll_interval=0.01,
+            poll_timeout=5.0,
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -232,11 +233,11 @@ def test_poll_timeout_when_coordinator_never_registers():
     store = ThreadSafeEndpointStore()
 
     with pytest.raises(TimeoutError, match="Timed out"):
-        _poll_for_coordinator(
-            resolver=store,
-            endpoint_name="jax_coordinator",
-            timeout=0.2,
+        poll_endpoint(
+            store,
+            "jax_coordinator",
             poll_interval=0.01,
+            poll_timeout=0.2,
         )
 
 

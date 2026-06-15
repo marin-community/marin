@@ -23,11 +23,10 @@ gang's tasks share it while separate gang jobs stay isolated.
 from __future__ import annotations
 
 import logging
-import time
 from enum import StrEnum
 from typing import Protocol
 
-from rigging.timing import Deadline, Duration, ExponentialBackoff
+from iris.runtime.endpoint_poll import poll_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +37,6 @@ _ROUND_ENDPOINT = "sweep_round_{seq}"
 # Registry address value standing in for "no more rounds". Target ids never
 # contain whitespace, so this can never collide with a real target id.
 _STOP = "__SWEEP_STOP__"
-
-# Followers re-log roughly this often while blocked so a long inter-round wait
-# (leader blocked on a peer gang's lock, or a multi-hour training round) is
-# visible in logs rather than looking hung.
-_FOLLOWER_LOG_INTERVAL = 60.0
 
 
 class GangRole(StrEnum):
@@ -130,30 +124,14 @@ class GangCoordinator:
         logger.info("Published sweep round %d: %s", seq, value)
 
     def receive(self, seq: int) -> str | None:
-        value = self._poll_round(seq)
+        value = poll_endpoint(
+            self._context().resolver,
+            _ROUND_ENDPOINT.format(seq=seq),
+            poll_interval=self._poll_interval,
+            poll_timeout=self._poll_timeout,
+            waiting_log=f"Waiting for leader to publish sweep round {seq} ...",
+        )
         return None if value == _STOP else value
-
-    def _poll_round(self, seq: int) -> str:
-        name = _ROUND_ENDPOINT.format(seq=seq)
-        resolver = self._context().resolver
-        backoff = ExponentialBackoff(initial=self._poll_interval, maximum=max(self._poll_interval, 30.0))
-        deadline = Deadline.from_now(Duration.from_seconds(self._poll_timeout)) if self._poll_timeout else None
-        last_log = 0.0
-        while True:
-            resolved = resolver.resolve(name)
-            if not resolved.is_empty:
-                return resolved.first().url
-            if deadline is not None and deadline.expired():
-                raise TimeoutError(f"Timed out waiting for sweep round '{name}'")
-            now = time.monotonic()
-            if now - last_log >= _FOLLOWER_LOG_INTERVAL:
-                logger.info("Waiting for leader to publish sweep round %d ...", seq)
-                last_log = now
-            interval = backoff.next_interval()
-            if deadline is not None:
-                interval = min(interval, deadline.remaining_seconds())
-            if interval > 0:
-                time.sleep(interval)
 
 
 def gang_coordinator() -> SweepCoordinator:
