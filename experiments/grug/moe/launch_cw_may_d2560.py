@@ -25,6 +25,7 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_REMAT=save_moe       none | recompute_all | save_moe
     MAY_USE_PKO=true         enable PKO/doc-start mask path on long layers
     MAY_PKO_ON_LAST_LAYER=true
+    MAY_OUTPUT_PROJ_SHARDING=lm_head  lm_head | replicated diagnostic
 
 The default parameter policy keeps one sharded fp32 parameter tree plus sharded
 optimizer state. Set ``MAY_LIVE_PARAM_MODE=compute_with_master`` to keep a
@@ -57,7 +58,14 @@ from experiments.grug.moe.launch import (
     validate_local_expert_model_axes,
     validate_ring_expert_model_axes,
 )
-from experiments.grug.moe.model import VALID_REMAT_MODES, CrossEntropyImplementation, GrugModelConfig, RematMode
+from experiments.grug.moe.model import (
+    VALID_OUTPUT_PROJ_SHARDINGS,
+    VALID_REMAT_MODES,
+    CrossEntropyImplementation,
+    GrugModelConfig,
+    OutputProjSharding,
+    RematMode,
+)
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig, LiveParamMode
 
@@ -104,6 +112,10 @@ def build_may_model() -> GrugModelConfig:
     remat_mode = os.environ.get("MAY_REMAT", "save_moe")
     if remat_mode not in VALID_REMAT_MODES:
         raise ValueError(f"MAY_REMAT={remat_mode!r} must be one of {VALID_REMAT_MODES}")
+    output_proj_sharding = os.environ.get("MAY_OUTPUT_PROJ_SHARDING", "lm_head")
+    if output_proj_sharding not in VALID_OUTPUT_PROJ_SHARDINGS:
+        valid = ", ".join(VALID_OUTPUT_PROJ_SHARDINGS)
+        raise ValueError(f"MAY_OUTPUT_PROJ_SHARDING={output_proj_sharding!r} must be one of {valid}")
     attention_implementation = os.environ.get("MAY_ATTENTION_IMPLEMENTATION", "gpu_fa4_cute")
     cross_entropy_implementation = os.environ.get("MAY_CE_IMPLEMENTATION") or None
 
@@ -121,6 +133,7 @@ def build_may_model() -> GrugModelConfig:
         moe_implementation=cast(str, os.environ.get("MAY_MOE_IMPLEMENTATION", "ring")),
         attention_implementation=cast(str, attention_implementation or None),
         cross_entropy_implementation=cast(CrossEntropyImplementation | None, cross_entropy_implementation),
+        output_proj_sharding=cast(OutputProjSharding, output_proj_sharding),
         remat_mode=cast(RematMode, remat_mode),
     )
 

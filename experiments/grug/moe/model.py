@@ -68,6 +68,8 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 RematMode = Literal["none", "recompute_all", "save_moe"]
 VALID_REMAT_MODES: tuple[RematMode, ...] = ("none", "recompute_all", "save_moe")
 CrossEntropyImplementation = Literal["pallas_gpu", "pallas_tpu", "xla", "reference"]
+OutputProjSharding = Literal["lm_head", "replicated"]
+VALID_OUTPUT_PROJ_SHARDINGS: tuple[OutputProjSharding, ...] = ("lm_head", "replicated")
 
 
 def _batch_spec() -> P:
@@ -91,6 +93,14 @@ def _token_reshard_if_mesh(x: jax.Array) -> jax.Array:
     if mesh is None or mesh.empty:
         return x
     return _token_reshard(x)
+
+
+def _output_proj_pspec(cfg: "GrugModelConfig") -> P:
+    if cfg.output_proj_sharding == "lm_head":
+        return Plm_head
+    if cfg.output_proj_sharding == "replicated":
+        return P(None, None)
+    raise ValueError(f"Unknown output_proj_sharding={cfg.output_proj_sharding!r}")
 
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
@@ -132,6 +142,8 @@ class GrugModelConfig:
     attention_implementation: GrugAttentionImplementation | None = None
     cross_entropy_implementation: CrossEntropyImplementation | None = None
     """Optional backend override for fused linear cross-entropy."""
+    output_proj_sharding: OutputProjSharding = "lm_head"
+    """Output projection parameter sharding. Use "replicated" only for layout diagnostics."""
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing.
@@ -161,6 +173,11 @@ class GrugModelConfig:
             )
         if self.remat_mode not in VALID_REMAT_MODES:
             raise ValueError(f"remat_mode must be one of {VALID_REMAT_MODES}, got {self.remat_mode!r}")
+        if self.output_proj_sharding not in VALID_OUTPUT_PROJ_SHARDINGS:
+            raise ValueError(
+                f"output_proj_sharding must be one of {VALID_OUTPUT_PROJ_SHARDINGS}, "
+                f"got {self.output_proj_sharding!r}"
+            )
         if self.num_experts <= 0:
             raise ValueError("num_experts must be positive")
         if self.num_experts_per_token <= 0:
@@ -624,7 +641,10 @@ class Transformer(eqx.Module):
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
-        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
+        output_proj = reshard(
+            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std),
+            _output_proj_pspec(cfg),
+        )
         blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
         return Transformer(
             token_embed=token_embed,

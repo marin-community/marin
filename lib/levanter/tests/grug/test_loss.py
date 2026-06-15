@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import cast
+
 import numpy as np
 import pytest
 
@@ -8,6 +10,7 @@ import jax
 import jax.numpy as jnp
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
+from levanter.grug import loss as grug_loss
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 
 
@@ -124,3 +127,19 @@ def test_xla_cross_entropy_model_sharded_vocab_matches_reference_and_gradients()
     np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(actual_hidden_grad, expected_hidden_grad, rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(actual_lm_head_grad, expected_lm_head_grad, rtol=1e-5, atol=1e-5)
+
+
+def test_lm_head_spec_tracks_effective_default_xla_backend(monkeypatch: pytest.MonkeyPatch):
+    class FakeMesh:
+        empty = False
+        shape = {"model": 2}
+
+    lm_head = jnp.zeros((4, 8), dtype=jnp.float32)
+
+    mesh = cast(jax.sharding.AbstractMesh, FakeMesh())
+
+    monkeypatch.setattr(grug_loss, "default_implementations", lambda: ("xla",))
+    assert grug_loss._lm_head_spec_for_xla_ce(lm_head, mesh, None) == P(None, "model")
+
+    monkeypatch.setattr(grug_loss, "default_implementations", lambda: ("pallas_gpu", "xla"))
+    assert grug_loss._lm_head_spec_for_xla_ce(lm_head, mesh, None) == P(None, None)

@@ -31,6 +31,7 @@ DATA="slimpajama"
 REMAT="save_moe"
 USE_PKO="${MAY_USE_PKO:-true}"
 PKO_ON_LAST_LAYER="${MAY_PKO_ON_LAST_LAYER:-true}"
+OUTPUT_PROJ_SHARDING="${MAY_OUTPUT_PROJ_SHARDING:-lm_head}"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 LIVE_PARAM_MODE="param"
 ATTENTION_IMPLEMENTATION="gpu_fa4_cute"
@@ -79,6 +80,7 @@ Options:
   --remat MODE              MAY_REMAT: save_moe or recompute_all (default: save_moe).
   --use-pko BOOL            MAY_USE_PKO diagnostic toggle (default: true).
   --pko-on-last-layer BOOL  MAY_PKO_ON_LAST_LAYER diagnostic toggle (default: true).
+  --output-proj-sharding MODE MAY_OUTPUT_PROJ_SHARDING: lm_head or replicated (default: lm_head).
   --mp POLICY               MAY_MP policy string.
   --live-param-mode MODE    MAY_LIVE_PARAM_MODE: param or compute_with_master (default: param).
   --attention NAME          MAY_ATTENTION_IMPLEMENTATION (default: gpu_fa4_cute).
@@ -194,6 +196,10 @@ while [ "$#" -gt 0 ]; do
             PKO_ON_LAST_LAYER="$2"
             shift 2
             ;;
+        --output-proj-sharding)
+            OUTPUT_PROJ_SHARDING="$2"
+            shift 2
+            ;;
         --mp)
             MP="$2"
             shift 2
@@ -251,6 +257,15 @@ case "$LIVE_PARAM_MODE" in
         ;;
 esac
 
+case "$OUTPUT_PROJ_SHARDING" in
+    lm_head|replicated)
+        ;;
+    *)
+        echo "ERROR: --output-proj-sharding must be lm_head or replicated, got: $OUTPUT_PROJ_SHARDING" >&2
+        exit 1
+        ;;
+esac
+
 if [ -f "$ENV_FILE" ] || [ "$ENV_FILE_EXPLICIT" = true ]; then
     R2_EXPORTS="$("${REPO_ROOT}/scripts/iris/cloudflare_r2_env.sh" "$ENV_FILE")"
 else
@@ -284,6 +299,7 @@ ENV_ARGS=(
     -e MAY_REMAT "$REMAT"
     -e MAY_USE_PKO "$USE_PKO"
     -e MAY_PKO_ON_LAST_LAYER "$PKO_ON_LAST_LAYER"
+    -e MAY_OUTPUT_PROJ_SHARDING "$OUTPUT_PROJ_SHARDING"
     -e MAY_MP "$MP"
     -e MAY_LIVE_PARAM_MODE "$LIVE_PARAM_MODE"
     -e MAY_ATTENTION_IMPLEMENTATION "$ATTENTION_IMPLEMENTATION"
@@ -343,6 +359,7 @@ log_jaxprs: $LOG_JAXPRS
 log_xla_hlo: $LOG_XLA_HLO
 use_pko: $USE_PKO
 pko_on_last_layer: $PKO_ON_LAST_LAYER
+output_proj_sharding: $OUTPUT_PROJ_SHARDING
 attention: $ATTENTION_IMPLEMENTATION
 ce_implementation: ${CE_IMPLEMENTATION:-default}
 moe_implementation: $MOE_IMPLEMENTATION

@@ -15,6 +15,7 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_m
 
 from haliax.jax_utils import named_call
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
+    default_implementations,
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
 from levanter.kernels.pallas.fused_cross_entropy_loss.xla import linear_softmax_cross_entropy_loss_xla
@@ -91,10 +92,12 @@ def _mesh_axis_size(mesh: Mesh | jax.sharding.AbstractMesh | None, axis_name: st
 
 
 def _uses_xla_ce(implementation: str | tuple[str, ...] | None) -> bool:
+    if implementation is None:
+        implementation = default_implementations()
     if implementation == "xla":
         return True
     if isinstance(implementation, tuple):
-        return implementation == ("xla",)
+        return len(implementation) > 0 and implementation[0] == "xla"
     return False
 
 
