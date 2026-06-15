@@ -1168,9 +1168,11 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> TaskBackend:
         # Kueue is enabled by a configured cluster_queue; the LocalQueue name Iris
         # stamps and reconciles is derived from label_prefix, not configured.
         local_queue = local_queue_name(label_prefix) if kp.kueue.cluster_queue else ""
-        # Operator-injected env (defaults.inject_env) is projected into task pods
-        # via envFrom on the iris-task-env Secret the launcher creates.
-        env_secret_name = TASK_ENV_SECRET_NAME if cluster_config.defaults.inject_env else ""
+        # The cluster default env (S3 storage auth + operator-injected vars) is
+        # projected into task pods via envFrom on the iris-task-env Secret the
+        # launcher creates. Present when s3 storage is used or inject_env is set.
+        s3_enabled = cluster_config.storage.remote_state_dir.startswith("s3://")
+        env_secret_name = TASK_ENV_SECRET_NAME if (s3_enabled or cluster_config.defaults.inject_env) else ""
         return K8sTaskProvider(
             kubectl=CloudK8sService(namespace=namespace, kubeconfig_path=kp.kubeconfig or None),
             namespace=namespace,

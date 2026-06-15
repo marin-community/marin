@@ -59,7 +59,7 @@ def _auto_ready_deployment(k8s: InMemoryK8sService, name: str, timeout: float = 
 
 @pytest.fixture(autouse=True)
 def _s3_env_vars(monkeypatch):
-    """Set R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY so ensure_s3_credentials_secret() succeeds."""
+    """Set R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY so the S3 task-env build succeeds."""
     monkeypatch.setenv("R2_ACCESS_KEY_ID", "test-key-id")
     monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "test-key-secret")
 
@@ -149,10 +149,15 @@ def test_start_controller_creates_all_resources():
     address = provider.start_controller(cluster_config)
 
     assert address == "iris-controller-svc.iris.svc.cluster.local:10000"
-    assert k8s.get_json(K8sResource.SECRETS, "iris-s3-credentials") is not None
     assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is not None
     assert k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is not None
     assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is not None
+
+    # S3 storage auth lives in the iris-task-env Secret, not the ConfigMap.
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
+    assert secret is not None
+    assert "AWS_ACCESS_KEY_ID" in secret["data"]
+    assert "AWS_SECRET_ACCESS_KEY" in secret["data"]
 
     # Verify Deployment nodeSelector targets the configured scale group
     iris_labels = Labels("iris")
@@ -161,12 +166,9 @@ def test_start_controller_creates_all_resources():
     node_selector = deploy_spec["template"]["spec"]["nodeSelector"]
     assert node_selector == {iris_labels.iris_scale_group: "cpu-erapids"}
 
-    # Verify controller uses S3 env vars (no GCS credentials)
+    # Controller consumes that env via envFrom (S3 + injected, one flow).
     container = deploy_spec["template"]["spec"]["containers"][0]
-    env_names = [e["name"] for e in container["env"]]
-    assert "AWS_ACCESS_KEY_ID" in env_names
-    assert "AWS_SECRET_ACCESS_KEY" in env_names
-    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env_names
+    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
     assert container["resources"]["requests"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
     assert container["resources"]["limits"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
 
@@ -199,8 +201,8 @@ def test_start_controller_injects_operator_env(monkeypatch):
     provider.shutdown()
 
 
-def test_start_controller_no_inject_env_omits_secret():
-    """Without inject_env, no task-env Secret or envFrom is created."""
+def test_start_controller_s3_storage_creates_task_env_secret():
+    """S3 storage alone (no inject_env) still populates the iris-task-env Secret."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
 
@@ -208,9 +210,11 @@ def test_start_controller_no_inject_env_omits_secret():
     t.start()
     provider.start_controller(cluster_config)
 
-    assert k8s.get_json(K8sResource.SECRETS, "iris-task-env") is None
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
+    assert secret is not None
+    assert "AWS_ACCESS_KEY_ID" in secret["data"]
     container = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")["spec"]["template"]["spec"]["containers"][0]
-    assert "envFrom" not in container
+    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
 
     t.join(timeout=5)
     provider.shutdown()
@@ -245,14 +249,14 @@ def test_stop_controller_deletes_resources():
     _apply_stub(k8s, "Deployment", "iris-controller")
     _apply_stub(k8s, "Service", "iris-controller-svc")
     _apply_stub(k8s, "ConfigMap", "iris-cluster-config")
-    _apply_stub(k8s, "Secret", "iris-s3-credentials")
+    _apply_stub(k8s, "Secret", "iris-task-env")
 
     provider.stop_controller(cluster_config)
 
     assert k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is None
     assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is None
     assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is None
-    assert k8s.get_json(K8sResource.SECRETS, "iris-s3-credentials") is None
+    assert k8s.get_json(K8sResource.SECRETS, "iris-task-env") is None
     provider.shutdown()
 
 
@@ -404,8 +408,8 @@ def test_configmap_strips_kubeconfig_path():
     provider.shutdown()
 
 
-def test_controller_deployment_includes_endpoint_url():
-    """When object_storage_endpoint is set, the controller Deployment includes AWS_ENDPOINT_URL."""
+def test_controller_endpoint_url_in_task_env_secret():
+    """When object_storage_endpoint is set, AWS_ENDPOINT_URL lands in the iris-task-env Secret."""
     k8s = InMemoryK8sService(namespace="iris")
     cw_config = config_pb2.CoreweavePlatformConfig(
         region="LGA1",
@@ -422,11 +426,8 @@ def test_controller_deployment_includes_endpoint_url():
 
     provider.start_controller(cluster_config)
 
-    dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
-    container = dep["spec"]["template"]["spec"]["containers"][0]
-    env_by_name = {e["name"]: e for e in container["env"]}
-    assert "AWS_ENDPOINT_URL" in env_by_name
-    assert env_by_name["AWS_ENDPOINT_URL"]["value"] == "https://object.lga1.coreweave.com"
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
+    assert base64.b64decode(secret["data"]["AWS_ENDPOINT_URL"]).decode() == "https://object.lga1.coreweave.com"
 
     t.join(timeout=5)
     provider.shutdown()
@@ -645,14 +646,11 @@ def test_start_controller_skips_s3_for_gs_storage(monkeypatch):
     address = provider.start_controller(cluster_config)
 
     assert address == "iris-controller-svc.iris.svc.cluster.local:10000"
-    # No S3 secret should be created
-    assert k8s.get_json(K8sResource.SECRETS, "iris-s3-credentials") is None
-    # Controller Deployment should have no S3 env vars
+    # GCS storage with no inject_env: no task-env Secret, no envFrom.
+    assert k8s.get_json(K8sResource.SECRETS, "iris-task-env") is None
     dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
     container = dep["spec"]["template"]["spec"]["containers"][0]
-    env_names = [e["name"] for e in container["env"]]
-    assert "AWS_ACCESS_KEY_ID" not in env_names
-    assert "AWS_SECRET_ACCESS_KEY" not in env_names
+    assert "envFrom" not in container
 
     t.join(timeout=5)
     provider.shutdown()

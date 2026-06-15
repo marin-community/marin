@@ -48,7 +48,6 @@ _DEPLOYMENT_DELETE_TIMEOUT = 120.0
 # CoreWeave bare-metal provisioning/deprovisioning is slow; 60s is not enough.
 _KUBECTL_TIMEOUT = 1800.0
 
-_S3_SECRET_NAME = "iris-s3-credentials"
 _CONTROLLER_CPU_REQUEST = "4"
 _CONTROLLER_MEMORY_REQUEST = "16Gi"
 
@@ -112,8 +111,7 @@ def _build_controller_deployment(
     image: str,
     port: int,
     node_selector: dict[str, str],
-    s3_env_vars: list[dict],
-    inject_env_secret: bool = False,
+    task_env_secret: bool = False,
     fresh: bool = False,
 ) -> dict:
     """Build the controller Deployment manifest as a dict."""
@@ -164,12 +162,12 @@ def _build_controller_deployment(
                             *(["--fresh"] if fresh else []),
                         ],
                         "ports": [{"containerPort": port}],
-                        "env": s3_env_vars,
-                        # optional=true so a controller-only restart that predates
-                        # the Secret does not crash-loop.
+                        # The cluster default env (S3 storage auth + operator-injected
+                        # vars) arrives via the iris-task-env Secret. optional=true so a
+                        # controller-only restart that predates the Secret does not crash-loop.
                         **(
                             {"envFrom": [{"secretRef": {"name": TASK_ENV_SECRET_NAME, "optional": True}}]}
-                            if inject_env_secret
+                            if task_env_secret
                             else {}
                         ),
                         "securityContext": {"capabilities": {"add": ["SYS_PTRACE"]}},
@@ -292,15 +290,17 @@ class K8sControllerProvider:
 
         self.ensure_rbac()
 
+        # Build the cluster default env and project it into the controller and
+        # every task via the iris-task-env Secret + envFrom. Resolution happens
+        # here, in the operator's shell -- the controller never has these secrets.
+        # S3 storage auth and operator-injected vars share one flow.
         self._s3_enabled = self.uses_s3_storage(config)
+        default_env: dict[str, str] = {}
         if self._s3_enabled:
-            self.ensure_s3_credentials_secret()
-
-        # Resolve operator-injected env from this shell (the controller can never
-        # do this — it lacks the operator's secrets) and stash it in a Secret.
-        inject_env = collect_inject_env(config.defaults.inject_env)
-        if inject_env:
-            self.ensure_task_env_secret(inject_env)
+            default_env.update(self._s3_task_env())
+        default_env.update(collect_inject_env(config.defaults.inject_env))
+        if default_env:
+            self.ensure_task_env_secret(default_env)
 
         config_json = self._config_json_for_configmap(config)
         configmap_manifest = {
@@ -315,14 +315,12 @@ class K8sControllerProvider:
         self.ensure_nodepools(config)
         self.ensure_kueue_queues(config)
 
-        s3_env = self.s3_env_vars() if self._s3_enabled else []
         deploy_manifest = _build_controller_deployment(
             namespace=self._namespace,
             image=config.controller.image,
             port=port,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
-            s3_env_vars=s3_env,
-            inject_env_secret=bool(config.defaults.inject_env),
+            task_env_secret=bool(default_env),
             fresh=fresh,
         )
         if fresh:
@@ -393,9 +391,7 @@ class K8sControllerProvider:
         self._kubectl.delete(K8sResource.SERVICES, service_name)
         self._kubectl.delete(K8sResource.PDBS, "iris-controller-pdb")
         self._kubectl.delete(K8sResource.CONFIGMAPS, "iris-cluster-config")
-        if self.uses_s3_storage(config):
-            self._kubectl.delete(K8sResource.SECRETS, _S3_SECRET_NAME)
-        if config.defaults.inject_env:
+        if self.uses_s3_storage(config) or config.defaults.inject_env:
             self._kubectl.delete(K8sResource.SECRETS, TASK_ENV_SECRET_NAME)
 
         cluster_role_name = self.rbac_cluster_role_name()
@@ -704,13 +700,15 @@ class K8sControllerProvider:
         """Check if any storage URI uses S3."""
         return config.storage.remote_state_dir.startswith("s3://")
 
-    # -- S3 Credentials -------------------------------------------------------
+    # -- Cluster default env (S3 storage auth + operator-injected vars) -------
 
-    def ensure_s3_credentials_secret(self) -> None:
-        """Create K8s Secret from operator's R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY env vars.
+    def _s3_task_env(self) -> dict[str, str]:
+        """Compute S3 storage env (creds + endpoint + FSSPEC) from the operator's shell.
 
-        Called during start_controller(). Pods reference the secret via
-        secretKeyRef so boto3/s3fs picks up credentials automatically.
+        Maps the operator's R2 credentials to the AWS names boto3/s3fs expect and
+        derives endpoint/region/FSSPEC_S3 from the configured object-storage
+        endpoint. Folded into the iris-task-env Secret so the controller and every
+        task authenticate to s3:// without per-call-site configuration.
         """
         key_id = os.environ.get("R2_ACCESS_KEY_ID")
         key_secret = os.environ.get("R2_SECRET_ACCESS_KEY")
@@ -719,43 +717,12 @@ class K8sControllerProvider:
                 "R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY environment variables are required "
                 "for S3-compatible object storage"
             )
-        manifest = {
-            "apiVersion": "v1",
-            "kind": "Secret",
-            "metadata": {"name": _S3_SECRET_NAME, "namespace": self._namespace},
-            "type": "Opaque",
-            "data": {
-                "AWS_ACCESS_KEY_ID": base64.b64encode(key_id.encode()).decode(),
-                "AWS_SECRET_ACCESS_KEY": base64.b64encode(key_secret.encode()).decode(),
-            },
-        }
-        self._kubectl.apply_json(manifest)
-
-    def s3_env_vars(self) -> list[dict]:
-        """K8s env var specs for S3 auth (secretKeyRef + endpoint).
-
-        Used by _build_controller_deployment() so fsspec/s3fs can authenticate
-        to S3-compatible object storage.
-
-        Sets FSSPEC_S3 so that all fsspec operations (in zephyr, marin,
-        levanter, etc.) automatically use the correct endpoint without
-        per-call-site configuration.
-        """
-        env = [
-            {
-                "name": "AWS_ACCESS_KEY_ID",
-                "valueFrom": {"secretKeyRef": {"name": _S3_SECRET_NAME, "key": "AWS_ACCESS_KEY_ID"}},
-            },
-            {
-                "name": "AWS_SECRET_ACCESS_KEY",
-                "valueFrom": {"secretKeyRef": {"name": _S3_SECRET_NAME, "key": "AWS_SECRET_ACCESS_KEY"}},
-            },
-        ]
+        env = {"AWS_ACCESS_KEY_ID": key_id, "AWS_SECRET_ACCESS_KEY": key_secret}
         endpoint = self._config.object_storage_endpoint
         if endpoint:
-            env.append({"name": "AWS_ENDPOINT_URL", "value": endpoint})
-            env.append({"name": "AWS_REGION", "value": "auto"})
-            env.append({"name": "AWS_DEFAULT_REGION", "value": "auto"})
+            env["AWS_ENDPOINT_URL"] = endpoint
+            env["AWS_REGION"] = "auto"
+            env["AWS_DEFAULT_REGION"] = "auto"
             fsspec_conf: dict = {"endpoint_url": endpoint}
             if _needs_virtual_host_addressing(endpoint):
                 fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
@@ -763,15 +730,13 @@ class K8sControllerProvider:
             # reject the default us-east-1 region in the v4 signature with
             # 400 Bad Request. "auto" tells boto3 to skip region validation.
             fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
-            env.append({"name": "FSSPEC_S3", "value": json.dumps(fsspec_conf)})
+            env["FSSPEC_S3"] = json.dumps(fsspec_conf)
         return env
 
-    # -- Operator-injected env (defaults.inject_env) --------------------------
+    def ensure_task_env_secret(self, env: dict[str, str]) -> None:
+        """Create the iris-task-env Secret holding the cluster default env.
 
-    def ensure_task_env_secret(self, injected: dict[str, str]) -> None:
-        """Create the iris-task-env Secret from operator-injected env values.
-
-        Task pods and the controller reference this Secret via envFrom, so the
+        The controller and task pods reference this Secret via envFrom, so the
         values reach containers without ever passing through the ConfigMap.
         """
         self._kubectl.apply_json(
@@ -780,7 +745,7 @@ class K8sControllerProvider:
                 "kind": "Secret",
                 "metadata": {"name": TASK_ENV_SECRET_NAME, "namespace": self._namespace},
                 "type": "Opaque",
-                "data": {k: base64.b64encode(v.encode()).decode() for k, v in injected.items()},
+                "data": {k: base64.b64encode(v.encode()).decode() for k, v in env.items()},
             }
         )
 
