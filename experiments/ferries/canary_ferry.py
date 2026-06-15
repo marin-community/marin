@@ -93,6 +93,11 @@ _HEURISTIC_BUDGET = 1e18
 # stays divisible by the heuristic's hidden_head_ratio (128).
 _CANARY_TPU_HIDDEN_DIM = 768
 
+# Subdirectory of MARIN_PREFIX the canary writes per-run output dirs into, so
+# they stay out of the root. scripts/canary/prune_canary_outputs.py imports this
+# to sweep the same subdir.
+CANARY_OUTPUT_SUBDIR = "canary"
+
 
 def _env_bool(key: str, default: bool) -> bool:
     raw = os.environ.get(key, "")
@@ -238,7 +243,7 @@ def _build_step_from_env() -> ExecutorStep:
     profiler_num_steps = env_int("CANARY_PROFILER_NUM_STEPS", 25)
 
     return ExecutorStep(
-        name=f"{name}-{run_id}",
+        name=f"{CANARY_OUTPUT_SUBDIR}/{name}-{run_id}",
         fn=run_grug_moe_trial,
         config=GrugMoeLaunchConfig(
             model=versioned(model),
