@@ -471,9 +471,10 @@ def _backward_streaming_from_lse(
     v_offsets = jnp.arange(v_block_size, dtype=jnp.int32)
 
     grad_x_init = jnp.zeros((b_dim, h_dim), dtype=jnp.float32)
-    v_indices = jnp.arange(num_v_blocks, dtype=jnp.int32)
+    grad_w_init = jnp.zeros((h_dim, v_pad), dtype=w.dtype)
 
-    def body(grad_x, v_block_index):
+    def body(v_block_index, state):
+        grad_x, grad_w = state
         v_start = v_block_index * v_block_size
         w_block = jax.lax.dynamic_slice(w_pad, (0, v_start), (h_dim, v_block_size))
 
@@ -515,10 +516,10 @@ def _backward_streaming_from_lse(
         ).astype(jnp.float32)
 
         grad_x = grad_x + grad_x_block
-        return grad_x, grad_w_block
+        grad_w = jax.lax.dynamic_update_slice(grad_w, grad_w_block.astype(w.dtype), (0, v_start))
+        return grad_x, grad_w
 
-    grad_x, grad_w_blocks = jax.lax.scan(body, grad_x_init, v_indices)
-    grad_w = jnp.transpose(grad_w_blocks, (1, 0, 2)).reshape((h_dim, v_pad))
+    grad_x, grad_w = jax.lax.fori_loop(0, num_v_blocks, body, (grad_x_init, grad_w_init))
     grad_w = grad_w[:, :v_dim]
     return grad_x.astype(x.dtype), grad_w.astype(w.dtype)
 

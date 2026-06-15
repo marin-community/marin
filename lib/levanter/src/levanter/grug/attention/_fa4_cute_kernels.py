@@ -41,7 +41,7 @@ after the backend has already imported the optional CUDA-only modules.
 The first target is BSHD BF16/FP16 causal self-attention with packed segment
 metadata:
 
-    valid[b, q] and lower_bounds[b, q] <= k <= q
+    lower_bounds[b, q] <= k <= q
 
 The dynamic segment mask is applied in every N tile. That is simpler than the
 FlashAttention v2 sample's split between masked and unmasked tiles and avoids
@@ -50,8 +50,9 @@ materializing a [B, S, S] mask.
 Nontrivial differences from upstream FA4/CuTe:
 - The public layout is dense BSHD from JAX ``cutlass_call``, not upstream's THD
   packed-sequence interface.
-- Segment semantics are carried as ``lower_bounds[B, S]`` plus ``valid[B, S]``
-  metadata, not as cu_seqlens or a dense attention mask.
+- Segment semantics are carried as ``lower_bounds[B, S]`` metadata, not as
+  cu_seqlens or a dense attention mask. Invalid queries are encoded with
+  ``lower_bounds == seq_len``.
 - The forward score tile applies the segment/causal predicate immediately before
   softmax exponentiation.
 - The backward launcher reuses upstream preprocess/postprocess, but the main
@@ -140,7 +141,7 @@ def segmented_flash_attention_forward_launcher(
 
     Returns:
         A ``cute.jit`` launcher with the JAX ``cutlass_call`` signature:
-        ``(stream, q, k, v, lower_bounds, valid, out, lse, *, softmax_scale)``.
+        ``(stream, q, k, v, lower_bounds, out, lse, *, softmax_scale)``.
     """
     _validate_config(
         head_dim=head_dim,
@@ -209,7 +210,6 @@ def segmented_flash_attention_forward_launcher(
             mK: cute.Tensor,
             mV: cute.Tensor,
             mLowerBounds: cute.Tensor,
-            mValid: cute.Tensor,
             mO: cute.Tensor,
             mLSE: cute.Tensor,
             softmax_scale: cutlass.Float32,
@@ -225,8 +225,6 @@ def segmented_flash_attention_forward_launcher(
                 raise TypeError("only Float16 and BFloat16 are supported")
             if cutlass.const_expr(mLowerBounds.element_type != cutlass.Int32):
                 raise TypeError("lower_bounds must be int32")
-            if cutlass.const_expr(mValid.element_type != cutlass.Int32):
-                raise TypeError("valid must be int32")
             if cutlass.const_expr(mQ.shape[1] != self._head_dim or mK.shape[1] != self._head_dim):
                 raise ValueError("q/k trailing dimension must match head_dim")
             if cutlass.const_expr(mV.shape[1] != self._head_dim_v or mO.shape[1] != self._head_dim_v):
@@ -237,8 +235,6 @@ def segmented_flash_attention_forward_launcher(
                 raise ValueError("k/v head counts must match")
             if cutlass.const_expr(mLowerBounds.shape[0] != mQ.shape[3] or mLowerBounds.shape[1] != mQ.shape[0]):
                 raise ValueError("lower_bounds must have shape [B, S]")
-            if cutlass.const_expr(mValid.shape[0] != mQ.shape[3] or mValid.shape[1] != mQ.shape[0]):
-                raise ValueError("valid must have shape [B, S]")
             if cutlass.const_expr(
                 mLSE.shape[0] != mQ.shape[3] or mLSE.shape[1] != mQ.shape[2] or mLSE.shape[2] != mQ.shape[0]
             ):
@@ -315,7 +311,6 @@ def segmented_flash_attention_forward_launcher(
                 mK,
                 mV,
                 mLowerBounds,
-                mValid,
                 mO,
                 mLSE,
                 softmax_scale_log2,
@@ -336,7 +331,6 @@ def segmented_flash_attention_forward_launcher(
             mK: cute.Tensor,
             mV: cute.Tensor,
             mLowerBounds: cute.Tensor,
-            mValid: cute.Tensor,
             mO: cute.Tensor,
             mLSE: cute.Tensor,
             softmax_scale_log2: cutlass.Float32,
@@ -494,7 +488,6 @@ def segmented_flash_attention_forward_launcher(
                 mQ=mQ,
                 mK=mK,
                 mLowerBounds=mLowerBounds,
-                mValid=mValid,
             )
             mma_params = SimpleNamespace(
                 thr_mma=thr_mma, tiled_mma=tiled_mma, tSrQ=tSrQ, tSrK=tSrK, tOrVt=tOrVt, acc_O=acc_O
@@ -754,10 +747,9 @@ def segmented_flash_attention_forward_launcher(
                 query_idx = tScS_mn[r, 0][1]
                 query_in_bounds = cute.elem_less(query_idx, basic_params.mQ.shape[0])
                 query_meta_idx = cutlass.min(query_idx, basic_params.mQ.shape[0] - 1)
-                # Grug divergence from upstream FA: lower_bounds/valid encode the
-                # dynamic packed-document mask. Apply it directly to the score
-                # tile so no [B, S, S] mask or THD repacking is required.
-                query_valid = basic_params.mValid[basic_params.batch_idx, query_meta_idx] != 0
+                # Grug divergence from upstream FA: lower_bounds encodes the
+                # dynamic packed-document mask. Invalid queries use seq_len as
+                # their lower bound, so no separate validity load is needed.
                 query_lower_bound = basic_params.mLowerBounds[basic_params.batch_idx, query_meta_idx]
 
                 for c in cutlass.range_constexpr(cute.size(tScS_mn.shape[1])):
@@ -765,13 +757,7 @@ def segmented_flash_attention_forward_launcher(
                     key_in_bounds = cute.elem_less(key_idx, basic_params.mK.shape[0])
                     key_after_lower_bound = cute.elem_less(query_lower_bound, key_idx + 1)
                     key_before_query = cute.elem_less(key_idx, query_idx + 1)
-                    if not (
-                        query_in_bounds
-                        and query_valid
-                        and key_in_bounds
-                        and key_after_lower_bound
-                        and key_before_query
-                    ):
+                    if not (query_in_bounds and key_in_bounds and key_after_lower_bound and key_before_query):
                         acc_S_mn[r, c] = -cutlass.Float32.inf
 
                 acc_S_row = acc_S_mn[r, None].load()
@@ -882,13 +868,12 @@ def segmented_flash_attention_forward_launcher(
         k: cute.Tensor,
         v: cute.Tensor,
         lower_bounds: cute.Tensor,
-        valid: cute.Tensor,
         out: cute.Tensor,
         lse: cute.Tensor,
         *,
         softmax_scale: cutlass.Float32,
     ):
-        kernel(q, k, v, lower_bounds, valid, out, lse, softmax_scale, stream)
+        kernel(q, k, v, lower_bounds, out, lse, softmax_scale, stream)
 
     return _launch_segmented_flash_attention_forward
 
@@ -1051,7 +1036,6 @@ def segmented_flash_attention_backward_launcher(
         dout: cute.Tensor,
         lse: cute.Tensor,
         lower_bounds: cute.Tensor,
-        valid: cute.Tensor,
         dq: cute.Tensor,
         dk: cute.Tensor,
         dv: cute.Tensor,
@@ -1077,7 +1061,6 @@ def segmented_flash_attention_backward_launcher(
             dk_accum,
             dv_accum,
             lower_bounds,
-            valid,
             softmax_scale,
             None,
             None,

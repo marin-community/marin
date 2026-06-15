@@ -25,7 +25,7 @@ try:
     from jax.shard_map import shard_map
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
-from jaxtyping import Array, Float, Int, PRNGKeyArray
+from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -33,6 +33,7 @@ from levanter.grug.attention import (
     align_kv_heads,
     apply_rotary_embedding,
     attention,
+    with_fa4_cute_metadata,
 )
 from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
@@ -48,6 +49,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
+_CROSS_ENTROPY_IMPLEMENTATIONS = ("pallas_gpu", "pallas_tpu", "xla", "reference")
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -63,15 +65,52 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
-RematMode = Literal["recompute_all", "save_moe"]
+RematMode = Literal["none", "recompute_all", "save_moe"]
+VALID_REMAT_MODES: tuple[RematMode, ...] = ("none", "recompute_all", "save_moe")
+CrossEntropyImplementation = Literal["pallas_gpu", "pallas_tpu", "xla", "reference"]
+OutputProjSharding = Literal["lm_head", "replicated"]
+VALID_OUTPUT_PROJ_SHARDINGS: tuple[OutputProjSharding, ...] = ("lm_head", "replicated")
+InputEmbedSharding = Literal["hidden_batch", "replicated"]
+VALID_INPUT_EMBED_SHARDINGS: tuple[InputEmbedSharding, ...] = ("hidden_batch", "replicated")
 
 
 def _batch_spec() -> P:
     return P(_BATCH_AXES)
 
 
+def _token_spec() -> P:
+    return P(_BATCH_AXES, None)
+
+
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
+
+
+def _token_reshard(x: jax.Array) -> jax.Array:
+    return reshard(x, _token_spec())
+
+
+def _token_reshard_if_mesh(x: jax.Array) -> jax.Array:
+    mesh = get_abstract_mesh()
+    if mesh is None or mesh.empty:
+        return x
+    return _token_reshard(x)
+
+
+def _output_proj_pspec(cfg: "GrugModelConfig") -> P:
+    if cfg.output_proj_sharding == "lm_head":
+        return Plm_head
+    if cfg.output_proj_sharding == "replicated":
+        return P(None, None)
+    raise ValueError(f"Unknown output_proj_sharding={cfg.output_proj_sharding!r}")
+
+
+def _input_embed_pspec(cfg: "GrugModelConfig") -> P:
+    if cfg.input_embed_sharding == "hidden_batch":
+        return Pembed_vocab
+    if cfg.input_embed_sharding == "replicated":
+        return P(None, None)
+    raise ValueError(f"Unknown input_embed_sharding={cfg.input_embed_sharding!r}")
 
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
@@ -102,12 +141,30 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    routing_renorm_sum: float | None = None
+    """If set, renormalize the selected top-k sigmoid routing weights to this per-token sum."""
+    use_half_rope: bool = False
+    """Apply RoPE only to the first half of each Q/K head, leaving the second half stationary."""
+    use_pko: bool = False
+    """On long-attention layers, shift the stationary half of K by one token with document-start zeroing."""
+    pko_on_last_layer: bool = True
+    """When ``use_pko`` is enabled, also treat the final layer as a long-attention/PKO layer."""
     attention_implementation: GrugAttentionImplementation | None = None
+    cross_entropy_implementation: CrossEntropyImplementation | None = None
+    """Optional backend override for fused linear cross-entropy."""
+    input_embed_sharding: InputEmbedSharding = "hidden_batch"
+    """Input embedding parameter sharding. Use "replicated" only for layout diagnostics."""
+    output_proj_sharding: OutputProjSharding = "lm_head"
+    """Output projection parameter sharding. Use "replicated" only for layout diagnostics."""
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
-    """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
-    backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
-    backward skips re-running expert dispatch and its EP collectives."""
+    """Per-block gradient checkpointing.
+
+    "none" keeps block activations live; use it only for narrow memory/throughput
+    probes. "recompute_all" reruns the whole block in backward (lowest memory).
+    "save_moe" keeps the tagged MoE dispatch tensors so backward skips
+    re-running expert dispatch and its EP collectives.
+    """
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -118,6 +175,26 @@ class GrugModelConfig:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
             raise ValueError("max_seq_len must be positive")
+        if (
+            self.cross_entropy_implementation is not None
+            and self.cross_entropy_implementation not in _CROSS_ENTROPY_IMPLEMENTATIONS
+        ):
+            raise ValueError(
+                "cross_entropy_implementation must be one of "
+                f"{_CROSS_ENTROPY_IMPLEMENTATIONS}, got {self.cross_entropy_implementation!r}"
+            )
+        if self.remat_mode not in VALID_REMAT_MODES:
+            raise ValueError(f"remat_mode must be one of {VALID_REMAT_MODES}, got {self.remat_mode!r}")
+        if self.output_proj_sharding not in VALID_OUTPUT_PROJ_SHARDINGS:
+            raise ValueError(
+                f"output_proj_sharding must be one of {VALID_OUTPUT_PROJ_SHARDINGS}, "
+                f"got {self.output_proj_sharding!r}"
+            )
+        if self.input_embed_sharding not in VALID_INPUT_EMBED_SHARDINGS:
+            raise ValueError(
+                f"input_embed_sharding must be one of {VALID_INPUT_EMBED_SHARDINGS}, "
+                f"got {self.input_embed_sharding!r}"
+            )
         if self.num_experts <= 0:
             raise ValueError("num_experts must be positive")
         if self.num_experts_per_token <= 0:
@@ -126,6 +203,10 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.routing_renorm_sum is not None and self.routing_renorm_sum <= 0:
+            raise ValueError("routing_renorm_sum must be positive when set")
+        if (self.use_half_rope or self.use_pko) and self.inferred_head_dim % 4 != 0:
+            raise ValueError("use_half_rope/use_pko require head_dim to be divisible by 4")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -143,6 +224,26 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     """Non-parametric RMS norm over the last dimension."""
     variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
+
+
+def _segment_start_mask(mask: AttentionMask | jax.Array, *, batch_size: int, seq_len: int) -> jax.Array:
+    """Return [B, S] true at packed-document starts, falling back to sequence starts."""
+    if not isinstance(mask, AttentionMask) or mask.segment_ids is None:
+        starts = jnp.zeros((seq_len,), dtype=bool).at[0].set(True)
+        return _token_reshard_if_mesh(jnp.broadcast_to(starts[None, :], (batch_size, seq_len)))
+
+    q_segment_ids, _ = mask.segment_ids
+    if q_segment_ids.ndim == 1:
+        previous = jnp.concatenate([q_segment_ids[:1], q_segment_ids[:-1]], axis=0)
+        starts = (q_segment_ids >= 0) & ((jnp.arange(seq_len) == 0) | (q_segment_ids != previous))
+        return _token_reshard_if_mesh(jnp.broadcast_to(starts[None, :], (batch_size, seq_len)))
+    if q_segment_ids.ndim == 2:
+        if q_segment_ids.shape[0] == 1 and batch_size != 1:
+            q_segment_ids = jnp.broadcast_to(q_segment_ids, (batch_size, seq_len))
+        previous = jnp.concatenate([q_segment_ids[:, :1], q_segment_ids[:, :-1]], axis=1)
+        first = jnp.zeros((batch_size, seq_len), dtype=bool).at[:, 0].set(True)
+        return _token_reshard_if_mesh((q_segment_ids >= 0) & (first | (q_segment_ids != previous)))
+    raise ValueError(f"segment_ids must be 1D or 2D, got ndim={q_segment_ids.ndim}")
 
 
 class CausalSelfAttention(eqx.Module):
@@ -167,17 +268,54 @@ class CausalSelfAttention(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        *,
+        use_pko: bool = False,
+        pko_doc_starts: Bool[Array, "B S"] | None = None,
+    ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        q_features = self.cfg.num_heads * head_dim
+        kv_features = self.cfg.num_kv_heads * head_dim
+        qkv_weight = unshard(jnp.concatenate([self.w_q, self.w_k, self.w_v], axis=1))
+        q_raw, k_raw, v_raw = jnp.split(
+            jnp.einsum("bsh,hd->bsd", x, qkv_weight, out_sharding=batch_spec),
+            [q_features, q_features + kv_features],
+            axis=-1,
+        )
+        q = rearrange(q_raw, "... (n d) -> ... n d", d=head_dim)
+        k = rearrange(k_raw, "... (m d) -> ... m d", d=head_dim)
+        v = rearrange(v_raw, "... (m d) -> ... m d", d=head_dim)
+        if use_pko:
+            half = head_dim // 2
+            k_stationary = k[..., half:]
+            k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
+            if pko_doc_starts is None:
+                pko_doc_starts = _segment_start_mask(mask, batch_size=k.shape[0], seq_len=seq_len)
+            if pko_doc_starts.shape != k.shape[:2]:
+                raise ValueError(f"pko_doc_starts must have shape {k.shape[:2]}, got {pko_doc_starts.shape}")
+            k_shifted = jnp.where(pko_doc_starts[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
+            k = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
         q = rms_norm(q)
         k = rms_norm(k)
-        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        if self.cfg.use_half_rope:
+            half = head_dim // 2
+            q_rot, k_rot = apply_rotary_embedding(
+                q[..., :half],
+                k[..., :half],
+                seq_len=seq_len,
+                head_dim=half,
+                rope=self.cfg.rope,
+            )
+            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
+            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+        else:
+            q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -188,10 +326,11 @@ class CausalSelfAttention(eqx.Module):
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+        gate_logits = jnp.einsum("bsd,dn->bsn", x, self.attn_gate, out_sharding=_token_spec())
+        gate = 2 * jax.nn.sigmoid(gate_logits)[..., None]
         attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        return jnp.einsum("bsh,hd->bsd", attn_out, unshard(self.w_o), out_sharding=batch_spec)
 
 
 class RMSNorm(eqx.Module):
@@ -229,11 +368,12 @@ class GatedNorm(eqx.Module):
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
+        out_sharding = _batch_spec() if x.ndim == 3 else None
+        gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down, out_sharding=out_sharding)
         # TODO: silu activation here isn't explored, just cargo-culted from Qwen. Likely low-hanging ablation fruit
         # (e.g. compare no activation, relu, etc.).
         gate_hidden = jax.nn.silu(gate_hidden)
-        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
+        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up, out_sharding=out_sharding))
         return x * gate.astype(x.dtype)
 
 
@@ -264,10 +404,17 @@ class DenseMLP(eqx.Module):
             activation_fn = activation
 
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
-        gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
-        up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
+        token_spec = _token_spec()
+        x_flat = _token_reshard(rearrange(x, "b s d -> (b s) d"))
+        gate = jnp.einsum("td,dm->tm", x_flat, unshard(self.w_gate), out_sharding=token_spec)
+        up = jnp.einsum("td,dm->tm", x_flat, unshard(self.w_up), out_sharding=token_spec)
+        activated = _token_reshard(activation_fn(gate) * up)
+        out_flat = jnp.einsum(
+            "tm,md->td",
+            activated,
+            unshard(self.w_down),
+            out_sharding=token_spec,
+        )
         # Reshard after the reshape so the shared-expert output carries the same
         # canonical batch sharding as the routed MoE output (MoEMLP reshards its
         # routed result identically). Splitting the fused
@@ -404,7 +551,11 @@ class MoEMLP(eqx.Module):
         selected_experts = selected_experts[:, :-1]
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
+        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+        if self.cfg.routing_renorm_sum is not None:
+            denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+            combine_weights_f = combine_weights_f * (self.cfg.routing_renorm_sum / (denom + 1e-9))
+        combine_weights = combine_weights_f.astype(x.dtype)
         router_stats = _routing_stats(
             selected_experts,
             router_probs,
@@ -477,14 +628,17 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        *,
+        use_pko: bool = False,
+        pko_doc_starts: Bool[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = _batch_reshard(x + self.attn(attn_in, mask))
+        x = _batch_reshard(x + self.attn(attn_in, mask, use_pko=use_pko, pko_doc_starts=pko_doc_starts))
         mlp_in = _batch_reshard(self.mlp_gated_norm(self.rms_mlp(x)))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
-        x = x + mlp_out
+        x = _batch_reshard(x + mlp_out)
         return x, router_stats
 
 
@@ -502,9 +656,13 @@ class Transformer(eqx.Module):
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Transformer":
         embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
         token_embed = reshard(
-            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
+            _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std),
+            _input_embed_pspec(cfg),
         )
-        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
+        output_proj = reshard(
+            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std),
+            _output_proj_pspec(cfg),
+        )
         blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
         return Transformer(
             token_embed=token_embed,
@@ -534,6 +692,14 @@ class Transformer(eqx.Module):
         if not isinstance(mask, AttentionMask):
             mask = AttentionMask.causal()
         short_mask, long_mask = _layer_attention_masks(mask, sliding_window=cfg.sliding_window)
+        if cfg.attention_implementation == "gpu_fa4_cute":
+            batch_size, seq_len = hidden.shape[:2]
+            short_mask = with_fa4_cute_metadata(short_mask, batch_size=batch_size, seq_len=seq_len)
+            long_mask = with_fa4_cute_metadata(long_mask, batch_size=batch_size, seq_len=seq_len)
+        pko_doc_starts = None
+        if cfg.use_pko:
+            batch_size, seq_len = hidden.shape[:2]
+            pko_doc_starts = _segment_start_mask(mask, batch_size=batch_size, seq_len=seq_len)
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
@@ -541,9 +707,20 @@ class Transformer(eqx.Module):
             remat_policy = None
 
         moe_router_stats: list[dict[str, jax.Array]] = []
+        num_blocks = len(self.blocks)
         for i, block in enumerate(self.blocks):
-            layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask)
+            use_long_layer = i % 4 == 3 or (cfg.use_pko and cfg.pko_on_last_layer and i == num_blocks - 1)
+            layer_mask = long_mask if use_long_layer else short_mask
+            use_pko = cfg.use_pko and use_long_layer
+            block_kwargs = {"use_pko": use_pko, "pko_doc_starts": pko_doc_starts if use_pko else None}
+            if cfg.remat_mode == "none":
+                hidden, router_stats = block(hidden, layer_mask, **block_kwargs)
+            else:
+                hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
+                    hidden,
+                    layer_mask,
+                    **block_kwargs,
+                )
             moe_router_stats.append(router_stats)
 
         router_metrics = {
@@ -589,6 +766,7 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
+            implementation=self.config.cross_entropy_implementation,
         )
         # No load-balancing loss; router z-loss only.
         num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
@@ -627,8 +805,10 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
 
 
 __all__ = [
+    "VALID_REMAT_MODES",
     "Block",
     "CausalSelfAttention",
+    "CrossEntropyImplementation",
     "DenseMLP",
     "GatedNorm",
     "GrugModelConfig",

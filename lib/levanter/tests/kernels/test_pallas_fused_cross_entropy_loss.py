@@ -372,6 +372,40 @@ def test_fused_cross_entropy_xla_infer_uses_tuned_batch_block_size_when_availabl
     assert captured == {"block_size": 4, "batch_block_size": 3}
 
 
+def test_fused_cross_entropy_xla_infer_uses_default_batch_block_size_without_tuned_match(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    x, w, y = _make_toy_inputs()
+    x = x.reshape(6, 4)
+    y = y.reshape(6)
+    captured: dict[str, int] = {}
+
+    monkeypatch.setattr(fused_xla, "infer_xla_v_block_size", lambda b, h, v, dtype: 4)
+    monkeypatch.setattr(fused_xla, "infer_xla_b_block_size", lambda b, v_block_size: 6)
+    monkeypatch.setattr(
+        fused_xla,
+        "infer_block_sizes_with_tuned_match",
+        lambda *args, **kwargs: (fused_api.BlockSizes(b_block_size=2, h_block_size=4, v_block_size=8), False),
+    )
+
+    def fake_custom_vjp(block_size, batch_block_size, dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg):
+        del dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg
+        captured["block_size"] = block_size
+        captured["batch_block_size"] = batch_block_size
+        return jnp.zeros((6,), dtype=jnp.float32), jnp.zeros((6,), dtype=jnp.float32)
+
+    monkeypatch.setattr(fused_xla, "_linear_softmax_cross_entropy_loss_streaming_custom_vjp", fake_custom_vjp)
+
+    fused_xla.linear_softmax_cross_entropy_loss_xla(
+        x,
+        y,
+        w,
+        dtype=jnp.float32,
+    )
+
+    assert captured == {"block_size": 4, "batch_block_size": 2}
+
+
 def test_fused_cross_entropy_xla_infer_falls_back_when_tuned_batch_block_size_is_unsafe(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -511,6 +545,30 @@ def test_infer_num_tensorcores_uses_device_kind(monkeypatch):
 def test_device_key_tpu_v5_lite_maps_to_v5e():
     assert tuned_block_sizes._device_key("TPU v5 lite") == "TPU v5e"
     assert tuned_block_sizes._device_key("TPU v5litepod") == "TPU v5e"
+
+
+@pytest.mark.parametrize("batch", [4096, 8192])
+def test_h100_d2560_pallas_gpu_block_sizes_fit_nvidia_tile_budget(batch: int, monkeypatch: pytest.MonkeyPatch):
+    block_sizes, has_tuned_match = tuned_block_sizes.infer_block_sizes_with_tuned_match(
+        batch,
+        2560,
+        128256,
+        dtype=jnp.float32,
+        x_dtype=jnp.bfloat16,
+        w_dtype=jnp.bfloat16,
+        device_kind="NVIDIA H100",
+    )
+
+    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
+
+    assert has_tuned_match
+    assert block_sizes.b_block_size == 256
+    pallas_gpu._validate_launch_feasibility(
+        w_dtype=jnp.float32,
+        h_block_size=block_sizes.h_block_size,
+        v_block_size=block_sizes.v_block_size,
+        num_h_blocks=2560 // block_sizes.h_block_size,
+    )
 
 
 def test_pallas_tpu_backward_uses_pallas_by_default(monkeypatch):
@@ -820,6 +878,38 @@ def test_fused_cross_entropy_pallas_gpu_requires_gpu():
             reduction=None,
             implementation="pallas_gpu",
         )
+
+
+def test_pallas_gpu_backward_streaming_from_lse_matches_reference_gradients():
+    key = jax.random.PRNGKey(17)
+    key_x, key_w, key_y, key_loss, key_lse = jax.random.split(key, 5)
+    x = jax.random.normal(key_x, (5, 3), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (3, 10), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (5,), 0, 10, dtype=jnp.int32)
+    g_loss = jax.random.normal(key_loss, (5,), dtype=jnp.float32)
+    g_lse = jax.random.normal(key_lse, (5,), dtype=jnp.float32)
+
+    _, lse = linear_softmax_cross_entropy_loss_reference(x, y, w, dtype=jnp.float32)
+
+    def reference_cotangent_loss(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        loss, logsumexp = linear_softmax_cross_entropy_loss_reference(x_raw, y, w_raw, dtype=jnp.float32)
+        return jnp.sum(loss * g_loss + logsumexp * g_lse)
+
+    expected_x, expected_w = jax.grad(reference_cotangent_loss, argnums=(0, 1))(x, w)
+    actual_x, actual_w = pallas_gpu._backward_streaming_from_lse(
+        x,
+        y,
+        w,
+        lse,
+        g_loss,
+        g_lse,
+        v_block_size=4,
+        logit_soft_cap=None,
+        precision=None,
+    )
+
+    np.testing.assert_allclose(actual_x, expected_x, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(actual_w, expected_w, rtol=1e-5, atol=1e-5)
 
 
 def test_fused_cross_entropy_pallas_gpu_custom_backward_grad_matches_xla():

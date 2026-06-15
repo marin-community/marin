@@ -5,6 +5,7 @@ from .api import (
     BlockSizes,
     IMPLEMENTATIONS,
     Implementation,
+    default_implementations,
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
 from .tuned_block_sizes import (
@@ -23,6 +24,7 @@ __all__ = [
     "SHAPE_BUCKETS",
     "ShapeBucket",
     "TUNED_BLOCK_SIZES",
+    "default_implementations",
     "fused_cross_entropy_loss_and_logsumexp_penalty",
     "infer_block_sizes",
 ]

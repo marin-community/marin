@@ -3,6 +3,7 @@
 
 from levanter.grug.attention._core import (
     AttentionMask as AttentionMask,
+    Fa4CuteMetadata as Fa4CuteMetadata,
     GrugAttentionImplementation as GrugAttentionImplementation,
     RotaryConfig as RotaryConfig,
     ThdSegmentMetadata as ThdSegmentMetadata,
@@ -12,5 +13,8 @@ from levanter.grug.attention._core import (
     reference_attention as reference_attention,
     thd_segment_metadata_from_segment_ids as thd_segment_metadata_from_segment_ids,
 )
-from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention as gpu_fa4_cute_attention
+from levanter.grug.attention._fa4_cute import (
+    gpu_fa4_cute_attention as gpu_fa4_cute_attention,
+    with_fa4_cute_metadata as with_fa4_cute_metadata,
+)
 from levanter.grug.attention._fa4_thd import gpu_fa4_thd_attention as gpu_fa4_thd_attention
