@@ -42,8 +42,9 @@ scale-invariant hyperball update is algebraically rewritten to avoid
 materializing the full post-step parameter value before subtracting the original
 parameter.
 
-Run evidence is captured in `.agents/logbooks/grug-moe-d2560-mfu.md` and
-`docs/debug-log-deepep-remat.md`.
+Run evidence is captured on the dedicated research logbook branch
+`codex/research-grug-moe-d2560-mfu-logbook`, keeping this branch focused on
+durable code and spec changes.
 
 ## Key code
 The DeepEP transport source preparation now compiles the patched launch source
