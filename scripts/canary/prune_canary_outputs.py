@@ -58,7 +58,7 @@ def main() -> None:
     parser.add_argument(
         "--max-age-days",
         type=int,
-        default=14,
+        default=7,
         help="Delete canary outputs whose newest object is older than this many days.",
     )
     parser.add_argument(
