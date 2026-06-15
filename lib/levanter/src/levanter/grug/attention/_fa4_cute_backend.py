@@ -7,7 +7,7 @@ The production attention kernel is intentionally isolated here so the high-level
 attention code stays independent of optional CUDA-only dependencies. The first kernel
 target is BF16/FP16 BSHD causal self-attention with dynamic per-token lower bounds:
 
-    valid[b, q] and lower_bounds[b, q] <= k <= q
+    lower_bounds[b, q] <= k <= q
 
 This avoids both THD compaction and materialized [B, S, S] masks.
 """
@@ -71,7 +71,6 @@ def segmented_flash_attention_forward(
     k: jax.Array,
     v: jax.Array,
     lower_bounds: jax.Array,
-    valid: jax.Array,
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
@@ -83,7 +82,6 @@ def segmented_flash_attention_forward(
         k: Key tensor with shape [B, S, Hkv, D].
         v: Value tensor with shape [B, S, Hkv, Dv].
         lower_bounds: Inclusive per-token key lower bound, shape [B, S].
-        valid: Per-token query validity mask, shape [B, S].
         softmax_scale: QK softmax scale.
         kernel_config: Architecture-specific tile/config object selected by attention.py.
 
@@ -91,7 +89,7 @@ def segmented_flash_attention_forward(
         ``(out, lse)`` where ``out`` has shape [B, S, Hq, Dv] and ``lse`` has
         shape [B, Hq, S]. The backward kernel consumes both tensors.
     """
-    _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale)
+    _validate_forward_inputs(q, k, v, lower_bounds, softmax_scale=softmax_scale)
     try:
         modules = _import_cutlass_cute()
     except Exception as exc:
@@ -119,7 +117,7 @@ def segmented_flash_attention_forward(
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    return call(q, k, v, lower_bounds, valid.astype(jnp.int32))
+    return call(q, k, v, lower_bounds)
 
 
 def segmented_flash_attention_backward(
@@ -130,7 +128,6 @@ def segmented_flash_attention_backward(
     dout: jax.Array,
     lse: jax.Array,
     lower_bounds: jax.Array,
-    valid: jax.Array,
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
@@ -142,7 +139,7 @@ def segmented_flash_attention_backward(
     The current launcher raises until those kernels are ported, while tests can
     fake ``cutlass_call`` to lock down the JAX custom-VJP contract.
     """
-    _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale)
+    _validate_forward_inputs(q, k, v, lower_bounds, softmax_scale=softmax_scale)
     _validate_backward_inputs(q, k, v, out, dout, lse)
     try:
         modules = _import_cutlass_cute()
@@ -171,7 +168,7 @@ def segmented_flash_attention_backward(
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    dq, dk, dv, *_scratch = call(q, k, v, out, dout, lse, lower_bounds, valid.astype(jnp.int32))
+    dq, dk, dv, *_scratch = call(q, k, v, out, dout, lse, lower_bounds)
     return dq, dk, dv
 
 
@@ -182,7 +179,7 @@ def _cutlass_attention_forward_specs(
     qkv_spec = tensor_spec(mode=(1, 3, 2, 0), divisibility=(1, 1, 1, vector_elems), static=True)
     lse_spec = tensor_spec(divisibility=(1, 1, 1), static=True)
     metadata_spec = tensor_spec(static=True)
-    return (qkv_spec, qkv_spec, qkv_spec, metadata_spec, metadata_spec), (qkv_spec, lse_spec)
+    return (qkv_spec, qkv_spec, qkv_spec, metadata_spec), (qkv_spec, lse_spec)
 
 
 def _cutlass_attention_backward_specs(
@@ -200,7 +197,6 @@ def _cutlass_attention_backward_specs(
         qkv_spec,
         qkv_spec,
         lse_spec,
-        metadata_spec,
         metadata_spec,
     )
     return input_spec, (
@@ -245,7 +241,6 @@ def fa4_cute_attention_forward(
     k: jax.Array,
     v: jax.Array,
     lower_bounds: jax.Array,
-    valid: jax.Array,
     *,
     sm_scale: float | None = None,
     kernel_config: Flash4CuteKernelConfig,
@@ -262,19 +257,17 @@ def fa4_cute_attention_forward(
         k,
         v,
         lower_bounds,
-        valid,
         sm_scale,
         kernel_config,
     )
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(5, 6))
+@partial(jax.custom_vjp, nondiff_argnums=(4, 5))
 def _segmented_flash_attention_custom_vjp(
     q: jax.Array,
     k: jax.Array,
     v: jax.Array,
     lower_bounds: jax.Array,
-    valid: jax.Array,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
 ) -> jax.Array:
@@ -283,7 +276,6 @@ def _segmented_flash_attention_custom_vjp(
         k,
         v,
         lower_bounds,
-        valid,
         softmax_scale=softmax_scale,
         kernel_config=kernel_config,
     )
@@ -295,31 +287,29 @@ def _segmented_flash_attention_custom_vjp_fwd(
     k: jax.Array,
     v: jax.Array,
     lower_bounds: jax.Array,
-    valid: jax.Array,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]]:
+) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]]:
     out, lse = segmented_flash_attention_forward(
         q,
         k,
         v,
         lower_bounds,
-        valid,
         softmax_scale=softmax_scale,
         kernel_config=kernel_config,
     )
-    return out, (q, k, v, out, lse, lower_bounds, valid)
+    return out, (q, k, v, out, lse, lower_bounds)
 
 
 def _segmented_flash_attention_custom_vjp_bwd(
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-    residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+    residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
     cotangent: jax.Array | jax.custom_derivatives.SymbolicZero,
-) -> tuple[jax.Array | None, jax.Array | None, jax.Array | None, None, None]:
-    q, k, v, out, lse, lower_bounds, valid = residuals
+) -> tuple[jax.Array | None, jax.Array | None, jax.Array | None, None]:
+    q, k, v, out, lse, lower_bounds = residuals
     if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
-        return jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None, None
+        return jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None
     dq, dk, dv = segmented_flash_attention_backward(
         q,
         k,
@@ -328,11 +318,10 @@ def _segmented_flash_attention_custom_vjp_bwd(
         cotangent.astype(q.dtype),
         lse,
         lower_bounds,
-        valid,
         softmax_scale=softmax_scale,
         kernel_config=kernel_config,
     )
-    return dq, dk, dv, None, None
+    return dq, dk, dv, None
 
 
 _segmented_flash_attention_custom_vjp.defvjp(
@@ -346,7 +335,6 @@ def _validate_forward_inputs(
     k: jax.Array,
     v: jax.Array,
     lower_bounds: jax.Array,
-    valid: jax.Array,
     *,
     softmax_scale: float,
 ) -> None:
@@ -366,12 +354,8 @@ def _validate_forward_inputs(
         raise ValueError(f"Hq must be divisible by Hkv for GQA, got q={q.shape}, k={k.shape}")
     if lower_bounds.shape != q.shape[:2]:
         raise ValueError(f"lower_bounds must have shape [B, S]={q.shape[:2]}, got {lower_bounds.shape}")
-    if valid.shape != q.shape[:2]:
-        raise ValueError(f"valid must have shape [B, S]={q.shape[:2]}, got {valid.shape}")
     if lower_bounds.dtype != jnp.int32:
         raise ValueError(f"lower_bounds must be int32, got {lower_bounds.dtype}")
-    if valid.dtype != jnp.bool_:
-        raise ValueError(f"valid must be bool, got {valid.dtype}")
     if q.dtype not in (jnp.bfloat16, jnp.float16):
         raise TypeError(f"gpu_fa4_cute_attention currently supports only bf16/fp16, got {q.dtype}")
     if k.dtype != q.dtype or v.dtype != q.dtype:

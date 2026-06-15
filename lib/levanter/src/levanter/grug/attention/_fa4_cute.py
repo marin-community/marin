@@ -6,11 +6,15 @@ from dataclasses import replace
 
 import jax
 from jax import numpy as jnp
+from jax.sharding import PartitionSpec as P
+from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug.attention._core import AttentionMask, Fa4CuteMetadata
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
 from levanter.grug.attention._fa4_cute_config import flash4_cute_kernel_config
+
+_BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 
 def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: int) -> jax.Array:
@@ -104,6 +108,13 @@ def _causal_lower_bounds(
     return lower_bounds, valid
 
 
+def _metadata_reshard_if_mesh(x: jax.Array) -> jax.Array:
+    mesh = get_abstract_mesh()
+    if mesh is None or mesh.empty:
+        return x
+    return reshard(x, P(_BATCH_AXES, None))
+
+
 def _validate_causal_self_attention_mask(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
@@ -178,7 +189,6 @@ def _fa4_metadata_matches(mask: AttentionMask, *, batch_size: int, seq_len: int)
     return (
         metadata is not None
         and metadata.lower_bounds.shape == (batch_size, seq_len)
-        and metadata.valid.shape == (batch_size, seq_len)
         and metadata.sliding_window == mask.sliding_window
     )
 
@@ -194,7 +204,7 @@ def with_fa4_cute_metadata(
         if _fa4_metadata_matches(mask, batch_size=batch_size, seq_len=seq_len):
             return mask
         if mask.segment_ids is None:
-            lower_bounds, valid = _causal_lower_bounds(
+            lower_bounds, _ = _causal_lower_bounds(
                 batch_size=batch_size,
                 seq_len=seq_len,
                 sliding_window=mask.sliding_window,
@@ -206,19 +216,19 @@ def with_fa4_cute_metadata(
                 seq_len=seq_len,
                 backend_name="gpu_fa4_cute_attention",
             )
-            lower_bounds, valid = _packed_segment_causal_lower_bounds(
+            lower_bounds, _ = _packed_segment_causal_lower_bounds(
                 q_segment_ids,
                 batch_size=batch_size,
                 seq_len=seq_len,
                 sliding_window=mask.sliding_window,
             )
+    lower_bounds = _metadata_reshard_if_mesh(lower_bounds)
     return AttentionMask(
         is_causal=mask.is_causal,
         segment_ids=mask.segment_ids,
         thd_segment_metadata=mask.thd_segment_metadata,
         fa4_cute_metadata=Fa4CuteMetadata(
             lower_bounds=lower_bounds,
-            valid=valid,
             sliding_window=mask.sliding_window,
         ),
         sliding_window=mask.sliding_window,
@@ -268,14 +278,10 @@ def gpu_fa4_cute_attention(
     mask = _validate_causal_self_attention_mask(mask, backend_name="gpu_fa4_cute_attention")
     with jax.named_scope("fa4_cute_prepare_metadata"):
         if mask.fa4_cute_metadata is not None:
-            if (
-                mask.fa4_cute_metadata.lower_bounds.shape != q.shape[:2]
-                or mask.fa4_cute_metadata.valid.shape != q.shape[:2]
-            ):
+            if mask.fa4_cute_metadata.lower_bounds.shape != q.shape[:2]:
                 raise ValueError(
                     "gpu_fa4_cute_attention metadata shape must match the q batch and sequence dimensions, "
-                    f"got lower_bounds={mask.fa4_cute_metadata.lower_bounds.shape}, "
-                    f"valid={mask.fa4_cute_metadata.valid.shape}, q={q.shape}"
+                    f"got lower_bounds={mask.fa4_cute_metadata.lower_bounds.shape}, q={q.shape}"
                 )
             if mask.fa4_cute_metadata.sliding_window != mask.sliding_window:
                 raise ValueError(
@@ -283,21 +289,22 @@ def gpu_fa4_cute_attention(
                     f"got metadata={mask.fa4_cute_metadata.sliding_window}, mask={mask.sliding_window}"
                 )
             lower_bounds = mask.fa4_cute_metadata.lower_bounds
-            valid = mask.fa4_cute_metadata.valid
         elif mask.segment_ids is not None:
             q_segment_ids = _packed_self_attention_segment_ids(q, k, mask, backend_name="gpu_fa4_cute_attention")
-            lower_bounds, valid = _packed_segment_causal_lower_bounds(
+            lower_bounds, _ = _packed_segment_causal_lower_bounds(
                 q_segment_ids,
                 batch_size=q.shape[0],
                 seq_len=q.shape[1],
                 sliding_window=mask.sliding_window,
             )
+            lower_bounds = _metadata_reshard_if_mesh(lower_bounds)
         else:
-            lower_bounds, valid = _causal_lower_bounds(
+            lower_bounds, _ = _causal_lower_bounds(
                 batch_size=q.shape[0],
                 seq_len=q.shape[1],
                 sliding_window=mask.sliding_window,
             )
+            lower_bounds = _metadata_reshard_if_mesh(lower_bounds)
     kernel_config = _segmented_kernel_config(q.shape[-1])
 
     with jax.named_scope("fa4_cute_kernel"):
@@ -306,7 +313,6 @@ def gpu_fa4_cute_attention(
             k,
             v,
             lower_bounds,
-            valid,
             sm_scale=1.0 / math.sqrt(q.shape[-1]),
             kernel_config=kernel_config,
         )

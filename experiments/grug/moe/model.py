@@ -65,7 +65,8 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
-RematMode = Literal["recompute_all", "save_moe"]
+RematMode = Literal["none", "recompute_all", "save_moe"]
+VALID_REMAT_MODES: tuple[RematMode, ...] = ("none", "recompute_all", "save_moe")
 CrossEntropyImplementation = Literal["pallas_gpu", "pallas_tpu", "xla", "reference"]
 
 
@@ -133,9 +134,13 @@ class GrugModelConfig:
     """Optional backend override for fused linear cross-entropy."""
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
-    """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
-    backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
-    backward skips re-running expert dispatch and its EP collectives."""
+    """Per-block gradient checkpointing.
+
+    "none" keeps block activations live; use it only for narrow memory/throughput
+    probes. "recompute_all" reruns the whole block in backward (lowest memory).
+    "save_moe" keeps the tagged MoE dispatch tensors so backward skips
+    re-running expert dispatch and its EP collectives.
+    """
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -154,6 +159,8 @@ class GrugModelConfig:
                 "cross_entropy_implementation must be one of "
                 f"{_CROSS_ENTROPY_IMPLEMENTATIONS}, got {self.cross_entropy_implementation!r}"
             )
+        if self.remat_mode not in VALID_REMAT_MODES:
+            raise ValueError(f"remat_mode must be one of {VALID_REMAT_MODES}, got {self.remat_mode!r}")
         if self.num_experts <= 0:
             raise ValueError("num_experts must be positive")
         if self.num_experts_per_token <= 0:
@@ -667,12 +674,15 @@ class Transformer(eqx.Module):
             use_long_layer = i % 4 == 3 or (cfg.use_pko and cfg.pko_on_last_layer and i == num_blocks - 1)
             layer_mask = long_mask if use_long_layer else short_mask
             use_pko = cfg.use_pko and use_long_layer
-            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                hidden,
-                layer_mask,
-                use_pko=use_pko,
-                pko_doc_starts=pko_doc_starts if use_pko else None,
-            )
+            block_kwargs = {"use_pko": use_pko, "pko_doc_starts": pko_doc_starts if use_pko else None}
+            if cfg.remat_mode == "none":
+                hidden, router_stats = block(hidden, layer_mask, **block_kwargs)
+            else:
+                hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
+                    hidden,
+                    layer_mask,
+                    **block_kwargs,
+                )
             moe_router_stats.append(router_stats)
 
         router_metrics = {
@@ -757,6 +767,7 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
 
 
 __all__ = [
+    "VALID_REMAT_MODES",
     "Block",
     "CausalSelfAttention",
     "CrossEntropyImplementation",

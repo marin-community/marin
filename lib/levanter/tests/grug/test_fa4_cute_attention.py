@@ -49,14 +49,13 @@ def test_fa4_cute_metadata_is_precomputed_per_sliding_window():
     mask = with_fa4_cute_metadata(mask, batch_size=1, seq_len=6)
 
     assert mask.fa4_cute_metadata is not None
-    expected_lower_bounds, expected_valid = _packed_segment_causal_lower_bounds(
+    expected_lower_bounds, _ = _packed_segment_causal_lower_bounds(
         segment_ids,
         batch_size=1,
         seq_len=6,
         sliding_window=3,
     )
     np.testing.assert_array_equal(mask.fa4_cute_metadata.lower_bounds, expected_lower_bounds)
-    np.testing.assert_array_equal(mask.fa4_cute_metadata.valid, expected_valid)
 
     changed_window = mask.with_sliding_window(4)
     assert changed_window.fa4_cute_metadata is None
@@ -83,9 +82,8 @@ def test_fa4_cute_metadata_supports_unsegmented_causal_masks():
     mask = with_fa4_cute_metadata(mask, batch_size=2, seq_len=6)
 
     assert mask.fa4_cute_metadata is not None
-    expected_lower_bounds, expected_valid = _causal_lower_bounds(batch_size=2, seq_len=6, sliding_window=3)
+    expected_lower_bounds, _ = _causal_lower_bounds(batch_size=2, seq_len=6, sliding_window=3)
     np.testing.assert_array_equal(mask.fa4_cute_metadata.lower_bounds, expected_lower_bounds)
-    np.testing.assert_array_equal(mask.fa4_cute_metadata.valid, expected_valid)
     np.testing.assert_array_equal(
         mask.fa4_cute_metadata.lower_bounds,
         jnp.array([[0, 0, 0, 1, 2, 3], [0, 0, 0, 1, 2, 3]], dtype=jnp.int32),
@@ -110,7 +108,6 @@ def test_fa4_cute_full_sequence_window_matches_unwindowed_metadata():
     assert packed_metadata is not None
     assert windowed_packed_metadata is not None
     np.testing.assert_array_equal(windowed_packed_metadata.lower_bounds, packed_metadata.lower_bounds)
-    np.testing.assert_array_equal(windowed_packed_metadata.valid, packed_metadata.valid)
 
     causal_metadata = with_fa4_cute_metadata(AttentionMask.causal(), batch_size=2, seq_len=6).fa4_cute_metadata
     windowed_causal_metadata = with_fa4_cute_metadata(
@@ -122,7 +119,6 @@ def test_fa4_cute_full_sequence_window_matches_unwindowed_metadata():
     assert causal_metadata is not None
     assert windowed_causal_metadata is not None
     np.testing.assert_array_equal(windowed_causal_metadata.lower_bounds, causal_metadata.lower_bounds)
-    np.testing.assert_array_equal(windowed_causal_metadata.valid, causal_metadata.valid)
 
 
 def test_fa4_cute_metadata_reuses_compatible_metadata():
@@ -137,12 +133,10 @@ def test_fa4_cute_metadata_reuses_compatible_metadata():
 
 def test_fa4_cute_metadata_refreshes_stale_window_metadata():
     stale_lower_bounds = jnp.zeros((1, 6), dtype=jnp.int32)
-    stale_valid = jnp.ones((1, 6), dtype=jnp.bool_)
     mask = AttentionMask(
         is_causal=True,
         fa4_cute_metadata=Fa4CuteMetadata(
             lower_bounds=stale_lower_bounds,
-            valid=stale_valid,
             sliding_window=4,
         ),
         sliding_window=3,
@@ -165,7 +159,6 @@ def test_gpu_fa4_cute_attention_rejects_stale_metadata_window(monkeypatch):
         is_causal=True,
         fa4_cute_metadata=Fa4CuteMetadata(
             lower_bounds=jnp.zeros((1, 6), dtype=jnp.int32),
-            valid=jnp.ones((1, 6), dtype=jnp.bool_),
             sliding_window=4,
         ),
         sliding_window=3,
@@ -181,13 +174,12 @@ def test_gpu_fa4_cute_attention_does_not_retrace_for_dynamic_segment_ids(monkeyp
 
     trace_count = 0
 
-    def fake_attention_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config):
+    def fake_attention_forward(q, k, v, lower_bounds, *, sm_scale, kernel_config):
         nonlocal trace_count
         del k, v, sm_scale, kernel_config
         trace_count += 1
         metadata_dependency = lower_bounds.astype(q.dtype)[..., None, None] * jnp.asarray(0, dtype=q.dtype)
-        validity_dependency = valid.astype(q.dtype)[..., None, None] * jnp.asarray(0, dtype=q.dtype)
-        return q + metadata_dependency + validity_dependency
+        return q + metadata_dependency
 
     monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", fake_attention_forward)
     q, k, v = _make_qkv(batch=1, q_len=6, k_len=6, q_heads=2, kv_heads=1)

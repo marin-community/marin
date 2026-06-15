@@ -60,7 +60,6 @@ class Fa4CuteMetadata(eqx.Module):
     """Precomputed packed metadata for FA4/CuTe segmented self-attention."""
 
     lower_bounds: Int[Array, "B S"]
-    valid: Bool[Array, "B S"]
     sliding_window: int | None = eqx.field(default=None, static=True)
 
 

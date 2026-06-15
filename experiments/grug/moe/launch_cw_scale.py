@@ -24,9 +24,9 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_STEPS         training steps (default 50)
     SCALE_HIDDEN_DIM / SCALE_NUM_LAYERS / SCALE_NUM_EXPERTS / SCALE_TOP_K
                         model-shape overrides (e.g. a smaller FSDP smoke test)
-    SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
-                        tagged MoE dispatch tensors for backward so the EP
-                        collectives are not re-run during recompute
+    SCALE_REMAT         none | recompute_all (default) | save_moe -- save_moe
+                        keeps the tagged MoE dispatch tensors for backward so
+                        the EP collectives are not re-run during recompute
     SCALE_CPU_PER_REPLICA
                         CPU request for each 8xH100 worker pod (default 32)
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
@@ -77,7 +77,7 @@ from experiments.grug.moe.launch import (
     validate_local_expert_model_axes,
     validate_ring_expert_model_axes,
 )
-from experiments.grug.moe.model import CrossEntropyImplementation, GrugModelConfig, RematMode
+from experiments.grug.moe.model import VALID_REMAT_MODES, CrossEntropyImplementation, GrugModelConfig, RematMode
 from experiments.grug.moe.train import GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
 
@@ -134,8 +134,8 @@ def build_scale_model() -> GrugModelConfig:
     intermediate_dim = hidden_dim // 2  # expert FFN inner width (~d/2)
     seq_len = env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
     remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
-    if remat_mode not in ("recompute_all", "save_moe"):
-        raise ValueError(f"SCALE_REMAT={remat_mode!r} must be 'recompute_all' or 'save_moe'")
+    if remat_mode not in VALID_REMAT_MODES:
+        raise ValueError(f"SCALE_REMAT={remat_mode!r} must be one of {VALID_REMAT_MODES}")
     cross_entropy_implementation = os.environ.get("SCALE_CE_IMPLEMENTATION") or None
     moe_implementation = os.environ.get("SCALE_MOE_IMPLEMENTATION") or None
     return GrugModelConfig(

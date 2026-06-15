@@ -34,6 +34,7 @@ from levanter.data.text import DatasetComponent, DirectDatasetComponent, LmDataC
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
+from levanter.grug.attention import with_fa4_cute_metadata
 from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -205,6 +206,25 @@ class _reset_abstract_mesh:
     def __exit__(self, exc_type, exc, tb):
         jax_config.abstract_mesh_context_manager.set_local(self._prev)
         return False
+
+
+def _jaxpr_has_primitive(jaxpr_like, primitive_name: str) -> bool:
+    jaxpr = getattr(jaxpr_like, "jaxpr", jaxpr_like)
+    for eqn in jaxpr.eqns:
+        if eqn.primitive.name == primitive_name:
+            return True
+        for param in eqn.params.values():
+            if _jaxpr_param_has_primitive(param, primitive_name):
+                return True
+    return False
+
+
+def _jaxpr_param_has_primitive(param, primitive_name: str) -> bool:
+    if hasattr(param, "jaxpr") or hasattr(param, "eqns"):
+        return _jaxpr_has_primitive(param, primitive_name)
+    if isinstance(param, (tuple, list)):
+        return any(_jaxpr_param_has_primitive(item, primitive_name) for item in param)
+    return False
 
 
 def _discover_grug_variants_with_model_and_train() -> list[str]:
@@ -391,6 +411,56 @@ def test_grug_moe_may_recipe_attention_flags_lower():
     assert "train/loss" in out_metrics_shape
 
 
+@pytest.mark.parametrize(
+    ("remat_mode", "expects_remat"),
+    [
+        ("none", False),
+        ("recompute_all", True),
+        ("save_moe", True),
+    ],
+)
+def test_grug_moe_remat_mode_controls_checkpoint_boundary(remat_mode: str, expects_remat: bool):
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    make_train_step = train_module._make_train_step
+    initial_state = train_module.initial_state
+    mesh_fn = getattr(model_module, "debug_mesh_and_token_pspec", None)
+    if mesh_fn is None:
+        raise AssertionError("experiments.grug.moe.model must define debug_mesh_and_token_pspec")
+
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+    cfg = dataclasses.replace(
+        cfg,
+        num_layers=1,
+        remat_mode=remat_mode,
+        cross_entropy_implementation="xla",
+        router_z_loss_coef=0.0,
+    )
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+    train_step = make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
+    mesh, token_pspec = mesh_fn(num_devices=4)
+    batch = GrugLmExample(
+        tokens=jnp.zeros((8, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((8, 4), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    def one_step():
+        sharded_batch = dataclasses.replace(
+            batch,
+            tokens=jax.sharding.reshard(batch.tokens, token_pspec),
+            loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
+        )
+        state = initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
+        return train_step(state, sharded_batch, compute_watch=False)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        closed_jaxpr, _, _ = eqx.filter_make_jaxpr(one_step)()
+
+    assert _jaxpr_has_primitive(closed_jaxpr, "remat2") is expects_remat
+
+
 def test_grug_moe_pko_attention_accepts_precomputed_segment_starts(monkeypatch):
     model_module = importlib.import_module("experiments.grug.moe.model")
     mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)
@@ -437,6 +507,23 @@ def test_grug_moe_segment_start_mask_keeps_token_sharding():
 
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
         closed_jaxpr = jax.make_jaxpr(starts_for)(segment_ids)
+
+    assert closed_jaxpr.jaxpr.outvars[0].aval.sharding.spec == P(("replica_dcn", "data", "expert"), None)
+
+
+def test_grug_moe_fa4_metadata_keeps_token_sharding():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)
+    segment_ids = jnp.array([[0, 0, 1, 1], [2, 2, 3, 3], [4, 4, 5, 5], [6, 6, 7, 7]], dtype=jnp.int32)
+
+    def lower_bounds_for(ids):
+        mask = GrugAttentionMask.causal(sliding_window=2).with_segment_ids(ids)
+        mask = with_fa4_cute_metadata(mask, batch_size=4, seq_len=4)
+        assert mask.fa4_cute_metadata is not None
+        return mask.fa4_cute_metadata.lower_bounds
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        closed_jaxpr = jax.make_jaxpr(lower_bounds_for)(segment_ids)
 
     assert closed_jaxpr.jaxpr.outvars[0].aval.sharding.spec == P(("replica_dcn", "data", "expert"), None)
 

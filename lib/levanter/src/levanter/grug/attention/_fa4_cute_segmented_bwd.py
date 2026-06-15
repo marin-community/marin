@@ -42,8 +42,7 @@ behavioral changes are limited to Grug packed-segment support:
 Nontrivial differences from upstream FA4/CuTe:
 - The JAX boundary passes dense BSHD tensors and ``lower_bounds`` metadata;
   upstream varlen/THD cu_seqlens paths are intentionally disabled. Invalid
-  queries are encoded with ``lower_bounds == seq_len``; ``valid`` remains in
-  the ABI for compatibility.
+  queries are encoded with ``lower_bounds == seq_len``.
 - ``segment_m_block_max`` prunes backward M tiles using monotonic packed segment
   lower bounds before entering the mainloop.
 - ``apply_segment_mask`` injects the Grug segment/causal predicate into each
@@ -463,7 +462,6 @@ class SegmentedFlashAttentionBackwardSm80:
         mdK: cute.Tensor,
         mdV: cute.Tensor,
         mLowerBounds: cute.Tensor,
-        mValid: cute.Tensor,
         softmax_scale: cutlass.Float32,
         mCuSeqlensQ: Optional[cute.Tensor] = None,
         mCuSeqlensK: Optional[cute.Tensor] = None,
@@ -508,14 +506,10 @@ class SegmentedFlashAttentionBackwardSm80:
         # monotonic lower bound per query token.
         if cutlass.const_expr(mLowerBounds.element_type != cutlass.Int32):
             raise TypeError("lower_bounds tensor must be Int32")
-        if cutlass.const_expr(mValid.element_type != cutlass.Int32):
-            raise TypeError("valid tensor must be Int32")
         if cutlass.const_expr(mCuSeqlensQ is not None or mCuSeqlensK is not None):
             raise NotImplementedError("segmented Grug backward supports only dense BSHD tensors")
         if cutlass.const_expr(mLowerBounds.shape[0] != mQ.shape[0] or mLowerBounds.shape[1] != mQ.shape[1]):
             raise ValueError("lower_bounds must have shape [B, S]")
-        if cutlass.const_expr(mValid.shape[0] != mQ.shape[0] or mValid.shape[1] != mQ.shape[1]):
-            raise ValueError("valid must have shape [B, S]")
         self.varlen_q = mCuSeqlensQ is not None
         self._setup_attributes()
         SharedStorage = self._get_shared_storage_cls()
@@ -563,7 +557,6 @@ class SegmentedFlashAttentionBackwardSm80:
             mdK,
             mdV,
             mLowerBounds,
-            mValid,
             mCuSeqlensQ,
             mCuSeqlensK,
             mSeqUsedQ,
@@ -609,7 +602,6 @@ class SegmentedFlashAttentionBackwardSm80:
         mdK: cute.Tensor,
         mdV: cute.Tensor,
         mLowerBounds: cute.Tensor,
-        mValid: cute.Tensor,
         mCuSeqlensQ: Optional[cute.Tensor],
         mCuSeqlensK: Optional[cute.Tensor],
         mSeqUsedQ: Optional[cute.Tensor],
@@ -993,7 +985,7 @@ class SegmentedFlashAttentionBackwardSm80:
                     mask_seqlen=True,
                     mask_causal=self.is_causal,
                 )
-                self.apply_segment_mask(acc_S, mLowerBounds, mValid, batch_idx, m_block, n_block, thr_mma_sdp)
+                self.apply_segment_mask(acc_S, mLowerBounds, batch_idx, m_block, n_block, thr_mma_sdp)
 
             smem_pipe_read_q = cutlass.Int32(0)
             smem_pipe_read_do = cutlass.Int32(0)
@@ -1067,7 +1059,6 @@ class SegmentedFlashAttentionBackwardSm80:
         self,
         acc_S: cute.Tensor,
         mLowerBounds: cute.Tensor,
-        mValid: cute.Tensor,
         batch_idx: cutlass.Int32,
         m_block: cutlass.Int32,
         n_block: cutlass.Int32,

@@ -21,6 +21,7 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_LOG_EVERY=1          train progress/scalar logging cadence
     MAY_LOG_JAXPRS=false     disable JAXPR dumps for throughput probes
     MAY_LOG_XLA_HLO=false    disable HLO dumps for throughput probes
+    MAY_REMAT=save_moe       none | recompute_all | save_moe
 
 The default parameter policy keeps one sharded fp32 parameter tree plus sharded
 optimizer state. Set ``MAY_LIVE_PARAM_MODE=compute_with_master`` to keep a
@@ -53,7 +54,7 @@ from experiments.grug.moe.launch import (
     validate_local_expert_model_axes,
     validate_ring_expert_model_axes,
 )
-from experiments.grug.moe.model import CrossEntropyImplementation, GrugModelConfig, RematMode
+from experiments.grug.moe.model import VALID_REMAT_MODES, CrossEntropyImplementation, GrugModelConfig, RematMode
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig, LiveParamMode
 
@@ -98,8 +99,8 @@ def build_may_model() -> GrugModelConfig:
     hidden_dim = env_int("MAY_HIDDEN_DIM", DEFAULT_HIDDEN_DIM)
     seq_len = env_int("MAY_SEQ_LEN", DEFAULT_SEQ_LEN)
     remat_mode = os.environ.get("MAY_REMAT", "save_moe")
-    if remat_mode not in ("recompute_all", "save_moe"):
-        raise ValueError(f"MAY_REMAT={remat_mode!r} must be 'recompute_all' or 'save_moe'")
+    if remat_mode not in VALID_REMAT_MODES:
+        raise ValueError(f"MAY_REMAT={remat_mode!r} must be one of {VALID_REMAT_MODES}")
     attention_implementation = os.environ.get("MAY_ATTENTION_IMPLEMENTATION", "gpu_fa4_cute")
     cross_entropy_implementation = os.environ.get("MAY_CE_IMPLEMENTATION") or None
 

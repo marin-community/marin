@@ -856,6 +856,38 @@ def test_fused_cross_entropy_pallas_gpu_requires_gpu():
         )
 
 
+def test_pallas_gpu_backward_streaming_from_lse_matches_reference_gradients():
+    key = jax.random.PRNGKey(17)
+    key_x, key_w, key_y, key_loss, key_lse = jax.random.split(key, 5)
+    x = jax.random.normal(key_x, (5, 3), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (3, 10), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (5,), 0, 10, dtype=jnp.int32)
+    g_loss = jax.random.normal(key_loss, (5,), dtype=jnp.float32)
+    g_lse = jax.random.normal(key_lse, (5,), dtype=jnp.float32)
+
+    _, lse = linear_softmax_cross_entropy_loss_reference(x, y, w, dtype=jnp.float32)
+
+    def reference_cotangent_loss(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        loss, logsumexp = linear_softmax_cross_entropy_loss_reference(x_raw, y, w_raw, dtype=jnp.float32)
+        return jnp.sum(loss * g_loss + logsumexp * g_lse)
+
+    expected_x, expected_w = jax.grad(reference_cotangent_loss, argnums=(0, 1))(x, w)
+    actual_x, actual_w = pallas_gpu._backward_streaming_from_lse(
+        x,
+        y,
+        w,
+        lse,
+        g_loss,
+        g_lse,
+        v_block_size=4,
+        logit_soft_cap=None,
+        precision=None,
+    )
+
+    np.testing.assert_allclose(actual_x, expected_x, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(actual_w, expected_w, rtol=1e-5, atol=1e-5)
+
+
 def test_fused_cross_entropy_pallas_gpu_custom_backward_grad_matches_xla():
     if jax.default_backend() != "gpu":
         pytest.skip("requires GPU backend")
