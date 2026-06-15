@@ -34,9 +34,26 @@ logger = logging.getLogger(__name__)
 # once, so a follower polling ``sweep_round_{seq}`` reads an unambiguous value.
 _ROUND_ENDPOINT = "sweep_round_{seq}"
 
-# Registry address value standing in for "no more rounds". Target ids never
-# contain whitespace, so this can never collide with a real target id.
-_STOP = "__SWEEP_STOP__"
+# A round's registry value is tagged so the stop signal can never collide with a
+# target id: a target is published as ``run:<target_id>`` and the terminal stop
+# as ``stop``. Any target id — including one literally equal to ``stop`` — is
+# carried under the ``run:`` prefix and so stays distinct.
+_STOP = "stop"
+_RUN_PREFIX = "run:"
+
+
+def _encode_round(target_id: str | None) -> str:
+    """Encode a round's registry value. ``None`` is the terminal stop."""
+    return _STOP if target_id is None else f"{_RUN_PREFIX}{target_id}"
+
+
+def _decode_round(value: str) -> str | None:
+    """Decode a round value back to a target id, or ``None`` for stop."""
+    if value == _STOP:
+        return None
+    if value.startswith(_RUN_PREFIX):
+        return value[len(_RUN_PREFIX) :]
+    raise ValueError(f"Malformed sweep round value: {value!r}")
 
 
 class GangRole(StrEnum):
@@ -117,7 +134,7 @@ class GangCoordinator:
     def publish(self, seq: int, target_id: str | None) -> None:
         if not self._active:
             return
-        value = _STOP if target_id is None else target_id
+        value = _encode_round(target_id)
         # Best-effort cleanup is handled by the controller's cascade delete on
         # task teardown, as in jax_init — we do not unregister per round.
         self._context().registry.register(_ROUND_ENDPOINT.format(seq=seq), value)
@@ -131,7 +148,7 @@ class GangCoordinator:
             poll_timeout=self._poll_timeout,
             waiting_log=f"Waiting for leader to publish sweep round {seq} ...",
         )
-        return None if value == _STOP else value
+        return _decode_round(value)
 
 
 def gang_coordinator() -> SweepCoordinator:

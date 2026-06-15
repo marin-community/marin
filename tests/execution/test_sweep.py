@@ -19,7 +19,19 @@ from marin.execution.executor_step_status import (
     StatusFile,
 )
 from marin.execution.sweep import SweepTarget, claim_and_run
-from marin.execution.sweep_coordination import GangRole
+from marin.execution.sweep_coordination import _STOP, GangRole, _decode_round, _encode_round
+
+
+@pytest.mark.parametrize("target_id", ["t01", "stop", _STOP, "run:t01", "weird id/with.chars"])
+def test_round_codec_round_trips_any_target_id(target_id):
+    """A target id round-trips through the wire encoding, including one equal to
+    the stop sentinel — the ``run:`` prefix keeps targets and stop disjoint."""
+    assert _decode_round(_encode_round(target_id)) == target_id
+
+
+def test_round_codec_stop_is_none():
+    assert _decode_round(_encode_round(None)) is None
+    assert _encode_round(None) == _STOP
 
 
 def _make_targets(n: int) -> list[SweepTarget]:
