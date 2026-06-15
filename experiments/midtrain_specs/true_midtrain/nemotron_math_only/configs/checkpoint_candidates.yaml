@@ -409,16 +409,17 @@ checkpoint_candidates:
     target_step: 17645
     target_progress_percent: 79.9973
     target_cooldown_steps: 4412
-    suggested_step: 20000
-    suggested_step_delta: 2355
-    suggested_relation_to_target: after_target
-    suggested_progress_percent: 90.6742
-    suggested_phase: decay
+    suggested_step: 17645
+    suggested_step_delta: 0
+    suggested_relation_to_target: exact_target
+    suggested_progress_percent: 79.9973
+    suggested_phase: stable
     suggested_required_artifacts_ok: true
-    suggested_checkpoint_path: "gs://marin-us-central2/adamh-scaling-ladder-nemotron-optimal-1e+21-v5-019021/checkpoints/step-20000"
-    checkpoint_at_or_before: {step: 15000, delta: -2645, phase: stable, progress_percent: 68.0056}
-    checkpoint_at_or_after: {step: 20000, delta: 2355, phase: decay, progress_percent: 90.6742}
-    review_status: needs_human_review
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256/checkpoints/step-17645"
+    checkpoint_at_or_before: {step: 17645, delta: 0, phase: stable, progress_percent: 79.9973}
+    checkpoint_at_or_after: {step: 17645, delta: 0, phase: stable, progress_percent: 79.9973}
+    materialized_checkpoint: true
+    review_status: approved
   - candidate_id: delphi-1e21-cooldown10
     base: 1e21
     cooldown_ratio: 0.10
@@ -460,16 +461,17 @@ checkpoint_candidates:
     target_step: 30588
     target_progress_percent: 80.0000
     target_cooldown_steps: 7647
-    suggested_step: 30000
-    suggested_step_delta: -588
-    suggested_relation_to_target: before_target
-    suggested_progress_percent: 78.4621
-    suggested_phase: stable
+    suggested_step: 30588
+    suggested_step_delta: 0
+    suggested_relation_to_target: exact_target
+    suggested_progress_percent: 80.0000
+    suggested_phase: decay
     suggested_required_artifacts_ok: true
-    suggested_checkpoint_path: "gs://marin-us-central2/adamh-scaling-ladder-nemotron-optimal-1e+22-v5-025b0e/checkpoints/step-30000"
-    checkpoint_at_or_before: {step: 30000, delta: -588, phase: stable, progress_percent: 78.4621}
-    checkpoint_at_or_after: {step: 35000, delta: 4412, phase: decay, progress_percent: 91.5392}
-    review_status: needs_human_review
+    suggested_checkpoint_path: "gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-1e22-prefixes-qwen3-v5p32-east5-r17/checkpoints/step-30588"
+    checkpoint_at_or_before: {step: 30588, delta: 0, phase: decay, progress_percent: 80.0000}
+    checkpoint_at_or_after: {step: 30588, delta: 0, phase: decay, progress_percent: 80.0000}
+    materialized_checkpoint: true
+    review_status: approved
   - candidate_id: delphi-1e22-cooldown10
     base: 1e22
     cooldown_ratio: 0.10
