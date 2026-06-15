@@ -17,7 +17,7 @@ from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
-from iris.cluster.client.bundle import BundleCreator
+from iris.cluster.client.bundle import create_workspace_zip
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
@@ -172,8 +172,7 @@ class RemoteClusterClient:
             request.bundle_id = self._bundle_id
         else:
             if self._bundle_blob is None and self._workspace is not None:
-                creator = BundleCreator(self._workspace)
-                self._bundle_blob = creator.create_bundle()
+                self._bundle_blob = create_workspace_zip(self._workspace)
                 logger.info(f"Workspace bundle size: {len(self._bundle_blob) / 1024 / 1024:.1f} MB")
             request.bundle_blob = self._bundle_blob or b""
 
