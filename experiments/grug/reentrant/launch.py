@@ -172,8 +172,11 @@ _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_f
 # consumers (e.g. experiments/ferries/canary_ferry.py) import it by name.
 GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _baseline_model
 
-# Smallest slice that comfortably fits the d512 MoE (4 chips, ~128 GiB HBM).
-_REENTRANT_RESOURCES = ResourceConfig.with_tpu("v6e-4")
+# v5p-8 in us-central1-a: region-local to the gs://marin-us-central1 data and
+# checkpoint bucket and to the cluster controller. The marin v6e pool lives only
+# in us-east/europe, which would force cross-region I/O. This matches the README
+# d512 baseline hardware (the v5p pool's smallest slice is 8 chips).
+_REENTRANT_RESOURCES = ResourceConfig.with_tpu("v5p-8", regions=["us-central1"])
 
 
 def reentrant_step(*, name: str, run_id: str, model: GrugModelConfig, tags: list[str]) -> ExecutorStep:
