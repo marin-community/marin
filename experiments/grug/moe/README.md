@@ -153,6 +153,61 @@ conservative and easier to reason about.
 
 Predicted macro uses `loss(C) = 1.6 + 95.18 · C^(-0.0941)`.
 
+## CoreWeave scale launch
+
+`launch_cw_scale.py` is the 256-H100 CoreWeave scale launcher for the
+90B-total / 5B-active sparse MoE. It defaults to the full 32-node shape; use the
+wrapper below for a safer 4-node sanity run first:
+
+```bash
+experiments/grug/moe/run_cw_scale.sh
+experiments/grug/moe/run_cw_scale.sh --submit
+```
+
+The first command is a dry run. The second submits the smoke configuration:
+`SCALE_GPU_REPLICAS=4`, `SCALE_HIDDEN_DIM=1024`, `SCALE_NUM_LAYERS=16`,
+`SCALE_BATCH=64`, `SCALE_STEPS=10`, and local disposable checkpointing.
+
+Use `--full --submit` only when you intend to launch the full 32-node recipe.
+The script passes R2 credentials to Iris as `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL`, and `AWS_ENDPOINT_URL_S3`, with
+`MARIN_PREFIX=s3://marin-na/marin/` by default. `--worker-cpu` sets the CPU
+request for each 8xH100 worker pod; this is useful when running diagnostics on
+the fixed CoreWeave CPU quota.
+
+### R2 credentials
+
+The direct dashboard path is:
+
+1. Open Cloudflare R2 object storage.
+2. Under account details, manage API tokens.
+3. Create an account or user R2 token with Object Read & Write access scoped to
+   the `marin-na` bucket.
+4. Copy the one-time `Access Key ID` and `Secret Access Key`.
+5. Store them outside disposable worktrees:
+
+```bash
+mkdir -p ~/.config/marin
+$EDITOR ~/.config/marin/marin-r2.env
+chmod 600 ~/.config/marin/marin-r2.env
+```
+
+Use this file shape when the dashboard gives S3-compatible R2 credentials:
+
+```bash
+R2_ACCESS_KEY_ID=...
+R2_SECRET_ACCESS_KEY=...
+R2_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
+```
+
+If `~/.config/marin/marin-r2.env` instead contains `CLOUDFLARE_ACCOUNT_ID`
+and an R2-capable `CLOUDFLARE_API_TOKEN`, derive the S3-compatible variables
+with:
+
+```bash
+eval "$(scripts/iris/cloudflare_r2_env.sh)"
+```
+
 ## Files
 
 - [`model.py`](./model.py) — `GrugModelConfig` + transformer implementation.

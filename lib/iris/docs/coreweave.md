@@ -20,7 +20,7 @@ Console links:
 create a token for `marin-gpu` and download its kubeconfig.
 
 **2. Install the kubeconfig** at `~/.kube/coreweave-iris-gpu` (context
-`marin-gpu_US-EAST-02A`), plus controller extras and R2 credentials:
+`marin-gpu_US-EAST-02A`), plus controller extras and durable R2 credentials:
 
 ```bash
 mkdir -p ~/.kube
@@ -29,9 +29,15 @@ export KUBECONFIG=~/.kube/coreweave-iris-gpu
 kubectl cluster-info   # sanity check
 
 uv pip install 'marin-iris[controller]'
-export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
-export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
+mkdir -p ~/.config/marin
+$EDITOR ~/.config/marin/marin-r2.env
+chmod 600 ~/.config/marin/marin-r2.env
+eval "$(scripts/iris/cloudflare_r2_env.sh)"
 ```
+
+The env file may contain either `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY`, and `R2_ENDPOINT_URL`, or
+`CLOUDFLARE_ACCOUNT_ID` plus an R2-capable `CLOUDFLARE_API_TOKEN`.
 
 **3. Check cluster status.** `--cluster=cw-us-east-02a` resolves the in-tree
 config and opens a `kubectl port-forward` to the controller for you:
@@ -184,7 +190,10 @@ operator reference (any `--cluster=NAME`) and the lifecycle details behind it.
 - Controller extras: `uv pip install 'marin-iris[controller]'`
 
 For S3 storage, export `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`;
-`iris cluster start` turns them into the `iris-s3-credentials` Secret.
+`iris cluster start` turns them into the `iris-s3-credentials` Secret. For
+Cloudflare R2, keep credentials in `~/.config/marin/marin-r2.env` and run
+`eval "$(scripts/iris/cloudflare_r2_env.sh)"` before starting the cluster or
+submitting jobs.
 
 > **Note**: CoreWeave AI Object Storage (`cwobject.com`, `cwlota.com`) uses
 > virtual-hosted-style S3 addressing, which is auto-detected and configured but

@@ -11,9 +11,11 @@
 # whatever the NodePools hold. See lib/iris/docs/coreweave.md.
 #
 # Workflow:
-#   1. Set R2 object storage credentials (required for s3:// storage URIs):
-#        export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
-#        export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
+#   1. Set R2 object storage credentials (required for s3:// storage URIs).
+#      Prefer a durable, untracked file outside disposable worktrees:
+#        ~/.config/marin/marin-r2.env
+#      Then export S3-compatible vars into the current shell:
+#        eval "$(scripts/iris/cloudflare_r2_env.sh)"
 #      `iris cluster start` turns these into the iris-s3-credentials Secret.
 #   2. Point kubectl/iris at the region kubeconfig:
 #        export KUBECONFIG=~/.kube/coreweave-iris-gpu   # context marin-gpu_US-EAST-02A
