@@ -14,7 +14,26 @@ import subprocess
 import sys
 from pathlib import Path
 
+_EXPORT_CODE = r"""
+from pathlib import Path
+import sys
+
 from experiments.grug.moe import vllm_tpu_parity as parity
+import tpu_inference.models.jax.grugmoe as tpu_grugmoe
+
+output_dir = Path(sys.argv[1])
+max_shard_size = int(sys.argv[2])
+generation_tokens = int(sys.argv[3])
+print("artifact_generation_process=started")
+parity.check_realistic_training_state_roundtrip(
+    tpu_grugmoe,
+    config_name="canary",
+    output_dir=output_dir,
+    max_shard_size=max_shard_size,
+    generation_tokens=generation_tokens,
+)
+print("artifact_generation_process=completed")
+"""
 
 _SERVE_CODE = r"""
 import importlib.metadata as md
@@ -93,29 +112,45 @@ def _print_runtime_header() -> None:
     print("grugmoe_spec=" + repr(importlib.util.find_spec("tpu_inference.models.jax.grugmoe")))
 
 
+def _directory_size_bytes(path: Path) -> int:
+    return sum(file.stat().st_size for file in path.rglob("*") if file.is_file())
+
+
+def _shard_count(path: Path) -> int:
+    return len(list(path.glob("*.safetensors")))
+
+
+def _subprocess_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    env["VLLM_TARGET_DEVICE"] = "tpu"
+    return env
+
+
 def run(output_dir: Path, *, max_shard_size: int, generation_tokens: int) -> None:
     _print_runtime_header()
 
-    import tpu_inference.models.jax.grugmoe as tpu_grugmoe
-
     if output_dir.exists():
         shutil.rmtree(output_dir)
-    parity.check_realistic_training_state_roundtrip(
-        tpu_grugmoe,
-        config_name="canary",
-        output_dir=output_dir,
-        max_shard_size=max_shard_size,
-        generation_tokens=generation_tokens,
+    env = _subprocess_env()
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _EXPORT_CODE,
+            str(output_dir),
+            str(max_shard_size),
+            str(generation_tokens),
+        ],
+        check=True,
+        env=env,
     )
 
     artifact_dir = output_dir / "grugmoe-inference"
     print("full_canary_artifact_dir=" + str(artifact_dir))
-    print("full_canary_artifact_bytes=" + str(parity._directory_size_bytes(artifact_dir)))
-    print("full_canary_shard_count=" + str(parity._shard_count(artifact_dir)))
+    print("full_canary_artifact_bytes=" + str(_directory_size_bytes(artifact_dir)))
+    print("full_canary_shard_count=" + str(_shard_count(artifact_dir)))
 
-    env = dict(os.environ)
-    env.pop("PYTHONPATH", None)
-    env["VLLM_TARGET_DEVICE"] = "tpu"
     subprocess.run(
         [sys.executable, "-c", _SERVE_CODE, str(artifact_dir)],
         check=True,
