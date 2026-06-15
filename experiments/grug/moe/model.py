@@ -533,7 +533,7 @@ class Transformer(eqx.Module):
 
         if not isinstance(mask, AttentionMask):
             mask = AttentionMask.causal()
-        short_mask, long_mask = _model_sliding_attention_masks(mask, cfg)
+        short_mask, long_mask = _layer_attention_masks(mask, sliding_window=cfg.sliding_window)
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
@@ -601,27 +601,6 @@ class Transformer(eqx.Module):
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
             return loss, summarized_metrics
         return loss
-
-
-def _model_sliding_attention_masks(
-    mask: AttentionMask | jax.Array,
-    cfg: GrugModelConfig,
-) -> tuple[AttentionMask, AttentionMask]:
-    segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-    thd_segment_metadata = mask.thd_segment_metadata if isinstance(mask, AttentionMask) else None
-    short_mask = AttentionMask(
-        is_causal=True,
-        sliding_window=cfg.sliding_window // 2,
-        segment_ids=segment_ids,
-        thd_segment_metadata=thd_segment_metadata,
-    )
-    long_mask = AttentionMask(
-        is_causal=True,
-        sliding_window=cfg.sliding_window,
-        segment_ids=segment_ids,
-        thd_segment_metadata=thd_segment_metadata,
-    )
-    return short_mask, long_mask
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:

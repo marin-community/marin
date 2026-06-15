@@ -61,6 +61,29 @@ def test_simple_causal_lower_bounds_match_full_causal_semantics():
     np.testing.assert_array_equal(valid, np.ones((2, 4), dtype=np.bool_))
 
 
+def _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, *, valid_tokens=None):
+    actual = jax.jit(gpu_fa4_cute_attention)(q, k, v, mask)
+    expected = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    if valid_tokens is not None:
+        actual = jnp.where(valid_tokens[..., None, None], actual, expected)
+
+    np.testing.assert_allclose(actual, expected, atol=7e-2, rtol=7e-2)
+
+    def ref_loss(q_arg, k_arg, v_arg):
+        out = reference_attention(q_arg, k_arg, v_arg, mask, logits_dtype=jnp.float32)
+        return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
+
+    def fa4_loss(q_arg, k_arg, v_arg):
+        out = gpu_fa4_cute_attention(q_arg, k_arg, v_arg, mask)
+        return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
+
+    actual_grads = jax.jit(jax.grad(fa4_loss, argnums=(0, 1, 2)))(q, k, v)
+    expected_grads = jax.jit(jax.grad(ref_loss, argnums=(0, 1, 2)))(q, k, v)
+
+    for actual_grad, expected_grad in zip(actual_grads, expected_grads, strict=True):
+        np.testing.assert_allclose(actual_grad, expected_grad, atol=7e-2, rtol=7e-2)
+
+
 @pytest.mark.parametrize(("q_heads", "kv_heads"), [(4, 1), (2, 2)])
 def test_real_gpu_fa4_cute_attention_matches_reference_for_valid_dynamic_packed_segments(q_heads, kv_heads):
     if jax.default_backend() != "gpu":
@@ -78,34 +101,11 @@ def test_real_gpu_fa4_cute_attention_matches_reference_for_valid_dynamic_packed_
         dtype=jnp.int32,
     )
     mask = AttentionMask.causal(sliding_window=5).with_segment_ids(segment_ids)
-
-    actual = jax.jit(gpu_fa4_cute_attention)(q, k, v, mask)
-    expected = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
     valid = segment_ids >= 0
-
-    np.testing.assert_allclose(
-        jnp.where(valid[..., None, None], actual, expected),
-        expected,
-        atol=7e-2,
-        rtol=7e-2,
-    )
-
     cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
     cotangent = cotangent * valid[..., None, None].astype(jnp.bfloat16)
 
-    def ref_loss(q_arg, k_arg, v_arg):
-        out = reference_attention(q_arg, k_arg, v_arg, mask, logits_dtype=jnp.float32)
-        return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
-
-    def fa4_loss(q_arg, k_arg, v_arg):
-        out = gpu_fa4_cute_attention(q_arg, k_arg, v_arg, mask)
-        return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
-
-    actual_grads = jax.jit(jax.grad(fa4_loss, argnums=(0, 1, 2)))(q, k, v)
-    expected_grads = jax.jit(jax.grad(ref_loss, argnums=(0, 1, 2)))(q, k, v)
-
-    for actual_grad, expected_grad in zip(actual_grads, expected_grads, strict=True):
-        np.testing.assert_allclose(actual_grad, expected_grad, atol=7e-2, rtol=7e-2)
+    _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, valid_tokens=valid)
 
 
 def test_real_gpu_fa4_cute_attention_matches_reference_for_simple_sliding_mask():
@@ -120,24 +120,6 @@ def test_real_gpu_fa4_cute_attention_matches_reference_for_simple_sliding_mask()
     k = jax.random.normal(k_key, (2, 64, 2, 64), dtype=jnp.bfloat16)
     v = jax.random.normal(v_key, (2, 64, 2, 64), dtype=jnp.bfloat16)
     mask = AttentionMask.causal(sliding_window=7)
-
-    actual = jax.jit(gpu_fa4_cute_attention)(q, k, v, mask)
-    expected = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
-
-    np.testing.assert_allclose(actual, expected, atol=7e-2, rtol=7e-2)
-
     cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
 
-    def ref_loss(q_arg, k_arg, v_arg):
-        out = reference_attention(q_arg, k_arg, v_arg, mask, logits_dtype=jnp.float32)
-        return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
-
-    def fa4_loss(q_arg, k_arg, v_arg):
-        out = gpu_fa4_cute_attention(q_arg, k_arg, v_arg, mask)
-        return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
-
-    actual_grads = jax.jit(jax.grad(fa4_loss, argnums=(0, 1, 2)))(q, k, v)
-    expected_grads = jax.jit(jax.grad(ref_loss, argnums=(0, 1, 2)))(q, k, v)
-
-    for actual_grad, expected_grad in zip(actual_grads, expected_grads, strict=True):
-        np.testing.assert_allclose(actual_grad, expected_grad, atol=7e-2, rtol=7e-2)
+    _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent)

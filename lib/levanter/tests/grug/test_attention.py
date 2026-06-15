@@ -188,8 +188,33 @@ def test_gpu_fa4_thd_forward_launcher_threads_local_window_arguments():
             calls["init_args"] = args
             calls["init_kwargs"] = kwargs
 
-        def __call__(self, *args):
-            calls["call_args"] = args
+        def __call__(
+            self,
+            q,
+            k,
+            v,
+            out,
+            lse,
+            softmax_scale,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            seqused_q,
+            seqused_k,
+            leftpad_k,
+            window_size_left,
+            window_size_right,
+            block_table,
+            alibi_slopes,
+            softcap,
+            softmax_scale_log2,
+            stream,
+        ):
+            del q, k, v, out, lse, softmax_scale, cu_seqlens_q, cu_seqlens_k
+            del seqused_q, seqused_k, block_table, alibi_slopes, softcap, softmax_scale_log2
+            calls["leftpad_k"] = leftpad_k
+            calls["window_size_left"] = window_size_left
+            calls["window_size_right"] = window_size_right
+            calls["stream"] = stream
 
     modules = fa4_thd._UpstreamFa4CuteModules(
         arch=100,
@@ -221,12 +246,10 @@ def test_gpu_fa4_thd_forward_launcher_threads_local_window_arguments():
     assert calls["init_args"] == (128, 128)
     assert calls["init_kwargs"]["is_causal"] is False
     assert calls["init_kwargs"]["is_local"] is True
-    call_args = calls["call_args"]
-    assert len(call_args) == 18
-    assert call_args[10] is None
-    assert call_args[11] == 2047
-    assert call_args[12] == 0
-    assert call_args[17] == "stream"
+    assert calls["leftpad_k"] is None
+    assert calls["window_size_left"] == 2047
+    assert calls["window_size_right"] == 0
+    assert calls["stream"] == "stream"
 
 
 def test_gpu_fa4_thd_rejects_mha_before_kernel_config(monkeypatch):
@@ -242,17 +265,11 @@ def test_gpu_fa4_thd_rejects_mha_before_kernel_config(monkeypatch):
         attention(q, k, v, mask, implementation="gpu_fa4_thd")
 
 
-def test_gpu_fa4_thd_validates_sliding_window():
+def test_gpu_fa4_thd_rejects_nonpositive_sliding_window():
     q = jnp.ones((1, 4, 2, 8), dtype=jnp.float32)
     k = jnp.ones((1, 4, 1, 8), dtype=jnp.float32)
     v = jnp.ones((1, 4, 1, 8), dtype=jnp.float32)
     segment_ids = jnp.array([[0, 0, 1, 1]], dtype=jnp.int32)
-
-    full_window = AttentionMask.causal(sliding_window=4).with_segment_ids(segment_ids, max_segments=2)
-    fa4_thd._validate_simple_causal_self_attention(q, k, v, full_window, backend_name="gpu_fa4_thd_attention")
-
-    short_window = AttentionMask.causal(sliding_window=3).with_segment_ids(segment_ids, max_segments=2)
-    fa4_thd._validate_simple_causal_self_attention(q, k, v, short_window, backend_name="gpu_fa4_thd_attention")
 
     zero_window = AttentionMask.causal(sliding_window=0).with_segment_ids(segment_ids, max_segments=2)
     with pytest.raises(ValueError, match="sliding_window must be positive"):

@@ -711,6 +711,7 @@ def _num_thd_sequences(*, cu_seqlens_shape: int, cu_seqlens_rank: int) -> int:
 
 
 def _effective_sliding_window(sliding_window: int | None, seq_len: int) -> int | None:
+    """Return the local window for FA4, or None when full causal attention is equivalent."""
     if sliding_window is None or sliding_window >= seq_len:
         return None
     return sliding_window

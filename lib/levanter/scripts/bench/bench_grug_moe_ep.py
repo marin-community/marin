@@ -45,6 +45,13 @@ class DeepEPConfigOverride:
     combine: transport_ffi.IntranodeConfig
 
 
+@dataclass(frozen=True)
+class BenchmarkContext:
+    tokens: int
+    mesh: Mesh
+    inputs: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]
+
+
 _DEEPEP_COMPONENT_STAGES = (
     "deepep_dispatch",
     "deepep_dispatch_w13",
@@ -367,14 +374,7 @@ def _deepep_config_payload(config: DeepEPConfigOverride | None) -> dict[str, dic
     }
 
 
-def _run_benchmark(
-    args: argparse.Namespace,
-    expert_axis_size: int,
-    deepep_config: DeepEPConfigOverride | None,
-) -> None:
-    if deepep_config is not None and args.mode != "deepep_components":
-        raise ValueError("DeepEP config override is only supported with --mode deepep_components")
-
+def _benchmark_context(args: argparse.Namespace, expert_axis_size: int) -> BenchmarkContext:
     tokens = args.batch_size * args.seq_len
     dtype = jnp.bfloat16 if args.dtype == "bfloat16" else jnp.float32
     mesh = _ep_mesh(expert_axis_size)
@@ -389,130 +389,182 @@ def _run_benchmark(
             dtype=dtype,
         ),
     )
+    return BenchmarkContext(tokens=tokens, mesh=mesh, inputs=inputs)
 
-    with jax.set_mesh(mesh):
-        if args.mode == "deepep_components":
-            results = [
-                _time(
-                    _deepep_component_fn(
-                        stage,
-                        mesh,
-                        num_experts=args.num_experts,
-                        capacity_factor=args.capacity_factor,
-                        deepep_config=deepep_config,
-                    ),
-                    inputs,
-                    tokens=tokens,
-                    warmup=args.warmup,
-                    steps=args.steps,
-                    implementation=stage,
-                )
-                for stage in _DEEPEP_COMPONENT_STAGES
-            ]
-            payload = {
-                "shape": {
-                    "tokens": tokens,
-                    "batch_size": args.batch_size,
-                    "seq_len": args.seq_len,
-                    "hidden_dim": args.hidden_dim,
-                    "intermediate_dim": args.intermediate_dim,
-                    "num_experts": args.num_experts,
-                    "topk": args.topk,
-                    "capacity_factor": args.capacity_factor,
-                    "dtype": args.dtype,
-                    "mode": args.mode,
-                },
-                "mesh": {
-                    "devices": len(jax.devices()),
-                    "expert_axis_size": expert_axis_size,
-                },
-                "deepep_config": _deepep_config_payload(deepep_config),
-                "results": [_as_json(result) for result in results],
-            }
-            rendered = json.dumps(payload, indent=2, sort_keys=True)
-            print(rendered)
-            if args.json_output is not None:
-                with open(args.json_output, "w", encoding="utf-8") as handle:
-                    handle.write(rendered)
-                    handle.write("\n")
-            return
 
-        fn_factory = _forward_fn if args.mode == "forward" else _forward_backward_fn
-        implementations = tuple(args.implementations)
-
-        ring_out, ring_dropped = _block_until_ready(
-            _forward_fn("ring", mesh, capacity_factor=args.capacity_factor)(*inputs)
-        )
-        ring_forward_backward = None
-        if args.mode == "forward_backward":
-            ring_forward_backward = _block_until_ready(
-                _forward_backward_fn("ring", mesh, capacity_factor=args.capacity_factor)(*inputs)
-            )
-        max_reference_abs = float(jnp.max(jnp.abs(ring_out.astype(jnp.float32))))
-        correctness: dict[str, dict[str, float]] = {}
-        results: list[BenchResult] = []
-        for implementation in implementations:
-            candidate_out, candidate_dropped = _block_until_ready(
-                _forward_fn(implementation, mesh, capacity_factor=args.capacity_factor)(*inputs)
-            )
-            diff = jnp.abs(ring_out.astype(jnp.float32) - candidate_out.astype(jnp.float32))
-            max_abs_diff = float(jnp.max(diff))
-            correctness[implementation] = {
-                "max_abs_diff": max_abs_diff,
-                "mean_abs_diff": float(jnp.mean(diff)),
-                "max_relative_diff": max_abs_diff / max(max_reference_abs, 1.0),
-                "ring_dropped": int(ring_dropped),
-                "candidate_dropped": int(candidate_dropped),
-                "dropped_abs_diff": int(jnp.abs(ring_dropped - candidate_dropped)),
-            }
-            if ring_forward_backward is not None:
-                candidate_loss, candidate_grads = _block_until_ready(
-                    _forward_backward_fn(implementation, mesh, capacity_factor=args.capacity_factor)(*inputs)
-                )
-                ring_loss, ring_grads = ring_forward_backward
-                correctness[implementation]["loss_abs_diff"] = float(
-                    jnp.abs(ring_loss.astype(jnp.float32) - candidate_loss.astype(jnp.float32))
-                )
-                correctness[implementation]["grad_max_abs_diff"] = _max_tree_abs_diff(ring_grads, candidate_grads)
-            results.append(
-                _time(
-                    fn_factory(implementation, mesh, capacity_factor=args.capacity_factor),
-                    inputs,
-                    tokens=tokens,
-                    warmup=args.warmup,
-                    steps=args.steps,
-                    implementation=implementation,
-                )
-            )
-
-    payload = {
-        "shape": {
-            "tokens": tokens,
-            "batch_size": args.batch_size,
-            "seq_len": args.seq_len,
-            "hidden_dim": args.hidden_dim,
-            "intermediate_dim": args.intermediate_dim,
-            "num_experts": args.num_experts,
-            "topk": args.topk,
-            "capacity_factor": args.capacity_factor,
-            "dtype": args.dtype,
-            "mode": args.mode,
-        },
-        "mesh": {
-            "devices": len(jax.devices()),
-            "expert_axis_size": expert_axis_size,
-        },
-        "deepep_config": _deepep_config_payload(deepep_config),
-        "max_reference_abs": max_reference_abs,
-        "correctness_vs_ring": correctness,
-        "results": [_as_json(result) for result in results],
+def _shape_payload(args: argparse.Namespace, tokens: int) -> dict[str, float | int | str]:
+    return {
+        "tokens": tokens,
+        "batch_size": args.batch_size,
+        "seq_len": args.seq_len,
+        "hidden_dim": args.hidden_dim,
+        "intermediate_dim": args.intermediate_dim,
+        "num_experts": args.num_experts,
+        "topk": args.topk,
+        "capacity_factor": args.capacity_factor,
+        "dtype": args.dtype,
+        "mode": args.mode,
     }
+
+
+def _mesh_payload(expert_axis_size: int) -> dict[str, int]:
+    return {
+        "devices": len(jax.devices()),
+        "expert_axis_size": expert_axis_size,
+    }
+
+
+def _emit_payload(args: argparse.Namespace, payload: dict[str, object]) -> None:
     rendered = json.dumps(payload, indent=2, sort_keys=True)
     print(rendered)
-    if args.json_output is not None:
-        with open(args.json_output, "w", encoding="utf-8") as handle:
-            handle.write(rendered)
-            handle.write("\n")
+    if args.json_output is None:
+        return
+    with open(args.json_output, "w", encoding="utf-8") as handle:
+        handle.write(rendered)
+        handle.write("\n")
+
+
+def _component_results(
+    args: argparse.Namespace,
+    context: BenchmarkContext,
+    deepep_config: DeepEPConfigOverride | None,
+) -> list[BenchResult]:
+    return [
+        _time(
+            _deepep_component_fn(
+                stage,
+                context.mesh,
+                num_experts=args.num_experts,
+                capacity_factor=args.capacity_factor,
+                deepep_config=deepep_config,
+            ),
+            context.inputs,
+            tokens=context.tokens,
+            warmup=args.warmup,
+            steps=args.steps,
+            implementation=stage,
+        )
+        for stage in _DEEPEP_COMPONENT_STAGES
+    ]
+
+
+def _run_deepep_component_benchmark(
+    args: argparse.Namespace,
+    context: BenchmarkContext,
+    expert_axis_size: int,
+    deepep_config: DeepEPConfigOverride | None,
+) -> None:
+    with jax.set_mesh(context.mesh):
+        results = _component_results(args, context, deepep_config)
+    _emit_payload(
+        args,
+        {
+            "shape": _shape_payload(args, context.tokens),
+            "mesh": _mesh_payload(expert_axis_size),
+            "deepep_config": _deepep_config_payload(deepep_config),
+            "results": [_as_json(result) for result in results],
+        },
+    )
+
+
+def _correctness_vs_ring(
+    args: argparse.Namespace,
+    context: BenchmarkContext,
+    implementations: tuple[str, ...],
+) -> tuple[float, dict[str, dict[str, float]]]:
+    ring_out, ring_dropped = _block_until_ready(
+        _forward_fn("ring", context.mesh, capacity_factor=args.capacity_factor)(*context.inputs)
+    )
+    ring_forward_backward = None
+    if args.mode == "forward_backward":
+        ring_forward_backward = _block_until_ready(
+            _forward_backward_fn("ring", context.mesh, capacity_factor=args.capacity_factor)(*context.inputs)
+        )
+    max_reference_abs = float(jnp.max(jnp.abs(ring_out.astype(jnp.float32))))
+    correctness: dict[str, dict[str, float]] = {}
+    for implementation in implementations:
+        candidate_out, candidate_dropped = _block_until_ready(
+            _forward_fn(implementation, context.mesh, capacity_factor=args.capacity_factor)(*context.inputs)
+        )
+        diff = jnp.abs(ring_out.astype(jnp.float32) - candidate_out.astype(jnp.float32))
+        max_abs_diff = float(jnp.max(diff))
+        correctness[implementation] = {
+            "max_abs_diff": max_abs_diff,
+            "mean_abs_diff": float(jnp.mean(diff)),
+            "max_relative_diff": max_abs_diff / max(max_reference_abs, 1.0),
+            "ring_dropped": int(ring_dropped),
+            "candidate_dropped": int(candidate_dropped),
+            "dropped_abs_diff": int(jnp.abs(ring_dropped - candidate_dropped)),
+        }
+        if ring_forward_backward is not None:
+            candidate_loss, candidate_grads = _block_until_ready(
+                _forward_backward_fn(implementation, context.mesh, capacity_factor=args.capacity_factor)(
+                    *context.inputs
+                )
+            )
+            ring_loss, ring_grads = ring_forward_backward
+            correctness[implementation]["loss_abs_diff"] = float(
+                jnp.abs(ring_loss.astype(jnp.float32) - candidate_loss.astype(jnp.float32))
+            )
+            correctness[implementation]["grad_max_abs_diff"] = _max_tree_abs_diff(ring_grads, candidate_grads)
+    return max_reference_abs, correctness
+
+
+def _benchmark_results(
+    args: argparse.Namespace,
+    context: BenchmarkContext,
+    implementations: tuple[str, ...],
+) -> list[BenchResult]:
+    fn_factory = _forward_fn if args.mode == "forward" else _forward_backward_fn
+    return [
+        _time(
+            fn_factory(implementation, context.mesh, capacity_factor=args.capacity_factor),
+            context.inputs,
+            tokens=context.tokens,
+            warmup=args.warmup,
+            steps=args.steps,
+            implementation=implementation,
+        )
+        for implementation in implementations
+    ]
+
+
+def _run_moe_benchmark(
+    args: argparse.Namespace,
+    context: BenchmarkContext,
+    expert_axis_size: int,
+    deepep_config: DeepEPConfigOverride | None,
+) -> None:
+    implementations = tuple(args.implementations)
+    with jax.set_mesh(context.mesh):
+        max_reference_abs, correctness = _correctness_vs_ring(args, context, implementations)
+        results = _benchmark_results(args, context, implementations)
+    _emit_payload(
+        args,
+        {
+            "shape": _shape_payload(args, context.tokens),
+            "mesh": _mesh_payload(expert_axis_size),
+            "deepep_config": _deepep_config_payload(deepep_config),
+            "max_reference_abs": max_reference_abs,
+            "correctness_vs_ring": correctness,
+            "results": [_as_json(result) for result in results],
+        },
+    )
+
+
+def _run_benchmark(
+    args: argparse.Namespace,
+    expert_axis_size: int,
+    deepep_config: DeepEPConfigOverride | None,
+) -> None:
+    if deepep_config is not None and args.mode != "deepep_components":
+        raise ValueError("DeepEP config override is only supported with --mode deepep_components")
+
+    context = _benchmark_context(args, expert_axis_size)
+    if args.mode == "deepep_components":
+        _run_deepep_component_benchmark(args, context, expert_axis_size, deepep_config)
+        return
+    _run_moe_benchmark(args, context, expert_axis_size, deepep_config)
 
 
 def main() -> None:
