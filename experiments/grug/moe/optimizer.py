@@ -522,6 +522,7 @@ def scale_with_grug_klsoaph(
     nesterov: bool = False,
     soap_muon: bool = False,
     kl: bool = True,
+    block_size: int = 0,
     learning_rate: float = 0.018,
 ) -> optax.GradientTransformation:
     """KL Soap H: full-matrix SOAP-eigenbasis Adam direction + hyperball post-step.
@@ -547,6 +548,7 @@ def scale_with_grug_klsoaph(
         nesterov=nesterov,
         soap_muon=soap_muon,
         kl=kl,
+        block_size=block_size,
     )
 
     def init_fn(params):
@@ -589,6 +591,7 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
     nesterov: bool = False  # Nadam-style look-ahead: precond numerator = b1*m_t+(1-b1)*g_t instead of plain EMA
     soap_muon: bool = False  # SOAP-Muon (modded-nanogpt PR #278/#321): msign the Adam-precond update after rotate-back
     kl: bool = True  # False -> non-KL SOAP-H: raw Gram (G Gᵀ, Gᵀ G), no ESI whitening (canonical SOAP) + hyperball
+    block_size: int = 0  # >0 -> block-wise SOAP: per bxb tile preconditioner (higher MFU, lower memory)
     # Real-Adam settings for the NON-SOAP groups (adamh: lm_head/output_proj; adam: embeddings/router),
     # kept SEPARATE from the SOAP eigenbasis betas/eps above so the SOAP group is the only variable
     # vs the MuonH baseline. Defaults match the d512 MuonH run (heuristic beta1=0.9062, beta2=0.999,
@@ -626,6 +629,7 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
                         nesterov=self.nesterov,
                         soap_muon=self.soap_muon,
                         kl=self.kl,
+                        block_size=self.block_size,
                         learning_rate=klsoaph_lr,
                     )
                 )

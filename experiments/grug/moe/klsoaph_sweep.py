@@ -82,6 +82,7 @@ _optimizer = GrugMoeKLSoapHConfig(
     nesterov=os.environ.get("KLSOAPH_NESTEROV", "0").lower() in ("1", "true", "yes"),
     soap_muon=os.environ.get("KLSOAPH_SOAP_MUON", "0").lower() in ("1", "true", "yes"),
     kl=os.environ.get("KLSOAPH_KL", "1").lower() in ("1", "true", "yes"),
+    block_size=int(os.environ.get("KLSOAPH_BLOCK_SIZE", "0")),
     # Non-SOAP groups pinned to the d512 MuonH baseline (apples-to-apples) — env-overridable:
     adam_lr=_f("KLSOAPH_ADAM_LR", _muonh.adam_lr),
     adam_beta1=_f("KLSOAPH_ADAM_BETA1", _muonh.beta1),

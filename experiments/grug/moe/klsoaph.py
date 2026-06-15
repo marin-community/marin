@@ -168,6 +168,38 @@ def _symmetrize(matrix):
     return 0.5 * (matrix + jnp.swapaxes(matrix, -1, -2))
 
 
+def _blockable(shape, block_size: int) -> bool:
+    """Block-wise SOAP applies to any matrix leaf (ndim>=2) whose trailing dims tile evenly.
+
+    Expert-stacked leaves (ndim>=3) keep the leading expert axis sharded with the block axis as an
+    extra replicated batch dim; plain 2D leaves are blocked and run replicated (the block axis is not
+    sharded). Only block when a trailing dim exceeds block_size (else blocking is a no-op).
+    """
+    if block_size <= 0 or len(shape) < 2:
+        return False
+    rows, cols = shape[-2], shape[-1]
+    return rows % block_size == 0 and cols % block_size == 0 and (rows > block_size or cols > block_size)
+
+
+def _to_blocks(x, b: int):
+    """[..., rows, cols] -> [..., (rows//b)*(cols//b), b, b]: tile the trailing matrix into bxb blocks."""
+    lead = x.shape[:-2]
+    rows, cols = x.shape[-2], x.shape[-1]
+    nr, nc = rows // b, cols // b
+    x = x.reshape(*lead, nr, b, nc, b)
+    x = jnp.moveaxis(x, -3, -2)  # (..., nr, nc, b_row, b_col)
+    return x.reshape(*lead, nr * nc, b, b)
+
+
+def _from_blocks(x, rows: int, cols: int, b: int):
+    """[..., (rows//b)*(cols//b), b, b] -> [..., rows, cols]: inverse of _to_blocks."""
+    lead = x.shape[:-3]
+    nr, nc = rows // b, cols // b
+    x = x.reshape(*lead, nr, nc, b, b)
+    x = jnp.moveaxis(x, -2, -3)  # (..., nr, b_row, nc, b_col)
+    return x.reshape(*lead, rows, cols)
+
+
 def _msign(m, steps: int = 5):
     """Newton-Schulz quintic orthogonalization (Muon's msign), batched over leading axes.
 
@@ -413,6 +445,7 @@ def _klsoaph_step_sharded(
     nesterov: bool = False,
     soap_muon: bool = False,
     kl: bool = True,
+    shard_expert: bool | None = None,
 ):
     """Distribute the per-expert SOAP step across the mesh via ``shard_map``.
 
@@ -421,6 +454,11 @@ def _klsoaph_step_sharded(
     local experts with single-device semantics (the linalg sees no sharded batch axis,
     avoiding the explicit-mesh ``select`` errors). 2D leaves and the no-mesh case fall
     through to a plain replicated call.
+
+    ``shard_expert`` overrides the shard-vs-replicate decision (default: shard iff ndim>=3).
+    A block-wise 2D leaf arrives as [num_blocks, b, b] (ndim 3) but has NO expert axis to
+    shard -- its block axis may not divide the mesh -- so callers pass shard_expert=False to
+    keep it replicated.
     """
     bound = functools.partial(
         _klsoaph_step,
@@ -437,7 +475,7 @@ def _klsoaph_step_sharded(
         kl=kl,
     )
     mesh = jax.sharding.get_abstract_mesh()
-    batched = hasattr(grad, "ndim") and grad.ndim >= 3
+    batched = (grad.ndim >= 3) if shard_expert is None else shard_expert
     if mesh.empty:
         return bound(grad, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r, step)
     if not batched:
@@ -460,8 +498,11 @@ def _klsoaph_step_sharded(
             jax.reshard(step, P()),
         )
 
-    mat_p = _expert_shard_pspec(3, mesh, True)  # [E, n, n]
-    esi_p = _expert_shard_pspec(2, mesh, True)  # [E, n]
+    # Derive ranks from the arrays: full SOAP -> mat [E,n,n] (3D), esi [E,n] (2D); block-wise SOAP ->
+    # mat [E, num_blocks, b, b] (4D), esi [E, num_blocks, b] (3D). The leading (expert) axis is sharded
+    # either way; the extra block axis is a replicated batch dim.
+    mat_p = _expert_shard_pspec(grad.ndim, mesh, True)
+    esi_p = _expert_shard_pspec(esi_l.ndim, mesh, True)
     rep = P()  # replicated scalar (step)
     # shard_map requires in_specs to MATCH each input's sharding (it does not reshard).
     # The grad arrives sharded as the param (P("expert", "data", ...)) and the state as
@@ -500,8 +541,15 @@ def scale_by_klsoaph(
     nesterov: bool = False,
     soap_muon: bool = False,
     kl: bool = True,
+    block_size: int = 0,
 ) -> optax.GradientTransformation:
     """Full-matrix SOAP-style preconditioner (upstream KLSOAPH, de-blocked).
+
+    ``block_size > 0`` enables block-wise SOAP: each expert-stacked matrix leaf (ndim>=3) whose
+    trailing dims tile evenly is partitioned into independent ``block_size x block_size`` tiles, and
+    SOAP (Gram / eigenbasis / Adam) runs per tile. The Gram/QR cost drops from O(n³) to O(n·b²) and
+    the eigenbasis state from O(n²) to O(n·b) -> higher MFU + lower memory. The hyperball post-step
+    downstream still normalizes the full reassembled update (never per-block).
 
     For each ``(..., rows, cols)`` weight, maintains the full row-Gram
     ``gg_l = (rows, rows)`` and col-Gram ``gg_r = (cols, cols)`` and their
@@ -521,17 +569,24 @@ def scale_by_klsoaph(
     ellipsis).
     """
 
+    def _maybe_block_param(p):
+        # State is allocated against the BLOCKED shape so all per-tile matrices are bxb.
+        if p is None or not _blockable(p.shape, block_size):
+            return p
+        return _to_blocks(p, block_size)
+
     def init_fn(params):
+        bp = jax.tree.map(_maybe_block_param, params, is_leaf=lambda x: x is None)
         return ScaleByKLSoapHState(
             count=jnp.zeros([], jnp.int32),
-            exp_avg=jax.tree.map(_zeros_mn, params, is_leaf=lambda x: x is None),
-            exp_avg_sq=jax.tree.map(_zeros_mn, params, is_leaf=lambda x: x is None),
-            gg_l=jax.tree.map(lambda p: _zeros_square(p, -2), params, is_leaf=lambda x: x is None),
-            gg_r=jax.tree.map(lambda p: _zeros_square(p, -1), params, is_leaf=lambda x: x is None),
-            q_l=jax.tree.map(lambda p: _eye_square(p, -2), params, is_leaf=lambda x: x is None),
-            q_r=jax.tree.map(lambda p: _eye_square(p, -1), params, is_leaf=lambda x: x is None),
-            esi_l=jax.tree.map(lambda p: _esi_init(p, -2, init_factor), params, is_leaf=lambda x: x is None),
-            esi_r=jax.tree.map(lambda p: _esi_init(p, -1, init_factor), params, is_leaf=lambda x: x is None),
+            exp_avg=jax.tree.map(_zeros_mn, bp, is_leaf=lambda x: x is None),
+            exp_avg_sq=jax.tree.map(_zeros_mn, bp, is_leaf=lambda x: x is None),
+            gg_l=jax.tree.map(lambda p: _zeros_square(p, -2), bp, is_leaf=lambda x: x is None),
+            gg_r=jax.tree.map(lambda p: _zeros_square(p, -1), bp, is_leaf=lambda x: x is None),
+            q_l=jax.tree.map(lambda p: _eye_square(p, -2), bp, is_leaf=lambda x: x is None),
+            q_r=jax.tree.map(lambda p: _eye_square(p, -1), bp, is_leaf=lambda x: x is None),
+            esi_l=jax.tree.map(lambda p: _esi_init(p, -2, init_factor), bp, is_leaf=lambda x: x is None),
+            esi_r=jax.tree.map(lambda p: _esi_init(p, -1, init_factor), bp, is_leaf=lambda x: x is None),
         )
 
     def update_fn(updates, state, params=None):
@@ -545,9 +600,17 @@ def scale_by_klsoaph(
             # Full-matrix SOAP. For batched expert leaves the per-expert linalg is
             # distributed across the mesh via shard_map (each device does E/N experts);
             # 2D leaves run replicated. Param sharding is restored downstream via
-            # _match_named_update_sharding.
+            # _match_named_update_sharding. With block_size>0, the gradient is tiled into bxb
+            # blocks (state is stored blocked), and the direction is un-tiled back to full shape.
+            # shard_expert is decided from the ORIGINAL rank: 3D leaves have an expert axis to shard;
+            # 2D leaves (even once blocked to [num_blocks, b, b]) have none and must run replicated.
+            shard_expert = grad.ndim >= 3
+            do_block = _blockable(grad.shape, block_size)
+            g_in = grad.astype(jnp.float32)
+            if do_block:
+                g_in = _to_blocks(g_in, block_size)
             out = _klsoaph_step_sharded(
-                grad.astype(jnp.float32),
+                g_in,
                 exp_avg,
                 exp_avg_sq,
                 gg_l,
@@ -568,8 +631,12 @@ def scale_by_klsoaph(
                 nesterov=nesterov,
                 soap_muon=soap_muon,
                 kl=kl,
+                shard_expert=shard_expert,
             )
-            direction = out[0].astype(grad.dtype)
+            direction = out[0]
+            if do_block:
+                direction = _from_blocks(direction, grad.shape[-2], grad.shape[-1], block_size)
+            direction = direction.astype(grad.dtype)
             return _SoapStepResult(direction, *out[1:])
 
         results = jax.tree.map(
