@@ -12,6 +12,7 @@ from iris.cli.job import (
     build_job_summary,
     build_resources,
     build_tpu_alternatives,
+    run_iris_job,
     validate_extra_resources,
     validate_region_zone,
 )
@@ -182,6 +183,27 @@ def test_build_job_constraints_preemptible_true_overrides_heuristic():
 
     # Exactly one preemptible constraint, and it reflects the user's choice.
     assert _preemptible_values(constraints) == ["true"]
+
+
+def test_run_iris_job_passes_task_image_override(monkeypatch):
+    captured: dict[str, str | None] = {}
+
+    def fake_submit_and_wait_job(**kwargs):
+        captured["task_image"] = kwargs["task_image"]
+        return 0
+
+    monkeypatch.setattr("iris.cli.job._submit_and_wait_job", fake_submit_and_wait_job)
+
+    exit_code = run_iris_job(
+        command=["python", "train.py"],
+        env_vars={},
+        controller_url="http://controller.test",
+        wait=False,
+        task_image="ghcr.io/marin-community/iris-task-cuda-devel:test",
+    )
+
+    assert exit_code == 0
+    assert captured == {"task_image": "ghcr.io/marin-community/iris-task-cuda-devel:test"}
 
 
 # --tpu multi-variant parsing
