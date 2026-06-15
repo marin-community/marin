@@ -15,6 +15,8 @@ These tests cover the behavior we want for robustness against W&B failures:
 
 from __future__ import annotations
 
+import os
+import shutil
 import threading
 import time
 from typing import Any
@@ -92,7 +94,10 @@ class AlwaysRaisingTracker(Tracker):
         self._boom()
 
 
-def test_background_tracker_forwards_calls():
+def test_background_tracker_forwards_calls(tmp_path):
+    artifact = tmp_path / "model.bin"
+    artifact.write_text("weights")
+
     inner = RecordingTracker()
     bt = BackgroundTracker(inner)
     try:
@@ -100,7 +105,7 @@ def test_background_tracker_forwards_calls():
         bt.log({"loss": 1.0}, step=0)
         bt.log({"loss": 0.5}, step=1, commit=True)
         bt.log_summary({"final_loss": 0.5})
-        bt.log_artifact("/tmp/x", name="x", type="model")
+        bt.log_artifact(str(artifact), name="x", type="model")
         assert bt._wait_until_idle(timeout=5)
     finally:
         bt.finish()
@@ -108,8 +113,122 @@ def test_background_tracker_forwards_calls():
     assert inner.hparams == [{"lr": 0.1}]
     assert inner.logs == [({"loss": 1.0}, 0, None), ({"loss": 0.5}, 1, True)]
     assert inner.summary == [{"final_loss": 0.5}]
-    assert inner.artifacts == [("/tmp/x", "x", "model")]
+    # The artifact is forwarded with its name/type preserved. The path is a staged
+    # copy (so the source can be deleted immediately), not the original path.
+    assert len(inner.artifacts) == 1
+    _, art_name, art_type = inner.artifacts[0]
+    assert (art_name, art_type) == ("x", "model")
     assert inner.finished is True
+
+
+class _GatedContentTracker(Tracker):
+    """Records each artifact's contents, with a gate that holds the worker thread.
+
+    The first ``log`` call blocks until ``release`` is set. That lets a test pin
+    the worker *before* it reaches the queued artifact, so it can delete the
+    source first and prove the bytes were captured on the producer thread.
+    """
+
+    name = "gated-content"
+
+    def __init__(self) -> None:
+        self.artifacts: list[dict[str, Any]] = []
+        self.worker_blocked = threading.Event()
+        self.release = threading.Event()
+
+    def log_hyperparameters(self, hparams):
+        pass
+
+    def log(self, metrics, *, step, commit=None):
+        self.worker_blocked.set()
+        self.release.wait(timeout=5)
+
+    def log_summary(self, metrics):
+        pass
+
+    def log_artifact(self, artifact_path, *, name=None, type=None):
+        if os.path.isdir(artifact_path):
+            contents: Any = sorted(os.listdir(artifact_path))
+        else:
+            with open(artifact_path) as f:
+                contents = f.read()
+        self.artifacts.append({"name": name, "type": type, "contents": contents})
+
+    def finish(self):
+        pass
+
+
+def test_background_tracker_stages_artifact_before_source_deleted(tmp_path):
+    """log_artifact must capture the file before the producer deletes the source.
+
+    Regression for the config.yaml FileNotFoundError: log_configuration builds the
+    artifact inside a TemporaryDirectory and deletes it as soon as log_artifact
+    returns, so the async worker would otherwise read a path that no longer exists.
+    The worker is pinned on a blocking log() so the delete is guaranteed to happen
+    before it processes the artifact — making the race deterministic.
+    """
+    inner = _GatedContentTracker()
+    bt = BackgroundTracker(inner)
+    try:
+        # Pin the worker so the queued artifact can't be processed until we release.
+        bt.log({"x": 1}, step=0)
+        assert inner.worker_blocked.wait(timeout=5)
+
+        ephemeral = tmp_path / "ephemeral"
+        ephemeral.mkdir()
+        config = ephemeral / "config.yaml"
+        config.write_text("hello: world\n")
+
+        bt.log_artifact(str(config), name="config.yaml", type="config")
+        # Producer deletes the source immediately, exactly like the TemporaryDirectory
+        # context manager in log_configuration — while the worker is still blocked.
+        shutil.rmtree(ephemeral)
+
+        inner.release.set()
+        assert bt._wait_until_idle(timeout=5)
+    finally:
+        inner.release.set()
+        bt.finish()
+
+    assert inner.artifacts == [{"name": "config.yaml", "type": "config", "contents": "hello: world\n"}]
+
+
+def test_background_tracker_stages_directory_artifact_before_source_deleted(tmp_path):
+    """Directory artifacts (e.g. perplexity-gap reports, profiles) are staged too."""
+    inner = _GatedContentTracker()
+    bt = BackgroundTracker(inner)
+    try:
+        bt.log({"x": 1}, step=0)
+        assert inner.worker_blocked.wait(timeout=5)
+
+        ephemeral = tmp_path / "report"
+        ephemeral.mkdir()
+        (ephemeral / "a.txt").write_text("a")
+        (ephemeral / "b.txt").write_text("b")
+
+        bt.log_artifact(str(ephemeral), name="report", type="report")
+        shutil.rmtree(ephemeral)
+
+        inner.release.set()
+        assert bt._wait_until_idle(timeout=5)
+    finally:
+        inner.release.set()
+        bt.finish()
+
+    assert inner.artifacts == [{"name": "report", "type": "report", "contents": ["a.txt", "b.txt"]}]
+
+
+def test_background_tracker_drops_missing_artifact(tmp_path):
+    """A source that does not exist at call time is dropped, not enqueued."""
+    inner = RecordingTracker()
+    bt = BackgroundTracker(inner)
+    try:
+        bt.log_artifact(str(tmp_path / "does-not-exist"), name="x", type="model")
+        assert bt._wait_until_idle(timeout=5)
+    finally:
+        bt.finish()
+
+    assert inner.artifacts == []
 
 
 def test_background_tracker_runs_off_caller_thread():
