@@ -1117,6 +1117,276 @@ Intermediate TPU attempts:
   architecture metadata reported hidden size `0`; fixed by
   `1730991a92bbd1169ff79e3cc67321b7db281adb`.
 
+## Current PR-Stack Installed Full-Canary TPU Validation 2026-06-15
+
+Objective:
+
+- Validate the GrugMoE TPU integration on top of the current fork-stack PR heads:
+  - `marin-community/vllm#6`
+  - `marin-community/tpu-inference#5`
+  - `marin-community/marin#6288`
+- Keep vLLM unchanged unless testing proves otherwise.
+- Run the installed/user-facing `marin-core[vllm]` path with no user
+  `PYTHONPATH`, `VLLM_TARGET_DEVICE=tpu`, a regenerated full
+  `GRUG_MOE_TRIAL_MODEL` HF artifact, and `vllm.LLM(...).generate(...)`.
+
+Current PR heads at audit time:
+
+- vLLM PR #6:
+  `c0010021cfc7d4439eab0bf2a6564c38444fa2e3`
+- tpu-inference PR #5:
+  `22a5fcccf542cf1b77d71e1db495be4ddae01bac`
+- Marin PR #6288:
+  `b6f0d7a92ab1c42ad3654499bf4c6d8de337860b`
+
+Branches and tested pins:
+
+- tpu-inference worktree:
+  `/home/romain/dev/marin-wt/grugmoe-pr5-registry-tpu-inference-20260615`
+- tpu-inference branch:
+  `codex/grugmoe-pr5-registry-20260615`
+- tpu-inference base:
+  PR #5 head `22a5fcccf542cf1b77d71e1db495be4ddae01bac`
+- tpu-inference tested commit:
+  `80bc72a68a216ddf86367db9d93263e0b2a288ce`
+- Marin worktree:
+  `/home/romain/dev/marin-wt/grugmoe-prstack-installed-vllm-20260615`
+- Marin branch:
+  `codex/grugmoe-prstack-installed-vllm-20260615`
+- Marin base:
+  PR #6288 head `b6f0d7a92ab1c42ad3654499bf4c6d8de337860b`
+- Marin tested commit before this logbook entry:
+  `db0f11fe5`
+- vLLM worktree used only for inspection:
+  `/home/romain/dev/marin-wt/grugmoe-pr6-vllm-plugins-20260615`
+- vLLM branch:
+  `codex/grugmoe-pr6-general-plugins-20260615`
+- vLLM tested commit:
+  PR #6 head `c0010021cfc7d4439eab0bf2a6564c38444fa2e3`
+- No vLLM code changes were required. The real `LLM(...)` construction path
+  goes through `EngineArgs`, which calls `load_general_plugins()` before model
+  config resolution.
+
+tpu-inference rebase/fix:
+
+- Re-applied the GrugMoE TPU registry/config support onto PR #5.
+- Added the missing PR #5-era native JAX `grugmoe.py` implementation.
+- Adapted the Grug head from the older `JaxLmHead` helper to PR #5's current
+  `JaxEinsum` layer.
+- Tried and reverted an import-time auto-registration hook because it made a
+  vLLM circular import observable during import-only probes. The installed
+  `LLM(...)` path does not need that hook.
+
+Marin integration changes:
+
+- `pyproject.toml` and `uv.lock` pin:
+  - `tpu-inference`:
+    `https://github.com/marin-community/tpu-inference.git@80bc72a68a216ddf86367db9d93263e0b2a288ce`
+  - `vllm`:
+    `https://github.com/marin-community/vllm.git@c0010021cfc7d4439eab0bf2a6564c38444fa2e3`
+- Added `experiments/grug/moe/installed_vllm_full_canary_smoke.py`.
+- The final harness keeps the parent process JAX-free, runs full artifact
+  generation in one subprocess, waits for that subprocess to exit, and then
+  launches the installed vLLM serving smoke in a second subprocess.
+
+Local validation:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-pr5-registry-tpu-inference-20260615
+pre-commit run ruff --files \
+  tpu_inference/models/jax/grugmoe.py \
+  tests/models/common/test_model_loader.py
+pre-commit run isort --files \
+  tpu_inference/models/jax/grugmoe.py \
+  tests/models/common/test_model_loader.py
+python -m py_compile \
+  tpu_inference/models/jax/grugmoe.py \
+  tests/models/common/test_model_loader.py
+
+cd /home/romain/dev/marin-wt/grugmoe-prstack-installed-vllm-20260615
+VLLM_TARGET_DEVICE=tpu uv lock
+VLLM_TARGET_DEVICE=tpu uv lock --check
+env -u PYTHONPATH VLLM_TARGET_DEVICE=tpu \
+  uv run --locked --package marin-core --extra vllm python - <<'PY'
+# Construct EngineArgs and verify installed package direct_url SHAs,
+# AutoConfig -> GrugMoeHfConfig, ModelConfig hidden size/head size,
+# and vLLM ModelRegistry -> GrugMoeForCausalLM text generation.
+PY
+env -u PYTHONPATH VLLM_TARGET_DEVICE=tpu \
+  /home/romain/dev/marin-wt/grugmoe-prstack-installed-vllm-20260615/.venv/bin/python \
+  -m pytest \
+  /home/romain/dev/marin-wt/grugmoe-pr5-registry-tpu-inference-20260615/tests/models/common/test_model_loader.py \
+  -k grugmoe -q
+python -m py_compile \
+  experiments/grug/moe/installed_vllm_full_canary_smoke.py \
+  experiments/grug/moe/vllm_tpu_parity.py \
+  experiments/grug/moe/model.py \
+  lib/levanter/src/levanter/compat/hf_checkpoints.py \
+  lib/levanter/src/levanter/main/export_lm_to_hf.py \
+  lib/marin/src/marin/export/levanter_checkpoint.py
+./infra/pre-commit.py \
+  pyproject.toml \
+  uv.lock \
+  experiments/grug/moe/installed_vllm_full_canary_smoke.py \
+  experiments/grug/moe/vllm_tpu_parity.py \
+  experiments/grug/moe/vllm_tpu_logbook.md \
+  experiments/grug/moe/vllm_tpu_reference.md \
+  experiments/grug/moe/model.py \
+  lib/levanter/src/levanter/compat/hf_checkpoints.py \
+  lib/levanter/src/levanter/main/export_lm_to_hf.py \
+  lib/marin/src/marin/export/levanter_checkpoint.py
+git diff --check
+```
+
+Local result:
+
+- `uv lock --check` passed.
+- Installed registry probe passed with no user `PYTHONPATH`.
+- Installed direct URL evidence showed:
+  - `vllm@c0010021cfc7d4439eab0bf2a6564c38444fa2e3`
+  - `tpu-inference@80bc72a68a216ddf86367db9d93263e0b2a288ce`
+- `AutoConfig.from_pretrained(...)` returned `GrugMoeHfConfig`.
+- vLLM `ModelConfig` reported hidden size `8`.
+- `inspect_arch=GrugMoeForCausalLM`.
+- `registry_text_generation=True`.
+- Focused Grug loader pytest passed:
+  `1 passed, 19 deselected`.
+- Marin pre-commit and `git diff --check` passed before TPU rerun; this
+  section was added after the successful TPU run.
+
+Failed one-process TPU harness attempt:
+
+- Job: `/romain/grugmoe-prstack-full-installed-vllm-20260615`
+- Dashboard:
+  `https://iris.oa.dev/#/job/%2Fromain%2Fgrugmoe-prstack-full-installed-vllm-20260615`
+- TPU: `v6e-4`
+- Region: `europe-west4`
+- State: `failed`
+- Exit: `1`
+- Failures/preemptions: `1`/`0`
+- Duration: `12 minutes and 0.59 seconds`
+- Useful evidence before failure:
+  - full canary config source was `GRUG_MOE_TRIAL_MODEL`;
+  - native/manual-copy parity matched Levanter hidden states, logits, routed
+    experts, and full-forward greedy generation;
+  - generated reference IDs were `[57524, 45040, 67859]`;
+  - HF artifact saved as 26 shards, `5.76GB`;
+  - loaded native artifact consumed `217/217` tensors with
+    `missing=[]` and `unexpected=[]`;
+  - artifact bytes were `5762169526`.
+- Blocker:
+  - the parent process had initialized JAX/libtpu while generating the
+    artifact, then the installed vLLM engine subprocess failed with
+    `RuntimeError: Unable to initialize backend 'tpu': ABORTED: The TPU is already in use by process with pid 341`.
+- Fix:
+  - commit `db0f11fe5` changed the harness to run artifact generation and
+    installed serving in separate child processes.
+
+Successful two-process TPU command:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-prstack-installed-vllm-20260615
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 7200 \
+  --cpu 16 \
+  --memory 256GB \
+  --disk 300GB \
+  --job-name grugmoe-prstack-full-installed-vllm-2phase-20260615 \
+  -e VLLM_TARGET_DEVICE tpu \
+  -- bash -lc 'set -euo pipefail; unset PYTHONPATH; export LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304; export PYTHONUNBUFFERED=1; export VLLM_TARGET_DEVICE=tpu; VLLM_TARGET_DEVICE=tpu uv run --locked --package marin-core --extra vllm --extra eval python -m experiments.grug.moe.installed_vllm_full_canary_smoke --output-dir /tmp/grugmoe-prstack-full-installed-vllm-2phase-20260615 --max-shard-size 268435456 --generation-tokens 3'
+```
+
+Successful two-process TPU result:
+
+- Job: `/romain/grugmoe-prstack-full-installed-vllm-2phase-20260615`
+- Dashboard:
+  `https://iris.oa.dev/#/job/%2Fromain%2Fgrugmoe-prstack-full-installed-vllm-2phase-20260615`
+- TPU: `v6e-4`
+- Region: `europe-west4`
+- State: `succeeded`
+- Exit: `0`
+- Failures/preemptions: `0`/`0`
+- Duration: `11 minutes and 31.95 seconds`
+- Remote package evidence:
+  - `remote_cwd=/app`
+  - `marin_sha=unavailable` because the Iris workspace is not a git checkout;
+    authoritative Marin commit for this run is the pushed branch commit
+    `db0f11fe5`;
+  - `vllm_direct_url` and `serve_vllm_direct_url`:
+    `c0010021cfc7d4439eab0bf2a6564c38444fa2e3`;
+  - `tpu-inference_direct_url` and `serve_tpu-inference_direct_url`:
+    `80bc72a68a216ddf86367db9d93263e0b2a288ce`;
+  - `vllm_version=0.20.1rc1.dev146+gc0010021c.tpu`;
+  - `tpu-inference_version=0.0.0`;
+  - `jax_version=0.9.2`;
+  - `libtpu_version=0.0.39`;
+  - `grugmoe_spec` resolved to
+    `/app/.venv/lib/python3.11/site-packages/tpu_inference/models/jax/grugmoe.py`.
+- Full artifact evidence:
+  - `artifact_generation_process=started`;
+  - `realistic-roundtrip: config_source=GRUG_MOE_TRIAL_MODEL`;
+  - native/manual-copy parity matched Levanter hidden states, logits, routed
+    experts, and full-forward greedy generation;
+  - reference prompt IDs were `[1, 42, 128, 2048, 17, 3072, 5, 63]`;
+  - reference generated IDs were `[57524, 45040, 67859]`;
+  - HF export saved 26 shards, `5.76GB`;
+  - loaded native artifact consumed all tensors:
+    `expected_tensors=217 consumed_tensors=217 missing=[] unexpected=[]`;
+  - `checkpoint_bytes=5762310165`;
+  - `artifact_bytes=5762169526`;
+  - `full_canary_artifact_bytes=5762169526`;
+  - `full_canary_shard_count=26`;
+  - `artifact_generation_process=completed`.
+- Installed vLLM serving evidence:
+  - vLLM logged `Registered JAX model GrugMoeForCausalLM with tpu_inference and vLLM registries`;
+  - vLLM logged `Resolved architecture: GrugMoeForCausalLM`;
+  - tpu-inference logged `Resolved MODEL_IMPL_TYPE 'auto' to 'flax_nnx'`;
+  - `llm_initialized=True`;
+  - `installed_full_canary_generated=[([1, 42, 128, 2048, 17, 3072, 5, 63], [91542, 58518, 8334], '')]`;
+  - `installed_path_result=works:full_canary_generate`.
+
+Conclusion:
+
+- Full GrugMoE now loads and generates through the installed
+  `marin-core[vllm]` / `vllm.LLM(...).generate(...)` path on TPU with the
+  current PR-stack pins.
+- The full canary artifact path also preserves native tpu-inference parity with
+  Levanter and consumes all 217 exported tensors.
+- The installed vLLM smoke validated serving-path load/generate success, not
+  token parity against the non-KV-cache native full-forward reference. The
+  installed vLLM generated IDs were `[91542, 58518, 8334]`, while the native
+  full-forward reference IDs were `[57524, 45040, 67859]`. Treat vLLM decode
+  token parity as a remaining correctness follow-up if exact serving semantics
+  are required.
+
+Sharp edges from this PR-stack validation:
+
+- Current PR heads mattered. Earlier branches pinned older vLLM/tpu-inference
+  commits and were not representative of the stack that is expected to land.
+- PR #5's JAX layer surface no longer had the older `JaxLmHead`; Grug needed a
+  current `JaxEinsum` head.
+- Do not auto-register Grug from tpu-inference package import time. It can run
+  before vLLM finishes initializing and cause a circular import through
+  `vllm.platforms.current_platform`.
+- Bare `AutoConfig` probes can still fail to know about `grug_moe` unless the
+  vLLM general plugin path has loaded. The real `LLM(...)` path works because
+  `EngineArgs` loads general plugins before `ModelConfig` is built.
+- Do not generate the full artifact and run installed vLLM serving from the
+  same process after JAX/libtpu has initialized. Use separate child processes
+  or separate jobs; otherwise vLLM's engine subprocess can fail because TPU is
+  already owned by the parent.
+- Iris runs from `/app`, not a git checkout, so `git rev-parse HEAD` is not
+  reliable inside the job. Use pushed branch commits plus direct URL package
+  SHAs as the authoritative run identity.
+- Expected non-blocking startup warnings include missing `vllm._C`, Triton
+  disabled on TPU, duplicate op registration, quantization overwrites, and JAX
+  buffer-donation warnings.
+
 ## Scope
 
 In scope:
