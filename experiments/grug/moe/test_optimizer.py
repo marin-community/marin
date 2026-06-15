@@ -4,6 +4,7 @@
 import jax
 import jax.numpy as jnp
 
+from experiments.grug.moe.adamh import _scale_invariant_hyperball_update as _adamh_hyperball_update
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig, _scale_invariant_hyperball_updates
 
 
@@ -112,10 +113,12 @@ def test_grug_moe_muonh_can_route_routed_expert_weights_to_adamh():
 
 def test_scale_invariant_hyperball_updates_matches_materialized_formula():
     params = {
+        "vector": jnp.arange(6, dtype=jnp.float32) / 5 + 0.3,
         "matrix": jnp.arange(12, dtype=jnp.float32).reshape(3, 4) / 7 + 0.25,
         "stack": jnp.arange(40, dtype=jnp.float32).reshape(2, 4, 5) / 11 + 0.5,
     }
     updates = {
+        "vector": jnp.arange(6, dtype=jnp.float32) / 9 + 0.05,
         "matrix": jnp.arange(12, dtype=jnp.float32).reshape(3, 4) / 13 + 0.1,
         "stack": jnp.arange(40, dtype=jnp.float32).reshape(2, 4, 5) / 17 + 0.2,
     }
@@ -139,5 +142,42 @@ def test_scale_invariant_hyperball_updates_matches_materialized_formula():
     actual = _scale_invariant_hyperball_updates(params, updates, learning_rate)
     expected = jax.tree.map(materialized_update, params, updates)
 
+    assert jnp.allclose(actual["vector"], expected["vector"], rtol=1e-5, atol=1e-6).item()
+    assert jnp.allclose(actual["matrix"], expected["matrix"], rtol=1e-5, atol=1e-6).item()
+    assert jnp.allclose(actual["stack"], expected["stack"], rtol=1e-5, atol=1e-6).item()
+
+
+def test_adamh_hyperball_update_matches_materialized_formula():
+    params = {
+        "vector": jnp.arange(6, dtype=jnp.float32) / 5 + 0.3,
+        "matrix": jnp.arange(12, dtype=jnp.float32).reshape(3, 4) / 7 + 0.25,
+        "stack": jnp.arange(40, dtype=jnp.float32).reshape(2, 4, 5) / 11 + 0.5,
+    }
+    updates = {
+        "vector": jnp.arange(6, dtype=jnp.float32) / 9 + 0.05,
+        "matrix": jnp.arange(12, dtype=jnp.float32).reshape(3, 4) / 13 + 0.1,
+        "stack": jnp.arange(40, dtype=jnp.float32).reshape(2, 4, 5) / 17 + 0.2,
+    }
+    learning_rate = 0.03
+
+    def materialized_update(param, update):
+        def materialized_2d(p, u):
+            p_norm = jnp.linalg.norm(p)
+            u_norm = jnp.linalg.norm(u)
+            new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
+            return new_p / jnp.linalg.norm(new_p) * p_norm - p
+
+        if param.ndim <= 2:
+            return materialized_2d(param, update)
+        return jax.vmap(materialized_2d)(param, update)
+
+    actual = jax.tree.map(
+        lambda param, update: _adamh_hyperball_update(param, update, learning_rate),
+        params,
+        updates,
+    )
+    expected = jax.tree.map(materialized_update, params, updates)
+
+    assert jnp.allclose(actual["vector"], expected["vector"], rtol=1e-5, atol=1e-6).item()
     assert jnp.allclose(actual["matrix"], expected["matrix"], rtol=1e-5, atol=1e-6).item()
     assert jnp.allclose(actual["stack"], expected["stack"], rtol=1e-5, atol=1e-6).item()

@@ -19,6 +19,29 @@ class ScaleByAdamHState(NamedTuple):
     nu: optax.Updates
 
 
+def _scale_invariant_hyperball_update(param: jax.Array, update: jax.Array, learning_rate: float) -> jax.Array:
+    """Return AdamH's norm-preserving update without materializing the new parameter."""
+    if param.ndim <= 2:
+        param_norm = jnp.linalg.norm(param)
+        update_norm = jnp.linalg.norm(update)
+        step_scale = learning_rate * param_norm / jnp.maximum(update_norm, 1e-10)
+        dot = jnp.sum(param * update)
+        new_param_norm_sq = param_norm**2 - 2 * step_scale * dot + step_scale**2 * update_norm**2
+        new_param_norm = jnp.sqrt(jnp.maximum(new_param_norm_sq, 1e-30))
+        rescale = param_norm / jnp.maximum(new_param_norm, 1e-10)
+        return (rescale - 1) * param - rescale * step_scale * update
+
+    axes = tuple(range(1, param.ndim))
+    param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
+    update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
+    step_scale = learning_rate * param_norm / jnp.maximum(update_norm, 1e-10)
+    dot = jnp.sum(param * update, axis=axes, keepdims=True)
+    new_param_norm_sq = param_norm**2 - 2 * step_scale * dot + step_scale**2 * update_norm**2
+    new_param_norm = jnp.sqrt(jnp.maximum(new_param_norm_sq, 1e-30))
+    rescale = param_norm / jnp.maximum(new_param_norm, 1e-10)
+    return (rescale - 1) * param - rescale * step_scale * update
+
+
 def scale_by_adamh(
     b1: float = 0.9,
     b2: float = 0.999,
@@ -48,20 +71,10 @@ def scale_by_adamh(
         )
         mu = otu.tree_cast(mu, mu_dtype)
 
-        def _scale_invariant_2d(p, u):
-            """Core update for a 2-D (matrix) parameter."""
-            p_norm = jnp.linalg.norm(p)
-            u_norm = jnp.linalg.norm(u)
-            new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
-            return new_p / jnp.linalg.norm(new_p) * p_norm - p
-
         def scale_invariant_update(p, u):
             if p is None:
                 return None
-            if p.ndim <= 2:
-                return _scale_invariant_2d(p, u)
-            # For higher-rank tensors, vmap the 2-D logic over the leading axis.
-            return jax.vmap(_scale_invariant_2d)(p, u)
+            return _scale_invariant_hyperball_update(p, u, learning_rate)
 
         adamh_updates = jax.tree_util.tree_map(
             scale_invariant_update,
