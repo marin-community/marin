@@ -82,6 +82,15 @@ STRAGGLER_GRACE_SECONDS = 300
 # and finalize whatever we have, even if some tasks are still in flight.
 MAX_SCAN_SECONDS = 90 * 60
 
+# Drain-based early finish. Once only a handful of tasks remain in flight
+# (queue + active workers) and stay there for DRAIN_GRACE_SECONDS, finalize
+# instead of waiting out MAX_SCAN_SECONDS. The straggler tail is a few huge
+# flat prefixes that keep streaming objects (so the no-progress timeout never
+# fires) but contribute marginally to a directory-level report. This mirrors
+# the manual "kill the scan when <100 tasks are left" operating practice.
+DRAIN_TASK_THRESHOLD = 100
+DRAIN_GRACE_SECONDS = 300
+
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -635,10 +644,14 @@ def run_distributed(
 
     # Monitor progress
     start_time = time.monotonic()
+    # Monotonic time when the in-flight task count first dropped to the drain
+    # threshold; reset whenever it climbs back above (new sub-prefixes queued).
+    drained_since: float | None = None
     try:
         while True:
             status = coordinator.get_status()
             elapsed = time.monotonic() - start_time
+            remaining = status["queue_size"] + status["active_workers"]
 
             print(
                 f"[{elapsed:6.0f}s] "
@@ -652,6 +665,15 @@ def run_distributed(
 
             if status["done"]:
                 break
+
+            if remaining <= DRAIN_TASK_THRESHOLD:
+                if drained_since is None:
+                    drained_since = time.monotonic()
+                elif time.monotonic() - drained_since >= DRAIN_GRACE_SECONDS:
+                    print(f"Only {remaining} tasks left for {DRAIN_GRACE_SECONDS}s; abandoning stragglers, finalizing")
+                    break
+            else:
+                drained_since = None
 
             if elapsed >= MAX_SCAN_SECONDS:
                 print(f"Wall-clock cap of {MAX_SCAN_SECONDS}s hit; abandoning stragglers and finalizing")
