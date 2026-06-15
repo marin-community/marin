@@ -298,18 +298,16 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   |---|---|---|---|---|---|
   | **0.02** | 3.153 | 3.112 | 3.0623 | 3.084 | 3.087 |
   | **0.05** | 3.1535 | 3.116 | 3.0705 | **3.046** | 3.162 |
-  | **0.1**  | 3.152 | 3.113 | 3.0662 | 3.052 | _(running)_ |
+  | **0.1**  | 3.152 | 3.113 | 3.0662 | 3.052 | 3.152 |
 
-  _Base 12/12 + two 1e-3 cells (~00:45Z). Best E1 = `7e-4/wd0.05`=**3.046**. **1e-3 does NOT
-  improve over 7e-4** — `1e-3/0.02`=3.087 ≈ 7e-4, and `1e-3/0.05`=**3.162** is far worse
-  (high LR goes unstable past 7e-4). So **7e-4 is the interior LR optimum** (top edge
-  closed). LR×WD interaction: optimum is 3.5e-4 at wd0.02 but 7e-4 at wd0.05/0.1. Only
-  `1e-3/0.1` left to fully confirm._
+  _**COMPLETE 15/15.** `1e-3` is worse than 7e-4 at every WD (3.087/3.162/3.152 vs
+  3.084/3.046/3.052), so the LR top edge is closed at 7e-4. LR×WD interaction: optimum is
+  3.5e-4 at wd0.02 but 7e-4 at wd0.05/0.1._
 
-- Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ — **NOT yet
-  confirmed**: leader is `7e-4/wd0.05`=3.046 but 7e-4 is the **top edge** (extending to
-  1e-3 via w1d). If 1e-3 ≥ 7e-4, optimum is interior near 7e-4; if 1e-3 still improving,
-  extend again.
+- **Confirmed optimum: `lr=7e-4, wd=0.05`, loss=3.046; neighbors all worse? ✅** — strictly
+  beats all four axis neighbors: `3.5e-4/0.05`=3.070, `1e-3/0.05`=3.162 (LR), `7e-4/0.02`=
+  3.084, `7e-4/0.1`=3.052 (WD). Interior in both axes (1e-3 above, 3.5e-4 below; wd0.02 &
+  wd0.1 both worse). **E1 optimum confirmed at 7e-4/wd0.05 — well above #70's 3.5e-4.**
 - Notes (edges extended, zoom, etc.): _12 launched, then **2 v6e-8 cells killed
   to get under the iris budget cap** — `lr8.75e-5 × wd0.02` and `lr8.75e-5 × wd0.1`
   (lowest-LR corners, least informative). SPENT 84,044 → 67,466 (cap 75,000). The
@@ -356,14 +354,14 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
 
   | wd \ lr | 1.75e-4 | 2.5e-4 | 3.5e-4 | 5e-4 | 7e-4 | 1e-3 |
   |---|---|---|---|---|---|---|
-  | **0.02** | | 3.011 | 3.001 | 2.986 | 2.980 | _(run)_ |
-  | **0.05** | | 3.021 | 3.000 | 2.982 | 2.979 | _(run)_ |
+  | **0.02** | 3.047 | 3.011 | 3.001 | 2.986 | 2.980 | _(run)_ |
+  | **0.05** | 3.037 | 3.021 | 3.000 | 2.982 | 2.979 | _(run)_ |
   | **0.1**  | 3.041 | 3.016 | 2.997 | 2.986 | **2.970** | _(run)_ |
 
-  _13 of 15 E2 finals (~00:15Z). 7e-4 column best (2.970–2.980); best E2 = `7e-4/wd0.1`=
-  **2.970** (high LR + high WD). 1.75e-4 column starting at ~3.04 (worst). E2 optimum on the
-  **7e-4 top edge**, like E1. `1e-3` column (w2q, v6e-8) running to bound it. Both waves
-  agree good-LR ≥7e-4, well above #70's 3.5e-4. Remaining base: 1.75e-4/wd0.02 & wd0.05._
+  _**Base 15/15 complete** (~17:15Z). Monotone in LR (7e-4 best ~2.97–2.98 > 5e-4 > … >
+  1.75e-4 ~3.04). Best E2 = `7e-4/wd0.1`=**2.970** (high LR + high WD). 7e-4 is the base top
+  edge; `1e-3` column (w2q, v6e-8) still running to close it (E1's 1e-3 was worse, so 7e-4
+  likely the E2 optimum too). All E2 < every E1 — 2 epochs helps. Good-LR ≥7e-4, ≫ #70's 3.5e-4._
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
 - Measured drift 1→2: `Δlog lr=…, Δlog wd=…` (E2 3.021 < E1 ~3.06 → 2 epochs helps)
