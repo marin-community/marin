@@ -3,7 +3,11 @@
 
 import asyncio
 
+import haliax.partitioning as hpart
+import jax
+import numpy as np
 import pytest
+from jax.sharding import Mesh
 
 from levanter.utils.background_iterable import BackgroundIterable
 
@@ -144,3 +148,28 @@ async def test_async_stop_event(max_capacity):
     with pytest.raises(StopIteration):
         next(iter1)
         next(iter1)
+
+
+@pytest.mark.parametrize("max_capacity", [None, 10])
+def test_producer_thread_runs_under_captured_mesh(max_capacity):
+    """The prefetch thread must run the producer under the parent's JAX mesh.
+
+    Regression for the eval-boundary "Received incompatible devices" crash: a
+    fresh threading.Thread inherits neither ContextVars nor JAX's active mesh,
+    so without an explicit re-entry the producer traces jits on an empty CPU
+    mesh. On modern JAX the mesh lives in the concrete-mesh config, which
+    copy_context() alone does not carry across the thread boundary.
+    """
+    mesh = Mesh(np.array(jax.devices()).reshape(1, 1), ("data", "model"))
+    seen_axis_names = []
+
+    def producer():
+        seen = hpart.get_concrete_mesh()
+        seen_axis_names.append(None if seen is None or seen.empty else tuple(seen.axis_names))
+        yield 1
+
+    with hpart.set_mesh(mesh):
+        result = list(BackgroundIterable(producer, max_capacity=max_capacity))
+
+    assert result == [1]
+    assert seen_axis_names == [("data", "model")]
