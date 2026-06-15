@@ -19,10 +19,65 @@ from marin.execution.executor_step_status import (
     StatusFile,
 )
 from marin.execution.sweep import SweepTarget, claim_and_run
+from marin.execution.sweep_coordination import GangRole
 
 
 def _make_targets(n: int) -> list[SweepTarget]:
     return [SweepTarget(target_id=f"t{i:02d}", config={"i": i}) for i in range(n)]
+
+
+class _FakeChannel:
+    """In-memory round stream shared by a fake leader and its followers.
+
+    Stands in for the Iris endpoint registry: ``publish`` records round ``seq``,
+    ``receive`` blocks until it appears. ``target_id is None`` is the stop
+    signal.
+    """
+
+    def __init__(self):
+        self._rounds: dict[int, str | None] = {}
+        self._cond = threading.Condition()
+
+    def publish(self, seq: int, target_id: str | None) -> None:
+        with self._cond:
+            self._rounds[seq] = target_id
+            self._cond.notify_all()
+
+    def receive(self, seq: int, timeout: float = 10.0) -> str | None:
+        with self._cond:
+            if not self._cond.wait_for(lambda: seq in self._rounds, timeout=timeout):
+                raise TimeoutError(f"round {seq} not published within {timeout}s")
+            return self._rounds[seq]
+
+
+class _LeaderCoordinator:
+    def __init__(self, channel: _FakeChannel):
+        self._channel = channel
+
+    @property
+    def role(self) -> GangRole:
+        return GangRole.LEADER
+
+    def publish(self, seq: int, target_id: str | None) -> None:
+        self._channel.publish(seq, target_id)
+
+    def receive(self, seq: int) -> str | None:
+        raise AssertionError("leader must not receive")
+
+
+class _FollowerCoordinator:
+    def __init__(self, channel: _FakeChannel):
+        self._channel = channel
+
+    @property
+    def role(self) -> GangRole:
+        return GangRole.FOLLOWER
+
+    def publish(self, seq: int, target_id: str | None) -> None:
+        raise AssertionError("follower must not publish")
+
+    def receive(self, seq: int) -> str | None:
+        return self._channel.receive(seq)
 
 
 def _status_at(sweep_root: str, target_id: str) -> str | None:
@@ -177,3 +232,129 @@ def test_peer_can_retry_a_failed_target(tmp_path):
     assert attempts_by_id[failing_id] == 2
     assert _status_at(sweep_root, failing_id) == STATUS_SUCCESS
     assert _status_at(sweep_root, targets[1].target_id) == STATUS_SUCCESS
+
+
+# ---------------------------------------------------------------------------
+# Gang coordination: leader claims + publishes; followers mirror.
+# ---------------------------------------------------------------------------
+
+
+def test_leader_publishes_only_claimed_rounds_then_stop(tmp_path):
+    """The leader announces a round per *claimed* target plus a final stop.
+
+    A target a peer already finished is skipped (``StepAlreadyDone``) and never
+    announced, so followers never see it.
+    """
+    sweep_root = str(tmp_path)
+    targets = _make_targets(3)
+
+    pre_done = targets[1]
+    pre_done_path = os.path.join(sweep_root, pre_done.target_id)
+    os.makedirs(pre_done_path, exist_ok=True)
+    StatusFile(pre_done_path, worker_id="seed").write_status(STATUS_SUCCESS)
+
+    channel = _FakeChannel()
+    leader_ran: list[str] = []
+
+    claim_and_run(
+        sweep_root,
+        targets,
+        lambda t: leader_ran.append(t.target_id),
+        coordinator=_LeaderCoordinator(channel),
+    )
+
+    # Leader ran the two fresh targets, skipped the pre-done one.
+    assert leader_ran == [targets[0].target_id, targets[2].target_id]
+    # Rounds: one per claimed target (re-indexed, skip not announced) + stop.
+    assert channel._rounds == {0: targets[0].target_id, 1: targets[2].target_id, 2: None}
+    for target in targets:
+        assert _status_at(sweep_root, target.target_id) == STATUS_SUCCESS
+
+
+def test_follower_runs_exactly_the_announced_rounds(tmp_path):
+    """A follower runs each announced target in order and stops on the sentinel.
+
+    It never touches the lock or the status files — only the leader does.
+    """
+    targets = _make_targets(3)
+    channel = _FakeChannel()
+    # Leader claimed t00 and t02 (t01 was already done, so never announced).
+    channel.publish(0, targets[0].target_id)
+    channel.publish(1, targets[2].target_id)
+    channel.publish(2, None)
+
+    seen: list[str] = []
+    claim_and_run(
+        str(tmp_path),
+        targets,
+        lambda t: seen.append(t.target_id),
+        coordinator=_FollowerCoordinator(channel),
+    )
+
+    assert seen == [targets[0].target_id, targets[2].target_id]
+    # Follower wrote no status anywhere.
+    for target in targets:
+        assert _status_at(str(tmp_path), target.target_id) is None
+
+
+def test_follower_run_fn_failure_propagates(tmp_path):
+    """A failure inside a follower's ``run_fn`` propagates out of the worker."""
+    targets = _make_targets(2)
+    channel = _FakeChannel()
+    channel.publish(0, targets[0].target_id)
+    channel.publish(1, targets[1].target_id)
+    channel.publish(2, None)
+
+    def run(target: SweepTarget) -> None:
+        if target.target_id == targets[1].target_id:
+            raise RuntimeError("follower boom")
+
+    with pytest.raises(RuntimeError, match="follower boom"):
+        claim_and_run(str(tmp_path), targets, run, coordinator=_FollowerCoordinator(channel))
+
+
+def test_leader_and_follower_agree_on_targets(tmp_path):
+    """End-to-end: a concurrent leader and follower run the same target set.
+
+    The leader claims every target (no peers), announcing each; the follower
+    mirrors it. Both run all targets in the same order.
+    """
+    sweep_root = str(tmp_path)
+    targets = _make_targets(4)
+    channel = _FakeChannel()
+
+    leader_ran: list[str] = []
+    follower_ran: list[str] = []
+    errors: list[BaseException] = []
+
+    def leader():
+        try:
+            claim_and_run(
+                sweep_root, targets, lambda t: leader_ran.append(t.target_id), coordinator=_LeaderCoordinator(channel)
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    def follower():
+        try:
+            claim_and_run(
+                sweep_root,
+                targets,
+                lambda t: follower_ran.append(t.target_id),
+                coordinator=_FollowerCoordinator(channel),
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=leader), threading.Thread(target=follower)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert not errors, f"worker errors: {errors}"
+    expected = [t.target_id for t in targets]
+    assert leader_ran == expected
+    assert follower_ran == expected
+    for target in targets:
+        assert _status_at(sweep_root, target.target_id) == STATUS_SUCCESS
