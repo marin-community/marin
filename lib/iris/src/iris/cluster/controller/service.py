@@ -92,7 +92,6 @@ from iris.rpc.auth import (
     authorize,
     authorize_resource_owner,
     get_verified_identity,
-    get_verified_user,
     require_identity,
 )
 from iris.rpc.proto_display import job_state_friendly, priority_band_name, task_state_friendly
@@ -994,15 +993,23 @@ class ControllerServiceImpl:
         if job_id.is_root and ctx is not None:
             _check_client_freshness(request.client_revision_date, date.today())
 
-        # When an auth provider is configured, override the user segment with
-        # the verified identity to prevent impersonation. Only override for
-        # root-level submissions; child jobs inherit the parent's user.
-        verified_user = get_verified_user()
-        if self._auth.provider and verified_user is not None and job_id.is_root:
-            job_id = JobName.root(verified_user, job_id.name)
+        # Reconcile the requested job owner with the authenticated principal.
+        #
+        # The job name's user segment names the *acting* owner the job is
+        # attributed to; the verified identity is the authenticated *principal*.
+        # These are distinct: a non-admin may only act as themselves, so we pin
+        # the owner to the principal to prevent impersonation. An admin — which
+        # includes a trusted-loopback caller (see docs/auth-loopback-transition)
+        # — may submit on behalf of any user, so the requested owner stands.
+        # This makes loopback-trust attribute jobs exactly as null-auth always
+        # has (the name is authoritative), while token users stay pinned.
+        # Only root submissions carry an owner segment; child jobs inherit it.
+        identity = get_verified_identity()
+        if self._auth.provider and identity is not None and job_id.is_root and identity.role != "admin":
+            job_id = JobName.root(identity.user_id, job_id.name)
 
         # For non-root jobs, verify the caller owns the parent hierarchy
-        if self._auth.provider and verified_user is not None and not job_id.is_root:
+        if self._auth.provider and identity is not None and not job_id.is_root:
             self._authorize_job_owner(job_id)
 
         # Priority band validation.

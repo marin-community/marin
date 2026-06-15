@@ -1062,7 +1062,8 @@ def _login_for_jwt(url: str, identity_token: str) -> str:
 
 
 def test_static_auth_rpc_access():
-    """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid JWT."""
+    """Static auth over loopback: tokenless requests are trusted as admin
+    (loopback trust), wrong tokens are rejected, valid JWTs are accepted."""
 
     config = _make_controller_only_config()
     config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
@@ -1072,10 +1073,10 @@ def test_static_auth_rpc_access():
     try:
         list_req = controller_pb2.Controller.ListWorkersRequest()
 
-        # Unauthenticated: should be rejected with 401
+        # The test client connects over loopback, so a tokenless request is
+        # trusted as the anonymous admin rather than rejected.
         unauth_client = ControllerServiceClientSync(address=url, timeout_ms=5000)
-        with pytest.raises(ConnectError, match=r"(?i)authenticat"):
-            unauth_client.list_workers(list_req)
+        assert unauth_client.list_workers(list_req) is not None
         unauth_client.close()
 
         # Wrong token: should be rejected

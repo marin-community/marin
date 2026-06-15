@@ -354,7 +354,7 @@ def create_controller_auth(
 
     optional = auth_config.optional
     logger.info(
-        "Auth enabled: provider=%s, db=%s, jwt=%s, optional=%s",
+        "Auth enabled: provider=%s, db=%s, jwt=%s, optional=%s (loopback always trusted as admin)",
         provider,
         "yes" if db else "no",
         "yes" if jwt_mgr else "no",

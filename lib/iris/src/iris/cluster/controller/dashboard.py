@@ -76,10 +76,22 @@ from iris.rpc.stats_service import RpcStatsService
 logger = logging.getLogger(__name__)
 
 
-def _extract_token_from_scope(scope: Scope) -> str | None:
-    """Extract auth token from ASGI scope (cookie or Authorization header)."""
-    headers = {k.decode(): v.decode() for k, v in scope.get("headers", [])}
-    return extract_bearer_token(headers)
+def _scope_headers(scope: Scope) -> dict[str, str]:
+    """Lowercase header dict from an ASGI scope."""
+    return {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+
+
+def _scope_client_address(scope: Scope) -> str | None:
+    """Return the transport peer as ``host:port``, or None.
+
+    This is uvicorn's ``scope["client"]`` — the genuine peer for a direct
+    connection, or a forwarded value (port 0) when derived from
+    ``X-Forwarded-For``. ``is_trusted_loopback`` relies on that distinction.
+    """
+    client = scope.get("client")
+    if not client:
+        return None
+    return f"{client[0]}:{client[1]}"
 
 
 async def _enforce_http_auth(
@@ -96,9 +108,16 @@ async def _enforce_http_auth(
     runs against route-annotated requests) and ``_SubdomainProxyMiddleware``
     (which intercepts before any route can match).
     """
-    token = _extract_token_from_scope(scope)
+    headers = _scope_headers(scope)
+    token = extract_bearer_token(headers)
     try:
-        identity = resolve_auth(token, verifier, optional)
+        identity = resolve_auth(
+            token,
+            verifier,
+            optional,
+            client_address=_scope_client_address(scope),
+            headers=headers,
+        )
     except ValueError:
         response = JSONResponse({"error": "authentication required"}, status_code=401)
         await response(scope, receive, send)
@@ -219,6 +238,7 @@ class _DashboardAuthInterceptor:
     through resolve_auth(token, verifier, optional) which:
     - token present + valid → authenticated identity
     - token present + invalid → rejected
+    - no token + loopback peer → anonymous/admin (loopback trust)
     - no token + optional → anonymous/admin fallback via NullAuthInterceptor
     - no token + required → rejected
     """
@@ -231,9 +251,16 @@ class _DashboardAuthInterceptor:
     def _resolve_or_raise(self, ctx):
         """Returns (identity, fallback_to_null). Raises ConnectError on rejection."""
 
-        token = extract_bearer_token(ctx.request_headers())
+        headers = ctx.request_headers()
+        token = extract_bearer_token(headers)
         try:
-            identity = resolve_auth(token, self._verifier, self._optional)
+            identity = resolve_auth(
+                token,
+                self._verifier,
+                self._optional,
+                client_address=ctx.client_address(),
+                headers=headers,
+            )
         except ValueError as exc:
             if token is None:
                 raise ConnectError(Code.UNAUTHENTICATED, str(exc)) from exc

@@ -52,7 +52,7 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import AuthTokenInjector, TokenProvider
+from iris.rpc.auth import TokenProvider, client_interceptors
 from iris.rpc.proto_display import job_state_friendly
 from iris.time_proto import timestamp_from_proto
 
@@ -553,9 +553,7 @@ class IrisClient:
         token_provider: TokenProvider | None,
         use_controller_proxy: bool,
     ) -> "IrisClient":
-        interceptors = []
-        if token_provider is not None:
-            interceptors.append(AuthTokenInjector(token_provider))
+        interceptors = client_interceptors(token_provider)
 
         cluster = RemoteClusterClient(
             controller_address=controller_address,
