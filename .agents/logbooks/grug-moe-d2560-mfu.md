@@ -1302,3 +1302,29 @@
 - Result: MAY-041 was intentionally stopped before scalar/profile output. MAY-042 submitted successfully; Iris polls found parent and child running with 16/16 child tasks running, zero failures, and zero preemptions. Logs reached W&B setup, compact mesh setup (`data=16`, `expert=8`, `model=1`, `batch_shards=128`), train progress initialization, and XLA CE selection. W&B is `running` but has zero scalar history rows and no profile artifacts yet. No OOM, remat warning, or first-step metric had appeared at the latest poll.
 - Interpretation: This is the cleaner direct-batch test. If it fits, the earlier N1/N2 failures were mostly insufficient data-axis sharding rather than global batch itself. If it OOMs, full seq4096 needs code/topology memory reduction beyond direct batch reduction on EP8/model1.
 - Next action: babysit MAY-042 for mesh (`data=16`, `expert=8`, `batch_shards=128`), W&B creation, first scalar/MFU rows, profile artifact, terminal success, OOM/remat warnings, or another pre-step stall. Heartbeat `poll-grug-d2560-may032-babysitter` and subagent `Chandrasekhar` (`019ec9f5-9e21-71b3-b75a-c53609e795b0`) now point at MAY-042.
+
+### 2026-06-15 01:39 PDT - MAY-042 reduced-batch seq4096 profile captured
+- Hypothesis: instead of train-time microbatching, reduce the direct global batch while preserving the 16-way data/FSDP axis. The smallest valid batch on the EP8/model1 16-node ring mesh is B128 because `batch_shards=128`, so MAY-042 tests one sequence per batch shard without weakening data-axis sharding.
+- Command:
+  - Status: `KUBECONFIG=$HOME/.kube/coreweave-iris-gpu uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job list --json --prefix /dlwh/iris-run-job-20260615-081359`
+  - Logs: `KUBECONFIG=$HOME/.kube/coreweave-iris-gpu uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs --since-seconds 1200 /dlwh/iris-run-job-20260615-081359 | rg -i "Progress on:train|profile|profiler|trace|RESOURCE_EXHAUSTED|oom|Can't reduce memory use|wandb|Grug compact mesh"`
+  - W&B/profile check: `uv run python - <<'PY' ... api.run('marin-community/marin_moe/GM2560-MAY-042S4096-B128-N16-PROFILE-cw-20260615-0814') ...`
+  - Profile summarize: `uv run python lib/marin/tools/profile_summary.py summarize --run-target marin-community/marin_moe/GM2560-MAY-042S4096-B128-N16-PROFILE-cw-20260615-0814 --download-root scratch/profiles --breakdown-mode exclusive_global --output scratch/profile_summary_may042.json`
+  - Profile report: `uv run python lib/marin/tools/profile_summary.py report --summary scratch/profile_summary_may042.json --output scratch/profile_report_may042.md`
+  - Stop after capture: `KUBECONFIG=$HOME/.kube/coreweave-iris-gpu uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260615-081359`
+- Config:
+  - Parent: `/dlwh/iris-run-job-20260615-081359`
+  - Child: `/dlwh/iris-run-job-20260615-081359/grug-train-GM2560-MAY-042S4096-B128-N16-PROFILE-cw-20260615-0814`
+  - W&B: `https://wandb.ai/marin-community/marin_moe/runs/GM2560-MAY-042S4096-B128-N16-PROFILE-cw-20260615-0814`
+  - Artifact: `marin-community/marin_moe/jax-profile-step-3-4:v0`
+  - Profile summary: `scratch/profile_summary_may042.json`
+  - Profile report: `scratch/profile_report_may042.md`
+  - Full May d2560/L26, `seq_len=4096`, `MAY_BATCH=128`, `MAY_GPU_REPLICAS=16`, synthetic data, checkpoints disabled, W&B tracker, `data=16`, `expert_axis=8`, `model_axis=1`, `replica_axis=1`, ring MoE, FA4/CuTe attention, XLA CE, replicated input/output embeddings, `live_param_mode=compute_with_master`, `remat_mode=recompute_all`, `MAY_STEPS=6`, `MAY_PROFILER_START=3`, `MAY_PROFILER_STEPS=1`.
+- Result: MAY-042 reached train step 3, started the profiler, stopped the profiler at step 4, and completed `6/6` steps with `loss=11.3` in the train logs. W&B still reports run state `crashed` because tracker finish raised `HandleAbandonedError`, but the `jax_profile` artifact uploaded and was ingested successfully. The profile has no suspected truncation and contains XPlane plus Perfetto files. After the artifact was captured and train steps completed, the job stayed Iris-running only because W&B finalization hung, so it was intentionally stopped to free the 16 nodes.
+- Profile findings:
+  - Time breakdown: compute `65.65%`, communication `33.68%`, stall `0.68%`.
+  - Top op: segmented FA4/CuTe attention backward (`SegmentedFlashAttentionBackwardSm80`), `208` calls and `44.0M` exclusive timeline units in the top-op table.
+  - Top collective: NCCL all-gather, `6248` calls and `21.8M` exclusive timeline units; send/recv and reduce-scatter follow.
+  - The generated report did not recover steady-state step markers, so MFU should not be claimed from this profile alone. The tqdm rate is compile/pipeline-skewed and not a steady-state throughput number.
+- Interpretation: direct batch reduction was the right next move, but the important qualifier is preserving `data=16`. The earlier B16/N2 and B8/N1 OOMs are now best interpreted as losing too much data-axis sharding, not as proof that B128-equivalent per-shard activation memory is impossible. On the current EP8/model1 ring layout, B128 is the direct-batch floor; going lower requires changing topology, most likely `model_axis=2` with a non-ring MoE implementation or fewer nodes with worse FSDP.
+- Next action: treat MAY-042 as the first valid full-seq4096 profile. Next optimization should focus on the attention backward path and all-gather volume/overlap. If we need lower direct batch than B128, do it as an explicit topology experiment, not train-time microbatching.
