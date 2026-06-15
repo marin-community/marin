@@ -83,6 +83,12 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                 return "adam"
             if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
                 return "adam"
+            if "core_film" in path_lower:
+                # Per-iteration FiLM scale/shift are per-feature affine params (like
+                # norms/biases), not weight matrices. They must use plain Adam: AdamH's
+                # norm-preserving update divides by the parameter norm, which is zero at
+                # their identity (zero) init -> 0/0 NaN that poisons the whole tree.
+                return "adam"
             if ".mlp.expert_mlp.w_" in path_lower or ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
                 return "adamh_expert"
             if hasattr(param, "ndim") and param.ndim >= 2:

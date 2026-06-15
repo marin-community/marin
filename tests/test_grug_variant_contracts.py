@@ -591,3 +591,48 @@ def test_reentrant_recurrence_override_changes_effective_depth():
         assert logits.shape == expected_shape
         assert jnp.all(jnp.isfinite(logits))
         assert not jnp.array_equal(logits, logits_r4)
+
+
+def test_reentrant_film_params_use_plain_adam_not_adamh():
+    """E2's FiLM tables must be optimized by plain Adam, not AdamH.
+
+    AdamH is a norm-preserving update for weight matrices: it divides by the
+    parameter norm, which is zero at the FiLM tables' identity (zero) init, giving
+    0/0 = NaN that poisons the whole parameter tree on the second step. The mask in
+    GrugMoeAdamHConfig must route ``core_film_*`` to the ``adam`` group (where norms
+    and biases live), not fall through the ``ndim >= 2`` rule into ``adamh``.
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+    optimizer_module = importlib.import_module("experiments.grug.reentrant.optimizer")
+    leaf_key_paths = importlib.import_module("levanter.utils.jax_utils").leaf_key_paths
+
+    cfg = model_module.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=64,
+        num_layers=3,
+        num_prelude_layers=1,
+        num_coda_layers=1,
+        recurrence_steps=4,
+        iteration_film=True,
+        num_heads=2,
+        num_kv_heads=2,
+        num_experts=4,
+        num_experts_per_token=2,
+        shared_expert_intermediate_dim=64,
+        max_seq_len=8,
+    )
+
+    with _reset_abstract_mesh(), set_mesh(compact_grug_mesh()):
+        model = model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
+
+    def path_str(p):
+        return ".".join(p) if isinstance(p, (list, tuple)) else str(p)
+
+    mask = optimizer_module.GrugMoeAdamHConfig().create_mask(model)
+    paths = [path_str(p) for p in jax.tree.leaves(leaf_key_paths(model))]
+    groups = jax.tree.leaves(mask)
+
+    film_groups = [g for path, g in zip(paths, groups, strict=True) if "core_film" in path.lower()]
+    assert film_groups, "expected FiLM params in the tree when iteration_film=True"
+    assert all(g == "adam" for g in film_groups), f"FiLM must use plain adam, got {set(film_groups)}"
