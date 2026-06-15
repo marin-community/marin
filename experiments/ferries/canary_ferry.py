@@ -42,7 +42,6 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
-from experiments.ferries.canary_paths import CANARY_OUTPUT_SUBDIR
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import (
     GRUG_MOE_TRIAL_MODEL,
@@ -93,6 +92,11 @@ _HEURISTIC_BUDGET = 1e18
 # comfortable VMEM margin on both v5p and v4 (VMEM is a fixed 16M on both). 768
 # stays divisible by the heuristic's hidden_head_ratio (128).
 _CANARY_TPU_HIDDEN_DIM = 768
+
+# Subdirectory of MARIN_PREFIX the canary writes per-run output dirs into, so
+# they stay out of the root. scripts/canary/prune_canary_outputs.py sweeps this
+# same subdir — keep the two in sync.
+CANARY_OUTPUT_SUBDIR = "canary"
 
 
 def _env_bool(key: str, default: bool) -> bool:
