@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -833,3 +834,43 @@ def test_build_caches_propagates_exception_from_one_component(tmp_path):
     )
     with pytest.raises(ValueError, match="No source and no cache"):
         config.build_caches("train")
+
+
+def test_build_caches_rebuilds_on_unloadable_cache(tmp_path):
+    """A cache dir that exists but won't load (no shard_ledger.json — the
+    leftover of a cache build killed before it finished) must not crash-loop:
+    with auto_build_caches on, build_caches catches the FileNotFoundError and
+    falls through to rebuild rather than propagating it.
+    """
+    records = [{"input_ids": [1, 2, 3, 4]}, {"input_ids": [5, 6, 7, 8]}]
+    data_path = tmp_path / "data.jsonl"
+    with data_path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
+        format=PrebuiltLmDatasetFormat(),
+        cache_dir=str(tmp_path),
+    )
+    config = LmDataConfig(components={"c": component}, tokenizer="passthrough", vocab_size=16)
+    assert config.auto_build_caches  # precondition: rebuild path is enabled
+
+    config.build_caches("train")  # first build → complete cache
+
+    # Reduce the cache dir to "exists but unloadable": keep the directory so
+    # fsspec exists() is True, but empty it so load_lm_dataset_cache raises
+    # FileNotFoundError (no ledger). This is the partial state a killed build
+    # leaves behind.
+    cache_path = next(tmp_path.glob("**/shard_ledger.json")).parent
+    for child in cache_path.iterdir():
+        shutil.rmtree(child) if child.is_dir() else child.unlink()
+    assert cache_path.exists() and not any(cache_path.iterdir())
+
+    rebuilt = config.build_caches("train")["c"]
+    assert (cache_path / "shard_ledger.json").exists(), "rebuild should restore the ledger"
+    Pos = hax.Axis("position", 4)
+    ds = dataset_for_component(
+        component, Pos, rebuilt, eos_id=None, block_cross_document_attention=config.block_cross_document_attention
+    ).as_sync_dataset()
+    np.testing.assert_array_equal(np.asarray(ds[0].tokens), np.array(records[0]["input_ids"], dtype=np.int32))
