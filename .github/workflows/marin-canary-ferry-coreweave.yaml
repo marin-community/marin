@@ -182,6 +182,22 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
 
+      # Canary runs write one output dir per run to R2 and nothing reads them
+      # after the gate above resolves the current run by version hash, so they
+      # accumulate unboundedly. Prune outputs older than 14 days. Schedule-only
+      # so manual debugging dispatches are never pruned; continue-on-error so a
+      # prune hiccup never fails the canary.
+      - name: Prune stale canary outputs
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        shell: bash -l {0}
+        run: .venv/bin/python scripts/canary/prune_canary_outputs.py --max-age-days 14
+        env:
+          MARIN_PREFIX: s3://marin-na/marin/
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+
       - name: Summarize GPU canary profile
         continue-on-error: true
         shell: bash -l {0}
