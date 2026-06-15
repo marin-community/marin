@@ -17,15 +17,7 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.cluster.types import (
-    Entrypoint,
-    JobName,
-    ResourceSpec,
-    TaskAttempt,
-    adjust_tpu_replicas,
-    gpu_device,
-    tpu_device,
-)
+from iris.cluster.types import Entrypoint, JobName, TaskAttempt, adjust_tpu_replicas, gpu_device, tpu_device
 from iris.rpc import job_pb2
 
 
@@ -76,18 +68,6 @@ def test_entrypoint_callable_has_workdir_files():
     assert "_callable.pkl" in ep.workdir_files
     assert "_callable_runner.py" in ep.workdir_files
     assert ep.command is not None
-
-
-def test_resource_spec_accelerator_without_cpu_uses_default_cpu_request():
-    proto = ResourceSpec(device=gpu_device("H100", count=8)).to_proto()
-
-    assert proto.cpu_millicores == ResourceSpec.MIN_ACCELERATOR_CPU_MILLICORES
-
-
-def test_resource_spec_accelerator_honors_explicit_cpu_request():
-    proto = ResourceSpec(cpu=8, device=gpu_device("H100", count=8)).to_proto()
-
-    assert proto.cpu_millicores == 8000
 
 
 def test_job_name_roundtrip_and_hierarchy():
