@@ -446,6 +446,7 @@ def _klsoaph_step_sharded(
     soap_muon: bool = False,
     kl: bool = True,
     shard_expert: bool | None = None,
+    block_size: int = 0,
 ):
     """Distribute the per-expert SOAP step across the mesh via ``shard_map``.
 
@@ -474,10 +475,22 @@ def _klsoaph_step_sharded(
         soap_muon=soap_muon,
         kl=kl,
     )
+
+    def _call(g, ea, eas, gl, gr, ql, qr, el, er, st):
+        # Block-wise SOAP tiles the trailing matrix into block_size x block_size blocks. This runs on
+        # LOCAL data only (no-mesh / replicated / inside shard_map), where the trailing dims are fully
+        # present on each device, so _to_blocks never splits a sharded axis -> zero communication. The
+        # state is already stored blocked; only the grad needs tiling and the direction un-tiling.
+        if block_size > 0 and _blockable(g.shape, block_size):
+            rows, cols = g.shape[-2], g.shape[-1]
+            out = bound(_to_blocks(g, block_size), ea, eas, gl, gr, ql, qr, el, er, st)
+            return (_from_blocks(out[0], rows, cols, block_size), *out[1:])
+        return bound(g, ea, eas, gl, gr, ql, qr, el, er, st)
+
     mesh = jax.sharding.get_abstract_mesh()
     batched = (grad.ndim >= 3) if shard_expert is None else shard_expert
     if mesh.empty:
-        return bound(grad, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r, step)
+        return _call(grad, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r, step)
     if not batched:
         # 2D leaves (attn/dense matrices) have no expert axis to shard, and their native
         # sharding can leave a CONTRACTING dim sharded (e.g. over "model"), which makes the
@@ -485,7 +498,7 @@ def _klsoaph_step_sharded(
         def _repl(x):
             return jax.reshard(x, P(*((None,) * x.ndim)))
 
-        return bound(
+        return _call(
             _repl(grad),
             _repl(exp_avg),
             _repl(exp_avg_sq),
@@ -498,29 +511,30 @@ def _klsoaph_step_sharded(
             jax.reshard(step, P()),
         )
 
-    # Derive ranks from the arrays: full SOAP -> mat [E,n,n] (3D), esi [E,n] (2D); block-wise SOAP ->
-    # mat [E, num_blocks, b, b] (4D), esi [E, num_blocks, b] (3D). The leading (expert) axis is sharded
-    # either way; the extra block axis is a replicated batch dim.
-    mat_p = _expert_shard_pspec(grad.ndim, mesh, True)
+    # The GRAD stays UNBLOCKED ([E, rows, cols], 3D); the STATE is stored BLOCKED ([E, num_blocks, b, b],
+    # 4D) when block_size>0 (else 3D). Blocking happens LOCALLY inside the shard_map (_call), so the grad
+    # reshape never splits the "data"-sharded rows axis. The leading (expert) axis is sharded either way.
+    grad_p = _expert_shard_pspec(grad.ndim, mesh, True)
+    state_p = _expert_shard_pspec(exp_avg.ndim, mesh, True)
     esi_p = _expert_shard_pspec(esi_l.ndim, mesh, True)
     rep = P()  # replicated scalar (step)
-    # shard_map requires in_specs to MATCH each input's sharding (it does not reshard).
-    # The grad arrives sharded as the param (P("expert", "data", ...)) and the state as
-    # whatever init produced (often replicated), so reshard all to the uniform target first.
-    grad = jax.reshard(grad, mat_p)
-    exp_avg = jax.reshard(exp_avg, mat_p)
-    exp_avg_sq = jax.reshard(exp_avg_sq, mat_p)
-    gg_l = jax.reshard(gg_l, mat_p)
-    gg_r = jax.reshard(gg_r, mat_p)
-    q_l = jax.reshard(q_l, mat_p)
-    q_r = jax.reshard(q_r, mat_p)
+    # shard_map in_specs must MATCH each input's sharding (it does not reshard), so reshard first: grad to
+    # the 3D target (gathers the data-sharded rows -- the same gather full SOAP already does), state to 4D.
+    grad = jax.reshard(grad, grad_p)
+    exp_avg = jax.reshard(exp_avg, state_p)
+    exp_avg_sq = jax.reshard(exp_avg_sq, state_p)
+    gg_l = jax.reshard(gg_l, state_p)
+    gg_r = jax.reshard(gg_r, state_p)
+    q_l = jax.reshard(q_l, state_p)
+    q_r = jax.reshard(q_r, state_p)
     esi_l = jax.reshard(esi_l, esi_p)
     esi_r = jax.reshard(esi_r, esi_p)
     step = jax.reshard(step, rep)
-    in_specs = (mat_p, mat_p, mat_p, mat_p, mat_p, mat_p, mat_p, esi_p, esi_p, rep)
-    out_specs = (mat_p, mat_p, mat_p, mat_p, mat_p, mat_p, mat_p, esi_p, esi_p)
+    in_specs = (grad_p, state_p, state_p, state_p, state_p, state_p, state_p, esi_p, esi_p, rep)
+    # Direction is un-tiled back to full (rows, cols) inside _call -> 3D, so it takes grad_p, not state_p.
+    out_specs = (grad_p, state_p, state_p, state_p, state_p, state_p, state_p, esi_p, esi_p)
     sharded = jax.shard_map(
-        lambda *a: bound(*a),
+        lambda *a: _call(*a),
         mesh=mesh,
         in_specs=in_specs,
         out_specs=out_specs,
@@ -570,10 +584,14 @@ def scale_by_klsoaph(
     """
 
     def _maybe_block_param(p):
-        # State is allocated against the BLOCKED shape so all per-tile matrices are bxb.
+        # State is allocated against the BLOCKED shape so all per-tile matrices are bxb. Build a fresh
+        # zeros of the blocked shape rather than reshaping the (sharded) param -- reshaping would split
+        # the "data"-sharded rows axis and raise a ShardingTypeError under the explicit mesh.
         if p is None or not _blockable(p.shape, block_size):
             return p
-        return _to_blocks(p, block_size)
+        rows, cols = p.shape[-2], p.shape[-1]
+        num_blocks = (rows // block_size) * (cols // block_size)
+        return jnp.zeros((*p.shape[:-2], num_blocks, block_size, block_size), dtype=p.dtype)
 
     def init_fn(params):
         bp = jax.tree.map(_maybe_block_param, params, is_leaf=lambda x: x is None)
@@ -602,15 +620,12 @@ def scale_by_klsoaph(
             # 2D leaves run replicated. Param sharding is restored downstream via
             # _match_named_update_sharding. With block_size>0, the gradient is tiled into bxb
             # blocks (state is stored blocked), and the direction is un-tiled back to full shape.
-            # shard_expert is decided from the ORIGINAL rank: 3D leaves have an expert axis to shard;
-            # 2D leaves (even once blocked to [num_blocks, b, b]) have none and must run replicated.
+            # shard_expert is decided from the rank: 3D leaves have an expert axis to shard; 2D leaves
+            # have none and run replicated. Block-wise tiling happens INSIDE the sharded step (on local
+            # data), so the grad is passed UNBLOCKED here -- never reshaped against the "data"-sharded axis.
             shard_expert = grad.ndim >= 3
-            do_block = _blockable(grad.shape, block_size)
-            g_in = grad.astype(jnp.float32)
-            if do_block:
-                g_in = _to_blocks(g_in, block_size)
             out = _klsoaph_step_sharded(
-                g_in,
+                grad.astype(jnp.float32),
                 exp_avg,
                 exp_avg_sq,
                 gg_l,
@@ -632,11 +647,9 @@ def scale_by_klsoaph(
                 soap_muon=soap_muon,
                 kl=kl,
                 shard_expert=shard_expert,
+                block_size=block_size,
             )
-            direction = out[0]
-            if do_block:
-                direction = _from_blocks(direction, grad.shape[-2], grad.shape[-1], block_size)
-            direction = direction.astype(grad.dtype)
+            direction = out[0].astype(grad.dtype)
             return _SoapStepResult(direction, *out[1:])
 
         results = jax.tree.map(

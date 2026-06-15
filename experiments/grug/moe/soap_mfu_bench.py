@@ -30,6 +30,7 @@ _LAYERS = int(os.environ.get("MFU_LAYERS", "6"))
 _STEPS = int(os.environ.get("MFU_STEPS", "30"))
 _FREQ = int(os.environ.get("KLSOAPH_PRECOND_FREQ", "1"))
 _BETA1 = float(os.environ.get("KLSOAPH_BETA1", "0.95"))
+_BLOCK = int(os.environ.get("KLSOAPH_BLOCK_SIZE", "0"))
 
 
 def _build_mesh():
@@ -100,10 +101,12 @@ def _time_layout(layout, opt, params, mesh, key):
 
 def main():
     mesh = _build_mesh()
-    print(f"dev={len(jax.devices())} mesh={dict(mesh.shape)} L={_LAYERS} freq={_FREQ} b1={_BETA1}")
+    print(f"dev={len(jax.devices())} mesh={dict(mesh.shape)} L={_LAYERS} freq={_FREQ} b1={_BETA1} block={_BLOCK}")
     params = _params()
     key = jax.random.PRNGKey(0)
-    opt = scale_by_klsoaph(beta1=_BETA1, beta2=0.9, shampoo_beta=0.9, eps=1e-8, precond_freq=_FREQ, init_factor=0.1)
+    opt = scale_by_klsoaph(
+        beta1=_BETA1, beta2=0.9, shampoo_beta=0.9, eps=1e-8, precond_freq=_FREQ, init_factor=0.1, block_size=_BLOCK
+    )
 
     with jax.set_mesh(mesh):
         results = {layout: _time_layout(layout, opt, params, mesh, key) for layout in ("replicate", "persist")}
