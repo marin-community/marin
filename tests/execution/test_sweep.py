@@ -19,62 +19,69 @@ from marin.execution.executor_step_status import (
     StatusFile,
 )
 from marin.execution.sweep import SweepTarget, claim_and_run
-from marin.execution.sweep_coordination import GangRole, Round
+from marin.execution.sweep_coordination import GangRole, Round, SweepLeaderActor
 
 
-@pytest.mark.parametrize("target_id", ["t01", "stop", "weird id/with.chars", None])
-def test_round_wire_round_trips(target_id):
-    """A round survives the JSON wire format; the target id is a field value, so
-    it can never be confused with the ``None`` stop signal."""
-    assert Round.from_wire(Round(target_id).to_wire()).target_id == target_id
+def test_leader_actor_serves_rounds_in_order():
+    """The actor blocks until a round is published, then returns it; a stop round
+    carries target_id=None."""
+    actor = SweepLeaderActor()
+    actor.publish(0, "t00")
+    actor.publish(1, None)
+    assert actor.next_round(0) == Round("t00")
+    assert actor.next_round(1) == Round(None)
+
+
+def test_leader_actor_wait_for_followers_counts_fetches():
+    """wait_for_followers unblocks once `count` followers have fetched the round."""
+    actor = SweepLeaderActor()
+    actor.publish(0, None)
+    done = threading.Event()
+
+    def waiter():
+        actor.wait_for_followers(0, count=2)
+        done.set()
+
+    t = threading.Thread(target=waiter)
+    t.start()
+    actor.next_round(0)
+    assert not done.wait(timeout=0.2)  # one fetch is not enough
+    actor.next_round(0)
+    assert done.wait(timeout=5)  # second fetch releases the leader
+    t.join(timeout=5)
 
 
 def _make_targets(n: int) -> list[SweepTarget]:
     return [SweepTarget(target_id=f"t{i:02d}", config={"i": i}) for i in range(n)]
 
 
-class _FakeChannel:
-    """In-memory round stream shared by a fake leader and its followers.
-
-    Stands in for the Iris endpoint registry: ``publish`` records round ``seq``,
-    ``receive`` blocks until it appears. ``target_id is None`` is the stop
-    signal.
-    """
-
-    def __init__(self):
-        self._rounds: dict[int, str | None] = {}
-        self._cond = threading.Condition()
-
-    def publish(self, seq: int, target_id: str | None) -> None:
-        with self._cond:
-            self._rounds[seq] = target_id
-            self._cond.notify_all()
-
-    def receive(self, seq: int, timeout: float = 10.0) -> str | None:
-        with self._cond:
-            if not self._cond.wait_for(lambda: seq in self._rounds, timeout=timeout):
-                raise TimeoutError(f"round {seq} not published within {timeout}s")
-            return self._rounds[seq]
-
-
 class _LeaderCoordinator:
-    def __init__(self, channel: _FakeChannel):
-        self._channel = channel
+    """Fake leader sharing a real SweepLeaderActor with its followers."""
+
+    def __init__(self, actor: SweepLeaderActor, num_followers: int = 0):
+        self._actor = actor
+        self._num_followers = num_followers
 
     @property
     def role(self) -> GangRole:
         return GangRole.LEADER
 
     def publish(self, seq: int, target_id: str | None) -> None:
-        self._channel.publish(seq, target_id)
+        self._actor.publish(seq, target_id)
 
     def receive(self, seq: int) -> str | None:
         raise AssertionError("leader must not receive")
 
+    def wait_for_followers(self, seq: int) -> None:
+        self._actor.wait_for_followers(seq, self._num_followers)
+
+    def close(self) -> None:
+        pass
+
 
 class _FollowerCoordinator:
-    def __init__(self, channel: _FakeChannel):
-        self._channel = channel
+    def __init__(self, actor: SweepLeaderActor):
+        self._actor = actor
 
     @property
     def role(self) -> GangRole:
@@ -84,7 +91,13 @@ class _FollowerCoordinator:
         raise AssertionError("follower must not publish")
 
     def receive(self, seq: int) -> str | None:
-        return self._channel.receive(seq)
+        return self._actor.next_round(seq).target_id
+
+    def wait_for_followers(self, seq: int) -> None:
+        raise AssertionError("follower must not wait for followers")
+
+    def close(self) -> None:
+        pass
 
 
 def _status_at(sweep_root: str, target_id: str) -> str | None:
@@ -260,20 +273,20 @@ def test_leader_publishes_only_claimed_rounds_then_stop(tmp_path):
     os.makedirs(pre_done_path, exist_ok=True)
     StatusFile(pre_done_path, worker_id="seed").write_status(STATUS_SUCCESS)
 
-    channel = _FakeChannel()
+    actor = SweepLeaderActor()
     leader_ran: list[str] = []
 
     claim_and_run(
         sweep_root,
         targets,
         lambda t: leader_ran.append(t.target_id),
-        coordinator=_LeaderCoordinator(channel),
+        coordinator=_LeaderCoordinator(actor),
     )
 
     # Leader ran the two fresh targets, skipped the pre-done one.
     assert leader_ran == [targets[0].target_id, targets[2].target_id]
     # Rounds: one per claimed target (re-indexed, skip not announced) + stop.
-    assert channel._rounds == {0: targets[0].target_id, 1: targets[2].target_id, 2: None}
+    assert actor._rounds == {0: Round(targets[0].target_id), 1: Round(targets[2].target_id), 2: Round(None)}
     for target in targets:
         assert _status_at(sweep_root, target.target_id) == STATUS_SUCCESS
 
@@ -284,18 +297,18 @@ def test_follower_runs_exactly_the_announced_rounds(tmp_path):
     It never touches the lock or the status files — only the leader does.
     """
     targets = _make_targets(3)
-    channel = _FakeChannel()
+    actor = SweepLeaderActor()
     # Leader claimed t00 and t02 (t01 was already done, so never announced).
-    channel.publish(0, targets[0].target_id)
-    channel.publish(1, targets[2].target_id)
-    channel.publish(2, None)
+    actor.publish(0, targets[0].target_id)
+    actor.publish(1, targets[2].target_id)
+    actor.publish(2, None)
 
     seen: list[str] = []
     claim_and_run(
         str(tmp_path),
         targets,
         lambda t: seen.append(t.target_id),
-        coordinator=_FollowerCoordinator(channel),
+        coordinator=_FollowerCoordinator(actor),
     )
 
     assert seen == [targets[0].target_id, targets[2].target_id]
@@ -307,17 +320,17 @@ def test_follower_runs_exactly_the_announced_rounds(tmp_path):
 def test_follower_run_fn_failure_propagates(tmp_path):
     """A failure inside a follower's ``run_fn`` propagates out of the worker."""
     targets = _make_targets(2)
-    channel = _FakeChannel()
-    channel.publish(0, targets[0].target_id)
-    channel.publish(1, targets[1].target_id)
-    channel.publish(2, None)
+    actor = SweepLeaderActor()
+    actor.publish(0, targets[0].target_id)
+    actor.publish(1, targets[1].target_id)
+    actor.publish(2, None)
 
     def run(target: SweepTarget) -> None:
         if target.target_id == targets[1].target_id:
             raise RuntimeError("follower boom")
 
     with pytest.raises(RuntimeError, match="follower boom"):
-        claim_and_run(str(tmp_path), targets, run, coordinator=_FollowerCoordinator(channel))
+        claim_and_run(str(tmp_path), targets, run, coordinator=_FollowerCoordinator(actor))
 
 
 def test_leader_and_follower_agree_on_targets(tmp_path):
@@ -328,7 +341,7 @@ def test_leader_and_follower_agree_on_targets(tmp_path):
     """
     sweep_root = str(tmp_path)
     targets = _make_targets(4)
-    channel = _FakeChannel()
+    actor = SweepLeaderActor()
 
     leader_ran: list[str] = []
     follower_ran: list[str] = []
@@ -337,7 +350,10 @@ def test_leader_and_follower_agree_on_targets(tmp_path):
     def leader():
         try:
             claim_and_run(
-                sweep_root, targets, lambda t: leader_ran.append(t.target_id), coordinator=_LeaderCoordinator(channel)
+                sweep_root,
+                targets,
+                lambda t: leader_ran.append(t.target_id),
+                coordinator=_LeaderCoordinator(actor, num_followers=1),
             )
         except BaseException as exc:
             errors.append(exc)
@@ -348,7 +364,7 @@ def test_leader_and_follower_agree_on_targets(tmp_path):
                 sweep_root,
                 targets,
                 lambda t: follower_ran.append(t.target_id),
-                coordinator=_FollowerCoordinator(channel),
+                coordinator=_FollowerCoordinator(actor),
             )
         except BaseException as exc:
             errors.append(exc)

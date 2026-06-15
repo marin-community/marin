@@ -105,10 +105,13 @@ def claim_and_run(
     """
     targets = list(targets)
     coordinator = coordinator or gang_coordinator()
-    if coordinator.role is GangRole.FOLLOWER:
-        _follow(targets, run_fn, coordinator)
-    else:
-        _lead(sweep_root, targets, run_fn, coordinator)
+    try:
+        if coordinator.role is GangRole.FOLLOWER:
+            _follow(targets, run_fn, coordinator)
+        else:
+            _lead(sweep_root, targets, run_fn, coordinator)
+    finally:
+        coordinator.close()
 
 
 def _lead(
@@ -121,7 +124,8 @@ def _lead(
 
     ``coordinator.publish`` is inert when there are no followers (a single-host
     gang), so this is the original claim loop plus a per-round announcement for
-    any gang followers.
+    any gang followers. After the final stop round we wait for followers to
+    consume it, so the leader's actor is not torn down out from under them.
     """
     seq = 0
     for target in targets:
@@ -141,6 +145,7 @@ def _lead(
         except StepAlreadyDone:
             logger.info("Skipping %s: already completed by a peer worker", target.target_id)
     coordinator.publish(seq, None)
+    coordinator.wait_for_followers(seq)
 
 
 def _follow(
