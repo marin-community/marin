@@ -25,7 +25,7 @@ try:
     from jax.shard_map import shard_map
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
-from jaxtyping import Array, Float, Int, PRNGKeyArray
+from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -83,6 +83,13 @@ def _batch_reshard(x: jax.Array) -> jax.Array:
 
 def _token_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _token_spec())
+
+
+def _token_reshard_if_mesh(x: jax.Array) -> jax.Array:
+    mesh = get_abstract_mesh()
+    if mesh is None or mesh.empty:
+        return x
+    return _token_reshard(x)
 
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
@@ -182,19 +189,19 @@ def _segment_start_mask(mask: AttentionMask | jax.Array, *, batch_size: int, seq
     """Return [B, S] true at packed-document starts, falling back to sequence starts."""
     if not isinstance(mask, AttentionMask) or mask.segment_ids is None:
         starts = jnp.zeros((seq_len,), dtype=bool).at[0].set(True)
-        return jnp.broadcast_to(starts[None, :], (batch_size, seq_len))
+        return _token_reshard_if_mesh(jnp.broadcast_to(starts[None, :], (batch_size, seq_len)))
 
     q_segment_ids, _ = mask.segment_ids
     if q_segment_ids.ndim == 1:
         previous = jnp.concatenate([q_segment_ids[:1], q_segment_ids[:-1]], axis=0)
         starts = (q_segment_ids >= 0) & ((jnp.arange(seq_len) == 0) | (q_segment_ids != previous))
-        return jnp.broadcast_to(starts[None, :], (batch_size, seq_len))
+        return _token_reshard_if_mesh(jnp.broadcast_to(starts[None, :], (batch_size, seq_len)))
     if q_segment_ids.ndim == 2:
         if q_segment_ids.shape[0] == 1 and batch_size != 1:
             q_segment_ids = jnp.broadcast_to(q_segment_ids, (batch_size, seq_len))
         previous = jnp.concatenate([q_segment_ids[:, :1], q_segment_ids[:, :-1]], axis=1)
         first = jnp.zeros((batch_size, seq_len), dtype=bool).at[:, 0].set(True)
-        return (q_segment_ids >= 0) & (first | (q_segment_ids != previous))
+        return _token_reshard_if_mesh((q_segment_ids >= 0) & (first | (q_segment_ids != previous)))
     raise ValueError(f"segment_ids must be 1D or 2D, got ndim={q_segment_ids.ndim}")
 
 
@@ -226,6 +233,7 @@ class CausalSelfAttention(eqx.Module):
         mask: AttentionMask | jax.Array,
         *,
         use_pko: bool = False,
+        pko_doc_starts: Bool[Array, "B S"] | None = None,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -246,8 +254,11 @@ class CausalSelfAttention(eqx.Module):
             half = head_dim // 2
             k_stationary = k[..., half:]
             k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
-            doc_starts = _segment_start_mask(mask, batch_size=k.shape[0], seq_len=seq_len)
-            k_shifted = jnp.where(doc_starts[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
+            if pko_doc_starts is None:
+                pko_doc_starts = _segment_start_mask(mask, batch_size=k.shape[0], seq_len=seq_len)
+            if pko_doc_starts.shape != k.shape[:2]:
+                raise ValueError(f"pko_doc_starts must have shape {k.shape[:2]}, got {pko_doc_starts.shape}")
+            k_shifted = jnp.where(pko_doc_starts[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
             k = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
         q = rms_norm(q)
         k = rms_norm(k)
@@ -578,14 +589,15 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         *,
         use_pko: bool = False,
+        pko_doc_starts: Bool[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = _batch_reshard(x + self.attn(attn_in, mask, use_pko=use_pko))
+        x = _batch_reshard(x + self.attn(attn_in, mask, use_pko=use_pko, pko_doc_starts=pko_doc_starts))
         mlp_in = _batch_reshard(self.mlp_gated_norm(self.rms_mlp(x)))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
-        x = x + mlp_out
+        x = _batch_reshard(x + mlp_out)
         return x, router_stats
 
 
@@ -639,6 +651,10 @@ class Transformer(eqx.Module):
             batch_size, seq_len = hidden.shape[:2]
             short_mask = with_fa4_cute_metadata(short_mask, batch_size=batch_size, seq_len=seq_len)
             long_mask = with_fa4_cute_metadata(long_mask, batch_size=batch_size, seq_len=seq_len)
+        pko_doc_starts = None
+        if cfg.use_pko:
+            batch_size, seq_len = hidden.shape[:2]
+            pko_doc_starts = _segment_start_mask(mask, batch_size=batch_size, seq_len=seq_len)
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
@@ -651,7 +667,12 @@ class Transformer(eqx.Module):
             use_long_layer = i % 4 == 3 or (cfg.use_pko and cfg.pko_on_last_layer and i == num_blocks - 1)
             layer_mask = long_mask if use_long_layer else short_mask
             use_pko = cfg.use_pko and use_long_layer
-            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask, use_pko=use_pko)
+            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
+                hidden,
+                layer_mask,
+                use_pko=use_pko,
+                pko_doc_starts=pko_doc_starts if use_pko else None,
+            )
             moe_router_stats.append(router_stats)
 
         router_metrics = {

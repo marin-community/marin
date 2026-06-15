@@ -41,7 +41,7 @@ after the backend has already imported the optional CUDA-only modules.
 The first target is BSHD BF16/FP16 causal self-attention with packed segment
 metadata:
 
-    valid[b, q] and lower_bounds[b, q] <= k <= q
+    lower_bounds[b, q] <= k <= q
 
 The dynamic segment mask is applied in every N tile. That is simpler than the
 FlashAttention v2 sample's split between masked and unmasked tiles and avoids
@@ -50,8 +50,9 @@ materializing a [B, S, S] mask.
 Nontrivial differences from upstream FA4/CuTe:
 - The public layout is dense BSHD from JAX ``cutlass_call``, not upstream's THD
   packed-sequence interface.
-- Segment semantics are carried as ``lower_bounds[B, S]`` plus ``valid[B, S]``
-  metadata, not as cu_seqlens or a dense attention mask.
+- Segment semantics are carried as ``lower_bounds[B, S]`` metadata, not as
+  cu_seqlens or a dense attention mask. Invalid queries are encoded with
+  ``lower_bounds == seq_len``; ``valid`` remains in the ABI for compatibility.
 - The forward score tile applies the segment/causal predicate immediately before
   softmax exponentiation.
 - The backward launcher reuses upstream preprocess/postprocess, but the main
@@ -754,10 +755,9 @@ def segmented_flash_attention_forward_launcher(
                 query_idx = tScS_mn[r, 0][1]
                 query_in_bounds = cute.elem_less(query_idx, basic_params.mQ.shape[0])
                 query_meta_idx = cutlass.min(query_idx, basic_params.mQ.shape[0] - 1)
-                # Grug divergence from upstream FA: lower_bounds/valid encode the
-                # dynamic packed-document mask. Apply it directly to the score
-                # tile so no [B, S, S] mask or THD repacking is required.
-                query_valid = basic_params.mValid[basic_params.batch_idx, query_meta_idx] != 0
+                # Grug divergence from upstream FA: lower_bounds encodes the
+                # dynamic packed-document mask. Invalid queries use seq_len as
+                # their lower bound, so no separate validity load is needed.
                 query_lower_bound = basic_params.mLowerBounds[basic_params.batch_idx, query_meta_idx]
 
                 for c in cutlass.range_constexpr(cute.size(tScS_mn.shape[1])):
@@ -765,13 +765,7 @@ def segmented_flash_attention_forward_launcher(
                     key_in_bounds = cute.elem_less(key_idx, basic_params.mK.shape[0])
                     key_after_lower_bound = cute.elem_less(query_lower_bound, key_idx + 1)
                     key_before_query = cute.elem_less(key_idx, query_idx + 1)
-                    if not (
-                        query_in_bounds
-                        and query_valid
-                        and key_in_bounds
-                        and key_after_lower_bound
-                        and key_before_query
-                    ):
+                    if not (query_in_bounds and key_in_bounds and key_after_lower_bound and key_before_query):
                         acc_S_mn[r, c] = -cutlass.Float32.inf
 
                 acc_S_row = acc_S_mn[r, None].load()

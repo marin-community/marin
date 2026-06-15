@@ -391,6 +391,56 @@ def test_grug_moe_may_recipe_attention_flags_lower():
     assert "train/loss" in out_metrics_shape
 
 
+def test_grug_moe_pko_attention_accepts_precomputed_segment_starts(monkeypatch):
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+    cfg = dataclasses.replace(cfg, use_pko=True)
+    attn = model_module.CausalSelfAttention(
+        w_q=jnp.ones((32, 32), dtype=jnp.bfloat16),
+        w_k=jnp.ones((32, 32), dtype=jnp.bfloat16),
+        w_v=jnp.ones((32, 32), dtype=jnp.bfloat16),
+        w_o=jnp.ones((32, 32), dtype=jnp.bfloat16),
+        attn_gate=jnp.zeros((32, 2), dtype=jnp.float32),
+        cfg=cfg,
+    )
+    segment_ids = jnp.array([[0, 0, 1, 1], [2, 2, 3, 3], [4, 4, 5, 5], [6, 6, 7, 7]], dtype=jnp.int32)
+    mask = GrugAttentionMask.causal().with_segment_ids(segment_ids)
+    pko_doc_starts = model_module._segment_start_mask(mask, batch_size=4, seq_len=4)
+
+    def fail_segment_start_mask(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("PKO should reuse precomputed document starts")
+
+    def fake_attention(q, k, v, mask, *, implementation=None):
+        del k, v, mask, implementation
+        return jnp.zeros_like(q)
+
+    monkeypatch.setattr(model_module, "_segment_start_mask", fail_segment_start_mask)
+    monkeypatch.setattr(model_module, "attention", fake_attention)
+    x = jnp.ones((4, 4, 32), dtype=jnp.bfloat16)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        out_shape = eqx.filter_eval_shape(lambda y: attn(y, mask, use_pko=True, pko_doc_starts=pko_doc_starts), x)
+
+    assert out_shape.shape == x.shape
+
+
+def test_grug_moe_segment_start_mask_keeps_token_sharding():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)
+    segment_ids = jnp.array([[0, 0, 1, 1], [2, 2, 3, 3], [4, 4, 5, 5], [6, 6, 7, 7]], dtype=jnp.int32)
+
+    def starts_for(ids):
+        mask = GrugAttentionMask.causal().with_segment_ids(ids)
+        return model_module._segment_start_mask(mask, batch_size=4, seq_len=4)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        closed_jaxpr = jax.make_jaxpr(starts_for)(segment_ids)
+
+    assert closed_jaxpr.jaxpr.outvars[0].aval.sharding.spec == P(("replica_dcn", "data", "expert"), None)
+
+
 def test_grug_moe_shared_dense_intermediates_keep_token_sharding():
     model_module = importlib.import_module("experiments.grug.moe.model")
     mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)

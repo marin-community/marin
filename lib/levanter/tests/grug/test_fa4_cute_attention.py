@@ -62,6 +62,21 @@ def test_fa4_cute_metadata_is_precomputed_per_sliding_window():
     assert changed_window.fa4_cute_metadata is None
 
 
+def test_fa4_cute_lower_bounds_encode_invalid_queries():
+    seq_len = 6
+    segment_ids = jnp.array([[7, 7, 8, 8, -1, -1]], dtype=jnp.int32)
+
+    lower_bounds, valid = _packed_segment_causal_lower_bounds(
+        segment_ids,
+        batch_size=1,
+        seq_len=seq_len,
+        sliding_window=3,
+    )
+
+    np.testing.assert_array_equal(valid, segment_ids >= 0)
+    np.testing.assert_array_equal(lower_bounds[segment_ids < 0], jnp.full((2,), seq_len, dtype=jnp.int32))
+
+
 def test_fa4_cute_metadata_supports_unsegmented_causal_masks():
     mask = AttentionMask.causal(sliding_window=3)
 

@@ -37,11 +37,13 @@
 This file is intentionally close to upstream ``flash_attn.cute.flash_bwd``. The
 behavioral changes are limited to Grug packed-segment support:
 
-    valid[b, q] and lower_bounds[b, q] <= k <= q
+    lower_bounds[b, q] <= k <= q
 
 Nontrivial differences from upstream FA4/CuTe:
-- The JAX boundary passes dense BSHD tensors and ``lower_bounds``/``valid``
-  metadata; upstream varlen/THD cu_seqlens paths are intentionally disabled.
+- The JAX boundary passes dense BSHD tensors and ``lower_bounds`` metadata;
+  upstream varlen/THD cu_seqlens paths are intentionally disabled. Invalid
+  queries are encoded with ``lower_bounds == seq_len``; ``valid`` remains in
+  the ABI for compatibility.
 - ``segment_m_block_max`` prunes backward M tiles using monotonic packed segment
   lower bounds before entering the mainloop.
 - ``apply_segment_mask`` injects the Grug segment/causal predicate into each
@@ -1072,8 +1074,9 @@ class SegmentedFlashAttentionBackwardSm80:
         thr_mma: cute.TiledMma,
     ):
         # Grug divergence from upstream FA4: this is the semantic mask. It
-        # combines padding validity, packed segment start, and causal ordering
-        # directly in the score accumulator tile before softmax.
+        # combines packed segment start and causal ordering directly in the
+        # score accumulator tile before softmax. Invalid queries are encoded by
+        # a seq_len lower bound, which rejects every in-bounds key.
         acc_S_mn = layout_utils.reshape_acc_to_mn(acc_S, transpose=self.SdP_swapAB)
         acc_shape = (
             (self.m_block_size, self.n_block_size)
@@ -1089,16 +1092,13 @@ class SegmentedFlashAttentionBackwardSm80:
             query_idx = tScS_mn[r, 0][row_coord] + m_block * self.m_block_size
             query_in_bounds = cute.elem_less(query_idx, seq_len)
             query_meta_idx = cutlass.min(query_idx, seq_len - 1)
-            query_valid = mValid[batch_idx, query_meta_idx] != 0
             query_lower_bound = mLowerBounds[batch_idx, query_meta_idx]
             for c in cutlass.range(cute.size(tScS_mn.shape[1]), unroll_full=True):
                 key_idx = tScS_mn[0, c][col_coord] + n_block * self.n_block_size
                 key_in_bounds = cute.elem_less(key_idx, seq_len)
                 key_after_lower_bound = cute.elem_less(query_lower_bound, key_idx + 1)
                 key_before_query = cute.elem_less(key_idx, query_idx + 1)
-                if not (
-                    query_in_bounds and query_valid and key_in_bounds and key_after_lower_bound and key_before_query
-                ):
+                if not (query_in_bounds and key_in_bounds and key_after_lower_bound and key_before_query):
                     acc_S_mn[r, c] = -cutlass.Float32.inf
 
     @cute.jit
