@@ -326,7 +326,80 @@ list and this section reconciled as work moves.
 
 ---
 
-## 7. References
+## 7. Novel directions beyond existing work
+
+The published work is almost entirely "loop a **dense** tied block + decide when to stop." That
+leaves real space, and several gaps line up with what makes Grug Grug (MoE + a hackable block).
+
+- **A. MoE-native recurrence (Grug's home turf).** Every looped model (MoR included) loops a
+  *dense* block. Instead: re-enter the *same shared MoE block* each loop but let the router pick
+  **different experts per pass**, conditioned on iteration index / convergence — experts
+  specialize into *roles along a reasoning trajectory* (parse → manipulate → refine), not roles
+  across fixed depths. Can be unified into Grug's existing top-k router (one router emits "which
+  experts" *and* "loop again?"). Highest ceiling, highest variance; later phase.
+- **B. Iteration-conditioned shared block (adaLN/FiLM on the loop index).** One shared block that
+  *knows what step it is on* via a cheap additive/scale modulation from an embedding of the
+  iteration count (+ optional convergence signal). Diffusion does this with timestep embeddings;
+  not cleanly ported to LM latent recurrence (Huginn injects the input but the block is
+  step-agnostic). Almost free in params; a coarse-to-fine schedule from one block. **Top cheap
+  win.**
+- **C. Anytime-decodable + self-distillation.** Attach the coda/LM head at *every* iteration and
+  train each step's output to be valid (PonderNet-style per-step outputs, but for an
+  autoregressive LM), then **distill late-iteration logits into early iterations**. Early-exit
+  becomes free and *calibrated*, and you get the refinement curve that says whether looping
+  actually helps. Plus a **learned value-of-compute critic** (predict marginal loss reduction of
+  one more loop; halt when gain < cost) — more principled than a KL threshold.
+- **D. New training framings.** *Latent denoising* — treat each loop as a denoising step on the
+  latent (perturb the recurrent state, train the loop to denoise toward consistency); inherits
+  diffusion's compute-for-quality knob and reframes the consistency constraint. *Stability-
+  regularized consistency* — rather than a blunt `‖f(z)−z‖` penalty, regularize the **Jacobian
+  spectral radius of the loop map toward <1** to *guarantee* a unique fixed point while dialing
+  how settled the representation must be.
+- **E. Latent-trajectory measurement (the de-risker).** Apply a **logit lens at every iteration**
+  and watch what the model "says" as it loops: stepwise refinement (genuine latent CoT) or smooth
+  capacity add? Directly attacks the open question of whether recurrence *substitutes* for CoT.
+  Cheap, analysis-only — run it from the first looped model onward.
+- **F. Inference/serving.** *Recurrent KV scratchpad* — persistent KV slots carried across
+  iterations so re-entry attends to its own prior latent passes (memory in KV space, no emitted
+  tokens). *SLA-elastic depth* — loop count as a per-request knob; map the accuracy/latency
+  Pareto frontier from one checkpoint.
+- **G. Interpretable hybrid.** A **"loop-more" control token**: the model emits a discrete token
+  that triggers N latent loops before resuming generation — interpretable trigger, latent compute;
+  a middle ground between CoTFormer (token-level) and Huginn (pure latent).
+
+**Order of bets (EV/risk):** B (nearly free) → C (principled adaptive compute + the refinement
+curve) → E (run from day one) → then A (high-ceiling, Grug-native) once the basics are stable.
+D/F/G are follow-ups.
+
+---
+
+## 8. Experimental rollout (live)
+
+Runs train **130M Grug MoE** variants on the `lib/iris/config/marin.yaml` Iris cluster, smallest
+slice that fits (target v6e-4/v6e-8), parallelizing independent experiments. Progress is logged
+in the GH tracking issue (and mirrored to this PR); babysitter sub-agents (`babysit-job`) watch
+each run. Each experiment changes **one** thing vs the prior best (per `change-grug`).
+
+| ID | Experiment | New idea | Compares against |
+|----|-----------|----------|------------------|
+| **E0** | Baseline 130M Grug MoE, unchanged | — (reference) | itself / dense scaling |
+| **E1** | Basic re-entrant: prelude/shared-core/coda, **fixed** loop `R`, strict weight-tie | the core mechanism | E0 at equal effective depth, fewer unique params |
+| **E2** | + **iteration-conditioned block** (adaLN on loop index) | §7 B | E1 |
+| **E3** | + **randomized depth** train + **truncated BPTT** | Huginn recipe | E1/E2; enables test-time depth scaling |
+| **E4** | + **anytime-decodable head** + self-distillation | §7 C | E3; calibrated early-exit |
+| **E5** | **logit-lens trajectory** analysis (no training change) | §7 E | run on E1+ checkpoints |
+| **E6** | **KL-convergence early-exit** at inference (training-free) | Phase 3 / §2 | E3/E4 compute-vs-accuracy |
+| **E7** | **per-iteration MoE re-routing** | §7 A | best of E1–E4 |
+
+Later swings: learned value-of-compute critic, latent-denoising training, spectral-stability
+consistency, recurrent KV scratchpad, "loop-more" control token.
+
+The phase issues (#158–#161) map onto this: #158→E1, #159→E3, #160→E6, #161→E7; E2/E4/E5 are
+the new §7 directions folded into the early rollout.
+
+---
+
+## 9. References
 
 | # | Title | Authors / year | arXiv |
 |---|---|---|---|
@@ -342,7 +415,7 @@ list and this section reconciled as work moves.
 | 10 | Mixture-of-Recursions: Learning Dynamic Recursive Depths for Adaptive Token-Level Computation | Bae, Kim, Bayat, Kim, Ha, Schuster, Fisch, Harutyunyan, Ji, Courville, Yun 2025 (NeurIPS'25) | [2507.10524](https://arxiv.org/abs/2507.10524) |
 | 11 | (follow-up) Looped transformers subsume deterministic CoT — stochastic-decoding gap | 2025 | [2509.25239](https://arxiv.org/abs/2509.25239) |
 
-## 8. Caveats & open questions
+## 10. Caveats & open questions
 
 - Most empirical numbers are **self-reported** by the originating papers in controlled/synthetic
   settings; independent replication at Marin scale is exactly what these experiments would
