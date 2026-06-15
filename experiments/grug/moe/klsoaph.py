@@ -176,14 +176,23 @@ def _msign(m, steps: int = 5):
     (KellerJordan/modded-nanogpt PR #278/#321) to orthogonalize the Adam-preconditioned
     update after rotating it back to full parameter space. msign normalizes the input scale
     on its first line, so any scalar prefactor (e.g. a Frobenius rescale) is washed out.
+
+    One-sided on the SHORTER trailing axis: Newton-Schulz is transpose-equivariant
+    (``msign(Xᵀ) = msign(X)ᵀ``), so for a (..., r, c) leaf we transpose when r > c so the
+    Gram ``x xᵀ`` is ``min(r, c)²`` instead of ``max(r, c)²`` -- e.g. for a (E, 512, 256)
+    expert weight the per-expert Gram is 256² not 512² (4x less memory + flops). This matches
+    canonical Muon (modded-nanogpt ``zeropower_via_newtonschulz5`` transposes when rows > cols)
+    and is the fix for SOAP-Muon's OOM pressure on memory-tight TPUs.
     """
     a, b, c = 3.4445, -4.7750, 2.0315  # Keller Jordan quintic coefficients
-    x = m / (jnp.linalg.norm(m, axis=(-2, -1), keepdims=True) + 1e-7)
+    transpose = m.shape[-2] > m.shape[-1]  # static per leaf; keep the Gram on the shorter axis
+    x = jnp.swapaxes(m, -1, -2) if transpose else m
+    x = x / (jnp.linalg.norm(x, axis=(-2, -1), keepdims=True) + 1e-7)
     for _ in range(steps):
-        gram = jnp.einsum("...ij,...kj->...ik", x, x)  # x xᵀ
+        gram = jnp.einsum("...ij,...kj->...ik", x, x)  # x xᵀ on the shorter axis -> min(r,c)²
         poly = b * gram + c * jnp.einsum("...ij,...jk->...ik", gram, gram)
         x = a * x + jnp.einsum("...ij,...jk->...ik", poly, x)
-    return x
+    return jnp.swapaxes(x, -1, -2) if transpose else x
 
 
 def _klsoaph_step(
