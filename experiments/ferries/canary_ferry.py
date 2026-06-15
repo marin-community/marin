@@ -88,9 +88,9 @@ _HEURISTIC_BUDGET = 1e18
 # float32 (the eval loss fn does not cast to the bf16 compute dtype), so that
 # window is twice the size of the train step's. At d1024 the f32 window is 8.4M
 # and the whole kernel needs 16.44M -- 452K over budget, which crashed the first
-# eval deterministically (#6363). At d768 the f32 window is 4.7M, leaving the
-# eval gmm a comfortable VMEM margin on both v5p and v4 (VMEM is a fixed 16M on
-# both). 768 stays divisible by the heuristic's hidden_head_ratio (128).
+# eval deterministically. At d768 the f32 window is 4.7M, leaving the eval gmm a
+# comfortable VMEM margin on both v5p and v4 (VMEM is a fixed 16M on both). 768
+# stays divisible by the heuristic's hidden_head_ratio (128).
 _CANARY_TPU_HIDDEN_DIM = 768
 
 
