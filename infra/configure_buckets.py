@@ -163,12 +163,12 @@ def _is_marin_gcs_ttl_rule(rule: dict) -> bool:
     return prefixes[0] in {_ttl_prefix(n) for n in ALLOWED_TTL_DAYS}
 
 
-def merge_gcs_lifecycle_rules(existing: list[dict], owned: list[dict]) -> list[dict]:
+def merge_lifecycle_rules(existing: list[dict], owned: list[dict], is_owned: Callable[[dict], bool]) -> list[dict]:
     """Drop our prior TTL rules from *existing* and append the canonical *owned* set.
 
-    Foreign rules (anything we don't recognize as ours) survive untouched.
+    Foreign rules (anything *is_owned* does not recognize as ours) survive untouched.
     """
-    foreign = [rule for rule in existing if not _is_marin_gcs_ttl_rule(rule)]
+    foreign = [rule for rule in existing if not is_owned(rule)]
     return foreign + owned
 
 
@@ -224,7 +224,7 @@ def configure_gcs_bucket(bucket: str, region: str, owned: list[dict], dry_run: b
         logger.info("Soft-delete already disabled.")
 
     existing_rules = (info.get("lifecycle_config") or info.get("lifecycleConfig") or {}).get("rule", []) or []
-    merged = merge_gcs_lifecycle_rules(existing_rules, owned)
+    merged = merge_lifecycle_rules(existing_rules, owned, _is_marin_gcs_ttl_rule)
 
     _apply_or_preview_lifecycle(
         merged,
@@ -292,15 +292,6 @@ def _is_marin_r2_ttl_rule(rule: dict) -> bool:
     return str(rule.get("ID", "")).startswith(R2_RULE_ID_PREFIX)
 
 
-def merge_r2_lifecycle_rules(existing: list[dict], owned: list[dict]) -> list[dict]:
-    """Drop our prior TTL rules from *existing* and append the canonical *owned* set.
-
-    Foreign rules (anything whose ``ID`` we don't recognize) survive untouched.
-    """
-    foreign = [rule for rule in existing if not _is_marin_r2_ttl_rule(rule)]
-    return foreign + owned
-
-
 def get_r2_lifecycle_rules(client: botocore.client.BaseClient, bucket: str) -> list[dict]:
     """Return the bucket's existing lifecycle rules, or ``[]`` if none are set."""
     try:
@@ -321,7 +312,7 @@ def configure_r2_bucket(client: botocore.client.BaseClient, bucket: str, owned: 
     logger.info("=== %s (R2) ===", bucket)
 
     existing_rules = get_r2_lifecycle_rules(client, bucket)
-    merged = merge_r2_lifecycle_rules(existing_rules, owned)
+    merged = merge_lifecycle_rules(existing_rules, owned, _is_marin_r2_ttl_rule)
 
     _apply_or_preview_lifecycle(
         merged,
