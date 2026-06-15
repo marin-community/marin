@@ -160,7 +160,8 @@ def test_producer_thread_runs_under_captured_mesh(max_capacity):
     mesh. On modern JAX the mesh lives in the concrete-mesh config, which
     copy_context() alone does not carry across the thread boundary.
     """
-    mesh = Mesh(np.array(jax.devices()).reshape(1, 1), ("data", "model"))
+    # N×1 so this works regardless of device count (1 on CPU, >1 on TPU CI).
+    mesh = Mesh(np.array(jax.devices()).reshape(-1, 1), ("data", "model"))
     seen_axis_names = []
 
     def producer():
