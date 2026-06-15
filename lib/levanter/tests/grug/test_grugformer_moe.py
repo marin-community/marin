@@ -301,6 +301,33 @@ def test_moe_expert_mlp_init_uses_concat_w13_for_sonic_backend():
     np.testing.assert_allclose(np.asarray(sonic_mlp.w_down), np.asarray(scatter_mlp.w_down), rtol=1e-5, atol=1e-5)
 
 
+def test_moe_expert_mlp_init_preserves_remat_mode():
+    mlp = MoEExpertMlp.init(
+        num_experts=4,
+        hidden_dim=16,
+        intermediate_dim=24,
+        initializer_std=0.02,
+        key=jax.random.key(28),
+        implementation="deepep",
+        remat_mode="save_moe",
+    )
+
+    assert mlp.remat_mode == "save_moe"
+
+
+def test_moe_expert_mlp_init_rejects_unknown_remat_mode():
+    with pytest.raises(ValueError, match="remat_mode"):
+        MoEExpertMlp.init(
+            num_experts=4,
+            hidden_dim=16,
+            intermediate_dim=24,
+            initializer_std=0.02,
+            key=jax.random.key(29),
+            implementation="deepep",
+            remat_mode="save_everything",
+        )
+
+
 def test_moe_mlp_sonic_backend_reports_missing_optional_dependencies():
     optional_modules = ("jax_triton", "triton")
     if all(importlib.util.find_spec(module) is not None for module in optional_modules):
