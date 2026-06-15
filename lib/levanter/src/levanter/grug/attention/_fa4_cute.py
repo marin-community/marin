@@ -28,11 +28,24 @@ def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: in
     return segment_ids
 
 
-def _segment_starts(segment_ids: jax.Array) -> jax.Array:
+def _segment_starts(segment_ids: jax.Array, valid: jax.Array) -> jax.Array:
+    starts_tail = valid[:, 1:] & (segment_ids[:, 1:] != segment_ids[:, :-1])
+    return jnp.concatenate([valid[:, :1], starts_tail], axis=1)
+
+
+def _packed_segment_start_positions_and_valid(
+    segment_ids: jax.Array,
+    *,
+    batch_size: int,
+    seq_len: int,
+) -> tuple[Int[Array, "B S"], Bool[Array, "B S"]]:
+    segment_ids = _batched_segment_ids(segment_ids, batch_size=batch_size, seq_len=seq_len)
     valid = segment_ids >= 0
-    previous = jnp.concatenate([segment_ids[:, :1], segment_ids[:, :-1]], axis=1)
-    first = jnp.zeros_like(valid).at[:, 0].set(True)
-    return valid & (first | (segment_ids != previous))
+    starts = _segment_starts(segment_ids, valid)
+    positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
+    start_positions = jnp.where(starts, positions, 0)
+    current_start: jax.Array = jax.lax.associative_scan(jnp.maximum, start_positions, axis=1)
+    return jnp.where(valid, current_start, seq_len), valid
 
 
 def _packed_segment_start_positions(
@@ -41,13 +54,12 @@ def _packed_segment_start_positions(
     batch_size: int,
     seq_len: int,
 ) -> Int[Array, "B S"]:
-    segment_ids = _batched_segment_ids(segment_ids, batch_size=batch_size, seq_len=seq_len)
-    valid = segment_ids >= 0
-    starts = _segment_starts(segment_ids)
-    positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
-    start_positions = jnp.where(starts, positions, 0)
-    current_start: jax.Array = jax.lax.associative_scan(jnp.maximum, start_positions, axis=1)
-    return jnp.where(valid, current_start, seq_len)
+    lower_bounds, _ = _packed_segment_start_positions_and_valid(
+        segment_ids,
+        batch_size=batch_size,
+        seq_len=seq_len,
+    )
+    return lower_bounds
 
 
 def _packed_segment_causal_lower_bounds(
@@ -61,14 +73,12 @@ def _packed_segment_causal_lower_bounds(
     if sliding_window is not None and sliding_window <= 0:
         raise ValueError(f"sliding_window must be positive, got {sliding_window}")
 
-    segment_ids = _batched_segment_ids(segment_ids, batch_size=batch_size, seq_len=seq_len)
-    valid = segment_ids >= 0
-    lower_bounds = _packed_segment_start_positions(
+    lower_bounds, valid = _packed_segment_start_positions_and_valid(
         segment_ids,
         batch_size=batch_size,
         seq_len=seq_len,
     )
-    if sliding_window is not None:
+    if sliding_window is not None and sliding_window < seq_len:
         positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
         window_lower_bounds = positions - (sliding_window - 1)
         lower_bounds = jnp.maximum(lower_bounds, window_lower_bounds)
@@ -85,9 +95,9 @@ def _causal_lower_bounds(
     if sliding_window is not None and sliding_window <= 0:
         raise ValueError(f"sliding_window must be positive, got {sliding_window}")
 
-    positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
     lower_bounds = jnp.zeros((1, seq_len), dtype=jnp.int32)
-    if sliding_window is not None:
+    if sliding_window is not None and sliding_window < seq_len:
+        positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
         lower_bounds = jnp.maximum(lower_bounds, positions - (sliding_window - 1))
     lower_bounds = jnp.broadcast_to(lower_bounds, (batch_size, seq_len))
     valid = jnp.ones((batch_size, seq_len), dtype=jnp.bool_)

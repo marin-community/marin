@@ -73,8 +73,16 @@ def _batch_spec() -> P:
     return P(_BATCH_AXES)
 
 
+def _token_spec() -> P:
+    return P(_BATCH_AXES, None)
+
+
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
+
+
+def _token_reshard(x: jax.Array) -> jax.Array:
+    return reshard(x, _token_spec())
 
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
@@ -342,14 +350,16 @@ class DenseMLP(eqx.Module):
             activation_fn = activation
 
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
-        gate = jnp.einsum("td,dm->tm", x_flat, unshard(self.w_gate))
-        up = jnp.einsum("td,dm->tm", x_flat, unshard(self.w_up))
+        token_spec = _token_spec()
+        x_flat = _token_reshard(rearrange(x, "b s d -> (b s) d"))
+        gate = jnp.einsum("td,dm->tm", x_flat, unshard(self.w_gate), out_sharding=token_spec)
+        up = jnp.einsum("td,dm->tm", x_flat, unshard(self.w_up), out_sharding=token_spec)
+        activated = _token_reshard(activation_fn(gate) * up)
         out_flat = jnp.einsum(
             "tm,md->td",
-            activation_fn(gate) * up,
+            activated,
             unshard(self.w_down),
-            out_sharding=_batch_spec(),
+            out_sharding=token_spec,
         )
         # Reshard after the reshape so the shared-expert output carries the same
         # canonical batch sharding as the routed MoE output (MoEMLP reshards its

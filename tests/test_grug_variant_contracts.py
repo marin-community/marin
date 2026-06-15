@@ -13,6 +13,7 @@ import dataclasses
 import importlib
 import json
 import logging
+import pickle
 import uuid
 from io import StringIO
 from pathlib import Path
@@ -25,6 +26,7 @@ import optax
 import pytest
 from fray.cluster import ResourceConfig
 from jax._src import config as jax_config
+from jax.sharding import PartitionSpec as P
 from jax.sharding import use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
@@ -172,6 +174,20 @@ def test_grug_moe_synthetic_dataset_is_dataclass_replaceable():
     assert "_loss_weight" not in field_names
     assert "_attn_mask" not in field_names
     assert asyncio.run(replaced.async_len()) == 32
+
+
+def test_grug_moe_synthetic_dataset_serializes_without_jax_arrays():
+    launch_module = importlib.import_module("experiments.grug.moe.launch")
+    dataset = launch_module.SyntheticGrugDataset(seq_len=8, vocab_size=128, num_examples=16)
+
+    assert not any(isinstance(value, jax.Array) for value in dataset.__dict__.values())
+
+    restored = pickle.loads(pickle.dumps(dataset))
+
+    assert not any(isinstance(value, jax.Array) for value in restored.__dict__.values())
+    [example] = asyncio.run(restored.get_batch([0]))
+    assert isinstance(example.tokens, jax.Array)
+    assert isinstance(example.loss_weight, jax.Array)
 
 
 def _variant_has_noverify(variant_dir: Path) -> bool:
@@ -373,6 +389,26 @@ def test_grug_moe_may_recipe_attention_flags_lower():
 
     assert out_state_shape.step.shape == ()
     assert "train/loss" in out_metrics_shape
+
+
+def test_grug_moe_shared_dense_intermediates_keep_token_sharding():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)
+    dense = model_module.DenseMLP(
+        w_gate=jnp.ones((32, 64), dtype=jnp.bfloat16),
+        w_up=jnp.ones((32, 64), dtype=jnp.bfloat16),
+        w_down=jnp.ones((64, 32), dtype=jnp.bfloat16),
+    )
+    x = jnp.ones((8, 4, 32), dtype=jnp.bfloat16)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        closed_jaxpr = jax.make_jaxpr(lambda y: dense(y))(x)
+
+    dot_specs = [
+        eqn.outvars[0].aval.sharding.spec for eqn in closed_jaxpr.jaxpr.eqns if eqn.primitive.name == "dot_general"
+    ]
+
+    assert dot_specs == [P(("replica_dcn", "data", "expert"), None)] * 3
 
 
 def test_grug_moe_data_loaders_build_against_single_expert_mesh():

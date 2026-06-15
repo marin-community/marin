@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import cast
 
-import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
@@ -206,7 +205,7 @@ class SyntheticGrugDataset(AsyncDataset[GrugLmExample]):
         # versions configs via dataclasses.replace, which cannot pass init=False fields.
         object.__setattr__(self, "_positions", np.arange(self.seq_len, dtype=np.int64))
         loss_weight = (np.arange(self.seq_len) < (self.seq_len - 1)).astype(np.float32)
-        object.__setattr__(self, "_loss_weight", jnp.asarray(loss_weight))
+        object.__setattr__(self, "_loss_weight", loss_weight)
         object.__setattr__(self, "_attn_mask", GrugAttentionMask.causal())
 
     async def async_len(self) -> int:
@@ -232,9 +231,10 @@ class SyntheticGrugDataset(AsyncDataset[GrugLmExample]):
         return tokens.astype(np.int32, copy=False)
 
     def _example_from_tokens(self, tokens: np.ndarray) -> GrugLmExample:
-        loss_weight = cast(jax.Array, self.__dict__["_loss_weight"])
+        loss_weight = cast(np.ndarray, self.__dict__["_loss_weight"])
         attn_mask = cast(GrugAttentionMask, self.__dict__["_attn_mask"])
         token_array = jnp.asarray(tokens, dtype=jnp.int32)
+        loss_weight_array = jnp.asarray(loss_weight)
         if self.eos_interval > 0 and self.block_cross_document_attention:
             assert self.eos_id is not None
             eos_mask = np.roll(tokens, 1) == self.eos_id
@@ -242,7 +242,7 @@ class SyntheticGrugDataset(AsyncDataset[GrugLmExample]):
             segment_ids = jnp.asarray(np.cumsum(eos_mask, dtype=np.int32))
             attn_mask = attn_mask.with_segment_ids(segment_ids)
 
-        return GrugLmExample(tokens=token_array, loss_weight=loss_weight, attn_mask=attn_mask)
+        return GrugLmExample(tokens=token_array, loss_weight=loss_weight_array, attn_mask=attn_mask)
 
 
 def synthetic_grug_data(

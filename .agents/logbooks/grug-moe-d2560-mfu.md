@@ -618,3 +618,20 @@
 - Result: MIN-016 got past dispatcher launch and created a child, but all 32 child tasks were still `building` with no worker assignment and zero failures/preemptions. Because it had not taken GPUs yet, it was stopped before placement. Added `out_sharding=_batch_spec()` to the attention qkv projection. Focused compile/lowering tests passed. MIN-017 submitted successfully from the patched bundle.
 - Interpretation: MIN-017 supersedes MIN-016. It tests the same one-layer full-activation minimizer while also forcing qkv projection output back to canonical batch sharding, which should reduce the chance of the known hidden-dimension activation reshard.
 - Next action: babysit MIN-017 for child discovery, task placement, and either first-step metrics or the MFU-007 SPMD/clique/fatal signature.
+
+### 2026-06-14 18:18 PDT - MIN-017 invalidated by pre-init JAX array serialization
+- Hypothesis: MIN-017's early `jax.distributed.initialize()` failure was caused by a JAX backend touch before Levanter distributed initialization, not by the d2560 executable.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-job-20260615-010535/grug-train-GM2560-MIN-017-cw-20260614-1806`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs --since-seconds 1800 --max-lines 8000 /dlwh/iris-run-job-20260615-010535/grug-train-GM2560-MIN-017-cw-20260614-1806 | rg -n -C 40 "jax\\.distributed\\.initialize\\(\\) must be called|Traceback|RuntimeError|XLA backend|libtpu|Running main|distributed"`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260615-010535`
+  - `uv run pytest tests/test_grug_variant_contracts.py::test_grug_moe_synthetic_dataset_vectorizes_token_generation tests/test_grug_variant_contracts.py::test_grug_moe_synthetic_dataset_preserves_eos_segments tests/test_grug_variant_contracts.py::test_grug_moe_synthetic_dataset_is_dataclass_replaceable tests/test_grug_variant_contracts.py::test_grug_moe_synthetic_dataset_serializes_without_jax_arrays tests/test_grug_variant_contracts.py::test_grug_moe_compute_live_params_one_step_lowers -q`
+  - `uv run pytest lib/levanter/tests/grug/test_fa4_cute_attention.py -q`
+- Config:
+  - Invalidated run id: `GM2560-MIN-017-cw-20260614-1806`
+  - Parent: `/dlwh/iris-run-job-20260615-010535`
+  - Child: `/dlwh/iris-run-job-20260615-010535/grug-train-GM2560-MIN-017-cw-20260614-1806`
+  - Same one-layer full-activation shape/topology as MIN-016.
+- Result: MIN-017 reached worker startup, then task 0 failed twice before training with `RuntimeError: jax.distributed.initialize() must be called before any JAX calls that might initialise the XLA backend`. The child was still non-terminal and flapping (`failure_count=2`) when stopped. The likely cause was `SyntheticGrugDataset` carrying a cached `_loss_weight` as a `jax.Array` inside the Iris-submitted config; unpickling that config on the worker can initialize XLA before `trainer.initialize()`. The fix keeps synthetic dataset caches NumPy-only until `get_batch()` materializes `GrugLmExample`s after distributed init. Regression coverage verifies dataclass replaceability, pickle round-trip serialization with no `jax.Array` runtime attrs, and batch materialization. Focused synthetic/train tests passed (`5 passed`); FA4 tests passed (`8 passed, 2 skipped`); py_compile passed.
+- Interpretation: MIN-017 is not model evidence. It never reached compile or the SPMD/clique path.
+- Next action: relaunch the same one-layer d2560 minimizer as MIN-018 with the serialization fix and the current shared-dense token-sharding patch.

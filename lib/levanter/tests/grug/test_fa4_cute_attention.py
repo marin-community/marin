@@ -80,6 +80,36 @@ def test_fa4_cute_metadata_supports_unsegmented_causal_masks():
     assert changed_window.fa4_cute_metadata is None
 
 
+def test_fa4_cute_full_sequence_window_matches_unwindowed_metadata():
+    segment_ids = jnp.array([[0, 0, 1, 1, 1, -1], [2, 2, 2, 3, 3, 3]], dtype=jnp.int32)
+    packed_mask = AttentionMask.causal().with_segment_ids(segment_ids)
+    windowed_packed_mask = packed_mask.with_sliding_window(6)
+
+    packed_metadata = with_fa4_cute_metadata(packed_mask, batch_size=2, seq_len=6).fa4_cute_metadata
+    windowed_packed_metadata = with_fa4_cute_metadata(
+        windowed_packed_mask,
+        batch_size=2,
+        seq_len=6,
+    ).fa4_cute_metadata
+
+    assert packed_metadata is not None
+    assert windowed_packed_metadata is not None
+    np.testing.assert_array_equal(windowed_packed_metadata.lower_bounds, packed_metadata.lower_bounds)
+    np.testing.assert_array_equal(windowed_packed_metadata.valid, packed_metadata.valid)
+
+    causal_metadata = with_fa4_cute_metadata(AttentionMask.causal(), batch_size=2, seq_len=6).fa4_cute_metadata
+    windowed_causal_metadata = with_fa4_cute_metadata(
+        AttentionMask.causal(sliding_window=6),
+        batch_size=2,
+        seq_len=6,
+    ).fa4_cute_metadata
+
+    assert causal_metadata is not None
+    assert windowed_causal_metadata is not None
+    np.testing.assert_array_equal(windowed_causal_metadata.lower_bounds, causal_metadata.lower_bounds)
+    np.testing.assert_array_equal(windowed_causal_metadata.valid, causal_metadata.valid)
+
+
 def test_fa4_cute_metadata_reuses_compatible_metadata():
     segment_ids = jnp.array([[7, 7, 8, 8, 8, -1]], dtype=jnp.int32)
     mask = AttentionMask.causal(sliding_window=3).with_segment_ids(segment_ids)
