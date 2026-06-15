@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "reentrant"
+  ],
+  "base_sha": "22174fe203cdb70b03dc0fc52e019864c7f4c016",
+  "head_sha": "5ac79940e664518fadb85ee93cecb48b983b8703",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "moe",
+      "distance_score": 153,
+      "report_relpath": "reentrant/index.html",
+      "status_counts": {
+        "added": 0,
+        "changed": 6,
+        "removed": 0,
+        "unchanged": 5
+      },
+      "variant": "reentrant"
+    }
+  ]
+}
