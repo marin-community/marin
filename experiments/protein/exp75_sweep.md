@@ -297,14 +297,14 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   | wd \ lr | 8.75e-5 | 1.75e-4 | 3.5e-4 | 7e-4 | 1e-3 |
   |---|---|---|---|---|---|
   | **0.02** | 3.153 | 3.112 | 3.0623 | 3.084 | 3.087 |
-  | **0.05** | 3.1535 | 3.116 | 3.0705 | **3.046** | _(running)_ |
+  | **0.05** | 3.1535 | 3.116 | 3.0705 | **3.046** | 3.162 |
   | **0.1**  | 3.152 | 3.113 | 3.0662 | 3.052 | _(running)_ |
 
-  _Base 12/12 + first 1e-3 cell (~20:45Z). Best E1 = `7e-4/wd0.05`=**3.046**. **Clear
-  LR×WD interaction:** at wd0.02 the optimum is **3.5e-4** (3.062 < 7e-4 3.084 < 1e-3
-  3.087 — higher LR hurts); at wd0.05/0.1 the optimum is **7e-4** (beats 3.5e-4). So
-  `1e-3/0.02`=3.087 ≥ 7e-4 confirms no gain past 7e-4 at low WD. The `1e-3/0.05` & `0.1`
-  cells (running) decide whether 7e-4 is the interior optimum at higher WD or it extends._
+  _Base 12/12 + two 1e-3 cells (~00:45Z). Best E1 = `7e-4/wd0.05`=**3.046**. **1e-3 does NOT
+  improve over 7e-4** — `1e-3/0.02`=3.087 ≈ 7e-4, and `1e-3/0.05`=**3.162** is far worse
+  (high LR goes unstable past 7e-4). So **7e-4 is the interior LR optimum** (top edge
+  closed). LR×WD interaction: optimum is 3.5e-4 at wd0.02 but 7e-4 at wd0.05/0.1. Only
+  `1e-3/0.1` left to fully confirm._
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ — **NOT yet
   confirmed**: leader is `7e-4/wd0.05`=3.046 but 7e-4 is the **top edge** (extending to
