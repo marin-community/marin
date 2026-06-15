@@ -210,7 +210,7 @@ def map_flattened_linear_layers(
 
 
 # Newton-Schulz coefficient options for zeropower iteration
-CoefficientType = Literal["simple", "quintic", "polar_express", "aol"]
+CoefficientType = Literal["simple", "quintic", "polar_express", "aol", "polar_v2_a", "polar_v2_b"]
 
 # Coefficient sets from https://github.com/NVIDIA-NeMo/Emerging-Optimizers
 NEWTON_SCHULZ_COEFFICIENTS = {
@@ -237,6 +237,24 @@ NEWTON_SCHULZ_COEFFICIENTS = {
         (3.4585, -5.5479, 2.5959),
         (2.7573, -3.2939, 1.4254),
         (2.7215, -3.0494, 1.3169),
+    ],
+    # Polar-Express-style 5-iteration coefficients (variants A and B). Same
+    # aggressive-first / smooth-tail shape as ``polar_express`` but with 5
+    # iterations (matching ``backend_steps=5`` in GrugMoeMuonHConfig) instead
+    # of 8, so each iteration's coefficient set is hit exactly once.
+    "polar_v2_a": [
+        (8.287212018145624, -23.59588651909883, 17.300387312530926),
+        (4.1070591115422, -2.9478499167379097, 0.5448431082926601),
+        (3.9486908534822938, -2.9089021159629462, 0.551819139437013),
+        (3.3184196573706033, -2.4884880243148766, 0.5100489401237206),
+        (2.3006520199548173, -1.6689039845747493, 0.4188073119525671),
+    ],
+    "polar_v2_b": [
+        (8.156554524902461, -22.48329292557794, 15.87876991520745),
+        (4.042929935166729, -2.808917465908707, 0.5000178451051303),
+        (3.8916678022926643, -2.772484153217687, 0.5060648178503396),
+        (3.285753657755653, -2.3681294933425368, 0.46449024233003067),
+        (2.300530711627098, -1.611166555725842, 0.383337442754528),
     ],
 }
 
