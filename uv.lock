@@ -5140,7 +5140,7 @@ requires-dist = [
     { name = "torchvision", marker = "platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'cpu'", specifier = "==0.25.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-core", extra = "cpu" } },
     { name = "torchvision", marker = "platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'vllm'", specifier = "==0.26.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-core", extra = "vllm" } },
     { name = "torchvision", marker = "extra == 'tpu'", specifier = "==0.25.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-core", extra = "tpu" } },
-    { name = "tpu-inference", marker = "extra == 'vllm'", git = "https://github.com/marin-community/tpu-inference.git?rev=a6c23f100c42109410fa0a4d5e668aabd70171e7" },
+    { name = "tpu-inference", marker = "extra == 'vllm'", git = "https://github.com/marin-community/tpu-inference.git?rev=8b235ead78efbcad3f775bf9349a6edd479b3a18" },
     { name = "tqdm" },
     { name = "tqdm-loggable" },
     { name = "triton", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'vllm'", specifier = "==3.6.0" },
@@ -11385,7 +11385,7 @@ wheels = [
 [[package]]
 name = "tpu-inference"
 version = "0.0.0"
-source = { git = "https://github.com/marin-community/tpu-inference.git?rev=a6c23f100c42109410fa0a4d5e668aabd70171e7#a6c23f100c42109410fa0a4d5e668aabd70171e7" }
+source = { git = "https://github.com/marin-community/tpu-inference.git?rev=8b235ead78efbcad3f775bf9349a6edd479b3a18#8b235ead78efbcad3f775bf9349a6edd479b3a18" }
 dependencies = [
     { name = "absl-py" },
     { name = "flax" },
