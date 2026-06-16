@@ -735,6 +735,92 @@ def test_batch_success_and_failure_is_order_independent(state, success_first):
     assert _query_job(state, job_id).state == job_pb2.JOB_STATE_FAILED
 
 
+def _report_worker_state(state, worker_id, task, new_state):
+    """Feed one worker-reported task observation for ``task``'s current attempt."""
+    with state._db.transaction() as cur:
+        apply_task_observations(
+            cur,
+            [
+                WorkerTaskUpdates(
+                    worker_id=worker_id,
+                    updates=[
+                        TaskUpdate(
+                            task_id=task.task_id,
+                            attempt_id=_query_task(state, task.task_id).current_attempt_id,
+                            new_state=new_state,
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
+        )
+
+
+def test_worker_reported_killed_on_live_attempt_retries_under_preemption_budget(state):
+    """A worker-reported KILLED for the current attempt retries; it does not fail the job.
+
+    A worker only reports KILLED when its container is stopped out-of-band — a
+    higher-priority job reclaiming the slice, a node drain, a spot/preemptible
+    reclaim, or a stop directive the controller issued without recording a task
+    transition. None of these are application failures, so the kill is charged to
+    the preemption budget (like WORKER_FAILED) and the task rolls back to PENDING.
+
+    Regression for a production incident: a v5p training task was preempted
+    (attempt 0), retried onto a fresh worker (attempt 1), and that worker reported
+    KILLED ~13s in. The controller terminated the whole job (JOB_STATE_KILLED) with
+    99 of 100 preemption retries unused, and the parent driver's wait() raised.
+    """
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="train",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=1,
+        max_retries_preemption=100,
+    )
+    [task] = submit_job(state, "train", req)
+    job_id = JobName.root("test-user", "train")
+
+    dispatch_task(state, task, worker_id)
+    # Run the attempt first so the kill is charged against the preemption budget
+    # (an EXECUTING task), exactly as in the incident.
+    _report_worker_state(state, worker_id, task, job_pb2.TASK_STATE_RUNNING)
+
+    _report_worker_state(state, worker_id, task, job_pb2.TASK_STATE_KILLED)
+
+    retried = _query_task(state, task.task_id)
+    assert retried.state == job_pb2.TASK_STATE_PENDING, "a live-attempt KILLED must roll the task back to PENDING"
+    assert retried.preemption_count == 1, "the kill must be charged to the preemption budget"
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_RUNNING, "the job must stay alive across the retry"
+
+
+def test_worker_reported_killed_terminal_when_preemption_budget_exhausted(state):
+    """With the preemption budget exhausted, a worker-reported KILLED finalizes
+    the task (as WORKER_FAILED) and the job — the retry is bounded, not infinite."""
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="train",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=1,
+        max_retries_preemption=0,
+    )
+    [task] = submit_job(state, "train", req)
+    job_id = JobName.root("test-user", "train")
+
+    dispatch_task(state, task, worker_id)
+    _report_worker_state(state, worker_id, task, job_pb2.TASK_STATE_RUNNING)
+
+    _report_worker_state(state, worker_id, task, job_pb2.TASK_STATE_KILLED)
+
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_WORKER_FAILED
+
+
 def test_max_task_failures_tolerance(state):
     """E2E: Job tolerates max_task_failures, then fails on next failure."""
 
