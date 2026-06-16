@@ -1540,6 +1540,43 @@ class TestAutoscalerUnresolvableTimeout:
         assert group.ready_slice_count() == 1
         autoscaler.shutdown()
 
+    def test_describe_failure_isolated_across_slices(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A describe() that raises folds as skip-and-retry without aborting peers.
+
+        refresh() fans the per-slice describes out over a bounded pool and folds
+        the results serially. A single slice whose describe() raises must leave
+        that slice tracked for retry while every other slice is still processed —
+        the resilience the old serial ``try/except: continue`` provided.
+        """
+        ok_handle = make_mock_slice_handle("slice-ok", created_at_ms=0)
+        bad_handle = make_mock_slice_handle("slice-bad", created_at_ms=0)
+        platform = make_mock_platform(slices_to_discover=[ok_handle, bad_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        autoscaler = Autoscaler(
+            scale_groups={"test-group": group},
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=platform,
+            unresolvable_timeout=DEFAULT_UNRESOLVABLE_TIMEOUT,
+        )
+
+        # The healthy peer transitions to READY; the other peer's describe raises.
+        worker = make_mock_worker_handle("slice-ok-vm-0", "10.0.2.0", vm_pb2.VM_STATE_READY)
+        ok_handle._status = SliceStatus(state=CloudSliceState.READY, worker_count=1, workers=[worker])
+
+        def _raise() -> SliceStatus:
+            raise RuntimeError("transient GCP describe error")
+
+        bad_handle.describe = _raise
+
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(60 * 1000))
+
+        # Healthy peer processed despite the failure; failing peer left tracked.
+        assert group.ready_slice_count() == 1
+        assert group.slice_count() == 2
+        autoscaler.shutdown()
+
 
 class TestAutoscalerHealthProbe:
     """Tests for probe_health(): terminate slices whose /health endpoint dies."""
