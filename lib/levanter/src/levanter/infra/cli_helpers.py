@@ -10,11 +10,14 @@ import warnings
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import draccus
 import yaml
 from google.cloud import storage
+
+
+USER_CONFIG_PATH = Path(".config/marin/config.yaml")
 
 
 @dataclass(frozen=True)
@@ -101,15 +104,41 @@ def add_arg(parser: argparse.ArgumentParser, config: CliConfig, flags: list[str]
 
 
 def load_config() -> CliConfig:
+    d = _load_yaml_mapping(Path.home() / USER_CONFIG_PATH)
+
     if os.path.exists(".levanter.yaml"):
-        d = yaml.load(open(".levanter.yaml", "r"), Loader=yaml.SafeLoader)
+        d = _merge_config_dicts(d, _load_yaml_mapping(Path(".levanter.yaml")))
     elif os.path.exists(".config"):
         warnings.warn("Using deprecated .config file. Please rename to .levanter.yaml")
-        d = yaml.load(open(".config", "r"), Loader=yaml.SafeLoader)
-    else:
-        d = {}
+        d = _merge_config_dicts(d, _load_yaml_mapping(Path(".config")))
 
     return draccus.decode(CliConfig, d)
+
+
+def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+
+    with path.open("r") as f:
+        data = yaml.load(f, Loader=yaml.SafeLoader)
+
+    if data is None:
+        return {}
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected YAML mapping in {path}")
+
+    return data
+
+
+def _merge_config_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = base.copy()
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_config_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def get_git_commit():
