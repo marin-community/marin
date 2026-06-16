@@ -34,6 +34,10 @@ _ROUTING_DEBUG_ENV = "GRUGMOE_ROUTING_DEBUG"
 _ROUTING_DEBUG_LAYER_ENV = "GRUGMOE_ROUTING_DEBUG_LAYER"
 _ROUTING_DEBUG_TOKEN_POSITION_ENV = "GRUGMOE_ROUTING_DEBUG_TOKEN_POSITION"
 _ROUTING_DEBUG_VECTOR_LIMIT_ENV = "GRUGMOE_ROUTING_DEBUG_VECTOR_LIMIT"
+_FORWARD_DEBUG_ENV = "GRUGMOE_FORWARD_DEBUG"
+_FORWARD_DEBUG_LAYER_ENV = "GRUGMOE_FORWARD_DEBUG_LAYER"
+_FORWARD_DEBUG_TOKEN_POSITION_ENV = "GRUGMOE_FORWARD_DEBUG_TOKEN_POSITION"
+_FORWARD_DEBUG_VECTOR_LIMIT_ENV = "GRUGMOE_FORWARD_DEBUG_VECTOR_LIMIT"
 _DEFAULT_VLLM_DTYPE = "bfloat16"
 _VLLM_DTYPE_CHOICES = ("bfloat16", "float32")
 
@@ -141,6 +145,41 @@ def _configure_routing_debug_env(
     )
 
 
+def _configure_forward_debug_env(
+    *,
+    enabled: bool,
+    token_position: int,
+    layer: int,
+    vector_limit: int,
+) -> None:
+    keys = (
+        _FORWARD_DEBUG_ENV,
+        _FORWARD_DEBUG_LAYER_ENV,
+        _FORWARD_DEBUG_TOKEN_POSITION_ENV,
+        _FORWARD_DEBUG_VECTOR_LIMIT_ENV,
+    )
+    if not enabled:
+        for key in keys:
+            os.environ.pop(key, None)
+        return
+    os.environ[_FORWARD_DEBUG_ENV] = "1"
+    os.environ[_FORWARD_DEBUG_LAYER_ENV] = str(layer)
+    os.environ[_FORWARD_DEBUG_TOKEN_POSITION_ENV] = str(token_position)
+    os.environ[_FORWARD_DEBUG_VECTOR_LIMIT_ENV] = str(vector_limit)
+    print(
+        "forward_debug_env="
+        + json.dumps(
+            {
+                _FORWARD_DEBUG_ENV: os.environ[_FORWARD_DEBUG_ENV],
+                _FORWARD_DEBUG_LAYER_ENV: os.environ[_FORWARD_DEBUG_LAYER_ENV],
+                _FORWARD_DEBUG_TOKEN_POSITION_ENV: os.environ[_FORWARD_DEBUG_TOKEN_POSITION_ENV],
+                _FORWARD_DEBUG_VECTOR_LIMIT_ENV: os.environ[_FORWARD_DEBUG_VECTOR_LIMIT_ENV],
+            },
+            sort_keys=True,
+        )
+    )
+
+
 def _server_base_url(server_url: str) -> str:
     return server_url.removesuffix("/v1")
 
@@ -155,6 +194,10 @@ def export_artifact(
     routing_debug_token_position: int,
     routing_debug_layer: int,
     routing_debug_vector_limit: int,
+    forward_debug: bool,
+    forward_debug_token_position: int,
+    forward_debug_layer: int,
+    forward_debug_vector_limit: int,
 ) -> None:
     if os.environ.get("PYTHONPATH"):
         raise SystemExit(f"PYTHONPATH unexpectedly set: {os.environ['PYTHONPATH']}")
@@ -177,6 +220,9 @@ def export_artifact(
         routing_debug_token_position=routing_debug_token_position if routing_debug else None,
         routing_debug_layer=routing_debug_layer if routing_debug else None,
         routing_debug_vector_limit=routing_debug_vector_limit,
+        forward_debug_token_position=forward_debug_token_position if forward_debug else None,
+        forward_debug_layer=forward_debug_layer if forward_debug else None,
+        forward_debug_vector_limit=forward_debug_vector_limit,
     )
     print("artifact_generation_process=completed")
 
@@ -452,6 +498,10 @@ def score_artifact(
     routing_debug_token_position: int,
     routing_debug_layer: int,
     routing_debug_vector_limit: int,
+    forward_debug: bool,
+    forward_debug_token_position: int,
+    forward_debug_layer: int,
+    forward_debug_vector_limit: int,
 ) -> None:
     if os.environ.get("PYTHONPATH"):
         raise SystemExit(f"PYTHONPATH unexpectedly set: {os.environ['PYTHONPATH']}")
@@ -461,6 +511,12 @@ def score_artifact(
         token_position=routing_debug_token_position,
         layer=routing_debug_layer,
         vector_limit=routing_debug_vector_limit,
+    )
+    _configure_forward_debug_env(
+        enabled=forward_debug,
+        token_position=forward_debug_token_position,
+        layer=forward_debug_layer,
+        vector_limit=forward_debug_vector_limit,
     )
 
     from vllm import LLM, SamplingParams
@@ -474,6 +530,8 @@ def score_artifact(
 
     with reference_path.open() as f:
         reference = json.load(f)
+    if isinstance(reference.get("levanter_forward_debug"), dict):
+        print("levanter_forward_debug=" + json.dumps(reference["levanter_forward_debug"], sort_keys=True))
     model_config = reference.get("model_config")
     if isinstance(model_config, dict):
         shape_keys = (
@@ -654,6 +712,10 @@ def _run_phase_subprocess(
     routing_debug_token_position: int,
     routing_debug_layer: int,
     routing_debug_vector_limit: int,
+    forward_debug: bool,
+    forward_debug_token_position: int,
+    forward_debug_layer: int,
+    forward_debug_vector_limit: int,
 ) -> None:
     args = [
         sys.executable,
@@ -692,6 +754,18 @@ def _run_phase_subprocess(
                 str(routing_debug_vector_limit),
             ]
         )
+    if forward_debug:
+        args.extend(
+            [
+                "--forward-debug",
+                "--forward-debug-token-position",
+                str(forward_debug_token_position),
+                "--forward-debug-layer",
+                str(forward_debug_layer),
+                "--forward-debug-vector-limit",
+                str(forward_debug_vector_limit),
+            ]
+        )
     if artifact_dir is not None:
         args.extend(["--artifact-dir", str(artifact_dir)])
     if reference_path is not None:
@@ -714,6 +788,10 @@ def run(
     routing_debug_token_position: int,
     routing_debug_layer: int,
     routing_debug_vector_limit: int,
+    forward_debug: bool,
+    forward_debug_token_position: int,
+    forward_debug_layer: int,
+    forward_debug_vector_limit: int,
 ) -> None:
     _print_runtime_header()
     print("installed_model_size=" + model_size)
@@ -726,6 +804,18 @@ def run(
                 "token_position": int(routing_debug_token_position),
                 "layer": int(routing_debug_layer),
                 "vector_limit": int(routing_debug_vector_limit),
+            },
+            sort_keys=True,
+        )
+    )
+    print(
+        "installed_forward_debug="
+        + json.dumps(
+            {
+                "enabled": bool(forward_debug),
+                "token_position": int(forward_debug_token_position),
+                "layer": int(forward_debug_layer),
+                "vector_limit": int(forward_debug_vector_limit),
             },
             sort_keys=True,
         )
@@ -748,6 +838,10 @@ def run(
         routing_debug_token_position=routing_debug_token_position,
         routing_debug_layer=routing_debug_layer,
         routing_debug_vector_limit=routing_debug_vector_limit,
+        forward_debug=forward_debug,
+        forward_debug_token_position=forward_debug_token_position,
+        forward_debug_layer=forward_debug_layer,
+        forward_debug_vector_limit=forward_debug_vector_limit,
     )
 
     artifact_dir = _artifact_dir(output_dir)
@@ -775,6 +869,10 @@ def run(
         routing_debug_token_position=routing_debug_token_position,
         routing_debug_layer=routing_debug_layer,
         routing_debug_vector_limit=routing_debug_vector_limit,
+        forward_debug=forward_debug,
+        forward_debug_token_position=forward_debug_token_position,
+        forward_debug_layer=forward_debug_layer,
+        forward_debug_vector_limit=forward_debug_vector_limit,
     )
     _run_phase_subprocess(
         "score",
@@ -793,6 +891,10 @@ def run(
         routing_debug_token_position=routing_debug_token_position,
         routing_debug_layer=routing_debug_layer,
         routing_debug_vector_limit=routing_debug_vector_limit,
+        forward_debug=forward_debug,
+        forward_debug_token_position=forward_debug_token_position,
+        forward_debug_layer=forward_debug_layer,
+        forward_debug_vector_limit=forward_debug_vector_limit,
     )
 
 
@@ -842,6 +944,14 @@ def main() -> None:
     parser.add_argument("--routing-debug-token-position", type=int, default=0)
     parser.add_argument("--routing-debug-layer", type=int, default=0)
     parser.add_argument("--routing-debug-vector-limit", type=int, default=_ROUTING_DEBUG_VECTOR_LIMIT)
+    parser.add_argument(
+        "--forward-debug",
+        action="store_true",
+        help="Emit Levanter and tpu-inference forward-pass debug records for one token/layer.",
+    )
+    parser.add_argument("--forward-debug-token-position", type=int, default=0)
+    parser.add_argument("--forward-debug-layer", type=int, default=0)
+    parser.add_argument("--forward-debug-vector-limit", type=int, default=_ROUTING_DEBUG_VECTOR_LIMIT)
     args = parser.parse_args()
 
     if args.phase == "export":
@@ -855,6 +965,10 @@ def main() -> None:
             routing_debug_token_position=args.routing_debug_token_position,
             routing_debug_layer=args.routing_debug_layer,
             routing_debug_vector_limit=args.routing_debug_vector_limit,
+            forward_debug=args.forward_debug,
+            forward_debug_token_position=args.forward_debug_token_position,
+            forward_debug_layer=args.forward_debug_layer,
+            forward_debug_vector_limit=args.forward_debug_vector_limit,
         )
     elif args.phase == "score":
         _print_runtime_header()
@@ -868,6 +982,10 @@ def main() -> None:
             routing_debug_token_position=args.routing_debug_token_position,
             routing_debug_layer=args.routing_debug_layer,
             routing_debug_vector_limit=args.routing_debug_vector_limit,
+            forward_debug=args.forward_debug,
+            forward_debug_token_position=args.forward_debug_token_position,
+            forward_debug_layer=args.forward_debug_layer,
+            forward_debug_vector_limit=args.forward_debug_vector_limit,
         )
     elif args.phase == "serve":
         _print_runtime_header()
@@ -894,6 +1012,10 @@ def main() -> None:
             routing_debug_token_position=args.routing_debug_token_position,
             routing_debug_layer=args.routing_debug_layer,
             routing_debug_vector_limit=args.routing_debug_vector_limit,
+            forward_debug=args.forward_debug,
+            forward_debug_token_position=args.forward_debug_token_position,
+            forward_debug_layer=args.forward_debug_layer,
+            forward_debug_vector_limit=args.forward_debug_vector_limit,
         )
 
 

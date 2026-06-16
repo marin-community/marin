@@ -74,6 +74,19 @@ _TRAINING_MP_POLICY = "params=float32,compute=bfloat16,output=bfloat16"
 _CANARY_BUDGET = 1e18
 _CANARY_HIDDEN_DIM = 1024
 _ROUTING_DEBUG_VECTOR_LIMIT = 16
+_FORWARD_DEBUG_VALUE_NAMES = (
+    "input_ids",
+    "positions",
+    "query_start_loc",
+    "seq_lens",
+    "embedding_output",
+    "layer_attn_input",
+    "layer_attn_output",
+    "layer_post_attn_residual",
+    "layer_mlp_input",
+    "layer_output",
+    "final_hidden",
+)
 
 
 class _EmptyMesh:
@@ -234,6 +247,27 @@ def _routing_debug_payload(
         payload["boundary_logit"] = float(topk_with_boundary_logits_np[top_k])
         payload["router_margin"] = float(topk_with_boundary_logits_np[top_k - 1] - topk_with_boundary_logits_np[top_k])
     return payload
+
+
+def _forward_debug_payload(
+    *,
+    source: str,
+    layer: int,
+    token_position: int,
+    vector_limit: int,
+    values: Sequence[Any],
+) -> dict[str, Any]:
+    if len(values) != len(_FORWARD_DEBUG_VALUE_NAMES):
+        raise ValueError(f"expected {len(_FORWARD_DEBUG_VALUE_NAMES)} forward-debug values, got {len(values)}")
+    return {
+        "source": source,
+        "layer": int(layer),
+        "token_position": int(token_position),
+        "values": {
+            name: _array_debug_summary(value, vector_limit=vector_limit)
+            for name, value in zip(_FORWARD_DEBUG_VALUE_NAMES, values, strict=True)
+        },
+    }
 
 
 def _copy_param(param: nnx.Param, value: Any) -> None:
@@ -667,23 +701,27 @@ def _jax_full_forward_with_router_debug(
     *,
     debug_token_position: int,
     debug_layer: int,
-) -> tuple[jax.Array, jax.Array, jax.Array, tuple[jax.Array, ...]]:
+) -> tuple[jax.Array, jax.Array, jax.Array, tuple[jax.Array, ...], tuple[jax.Array, ...]]:
     cfg = model.config
     _bsz, seq_len = token_ids.shape
     positions = jnp.broadcast_to(jnp.arange(seq_len, dtype=jnp.int32)[None, :], token_ids.shape)
     hidden = model.token_embed[token_ids]
     hidden = _jax_gated_norm(model.embed_gated_norm, _jax_rms_norm(hidden, model.embed_norm.weight, cfg.layer_norm_eps))
+    embedding_output = hidden[0, debug_token_position]
 
     expert_ids_by_layer = []
     router_margins_by_layer = []
     routing_debug = None
+    forward_layer_debug = None
     for i, block in enumerate(model.blocks):
         layer_window = _layer_sliding_window(cfg, i)
         attn_in = _jax_gated_norm(
             block.attn_gated_norm,
             _jax_rms_norm(hidden, block.rms_attn.weight, block.rms_attn.eps),
         )
-        hidden = hidden + _jax_attention(block.attn, attn_in, positions, layer_window)
+        attn_out = _jax_attention(block.attn, attn_in, positions, layer_window)
+        post_attn = hidden + attn_out
+        hidden = post_attn
         mlp_in = _jax_gated_norm(block.mlp_gated_norm, _jax_rms_norm(hidden, block.rms_mlp.weight, block.rms_mlp.eps))
         if i == debug_layer:
             mlp_out, expert_ids, router_margin, routing_debug = _jax_moe_mlp_with_margin_and_debug(
@@ -696,17 +734,38 @@ def _jax_full_forward_with_router_debug(
         if block.shared is not None:
             mlp_out = mlp_out + _jax_dense_mlp(block.shared, mlp_in)
         hidden = hidden + mlp_out
+        if i == debug_layer:
+            forward_layer_debug = (
+                attn_in[0, debug_token_position],
+                attn_out[0, debug_token_position],
+                post_attn[0, debug_token_position],
+                mlp_in[0, debug_token_position],
+                hidden[0, debug_token_position],
+            )
 
     hidden = _jax_gated_norm(
         model.final_gated_norm,
         _jax_rms_norm(hidden, model.final_norm.weight, model.final_norm.eps),
     )
     assert routing_debug is not None
+    assert forward_layer_debug is not None
+    query_start_loc = jnp.asarray([0, seq_len], dtype=jnp.int32)
+    seq_lens = jnp.asarray([seq_len], dtype=jnp.int32)
+    forward_debug = (
+        token_ids[0],
+        positions[0],
+        query_start_loc,
+        seq_lens,
+        embedding_output,
+        *forward_layer_debug,
+        hidden[0, debug_token_position],
+    )
     return (
         hidden,
         jnp.stack(expert_ids_by_layer, axis=0),
         jnp.stack(router_margins_by_layer, axis=0),
         routing_debug,
+        forward_debug,
     )
 
 
@@ -756,6 +815,9 @@ def _write_installed_vllm_reference(
     routing_debug_token_position: int | None = None,
     routing_debug_layer: int | None = None,
     routing_debug_vector_limit: int = _ROUTING_DEBUG_VECTOR_LIMIT,
+    forward_debug_token_position: int | None = None,
+    forward_debug_layer: int | None = None,
+    forward_debug_vector_limit: int = _ROUTING_DEBUG_VECTOR_LIMIT,
 ) -> None:
     if prompt_ids.shape[0] != 1:
         raise ValueError(f"installed-vLLM reference expects batch size 1, got {prompt_ids.shape[0]}")
@@ -765,52 +827,79 @@ def _write_installed_vllm_reference(
         raise ValueError("installed-vLLM reference needs at least one continuation token")
 
     routing_debug_payload = None
-    if routing_debug_token_position is not None or routing_debug_layer is not None:
-        if routing_debug_token_position is None or routing_debug_layer is None:
-            raise ValueError("routing debug requires both token position and layer")
-        if not (0 <= routing_debug_token_position < int(score_token_ids.shape[1])):
+    forward_debug_payload = None
+    debug_token_position = None
+    debug_layer = None
+    if (
+        routing_debug_token_position is not None
+        or routing_debug_layer is not None
+        or forward_debug_token_position is not None
+        or forward_debug_layer is not None
+    ):
+        if routing_debug_token_position is not None or routing_debug_layer is not None:
+            if routing_debug_token_position is None or routing_debug_layer is None:
+                raise ValueError("routing debug requires both token position and layer")
+            debug_token_position = routing_debug_token_position
+            debug_layer = routing_debug_layer
+        if forward_debug_token_position is not None or forward_debug_layer is not None:
+            if forward_debug_token_position is None or forward_debug_layer is None:
+                raise ValueError("forward debug requires both token position and layer")
+            if debug_token_position is None:
+                debug_token_position = forward_debug_token_position
+                debug_layer = forward_debug_layer
+            elif debug_token_position != forward_debug_token_position or debug_layer != forward_debug_layer:
+                raise ValueError("routing and forward debug must target the same token/layer for one reference pass")
+        assert debug_token_position is not None
+        assert debug_layer is not None
+        if not (0 <= debug_token_position < int(score_token_ids.shape[1])):
             raise ValueError(
-                f"routing debug token position {routing_debug_token_position} is outside score length "
-                f"{score_token_ids.shape[1]}"
+                f"debug token position {debug_token_position} is outside score length {score_token_ids.shape[1]}"
             )
-        if not (0 <= routing_debug_layer < int(lev_model.config.num_layers)):
-            raise ValueError(
-                f"routing debug layer {routing_debug_layer} is outside num_layers {lev_model.config.num_layers}"
-            )
+        if not (0 <= debug_layer < int(lev_model.config.num_layers)):
+            raise ValueError(f"debug layer {debug_layer} is outside num_layers {lev_model.config.num_layers}")
         debug_forward = jax.jit(
             _jax_full_forward_with_router_debug,
             static_argnames=("debug_token_position", "debug_layer"),
         )
-        hidden, expert_ids, router_margins, routing_debug = debug_forward(
+        hidden, expert_ids, router_margins, routing_debug, forward_debug = debug_forward(
             lev_model,
             score_token_ids,
-            debug_token_position=routing_debug_token_position,
-            debug_layer=routing_debug_layer,
+            debug_token_position=debug_token_position,
+            debug_layer=debug_layer,
         )
-        (
-            router_input_hidden_state,
-            router_logits,
-            router_bias,
-            biased_router_logits,
-            topk_with_boundary_logits,
-            topk_with_boundary_expert_ids,
-            topk_expert_ids,
-            combine_weights,
-        ) = (_np(value) for value in routing_debug)
-        routing_debug_payload = _routing_debug_payload(
-            source="Levanter manual reference",
-            layer=routing_debug_layer,
-            token_position=routing_debug_token_position,
-            vector_limit=routing_debug_vector_limit,
-            router_input_hidden_state=router_input_hidden_state,
-            router_logits=router_logits,
-            router_bias=router_bias,
-            biased_router_logits=biased_router_logits,
-            topk_with_boundary_logits=topk_with_boundary_logits,
-            topk_with_boundary_expert_ids=topk_with_boundary_expert_ids,
-            topk_expert_ids=topk_expert_ids,
-            combine_weights=combine_weights,
-        )
+        if routing_debug_token_position is not None:
+            (
+                router_input_hidden_state,
+                router_logits,
+                router_bias,
+                biased_router_logits,
+                topk_with_boundary_logits,
+                topk_with_boundary_expert_ids,
+                topk_expert_ids,
+                combine_weights,
+            ) = (_np(value) for value in routing_debug)
+            routing_debug_payload = _routing_debug_payload(
+                source="Levanter manual reference",
+                layer=debug_layer,
+                token_position=debug_token_position,
+                vector_limit=routing_debug_vector_limit,
+                router_input_hidden_state=router_input_hidden_state,
+                router_logits=router_logits,
+                router_bias=router_bias,
+                biased_router_logits=biased_router_logits,
+                topk_with_boundary_logits=topk_with_boundary_logits,
+                topk_with_boundary_expert_ids=topk_with_boundary_expert_ids,
+                topk_expert_ids=topk_expert_ids,
+                combine_weights=combine_weights,
+            )
+        if forward_debug_token_position is not None:
+            forward_debug_payload = _forward_debug_payload(
+                source="Levanter manual reference",
+                layer=debug_layer,
+                token_position=debug_token_position,
+                vector_limit=forward_debug_vector_limit,
+                values=tuple(_np(value) for value in forward_debug),
+            )
     else:
         hidden, expert_ids, router_margins = jax.jit(_jax_full_forward_with_router_margins)(lev_model, score_token_ids)
     logits = _jax_logits(lev_model, hidden)[0]
@@ -845,6 +934,8 @@ def _write_installed_vllm_reference(
     }
     if routing_debug_payload is not None:
         payload["levanter_routing_debug"] = routing_debug_payload
+    if forward_debug_payload is not None:
+        payload["levanter_forward_debug"] = forward_debug_payload
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w") as f:
         json.dump(payload, f, sort_keys=True)
@@ -853,6 +944,8 @@ def _write_installed_vllm_reference(
     print(f"reference_continuation_logprobs={payload['levanter_continuation_logprobs']}")
     if routing_debug_payload is not None:
         print("levanter_routing_debug=" + json.dumps(routing_debug_payload, sort_keys=True))
+    if forward_debug_payload is not None:
+        print("levanter_forward_debug=" + json.dumps(forward_debug_payload, sort_keys=True))
 
 
 def _native_greedy_generation(
@@ -1309,6 +1402,9 @@ def check_realistic_training_state_roundtrip(
     routing_debug_token_position: int | None = None,
     routing_debug_layer: int | None = None,
     routing_debug_vector_limit: int = _ROUTING_DEBUG_VECTOR_LIMIT,
+    forward_debug_token_position: int | None = None,
+    forward_debug_layer: int | None = None,
+    forward_debug_vector_limit: int = _ROUTING_DEBUG_VECTOR_LIMIT,
 ) -> None:
     attention_metadata_mod = importlib.import_module("tpu_inference.layers.common.attention_metadata")
     cfg, optimizer_config, num_train_steps, config_source = _realistic_cfg_optimizer_steps(config_name)
@@ -1405,6 +1501,9 @@ def check_realistic_training_state_roundtrip(
             routing_debug_token_position=routing_debug_token_position,
             routing_debug_layer=routing_debug_layer,
             routing_debug_vector_limit=routing_debug_vector_limit,
+            forward_debug_token_position=forward_debug_token_position,
+            forward_debug_layer=forward_debug_layer,
+            forward_debug_vector_limit=forward_debug_vector_limit,
         )
 
     del manual_model
@@ -1553,6 +1652,24 @@ def main() -> None:
         default=_ROUTING_DEBUG_VECTOR_LIMIT,
         help="Maximum number of values to include inline for large routing-debug vectors.",
     )
+    parser.add_argument(
+        "--forward-debug-token-position",
+        type=int,
+        default=None,
+        help="When writing an installed-vLLM reference JSON, include forward-pass stages for this token position.",
+    )
+    parser.add_argument(
+        "--forward-debug-layer",
+        type=int,
+        default=None,
+        help="When writing an installed-vLLM reference JSON, include forward-pass stages for this decoder layer.",
+    )
+    parser.add_argument(
+        "--forward-debug-vector-limit",
+        type=int,
+        default=_ROUTING_DEBUG_VECTOR_LIMIT,
+        help="Maximum number of values to include inline for large forward-debug vectors.",
+    )
     args = parser.parse_args()
 
     tpu_grugmoe = _load_tpu_grugmoe(args.tpu_inference_root.resolve())
@@ -1572,6 +1689,9 @@ def main() -> None:
             routing_debug_token_position=args.routing_debug_token_position,
             routing_debug_layer=args.routing_debug_layer,
             routing_debug_vector_limit=args.routing_debug_vector_limit,
+            forward_debug_token_position=args.forward_debug_token_position,
+            forward_debug_layer=args.forward_debug_layer,
+            forward_debug_vector_limit=args.forward_debug_vector_limit,
         )
 
 
