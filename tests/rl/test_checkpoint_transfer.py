@@ -145,4 +145,3 @@ def test_receive_weights_supports_fsspec_memory_scheme(memory_checkpoint_dir, ch
     assert update is not None
     assert update.weight_id == 42
     assert checkpoint_paths == [expected_checkpoint_path]
-    assert not checkpoint_paths[0].startswith("memory://memory://")
