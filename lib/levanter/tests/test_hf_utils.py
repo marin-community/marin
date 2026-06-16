@@ -10,6 +10,8 @@ from fsspec import AbstractFileSystem
 from test_utils import skip_if_hf_model_not_accessible
 
 from levanter.compat.hf_checkpoints import _patch_hf_hub_download, load_tokenizer
+from levanter.tokenizers import TokenizerBackend
+from levanter.tokenizers import load_tokenizer as load_marin_tokenizer
 from levanter.utils.hf_utils import byte_length_of_token
 
 
@@ -58,8 +60,6 @@ def test_byte_length_of_token_tokenmonster_capcode_markers():
 
 def test_tokenmonster_byte_offsets_handle_normalized_unicode():
     pytest.importorskip("tokenmonster")
-    from levanter.tokenizers import TokenizerBackend
-    from levanter.tokenizers import load_tokenizer as load_marin_tokenizer
 
     tok = load_marin_tokenizer(
         "tokenmonster:englishcode-32000-consistent-v1",

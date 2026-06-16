@@ -17,6 +17,7 @@ Usage:
 import contextlib
 import dataclasses
 import functools
+import importlib
 import json
 import logging
 import os
@@ -1167,9 +1168,11 @@ def _load_tokenizer_config(name_or_path: str) -> dict:
 
     with open(path) as f:
         return json.load(f)
+
+
 def _load_tokenmonster_tokenizer(name_or_path: str) -> TokenMonsterMarinTokenizer:
     """Load a TokenMonster vocabulary into the Marin tokenizer protocol."""
-    import tokenmonster
+    tokenmonster = importlib.import_module("tokenmonster")
 
     vocab_name = name_or_path.removeprefix("tokenmonster:")
     tok = tokenmonster.load(vocab_name)

@@ -60,7 +60,7 @@ from levanter.main.perplexity_gap import (
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.tracker import current_tracker
 from levanter.tracker.tracker import DictTracker
-from levanter.tokenizers import load_tokenizer
+from levanter.tokenizers import TokenizerBackend, load_tokenizer
 from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 
@@ -100,7 +100,6 @@ def test_tokenize_text_with_byte_spans_covers_utf8_bytes():
 
 def test_tokenmonster_byte_spans_keep_control_token_loss_on_source_bytes():
     pytest.importorskip("tokenmonster")
-    from levanter.tokenizers import TokenizerBackend
 
     tokenizer = load_tokenizer(
         "tokenmonster:englishcode-32000-consistent-v1",
