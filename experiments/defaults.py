@@ -22,6 +22,7 @@ from levanter.data.text import (
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.lm_model import LmConfig
 from marin.defaults import (
+    CORE_TASKS,
     SimpleTrainConfig,
     _build_train_lm_config,
     _prepare_data_config,
@@ -43,7 +44,6 @@ from marin.training.training import (
 from experiments.evals.exp1600_uncheatable_evals import (
     uncheatable_eval_raw_validation_sets,
 )
-from experiments.evals.task_configs import CORE_TASKS
 from experiments.paloma import paloma_raw_validation_sets
 
 logger = logging.getLogger(__name__)

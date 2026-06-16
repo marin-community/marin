@@ -10,6 +10,7 @@ datasets used by various training experiments.
 
 from marin.datakit.download.ar5iv import ar5iv_step
 from marin.datakit.download.wikipedia import download_wikipedia_step
+from marin.defaults import default_tokenize
 from marin.execution.executor import mirrored
 from marin.execution.step_spec import StepSpec
 from marin.execution.types import ExecutorStep, this_output_path, versioned
@@ -26,7 +27,6 @@ from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import tokenize_nemotron
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.pretraining_datasets.dolmino import tokenize_dolmino, tokenize_dolmino_math
-from experiments.tokenization import default_tokenize
 
 # Stack Exchange resiliparse custom fork (inlined from deleted exp822)
 stackexchange_text_resiliparse_custom_fork = ExecutorStep(

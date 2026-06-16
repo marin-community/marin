@@ -10,6 +10,7 @@ import re
 from collections.abc import Sequence
 
 from fray.cluster import ResourceConfig
+from marin.defaults import CORE_TASKS
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
@@ -23,7 +24,6 @@ from experiments.evals.evalchemy_results_compiler import compile_evalchemy_resul
 from experiments.evals.evalchemy_task_configs import EVALCHEMY_CORE_TASKS
 from experiments.evals.task_configs import (
     BASE_GENERATION_TASKS,
-    CORE_TASKS,
     CORE_TASKS_PLUS_LEADERBOARD,
     KEY_GENERATION_TASKS,
     KEY_MULTIPLE_CHOICE_TASKS,

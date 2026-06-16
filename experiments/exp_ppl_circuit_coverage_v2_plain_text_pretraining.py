@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from levanter.data.text import TextLmDatasetFormat
+from marin.defaults import default_tokenize
 from marin.execution.executor import ExecutorStep, executor_main
 
 from experiments.evals.ppl_circuit_coverage_v2 import (
@@ -14,7 +15,6 @@ from experiments.evals.ppl_circuit_coverage_v2 import (
     ppl_circuit_coverage_v2_plain_text_pretraining_executor,
 )
 from experiments.marin_models import marin_tokenizer
-from experiments.tokenization import default_tokenize
 
 RUN_KEY = "ppl_circuit_coverage_v2_plain_text_1b_issue6070_v2"
 

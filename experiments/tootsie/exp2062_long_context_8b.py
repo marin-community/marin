@@ -20,7 +20,7 @@ from fray import ResourceConfig
 from levanter.data.text import ChatLmDatasetFormat
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.optim import AdamConfig
-from marin.defaults import SimpleTrainConfig, default_train
+from marin.defaults import SimpleTrainConfig, default_tokenize, default_train
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import (
     interpolate_mixture_weights,
@@ -39,7 +39,6 @@ from experiments.long_context_datasets import (
 from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS
-from experiments.tokenization import default_tokenize
 from experiments.tootsie.exp600_tootsie import (
     PHASE_3_START,
     PHASE_4_END,

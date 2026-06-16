@@ -53,6 +53,7 @@ import pyarrow.parquet as pq
 from datasets import Image as DatasetsImage
 from datasets import load_dataset
 from huggingface_hub import hf_hub_download
+from marin.defaults import CORE_TASKS
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
@@ -65,7 +66,6 @@ from experiments.evals.task_configs import (
     ACTION_TASKS,
     BIAS_SAFETY_TASKS,
     CODE_TASKS,
-    CORE_TASKS,
     EMOTIONAL_ETHICS_TASKS,
     KEY_GENERATION_TASKS,
     KEY_MULTIPLE_CHOICE_TASKS,

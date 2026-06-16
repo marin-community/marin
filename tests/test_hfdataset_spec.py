@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from marin.datakit.download.huggingface import DownloadConfig
+from marin.defaults import default_download
 from marin.processing.tokenize import HfDatasetSpec
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfig
 
-from experiments.tokenization import default_download, default_tokenize
+from experiments.tokenization import default_tokenize
 
 
 def test_default_tokenize_with_dataset_name():

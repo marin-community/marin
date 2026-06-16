@@ -8,7 +8,7 @@ Uses the same HuggingFace repo (HuggingFaceFW/finepdfs) as pretraining_datasets/
 but exposes path-based dicts suitable for mixture configs rather than executor tokenize steps.
 """
 
-from experiments.tokenization import default_download
+from marin.defaults import default_download
 
 FINEPDFS_HF_ID = "HuggingFaceFW/finepdfs"
 FINEPDFS_REVISION = "89f5411"

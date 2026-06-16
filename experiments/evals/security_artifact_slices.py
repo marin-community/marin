@@ -24,14 +24,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from marin.defaults import default_download
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
 from marin.execution.types import ExecutorStep, this_output_path
 from marin.transform.security_artifacts.zeek_to_dolma import (
     ZeekToDolmaConfig,
     convert_zeek_to_dolma,
 )
-
-from experiments.tokenization import default_download
 
 # Canonical Zeek conn.log field order as documented at
 # https://docs.zeek.org/en/master/logs/conn.html. Kept as a tuple so it can be

@@ -3,7 +3,7 @@
 
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.defaults import SimpleTrainConfig, default_train
+from marin.defaults import SimpleTrainConfig, default_tokenize, default_train
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
@@ -12,7 +12,6 @@ from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import LlamaConfig
 from experiments.pretraining_datasets.dclm import DCLM_BASELINE_ONLY_MIXTURE, DCLM_MIXTURE_WEIGHTS
 from experiments.pretraining_datasets.simple import downloads
-from experiments.tokenization import default_tokenize
 
 gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"
 
