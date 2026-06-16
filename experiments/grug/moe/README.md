@@ -33,8 +33,9 @@ z-loss only). The architecture choices are hardcoded in
 - **RoPE**: standard rotary embeddings (no scaling by default).
 - **GQA**: grouped-query attention. Default ratio in the heuristic is 4:1
   (`num_kv_heads = num_heads / 4`).
-- **Sliding-window attention**: every 4th layer uses full `sliding_window`;
-  others use half. Specifically, layer `i` uses the long mask iff `i % 4 == 3`.
+- **Sliding-window attention**: `sliding_window` is the short-layer window.
+  Every 4th layer uses a full causal mask. Specifically, layer `i` uses the
+  long mask iff `i % 4 == 3`.
 - **Fp32 router path**: router logits cast to fp32 before top-k, softmax, and
   QB statistics.
 - **Expert parallelism**: `ragged_all_to_all` or ring-based via

@@ -114,7 +114,7 @@ def _input_embed_pspec(cfg: "GrugModelConfig") -> P:
 
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
-    return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
+    return mask.with_sliding_window(sliding_window), mask.with_sliding_window(None)
 
 
 @dataclass(frozen=True)
