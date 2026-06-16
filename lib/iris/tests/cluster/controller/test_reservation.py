@@ -735,17 +735,16 @@ def test_demand_gates_colocating_real_task_until_reservation_claimed(ctrl):
 def test_device_mismatched_reservation_parent_not_gated(ctrl):
     """A reservation whose own task targets a different device is NOT gated.
 
-    Regression for the 2026-06-08 canary thrash (and the ``/power`` v5p reserve
-    job that motivated this fix): ``iris run --reserve <tpu> --cpu N`` makes the
-    *parent* a CPU orchestrator that reserves a TPU it never runs on. The parent
-    must not wait on (or be EQ-pinned to) the reserved TPU workers — its own CPU
-    task schedules independently. So its real task emits CPU demand even while
-    the TPU reservation is unclaimed; only the holder provisions the TPU.
+    ``iris run --reserve <tpu> --cpu N`` makes the *parent* a CPU orchestrator
+    that reserves a TPU it never runs on. The parent must not wait on (or be
+    EQ-pinned to) the reserved TPU workers — its own CPU task schedules
+    independently. So its real task emits CPU demand even while the TPU
+    reservation is unclaimed; only the holder provisions the TPU.
 
-    Before the fix the parent was treated as a co-locating reservation: the
-    demand path gated it (no CPU demand) while the scheduler EQ-pinned it to the
-    TPU-only claim, so it could never run, and (once claimed on a preemptible
-    worker the non-preemptible parent could not use) routed phantom CPU demand
+    When the parent was instead treated as a co-locating reservation, the demand
+    path gated it (no CPU demand) while the scheduler EQ-pinned it to the
+    TPU-only claim, so it could never run, and — once claimed on a preemptible
+    worker the non-preemptible parent could not use — routed phantom CPU demand
     that booted CPU VMs which idled out and were reaped every cycle.
     """
     tpu_device = job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant="v5p-8", count=4))

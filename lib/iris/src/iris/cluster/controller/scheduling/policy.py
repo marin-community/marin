@@ -27,6 +27,7 @@ from iris.cluster.constraints import (
     constraints_from_resources,
     evaluate_constraint,
     extract_placement_requirements,
+    get_device_type_enum,
     merge_constraints,
     split_hard_soft,
 )
@@ -43,6 +44,7 @@ from iris.cluster.controller.codec import (
     constraints_from_json,
     device_counts_from_json,
     device_variant_from_json,
+    proto_from_json,
     reservation_entries_from_json,
     resource_spec_from_scalars,
 )
@@ -158,8 +160,8 @@ def reservation_unsatisfied(
     workers, so it schedules on its own resources independent of the
     reservation. Gating it would strand it whenever the reservation cannot be
     claimed (device stockout), and EQ-pinning it (see
-    :func:`inject_taint_constraints`) would route phantom CPU demand the
-    scheduler can never satisfy (the 2026-06-08 canary thrash).
+    :func:`inject_taint_constraints`) would route phantom demand the scheduler
+    can never satisfy.
 
     Both the scheduling gate (:func:`apply_scheduling_gates`) and the demand
     path (:func:`compute_demand_entries`) consult this predicate so they agree.
@@ -185,12 +187,9 @@ def _claims_by_job(claims: dict[WorkerId, ReservationClaim] | None) -> dict[str,
 
 def _own_device_type(res_device_json: str | None) -> DeviceType:
     """Device class a task's *own* resource request targets (CPU when no accelerator)."""
-    dc = device_counts_from_json(res_device_json)
-    if dc.gpu > 0:
-        return DeviceType.GPU
-    if dc.tpu > 0:
-        return DeviceType.TPU
-    return DeviceType.CPU
+    if not res_device_json:
+        return DeviceType.CPU
+    return get_device_type_enum(proto_from_json(res_device_json, job_pb2.DeviceConfig))
 
 
 def _colocating_reservation_job_ids(

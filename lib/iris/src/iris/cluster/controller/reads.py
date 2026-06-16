@@ -886,10 +886,6 @@ def reservation_entry_counts(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName
 def reservation_entry_device_types(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, frozenset[DeviceType]]:
     """Return ``{job_id: device types across its reservation entries}`` for the requested jobs.
 
-    Used to decide whether a directly-reserved job *co-locates* on its reserved
-    workers: a ``--reserve`` job whose own task targets the reservation's device
-    class runs on the reserved workers, while one whose own task is CPU-only and
-    reserves an accelerator does not (see ``_colocating_reservation_job_ids``).
     Jobs with no reservation JSON are omitted.
     """
     ids = list(job_ids)
