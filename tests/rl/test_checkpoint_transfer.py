@@ -23,8 +23,8 @@ def checkpoint_loader(monkeypatch):
     loaded_model = object()
     checkpoint_paths = []
 
-    def fake_load_checkpoint(*, tree, checkpoint_path, axis_mapping, mesh):
-        checkpoint_paths.append(checkpoint_path)
+    def fake_load_checkpoint(**kwargs):
+        checkpoint_paths.append(kwargs["checkpoint_path"])
         return loaded_model
 
     monkeypatch.setattr(checkpoint_transfer.levanter_checkpoint, "load_checkpoint", fake_load_checkpoint)

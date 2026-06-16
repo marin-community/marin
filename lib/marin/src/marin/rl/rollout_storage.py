@@ -47,6 +47,8 @@ from .types import RolloutBatch
 
 logger = logging.getLogger(__name__)
 
+ROLLOUT_FILE_SUFFIX = ".pkl"
+
 
 class StorageType(Enum):
     """Type of rollout storage backend."""
@@ -173,14 +175,14 @@ class FileRolloutReader(RolloutReader):
 
     def _get_available_files(self) -> list[str]:
         """Get list of available batch files sorted by timestamp and writer counter."""
-        pattern = f"{self.path}/*.pkl"
+        pattern = f"{self.path}/*{ROLLOUT_FILE_SUFFIX}"
         files = self.fs.glob(pattern)
 
         parsed_files = []
         for file_path in files:
             filename = file_path.split("/")[-1]
-            if filename.endswith(".pkl"):
-                stem = filename.removesuffix(".pkl")
+            if filename.endswith(ROLLOUT_FILE_SUFFIX):
+                stem = filename.removesuffix(ROLLOUT_FILE_SUFFIX)
                 try:
                     timestamp_raw, host_and_counter = stem.split("_", maxsplit=1)
                     _, counter_raw = host_and_counter.rsplit("_", maxsplit=1)
@@ -296,7 +298,7 @@ class FileRolloutWriter(RolloutWriter):
     def _get_batch_path(self, timestamp: float, counter: int) -> str:
         """Get path for batch with timestamp and hostname."""
         timestamp_int = int(timestamp * 1000000)  # microseconds for ordering
-        return f"{self.path}/{timestamp_int:020d}_{self.hostname}_{counter:06d}.pkl"
+        return f"{self.path}/{timestamp_int:020d}_{self.hostname}_{counter:06d}{ROLLOUT_FILE_SUFFIX}"
 
     def write_batch(self, batch: RolloutBatch) -> None:
         """Write batch to storage with all required fields."""

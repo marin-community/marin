@@ -32,6 +32,8 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
+CHECKPOINT_STEP_PREFIX = "step_"
+
 
 def _rm_thread(path: str) -> None:
     try:
@@ -58,7 +60,7 @@ class GCSCheckpointServer(WeightTransferServer):
 
     def serve_weights(self, weight_id: int, model: PyTree) -> None:
         """Save checkpoint using Levanter's checkpoint system."""
-        checkpoint_path = os.path.join(self.config.checkpoint_dir, f"step_{weight_id}")
+        checkpoint_path = os.path.join(self.config.checkpoint_dir, f"{CHECKPOINT_STEP_PREFIX}{weight_id}")
 
         self.metrics.total_transfers += 1
 
@@ -66,7 +68,7 @@ class GCSCheckpointServer(WeightTransferServer):
             # Manage checkpoint queue
             if self.config.max_checkpoints is not None and len(self.checkpoint_queue) >= self.config.max_checkpoints:
                 old_weight_id = self.checkpoint_queue.popleft()
-                old_path = os.path.join(self.config.checkpoint_dir, f"step_{old_weight_id}")
+                old_path = os.path.join(self.config.checkpoint_dir, f"{CHECKPOINT_STEP_PREFIX}{old_weight_id}")
                 if jax.process_index() == 0:  # Only delete from coordinator
                     logger.info(f"Cleaning up old checkpoint at weight_id {old_weight_id} ({old_path})...")
                     fs, _ = url_to_fs(old_path)
@@ -170,9 +172,9 @@ class GCSCheckpointClient(WeightTransferClient):
         for d in dirs:
             # Handle trailing slashes in directory names
             step_name = d.rstrip("/").split("/")[-1]
-            if step_name.startswith("step_"):
+            if step_name.startswith(CHECKPOINT_STEP_PREFIX):
                 try:
-                    step_num = int(step_name.removeprefix("step_"))
+                    step_num = int(step_name.removeprefix(CHECKPOINT_STEP_PREFIX))
                 except ValueError:
                     logger.warning("Ignoring malformed checkpoint directory: %s", d)
                     continue
