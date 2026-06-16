@@ -40,7 +40,7 @@ import draccus
 - [`SimpleTrainConfig`][experiments.simple_train_config.SimpleTrainConfig]
 - [`default_train`][experiments.defaults.default_train]: A utility function that creates a training pipeline
 - [`LlamaConfig`][levanter.models.llama.LlamaConfig]: A dataclass that defines the model architecture from [Levanter](https://github.com/stanford-crfm/levanter)
-- [`launch_executor`][experiments.launch.launch_executor]: Hoists the Iris client for `--cluster` and runs the experiment through the Marin executor framework
+- [`launch_executor`](https://github.com/marin-community/marin/blob/main/experiments/launch.py): Hoists the Iris client for `--cluster` and runs the experiment through the Marin executor framework
 
 ## Setting Up the Model Configuration
 
