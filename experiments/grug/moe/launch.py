@@ -98,10 +98,10 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
             base_path=os.path.join(config.output_path, "checkpoints"),
             temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,
-            # 3 min (was 10): on heavily-preempted preemptible TPUs a run must reach its first
-            # checkpoint before being preempted again, else it restarts from scratch and never
-            # progresses. A short interval keeps preemptible compute viable for these gate runs.
-            save_interval=timedelta(minutes=3),
+            # Checkpoint interval (minutes), env-configurable. Default 10 (baseline) for clean throughput
+            # on reserved TPUs; set GRUG_CKPT_MIN=3 on heavily-preempted preemptible TPUs so a run reaches
+            # its first checkpoint before the next preemption (frequent saves otherwise drag mean tok/s).
+            save_interval=timedelta(minutes=int(os.environ.get("GRUG_CKPT_MIN", "10"))),
             keep=None,
         ),
     )
