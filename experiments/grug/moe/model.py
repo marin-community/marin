@@ -590,12 +590,7 @@ class Transformer(eqx.Module):
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
-        # moe_may_pr semantics: PKO-aware. Short layers run sliding-window
-        # attention at ``cfg.sliding_window``; long (every 4th + last) layers run
-        # full causal attention. segment_ids passed through for PKO doc-start
-        # zeroing on long layers. main's ``_layer_attention_masks`` halves the
-        # short window and uses the full ``sliding_window`` on long layers; that
-        # changes the architecture and breaks PKO, so we keep the explicit setup.
+        # Short layers: sliding window. Long layers (every 4th + last): full causal.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
