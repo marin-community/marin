@@ -34,6 +34,8 @@ _ROUTING_DEBUG_ENV = "GRUGMOE_ROUTING_DEBUG"
 _ROUTING_DEBUG_LAYER_ENV = "GRUGMOE_ROUTING_DEBUG_LAYER"
 _ROUTING_DEBUG_TOKEN_POSITION_ENV = "GRUGMOE_ROUTING_DEBUG_TOKEN_POSITION"
 _ROUTING_DEBUG_VECTOR_LIMIT_ENV = "GRUGMOE_ROUTING_DEBUG_VECTOR_LIMIT"
+_DEFAULT_VLLM_DTYPE = "bfloat16"
+_VLLM_DTYPE_CHOICES = ("bfloat16", "float32")
 
 
 def _direct_url(package: str) -> str:
@@ -445,6 +447,7 @@ def score_artifact(
     *,
     max_logprob_delta: float,
     routing_margin_tolerance: float,
+    vllm_dtype: str,
     routing_debug: bool,
     routing_debug_token_position: int,
     routing_debug_layer: int,
@@ -464,6 +467,7 @@ def score_artifact(
 
     print("score_artifact_dir=" + str(artifact_dir))
     print("score_reference_json=" + str(reference_path))
+    print("score_vllm_dtype=" + vllm_dtype)
     for package in ("vllm", "tpu-inference"):
         print(f"score_{package}_direct_url=" + _direct_url(package))
     print("score_grugmoe_spec=" + repr(importlib.util.find_spec("tpu_inference.models.jax.grugmoe")))
@@ -499,7 +503,7 @@ def score_artifact(
         runner="generate",
         skip_tokenizer_init=True,
         trust_remote_code=False,
-        dtype="bfloat16",
+        dtype=vllm_dtype,
         enforce_eager=True,
         max_model_len=max_model_len,
         max_num_batched_tokens=max_model_len,
@@ -551,6 +555,7 @@ def serve_artifact(
     artifact_dir: Path,
     *,
     model_size: str,
+    vllm_dtype: str,
     generation_tokens: int,
     server_port: int,
     server_timeout_seconds: int,
@@ -565,6 +570,7 @@ def serve_artifact(
 
     print("serve_artifact_dir=" + str(artifact_dir))
     print("serve_model_size=" + model_size)
+    print("serve_vllm_dtype=" + vllm_dtype)
     for package in ("vllm", "tpu-inference"):
         print(f"serve_{package}_direct_url=" + _direct_url(package))
     print("serve_grugmoe_spec=" + repr(importlib.util.find_spec("tpu_inference.models.jax.grugmoe")))
@@ -581,7 +587,7 @@ def serve_artifact(
         "--runner",
         "generate",
         "--dtype",
-        "bfloat16",
+        vllm_dtype,
         "--enforce-eager",
         "--max-num-seqs",
         "1",
@@ -643,6 +649,7 @@ def _run_phase_subprocess(
     server_timeout_seconds: int,
     max_logprob_delta: float,
     routing_margin_tolerance: float,
+    vllm_dtype: str,
     routing_debug: bool,
     routing_debug_token_position: int,
     routing_debug_layer: int,
@@ -670,6 +677,8 @@ def _run_phase_subprocess(
         str(max_logprob_delta),
         "--routing-margin-tolerance",
         str(routing_margin_tolerance),
+        "--vllm-dtype",
+        vllm_dtype,
     ]
     if routing_debug:
         args.extend(
@@ -700,6 +709,7 @@ def run(
     server_timeout_seconds: int,
     max_logprob_delta: float,
     routing_margin_tolerance: float,
+    vllm_dtype: str,
     routing_debug: bool,
     routing_debug_token_position: int,
     routing_debug_layer: int,
@@ -707,6 +717,7 @@ def run(
 ) -> None:
     _print_runtime_header()
     print("installed_model_size=" + model_size)
+    print("installed_vllm_dtype=" + vllm_dtype)
     print(
         "installed_routing_debug="
         + json.dumps(
@@ -732,6 +743,7 @@ def run(
         server_timeout_seconds=server_timeout_seconds,
         max_logprob_delta=max_logprob_delta,
         routing_margin_tolerance=routing_margin_tolerance,
+        vllm_dtype=vllm_dtype,
         routing_debug=routing_debug,
         routing_debug_token_position=routing_debug_token_position,
         routing_debug_layer=routing_debug_layer,
@@ -758,6 +770,7 @@ def run(
         server_timeout_seconds=server_timeout_seconds,
         max_logprob_delta=max_logprob_delta,
         routing_margin_tolerance=routing_margin_tolerance,
+        vllm_dtype=vllm_dtype,
         routing_debug=routing_debug,
         routing_debug_token_position=routing_debug_token_position,
         routing_debug_layer=routing_debug_layer,
@@ -775,6 +788,7 @@ def run(
         server_timeout_seconds=server_timeout_seconds,
         max_logprob_delta=max_logprob_delta,
         routing_margin_tolerance=routing_margin_tolerance,
+        vllm_dtype=vllm_dtype,
         routing_debug=routing_debug,
         routing_debug_token_position=routing_debug_token_position,
         routing_debug_layer=routing_debug_layer,
@@ -815,6 +829,12 @@ def main() -> None:
     parser.add_argument("--max-logprob-delta", type=float, default=_DEFAULT_MAX_LOGPROB_DELTA)
     parser.add_argument("--routing-margin-tolerance", type=float, default=_DEFAULT_ROUTING_MARGIN_TOLERANCE)
     parser.add_argument(
+        "--vllm-dtype",
+        choices=_VLLM_DTYPE_CHOICES,
+        default=_DEFAULT_VLLM_DTYPE,
+        help="Installed vLLM dtype for score/serve paths.",
+    )
+    parser.add_argument(
         "--routing-debug",
         action="store_true",
         help="Emit Levanter, tpu-inference, and final-output routing debug records for one token/layer.",
@@ -843,6 +863,7 @@ def main() -> None:
             args.reference_path or _reference_path(args.output_dir),
             max_logprob_delta=args.max_logprob_delta,
             routing_margin_tolerance=args.routing_margin_tolerance,
+            vllm_dtype=args.vllm_dtype,
             routing_debug=args.routing_debug,
             routing_debug_token_position=args.routing_debug_token_position,
             routing_debug_layer=args.routing_debug_layer,
@@ -853,6 +874,7 @@ def main() -> None:
         serve_artifact(
             args.artifact_dir or _artifact_dir(args.output_dir),
             model_size=args.model_size,
+            vllm_dtype=args.vllm_dtype,
             generation_tokens=args.generation_tokens,
             server_port=args.server_port,
             server_timeout_seconds=args.server_timeout_seconds,
@@ -867,6 +889,7 @@ def main() -> None:
             server_timeout_seconds=args.server_timeout_seconds,
             max_logprob_delta=args.max_logprob_delta,
             routing_margin_tolerance=args.routing_margin_tolerance,
+            vllm_dtype=args.vllm_dtype,
             routing_debug=args.routing_debug,
             routing_debug_token_position=args.routing_debug_token_position,
             routing_debug_layer=args.routing_debug_layer,
