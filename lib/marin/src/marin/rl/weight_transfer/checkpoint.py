@@ -160,35 +160,17 @@ class GCSCheckpointClient(WeightTransferClient):
     def _find_latest_checkpoint(self) -> tuple[str, int] | None:
         """Find the latest checkpoint in the checkpoint directory."""
         logger.info(f"Search for new checkpoints in {self.config.checkpoint_dir}...")
-        fs, path_in_fs = url_to_fs(self.config.checkpoint_dir, use_listings_cache=False)
-        if not fs.exists(path_in_fs):
+        checkpoint_candidates = levanter_checkpoint.discover_checkpoint_candidates(self.config.checkpoint_dir)
+        if not checkpoint_candidates:
             return None
 
-        # Checkpoint format is {checkpoint_dir}/step_{xyz}
-        # Make sure we expire before our poll-interval.
-        # We disable caching above, but it's unclear if fsspec adheres to this.
-        dirs = fs.ls(path_in_fs, detail=False, listings_expiry_time=1.0)
-        checkpoint_dirs = []
-        for d in dirs:
-            # Handle trailing slashes in directory names
-            step_name = d.rstrip("/").split("/")[-1]
-            if step_name.startswith(CHECKPOINT_STEP_PREFIX):
-                try:
-                    step_num = int(step_name.removeprefix(CHECKPOINT_STEP_PREFIX))
-                except ValueError:
-                    logger.warning("Ignoring malformed checkpoint directory: %s", d)
-                    continue
-                logger.info(f"Found checkpoint directory: {d} with step number {step_num}")
-                checkpoint_dirs.append((step_num, d))
-        if not checkpoint_dirs:
-            return None
-
-        step_num, latest_dir = max(checkpoint_dirs, key=lambda x: x[0])
-        # Reconstruct full URL with original scheme
-        if "://" in str(self.config.checkpoint_dir) and "://" not in latest_dir:
-            scheme = self.config.checkpoint_dir.split("://")[0]
-            return f"{scheme}://{latest_dir}", step_num
-        return latest_dir, step_num
+        latest_checkpoint = checkpoint_candidates[-1]
+        logger.info(
+            "Found checkpoint directory: %s with step number %d",
+            latest_checkpoint.path,
+            latest_checkpoint.step,
+        )
+        return latest_checkpoint.path, latest_checkpoint.step
 
     def cleanup(self) -> None:
         """No cleanup needed for GCS checkpoints."""

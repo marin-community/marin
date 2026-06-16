@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import datetime
+import json
 import posixpath
 import uuid
 
@@ -60,7 +62,11 @@ def _create_checkpoint_entries(
     fs.makedirs(path, exist_ok=True)
 
     for step in steps or []:
-        fs.makedirs(posixpath.join(path, f"step_{step}"), exist_ok=True)
+        checkpoint_path = posixpath.join(path, f"step_{step}")
+        fs.makedirs(checkpoint_path, exist_ok=True)
+        timestamp = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC) + datetime.timedelta(seconds=step)
+        with fs.open(posixpath.join(checkpoint_path, "metadata.json"), "w") as f:
+            json.dump({"step": step, "timestamp": timestamp.isoformat()}, f)
 
     for directory in directories or []:
         fs.makedirs(posixpath.join(path, directory), exist_ok=True)
