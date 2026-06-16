@@ -3,6 +3,7 @@
 import dataclasses
 import os
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import timedelta
 from functools import lru_cache
 
@@ -15,8 +16,9 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, LMMixtureDatasetConfig, PreferenceLmDataConfig
+from levanter.dpo import ReferenceEvalCacheConfig
 from levanter.eval_harness import LmEvalHarnessConfig
-from levanter.main.train_dpo import SeparateReferenceConfig, TrainDpoConfig
+from levanter.main.train_dpo import DpoReferenceConfig, SeparateReferenceConfig, TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
@@ -26,15 +28,16 @@ from levanter.tracker.wandb import WandbConfig, truncate_wandb_run_name
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 
-from experiments.evals.exp1600_uncheatable_evals import uncheatable_eval_tokenized
 from experiments.evals.task_configs import CORE_TASKS
+from experiments.llama import llama3_tokenizer
 from experiments.paloma import paloma_tokenized
-from experiments.simple_dpo_config import SimpleDPOConfig
-from experiments.simple_sft_config import SimpleSFTConfig
+from experiments.tokenization import default_tokenize
+from marin.datakit.download.uncheatable_eval import make_uncheatable_eval_step
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
 from marin.execution.executor import unwrap_versioned_value
 from marin.execution.types import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import (
+    TokenizeConfig,
     TokenizerStep,
     add_validation_sets_to_mixture,
     lm_data_config,
@@ -392,6 +395,123 @@ def default_train(
     )
 
 
+@dataclass(frozen=True)
+class SimpleSFTConfig:
+    """
+    A simplified configuration for Supervised Fine-Tuning (SFT) that works for both
+    single dataset and mixture training approaches.
+    """
+
+    # Hardware configuration
+    resources: ResourceConfig
+
+    # Core training parameters
+    train_batch_size: int | IntSchedule = 128
+    """
+    The batch size for training. If an IntSchedule is provided, the batch size will be
+    varied according to the schedule.
+    """
+    num_train_steps: int = 10000
+    """Number of training steps."""
+
+    learning_rate: float = 5e-6
+    """Learning rate for the optimizer."""
+
+    # Model configuration
+    tokenizer: str | None = None
+    """Tokenizer to use for training."""
+
+    initialize_from_hf: str | None = None
+    """HF model name or path to initialize from (e.g., 'meta-llama/Llama-3.1-8B').
+    Mutually exclusive with initialize_from_checkpoint_path."""
+
+    initialize_from_checkpoint_path: str | None = None
+    """Path to a levanter checkpoint to initialize from.
+    Mutually exclusive with initialize_from_hf."""
+
+    max_seq_len: int = 4096
+    """Maximum sequence length for training."""
+
+    # Optimizer parameters
+    weight_decay: float = 0.0
+    """Weight decay for the optimizer."""
+
+    beta1: float | None = None
+    """AdamW optimizer beta1."""
+
+    beta2: float | None = None
+    """AdamW optimizer beta2."""
+
+    warmup: float = 0.03
+    """Fraction of training steps to use for learning rate warmup."""
+
+    decay: float = 0.0
+    """Fraction of training steps to use for learning rate decay."""
+
+    lr_schedule: str = "linear"
+    """Learning rate schedule to use: 'linear', 'cosine', etc."""
+
+    min_lr_ratio: float = 0.0
+    """Minimum learning rate as a ratio of the base learning rate."""
+
+    max_grad_norm: float | None = None
+    """Maximum gradient norm for gradient clipping."""
+
+    # Checkpointing and evaluation
+    steps_per_eval: int = 1000
+    """How often to run validation losses."""
+
+    steps_per_checkpoint: int | None = None
+    """How often to keep a permanent checkpoint. None (default) keeps only the final
+    checkpoint; rolling temporary checkpoints are still written for resumption."""
+
+    steps_per_hf_export: int = 500
+    """How often to save HuggingFace checkpoints."""
+
+    hf_generation_eos_token_ids: list[int] | None = None
+    """EOS token IDs to write to generation_config.json. None means no generation config.
+    For chat models, include the turn-boundary token (e.g. [128001, 128009])."""
+
+    # Mixture-specific parameters
+    mixture_block_size: int = 2048
+    """Block size for dataset mixing (only used with mixture training)."""
+
+    stop_strategy: str = "restart"
+    """
+    Strategy for handling dataset completion (only used with mixture training).
+    Options: 'restart' or 'exit'.
+    """
+
+    # Other parameters
+    seed: int = 0
+    """Random seed for training."""
+
+    node_count: int = 1
+    """Number of TPU slices for training."""
+
+    int8: bool = False
+    """Int8 (quantized) training in Levanter."""
+
+    pad_tokenizer_to_match_model: bool = False
+    """If True, pad the tokenizer's vocab to match the model's vocab size by adding dummy tokens.
+    Useful when the model checkpoint has a larger vocab than the tokenizer (e.g., Qwen models
+    pad their vocab to be divisible by 4 for TPU efficiency)."""
+
+    z_loss_weight: float = 0.0
+
+    per_device_parallelism: int = -1
+    """How many examples to process in parallel on each device. -1 (default) means
+    train_batch_size/num_devices (no gradient accumulation). Set to a positive value
+    to enable gradient accumulation. For example, with 8 devices, batch_size=32, and
+    per_device_parallelism=1, you get gradient accumulation of 4."""
+
+    reinit_tokens: list[str] | bool = False
+    """
+    if set, will reinitialize the embeddings for the given tokens. If True, will reinitialize the default tokens
+    for llama3's tokenizer
+    """
+
+
 def default_sft(
     name: str,
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
@@ -464,6 +584,77 @@ def default_sft(
         use_default_validation=False,
         adapter=adapter,
     )
+
+
+@dataclass(frozen=True)
+class SimpleDPOConfig:
+    """
+    A simplified configuration for Direct Preference Optimization (DPO).
+    """
+
+    resources: ResourceConfig
+
+    train_batch_size: int | IntSchedule = 128
+    num_train_steps: int | None = None
+    num_epochs: float = 1.0
+    """Approximate number of passes over the DPO train set when num_train_steps is unset."""
+    learning_rate: float = 1e-6
+    wandb_project: str | None = None
+
+    tokenizer: str | None = None
+    model_name_or_path: str | None = None
+    initialize_from_checkpoint_path: str | None = None
+
+    adapter: AdaptorConfig = dataclasses.field(default_factory=NoAdaptorConfig)
+    reference: DpoReferenceConfig = dataclasses.field(default_factory=SeparateReferenceConfig)
+    reference_model_path: str | None = None
+    reference_is_hf: bool = True
+    beta: float = 0.1
+    validation_split_fraction: float | None = 0.1
+    reference_eval_cache: ReferenceEvalCacheConfig = dataclasses.field(
+        default_factory=lambda: ReferenceEvalCacheConfig(mode="build_or_load")
+    )
+
+    train_seq_len: int | None = None
+    max_seq_len: int = 4096
+
+    weight_decay: float = 0.0
+    warmup: float = 0.0
+    cooldown: float | None = None
+    lr_schedule: str = "linear"
+    min_lr_ratio: float = 0.0
+    max_grad_norm: float | None = 1
+
+    steps_per_eval: int | None = None
+    """None auto-schedules validation five times: before training, three interior points, and at the end."""
+    steps_per_checkpoint: int | None = None
+    """How often to keep a permanent checkpoint. None (default) keeps only the final
+    checkpoint; rolling temporary checkpoints are still written for resumption."""
+    steps_per_hf_export: int = 500
+    hf_save_dtype: str | None = None
+    hf_generation_eos_token_ids: list[int] | None = None
+    """EOS token IDs to write to generation_config.json. None means no generation config.
+    For chat models, include the turn-boundary token (e.g. [128001, 128009])."""
+
+    per_device_eval_parallelism: int = -1
+
+    seed: int = 0
+    initialize_from_hf: bool | None = None
+
+    profiler: ProfilerConfig = dataclasses.field(default_factory=ProfilerConfig)
+
+    allow_partial_checkpoint: bool = False
+    int8: bool = False
+
+    def __post_init__(self):
+        if self.num_train_steps is not None and self.num_train_steps <= 0:
+            raise ValueError(f"num_train_steps must be positive, got {self.num_train_steps}")
+        if self.num_epochs <= 0:
+            raise ValueError(f"num_epochs must be positive, got {self.num_epochs}")
+        if self.steps_per_eval is not None and self.steps_per_eval <= 0:
+            raise ValueError(f"steps_per_eval must be positive, got {self.steps_per_eval}")
+        if self.steps_per_checkpoint is not None and self.steps_per_checkpoint <= 0:
+            raise ValueError(f"steps_per_checkpoint must be positive, got {self.steps_per_checkpoint}")
 
 
 def default_dpo(
@@ -694,3 +885,91 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 
     return tokenizer
+
+
+uncheatable_eval = make_uncheatable_eval_step()
+
+
+def uncheatable_eval_tokenized(
+    *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, uncheatable_eval_raw: ExecutorStep = uncheatable_eval
+) -> dict[str, TokenizerStep]:
+    uncheatable_eval_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
+    for dataset in ACTIVE_DATASETS:
+        path_part = ALL_UNCHEATABLE_EVAL_DATASETS[dataset]
+        uncheatable_eval_steps[os.path.join("uncheatable_eval", dataset)] = default_tokenize(
+            name=os.path.join("uncheatable_eval", dataset),
+            dataset=uncheatable_eval_raw.cd(f"{path_part}"),
+            tokenizer=tokenizer,
+            is_validation=True,
+        )
+
+    return uncheatable_eval_steps
+
+
+ALL_UNCHEATABLE_EVAL_DATASETS = {
+    "wikipedia_arabic": "wikipedia_arabic_*.jsonl.gz",
+    "wikipedia_english": "wikipedia_english_*.jsonl.gz",
+    "wikipedia_french": "wikipedia_french_*.jsonl.gz",
+    "wikipedia_german": "wikipedia_german_*.jsonl.gz",
+    "wikipedia_japanese": "wikipedia_japanese_*.jsonl.gz",
+    "wikipedia_spanish": "wikipedia_spanish_*.jsonl.gz",
+    "github_python": "github_python_*.jsonl.gz",
+    "github_cpp": "github_cpp_*.jsonl.gz",
+    "bbc_news": "bbc_news_*.jsonl.gz",
+    "arxiv_physics": "arxiv_physics_*.jsonl.gz",
+    "arxiv_computer_science": "arxiv_computer_science_*.jsonl.gz",
+    "ao3_chinese": "ao3_chinese_*.jsonl.gz",
+    "ao3_english": "ao3_english_*.jsonl.gz",
+}
+ACTIVE_DATASETS = [
+    "wikipedia_english",
+    "github_python",
+    "github_cpp",
+    "bbc_news",
+    "arxiv_physics",
+    "arxiv_computer_science",
+    "ao3_english",
+]
+
+
+def compute_per_device_parallelism(
+    global_batch_size: int,
+    microbatch_size: int,
+    resources: ResourceConfig,
+) -> int:
+    """Compute per_device_parallelism for gradient accumulation.
+
+    Args:
+        global_batch_size: The effective batch size after gradient accumulation.
+        microbatch_size: The batch size that fits in memory (local batch size).
+        resources: The ResourceConfig specifying TPU/GPU resources.
+
+    Returns:
+        per_device_parallelism: Number of examples each device processes per forward/backward pass.
+
+    Example:
+        For v5p-8 (4 chips), global_batch_size=128, microbatch_size=8:
+        - per_device_parallelism = 8 / 4 = 2
+        - gradient_accumulation = 128 / 8 = 16 steps
+    """
+    num_devices = resources.chip_count()
+
+    if microbatch_size % num_devices != 0:
+        raise ValueError(f"microbatch_size ({microbatch_size}) must be divisible by " f"num_devices ({num_devices})")
+
+    if global_batch_size % microbatch_size != 0:
+        raise ValueError(
+            f"global_batch_size ({global_batch_size}) must be divisible by " f"microbatch_size ({microbatch_size})"
+        )
+
+    per_device_parallelism = microbatch_size // num_devices
+    grad_accum_steps = global_batch_size // microbatch_size
+
+    print(
+        f"Gradient accumulation config: "
+        f"global_batch={global_batch_size}, microbatch={microbatch_size}, "
+        f"num_devices={num_devices}, per_device_parallelism={per_device_parallelism}, "
+        f"grad_accum_steps={grad_accum_steps}"
+    )
+
+    return per_device_parallelism

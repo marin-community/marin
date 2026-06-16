@@ -17,7 +17,7 @@ Schedule details
 import dataclasses
 
 from fray.cluster import ResourceConfig
-from marin.defaults import SimpleTrainConfig, default_sft, default_train
+from marin.defaults import SimpleSFTConfig, SimpleTrainConfig, default_sft, default_train
 from marin.execution.executor import executor_main
 from marin.execution.types import output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
@@ -26,7 +26,6 @@ from experiments.exp808_sft_mixture import mixture_config as sft_mixture_llama3
 from experiments.llama import llama3_tokenizer, llama_600m
 from experiments.midtraining_datasets import finemath_3_plus_tokenized, megamath_tokenized
 from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
-from experiments.simple_sft_config import SimpleSFTConfig
 
 # ------------------------------------------------------------------------------------
 # Shared hyperparameters and helpers

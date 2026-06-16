@@ -16,9 +16,8 @@ walks through setting up a DPO run end-to-end in Marin.
 
 ```python
 
-from marin.defaults import default_dpo
+from marin.defaults import default_dpo, SimpleDPOConfig
 from experiments.llama import llama_3_1_8b
-from experiments.simple_dpo_config import SimpleDPOConfig
 from experiments.tokenization import default_tokenize
 from fray.cluster import ResourceConfig
 from levanter.data.text import PreferenceChatLmDatasetFormat
