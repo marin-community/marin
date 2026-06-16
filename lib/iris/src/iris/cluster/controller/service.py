@@ -644,17 +644,10 @@ def _overlay_worker_usability(
 ) -> None:
     """Overlay per-VM usability and stamp each ready slice's capacity status in place.
 
-    ``worker_id`` and ``running_task_count`` are intrinsic to the VM and always
-    set; usability/worker_healthy are overlaid only when the worker is present in
-    the liveness roster (``usability_by_id``). A VM running tasks but momentarily
-    absent from the roster keeps its worker_id and task count, with usability left
-    empty (unknown) rather than mislabelled.
-
-    Per ready slice we then derive a single slice-granular ``capacity_status``
-    (available / in_use / idle / degraded) from host health and occupancy, so the
-    dashboard reports free capacity honestly: a fully-booked healthy slice is
-    ``in_use``, not schedulable. ``degraded_slot_count`` retains the per-slice
-    count of reachable-but-failing hosts for detail display.
+    worker_id/running_task_count are always set; usability/worker_healthy only when
+    the worker is in the liveness roster (else left empty rather than mislabelled).
+    Per ready slice we derive a slice-granular ``capacity_status`` from host health
+    and occupancy, plus ``degraded_slot_count`` for detail.
     """
     for group in status.groups:
         for slice_info in group.slices:

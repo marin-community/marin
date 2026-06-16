@@ -23,13 +23,8 @@ class PendingHint:
 
 
 class SliceCapacityStatus(StrEnum):
-    """How a *ready* slice relates to placement, derived in the status overlay.
-
-    This is slice-granular and capacity-honest: a fully-booked healthy slice is
-    ``IN_USE``, never counted as free/schedulable capacity. Non-ready slices
-    (requesting/booting/initializing/failed) carry no capacity status — their
-    lifecycle ``state`` already describes them.
-    """
+    """Placement status of a ready slice (slice-granular). A fully-booked healthy
+    slice is ``IN_USE``, not free; non-ready slices carry no capacity status."""
 
     AVAILABLE = "available"  # all hosts healthy, no tasks: free to place on now
     IN_USE = "in_use"  # all hosts healthy, at least one task running
@@ -45,13 +40,10 @@ def slice_capacity_status(
     running_tasks: int,
     idle: bool,
 ) -> str:
-    """Classify a ready slice by placement readiness.
+    """Classify a ready slice by placement readiness; "" for non-ready slices.
 
-    Returns the empty string for non-ready slices. A ready slice is DEGRADED if
-    it has no hosts or any host is not HEALTHY (degraded, dead, or unrostered) —
-    such a slice cannot accept a gang-scheduled job even if some hosts are fine.
-    Only fully-healthy slices are classified by occupancy (in_use / idle /
-    available), so "available + idle" is the honest free-capacity count.
+    DEGRADED if it has no hosts or any host is not HEALTHY (it cannot take a gang
+    job even if some hosts are fine); otherwise split by occupancy.
     """
     if not is_ready:
         return ""

@@ -123,15 +123,13 @@ const routing = computed(() => autoscaler.value?.lastRoutingDecision ?? null)
 const unmetEntries = computed(() => routing.value?.unmetEntries ?? [])
 const actions = computed(() => (autoscaler.value?.recentActions ?? []).slice().reverse())
 
-// SliceList wants a worker_id → jobs map; the pool-keyed view does not surface a
-// per-host job join (that lived in the dropped Fleet Overview), so pass empty.
-// Status classification does not depend on the job map, so the summaries below
-// are unaffected by it.
+// SliceList wants a worker_id → jobs map; the pool-keyed view has no per-host job
+// join (it lived in the dropped Fleet Overview), so pass empty. Status
+// classification does not use it.
 const NO_WORKER_JOBS: Map<string, SliceJob[]> = new Map()
 
-// Resolve every slice to a view-model with a single slice-granular status. The
-// summary strip, the per-group badges, and the expanded SliceList all read this
-// same classification, so the row summary can never disagree with the detail.
+// One view-model per slice, shared by the summary strip, the per-group badges, and
+// the expanded list — so the row summary can never disagree with the detail.
 const allSliceViews = computed<SliceView[]>(() =>
   groups.value.flatMap(g => (g.slices ?? []).map(s => buildSliceView(s, NO_WORKER_JOBS, nowMs.value)))
 )
@@ -150,10 +148,8 @@ const groupIndex = computed(() => {
 // ===========================================================================
 // Capacity summary metrics
 //
-// Counts are slice-granular. Lifecycle totals come from the server's
-// sliceStateCounts; the capacity split (free / in use / idle / degraded) is a
-// trivial count over each slice's server-stamped capacity_status — never a
-// per-host number, so a group with 5 slices never reports "40" of anything.
+// Slice-granular: lifecycle totals from sliceStateCounts, the capacity split
+// from each slice's server-stamped capacity_status.
 // ===========================================================================
 
 const sliceTotals = computed<Record<string, number>>(() => {

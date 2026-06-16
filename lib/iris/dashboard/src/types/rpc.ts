@@ -314,10 +314,8 @@ export interface SliceInfo {
   /** Count of DEGRADED (reachable-but-failing) hosts among `vms`, for detail display. */
   degradedSlotCount?: number
   /**
-   * Placement-readiness of a ready slice, server-derived from host usability +
-   * running tasks: "available" | "in_use" | "idle" | "degraded". Empty for
-   * non-ready slices, whose `state` already describes them. Slice-granular: a
-   * fully-booked healthy slice is "in_use", never counted as free capacity.
+   * Server-derived placement status of a ready slice: "available" | "in_use" |
+   * "idle" | "degraded". Empty for non-ready slices.
    */
   capacityStatus?: string
 }

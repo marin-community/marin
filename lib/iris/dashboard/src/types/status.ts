@@ -192,15 +192,9 @@ export const STATUS_COLOR_ORDER: readonly string[] = [
 // -- Slice status styling (Autoscaler tab) --
 
 /**
- * Visual style for a slice-status badge: a solid status dot plus pill colors and
- * a human label/description. Keyed by the resolved {@link SliceStatus} — the
- * lifecycle state for non-ready slices, or the capacity status
- * (available / in_use / idle / degraded) for ready ones — so the per-group
- * summary, the per-slice list, and the legend all read from one palette.
- *
- * Counts shown alongside these badges are always slice-granular (one slice =
- * one unit), never per-host, so a group with 5 slices never reports "40" of
- * anything.
+ * Visual style for a slice-status badge (dot + pill colors + label), keyed by the
+ * resolved SliceStatus. Shared by the per-group summary, the slice list, and the
+ * legend so they stay in sync. Counts over these are always slice-granular.
  */
 export interface SliceStatusStyle {
   /** Short label rendered in the badge, e.g. "in use", "free". */

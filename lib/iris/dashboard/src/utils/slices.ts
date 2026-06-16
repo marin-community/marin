@@ -19,10 +19,8 @@ import { timestampMs } from '@/utils/formatting'
 export type SliceLifecycle = 'requesting' | 'booting' | 'initializing' | 'ready' | 'failed'
 
 /**
- * Display status: the lifecycle state for non-ready slices, or the server-derived
- * capacity status for ready ones. `available` / `in_use` / `idle` / `degraded`
- * come straight from `SliceInfo.capacity_status`, so the per-group summary, the
- * slice list, and the legend all agree. Every count over these is slice-granular.
+ * Display status: lifecycle for non-ready slices, else the server-derived capacity
+ * status (`available`/`in_use`/`idle`/`degraded`) from `SliceInfo.capacity_status`.
  */
 export type SliceStatus = SliceLifecycle | 'available' | 'in_use' | 'idle' | 'degraded'
 
