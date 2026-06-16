@@ -53,15 +53,17 @@ def top2_gap_from_logits(logits: hax.NamedArray, axis: hax.AxisSelector) -> hax.
         A NamedArray with the same shape as logits minus `axis`, containing the top-2 gaps.
     """
 
-    # this uses a ton of memory for no particularly good reason. So we do it in two passes:
-    # sorted_logits = hax.top_k(logits, axis, 2, "top")[0]
-    # top1 = sorted_logits["top", 0]
-    # top2 = sorted_logits["top", 1]
+    # hax.top_k(logits, axis, 2, "top") would materialize a sorted copy of the whole axis,
+    # so instead we take two argmax passes: find the max, mask out its position, take the max again.
+    Axis = logits.resolve_axis(axis)
+    argmax = hax.argmax(logits, axis=Axis)
+    top1 = hax.take(logits, Axis, argmax)
 
-    argmax = hax.argmax(logits, axis=axis)
-    top1 = hax.take(logits, axis, argmax)
-    argmax2 = hax.argmax(hax.where(argmax, -jnp.inf, logits), axis=axis)
-    top2 = hax.take(logits, axis, argmax2)
+    # Mask the winning position (the one whose index equals argmax) with -inf so the second pass
+    # finds the runner-up. argmax lacks the reduced axis, so broadcast it back over Axis to compare.
+    is_top1 = hax.arange(Axis) == argmax.broadcast_axis(Axis)
+    argmax2 = hax.argmax(hax.where(is_top1, -jnp.inf, logits), axis=Axis)
+    top2 = hax.take(logits, Axis, argmax2)
     return top1 - top2
 
 
