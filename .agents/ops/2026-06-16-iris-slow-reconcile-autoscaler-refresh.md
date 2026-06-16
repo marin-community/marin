@@ -3,7 +3,7 @@ date: 2026-06-16
 system: iris
 severity: degraded
 resolution: fixed
-pr: pending
+pr: "#6435"
 issue: weaver #202
 ---
 
