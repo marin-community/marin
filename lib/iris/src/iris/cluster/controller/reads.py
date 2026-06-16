@@ -58,7 +58,7 @@ from iris.cluster.controller.task_state import (
     task_row_can_be_scheduled,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, PendingTask, WorkerId, WorkerStatusMap
+from iris.cluster.types import AttemptUid, JobName, PendingTask, WorkerId, WorkerStatusMap, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2
 
 # ---------------------------------------------------------------------------
@@ -1268,10 +1268,8 @@ class WorkerLivenessSource(Protocol):
 
 
 class _LivenessEntry(Protocol):
-    healthy: bool
-    active: bool
-    last_heartbeat_ms: int
-    consecutive_failures: int
+    @property
+    def usability(self) -> WorkerUsability: ...
 
 
 class WorkerAttrsSource(Protocol):
@@ -1317,28 +1315,28 @@ def get_worker_detail(tx: Tx, worker_id: WorkerId):
 
 
 def _healthy_active_worker_ids(health: WorkerLivenessSource) -> set[WorkerId]:
-    """Reconcile-target worker ids: every healthy+active worker.
+    """Reconcile-target worker ids: every non-``DEAD`` worker (``HEALTHY | DEGRADED``).
 
     The reconcile pass must keep probing a worker that is mid-failure (so its
-    liveness can recover or cross the teardown threshold), so it targets all
-    active workers — a climbing ``consecutive_failures`` does NOT drop a worker
-    here. Scheduling placement uses the stricter :func:`_schedulable_worker_ids`.
+    liveness can recover or cross the teardown threshold), so it targets degraded
+    workers too — only :data:`WorkerUsability.DEAD` drops out. Scheduling placement
+    uses the stricter :func:`_schedulable_worker_ids`.
 
     Callers post-filter the ``workers`` table in Python against this set rather than
     pushing a SQL ``IN`` — cheaper, since almost every persisted worker is healthy.
     """
-    return {wid for wid, ent in health.all().items() if ent.healthy and ent.active}
+    return {wid for wid, ent in health.all().items() if ent.usability is not WorkerUsability.DEAD}
 
 
 def _schedulable_worker_ids(health: WorkerLivenessSource) -> set[WorkerId]:
-    """Scheduling-placement worker ids: healthy+active AND not currently failing.
+    """Scheduling-placement worker ids: only :data:`WorkerUsability.HEALTHY` workers.
 
-    Excludes workers with any consecutive reconcile failures so new tasks stop
-    landing on an unreachable worker immediately, rather than for the whole
-    detection window before teardown. Reconcile keeps probing them
-    (:func:`_healthy_active_worker_ids`); only placement is gated.
+    Excludes degraded (mid-failure) workers so new tasks stop landing on an
+    unreachable worker immediately, rather than for the whole detection window
+    before teardown. Reconcile keeps probing them (:func:`_healthy_active_worker_ids`);
+    only placement is gated.
     """
-    return {wid for wid, ent in health.all().items() if ent.healthy and ent.active and ent.consecutive_failures == 0}
+    return {wid for wid, ent in health.all().items() if ent.usability is WorkerUsability.HEALTHY}
 
 
 def list_active_healthy_workers(tx: Tx, health: WorkerLivenessSource) -> dict[WorkerId, str]:

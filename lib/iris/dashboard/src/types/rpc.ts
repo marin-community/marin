@@ -286,6 +286,8 @@ export interface VmInfo {
   stateChangedAt?: ProtoTimestamp
   workerId?: string
   workerHealthy?: boolean
+  /** WorkerUsability: "healthy" | "degraded" | "dead"; empty if not in the roster. */
+  usability?: string
   initPhase?: string
   initLogTail?: string
   initError?: string
@@ -309,6 +311,9 @@ export interface SliceInfo {
    * which is empty until a slice's workers register — a booting slice has none.
    */
   state?: string
+  /** Per-slice usability rollup over `vms`: HEALTHY vs DEGRADED worker counts. */
+  schedulableSlotCount?: number
+  degradedSlotCount?: number
 }
 
 export interface ScaleGroupConfig {
@@ -332,6 +337,9 @@ export interface ScaleGroupStatus {
   blockedUntil?: ProtoTimestamp
   scaleUpCooldownUntil?: ProtoTimestamp
   idleThresholdMs?: string
+  /** Group-level usability rollup over all slices' VMs: HEALTHY vs DEGRADED. */
+  totalSchedulableSlots?: number
+  totalDegradedSlots?: number
 }
 
 export interface AutoscalerAction {

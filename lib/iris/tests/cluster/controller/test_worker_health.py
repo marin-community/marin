@@ -19,8 +19,9 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEvent,
     WorkerHealthEventKind,
     WorkerHealthTracker,
+    WorkerLiveness,
 )
-from iris.cluster.types import WorkerId
+from iris.cluster.types import WorkerId, WorkerUsability
 from rigging.timing import Timestamp
 from sqlalchemy import insert, select
 
@@ -193,3 +194,29 @@ def test_failing_worker_excluded_from_scheduling_but_still_reconciled(state):
     assert ok in schedulable
     assert failing not in schedulable, "a failing worker must not receive new placements"
     assert {ok, failing} <= reconcile_targets, "a failing worker must still be reconciled/probed"
+
+
+@pytest.mark.parametrize(
+    "liveness, expected",
+    [
+        # Reached and clean -> schedulable.
+        (WorkerLiveness(healthy=True, active=True, consecutive_failures=0), WorkerUsability.HEALTHY),
+        # Mid-failure (below threshold) -> reconciled but not placeable.
+        (WorkerLiveness(healthy=True, active=True, consecutive_failures=1), WorkerUsability.DEGRADED),
+        # At/over the teardown threshold is still DEGRADED, NOT a distinct DEAD: the
+        # reconcile pass must keep probing it until apply() reaps it. The threshold
+        # lives in apply(), not in the classifier.
+        (WorkerLiveness(healthy=True, active=True, consecutive_failures=99), WorkerUsability.DEGRADED),
+        # build_failures do NOT affect usability: they drive teardown via apply(),
+        # not placement/reconcile membership. A build-failing but reachable worker
+        # stays schedulable (preserving pre-refactor behavior).
+        (WorkerLiveness(healthy=True, active=True, consecutive_failures=0, build_failures=5), WorkerUsability.HEALTHY),
+        # Not reached / inactive -> excluded everywhere.
+        (WorkerLiveness(healthy=False, active=True, consecutive_failures=0), WorkerUsability.DEAD),
+        (WorkerLiveness(healthy=True, active=False, consecutive_failures=0), WorkerUsability.DEAD),
+        (WorkerLiveness(), WorkerUsability.DEAD),
+    ],
+)
+def test_worker_liveness_usability_classification(liveness: WorkerLiveness, expected: WorkerUsability) -> None:
+    """The single classifier maps liveness to the verdict every predicate projects from."""
+    assert liveness.usability is expected

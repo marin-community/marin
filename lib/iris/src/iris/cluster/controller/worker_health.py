@@ -33,7 +33,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from iris.cluster.types import WorkerId
+from iris.cluster.types import WorkerId, WorkerUsability
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,21 @@ class WorkerLiveness:
     consecutive_failures: int = 0
     last_heartbeat_ms: int = 0
     build_failures: int = 0
+
+    @property
+    def usability(self) -> WorkerUsability:
+        """Classify how the control loop may use this worker.
+
+        ``build_failures`` and the termination thresholds are intentionally not
+        consulted: they drive teardown (via ``apply``), not placement/reconcile
+        membership. A worker over a threshold is still ``DEGRADED`` here until it
+        is reaped, so the reconcile pass keeps probing it.
+        """
+        if not self.active or not self.healthy:
+            return WorkerUsability.DEAD
+        if self.consecutive_failures > 0:
+            return WorkerUsability.DEGRADED
+        return WorkerUsability.HEALTHY
 
 
 class WorkerHealthTracker:

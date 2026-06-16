@@ -35,8 +35,8 @@ from iris.cluster.controller.scheduling.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
-from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.types import JobName, UserBudgetDefaults
+from iris.cluster.controller.service import ControllerServiceImpl, _overlay_worker_usability
+from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, WorkerUsability
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.rpc.auth import StaticTokenVerifier
 from iris.time_proto import timestamp_to_proto
@@ -697,6 +697,48 @@ def test_get_autoscaler_status_populates_worker_id_for_unrostered_vm(client_with
     # when the VM was missing from the roster).
     for vm in vms:
         assert vm["workerId"] == vm["vmId"]
+
+
+def test_overlay_worker_usability_rolls_up_slice_and_group_counts():
+    """The overlay tags each VM and rolls schedulable/degraded counts per slice and group."""
+    status = vm_pb2.AutoscalerStatus(
+        groups=[
+            vm_pb2.ScaleGroupStatus(
+                name="g",
+                slices=[
+                    vm_pb2.SliceInfo(
+                        slice_id="s1",
+                        vms=[vm_pb2.VmInfo(vm_id="w-healthy"), vm_pb2.VmInfo(vm_id="w-degraded")],
+                    ),
+                    vm_pb2.SliceInfo(slice_id="s2", vms=[vm_pb2.VmInfo(vm_id="w-unrostered")]),
+                ],
+            )
+        ]
+    )
+    usability_by_id = {
+        "w-healthy": WorkerUsability.HEALTHY,
+        "w-degraded": WorkerUsability.DEGRADED,
+        # "w-unrostered" intentionally absent from the roster.
+    }
+    running = {WorkerId("w-healthy"): {"task-1"}}
+
+    _overlay_worker_usability(status, usability_by_id, running)
+
+    group = status.groups[0]
+    s1, s2 = group.slices
+    by_id = {vm.vm_id: vm for vm in (*s1.vms, *s2.vms)}
+    assert by_id["w-healthy"].usability == "healthy"
+    assert by_id["w-healthy"].worker_healthy is True
+    assert by_id["w-healthy"].running_task_count == 1
+    assert by_id["w-degraded"].usability == "degraded"
+    assert by_id["w-degraded"].worker_healthy is True
+    # An unrostered VM keeps worker_id/task count but is left unclassified.
+    assert by_id["w-unrostered"].worker_id == "w-unrostered"
+    assert by_id["w-unrostered"].usability == ""
+
+    assert (s1.schedulable_slot_count, s1.degraded_slot_count) == (1, 1)
+    assert (s2.schedulable_slot_count, s2.degraded_slot_count) == (0, 0)
+    assert (group.total_schedulable_slots, group.total_degraded_slots) == (1, 1)
 
 
 def test_pending_reason_uses_autoscaler_hint_for_scale_up(

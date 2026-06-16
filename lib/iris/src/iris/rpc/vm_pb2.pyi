@@ -58,7 +58,7 @@ class ResourceSpec(_message.Message):
     def __init__(self, cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., gpu_count: _Optional[int] = ..., tpu_count: _Optional[int] = ...) -> None: ...
 
 class VmInfo(_message.Message):
-    __slots__ = ("vm_id", "slice_id", "scale_group", "state", "address", "zone", "created_at", "state_changed_at", "worker_id", "worker_healthy", "init_phase", "init_log_tail", "init_error", "running_task_count", "labels")
+    __slots__ = ("vm_id", "slice_id", "scale_group", "state", "address", "zone", "created_at", "state_changed_at", "worker_id", "worker_healthy", "usability", "init_phase", "init_log_tail", "init_error", "running_task_count", "labels")
     class LabelsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -76,6 +76,7 @@ class VmInfo(_message.Message):
     STATE_CHANGED_AT_FIELD_NUMBER: _ClassVar[int]
     WORKER_ID_FIELD_NUMBER: _ClassVar[int]
     WORKER_HEALTHY_FIELD_NUMBER: _ClassVar[int]
+    USABILITY_FIELD_NUMBER: _ClassVar[int]
     INIT_PHASE_FIELD_NUMBER: _ClassVar[int]
     INIT_LOG_TAIL_FIELD_NUMBER: _ClassVar[int]
     INIT_ERROR_FIELD_NUMBER: _ClassVar[int]
@@ -91,15 +92,16 @@ class VmInfo(_message.Message):
     state_changed_at: _time_pb2.Timestamp
     worker_id: str
     worker_healthy: bool
+    usability: str
     init_phase: str
     init_log_tail: str
     init_error: str
     running_task_count: int
     labels: _containers.ScalarMap[str, str]
-    def __init__(self, vm_id: _Optional[str] = ..., slice_id: _Optional[str] = ..., scale_group: _Optional[str] = ..., state: _Optional[_Union[VmState, str]] = ..., address: _Optional[str] = ..., zone: _Optional[str] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., state_changed_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., worker_id: _Optional[str] = ..., worker_healthy: _Optional[bool] = ..., init_phase: _Optional[str] = ..., init_log_tail: _Optional[str] = ..., init_error: _Optional[str] = ..., running_task_count: _Optional[int] = ..., labels: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    def __init__(self, vm_id: _Optional[str] = ..., slice_id: _Optional[str] = ..., scale_group: _Optional[str] = ..., state: _Optional[_Union[VmState, str]] = ..., address: _Optional[str] = ..., zone: _Optional[str] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., state_changed_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., worker_id: _Optional[str] = ..., worker_healthy: _Optional[bool] = ..., usability: _Optional[str] = ..., init_phase: _Optional[str] = ..., init_log_tail: _Optional[str] = ..., init_error: _Optional[str] = ..., running_task_count: _Optional[int] = ..., labels: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class SliceInfo(_message.Message):
-    __slots__ = ("slice_id", "scale_group", "created_at", "vms", "error_message", "last_active", "idle", "state")
+    __slots__ = ("slice_id", "scale_group", "created_at", "vms", "error_message", "last_active", "idle", "state", "schedulable_slot_count", "degraded_slot_count")
     SLICE_ID_FIELD_NUMBER: _ClassVar[int]
     SCALE_GROUP_FIELD_NUMBER: _ClassVar[int]
     CREATED_AT_FIELD_NUMBER: _ClassVar[int]
@@ -108,6 +110,8 @@ class SliceInfo(_message.Message):
     LAST_ACTIVE_FIELD_NUMBER: _ClassVar[int]
     IDLE_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
+    SCHEDULABLE_SLOT_COUNT_FIELD_NUMBER: _ClassVar[int]
+    DEGRADED_SLOT_COUNT_FIELD_NUMBER: _ClassVar[int]
     slice_id: str
     scale_group: str
     created_at: _time_pb2.Timestamp
@@ -116,7 +120,9 @@ class SliceInfo(_message.Message):
     last_active: _time_pb2.Timestamp
     idle: bool
     state: str
-    def __init__(self, slice_id: _Optional[str] = ..., scale_group: _Optional[str] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., vms: _Optional[_Iterable[_Union[VmInfo, _Mapping]]] = ..., error_message: _Optional[str] = ..., last_active: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., idle: _Optional[bool] = ..., state: _Optional[str] = ...) -> None: ...
+    schedulable_slot_count: int
+    degraded_slot_count: int
+    def __init__(self, slice_id: _Optional[str] = ..., scale_group: _Optional[str] = ..., created_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., vms: _Optional[_Iterable[_Union[VmInfo, _Mapping]]] = ..., error_message: _Optional[str] = ..., last_active: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., idle: _Optional[bool] = ..., state: _Optional[str] = ..., schedulable_slot_count: _Optional[int] = ..., degraded_slot_count: _Optional[int] = ...) -> None: ...
 
 class ScalingDecision(_message.Message):
     __slots__ = ("scale_group", "action", "slice_delta", "reason")
@@ -131,7 +137,7 @@ class ScalingDecision(_message.Message):
     def __init__(self, scale_group: _Optional[str] = ..., action: _Optional[_Union[ScalingAction, str]] = ..., slice_delta: _Optional[int] = ..., reason: _Optional[str] = ...) -> None: ...
 
 class ScaleGroupStatus(_message.Message):
-    __slots__ = ("name", "config", "current_demand", "peak_demand", "backoff_until", "consecutive_failures", "last_scale_up", "last_scale_down", "slices", "slice_state_counts", "availability_status", "availability_reason", "blocked_until", "scale_up_cooldown_until", "idle_threshold_ms")
+    __slots__ = ("name", "config", "current_demand", "peak_demand", "backoff_until", "consecutive_failures", "last_scale_up", "last_scale_down", "slices", "slice_state_counts", "availability_status", "availability_reason", "blocked_until", "scale_up_cooldown_until", "idle_threshold_ms", "total_schedulable_slots", "total_degraded_slots")
     class SliceStateCountsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -154,6 +160,8 @@ class ScaleGroupStatus(_message.Message):
     BLOCKED_UNTIL_FIELD_NUMBER: _ClassVar[int]
     SCALE_UP_COOLDOWN_UNTIL_FIELD_NUMBER: _ClassVar[int]
     IDLE_THRESHOLD_MS_FIELD_NUMBER: _ClassVar[int]
+    TOTAL_SCHEDULABLE_SLOTS_FIELD_NUMBER: _ClassVar[int]
+    TOTAL_DEGRADED_SLOTS_FIELD_NUMBER: _ClassVar[int]
     name: str
     config: _config_pb2.ScaleGroupConfig
     current_demand: int
@@ -169,7 +177,9 @@ class ScaleGroupStatus(_message.Message):
     blocked_until: _time_pb2.Timestamp
     scale_up_cooldown_until: _time_pb2.Timestamp
     idle_threshold_ms: int
-    def __init__(self, name: _Optional[str] = ..., config: _Optional[_Union[_config_pb2.ScaleGroupConfig, _Mapping]] = ..., current_demand: _Optional[int] = ..., peak_demand: _Optional[int] = ..., backoff_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., consecutive_failures: _Optional[int] = ..., last_scale_up: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., last_scale_down: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., slices: _Optional[_Iterable[_Union[SliceInfo, _Mapping]]] = ..., slice_state_counts: _Optional[_Mapping[str, int]] = ..., availability_status: _Optional[str] = ..., availability_reason: _Optional[str] = ..., blocked_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., scale_up_cooldown_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., idle_threshold_ms: _Optional[int] = ...) -> None: ...
+    total_schedulable_slots: int
+    total_degraded_slots: int
+    def __init__(self, name: _Optional[str] = ..., config: _Optional[_Union[_config_pb2.ScaleGroupConfig, _Mapping]] = ..., current_demand: _Optional[int] = ..., peak_demand: _Optional[int] = ..., backoff_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., consecutive_failures: _Optional[int] = ..., last_scale_up: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., last_scale_down: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., slices: _Optional[_Iterable[_Union[SliceInfo, _Mapping]]] = ..., slice_state_counts: _Optional[_Mapping[str, int]] = ..., availability_status: _Optional[str] = ..., availability_reason: _Optional[str] = ..., blocked_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., scale_up_cooldown_until: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., idle_threshold_ms: _Optional[int] = ..., total_schedulable_slots: _Optional[int] = ..., total_degraded_slots: _Optional[int] = ...) -> None: ...
 
 class AutoscalerAction(_message.Message):
     __slots__ = ("timestamp", "action_type", "scale_group", "slice_id", "reason", "status")
