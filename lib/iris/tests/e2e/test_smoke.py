@@ -509,37 +509,39 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, ca
     )
 
 
-def _wait_for_autoscaler_screenshot_ready(page) -> None:
-    # AutoscalerTab.vue shows only a "Loading autoscaler status…" spinner until its
+def _wait_for_capacity_screenshot_ready(page) -> None:
+    # CapacityTab.vue shows only a "Loading capacity & scheduling…" spinner until its
     # first RPC resolves. Route components are lazy-imported, so during the SPA swap
     # the previously-viewed page (e.g. worker detail, which renders "Scale Group" +
-    # the "local-cpu" group name) is still mounted while the autoscaler chunk loads.
+    # the "local-cpu" group name) is still mounted while the capacity chunk loads.
     # A body-text wait keyed on those strings false-positives on that stale DOM, so
-    # the screenshot then catches the autoscaler spinner. Anchor on the route hash
-    # plus the section headings that only render in the loaded (v-else) branch so the
-    # match can't be satisfied by another page.
+    # the screenshot then catches the spinner. Anchor on the route hash plus section
+    # headings that only render in the loaded (v-else) branch so the match can't be
+    # satisfied by another page. Substring-match the headings (not exact) so dynamic
+    # counts (e.g. "Pending Jobs (3)") and unicode dashes don't break the wait.
     check = """
         () => {
             const text = document.body.textContent || "";
-            const routeReady = decodeURIComponent(window.location.hash) === "#/autoscaler";
+            const routeReady = decodeURIComponent(window.location.hash) === "#/capacity";
             const headings = Array.from(document.querySelectorAll("h3"))
                 .map((heading) => (heading.textContent || "").trim().toLowerCase());
+            const has = (needle) => headings.some((heading) => heading.includes(needle));
             return routeReady
-                && !text.includes("Loading autoscaler status")
-                && headings.includes("waterfall routing")
-                && headings.includes("recent actions")
-                && headings.includes("autoscaler logs");
+                && !text.includes("Loading capacity & scheduling")
+                && has("pools")
+                && has("pending jobs")
+                && has("users & quotas");
         }
     """
     _await_stable_screenshot(page, check)
 
 
-def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
-    """Autoscaler tab shows scale groups."""
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
+def test_dashboard_capacity_tab(smoke_cluster, smoke_page, smoke_screenshot):
+    """Capacity & Scheduling tab shows scale groups, pending jobs, and user quotas."""
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/capacity")
     wait_for_dashboard_ready(smoke_page)
-    _wait_for_autoscaler_screenshot_ready(smoke_page)
-    smoke_screenshot("autoscaler-tab", "Autoscaler tab showing scale group configuration")
+    _wait_for_capacity_screenshot_ready(smoke_page)
+    smoke_screenshot("capacity-tab", "Capacity & Scheduling tab: pools, demand, pending jobs, quotas")
 
 
 def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):

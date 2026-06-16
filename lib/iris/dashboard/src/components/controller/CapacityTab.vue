@@ -1,0 +1,1176 @@
+<script setup lang="ts">
+import { ref, computed, onMounted, watch } from 'vue'
+import { RouterLink } from 'vue-router'
+import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
+import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
+import { SLICE_STATE_STYLES, SLICE_BADGE_ORDER, DIVERGING_COLORS } from '@/types/status'
+import type {
+  GetAutoscalerStatusResponse,
+  GetSchedulerStateResponse,
+  ListUsersResponse,
+  ListJobsResponse,
+  AutoscalerStatus,
+  ScaleGroupStatus,
+  SliceInfo,
+  GroupRoutingStatus,
+  ProtoTimestamp,
+  SchedulerUserBudget,
+  UserSummary,
+  PendingTaskBucket,
+  RunningTaskBucket,
+  JobStatus,
+  JobQuery,
+} from '@/types/rpc'
+import { timestampMs, formatRelativeTime, bandDisplayName, bandColor } from '@/utils/formatting'
+import type { SliceJob } from '@/utils/slices'
+import SliceList from '@/components/controller/SliceList.vue'
+import EmptyState from '@/components/shared/EmptyState.vue'
+import LogViewer from '@/components/shared/LogViewer.vue'
+import LoadingSpinner from '@/components/shared/LoadingSpinner.vue'
+import StatusBadge from '@/components/shared/StatusBadge.vue'
+import MetricCard from '@/components/shared/MetricCard.vue'
+
+// ===========================================================================
+// RPC + auto-refresh
+//
+// One auto-refresh drives every panel so the autoscaler, scheduler, user and
+// pending-job views always describe the same moment. The pending-jobs list is a
+// paginated/searchable ListJobs query, so it's fetched imperatively.
+// ===========================================================================
+
+const { data: autoscalerData, loading: autoscalerLoading, error: autoscalerError, refresh: refreshAutoscaler } =
+  useControllerRpc<GetAutoscalerStatusResponse>('GetAutoscalerStatus')
+const { data: schedulerData, error: schedulerError, refresh: refreshScheduler } =
+  useControllerRpc<GetSchedulerStateResponse>('GetSchedulerState')
+const { data: usersData, error: usersError, refresh: refreshUsers } =
+  useControllerRpc<ListUsersResponse>('ListUsers')
+
+// Updated on every refresh so relative slice ages advance with the data.
+const nowMs = ref(Date.now())
+
+async function refreshAll() {
+  await Promise.all([refreshAutoscaler(), refreshScheduler(), refreshUsers(), fetchPendingJobs()])
+  nowMs.value = Date.now()
+}
+useAutoRefresh(refreshAll, DEFAULT_REFRESH_MS)
+onMounted(refreshAll)
+
+// ===========================================================================
+// Pending jobs query (searchable / paginated)
+// ===========================================================================
+
+const PENDING_PAGE_SIZE = 25
+const pendingPage = ref(0)
+const pendingSearch = ref('')
+const pendingSearchInput = ref('')
+const pendingJobs = ref<JobStatus[]>([])
+const pendingTotal = ref(0)
+const pendingLoading = ref(false)
+const pendingError = ref<string | null>(null)
+
+async function fetchPendingJobs() {
+  pendingLoading.value = true
+  pendingError.value = null
+  try {
+    const query: JobQuery = {
+      scope: 'JOB_QUERY_SCOPE_ROOTS',
+      stateFilter: 'pending',
+      offset: pendingPage.value * PENDING_PAGE_SIZE,
+      limit: PENDING_PAGE_SIZE,
+      sortField: 'JOB_SORT_FIELD_DATE',
+      sortDirection: 'SORT_DIRECTION_DESC',
+    }
+    if (pendingSearch.value.trim()) {
+      query.nameFilter = pendingSearch.value.trim()
+    }
+    const resp = await controllerRpcCall<ListJobsResponse>('ListJobs', { query })
+    pendingJobs.value = resp.jobs ?? []
+    pendingTotal.value = resp.totalCount ?? 0
+    // Clamp the page if the pending queue shrank underneath us during a refresh.
+    const maxPage = Math.max(0, Math.ceil(pendingTotal.value / PENDING_PAGE_SIZE) - 1)
+    if (pendingPage.value > maxPage) {
+      pendingPage.value = maxPage
+    }
+  } catch (e) {
+    pendingError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    pendingLoading.value = false
+  }
+}
+
+const pendingTotalPages = computed(() =>
+  Math.max(1, Math.ceil(pendingTotal.value / PENDING_PAGE_SIZE))
+)
+
+function applyPendingSearch() {
+  pendingSearch.value = pendingSearchInput.value
+  pendingPage.value = 0
+  fetchPendingJobs()
+}
+
+watch(pendingPage, () => fetchPendingJobs())
+
+// ===========================================================================
+// Top-level state
+// ===========================================================================
+
+const loading = computed(() => autoscalerLoading.value && !autoscalerData.value)
+const error = computed(() => autoscalerError.value || schedulerError.value || usersError.value)
+
+const autoscaler = computed<AutoscalerStatus | null>(() => autoscalerData.value?.status ?? null)
+const groups = computed(() => autoscaler.value?.groups ?? [])
+const routing = computed(() => autoscaler.value?.lastRoutingDecision ?? null)
+const unmetEntries = computed(() => routing.value?.unmetEntries ?? [])
+const actions = computed(() => (autoscaler.value?.recentActions ?? []).slice().reverse())
+
+const groupIndex = computed(() => {
+  const index: Record<string, ScaleGroupStatus> = {}
+  for (const g of groups.value) {
+    if (g.name) index[g.name] = g
+  }
+  return index
+})
+
+// ===========================================================================
+// Capacity summary metrics
+//
+// All counts read the server-provided rollups (sliceStateCounts,
+// totalSchedulableSlots, totalDegradedSlots) — no client-side per-VM joins.
+// ===========================================================================
+
+const sliceTotals = computed<Record<string, number>>(() => {
+  const totals: Record<string, number> = {}
+  for (const g of groups.value) {
+    for (const [state, count] of Object.entries(g.sliceStateCounts ?? {})) {
+      totals[state] = (totals[state] ?? 0) + (count ?? 0)
+    }
+  }
+  return totals
+})
+const totalSlices = computed(() => Object.values(sliceTotals.value).reduce((a, b) => a + b, 0))
+const totalIdle = computed(() => {
+  let idle = 0
+  for (const g of groups.value) {
+    for (const slice of g.slices ?? []) {
+      if (slice.idle) idle++
+    }
+  }
+  return idle
+})
+const totalSchedulable = computed(() =>
+  groups.value.reduce((n, g) => n + (g.totalSchedulableSlots ?? 0), 0)
+)
+// Count degraded SLICES (not per-worker slots) so this parallels "Idle spare",
+// which is also slice-granular, in the summary strip.
+const totalDegradedSlices = computed(() => {
+  let degraded = 0
+  for (const g of groups.value) {
+    for (const slice of g.slices ?? []) {
+      if ((slice.degradedSlotCount ?? 0) > 0) degraded++
+    }
+  }
+  return degraded
+})
+const onlineGroups = computed(() =>
+  groups.value.filter(g =>
+    Object.values(g.sliceStateCounts ?? {}).reduce((a, b) => a + b, 0) > 0
+  ).length
+)
+const totalDemand = computed(() =>
+  groups.value.reduce((n, g) => n + (g.currentDemand ?? 0), 0)
+)
+const launchPlanned = computed(() => {
+  const statuses = routing.value?.groupStatuses ?? []
+  if (statuses.length > 0) {
+    return statuses.reduce((n, gs) => n + (gs.launch ?? 0), 0)
+  }
+  return Object.values(routing.value?.groupToLaunch ?? {}).reduce((n, v) => n + (v ?? 0), 0)
+})
+const lastEvalMs = computed(() => timestampMs(autoscaler.value?.lastEvaluation))
+
+function formatSliceSummary(totals: Record<string, number>): string {
+  const total = Object.values(totals).reduce((a, b) => a + b, 0)
+  if (total === 0) return '0'
+  const order = ['ready', 'requesting', 'booting', 'initializing', 'failed']
+  const parts = order
+    .filter(state => (totals[state] ?? 0) > 0)
+    .map(state => `${totals[state]} ${state}`)
+  return parts.length > 0 ? parts.join(', ') : `${total}`
+}
+
+// ===========================================================================
+// Pools table (the cohesive core)
+//
+// Rows are the routing decision's per-group statuses, grouped into quota pools
+// and ordered by allocation tier. Pool-tier monotonicity (a low tier blocking
+// higher tiers) has no server equivalent, so it stays client-side.
+// ===========================================================================
+
+const expandedSlices = ref<Set<string>>(new Set())
+const collapsedPools = ref<Set<string>>(new Set())
+
+function toggleSet(set: Set<string>, key: string): Set<string> {
+  const next = new Set(set)
+  next.has(key) ? next.delete(key) : next.add(key)
+  return next
+}
+function togglePool(pool: string) { collapsedPools.value = toggleSet(collapsedPools.value, pool) }
+function toggleSlices(name: string) { expandedSlices.value = toggleSet(expandedSlices.value, name) }
+
+const sortedGroupStatuses = computed<GroupRoutingStatus[]>(() => {
+  const statuses = routing.value?.groupStatuses ?? []
+  return statuses.slice().sort((a, b) => {
+    const pa = a.priority ?? 100
+    const pb = b.priority ?? 100
+    if (pa !== pb) return pa - pb
+    return (a.group ?? '').localeCompare(b.group ?? '')
+  })
+})
+
+interface PoolSection {
+  pool: string
+  groups: GroupRoutingStatus[]
+  blockedAtTier: number | null  // lowest tier in quota_exceeded/backoff, or null
+}
+
+const poolSections = computed<PoolSection[]>(() => {
+  const poolMap = new Map<string, GroupRoutingStatus[]>()
+  const unpooled: GroupRoutingStatus[] = []
+
+  for (const gs of sortedGroupStatuses.value) {
+    const pool = groupIndex.value[gs.group]?.config?.quotaPool
+    if (pool) {
+      if (!poolMap.has(pool)) poolMap.set(pool, [])
+      poolMap.get(pool)!.push(gs)
+    } else {
+      unpooled.push(gs)
+    }
+  }
+
+  const sections: PoolSection[] = []
+  for (const [pool, poolGroups] of poolMap) {
+    poolGroups.sort((a, b) => {
+      const ta = groupIndex.value[a.group]?.config?.allocationTier ?? 0
+      const tb = groupIndex.value[b.group]?.config?.allocationTier ?? 0
+      return ta - tb
+    })
+
+    let blockedAtTier: number | null = null
+    for (const gs of poolGroups) {
+      const group = groupIndex.value[gs.group]
+      if (!group) continue
+      const tier = group.config?.allocationTier ?? 0
+      const status = group.availabilityStatus
+      if (tier > 0 && (status === 'quota_exceeded' || status === 'backoff')) {
+        if (blockedAtTier === null || tier < blockedAtTier) blockedAtTier = tier
+      }
+    }
+    sections.push({ pool, groups: poolGroups, blockedAtTier })
+  }
+
+  if (unpooled.length > 0) {
+    sections.push({ pool: '__unpooled', groups: unpooled, blockedAtTier: null })
+  }
+  return sections
+})
+
+function isTierBlocked(gs: GroupRoutingStatus, section: PoolSection): boolean {
+  if (!section.blockedAtTier) return false
+  const tier = groupIndex.value[gs.group]?.config?.allocationTier ?? 0
+  return tier > section.blockedAtTier
+}
+
+function tierLabel(gs: GroupRoutingStatus): string {
+  const tier = groupIndex.value[gs.group]?.config?.allocationTier ?? 0
+  return tier > 0 ? `T${tier}` : ''
+}
+
+function isInactiveRow(gs: GroupRoutingStatus): boolean {
+  const counts = groupIndex.value[gs.group]?.sliceStateCounts ?? {}
+  const total = Object.values(counts).reduce((a, b) => a + b, 0)
+  return total === 0 && (gs.decision ?? 'idle') === 'idle'
+}
+
+// -- Per-group accessors (read server fields directly) --
+
+function group(name: string): ScaleGroupStatus | undefined { return groupIndex.value[name] }
+function groupFailures(name: string): number { return group(name)?.consecutiveFailures ?? 0 }
+function groupSliceCounts(name: string): Record<string, number> { return group(name)?.sliceStateCounts ?? {} }
+function groupSlices(name: string): SliceInfo[] { return group(name)?.slices ?? [] }
+function groupHasSlices(name: string): boolean { return groupSlices(name).length > 0 }
+function groupDemand(name: string): number { return group(name)?.currentDemand ?? 0 }
+function groupSchedulable(name: string): number { return group(name)?.totalSchedulableSlots ?? 0 }
+function groupDegraded(name: string): number { return group(name)?.totalDegradedSlots ?? 0 }
+
+// Idle slices are split per-slice on their own degraded state: a group may hold
+// both a healthy idle slice (scale-down candidate) and a degraded idle slice
+// (unschedulable), and each gets its own badge.
+function groupIdleDegradedCount(name: string): number {
+  return groupSlices(name).filter(s => s.idle && (s.degradedSlotCount ?? 0) > 0).length
+}
+function groupIdleSpareCount(name: string): number {
+  return groupSlices(name).filter(s => s.idle && (s.degradedSlotCount ?? 0) === 0).length
+}
+
+// Shared layout/typography for the slice-badge cluster; each badge only adds its
+// own tone colors on top of this base.
+const BADGE_BASE = 'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold border'
+
+// `in_use` lives in the shared SLICE_BADGE_ORDER but the server's
+// sliceStateCounts never carries that key (it was a dropped client-side join),
+// so it's filtered out here to keep the rendered list honest.
+const SLICE_LIFECYCLE_BADGES = SLICE_BADGE_ORDER.filter(state => state !== 'in_use')
+
+// -- Availability badge --
+
+interface AvailabilityBadge { label: string; classes: string }
+
+function groupAvailabilityBadge(g: ScaleGroupStatus, section?: PoolSection): AvailabilityBadge | null {
+  const status = g.availabilityStatus
+  const blockedMs = timestampMs(g.blockedUntil)
+  const cooldownMs = timestampMs(g.scaleUpCooldownUntil)
+  const now = Date.now()
+
+  if (section?.blockedAtTier) {
+    const tier = g.config?.allocationTier ?? 0
+    if (tier > section.blockedAtTier) {
+      return { label: 'tier-blocked', classes: 'bg-status-danger-bg text-status-danger border-status-danger-border opacity-60' }
+    }
+  }
+  if (status === 'requesting') {
+    return { label: 'in-flight', classes: 'bg-status-purple-bg text-status-purple border-status-purple-border' }
+  }
+  if (status === 'backoff') {
+    const label = blockedMs && blockedMs > now ? `backoff ${Math.ceil((blockedMs - now) / 1000)}s` : 'backoff'
+    return { label, classes: 'bg-status-orange-bg text-status-orange border-status-orange-border' }
+  }
+  if (status === 'quota_exceeded') {
+    const label = blockedMs && blockedMs > now ? `quota exceeded ${Math.ceil((blockedMs - now) / 1000)}s` : 'quota exceeded'
+    return { label, classes: 'bg-status-danger-bg text-status-danger border-status-danger-border' }
+  }
+  if (status === 'at_capacity') {
+    return { label: 'at capacity', classes: 'bg-status-warning-bg text-status-warning border-status-warning-border' }
+  }
+  if (cooldownMs && cooldownMs > now) {
+    return { label: `cooldown ${Math.ceil((cooldownMs - now) / 1000)}s`, classes: 'bg-accent-subtle text-accent border-accent-border' }
+  }
+  return null
+}
+
+// -- Decision / reason --
+
+function formatDecision(decision?: string): string {
+  return (decision ?? 'idle').replace('_', ' ')
+}
+
+function decisionClasses(decision?: string): string {
+  switch (decision ?? 'idle') {
+    case 'selected': return 'text-status-success font-semibold'
+    case 'scale_up': return 'text-accent font-semibold'
+    case 'idle': return 'text-text-muted'
+    case 'at_capacity': return 'text-status-warning'
+    case 'backoff': return 'text-status-orange'
+    case 'quota_exceeded': return 'text-status-danger'
+    default: return 'text-text-secondary'
+  }
+}
+
+function groupReasonText(gs: GroupRoutingStatus): string {
+  let reason = gs.reason ?? ''
+  const g = group(gs.group)
+  if (g && (g.availabilityStatus === 'backoff' || g.availabilityStatus === 'quota_exceeded')) {
+    const blockedMs = timestampMs(g.blockedUntil)
+    if (blockedMs && blockedMs > Date.now()) {
+      const secsLeft = Math.ceil((blockedMs - Date.now()) / 1000)
+      reason = reason ? `${reason} (unblocks in ${secsLeft}s)` : `unblocks in ${secsLeft}s`
+    }
+  }
+  return reason || '-'
+}
+
+/**
+ * Row-level reconciliation note that correlates the two stories that the
+ * autoscaler and scheduler used to tell separately:
+ *   - free schedulable capacity AND unmet demand → a real placement bug.
+ *   - degraded capacity AND unmet demand → workers recovering, not a bug.
+ */
+interface ReconcileNote { text: string; classes: string }
+
+function groupReconcileNote(name: string): ReconcileNote | null {
+  const demand = groupDemand(name)
+  if (demand <= 0) return null
+  if (groupSchedulable(name) > 0) {
+    return {
+      text: 'placeable capacity with unmet demand — scheduler not placing on healthy slices',
+      classes: 'text-status-warning',
+    }
+  }
+  if (groupDegraded(name) > 0) {
+    return {
+      text: 'demand blocked on degraded workers — recovery in progress',
+      classes: 'text-status-orange',
+    }
+  }
+  return null
+}
+
+// ===========================================================================
+// Unmet demand
+// ===========================================================================
+
+const RESERVATION_RE = /^(.+):reservation:\d+$/
+
+function taskIdToJob(taskId: string): string {
+  if (!taskId) return 'unknown'
+  const rsvMatch = taskId.match(RESERVATION_RE)
+  if (rsvMatch) return rsvMatch[1]
+  const idx = taskId.lastIndexOf('/')
+  return idx <= 0 ? taskId : taskId.slice(0, idx)
+}
+
+interface UnmetDemandRow {
+  job: string
+  entryCount: number
+  exampleTask: string | null
+  reasonCounts: Record<string, number>
+  accelerators: Set<string>
+}
+
+const aggregatedUnmet = computed<UnmetDemandRow[]>(() => {
+  const byJob = new Map<string, UnmetDemandRow>()
+  for (const u of unmetEntries.value) {
+    const entry = u.entry ?? {}
+    const reason = u.reason ?? 'unknown'
+    const taskIds = entry.taskIds ?? []
+    const job = entry.coscheduleGroupId ?? taskIdToJob(taskIds[0] ?? '')
+    if (!byJob.has(job)) {
+      byJob.set(job, { job, entryCount: 0, exampleTask: null, reasonCounts: {}, accelerators: new Set() })
+    }
+    const row = byJob.get(job)!
+    row.entryCount += 1
+    if (!row.exampleTask && taskIds.length > 0) row.exampleTask = taskIds[0]
+    row.reasonCounts[reason] = (row.reasonCounts[reason] ?? 0) + 1
+    const deviceStr = [entry.deviceType, entry.deviceVariant].filter(Boolean).join(':') || 'unknown'
+    row.accelerators.add(deviceStr)
+  }
+  return Array.from(byJob.values()).sort((a, b) => a.job.localeCompare(b.job))
+})
+
+function formatReasonCounts(counts: Record<string, number>): string {
+  const entries = Object.entries(counts)
+  if (entries.length === 0) return '-'
+  return entries.map(([reason, count]) => `${reason.replace(/^[a-z_]+:\s*/, '')} (${count})`).join(', ')
+}
+
+// ===========================================================================
+// Pending jobs → effective band annotation
+// ===========================================================================
+
+const pendingJobBand = computed<Map<string, string>>(() => {
+  const out = new Map<string, string>()
+  for (const bucket of schedulerData.value?.pendingBuckets ?? []) {
+    if (!out.has(bucket.jobId)) out.set(bucket.jobId, bucket.band)
+  }
+  return out
+})
+
+// ===========================================================================
+// Users & quotas
+// ===========================================================================
+
+const TERMINAL_JOB_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'preempted'])
+const BANDS = ['PRIORITY_BAND_PRODUCTION', 'PRIORITY_BAND_INTERACTIVE', 'PRIORITY_BAND_BATCH'] as const
+type Band = typeof BANDS[number]
+
+const userBudgets = computed<SchedulerUserBudget[]>(() => schedulerData.value?.userBudgets ?? [])
+const users = computed<UserSummary[]>(() => usersData.value?.users ?? [])
+
+interface BandBreakdown {
+  running: Record<Band, number>
+  pending: Record<Band, number>
+}
+
+function emptyBandBreakdown(): BandBreakdown {
+  const running = Object.fromEntries(BANDS.map(b => [b, 0])) as Record<Band, number>
+  const pending = Object.fromEntries(BANDS.map(b => [b, 0])) as Record<Band, number>
+  return { running, pending }
+}
+
+function bandBreakdownTotal(b: BandBreakdown): number {
+  return BANDS.reduce((acc, band) => acc + b.running[band] + b.pending[band], 0)
+}
+
+// Per-user task counts per effective band, split running vs pending. Band is a
+// per-task attribute after downgrades, so it's derived from the task buckets.
+const userBandCounts = computed<Map<string, BandBreakdown>>(() => {
+  const out = new Map<string, BandBreakdown>()
+  for (const bucket of (schedulerData.value?.pendingBuckets ?? []) as PendingTaskBucket[]) {
+    const band = bucket.band as Band
+    if (!BANDS.includes(band)) continue
+    const entry = out.get(bucket.userId) ?? emptyBandBreakdown()
+    entry.pending[band] += bucket.count
+    out.set(bucket.userId, entry)
+  }
+  for (const bucket of (schedulerData.value?.runningBuckets ?? []) as RunningTaskBucket[]) {
+    const band = bucket.band as Band
+    if (!BANDS.includes(band)) continue
+    const entry = out.get(bucket.userId) ?? emptyBandBreakdown()
+    entry.running[band] += bucket.count
+    out.set(bucket.userId, entry)
+  }
+  return out
+})
+
+interface MergedUser {
+  userId: string
+  activeJobs: number
+  runningJobs: number
+  pendingJobs: number
+  runningTasks: number
+  totalTasks: number
+  budgetSpent: string
+  budgetLimit: string
+  utilizationPercent: number
+  maxBand: string
+  effectiveBand: string
+  hasBudget: boolean
+  bands: BandBreakdown
+}
+
+const mergedUsers = computed<MergedUser[]>(() => {
+  const budgetMap = new Map<string, SchedulerUserBudget>()
+  for (const b of userBudgets.value) budgetMap.set(b.userId, b)
+
+  const userMap = new Map<string, UserSummary>()
+  for (const u of users.value) userMap.set(u.user, u)
+
+  const allUserIds = new Set([...budgetMap.keys(), ...userMap.keys()])
+  const result: MergedUser[] = []
+
+  for (const userId of allUserIds) {
+    const user = userMap.get(userId)
+    const budget = budgetMap.get(userId)
+    const jobCounts = user?.jobStateCounts ?? {}
+    const taskCounts = user?.taskStateCounts ?? {}
+
+    const activeJobs = Object.entries(jobCounts)
+      .filter(([state]) => !TERMINAL_JOB_STATES.has(state))
+      .reduce((acc, [, count]) => acc + count, 0)
+
+    result.push({
+      userId,
+      activeJobs,
+      runningJobs: jobCounts['running'] ?? 0,
+      pendingJobs: (jobCounts['pending'] ?? 0) + (jobCounts['unschedulable'] ?? 0),
+      runningTasks: taskCounts['running'] ?? 0,
+      totalTasks: Object.values(taskCounts).reduce((a, b) => a + b, 0),
+      budgetSpent: budget?.budgetSpent ?? '-',
+      budgetLimit: budget?.budgetLimit ?? '-',
+      utilizationPercent: budget?.utilizationPercent ?? 0,
+      maxBand: budget?.maxBand ?? '',
+      effectiveBand: budget?.effectiveBand ?? '',
+      hasBudget: !!budget,
+      bands: userBandCounts.value.get(userId) ?? emptyBandBreakdown(),
+    })
+  }
+
+  result.sort((a, b) => b.activeJobs - a.activeJobs || b.runningTasks - a.runningTasks || a.userId.localeCompare(b.userId))
+  return result
+})
+
+function utilizationStyle(pct: number): Record<string, string> {
+  const clamped = Math.min(pct, 120)
+  const idx = Math.round((clamped / 120) * (DIVERGING_COLORS.length - 1))
+  const colorIdx = DIVERGING_COLORS.length - 1 - Math.max(0, Math.min(idx, DIVERGING_COLORS.length - 1))
+  return { color: DIVERGING_COLORS[colorIdx] }
+}
+
+// ===========================================================================
+// Diagnostics (recent actions)
+// ===========================================================================
+
+function formatActionTime(ts?: ProtoTimestamp): string {
+  const ms = timestampMs(ts)
+  return ms ? new Date(ms).toLocaleTimeString() : '-'
+}
+
+function actionTypeClasses(actionType?: string): string {
+  switch (actionType) {
+    case 'scale_up': return 'text-status-success font-semibold'
+    case 'scale_down': return 'text-status-warning font-semibold'
+    case 'delete': return 'text-status-danger font-semibold'
+    default: return 'text-text font-semibold'
+  }
+}
+
+function actionStatusClasses(status?: string): string {
+  switch (status) {
+    case 'pending': return 'text-status-warning'
+    case 'failed': return 'text-status-danger'
+    default: return 'text-status-success'
+  }
+}
+
+function sliceIdShort(sliceId?: string): string {
+  if (!sliceId) return ''
+  return sliceId.length > 24 ? `${sliceId.slice(0, 20)}...` : sliceId
+}
+
+// SliceList wants a worker_id → jobs map; the pool-keyed view does not surface a
+// per-host job join (that lived in the dropped Fleet Overview), so pass empty.
+const NO_WORKER_JOBS: Map<string, SliceJob[]> = new Map()
+</script>
+
+<template>
+  <!-- Loading -->
+  <LoadingSpinner v-if="loading" label="Loading capacity & scheduling…" />
+
+  <!-- Error -->
+  <div
+    v-else-if="error"
+    class="px-4 py-3 text-sm text-status-danger bg-status-danger-bg rounded-lg border border-status-danger-border"
+  >
+    {{ error }}
+  </div>
+
+  <!-- Autoscaler disabled -->
+  <div v-else-if="!autoscaler" class="space-y-4">
+    <EmptyState message="Autoscaler: Disabled" icon="⏸" />
+  </div>
+
+  <div v-else class="space-y-8">
+
+    <!-- ===== Capacity summary strip ===== -->
+    <section>
+      <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+        <MetricCard :value="`${onlineGroups} / ${groups.length}`" label="Pools online" />
+        <MetricCard :value="totalSlices" label="Slices" :detail="formatSliceSummary(sliceTotals)" />
+        <MetricCard
+          :value="totalIdle"
+          label="Idle spare"
+          :variant="totalIdle > 0 ? 'warning' : 'default'"
+        />
+        <MetricCard
+          :value="totalDegradedSlices"
+          label="Degraded slices"
+          :variant="totalDegradedSlices > 0 ? 'orange' : 'default'"
+          :detail="totalDegradedSlices > 0 ? 'unschedulable' : undefined"
+        />
+        <MetricCard :value="totalDemand" label="Demand" :variant="totalDemand > 0 ? 'accent' : 'default'" />
+        <MetricCard :value="launchPlanned" label="Launch planned" :variant="launchPlanned > 0 ? 'accent' : 'default'" />
+        <MetricCard
+          :value="aggregatedUnmet.length"
+          label="Unmet jobs"
+          :variant="aggregatedUnmet.length > 0 ? 'danger' : 'default'"
+        />
+        <MetricCard :value="formatRelativeTime(lastEvalMs)" label="Last evaluation" />
+      </div>
+    </section>
+
+    <!-- ===== Pools — capacity & routing ===== -->
+    <section>
+      <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">
+        Pools — Capacity &amp; Routing
+      </h3>
+
+      <div v-if="!routing" class="text-sm text-text-muted py-4">
+        No routing decision yet
+      </div>
+
+      <div v-else class="overflow-x-auto rounded-lg border border-surface-border">
+        <table class="w-full border-collapse">
+          <thead>
+            <tr class="border-b border-surface-border bg-surface">
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left w-16">Priority</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Group</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Slices</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Demand</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Assigned</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Launch</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Decision</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template v-for="section in poolSections" :key="section.pool || '__unpooled'">
+              <!-- Pool header row -->
+              <tr class="bg-surface border-b border-surface-border hover:bg-surface-raised">
+                <td colspan="8" class="px-3 py-1.5">
+                  <div class="flex items-center gap-2">
+                    <button
+                      type="button"
+                      class="inline-flex items-center gap-2 text-left cursor-pointer hover:opacity-80"
+                      :aria-expanded="!collapsedPools.has(section.pool)"
+                      :aria-label="(collapsedPools.has(section.pool) ? 'Expand ' : 'Collapse ') + (section.pool === '__unpooled' ? 'unpooled groups' : 'pool ' + section.pool)"
+                      @click="togglePool(section.pool)"
+                    >
+                      <span class="text-[10px] text-text-muted">
+                        {{ collapsedPools.has(section.pool) ? '▶' : '▼' }}
+                      </span>
+                      <span class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
+                        {{ section.pool === '__unpooled' ? 'Unpooled' : `Pool: ${section.pool}` }}
+                      </span>
+                    </button>
+                    <span
+                      v-if="section.blockedAtTier"
+                      class="inline-flex items-center px-1.5 py-0.5 rounded text-xs border
+                             bg-status-danger-bg text-status-danger border-status-danger-border"
+                    >
+                      blocked at tier {{ section.blockedAtTier }}+
+                    </span>
+                    <!-- Tier chain visualization (not shown for unpooled groups) -->
+                    <span v-if="section.pool !== '__unpooled'" class="flex items-center gap-0.5 text-xs text-text-muted ml-2">
+                      <template v-for="(gs, idx) in section.groups" :key="gs.group">
+                        <span v-if="idx > 0" class="text-text-muted mx-0.5">&rarr;</span>
+                        <span
+                          :class="[
+                            'px-1 py-0.5 rounded border text-[11px] font-mono',
+                            isTierBlocked(gs, section)
+                              ? 'bg-status-danger-bg text-status-danger border-status-danger-border line-through'
+                              : group(gs.group)?.availabilityStatus === 'quota_exceeded'
+                                ? 'bg-status-danger-bg text-status-danger border-status-danger-border'
+                                : group(gs.group)?.availabilityStatus === 'backoff'
+                                  ? 'bg-status-orange-bg text-status-orange border-status-orange-border'
+                                  : 'bg-surface border-surface-border text-text-secondary',
+                          ]"
+                        >
+                          {{ tierLabel(gs) }}
+                        </span>
+                      </template>
+                    </span>
+                  </div>
+                </td>
+              </tr>
+
+              <template v-for="gs in section.groups" :key="gs.group">
+                <!-- Main row -->
+                <tr
+                  v-if="!collapsedPools.has(section.pool)"
+                  :class="[
+                    'border-b border-surface-border-subtle hover:bg-surface-raised transition-colors',
+                    isInactiveRow(gs) ? 'opacity-50' : '',
+                    isTierBlocked(gs, section) ? 'opacity-40' : '',
+                  ]"
+                >
+                  <!-- Priority -->
+                  <td class="px-3 py-2 text-[13px] font-mono text-text-muted align-top">
+                    {{ gs.priority ?? 100 }}
+                  </td>
+
+                  <!-- Group name + badges -->
+                  <td class="px-3 py-2 text-[13px] align-top">
+                    <div>
+                      <span class="font-semibold">{{ gs.group }}</span>
+                      <span
+                        v-if="groupFailures(gs.group) > 0"
+                        class="ml-2 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs
+                               bg-status-danger-bg text-status-danger border border-status-danger-border"
+                      >
+                        &#x26a0; {{ groupFailures(gs.group) }} fail{{ groupFailures(gs.group) > 1 ? 's' : '' }}
+                      </span>
+                    </div>
+                    <div v-if="group(gs.group) && groupAvailabilityBadge(group(gs.group)!, section)" class="mt-0.5">
+                      <span
+                        :class="[
+                          'inline-flex items-center px-1.5 py-0.5 rounded text-xs border',
+                          groupAvailabilityBadge(group(gs.group)!, section)!.classes,
+                        ]"
+                      >
+                        {{ groupAvailabilityBadge(group(gs.group)!, section)!.label }}
+                      </span>
+                    </div>
+                  </td>
+
+                  <!-- Slices (expandable) + schedulable/degraded/idle badges -->
+                  <td class="px-3 py-2 text-[13px] align-top">
+                    <button
+                      v-if="groupHasSlices(gs.group)"
+                      class="inline-flex items-center gap-1 cursor-pointer hover:opacity-80 flex-wrap"
+                      :aria-expanded="expandedSlices.has(gs.group)"
+                      :aria-label="(expandedSlices.has(gs.group) ? 'Hide' : 'Show') + ' slices for ' + gs.group"
+                      @click="toggleSlices(gs.group)"
+                    >
+                      <span class="text-[10px] text-text-muted">
+                        {{ expandedSlices.has(gs.group) ? '▼' : '▶' }}
+                      </span>
+                      <span class="inline-flex items-center gap-1 flex-wrap">
+                        <!-- Lifecycle state badges (server sliceStateCounts) -->
+                        <template v-for="state in SLICE_LIFECYCLE_BADGES" :key="state">
+                          <span
+                            v-if="(groupSliceCounts(gs.group)[state] ?? 0) > 0"
+                            :class="[
+                              BADGE_BASE,
+                              SLICE_STATE_STYLES[state].bg,
+                              SLICE_STATE_STYLES[state].text,
+                              SLICE_STATE_STYLES[state].border,
+                            ]"
+                            :title="SLICE_STATE_STYLES[state].label"
+                          >
+                            {{ groupSliceCounts(gs.group)[state] }}{{ SLICE_STATE_STYLES[state].letter }}
+                          </span>
+                        </template>
+
+                        <!-- Schedulable (healthy, server rollup) -->
+                        <span
+                          v-if="groupSchedulable(gs.group) > 0"
+                          :class="[BADGE_BASE, 'bg-status-success-bg text-status-success border-status-success-border']"
+                          :title="`${groupSchedulable(gs.group)} schedulable (healthy) slot${groupSchedulable(gs.group) > 1 ? 's' : ''}`"
+                        >
+                          {{ groupSchedulable(gs.group) }} schedulable
+                        </span>
+
+                        <!-- Degraded (unschedulable, server rollup) -->
+                        <span
+                          v-if="groupDegraded(gs.group) > 0"
+                          :class="[BADGE_BASE, 'bg-status-orange-bg text-status-orange border-status-orange-border']"
+                          :title="`${groupDegraded(gs.group)} degraded slot${groupDegraded(gs.group) > 1 ? 's' : ''} — workers unhealthy, cannot schedule`"
+                        >
+                          {{ groupDegraded(gs.group) }} degraded
+                        </span>
+
+                        <!-- Idle slices, split per-slice on their own degraded state.
+                             Both badges can appear if a group holds both kinds. -->
+                        <span
+                          v-if="groupIdleDegradedCount(gs.group) > 0"
+                          :class="[BADGE_BASE, 'bg-status-orange-bg text-status-orange border-status-orange-border']"
+                          :title="`${groupIdleDegradedCount(gs.group)} idle slice${groupIdleDegradedCount(gs.group) > 1 ? 's' : ''} but degraded — cannot be scheduled`"
+                        >
+                          {{ groupIdleDegradedCount(gs.group) }} idle · unschedulable (degraded)
+                        </span>
+                        <span
+                          v-if="groupIdleSpareCount(gs.group) > 0"
+                          :class="[BADGE_BASE, 'bg-status-warning-bg text-status-warning border-status-warning-border']"
+                          :title="`${groupIdleSpareCount(gs.group)} idle slice${groupIdleSpareCount(gs.group) > 1 ? 's' : ''} — eligible for scale-down`"
+                        >
+                          {{ groupIdleSpareCount(gs.group) }} idle
+                        </span>
+                      </span>
+                    </button>
+                    <span v-else class="text-text-muted">-</span>
+
+                    <!-- Reconciliation note: free capacity vs unmet demand -->
+                    <div v-if="groupReconcileNote(gs.group)" class="mt-1 text-[11px]" :class="groupReconcileNote(gs.group)!.classes">
+                      &#x26a0; {{ groupReconcileNote(gs.group)!.text }}
+                    </div>
+                  </td>
+
+                  <!-- Demand -->
+                  <td class="px-3 py-2 text-[13px] text-right font-mono align-top">
+                    {{ groupDemand(gs.group) || '' }}
+                  </td>
+
+                  <!-- Assigned -->
+                  <td class="px-3 py-2 text-[13px] text-right font-mono align-top">{{ gs.assigned ?? 0 }}</td>
+
+                  <!-- Launch -->
+                  <td class="px-3 py-2 text-[13px] text-right font-mono align-top">{{ gs.launch ?? 0 }}</td>
+
+                  <!-- Decision -->
+                  <td class="px-3 py-2 text-[13px] align-top">
+                    <span :class="decisionClasses(gs.decision)">{{ formatDecision(gs.decision) }}</span>
+                  </td>
+
+                  <!-- Reason -->
+                  <td class="px-3 py-2 text-[13px] text-text-secondary max-w-xs truncate align-top" :title="groupReasonText(gs)">
+                    {{ groupReasonText(gs) }}
+                  </td>
+                </tr>
+
+                <!-- Slice detail (expanded) -->
+                <tr v-if="expandedSlices.has(gs.group) && groupHasSlices(gs.group) && !collapsedPools.has(section.pool)" class="bg-surface-sunken">
+                  <td colspan="8" class="px-6 py-3">
+                    <SliceList :slices="groupSlices(gs.group)" :worker-jobs="NO_WORKER_JOBS" :now="nowMs" />
+                  </td>
+                </tr>
+              </template>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===== Unmet demand ===== -->
+    <section v-if="aggregatedUnmet.length > 0">
+      <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">
+        Unmet Demand
+      </h3>
+      <div class="overflow-x-auto rounded-lg border border-surface-border">
+        <table class="w-full border-collapse">
+          <thead>
+            <tr class="border-b border-surface-border bg-surface">
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Job</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Reasons</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Entries</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Example Task</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Accelerator</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in aggregatedUnmet"
+              :key="row.job"
+              class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+            >
+              <td class="px-3 py-2 text-[13px] font-semibold">{{ row.job }}</td>
+              <td class="px-3 py-2 text-[13px] text-text-secondary">{{ formatReasonCounts(row.reasonCounts) }}</td>
+              <td class="px-3 py-2 text-[13px] text-right font-mono">{{ row.entryCount }}</td>
+              <td class="px-3 py-2 text-[13px] font-mono text-text-muted truncate max-w-xs" :title="row.exampleTask ?? undefined">
+                {{ row.exampleTask ?? '-' }}
+              </td>
+              <td class="px-3 py-2 text-[13px] font-mono">
+                {{ row.accelerators.size === 1 ? [...row.accelerators][0] : 'mixed' }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===== Pending jobs (not scheduling) ===== -->
+    <section>
+      <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">
+        Pending Jobs ({{ pendingTotal }})
+      </h3>
+      <div class="flex items-center gap-3 mb-3">
+        <form class="flex items-center gap-2" @submit.prevent="applyPendingSearch">
+          <input
+            v-model="pendingSearchInput"
+            type="text"
+            placeholder="Search by job name..."
+            aria-label="Search pending jobs by name"
+            class="w-64 px-3 py-1.5 bg-surface border border-surface-border rounded
+                   text-sm font-mono placeholder:text-text-muted
+                   focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
+          />
+          <button
+            type="submit"
+            class="px-3 py-1.5 text-sm border border-surface-border rounded hover:bg-surface-raised text-text-secondary"
+          >
+            Search
+          </button>
+          <button
+            v-if="pendingSearch"
+            type="button"
+            class="px-3 py-1.5 text-sm border border-surface-border rounded hover:bg-surface-raised text-text-muted"
+            @click="pendingSearchInput = ''; applyPendingSearch()"
+          >
+            Clear
+          </button>
+        </form>
+      </div>
+
+      <div
+        v-if="pendingError"
+        class="mb-4 px-4 py-3 text-sm text-status-danger bg-status-danger-bg rounded-lg border border-status-danger-border"
+      >
+        {{ pendingError }}
+      </div>
+
+      <LoadingSpinner v-if="pendingLoading && pendingJobs.length === 0" size="sm" />
+
+      <EmptyState v-else-if="pendingJobs.length === 0" message="No pending jobs" />
+
+      <div v-else class="overflow-x-auto">
+        <table class="w-full border-collapse">
+          <thead>
+            <tr class="border-b border-surface-border">
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Job</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">User</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">State</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Band</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Pending Reason</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Submitted</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="job in pendingJobs"
+              :key="job.jobId"
+              class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+            >
+              <td class="px-3 py-2 text-[13px] font-mono">
+                <RouterLink :to="`/job/${encodeURIComponent(job.jobId)}`" class="text-accent hover:underline">
+                  {{ job.name || job.jobId }}
+                </RouterLink>
+              </td>
+              <td class="px-3 py-2 text-[13px]">{{ job.jobId.split('/')[0] }}</td>
+              <td class="px-3 py-2 text-[13px]">
+                <StatusBadge :status="job.state" size="sm" />
+              </td>
+              <td class="px-3 py-2 text-[13px]">
+                <span v-if="pendingJobBand.get(job.jobId)" :class="bandColor(pendingJobBand.get(job.jobId))">
+                  {{ bandDisplayName(pendingJobBand.get(job.jobId)) }}
+                </span>
+                <span v-else class="text-text-muted">-</span>
+              </td>
+              <td class="px-3 py-2 text-[13px] text-status-warning max-w-md truncate" :title="job.pendingReason ?? ''">
+                {{ job.pendingReason || '-' }}
+              </td>
+              <td class="px-3 py-2 text-[13px] font-mono text-text-secondary">
+                {{ job.submittedAt ? formatRelativeTime(timestampMs(job.submittedAt)) : '-' }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <!-- Pagination -->
+        <div v-if="pendingTotalPages > 1" class="flex items-center justify-between px-3 py-2 text-xs text-text-secondary border-t border-surface-border">
+          <span>
+            {{ pendingPage * PENDING_PAGE_SIZE + 1 }}&ndash;{{ Math.min((pendingPage + 1) * PENDING_PAGE_SIZE, pendingTotal) }}
+            of {{ pendingTotal }} jobs
+          </span>
+          <div class="flex items-center gap-1">
+            <button
+              :disabled="pendingPage === 0"
+              class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+              @click="pendingPage--"
+            >
+              &larr; Prev
+            </button>
+            <span class="px-2 font-mono">{{ pendingPage + 1 }} / {{ pendingTotalPages }}</span>
+            <button
+              :disabled="pendingPage >= pendingTotalPages - 1"
+              class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+              @click="pendingPage++"
+            >
+              Next &rarr;
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Users & quotas ===== -->
+    <section>
+      <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">Users &amp; Quotas</h3>
+      <EmptyState v-if="mergedUsers.length === 0" message="No users" />
+      <div v-else class="overflow-x-auto">
+        <table class="w-full border-collapse">
+          <thead>
+            <tr class="border-b border-surface-border">
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">User</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Active Jobs</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Running</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Pending</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Running Tasks</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary" title="Running / pending tasks per effective priority band">By Band</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Total Tasks</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Spent</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Limit</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Utilization</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Band</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="user in mergedUsers"
+              :key="user.userId"
+              class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+            >
+              <td class="px-3 py-2 text-[13px] font-mono">
+                <RouterLink
+                  v-if="user.userId"
+                  :to="{ path: '/', query: { user: user.userId } }"
+                  class="text-accent hover:underline"
+                >{{ user.userId }}</RouterLink>
+                <span v-else class="text-text-muted">(unknown)</span>
+              </td>
+              <td class="px-3 py-2 text-[13px] text-right tabular-nums">{{ user.activeJobs }}</td>
+              <td class="px-3 py-2 text-[13px] text-right tabular-nums">
+                <span :class="user.runningJobs > 0 ? 'text-accent font-semibold' : ''">{{ user.runningJobs }}</span>
+              </td>
+              <td class="px-3 py-2 text-[13px] text-right tabular-nums">
+                <span :class="user.pendingJobs > 0 ? 'text-status-warning' : ''">{{ user.pendingJobs }}</span>
+              </td>
+              <td class="px-3 py-2 text-[13px] text-right tabular-nums">
+                <span :class="user.runningTasks > 0 ? 'text-accent font-semibold' : ''">{{ user.runningTasks }}</span>
+              </td>
+              <td class="px-3 py-2 text-[13px] whitespace-nowrap">
+                <template v-for="band in BANDS" :key="band">
+                  <span
+                    v-if="user.bands.running[band] || user.bands.pending[band]"
+                    class="mr-2 tabular-nums"
+                    :title="bandDisplayName(band) + ': ' + user.bands.running[band] + ' running / ' + user.bands.pending[band] + ' pending'"
+                  >
+                    <span :class="bandColor(band)">{{ bandDisplayName(band).charAt(0) }}</span>
+                    <span class="text-accent">{{ user.bands.running[band] }}</span>
+                    <span class="text-text-muted">/</span>
+                    <span :class="user.bands.pending[band] > 0 ? 'text-status-warning' : 'text-text-muted'">{{ user.bands.pending[band] }}</span>
+                  </span>
+                </template>
+                <span v-if="bandBreakdownTotal(user.bands) === 0" class="text-text-muted">-</span>
+              </td>
+              <td class="px-3 py-2 text-[13px] text-right tabular-nums">{{ user.totalTasks }}</td>
+              <td class="px-3 py-2 text-[13px] text-right tabular-nums">
+                {{ user.hasBudget ? user.budgetSpent : '-' }}
+              </td>
+              <td class="px-3 py-2 text-[13px] text-right tabular-nums">
+                {{ !user.hasBudget ? '-' : user.budgetLimit === '0' ? 'Unlimited' : user.budgetLimit }}
+              </td>
+              <td class="px-3 py-2 text-[13px] text-right tabular-nums font-semibold" :style="user.hasBudget ? utilizationStyle(user.utilizationPercent) : {}">
+                {{ !user.hasBudget ? '-' : user.budgetLimit === '0' ? '-' : user.utilizationPercent.toFixed(1) + '%' }}
+              </td>
+              <td class="px-3 py-2 text-[13px]">
+                <template v-if="user.hasBudget">
+                  <span :class="bandColor(user.effectiveBand)">{{ bandDisplayName(user.effectiveBand) }}</span>
+                  <span
+                    v-if="user.maxBand !== user.effectiveBand"
+                    class="ml-1 text-xs text-status-warning"
+                  >
+                    (max: {{ bandDisplayName(user.maxBand) }})
+                  </span>
+                </template>
+                <span v-else class="text-text-muted">-</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="px-3 py-2 text-xs text-text-secondary border-t border-surface-border">
+          {{ mergedUsers.length }} user{{ mergedUsers.length !== 1 ? 's' : '' }}
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Diagnostics (secondary) ===== -->
+    <details class="rounded-lg border border-surface-border bg-surface">
+      <summary class="px-4 py-2 cursor-pointer text-sm font-semibold text-text-secondary uppercase tracking-wider select-none">
+        Diagnostics — recent actions &amp; logs
+      </summary>
+      <div class="px-4 py-3 space-y-6 border-t border-surface-border">
+        <!-- Recent autoscaler actions -->
+        <div>
+          <h4 class="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">Recent Actions</h4>
+          <div v-if="actions.length === 0" class="text-sm text-text-muted py-2">No recent actions</div>
+          <div v-else class="rounded-lg border border-surface-border bg-surface-sunken divide-y divide-surface-border-subtle">
+            <div
+              v-for="(action, i) in actions"
+              :key="i"
+              class="flex items-center gap-3 px-4 py-2 text-[13px] hover:bg-surface-raised transition-colors"
+            >
+              <span class="font-mono text-text-muted w-20 flex-shrink-0">{{ formatActionTime(action.timestamp) }}</span>
+              <span :class="actionTypeClasses(action.actionType)">
+                {{ (action.actionType ?? 'unknown').replace('_', ' ') }}
+              </span>
+              <span
+                v-if="action.status && action.status !== 'completed'"
+                :class="['text-xs', actionStatusClasses(action.status)]"
+              >
+                [{{ action.status }}]
+              </span>
+              <span class="font-semibold">{{ action.scaleGroup }}</span>
+              <span v-if="action.sliceId" class="font-mono text-text-muted text-xs" :title="action.sliceId">
+                [{{ sliceIdShort(action.sliceId) }}]
+              </span>
+              <span v-if="action.reason" class="text-text-secondary">- {{ action.reason }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Controller logs -->
+        <div>
+          <h4 class="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">Controller Logs</h4>
+          <LogViewer source="controller" max-height="40vh" />
+        </div>
+      </div>
+    </details>
+  </div>
+</template>

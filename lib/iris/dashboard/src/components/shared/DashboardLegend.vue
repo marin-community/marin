@@ -40,7 +40,7 @@ onUnmounted(() => {
 })
 
 // -- Availability badge examples --
-// These mirror groupAvailabilityBadge() in AutoscalerTab.vue. Keep label text
+// These mirror groupAvailabilityBadge() in CapacityTab.vue. Keep label text
 // in sync with the logic there.
 interface AvailabilityExample {
   label: string
