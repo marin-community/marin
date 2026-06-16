@@ -41,10 +41,10 @@ logger = logging.getLogger(__name__)
 def _job_constraints_json(request: controller_pb2.Controller.LaunchJobRequest, job_id: JobName) -> str | None:
     """Serialize the job's constraints, folding in the deprecated reservation field.
 
-    Reservations were replaced by soft ``availability:<variant>`` constraints. A
+    Reservations were replaced by hard ``availability:<variant>`` constraints. A
     pre-availability client may still set ``request.reservation``; we convert each
-    entry to a soft availability hint here (the single server-side ingestion point)
-    and never persist anything reservation-shaped. New availability hints are
+    entry to an availability constraint here (the single server-side ingestion point)
+    and never persist anything reservation-shaped. Converted constraints are
     deduplicated against constraints the request already carries.
     """
     constraints = list(request.constraints)
@@ -59,8 +59,8 @@ def _job_constraints_json(request: controller_pb2.Controller.LaunchJobRequest, j
     ]
     if converted:
         logger.warning(
-            "Job %s submitted with the deprecated `reservation` field; converting it to soft "
-            "availability hints %s. Update the client to pass availability constraints directly.",
+            "Job %s submitted with the deprecated `reservation` field; converting it to "
+            "availability constraints %s. Update the client to pass availability constraints directly.",
             job_id.to_wire(),
             [c.key for c in converted],
         )

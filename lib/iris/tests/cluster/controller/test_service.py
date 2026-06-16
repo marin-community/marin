@@ -1503,8 +1503,8 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
 
 
 def test_launch_job_deprecated_reservation_becomes_availability_hint(service, state):
-    """A pre-availability client's ``reservation`` field is converted to soft
-    availability hints at ingestion and nothing reservation-shaped is persisted."""
+    """A pre-availability client's ``reservation`` field is converted to hard
+    availability constraints at ingestion and nothing reservation-shaped is persisted."""
     request = controller_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-user", "old-client-job").to_wire(),
         entrypoint=make_test_entrypoint(),
@@ -1521,9 +1521,10 @@ def test_launch_job_deprecated_reservation_becomes_availability_hint(service, st
     stored = constraints_from_json(job.constraints_json)
     avail = [c for c in stored if c.key == availability_key("v5litepod-16")]
     assert len(avail) == 1, stored
-    # Soft, zone-level hint: EXISTS + PREFERRED, never a hard requirement.
+    # Hard, zone-level constraint: EXISTS + REQUIRED — the job is confined to a
+    # zone that can provision the accelerator.
     assert avail[0].op == ConstraintOp.EXISTS
-    assert avail[0].mode == job_pb2.CONSTRAINT_MODE_PREFERRED
+    assert avail[0].mode == job_pb2.CONSTRAINT_MODE_REQUIRED
 
 
 # =============================================================================

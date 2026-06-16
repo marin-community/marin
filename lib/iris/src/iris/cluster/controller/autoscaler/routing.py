@@ -435,10 +435,10 @@ def _enriched_group_attrs(
 ) -> dict[str, AttributeValue]:
     """A group's routing attributes plus its zone's ``availability:<variant>`` markers.
 
-    A soft ``availability:<variant>`` hint on a job's demand ranks groups whose
-    zone can provision that variant ahead of groups elsewhere, so a CPU
-    orchestrator's CPU demand is steered toward a zone where its accelerator can
-    later be found.
+    A hard ``availability:<variant>`` constraint on a job's demand restricts routing
+    to groups whose zone can provision that variant, so a CPU orchestrator's CPU
+    demand is steered into a zone where its accelerator can later be found (and is
+    held back from zones that can never provide it).
     """
     attrs = group.to_attributes()
     for variant in zone_capabilities.get(group.zone or "", ()):

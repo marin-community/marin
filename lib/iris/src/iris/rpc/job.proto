@@ -359,7 +359,7 @@ message JobStatus {
 // Reservations are gone. The controller no longer holds capacity, spawns holder
 // jobs, or gates scheduling. These messages and LaunchJobRequest.reservation are
 // retained ONLY so pre-availability clients don't hard-fail: the server converts
-// any incoming reservation into soft availability:<variant> constraints at
+// any incoming reservation into hard availability:<variant> constraints at
 // ingestion and discards it (nothing reservation-shaped is persisted). Current
 // clients omit the field. Scheduled for removal once stragglers have upgraded.
 

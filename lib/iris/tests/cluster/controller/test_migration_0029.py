@@ -6,7 +6,7 @@
 Builds a representative pre-migration DB (reservation columns/indexes/CHECK, a
 holder job, a real reservation job, a plain job, a FK-referenced task) and asserts
 the migration: deletes holders (cascading to their tasks), converts real
-reservations into soft ``availability:<variant>`` constraints, strips the schema,
+reservations into hard ``availability:<variant>`` constraints, strips the schema,
 and leaves data + FK integrity intact — and is idempotent on re-run.
 """
 
@@ -104,7 +104,7 @@ def _seed(conn: sqlite3.Connection) -> None:
     )
     conn.execute("INSERT INTO tasks VALUES ('/u1/holder/0','/u1/holder',?)", (job_pb2.TASK_STATE_RUNNING,))
 
-    # Real reservation job — its reservation converts to a soft availability hint.
+    # Real reservation job — its reservation converts to a hard availability constraint.
     add_job("/u1/real", holder=0, has_reservation=1, name="real")
     conn.execute(
         "INSERT INTO job_config (job_id,name,has_reservation,constraints_json,reservation_json) VALUES (?,?,?,?,?)",
@@ -134,13 +134,13 @@ def test_migration_0029_drops_reservations_and_converts_in_flight():
     assert conn.execute("SELECT COUNT(*) FROM jobs WHERE job_id='/u1/holder'").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM tasks WHERE job_id='/u1/holder'").fetchone()[0] == 0
 
-    # Real reservation became exactly one soft availability:<variant> constraint.
+    # Real reservation became exactly one hard availability:<variant> constraint.
     real_json = conn.execute("SELECT constraints_json FROM job_config WHERE job_id='/u1/real'").fetchone()[0]
     constraints = constraints_from_json(real_json)
     avail = [c for c in constraints if c.key == availability_key("v5litepod-16")]
     assert len(avail) == 1, constraints
     assert avail[0].op == ConstraintOp.EXISTS
-    assert avail[0].mode == job_pb2.CONSTRAINT_MODE_PREFERRED
+    assert avail[0].mode == job_pb2.CONSTRAINT_MODE_REQUIRED
 
     # Plain job's constraints are untouched.
     assert conn.execute("SELECT constraints_json FROM job_config WHERE job_id='/u1/plain'").fetchone()[0] == "[]"

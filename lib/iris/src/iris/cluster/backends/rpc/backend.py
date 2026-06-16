@@ -164,8 +164,10 @@ class RpcTaskBackend:
 
         Reads the autoscaler's per-zone accelerator-capability map so the
         scheduler can inject ``availability:<variant>`` markers onto workers and
-        rank a soft availability hint by zone. Clusters with no autoscaler pass
-        an empty map (availability hints simply have no effect).
+        confine a hard availability constraint to a capable zone. Clusters with no
+        autoscaler pass an empty map: no worker gets an availability marker, so a
+        job carrying an availability constraint there stays unschedulable (it has
+        no zone that can satisfy it).
         """
         zone_capabilities = self.autoscaler.zone_capabilities() if self.autoscaler is not None else None
         return run_scheduling_decision(self._scheduler, snapshot, zone_capabilities)

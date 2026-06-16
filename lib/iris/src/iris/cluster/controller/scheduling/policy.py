@@ -19,11 +19,13 @@ from dataclasses import dataclass, replace
 from rigging.log_setup import slow_log
 
 from iris.cluster.constraints import (
+    AVAILABILITY_PREFIX,
     AttributeValue,
     PlacementRequirements,
     WellKnownAttribute,
     availability_key,
     extract_placement_requirements,
+    is_availability_key,
     split_hard_soft,
 )
 from iris.cluster.controller import reads
@@ -120,12 +122,11 @@ def enrich_workers_with_availability(
     """Add each worker's zone ``availability:<variant>`` markers to its attributes.
 
     A worker inherits the accelerator variants its *zone* can provision (inferred
-    from the autoscaler). A soft ``availability:<variant>`` job hint then ranks a
-    worker in a capable zone ahead of workers elsewhere, so a CPU orchestrator
-    co-locates with the zone where its accelerator can be found — by preference,
-    never as a hard requirement. Keys on the existing ``zone`` attribute (the same
-    one ``--zone``/``--region`` matching uses); workers without a zone are passed
-    through unchanged.
+    from the autoscaler). A hard ``availability:<variant>`` job constraint then
+    filters placement to workers in a capable zone, so a CPU orchestrator is placed
+    only in the zone where its accelerator can be found (and waits otherwise). Keys
+    on the existing ``zone`` attribute (the same one ``--zone``/``--region``
+    matching uses); workers without a zone are passed through unchanged.
     """
     if not zone_capabilities:
         return workers
@@ -141,6 +142,30 @@ def enrich_workers_with_availability(
             attrs[availability_key(variant)] = AttributeValue("true")
         enriched.append(replace(worker, attributes=attrs))
     return enriched
+
+
+def demanded_availability_variants(pending_task_rows: list[PendingTask]) -> set[str]:
+    """Accelerator variants some pending task constrains on via ``availability:<variant>``.
+
+    Only these variants need injecting onto workers this tick: an availability
+    marker matters solely when a pending job filters on it, and in practice a tiny
+    set of variants (often just one, e.g. ``v5p-8``) is ever reserved. Restricting
+    enrichment to this set confines the per-worker copy to the few workers in a
+    zone that provisions a demanded variant. A substring pre-check skips JSON
+    parsing for the common task that carries no availability constraint at all.
+
+    Returned variants are lowercased to match the ``zone_capabilities`` map (both
+    sides come through :func:`availability_key`).
+    """
+    variants: set[str] = set()
+    for task in pending_task_rows:
+        constraints_json = task.constraints_json
+        if not constraints_json or AVAILABILITY_PREFIX not in constraints_json:
+            continue
+        for constraint in constraints_from_json(constraints_json):
+            if is_availability_key(constraint.key):
+                variants.add(constraint.key[len(AVAILABILITY_PREFIX) :])
+    return variants
 
 
 def compute_demand_entries(
@@ -159,9 +184,9 @@ def compute_demand_entries(
     (limits-on) assignment pass: a task blocked only by the per-cycle assignment
     cap has capacity waiting for it and must not signal demand.
 
-    Each entry carries the job's constraints, so a soft ``availability:<variant>``
-    hint rides along to the autoscaler, which ranks scaling groups by the zone
-    capability they expose (see ``route_demand``).
+    Each entry carries the job's constraints, so a hard ``availability:<variant>``
+    constraint rides along to the autoscaler, which restricts scaling groups to the
+    zones that expose that capability (see ``route_demand``).
 
     Args:
         ctx: The per-tick scheduling context (workers, pending task rows,

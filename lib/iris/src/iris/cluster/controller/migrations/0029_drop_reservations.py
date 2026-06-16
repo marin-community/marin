@@ -3,8 +3,8 @@
 
 """Drop the reservation apparatus, gracefully migrating any in-flight reservations.
 
-Reservations are gone: ``--reserve`` now becomes a soft ``availability:<variant>``
-scheduling hint, holding no capacity and spawning no holder job. A DB upgraded
+Reservations are gone: ``--reserve`` now becomes a hard ``availability:<variant>``
+scheduling constraint, holding no capacity and spawning no holder job. A DB upgraded
 mid-flight may still carry reservation state, so before stripping the schema this
 migration handles the two cases the removed code would otherwise mishandle:
 
@@ -17,10 +17,10 @@ migration handles the two cases the removed code would otherwise mishandle:
    any descendants) drops it from the controller's reconcile ``desired`` set, so the
    worker zombie-reaps the still-running process and frees the accelerator.
 
-2. **Real reservations are converted to availability hints.** Each non-holder job
-   with a ``reservation_json`` has its reserved accelerator variants folded into the
-   job's ``constraints_json`` as soft ``availability:<variant>`` constraints (the same
-   conversion the ingestion shim applies to new submissions), preserving the
+2. **Real reservations are converted to availability constraints.** Each non-holder
+   job with a ``reservation_json`` has its reserved accelerator variants folded into
+   the job's ``constraints_json`` as hard ``availability:<variant>`` constraints (the
+   same conversion the ingestion shim applies to new submissions), preserving the
    zone-steering intent of a job that was mid-flight at upgrade. This is an
    intentional, transitional data migration: it reuses live constraint helpers rather
    than re-encoding the wire format by hand, and is scheduled for removal with the
@@ -141,7 +141,7 @@ def _merged_constraints_json(reservation_json: str, constraints_json: str | None
 
 
 def _convert_reservations_to_availability(raw_conn) -> None:
-    """Convert each non-holder job's reservation into soft availability constraints."""
+    """Convert each non-holder job's reservation into hard availability constraints."""
     if not _has_column(raw_conn, "job_config", "reservation_json"):
         return
     rows = raw_conn.execute(

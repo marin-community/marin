@@ -374,9 +374,9 @@ class Autoscaler:
     def zone_capabilities(self, timestamp: Timestamp | None = None) -> dict[str, frozenset[str]]:
         """Map zone -> {device_variant} the cluster is configured to provision there.
 
-        Used by routing (to rank scaling groups) and by the scheduler (to inject
-        ``availability:<variant>`` markers onto workers) so a soft availability
-        hint steers a job toward a zone where its accelerator can be found.
+        Used by routing (to filter scaling groups) and by the scheduler (to inject
+        ``availability:<variant>`` markers onto workers) so a hard availability
+        constraint confines a job to a zone where its accelerator can be found.
 
         A variant counts for a zone if a configured accelerator group for it
         exists there and is not hard-quota-blocked (QUOTA_EXCEEDED); transient

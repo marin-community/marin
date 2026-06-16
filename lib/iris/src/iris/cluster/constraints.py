@@ -344,26 +344,29 @@ def is_availability_key(key: str) -> bool:
     return key.startswith(AVAILABILITY_PREFIX)
 
 
-def availability_constraint(variant: str, *, soft: bool = True) -> Constraint:
-    """Prefer (soft, default) or require (hard) a zone that can provision ``variant``.
+def availability_constraint(variant: str) -> Constraint:
+    """Require a zone that can provision ``variant``.
 
-    A zone-level placement hint, not a per-worker requirement: the scheduler and
+    A zone-level placement requirement, not a per-worker one: the scheduler and
     autoscaler inject ``availability:<variant>`` markers onto workers/groups whose
-    zone can provision the accelerator (inferred from the autoscaler), and this
-    EXISTS constraint ranks (soft) or filters (hard) candidates by that marker.
-    Accelerators only — CPU/RAM/disk never produce availability markers.
+    zone can provision the accelerator (inferred from the autoscaler's configured
+    scaling groups), and this EXISTS constraint filters candidates to that marker.
+    A job is placed only where the hint can be satisfied — it waits rather than
+    landing in a zone that can never provide the accelerator. Accelerators only —
+    CPU/RAM/disk never produce availability markers.
     """
-    mode = job_pb2.CONSTRAINT_MODE_PREFERRED if soft else job_pb2.CONSTRAINT_MODE_REQUIRED
-    return Constraint.create(key=availability_key(variant), op=ConstraintOp.EXISTS, mode=mode)
+    return Constraint.create(
+        key=availability_key(variant), op=ConstraintOp.EXISTS, mode=job_pb2.CONSTRAINT_MODE_REQUIRED
+    )
 
 
 def availability_constraints_from_reservation(reservation: job_pb2.ReservationConfig) -> list[Constraint]:
-    """Map a deprecated ``ReservationConfig`` to soft ``availability:<variant>`` hints.
+    """Map a deprecated ``ReservationConfig`` to hard ``availability:<variant>`` constraints.
 
     Back-compat shim for pre-availability clients (see job.proto): each reservation
-    entry's accelerator variant becomes one soft availability constraint. Entries
+    entry's accelerator variant becomes one hard availability constraint. Entries
     with no accelerator device contribute nothing (availability is accelerators
-    only). Deduplicated by key so duplicate entries collapse to a single hint.
+    only). Deduplicated by key so duplicate entries collapse to a single constraint.
     """
     constraints: list[Constraint] = []
     seen: set[str] = set()

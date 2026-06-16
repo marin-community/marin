@@ -70,11 +70,11 @@ def test_parse_gpu_spec_rejects_invalid(spec):
 
 
 def test_reserve_spec_to_availability_tpu():
-    """A TPU variant yields a soft availability:<variant> EXISTS constraint."""
+    """A TPU variant yields a hard availability:<variant> EXISTS constraint."""
     constraint = reserve_spec_to_availability("v5litepod-16")
     assert constraint.key == availability_key("v5litepod-16")
     assert constraint.op == ConstraintOp.EXISTS
-    assert constraint.is_soft
+    assert not constraint.is_soft
 
 
 def test_reserve_spec_to_availability_gpu():
@@ -82,7 +82,7 @@ def test_reserve_spec_to_availability_gpu():
     constraint = reserve_spec_to_availability("H100x8")
     assert constraint.key == availability_key("H100")
     assert constraint.op == ConstraintOp.EXISTS
-    assert constraint.is_soft
+    assert not constraint.is_soft
 
 
 def test_reserve_spec_to_availability_count_prefix_ignored():
@@ -142,7 +142,7 @@ def test_run_iris_job_adds_zone_constraint(monkeypatch):
 
 
 def test_run_iris_job_passes_reserve_as_availability_constraint(monkeypatch):
-    """run_iris_job forwards --reserve as a soft availability constraint."""
+    """run_iris_job forwards --reserve as a hard availability constraint."""
     captured: dict[str, object] = {}
 
     def _fake_submit_and_wait_job(**kwargs):
@@ -165,7 +165,7 @@ def test_run_iris_job_passes_reserve_as_availability_constraint(monkeypatch):
     availability = [c for c in constraints if c.key == availability_key("H100")]
     assert len(availability) == 1
     assert availability[0].op == ConstraintOp.EXISTS
-    assert availability[0].is_soft
+    assert not availability[0].is_soft
 
 
 def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):

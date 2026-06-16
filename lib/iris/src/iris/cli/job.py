@@ -403,13 +403,14 @@ def validate_extra_resources(
 
 
 def reserve_spec_to_availability(spec: str) -> Constraint:
-    """Turn a ``--reserve`` spec like ``4:H100x8`` or ``v5litepod-16`` into a soft
+    """Turn a ``--reserve`` spec like ``4:H100x8`` or ``v5litepod-16`` into a hard
     ``availability:<variant>`` constraint.
 
     Format: ``[COUNT:]DEVICE_SPEC``. The count is ignored — availability is a
-    soft, zone-level hint ("schedule me where this accelerator can be found"),
-    not a capacity hold, so the number of workers is meaningless. DEVICE_SPEC
-    resolves as a known TPU variant first, then falls back to a GPU spec.
+    zone-level placement constraint ("schedule me where this accelerator can be
+    found"), not a capacity hold, so the number of workers is meaningless.
+    DEVICE_SPEC resolves as a known TPU variant first, then falls back to a GPU
+    spec.
     """
     device_spec = spec.split(":", 1)[1] if ":" in spec else spec
 
@@ -564,8 +565,8 @@ def run_iris_job(
             (KeyboardInterrupt, unexpected exceptions). Normal completion is unaffected.
         regions: If provided, restrict the job to workers in these regions.
         zone: If provided, restrict the job to workers in this zone.
-        reserve: Soft availability hints (e.g., ("4:H100x8", "v5litepod-16")) that
-            steer the job toward a zone where the named accelerator can be found.
+        reserve: Hard availability constraints (e.g., ("4:H100x8", "v5litepod-16"))
+            that confine the job to a zone where the named accelerator can be found.
         preemptible: If True/False, force scheduling on (non-)preemptible workers
             and bypass the executor heuristic. If None (default), the heuristic runs.
         task_image: Optional task container image override. When None, workers use
@@ -595,9 +596,9 @@ def run_iris_job(
     )
 
     if reserve:
-        # --reserve is now a soft, zone-level availability hint: "schedule me in
-        # a zone where this accelerator can be found." It ranks candidate zones
-        # but never blocks, so it composes freely with --region/--zone.
+        # --reserve is now a hard, zone-level availability constraint: "schedule me
+        # only in a zone where this accelerator can be found." It filters candidate
+        # zones rather than holding capacity, so it composes with --region/--zone.
         availability = [reserve_spec_to_availability(spec) for spec in reserve]
         constraints = [*(constraints or []), *availability]
 
@@ -623,7 +624,7 @@ def run_iris_job(
     if preemptible is not None:
         logger.info(f"Preemptible constraint: {preemptible}")
     if reserve:
-        logger.info(f"Availability hint: {', '.join(reserve)}")
+        logger.info(f"Availability constraint: {', '.join(reserve)}")
     if task_image:
         logger.info(f"Task image: {task_image}")
 
@@ -816,10 +817,11 @@ Examples:
     "--reserve",
     multiple=True,
     help=(
-        "Soft availability hint: schedule in a zone where this accelerator can be "
-        "found. Format: [COUNT:]DEVICE (e.g., 4:H100x8, v5litepod-16); the count is "
-        "ignored. Can be repeated. This only steers placement — it holds no capacity "
-        "and attaches no device. Use --tpu/--gpu to actually request an accelerator."
+        "Availability constraint: schedule only in a zone where this accelerator can "
+        "be found (the job waits otherwise). Format: [COUNT:]DEVICE (e.g., 4:H100x8, "
+        "v5litepod-16); the count is ignored. Can be repeated. This only constrains "
+        "placement — it holds no capacity and attaches no device. Use --tpu/--gpu to "
+        "actually request an accelerator."
     ),
 )
 @click.option(

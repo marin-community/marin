@@ -63,6 +63,7 @@ from iris.cluster.controller.scheduling.policy import (
     apply_scheduling_gates,
     compute_demand_entries,
     compute_scheduling_order,
+    demanded_availability_variants,
     enrich_workers_with_availability,
 )
 from iris.cluster.controller.scheduling.scheduler import JobRequirements, Scheduler, SchedulingContext
@@ -240,20 +241,30 @@ def run_scheduling_decision(
     (plus the autoscaler-derived ``zone_capabilities`` snapshot) and every output
     is plain data.
 
-    ``zone_capabilities`` (zone -> accelerator variants the zone can provision)
-    is folded onto each worker's attributes as ``availability:<variant>`` markers
-    so a soft availability hint ranks workers in a capable zone first.
+    ``zone_capabilities`` (zone -> accelerator variants the zone can provision) is
+    folded onto worker attributes as ``availability:<variant>`` markers so a hard
+    availability constraint confines a job to workers in a capable zone. Only the
+    variants some pending task actually constrains on are injected, so the per-worker
+    copy touches just the workers in a zone that provisions a demanded variant.
     """
     ctx = snapshot.context
     trace = snapshot.trace
 
     if zone_capabilities:
-        ctx = ctx.evolve_with_workers(
-            workers=enrich_workers_with_availability(ctx.workers, zone_capabilities),
-            jobs=ctx.jobs,
-            building_counts=ctx.building_counts,
-            max_building_tasks=ctx.max_building_tasks,
-        )
+        # Inject only the availability markers some pending task actually constrains
+        # on (typically a single variant, e.g. v5p-8). Pruning zone_capabilities to
+        # the demanded variants confines the per-worker attribute copy to the handful
+        # of workers in a zone that provisions one, instead of rebuilding every
+        # worker's attributes every tick. No demand -> no enrichment, no index rebuild.
+        demanded = demanded_availability_variants(ctx.pending_task_rows)
+        relevant = {zone: kept for zone, variants in zone_capabilities.items() if (kept := variants & demanded)}
+        if relevant:
+            ctx = ctx.evolve_with_workers(
+                workers=enrich_workers_with_availability(ctx.workers, relevant),
+                jobs=ctx.jobs,
+                building_counts=ctx.building_counts,
+                max_building_tasks=ctx.max_building_tasks,
+            )
 
     gated = apply_scheduling_gates(
         ctx,
