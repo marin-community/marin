@@ -173,9 +173,9 @@ Jobs in this directory are submitted to **Iris** on a **v5p-8**.
 Swap the module path (`experiments.grug.moe.launch`) for whichever launch
 script in this directory you are running.
 
-`--reserve v5p-8` is a soft zone hint (steers the job toward a zone that can
-provision a v5p-8), not a hard reservation — it does not hold or guarantee
-capacity.
+`--reserve v5p-8` is a hard zone constraint (confines the job to a zone where a
+v5p-8 has actually been obtained, waiting otherwise), not a capacity reservation
+— it does not hold or guarantee capacity.
 
 ### Monitoring
 
