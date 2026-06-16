@@ -933,10 +933,9 @@ class Controller:
     def _run_scheduling(self) -> SchedulingOutcome:
         """Run one self-contained scheduling cycle (its own snapshot + commits).
 
-        Drives the dry-run schedule-only mini-tick (``_control_tick`` short-circuits
-        here when side effects are suppressed); the live control tick instead runs
-        the schedule decision via ``_schedule_phase`` and commits it inside the
-        shared end-of-tick transaction.
+        This is the dry-run scheduling path; the live control tick computes its
+        schedule via ``_schedule_phase`` and commits it in the shared end-of-tick
+        transaction instead.
 
         The controller owns only the I/O: it refreshes reservation claims and
         builds the scheduling context in a single DB snapshot (which folds in the

@@ -286,10 +286,9 @@ def _spent_limiter() -> RateLimiter:
 def reconcile_once(ctrl: Controller) -> None:
     """Drive exactly one reconcile pass through the production control tick.
 
-    The standalone polling loop is gone; reconcile now runs only as a phase of
-    ``Controller._control_tick``. This forces a single reconcile-only tick:
-    ``_force_reconcile`` drives the reconcile phase while the schedule and
-    autoscale limiters never fire.
+    Reconcile runs only as a phase of ``Controller._control_tick``, so this forces
+    a reconcile-only tick: the reconcile phase fires while the schedule and
+    autoscale phases are held off.
     """
     ctrl._force_reconcile = True
     ctrl._control_tick(
@@ -303,10 +302,9 @@ def reconcile_once(ctrl: Controller) -> None:
 def autoscale_once(ctrl: Controller) -> None:
     """Drive one autoscale pass through the production control tick.
 
-    The standalone autoscaler loop is gone; autoscale now runs only as a phase of
-    ``Controller._control_tick`` (always paired with a fresh schedule). In dry-run
-    the tick short-circuits to the schedule-only path, so the autoscale backend
-    call is suppressed — exactly what the dry-run test asserts.
+    Autoscale runs only as a phase of ``Controller._control_tick``, always paired
+    with a fresh schedule. In dry-run the tick short-circuits to the schedule-only
+    path, so the autoscale backend call is suppressed.
     """
     ctrl._force_reconcile = False
     ctrl._control_tick(
