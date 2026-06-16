@@ -44,15 +44,15 @@ uv run python experiments/grug/base/launch.py
 Iris cluster run (from a dev box, on the `marin` prod cluster):
 
 ```bash
-MARIN_PREFIX=gs://marin-us-central2 WANDB_API_KEY="$WANDB_API_KEY" \
+WANDB_API_KEY="$WANDB_API_KEY" \
   uv run python experiments/grug/base/launch.py --cluster=marin
 ```
 
 The driver runs on your dev box and submits the TPU training job via Fray.
-`--tpu_type=v4-8` / `--region=...` override the template's resources, and
-`MARIN_PREFIX` chooses the regional bucket for outputs and checkpoints. See
-[`lib/iris/OPS.md`](../../lib/iris/OPS.md) for the Iris CLI reference and
-troubleshooting.
+`--tpu_type=v4-8` / `--region=...` override the template's resources. Outputs and
+checkpoints land in the regional bucket inferred from your environment, so there
+is no `MARIN_PREFIX` to set. See [`lib/iris/OPS.md`](../../lib/iris/OPS.md) for
+the Iris CLI reference and troubleshooting.
 
 ## Visual diff for template variants
 

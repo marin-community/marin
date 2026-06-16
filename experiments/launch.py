@@ -32,17 +32,17 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import logging
-import os
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from fray.current_client import set_current_client
 from fray.iris_backend import FrayIrisClient
-from fray.types import ResourceConfig, TpuConfig, get_tpu_topology
+from fray.types import GpuConfig, ResourceConfig, TpuConfig, get_tpu_topology
 from iris.client.connect import connect_to_cluster
 from iris.cluster.client.job_info import get_job_info
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main
+from marin.execution.types import VersionedValue, versioned
 
 logger = logging.getLogger(__name__)
 
@@ -90,29 +90,6 @@ def _repo_root() -> Path:
     return root
 
 
-def _ensure_storage_prefix(config: LaunchConfig) -> None:
-    """Pin ``MARIN_PREFIX`` to a regional GCS bucket before any path resolution.
-
-    On a cluster CPU launcher worker, ``MARIN_PREFIX`` is injected from the
-    cluster config or GCS metadata. On a dev box it is neither, so
-    ``marin_prefix()`` would silently fall back to local ``/tmp/marin`` and the
-    driver would compute output paths (and the JAX compilation-cache bucket)
-    under local storage while submitting remote jobs. Refuse that: take the
-    prefix from ``--executor.prefix`` or ``MARIN_PREFIX``, require it to be a
-    ``gs://`` path, and export it so the executor and the direct training-env
-    resolution (which reads ``MARIN_PREFIX``) agree.
-    """
-    prefix = config.executor.prefix or os.environ.get("MARIN_PREFIX")
-    if not prefix or not prefix.startswith("gs://"):
-        raise ValueError(
-            f"Connecting to cluster {config.cluster!r} requires a regional GCS storage prefix, but "
-            f"got {prefix!r}. Pass --executor.prefix=gs://marin-<region> or export "
-            "MARIN_PREFIX=gs://marin-<region> (e.g. gs://marin-us-central2) so outputs and "
-            "checkpoints land on cluster storage instead of local /tmp."
-        )
-    os.environ["MARIN_PREFIX"] = prefix
-
-
 @contextlib.contextmanager
 def launch_session(config: LaunchConfig) -> Iterator[None]:
     """Hoist a connected Iris client for the duration of the block, or run locally.
@@ -145,7 +122,6 @@ def launch_session(config: LaunchConfig) -> Iterator[None]:
         yield
         return
 
-    _ensure_storage_prefix(config)
     with connect_to_cluster(config.cluster, workspace=_repo_root()) as iris_client:
         with set_current_client(FrayIrisClient.from_iris_client(iris_client)):
             yield
@@ -182,29 +158,56 @@ def override_resources(resources: ResourceConfig, config: LaunchConfig) -> Resou
     return dataclasses.replace(resources, **replacements) if replacements else resources
 
 
-def _apply_overrides_to_step(step: ExecutorStep, config: LaunchConfig) -> ExecutorStep:
-    """Apply ``--tpu_type`` / ``--region`` / ``--zone`` to a step's resources.
+def _override_resource_field(value: object, config: LaunchConfig) -> tuple[object, bool]:
+    """Override a ``ResourceConfig`` held directly or inside a ``VersionedValue``.
 
-    A training step carries its :class:`ResourceConfig` in two places that must
-    agree: ``ExecutorStep.resources`` (used to schedule the Fray job) and the
-    step's ``config.resources`` (read at runtime for the accelerator env and
-    region checks, e.g. ``TrainLmOnPodConfig``). Override both so they don't
-    drift. Steps without resources (inline CPU steps) are returned unchanged.
-    Resources are not part of a step's version hash, so the output path is
-    stable across an override.
+    Returns ``(new_value, changed)``. Only accelerator (TPU/GPU) resources are
+    rewritten; CPU resources (inline data-prep steps) are left untouched so their
+    cached output paths stay stable. A ``VersionedValue`` wrapper is preserved so
+    the step's version hash keeps tracking the resources — which is exactly where
+    grug-style steps stash the TPU config consumed at submit time.
     """
-    if step.resources is None:
-        return step
-    new_resources = override_resources(step.resources, config)
-    if new_resources is step.resources:
-        return step
-    replacements: dict[str, object] = {"resources": new_resources}
+    if isinstance(value, VersionedValue):
+        resources: object = value.value
+        wrapped = True
+    else:
+        resources = value
+        wrapped = False
+    if not isinstance(resources, ResourceConfig) or not isinstance(resources.device, TpuConfig | GpuConfig):
+        return value, False
+    new_resources = override_resources(resources, config)
+    if new_resources is resources:
+        return value, False
+    return (versioned(new_resources) if wrapped else new_resources), True
+
+
+def _apply_overrides_to_step(step: ExecutorStep, config: LaunchConfig) -> ExecutorStep:
+    """Apply ``--tpu_type`` / ``--region`` / ``--zone`` to a step's accelerator resources.
+
+    A training step carries its :class:`ResourceConfig` in up to two places that
+    must agree: ``ExecutorStep.resources`` (used to schedule the Fray job) and the
+    step's ``config.resources`` (read at submit time — e.g. the grug templates,
+    whose ``run_grug`` path submits the real job from ``config.resources`` while
+    ``ExecutorStep.resources`` is ``None``). Override both so they can't drift.
+    ``config.resources`` is usually wrapped in ``versioned(...)``; the wrapper is
+    preserved. Only accelerator resources are touched, so inline CPU data-prep
+    steps keep their cached identity. ``ExecutorStep.resources`` is not part of a
+    step's version hash (its output path is stable), whereas a versioned
+    ``config.resources`` is — so a swapped TPU/region yields a fresh run, the
+    intended behavior when the script is re-targeted at new hardware.
+    """
+    replacements: dict[str, object] = {}
+    new_step_resources, step_changed = _override_resource_field(step.resources, config)
+    if step_changed:
+        replacements["resources"] = new_step_resources
     step_config = step.config
     if dataclasses.is_dataclass(step_config) and not isinstance(step_config, type):
         config_fields = {f.name for f in dataclasses.fields(step_config)}
-        if "resources" in config_fields and isinstance(getattr(step_config, "resources", None), ResourceConfig):
-            replacements["config"] = dataclasses.replace(step_config, resources=new_resources)
-    return dataclasses.replace(step, **replacements)
+        if "resources" in config_fields:
+            new_config_resources, config_changed = _override_resource_field(step_config.resources, config)
+            if config_changed:
+                replacements["config"] = dataclasses.replace(step_config, resources=new_config_resources)
+    return dataclasses.replace(step, **replacements) if replacements else step
 
 
 def launch_executor(config: LaunchConfig, steps: list[ExecutorStep], description: str | None = None) -> None:

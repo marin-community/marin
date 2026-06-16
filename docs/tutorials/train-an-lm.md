@@ -154,11 +154,12 @@ The `default_train` function creates a training pipeline that:
 
 Because the script wraps its entrypoint in `launch_executor`, it is
 *self-running*: run it directly from a dev box and pass `--cluster`. The driver
-runs on your machine and spawns the TPU/GPU sub-tasks via Fray. Set
-`MARIN_PREFIX` to the regional bucket where checkpoints and outputs should land:
+runs on your machine and spawns the TPU/GPU sub-tasks via Fray. Checkpoints and
+outputs land in the regional bucket inferred from your environment — no
+`MARIN_PREFIX` to set:
 
 ```bash
-MARIN_PREFIX=gs://marin-us-central2 WANDB_API_KEY="$WANDB_API_KEY" \
+WANDB_API_KEY="$WANDB_API_KEY" \
   uv run python experiments/${YOUR_EXPERIMENT_SCRIPT}.py --cluster=marin
 ```
 

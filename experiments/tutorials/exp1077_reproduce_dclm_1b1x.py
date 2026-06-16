@@ -11,7 +11,7 @@ Author: Will Held
 
 Example usage:
   # Connect to the cluster from your dev box and submit the training job.
-  MARIN_PREFIX=gs://marin-us-central2 WANDB_API_KEY="$WANDB_API_KEY" \
+  WANDB_API_KEY="$WANDB_API_KEY" \
     uv run python experiments/tutorials/exp1077_reproduce_dclm_1b1x.py --cluster=marin
 """
 

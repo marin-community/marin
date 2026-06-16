@@ -4,17 +4,17 @@
 """Behavior tests for the self-running experiment launcher (``experiments/launch.py``)."""
 
 import dataclasses
-import os
 
 import draccus
 import pytest
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import GpuConfig, ResourceConfig
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep
+from marin.execution.executor import ExecutorStep
+from marin.execution.types import VersionedValue, versioned
 
 import experiments.launch as launch
-from experiments.launch import LaunchConfig, _ensure_storage_prefix, launch_session, override_resources
+from experiments.launch import LaunchConfig, launch_session, override_resources
 
 
 def test_launch_config_parses_embedded_executor_flags():
@@ -73,33 +73,9 @@ def test_override_resources_noop_without_overrides():
     assert override_resources(base, LaunchConfig()) is base
 
 
-def test_ensure_storage_prefix_requires_regional_gcs(monkeypatch):
-    config = LaunchConfig(cluster="marin")
-    monkeypatch.delenv("MARIN_PREFIX", raising=False)
-    with pytest.raises(ValueError, match="storage prefix"):
-        _ensure_storage_prefix(config)
-
-    monkeypatch.setenv("MARIN_PREFIX", "/tmp/marin")
-    with pytest.raises(ValueError, match="storage prefix"):
-        _ensure_storage_prefix(config)
-
-    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2")
-    _ensure_storage_prefix(config)
-    assert os.environ["MARIN_PREFIX"] == "gs://marin-us-central2"
-
-
-def test_ensure_storage_prefix_accepts_executor_prefix(monkeypatch):
-    # An explicit --executor.prefix is honored even with MARIN_PREFIX unset, and
-    # exported so the direct training-env path (which reads MARIN_PREFIX) agrees.
-    monkeypatch.delenv("MARIN_PREFIX", raising=False)
-    config = LaunchConfig(cluster="marin", executor=ExecutorMainConfig(prefix="gs://marin-eu-west4"))
-    _ensure_storage_prefix(config)
-    assert os.environ["MARIN_PREFIX"] == "gs://marin-eu-west4"
-
-
 @dataclasses.dataclass(frozen=True)
 class _PodConfigStub:
-    resources: ResourceConfig
+    resources: ResourceConfig | VersionedValue[ResourceConfig]
     note: str = "x"
 
 
@@ -121,8 +97,22 @@ def test_apply_overrides_updates_both_step_and_config_resources():
     assert out.config.note == "x"
 
 
+def test_apply_overrides_updates_versioned_config_resources():
+    # grug executor steps leave ExecutorStep.resources unset and stash the real
+    # TPU config in config.resources wrapped in versioned(...); run_grug submits
+    # from config.resources, so the override must reach it and keep the wrapper.
+    base = ResourceConfig.with_tpu("v5p-8")
+    step = ExecutorStep(name="train/x", fn=lambda p: None, config=_PodConfigStub(resources=versioned(base)))
+    assert step.resources is None
+    out = launch._apply_overrides_to_step(step, LaunchConfig(tpu_type="v4-8", region="us-central2"))
+    assert isinstance(out.config.resources, VersionedValue)
+    assert out.config.resources.value.device.variant == "v4-8"
+    assert out.config.resources.value.regions == ("us-central2",)
+
+
 def test_apply_overrides_leaves_inline_cpu_step_untouched():
-    # resources=None (the default) => inline step; nothing to override even with flags set.
+    # A CPU data-prep step keeps its cached identity: even with config.resources set
+    # and --region passed, a CPU device is not an accelerator target, so it's skipped.
     step = ExecutorStep(name="data/x", fn=lambda p: None, config=_PodConfigStub(resources=ResourceConfig.with_cpu()))
     assert step.resources is None
     assert launch._apply_overrides_to_step(step, LaunchConfig(region="us-central2")) is step
@@ -155,12 +145,3 @@ def test_launch_session_local_when_no_cluster(monkeypatch):
     with launch_session(LaunchConfig(cluster=None)):
         # No client was hoisted: current_client falls back to LocalClient.
         assert isinstance(current_client(), LocalClient)
-
-
-def test_launch_session_local_does_not_require_marin_prefix(monkeypatch):
-    monkeypatch.setattr(launch, "get_job_info", lambda: None)
-    monkeypatch.delenv("MARIN_PREFIX", raising=False)
-    # Local mode must not trip the storage-prefix guard.
-    with launch_session(LaunchConfig(cluster=None, local=True)):
-        pass
-    assert "MARIN_PREFIX" not in os.environ

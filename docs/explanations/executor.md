@@ -103,10 +103,11 @@ The example scripts under `experiments/grug/` and `experiments/tutorials/` are
 `experiments.launch`), so you run them directly from a dev box and pass
 `--cluster`. The driver runs on your machine and `executor_main` spawns the
 accelerated sub-jobs via Fray — there is no separate launcher job to size or
-place. Set `MARIN_PREFIX` to the regional bucket where outputs should land:
+place. Outputs land in the regional bucket inferred from your environment — no
+`MARIN_PREFIX` to set:
 
 ```bash
-MARIN_PREFIX=gs://marin-us-central2 WANDB_API_KEY="$WANDB_API_KEY" \
+WANDB_API_KEY="$WANDB_API_KEY" \
   uv run python experiments/tutorials/train_tiny_model_tpu.py --cluster=marin
 ```
 
