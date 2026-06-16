@@ -23,10 +23,10 @@ import dataclasses
 from fray.cluster import ResourceConfig
 from levanter.schedule import ScheduleStep
 from marin.defaults import SimpleTrainConfig, default_train
+from marin.defaults.evals import default_base_eval
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
-from experiments.evals.evals import default_base_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary

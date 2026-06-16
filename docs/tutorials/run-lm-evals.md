@@ -12,11 +12,10 @@ This guide shows the current evaluation entrypoints in Marin. For a high-level o
 The canonical helpers live in `experiments/evals/evals.py`:
 
 ```python
-from experiments.evals.evals import (
-  default_key_evals,
-  evaluate_lm_evaluation_harness,
-)
-from marin.defaults.evals import evaluate_levanter_lm_evaluation_harness, default_eval
+
+from marin.defaults.evals import evaluate_levanter_lm_evaluation_harness, default_eval, evaluate_lm_evaluation_harness,
+
+default_key_evals
 ```
 
 - `default_eval` runs `CORE_TASKS` through the Levanter LM evaluation harness by default.
@@ -63,20 +62,20 @@ Use `default_key_evals` for the repository's current key-eval bundle:
 
 ```python
 from fray.cluster import ResourceConfig
-from experiments.evals.evals import default_key_evals
+from marin.defaults.evals import default_key_evals
 from marin.execution.executor import executor_main
 
 model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
 
 key_steps = default_key_evals(
-    step=model_path,
-    resource_config=ResourceConfig.with_tpu("v6e-8"),
-    model_name="my_key_evals",
-    # max_eval_instances=50,
+  step=model_path,
+  resource_config=ResourceConfig.with_tpu("v6e-8"),
+  model_name="my_key_evals",
+  # max_eval_instances=50,
 )
 
 if __name__ == "__main__":
-    executor_main(steps=key_steps)
+  executor_main(steps=key_steps)
 ```
 
 Today, `default_key_evals` returns two `ExecutorStep`s:
@@ -105,25 +104,25 @@ Use the lower-level helpers when you want a custom task list or evaluator:
 
 ```python
 from fray.cluster import ResourceConfig
-from experiments.evals.evals import evaluate_lm_evaluation_harness
+from marin.defaults.evals import evaluate_lm_evaluation_harness
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import executor_main
 
 custom_tasks = [
-    EvalTaskConfig(name="commonsense_qa", num_fewshot=5),
-    EvalTaskConfig(name="openbookqa", num_fewshot=0),
+  EvalTaskConfig(name="commonsense_qa", num_fewshot=5),
+  EvalTaskConfig(name="openbookqa", num_fewshot=0),
 ]
 
 custom_step = evaluate_lm_evaluation_harness(
-    model_name="custom_eval",
-    model_path="gs://path/to/model",
-    evals=custom_tasks,
-    resource_config=ResourceConfig.with_tpu("v4-8"),
-    max_eval_instances=200,
+  model_name="custom_eval",
+  model_path="gs://path/to/model",
+  evals=custom_tasks,
+  resource_config=ResourceConfig.with_tpu("v4-8"),
+  max_eval_instances=200,
 )
 
 if __name__ == "__main__":
-    executor_main(steps=[custom_step])
+  executor_main(steps=[custom_step])
 ```
 
 Use `evaluate_levanter_lm_evaluation_harness` instead when you specifically want the Levanter-backed evaluator path used by `default_eval`.

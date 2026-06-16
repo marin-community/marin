@@ -55,11 +55,11 @@ from marin.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
 
 tinystories_tokenized = default_tokenize(
-  name=tinystories_hf_id,  # path to write tokenized files (tokenized/ will be prepended)
-  dataset=tinystories_hf_id,  # HF dataset id
-  tokenizer=marin_tokenizer,
-  format=TextLmDatasetFormat(),
-  sample_count=versioned(1000),  # keep tutorial fast by tokenizing 1k samples per shard
+    name=tinystories_hf_id,  # path to write tokenized files (tokenized/ will be prepended)
+    dataset=tinystories_hf_id,  # HF dataset id
+    tokenizer=marin_tokenizer,
+    format=TextLmDatasetFormat(),
+    sample_count=versioned(1000),  # keep tutorial fast by tokenizing 1k samples per shard
 )
 ```
 
@@ -145,13 +145,13 @@ from experiments.llama import llama_nano
 from marin.defaults import default_train
 
 nano_tinystories_model = default_train(
-  name="marin-nano-tinystories",
-  tokenized=tinystories_tokenized,
-  model_config=versioned(llama_nano),
-  train_config=nano_train_config,
-  tags=["llama", "nano", "tinystories", "tutorial"],
-  eval_harness_tasks=[],
-  use_default_validation=False,
+    name="marin-nano-tinystories",
+    tokenized=tinystories_tokenized,
+    model_config=versioned(llama_nano),
+    train_config=nano_train_config,
+    tags=["llama", "nano", "tinystories", "tutorial"],
+    eval_harness_tasks=[],
+    use_default_validation=False,
 )
 ```
 
