@@ -823,33 +823,6 @@ class Worker:
         )
         table.write([stat])
 
-    def handle_ping(self, request: worker_pb2.Worker.PingRequest) -> worker_pb2.Worker.PingResponse:
-        """Vestigial keep-alive for rolling deploys.
-
-        The new controller never calls Ping — Reconcile is the keep-alive. This
-        handler exists only so a pre-upgrade controller's ping loop keeps
-        succeeding (heartbeat reset + truthful health bit) against an upgraded
-        worker until the controller itself is rolled. Remove once the fleet is
-        fully migrated.
-        """
-        if rule := chaos("worker.ping"):
-            if rule.delay_seconds > 0:
-                time.sleep(rule.delay_seconds)
-            if rule.error:
-                raise rule.error
-            if not rule.delay_seconds:
-                raise RuntimeError("chaos: worker.ping")
-        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
-        resource_snapshot = self._collect_resource_metrics()
-        health = check_worker_health(disk_path=str(self._cache_dir))
-        if not health.healthy:
-            logger.warning("Worker health check failed: %s", health.error)
-        self._emit_worker_stat(resource_snapshot)
-        return worker_pb2.Worker.PingResponse(
-            healthy=health.healthy,
-            health_error=health.error,
-        )
-
     def handle_reconcile(self, request: worker_pb2.Worker.ReconcileRequest) -> worker_pb2.Worker.ReconcileResponse:
         """Process desired state from the controller and return observed state.
 
