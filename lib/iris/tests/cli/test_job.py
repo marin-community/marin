@@ -5,6 +5,7 @@
 
 import click
 import pytest
+from click.testing import CliRunner
 from iris.cli.job import (
     _parse_tpu_alternatives,
     _render_job_summary_text,
@@ -12,6 +13,7 @@ from iris.cli.job import (
     build_job_summary,
     build_resources,
     build_tpu_alternatives,
+    run,
     validate_extra_resources,
     validate_region_zone,
 )
@@ -182,6 +184,44 @@ def test_build_job_constraints_preemptible_true_overrides_heuristic():
 
     # Exactly one preemptible constraint, and it reflects the user's choice.
     assert _preemptible_values(constraints) == ["true"]
+
+
+def test_job_run_cli_accepts_task_image_override(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeJob:
+        job_id = "test-job"
+
+    class FakeClient:
+        def submit(self, **kwargs):
+            captured.update(kwargs)
+            return FakeJob()
+
+    def fake_remote(controller_url, workspace, token_provider):
+        captured["controller_url"] = controller_url
+        captured["workspace"] = workspace
+        captured["token_provider"] = token_provider
+        return FakeClient()
+
+    monkeypatch.setattr("iris.cli.job.IrisClient.remote", fake_remote)
+
+    result = CliRunner().invoke(
+        run,
+        [
+            "--task-image",
+            "ghcr.io/marin-community/iris-task-cuda-devel:test",
+            "--no-wait",
+            "--",
+            "python",
+            "train.py",
+        ],
+        obj={"controller_url": "http://controller.test", "config": None, "token_provider": None},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["task_image"] == "ghcr.io/marin-community/iris-task-cuda-devel:test"
+    assert captured["controller_url"] == "http://controller.test"
+    assert captured["entrypoint"].command == ["python", "train.py"]
 
 
 # --tpu multi-variant parsing

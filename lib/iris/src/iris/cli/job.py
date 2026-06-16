@@ -550,6 +550,7 @@ def run_iris_job(
     reserve: tuple[str, ...] | None = None,
     priority: str | None = None,
     preemptible: bool | None = None,
+    task_image: str | None = None,
     token_provider: TokenProvider | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -567,6 +568,8 @@ def run_iris_job(
         reserve: Reservation specs (e.g., ("4:H100x8", "v5litepod-16")).
         preemptible: If True/False, force scheduling on (non-)preemptible workers
             and bypass the executor heuristic. If None (default), the heuristic runs.
+        task_image: Optional task container image override. When None, workers use
+            their cluster-configured default task image.
 
     Returns:
         Exit code: 0 for success, 1 for failure
@@ -631,6 +634,8 @@ def run_iris_job(
         logger.info(f"Preemptible constraint: {preemptible}")
     if reservation:
         logger.info(f"Reservation: {len(reservation)} entries")
+    if task_image:
+        logger.info(f"Task image: {task_image}")
 
     logger.info(f"Using controller: {controller_url}")
     priority_band = job_pb2.PRIORITY_BAND_UNSPECIFIED
@@ -658,6 +663,7 @@ def run_iris_job(
         token_provider=token_provider,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
+        task_image=task_image,
     )
 
 
@@ -681,6 +687,7 @@ def _submit_and_wait_job(
     token_provider: TokenProvider | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
+    task_image: str | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -704,6 +711,7 @@ def _submit_and_wait_job(
         reservation=reservation,
         priority_band=priority_band,
         submit_argv=submit_argv,
+        task_image=task_image,
     )
 
     logger.info(f"Job submitted: {job.job_id}")
@@ -843,6 +851,15 @@ Examples:
     ),
 )
 @click.option(
+    "--task-image",
+    type=str,
+    default=None,
+    help=(
+        "Override the task container image for this job. "
+        "The image must already exist in a registry visible to workers."
+    ),
+)
+@click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
     help="Terminate the job on Ctrl+C (default: terminate). Tunnel failures never kill the job.",
@@ -870,6 +887,7 @@ def run(
     reserve: tuple[str, ...],
     priority: str | None,
     preemptible: bool | None,
+    task_image: str | None,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
@@ -922,6 +940,7 @@ def run(
             reserve=reserve or None,
             priority=priority,
             preemptible=preemptible,
+            task_image=task_image,
             token_provider=ctx.obj.get("token_provider"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,
