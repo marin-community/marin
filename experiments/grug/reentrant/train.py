@@ -6,6 +6,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -39,6 +40,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
+from marin.training.training import resolve_training_env
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -581,10 +583,26 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
 
 def run_grug(config: GrugRunConfig) -> None:
-    """Dispatch grug training through Fray jobs."""
+    """Run grug training: dispatch a nested Fray job, or run inline when GRUG_DIRECT is set.
+
+    Default: submit a nested Fray training job (the CPU launcher pattern). When
+    GRUG_DIRECT is set the training runs inline on the *current* task instead. Use
+    that when the job is submitted directly to an accelerator (`iris job run --tpu
+    ...`), which attaches the devices to this task — no CPU launcher, no nested
+    dispatch, and no `--reserve` reservation (which does not attach devices). We
+    apply the same training env the dispatch path would have set before
+    `_run_grug_local` touches JAX, so the inline run matches the dispatched one.
+    """
     trainer = config.trainer.trainer
     if trainer.id is None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
+
+    if os.environ.get("GRUG_DIRECT"):
+        env = resolve_training_env(base_env=None, resources=config.resources)
+        for key, value in env.items():
+            os.environ.setdefault(key, value)
+        _run_grug_local(config)
+        return
 
     dispatch_grug_training_run(
         run_id=trainer.id,
