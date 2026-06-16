@@ -654,13 +654,13 @@ def _model_sliding_attention_masks(
     thd_segment_metadata = mask.thd_segment_metadata if isinstance(mask, AttentionMask) else None
     short_mask = AttentionMask(
         is_causal=True,
-        sliding_window=cfg.sliding_window // 2,
+        sliding_window=cfg.sliding_window,
         segment_ids=segment_ids,
         thd_segment_metadata=thd_segment_metadata,
     )
     long_mask = AttentionMask(
         is_causal=True,
-        sliding_window=cfg.sliding_window,
+        sliding_window=cfg.max_seq_len,
         segment_ids=segment_ids,
         thd_segment_metadata=thd_segment_metadata,
     )
