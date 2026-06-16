@@ -821,6 +821,48 @@ def test_worker_reported_killed_terminal_when_preemption_budget_exhausted(state)
     assert _query_job(state, job_id).state == job_pb2.JOB_STATE_WORKER_FAILED
 
 
+def test_worker_reported_killed_on_coscheduled_task_requeues_the_gang(state):
+    """A worker-reported KILLED on one coscheduled task bounces the whole gang.
+
+    The retry must preserve the coscheduling invariant: when one gang member is
+    stopped out-of-band, every sibling is requeued to PENDING so the job
+    re-coschedules atomically onto a single slice — not left half-running with
+    one member pending. (Mirrors the WORKER_FAILED peer cascade.)
+    """
+    for i in range(4):
+        meta = make_worker_metadata()
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="coschedule-killed",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=4,
+        environment=job_pb2.EnvironmentConfig(),
+        max_retries_preemption=100,
+    )
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+    tasks = submit_job(state, "j-cosched-killed", req)
+    job_id = JobName.root("test-user", "j-cosched-killed")
+
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+    # The coscheduled requeue cascade only fires from EXECUTING states.
+    for i, task in enumerate(tasks):
+        _report_worker_state(state, WorkerId(f"w{i}"), task, job_pb2.TASK_STATE_RUNNING)
+
+    # One member is stopped out-of-band -> reported KILLED with budget to spare.
+    _report_worker_state(state, WorkerId("w0"), tasks[0], job_pb2.TASK_STATE_KILLED)
+
+    # The whole gang bounces to PENDING for atomic re-scheduling; the job survives.
+    for task in tasks:
+        assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING
+    assert _query_task(state, tasks[0].task_id).preemption_count == 1
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_RUNNING
+
+
 def test_max_task_failures_tolerance(state):
     """E2E: Job tolerates max_task_failures, then fails on next failure."""
 

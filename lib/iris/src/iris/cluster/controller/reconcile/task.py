@@ -16,7 +16,7 @@ from rigging.timing import Timestamp
 
 from iris.cluster.controller.reconcile.effects import AttemptRowDelta, TaskRowDelta
 from iris.cluster.controller.reconcile.overlay import Overlay
-from iris.cluster.controller.reconcile.policy import FAILURE_TASK_STATES
+from iris.cluster.controller.reconcile.policy import PEER_CASCADE_TRIGGER_STATES
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate, TransitionSnapshot
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
@@ -507,7 +507,7 @@ def apply_one_transition(
         state.emit_endpoint_deletion(update.task_id)
 
     jc = state.job_config(task.job_id)
-    has_cosched = bool(jc is not None and jc.has_coscheduling and update.new_state in FAILURE_TASK_STATES)
+    has_cosched = bool(jc is not None and jc.has_coscheduling and update.new_state in PEER_CASCADE_TRIGGER_STATES)
 
     return TransitionOutcome(
         task_id=update.task_id,
