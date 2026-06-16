@@ -1541,12 +1541,10 @@ class TestAutoscalerUnresolvableTimeout:
         autoscaler.shutdown()
 
     def test_describe_failure_isolated_across_slices(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """A describe() that raises folds as skip-and-retry without aborting peers.
+        """A describe() that raises leaves its slice tracked without aborting peers.
 
-        refresh() fans the per-slice describes out over a bounded pool and folds
-        the results serially. A single slice whose describe() raises must leave
-        that slice tracked for retry while every other slice is still processed —
-        the resilience the old serial ``try/except: continue`` provided.
+        One slice failing to describe must not prevent the others from being
+        processed; the failed slice stays tracked for retry next tick.
         """
         ok_handle = make_mock_slice_handle("slice-ok", created_at_ms=0)
         bad_handle = make_mock_slice_handle("slice-bad", created_at_ms=0)

@@ -136,12 +136,10 @@ def _probe_worker_health(worker_url: str) -> bool:
 
 
 def _safe_describe(slice_id: str, handle: SliceHandle) -> SliceStatus | None:
-    """Run a slice's blocking ``describe()``, returning None on failure.
+    """Describe a slice, returning None (and logging) when the call raises.
 
-    Pure I/O helper for the refresh() fan-out: it touches no autoscaler state,
-    so it is safe to run on the bounded describe pool. A describe that raises is
-    logged and folded as None — the slice is left untouched and retried next
-    tick, matching the original serial behaviour.
+    Touches no autoscaler state, so it is safe to run concurrently on the
+    describe pool. A None result means "skip this slice this tick".
     """
     try:
         return handle.describe()
@@ -533,17 +531,13 @@ class Autoscaler:
         self._worker_registry.unregister_slice_workers(slice_id, worker_ids)
 
     def refresh(self, worker_status_map: WorkerStatusMap, timestamp: Timestamp | None = None) -> None:
-        """State-read phase: scale down idle slices from currently tracked state.
+        """Poll non-READY slices and scale down idle ones.
 
-        Each non-READY slice's cloud state is read via ``handle.describe()`` — a
-        blocking GCP round-trip (two, for a still-queued reserved slice). A large
-        reserved backlog (dozens of WAITING_FOR_RESOURCES queued resources) would
-        serialize into tens of seconds and, because this runs inline on the
-        shared control loop, starve reconcile. So the describes are fanned out
-        over a bounded pool (pure I/O, no shared state) and their results folded
-        into group state serially afterward — the same find-then-fold structure
-        :meth:`probe_health` uses for /health probes. Folding stays single-
-        threaded so scale-group mutation remains race-free.
+        Reading a slice's cloud state is a blocking GCP round-trip (two for a
+        still-queued reserved slice). A large reserved backlog would serialize
+        into tens of seconds and, since this runs inline on the shared control
+        loop, starve reconcile — so the reads are fanned out over a bounded pool
+        and folded serially (see the phase comments below).
         """
         timestamp = timestamp or Timestamp.now()
 
