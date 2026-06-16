@@ -87,6 +87,15 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.3
     router_z_loss_coef: float = 0.0
+    # When True, alternate pure-dense and pure-MoE blocks. Even-indexed
+    # blocks (0, 2, 4, ...) become pure dense (a single DenseMLP with
+    # ``dense_intermediate_dim``); odd-indexed blocks (1, 3, ...) are pure
+    # MoE (uses ``num_experts``, ``num_experts_per_token``, ``intermediate_dim``;
+    # no shared expert, regardless of ``shared_expert_intermediate_dim``).
+    alternate_dense_moe: bool = False
+    # Intermediate dim for the dense blocks when ``alternate_dense_moe=True``.
+    # ``None`` defaults to ``3 * hidden_dim``.
+    dense_intermediate_dim: int | None = None
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
@@ -476,20 +485,50 @@ class MoEMLP(eqx.Module):
         return routed, router_stats
 
 
+def _dense_block_router_stats(num_experts: int) -> dict[str, jax.Array]:
+    """Zero stub stats so dense blocks can be stacked alongside MoE blocks."""
+    return {
+        "routing_entropy": jnp.float32(0.0),
+        "routing_counts": jnp.zeros((num_experts,), dtype=jnp.float32),
+        "load_balancing_loss": jnp.float32(0.0),
+        "router_z_loss": jnp.float32(0.0),
+        "qb_beta": jnp.float32(0.0),
+        "capacity_overflow": jnp.float32(0.0),
+    }
+
+
 class Block(eqx.Module):
     rms_attn: RMSNorm
     attn_gated_norm: GatedNorm
     attn: CausalSelfAttention
     rms_mlp: RMSNorm
     mlp_gated_norm: GatedNorm
-    mlp: MoEMLP
+    # For pure-dense blocks (``alternate_dense_moe`` on, even index) ``mlp`` is
+    # None and ``shared`` holds the only DenseMLP; the block's MLP residual
+    # update is just ``shared(mlp_in)``. For MoE blocks, ``mlp`` is the
+    # MoEMLP and ``shared`` is the (optional) shared expert.
+    mlp: MoEMLP | None
     shared: DenseMLP | None
+    is_dense: bool = eqx.field(static=True)
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
+    def init(cfg: GrugModelConfig, block_idx: int, *, key: PRNGKeyArray) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
+        is_dense = cfg.alternate_dense_moe and block_idx % 2 == 0
+        if is_dense:
+            dense_inter = cfg.dense_intermediate_dim or 3 * cfg.hidden_dim
+            return Block(
+                rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+                attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
+                attn=CausalSelfAttention.init(cfg, key=attn_key),
+                rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+                mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
+                mlp=None,
+                shared=DenseMLP.init(cfg.hidden_dim, dense_inter, cfg.initializer_std, key=shared_key),
+                is_dense=True,
+            )
         shared = None
-        if cfg.shared_expert_intermediate_dim > 0:
+        if cfg.shared_expert_intermediate_dim > 0 and not cfg.alternate_dense_moe:
             shared = DenseMLP.init(
                 cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
             )
@@ -501,6 +540,7 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            is_dense=False,
         )
 
     @named_call
@@ -513,9 +553,19 @@ class Block(eqx.Module):
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask, use_pko=use_pko)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
-        if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+        if self.is_dense:
+            assert self.shared is not None and self.mlp is None
+            mlp_out = self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            # DenseMLP flattens (b, s) before its einsums, so the output can
+            # come out sharded along the seq axis. Reshard back to batch_spec
+            # so the residual add aligns with x (which is batch-sharded).
+            mlp_out = _batch_reshard(mlp_out)
+            router_stats = _dense_block_router_stats(self.attn.cfg.num_experts)
+        else:
+            assert self.mlp is not None
+            mlp_out, router_stats = self.mlp(mlp_in)
+            if self.shared is not None:
+                mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
         return x, router_stats
 
@@ -537,7 +587,7 @@ class Transformer(eqx.Module):
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
-        blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+        blocks = tuple(Block.init(cfg, i, key=block_keys[i]) for i in range(cfg.num_layers))
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
