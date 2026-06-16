@@ -30,7 +30,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import open_url
+from rigging.filesystem import marin_temp_bucket, open_url
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -84,6 +84,36 @@ DEFAULT_JAX_CONFIG: Dict[str, JsonAtom] = {
     "jax_threefry_partitionable": True,
     "jax_softmax_custom_jvp": True,
 }
+
+
+def _configure_compilation_cache(cache_dir: Optional[str]) -> None:
+    """Point JAX's persistent compilation cache at a worker-resolved directory.
+
+    Resolution precedence: an explicit ``TrainerConfig.jax_compilation_cache_dir``,
+    then a ``JAX_COMPILATION_CACHE_DIR`` env override, then a region-local default
+    from :func:`rigging.filesystem.marin_temp_bucket`. The default is resolved
+    here — on the worker, at trainer init — so the cache lands in the *worker's*
+    region. The launcher may submit from a laptop (no region metadata) or a
+    different region, so resolving on the driver would ship a useless or
+    cross-region cache path to every worker.
+
+    A ``file://`` scheme is stripped (JAX's ``LRUCache`` rejects it). For a remote
+    cache (``gs://``/``s3://``) XLA's per-fusion autotune sub-cache is disabled: it
+    uses XLA's C++ ``tsl::Env``, which only supports local paths and crashes on
+    remote URLs.
+    """
+    if cache_dir is None:
+        cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR")
+    if cache_dir is None:
+        cache_dir = marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
+    cache_dir = cache_dir.removeprefix("file://")
+
+    jax.config.update("jax_compilation_cache_dir", cache_dir)
+
+    remote = "://" in cache_dir
+    if remote and "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES" not in os.environ:
+        jax.config.update("jax_persistent_cache_enable_xla_caches", "none")
+    logger.info("JAX compilation cache: %s%s", cache_dir, " (remote; XLA sub-caches disabled)" if remote else "")
 
 
 # A note on the semantics of "step" vs "next_step":
@@ -1018,9 +1048,7 @@ class TrainerConfig:
     def _initialize_jax_config(self):
         for key, value in self.jax_config.items():
             jax.config.update(key, value)
-
-        if self.jax_compilation_cache_dir is not None:
-            jax.config.update("jax_compilation_cache_dir", self.jax_compilation_cache_dir)
+        _configure_compilation_cache(self.jax_compilation_cache_dir)
 
     def _maybe_set_id(self):
         # always do this so we don't get weird hangs if the id isn't set right

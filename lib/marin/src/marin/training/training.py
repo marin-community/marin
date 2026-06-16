@@ -365,38 +365,6 @@ def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     return replace(config, train_config=inner_config)
 
 
-def _normalize_jax_compilation_cache_dir(path: str) -> str:
-    """Normalize cache dir to a form accepted by JAX's compilation cache.
-
-    JAX's ``LRUCache`` delegates I/O to ``etils.epath.Path`` which supports
-    local paths, ``gs://`` (via gcsfs), and ``s3://`` (via s3fs/fsspec).
-    The only scheme that causes problems is ``file://`` which raises during
-    initialization.
-    """
-    if path.startswith("file://"):
-        return path.removeprefix("file://")
-    return path
-
-
-def _disable_xla_autotune_subcache(env: dict) -> None:
-    """Disable XLA's per-fusion autotune sub-cache for remote compilation caches.
-
-    JAX automatically places XLA sub-caches (autotune, kernel cache) as
-    subdirectories of the compilation cache dir.  The autotune cache uses
-    XLA's C++ ``tsl::Env`` which only supports local paths — it crashes on
-    ``gs://`` and ``s3://``.  Since the autotune cache is ephemeral (skipped
-    entirely on a JAX cache hit) and only saves minutes on cold compiles,
-    we disable it via the JAX config rather than trying to redirect it.
-    """
-    cache_dir = env.get("JAX_COMPILATION_CACHE_DIR", "")
-    if "://" not in cache_dir:
-        return
-    if "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES" in env:
-        return
-    env["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] = "none"
-    logger.info("XLA sub-caches disabled (compilation cache is remote: %s)", cache_dir)
-
-
 def resolve_training_env(
     base_env: dict[str, str] | None,
     resources: ResourceConfig,
@@ -404,10 +372,12 @@ def resolve_training_env(
     """Build the training-side environment dict.
 
     Combines the base env from the user (typically ``train_config.env_vars``)
-    with hardware-specific defaults from ``levanter.infra.cli_helpers``, run
-    metadata (GIT_COMMIT, FERRY_DATE, etc. via ``add_run_env_variables``), a
-    JAX compilation cache pointing at ``marin_temp_bucket``, and a guard
-    against XLA's autotune subcache when the cache lives on remote storage.
+    with hardware-specific defaults from ``levanter.infra.cli_helpers`` and run
+    metadata (GIT_COMMIT, FERRY_DATE, etc. via ``add_run_env_variables``).
+
+    The JAX compilation cache is *not* set here: levanter resolves it on the
+    worker at trainer init (``TrainerConfig._initialize_jax_config``) so it lands
+    in the worker's region rather than the launcher's.
     """
     default_launch_config = _cli_helpers_module().load_config()
 
@@ -418,16 +388,7 @@ def resolve_training_env(
     if isinstance(resources.device, TpuConfig):
         _check_for_wandb_key(env)
 
-    env = add_run_env_variables(env)
-
-    if "JAX_COMPILATION_CACHE_DIR" not in env:
-        env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
-            marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
-        )
-        logger.info("JAX compilation cache: %s", env["JAX_COMPILATION_CACHE_DIR"])
-    _disable_xla_autotune_subcache(env)
-
-    return env
+    return add_run_env_variables(env)
 
 
 def _prepare_training_run(
