@@ -48,7 +48,8 @@ from levanter.optim import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep, this_output_path
 
 from experiments.defaults import _submit_train_job
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
@@ -56,7 +57,7 @@ from experiments.grug.moe.heuristic_adamh import build_from_heuristic
 from experiments.grug.moe.launch import NEMOTRON_MIX_WITH_DEFAULT_VALIDATION
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
-from experiments.grug.moe.train import GrugTrainState, initial_state
+from experiments.grug.moe.train import GrugTrainState, _apply_qb_betas, initial_state
 
 logger = logging.getLogger(__name__)
 
@@ -154,8 +155,6 @@ def _per_token_loss_local(config: PerTokenLossConfig) -> None:
 
         compute_params = trainer.mp.cast_to_compute(state.params)
         # Apply pending QB betas so the router uses the trained biases.
-        from experiments.grug.moe.train import _apply_qb_betas
-
         compute_params = _apply_qb_betas(compute_params, state.pending_qb_betas)
 
         all_runs, all_evals, all_batches, all_positions = [], [], [], []
