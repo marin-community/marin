@@ -11,6 +11,7 @@ from iris.rpc import job_pb2
 
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.conftest import (
+    autoscale_once,
     make_job_request,
     make_worker_metadata,
     query_tasks_for_job,
@@ -58,7 +59,9 @@ def test_dry_run_autoscaler_skipped_entirely(dry_run_controller):
     controller = dry_run_controller
     controller._task_backend.autoscale = MagicMock()
 
-    controller._run_autoscaler_once()
+    # In dry-run the control tick short-circuits to the schedule-only path, so
+    # the autoscale phase never reaches the backend even when forced.
+    autoscale_once(controller)
 
     controller._task_backend.autoscale.assert_not_called()
 
