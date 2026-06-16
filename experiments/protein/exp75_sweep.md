@@ -366,9 +366,13 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ — leader `7e-4/wd0.1`=
   **2.970**, **3 of 4 axis-neighbors now confirm worse**: LR− `5e-4/0.1`=2.986, LR+
   `1e-3/0.1`=**2.989** (w2q, landed ~05:08Z), WD− `7e-4/0.05`=2.979. **Only the WD+ neighbor
-  `7e-4/wd0.2` (w2s, ~1.3h in) is still running** — once it lands worse, 7e-4/wd0.1 is a
+  `7e-4/wd0.2` (w2s, ~1.8h in) is still running** — once it lands worse, 7e-4/wd0.1 is a
   confirmed interior optimum. **Launched the `wd=0.2` column** (w2r/s/t, ~02:44Z:
   5e-4/7e-4/1e-3 × wd0.2) to bound the WD top edge.
+  _~05:43Z: budget hit 82.9k (>78k) and the over-cap downgrade was preempting the critical
+  E4 7e-4 column + w2s. Shed ~16.5k by **killing the two speculative wd0.2 corners
+  `5e-4/0.2` & `1e-3/0.2`** (w2t) — only `7e-4/0.2` (w2s) is needed to confirm the
+  optimum; relaunch the corners cheaply only if w2s shows wd0.2 is *better* than wd0.1._
 - Measured drift 1→2: lr* stable at **7e-4** (both waves); wd* nudged **up** 0.05→0.1
   (opposite the lr↓/wd↓ prior) — top of WD is flat, hence the wd0.2 check.
 - Notes:
