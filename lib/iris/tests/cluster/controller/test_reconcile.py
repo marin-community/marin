@@ -597,6 +597,49 @@ def test_reconcile_rpc_failure_returns_error_and_empty_observations():
     assert list(results[0].observations) == []
 
 
+def test_reconcile_matching_responder_id_is_reached():
+    """A healthy reply stamped with the targeted worker's id counts as REACHED."""
+    stub = _FakeWorkerStub(
+        address=_W1_ADDR,
+        reconcile_response=worker_pb2.Worker.ReconcileResponse(
+            worker_id=_W1, health=worker_pb2.Worker.WorkerHealth(healthy=True)
+        ),
+    )
+    factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
+    provider = RpcTaskBackend(stub_factory=factory)
+
+    result = provider.reconcile(_reconcile_snapshot({WorkerId(_W1): _W1_ADDR}))
+
+    assert result.health_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.REACHED)]
+    assert _W1_ADDR in factory.stubs  # healthy worker's stub kept
+
+
+def test_reconcile_recycled_address_is_unreachable_not_reached():
+    """A healthy reply stamped with a DIFFERENT worker_id (recycled IP) is UNREACHABLE.
+
+    Regression: after a worker's VM is deleted GCP recycles its internal IP onto
+    a new VM. Reconciling the dead worker at its stale address then reaches the
+    *new* worker, which answers healthy. Folding that as REACHED would reset the
+    dead worker's failure count and keep it schedulable forever — a black hole
+    that accepts and kills every task assigned to it. The mismatched id must mark
+    the dead worker UNREACHABLE so it is reaped, and the impostor's stub dropped.
+    """
+    stub = _FakeWorkerStub(
+        address=_W1_ADDR,
+        reconcile_response=worker_pb2.Worker.ReconcileResponse(
+            worker_id=_W2, health=worker_pb2.Worker.WorkerHealth(healthy=True)
+        ),
+    )
+    factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
+    provider = RpcTaskBackend(stub_factory=factory)
+
+    result = provider.reconcile(_reconcile_snapshot({WorkerId(_W1): _W1_ADDR}))
+
+    assert result.health_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.UNREACHABLE)]
+    # The stale stub is evicted so the next tick re-resolves the address.
+    assert _W1_ADDR not in factory.stubs
+
+
 # ===========================================================================
 # Section 3: apply (transitions) + e2e (controller tick)
 # ===========================================================================

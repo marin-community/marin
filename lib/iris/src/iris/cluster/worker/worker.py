@@ -836,6 +836,27 @@ class Worker:
         Routing is by ``attempt_uid`` only: every DesiredAttempt and
         AttemptObservation is keyed by UID.
         """
+        # Identity guard: only act on reconciles addressed to *this* worker.
+        # After a worker's VM is deleted GCP can recycle its internal IP onto a
+        # new VM; the controller may still hold the dead worker's stale address
+        # and reconcile us under the dead worker's id. Because routing is by
+        # attempt_uid, processing it would run the dead worker's tasks and
+        # zombie-kill our own attempts (absent from the misrouted plan). Refuse,
+        # but report our real id so the controller detects the recycled address
+        # and reaps the stale worker (a wrong-worker reply is not a heartbeat, so
+        # we also skip the deadline reset and the host-metrics stat below).
+        if request.worker_id and self._worker_id and request.worker_id != self._worker_id:
+            logger.warning(
+                "Reconcile addressed to %s but this worker is %s; refusing (recycled address?)",
+                request.worker_id,
+                self._worker_id,
+            )
+            return worker_pb2.Worker.ReconcileResponse(
+                worker_id=self._worker_id,
+                observed=[],
+                health=worker_pb2.Worker.WorkerHealth(healthy=True),
+            )
+
         self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
 
         for desired in request.desired:

@@ -240,6 +240,49 @@ def test_zombie_attempt_is_killed(worker, mock_runtime):
     assert task.status == job_pb2.TASK_STATE_KILLED
 
 
+def test_reconcile_addressed_to_other_worker_is_refused(worker, mock_runtime):
+    """A reconcile addressed to a different worker (recycled-IP misroute) is refused.
+
+    Regression: after a worker's VM is deleted GCP can recycle its internal IP
+    onto this live VM, so the controller — still holding the dead worker's stale
+    address — dials us under the dead worker's id. Routing is by attempt_uid, so
+    acting on that (empty) plan would zombie-kill our own running attempt. We must
+    ignore it and report our real id so the controller detects the recycled
+    address and reaps the stale worker instead.
+    """
+    task_id = _task_id("not-a-zombie")
+    uid = "uid-not-a-zombie"
+    run_req = create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid=uid)
+
+    mock_runtime.create_container = Mock(
+        return_value=create_mock_container_handle(
+            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
+        )
+    )
+
+    worker.submit_task(run_req)
+    task = worker.task_by_uid(uid)
+    assert task is not None
+    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
+
+    # Misrouted reconcile: empty desired set addressed to a DIFFERENT worker.
+    # Without the identity guard the empty plan zombie-kills our running attempt.
+    response = worker.handle_reconcile(worker_pb2.Worker.ReconcileRequest(worker_id="some-other-worker", desired=[]))
+
+    # Refused: response carries OUR id, no observations, and our task survives.
+    assert response.worker_id == "w-reconcile-test"
+    assert list(response.observed) == []
+    assert task.should_stop is False
+    assert task.status == job_pb2.TASK_STATE_RUNNING
+
+    # A correctly-addressed reconcile with the same empty desired set still
+    # performs the zombie kill, proving the guard only blocks misroutes.
+    worker.handle_reconcile(worker_pb2.Worker.ReconcileRequest(worker_id="w-reconcile-test", desired=[]))
+    assert task.should_stop is True
+    task.thread.join(timeout=5.0)
+    assert task.status == job_pb2.TASK_STATE_KILLED
+
+
 def test_zombie_kill_skips_terminal_tasks(worker, mock_runtime):
     """Attempts already in a terminal state are not re-killed during zombie detection."""
     task_id = _task_id("zombie-terminal")
