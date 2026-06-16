@@ -47,6 +47,7 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.reentrant.launch import (
     _E3_MODEL,
     _E6_MODEL,
+    _E7_MODEL,
     _REENTRANT_RESOURCES,
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
     _baseline_optimizer,
@@ -71,8 +72,16 @@ _DEFAULT_RECURRENCE_VALUES: tuple[int, ...] = (2, 4, 8, 16, 32)
 # Which model config to restore the checkpoint with. E4's anytime supervision adds
 # no params, so its checkpoint shares E3's param tree (restore with E3, no readout
 # overhead). E64 shares E6's tree (depth-conditioned router bias present, anytime
-# off for eval). Keyed by SWEEP_MODEL (default e3).
-_SWEEP_MODELS = {"e3": _E3_MODEL, "e4": _E3_MODEL, "e6": _E6_MODEL, "e64": _E6_MODEL}
+# off for eval). E7 adds a halt_head (PonderNet), so it must restore with the E7
+# config; ponder is training-only, so the eval forward is identical to E3's. Keyed
+# by SWEEP_MODEL (default e3).
+_SWEEP_MODELS = {
+    "e3": _E3_MODEL,
+    "e4": _E3_MODEL,
+    "e6": _E6_MODEL,
+    "e64": _E6_MODEL,
+    "e7": _E7_MODEL,
+}
 
 
 def _resolve_sweep_model() -> GrugModelConfig:
