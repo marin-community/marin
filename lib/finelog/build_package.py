@@ -69,9 +69,21 @@ TOOLS_DIR = REPO_ROOT / ".tools"
 PYPI_JSON_URL = "https://pypi.org/pypi/marin-finelog/json"
 
 ZIG_VERSION = "0.15.2"
-# ziglang.org's own server is very slow (<0.1 MB/s); use a community mirror
-# from https://ziglang.org/download/community-mirrors.txt instead.
-ZIG_DOWNLOAD_BASE = "https://pkg.earth/zig"
+# Zig tarballs are large and ziglang.org's own server is slow and rate-limited
+# (<0.1 MB/s), so prefer the community mirrors from
+# https://ziglang.org/download/community-mirrors.txt and fall back to the
+# official server only if every mirror fails. Mirrors intermittently 500 or
+# drop the connection (a single hard-coded mirror is a CI flake waiting to
+# happen), so we rotate through several with retries. Each mirror serves the
+# tarball at `<base>/<filename>`; the official server nests it under
+# `/download/<version>/`.
+ZIG_MIRRORS = (
+    "https://pkg.earth/zig",
+    "https://pkg.hexops.org/zig",
+    "https://zig.linus.dev/zig",
+)
+ZIG_OFFICIAL_BASE = "https://ziglang.org/download"
+ZIG_DOWNLOAD_ATTEMPTS_PER_SOURCE = 2
 
 # (rust-triple, manylinux-tag) — manylinux is None for native macOS builds.
 LINUX_TARGETS: list[tuple[str, str | None]] = [
@@ -106,8 +118,31 @@ def _zig_platform_key() -> str:
     return f"{arch_map[machine]}-{os_map[system]}"
 
 
+def _download_zig_archive(filename: str, dest: Path, reporthook) -> None:
+    """Fetch the zig tarball into ``dest``, trying mirrors then ziglang.org.
+
+    Tries each community mirror (a couple of attempts apiece, since they
+    intermittently 500 or drop the connection) before falling back to the slow,
+    rate-limited official server. Raises if every source fails.
+    """
+    sources = [f"{base}/{filename}" for base in ZIG_MIRRORS]
+    sources.append(f"{ZIG_OFFICIAL_BASE}/{ZIG_VERSION}/{filename}")
+    last_error: Exception | None = None
+    for url in sources:
+        for attempt in range(1, ZIG_DOWNLOAD_ATTEMPTS_PER_SOURCE + 1):
+            print(f"Downloading zig {ZIG_VERSION} from {url} (attempt {attempt})...")
+            try:
+                urllib.request.urlretrieve(url, dest, reporthook=reporthook)
+                return
+            except (urllib.error.URLError, OSError) as e:
+                last_error = e
+                print(f"  download failed: {e}")
+                dest.unlink(missing_ok=True)
+    raise RuntimeError(f"Could not download zig {ZIG_VERSION} from any mirror or ziglang.org") from last_error
+
+
 def _ensure_zig() -> str:
-    """Return path to zig binary, downloading from a community mirror if absent."""
+    """Return path to zig binary, downloading it if absent (see _download_zig_archive)."""
     existing = shutil.which("zig")
     if existing:
         return existing
@@ -119,9 +154,6 @@ def _ensure_zig() -> str:
         return str(zig_bin)
 
     filename = f"zig-{plat}-{ZIG_VERSION}.tar.xz"
-    url = f"{ZIG_DOWNLOAD_BASE}/{filename}"
-    print(f"Downloading zig {ZIG_VERSION} for {plat} from {ZIG_DOWNLOAD_BASE}...")
-
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
     archive_path = TOOLS_DIR / filename
 
@@ -140,7 +172,7 @@ def _ensure_zig() -> str:
         else:
             print(f"  zig download: {downloaded / 1e6:.1f} MB")
 
-    urllib.request.urlretrieve(url, archive_path, reporthook=_report)
+    _download_zig_archive(filename, archive_path, _report)
     with tarfile.open(archive_path, "r:xz") as tar:
         tar.extractall(TOOLS_DIR, filter="data")
     archive_path.unlink()
