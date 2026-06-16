@@ -93,23 +93,20 @@ def _configure_compilation_cache(cache_dir: Optional[str]) -> None:
     then a ``JAX_COMPILATION_CACHE_DIR`` env override, then a region-local default
     from :func:`rigging.filesystem.marin_temp_bucket`. The default is resolved
     here — on the worker, at trainer init — so the cache lands in the *worker's*
-    region. The launcher may submit from a laptop (no region metadata) or a
-    different region, so resolving on the driver would ship a useless or
-    cross-region cache path to every worker.
-
-    A ``file://`` scheme is stripped (JAX's ``LRUCache`` rejects it). For a remote
-    cache (``gs://``/``s3://``) XLA's per-fusion autotune sub-cache is disabled: it
-    uses XLA's C++ ``tsl::Env``, which only supports local paths and crashes on
-    remote URLs.
+    region. Resolving it on the driver would ship a useless local path (a laptop
+    has no region metadata) or pin the cache to the launcher's region (forcing
+    cross-region traffic from workers elsewhere).
     """
     if cache_dir is None:
         cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR")
     if cache_dir is None:
         cache_dir = marin_temp_bucket(ttl_days=30, prefix="compilation-cache")
-    cache_dir = cache_dir.removeprefix("file://")
+    cache_dir = cache_dir.removeprefix("file://")  # JAX's LRUCache rejects the file:// scheme
 
     jax.config.update("jax_compilation_cache_dir", cache_dir)
 
+    # XLA's per-fusion autotune sub-cache uses C++ tsl::Env, which only supports
+    # local paths and crashes on gs://-/s3://, so disable it for a remote cache.
     remote = "://" in cache_dir
     if remote and "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES" not in os.environ:
         jax.config.update("jax_persistent_cache_enable_xla_caches", "none")

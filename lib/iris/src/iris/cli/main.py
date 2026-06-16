@@ -25,11 +25,6 @@ from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, prio
 logger = logging.getLogger(__name__)
 
 
-def _configure_client_s3(config) -> None:
-    """Configure S3 env vars for fsspec access. Delegates to the canonical implementation."""
-    configure_client_s3(config)
-
-
 @click.group()
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
 @click.option("--traceback", "show_traceback", is_flag=True, help="Show full stack traces on errors")
@@ -93,7 +88,7 @@ def iris(
         iris_config = IrisConfig.load(config_file)
         ctx.obj["config"] = iris_config.proto
         ctx.obj["config_file"] = config_file
-        _configure_client_s3(iris_config.proto)
+        configure_client_s3(iris_config.proto)
 
         name = resolve_cluster_name(iris_config.proto, controller_url, cluster_name)
         ctx.obj["cluster_name"] = name
