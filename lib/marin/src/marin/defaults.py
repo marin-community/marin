@@ -36,7 +36,6 @@ from levanter.trainer import TrainerConfig
 from levanter.utils import fsspec_utils
 from levanter.utils.mesh import MeshConfig
 
-from experiments.paloma import paloma_tokenized
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.datakit.download.uncheatable_eval import make_uncheatable_eval_step
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
@@ -90,6 +89,9 @@ def _validate_train_length(train_seq_len: int | None, model_config: LmConfig) ->
 
 @lru_cache  # LRU to make the executor happier
 def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
+    # NB: only dependency on experiments!
+    from experiments.paloma import paloma_tokenized  # noqa
+
     validation_sets = dict(paloma_tokenized(base_path=base_path, tokenizer=tokenizer))
     validation_sets.update(uncheatable_eval_tokenized(base_path=base_path, tokenizer=tokenizer))
     return validation_sets
