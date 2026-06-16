@@ -104,8 +104,7 @@ message SliceInfo {
 
   // Count of DEGRADED hosts (reachable-but-failing) among `vms`, surfaced as
   // detail. Computed in the status handler.
-  int32 degraded_slot_count = 10;
-  reserved 9;  // was schedulable_slot_count (host-granular; replaced by capacity_status)
+  int32 degraded_slot_count = 9;
 
   // Placement-readiness of a *ready* slice, derived in the status handler from
   // host usability + running tasks. One of:
@@ -116,7 +115,7 @@ message SliceInfo {
   //   "degraded"  — no hosts, or any host not healthy: not a placement target.
   // Empty for non-ready slices, whose `state` already describes them. This is
   // slice-granular: a fully-booked healthy slice is "in_use", never schedulable.
-  string capacity_status = 11;
+  string capacity_status = 10;
 }
 
 // A scaling decision
@@ -160,10 +159,6 @@ message ScaleGroupStatus {
 
   // Idle threshold in milliseconds (how long a slice must be idle before scale-down)
   int64 idle_threshold_ms = 71;
-
-  reserved 72, 73;  // were total_schedulable_slots/total_degraded_slots — host-granular
-                    // rollups. The dashboard now counts slices by SliceInfo.capacity_status,
-                    // which is slice-granular and excludes busy hosts from "free" capacity.
 }
 
 // Autoscaler action/event log entry
