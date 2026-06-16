@@ -53,10 +53,8 @@ You can check out the [full script](https://github.com/marin-community/marin/blo
 ```python
 from fray.cluster import ResourceConfig
 
-from experiments.defaults import default_train
 from experiments.llama import llama3_tokenizer, llama_nano
-from marin.defaults import SimpleTrainConfig
-from experiments.tokenization import default_tokenize
+from marin.defaults import SimpleTrainConfig, default_train, default_tokenize
 from marin.execution.executor import executor_main
 
 # 1. Choose a dataset
