@@ -17,10 +17,10 @@ table is already a learned parameter, and removing the per-token rescale
 could let downstream blocks see more of the raw embedding signal (e.g.
 the BOS sink dimension growing without being normalised away).
 
-Submit (us-central2, v4-32, production priority)::
+Submit (us-east5-a, v5p-8, interactive priority)::
 
-    .venv/bin/iris --cluster=marin job run --no-wait --region us-central2 \\
-        --priority production \\
+    .venv/bin/iris --cluster=marin job run --no-wait --zone us-east5-a \\
+        --priority interactive \\
         -e WANDB_API_KEY "$WANDB_API_KEY" \\
         -- python -m experiments.grug.moe.moe_may_compute_opt_d512_ep1_embed_no_rms
 """
@@ -57,7 +57,7 @@ compute_opt_step = ExecutorStep(
         data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
         output_path=this_output_path(),
         run_id=_run_id,
-        resources=versioned(ResourceConfig.with_tpu("v4-32")),
+        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
         steps=versioned(_STEPS),
         batch_size=versioned(_BS),
         seed=versioned(0),
@@ -95,6 +95,6 @@ if __name__ == "__main__":
         description=(
             f"d={_DIM} EP={_EP} May Recipe compute-optimal baseline with embed_skip_rms_norm=True "
             f"(post-embedding RMSNorm replaced by x * 1/initializer_std = x * 50). "
-            f"bs={_BS}, steps={_STEPS}, tokens={_tokens:.2e}. v4-32 us-central2."
+            f"bs={_BS}, steps={_STEPS}, tokens={_tokens:.2e}. v5p-8 us-east5-a."
         ),
     )
