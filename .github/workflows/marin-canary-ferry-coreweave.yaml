@@ -67,7 +67,6 @@ jobs:
       CANARY_TARGET_TOKENS: "6553600"
       CANARY_MIN_STEPS: "40"
       CANARY_MAX_LOSS: "8.0"
-      CANARY_OUTPUT_TTL_DAYS: "7"
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/config/coreweave-ci.yaml
@@ -139,7 +138,6 @@ jobs:
             -e CANARY_GPU_REPLICAS "$CANARY_GPU_REPLICAS" \
             -e CANARY_PROFILER_NUM_STEPS "$CANARY_PROFILER_NUM_STEPS" \
             -e CANARY_TARGET_TOKENS "$CANARY_TARGET_TOKENS" \
-            -e CANARY_OUTPUT_TTL_DAYS "$CANARY_OUTPUT_TTL_DAYS" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
