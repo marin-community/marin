@@ -9,9 +9,10 @@ name: "Finelog - Release Wheels"
 #   - marin-finelog-server: the native in-process server ext (importable as
 #     `finelog_server`), built by maturin from lib/finelog/rust (manifest-path
 #     -> pyext). Platform wheels come from the build matrix below.
-#   - marin-finelog: the pure-Python client/deploy/proto (hatchling), depending
-#     on marin-finelog-server. Its single py3-none-any wheel is built on the
-#     linux matrix leg only, so merged artifacts never collide.
+#   - marin-finelog: the pure-Python client/deploy/proto (hatchling). Its single
+#     py3-none-any wheel is built on the linux matrix leg only, so merged
+#     artifacts never collide. It does NOT depend on marin-finelog-server;
+#     consumers needing the in-process server depend on it explicitly.
 # PyPI trusted publishing must be configured for BOTH projects against this
 # workflow + the pypi-publish environment.
 #

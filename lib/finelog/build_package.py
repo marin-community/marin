@@ -13,9 +13,10 @@ finelog ships as TWO dists, released in lockstep at one resolved version:
     is a maturin project whose `[tool.maturin] manifest-path` points at the
     pyext cdylib crate (the in-process server, importable as `finelog_server`).
     Platform wheels are built per-target by the CI matrix.
-  - marin-finelog: pure Python (hatchling) — client/deploy/proto — depending on
-    `marin-finelog-server >= 0.2.0.dev0`. One py3-none-any wheel, built on the
-    linux matrix leg only so artifacts never collide across legs.
+  - marin-finelog: pure Python (hatchling) — client/deploy/proto. One
+    py3-none-any wheel, built on the linux matrix leg only so artifacts never
+    collide across legs. It does NOT depend on marin-finelog-server; consumers
+    that need the in-process server (e.g. iris) depend on it explicitly.
 
 Modes:
     nightly  -- `<bumped_patch>-dev.<YYYYMMDDhhmm>` (UTC), where

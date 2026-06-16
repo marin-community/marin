@@ -1,8 +1,9 @@
 # marin-finelog-server (pyext)
 
 In-process [finelog](../..) server, exposed to Python via PyO3 and shipped as
-the `marin-finelog-server` wheel — a dependency of the pure-Python
-`marin-finelog`.
+the `marin-finelog-server` wheel — a standalone dist that consumers needing the
+in-process server (e.g. the iris controller) depend on explicitly. The pure
+`marin-finelog` client does not depend on it.
 
 `finelog_server.EmbeddedServer` boots the same axum app the `finelog-server`
 binary serves, on an owned tokio runtime bound to a local port. Callers talk to

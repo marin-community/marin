@@ -44,6 +44,12 @@ Finelog ships as two PyPI dists, released in lockstep by
   top-level `finelog_server` (maturin project at `rust/`; the cdylib crate is
   `rust/pyext`). Only `src/finelog/embedded.py` imports it.
 
+`marin-finelog` does **not** depend on `marin-finelog-server` at runtime — the
+pure client never needs the in-process server. Consumers that do (the iris
+controller) depend on `marin-finelog-server` explicitly. Here it is only a
+`dev` dependency, pulled in for the embedded-server smoke test and the
+dashboard demo.
+
 By default the extension comes from the pre-built PyPI wheel, so in-dir
 `uv run` never compiles Rust. To build it from source (live Rust dev), run
 `python scripts/rust_mode.py dev` at the repo root — it points

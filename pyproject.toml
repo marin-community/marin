@@ -28,12 +28,13 @@ dependencies = [
     # any earlier dev of the same Z; bump the floor to whichever is newest.
     # Published by .github/workflows/dupekit-release-wheels.yaml.
     "marin-dupekit >= 0.1.2.dev202606060824",
-    # marin-finelog is pure Python; its native in-process server ext (module
-    # `finelog_server`, started by the iris controller) comes transitively via
-    # its marin-finelog-server dependency — a maturin dist built from
-    # lib/finelog/rust and released in lockstep by finelog-release-wheels.yaml.
-    # `scripts/rust_mode.py dev` swaps both to path sources locally.
-    "marin-finelog >= 0.2.9",
+    # marin-finelog is the pure-Python client. The iris controller also starts
+    # an in-process native log server (module `finelog_server`); that ships as
+    # the separate marin-finelog-server wheel (maturin, lib/finelog/rust), which
+    # the controller depends on explicitly (see lib/iris) and reaches us
+    # transitively via marin-iris — the pure client does not depend on it.
+    # `scripts/rust_mode.py dev` swaps both to local path sources.
+    "marin-finelog >= 0.2.10",
 ]
 
 [tool.uv]
@@ -53,10 +54,6 @@ constraint-dependencies = [
     # the pre-release component here only flips uv's per-package opt-in.
     "tfp-nightly>=0.1.dev0",
     "opentelemetry-semantic-conventions>=0.1b0",
-    # Transitive via marin-finelog; needed whenever the marin-finelog floor
-    # above points at a nightly (stable tags cut a stable pair, so a stable
-    # floor never needs this — but it is inert in that case, not harmful).
-    "marin-finelog-server>=0.2.0.dev0",
 ]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",

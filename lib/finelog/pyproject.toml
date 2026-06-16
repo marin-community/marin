@@ -10,12 +10,6 @@ requires-python = ">=3.11,<3.13"
 # duckdb is used by the deploy CLI to query pulled parquet segments in-process
 # (`finelog inspect`), not by a storage engine — the Rust server owns storage.
 dependencies = [
-    # The native in-process server ext (module `finelog_server`) ships in the
-    # companion dist, built by maturin from this package's rust/ subtree and
-    # released in lockstep by finelog-release-wheels.yaml. The dev floor opts
-    # uv into its nightlies; `scripts/rust_mode.py dev` swaps in a path source
-    # to build it from source instead.
-    "marin-finelog-server >= 0.2.0.dev0",
     "marin-rigging",
     "click>=8.3.1",
     "connect-python>=0.9.0",
@@ -33,6 +27,14 @@ finelog = "finelog.deploy.cli:cli"
 
 [dependency-groups]
 dev = [
+    # The native in-process server ext (module `finelog_server`) is NOT a
+    # runtime dependency of the pure client — only the embedded-server smoke
+    # test and the dashboard demo need it. It ships as the companion
+    # marin-finelog-server dist (maturin, this package's rust/ subtree), built
+    # in lockstep by finelog-release-wheels.yaml; `scripts/rust_mode.py dev`
+    # swaps the [tool.uv.sources] entry below to the local rust/ tree so it
+    # builds from source.
+    "marin-finelog-server >= 0.2.0.dev0",
     "pytest>=8.4",
     "pytest-timeout",
     "pytest-xdist",
