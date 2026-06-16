@@ -87,6 +87,14 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.3
     router_z_loss_coef: float = 0.0
+    # When True, the post-embedding RMSNorm (``embed_norm``) is skipped in the
+    # forward pass; instead the token embedding is multiplied by the static
+    # constant ``1/initializer_std`` so the input to ``embed_gated_norm`` has
+    # the same RMS at init as the original RMSNorm output. The model no longer
+    # rescales per-token; it has to maintain reasonable embed magnitudes itself.
+    # ``embed_norm`` is still constructed (and its 1-D weight kept in the
+    # module tree) for state-dict shape compatibility -- it just isn't called.
+    embed_skip_rms_norm: bool = False
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
@@ -561,7 +569,13 @@ class Transformer(eqx.Module):
         batch_spec = _batch_spec()
         cfg = self.config
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
-        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        if cfg.embed_skip_rms_norm:
+            # Static unit-RMS rescale: matches embed_norm's output magnitude
+            # at init (when token_embed ~ N(0, initializer_std**2)).
+            hidden = hidden * jnp.float32(1.0 / cfg.initializer_std)
+        else:
+            hidden = self.embed_norm(hidden)
+        hidden = self.embed_gated_norm(hidden)
 
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
