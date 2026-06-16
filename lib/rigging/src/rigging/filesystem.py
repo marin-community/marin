@@ -79,10 +79,7 @@ _REGION_ALIASES: dict[str, str] = {
     "eu-west4": "europe-west4",
 }
 
-# Cloudflare R2 data buckets (S3-compatible, ``s3://`` scheme). R2 is not
-# regional like GCS — runs on CoreWeave point at a single North-America bucket.
-# ``marin_temp_bucket`` addresses the TTL-managed scratch area at the root of
-# these buckets, and ``infra/configure_buckets.py`` owns their lifecycle rules.
+# Cloudflare R2 data buckets (S3-compatible, ``s3://`` scheme).
 R2_DATA_BUCKETS: frozenset[str] = frozenset({"marin-na"})
 
 # Allowed TTL-day values. Each value N corresponds to a lifecycle rule on every
