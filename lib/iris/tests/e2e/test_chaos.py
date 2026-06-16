@@ -203,14 +203,6 @@ def test_dispatch_permanent_failure(cluster):
     assert status.state in (job_pb2.JOB_STATE_FAILED, job_pb2.JOB_STATE_UNSCHEDULABLE)
 
 
-# The three `worker.ping` chaos tests (test_ping_temporary_failure,
-# test_ping_permanent_failure, test_ping_survives_transient_delay) were deleted:
-# `handle_ping` (their injection seam) no longer exists, and they were redundant
-# with the `controller.reconcile` threshold tests below, which cover the
-# below-threshold-recovers and at-threshold-kills paths via the live reconcile
-# keep-alive seam.
-
-
 # ---------------------------------------------------------------------------
 # Reconcile-RPC threshold: a worker whose Reconcile RPCs keep failing accrues
 # UNREACHABLE health events and is torn down once consecutive failures reach

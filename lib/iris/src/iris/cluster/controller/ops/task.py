@@ -64,11 +64,10 @@ def assign(
 ) -> None:
     """Commit assignments to ``tasks.state = ASSIGNED`` + ``task_attempts``.
 
-    Worker-bound dispatch is driven by the polling reconcile loop, which
-    reads ``tasks.state = ASSIGNED`` rows from a snapshot and fans out
-    Reconcile RPCs. This method does not enqueue or fan out anything;
-    callers are responsible for waking ``_polling_wake`` after commit so
-    the reconcile loop sees the new ASSIGNED rows on its next tick.
+    Worker-bound dispatch is driven by the control tick's reconcile phase, which
+    reads ``tasks.state = ASSIGNED`` rows from a snapshot and fans out Reconcile
+    RPCs. This method does not enqueue or fan out anything; the next reconcile
+    phase picks up the new ASSIGNED rows (a fresh assignment forces one).
 
     Reservation-holder assignments are admitted (they anchor the worker
     for taint-injection) but never produce a worker-bound RunTaskRequest.

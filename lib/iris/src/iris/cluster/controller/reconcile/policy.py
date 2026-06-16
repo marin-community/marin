@@ -36,7 +36,9 @@ accidental collision with normal job names."""
 # Predicate sets
 # ---------------------------------------------------------------------------
 
-# Failure states that trigger coscheduled sibling cascades.
+# Failure states that trigger coscheduled sibling cascades. Also reused to pick
+# the cascade *direction* from a transition's resolved task state: a member here
+# tears the gang down, a non-member (PENDING) requeues it.
 FAILURE_TASK_STATES: frozenset[int] = frozenset(
     {
         job_pb2.TASK_STATE_FAILED,
@@ -44,6 +46,15 @@ FAILURE_TASK_STATES: frozenset[int] = frozenset(
         job_pb2.TASK_STATE_PREEMPTED,
     }
 )
+
+# Worker-reported states that, on a coscheduled task, must fan out to the gang.
+# KILLED joins the failure states because a worker only reports it on an
+# out-of-band container stop (slice reclaimed for a higher-priority job, node
+# drain, spot/preemptible reclaim) — an infra event the whole gang must react to,
+# exactly like WORKER_FAILED. This gates *whether* to cascade; the resolved task
+# state (via FAILURE_TASK_STATES) still decides requeue-vs-terminate downstream,
+# so KILLED is deliberately kept out of FAILURE_TASK_STATES itself.
+PEER_CASCADE_TRIGGER_STATES: frozenset[int] = FAILURE_TASK_STATES | {job_pb2.TASK_STATE_KILLED}
 
 # Non-terminal task states (ACTIVE plus PENDING). Used as the snapshot's
 # per-job ``active_tasks_by_job`` state filter so a single read covers both

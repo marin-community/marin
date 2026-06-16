@@ -34,6 +34,7 @@ from iris.cluster.backends.types import (
     QuotaExhaustedError,
     RemoteWorkerHandle,
     SliceHandle,
+    SliceStatus,
 )
 from iris.cluster.constraints import Constraint
 from iris.cluster.controller.autoscaler.models import (
@@ -82,6 +83,11 @@ _HEALTH_PROBE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({
 # timeouts would blow past evaluation_interval (10 s default).
 _HEALTH_PROBE_MAX_WORKERS = 64
 
+# Cap concurrent describe() calls in refresh(). Each is a blocking GCP round-trip
+# (two for a still-queued reserved slice), so a large reserved backlog would
+# otherwise serialize into tens of seconds and starve the shared control loop.
+_REFRESH_DESCRIBE_MAX_WORKERS = 64
+
 # Cap concurrent slice create/terminate cloud requests issued in one phase. The
 # fan-out keeps a burst (cold-start scale-up, mass-preemption teardown) within
 # the phase budget instead of serializing one bounded HTTP round-trip at a time.
@@ -125,6 +131,17 @@ def _probe_worker_health(worker_url: str) -> bool:
         return 200 <= resp.status < 300
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
         return False
+
+
+def _safe_describe(slice_id: str, handle: SliceHandle) -> SliceStatus | None:
+    """Describe a slice on the fan-out pool, returning None (logged) if it raises."""
+    try:
+        return handle.describe()
+    except Exception as e:
+        # A failed poll is transient: skip this slice this tick and retry. A slice
+        # that stays unresolvable is failed via the UNKNOWN/unresolvable-timeout path.
+        logger.warning("Failed to poll slice %s: %s", slice_id, e)
+        return None
 
 
 @dataclass
@@ -510,62 +527,80 @@ class Autoscaler:
         self._worker_registry.unregister_slice_workers(slice_id, worker_ids)
 
     def refresh(self, worker_status_map: WorkerStatusMap, timestamp: Timestamp | None = None) -> None:
-        """State-read phase: scale down idle slices from currently tracked state."""
+        """Poll non-READY slices and scale down idle ones.
+
+        Reading a slice's cloud state is a blocking GCP round-trip (two for a
+        still-queued reserved slice). A large reserved backlog would serialize
+        into tens of seconds and, since this runs inline on the shared control
+        loop, starve reconcile — so the reads are fanned out over a bounded pool
+        and folded serially (see the phase comments below).
+        """
         timestamp = timestamp or Timestamp.now()
 
-        for group in self._groups.values():
-            for slice_id, handle in group.non_ready_slice_handles():
-                try:
-                    status = handle.describe()
-                except Exception as e:
-                    logger.warning("Failed to poll slice %s: %s", slice_id, e)
-                    continue
+        # Phase 1: snapshot every non-READY slice across all groups.
+        targets = [
+            (group, slice_id, handle)
+            for group in self._groups.values()
+            for slice_id, handle in group.non_ready_slice_handles()
+        ]
 
-                if status.state == CloudSliceState.READY:
-                    worker_ids = [w.worker_id for w in status.workers]
-                    worker_urls = self._worker_urls(status.workers)
-                    group.mark_slice_ready(slice_id, worker_ids, worker_urls=worker_urls)
-                    self._register_slice_workers(status.workers, slice_id, group.name)
-                    self._log_action(
-                        "slice_ready",
-                        group.name,
-                        slice_id,
-                        reason=f"bootstrap completed ({len(worker_ids)} workers)",
-                    )
-                elif status.state == CloudSliceState.FAILED:
-                    group.mark_slice_failed(slice_id, error_message=status.error_message)
+        # Phase 2: fan out the blocking describe() over a bounded pool.
+        statuses = _run_io_batch(
+            targets,
+            lambda t: _safe_describe(t[1], t[2]),
+            max_workers=_REFRESH_DESCRIBE_MAX_WORKERS,
+            thread_name_prefix="slice-describe",
+        )
+
+        # Phase 3: fold describe results into group state serially.
+        for (group, slice_id, handle), status in zip(targets, statuses, strict=True):
+            if status is None:
+                continue
+            if status.state == CloudSliceState.READY:
+                worker_ids = [w.worker_id for w in status.workers]
+                worker_urls = self._worker_urls(status.workers)
+                group.mark_slice_ready(slice_id, worker_ids, worker_urls=worker_urls)
+                self._register_slice_workers(status.workers, slice_id, group.name)
+                self._log_action(
+                    "slice_ready",
+                    group.name,
+                    slice_id,
+                    reason=f"bootstrap completed ({len(worker_ids)} workers)",
+                )
+            elif status.state == CloudSliceState.FAILED:
+                group.mark_slice_failed(slice_id, error_message=status.error_message)
+                group.scale_down(slice_id)
+                self._unregister_slice_workers(slice_id)
+                group.record_slice_boot_failed(slice_id, timestamp)
+                reason = status.error_message if status.error_message else "bootstrap failed"
+                self._log_action(
+                    "slice_failed",
+                    group.name,
+                    slice_id,
+                    reason=reason,
+                    status="failed",
+                )
+            elif status.state == CloudSliceState.UNKNOWN:
+                age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
+                if age >= self._unresolvable_timeout:
+                    group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
                     group.scale_down(slice_id)
                     self._unregister_slice_workers(slice_id)
                     group.record_slice_boot_failed(slice_id, timestamp)
-                    reason = status.error_message if status.error_message else "bootstrap failed"
                     self._log_action(
                         "slice_failed",
                         group.name,
                         slice_id,
-                        reason=reason,
+                        reason=f"TPU unresolvable for {age}",
                         status="failed",
                     )
-                elif status.state == CloudSliceState.UNKNOWN:
-                    age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
-                    if age >= self._unresolvable_timeout:
-                        group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
-                        group.scale_down(slice_id)
-                        self._unregister_slice_workers(slice_id)
-                        group.record_slice_boot_failed(slice_id, timestamp)
-                        self._log_action(
-                            "slice_failed",
-                            group.name,
-                            slice_id,
-                            reason=f"TPU unresolvable for {age}",
-                            status="failed",
-                        )
-                    else:
-                        logger.debug(
-                            "Slice %s UNKNOWN (age %s < timeout %s); will retry",
-                            slice_id,
-                            age,
-                            self._unresolvable_timeout,
-                        )
+                else:
+                    logger.debug(
+                        "Slice %s UNKNOWN (age %s < timeout %s); will retry",
+                        slice_id,
+                        age,
+                        self._unresolvable_timeout,
+                    )
 
         for group in self._groups.values():
             target_capacity = min(group.current_demand + group.buffer_slices, group.max_slices)
