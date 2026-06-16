@@ -115,7 +115,7 @@ def test_storage_operations(storage_config):
         assert np.array_equal(read_rollout.prompt_tokens, orig_rollout.prompt_tokens)
 
 
-def test_file_storage_timestamp_ordering(tmp_path):
+def test_file_storage_same_timestamp_counter_ordering(tmp_path):
     """Test that file storage breaks same-timestamp ties by counter."""
     storage_path = tmp_path / "ordered_test"
     storage_path.mkdir()
