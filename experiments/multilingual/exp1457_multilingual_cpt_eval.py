@@ -9,11 +9,11 @@ from collections.abc import Iterable
 from dataclasses import replace
 
 from fray.cluster import ResourceConfig
+from marin.defaults.evals import default_eval
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep
 
-from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import MULTILINGUAL_LM_EVAL_LOGPROB_TASKS
 from experiments.models import apertus_8b, llama_3_1_8b, olmo_2_base_8b, olmo_3_1025_7b, qwen2_5_7b
 from experiments.multilingual.exp1457_multilingual_cpt import multilingual_cpt_8b_fineweb2_hq

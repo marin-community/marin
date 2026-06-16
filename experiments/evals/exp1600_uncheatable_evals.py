@@ -17,7 +17,12 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from fray.cluster import ResourceConfig
-from marin.defaults import ACTIVE_DATASETS, ALL_UNCHEATABLE_EVAL_DATASETS, uncheatable_eval, uncheatable_eval_tokenized
+from marin.defaults.evals import (
+    ACTIVE_DATASETS,
+    ALL_UNCHEATABLE_EVAL_DATASETS,
+    uncheatable_eval,
+    uncheatable_eval_tokenized,
+)
 from marin.evaluation.perplexity_gap import raw_text_dataset
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, output_path_of

@@ -21,13 +21,11 @@ from levanter.data.text import (
 )
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.lm_model import LmConfig
-from marin.defaults import (
-    CORE_TASKS,
-    SimpleTrainConfig,
+from marin.defaults import CORE_TASKS, SimpleTrainConfig, default_train
+from marin.defaults.step import (
     _build_train_lm_config,
     _prepare_data_config,
     _validate_train_length,
-    default_train,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import compute_output_path, materialize, resolve_local_placeholders

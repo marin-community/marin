@@ -13,11 +13,10 @@ The canonical helpers live in `experiments/evals/evals.py`:
 
 ```python
 from experiments.evals.evals import (
-    default_eval,
-    default_key_evals,
-    evaluate_lm_evaluation_harness,
-    evaluate_levanter_lm_evaluation_harness,
+  default_key_evals,
+  evaluate_lm_evaluation_harness,
 )
+from marin.defaults.evals import evaluate_levanter_lm_evaluation_harness, default_eval
 ```
 
 - `default_eval` runs `CORE_TASKS` through the Levanter LM evaluation harness by default.
@@ -38,21 +37,21 @@ Use `default_eval` when you want the default multiple-choice evaluation suite:
 
 ```python
 from fray.cluster import ResourceConfig
-from experiments.evals.evals import default_eval
+from marin.defaults.evals import default_eval
 from marin.execution.executor import executor_main
 
 model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
 
 core_eval_step = default_eval(
-    step=model_path,
-    resource_config=ResourceConfig.with_tpu("v4-8"),
-    # Optional overrides:
-    # evals=CORE_TASKS_PLUS_MMLU,
-    # max_eval_instances=100,
+  step=model_path,
+  resource_config=ResourceConfig.with_tpu("v4-8"),
+  # Optional overrides:
+  # evals=CORE_TASKS_PLUS_MMLU,
+  # max_eval_instances=100,
 )
 
 if __name__ == "__main__":
-    executor_main(steps=[core_eval_step])
+  executor_main(steps=[core_eval_step])
 ```
 
 - `default_eval` accepts a checkpoint path, an `ExecutorStep`, or an `InputName`.

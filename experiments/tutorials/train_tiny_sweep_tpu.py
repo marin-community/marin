@@ -23,7 +23,7 @@ from fray import client as fray_client
 from fray.cluster import ResourceConfig
 from fray.types import Entrypoint, JobRequest, create_environment
 from levanter.main.train_lm import TrainLmConfig
-from marin.defaults import CORE_TASKS
+from marin.defaults import CORE_TASKS, SimpleTrainConfig
 from marin.execution.sweep import SweepTarget, claim_and_run
 from marin.execution.types import versioned
 from marin.training.run_environment import extras_for_resources
@@ -32,7 +32,6 @@ from marin.training.training import resolve_training_env
 from experiments.defaults import _run_training_on_worker, prepare_lm_train
 from experiments.llama import llama_30m
 from experiments.pretraining_datasets.simple import tokenized
-from experiments.simple_train_config import SimpleTrainConfig
 
 RESOURCES = ResourceConfig.with_tpu("v4-8")
 EVALS = CORE_TASKS

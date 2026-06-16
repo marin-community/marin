@@ -1,3 +1,5 @@
+from marin.defaults import evalsfrom marin.defaults import evals
+
 # Smoke Test Review Fix Plan
 
 ## Issue 1: `from __future__ import annotations` in `debug.py`
@@ -92,8 +94,8 @@ Then in `SmokeTestRunner.run()`, wrap usage:
 ```python
 # In __init__, don't create logger yet, just store log_dir
 # In run():
-with SmokeTestLogger(self.config.log_dir) as self.logger:
-    ...
+with SmokeTestLogger(self.config.log_dir) as evals.logger:
+  ...
 ```
 
 However, this is a moderate refactor. A simpler fix: just ensure `close()` is called in a `finally` in `run()` -- which it already is (line 588). The real risk is if `__init__` itself raises after `open()`. Since the only thing after `open()` is the assignment, this is extremely unlikely. The current code is acceptable. Mark this as "low risk, defer."

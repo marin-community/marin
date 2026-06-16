@@ -42,12 +42,12 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamHConfig
 from marin.defaults import SimpleTrainConfig, default_train
+from marin.defaults.evals import default_eval
 from marin.execution.types import ExecutorStep, InputName
 from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.scaling_laws import CandidateConfig, pick_v4_type
 from marin.scaling_laws.tpu_utils import V4_SPEC
 
-from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import EvalTaskConfig
 
 # --- Constants ---

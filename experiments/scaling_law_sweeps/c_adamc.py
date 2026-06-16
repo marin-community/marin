@@ -33,11 +33,11 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.cautious import CautiousConfig
 from marin.defaults import SimpleTrainConfig, default_train
+from marin.defaults.evals import default_eval
 from marin.execution.types import ExecutorStep, InputName
 from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.scaling_laws import CandidateConfig, pick_v5p_type
 
-from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import EvalTaskConfig
 
 # --- Constants ---

@@ -24,14 +24,12 @@ from levanter.tracker.wandb import WandbConfig, truncate_wandb_run_name
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 
-from marin.datakit.download.uncheatable_eval import make_uncheatable_eval_step
 from marin.defaults.config import SimpleDPOConfig, SimpleSFTConfig, SimpleTrainConfig
-from marin.defaults.tokenize import default_tokenize
+from marin.defaults.evals import uncheatable_eval_tokenized
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
 from marin.execution.executor import unwrap_versioned_value
 from marin.execution.types import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import (
-    TokenizeConfig,
     TokenizerStep,
     add_validation_sets_to_mixture,
     lm_data_config,
@@ -620,48 +618,3 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 
     return tokenizer
-
-
-uncheatable_eval = make_uncheatable_eval_step()
-
-
-def uncheatable_eval_tokenized(
-    *, base_path="tokenized/", tokenizer: str | None = None, uncheatable_eval_raw: ExecutorStep = uncheatable_eval
-) -> dict[str, TokenizerStep]:
-    uncheatable_eval_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
-    for dataset in ACTIVE_DATASETS:
-        path_part = ALL_UNCHEATABLE_EVAL_DATASETS[dataset]
-        uncheatable_eval_steps[os.path.join("uncheatable_eval", dataset)] = default_tokenize(
-            name=os.path.join("uncheatable_eval", dataset),
-            dataset=uncheatable_eval_raw.cd(f"{path_part}"),
-            tokenizer=tokenizer,
-            is_validation=True,
-        )
-
-    return uncheatable_eval_steps
-
-
-ALL_UNCHEATABLE_EVAL_DATASETS = {
-    "wikipedia_arabic": "wikipedia_arabic_*.jsonl.gz",
-    "wikipedia_english": "wikipedia_english_*.jsonl.gz",
-    "wikipedia_french": "wikipedia_french_*.jsonl.gz",
-    "wikipedia_german": "wikipedia_german_*.jsonl.gz",
-    "wikipedia_japanese": "wikipedia_japanese_*.jsonl.gz",
-    "wikipedia_spanish": "wikipedia_spanish_*.jsonl.gz",
-    "github_python": "github_python_*.jsonl.gz",
-    "github_cpp": "github_cpp_*.jsonl.gz",
-    "bbc_news": "bbc_news_*.jsonl.gz",
-    "arxiv_physics": "arxiv_physics_*.jsonl.gz",
-    "arxiv_computer_science": "arxiv_computer_science_*.jsonl.gz",
-    "ao3_chinese": "ao3_chinese_*.jsonl.gz",
-    "ao3_english": "ao3_english_*.jsonl.gz",
-}
-ACTIVE_DATASETS = [
-    "wikipedia_english",
-    "github_python",
-    "github_cpp",
-    "bbc_news",
-    "arxiv_physics",
-    "arxiv_computer_science",
-    "ao3_english",
-]
