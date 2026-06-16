@@ -154,6 +154,20 @@ class GrugModelConfig:
     anytime_supervision_weight: float = 1.0
     """E4: relative weight on the averaged per-iteration deep-supervision CE term.
     Only used when anytime_supervision is True."""
+    ponder_halting: bool = False
+    """E7 (PonderNet): when True and the core is looped, a learned per-token halting
+    head reads each per-iteration readout to predict a halting probability; training
+    adds an expected-over-halting CE term plus a KL-to-geometric-prior regularizer.
+    This is ADDED to the standard final CE (not a replacement), so the eval path and
+    the comparable paloma metric are unchanged. Training-only; adds one (hidden_dim,)
+    halt-head vector (routes to plain Adam). Builds on the same per-iteration readout
+    plumbing as anytime_supervision (E4)."""
+    ponder_loss_weight: float = 1.0
+    """E7: weight on the expected-over-halting reconstruction CE term."""
+    ponder_kl_weight: float = 0.01
+    """E7: weight (beta) on the KL(halting-dist || geometric-prior) regularizer."""
+    ponder_prior_lambda: float = 0.2
+    """E7: geometric-prior halting rate (expected halting step ~ 1/lambda)."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -615,6 +629,7 @@ class Transformer(eqx.Module):
     core_film_scale: jax.Array | None
     core_film_shift: jax.Array | None
     core_router_bias: jax.Array | None
+    halt_head: jax.Array | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -645,6 +660,13 @@ class Transformer(eqx.Module):
         if cfg.depth_conditioned_routing and cfg.max_trained_recurrence > 1:
             bias_shape = (cfg.max_trained_recurrence, cfg.num_core_layers, cfg.num_experts)
             core_router_bias = reshard(jnp.zeros(bias_shape, dtype=jnp.float32), P(None, None, None))
+        # E7 (PonderNet): per-token halting head read off each per-iteration readout.
+        # Zero-init and consumes no PRNG key, so every other param stays bit-identical
+        # to the ponder_halting=False model. Shape (hidden_dim,) so ndim==1 routes it
+        # to plain Adam (AdamH divides by the param norm -> 0/0 NaN on a zero init).
+        halt_head = None
+        if cfg.ponder_halting and cfg.max_trained_recurrence > 1:
+            halt_head = reshard(jnp.zeros((cfg.hidden_dim,), dtype=jnp.float32), P(None))
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -656,6 +678,7 @@ class Transformer(eqx.Module):
             core_film_scale=core_film_scale,
             core_film_shift=core_film_shift,
             core_router_bias=core_router_bias,
+            halt_head=halt_head,
             config=cfg,
         )
 
@@ -734,7 +757,12 @@ class Transformer(eqx.Module):
         # coda (cheap), so they regularize the core to be decodable at every depth;
         # the final output still flows through the coda below.
         track_anytime = cfg.anytime_supervision and cfg.max_trained_recurrence > 1
+        # E7 (PonderNet): collect a per-iteration halting logit (readout . halt_head)
+        # alongside the readouts. Needs the same per-iteration readout plumbing as E4.
+        track_ponder = cfg.ponder_halting and cfg.max_trained_recurrence > 1
+        collect_readouts = track_anytime or track_ponder
         anytime_readouts: list[jax.Array] = []
+        ponder_halt_logits: list[jax.Array] = []
         for t in range(n_recurrence):
             for c, block in enumerate(core_blocks):
                 film = None
@@ -758,8 +786,11 @@ class Transformer(eqx.Module):
                 den = jnp.sum(jnp.square(x_prev.astype(jnp.float32)), axis=-1) + cfg.layer_norm_eps
                 consistency_accum = consistency_accum + jnp.mean(num / den)
                 x_prev = hidden
-            if track_anytime:
-                anytime_readouts.append(self.final_gated_norm(self.final_norm(hidden)))
+            if collect_readouts:
+                readout = self.final_gated_norm(self.final_norm(hidden))
+                anytime_readouts.append(readout)
+                if track_ponder:
+                    ponder_halt_logits.append(jnp.einsum("bsd,d->bs", readout, self.halt_head))
         per_block_stats.extend(_mean_router_stats(s) for s in core_iter_stats)
 
         for block in coda_blocks:
@@ -776,11 +807,15 @@ class Transformer(eqx.Module):
         }
         if track_consistency:
             router_metrics["core_consistency"] = consistency_accum / n_recurrence
-        if track_anytime:
+        if collect_readouts:
             # (n_recurrence, B, S, D). Consumed by next_token_loss (training only)
             # and dropped before _summarize_router_metrics, so it never escapes the
-            # train_step metrics dict.
+            # train_step metrics dict. Present whenever ponder is on too, since the
+            # PonderNet recon term reads each per-iteration readout's CE.
             router_metrics["anytime_readouts"] = jnp.stack(anytime_readouts, axis=0)
+        if track_ponder:
+            # (n_recurrence, B, S). Per-iteration halting logits for the PonderNet loss.
+            router_metrics["ponder_halt_logits"] = jnp.stack(ponder_halt_logits, axis=0)
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
 
@@ -855,6 +890,61 @@ class Transformer(eqx.Module):
             anytime_ce = ce_sum / n_iter
             anytime_ce_weighted = self.config.anytime_supervision_weight * anytime_ce
             loss = loss + anytime_ce_weighted
+        # E7 (PonderNet): training-only halting loss. Builds a per-token halting
+        # distribution p_t over the R core iterations from the learned halting head,
+        # then adds an expected-over-halting CE (recon) plus a KL-to-geometric-prior
+        # regularizer. ADDED to the standard final CE (not a replacement), so the eval
+        # (reduction="none") path and the comparable metric stay byte-identical.
+        ponder_recon = None
+        ponder_kl = None
+        expected_halt_step = None
+        if reduction != "none" and self.config.ponder_halting and "ponder_halt_logits" in router_metrics:
+            readouts = router_metrics["anytime_readouts"]  # (R, B, S, D)
+            halt_logits = router_metrics["ponder_halt_logits"]  # (R, B, S)
+            n_recurrence = readouts.shape[0]
+            # Halting distribution p_t (R, B, S), Sum_t p_t == 1 exactly: the last
+            # step absorbs all remaining mass (forced halt). remain_t is the exclusive
+            # cumulative product of (1 - lam) so remain_0 == 1.
+            lam = jax.nn.sigmoid(halt_logits.astype(loss_dtype))
+            one_minus = 1.0 - lam
+            incl = jnp.cumprod(one_minus, axis=0)
+            # remain_t = exclusive cumprod of (1 - lam) (remain_0 = 1). Build it by
+            # shifting `incl` down one step and seeding step 0 with ones; `ones_like`
+            # inherits incl's batch sharding so the concatenate stays well-sharded.
+            ones = jnp.ones_like(incl[:1])
+            remain = jnp.concatenate([ones, incl[:-1]], axis=0)
+            p = lam * remain
+            p = p.at[-1].set(remain[-1])
+            # Raw (unweighted) per-position CE for each per-iteration readout (R, B, S).
+            ce_list = [
+                fused_linear_softmax_cross_entropy_loss(
+                    readouts[t],
+                    self.output_proj,
+                    labels,
+                    weight=None,
+                    reduction="none",
+                    dtype=loss_dtype,
+                )
+                for t in range(n_recurrence)
+            ]
+            ce = jnp.stack(ce_list, axis=0)  # (R, B, S)
+            recon_per_pos = jnp.sum(p * ce, axis=0)  # (B, S)
+            denom = jnp.sum(loss_weight)
+            ponder_recon = jnp.sum(loss_weight * recon_per_pos) / denom
+            # Geometric prior g_t = lp*(1-lp)^t for t<R-1, g_{R-1}=(1-lp)^{R-1}; Sum_t g_t == 1.
+            lp = jnp.asarray(self.config.ponder_prior_lambda, dtype=loss_dtype)
+            t_idx = jnp.arange(n_recurrence, dtype=loss_dtype)
+            prior = lp * (1.0 - lp) ** t_idx
+            prior = prior.at[-1].set((1.0 - lp) ** (n_recurrence - 1))
+            eps = 1e-8
+            g = prior.reshape((n_recurrence, 1, 1))
+            kl_per_pos = jnp.sum(p * (jnp.log(p + eps) - jnp.log(g + eps)), axis=0)  # (B, S)
+            ponder_kl = jnp.sum(loss_weight * kl_per_pos) / denom
+            # Diagnostic: loss_weight-weighted mean of E_t[t] = Sum_t p_t * t over positions.
+            steps = jnp.arange(n_recurrence, dtype=p.dtype).reshape((n_recurrence, 1, 1))
+            expected_halt_per_pos = jnp.sum(p * steps, axis=0)  # (B, S)
+            expected_halt_step = jnp.sum(loss_weight * expected_halt_per_pos) / denom
+            loss = loss + self.config.ponder_loss_weight * ponder_recon + self.config.ponder_kl_weight * ponder_kl
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
@@ -865,6 +955,10 @@ class Transformer(eqx.Module):
             if anytime_ce is not None:
                 summarized_metrics["train/anytime_ce"] = anytime_ce
                 summarized_metrics["train/anytime_ce_weighted"] = anytime_ce_weighted
+            if ponder_recon is not None:
+                summarized_metrics["train/ponder_recon"] = ponder_recon
+                summarized_metrics["train/ponder_kl"] = ponder_kl
+                summarized_metrics["train/ponder_expected_halt_step"] = expected_halt_step
             return loss, summarized_metrics
         return loss
 

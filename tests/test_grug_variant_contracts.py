@@ -720,8 +720,10 @@ def test_reentrant_core_consistency_absent_when_disabled():
         {"depth_conditioned_routing": True, "anytime_supervision": True},
         {"randomize_recurrence": True, "recurrence_choices": (2, 4, 8), "depth_conditioned_routing": True},
         {"randomize_recurrence": True, "recurrence_choices": (2, 4, 8), "anytime_supervision": True},
+        {"ponder_halting": True},
+        {"randomize_recurrence": True, "recurrence_choices": (2, 4, 8), "ponder_halting": True},
     ],
-    ids=["e6", "e4", "e64", "e6_randdepth", "e4_randdepth"],
+    ids=["e6", "e4", "e64", "e6_randdepth", "e4_randdepth", "e7", "e7_randdepth"],
 )
 def test_reentrant_e4_e6_full_train_step_lowers(overrides):
     """A full re-entrant train step (value_and_grad through the deep-supervision /
@@ -770,6 +772,8 @@ def test_reentrant_e4_e6_full_train_step_lowers(overrides):
     assert out_metrics_shape["train/loss"].shape == ()
     if overrides.get("anytime_supervision"):
         assert "train/anytime_ce" in out_metrics_shape
+    if overrides.get("ponder_halting"):
+        assert out_metrics_shape["train/ponder_recon"].shape == ()
     assert out_state_shape.pending_qb_betas.shape[0] == cfg.num_layers
 
 
@@ -950,6 +954,177 @@ def test_reentrant_anytime_readouts_absent_when_disabled():
         _, router_metrics = jax.jit(lambda m, t: m(t))(model, sharded_tokens)
 
     assert "anytime_readouts" not in router_metrics
+
+
+def _ponder_halting_distribution(halt_logits):
+    """Recompute the PonderNet halting distribution p_t (R, B, S) from halt logits.
+
+    Mirrors the exact formula in Transformer.next_token_loss: lam=sigmoid(logit),
+    remain_t = exclusive cumprod of (1-lam) (remain_0=1), p_t = lam*remain_t, and the
+    last step absorbs all remaining mass so Sum_t p_t == 1.
+    """
+    lam = jax.nn.sigmoid(halt_logits)
+    one_minus = 1.0 - lam
+    incl = jnp.cumprod(one_minus, axis=0)
+    ones = jnp.ones((1, *lam.shape[1:]), dtype=lam.dtype)
+    remain = jnp.concatenate([ones, incl[:-1]], axis=0)
+    p = lam * remain
+    return p.at[-1].set(remain[-1])
+
+
+def test_reentrant_ponder_does_not_touch_eval_loss():
+    """E7's PonderNet halting loss must be training-only: with reduction="none"
+    (the eval path), a model with ponder_halting=True returns the exact same
+    per-position loss as the identical model with it off. PonderNet adds the halt_head
+    param, but it is zero-init and never feeds back into the residual stream, so the
+    post-coda hidden and thus the eval CE are byte-identical.
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+
+    cfg_off = _small_reentrant_config(model_module, ponder_halting=False)
+    cfg_on = _small_reentrant_config(model_module, ponder_halting=True)
+
+    mesh = compact_grug_mesh()
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(2 * 8, dtype=jnp.int32).reshape(2, 8) % cfg_off.vocab_size
+    weights = jnp.ones((2, 8), dtype=jnp.float32)
+    token_pspec = jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None)
+
+    def eval_loss(cfg, sharded_tokens, sharded_weights):
+        model = model_module.Transformer.init(cfg, key=key)
+        return jax.jit(lambda m, t, w: m.next_token_loss(t, w, reduction="none", logsumexp_weight=None))(
+            model, sharded_tokens, sharded_weights
+        )
+
+    with _reset_abstract_mesh(), set_mesh(mesh):
+        sharded_tokens = jax.sharding.reshard(tokens, token_pspec)
+        sharded_weights = jax.sharding.reshard(weights, token_pspec)
+        loss_off = eval_loss(cfg_off, sharded_tokens, sharded_weights)
+        loss_on = eval_loss(cfg_on, sharded_tokens, sharded_weights)
+
+    assert loss_off.shape == (2, 8)
+    assert jnp.array_equal(loss_off, loss_on)
+
+
+def test_reentrant_ponder_adds_positive_terms_to_training_loss():
+    """With ponder_halting and reduction="mean", the recon/KL metrics are surfaced,
+    finite, and recon is positive; the training loss grows relative to ponder off.
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+
+    cfg_off = _small_reentrant_config(model_module, ponder_halting=False)
+    cfg_on = _small_reentrant_config(model_module, ponder_halting=True)
+
+    mesh = compact_grug_mesh()
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(2 * 8, dtype=jnp.int32).reshape(2, 8) % cfg_off.vocab_size
+    weights = jnp.ones((2, 8), dtype=jnp.float32)
+    token_pspec = jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None)
+
+    def train_loss(cfg, sharded_tokens, sharded_weights):
+        model = model_module.Transformer.init(cfg, key=key)
+        return jax.jit(
+            lambda m, t, w: m.next_token_loss(t, w, reduction="mean", logsumexp_weight=None, return_router_metrics=True)
+        )(model, sharded_tokens, sharded_weights)
+
+    with _reset_abstract_mesh(), set_mesh(mesh):
+        sharded_tokens = jax.sharding.reshard(tokens, token_pspec)
+        sharded_weights = jax.sharding.reshard(weights, token_pspec)
+        loss_off, metrics_off = train_loss(cfg_off, sharded_tokens, sharded_weights)
+        loss_on, metrics_on = train_loss(cfg_on, sharded_tokens, sharded_weights)
+
+    recon = metrics_on["train/ponder_recon"]
+    kl = metrics_on["train/ponder_kl"]
+    assert jnp.isfinite(recon)
+    assert jnp.isfinite(kl)
+    assert float(recon) > 0.0
+    assert float(loss_on) > float(loss_off)
+    # The ponder-off model never computes the terms, so it has no such metrics.
+    assert "train/ponder_recon" not in metrics_off
+    assert "train/ponder_kl" not in metrics_off
+
+
+def test_reentrant_ponder_halting_distribution_sums_to_one():
+    """The PonderNet halting distribution recomputed from the per-iteration halt
+    logits in router_metrics must sum to 1 across iterations for every (B, S) token,
+    and the reported expected-halt-step diagnostic must be finite and in [0, R-1].
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+
+    cfg = _small_reentrant_config(model_module, ponder_halting=True)
+    r = cfg.recurrence_steps
+
+    mesh = compact_grug_mesh()
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(2 * 8, dtype=jnp.int32).reshape(2, 8) % cfg.vocab_size
+    weights = jnp.ones((2, 8), dtype=jnp.float32)
+    token_pspec = jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None)
+
+    with _reset_abstract_mesh(), set_mesh(mesh):
+        sharded_tokens = jax.sharding.reshard(tokens, token_pspec)
+        sharded_weights = jax.sharding.reshard(weights, token_pspec)
+        model = model_module.Transformer.init(cfg, key=key)
+        _, router_metrics = jax.jit(lambda m, t: m(t))(model, sharded_tokens)
+        _, metrics = jax.jit(
+            lambda m, t, w: m.next_token_loss(t, w, reduction="mean", logsumexp_weight=None, return_router_metrics=True)
+        )(model, sharded_tokens, sharded_weights)
+
+    halt_logits = router_metrics["ponder_halt_logits"]
+    assert halt_logits.shape == (r, 2, 8)
+    p = _ponder_halting_distribution(halt_logits)
+    assert jnp.allclose(jnp.sum(p, axis=0), 1.0, atol=1e-5)
+
+    expected_halt_step = metrics["train/ponder_expected_halt_step"]
+    assert jnp.isfinite(expected_halt_step)
+    assert 0.0 <= float(expected_halt_step) <= r - 1
+
+
+def test_reentrant_ponder_readouts_absent_when_disabled():
+    """With ponder_halting off (the default) the forward never adds a
+    ``ponder_halt_logits`` key to router_metrics, so E0-E6 traces are unchanged.
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+
+    cfg = _small_reentrant_config(model_module, ponder_halting=False)
+
+    mesh = compact_grug_mesh()
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(2 * 8, dtype=jnp.int32).reshape(2, 8) % cfg.vocab_size
+    token_pspec = jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None)
+
+    with _reset_abstract_mesh(), set_mesh(mesh):
+        sharded_tokens = jax.sharding.reshard(tokens, token_pspec)
+        model = model_module.Transformer.init(cfg, key=key)
+        _, router_metrics = jax.jit(lambda m, t: m(t))(model, sharded_tokens)
+
+    assert "ponder_halt_logits" not in router_metrics
+
+
+def test_reentrant_ponder_halt_head_uses_plain_adam_not_adamh():
+    """E7's halt head must be optimized by plain Adam, not AdamH. It is a 1-D
+    (hidden_dim,) zero-init vector; AdamH divides by the parameter norm, giving
+    0/0 = NaN at init. The mask routes it to ``adam`` because it doesn't match an
+    AdamH name rule and falls through the ndim==1 case.
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+    optimizer_module = importlib.import_module("experiments.grug.reentrant.optimizer")
+    leaf_key_paths = importlib.import_module("levanter.utils.jax_utils").leaf_key_paths
+
+    cfg = _small_reentrant_config(model_module, ponder_halting=True)
+
+    with _reset_abstract_mesh(), set_mesh(compact_grug_mesh()):
+        model = model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
+
+    def path_str(p):
+        return ".".join(p) if isinstance(p, (list, tuple)) else str(p)
+
+    mask = optimizer_module.GrugMoeAdamHConfig().create_mask(model)
+    paths = [path_str(p) for p in jax.tree.leaves(leaf_key_paths(model))]
+    groups = jax.tree.leaves(mask)
+
+    halt_groups = [g for path, g in zip(paths, groups, strict=True) if "halt_head" in path.lower()]
+    assert halt_groups, "expected halt_head in the tree when ponder_halting=True"
+    assert all(g == "adam" for g in halt_groups), f"halt head must use plain adam, got {set(halt_groups)}"
 
 
 def test_reentrant_depth_router_bias_uses_plain_adam_not_adamh():

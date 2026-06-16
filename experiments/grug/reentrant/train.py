@@ -552,6 +552,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         "train/core_consistency_weighted",
                         "train/anytime_ce",
                         "train/anytime_ce_weighted",
+                        "train/ponder_recon",
+                        "train/ponder_kl",
+                        "train/ponder_expected_halt_step",
                     )
                     extra_scalars = {key: metrics[key] for key in extra_scalar_keys if key in metrics}
                     if extra_scalars:

@@ -332,6 +332,23 @@ e64_reentrant = reentrant_step(
     tags=["moe", "reentrant", "e64-combined"],
 )
 
+# E7 — PonderNet: E3 plus a learned per-token halting head + expected-over-halting CE
+# and a KL-to-geometric-prior regularizer (added on top of the standard final CE, so
+# the eval metric stays comparable). Adaptive test-time compute. PONDER_KL / PONDER_PRIOR
+# env knobs. No effect on the eval path; checkpoint depth-sweepable with the E3 config.
+_E7_MODEL = dataclasses.replace(
+    _E3_MODEL,
+    ponder_halting=True,
+    ponder_kl_weight=env_float("PONDER_KL", 0.01),
+    ponder_prior_lambda=env_float("PONDER_PRIOR", 0.2),
+)
+e7_reentrant = reentrant_step(
+    name="grug/reentrant_e7_ponder",
+    run_id=_resolve_run_id("reentrant_e7_ponder"),
+    model=_E7_MODEL,
+    tags=["moe", "reentrant", "e7-ponder"],
+)
+
 # Experiment registry. Select with GRUG_EXPERIMENT (comma-separated names); default E0.
 _STEPS = {
     "e0": e0_baseline,
@@ -342,6 +359,7 @@ _STEPS = {
     "e6": e6_reentrant,
     "e4": e4_reentrant,
     "e64": e64_reentrant,
+    "e7": e7_reentrant,
 }
 
 
