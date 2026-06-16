@@ -3,14 +3,13 @@
 
 """Autoscaler checkpoint restore helpers."""
 
-from __future__ import annotations
-
 import logging
-import threading
 from dataclasses import dataclass
 
 from sqlalchemy import select
 
+from iris.cluster.backends.protocols import WorkerInfraProvider
+from iris.cluster.backends.types import CloudSliceState, SliceHandle
 from iris.cluster.controller.autoscaler.scaling_group import (
     GroupSnapshot,
     ScalingGroup,
@@ -20,8 +19,6 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, TrackedWorkerRow, restore_tracked_workers
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import scaling_groups_table, slices_table, workers_table
-from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import CloudSliceState, SliceHandle
 
 _LIVE_CLOUD_STATES = frozenset({CloudSliceState.CREATING, CloudSliceState.READY, CloudSliceState.REPAIRING})
 
@@ -133,31 +130,29 @@ def restore_autoscaler_state(
         restore_result = restore_scaling_group(
             group_snapshot=group_snapshot,
             cloud_handles=cloud_by_group.get(group_snapshot.name, []),
-            label_prefix=group.label_prefix,
         )
         group.restore_from_snapshot(
             slices=restore_result.slices,
             last_scale_up=restore_result.last_scale_up,
             last_scale_down=restore_result.last_scale_down,
         )
-        group.purge_persisted_slice_rows(restore_result.discarded_slice_ids)
+        # Discarded slice rows (missing from cloud) are not re-added to the
+        # group's in-memory state, so the controller's first wholesale DB sync
+        # after the next capacity call deletes them — no explicit purge needed.
 
     return restore_tracked_workers(checkpoint.tracked_worker_rows)
 
 
 def _reclaim_dead_slice(handle: SliceHandle, state: CloudSliceState) -> None:
-    """Best-effort terminate of a dead slice in a daemon thread.
+    """Best-effort terminate of a dead slice during boot recovery.
 
-    Boot recovery must not block on or fail because of a stale cloud resource:
-    terminate() can hit transient API errors and is not guaranteed to be fast.
-    Errors are logged; on the next restart the slice will surface again.
+    ``terminate()`` is a bounded cloud request (an async delete that returns
+    immediately), issued in line here. Boot recovery must not fail because of a
+    stale cloud resource, so transient API errors are logged and swallowed; on
+    the next restart the slice will surface again.
     """
     logger.info("Reclaiming dead slice %s (state=%s, zone=%s)", handle.slice_id, state, handle.zone)
-
-    def _run() -> None:
-        try:
-            handle.terminate()
-        except Exception as e:
-            logger.warning("Failed to terminate dead slice %s: %s", handle.slice_id, e)
-
-    threading.Thread(target=_run, name=f"reclaim-{handle.slice_id}", daemon=True).start()
+    try:
+        handle.terminate()
+    except Exception as e:
+        logger.warning("Failed to terminate dead slice %s: %s", handle.slice_id, e)

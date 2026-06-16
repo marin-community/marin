@@ -11,34 +11,45 @@ requires-python = ">=3.11"
 dependencies = [
     # workspaces
     "marin-iris",
-    "marin-finelog",
     "marin-fray",
     "marin-haliax",
     "marin-levanter",
-    "marin",
+    "marin-core",
     "marin-rigging",
     "marin-zephyr",
     # top level deps. try to keep these small.
     "watchdog",
-    # `>= 0.1.0.dev0` opts uv into pre-releases for this one package so the
-    # daily nightly published by .github/workflows/dupekit-release-wheels.yaml
-    # (`X.Y.Z.dev<YYYYMMDDhhmm>`) is picked up by `uv lock` automatically.
-    # Cut a stable tag (`dupekit-v<X.Y.Z>`) when promoting; uv prefers the
-    # higher version, so a stable supersedes any earlier dev of the same Z.
-    "marin-dupekit >= 0.1.0.dev0",
+    # marin-dupekit and marin-finelog are native (maturin) packages shipped as
+    # pre-built platform wheels (built by their *-release-wheels.yaml workflows)
+    # rather than pure-Python workspace members. A `>= X.Y.Z.dev0` floor opts uv
+    # into the daily nightly wheels (`X.Y.Z.dev<YYYYMMDDhhmm>`); a plain
+    # `>= X.Y.Z` floor pins to a stable tag (`dupekit-v<X.Y.Z>` /
+    # `finelog-v<X.Y.Z>`). uv prefers the higher version, so a stable supersedes
+    # any earlier dev of the same Z; bump the floor to whichever is newest.
+    # Published by .github/workflows/dupekit-release-wheels.yaml.
+    "marin-dupekit >= 0.1.2.dev202606060824",
+    # finelog carries an in-process server ext (finelog._native) the controller
+    # starts; `scripts/rust_mode.py dev` swaps in an editable source locally.
+    "marin-finelog >= 0.2.9",
 ]
 
 [tool.uv]
 fork-strategy = "fewest"
-# Allow pre-releases globally so `uv lock` resolves marin-dupekit to its
-# latest nightly (`X.Y.Z.dev<timestamp>` published by the dupekit release
-# workflow). uv has no per-package prerelease config; in practice almost
-# none of our other dependencies publish pre-releases on PyPI, so this
-# only affects dupekit and the already-pinned `omegaconf>=2.4.0.dev4`
-# below.
-prerelease = "allow"
-find-links = [
-    "https://github.com/marin-community/kitoken/releases/expanded_assets/kitoken-0.10.2-a3012f4",
+# "explicit": allow pre-releases only for packages whose declared specifier
+# names one, so our intentional pre-releases resolve while everything else stays
+# on its latest stable release. (A global "allow" would instead promote any
+# transitive dependency's newest beta/rc into the lock.) Opted in: the
+# marin-dupekit nightly (above); the omegaconf dev pin in override-dependencies
+# below; and the prerelease-only transitive deps in constraint-dependencies
+# (tfp-nightly / opentelemetry-semantic-conventions publish no stable release).
+prerelease = "explicit"
+constraint-dependencies = [
+    # Enable pre-releases for transitive deps that publish no stable release at
+    # all. A constraint intersects (rather than replaces) the upstream
+    # specifier, so the resolved version still follows whatever requires them;
+    # the pre-release component here only flips uv's per-package opt-in.
+    "tfp-nightly>=0.1.dev0",
+    "opentelemetry-semantic-conventions>=0.1b0",
 ]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
@@ -77,22 +88,22 @@ conflicts = [
     # Remove these once CPU, TPU, vLLM, and Fray TPU test paths can share the GPU JAX line.
     [
         { package = "marin-levanter", extra = "gpu" },
-        { package = "marin", extra = "cpu" },
+        { package = "marin-core", extra = "cpu" },
     ],
     [
         { package = "marin-levanter", extra = "gpu" },
-        { package = "marin", extra = "tpu" },
+        { package = "marin-core", extra = "tpu" },
     ],
     [
         { package = "marin-levanter", extra = "gpu" },
-        { package = "marin", extra = "vllm" },
+        { package = "marin-core", extra = "vllm" },
     ],
     [
-        { package = "marin", extra = "gpu" },
+        { package = "marin-core", extra = "gpu" },
         { package = "marin-levanter", extra = "tpu" },
     ],
     [
-        { package = "marin", extra = "gpu" },
+        { package = "marin-core", extra = "gpu" },
         { package = "marin-fray", group = "fray_tpu_test" },
     ],
     [
@@ -102,9 +113,11 @@ conflicts = [
 ]
 
 [tool.uv.workspace]
+# marin-finelog is intentionally NOT a member: it is a native (maturin) package
+# consumed as a pre-built platform wheel (see [project] dependencies and the
+# RUST-DEV SOURCES block below), mirroring marin-dupekit.
 members = [
     "lib/iris",
-    "lib/finelog",
     "lib/fray",
     "lib/haliax",
     "lib/levanter",
@@ -115,18 +128,25 @@ members = [
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
-marin-finelog = { workspace = true }
 marin-fray = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
-marin = { workspace = true }
+marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
+nvidia-cutlass-dsl = { index = "nvidia" }
+nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
+nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
+explicit = true
 
 
 [tool.black]
@@ -161,19 +181,30 @@ extend-include = ["scripts/workflows/**/*.py"]
 #   RET502  -> "Explicit returns mixed with implicit returns" (bare `return` value path)
 #   RET503  -> "Explicit returns mixed with implicit returns" (missing explicit return)
 #   SIM115  -> "File is not always closed" (open() without a context manager)
+#   PLC0415 -> "import should be at the top-level of a file" (no function-local
+#              imports except to break a circular import or guard an optional dep)
 # B018 (already via "B") and F401/F841/F811 (via "F") cover the rest of the
 # actionable CodeQL maintainability set; B018 correctly ignores `...`/docstrings.
 select = [
     "A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W",
-    "N805", "PLR0124", "PLR1722", "RET502", "RET503", "SIM115",
+    "N805", "PLR0124", "PLR1722", "RET502", "RET503", "SIM115", "PLC0415",
+    # Local-import hygiene (issue #6219):
+    #   TID252 -> "relative-imports" (prefer absolute over parent-relative imports)
+    #   ICN001 -> "unconventional-import-alias" (e.g. `import numpy as np`)
+    # lib/haliax and lib/levanter carry their own [tool.ruff.lint] configs; these
+    # two rules are mirrored there via extend-select so they apply repo-wide.
+    "TID252", "ICN001",
 ]
 ignore = ["F722", "B008", "UP015", "A005", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
+# Notebook cells legitimately interleave imports with computation as they are
+# executed top-to-bottom; PLC0415's top-of-file rule does not apply to cells.
+"*.ipynb" = ["PLC0415"]
 # Bloom filter tests deliberately compare an object with itself to exercise its
 # reflexive comparison operators (==, <=, >=, ...), so PLR0124 is expected here.
-"rust/dupekit/tests/test_bloom.py" = ["PLR0124"]
+"lib/dupekit/tests/test_bloom.py" = ["PLR0124"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]
@@ -200,6 +231,7 @@ project-includes = [
     "lib/haliax/src/**/*.py",
     "lib/fray/src/**/*.py",
     "lib/iris/src/**/*.py",
+    "lib/iris/scripts/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
     "scripts/workflows",
@@ -216,13 +248,72 @@ search-path = [
     "lib/zephyr/src",
     "lib/fray/src",
     "lib/iris/src",
+    # benchmark_controller.py imports controller test fixtures from lib/iris/tests
+    # (`from tests.cluster.controller... import`), run with lib/iris on sys.path.
+    "lib/iris",
 ]
 disable-search-path-heuristics = true
 
-# Prevent pyrefly from querying the Python interpreter for site-packages
-# which would auto-detect workspace members as site packages and exclude them
-skip-interpreter-query = true
+# Type-check against real installed third-party types. CI's marin-lint job syncs
+# this venv (uv sync --all-packages --extra=cpu --no-default-groups); locally it is
+# your worktree .venv. Relative path keeps it worktree-local.
+python-interpreter-path = ".venv/bin/python"
 use-ignore-files = false
+
+# Parse jaxtyping/native tensor shape annotations (e.g. Float[Array, "batch seq"])
+# as shape specifications instead of forward-reference type expressions. Without this,
+# Pyrefly reads the dimension tokens inside the shape string ("B", "N", "groups", ...)
+# as undefined forward references and emits ~141 false `unknown-name` errors across
+# levanter/grug and levanter/kernels. See docs/plans/pyrefly-tensor-shapes.md.
+tensor-shapes = true
+
+# Modules treated as Any when absent on disk. Pyrefly still uses real stubs when
+# the dep is installed (so a deleted/misspelled internal module still trips
+# missing-import). Covers deps no lint profile installs (vllm/lm_eval, resiliparse)
+# and compute deps a local venv commonly skips (torch, sympy). List both `pkg` and
+# `pkg.*`.
+ignore-missing-imports = [
+    "harbor",
+    "harbor.*",
+    "jax_triton",
+    "jax_triton.*",
+    "jaxlib",
+    "jaxlib.*",
+    "kubernetes",
+    "kubernetes.*",
+    "librosa",
+    "librosa.*",
+    "lm_eval",
+    "lm_eval.*",
+    "math_verify",
+    "math_verify.*",
+    "memray",
+    "memray.*",
+    "prompt_toolkit",
+    "prompt_toolkit.*",
+    "pylatexenc",
+    "pylatexenc.*",
+    "resiliparse",
+    "resiliparse.*",
+    "sympy",
+    "sympy.*",
+    "tensorboardX",
+    "tensorboardX.*",
+    "torch",
+    "torch.*",
+    "tpu_inference",
+    "tpu_inference.*",
+    "trackio",
+    "trackio.*",
+    "triton",
+    "triton.*",
+    "verifiers",
+    "verifiers.*",
+    "vllm",
+    "vllm.*",
+    "xprof",
+    "xprof.*",
+]
 
 # Exclude non-production code from type checking
 project-excludes = [
@@ -231,7 +322,6 @@ project-excludes = [
     "scripts/datakit/**",
     "scripts/debug/**",
     "scripts/ferries/**",
-    "scripts/gcp-ssh/**",
     "scripts/gcs-reorganization/**",
     "scripts/gpu_eval/**",
     "scripts/iris/**",
@@ -254,59 +344,48 @@ project-excludes = [
     "**/venv/**",
 ]
 
-# Disable specific error codes that are primarily noise from missing type stubs
-# These can be gradually enabled as the codebase improves
+# Disable specific error codes that are primarily noise from missing type stubs.
+# Enable gradually as the codebase improves.
 [tool.pyrefly.errors]
-# Missing imports (824 occurrences) - third-party libs without stubs
-missing-import = false
-
-# Unexpected keyword arguments (47 occurrences) - dynamic configs from transformers, dataclasses
-unexpected-keyword = false
-
-# Missing attributes (315 occurrences) - often from untyped libraries like JAX, etc.
-# These are mostly false positives from libraries without complete type stubs
+# Untyped-library attribute access (jax/flax/equinox); sampling found ~no real bugs.
 missing-attribute = false
 
-# Additional error types with >10 occurrences that are hard to fix systematically:
+# Real undefined-name bugs. The former jaxtyping shape-string false positives are now
+# handled natively by tensor-shapes = true above; residual false positives are
+# suppressed in .pyrefly-baseline.json.
+unknown-name = true
 
-# Deprecated APIs (19 occurrences) - would require code changes across multiple files
-deprecated = false
-
-# Unknown name errors (17 occurrences) - often from dynamic code or missing stubs
-unknown-name = false
-
-# Not iterable errors (17 occurrences) - complex type inference issues with JAX/numpy
-not-iterable = false
-
-# No matching overload (16 occurrences) - complex overload resolution issues
+# Complex overload resolution (stdlib/library overloads); sampling found ~no real bugs.
 no-matching-overload = false
 
-# Bad index (12 occurrences) - complex dict/list type inference
-bad-index = false
-
-# Library/stub-related noise - disable to focus on real issues:
-
-# Bad argument type (638 occurrences) - mostly third-party library stub issues
-# Common culprits: smart_open, Flax API, JAX/numpy arrays
+# Mostly third-party stub noise (smart_open, Flax, jax/numpy arrays), with a handful of
+# real callsite mismatches buried in the volume.
 bad-argument-type = false
 
-# Bad context manager (30 occurrences) - tqdm and similar libraries
-bad-context-manager = false
-
-# Missing/bad argument count (99 occurrences) - Flax API positional/keyword confusion
-missing-argument = false
-bad-argument-count = false
-
-# Unbound name (64 occurrences) - pyrefly's control flow analysis doesn't understand
-# patterns where variables are guaranteed to be initialized by program logic
+# Real "code that can be better written" bugs mixed with control-flow false positives
+# pyrefly cannot prove safe.
 unbound-name = false
 
-# Keep these enabled to catch real type errors:
-# bad-override = true (126 occurrences)
-# bad-assignment = true (94 occurrences)
-# bad-return = true (84 occurrences)
-# unsupported-operation = true (68 occurrences)
-# not-callable = true (27 occurrences)
+# Kept enabled (high signal): bad-override, bad-assignment, bad-return,
+# unsupported-operation, not-callable. Pre-existing instances are suppressed via
+# .pyrefly-baseline.json.
+
+# jit_scheduler.py annotates eqx.Module fields with single-axis haxtyping shapes,
+# e.g. `ht.i32[NamedArray, "position"]`. tensor-shapes = true parses multi-token
+# shape strings ("seq page") correctly, but reads a lone bare-identifier axis
+# ("position", "seq") as a forward reference, yielding false unknown-name errors.
+# Scope the disable to this one file rather than scattering 17 inline ignores.
+[[tool.pyrefly.sub_config]]
+matches = "lib/levanter/src/levanter/inference/jit_scheduler.py"
+[tool.pyrefly.sub_config.errors]
+unknown-name = false
+
+# Turn bad-argument-type ON for these controller-driving scripts (it is off
+# repo-wide) so a wrong-type call into the controller API fails type-checking.
+[[tool.pyrefly.sub_config]]
+matches = "lib/iris/scripts/**"
+[tool.pyrefly.sub_config.errors]
+bad-argument-type = true
 
 [tool.hatch.metadata]
 allow-direct-references = true

@@ -11,6 +11,7 @@ live on a separate ``auth_metadata`` because they are stored in the attached
 import json
 import threading
 from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from rigging.timing import Timestamp
@@ -27,8 +28,11 @@ from sqlalchemy import (
     String,
     Table,
     UniqueConstraint,
+    func,
+    literal_column,
     text,
 )
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.types import TypeDecorator
 
 from iris.cluster.types import JobName, WorkerId
@@ -381,6 +385,19 @@ tasks_table = Table(
 )
 
 
+# The planner mis-estimates `tasks.state IN (<active states>)` as ~14% of rows
+# (sqlite_stat1 only knows the index's average rows-per-value), so it full-scans
+# instead of driving off the small active set via idx_tasks_state. Wrap such
+# predicates to force the state-driven plan; likelihood()'s probability must be a
+# literal, not a bound parameter.
+_RARE_STATE_PROBABILITY = literal_column("0.005")
+
+
+def hint_rare_state(predicate: ColumnElement[bool]) -> ColumnElement[bool]:
+    """Hint SQLite that ``predicate`` matches few rows, so it drives off idx_tasks_state."""
+    return func.likelihood(predicate, _RARE_STATE_PROBABILITY)
+
+
 task_attempts_table = Table(
     "task_attempts",
     metadata,
@@ -503,6 +520,19 @@ reservation_claims_table = Table(
 )
 
 
+@dataclass(frozen=True)
+class ReservationClaim:
+    """A claim binding a worker to a specific reservation entry.
+
+    The controller assigns unclaimed workers to unsatisfied reservation entries
+    each scheduling cycle. Once every entry for a job is claimed, the
+    reservation gate opens and the job's tasks can be scheduled.
+    """
+
+    job_id: str
+    entry_idx: int
+
+
 user_budgets_table = Table(
     "user_budgets",
     metadata,
@@ -517,7 +547,8 @@ auth_api_keys_table = Table(
     "api_keys",
     auth_metadata,
     Column("key_id", String, primary_key=True),
-    Column("key_hash", String, nullable=False, unique=True),
+    # Human-readable key prefix surfaced in `iris key list` / CreateApiKey
+    # responses ("jwt" for JWT-backed keys, the token's first 8 chars otherwise).
     Column("key_prefix", String, nullable=False),
     Column("user_id", String, nullable=False),
     Column("name", String, nullable=False),
@@ -525,7 +556,6 @@ auth_api_keys_table = Table(
     Column("last_used_at_ms", TimestampMsType),
     Column("expires_at_ms", TimestampMsType),
     Column("revoked_at_ms", TimestampMsType),
-    Index("idx_api_keys_hash", "key_hash"),
     Index("idx_api_keys_user", "user_id"),
 )
 

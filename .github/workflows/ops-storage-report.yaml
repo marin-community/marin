@@ -1,0 +1,93 @@
+name: "Ops - Storage Report"
+
+# Weekly GCS storage report. A scheduled GitHub Actions run tunnels into the
+# marin Iris controller (same mechanism as marin-canary-ferry) and runs the
+# scan -> dedup -> aggregate pipeline, then publishes report.md as a secret
+# gist and posts a summary (with week-over-week changes) to Discord.
+#
+# There is no cluster-native cron; the schedule lives here and the heavy work
+# runs as Iris jobs submitted from this runner.
+
+on:
+  schedule:
+    - cron: '0 14 * * 1'  # Mondays 14:00 UTC
+  workflow_dispatch:
+    inputs:
+      workers:
+        description: 'Scan worker replicas'
+        type: number
+        required: false
+      dry_run:
+        description: 'Skip gist + Discord (print the message only)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ops-storage-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    # The scan usually finishes early once it drains to a few straggler tasks,
+    # but can run up to MAX_SCAN_SECONDS (90 min) plus Iris scheduling overhead;
+    # leave generous room for dedup, aggregation, gist, and the Discord post so
+    # the publish step is never the thing that gets guillotined.
+    timeout-minutes: 240
+    env:
+      IRIS_CONFIG: lib/iris/config/marin.yaml
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Sync uv environment
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      # Required for the controller tunnel (gcloud SSH/IAP) — same as the ferry.
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
+          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
+          chmod 600 ~/.ssh/google_compute_engine
+          chmod 644 ~/.ssh/google_compute_engine.pub
+
+      - name: Generate and publish storage report
+        shell: bash -l {0}
+        env:
+          GH_TOKEN: ${{ secrets.GIST_PAT }}
+          DISCORD_WEBHOOK_INTERNAL_DISCUSS: ${{ secrets.DISCORD_WEBHOOK_INTERNAL_DISCUSS }}
+        run: |
+          uv run python scripts/ops/storage/generate_report.py \
+            --cluster marin \
+            --gist secret \
+            --discord internal-discuss \
+            ${{ inputs.workers && format('--workers {0}', inputs.workers) || '' }} \
+            ${{ inputs.dry_run && '--dry-run' || '' }}

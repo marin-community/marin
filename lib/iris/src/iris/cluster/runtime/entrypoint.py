@@ -82,12 +82,14 @@ def build_runtime_entrypoint(
         setup_commands.append(f"uv sync {quiet_flag} {frozen_flag} {link_mode_flag} {python_flag}".strip())
     # In rust-dev mode, uv sync creates .pth links for editable path sources but
     # doesn't invoke the build backend (maturin), so native extensions are missing.
-    # Detect the mode via the RUST-DEV markers in pyproject.toml and explicitly
-    # build any Rust crates found under rust/.
+    # The RUST-DEV SOURCES block is the only place we use `editable = true`; when
+    # present, explicitly build every maturin package under lib/ (e.g. dupekit,
+    # finelog) so its native extension lands in the venv.
     setup_commands.append(
-        "if grep -q 'path = \"rust/' pyproject.toml 2>/dev/null; then"
+        "if grep -q 'editable = true' pyproject.toml 2>/dev/null; then"
         " echo 'rust-dev mode: building native extensions';"
-        " for crate in rust/*/pyproject.toml; do"
+        " for crate in lib/*/pyproject.toml; do"
+        ' grep -q \'build-backend = "maturin"\' "$crate" 2>/dev/null &&'
         f' uv pip install {quiet_flag} -e "$(dirname "$crate")";'
         " done;"
         " fi"

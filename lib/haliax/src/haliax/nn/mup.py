@@ -7,9 +7,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import haliax as hax
-import equinox as eqx
 
-from ..axis import AxisSpec
+from haliax.axis import AxisSpec
 
 
 class AbstractReparam(ABC):
@@ -199,8 +198,11 @@ class EmbeddingMup(AbstractEmbeddingReparam):
 class ReparamEnabled(ABC):
     """Mixin for modules that support reparameterization.
 
-    Stores an abstract `reparam` attribute that specifies
+    Exposes an abstract `reparam` property that specifies
     how initialization and scaling are handled.
     """
 
-    reparam: eqx.AbstractVar[AbstractReparam]
+    @property
+    @abstractmethod
+    def reparam(self) -> AbstractReparam:
+        raise NotImplementedError

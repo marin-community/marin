@@ -244,11 +244,13 @@ def _build_rl_job_config(
     )
     model_config_cls = model_config_class.from_hf_config(converter.default_hf_config)
 
+    # tokenizer/attn_backend live on concrete model configs (e.g. LlamaConfig), not the
+    # HFCompatConfig base that from_hf_config is statically typed to return.
     model_config = dataclasses.replace(
         model_config_cls,
         max_seq_len=config.max_input_tokens + config.max_output_tokens,
-        tokenizer=model_path,
-        attn_backend=AttentionBackend.SPLASH,
+        tokenizer=model_path,  # pyrefly: ignore[unexpected-keyword]
+        attn_backend=AttentionBackend.SPLASH,  # pyrefly: ignore[unexpected-keyword]
     )
 
     tags = [*config.tags, config.model_config.name.split("/")[-1]]

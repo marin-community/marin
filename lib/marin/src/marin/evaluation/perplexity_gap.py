@@ -10,7 +10,7 @@ from typing import Any
 import wandb
 from fray import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
-from levanter.analysis.model_perplexity import compare_scored_outputs
+from levanter.analysis.model_perplexity import add_prefixed_runtime_metric_scalars, compare_scored_outputs
 from levanter.analysis.perplexity_gap import write_report_files
 from levanter.data.text import (
     DatasetComponent,
@@ -340,10 +340,34 @@ def _summary_scalars(summary: dict[str, Any]) -> dict[str, float]:
         scalars[f"gap/datasets/{row['name']}/bpb_gap"] = float(row["gap_bpb"])
         scalars[f"gap/datasets/{row['name']}/model_a_bpb"] = float(row["model_a_bpb"])
         scalars[f"gap/datasets/{row['name']}/model_b_bpb"] = float(row["model_b_bpb"])
+        add_prefixed_runtime_metric_scalars(
+            scalars,
+            key_prefix=f"gap/datasets/{row['name']}",
+            row=row,
+            prefix="model_a",
+        )
+        add_prefixed_runtime_metric_scalars(
+            scalars,
+            key_prefix=f"gap/datasets/{row['name']}",
+            row=row,
+            prefix="model_b",
+        )
     for row in summary["dataset_groups"]:
         if row["gap_bpb"] is None:
             continue
         scalars[f"gap/groups/{row['name']}/bpb_gap"] = float(row["gap_bpb"])
+        add_prefixed_runtime_metric_scalars(
+            scalars,
+            key_prefix=f"gap/groups/{row['name']}",
+            row=row,
+            prefix="model_a",
+        )
+        add_prefixed_runtime_metric_scalars(
+            scalars,
+            key_prefix=f"gap/groups/{row['name']}",
+            row=row,
+            prefix="model_b",
+        )
     for row in summary["pattern_buckets"]:
         if row["gap_bpb"] is None:
             continue

@@ -6,21 +6,11 @@ import os
 import time
 
 from fsspec.callbacks import TqdmCallback
-from fsspec.implementations.local import LocalFileSystem
 from rigging.filesystem import filesystem as marin_filesystem
-from rigging.filesystem import url_to_fs
 
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_mtime
 
 logger = logging.getLogger(__name__)
-
-
-def is_remote_path(path: str) -> bool:
-    """
-    Checks if the given path is a remote path, e.g., Google Cloud Storage (GCS) path.
-    """
-    fs, _ = url_to_fs(path)
-    return not isinstance(fs, LocalFileSystem)
 
 
 def download_from_gcs(gcs_path: str, destination_path: str) -> None:

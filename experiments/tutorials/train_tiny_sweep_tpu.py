@@ -8,6 +8,13 @@ Submits ``NUM_WORKERS`` independent TPU jobs; each worker races on
 ``step_lock`` to claim grid targets and trains inline on its own TPU. There is
 no CPU coordinator. ``SWEEP_NAME`` is the stable lock-path key — bump it to
 start a fresh sweep over the same grid.
+
+This example uses a single-host slice (``v4-8``), so each worker is one
+process. On a multi-host slice the whole gang acts as one worker: its leader
+(task 0) claims targets and the other hosts train alongside it — see
+``marin.execution.sweep_coordination``. A multi-host sweep must also pass
+``ports=["actor"]`` in its ``JobRequest`` so the leader's coordination actor is
+reachable by its followers.
 """
 import dataclasses
 from dataclasses import dataclass
@@ -18,7 +25,8 @@ from fray.types import Entrypoint, JobRequest, create_environment
 from levanter.main.train_lm import TrainLmConfig
 from marin.execution.sweep import SweepTarget, claim_and_run
 from marin.execution.types import versioned
-from marin.training.training import extras_for_resources, resolve_training_env
+from marin.training.run_environment import extras_for_resources
+from marin.training.training import resolve_training_env
 
 from experiments.defaults import _run_training_on_worker, prepare_lm_train
 from experiments.evals.task_configs import CORE_TASKS

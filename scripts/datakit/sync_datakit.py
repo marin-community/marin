@@ -37,7 +37,7 @@ For each source, this script builds a single :class:`StepSpec`. The step's
   and the shard is re-copied.
 * Otherwise, streams every file in the shard from source to a sibling
   ``.tmp.<uuid>`` key at the destination and publishes it via
-  :func:`zephyr.writers.atomic_rename` (the per-file copies fan out across
+  :func:`rigging.filesystem.atomic_rename` (the per-file copies fan out across
   ``copy_threads`` threads), then Zephyr writes the per-shard JSONL — that
   output IS the resume marker. When the destination is ``s3://``, the dst
   ``S3FileSystem`` is constructed with ``fixed_upload_size=True`` so R2
@@ -83,11 +83,10 @@ from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import marin_prefix
+from rigging.filesystem import atomic_rename, marin_prefix
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext, counters
-from zephyr.plan import deterministic_hash
-from zephyr.writers import atomic_rename
+from zephyr.shard_keys import deterministic_hash
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +111,7 @@ class SyncScope(StrEnum):
     NORMALIZED = "normalized"
 
 
-# Matches the ``.tmp.<uuid.hex>`` suffix that ``zephyr.writers.atomic_rename``
+# Matches the ``.tmp.<uuid.hex>`` suffix that ``rigging.filesystem.atomic_rename``
 # uses for its intermediate write key. Used to filter orphan leftovers out
 # of source listings (see ``_list_relative_files``).
 _ATOMIC_RENAME_TMP_RE = re.compile(r"\.tmp\.[0-9a-f]{32}$")
@@ -306,7 +305,7 @@ def _list_relative_files(src_dir: str) -> list[tuple[str, str]]:
             # the whole leaf is done.
             continue
         if _ATOMIC_RENAME_TMP_RE.search(rel):
-            # Orphans from a prior interrupted sync: ``zephyr.writers.atomic_rename``
+            # Orphans from a prior interrupted sync: ``rigging.filesystem.atomic_rename``
             # writes ``<dst>.tmp.<uuid.hex>`` then ``fs.mv``s; if the worker is
             # SIGKILLed between the two, the temp lingers. They're never
             # legitimate datakit content — skip them so they don't propagate.

@@ -27,11 +27,11 @@ from typing import Any
 import pandas as pd
 import wandb
 from huggingface_hub import snapshot_download
-from rigging.filesystem import open_url
+from rigging.filesystem import is_remote_path, open_url
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.evaluation.utils import download_from_gcs, is_remote_path, upload_to_gcs
+from marin.evaluation.utils import download_from_gcs, upload_to_gcs
 from marin.inference.vllm_server import VllmEnvironment
 from marin.utils import fsspec_exists, fsspec_glob
 
@@ -345,12 +345,16 @@ class HarborEvaluator(Evaluator):
         - Restores completed trials from GCS on resume
         - Leverages Harbor's native resume capability
         """
-        from harbor.job import Job
-        from harbor.models.environment_type import EnvironmentType
-        from harbor.models.job.config import JobConfig, LocalDatasetConfig, RegistryDatasetConfig
-        from harbor.models.orchestrator_type import OrchestratorType
-        from harbor.models.registry import RemoteRegistryInfo
-        from harbor.models.trial.config import AgentConfig, EnvironmentConfig
+        from harbor.job import Job  # noqa: PLC0415  # optional dep: harbor
+        from harbor.models.environment_type import EnvironmentType  # noqa: PLC0415  # optional dep: harbor
+        from harbor.models.job.config import (  # noqa: PLC0415  # optional dep: harbor
+            JobConfig,
+            LocalDatasetConfig,
+            RegistryDatasetConfig,
+        )
+        from harbor.models.orchestrator_type import OrchestratorType  # noqa: PLC0415  # optional dep: harbor
+        from harbor.models.registry import RemoteRegistryInfo  # noqa: PLC0415  # optional dep: harbor
+        from harbor.models.trial.config import AgentConfig, EnvironmentConfig  # noqa: PLC0415  # optional dep: harbor
 
         # Generate deterministic job name for resume capability
         job_name = _generate_stable_job_name(dataset, version, model_name, agent, task_limit)

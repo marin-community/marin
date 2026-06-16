@@ -3,16 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
-from typing import Any, Callable, Generic, Sequence, TypeVar
+from typing import Any, Callable, Generic, Self, Sequence, TypeVar
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 
-from .._src.scan import ScanCheckpointPolicy, ScanCheckpointSpec, find_closest_divisible_int_to_sqrt
-from .._src.state_dict import ModuleWithStateDictSerialization, StateDict
-from ..jax_utils import is_jax_array_like, multilevel_scan, tree_checkpoint_name
-from ..util import is_named_array
+from haliax._src.scan import ScanCheckpointPolicy, ScanCheckpointSpec, find_closest_divisible_int_to_sqrt
+from haliax._src.state_dict import ModuleWithStateDictSerialization, StateDict
+from haliax.jax_utils import is_jax_array_like, multilevel_scan, tree_checkpoint_name
+from haliax.util import is_named_array
 from .scan import ModuleInit, _stack_state_dict, _unstack_state_dict
 
 M = TypeVar("M", bound=eqx.Module)
@@ -121,7 +121,8 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
         **extra_kwargs,
     ):
         def call_layer(layer: M, carry, *args, **kwargs):
-            return layer(carry, *args, **kwargs)
+            # eqx.Module defines __call__ on subclasses but not on the base, so M is not seen as callable.
+            return layer(carry, *args, **kwargs)  # pyrefly: ignore[not-callable]
 
         return self.scan_via(call_layer, unroll=unroll, in_axes=in_axes)(init, *extra_args, **extra_kwargs)
 
@@ -134,7 +135,8 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
         **kwargs,
     ):
         def call_layer(layer: M, carry, *layer_args, **layer_kwargs):
-            return layer(carry, *layer_args, **layer_kwargs)
+            # eqx.Module defines __call__ on subclasses but not on the base, so M is not seen as callable.
+            return layer(carry, *layer_args, **layer_kwargs)  # pyrefly: ignore[not-callable]
 
         return self.fold_via(call_layer, unroll=unroll, in_axes=in_axes)(init, *args, **kwargs)
 
@@ -274,7 +276,7 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
         state_dict: StateDict = super().to_state_dict(prefix)
         return _unstack_state_dict(state_dict, prefix)
 
-    def from_state_dict(self: M, state_dict: StateDict, prefix: str | None = None) -> M:
+    def from_state_dict(self, state_dict: StateDict, prefix: str | None = None) -> Self:
         stacked = _stack_state_dict(state_dict, prefix=prefix)
         return super().from_state_dict(stacked, prefix=prefix)  # type: ignore
 

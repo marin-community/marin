@@ -28,8 +28,9 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.chaos import reset_chaos
 from iris.client.client import IrisClient, Job
-from iris.cluster.config import connect_cluster, load_config, make_local_config
+from iris.cluster.config import load_config, make_local_config
 from iris.cluster.constraints import Constraint, WellKnownAttribute
+from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -498,6 +499,9 @@ class _NoOpPage:
     def wait_for_selector(self, selector, **kwargs):
         pass
 
+    def wait_for_timeout(self, timeout):
+        pass
+
     def locator(self, selector, **kwargs):
         return _NoOpLocator()
 
@@ -524,6 +528,15 @@ class _NoOpLocator:
     def count(self):
         return 0
 
+    def get_by_role(self, role, **kwargs):
+        return self
+
+    def click(self, **kwargs):
+        pass
+
+    def wait_for(self, **kwargs):
+        pass
+
 
 def _is_noop_page(page) -> bool:
     return isinstance(page, _NoOpPage)
@@ -533,7 +546,7 @@ def assert_visible(page, selector: str, *, timeout: int = 10_000) -> None:
     """Assert a selector is visible. No-op when Playwright is unavailable."""
     if _is_noop_page(page):
         return
-    from playwright.sync_api import expect
+    from playwright.sync_api import expect  # noqa: PLC0415  # optional dep: playwright
 
     expect(page.locator(selector).first).to_be_visible(timeout=timeout)
 

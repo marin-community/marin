@@ -26,10 +26,9 @@ import tarfile
 import tempfile
 
 from fray import ResourceConfig
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import atomic_rename, open_url, url_to_fs
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_jsonl
-from zephyr.writers import atomic_rename
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.normalize import normalize_step

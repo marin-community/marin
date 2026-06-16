@@ -12,19 +12,17 @@ from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, S
 
 import datasets
 import numpy as np
-from rigging.filesystem import open_url
 import pyarrow.parquet as pq
+from rigging.filesystem import open_url
 
 from levanter.utils import fsspec_utils
 
-from ..data import AsyncDataset
-from ..utils.fsspec_utils import expand_glob
+from levanter.utils.fsspec_utils import expand_glob
 from ._preprocessor import (
     BatchResult,
     _BatchMapTransform,
-    _construct_composite_batch_processor,
-    _DatasetTransform,
     _MapTransform,
+    _TransformedDataset,
 )
 from .utils import batched
 
@@ -68,35 +66,6 @@ class ShardedDataSource(Generic[T_co]):
             for doc in self.open_shard(shard_name):
                 yield doc
 
-    def build_or_load_cache(
-        self,
-        path: str,
-    ) -> AsyncDataset[T]:
-        """
-        Constructs a shard cache version of this dataset.
-
-        Levanter's preprocessing pipeline offers the following features/guarantees:
-        * distributed, sharded preprocessing using Zephyr
-        * deterministic ordering of data
-        * interruptible and resumable
-        * streaming results (no need to wait for everything to finish)
-
-        Note that this is an experimental API and is subject to change.
-
-        Returns:
-            A new AsyncDataset that is backed by the cache.
-        """
-
-        source, processor = _construct_composite_batch_processor(self)
-        from ..store.cache import build_or_load_cache  # lazy: store.cache imports levanter.data modules
-
-        cache = build_or_load_cache(
-            path,
-            source,
-            processor,
-        )
-        return cache
-
     def map(self, fn: Callable[[T_co], U]) -> "ShardedDataSource[U]":
         return _MappedShardedDataSource(self, fn)
 
@@ -129,6 +98,36 @@ class ShardedDataSource(Generic[T_co]):
         return _BatchMappedShardedDataSource(
             self, fn, batch_size, num_cpus=num_cpus, num_gpus=num_gpus, output_exemplar=output_exemplar, **resources
         )
+
+
+class FirstRowsShardedDataSource(ShardedDataSource[T]):
+    """A single-shard view over the first rows of another sharded source."""
+
+    def __init__(self, source: ShardedDataSource[T], max_rows: int):
+        if max_rows <= 0:
+            raise ValueError("max_rows must be positive")
+        self.source = source
+        self.max_rows = max_rows
+
+    @property
+    def shard_names(self) -> Sequence[str]:
+        return ["data"]
+
+    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[T]:
+        if shard_name != "data":
+            raise ValueError(f"Unknown shard {shard_name!r}")
+        if row >= self.max_rows:
+            return
+
+        emitted = 0
+        for item in self.source:
+            if emitted >= row:
+                emitted += 1
+                yield item
+                if emitted >= self.max_rows:
+                    return
+            else:
+                emitted += 1
 
 
 class UrlBackedShardedDataSource(ShardedDataSource[T_co], abc.ABC):
@@ -546,15 +545,10 @@ def _mk_shard_name_mapping(urls):
     return _shard_name_to_url_mapping
 
 
-class _TransformedDataset:
-    source: ShardedDataSource
-    _transform: _DatasetTransform
-
-
 class _MappedShardedDataSource(ShardedDataSource[T], _TransformedDataset):
     def __init__(self, source: ShardedDataSource[T_co], fn: Callable[[T_co], T]):
         self.source = source
-        self.fn = fn
+        self.fn: Callable[..., T] = fn
         self._transform = _MapTransform(fn)
 
     @property

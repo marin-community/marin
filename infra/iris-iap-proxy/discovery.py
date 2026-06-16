@@ -6,7 +6,7 @@
 Queries the Compute Engine API for VMs matching the Iris controller label,
 returns the internal IP address, and caches the result to avoid per-request
 API calls. Mirrors the discovery pattern in
-``iris.cluster.providers.gcp.controller.GcpControllerProvider.discover_controller``.
+``iris.cluster.backends.gcp.controller.GcpControllerProvider.discover_controller``.
 """
 
 import logging

@@ -1,0 +1,66 @@
+# Controller-based gang smoke on a local `kind` cluster (tests/e2e/gpu_gang_smoke.py).
+#
+# Unlike the old standalone smoke (which drove K8sTaskProvider directly), this
+# stands up a real in-cluster Iris controller and submits a NORMAL coscheduled
+# GPU-shaped job through it, exercising the controller's Kueue gang admission,
+# bundle delivery, `uv sync --extra`, and registry-based initialize_jax.
+#
+# kind has no GPUs, so the gang is CPU-shaped (jax CPU via the `cpu` extra); it
+# validates the whole software path short of real CUDA/IB. See
+# coreweave-controller-gpu-smoke.yaml for the real H100 variant.
+
+platform:
+  label_prefix: iris
+  coreweave:
+    region: local
+    namespace: iris
+    kubeconfig_path: ~/.kube/iris-kind-gpu-smoke
+
+storage:
+  # Controller checkpoint dir; file:// keeps it in the controller pod (emptyDir).
+  remote_state_dir: file:///var/cache/iris/controller/state
+
+kubernetes_provider:
+  namespace: iris
+  default_image: ghcr.io/marin-community/iris-task:latest  # branch-agnostic; gang code is in the controller
+  kubeconfig: ""                                            # in-cluster auth inside the controller pod
+  host_network: false                                       # kind: cluster DNS for bundle fetch + jax coordinator
+  cache_dir: /tmp/iris-cache
+  controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
+  kueue:
+    cluster_queue: iris-cq   # enables Kueue gang admission; empty topologies => CoreWeave-default pool->leafgroup
+
+defaults:
+  # The K8s direct provider has no worker daemons; these satisfy config validation
+  # and are otherwise unused (the controller dispatches task pods directly).
+  worker:
+    docker_image: ghcr.io/marin-community/iris-worker:latest
+    port: 10001
+    runtime: kubernetes
+    default_task_image: ghcr.io/marin-community/iris-task:latest
+
+controller:
+  image: iris-controller:kindsmoke   # built from this branch, kind-loaded
+  coreweave:
+    port: 10000
+    service_name: iris-controller-svc
+    scale_group: cpu-kind
+
+scale_groups:
+  cpu-kind:
+    num_vms: 1
+    resources:
+      cpu: 4
+      ram: 8GB
+      disk: 20GB
+      device_type: cpu
+      capacity_type: on-demand
+    buffer_slices: 0
+    max_slices: 1
+    priority: 50
+    slice_template:
+      num_vms: 1
+      # No coreweave.instance_type: there are no CoreWeave NodePools on kind, and
+      # the smoke skips ensure_nodepools for the kind target anyway.
+      coreweave:
+        region: local

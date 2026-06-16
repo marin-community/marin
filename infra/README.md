@@ -71,24 +71,33 @@ Jobs should still follow these principles for preemptible compute:
 To keep our Docker artifact registries tidy, we provide a script and Makefile target to automatically configure a cleanup policy for all our standard GCP regions. This policy deletes images older than 30 days from the registry,
 except we keep the most recent 16 tags.
 
+The canonical region list is sourced from `rigging.filesystem.REGION_TO_DATA_BUCKET`
+(us-central1, us-central2, us-east1, us-east5, us-west4, europe-west4) — the same
+single source of truth used by `infra/configure_buckets.py`. Scripts read that map
+rather than hardcoding regions, so they never drift from the runtime view of the fleet.
+
 ### Script: `infra/configure_gcp_registry.py`
-- This script sets a cleanup policy on a GCP Artifact Registry repository to delete images older than 30 days.
+- This script sets a cleanup policy on a GCP Artifact Registry repository to delete images older than 30 days (keeping the 16 most recent tags).
+- A registry repo's "location" is the GCP region.
 - Usage:
   ```bash
-  python infra/configure_gcp_registry.py <repository-name> --region=<region> [--project=<gcp-project>]
+  uv run infra/configure_gcp_registry.py <repository-name> --region=<region> [--project=<gcp-project>]
+  uv run infra/configure_gcp_registry.py <repository-name> --all-regions [--project=<gcp-project>]
+  uv run infra/configure_gcp_registry.py <repository-name> --all-regions --dry-run
   ```
-  - `repository-name`: Name of the Artifact Registry repository (default is usually `marin`).
-  - `--region`: GCP region (e.g., `us-central2`).
+  - `repository-name`: Name of the Artifact Registry repository (usually `marin`).
+  - `--region`: GCP region (e.g., `us-central2`). Mutually exclusive with `--all-regions`; exactly one is required.
+  - `--all-regions`: Apply to every region in `rigging.filesystem.REGION_TO_DATA_BUCKET`.
+  - `--dry-run`: Print the gcloud command(s) that would run, per region, without executing.
   - `--project`: (Optional) GCP project ID. If omitted, uses the current gcloud project.
 
 ### Makefile Target: `configure_gcp_registry_all`
-- To apply the 30-day cleanup policy to all standard regions (as defined in the `CLUSTER_REPOS` variable in the Makefile), run:
+- To apply the 30-day cleanup policy to the `marin` repository across every canonical region, run:
   ```bash
   make configure_gcp_registry_all
   ```
-- This will call the script for each region, setting the policy for the `marin` repository in each.
-- To use a different repository name, edit the `default_registry_name` variable in the Makefile.
-- To specify a project, you can modify the Makefile target or call the script directly with `--project`.
+- This runs `uv run infra/configure_gcp_registry.py marin --all-regions`, iterating over the regions in `rigging.filesystem.REGION_TO_DATA_BUCKET`.
+- To target a single region, a different repository, or a specific project, call the script directly with `--region` / `--project`.
 
 **When to use:**
 - After creating new Artifact Registry repositories in new regions.

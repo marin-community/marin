@@ -95,8 +95,8 @@ class GCSCheckpointServer(WeightTransferServer):
         """No cleanup needed for GCS checkpoints."""
         pass
 
-    def get_metrics(self) -> dict:
-        return dataclasses.asdict(self.metrics)
+    def get_metrics(self) -> WeightTransferServerMetrics:
+        return self.metrics
 
 
 class GCSCheckpointClient(WeightTransferClient):

@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
-import { SLICE_STATE_STYLES, SLICE_BADGE_ORDER, CATEGORICAL_COLORS, vmStateToName } from '@/types/status'
+import { SLICE_STATE_STYLES, SLICE_BADGE_ORDER, CATEGORICAL_COLORS } from '@/types/status'
 import type {
   GetAutoscalerStatusResponse,
   GetSchedulerStateResponse,
@@ -11,25 +10,29 @@ import type {
   AutoscalerStatus,
   ScaleGroupStatus,
   SliceInfo,
-  VmInfo,
   GroupRoutingStatus,
   UnmetDemand,
   AutoscalerAction,
   ProtoTimestamp,
 } from '@/types/rpc'
-import { timestampMs, formatRelativeTime, formatDuration } from '@/utils/formatting'
-import StatusBadge from '@/components/shared/StatusBadge.vue'
-import MetricCard from '@/components/shared/MetricCard.vue'
+import { timestampMs, formatRelativeTime } from '@/utils/formatting'
+import type { SliceJob } from '@/utils/slices'
+import SliceList from '@/components/controller/SliceList.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
+import LoadingSpinner from '@/components/shared/LoadingSpinner.vue'
 
 // -- RPC + auto-refresh --
 
 const { data, loading, error, refresh: refreshAutoscaler } = useControllerRpc<GetAutoscalerStatusResponse>('GetAutoscalerStatus')
 const { data: schedulerData, refresh: refreshScheduler } = useControllerRpc<GetSchedulerStateResponse>('GetSchedulerState')
 
+// Updated on every refresh so relative slice ages advance with the data.
+const nowMs = ref(Date.now())
+
 async function refresh() {
   await Promise.all([refreshAutoscaler(), refreshScheduler()])
+  nowMs.value = Date.now()
 }
 useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
 onMounted(refresh)
@@ -80,20 +83,6 @@ function taskIdToJob(taskId: string): string {
 function isReservationEntry(entry: { taskIds?: string[] }): boolean {
   const taskIds = entry.taskIds ?? []
   return taskIds.length > 0 && RESERVATION_RE.test(taskIds[0])
-}
-
-function formatIdleSince(lastActive?: ProtoTimestamp): string {
-  const ms = timestampMs(lastActive)
-  if (!ms) return 'never active'
-  const elapsed = Date.now() - ms
-  if (elapsed < 60000) return `${Math.floor(elapsed / 1000)}s`
-  if (elapsed < 3600000) return `${Math.floor(elapsed / 60000)}m`
-  return `${Math.floor(elapsed / 3600000)}h ${Math.floor((elapsed % 3600000) / 60000)}m`
-}
-
-function formatIdleThreshold(ms: number): string {
-  if (!ms) return '?'
-  return ms >= 60000 ? `${Math.floor(ms / 60000)}m` : `${Math.floor(ms / 1000)}s`
 }
 
 // Slice state badge styling and order are imported from @/types/status so the
@@ -473,10 +462,6 @@ function sliceIdShort(sliceId?: string): string {
   return sliceId.length > 24 ? `${sliceId.slice(0, 20)}...` : sliceId
 }
 
-function idleThresholdMs(groupName: string): number {
-  return parseInt(groupIndex.value[groupName]?.idleThresholdMs ?? '0', 10)
-}
-
 // -- Fleet overview --
 
 interface RegionCount {
@@ -518,28 +503,25 @@ const workerBands = computed<Map<string, Map<string, number>>>(() => {
   return map
 })
 
-/** One job's worth of tasks running on a single VM. */
-interface VmJobChip {
-  jobId: string
-  userId: string
-  count: number
-}
-
-/** Map workerId → list of (jobId, userId, count) chips, one per distinct job. */
-const workerJobs = computed<Map<string, VmJobChip[]>>(() => {
-  const map = new Map<string, VmJobChip[]>()
+/**
+ * Map worker_id → jobs running on that host (one entry per distinct job).
+ * SliceList aggregates these across a slice's hosts so a co-scheduled job that
+ * spans every host shows once, not once per host.
+ */
+const sliceWorkerJobs = computed<Map<string, SliceJob[]>>(() => {
+  const map = new Map<string, SliceJob[]>()
   for (const bucket of (schedulerData.value?.runningBuckets ?? []) as RunningTaskBucket[]) {
     if (!bucket.workerId || !bucket.jobId) continue
     if (!map.has(bucket.workerId)) map.set(bucket.workerId, [])
-    map.get(bucket.workerId)!.push({ jobId: bucket.jobId, userId: bucket.userId, count: bucket.count })
+    map.get(bucket.workerId)!.push({
+      jobId: bucket.jobId,
+      userId: bucket.userId,
+      taskCount: bucket.count,
+      hostCount: 1,
+    })
   }
   return map
 })
-
-function jobsForVm(vm: VmInfo): VmJobChip[] {
-  if (!vm.workerId) return []
-  return workerJobs.value.get(vm.workerId) ?? []
-}
 
 /** Extract chip type + size from scale group name.
  *  e.g. "TPU_V5E_PREEMPTIBLE_16_US_EAST" → "v5e-16"
@@ -743,9 +725,7 @@ function formatUptimeShort(ms: number | null): string {
 
 <template>
   <!-- Loading state -->
-  <div v-if="loading && !data" class="flex items-center justify-center py-12 text-text-muted text-sm">
-    Loading autoscaler status...
-  </div>
+  <LoadingSpinner v-if="loading && !data" label="Loading autoscaler status…" />
 
   <!-- Error state -->
   <div
@@ -879,28 +859,36 @@ function formatUptimeShort(ms: number | null): string {
         <table class="w-full border-collapse">
           <thead>
             <tr class="border-b border-surface-border bg-surface">
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left w-16">Priority</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Group</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Slices</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Demand</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Assigned</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Launch</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Decision</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Reason</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left w-16">Priority</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Group</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Slices</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Demand</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Assigned</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Launch</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Decision</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Reason</th>
             </tr>
           </thead>
           <tbody>
             <template v-for="section in poolSections" :key="section.pool || '__unpooled'">
               <!-- Pool header row -->
-              <tr class="bg-surface border-b border-surface-border cursor-pointer hover:bg-surface-raised" @click="togglePool(section.pool)">
+              <tr class="bg-surface border-b border-surface-border hover:bg-surface-raised">
                 <td colspan="8" class="px-3 py-1.5">
                   <div class="flex items-center gap-2">
-                    <span class="text-[10px] text-text-muted">
-                      {{ collapsedPools.has(section.pool) ? '▶' : '▼' }}
-                    </span>
-                    <span class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
-                      {{ section.pool === '__unpooled' ? 'Unpooled' : `Pool: ${section.pool}` }}
-                    </span>
+                    <button
+                      type="button"
+                      class="inline-flex items-center gap-2 text-left cursor-pointer hover:opacity-80"
+                      :aria-expanded="!collapsedPools.has(section.pool)"
+                      :aria-label="(collapsedPools.has(section.pool) ? 'Expand ' : 'Collapse ') + (section.pool === '__unpooled' ? 'unpooled groups' : 'pool ' + section.pool)"
+                      @click="togglePool(section.pool)"
+                    >
+                      <span class="text-[10px] text-text-muted">
+                        {{ collapsedPools.has(section.pool) ? '▶' : '▼' }}
+                      </span>
+                      <span class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
+                        {{ section.pool === '__unpooled' ? 'Unpooled' : `Pool: ${section.pool}` }}
+                      </span>
+                    </button>
                     <span
                       v-if="section.blockedAtTier"
                       class="inline-flex items-center px-1.5 py-0.5 rounded text-xs border
@@ -976,6 +964,8 @@ function formatUptimeShort(ms: number | null): string {
                   <button
                     v-if="groupHasSlices(gs.group)"
                     class="inline-flex items-center gap-1 cursor-pointer hover:opacity-80"
+                    :aria-expanded="expandedSlices.has(gs.group)"
+                    :aria-label="(expandedSlices.has(gs.group) ? 'Hide' : 'Show') + ' slices for ' + gs.group"
                     @click="toggleSlices(gs.group)"
                   >
                     <span class="text-[10px] text-text-muted">
@@ -1014,6 +1004,8 @@ function formatUptimeShort(ms: number | null): string {
                   <button
                     v-if="groupDemand(gs.group) > 0"
                     class="cursor-pointer hover:opacity-80"
+                    :aria-expanded="expandedDemand.has(gs.group)"
+                    :aria-label="(expandedDemand.has(gs.group) ? 'Hide' : 'Show') + ' demand for ' + gs.group"
                     @click="toggleDemand(gs.group)"
                   >
                     <span class="text-[10px] text-text-muted mr-1">
@@ -1050,65 +1042,11 @@ function formatUptimeShort(ms: number | null): string {
               <!-- Slice detail (expanded) -->
               <tr v-if="expandedSlices.has(gs.group) && groupHasSlices(gs.group) && (!collapsedPools.has(section.pool))" class="bg-surface-sunken">
                 <td colspan="8" class="px-6 py-3">
-                  <div class="space-y-1.5">
-                    <div
-                      v-for="slice in groupSlices(gs.group)"
-                      :key="slice.sliceId"
-                      class="flex items-center gap-3 text-xs"
-                    >
-                      <span class="font-mono text-text-muted w-48 truncate" :title="slice.sliceId">
-                        {{ slice.sliceId }}
-                      </span>
-                      <span class="text-text-secondary w-16">
-                        {{ (slice.vms ?? []).length }} vm{{ (slice.vms ?? []).length !== 1 ? 's' : '' }}
-                      </span>
-                      <span v-if="slice.idle" class="inline-flex items-center px-1.5 py-0.5 rounded border text-xs font-semibold bg-status-warning-bg text-status-warning border-status-warning-border" :title="`Idle for ${formatIdleSince(slice.lastActive)}, threshold ${formatIdleThreshold(idleThresholdMs(gs.group))}`">
-                        idle {{ formatIdleSince(slice.lastActive) }}
-                      </span>
-                      <span
-                        v-else-if="sliceInUse(slice)"
-                        :class="[
-                          'inline-flex items-center px-1.5 py-0.5 rounded border text-xs font-semibold',
-                          SLICE_STATE_STYLES.in_use.bg,
-                          SLICE_STATE_STYLES.in_use.text,
-                          SLICE_STATE_STYLES.in_use.border,
-                        ]"
-                        :title="SLICE_STATE_STYLES.in_use.label"
-                      >
-                        in use
-                      </span>
-                      <StatusBadge
-                        v-else-if="(slice.vms ?? []).length > 0"
-                        :status="vmStateToName(slice.vms![0].state)"
-                        size="sm"
-                        :show-dot="false"
-                      />
-                      <span v-else class="text-text-muted">unknown</span>
-                      <span class="text-text-muted text-[11px]">
-                        {{ timestampMs(slice.createdAt) ? formatRelativeTime(timestampMs(slice.createdAt)) : '-' }}
-                      </span>
-                      <!-- Per-VM task counts + job links -->
-                      <span v-if="(slice.vms ?? []).length > 0" class="text-text-muted text-[11px] flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                        <template v-for="(vm, vi) in (slice.vms ?? [])" :key="vm.vmId">
-                          <span v-if="vi > 0" class="text-text-muted">·</span>
-                          <span :title="`${vm.vmId}: ${vm.runningTaskCount ?? 0} tasks`">
-                            vm{{ vi }}: {{ vm.runningTaskCount ?? 0 }}t
-                          </span>
-                          <template v-if="jobsForVm(vm).length > 0">
-                            <RouterLink
-                              v-for="chip in jobsForVm(vm)"
-                              :key="chip.jobId"
-                              :to="`/job/${encodeURIComponent(chip.jobId)}`"
-                              class="text-accent hover:underline font-mono"
-                              :title="`${chip.jobId} (user: ${chip.userId}, ${chip.count} tasks)`"
-                            >
-                              {{ chip.jobId }}<span v-if="chip.count > 1" class="text-text-muted"> ×{{ chip.count }}</span><span v-if="chip.userId" class="text-text-muted"> · {{ chip.userId }}</span>
-                            </RouterLink>
-                          </template>
-                        </template>
-                      </span>
-                    </div>
-                  </div>
+                  <SliceList
+                    :slices="groupSlices(gs.group)"
+                    :worker-jobs="sliceWorkerJobs"
+                    :now="nowMs"
+                  />
                 </td>
               </tr>
 
@@ -1148,11 +1086,11 @@ function formatUptimeShort(ms: number | null): string {
         <table class="w-full border-collapse">
           <thead>
             <tr class="border-b border-surface-border bg-surface">
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Job</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Reasons</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Entries</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Example Task</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Accelerator</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Job</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Reasons</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Entries</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Example Task</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Accelerator</th>
             </tr>
           </thead>
           <tbody>

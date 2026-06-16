@@ -12,7 +12,7 @@ from absl import flags as absl_flags
 
 
 def main() -> None:
-    from tokamax._src.ops.linear_softmax_cross_entropy_loss.api import (
+    from tokamax._src.ops.linear_softmax_cross_entropy_loss.api import (  # noqa: PLC0415  # optional dep: tokamax
         linear_softmax_cross_entropy_loss,
     )
 

@@ -16,6 +16,7 @@ import functools
 import hashlib
 import os
 import sys
+import urllib.parse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -196,6 +197,18 @@ class JobName:
     def to_wire(self) -> str:
         """Serialize to wire format for RPC/env vars."""
         return str(self)
+
+    def dashboard_url(self, base_url: str) -> str:
+        """Public dashboard URL for this job under ``base_url``.
+
+        ``base_url`` is the deployment's dashboard origin (e.g.
+        ``https://iris.oa.dev``). The Vue dashboard routes jobs through a hash
+        fragment whose path is the percent-encoded wire name, so
+        ``/rav/job`` becomes ``…/#/job/%2Frav%2Fjob``. Inverse of
+        ``scripts/job_profile_summary.parse_job_id``.
+        """
+        encoded = urllib.parse.quote(self.to_wire(), safe="")
+        return f"{base_url.rstrip('/')}/#/job/{encoded}"
 
     @classmethod
     def from_wire(cls, s: str) -> "JobName":
@@ -514,8 +527,10 @@ class ResourceSpec:
     disk: str | int = 0
     device: job_pb2.DeviceConfig | None = None
 
-    # Accelerator tasks need enough CPU to avoid bottlenecking on data loading.
-    MIN_ACCELERATOR_CPU_MILLICORES = 32_000
+    # Accelerator tasks default to enough CPU to avoid bottlenecking on data
+    # loading, but explicit CPU requests are preserved for quota-constrained
+    # queues and diagnostic runs.
+    MIN_ACCELERATOR_CPU_MILLICORES = 4_000
 
     def to_proto(self) -> job_pb2.ResourceSpecProto:
         """Convert to wire format."""

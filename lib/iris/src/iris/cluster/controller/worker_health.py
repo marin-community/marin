@@ -1,21 +1,29 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""In-memory worker liveness tracking.
+"""In-memory worker liveness, owned by the controller and folded from backend-observed events.
+
+The backend never decides a worker is dead. Each reconcile tick it *observes*
+its own I/O outcomes and emits :class:`WorkerHealthEvent`s; the controller folds
+them through the single :meth:`WorkerHealthTracker.apply` site, which accumulates
+the per-worker counters and applies the termination thresholds. ``apply`` is the
+sole liveness-accounting mutation site. The only other writes are lifecycle:
+startup seeding + worker registration (``heartbeat``/``register``) and removal
+(``forget``/``forget_many``).
 
 Per-worker signals:
 
-- ``last_heartbeat_ms``: bumped on each successful heartbeat / ping.
-- ``healthy`` / ``active``: liveness verdict; flipped to false when the worker
-  is marked unhealthy or removed.
-- ``consecutive_failures``: incremented by failed ping/heartbeat RPCs, reset
-  on success. ``PING_FAILURE_THRESHOLD`` consecutive failures trip
-  termination.
-- ``build_failures``: monotonic counter for BUILDING→FAILED transitions.
+- ``last_heartbeat_ms``: bumped each time the backend reaches the worker.
+- ``healthy`` / ``active``: liveness verdict; set true on REACHED, dropped on
+  removal.
+- ``consecutive_failures``: incremented per UNREACHABLE event, reset on REACHED.
+  ``reconcile_failure_threshold`` consecutive failures trip termination (the
+  controller derives it from ``worker_unreachable_grace / poll_interval``).
+- ``build_failures``: monotonic counter incremented per BUILD_FAILED event.
   ``BUILD_FAILURE_THRESHOLD`` build failures trip termination independently.
 
-Thread-safe: written from ping/heartbeat threads, read from the reaper,
-scheduler, and RPC handler threads.
+Thread-safe: ``apply`` runs on the reconcile thread; reads come from the
+scheduler and RPC handler threads.
 """
 
 import dataclasses
@@ -23,21 +31,43 @@ import logging
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import StrEnum
 
 from iris.cluster.types import WorkerId
 
 logger = logging.getLogger(__name__)
 
-PING_FAILURE_THRESHOLD = 10
+CONSECUTIVE_FAILURE_THRESHOLD = 10
 BUILD_FAILURE_THRESHOLD = 10
+
+
+class WorkerHealthEventKind(StrEnum):
+    """A backend-observed liveness signal for a single worker."""
+
+    REACHED = "reached"
+    """The backend reached the worker this tick — bump heartbeat, reset failures."""
+
+    UNREACHABLE = "unreachable"
+    """The backend could not reach the worker — increment consecutive failures."""
+
+    BUILD_FAILED = "build_failed"
+    """The worker failed to launch/build an attempt — increment build failures."""
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerHealthEvent:
+    """One backend-observed health signal the controller folds via :meth:`apply`."""
+
+    worker_id: WorkerId
+    kind: WorkerHealthEventKind
 
 
 @dataclass(slots=True)
 class WorkerLiveness:
     """Public snapshot of a worker's transient liveness state.
 
-    Mutated in place by the tracker under its lock during heartbeat/ping
-    updates. Readers receive copies via :meth:`WorkerHealthTracker.liveness`.
+    Mutated in place by the tracker under its lock. Readers receive copies via
+    :meth:`WorkerHealthTracker.liveness`.
     """
 
     healthy: bool = False
@@ -53,29 +83,29 @@ class WorkerHealthTracker:
     def __init__(
         self,
         *,
-        ping_threshold: int = PING_FAILURE_THRESHOLD,
+        reconcile_failure_threshold: int = CONSECUTIVE_FAILURE_THRESHOLD,
         build_threshold: int = BUILD_FAILURE_THRESHOLD,
     ) -> None:
-        assert ping_threshold > 0
+        assert reconcile_failure_threshold > 0
         assert build_threshold > 0
-        self._ping_threshold = ping_threshold
+        self._reconcile_failure_threshold = reconcile_failure_threshold
         self._build_threshold = build_threshold
         self._lock = threading.Lock()
         self._states: dict[WorkerId, WorkerLiveness] = {}
 
-    # -- Registration / heartbeat -------------------------------------------
+    # -- Registration / seeding ---------------------------------------------
 
     def register(self, worker_id: WorkerId, *, now_ms: int) -> None:
-        """Mark a worker as live with a fresh heartbeat. Resets failure counters."""
-        with self._lock:
-            state = self._states.setdefault(worker_id, WorkerLiveness())
-            state.last_heartbeat_ms = now_ms
-            state.healthy = True
-            state.active = True
-            state.consecutive_failures = 0
+        """Seed a newly-joined worker as live with a fresh heartbeat."""
+        self.heartbeat([worker_id], now_ms)
 
     def heartbeat(self, worker_ids: Iterable[WorkerId], now_ms: int) -> None:
-        """Record a successful heartbeat batch — bumps last_heartbeat_ms and resets health."""
+        """Seed/refresh liveness for a batch of workers (startup + registration).
+
+        Bumps ``last_heartbeat_ms``, marks healthy/active, and resets the
+        consecutive-failure counter. Steady-state liveness goes through
+        :meth:`apply`; this is the lifecycle seed.
+        """
         with self._lock:
             for wid in worker_ids:
                 state = self._states.setdefault(wid, WorkerLiveness())
@@ -84,48 +114,40 @@ class WorkerHealthTracker:
                 state.active = True
                 state.consecutive_failures = 0
 
-    def bump_heartbeat(self, worker_ids: Iterable[WorkerId], now_ms: int) -> None:
-        """Record a successful ping batch — bumps last_heartbeat_ms only.
+    # -- The single liveness-accounting mutation site -----------------------
 
-        Does not reset healthy/active/consecutive_failures. The ping path
-        records failures separately via :meth:`ping`.
+    def apply(self, events: Iterable[WorkerHealthEvent], *, now_ms: int) -> list[WorkerId]:
+        """Fold backend-observed health events; return workers over a termination threshold.
+
+        REACHED bumps the heartbeat and resets the failure count; UNREACHABLE
+        increments consecutive failures; BUILD_FAILED increments build failures.
+        Returns every worker currently at/over the reconcile-failure or
+        build-failure threshold so the controller fails and tears them down —
+        workers are forgotten on removal, so a returned worker does not repeat
+        once gone.
         """
         with self._lock:
-            for wid in worker_ids:
-                state = self._states.setdefault(wid, WorkerLiveness())
-                state.last_heartbeat_ms = now_ms
+            for event in events:
+                state = self._states.setdefault(event.worker_id, WorkerLiveness())
+                if event.kind is WorkerHealthEventKind.REACHED:
+                    state.last_heartbeat_ms = now_ms
+                    state.healthy = True
+                    state.active = True
+                    state.consecutive_failures = 0
+                elif event.kind is WorkerHealthEventKind.UNREACHABLE:
+                    state.consecutive_failures += 1
+                elif event.kind is WorkerHealthEventKind.BUILD_FAILED:
+                    state.build_failures += 1
+            over = [wid for wid, s in self._states.items() if self._over_threshold(s)]
+        if over:
+            logger.warning("Workers over health threshold: %s", [str(wid) for wid in over[:10]])
+        return over
 
-    def ping(self, worker_id: WorkerId, *, healthy: bool) -> None:
-        """Record a ping outcome. A healthy ping resets the consecutive failure count."""
-        with self._lock:
-            state = self._states.setdefault(worker_id, WorkerLiveness())
-            if healthy:
-                state.consecutive_failures = 0
-            else:
-                state.consecutive_failures += 1
-            failures = state.consecutive_failures
-        logger.debug(
-            "Worker %s ping=%s consecutive_failures=%d",
-            worker_id,
-            "ok" if healthy else "fail",
-            failures,
+    def _over_threshold(self, state: WorkerLiveness) -> bool:
+        return (
+            state.consecutive_failures >= self._reconcile_failure_threshold
+            or state.build_failures >= self._build_threshold
         )
-
-    def build_failed(self, worker_id: WorkerId) -> None:
-        """Record a BUILDING→FAILED transition."""
-        with self._lock:
-            state = self._states.setdefault(worker_id, WorkerLiveness())
-            state.build_failures += 1
-            failures = state.build_failures
-        logger.debug("Worker %s build_failures=%d", worker_id, failures)
-
-    def mark_unhealthy(self, worker_id: WorkerId) -> None:
-        """Force the worker into the unhealthy verdict (used by failure cascade)."""
-        with self._lock:
-            state = self._states.get(worker_id)
-            if state is None:
-                return
-            state.healthy = False
 
     # -- Reads --------------------------------------------------------------
 
@@ -148,15 +170,6 @@ class WorkerHealthTracker:
     def all(self) -> dict[WorkerId, WorkerLiveness]:
         with self._lock:
             return {wid: dataclasses.replace(state) for wid, state in self._states.items()}
-
-    def workers_over_threshold(self) -> list[WorkerId]:
-        """Return IDs of workers that have exceeded a termination threshold."""
-        with self._lock:
-            return [
-                wid
-                for wid, s in self._states.items()
-                if s.consecutive_failures >= self._ping_threshold or s.build_failures >= self._build_threshold
-            ]
 
     # -- Eviction -----------------------------------------------------------
 
