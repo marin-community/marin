@@ -310,7 +310,12 @@ def apply_placements(
     un-tainted workers. When there are no claims the un-tainted ``ctx`` is reused
     to avoid an index rebuild.
     """
-    modified_jobs = inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
+    modified_jobs = inject_taint_constraints(
+        gated.jobs,
+        gated.has_reservation,
+        gated.has_direct_reservation,
+        ctx.reservation_zones_by_job,
+    )
 
     if claims:
         modified_workers = inject_reservation_taints(list(ctx.workers), claims)

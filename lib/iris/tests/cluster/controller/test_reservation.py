@@ -124,6 +124,33 @@ def _cpu_metadata() -> job_pb2.WorkerMetadata:
     return meta
 
 
+def _cpu_metadata_in_zone(zone: str, *, preemptible: bool = False) -> job_pb2.WorkerMetadata:
+    meta = _cpu_metadata()
+    meta.attributes[WellKnownAttribute.ZONE].CopyFrom(job_pb2.AttributeValue(string_value=zone))
+    meta.attributes[WellKnownAttribute.PREEMPTIBLE].CopyFrom(
+        job_pb2.AttributeValue(string_value=str(preemptible).lower())
+    )
+    return meta
+
+
+def _tpu_metadata_in_zone(variant: str, zone: str, *, preemptible: bool = True) -> job_pb2.WorkerMetadata:
+    meta = job_pb2.WorkerMetadata(
+        hostname="tpu",
+        ip_address="127.0.0.1",
+        cpu_count=200,
+        memory_bytes=512 * 1024**3,
+        disk_bytes=1000 * 1024**3,
+        tpu_name="tpu-host",
+    )
+    meta.attributes[WellKnownAttribute.DEVICE_TYPE].CopyFrom(job_pb2.AttributeValue(string_value="tpu"))
+    meta.attributes[WellKnownAttribute.DEVICE_VARIANT].CopyFrom(job_pb2.AttributeValue(string_value=variant))
+    meta.attributes[WellKnownAttribute.ZONE].CopyFrom(job_pb2.AttributeValue(string_value=zone))
+    meta.attributes[WellKnownAttribute.PREEMPTIBLE].CopyFrom(
+        job_pb2.AttributeValue(string_value=str(preemptible).lower())
+    )
+    return meta
+
+
 def _gpu_metadata(variant: str = "H100") -> job_pb2.WorkerMetadata:
     meta = job_pb2.WorkerMetadata(
         hostname="test-gpu",
@@ -203,11 +230,12 @@ def _entrypoint() -> job_pb2.RuntimeEntrypoint:
 def _make_job_request_with_reservation(
     name: str = "res-job",
     reservation_entries: list[job_pb2.ReservationEntry] | None = None,
+    resources: job_pb2.ResourceSpecProto | None = None,
 ) -> controller_pb2.Controller.LaunchJobRequest:
     req = controller_pb2.Controller.LaunchJobRequest(
         name=name,
         entrypoint=_entrypoint(),
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        resources=resources or job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
@@ -689,23 +717,23 @@ def _real_demand(demand):
     return [d for d in demand if not any(RESERVATION_HOLDER_JOB_NAME in t for t in d.task_ids)]
 
 
-def test_demand_gates_real_task_until_reservation_claimed(ctrl):
-    """A reserved job's real task must not emit demand until its reservation is claimed.
+def test_demand_gates_reserved_parent_until_reservation_claimed(ctrl):
+    """A reserved job's parent must not emit demand until its reservation is claimed.
 
-    Regression for the europe-west4-a autoscaler thrash: an ``iris run`` job's
-    parent task is a tiny CPU driver that holds a GPU/TPU reservation. While the
-    reservation is unclaimed the scheduler gate (``apply_scheduling_gates``)
-    blocks the parent task, but ``compute_demand_entries`` used to emit CPU
-    demand for it anyway. The autoscaler then booted CPU workers the scheduler
-    would never let the task occupy; they idled out and were reaped every cycle,
-    forever. The demand path must apply the same reservation gate: only the
-    holder task generates demand (to provision the reserved capacity) until the
-    reservation is satisfied.
+    Regression for the europe-west4-a autoscaler thrash. While the reservation is
+    unclaimed the scheduler gate (``apply_scheduling_gates``) blocks the parent
+    task; the demand path (``compute_demand_entries``) must apply the same gate so
+    it does not emit demand the scheduler would reject. Only the holder generates
+    demand (to provision the reserved capacity) until the reservation is
+    satisfied. Gating the parent until the claim also fixes its zone before any of
+    its demand is routed.
     """
-    # Parent task is a CPU driver; the reservation is for a GPU no CPU worker can
-    # satisfy, so it stays unclaimed even though a CPU worker is available.
-    _register_worker(ctrl, "cpu1", _cpu_metadata())
-    req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_gpu_device("H100"))])
+    # No GPU worker exists yet, so the reservation stays unclaimed.
+    gpu_resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3, device=_gpu_device("H100"))
+    req = _make_job_request_with_reservation(
+        reservation_entries=[_make_reservation_entry(_gpu_device("H100"))],
+        resources=gpu_resources,
+    )
     jid = _submit_job(ctrl, "j1", req)
 
     _claim_for_reservations(ctrl)
@@ -715,7 +743,7 @@ def test_demand_gates_real_task_until_reservation_claimed(ctrl):
     demand = _demand_no_dry_run(ctrl, claims)
     # Holder provisions the reserved GPU; the parent's real task is gated.
     assert len(_holder_demand(demand)) == 1
-    assert _real_demand(demand) == [], "real task must not emit demand while reservation is unclaimed"
+    assert _real_demand(demand) == [], "co-locating real task must not emit demand while reservation is unclaimed"
 
     # Once a matching worker is claimed, the gate opens and the real task may
     # emit demand again.
@@ -727,6 +755,117 @@ def test_demand_gates_real_task_until_reservation_claimed(ctrl):
     demand = _demand_no_dry_run(ctrl, claims)
     real_ids = {t for d in _real_demand(demand) for t in d.task_ids}
     assert jid.task(0).to_wire() in real_ids
+
+
+def test_reservation_parent_gated_then_routes_demand_to_reserved_zone(ctrl):
+    """A CPU parent reserving a TPU is gated until claimed, then routes demand to the reserved zone.
+
+    ``iris run --reserve <tpu> --cpu N`` makes the parent a CPU orchestrator that
+    reserves a TPU it never runs on. While the reservation is unclaimed the parent
+    emits no demand (the holder provisions the TPU). Once the TPU is claimed in a
+    zone, the parent's own CPU demand carries that zone, so the autoscaler routes
+    it to CPU capacity in the reserved zone instead of booting CPU VMs in an
+    arbitrary zone that idle out and get reaped (the europe-west4-a /
+    us-central2-b thrash).
+    """
+    tpu_device = job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant="v5p-8", count=4))
+    tpu_entry = job_pb2.ReservationEntry(
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3, device=tpu_device),
+        constraints=[device_variant_constraint(["v5p-8"]).to_proto()],
+    )
+    req = _make_job_request_with_reservation(reservation_entries=[tpu_entry])
+    jid = _submit_job(ctrl, "j1", req)
+
+    # Unclaimed (no TPU worker yet): the CPU parent is gated; only the holder demands.
+    _claim_for_reservations(ctrl)
+    claims = read_reservation_claims(ctrl._db)
+    assert claims == {}
+    demand = _demand_no_dry_run(ctrl, claims)
+    assert len(_holder_demand(demand)) == 1
+    assert _real_demand(demand) == [], "parent is gated until its reservation is claimed"
+
+    # Claim a TPU worker in us-east5-a; the parent ungates and routes CPU demand there.
+    _register_worker(ctrl, "tpu1", _tpu_metadata_in_zone("v5p-8", "us-east5-a"))
+    _claim_for_reservations(ctrl)
+    claims = read_reservation_claims(ctrl._db)
+    assert WorkerId("tpu1") in claims
+
+    demand = _demand_no_dry_run(ctrl, claims)
+    parent_demand = [d for d in _real_demand(demand) if jid.task(0).to_wire() in d.task_ids]
+    assert len(parent_demand) == 1
+    zone_values = [c.values[0].value for c in parent_demand[0].constraints if c.key == WellKnownAttribute.ZONE]
+    assert zone_values == ["us-east5-a"], "parent demand must carry the reservation's claimed zone"
+
+
+def test_reservation_parent_schedules_in_reserved_zone(ctrl):
+    """The CPU parent of a TPU reservation schedules on in-zone CPU, never worker-pinned.
+
+    End-to-end regression for the stuck ``--reserve`` job: the parent is
+    zone-pinned to the zone where its TPU was claimed, then the scheduler places
+    it on plain CPU capacity in that zone — so the CPU the autoscaler boots is
+    actually used, not reaped. Reproduces the real condition: the reserved v5p is
+    preemptible and the parent is non-preemptible, so the parent cannot run on the
+    reserved worker and must land on in-zone on-demand CPU (it is never pinned to
+    the exact reserved worker, and never sent to an out-of-zone worker).
+    """
+    # On-demand CPU in the reserved zone (the target), on-demand CPU elsewhere
+    # (must be excluded by the zone pin), and the preemptible TPU the reservation
+    # claims.
+    _register_worker(ctrl, "cpu-in", _cpu_metadata_in_zone("us-east5-a"))
+    _register_worker(ctrl, "cpu-out", _cpu_metadata_in_zone("us-central2-b"))
+    _register_worker(ctrl, "tpu1", _tpu_metadata_in_zone("v5p-8", "us-east5-a", preemptible=True))
+
+    tpu_device = job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant="v5p-8", count=4))
+    tpu_entry = job_pb2.ReservationEntry(
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3, device=tpu_device),
+        constraints=[device_variant_constraint(["v5p-8"]).to_proto()],
+    )
+    req = _make_job_request_with_reservation(reservation_entries=[tpu_entry])
+    req.constraints.append(preemptible_constraint(False).to_proto())
+    jid = _submit_job(ctrl, "j1", req)
+
+    _claim_for_reservations(ctrl)
+    claims = read_reservation_claims(ctrl._db)
+    assert WorkerId("tpu1") in claims
+
+    scheduler = Scheduler()
+    with ctrl._db.read_snapshot() as snap:
+        ctx = build_scheduling_context(
+            snap,
+            ctrl._health,
+            ctrl._worker_attrs,
+            ctrl._config.user_budget_defaults,
+            claims,
+            max_building_tasks=scheduler.max_building_tasks_per_worker,
+        )
+    # The reservation maps the parent to the zone where its TPU was claimed.
+    assert ctx.reservation_zones_by_job.get(jid) == frozenset({"us-east5-a"})
+
+    gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
+    assert jid.task(0) in gated.schedulable_task_ids, "parent must pass the gate once its reservation is claimed"
+
+    order = compute_scheduling_order(ctx, gated)
+    jobs = inject_taint_constraints(
+        gated.jobs, gated.has_reservation, gated.has_direct_reservation, ctx.reservation_zones_by_job
+    )
+    # Zone-pinned to the reserved zone, never worker-pinned (no reservation taint).
+    parent_zone = [c for c in jobs[jid].constraints if c.key == WellKnownAttribute.ZONE]
+    assert [c.values[0].value for c in parent_zone] == ["us-east5-a"]
+    assert [c for c in jobs[jid].constraints if c.key == RESERVATION_TAINT_KEY] == []
+
+    ctx.pending_tasks = list(order.ordered_task_ids)
+    building_counts = {wid: cap.building_task_count for wid, cap in ctx.capacities.items()}
+    ctx = ctx.evolve_with_workers(
+        workers=inject_reservation_taints(list(ctx.workers), claims),
+        jobs=jobs,
+        building_counts=building_counts,
+        max_building_tasks=scheduler.max_building_tasks_per_worker,
+    )
+    preference = preference_pass(ctx, gated.has_reservation, claims)
+    assignments = dict(preference + scheduler.find_assignments(ctx).assignments)
+    # Non-preemptible parent can't use the preemptible reserved TPU, so it lands on
+    # the in-zone on-demand CPU worker — not the out-of-zone one, not stranded.
+    assert assignments.get(jid.task(0)) == WorkerId("cpu-in")
 
 
 # =============================================================================
@@ -838,26 +977,54 @@ def test_taint_constraint_added_to_non_reservation_jobs():
     assert not_exists[0].op == ConstraintOp.NOT_EXISTS
 
 
-def test_taint_constraint_not_added_to_reservation_jobs():
-    """Direct reservation jobs get an EQ constraint forcing them onto claimed workers."""
+def test_reservation_parent_zone_pinned_not_worker_pinned():
+    """A directly-reserved parent is pinned to its reservation's claimed zone."""
     res_job = JobName.root("test-user", "reserved")
     jobs = {
         res_job: _make_job_requirements(),
     }
     has_reservation = {res_job}
     has_direct_reservation = {res_job}
+    zones = {res_job: frozenset({"us-east5-a"})}
 
-    result = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+    result = inject_taint_constraints(jobs, has_reservation, has_direct_reservation, zones)
 
     constraints = result[res_job].constraints
-    eq = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
-    assert len(eq) == 1
-    assert eq[0].op == ConstraintOp.EQ
-    assert eq[0].values[0].value == res_job.to_wire()
+    zone = [c for c in constraints if c.key == WellKnownAttribute.ZONE]
+    assert len(zone) == 1
+    assert zone[0].op == ConstraintOp.EQ
+    assert zone[0].values[0].value == "us-east5-a"
+    # Zone-pinned, never worker-pinned: no reservation taint on the parent.
+    assert [c for c in constraints if c.key == RESERVATION_TAINT_KEY] == []
+
+
+def test_reservation_parent_zone_pin_spans_claimed_zones():
+    """A reservation claimed across two zones pins its parent to both (an IN set)."""
+    res_job = JobName.root("test-user", "reserved")
+    jobs = {res_job: _make_job_requirements()}
+    zones = {res_job: frozenset({"us-east5-a", "us-central1-a"})}
+
+    result = inject_taint_constraints(jobs, {res_job}, {res_job}, zones)
+
+    zone = [c for c in result[res_job].constraints if c.key == WellKnownAttribute.ZONE]
+    assert len(zone) == 1
+    assert zone[0].op == ConstraintOp.IN
+    assert {v.value for v in zone[0].values} == {"us-east5-a", "us-central1-a"}
+
+
+def test_reservation_parent_no_constraint_until_claimed():
+    """An unclaimed reservation parent gets no zone constraint (its zone is unknown)."""
+    res_job = JobName.root("test-user", "reserved")
+    jobs = {res_job: _make_job_requirements()}
+
+    result = inject_taint_constraints(jobs, {res_job}, {res_job}, reservation_zones_by_job={})
+
+    # No claimed zone yet: no zone pin, and no taint (the parent may use claimed workers).
+    assert result[res_job].constraints == []
 
 
 def test_taint_constraint_mixed_jobs():
-    """Direct reservation gets EQ, descendant gets nothing, regular gets NOT_EXISTS."""
+    """Direct reservation gets a zone pin, descendant gets nothing, regular gets NOT_EXISTS."""
     res_job = JobName.root("test-user", "reserved")
     descendant_job = JobName.from_string("/test-user/reserved/child")
     reg_job = JobName.root("test-user", "regular")
@@ -868,18 +1035,19 @@ def test_taint_constraint_mixed_jobs():
     }
     has_reservation = {res_job, descendant_job}
     has_direct_reservation = {res_job}
+    zones = {res_job: frozenset({"us-east5-a"})}
 
-    result = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+    result = inject_taint_constraints(jobs, has_reservation, has_direct_reservation, zones)
 
-    # Direct reservation job: EQ constraint
-    res_constraints = [c for c in result[res_job].constraints if c.key == RESERVATION_TAINT_KEY]
-    assert len(res_constraints) == 1
-    assert res_constraints[0].op == ConstraintOp.EQ
-    assert res_constraints[0].values[0].value == res_job.to_wire()
+    # Direct reservation parent: zone pin, no reservation taint.
+    res_zone = [c for c in result[res_job].constraints if c.key == WellKnownAttribute.ZONE]
+    assert len(res_zone) == 1
+    assert res_zone[0].values[0].value == "us-east5-a"
+    assert [c for c in result[res_job].constraints if c.key == RESERVATION_TAINT_KEY] == []
 
-    # Descendant: no taint constraint
-    desc_constraints = [c for c in result[descendant_job].constraints if c.key == RESERVATION_TAINT_KEY]
-    assert len(desc_constraints) == 0
+    # Descendant: allowed anywhere — no zone pin and no taint.
+    assert [c for c in result[descendant_job].constraints if c.key == WellKnownAttribute.ZONE] == []
+    assert [c for c in result[descendant_job].constraints if c.key == RESERVATION_TAINT_KEY] == []
 
     # Regular job: NOT_EXISTS constraint
     reg_constraints = [c for c in result[reg_job].constraints if c.key == RESERVATION_TAINT_KEY]
@@ -1125,17 +1293,24 @@ def test_preference_pass_respects_matching_hard_constraint():
     assert task_id not in context.pending_tasks
 
 
-def test_preference_pass_accepts_claimed_worker_carrying_its_reservation_taint():
-    """The constraint gate must not reject a claimed worker for its own EQ
-    reservation taint. In production preference_pass runs on the tainted req: a
-    direct-reservation job carries an EQ reservation-job==<job> constraint and
-    the claimed worker carries the matching reservation-job attribute, so the
-    gate must still admit it (otherwise direct reservations would never place)."""
+def test_preference_pass_accepts_claimed_worker_in_reservation_zone():
+    """The constraint gate must admit a claimed worker for a zone-pinned parent.
+
+    In production preference_pass runs on the zone-pinned req: a direct-reservation
+    parent carries a ``zone==<claimed zone>`` constraint and its claimed worker is
+    in that zone, so the gate must admit it (otherwise direct reservations would
+    never land on their claimed workers)."""
     job_id = JobName.root("test-user", "res-job")
     job_wire = job_id.to_wire()
     task_id = job_id.task(0)
-    w1 = _make_worker("w1", attributes={RESERVATION_TAINT_KEY: AttributeValue(job_wire)})
-    req = _req_with_constraints([Constraint.create(key=RESERVATION_TAINT_KEY, op=ConstraintOp.EQ, value=job_wire)])
+    w1 = _make_worker(
+        "w1",
+        attributes={
+            RESERVATION_TAINT_KEY: AttributeValue(job_wire),
+            WellKnownAttribute.ZONE: AttributeValue("us-east5-a"),
+        },
+    )
+    req = _req_with_constraints([Constraint.create(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value="us-east5-a")])
     has_reservation = {job_id}
     claims = {WorkerId("w1"): ReservationClaim(job_id=job_wire, entry_idx=0)}
 
@@ -1408,12 +1583,11 @@ def test_taint_exemption_for_children_of_reservation_job(ctrl):
     taint = [c for c in child_constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(taint) == 0
 
-    # Parent (direct reservation) gets EQ constraint
+    # Parent (direct reservation) is zone-pinned, never worker-pinned: no taint.
     parent_jid = JobName.root("test-user", "res-parent")
     if parent_jid in modified_jobs:
         parent_constraints = [c for c in modified_jobs[parent_jid].constraints if c.key == RESERVATION_TAINT_KEY]
-        assert len(parent_constraints) == 1
-        assert parent_constraints[0].op == job_pb2.CONSTRAINT_OP_EQ
+        assert parent_constraints == []
 
 
 def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
@@ -1540,12 +1714,11 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
         taint = [c for c in gc_constraints if c.key == RESERVATION_TAINT_KEY]
         assert len(taint) == 0
 
-    # Direct reservation jobs get EQ constraint
+    # Direct reservation jobs are zone-pinned, never worker-pinned: no taint.
     for direct_jid in [child_a_jid, child_b_jid]:
         if direct_jid in modified_jobs:
             direct_constraints = [c for c in modified_jobs[direct_jid].constraints if c.key == RESERVATION_TAINT_KEY]
-            assert len(direct_constraints) == 1
-            assert direct_constraints[0].op == job_pb2.CONSTRAINT_OP_EQ
+            assert direct_constraints == []
 
     # Unrelated job DOES get NOT_EXISTS constraint
     unrelated_jid = JobName.root("test-user", "unrelated")

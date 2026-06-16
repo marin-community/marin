@@ -23,11 +23,13 @@ from iris.cluster.constraints import (
     Constraint,
     ConstraintOp,
     PlacementRequirements,
+    WellKnownAttribute,
     constraints_from_resources,
     evaluate_constraint,
     extract_placement_requirements,
     merge_constraints,
     split_hard_soft,
+    zone_constraint,
 )
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -148,7 +150,9 @@ def reservation_unsatisfied(
     number of workers claimed for its reservation reaches the reservation's
     entry count. Such a task must neither be scheduled nor generate autoscaler
     demand: the reservation's holder task provisions the reserved capacity, and
-    the real task runs only once that capacity exists.
+    the real task runs only once that capacity exists. Waiting for the claim also
+    fixes the reservation's zone before the task is placed or routed, so the
+    autoscaler never boots capacity in the wrong zone.
 
     Both the scheduling gate (:func:`apply_scheduling_gates`) and the demand
     path (:func:`compute_demand_entries`) consult this predicate so they agree.
@@ -168,6 +172,38 @@ def _claims_by_job(claims: dict[WorkerId, ReservationClaim] | None) -> dict[str,
     for claim in (claims or {}).values():
         counts[claim.job_id] += 1
     return counts
+
+
+def reservation_zones_from_claims(
+    claims: dict[WorkerId, ReservationClaim],
+    workers: list[WorkerSnapshot],
+) -> dict[JobName, frozenset[str]]:
+    """Zones in which each reserving job's workers were claimed, keyed by job.
+
+    A directly-reserved job is constrained to these zones so it runs beside its
+    reservation. A job is absent until at least one of its entries is claimed on
+    a zone-reporting worker.
+    """
+    zones_by_wire: dict[str, set[str]] = defaultdict(set)
+    attrs_by_worker = {w.worker_id: w.attributes for w in workers}
+    for worker_id, claim in claims.items():
+        attrs = attrs_by_worker.get(worker_id)
+        if attrs is None:
+            continue
+        zone = attrs.get(WellKnownAttribute.ZONE)
+        if zone is not None:
+            zones_by_wire[claim.job_id].add(str(zone.value))
+    return {JobName.from_wire(wire): frozenset(zones) for wire, zones in zones_by_wire.items()}
+
+
+def _reservation_zone_constraints(zones: frozenset[str]) -> list[Constraint]:
+    """Constrain a task to a set of claimed reservation zones (empty → no constraint)."""
+    if not zones:
+        return []
+    ordered = sorted(zones)
+    if len(ordered) == 1:
+        return [zone_constraint(ordered[0])]
+    return [Constraint.create(key=WellKnownAttribute.ZONE, op=ConstraintOp.IN, values=ordered)]
 
 
 def compute_demand_entries(
@@ -259,11 +295,19 @@ def compute_demand_entries(
             has_reservation.add(task.job_id)
 
     # Dry-run scheduling with building/assignment limits disabled.
-    # All tasks participate — holders and real tasks alike.
+    # Reservation-gated tasks are excluded: the real scheduling pass
+    # (apply_scheduling_gates) does not place them, so letting them consume
+    # absorption capacity here would make the fleet look full and push other
+    # tasks into false demand.
     absorbed_task_ids: set[JobName] = set()
     if ctx.workers:
         dry_run_workers = inject_reservation_taints(ctx.workers, claims)
-        dry_run_jobs = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+        dry_run_jobs = inject_taint_constraints(
+            jobs, has_reservation, has_direct_reservation, ctx.reservation_zones_by_job
+        )
+        dry_run_pending = [
+            t.task_id for t in pending if not reservation_unsatisfied(t, claims_by_job, reservation_entry_counts)
+        ]
 
         # Dry-run scheduling context — only the per-(task, worker) matching loop
         # consumes capacities/jobs/pending_tasks, so the raw-read fields stay
@@ -274,7 +318,7 @@ def compute_demand_entries(
             building_counts=ctx.building_counts,
             max_building_tasks=_UNLIMITED,
             max_assignments_per_worker=_UNLIMITED,
-            pending_tasks=[t.task_id for t in pending],
+            pending_tasks=dry_run_pending,
             jobs=dry_run_jobs,
             pending_task_rows=[],
             user_spend={},
@@ -307,6 +351,17 @@ def compute_demand_entries(
             continue
 
         job_constraints = constraints_from_json(job_row.constraints_json)
+        # A directly-reserved parent routes its own demand to the reservation's
+        # claimed zone, matching the zone pin the scheduler applies in
+        # inject_taint_constraints. The reservation gate above ensures we only
+        # reach here once claimed, so the zone is known. Without this the
+        # autoscaler would route the parent's demand to an arbitrary zone the
+        # scheduler then rejects.
+        if job_id in has_direct_reservation:
+            job_constraints = [
+                *job_constraints,
+                *_reservation_zone_constraints(ctx.reservation_zones_by_job.get(job_id, frozenset())),
+            ]
         # Build the proto here — DemandEntry.resources is an autoscaler RPC field (legitimate boundary).
         job_resources = resource_spec_from_scalars(
             job_row.res_cpu_millicores, job_row.res_memory_bytes, job_row.res_disk_bytes, job_row.res_device_json
@@ -791,44 +846,42 @@ def inject_taint_constraints(
     jobs: dict[JobName, JobRequirements],
     has_reservation: set[JobName],
     has_direct_reservation: set[JobName] | None = None,
+    reservation_zones_by_job: dict[JobName, frozenset[str]] | None = None,
 ) -> dict[JobName, JobRequirements]:
-    """Add reservation taint constraints to jobs.
+    """Add reservation zone/taint constraints to jobs.
 
-    Three-way logic:
-    - Direct reservation jobs (has_direct_reservation): get an EQ constraint
-      forcing them onto their claimed workers only.
+    A reservation maps its job to the *zone* where its accelerators were claimed;
+    it never pins to a specific worker. The reserved workers are held by the
+    job's ``:reservation:`` holder child and protected from third parties by the
+    taint below.
+
+    - Directly-reserved jobs (the reservation's parent): the zone constraint.
+      The parent must run in the reserved zone; the scheduler's normal matching
+      then places it on the reserved worker if its own request fits, or on other
+      capacity in that zone otherwise. No taint — the parent may use the claimed
+      workers.
     - Descendants of reservation jobs (has_reservation minus direct): no
-      constraint — they can use both claimed and unclaimed workers.
-    - Non-reservation jobs: get a NOT_EXISTS constraint blocking them from
-      claimed workers.
+      constraint — they are *allowed* to use the claimed workers but are not
+      required to, and may run anywhere.
+    - Non-reservation jobs: a NOT_EXISTS constraint blocking claimed workers.
     """
     if not has_reservation and not jobs:
         return jobs
 
-    if has_direct_reservation is None:
-        has_direct_reservation = set()
+    has_direct_reservation = has_direct_reservation or set()
+    zones_by_job = reservation_zones_by_job or {}
 
     taint_constraint = Constraint(key=RESERVATION_TAINT_KEY, op=ConstraintOp.NOT_EXISTS)
 
     modified: dict[JobName, JobRequirements] = {}
     for job_id, req in jobs.items():
         if job_id in has_direct_reservation:
-            eq_constraint = Constraint.create(
-                key=RESERVATION_TAINT_KEY,
-                op=ConstraintOp.EQ,
-                value=job_id.to_wire(),
-            )
-            modified[job_id] = replace(
-                req,
-                constraints=[*list(req.constraints), eq_constraint],
-            )
+            extra = _reservation_zone_constraints(zones_by_job.get(job_id, frozenset()))
+            modified[job_id] = replace(req, constraints=[*list(req.constraints), *extra])
         elif job_id in has_reservation:
             modified[job_id] = req
         else:
-            modified[job_id] = replace(
-                req,
-                constraints=[*list(req.constraints), taint_constraint],
-            )
+            modified[job_id] = replace(req, constraints=[*list(req.constraints), taint_constraint])
     return modified
 
 
@@ -952,12 +1005,14 @@ def build_scheduling_context(
         user_budget_limits = reads.get_all_user_budget_limits(snap)
         requested_bands = reads.get_priority_bands(snap, {t.job_id for t in pending})
         reserved_jobs = reads.reserved_job_ids(snap)
-        reservation_entry_counts = reads.reservation_entry_counts(snap, {t.job_id for t in pending if t.has_reservation})
+        reserved_pending_ids = {t.job_id for t in pending if t.has_reservation}
+        reservation_entry_counts = reads.reservation_entry_counts(snap, reserved_pending_ids)
         building_counts = reads.building_counts(snap, [w.worker_id for w in workers])
         running = _running_tasks_with_band_and_value(snap, set(claims.keys()))
 
     snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
     sorted_pending = _sort_pending_tasks_by_resolved_band(pending, requested_bands)
+    reservation_zones = reservation_zones_from_claims(claims, snapshots)
     return SchedulingContext(
         workers=snapshots,
         building_counts=building_counts,
@@ -973,6 +1028,7 @@ def build_scheduling_context(
         reservation_entry_counts=reservation_entry_counts,
         user_budget_defaults=defaults,
         running_for_preemption=running,
+        reservation_zones_by_job=reservation_zones,
     )
 
 
