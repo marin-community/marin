@@ -24,7 +24,7 @@ a dev box::
 installs a connected Fray client as the current client; the script's existing
 submit path (``executor_main`` or ``current_client().submit``) then targets the
 cluster with no launcher job. :func:`override_resources` applies ``--region`` /
-``--tpu-type`` to a script's :class:`ResourceConfig`.
+``--tpu_type`` to a script's :class:`ResourceConfig`.
 """
 
 from __future__ import annotations
@@ -42,7 +42,6 @@ from fray.iris_backend import FrayIrisClient
 from fray.types import ResourceConfig, TpuConfig, get_tpu_topology
 from iris.client.connect import connect_to_cluster
 from iris.cluster.client.job_info import get_job_info
-
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main
 
 logger = logging.getLogger(__name__)
@@ -79,31 +78,37 @@ class LaunchConfig:
 
 
 def _repo_root() -> Path:
-    """Return the marin repo root (this file lives at ``<root>/experiments/launch.py``)."""
+    """Return the git workspace root to bundle for workers.
+
+    This file lives at ``<root>/experiments/launch.py``, so the root is two
+    parents up; we assert ``pyproject.toml`` is there so the bundle is rooted at
+    a real workspace rather than some unexpected cwd.
+    """
     root = Path(__file__).resolve().parents[1]
     if not (root / "pyproject.toml").is_file():
         raise RuntimeError(f"Expected marin repo root with pyproject.toml at {root}, found none.")
     return root
 
 
-def _ensure_storage_prefix(cluster: str) -> None:
+def _ensure_storage_prefix(config: LaunchConfig) -> None:
     """Pin ``MARIN_PREFIX`` to a regional GCS bucket before any path resolution.
 
     On a cluster CPU launcher worker, ``MARIN_PREFIX`` is injected from the
     cluster config or GCS metadata. On a dev box it is neither, so
     ``marin_prefix()`` would silently fall back to local ``/tmp/marin`` and the
     driver would compute output paths (and the JAX compilation-cache bucket)
-    under local storage while submitting remote jobs. Refuse that: require an
-    explicit regional prefix and export it so both the executor and the direct
-    training-env resolution agree.
+    under local storage while submitting remote jobs. Refuse that: take the
+    prefix from ``--executor.prefix`` or ``MARIN_PREFIX``, require it to be a
+    ``gs://`` path, and export it so the executor and the direct training-env
+    resolution (which reads ``MARIN_PREFIX``) agree.
     """
-    prefix = os.environ.get("MARIN_PREFIX")
+    prefix = config.executor.prefix or os.environ.get("MARIN_PREFIX")
     if not prefix or not prefix.startswith("gs://"):
         raise ValueError(
-            f"Connecting to cluster {cluster!r} requires a regional GCS storage prefix, but "
-            f"MARIN_PREFIX is {prefix!r}. Export MARIN_PREFIX=gs://marin-<region> "
-            "(e.g. gs://marin-us-central2) so outputs and checkpoints land on cluster storage "
-            "instead of local /tmp."
+            f"Connecting to cluster {config.cluster!r} requires a regional GCS storage prefix, but "
+            f"got {prefix!r}. Pass --executor.prefix=gs://marin-<region> or export "
+            "MARIN_PREFIX=gs://marin-<region> (e.g. gs://marin-us-central2) so outputs and "
+            "checkpoints land on cluster storage instead of local /tmp."
         )
     os.environ["MARIN_PREFIX"] = prefix
 
@@ -140,30 +145,30 @@ def launch_session(config: LaunchConfig) -> Iterator[None]:
         yield
         return
 
-    _ensure_storage_prefix(config.cluster)
+    _ensure_storage_prefix(config)
     with connect_to_cluster(config.cluster, workspace=_repo_root()) as iris_client:
         with set_current_client(FrayIrisClient.from_iris_client(iris_client)):
             yield
 
 
 def override_resources(resources: ResourceConfig, config: LaunchConfig) -> ResourceConfig:
-    """Apply ``--tpu-type`` / ``--region`` / ``--zone`` to a script's resources.
+    """Apply ``--tpu_type`` / ``--region`` / ``--zone`` to a script's resources.
 
     Preserves every other scheduling field (replicas, preemptible, image, ...).
     Rejects unsafe TPU swaps — a different ``vm_count`` would silently corrupt the
     replica count, and a flexible (multi-variant) config can't be re-derived from
-    a single ``--tpu-type``. Edit those in the script instead.
+    a single ``--tpu_type``. Edit those in the script instead.
     """
     if config.tpu_type is not None:
         if not isinstance(resources.device, TpuConfig):
-            raise ValueError(f"--tpu-type only applies to TPU resources, got {type(resources.device).__name__}.")
+            raise ValueError(f"--tpu_type only applies to TPU resources, got {type(resources.device).__name__}.")
         if resources.device_alternatives:
-            raise ValueError("--tpu-type cannot override a flexible multi-variant TPU config; edit the script.")
+            raise ValueError("--tpu_type cannot override a flexible multi-variant TPU config; edit the script.")
         current_vm_count = get_tpu_topology(resources.device.variant).vm_count
         new_vm_count = get_tpu_topology(config.tpu_type).vm_count
         if new_vm_count != current_vm_count:
             raise ValueError(
-                f"--tpu-type={config.tpu_type} (vm_count={new_vm_count}) differs in vm_count from the "
+                f"--tpu_type={config.tpu_type} (vm_count={new_vm_count}) differs in vm_count from the "
                 f"script default {resources.device.variant} (vm_count={current_vm_count}); the replica "
                 "count would be wrong. Edit the script's ResourceConfig instead."
             )

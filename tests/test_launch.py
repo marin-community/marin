@@ -11,7 +11,7 @@ import pytest
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import GpuConfig, ResourceConfig
-from marin.execution.executor import ExecutorStep
+from marin.execution.executor import ExecutorMainConfig, ExecutorStep
 
 import experiments.launch as launch
 from experiments.launch import LaunchConfig, _ensure_storage_prefix, launch_session, override_resources
@@ -74,16 +74,27 @@ def test_override_resources_noop_without_overrides():
 
 
 def test_ensure_storage_prefix_requires_regional_gcs(monkeypatch):
+    config = LaunchConfig(cluster="marin")
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
-    with pytest.raises(ValueError, match="MARIN_PREFIX"):
-        _ensure_storage_prefix("marin")
+    with pytest.raises(ValueError, match="storage prefix"):
+        _ensure_storage_prefix(config)
 
     monkeypatch.setenv("MARIN_PREFIX", "/tmp/marin")
-    with pytest.raises(ValueError, match="MARIN_PREFIX"):
-        _ensure_storage_prefix("marin")
+    with pytest.raises(ValueError, match="storage prefix"):
+        _ensure_storage_prefix(config)
 
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2")
-    _ensure_storage_prefix("marin")  # does not raise
+    _ensure_storage_prefix(config)
+    assert os.environ["MARIN_PREFIX"] == "gs://marin-us-central2"
+
+
+def test_ensure_storage_prefix_accepts_executor_prefix(monkeypatch):
+    # An explicit --executor.prefix is honored even with MARIN_PREFIX unset, and
+    # exported so the direct training-env path (which reads MARIN_PREFIX) agrees.
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    config = LaunchConfig(cluster="marin", executor=ExecutorMainConfig(prefix="gs://marin-eu-west4"))
+    _ensure_storage_prefix(config)
+    assert os.environ["MARIN_PREFIX"] == "gs://marin-eu-west4"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -124,14 +135,19 @@ def test_launch_session_hard_fails_when_cluster_passed_inside_job(monkeypatch):
             pass
 
 
-def test_launch_session_warns_and_continues_for_legacy_two_hop(monkeypatch, caplog):
+def test_launch_session_legacy_in_job_does_not_hoist_a_client(monkeypatch):
+    # Legacy two-hop (inside an Iris job, no --cluster): launch_session must NOT
+    # connect/hoist a client, so current_client() keeps using the in-cluster
+    # context. Assert the no-hoist behavior, not the warning text.
+    def _must_not_connect(*args, **kwargs):
+        raise AssertionError("connect_to_cluster must not be called in the legacy in-job path")
+
     monkeypatch.setattr(launch, "get_job_info", lambda: object())
+    monkeypatch.setattr(launch, "connect_to_cluster", _must_not_connect)
     entered = False
-    with caplog.at_level("WARNING"):
-        with launch_session(LaunchConfig(cluster=None)):
-            entered = True
+    with launch_session(LaunchConfig(cluster=None)):
+        entered = True
     assert entered
-    assert any("no longer need" in r.message for r in caplog.records)
 
 
 def test_launch_session_local_when_no_cluster(monkeypatch):

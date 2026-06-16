@@ -18,8 +18,8 @@ from typing import Literal
 
 import click
 from google.protobuf import json_format
-from iris.cli.main import create_client_token_provider, resolve_cluster_name
 from iris.client import IrisClient
+from iris.client.connect import create_client_token_provider, resolve_cluster_name
 from iris.cluster.backends.k8s.tasks import _sanitize_label_value
 from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import IrisConfig

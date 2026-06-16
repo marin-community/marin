@@ -51,8 +51,8 @@ from pathlib import Path
 import click
 import fsspec
 from fray import ResourceConfig
-from iris.cli.main import IRIS_CLUSTER_CONFIG_DIRS, create_client_token_provider, resolve_cluster_name
 from iris.client import IrisClient
+from iris.client.connect import IRIS_CLUSTER_CONFIG_DIRS, create_client_token_provider, resolve_cluster_name
 from iris.cluster.config import IrisConfig
 from iris.cluster.constraints import Constraint, preemptible_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec

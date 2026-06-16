@@ -83,7 +83,9 @@ def resolve_cluster_name(
     controller_url: str | None,
     cli_cluster_name: str | None,
 ) -> str:
-    """Resolve a human-readable cluster name from the available signals."""
+    """Resolve a cluster name, preferring the CLI name, then the config name,
+    then ``local`` for a local controller, then a name derived from the URL,
+    falling back to ``default``."""
     if cli_cluster_name:
         return cli_cluster_name
     if config and config.name:
