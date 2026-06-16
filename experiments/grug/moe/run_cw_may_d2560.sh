@@ -25,8 +25,10 @@ REPLICA_AXIS=1
 MODEL_AXIS=1
 BATCH=256
 SEQ_LEN=4096
+SLIDING_WINDOW=2048
 NUM_LAYERS=""
 STEPS=30
+TOTAL_TOKENS="${MAY_TOTAL_TOKENS:-10000000000000}"
 CHECKPOINTS="none"
 DATA="slimpajama"
 REMAT="save_moe"
@@ -74,8 +76,10 @@ Options:
   --model-axis N            MAY_MODEL_AXIS tensor/model-parallel axis size (default: 1).
   --batch N                 MAY_BATCH (default: 256).
   --seq-len N               MAY_SEQ_LEN (default: 4096).
+  --sliding-window N        MAY_SLIDING_WINDOW for short layers (default: 2048).
   --layers N                MAY_NUM_LAYERS diagnostic override (default: May heuristic).
   --steps N                 MAY_STEPS (default: 30).
+  --total-tokens N          MAY_TOTAL_TOKENS optimizer horizon (default: 10000000000000).
   --profiler-start N        MAY_PROFILER_START (default: 12).
   --profiler-steps N        MAY_PROFILER_STEPS (default: 8; set 0 to disable).
   --xla-memory-fraction F   XLA_PYTHON_CLIENT_MEM_FRACTION (default: 0.95).
@@ -165,12 +169,20 @@ while [ "$#" -gt 0 ]; do
             SEQ_LEN="$2"
             shift 2
             ;;
+        --sliding-window)
+            SLIDING_WINDOW="$2"
+            shift 2
+            ;;
         --layers)
             NUM_LAYERS="$2"
             shift 2
             ;;
         --steps)
             STEPS="$2"
+            shift 2
+            ;;
+        --total-tokens)
+            TOTAL_TOKENS="$2"
             shift 2
             ;;
         --profiler-start)
@@ -321,6 +333,8 @@ if [ -z "$RUN_ID" ]; then
     RUN_ID="cw-may-d2560-profile-$(date -u +%Y%m%d-%H%M%S)"
 fi
 
+RUN_TOKENS=$((BATCH * SEQ_LEN * STEPS))
+
 ENV_ARGS=(
     -e MARIN_PREFIX "$MARIN_PREFIX"
     -e RUN_ID "$RUN_ID"
@@ -336,8 +350,10 @@ ENV_ARGS=(
     -e MAY_MODEL_AXIS "$MODEL_AXIS"
     -e MAY_BATCH "$BATCH"
     -e MAY_SEQ_LEN "$SEQ_LEN"
+    -e MAY_SLIDING_WINDOW "$SLIDING_WINDOW"
     -e MAY_NUM_LAYERS "$NUM_LAYERS"
     -e MAY_STEPS "$STEPS"
+    -e MAY_TOTAL_TOKENS "$TOTAL_TOKENS"
     -e MAY_CHECKPOINTS "$CHECKPOINTS"
     -e MAY_DATA "$DATA"
     -e MAY_REMAT "$REMAT"
@@ -393,8 +409,11 @@ task_image: ${TASK_IMAGE:-default}
 mesh axes: replica=$REPLICA_AXIS expert=$EXPERT_AXIS model=$MODEL_AXIS
 batch: $BATCH
 seq_len: $SEQ_LEN
+sliding_window: $SLIDING_WINDOW
 layers: ${NUM_LAYERS:-default}
 steps: $STEPS
+run_tokens: $RUN_TOKENS
+total_tokens: $TOTAL_TOKENS
 tracker: $TRACKER
 profiler: start=$PROFILER_START steps=$PROFILER_STEPS hlo_proto=$ENABLE_HLO_PROTO
 checkpoints: $CHECKPOINTS

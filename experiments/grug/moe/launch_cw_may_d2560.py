@@ -12,6 +12,7 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_REPLICA_AXIS=1       FSDP over the whole data axis
     MAY_MODEL_AXIS=1         tensor/model-parallel axis size
     MAY_BATCH=256            seq=4096 context; raise only after profiling memory
+    MAY_SLIDING_WINDOW=2048  short-layer attention window; long layers remain full causal
     MAY_NUM_LAYERS=26        override layer count for narrow diagnostics
     MAY_STEPS=50             throughput/profiling length
     MAY_CPU_PER_REPLICA=32   CPU request for each 8xH100 worker pod
@@ -77,6 +78,7 @@ from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig, LivePa
 GPUS_PER_NODE = 8
 DEFAULT_HIDDEN_DIM = 2560
 DEFAULT_SEQ_LEN = 4096
+DEFAULT_SLIDING_WINDOW = 2048
 DEFAULT_BATCH = 256
 DEFAULT_STEPS = 50
 DEFAULT_TOTAL_TOKENS = 1.0e13
@@ -114,6 +116,7 @@ def env_optional_int(key: str) -> int | None:
 def build_may_model() -> GrugModelConfig:
     hidden_dim = env_int("MAY_HIDDEN_DIM", DEFAULT_HIDDEN_DIM)
     seq_len = env_int("MAY_SEQ_LEN", DEFAULT_SEQ_LEN)
+    sliding_window = env_int("MAY_SLIDING_WINDOW", DEFAULT_SLIDING_WINDOW)
     remat_mode = os.environ.get("MAY_REMAT", "save_moe")
     if remat_mode not in VALID_REMAT_MODES:
         raise ValueError(f"MAY_REMAT={remat_mode!r} must be one of {VALID_REMAT_MODES}")
@@ -132,6 +135,7 @@ def build_may_model() -> GrugModelConfig:
     return dataclasses.replace(
         model,
         num_layers=env_int("MAY_NUM_LAYERS", model.num_layers),
+        sliding_window=sliding_window,
         num_experts=env_int("MAY_NUM_EXPERTS", 256),
         num_experts_per_token=env_int("MAY_TOP_K", 4),
         router_z_loss_coef=0.0,
