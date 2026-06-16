@@ -55,7 +55,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_WORKER_RPC_TIMEOUT = Duration.from_seconds(10.0)
 
 # Max concurrent in-flight per-worker RPCs in a fan-out (asyncio.Semaphore width).
-RECONCILE_FANOUT_PARALLELISM = 128
+# Kept >= fleet size so the whole fleet reconciles in one wave and a slow worker
+# costs one RPC-timeout window per round, not one per wave.
+RECONCILE_FANOUT_PARALLELISM = 512
 
 # Generous deadline for an "unlimited" exec_in_container (negative timeout). Long
 # enough for real interactive/debug commands, but not the old ~1-hour stall.
