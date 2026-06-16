@@ -312,7 +312,7 @@ def cancel(
     # terminal before cancel ran (kernel only emits EndpointDeletion for
     # tasks we actively killed). Derive the same subtree the kernel cancelled
     # from the snapshot's transitive descendants.
-    subtree = [job_id, *snapshot.job_descendants[job_id].descendants_full]
+    subtree = [job_id, *snapshot.job_descendants[job_id].descendants]
     endpoints.remove_by_job_ids(cur, subtree)
 
 

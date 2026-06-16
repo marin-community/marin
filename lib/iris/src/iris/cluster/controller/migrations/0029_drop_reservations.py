@@ -118,10 +118,10 @@ def _delete_reservation_holders(raw_conn) -> None:
 
 
 def _merged_constraints_json(reservation_json: str, constraints_json: str | None) -> str | None:
-    """Fold a job's ``reservation_json`` into its ``constraints_json`` as soft hints.
+    """Fold a job's ``reservation_json`` into its ``constraints_json`` as hard availability constraints.
 
     Returns the new constraints JSON, or ``None`` when there is nothing to add (no
-    accelerator entries, or the hint is already present — keeping the step
+    accelerator entries, or the constraint is already present — keeping the step
     idempotent). Malformed reservation JSON is logged and skipped.
     """
     try:

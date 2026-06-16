@@ -184,8 +184,8 @@ class ScheduleResult:
     """Limits-free capacity-fit residual; cached for the autoscaler loop."""
     diagnostics: dict[str, str] = field(default_factory=dict)
     """Per-job scheduling diagnostics surfaced on the dashboard."""
-    post_taint_context: SchedulingContext | None = None
-    """Post-taint (or un-tainted) context cached for dashboard diagnostics."""
+    scheduling_context: SchedulingContext | None = None
+    """Post-placement scheduling context cached for dashboard diagnostics."""
 
 
 @dataclass(frozen=True)
@@ -287,7 +287,7 @@ def run_scheduling_decision(
         # snapshot for this tick.
         return ScheduleResult(
             unschedulable=list(gated.expired_tasks),
-            post_taint_context=ctx,
+            scheduling_context=ctx,
             residual_demand=residual_demand,
         )
 
@@ -311,7 +311,7 @@ def run_scheduling_decision(
         ],
         unschedulable=list(gated.expired_tasks),
         diagnostics=diagnostics,
-        post_taint_context=context,
+        scheduling_context=context,
         residual_demand=residual_demand,
     )
 

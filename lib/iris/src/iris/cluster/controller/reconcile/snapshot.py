@@ -56,7 +56,7 @@ class JobStateBasis:
 @dataclass(frozen=True, slots=True)
 class JobDescendants:
     job_id: JobName
-    descendants_full: tuple[JobName, ...]
+    descendants: tuple[JobName, ...]
 
 
 @dataclass(frozen=True, slots=True)

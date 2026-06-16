@@ -282,7 +282,7 @@ class ReconcileState:
         descendants = self._snapshot.job_descendants.get(job_id)
         if descendants is None:
             return self.overlay.effects
-        subtree = [job_id, *descendants.descendants_full]
+        subtree = [job_id, *descendants.descendants]
         now_ms = now.epoch_ms()
         finished_at = Timestamp.from_ms(now_ms)
 

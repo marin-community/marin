@@ -189,7 +189,7 @@ class Overlay:
         desc = self._snapshot.job_descendants.get(job_id)
         if desc is None:
             return []
-        return list(desc.descendants_full)
+        return list(desc.descendants)
 
     def job_preemption_policy(self, job_id: JobName) -> int:
         """Resolve the effective preemption policy.

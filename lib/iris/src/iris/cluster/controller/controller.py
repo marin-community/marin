@@ -785,7 +785,7 @@ class Controller:
         # dispatch follow-up for fresh assignments, fold health.
         if sched_result is not None:
             self._scheduling_diagnostics = sched_result.diagnostics
-            self._last_scheduling_context = sched_result.post_taint_context
+            self._last_scheduling_context = sched_result.scheduling_context
             if sched_result.assignments:
                 self._force_reconcile = True
                 self._tick_wake.set()
@@ -848,7 +848,7 @@ class Controller:
         if not ctx.pending_task_rows:
             # No pending work: empty decision, but keep the context as the
             # dashboard diagnostics snapshot for this tick.
-            return ScheduleResult(post_taint_context=ctx)
+            return ScheduleResult(scheduling_context=ctx)
         return self._task_backend.schedule(
             ScheduleInput(
                 context=ctx,
@@ -976,7 +976,7 @@ class Controller:
         self._apply_preemptions(result.preemptions)
 
         self._scheduling_diagnostics = result.diagnostics
-        self._last_scheduling_context = result.post_taint_context
+        self._last_scheduling_context = result.scheduling_context
 
         if result.assignments or result.preemptions:
             log_event(
