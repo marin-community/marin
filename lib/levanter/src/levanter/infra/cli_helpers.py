@@ -19,21 +19,35 @@ from google.cloud import storage
 
 USER_CONFIG_PATH = Path(".config/marin/config.yaml")
 LOCAL_CONFIG_PATH = Path(".levanter.yaml")
+# Legacy checkout-local file, distinct from the XDG user config directory.
 DEPRECATED_LOCAL_CONFIG_PATH = Path(".config")
 
 
 @dataclass(frozen=True)
 class CliConfig:
+    autodelete: bool | None = None
+    capacity_type: str | None = None
     project: str | None = None
+    region: str | None = None
     zone: str | None = None
     tpu: str | None = None
+    tpu_name: str | None = None
+    tpu_type: str | None = None
+    node_count: int | None = None
+    version: str | None = None
+    retries: int | None = None
+    run_id: str | None = None
     repository: str | None = None
     image: str | None = None
+    image_name: str | None = None
     tag: str | None = None
     github_user: str | None = None
     github_token: str | None = None
+    docker_base_image: str | None = None
     docker_file: str | None = None
+    docker_registry: str | None = None
     extra_context: str | None = None
+    foreground: bool | None = None
     docker_target: str | None = None
     docker_repository: str | None = None
     subnetwork: str | None = None
