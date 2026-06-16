@@ -43,6 +43,8 @@ Use hypothesis-driven diagnosis: state hypothesis, gather evidence, narrow.
 Attempt to reproduce the issue locally and minimally.
 Triple check that you're narrowing down on the same issue as the one that actually broke the canary.
 
+Routing once you've classified: scheduling/PENDING → .agents/runbooks/diagnose-stuck-pending-job.md; TPU task failures → .agents/runbooks/triage-tpu-worker-failure.md; GPU-lane/CoreWeave context → .agents/runbooks/stand-up-coreweave-cluster.md.
+
 ### 3. File a GitHub issue
 
 Follow the `file-issue` skill. Use the bug-report template.

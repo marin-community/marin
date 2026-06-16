@@ -33,7 +33,7 @@ that destroys a healthy slice without fixing anything.
   same time, or the same node fails again after a delete + resubmit, stop and
   escalate to the user — that is a fleet event (stockout, preemption storm, or a
   controller bug), not a single bad host. See OPS.md "TPU Bad-Node Recovery"
-  (lib/iris/OPS.md:257) for the same guardrail.
+  (lib/iris/OPS.md:260) for the same guardrail.
 - Baseline to capture before any action: the failing `worker_id` and its task
   `attempt_id`/error from the controller (`iris job bug-report /user/job`), and
   the zone. You will map the worker IP → VM name from these.
@@ -47,7 +47,7 @@ suffix to get the VM name. Then walk the branches.
 **1. Is the controller's reaper even running?** If tasks are stuck in ASSIGNED
 with stale `last_heartbeat_ms` rather than actively looping new attempts, the
 worker-failure reaper thread may be blocked on a hung `gcloud ... tpu-vm delete`
-subprocess — see Known Bug #2 (lib/iris/OPS.md:221). `py-spy dump` the
+subprocess — see Known Bug #2 (lib/iris/OPS.md:224). `py-spy dump` the
 controller, look for `subprocess.run` → `terminate` on the reaper, kill the
 stuck gcloud process. That is a different runbook-less situation; if you see it,
 clear it before continuing here.
@@ -56,7 +56,7 @@ clear it before continuing here.
 VM with the impersonated controller service account and run `sudo docker ps
 --filter label=iris.managed=true`. (SSH + docker-inspection command shapes:
 `2026-04-21-iris-tpu-wedge-and-holder-poll.md` §"How OPS.md could have shortened
-this", and OPS.md "Connecting", lib/iris/OPS.md:227. `sudo` is mandatory —
+this", and OPS.md "Connecting", lib/iris/OPS.md:230. `sudo` is mandatory —
 docker.sock is root-owned, else you get "permission denied … Docker daemon
 socket".) Compare the container count to what the controller lists running on
 that worker (its task list from the bug-report / worker-state RPC):
@@ -95,7 +95,7 @@ VM; the node is healthy.
 
 Only after §2 confirmed the container count matches: map worker IP → VM name and
 delete the **one** node, then resubmit the job. Command syntax lives in OPS.md
-"TPU Bad-Node Recovery" (lib/iris/OPS.md:257-266) — `gcloud compute tpus tpu-vm
+"TPU Bad-Node Recovery" (lib/iris/OPS.md:260-272) — `gcloud compute tpus tpu-vm
 delete <NAME> --zone <ZONE> --quiet`. Keep the guardrail: one node only; if it
 recurs or spreads, escalate.
 
@@ -137,11 +137,11 @@ diagnosis path and the worker-VM inspection recipe.
 
 ## See also
 
-- lib/iris/OPS.md "TPU Bad-Node Recovery" (lib/iris/OPS.md:257) — IP→VM mapping
+- lib/iris/OPS.md "TPU Bad-Node Recovery" (lib/iris/OPS.md:260) — IP→VM mapping
   and the `tpu-vm delete` syntax for branch §B, plus the one-node guardrail.
-- lib/iris/OPS.md "Connecting" / "GCP Resources" (lib/iris/OPS.md:227-255) —
+- lib/iris/OPS.md "Connecting" / "GCP Resources" (lib/iris/OPS.md:230-258) —
   SSH-tunnel and VM-listing command reference.
-- lib/iris/OPS.md "Known Bugs" #2 (lib/iris/OPS.md:221) — the reaper-stall on a
+- lib/iris/OPS.md "Known Bugs" #2 (lib/iris/OPS.md:224) — the reaper-stall on a
   hung gcloud subprocess (Diagnose §1).
 - `docs/dev-guide/tpu_observability.md` "Troubleshooting Commands" — stockout /
   preemption / node-termination ground truth to rule out a fleet event before

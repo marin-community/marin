@@ -13,7 +13,7 @@ As a rule of thumb, use this skill for runs that are expected to run for 1e22 mo
 
 - If the user asks to launch a run, arrange babysitting unless they explicitly decline.
 - Use a 15 minute default check cadence for babysitting unless the run's failure mode requires tighter monitoring.
-- Never stop, restart, or bounce an Iris cluster without explicit user permission.
+- Never stop, restart, or bounce an Iris cluster without explicit user permission. For the controller-only vs full-restart distinction, see .agents/runbooks/deploy-controller-fix.md.
 - If something needs human judgment or authorization, attempt to contact the DRI, usually the user in the chat, through available channels such as GitHub issue comments, Discord, email, or Slack.
 
 ## Launch

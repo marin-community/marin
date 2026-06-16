@@ -65,6 +65,9 @@ commit/log timestamps for live data.
 Format as a numbered list of short paragraphs. Five to twelve steps; longer
 means you're narrating tool calls instead of decisions.
 
+For safe offline queries during diagnosis, see
+.agents/runbooks/offline-checkpoint-analysis.md.
+
 ### User course corrections
 
 Explicit list of points where the user redirected the investigation. Each

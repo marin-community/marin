@@ -29,7 +29,7 @@ is different.
   yes (see [deploy-controller-fix](deploy-controller-fix.md)).
 - **Don't trigger a live checkpoint to investigate.** `iris cluster controller
   checkpoint` briefly stalls the controller — wrong when scheduling is already
-  wedged. Pull the last GCS checkpoint instead (lib/iris/OPS.md:145).
+  wedged. Pull the last GCS checkpoint instead (lib/iris/OPS.md:151).
 - **Baseline:** the job's pending_reason and queue_position from
   `get-scheduler-state`, plus the pending_reason of a handful of *other* pending
   jobs — you need the spread, not just this one.
@@ -37,7 +37,7 @@ is different.
 ## Diagnose
 
 **Step 0 — read the spread, not the job.** Pull the pending queue and compare the
-pending-reason text across jobs (see lib/iris/OPS.md:87 "Scheduler & Autoscaler"
+pending-reason text across jobs (see lib/iris/OPS.md:93 "Scheduler & Autoscaler"
 for `get-scheduler-state`).
 
 - **Many/all pending jobs carry the *same* fallback reason text** (e.g. the
@@ -53,12 +53,12 @@ this job yet.
 
 - `iris rpc controller get-scheduler-state` — confirm the constraint is resource/
   quota, not exotic.
-- Quota-blocked groups: the `scaling_groups` query in lib/iris/OPS.md:117 ("Useful
+- Quota-blocked groups: the `scaling_groups` query in lib/iris/OPS.md:123 ("Useful
   queries") — non-empty `quota_reason` or rising `consecutive_failures` means GCP
   quota is the wall.
 - `iris rpc controller get-autoscaler-status` — check `backoff_until_ms` /
   `consecutive_failures`. The autoscaler backs off exponentially per group; quota
-  is the primary scaling bottleneck (lib/iris/OPS.md:276 "GCP Gotchas").
+  is the primary scaling bottleneck (lib/iris/OPS.md:277 "GCP Gotchas").
 
 If quota/backoff explains it, this is a wait, not a bug. Resolve via branch (a).
 
@@ -75,9 +75,7 @@ Confirm:
 - Grep recent controller parquet logs for the silent death and originating
   traceback — `ManagedThread.*crashed`, `scheduling-loop crashed` /
   `IntegrityError` on `key='/system/controller'`. For the duckdb-over-GCS recipe
-  (no local download), see the planned **offline-checkpoint-analysis** runbook
-  *(tracked in `.agents/projects/ops-runbooks.md`; until it lands the recipe lives
-  in the scheduler-freeze postmortem, §1 of "How OPS.md could have shortened this")*.
+  (no local download), see [offline-checkpoint-analysis](offline-checkpoint-analysis.md).
 - Checkpoint cross-table check: any task where
   `max(task_attempts.attempt_id) > tasks.current_attempt_id` is a poisoned row that
   crashes the next assignment cycle.
@@ -92,7 +90,7 @@ Hypothesis: a `--reserve` parent is stuck PENDING while its `:reservation:` hold
 is RUNNING.
 
 - `iris query "SELECT * FROM reservation_claims"` and check the holder's state
-  (lib/iris/OPS.md:278 "Reservation system"). Holder RUNNING + parent PENDING is
+  (lib/iris/OPS.md:281 "Reservation system"). Holder RUNNING + parent PENDING is
   the tell.
 - The parent is `has_direct_reservation`, so the scheduler injects a
   `reservation-job == <self>` **EQ taint** pinning it to the reservation's workers
@@ -130,7 +128,7 @@ is RUNNING.
   and the autoscaler stops booting idle CPU VMs for phantom demand.
 
 Active states are 2 (BUILDING), 3 (RUNNING), **and 9 (ASSIGNED)** — a job leaving
-PENDING into ASSIGNED is progress, not a stall (lib/iris/OPS.md:111 "Sharp edges").
+PENDING into ASSIGNED is progress, not a stall (lib/iris/OPS.md:117 "Sharp edges").
 
 ## Why this happens
 
@@ -149,15 +147,15 @@ PENDING into ASSIGNED is progress, not a stall (lib/iris/OPS.md:111 "Sharp edges
 
 ## See also
 
-- lib/iris/OPS.md:206 — Troubleshooting matrix ("Job stuck PENDING", "Autoscaler
-  not scaling") and lib/iris/OPS.md:87 / lib/iris/OPS.md:117 for the exact
+- lib/iris/OPS.md:209 — Troubleshooting matrix ("Job stuck PENDING", "Autoscaler
+  not scaling") and lib/iris/OPS.md:93 / lib/iris/OPS.md:123 for the exact
   `get-scheduler-state`, `quota_reason`, and `scaling_groups` commands.
 - `.agents/ops/2026-04-21-iris-scheduler-freeze.md` — frozen scheduler.
 - `.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md` — reservation
   taint / phantom demand.
 - [deploy-controller-fix](deploy-controller-fix.md) — a stale controller presents
   as scheduling weirdness; this is also how you restart on the fixed image.
-- **offline-checkpoint-analysis** *(planned)* — deep duckdb-over-GCS log and
-  checkpoint queries.
+- [offline-checkpoint-analysis](offline-checkpoint-analysis.md) — deep
+  duckdb-over-GCS log and checkpoint queries.
 - `babysit-job` skill — points operators here when a watched job won't leave
   PENDING.

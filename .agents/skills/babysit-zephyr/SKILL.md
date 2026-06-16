@@ -110,7 +110,7 @@ After submitting, monitor in escalating stages:
 
 3. **Failure detection**: If workers get KILLED or the coordinator goes zombie, the `StepRunner` may retry automatically (new child jobs with a different hash). Check the latest attempt. Stale coordinators from previous attempts may accumulate (#3705). If retries keep failing, escalate to **debug**.
 
-**"Terminated by user" is misleading**: This does not necessarily mean a human killed the job. The system uses this message for various internal termination reasons. Always check the actual logs at each level (parent job, coordinator, workers) to find the real cause.
+**"Terminated by user" is misleading** — see lib/zephyr/OPS.md "Misleading Diagnostics". Always check the actual logs at each level (parent job, coordinator, workers) to find the real cause.
 
 ## Restarting After Failure
 

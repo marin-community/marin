@@ -100,10 +100,13 @@ skill(s) that point here, the postmortem(s) that feed it.>
 
 | Runbook | Situation |
 |---|---|
+| [new-cluster](new-cluster.md) | Stand up a brand-new Iris cluster in a new region from scratch — the bootstrap order |
 | [deploy-controller-fix](deploy-controller-fix.md) | Ship a merged controller/iris fix, or restart the controller, without shipping a stale `:latest` |
 | [diagnose-stuck-pending-job](diagnose-stuck-pending-job.md) | A job sits PENDING — capacity wait vs frozen scheduler vs reservation-taint |
 | [triage-tpu-worker-failure](triage-tpu-worker-failure.md) | Repeated TPU task failures — wedged container vs a genuinely bad node |
-
-Planned (see `.agents/projects/ops-runbooks.md`): `offline-checkpoint-analysis`,
-`repair-task-attempts-invariant`, `tpu-ci-fleet`, `finelog-rollout-rollback`,
-`run-datakit-ferry-manually`, `stand-up-coreweave-cluster`, `new-cluster`.
+| [offline-checkpoint-analysis](offline-checkpoint-analysis.md) | Run expensive controller queries safely — offline checkpoint + parquet-over-GCS |
+| [repair-task-attempts-invariant](repair-task-attempts-invariant.md) | tasks vs task_attempts invariant breaks — ghost co-tenants, orphan attempts, split slices |
+| [finelog-rollout-rollback](finelog-rollout-rollback.md) | Roll out / roll back a finelog server; query archived parquet |
+| [run-datakit-ferry-manually](run-datakit-ferry-manually.md) | Run, stop, and validate a datakit ferry smoke run by hand |
+| [stand-up-coreweave-cluster](stand-up-coreweave-cluster.md) | Bring a CoreWeave GPU cluster to a running job; run the canary smoke; clean up nodepools |
+| [tpu-ci-fleet](tpu-ci-fleet.md) | Operate the self-hosted TPU CI runner fleet — stand up, rotate PAT, recover runners |

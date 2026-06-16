@@ -18,6 +18,12 @@ Marin clusters run on [Iris](../lib/iris/README.md) for orchestration (job/task
 scheduling, node provisioning), fray for distributed execution (Iris-backed),
 and [zephyr](../lib/zephyr/README.md) for data pipelines.
 
+To stand up a brand-new cluster from scratch — the ordered bootstrap sequence
+(IAM, buckets, registry mirror, configs, controller) — see
+[`.agents/runbooks/new-cluster.md`](../.agents/runbooks/new-cluster.md). To
+operate the self-hosted TPU CI runner fleet (`tpu-ci/`), see
+[`.agents/runbooks/tpu-ci-fleet.md`](../.agents/runbooks/tpu-ci-fleet.md).
+
 ## Preemptibility
 
 It is important to understand that almost all of our compute is **preemptible**.  This means that the VMs can be shut down at

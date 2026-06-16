@@ -7,6 +7,13 @@ extraction PR for context.
 
 Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 
+## Operations
+
+Finelog has no `OPS.md`. To deploy, roll out, or roll back a finelog server
+(health-gated rollout with auto-rollback via `scripts/safe_deploy.py`), or to
+query archived parquet that has evicted to GCS, see
+`.agents/runbooks/finelog-rollout-rollback.md`.
+
 ## Source Layout
 
 - `src/finelog/proto/logging.proto` — log-service RPC definitions (package `finelog.logging`)

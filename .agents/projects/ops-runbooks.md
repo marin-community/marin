@@ -48,10 +48,15 @@ propagate, don't gold-plate.
   `task-states.md`, architecture docs, infra script docstrings, and the
   CoreWeave config tables remain where they are; runbooks **link** to them and
   never restate them.
-- **De-dup, don't just cross-link.** When a runbook owns a procedure, the
-  duplicated prose in OPS.md / skills is replaced by a tight pointer (plus any
-  one-line *guardrail* kept inline). The goal is single-source, per the user's
-  ask — not additive links on top of the old duplication.
+- **Aggressive de-dup (single source).** Every *procedure* lives in exactly one
+  place. When a runbook owns a procedure, the duplicated prose elsewhere is
+  *deleted* and replaced by a one-line pointer — not left in place with a link
+  bolted on. Rationale (user): more duplication = more chances for staleness.
+  The only inline survivors are bare *policy* statements at their canonical home
+  (e.g. the never-restart prohibition in `AGENTS.md`, which links to the runbook
+  for the nuance) and at-a-glance *reference* (command/SQL catalogs), which is
+  not duplication — reference and procedure are split, each in one place,
+  cross-linked.
 - **Troubleshooting matrix stays as an index.** The OPS.md troubleshooting table
   and Known-Bugs list remain at-a-glance indexes; rows that have a runbook become
   one-line pointers into it.
@@ -111,24 +116,39 @@ because each is independently reported across an OPS.md section **and** a skill
   exactly the case where that is wrong. Adds the wedged-container-vs-bad-node
   disambiguation before the destructive step.
 
-Follow-up (repo backlog):
+Remaining situations (#169 — now also in this branch / PR, the user chose to land
+the whole pattern in one PR):
 
-- #169 Propagate the pattern to the remaining situations — `offline-checkpoint-analysis`,
-  `repair-task-attempts-invariant`, `tpu-ci-fleet` (net-new, thin pointer over
-  gold-standard docstrings), `finelog-rollout-rollback` (net-new; finelog has no
-  OPS.md), `run-datakit-ferry-manually`, `stand-up-coreweave-cluster` (carve the
-  procedural half out of `coreweave.md`), and `new-cluster` (the from-scratch
-  bootstrap gap flagged in the `ops-survey` artifact) — plus consolidating the
-  remaining cross-cutting policies (cost/cross-region guardrail to a single 10 GB
-  threshold; RPC-over-SSH posture) into one canonical statement each.
+- `offline-checkpoint-analysis` — copy-the-checkpoint + duckdb-over-GCS; OPS.md's
+  half-stated rule collapses to a pointer.
+- `repair-task-attempts-invariant` — detection-query index for the ghost-co-tenant
+  / orphan-attempt / split-slice family; Known Bug #1 points here.
+- `tpu-ci-fleet` — net-new, thin pointer over the `infra/tpu-ci/` docstrings; adds
+  `infra/tpu-ci/README.md` + an OPS.md CI-Workflows pointer (zero prior coverage).
+- `finelog-rollout-rollback` — net-new (finelog has no OPS.md); `lib/finelog/AGENTS.md`
+  gains an Operations pointer.
+- `run-datakit-ferry-manually` — owns the submit/stop/validate triple;
+  `experiments/ferries/OPS.md` collapses to a pointer (and a stale workflow path
+  `marin-smoke-datakit.yaml` → `marin-canary-datakit-tier{1,2,3}.yaml` fixed).
+- `stand-up-coreweave-cluster` — the guarded walkthrough; `coreweave.md` stays the
+  detailed reference (the runbook points into it) and gets a top pointer.
+- `new-cluster` — the from-scratch bootstrap order (the `ops-survey` #1 gap);
+  `infra/README.md` links it.
+
+Cross-cutting policy consolidation done this PR: the cost/cross-region guardrail
+is now single-sourced with a 10 GB `TransferBudget` ceiling in `/AGENTS.md`, and
+`lib/marin/AGENTS.md` + `experiments/AGENTS.md` defer to it (no more "few MB" vs
+"10 GB" drift). The RPC-over-SSH posture was left as two complementary statements
+(profiling-specific in iris OPS.md; request-new-tools in zephyr OPS.md) — not true
+duplication, so not merged.
 
 ## Cross-cutting policies (single home, referenced everywhere)
 
 | Policy | Duplicated at | Canonical home |
 |---|---|---|
 | Never restart/bounce a cluster without permission | `AGENTS.md:47`, `OPS.md:24`, `restart-iris:10`, `manage-hero-run:16`, `debug`, `babysit-job` | `deploy-controller-fix` runbook owns the nuance; others keep the bare prohibition + link |
-| Never cross-region/internet large data; no STS without Percy-grants | `AGENTS.md:48-49`, `lib/marin/AGENTS.md:22-25`, `experiments/AGENTS.md:5-26` | one cost-guardrail statement, single 10 GB threshold (follow-up #169) |
-| Prefer `iris process` RPC over SSH | `OPS.md:84-85`, `lib/zephyr/OPS.md:117-119` | one posture statement; wedged-worker is the documented exception (follow-up #169) |
+| Never cross-region/internet large data; no STS without Percy-grants | `AGENTS.md`, `lib/marin/AGENTS.md`, `experiments/AGENTS.md` | **Done:** single cost-guardrail with a 10 GB `TransferBudget` ceiling in `/AGENTS.md`; the other two defer to it (killed the "few MB" vs "10 GB" drift) |
+| Prefer `iris process` RPC over SSH | `OPS.md:84-85`, `lib/zephyr/OPS.md:117-119` | Left as-is — two *complementary* statements (profiling-specific vs request-new-tools), not true duplication |
 
 ## Not now
 
