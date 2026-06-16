@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
-import { SLICE_STATE_STYLES, SLICE_BADGE_ORDER, DIVERGING_COLORS } from '@/types/status'
+import { SLICE_STATUS_STYLES, SLICE_STATUS_SUMMARY_ORDER, DIVERGING_COLORS, type SliceStatusStyle } from '@/types/status'
 import type {
   GetAutoscalerStatusResponse,
   GetSchedulerStateResponse,
@@ -22,7 +22,7 @@ import type {
   JobQuery,
 } from '@/types/rpc'
 import { timestampMs, formatRelativeTime, bandDisplayName, bandColor } from '@/utils/formatting'
-import type { SliceJob } from '@/utils/slices'
+import { buildSliceView, type SliceJob, type SliceStatus, type SliceView } from '@/utils/slices'
 import SliceList from '@/components/controller/SliceList.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
@@ -123,6 +123,20 @@ const routing = computed(() => autoscaler.value?.lastRoutingDecision ?? null)
 const unmetEntries = computed(() => routing.value?.unmetEntries ?? [])
 const actions = computed(() => (autoscaler.value?.recentActions ?? []).slice().reverse())
 
+// SliceList wants a worker_id → jobs map; the pool-keyed view has no per-host job
+// join (it lived in the dropped Fleet Overview), so pass empty. Status
+// classification does not use it.
+const NO_WORKER_JOBS: Map<string, SliceJob[]> = new Map()
+
+// One view-model per slice, shared by the summary strip, the per-group badges, and
+// the expanded list — so the row summary can never disagree with the detail.
+const allSliceViews = computed<SliceView[]>(() =>
+  groups.value.flatMap(g => (g.slices ?? []).map(s => buildSliceView(s, NO_WORKER_JOBS, nowMs.value)))
+)
+function countSliceStatus(views: SliceView[], status: SliceStatus): number {
+  return views.reduce((n, v) => n + (v.status === status ? 1 : 0), 0)
+}
+
 const groupIndex = computed(() => {
   const index: Record<string, ScaleGroupStatus> = {}
   for (const g of groups.value) {
@@ -134,8 +148,8 @@ const groupIndex = computed(() => {
 // ===========================================================================
 // Capacity summary metrics
 //
-// All counts read the server-provided rollups (sliceStateCounts,
-// totalSchedulableSlots, totalDegradedSlots) — no client-side per-VM joins.
+// Slice-granular: lifecycle totals from sliceStateCounts, the capacity split
+// from each slice's server-stamped capacity_status.
 // ===========================================================================
 
 const sliceTotals = computed<Record<string, number>>(() => {
@@ -148,26 +162,11 @@ const sliceTotals = computed<Record<string, number>>(() => {
   return totals
 })
 const totalSlices = computed(() => Object.values(sliceTotals.value).reduce((a, b) => a + b, 0))
-const totalIdle = computed(() => {
-  let idle = 0
-  for (const g of groups.value) {
-    for (const slice of g.slices ?? []) {
-      if (slice.idle) idle++
-    }
-  }
-  return idle
-})
-// Count degraded SLICES (not per-worker slots) so this parallels "Idle spare",
-// which is also slice-granular, in the summary strip.
-const totalDegradedSlices = computed(() => {
-  let degraded = 0
-  for (const g of groups.value) {
-    for (const slice of g.slices ?? []) {
-      if ((slice.degradedSlotCount ?? 0) > 0) degraded++
-    }
-  }
-  return degraded
-})
+// Idle spare = healthy slices eligible for scale-down. Degraded = ready slices
+// with missing/unhealthy hosts. Both are slice-granular, straight off the shared
+// capacity classification.
+const totalIdle = computed(() => countSliceStatus(allSliceViews.value, 'idle'))
+const totalDegradedSlices = computed(() => countSliceStatus(allSliceViews.value, 'degraded'))
 const onlineGroups = computed(() =>
   groups.value.filter(g =>
     Object.values(g.sliceStateCounts ?? {}).reduce((a, b) => a + b, 0) > 0
@@ -292,31 +291,58 @@ function isInactiveRow(gs: GroupRoutingStatus): boolean {
 
 function group(name: string): ScaleGroupStatus | undefined { return groupIndex.value[name] }
 function groupFailures(name: string): number { return group(name)?.consecutiveFailures ?? 0 }
-function groupSliceCounts(name: string): Record<string, number> { return group(name)?.sliceStateCounts ?? {} }
 function groupSlices(name: string): SliceInfo[] { return group(name)?.slices ?? [] }
 function groupHasSlices(name: string): boolean { return groupSlices(name).length > 0 }
+function groupSliceCounts(name: string): Record<string, number> { return group(name)?.sliceStateCounts ?? {} }
 function groupDemand(name: string): number { return group(name)?.currentDemand ?? 0 }
-function groupSchedulable(name: string): number { return group(name)?.totalSchedulableSlots ?? 0 }
-function groupDegraded(name: string): number { return group(name)?.totalDegradedSlots ?? 0 }
 
-// Idle slices are split per-slice on their own degraded state: a group may hold
-// both a healthy idle slice (scale-down candidate) and a degraded idle slice
-// (unschedulable), and each gets its own badge.
-function groupIdleDegradedCount(name: string): number {
-  return groupSlices(name).filter(s => s.idle && (s.degradedSlotCount ?? 0) > 0).length
-}
-function groupIdleSpareCount(name: string): number {
-  return groupSlices(name).filter(s => s.idle && (s.degradedSlotCount ?? 0) === 0).length
+// Per-group slice view-models, built from the same buildSliceView the expanded
+// list uses, so the row summary and the detail rows can never disagree.
+function groupSliceViews(name: string): SliceView[] {
+  return groupSlices(name).map(s => buildSliceView(s, NO_WORKER_JOBS, nowMs.value))
 }
 
-// Shared layout/typography for the slice-badge cluster; each badge only adds its
-// own tone colors on top of this base.
-const BADGE_BASE = 'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold border'
+interface SliceStatusCount { status: SliceStatus; count: number; style: SliceStatusStyle }
 
-// `in_use` lives in the shared SLICE_BADGE_ORDER but the server's
-// sliceStateCounts never carries that key (it was a dropped client-side join),
-// so it's filtered out here to keep the rendered list honest.
-const SLICE_LIFECYCLE_BADGES = SLICE_BADGE_ORDER.filter(state => state !== 'in_use')
+// Non-ready lifecycle states have authoritative counts in sliceStateCounts and may
+// have no SliceInfo row — `requesting` in particular counts pending scale-ups that
+// have not been granted a slice handle yet.
+const NON_READY_LIFECYCLE: SliceStatus[] = ['requesting', 'booting', 'initializing', 'failed']
+
+// One slice-granular chip per present status, in the canonical display order.
+// Ready slices are split into capacity statuses from their per-slice views; the
+// non-ready states are read from sliceStateCounts so in-flight scale-ups still
+// show even before they materialize as slices.
+function groupStatusSummary(name: string): SliceStatusCount[] {
+  const counts = new Map<SliceStatus, number>()
+  for (const v of groupSliceViews(name)) {
+    if (v.lifecycle === 'ready') counts.set(v.status, (counts.get(v.status) ?? 0) + 1)
+  }
+  const lifecycle = groupSliceCounts(name)
+  for (const state of NON_READY_LIFECYCLE) {
+    const n = lifecycle[state] ?? 0
+    if (n > 0) counts.set(state, (counts.get(state) ?? 0) + n)
+  }
+  return SLICE_STATUS_SUMMARY_ORDER
+    .filter(s => (counts.get(s) ?? 0) > 0)
+    .map(s => ({ status: s, count: counts.get(s)!, style: SLICE_STATUS_STYLES[s] }))
+}
+
+// Free = healthy slices that can take work now (available + idle). Both counts
+// are slice-granular — a fully-booked healthy slice is `in_use`, not free.
+function groupFreeSlices(name: string): number {
+  return groupSliceViews(name).reduce(
+    (n, v) => n + (v.status === 'available' || v.status === 'idle' ? 1 : 0),
+    0,
+  )
+}
+function groupDegradedSliceCount(name: string): number {
+  return countSliceStatus(groupSliceViews(name), 'degraded')
+}
+
+// Shared layout/typography for the slice-status chips; each chip adds its own
+// tone colors and a status dot on top of this base.
+const BADGE_BASE = 'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-semibold border'
 
 // -- Availability badge --
 
@@ -388,23 +414,23 @@ function groupReasonText(gs: GroupRoutingStatus): string {
 /**
  * Row-level reconciliation note that correlates the two stories that the
  * autoscaler and scheduler used to tell separately:
- *   - free schedulable capacity AND unmet demand → a real placement bug.
- *   - degraded capacity AND unmet demand → workers recovering, not a bug.
+ *   - free slices AND unmet demand → a real placement bug.
+ *   - degraded slices AND unmet demand → workers recovering, not a bug.
  */
 interface ReconcileNote { text: string; classes: string }
 
 function groupReconcileNote(name: string): ReconcileNote | null {
   const demand = groupDemand(name)
   if (demand <= 0) return null
-  if (groupSchedulable(name) > 0) {
+  if (groupFreeSlices(name) > 0) {
     return {
-      text: 'placeable capacity with unmet demand — scheduler not placing on healthy slices',
+      text: 'free slices with unmet demand — scheduler not placing on healthy slices',
       classes: 'text-status-warning',
     }
   }
-  if (groupDegraded(name) > 0) {
+  if (groupDegradedSliceCount(name) > 0) {
     return {
-      text: 'demand blocked on degraded workers — recovery in progress',
+      text: 'demand blocked on degraded slices — recovery in progress',
       classes: 'text-status-orange',
     }
   }
@@ -612,10 +638,6 @@ function sliceIdShort(sliceId?: string): string {
   if (!sliceId) return ''
   return sliceId.length > 24 ? `${sliceId.slice(0, 20)}...` : sliceId
 }
-
-// SliceList wants a worker_id → jobs map; the pool-keyed view does not surface a
-// per-host job join (that lived in the dropped Fleet Overview), so pass empty.
-const NO_WORKER_JOBS: Map<string, SliceJob[]> = new Map()
 </script>
 
 <template>
@@ -780,69 +802,39 @@ const NO_WORKER_JOBS: Map<string, SliceJob[]> = new Map()
 
                   <!-- Slices (expandable) + schedulable/degraded/idle badges -->
                   <td class="px-3 py-2 text-[13px] align-top">
-                    <button
-                      v-if="groupHasSlices(gs.group)"
-                      class="inline-flex items-center gap-1 cursor-pointer hover:opacity-80 flex-wrap"
-                      :aria-expanded="expandedSlices.has(gs.group)"
-                      :aria-label="(expandedSlices.has(gs.group) ? 'Hide' : 'Show') + ' slices for ' + gs.group"
-                      @click="toggleSlices(gs.group)"
+                    <!-- Slice-granular status chips: one per present status, each a
+                         count of SLICES (never per-host), so counts line up with the
+                         expanded list and the total slice count. Expandable into the
+                         per-slice list only when the group has materialized slices;
+                         a group with only in-flight (requesting) scale-ups still shows
+                         its chips but has nothing to drill into yet. -->
+                    <component
+                      :is="groupHasSlices(gs.group) ? 'button' : 'span'"
+                      v-if="groupStatusSummary(gs.group).length"
+                      class="inline-flex items-center gap-1 flex-wrap text-left"
+                      :class="groupHasSlices(gs.group) ? 'cursor-pointer hover:opacity-80' : ''"
+                      :type="groupHasSlices(gs.group) ? 'button' : undefined"
+                      :aria-expanded="groupHasSlices(gs.group) ? expandedSlices.has(gs.group) : undefined"
+                      :aria-label="groupHasSlices(gs.group)
+                        ? (expandedSlices.has(gs.group) ? 'Hide' : 'Show') + ' slices for ' + gs.group
+                        : undefined"
+                      @click="groupHasSlices(gs.group) && toggleSlices(gs.group)"
                     >
-                      <span class="text-[10px] text-text-muted">
+                      <span v-if="groupHasSlices(gs.group)" class="text-[10px] text-text-muted">
                         {{ expandedSlices.has(gs.group) ? '▼' : '▶' }}
                       </span>
                       <span class="inline-flex items-center gap-1 flex-wrap">
-                        <!-- Lifecycle state badges (server sliceStateCounts) -->
-                        <template v-for="state in SLICE_LIFECYCLE_BADGES" :key="state">
-                          <span
-                            v-if="(groupSliceCounts(gs.group)[state] ?? 0) > 0"
-                            :class="[
-                              BADGE_BASE,
-                              SLICE_STATE_STYLES[state].bg,
-                              SLICE_STATE_STYLES[state].text,
-                              SLICE_STATE_STYLES[state].border,
-                            ]"
-                            :title="SLICE_STATE_STYLES[state].label"
-                          >
-                            {{ groupSliceCounts(gs.group)[state] }}{{ SLICE_STATE_STYLES[state].letter }}
-                          </span>
-                        </template>
-
-                        <!-- Schedulable (healthy, server rollup) -->
                         <span
-                          v-if="groupSchedulable(gs.group) > 0"
-                          :class="[BADGE_BASE, 'bg-status-success-bg text-status-success border-status-success-border']"
-                          :title="`${groupSchedulable(gs.group)} schedulable (healthy) slot${groupSchedulable(gs.group) > 1 ? 's' : ''}`"
+                          v-for="b in groupStatusSummary(gs.group)"
+                          :key="b.status"
+                          :class="[BADGE_BASE, b.style.bg, b.style.text, b.style.border]"
+                          :title="`${b.count} ${b.style.label} slice${b.count > 1 ? 's' : ''} — ${b.style.description}`"
                         >
-                          {{ groupSchedulable(gs.group) }} schedulable
-                        </span>
-
-                        <!-- Degraded (unschedulable, server rollup) -->
-                        <span
-                          v-if="groupDegraded(gs.group) > 0"
-                          :class="[BADGE_BASE, 'bg-status-orange-bg text-status-orange border-status-orange-border']"
-                          :title="`${groupDegraded(gs.group)} degraded slot${groupDegraded(gs.group) > 1 ? 's' : ''} — workers unhealthy, cannot schedule`"
-                        >
-                          {{ groupDegraded(gs.group) }} degraded
-                        </span>
-
-                        <!-- Idle slices, split per-slice on their own degraded state.
-                             Both badges can appear if a group holds both kinds. -->
-                        <span
-                          v-if="groupIdleDegradedCount(gs.group) > 0"
-                          :class="[BADGE_BASE, 'bg-status-orange-bg text-status-orange border-status-orange-border']"
-                          :title="`${groupIdleDegradedCount(gs.group)} idle slice${groupIdleDegradedCount(gs.group) > 1 ? 's' : ''} but degraded — cannot be scheduled`"
-                        >
-                          {{ groupIdleDegradedCount(gs.group) }} idle · unschedulable (degraded)
-                        </span>
-                        <span
-                          v-if="groupIdleSpareCount(gs.group) > 0"
-                          :class="[BADGE_BASE, 'bg-status-warning-bg text-status-warning border-status-warning-border']"
-                          :title="`${groupIdleSpareCount(gs.group)} idle slice${groupIdleSpareCount(gs.group) > 1 ? 's' : ''} — eligible for scale-down`"
-                        >
-                          {{ groupIdleSpareCount(gs.group) }} idle
+                          <span class="w-1.5 h-1.5 rounded-full" :class="b.style.dot" />
+                          {{ b.count }} {{ b.style.label }}
                         </span>
                       </span>
-                    </button>
+                    </component>
                     <span v-else class="text-text-muted">-</span>
 
                     <!-- Reconciliation note: free capacity vs unmet demand -->

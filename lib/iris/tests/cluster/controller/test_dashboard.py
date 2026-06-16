@@ -699,8 +699,9 @@ def test_get_autoscaler_status_populates_worker_id_for_unrostered_vm(client_with
         assert vm["workerId"] == vm["vmId"]
 
 
-def test_overlay_worker_usability_rolls_up_slice_and_group_counts():
-    """The overlay tags each VM and rolls schedulable/degraded counts per slice and group."""
+def test_overlay_worker_usability_tags_vms_and_per_slice_degraded_count():
+    """The overlay tags each VM with usability/worker_healthy/running_task_count and
+    records the per-slice count of degraded (reachable-but-failing) hosts."""
     status = vm_pb2.AutoscalerStatus(
         groups=[
             vm_pb2.ScaleGroupStatus(
@@ -708,9 +709,10 @@ def test_overlay_worker_usability_rolls_up_slice_and_group_counts():
                 slices=[
                     vm_pb2.SliceInfo(
                         slice_id="s1",
+                        state="ready",
                         vms=[vm_pb2.VmInfo(vm_id="w-healthy"), vm_pb2.VmInfo(vm_id="w-degraded")],
                     ),
-                    vm_pb2.SliceInfo(slice_id="s2", vms=[vm_pb2.VmInfo(vm_id="w-unrostered")]),
+                    vm_pb2.SliceInfo(slice_id="s2", state="ready", vms=[vm_pb2.VmInfo(vm_id="w-unrostered")]),
                 ],
             )
         ]
@@ -736,9 +738,31 @@ def test_overlay_worker_usability_rolls_up_slice_and_group_counts():
     assert by_id["w-unrostered"].worker_id == "w-unrostered"
     assert by_id["w-unrostered"].usability == ""
 
-    assert (s1.schedulable_slot_count, s1.degraded_slot_count) == (1, 1)
-    assert (s2.schedulable_slot_count, s2.degraded_slot_count) == (0, 0)
-    assert (group.total_schedulable_slots, group.total_degraded_slots) == (1, 1)
+    assert s1.degraded_slot_count == 1
+    assert s2.degraded_slot_count == 0
+
+
+def test_overlay_capacity_status_busy_healthy_slice_is_in_use():
+    """Regression for '40 schedulable' on fully booked slices: a healthy slice that
+    is running tasks is `in_use`, never counted as free/schedulable capacity."""
+    status = vm_pb2.AutoscalerStatus(
+        groups=[
+            vm_pb2.ScaleGroupStatus(
+                name="g",
+                slices=[
+                    vm_pb2.SliceInfo(
+                        slice_id="s",
+                        state="ready",
+                        vms=[vm_pb2.VmInfo(vm_id="a"), vm_pb2.VmInfo(vm_id="b")],
+                    )
+                ],
+            )
+        ]
+    )
+    usability = {"a": WorkerUsability.HEALTHY, "b": WorkerUsability.HEALTHY}
+    _overlay_worker_usability(status, usability, {WorkerId("a"): {"t1"}, WorkerId("b"): {"t2"}})
+
+    assert status.groups[0].slices[0].capacity_status == "in_use"
 
 
 def test_pending_reason_uses_autoscaler_hint_for_scale_up(

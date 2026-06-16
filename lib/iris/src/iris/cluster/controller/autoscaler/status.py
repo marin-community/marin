@@ -6,6 +6,7 @@
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 
 from iris.cluster.controller.autoscaler.models import DemandEntry, RoutingDecision
 from iris.cluster.controller.autoscaler.routing import format_variants
@@ -19,6 +20,40 @@ class PendingHint:
 
     message: str
     is_scaling_up: bool
+
+
+class SliceCapacityStatus(StrEnum):
+    """Placement status of a ready slice (slice-granular). A fully-booked healthy
+    slice is ``IN_USE``, not free; non-ready slices carry no capacity status."""
+
+    AVAILABLE = "available"  # all hosts healthy, no tasks: free to place on now
+    IN_USE = "in_use"  # all hosts healthy, at least one task running
+    IDLE = "idle"  # all hosts healthy, no tasks, idle past scale-down threshold
+    DEGRADED = "degraded"  # no hosts, or any host unhealthy: not a placement target
+
+
+def slice_capacity_status(
+    *,
+    is_ready: bool,
+    host_count: int,
+    healthy_hosts: int,
+    running_tasks: int,
+    idle: bool,
+) -> str:
+    """Classify a ready slice by placement readiness; "" for non-ready slices.
+
+    DEGRADED if it has no hosts or any host is not HEALTHY (it cannot take a gang
+    job even if some hosts are fine); otherwise split by occupancy.
+    """
+    if not is_ready:
+        return ""
+    if host_count == 0 or healthy_hosts < host_count:
+        return SliceCapacityStatus.DEGRADED
+    if running_tasks > 0:
+        return SliceCapacityStatus.IN_USE
+    if idle:
+        return SliceCapacityStatus.IDLE
+    return SliceCapacityStatus.AVAILABLE
 
 
 def _resource_spec_proto(resources: job_pb2.ResourceSpecProto) -> vm_pb2.ResourceSpec:

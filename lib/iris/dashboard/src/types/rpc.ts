@@ -311,9 +311,13 @@ export interface SliceInfo {
    * which is empty until a slice's workers register — a booting slice has none.
    */
   state?: string
-  /** Per-slice usability rollup over `vms`: HEALTHY vs DEGRADED worker counts. */
-  schedulableSlotCount?: number
+  /** Count of DEGRADED (reachable-but-failing) hosts among `vms`, for detail display. */
   degradedSlotCount?: number
+  /**
+   * Server-derived placement status of a ready slice: "available" | "in_use" |
+   * "idle" | "degraded". Empty for non-ready slices.
+   */
+  capacityStatus?: string
 }
 
 export interface ScaleGroupConfig {
@@ -337,9 +341,6 @@ export interface ScaleGroupStatus {
   blockedUntil?: ProtoTimestamp
   scaleUpCooldownUntil?: ProtoTimestamp
   idleThresholdMs?: string
-  /** Group-level usability rollup over all slices' VMs: HEALTHY vs DEGRADED. */
-  totalSchedulableSlots?: number
-  totalDegradedSlots?: number
 }
 
 export interface AutoscalerAction {
