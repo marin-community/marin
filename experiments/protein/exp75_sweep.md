@@ -363,13 +363,28 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   edge; `1e-3` column (w2q, v6e-8) still running to close it (E1's 1e-3 was worse, so 7e-4
   likely the E2 optimum too). All E2 < every E1 — 2 epochs helps. Good-LR ≥7e-4, ≫ #70's 3.5e-4._
 
-- Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
-- Measured drift 1→2: `Δlog lr=…, Δlog wd=…` (E2 3.021 < E1 ~3.06 → 2 epochs helps)
+- Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ — leader `7e-4/wd0.1`=
+  **2.970** but **NOT yet confirmed**: it's on the WD top edge (wd0.1) and its LR-upper
+  neighbor (1e-3, w2q) is still running. **Launched the `wd=0.2` column** (w2r, ~02:44Z:
+  5e-4/7e-4/1e-3 × wd0.2) to bound the WD edge — together with w2q that gives all 4
+  neighbors of 7e-4/wd0.1.
+- Measured drift 1→2: lr* stable at **7e-4** (both waves); wd* nudged **up** 0.05→0.1
+  (opposite the lr↓/wd↓ prior) — top of WD is flat, hence the wd0.2 check.
 - Notes:
 
 ### epochs = 4
-- Extrapolated center: `lr≈…, wd≈…`
-- Grid:
+- **Center = E2 optimum region (lr 7e-4, high WD).** Tight 3×3 launched ~02:43Z (w4):
+  LR {5e-4, 7e-4, 1e-3} × WD {0.05, 0.1, 0.2}, 9 cells, batch on v5p family + v6e-16
+  (center 7e-4/0.1 on v5p-64). Confirms 7e-4 interior (5e-4 below, 1e-3 above) and extends
+  WD to 0.2 (E2 best was on the wd0.1 edge). Expensive: 4-epoch ≈ 17.8k steps/run.
+- Grid (final-step `eval/contacts-v1-val/loss`):
+
+  | wd \ lr | 5e-4 | 7e-4 | 1e-3 |
+  |---|---|---|---|
+  | **0.05** | | | |
+  | **0.1**  | | | |
+  | **0.2**  | | | |
+
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
 - Notes:
 
