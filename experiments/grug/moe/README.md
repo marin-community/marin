@@ -135,25 +135,25 @@ are the baseline runs that ablation experiments compare against.
 
 ### May Recipe (drop-1e18 fit, issue #6074) — current baseline
 
-Reference runs on **v4-32 us-central2 with EP=2**, MuonH optimizer
+Reference runs on **v4-32 us-central2 with EP=1**, MuonH optimizer
 (`muonh_lr` from `heuristic_muonh.MoeMuonHHeuristic.build_muonh_config`), 1pct-noclip
 schedule, no permanent step-interval checkpoints.
 
 | Budget   | Dim    | Layers | bs  | Steps    | Tokens  | Paloma macro | v4-32 tok/s | Runtime | Run |
 |----------|--------|--------|-----|----------|---------|--------------|-------------|---------|-----|
-| 3.82e17  | d512   | 6      | 32  | 10,980   | 1.44e9  | **3.5438**   | 530,704     | 1.0h    | [marin-big-run-moe_may_compute_opt_d512](https://wandb.ai/marin-community/marin_moe/runs/marin-big-run-moe_may_compute_opt_d512) |
-| 2.81e18  | d768   | 8      | 64  | 16,875   | 4.42e9  | **3.2330**   | 357,696     | 4.0h    | [marin-big-run-moe_may_compute_opt_d768](https://wandb.ai/marin-community/marin_moe/runs/marin-big-run-moe_may_compute_opt_d768) |
-| 1.16e19  | d1024  | 11     | 128 | 16,080   | 8.43e9  | **3.0297**   | 255,040     | 11.5h   | [marin-big-run-moe_may_compute_opt_d1024](https://wandb.ai/marin-community/marin_moe/runs/marin-big-run-moe_may_compute_opt_d1024) |
-| 3.46e19  | d1280  | 13     | 256 | 14,325   | 1.50e10 | **2.8963**   | 192,300     | 23.5h   | [marin-big-run-moe_may_compute_opt_d1280](https://wandb.ai/marin-community/marin_moe/runs/marin-big-run-moe_may_compute_opt_d1280) |
+| 3.82e17  | d512   | 6      | 32  | 10,980   | 1.44e9  | **3.5422**   | 433,986     | 1.25h   | [moe_may_compute_opt_d512_ep1](https://wandb.ai/marin-community/marin_moe/runs/moe_may_compute_opt_d512_ep1) |
+| 2.81e18  | d768   | 8      | 64  | 16,875   | 4.42e9  | **3.2273**   | 294,726     | 4.83h   | [moe_may_compute_opt_d768_ep1](https://wandb.ai/marin-community/marin_moe/runs/moe_may_compute_opt_d768_ep1) |
+| 1.16e19  | d1024  | 11     | 128 | 16,080   | 8.43e9  | **3.0195**   | 219,720     | 11.72h  | [moe_may_compute_opt_d1024_ep1](https://wandb.ai/marin-community/marin_moe/runs/moe_may_compute_opt_d1024_ep1) |
+| 3.46e19  | d1280  | 13     | 256 | 14,325   | 1.50e10 | **2.8857**   | 171,912     | 25.68h  | [moe_may_compute_opt_d1280_ep1](https://wandb.ai/marin-community/marin_moe/runs/moe_may_compute_opt_d1280_ep1) |
 
-Fitted scaling law on these 4 cells (`L_inf=1.6` pinned):
+Fitted scaling law on these 4 cells (`L_inf=1.6` pinned, α pinned to the v16
+exponent of 0.0941):
 
 ```
-loss(C) = 1.6 + 88.90 · C^-0.0941
+loss(C) = 1.6 + 88.32 · C^-0.0941
 ```
 
-Same exponent α as the v16 README curve, ~2.12× equal-TPS compute-equivalent
-speedup vs v16 baseline at every budget.
+~2.22× equal-TPS compute-equivalent speedup vs v16 baseline at every budget.
 
 ### v16 baseline (historical reference)
 
