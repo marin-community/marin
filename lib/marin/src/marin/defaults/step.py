@@ -1,40 +1,49 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 import os
+from collections.abc import Sequence
 from datetime import timedelta
 from functools import lru_cache
-from typing import Sequence
 
 import jmp
-
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
-from levanter.adaptor import AdaptorConfig, NoAdaptorConfig, LoraAdaptorConfig
+from levanter.adaptor import AdaptorConfig, LoraAdaptorConfig, NoAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LMMixtureDatasetConfig, PreferenceLmDataConfig, \
-  DEFAULT_LM_DATA_SHUFFLE
+from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, LMMixtureDatasetConfig, PreferenceLmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main.train_dpo import SeparateReferenceConfig, TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
-
 from levanter.models.lm_model import LmConfig
-from levanter.optim import EmaModelAveragingConfig, AdamConfig
+from levanter.optim import AdamConfig, EmaModelAveragingConfig
 from levanter.schedule import BatchSchedule
-from levanter.tracker.wandb import truncate_wandb_run_name, WandbConfig
+from levanter.tracker.wandb import WandbConfig, truncate_wandb_run_name
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
+
 from marin.datakit.download.uncheatable_eval import make_uncheatable_eval_step
-from marin.defaults.config import SimpleTrainConfig, SimpleSFTConfig, SimpleDPOConfig
+from marin.defaults.config import SimpleDPOConfig, SimpleSFTConfig, SimpleTrainConfig
 from marin.defaults.tokenize import default_tokenize
-from marin.evaluation.evaluation_config import EvalTaskConfig, \
-  convert_to_levanter_task_config
+from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
 from marin.execution.executor import unwrap_versioned_value
-from marin.execution.types import InputName, ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize import TokenizerStep, lm_mixture_data_config, \
-  lm_data_config, add_validation_sets_to_mixture, TokenizeConfig
-from marin.processing.tokenize.tokenize import TokenizeConfigBase, HfTokenizeConfig
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm, \
-  TrainDpoOnPodConfig, run_levanter_train_dpo
+from marin.execution.types import ExecutorStep, InputName, this_output_path, versioned
+from marin.processing.tokenize import (
+    TokenizeConfig,
+    TokenizerStep,
+    add_validation_sets_to_mixture,
+    lm_data_config,
+    lm_mixture_data_config,
+)
+from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
+from marin.training.training import (
+    TrainDpoOnPodConfig,
+    TrainLmOnPodConfig,
+    run_levanter_train_dpo,
+    run_levanter_train_lm,
+)
 
 
 def _resolve_hf_export_steps(steps_per_hf_export: int | None, steps_per_export: int | None) -> int | None:
