@@ -23,7 +23,7 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import TERMINAL_JOB_STATES, WorkerId
+from iris.cluster.types import TERMINAL_JOB_STATES, WorkerId, WorkerUsability
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def _find_prunable_worker(health: WorkerHealthTracker, before_ms: int) -> Worker
     on commit of ``remove``), so scanning the tracker is sufficient.
     """
     for worker_id, liveness in health.all().items():
-        if (not liveness.healthy or not liveness.active) and liveness.last_heartbeat_ms < before_ms:
+        if liveness.usability is WorkerUsability.DEAD and liveness.last_heartbeat_ms < before_ms:
             return worker_id
     return None
 

@@ -919,14 +919,21 @@ class ScalingGroup:
         return terminated
 
     def _verify_slice_idle(self, state: SliceState, worker_status_map: WorkerStatusMap) -> bool:
-        """Verify all workers in a slice are idle before termination.
+        """Verify every known worker in a slice is an idle spare before termination.
 
-        Requires at least one known worker to be idle. If no workers are known at all
-        (none in worker_status_map), returns False -- the slice may still be booting.
-        Zombie slices whose workers disappeared are reaped elsewhere: a dead worker
-        process trips the heartbeat timeout (if a worker row exists) or the per-worker
-        /health probe, and a slice whose backing allocation vanished entirely (no worker
-        rows, nothing to probe) trips the no-worker counter in Autoscaler.probe_health.
+        Gates on ``is_idle_spare`` (idle AND schedulable), not bare ``is_idle``: a
+        slice holding a ``DEGRADED`` worker is reported quiet (it runs no tasks) but
+        is NOT reclaimable spare — the scheduler cannot place onto it, so reclaiming
+        it as free capacity is exactly the autoscaler/scheduler disagreement we are
+        fixing. Such a slice is retained here and torn down by the health threshold
+        path instead.
+
+        Requires at least one known worker. If no workers are known at all (none in
+        worker_status_map), returns False -- the slice may still be booting. Zombie
+        slices whose workers disappeared are reaped elsewhere: a dead worker process
+        trips the heartbeat timeout (if a worker row exists) or the per-worker /health
+        probe, and a slice whose backing allocation vanished entirely (no worker rows,
+        nothing to probe) trips the no-worker counter in Autoscaler.probe_health.
         """
         has_known_worker = False
         for worker_id in state.worker_ids:
@@ -934,7 +941,7 @@ class ScalingGroup:
             if status is None:
                 continue
             has_known_worker = True
-            if not status.is_idle:
+            if not status.is_idle_spare:
                 return False
         return has_known_worker
 

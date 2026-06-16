@@ -85,6 +85,7 @@ from iris.cluster.types import (
     TaskAttempt,
     UserBudgetDefaults,
     WorkerId,
+    WorkerUsability,
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
@@ -633,6 +634,45 @@ def _query_from_list_jobs_request(
             "narrow the result set with state_filter/name_filter/parent_job_id instead of paging deeper.",
         )
     return query
+
+
+def _overlay_worker_usability(
+    status: vm_pb2.AutoscalerStatus,
+    usability_by_id: dict[str, WorkerUsability],
+    running: dict[WorkerId, set],
+) -> None:
+    """Overlay per-VM usability + per-slice/per-group usability rollups in place.
+
+    ``worker_id`` and ``running_task_count`` are intrinsic to the VM and always
+    set; usability/worker_healthy are overlaid only when the worker is present in
+    the liveness roster (``usability_by_id``). A VM running tasks but momentarily
+    absent from the roster keeps its worker_id and task count, with usability left
+    empty (unknown) rather than mislabelled.
+    """
+    for group in status.groups:
+        group_schedulable = 0
+        group_degraded = 0
+        for slice_info in group.slices:
+            slice_schedulable = 0
+            slice_degraded = 0
+            for vm in slice_info.vms:
+                vm.worker_id = vm.vm_id
+                vm.running_task_count = len(running.get(WorkerId(vm.vm_id), set()))
+                usability = usability_by_id.get(vm.vm_id)
+                if usability is None:
+                    continue
+                vm.usability = str(usability)
+                vm.worker_healthy = usability is not WorkerUsability.DEAD
+                if usability is WorkerUsability.HEALTHY:
+                    slice_schedulable += 1
+                elif usability is WorkerUsability.DEGRADED:
+                    slice_degraded += 1
+            slice_info.schedulable_slot_count = slice_schedulable
+            slice_info.degraded_slot_count = slice_degraded
+            group_schedulable += slice_schedulable
+            group_degraded += slice_degraded
+        group.total_schedulable_slots = group_schedulable
+        group.total_degraded_slots = group_degraded
 
 
 def _worker_roster(db: ControllerDB) -> list[tuple[Any, dict]]:
@@ -1786,8 +1826,8 @@ class ControllerServiceImpl:
 
         workers = _worker_roster(self._db)
         liveness_by_id = self._health.liveness_many(w.worker_id for w, _attrs in workers)
-        worker_id_to_health: dict[str, bool] = {
-            str(w.worker_id): liveness_by_id[w.worker_id].healthy for w, _attrs in workers
+        usability_by_id: dict[str, WorkerUsability] = {
+            str(w.worker_id): liveness_by_id[w.worker_id].usability for w, _attrs in workers
         }
 
         # Look up running tasks for every VM in the status. The vm_id IS the
@@ -1804,17 +1844,7 @@ class ControllerServiceImpl:
         else:
             running = {}
 
-        for group in status.groups:
-            for slice_info in group.slices:
-                for vm in slice_info.vms:
-                    # worker_id and running_task_count are intrinsic to the VM
-                    # and always populated; health is overlaid only when the
-                    # worker is present in the liveness roster.
-                    vm.worker_id = vm.vm_id
-                    vm.running_task_count = len(running.get(WorkerId(vm.vm_id), set()))
-                    healthy = worker_id_to_health.get(vm.vm_id)
-                    if healthy is not None:
-                        vm.worker_healthy = healthy
+        _overlay_worker_usability(status, usability_by_id, running)
 
         return controller_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 

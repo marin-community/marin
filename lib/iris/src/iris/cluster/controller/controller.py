@@ -88,6 +88,7 @@ from iris.cluster.types import (
     WorkerId,
     WorkerStatus,
     WorkerStatusMap,
+    WorkerUsability,
 )
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
@@ -1471,12 +1472,15 @@ class Controller:
         read transaction.
         """
         result: WorkerStatusMap = {}
-        worker_ids = {wid for wid, l in self._health.all().items() if l.active}
+        liveness = self._health.all()
+        usability = {wid: l.usability for wid, l in liveness.items()}
+        worker_ids = {wid for wid, u in usability.items() if u is not WorkerUsability.DEAD}
         running_by_worker = reads.running_tasks_by_worker(tx, worker_ids)
         for wid in worker_ids:
             result[wid] = WorkerStatus(
                 worker_id=wid,
                 running_task_ids=frozenset(tid.to_wire() for tid in running_by_worker.get(wid, set())),
+                usability=usability[wid],
             )
         return result
 

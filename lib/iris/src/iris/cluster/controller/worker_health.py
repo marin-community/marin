@@ -33,7 +33,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from iris.cluster.types import WorkerId
+from iris.cluster.types import WorkerId, WorkerUsability
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,21 @@ class WorkerLiveness:
     consecutive_failures: int = 0
     last_heartbeat_ms: int = 0
     build_failures: int = 0
+
+    @property
+    def usability(self) -> WorkerUsability:
+        """Classify how the control loop may use this worker (the single classifier).
+
+        ``build_failures`` and the termination thresholds deliberately play no
+        part here: they govern teardown via :meth:`WorkerHealthTracker.apply`,
+        not placement/reconcile membership, so leaving them out keeps every
+        projection an exact match for the predicate it replaces.
+        """
+        if not self.active or not self.healthy:
+            return WorkerUsability.DEAD
+        if self.consecutive_failures > 0:
+            return WorkerUsability.DEGRADED
+        return WorkerUsability.HEALTHY
 
 
 class WorkerHealthTracker:

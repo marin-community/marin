@@ -30,7 +30,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     prepare_slice_config,
     slice_state_to_proto,
 )
-from iris.cluster.types import WorkerStatus
+from iris.cluster.types import WorkerStatus, WorkerUsability
 from iris.rpc import config_pb2, vm_pb2
 from rigging.timing import Duration, Timestamp
 
@@ -564,6 +564,60 @@ class TestScalingGroupIdleTracking:
 
         assert len(scaled_down) == 1
         assert group.slice_count() == 1  # One slice was terminated
+
+    def test_scale_down_retains_degraded_idle_slice(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """A slice whose worker is idle but DEGRADED is NOT reclaimed as spare.
+
+        Regression for the autoscaler/scheduler disagreement: a degraded worker
+        runs no tasks (so the slice reads "idle") but the scheduler cannot place
+        onto it, so scaling it down as free capacity is wrong. Only the HEALTHY
+        idle slice is reclaimed; the degraded one is retained for the health
+        teardown path.
+        """
+        discovered = [
+            make_fake_slice_handle("slice-001", all_ready=True),
+            make_fake_slice_handle("slice-002", all_ready=True),
+        ]
+        platform = make_mock_platform(slices_to_discover=discovered)
+        group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(1000))
+        group.reconcile()
+        _mark_discovered_ready(group, discovered)
+
+        wid_healthy = _get_worker_id(group.get_slice("slice-001"))
+        wid_degraded = _get_worker_id(group.get_slice("slice-002"))
+
+        # Both slices idle (no running tasks), but slice-002's worker is DEGRADED.
+        status_map = {
+            wid_healthy: WorkerStatus(worker_id=wid_healthy, running_task_ids=frozenset()),
+            wid_degraded: WorkerStatus(
+                worker_id=wid_degraded, running_task_ids=frozenset(), usability=WorkerUsability.DEGRADED
+            ),
+        }
+        group.update_slice_activity(status_map, Timestamp.from_ms(0))
+
+        # Target 1: the autoscaler wants to shed one of the two idle slices.
+        scaled_down = group.scale_down_if_idle(status_map, target_capacity=1, timestamp=Timestamp.from_ms(10_000))
+
+        # Only the healthy slice is reclaimed; the degraded one is retained.
+        assert [h.slice_id for h in scaled_down] == ["slice-001"]
+        assert group.get_slice("slice-002") is not None
+
+    def test_scale_down_retains_all_degraded_idle_slices(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """When every idle slice over target is DEGRADED, nothing is reclaimed."""
+        discovered = [make_fake_slice_handle("slice-001", all_ready=True)]
+        platform = make_mock_platform(slices_to_discover=discovered)
+        group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(1000))
+        group.reconcile()
+        _mark_discovered_ready(group, discovered)
+
+        wid = _get_worker_id(group.get_slice("slice-001"))
+        status_map = {wid: WorkerStatus(worker_id=wid, running_task_ids=frozenset(), usability=WorkerUsability.DEGRADED)}
+        group.update_slice_activity(status_map, Timestamp.from_ms(0))
+
+        scaled_down = group.scale_down_if_idle(status_map, target_capacity=0, timestamp=Timestamp.from_ms(10_000))
+
+        assert scaled_down == []
+        assert group.get_slice("slice-001") is not None
 
     def test_scale_down_if_idle_respects_target_capacity(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """scale_down_if_idle does nothing when at or below target capacity."""

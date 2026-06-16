@@ -19,6 +19,7 @@ import sys
 import urllib.parse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, NewType
 
@@ -374,16 +375,57 @@ class UserBudgetDefaults:
     max_band: int = job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
+class WorkerUsability(StrEnum):
+    """How the control loop may use a worker, derived from its liveness.
+
+    The single classification that replaces the scattered ``healthy``/``active``/
+    ``consecutive_failures`` predicates. It is computed in exactly one place —
+    the ``WorkerLiveness.usability`` property — and read everywhere else.
+
+    Projections (each exactly preserves the predicate it replaces):
+
+    - scheduling placement targets ``HEALTHY`` only;
+    - the reconcile pass targets ``HEALTHY | DEGRADED`` (it keeps probing a
+      mid-failure worker so it can recover or cross the teardown threshold);
+    - autoscaler idle-spare accounting counts ``HEALTHY`` only, so a ``DEGRADED``
+      idle worker is never reclaimed as free capacity.
+    """
+
+    HEALTHY = "healthy"
+    """Active, healthy, no consecutive failures — a placement target."""
+
+    DEGRADED = "degraded"
+    """Active and healthy but accumulating failures — reconciled, NOT placeable,
+    and NOT counted as idle spare. Torn down by the health threshold path, not
+    by capacity scale-down."""
+
+    DEAD = "dead"
+    """Not active or not healthy — excluded from reconcile, scheduling, and
+    idle tracking."""
+
+
 @dataclass(frozen=True)
 class WorkerStatus:
     """Worker status keyed by worker_id for autoscaler idle tracking."""
 
     worker_id: str
     running_task_ids: frozenset[str]
+    usability: WorkerUsability = WorkerUsability.HEALTHY
 
     @property
     def is_idle(self) -> bool:
         return len(self.running_task_ids) == 0
+
+    @property
+    def is_idle_spare(self) -> bool:
+        """Idle AND schedulable — safe to reclaim via scale-down.
+
+        A ``DEGRADED`` idle worker is not a spare: counting it as reclaimable
+        headroom is exactly what let the autoscaler call an unschedulable slice
+        "idle — eligible for scale-down" while the scheduler was still waiting
+        for that pool.
+        """
+        return self.is_idle and self.usability is WorkerUsability.HEALTHY
 
 
 WorkerStatusMap = dict[str, WorkerStatus]
