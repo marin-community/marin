@@ -303,6 +303,9 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   _**COMPLETE 15/15.** `1e-3` is worse than 7e-4 at every WD (3.087/3.162/3.152 vs
   3.084/3.046/3.052), so the LR top edge is closed at 7e-4. LR×WD interaction: optimum is
   3.5e-4 at wd0.02 but 7e-4 at wd0.05/0.1._
+  _E2 update: the 1e-3 column (w2q) is now COMPLETE — 2.996/2.989/2.989 across wd0.02/0.05/0.1,
+  worse than the 7e-4 column (2.980/2.979/2.970) at every WD, so the E2 LR top edge is also
+  closed at 7e-4 (same as E1)._
 
 - **Confirmed optimum: `lr=7e-4, wd=0.05`, loss=3.046; neighbors all worse? ✅** — strictly
   beats all four axis neighbors: `3.5e-4/0.05`=3.070, `1e-3/0.05`=3.162 (LR), `7e-4/0.02`=
@@ -355,7 +358,7 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   | wd \ lr | 1.75e-4 | 2.5e-4 | 3.5e-4 | 5e-4 | 7e-4 | 1e-3 |
   |---|---|---|---|---|---|---|
   | **0.02** | 3.047 | 3.011 | 3.001 | 2.986 | 2.980 | 2.996 |
-  | **0.05** | 3.037 | 3.021 | 3.000 | 2.982 | 2.979 | _(run)_ |
+  | **0.05** | 3.037 | 3.021 | 3.000 | 2.982 | 2.979 | 2.989 |
   | **0.1**  | 3.041 | 3.016 | 2.997 | 2.986 | **2.970** | 2.989 |
 
   _**Base 15/15 complete** (~17:15Z). Monotone in LR (7e-4 best ~2.97–2.98 > 5e-4 > … >
