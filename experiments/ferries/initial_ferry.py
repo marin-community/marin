@@ -6,10 +6,11 @@
 import math
 
 from fray.cluster import ResourceConfig
+from marin.defaults import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
-from experiments.defaults import SimpleTrainConfig, default_train
+from experiments.defaults import default_train
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.midtraining_datasets import (
     megamath_token_counts,

@@ -7,9 +7,12 @@ from datetime import timedelta
 from functools import lru_cache
 
 import jmp
+from fray import ResourceConfig
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.adaptor import AdaptorConfig, LoraAdaptorConfig, NoAdaptorConfig
+from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, LMMixtureDatasetConfig, PreferenceLmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
@@ -17,8 +20,8 @@ from levanter.main.train_dpo import SeparateReferenceConfig, TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
-from levanter.optim import AdamConfig, EmaModelAveragingConfig
-from levanter.schedule import BatchSchedule
+from levanter.optim import AdamConfig, EmaModelAveragingConfig, OptimizerConfig
+from levanter.schedule import BatchSchedule, IntSchedule
 from levanter.tracker.wandb import WandbConfig, truncate_wandb_run_name
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
@@ -28,7 +31,6 @@ from experiments.evals.task_configs import CORE_TASKS
 from experiments.paloma import paloma_tokenized
 from experiments.simple_dpo_config import SimpleDPOConfig
 from experiments.simple_sft_config import SimpleSFTConfig
-from experiments.simple_train_config import SimpleTrainConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
 from marin.execution.executor import unwrap_versioned_value
 from marin.execution.types import ExecutorStep, InputName, this_output_path, versioned
@@ -81,6 +83,102 @@ def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> di
     validation_sets = dict(paloma_tokenized(base_path=base_path, tokenizer=tokenizer))
     validation_sets.update(uncheatable_eval_tokenized(base_path=base_path, tokenizer=tokenizer))
     return validation_sets
+
+
+@dataclasses.dataclass(frozen=True)
+class SimpleTrainConfig:
+    resources: ResourceConfig
+    train_batch_size: int | IntSchedule
+    """
+    The batch size for training. If an IntSchedule is provided, the batch size will be
+    varied according to the schedule.
+    """
+    num_train_steps: int
+    learning_rate: float
+    train_seq_len: int | None = None
+    data_seed: int | None = None
+    weight_decay: float | None = None
+    beta1: float | None = None
+    beta2: float | None = None
+    epsilon: float | None = None
+    max_grad_norm: float | None = None
+    warmup: float | None = None
+    decay: float | None = None
+    rewarmup: float | None = None
+    """
+    The rewarmup parameter is used to re-warmup the learning rate after a decay cycles
+    """
+    lr_schedule: str | None = None
+    min_lr_ratio: float | None = None
+    cycle_length: int | list[int] | None = None
+    z_loss_weight: float | None = None
+    ema_beta: float | None = None
+    """exponential moving average beta"""
+    skip_bad_steps: bool = False
+    """If True, skips steps where the loss or grad is significantly higher than the historical mean."""
+
+    steps_per_eval: int | None = None
+    """how often to run validation losses"""
+    steps_per_export: int | None = None
+    """How often to keep a permanent checkpoint. None (default) keeps only the final
+    checkpoint; rolling temporary checkpoints are still written for resumption."""
+    steps_per_task_eval: int | None = None
+    """how often to run task evaluations"""
+    steps_per_hf_export: int | None = None
+    """None means match steps_per_export, -1 disables"""
+    hf_generation_eos_token_ids: list[int] | None = None
+    """EOS token IDs to write to generation_config.json. None means no generation config."""
+    per_device_parallelism: int = -1
+    """How many examples to process in parallel on each device. -1 (default) means
+    train_batch_size/num_devices (no gradient accumulation). Set to a positive value
+    to enable gradient accumulation."""
+    per_device_eval_parallelism: int | None = None
+    """Number of examples to evaluate in parallel on each device"""
+    max_eval_batches: int | None = None
+    """Maximum number of batches to evaluate on. None means all batches"""
+
+    initialize_from_checkpoint_path: str | None = None
+    """If set, the training will resume from the checkpoint at this path. Otherwise, training will start from scratch."""
+    initialize_from_hf: str | None = None
+    """If set, the training will start from the hf model at this path. Otherwise, training will start from scratch."""
+    reset_data_loader_on_init: bool = True
+    """Pairs with initialize_from_checkpoint_path. If True, initialize_from_checkpoint_path will reset the data loader
+    so that it starts from step 0. Otherwise, it will resume from the step in the checkpoint."""
+
+    allow_partial_checkpoint: bool = False
+    """
+    Allow loading partial checkpoints. This is useful for converting training to EMA, e.g.
+    """
+
+    int8: bool = False
+    """Int8 (quantized) training in Levanter."""
+
+    pad_tokenizer_to_match_model: bool = False
+    """If True, pad the tokenizer's vocab to match the model's vocab size by adding dummy tokens.
+    Useful when the model checkpoint has a larger vocab than the tokenizer (e.g., Qwen models
+    pad their vocab to be divisible by 4 for TPU efficiency)."""
+
+    optimizer_config: OptimizerConfig | None = None
+    """Optimizer configuration to use. If not set, Adam will be used."""
+
+    watch: WatchConfig = dataclasses.field(default_factory=WatchConfig)
+    """Config for watching gradients, parameters, etc. Default is to log norms of gradients and parameters."""
+
+    profiler: ProfilerConfig = dataclasses.field(default_factory=ProfilerConfig)
+    """JAX profiler settings for training."""
+
+    explicit_mesh_axes: bool = False
+    """If True, build the device mesh with `AxisType.Explicit` axes.
+
+    Required for models that call `jax.sharding.reshard(..., PartitionSpec(...))`.
+    """
+
+    tensor_parallel_size: int = 1
+    """Size of the model (tensor parallel) axis. >1 shards model weights and activations
+    across multiple devices. Useful when batch_size < num_chips."""
+
+    env_vars: dict[str, str] | None = None
+    """Environment variables to pass to the training task."""
 
 
 def _build_train_lm_config(

@@ -24,7 +24,7 @@ import dataclasses
 from fray.cluster import ResourceConfig
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 from levanter.schedule import ScheduleStep
-from marin.defaults import default_train
+from marin.defaults import SimpleTrainConfig, default_train
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
@@ -34,7 +34,6 @@ from experiments.pretraining_datasets.dclm import (
     dclm_components_llama3,
     dclm_mixture_config_llama3,
 )
-from experiments.simple_train_config import SimpleTrainConfig
 
 # data
 

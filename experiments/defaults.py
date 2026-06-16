@@ -13,14 +13,21 @@ from functools import lru_cache
 from typing import Any
 
 import levanter.main.train_lm as levanter_train_lm
-from fray import ResourceConfig, current_client
+from fray import current_client
+from fray.cluster import ResourceConfig
 from fray.types import Entrypoint, JobRequest, create_environment
 from levanter.data.text import (
     LMMixtureDatasetConfig,
 )
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.lm_model import LmConfig
-from marin.defaults import _build_train_lm_config, _prepare_data_config, _validate_train_length, default_train
+from marin.defaults import (
+    SimpleTrainConfig,
+    _build_train_lm_config,
+    _prepare_data_config,
+    _validate_train_length,
+    default_train,
+)
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import compute_output_path, materialize, resolve_local_placeholders
 from marin.execution.remote import _sanitize_job_name
@@ -38,7 +45,6 @@ from experiments.evals.exp1600_uncheatable_evals import (
 )
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.paloma import paloma_raw_validation_sets
-from experiments.simple_train_config import SimpleTrainConfig
 
 logger = logging.getLogger(__name__)
 

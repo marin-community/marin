@@ -3,11 +3,10 @@
 
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.defaults import default_train
+from marin.defaults import SimpleTrainConfig, default_train
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
-from experiments.defaults import SimpleTrainConfig
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import LlamaConfig

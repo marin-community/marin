@@ -8,10 +8,9 @@ import dataclasses
 
 from fray.cluster import ResourceConfig
 from levanter.optim import MuonHConfig
-from marin.defaults import default_train
+from marin.defaults import SimpleTrainConfig, default_train
 from marin.execution.executor import executor_main
 
-from experiments.defaults import SimpleTrainConfig
 from experiments.ferries.initial_ferry import (
     BATCH_SIZE_1B,
     BATCH_SIZE_8B,
