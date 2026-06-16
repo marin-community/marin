@@ -23,7 +23,6 @@ from marin.evaluation.perplexity_gap import (
 from marin.execution.executor import (
     Executor,
     _get_info_path,
-    _is_relative_path,
     collect_dependencies_and_version,
     compute_output_path,
     instantiate_config,
@@ -141,7 +140,7 @@ def test_executor():
     cleanup_log(log)
 
 
-def test_relative_prefix_resolves_to_single_directory(monkeypatch, tmp_path):
+def test_relative_prefix_resolves_to_single_directory(tmp_path):
     """Regression for #6334.
 
     With a relative executor ``prefix`` (e.g. ``--prefix ../marin-prefix``) the
@@ -151,12 +150,7 @@ def test_relative_prefix_resolves_to_single_directory(monkeypatch, tmp_path):
     which would split a step's status/lock/dependency paths from where its
     ``fn`` actually writes data.
     """
-    # A MARIN_PREFIX distinct from cwd: a spurious re-prefix would surface here.
-    marin_prefix_env = str(tmp_path / "marin-prefix-env")
-    monkeypatch.setenv("MARIN_PREFIX", marin_prefix_env)
-
     rel_prefix = os.path.relpath(str(tmp_path / "work"))
-    assert _is_relative_path(rel_prefix)
 
     def fn(config: MyConfig | None):
         return None
@@ -174,13 +168,12 @@ def test_relative_prefix_resolves_to_single_directory(monkeypatch, tmp_path):
 
     for step in (a, b):
         spec = specs[step.name]
-        # Status/lock/info path (StepSpec.output_path) must match where fn writes data.
-        assert os.path.realpath(spec.output_path) == os.path.realpath(executor.output_paths[step])
-        # ...and must not be re-prefixed against MARIN_PREFIX.
-        assert marin_prefix_env not in spec.output_path
+        # Status/lock/info path (StepSpec.output_path) must be the resolved path
+        # where fn writes data, not a second-prefixed variant.
+        assert spec.output_path == os.path.abspath(executor.output_paths[step])
 
     # The dependency stub (b -> a) must resolve to a's real directory.
-    assert os.path.realpath(specs["b"].dep_paths[0]) == os.path.realpath(executor.output_paths[a])
+    assert specs["b"].dep_paths[0] == os.path.abspath(executor.output_paths[a])
 
 
 def test_status_file_reads_legacy_format(tmp_path):
