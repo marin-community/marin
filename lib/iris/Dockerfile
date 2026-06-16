@@ -80,6 +80,9 @@ ENV PATH="/app/.venv/bin:$PATH"
 # member's pyproject.toml (metadata only) — but only iris+rigging install. The
 # first sync uses `--no-install-workspace` to install just the external deps
 # (cached across source edits); the second builds iris+rigging from source.
+# Metadata alone suffices even for marin-haliax's `dynamic = ["version"]`
+# (sourced from src/haliax/__about__.py): under --frozen, uv takes the version
+# from the lock and never invokes a non-installed member's build backend.
 COPY uv.lock pyproject.toml ./
 COPY lib/iris/pyproject.toml ./lib/iris/pyproject.toml
 COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
