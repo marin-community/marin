@@ -378,11 +378,8 @@ class UserBudgetDefaults:
 class WorkerUsability(StrEnum):
     """How the control loop may use a worker, derived from its liveness.
 
-    The single classification that replaces the scattered ``healthy``/``active``/
-    ``consecutive_failures`` predicates. It is computed in exactly one place —
-    the ``WorkerLiveness.usability`` property — and read everywhere else.
-
-    Projections (each exactly preserves the predicate it replaces):
+    Consumers project this verdict rather than re-deriving it from the raw
+    ``healthy``/``active``/``consecutive_failures`` fields:
 
     - scheduling placement targets ``HEALTHY`` only;
     - the reconcile pass targets ``HEALTHY | DEGRADED`` (it keeps probing a

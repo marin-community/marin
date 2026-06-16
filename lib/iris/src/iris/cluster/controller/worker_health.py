@@ -78,12 +78,12 @@ class WorkerLiveness:
 
     @property
     def usability(self) -> WorkerUsability:
-        """Classify how the control loop may use this worker (the single classifier).
+        """Classify how the control loop may use this worker.
 
-        ``build_failures`` and the termination thresholds deliberately play no
-        part here: they govern teardown via :meth:`WorkerHealthTracker.apply`,
-        not placement/reconcile membership, so leaving them out keeps every
-        projection an exact match for the predicate it replaces.
+        ``build_failures`` and the termination thresholds are intentionally not
+        consulted: they drive teardown (via ``apply``), not placement/reconcile
+        membership. A worker over a threshold is still ``DEGRADED`` here until it
+        is reaped, so the reconcile pass keeps probing it.
         """
         if not self.active or not self.healthy:
             return WorkerUsability.DEAD

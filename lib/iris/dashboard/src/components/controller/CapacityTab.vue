@@ -157,9 +157,6 @@ const totalIdle = computed(() => {
   }
   return idle
 })
-const totalSchedulable = computed(() =>
-  groups.value.reduce((n, g) => n + (g.totalSchedulableSlots ?? 0), 0)
-)
 // Count degraded SLICES (not per-worker slots) so this parallels "Idle spare",
 // which is also slice-granular, in the summary strip.
 const totalDegradedSlices = computed(() => {
