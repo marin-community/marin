@@ -250,11 +250,11 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
 
     mp = marin_prefix()
 
-    # An explicit source_prefix fully determines the backend and region; it must
-    # win over the ambient marin prefix / VM metadata. Otherwise an R2
-    # source_prefix on a GCP launcher (gs:// MARIN_PREFIX) would resolve to a GCS
-    # temp bucket the R2-only job can't write. Only when source_prefix is absent
-    # do we fall back to the marin prefix (and metadata for the GCS region).
+    # An explicit source_prefix fully determines the backend and region, taking
+    # precedence over the ambient marin prefix and VM metadata so that an R2
+    # source_prefix yields an R2 temp path even on a GCP launcher. Only when
+    # source_prefix is absent do we derive the location from the marin prefix
+    # (and VM metadata for the GCS region).
     if source_prefix is not None:
         region = region_from_prefix(source_prefix)
         s3_bucket = _s3_bucket_from_prefix(source_prefix)

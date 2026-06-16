@@ -247,12 +247,12 @@ def _build_step_from_env() -> ExecutorStep:
     profiler_num_steps = env_int("CANARY_PROFILER_NUM_STEPS", 25)
 
     step_name = f"{CANARY_OUTPUT_SUBDIR}/{name}-{run_id}"
-    # When CANARY_OUTPUT_TTL_DAYS is set (the CoreWeave daily canary), redirect the
-    # per-run training output to the region-local TTL temp bucket so the bucket
-    # lifecycle rules sweep it after N days instead of a manual prune step. The
-    # SlimPajama tokenize cache is a separate dependency step, so it stays under
-    # MARIN_PREFIX regardless. validate_canary_metrics.py imports this same step,
-    # so the override travels with it and both resolve the identical path.
+    # When CANARY_OUTPUT_TTL_DAYS is set (the CoreWeave daily canary), the per-run
+    # training output goes to the region-local TTL temp bucket so the bucket
+    # lifecycle rules sweep it after N days. The SlimPajama tokenize cache is a
+    # separate dependency step, so it stays under MARIN_PREFIX. validate_canary_metrics.py
+    # imports this same step, so the override travels with it and both resolve the
+    # identical path.
     output_ttl_days = env_int("CANARY_OUTPUT_TTL_DAYS", 0)
     override_output_path = marin_temp_bucket(ttl_days=output_ttl_days, prefix=step_name) if output_ttl_days else None
 
