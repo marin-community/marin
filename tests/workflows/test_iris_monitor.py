@@ -88,50 +88,13 @@ def test_wait_for_child_job_times_out_when_no_child_starts(monkeypatch: pytest.M
         )
 
 
-def test_wait_for_child_job_ignores_reservation_holder(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A RUNNING ``:reservation:`` holder must not satisfy the queue-wait timeout.
-
-    Models the canary failure mode where ``--reserve v5p-8`` records a reservation (holder
-    reaches RUNNING in seconds) but the CPU orchestrator parent never leaves the queue. The
-    held reservation should not mask the stuck parent, so the timeout must still fire.
-    """
-    parent_id = "/runner/parent"
-    holder_id = f"{parent_id}/:reservation:"
-    polls = [
-        [_job(parent_id, "JOB_STATE_PENDING"), _job(holder_id, "JOB_STATE_RUNNING")],
-        [_job(parent_id, "JOB_STATE_PENDING"), _job(holder_id, "JOB_STATE_RUNNING")],
-    ]
-    fake = _FakeClient(polls)
-
-    @contextmanager
-    def fake_open(**_kwargs):
-        yield fake
-
-    monkeypatch.setattr(iris_monitor, "_open_iris_client", fake_open)
-    monkeypatch.setattr(iris_monitor.time, "sleep", lambda _s: None)
-    times = iter([0.0, 100.0, 5000.0])
-    monkeypatch.setattr(iris_monitor.time, "monotonic", lambda: next(times))
-
-    with pytest.raises(TimeoutError, match="No child reached RUNNING"):
-        iris_monitor.wait_for_child_job(
-            parent_id,
-            iris_config=None,
-            controller_url=None,
-            poll_interval=1,
-            child_wait_timeout=3000,
-            repo_root=iris_monitor._REPO_ROOT,
-        )
-
-
 def test_wait_for_child_job_real_child_running_drops_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A real training child reaching RUNNING drops the queue timeout even alongside a holder."""
+    """A training child reaching RUNNING drops the queue timeout."""
     parent_id = "/runner/parent"
-    holder_id = f"{parent_id}/:reservation:"
     child_id = f"{parent_id}/grug-train-canary-tpu-1"
-    holder = _job(holder_id, "JOB_STATE_RUNNING")
     polls = [
-        [_job(parent_id, "JOB_STATE_RUNNING"), holder, _job(child_id, "JOB_STATE_RUNNING")],
-        [_job(parent_id, "JOB_STATE_SUCCEEDED"), holder, _job(child_id, "JOB_STATE_SUCCEEDED")],
+        [_job(parent_id, "JOB_STATE_RUNNING"), _job(child_id, "JOB_STATE_RUNNING")],
+        [_job(parent_id, "JOB_STATE_SUCCEEDED"), _job(child_id, "JOB_STATE_SUCCEEDED")],
     ]
     fake = _FakeClient(polls)
 

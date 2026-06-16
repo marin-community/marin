@@ -6,16 +6,18 @@
 import difflib
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from rigging.timing import Timestamp
 
 from iris.cluster.constraints import (
+    AttributeValue,
     Constraint,
     ConstraintIndex,
     DeviceType,
     PlacementRequirements,
+    availability_key,
     extract_placement_requirements,
     get_device_type_enum,
     routing_constraints,
@@ -428,16 +430,37 @@ def _is_tier_blocked(group: ScalingGroup, pool_blocked: dict[str, int]) -> bool:
     return tier >= min_blocked
 
 
+def _enriched_group_attrs(
+    group: ScalingGroup, zone_capabilities: Mapping[str, frozenset[str]]
+) -> dict[str, AttributeValue]:
+    """A group's routing attributes plus its zone's ``availability:<variant>`` markers.
+
+    A soft ``availability:<variant>`` hint on a job's demand ranks groups whose
+    zone can provision that variant ahead of groups elsewhere, so a CPU
+    orchestrator's CPU demand is steered toward a zone where its accelerator can
+    later be found.
+    """
+    attrs = group.to_attributes()
+    for variant in zone_capabilities.get(group.zone or "", ()):
+        attrs[availability_key(variant)] = AttributeValue("true")
+    return attrs
+
+
 def route_demand(
     groups: list[ScalingGroup],
     demand_entries: list[DemandEntry],
     timestamp: Timestamp | None = None,
+    zone_capabilities: Mapping[str, frozenset[str]] | None = None,
 ) -> RoutingDecision:
     """Route demand to groups using two-phase routing with committed budgets."""
 
     ts = timestamp or Timestamp.now()
+    zone_caps = zone_capabilities or {}
     sorted_groups = sorted(groups, key=lambda group: group.config.priority or 100)
-    group_attrs = {group.name: group.to_attributes() for group in sorted_groups}
+    # Enrich once and reuse for BOTH hard filtering (the index) and soft ranking,
+    # since the soft-rank sort reads this map directly rather than recomputing
+    # group.to_attributes() (which would omit the injected availability markers).
+    group_attrs = {group.name: _enriched_group_attrs(group, zone_caps) for group in sorted_groups}
     group_index = ConstraintIndex.build(group_attrs)
 
     routed: dict[str, list[DemandEntry]] = {}
@@ -486,7 +509,7 @@ def route_demand(
             matching_groups = sorted(
                 matching_groups,
                 key=lambda group: (
-                    -soft_constraint_score(group.to_attributes(), soft_routing_cs),
+                    -soft_constraint_score(group_attrs[group.name], soft_routing_cs),
                     group.config.priority or 100,
                 ),
             )

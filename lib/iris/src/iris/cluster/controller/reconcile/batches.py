@@ -84,10 +84,9 @@ def _cascade_to_children(
     job_id: JobName,
     now_ms: int,
     reason: str,
-    exclude_reservation_holders: bool = False,
 ) -> None:
     """Kill descendant jobs (not the job itself) on a parent terminal/preempt."""
-    descendants = overlay.job_descendants(job_id, exclude_holders=exclude_reservation_holders)
+    descendants = overlay.job_descendants(job_id)
     for child_job_id in descendants:
         _kill_non_terminal_tasks(overlay, child_job_id, reason, now_ms)
         overlay.merge_cascade_kill(
@@ -354,7 +353,7 @@ class ReconcileState:
         for job_id, reason in self.pending_child_cascades.items():
             if job_id in cascaded_jobs:
                 continue
-            _cascade_to_children(self.overlay, job_id, now_ms, reason, exclude_reservation_holders=True)
+            _cascade_to_children(self.overlay, job_id, now_ms, reason)
         return cascaded_jobs
 
     def _note(self, job_id: JobName) -> None:
@@ -464,18 +463,12 @@ class ReconcileState:
         if effective_state is None or effective_state not in ACTIVE_TASK_STATES:
             return None
         prior_state = effective_state
-        is_reservation_holder = task_row.is_reservation_holder
-        if is_reservation_holder:
-            new_task_state = job_pb2.TASK_STATE_PENDING
-            preemption_count = task_row.preemption_count
-        else:
-            new_task_state, preemption_count = task.resolve_task_failure_state(
-                prior_state,
-                task_row.preemption_count,
-                task_row.max_retries_preemption,
-                job_pb2.TASK_STATE_WORKER_FAILED,
-            )
-        holder_preemption_count = 0 if is_reservation_holder else preemption_count
+        new_task_state, preemption_count = task.resolve_task_failure_state(
+            prior_state,
+            task_row.preemption_count,
+            task_row.max_retries_preemption,
+            job_pb2.TASK_STATE_WORKER_FAILED,
+        )
         # The worker is gone, so the attempt is truly done: finalize it (stamp
         # finished_at) rather than leaving it for a status update that will never
         # arrive.
@@ -488,7 +481,7 @@ class ReconcileState:
             now_ms,
             stamp_attempt_finished=True,
             attempt_state=job_pb2.TASK_STATE_WORKER_FAILED,
-            preemption_count=holder_preemption_count,
+            preemption_count=preemption_count,
         )
         parent_job_id, _ = task_id.require_task()
         return task.TransitionOutcome(
@@ -496,7 +489,7 @@ class ReconcileState:
             job_id=parent_job_id,
             prior_state=prior_state,
             new_task_state=new_task_state,
-            cascade_to_peers=not is_reservation_holder and task_row.has_coscheduling,
+            cascade_to_peers=task_row.has_coscheduling,
         )
 
     # ------------------------------------------------------------------

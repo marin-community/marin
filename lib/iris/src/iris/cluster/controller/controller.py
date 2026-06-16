@@ -68,14 +68,10 @@ from iris.cluster.controller.reconcile.worker import ReconcileRow
 from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.scheduling.policy import (
     build_scheduling_context,
-    read_reservation_claims,
-    refresh_reservation_claims,
-    refresh_reservation_claims_in_tx,
 )
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
-from iris.cluster.controller.schema import ReservationClaim
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
@@ -143,13 +139,11 @@ class _TickInputs:
     """DB-less per-tick inputs the control driver assembles in one read txn.
 
     Only the sections for the phases due this tick are populated; the rest stay
-    at their empty defaults. ``ctx``/``claims`` feed the schedule phase,
-    ``control`` the reconcile phase, ``worker_status_map`` the autoscale phase.
+    at their empty defaults. ``ctx`` feeds the schedule phase, ``control`` the
+    reconcile phase, ``worker_status_map`` the autoscale phase.
     """
 
     ctx: SchedulingContext | None = None
-    claims: dict[WorkerId, ReservationClaim] = field(default_factory=dict)
-    claims_changed: bool = False
     control: "reads.ControlSnapshot" = field(
         default_factory=lambda: reads.ControlSnapshot(worker_addresses={}, reconcile_rows=[], timeout_rows=[])
     )
@@ -811,9 +805,8 @@ class Controller:
 
         A placement-owning (``CLUSTER_VIEW``) backend's reconcile snapshot comes
         from the dispatch drain (a write), so it is built first, outside the read
-        txn; the worker-daemon reconcile snapshot, the scheduling context +
-        reservation claims, and the autoscale worker-status map all share the one
-        read snapshot.
+        txn; the worker-daemon reconcile snapshot, the scheduling context, and the
+        autoscale worker-status map all share the one read snapshot.
         """
         drained_control: reads.ControlSnapshot | None = None
         if run_reconcile and self._backend_drains_dispatch:
@@ -824,15 +817,11 @@ class Controller:
         # dashboard read for a connection.
         with self._db.control_read_snapshot() as snap:
             if run_schedule:
-                claims, changed = refresh_reservation_claims_in_tx(snap, self._health, self._worker_attrs)
-                inputs.claims = claims
-                inputs.claims_changed = changed
                 inputs.ctx = build_scheduling_context(
                     snap,
                     self._health,
                     self._worker_attrs,
                     self._config.user_budget_defaults,
-                    claims,
                 )
             if run_reconcile and not self._backend_drains_dispatch:
                 control = reads.load_control_snapshot(snap, self._health, scan_timeouts=scan_timeouts)
@@ -863,7 +852,6 @@ class Controller:
         return self._task_backend.schedule(
             ScheduleInput(
                 context=ctx,
-                claims=inputs.claims,
                 max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
                 trace=trace,
             )
@@ -881,24 +869,21 @@ class Controller:
     ) -> ControllerEffects | None:
         """Apply this tick's decisions and observations in one write transaction.
 
-        Order within the txn: reservation claims, schedule decisions, reconcile
-        observations, execution-timeout finalizations, autoscaler state. Returns
-        the reconcile kernel effects (consumed by the health fold) or None when the
-        backend reported no worker results. A no-op tick opens no transaction.
+        Order within the txn: schedule decisions, reconcile observations,
+        execution-timeout finalizations, autoscaler state. Returns the reconcile
+        kernel effects (consumed by the health fold) or None when the backend
+        reported no worker results. A no-op tick opens no transaction.
         """
-        has_claims = inputs.claims_changed
         has_sched = sched_result is not None and bool(
             sched_result.unschedulable or sched_result.assignments or sched_result.preemptions
         )
         has_recon = recon_result is not None and bool(recon_result.worker_results or recon_result.updates)
         has_state = auto_result is not None and auto_result.autoscaler_state is not None
-        if not (has_claims or has_sched or has_recon or timeout_decisions or has_state):
+        if not (has_sched or has_recon or timeout_decisions or has_state):
             return None
 
         reconcile_effects: ControllerEffects | None = None
         with self._db.transaction() as cur:
-            if has_claims:
-                writes.replace_reservation_claims(cur, inputs.claims)
             if sched_result is not None:
                 self._commit_schedule_decisions(cur, sched_result, now)
             if recon_result is not None:
@@ -937,14 +922,14 @@ class Controller:
         schedule via ``_schedule_phase`` and commits it in the shared end-of-tick
         transaction instead.
 
-        The controller owns only the I/O: it refreshes reservation claims and
-        builds the scheduling context in a single DB snapshot (which folds in the
-        running-task band/value the preemption pass may evict), hands the
-        resulting DB-less snapshot to ``backend.schedule`` for the pure placement
-        decision, then commits the returned assignments, preemptions, and
-        unschedulable marks. A worker-daemon backend runs the full
-        gates → order → taints → preference → find_assignments → preemption
-        pipeline; a cluster backend returns an empty result (Kueue schedules).
+        The controller owns only the I/O: it builds the scheduling context in a
+        single DB snapshot (which folds in the running-task band/value the
+        preemption pass may evict), hands the resulting DB-less snapshot to
+        ``backend.schedule`` for the pure placement decision, then commits the
+        returned assignments, preemptions, and unschedulable marks. A
+        worker-daemon backend runs the full gates → order → find_assignments →
+        preemption pipeline; a cluster backend returns an empty result (Kueue
+        schedules).
 
         No lock is needed since the control driver is single-threaded. Every DB
         access is serialized by ControllerDB._lock with multi-statement
@@ -953,23 +938,20 @@ class Controller:
         self._scheduling_round += 1
         trace = self._scheduling_round % _SCHEDULING_TRACE_INTERVAL == 0
 
-        claims = self._refresh_reservation_claims()
         with self._db.control_read_snapshot() as snap:
             ctx = build_scheduling_context(
                 snap,
                 self._health,
                 self._worker_attrs,
                 self._config.user_budget_defaults,
-                claims,
             )
 
         if trace:
             logger.info(
-                "[TRACE round=%d] Phase 0: %d pending tasks, %d workers, %d reservation claims",
+                "[TRACE round=%d] Phase 0: %d pending tasks, %d workers",
                 self._scheduling_round,
                 len(ctx.pending_task_rows),
                 len(ctx.workers),
-                len(claims),
             )
 
         if not ctx.pending_task_rows:
@@ -980,7 +962,6 @@ class Controller:
         result = self._task_backend.schedule(
             ScheduleInput(
                 context=ctx,
-                claims=claims,
                 max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
                 trace=trace,
             )
@@ -1008,15 +989,6 @@ class Controller:
             )
             return SchedulingOutcome.ASSIGNMENTS_MADE
         return SchedulingOutcome.NO_ASSIGNMENTS
-
-    def _refresh_reservation_claims(self) -> dict[WorkerId, ReservationClaim]:
-        """Read, clean up, and refresh reservation claims. Returns updated claims."""
-        return refresh_reservation_claims(
-            self._db,
-            self._health,
-            self._worker_attrs,
-            persist=not self._config.dry_run,
-        )
 
     def _commit_assignments(self, assignments: list[Assignment]) -> None:
         """Persist scheduler decisions to ``tasks.state = ASSIGNED`` rows.
@@ -1139,7 +1111,7 @@ class Controller:
         """Build per-job ``RunTaskRequest`` templates for the ASSIGNED reconcile rows.
 
         ``run_request_template`` can return ``None`` for jobs the scheduler hasn't
-        cached yet (e.g. reservation holders); those are dropped from the map.
+        cached yet; those are dropped from the map.
         """
         templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
         for row in reconcile_rows:
@@ -1349,11 +1321,6 @@ class Controller:
     @property
     def url(self) -> str:
         return f"http://{self.external_host}:{self.port}"
-
-    @property
-    def reservation_claims(self) -> dict[WorkerId, ReservationClaim]:
-        """Current reservation claims, keyed by worker ID."""
-        return read_reservation_claims(self._db)
 
     @property
     def autoscaler(self) -> Autoscaler | None:

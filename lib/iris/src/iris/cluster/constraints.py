@@ -326,6 +326,61 @@ def zone_constraint(zone: str) -> Constraint:
     return Constraint.create(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value=zone)
 
 
+AVAILABILITY_PREFIX = "availability:"
+
+
+def availability_key(variant: str) -> str:
+    """Composite attribute key marking that a zone can provision ``variant``.
+
+    The variant is lowercased to match the canonical ``device-variant`` string
+    that scaling groups and workers already carry (e.g. ``availability:v5p-8``,
+    ``availability:h100``).
+    """
+    return f"{AVAILABILITY_PREFIX}{variant.strip().lower()}"
+
+
+def is_availability_key(key: str) -> bool:
+    """Whether ``key`` is an ``availability:<variant>`` zone-capability marker."""
+    return key.startswith(AVAILABILITY_PREFIX)
+
+
+def availability_constraint(variant: str, *, soft: bool = True) -> Constraint:
+    """Prefer (soft, default) or require (hard) a zone that can provision ``variant``.
+
+    A zone-level placement hint, not a per-worker requirement: the scheduler and
+    autoscaler inject ``availability:<variant>`` markers onto workers/groups whose
+    zone can provision the accelerator (inferred from the autoscaler), and this
+    EXISTS constraint ranks (soft) or filters (hard) candidates by that marker.
+    Accelerators only — CPU/RAM/disk never produce availability markers.
+    """
+    mode = job_pb2.CONSTRAINT_MODE_PREFERRED if soft else job_pb2.CONSTRAINT_MODE_REQUIRED
+    return Constraint.create(key=availability_key(variant), op=ConstraintOp.EXISTS, mode=mode)
+
+
+def availability_constraints_from_reservation(reservation: job_pb2.ReservationConfig) -> list[Constraint]:
+    """Map a deprecated ``ReservationConfig`` to soft ``availability:<variant>`` hints.
+
+    Back-compat shim for pre-availability clients (see job.proto): each reservation
+    entry's accelerator variant becomes one soft availability constraint. Entries
+    with no accelerator device contribute nothing (availability is accelerators
+    only). Deduplicated by key so duplicate entries collapse to a single hint.
+    """
+    constraints: list[Constraint] = []
+    seen: set[str] = set()
+    for entry in reservation.entries:
+        if not entry.resources.HasField("device"):
+            continue
+        variant = get_device_variant(entry.resources.device)
+        if not variant or variant == "auto":
+            continue
+        key = availability_key(variant)
+        if key in seen:
+            continue
+        seen.add(key)
+        constraints.append(availability_constraint(variant))
+    return constraints
+
+
 def region_constraint(regions: list[str]) -> Constraint:
     """Constraint requiring workers to be in one of the given regions.
 
@@ -949,6 +1004,11 @@ def routing_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:
     result = []
     for c in constraints:
         if is_cpu_device_type_constraint(c):
+            continue
+        if is_availability_key(c.key):
+            # Dynamic zone-capability marker: not in CONSTRAINT_REGISTRY but routes
+            # to scaling groups (a group's zone determines its availability markers).
+            result.append(c)
             continue
         desc = CONSTRAINT_REGISTRY.get(c.key)
         if desc is None or not desc.routing:

@@ -43,7 +43,9 @@ job.wait()
 ```
 
 For accelerator jobs, request the accelerator on the task itself with `--tpu ...` or `--gpu ...`.
-`--reserve ...` only holds capacity for scheduling and does not attach accelerator devices to the task container.
+`--reserve <accel>` is a best-effort hint that steers the job toward a zone where `<accel>` can be
+provisioned; it does not attach accelerator devices (use `--tpu`/`--gpu` for that) and does not
+guarantee or hold capacity.
 
 ## Architecture
 

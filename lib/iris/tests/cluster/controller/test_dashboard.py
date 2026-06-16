@@ -138,11 +138,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
                     (tasks_table.c.task_id == task_attempts_table.c.task_id)
                     & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
                 )
-                .join(jobs_table, tasks_table.c.job_id == jobs_table.c.job_id)
-                .where(
-                    tasks_table.c.state.in_([job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED]),
-                    jobs_table.c.is_reservation_holder == False,  # noqa: E712
-                )
+                .where(tasks_table.c.state.in_([job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED]))
                 .group_by(task_attempts_table.c.worker_id)
                 .order_by(task_attempts_table.c.worker_id.asc())
             ).all()
@@ -161,8 +157,6 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
             user_spend={},
             user_budget_limits={},
             requested_bands={},
-            reserved_job_ids=frozenset(),
-            reservation_entry_counts={},
             user_budget_defaults=UserBudgetDefaults(),
         )
 

@@ -85,8 +85,11 @@ message Controller {
     // removed and replaced with the new submission.
     bool fail_if_exists = 22;
 
-    // Resource reservation. When set, the autoscaler pre-provisions capacity
-    // and the reserving job is held pending until the reservation is satisfied.
+    // DEPRECATED, back-compat only. Reservations were replaced by the soft
+    // availability:<variant> constraint. Current clients leave this empty; when a
+    // pre-availability client sets it, the server converts each entry into a soft
+    // availability constraint at ingestion and discards the field. Scheduled for
+    // removal once stragglers have upgraded — do not add new uses.
     iris.job.ReservationConfig reservation = 30;
 
     iris.job.JobPreemptionPolicy preemption_policy = 31;

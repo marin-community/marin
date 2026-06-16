@@ -87,26 +87,11 @@ def constraints_from_json(constraints_json: str | None) -> list[Constraint]:
     ]
 
 
-def reservation_to_json(request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
-    """Serialize the reservation field of a LaunchJobRequest to JSON.  Returns None if absent."""
-    if not request.HasField("reservation"):
-        return None
-    return json.dumps(json_format.MessageToDict(request.reservation, **_TO_DICT_OPTS))
-
-
 def entrypoint_to_json(ep: job_pb2.RuntimeEntrypoint) -> str:
     """Serialize a RuntimeEntrypoint, excluding inline workdir_files (stored separately)."""
     d = json_format.MessageToDict(ep, **_TO_DICT_OPTS)
     d.pop("workdir_files", None)
     return json.dumps(d)
-
-
-def reservation_entries_from_json(reservation_json: str | None) -> list[job_pb2.ReservationEntry]:
-    """Deserialize reservation JSON back to a list of ReservationEntry protos."""
-    if not reservation_json:
-        return []
-    data = json.loads(reservation_json)
-    return [json_format.ParseDict(e, job_pb2.ReservationEntry()) for e in data.get("entries", [])]
 
 
 class DeviceCounts(NamedTuple):
@@ -192,10 +177,6 @@ def reconstruct_launch_job_request(job) -> controller_pb2.Controller.LaunchJobRe
 
     if job.timeout_ms is not None and job.timeout_ms > 0:
         req.timeout.milliseconds = job.timeout_ms
-
-    if job.reservation_json:
-        for entry in reservation_entries_from_json(job.reservation_json):
-            req.reservation.entries.append(entry)
 
     return req
 

@@ -102,8 +102,7 @@ def run_request_template(
     """Return a cached per-job ``RunTaskRequest`` template.
 
     Per-attempt fields (``task_id``, ``attempt_id``) are stamped onto a
-    copy at fan-out time. Returns ``None`` for jobs that have no
-    worker-bound dispatch (e.g. reservation holders, missing rows).
+    copy at fan-out time. Returns ``None`` for jobs with no row.
     """
     wire = job_id.to_wire()
     cached = cache.get(wire)
@@ -111,7 +110,7 @@ def run_request_template(
         return cached
 
     job = reads.get_job_detail(snap, job_id)
-    if job is None or job.is_reservation_holder:
+    if job is None:
         return None
 
     resources = resource_spec_from_scalars(
@@ -179,21 +178,13 @@ def _dispatch_query(
     """Fetch :class:`PendingDispatchRow`s for the direct-provider drain.
 
     All drain queries select ``PENDING_DISPATCH_COLS`` over the
-    tasks⋈jobs⋈job_config join and exclude reservation holders; callers
-    supply the distinct state / coscheduling predicates plus optional
-    ordering and limit.
+    tasks⋈jobs⋈job_config join; callers supply the distinct state /
+    coscheduling predicates plus optional ordering and limit.
     """
     dispatch_join = tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
         job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
     )
-    stmt = (
-        select(*PENDING_DISPATCH_COLS)
-        .select_from(dispatch_join)
-        .where(
-            jobs_table.c.is_reservation_holder == False,  # noqa: E712
-            *predicates,
-        )
-    )
+    stmt = select(*PENDING_DISPATCH_COLS).select_from(dispatch_join).where(*predicates)
     if order_by_job_id:
         stmt = stmt.order_by(tasks_table.c.job_id)
     if limit is not None:

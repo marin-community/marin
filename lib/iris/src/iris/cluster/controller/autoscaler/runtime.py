@@ -20,7 +20,7 @@ The run_once() flow splits into two phases:
 import logging
 import urllib.error
 import urllib.request
-from collections import deque
+from collections import defaultdict, deque
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -51,7 +51,11 @@ from iris.cluster.controller.autoscaler.recovery import (
     restore_autoscaler_state,
 )
 from iris.cluster.controller.autoscaler.routing import job_feasibility, route_demand
-from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build_worker_config_for_group
+from iris.cluster.controller.autoscaler.scaling_group import (
+    GroupAvailability,
+    ScalingGroup,
+    build_worker_config_for_group,
+)
 from iris.cluster.controller.autoscaler.state import AutoscalerState, GroupPersist, SlicePersist
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
@@ -330,7 +334,9 @@ class Autoscaler:
         """
         ts = timestamp or Timestamp.now()
 
-        routing_decision = route_demand(list(self._groups.values()), demand_entries, ts)
+        routing_decision = route_demand(
+            list(self._groups.values()), demand_entries, ts, zone_capabilities=self.zone_capabilities(ts)
+        )
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
         # Build cached views eagerly here so dashboard/service RPCs never pay
         # the conversion cost on the hot path (#4844).
@@ -364,6 +370,32 @@ class Autoscaler:
                 logger.debug("Scale group %s: scale up blocked", group.name)
 
         return scale_plan.decisions()
+
+    def zone_capabilities(self, timestamp: Timestamp | None = None) -> dict[str, frozenset[str]]:
+        """Map zone -> {device_variant} the cluster is configured to provision there.
+
+        Used by routing (to rank scaling groups) and by the scheduler (to inject
+        ``availability:<variant>`` markers onto workers) so a soft availability
+        hint steers a job toward a zone where its accelerator can be found.
+
+        A variant counts for a zone if a configured accelerator group for it
+        exists there and is not hard-quota-blocked (QUOTA_EXCEEDED); transient
+        states (AT_MAX_SLICES, BACKOFF, REQUESTING) still count, since the zone
+        *can* provide it once capacity frees up. CPU-only groups carry no variant
+        and contribute nothing — availability markers are accelerators only.
+        """
+        ts = timestamp or Timestamp.now()
+        caps: dict[str, set[str]] = defaultdict(set)
+        for group in self._groups.values():
+            zone = group.zone
+            resources = group.resources
+            variant = resources.device_variant if resources is not None else ""
+            if zone is None or not variant:
+                continue
+            if group.availability(ts).status is GroupAvailability.QUOTA_EXCEEDED:
+                continue
+            caps[zone].add(variant.lower())
+        return {zone: frozenset(variants) for zone, variants in caps.items()}
 
     def execute(
         self,

@@ -55,7 +55,6 @@ from iris.cluster.controller.reconcile.worker import WorkerReconcileResult
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
-    jobs_table,
     task_attempts_table,
     tasks_table,
     worker_attributes_table,
@@ -103,7 +102,7 @@ class FakeProvider:
     def __init__(self) -> None:
         # Real Iris scheduler: ``ctrl._run_scheduling`` routes the decision
         # through ``schedule`` now, so the fake must run the real pipeline for
-        # scheduler/preemption/reservation tests to exercise placement.
+        # scheduler/preemption tests to exercise placement.
         self._scheduler = Scheduler()
 
     def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
@@ -473,7 +472,7 @@ def schedulable_tasks(state: ControllerTestState) -> list:
 
 
 def building_counts(state: ControllerTestState) -> dict[WorkerId, int]:
-    """Count tasks in BUILDING/ASSIGNED state per worker, excluding reservation holders."""
+    """Count tasks in BUILDING/ASSIGNED state per worker."""
     with state._db.read_snapshot() as tx:
         rows = tx.execute(
             select(task_attempts_table.c.worker_id, func.count().label("c"))
@@ -482,11 +481,7 @@ def building_counts(state: ControllerTestState) -> dict[WorkerId, int]:
                 (tasks_table.c.task_id == task_attempts_table.c.task_id)
                 & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
             )
-            .join(jobs_table, tasks_table.c.job_id == jobs_table.c.job_id)
-            .where(
-                tasks_table.c.state.in_([job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED]),
-                jobs_table.c.is_reservation_holder == False,  # noqa: E712
-            )
+            .where(tasks_table.c.state.in_([job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED]))
             .group_by(task_attempts_table.c.worker_id)
             .order_by(task_attempts_table.c.worker_id.asc())
         ).all()
@@ -564,7 +559,7 @@ def submit_job(
 
 # =============================================================================
 # Shared test helpers (deduplicated from test_transitions, test_scheduler,
-# test_service, test_dashboard, test_reservation)
+# test_service, test_dashboard)
 # =============================================================================
 
 

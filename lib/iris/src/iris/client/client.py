@@ -45,7 +45,6 @@ from iris.cluster.types import (
     EnvironmentSpec,
     JobName,
     Namespace,
-    ReservationEntry,
     ResourceSpec,
     TaskAttempt,
     adjust_tpu_replicas,
@@ -602,7 +601,6 @@ class IrisClient:
         max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
         user: str | None = None,
-        reservation: list[ReservationEntry] | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
@@ -625,7 +623,6 @@ class IrisClient:
             max_retries_preemption: Max retries per task on preemption (default: 100)
             timeout: Per-task timeout (None = no timeout)
             user: Optional explicit user override for top-level jobs
-            reservation: Resource entries to pre-provision before scheduling (None = no reservation)
             task_image: Optional override for the task container image. When None,
                 the worker uses its cluster-configured default_task_image. Used for
                 jobs that need a custom runtime (e.g. an image with runsc/skopeo
@@ -688,8 +685,8 @@ class IrisClient:
             # Always inherit the parent's region unless the child already has
             # an explicit region constraint.  This applies even when the caller
             # passes constraints=[] to clear other inherited constraints —
-            # region pinning ensures children stay co-located with the
-            # reservation's claimed workers.
+            # region pinning keeps a child co-located with the worker that
+            # launched it (where its in-region data and resources live).
             if job_info and job_info.worker_region and not any(c.key == WellKnownAttribute.REGION for c in constraints):
                 inherited_region = region_constraint([job_info.worker_region])
                 constraints = [*constraints, inherited_region]
@@ -699,11 +696,6 @@ class IrisClient:
         environment_proto = environment.to_proto() if environment else None
         constraints_proto = [c.to_proto() for c in constraints or []]
         coscheduling_proto = coscheduling.to_proto() if coscheduling else None
-        reservation_proto = None
-        if reservation:
-            reservation_proto = job_pb2.ReservationConfig(
-                entries=[e.to_proto() for e in reservation],
-            )
 
         try:
             canonical_id = self._cluster_client.submit_job(
@@ -719,7 +711,6 @@ class IrisClient:
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
                 timeout=timeout,
-                reservation=reservation_proto,
                 preemption_policy=preemption_policy,
                 existing_job_policy=existing_job_policy,
                 task_image=task_image,
