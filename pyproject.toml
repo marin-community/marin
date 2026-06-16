@@ -28,9 +28,13 @@ dependencies = [
     # any earlier dev of the same Z; bump the floor to whichever is newest.
     # Published by .github/workflows/dupekit-release-wheels.yaml.
     "marin-dupekit >= 0.1.2.dev202606060824",
-    # finelog carries an in-process server ext (finelog._native) the controller
-    # starts; `scripts/rust_mode.py dev` swaps in an editable source locally.
-    "marin-finelog >= 0.2.9",
+    # marin-finelog is the pure-Python client. The iris controller also starts
+    # an in-process native log server (module `finelog_server`); that ships as
+    # the separate marin-finelog-server wheel (maturin, lib/finelog/rust), which
+    # the controller depends on explicitly (see lib/iris) and reaches us
+    # transitively via marin-iris — the pure client does not depend on it.
+    # `scripts/rust_mode.py dev` swaps both to local path sources.
+    "marin-finelog >= 0.2.10",
 ]
 
 [tool.uv]
@@ -113,9 +117,10 @@ conflicts = [
 ]
 
 [tool.uv.workspace]
-# marin-finelog is intentionally NOT a member: it is a native (maturin) package
-# consumed as a pre-built platform wheel (see [project] dependencies and the
-# RUST-DEV SOURCES block below), mirroring marin-dupekit.
+# lib/finelog is intentionally NOT a member: marin-finelog and its native
+# companion marin-finelog-server (maturin, lib/finelog/rust) are consumed as
+# published wheels (see [project] dependencies and the RUST-DEV SOURCES block
+# below), mirroring marin-dupekit.
 members = [
     "lib/iris",
     "lib/fray",

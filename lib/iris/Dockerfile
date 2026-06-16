@@ -69,14 +69,15 @@ FROM base AS deps
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Rigging is a workspace-local dep not on PyPI. finelog is a native (maturin)
-# package consumed as a pre-built wheel from the index — its wheel bundles the
-# in-process server ext (finelog._native) the controller starts, so it is NOT a
-# workspace member here (slim base has no Rust toolchain). `prerelease =
-# "explicit"` allows a prerelease only when a specifier asks for one (iris's
-# `marin-finelog >= 0.2.0.dev0`). Plain `"allow"` also pulls unrelated
-# prereleases — it grabbed httpx 1.0.dev, which drops `httpx.Limits` and crashes
-# the controller — because this reduced workspace lacks the full lock's httpx<1
+# Rigging is a workspace-local dep not on PyPI. finelog is consumed as
+# pre-built wheels from the index — the pure marin-finelog plus the native
+# marin-finelog-server (the in-process server ext, finelog_server, the
+# controller starts and depends on explicitly) — so neither is a workspace
+# member here (slim base has no Rust toolchain). `prerelease = "explicit"`
+# allows a prerelease only when a specifier asks for one; with iris's finelog
+# floors at stable, none do. Plain `"allow"` also pulls unrelated prereleases —
+# it grabbed httpx 1.0.dev, which drops `httpx.Limits` and crashes the
+# controller — because this reduced workspace lacks the full lock's httpx<1
 # bound. Copy only metadata first so source changes don't bust the dep cache.
 COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
 COPY lib/iris/pyproject.toml ./lib/iris/

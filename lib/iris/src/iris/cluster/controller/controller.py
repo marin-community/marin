@@ -246,7 +246,7 @@ class ControllerConfig:
     log_service_address: str | None = None
     """Address of an externally-hosted log server (e.g. http://localhost:10001).
     When set, the controller connects to the existing server. When None, the
-    Controller starts an in-process native ``finelog._native`` server on a free
+    Controller starts an in-process native ``finelog_server`` server on a free
     port (used by tests and local-mode runs). In production this address is
     sourced from `endpoints["/system/log-server"]` and passed in here by the
     daemon entrypoint."""
@@ -353,9 +353,9 @@ class Controller:
         # The log server is always accessed via RPC. In production the
         # controller's main() starts a subprocess; in tests/local mode the
         # Controller spins up an in-process native finelog server
-        # (finelog._native). After the server is running, all access goes
+        # (finelog_server). After the server is running, all access goes
         # through RPC clients — no branching on hosting mode.
-        self._log_server: Any = None  # finelog._native.EmbeddedServer when started locally
+        self._log_server: Any = None  # finelog_server.EmbeddedServer when started locally
 
         if config.log_service_address:
             self._log_service_address = config.log_service_address
@@ -517,7 +517,7 @@ class Controller:
 
         Used as a fallback when ``cluster_config.endpoints`` does not declare
         ``/system/log-server`` (and in tests). Backed by the native
-        ``finelog._native`` server (the same engine the ``finelog-server`` binary
+        ``finelog_server`` module (the same engine the ``finelog-server`` binary
         runs), storing segments under ``local_state_dir/log-server`` so written
         logs are queryable: the engine's in-memory mode spawns no maintenance
         task, so its RAM buffer never flushes to a readable segment — only a
