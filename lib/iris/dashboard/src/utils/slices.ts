@@ -18,8 +18,13 @@ import { timestampMs } from '@/utils/formatting'
 
 export type SliceLifecycle = 'requesting' | 'booting' | 'initializing' | 'ready' | 'failed'
 
-/** Display status: lifecycle plus the orthogonal in-use / idle overlay on ready slices. */
-export type SliceStatus = SliceLifecycle | 'in_use' | 'idle'
+/**
+ * Display status: the lifecycle state for non-ready slices, or the server-derived
+ * capacity status for ready ones. `available` / `in_use` / `idle` / `degraded`
+ * come straight from `SliceInfo.capacity_status`, so the per-group summary, the
+ * slice list, and the legend all agree. Every count over these is slice-granular.
+ */
+export type SliceStatus = SliceLifecycle | 'available' | 'in_use' | 'idle' | 'degraded'
 
 /** One job's occupancy on a slice, aggregated across the slice's hosts. */
 export interface SliceJob {
@@ -39,6 +44,8 @@ export interface SliceView {
   ageMs: number | null
   /** Number of worker hosts in the slice (0 while booting). */
   hostCount: number
+  /** Number of hosts reporting HEALTHY usability (placement-ready). */
+  healthyHostCount: number
   /** Total running tasks across the slice's hosts. */
   taskCount: number
   /** Distinct jobs occupying the slice, deduped across hosts. */
@@ -88,9 +95,11 @@ export function buildSliceView(
   // in-use overlay so it matches the group-level badge counts; the per-job
   // breakdown comes from the scheduler buckets.
   let taskCount = 0
+  let healthyHostCount = 0
   const jobMap = new Map<string, SliceJob>()
   for (const vm of vms) {
     taskCount += vm.runningTaskCount ?? 0
+    if (vm.usability === 'healthy') healthyHostCount += 1
     const workerId = vm.workerId || vm.vmId
     for (const chip of workerJobs.get(workerId) ?? []) {
       const existing = jobMap.get(chip.jobId)
@@ -110,15 +119,17 @@ export function buildSliceView(
     taskCount = jobs.reduce((n, j) => n + j.taskCount, 0)
   }
 
+  // A ready slice's display status is its server-derived capacity status
+  // (available / in_use / idle / degraded). The fallback to 'available' only
+  // guards an unexpected empty value; the controller always sets it for ready
+  // slices. Non-ready slices render their lifecycle state directly.
   let status: SliceStatus = lifecycle
   let idleForMs: number | null = null
   if (lifecycle === 'ready') {
-    if (slice.idle) {
-      status = 'idle'
+    status = (slice.capacityStatus as SliceStatus) || 'available'
+    if (status === 'idle') {
       const since = timestampMs(slice.lastActive)
       idleForMs = since ? now - since : null
-    } else if (taskCount > 0) {
-      status = 'in_use'
     }
   }
 
@@ -129,6 +140,7 @@ export function buildSliceView(
     status,
     ageMs: createdMs ? now - createdMs : null,
     hostCount: vms.length,
+    healthyHostCount,
     taskCount,
     jobs,
     errorMessage: slice.errorMessage ?? '',
@@ -136,25 +148,29 @@ export function buildSliceView(
   }
 }
 
-/** Sort key so the operator-actionable slices (failed, then longest-booting) come first. */
+/** Sort key so operator-actionable slices (failed/degraded, then provisioning) come first. */
 const STATUS_RANK: Record<SliceStatus, number> = {
   failed: 0,
-  requesting: 1,
-  booting: 1,
-  initializing: 1,
-  idle: 2,
-  in_use: 3,
-  ready: 4,
+  degraded: 1,
+  requesting: 2,
+  booting: 2,
+  initializing: 2,
+  idle: 3,
+  in_use: 4,
+  available: 5,
+  ready: 5,
 }
 
-/** Order slices for display: problems first, then booting (oldest first), then healthy. */
+const PROVISIONING_RANK = 2
+
+/** Order slices for display: problems first, then provisioning (oldest first), then healthy. */
 export function sortSliceViews(views: SliceView[]): SliceView[] {
   return views.slice().sort((a, b) => {
     const ra = STATUS_RANK[a.status]
     const rb = STATUS_RANK[b.status]
     if (ra !== rb) return ra - rb
-    // Within booting, surface the oldest (most likely stuck) first.
-    if (ra === 1) return (b.ageMs ?? 0) - (a.ageMs ?? 0)
+    // Within provisioning, surface the oldest (most likely stuck) first.
+    if (ra === PROVISIONING_RANK) return (b.ageMs ?? 0) - (a.ageMs ?? 0)
     return a.sliceId.localeCompare(b.sliceId)
   })
 }

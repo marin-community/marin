@@ -6,6 +6,7 @@
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 
 from iris.cluster.controller.autoscaler.models import DemandEntry, RoutingDecision
 from iris.cluster.controller.autoscaler.routing import format_variants
@@ -19,6 +20,48 @@ class PendingHint:
 
     message: str
     is_scaling_up: bool
+
+
+class SliceCapacityStatus(StrEnum):
+    """How a *ready* slice relates to placement, derived in the status overlay.
+
+    This is slice-granular and capacity-honest: a fully-booked healthy slice is
+    ``IN_USE``, never counted as free/schedulable capacity. Non-ready slices
+    (requesting/booting/initializing/failed) carry no capacity status — their
+    lifecycle ``state`` already describes them.
+    """
+
+    AVAILABLE = "available"  # all hosts healthy, no tasks: free to place on now
+    IN_USE = "in_use"  # all hosts healthy, at least one task running
+    IDLE = "idle"  # all hosts healthy, no tasks, idle past scale-down threshold
+    DEGRADED = "degraded"  # no hosts, or any host unhealthy: not a placement target
+
+
+def slice_capacity_status(
+    *,
+    is_ready: bool,
+    host_count: int,
+    healthy_hosts: int,
+    running_tasks: int,
+    idle: bool,
+) -> str:
+    """Classify a ready slice by placement readiness.
+
+    Returns the empty string for non-ready slices. A ready slice is DEGRADED if
+    it has no hosts or any host is not HEALTHY (degraded, dead, or unrostered) —
+    such a slice cannot accept a gang-scheduled job even if some hosts are fine.
+    Only fully-healthy slices are classified by occupancy (in_use / idle /
+    available), so "available + idle" is the honest free-capacity count.
+    """
+    if not is_ready:
+        return ""
+    if host_count == 0 or healthy_hosts < host_count:
+        return SliceCapacityStatus.DEGRADED
+    if running_tasks > 0:
+        return SliceCapacityStatus.IN_USE
+    if idle:
+        return SliceCapacityStatus.IDLE
+    return SliceCapacityStatus.AVAILABLE
 
 
 def _resource_spec_proto(resources: job_pb2.ResourceSpecProto) -> vm_pb2.ResourceSpec:

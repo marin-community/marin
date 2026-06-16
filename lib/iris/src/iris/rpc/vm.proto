@@ -102,12 +102,21 @@ message SliceInfo {
   // has no VMs yet. (Previously clients showed such slices as "unknown".)
   string state = 8;
 
-  // Per-slice usability rollup over `vms` (computed in the status handler).
-  // schedulable = HEALTHY workers; degraded = DEGRADED workers. A slice that is
-  // `idle` but has degraded_slot_count > 0 is retained, not reclaimed — this is
-  // the "idle but unschedulable" signal the dashboard renders distinctly.
-  int32 schedulable_slot_count = 9;
+  // Count of DEGRADED hosts (reachable-but-failing) among `vms`, surfaced as
+  // detail. Computed in the status handler.
   int32 degraded_slot_count = 10;
+  reserved 9;  // was schedulable_slot_count (host-granular; replaced by capacity_status)
+
+  // Placement-readiness of a *ready* slice, derived in the status handler from
+  // host usability + running tasks. One of:
+  //   "available" — all hosts healthy, no tasks: free to place on now.
+  //   "in_use"    — all hosts healthy, at least one task running.
+  //   "idle"      — all hosts healthy, no tasks, idle past the scale-down
+  //                 threshold (also reflected in `idle`): a scale-down candidate.
+  //   "degraded"  — no hosts, or any host not healthy: not a placement target.
+  // Empty for non-ready slices, whose `state` already describes them. This is
+  // slice-granular: a fully-booked healthy slice is "in_use", never schedulable.
+  string capacity_status = 11;
 }
 
 // A scaling decision
@@ -152,11 +161,9 @@ message ScaleGroupStatus {
   // Idle threshold in milliseconds (how long a slice must be idle before scale-down)
   int64 idle_threshold_ms = 71;
 
-  // Group-level usability rollup over all slices' VMs (computed in the status
-  // handler): total HEALTHY vs DEGRADED workers. Lets the dashboard show, per
-  // pool, how much capacity is actually placeable vs retained-degraded.
-  int32 total_schedulable_slots = 72;
-  int32 total_degraded_slots = 73;
+  reserved 72, 73;  // were total_schedulable_slots/total_degraded_slots — host-granular
+                    // rollups. The dashboard now counts slices by SliceInfo.capacity_status,
+                    // which is slice-granular and excludes busy hosts from "free" capacity.
 }
 
 // Autoscaler action/event log entry

@@ -35,7 +35,8 @@ from iris.cluster.controller.auth import (
     revoke_api_key,
     revoke_login_keys_for_user,
 )
-from iris.cluster.controller.autoscaler.status import PendingHint
+from iris.cluster.controller.autoscaler.scaling_group import SliceLifecycleState
+from iris.cluster.controller.autoscaler.status import PendingHint, slice_capacity_status
 from iris.cluster.controller.backend import BackendCapability, ProviderError, TaskBackend, TaskTarget
 from iris.cluster.controller.budget import (
     compute_effective_band,
@@ -641,38 +642,46 @@ def _overlay_worker_usability(
     usability_by_id: dict[str, WorkerUsability],
     running: dict[WorkerId, set],
 ) -> None:
-    """Overlay per-VM usability + per-slice/per-group usability rollups in place.
+    """Overlay per-VM usability and stamp each ready slice's capacity status in place.
 
     ``worker_id`` and ``running_task_count`` are intrinsic to the VM and always
     set; usability/worker_healthy are overlaid only when the worker is present in
     the liveness roster (``usability_by_id``). A VM running tasks but momentarily
     absent from the roster keeps its worker_id and task count, with usability left
     empty (unknown) rather than mislabelled.
+
+    Per ready slice we then derive a single slice-granular ``capacity_status``
+    (available / in_use / idle / degraded) from host health and occupancy, so the
+    dashboard reports free capacity honestly: a fully-booked healthy slice is
+    ``in_use``, not schedulable. ``degraded_slot_count`` retains the per-slice
+    count of reachable-but-failing hosts for detail display.
     """
     for group in status.groups:
-        group_schedulable = 0
-        group_degraded = 0
         for slice_info in group.slices:
-            slice_schedulable = 0
-            slice_degraded = 0
+            healthy_hosts = 0
+            degraded_hosts = 0
+            running_tasks = 0
             for vm in slice_info.vms:
                 vm.worker_id = vm.vm_id
                 vm.running_task_count = len(running.get(WorkerId(vm.vm_id), set()))
+                running_tasks += vm.running_task_count
                 usability = usability_by_id.get(vm.vm_id)
                 if usability is None:
                     continue
                 vm.usability = str(usability)
                 vm.worker_healthy = usability is not WorkerUsability.DEAD
                 if usability is WorkerUsability.HEALTHY:
-                    slice_schedulable += 1
+                    healthy_hosts += 1
                 elif usability is WorkerUsability.DEGRADED:
-                    slice_degraded += 1
-            slice_info.schedulable_slot_count = slice_schedulable
-            slice_info.degraded_slot_count = slice_degraded
-            group_schedulable += slice_schedulable
-            group_degraded += slice_degraded
-        group.total_schedulable_slots = group_schedulable
-        group.total_degraded_slots = group_degraded
+                    degraded_hosts += 1
+            slice_info.degraded_slot_count = degraded_hosts
+            slice_info.capacity_status = slice_capacity_status(
+                is_ready=slice_info.state == SliceLifecycleState.READY,
+                host_count=len(slice_info.vms),
+                healthy_hosts=healthy_hosts,
+                running_tasks=running_tasks,
+                idle=slice_info.idle,
+            )
 
 
 def _worker_roster(db: ControllerDB) -> list[tuple[Any, dict]]:

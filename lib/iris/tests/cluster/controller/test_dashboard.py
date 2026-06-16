@@ -699,8 +699,9 @@ def test_get_autoscaler_status_populates_worker_id_for_unrostered_vm(client_with
         assert vm["workerId"] == vm["vmId"]
 
 
-def test_overlay_worker_usability_rolls_up_slice_and_group_counts():
-    """The overlay tags each VM and rolls schedulable/degraded counts per slice and group."""
+def test_overlay_worker_usability_tags_vms_and_per_slice_degraded_count():
+    """The overlay tags each VM with usability/worker_healthy/running_task_count and
+    records the per-slice count of degraded (reachable-but-failing) hosts."""
     status = vm_pb2.AutoscalerStatus(
         groups=[
             vm_pb2.ScaleGroupStatus(
@@ -708,9 +709,10 @@ def test_overlay_worker_usability_rolls_up_slice_and_group_counts():
                 slices=[
                     vm_pb2.SliceInfo(
                         slice_id="s1",
+                        state="ready",
                         vms=[vm_pb2.VmInfo(vm_id="w-healthy"), vm_pb2.VmInfo(vm_id="w-degraded")],
                     ),
-                    vm_pb2.SliceInfo(slice_id="s2", vms=[vm_pb2.VmInfo(vm_id="w-unrostered")]),
+                    vm_pb2.SliceInfo(slice_id="s2", state="ready", vms=[vm_pb2.VmInfo(vm_id="w-unrostered")]),
                 ],
             )
         ]
@@ -736,9 +738,67 @@ def test_overlay_worker_usability_rolls_up_slice_and_group_counts():
     assert by_id["w-unrostered"].worker_id == "w-unrostered"
     assert by_id["w-unrostered"].usability == ""
 
-    assert (s1.schedulable_slot_count, s1.degraded_slot_count) == (1, 1)
-    assert (s2.schedulable_slot_count, s2.degraded_slot_count) == (0, 0)
-    assert (group.total_schedulable_slots, group.total_degraded_slots) == (1, 1)
+    assert s1.degraded_slot_count == 1
+    assert s2.degraded_slot_count == 0
+
+
+def _capacity_status_for(slice_info: vm_pb2.SliceInfo, usability: dict, running: dict) -> str:
+    """Run the overlay over a single slice and return its derived capacity_status."""
+    status = vm_pb2.AutoscalerStatus(groups=[vm_pb2.ScaleGroupStatus(name="g", slices=[slice_info])])
+    _overlay_worker_usability(status, usability, running)
+    return status.groups[0].slices[0].capacity_status
+
+
+def _two_healthy_hosts() -> list[vm_pb2.VmInfo]:
+    return [vm_pb2.VmInfo(vm_id="a"), vm_pb2.VmInfo(vm_id="b")]
+
+
+def test_overlay_capacity_status_classifies_ready_slices():
+    """capacity_status is slice-granular: a busy-but-healthy slice is `in_use`, not
+    schedulable. This is the regression for the '40 schedulable' on fully booked
+    slices bug — occupancy, not raw host health, drives free capacity."""
+    both_healthy = {"a": WorkerUsability.HEALTHY, "b": WorkerUsability.HEALTHY}
+
+    # Every host healthy + a task running -> in_use (NOT free/schedulable).
+    assert (
+        _capacity_status_for(
+            vm_pb2.SliceInfo(slice_id="s", state="ready", vms=_two_healthy_hosts()),
+            both_healthy,
+            {WorkerId("a"): {"t1"}},
+        )
+        == "in_use"
+    )
+    # Every host healthy, no tasks, idle flag -> idle (scale-down candidate).
+    assert (
+        _capacity_status_for(
+            vm_pb2.SliceInfo(slice_id="s", state="ready", idle=True, vms=_two_healthy_hosts()),
+            both_healthy,
+            {},
+        )
+        == "idle"
+    )
+    # Every host healthy, no tasks, not idle yet -> available (free now).
+    assert (
+        _capacity_status_for(
+            vm_pb2.SliceInfo(slice_id="s", state="ready", vms=_two_healthy_hosts()),
+            both_healthy,
+            {},
+        )
+        == "available"
+    )
+    # Any host unhealthy -> degraded, even while running tasks on the healthy host.
+    assert (
+        _capacity_status_for(
+            vm_pb2.SliceInfo(slice_id="s", state="ready", vms=_two_healthy_hosts()),
+            {"a": WorkerUsability.HEALTHY, "b": WorkerUsability.DEGRADED},
+            {WorkerId("a"): {"t1"}},
+        )
+        == "degraded"
+    )
+    # A ready slice with no registered hosts -> degraded (not a placement target).
+    assert _capacity_status_for(vm_pb2.SliceInfo(slice_id="s", state="ready"), {}, {}) == "degraded"
+    # Non-ready slices carry no capacity status; their lifecycle state describes them.
+    assert _capacity_status_for(vm_pb2.SliceInfo(slice_id="s", state="booting"), {}, {}) == ""
 
 
 def test_pending_reason_uses_autoscaler_hint_for_scale_up(
