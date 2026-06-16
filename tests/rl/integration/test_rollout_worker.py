@@ -4,7 +4,6 @@
 """Test rollout worker in isolation."""
 
 import os
-import time
 
 import pytest
 from marin.rl.kl_regularization import KLConfig, KLMode
@@ -57,8 +56,6 @@ def test_rollout_worker(tmp_path):
 
     with runner:
         runner.wait_for_result()
-
-        time.sleep(0.5)
 
         batches = queue_reader.read_all_available()
         assert len(batches) > 0, "Should be able to read batches from queue"

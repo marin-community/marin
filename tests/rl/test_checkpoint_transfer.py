@@ -1,319 +1,142 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import tempfile
-from unittest.mock import Mock, patch
+import posixpath
+import uuid
 
 import pytest
+from rigging.filesystem import url_to_fs
 
 try:
+    import marin.rl.weight_transfer.checkpoint as checkpoint_transfer
     from marin.rl.weight_transfer import (
-        GCSCheckpointClient,
         WeightTransferConfig,
         WeightTransferMode,
+        create_weight_transfer_client,
     )
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
 
 
-pytestmark = pytest.mark.skipif(os.environ.get("CI") is not None, reason="GCS tests are skipped on CI")
+@pytest.fixture
+def checkpoint_loader(monkeypatch):
+    loaded_model = object()
+    checkpoint_paths = []
+
+    def fake_load_checkpoint(*, tree, checkpoint_path, axis_mapping, mesh):
+        checkpoint_paths.append(checkpoint_path)
+        return loaded_model
+
+    monkeypatch.setattr(checkpoint_transfer.levanter_checkpoint, "load_checkpoint", fake_load_checkpoint)
+    return checkpoint_paths, loaded_model
 
 
 @pytest.fixture
-def gcs_config():
-    """Create weight transfer config for GCS checkpoint mode."""
+def memory_checkpoint_dir():
+    checkpoint_dir = f"memory://checkpoint-transfer-{uuid.uuid4().hex}/policy_checkpoints"
+    yield checkpoint_dir
+
+    fs, path = url_to_fs(checkpoint_dir)
+    root = f"/{path.strip('/').split('/', maxsplit=1)[0]}"
+    if fs.exists(root):
+        fs.rm(root, recursive=True)
+
+
+def _checkpoint_config(checkpoint_dir: str) -> WeightTransferConfig:
     return WeightTransferConfig(
         mode=WeightTransferMode.GCS_CHECKPOINT,
-        checkpoint_dir="gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
+        checkpoint_dir=checkpoint_dir,
     )
 
 
-@pytest.fixture
-def local_config():
-    """Create weight transfer config for local filesystem."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        config = WeightTransferConfig(
-            mode=WeightTransferMode.GCS_CHECKPOINT,
-            checkpoint_dir=temp_dir,
+def _create_checkpoint_entries(
+    checkpoint_dir: str,
+    *,
+    steps: list[int] | None = None,
+    directories: list[str] | None = None,
+    files: list[str] | None = None,
+) -> None:
+    fs, path = url_to_fs(checkpoint_dir)
+    fs.makedirs(path, exist_ok=True)
+
+    for step in steps or []:
+        fs.makedirs(posixpath.join(path, f"step_{step}"), exist_ok=True)
+
+    for directory in directories or []:
+        fs.makedirs(posixpath.join(path, directory), exist_ok=True)
+
+    for filename in files or []:
+        fs.touch(posixpath.join(path, filename))
+
+
+def test_receive_weights_loads_latest_numeric_checkpoint(tmp_path, checkpoint_loader):
+    checkpoint_dir = str(tmp_path / "policy_checkpoints")
+    _create_checkpoint_entries(
+        checkpoint_dir,
+        steps=[9, 100, 39],
+        directories=["other_dir", "step_not_numeric"],
+        files=["config.json"],
+    )
+    checkpoint_paths, loaded_model = checkpoint_loader
+    old_model = object()
+
+    client = create_weight_transfer_client(_checkpoint_config(checkpoint_dir))
+    update = client.receive_weights(old_model)
+
+    assert update is not None
+    assert update.model is loaded_model
+    assert update.weight_id == 100
+    assert checkpoint_paths == [str(tmp_path / "policy_checkpoints" / "step_100")]
+
+
+@pytest.mark.parametrize("create_entries", [False, True])
+def test_receive_weights_without_checkpoints_returns_none(tmp_path, checkpoint_loader, create_entries):
+    checkpoint_dir = str(tmp_path / "policy_checkpoints")
+    if create_entries:
+        _create_checkpoint_entries(
+            checkpoint_dir,
+            directories=["other_dir", "step_not_numeric"],
+            files=["config.json"],
         )
-        yield config
+    checkpoint_paths, _ = checkpoint_loader
+
+    client = create_weight_transfer_client(_checkpoint_config(checkpoint_dir))
+
+    assert client.receive_weights(object()) is None
+    assert checkpoint_paths == []
 
 
-def test_find_latest_checkpoint_with_trailing_slashes(gcs_config):
-    """Test handling of trailing slashes in directory names from fs.ls()."""
-    client = GCSCheckpointClient(gcs_config)
+def test_receive_weights_skips_repeated_checkpoint_and_loads_newer_step(tmp_path, checkpoint_loader):
+    checkpoint_dir = str(tmp_path / "policy_checkpoints")
+    _create_checkpoint_entries(checkpoint_dir, steps=[3])
+    checkpoint_paths, _ = checkpoint_loader
+    old_model = object()
 
-    # Mock fsspec to return dirs with trailing slashes (common for GCS)
-    mock_fs = Mock()
-    mock_fs.exists.return_value = True
-    mock_fs.ls.return_value = [
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_36/",
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_37/",
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_38/",
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_39/",
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_40/",
-    ]
+    client = create_weight_transfer_client(_checkpoint_config(checkpoint_dir))
+    first_update = client.receive_weights(old_model)
+    repeated_update = client.receive_weights(old_model)
 
-    with patch(
-        "fsspec.core.url_to_fs",
-        return_value=(
-            mock_fs,
-            "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
-        ),
-    ):
-        result = client._find_latest_checkpoint()
+    _create_checkpoint_entries(checkpoint_dir, steps=[5])
+    second_update = client.receive_weights(old_model)
 
-    # Should find step_40 (highest number) and reconstruct full GCS URL
-    # Note: preserves trailing slash from original fs.ls() result
-    expected_path = "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_40/"
-    expected_step = 40
-    assert result == (expected_path, expected_step)
+    assert first_update is not None
+    assert first_update.weight_id == 3
+    assert repeated_update is None
+    assert second_update is not None
+    assert second_update.weight_id == 5
+    assert [posixpath.basename(path) for path in checkpoint_paths] == ["step_3", "step_5"]
 
 
-def test_find_latest_checkpoint_without_trailing_slashes(gcs_config):
-    """Test handling when fs.ls() returns paths without trailing slashes."""
-    client = GCSCheckpointClient(gcs_config)
+def test_receive_weights_supports_fsspec_memory_scheme(memory_checkpoint_dir, checkpoint_loader):
+    _create_checkpoint_entries(memory_checkpoint_dir, steps=[42])
+    checkpoint_paths, _ = checkpoint_loader
+    _, path = url_to_fs(memory_checkpoint_dir)
+    expected_checkpoint_path = f"memory://{posixpath.join(path, 'step_42')}"
 
-    mock_fs = Mock()
-    mock_fs.exists.return_value = True
-    mock_fs.ls.return_value = [
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_36",
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_40",
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_38",
-    ]
+    client = create_weight_transfer_client(_checkpoint_config(memory_checkpoint_dir))
+    update = client.receive_weights(object())
 
-    with patch(
-        "fsspec.core.url_to_fs",
-        return_value=(
-            mock_fs,
-            "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
-        ),
-    ):
-        result = client._find_latest_checkpoint()
-
-    expected_path = "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_40"
-    expected_step = 40
-    assert result == (expected_path, expected_step)
-
-
-def test_find_latest_checkpoint_mixed_formats(gcs_config):
-    """Test handling of mixed directory formats."""
-    client = GCSCheckpointClient(gcs_config)
-
-    mock_fs = Mock()
-    mock_fs.exists.return_value = True
-    mock_fs.ls.return_value = [
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_36/",
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_40",
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/other_file.txt",
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_38/",
-    ]
-
-    with patch(
-        "fsspec.core.url_to_fs",
-        return_value=(
-            mock_fs,
-            "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
-        ),
-    ):
-        result = client._find_latest_checkpoint()
-
-    # Should still find step_40 as the latest
-    expected_path = "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_40"
-    expected_step = 40
-    assert result == (expected_path, expected_step)
-
-
-def test_find_latest_checkpoint_step_number_extraction(gcs_config):
-    """Test correct extraction of step numbers from various formats."""
-    client = GCSCheckpointClient(gcs_config)
-
-    mock_fs = Mock()
-    mock_fs.exists.return_value = True
-    mock_fs.ls.return_value = [
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_9/",
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_100/",
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_39/",
-    ]
-
-    with patch(
-        "fsspec.core.url_to_fs",
-        return_value=(
-            mock_fs,
-            "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
-        ),
-    ):
-        result = client._find_latest_checkpoint()
-
-    # Should find step_100 (highest number), not step_9
-    # Note: preserves trailing slash from original fs.ls() result
-    expected_path = "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_100/"
-    expected_step = 100
-    assert result == (expected_path, expected_step)
-
-
-def test_find_latest_checkpoint_local_filesystem(local_config):
-    """Test checkpoint discovery with local filesystem paths."""
-    client = GCSCheckpointClient(local_config)
-
-    mock_fs = Mock()
-    mock_fs.exists.return_value = True
-    mock_fs.ls.return_value = [
-        f"{local_config.checkpoint_dir}/step_5",
-        f"{local_config.checkpoint_dir}/step_10",
-        f"{local_config.checkpoint_dir}/step_3",
-    ]
-
-    with patch("fsspec.core.url_to_fs", return_value=(mock_fs, local_config.checkpoint_dir)):
-        result = client._find_latest_checkpoint()
-
-    # For local paths, no scheme reconstruction needed
-    expected_path = f"{local_config.checkpoint_dir}/step_10"
-    expected_step = 10
-    assert result == (expected_path, expected_step)
-
-
-def test_find_latest_checkpoint_empty_directory(gcs_config):
-    """Test behavior when checkpoint directory is empty."""
-    client = GCSCheckpointClient(gcs_config)
-
-    mock_fs = Mock()
-    mock_fs.exists.return_value = True
-    mock_fs.ls.return_value = []
-
-    with patch(
-        "fsspec.core.url_to_fs",
-        return_value=(
-            mock_fs,
-            "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
-        ),
-    ):
-        result = client._find_latest_checkpoint()
-
-    assert result is None
-
-
-def test_find_latest_checkpoint_nonexistent_directory(gcs_config):
-    """Test behavior when checkpoint directory doesn't exist."""
-    client = GCSCheckpointClient(gcs_config)
-
-    mock_fs = Mock()
-    mock_fs.exists.return_value = False
-
-    with patch(
-        "fsspec.core.url_to_fs",
-        return_value=(
-            mock_fs,
-            "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
-        ),
-    ):
-        result = client._find_latest_checkpoint()
-
-    assert result is None
-
-
-def test_find_latest_checkpoint_no_step_directories(gcs_config):
-    """Test behavior when directory has files but no step_ directories."""
-    client = GCSCheckpointClient(gcs_config)
-
-    mock_fs = Mock()
-    mock_fs.exists.return_value = True
-    mock_fs.ls.return_value = [
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/config.json",
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/log.txt",
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/other_dir/",
-    ]
-
-    with patch(
-        "fsspec.core.url_to_fs",
-        return_value=(
-            mock_fs,
-            "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
-        ),
-    ):
-        result = client._find_latest_checkpoint()
-
-    assert result is None
-
-
-def test_url_reconstruction_with_scheme(gcs_config):
-    """Test that URL reconstruction preserves the original scheme."""
-    client = GCSCheckpointClient(gcs_config)
-
-    mock_fs = Mock()
-    mock_fs.exists.return_value = True
-    mock_fs.ls.return_value = [
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_42",
-    ]
-
-    with patch(
-        "fsspec.core.url_to_fs",
-        return_value=(
-            mock_fs,
-            "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
-        ),
-    ):
-        result = client._find_latest_checkpoint()
-
-    # Should reconstruct with gs:// scheme
-    assert result is not None
-    checkpoint_path, step_num = result
-    assert checkpoint_path.startswith("gs://")
-    assert "step_42" in checkpoint_path
-    assert step_num == 42
-
-
-def test_url_reconstruction_already_has_scheme(gcs_config):
-    """Test that URL reconstruction doesn't double-add scheme."""
-    client = GCSCheckpointClient(gcs_config)
-
-    mock_fs = Mock()
-    mock_fs.exists.return_value = True
-    # Simulate fs.ls() returning full URLs (edge case)
-    mock_fs.ls.return_value = [
-        "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_42",
-    ]
-
-    with patch(
-        "fsspec.core.url_to_fs",
-        return_value=(
-            mock_fs,
-            "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
-        ),
-    ):
-        result = client._find_latest_checkpoint()
-
-    # Should not have double gs:// prefix
-    assert result is not None
-    checkpoint_path, step_num = result
-    assert checkpoint_path == "gs://marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_42"
-    assert not checkpoint_path.startswith("gs://gs://")
-    assert step_num == 42
-
-
-def test_step_parsing_with_very_large_numbers(gcs_config):
-    """Test parsing of very large step numbers."""
-    client = GCSCheckpointClient(gcs_config)
-
-    mock_fs = Mock()
-    mock_fs.exists.return_value = True
-    mock_fs.ls.return_value = [
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_999999/",
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_1000000/",
-        "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints/step_1000001/",
-    ]
-
-    with patch(
-        "fsspec.core.url_to_fs",
-        return_value=(
-            mock_fs,
-            "marin-eu-west4/rl_testing/llama-1b-math-rl-test-0-35d621/policy_checkpoints",
-        ),
-    ):
-        result = client._find_latest_checkpoint()
-
-    assert result is not None
-    checkpoint_path, step_num = result
-    assert "step_1000001" in checkpoint_path
-    assert step_num == 1000001
+    assert update is not None
+    assert update.weight_id == 42
+    assert checkpoint_paths == [expected_checkpoint_path]
+    assert not checkpoint_paths[0].startswith("memory://memory://")

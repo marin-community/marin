@@ -165,13 +165,17 @@ class GCSCheckpointClient(WeightTransferClient):
         # Checkpoint format is {checkpoint_dir}/step_{xyz}
         # Make sure we expire before our poll-interval.
         # We disable caching above, but it's unclear if fsspec adheres to this.
-        dirs = fs.ls(path_in_fs, listings_expiry_time=1.0)
+        dirs = fs.ls(path_in_fs, detail=False, listings_expiry_time=1.0)
         checkpoint_dirs = []
         for d in dirs:
             # Handle trailing slashes in directory names
             step_name = d.rstrip("/").split("/")[-1]
             if step_name.startswith("step_"):
-                step_num = int(step_name.split("_")[-1])
+                try:
+                    step_num = int(step_name.removeprefix("step_"))
+                except ValueError:
+                    logger.warning("Ignoring malformed checkpoint directory: %s", d)
+                    continue
                 logger.info(f"Found checkpoint directory: {d} with step number {step_num}")
                 checkpoint_dirs.append((step_num, d))
         if not checkpoint_dirs:

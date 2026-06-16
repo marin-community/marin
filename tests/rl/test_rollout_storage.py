@@ -115,27 +115,25 @@ def test_storage_operations(storage_config):
 
 
 def test_file_storage_timestamp_ordering(tmp_path):
-    """Test that file storage maintains timestamp ordering."""
-    config = RolloutStorageConfig(storage_type=StorageType.FILE, path=str(tmp_path / "ordered_test"))
-
-    writer = config.create_writer()
+    """Test that file storage breaks same-timestamp ties by counter."""
+    storage_path = tmp_path / "ordered_test"
+    storage_path.mkdir()
+    config = RolloutStorageConfig(storage_type=StorageType.FILE, path=str(storage_path))
     reader = config.create_reader()
 
-    # Write batches with small delays to ensure different timestamps
-    batches = []
-    for i in range(3):
-        batch = create_test_rollout_batch(i)
-        writer.write_batch(batch)
-        batches.append(batch)
-        time.sleep(0.01)  # Small delay
+    timestamp = 123456789
+    first_batch = create_test_rollout_batch(1)
+    second_batch = create_test_rollout_batch(2)
+    files = [
+        (f"{timestamp:020d}_zhost_000001.pkl", first_batch),
+        (f"{timestamp:020d}_ahost_000002.pkl", second_batch),
+    ]
+    for filename, batch in files:
+        with (storage_path / filename).open("wb") as f:
+            pickle.dump(batch, f)
 
-    # Read back - should be in order
     read_batches = reader.read_all_available()
-    assert len(read_batches) == 3
-
-    # Verify ordering by checking worker IDs
-    for i, batch in enumerate(read_batches):
-        assert batch.metadata.worker_id == f"worker_{i}"
+    assert [batch.metadata.worker_id for batch in read_batches] == ["worker_1", "worker_2"]
 
 
 def test_large_rollout_batch():

@@ -172,27 +172,27 @@ class FileRolloutReader(RolloutReader):
         logger.info(f"Initialized file rollout reader at {path}")
 
     def _get_available_files(self) -> list[str]:
-        """Get list of available batch files sorted by timestamp."""
+        """Get list of available batch files sorted by timestamp and writer counter."""
         pattern = f"{self.path}/*.pkl"
         files = self.fs.glob(pattern)
 
-        # Parse and sort files by timestamp
         parsed_files = []
         for file_path in files:
             filename = file_path.split("/")[-1]
             if filename.endswith(".pkl"):
-                # Extract timestamp from filename: timestamp_hostname_counter.pkl
-                parts = filename.split("_")
-                if len(parts) == 3:
-                    timestamp_int = int(parts[0])
-                    timestamp = timestamp_int / 1000000.0  # Convert back from microseconds
-                    parsed_files.append((timestamp, file_path))
-                else:
-                    logger.warning(f"Unexpected filename format: {filename}")
+                stem = filename.removesuffix(".pkl")
+                try:
+                    timestamp_raw, host_and_counter = stem.split("_", maxsplit=1)
+                    _, counter_raw = host_and_counter.rsplit("_", maxsplit=1)
+                    timestamp = int(timestamp_raw)
+                    counter = int(counter_raw)
+                except ValueError:
+                    logger.warning("Unexpected rollout filename format: %s", filename)
+                    continue
+                parsed_files.append((timestamp, counter, file_path))
 
-        # Sort by timestamp and return file paths
-        parsed_files.sort(key=lambda x: x[0])
-        return [file_path for _, file_path in parsed_files]
+        parsed_files.sort(key=lambda x: (x[0], x[1]))
+        return [file_path for _, _, file_path in parsed_files]
 
     def read_batch(self, timeout: float | None = None) -> RolloutBatch | None:
         """Read a single batch with optional timeout.

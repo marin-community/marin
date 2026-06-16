@@ -4,12 +4,12 @@
 """Test rollout and training workers with weight synchronization."""
 
 import os
-import time
 
 import pytest
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
+from rigging.timing import Duration, ExponentialBackoff
 
 from tests.rl.integration.config import (
     DummyTokenizer,
@@ -61,7 +61,11 @@ def test_rollout_and_train_workers(tmp_path):
     rollout_runner.rollout_worker_config.max_rollouts = 100
 
     with training_runner:
-        time.sleep(1)
+        training_started = ExponentialBackoff(initial=0.1, maximum=0.5).wait_until(
+            lambda: training_runner.worker is not None,
+            timeout=Duration.from_seconds(30),
+        )
+        assert training_started, "Training worker did not start"
         with rollout_runner:
             result = training_runner.wait_for_result(timeout=60)
             assert result == WaitResult.SUCCESS, "Training timed out after 60s"

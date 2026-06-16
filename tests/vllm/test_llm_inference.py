@@ -30,6 +30,7 @@ def run_vllm_inference(model_path, **model_init_kwargs):
     return generated_texts
 
 
+@pytest.mark.integration
 @pytest.mark.tpu_ci
 def test_local_llm_inference():
     config = ModelConfig(
@@ -39,4 +40,7 @@ def test_local_llm_inference():
         generation_params={"max_tokens": 16},
     )
     model_name_or_path, config = resolve_model_name_or_path(config)
-    run_vllm_inference(model_name_or_path, **config.engine_kwargs)
+    generated_texts = run_vllm_inference(model_name_or_path, **config.engine_kwargs)
+    assert generated_texts
+    assert generated_texts[0].outputs
+    assert generated_texts[0].outputs[0].text

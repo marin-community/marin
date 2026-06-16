@@ -9,7 +9,6 @@ No dashboard screenshots are taken here; those remain in lib/iris/tests/e2e/test
 
 import logging
 import os
-import time
 import uuid
 
 import pytest
@@ -118,15 +117,20 @@ def test_log_levels_populated(integration_cluster, verbose_job):
     """Task logs have level field (INFO, WARNING, ERROR)."""
     task_id = verbose_job.job_id.task(0).to_wire()
 
-    deadline = time.monotonic() + integration_cluster.job_timeout
     entries = []
     source = f"{task_id}:"
-    while time.monotonic() < deadline:
+
+    def _has_info_marker():
+        nonlocal entries
         response = integration_cluster.fetch_logs(source, match_scope=logging_pb2.MATCH_SCOPE_PREFIX)
         entries = list(response.entries)
-        if any("info-marker" in e.data for e in entries):
-            break
-        time.sleep(0.5)
+        return any("info-marker" in e.data for e in entries)
+
+    found_info_marker = ExponentialBackoff(initial=0.1, maximum=0.5).wait_until(
+        _has_info_marker,
+        timeout=Duration.from_seconds(integration_cluster.job_timeout),
+    )
+    assert found_info_marker, f"info-marker not found. Got {len(entries)} entries"
 
     markers_found = {}
     for entry in entries:
@@ -134,7 +138,7 @@ def test_log_levels_populated(integration_cluster, verbose_job):
             if marker in entry.data:
                 markers_found[marker] = entry.level
 
-    assert "info-marker" in markers_found, f"info-marker not found. Got {len(entries)} entries"
+    assert "info-marker" in markers_found
     assert markers_found["info-marker"] == logging_pb2.LOG_LEVEL_INFO
     assert markers_found.get("warning-marker") == logging_pb2.LOG_LEVEL_WARNING
     assert markers_found.get("error-marker") == logging_pb2.LOG_LEVEL_ERROR
