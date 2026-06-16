@@ -356,7 +356,7 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   |---|---|---|---|---|---|---|
   | **0.02** | 3.047 | 3.011 | 3.001 | 2.986 | 2.980 | _(run)_ |
   | **0.05** | 3.037 | 3.021 | 3.000 | 2.982 | 2.979 | _(run)_ |
-  | **0.1**  | 3.041 | 3.016 | 2.997 | 2.986 | **2.970** | _(run)_ |
+  | **0.1**  | 3.041 | 3.016 | 2.997 | 2.986 | **2.970** | 2.989 |
 
   _**Base 15/15 complete** (~17:15Z). Monotone in LR (7e-4 best ~2.97–2.98 > 5e-4 > … >
   1.75e-4 ~3.04). Best E2 = `7e-4/wd0.1`=**2.970** (high LR + high WD). 7e-4 is the base top
@@ -364,10 +364,11 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   likely the E2 optimum too). All E2 < every E1 — 2 epochs helps. Good-LR ≥7e-4, ≫ #70's 3.5e-4._
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ — leader `7e-4/wd0.1`=
-  **2.970** but **NOT yet confirmed**: it's on the WD top edge (wd0.1) and its LR-upper
-  neighbor (1e-3, w2q) is still running. **Launched the `wd=0.2` column** (w2r, ~02:44Z:
-  5e-4/7e-4/1e-3 × wd0.2) to bound the WD edge — together with w2q that gives all 4
-  neighbors of 7e-4/wd0.1.
+  **2.970**, **3 of 4 axis-neighbors now confirm worse**: LR− `5e-4/0.1`=2.986, LR+
+  `1e-3/0.1`=**2.989** (w2q, landed ~05:08Z), WD− `7e-4/0.05`=2.979. **Only the WD+ neighbor
+  `7e-4/wd0.2` (w2s, ~1.3h in) is still running** — once it lands worse, 7e-4/wd0.1 is a
+  confirmed interior optimum. **Launched the `wd=0.2` column** (w2r/s/t, ~02:44Z:
+  5e-4/7e-4/1e-3 × wd0.2) to bound the WD top edge.
 - Measured drift 1→2: lr* stable at **7e-4** (both waves); wd* nudged **up** 0.05→0.1
   (opposite the lr↓/wd↓ prior) — top of WD is flat, hence the wd0.2 check.
 - Notes:
