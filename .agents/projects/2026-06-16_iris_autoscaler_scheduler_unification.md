@@ -30,6 +30,63 @@ The fix has two halves:
 
 ---
 
+## 0. Implementation status (landed in this PR)
+
+Both halves shipped, with a deliberate simplification of the state half (see why below):
+
+**State — `WorkerUsability`, one classifier, behavior-preserving projections.** Instead of a
+standalone `CapacityLedger` mega-builder spanning two disjoint DB snapshots, the three liveness
+predicates collapse onto a single `WorkerUsability {HEALTHY, DEGRADED, DEAD}` computed in exactly one
+place — the `WorkerLiveness.usability` property (`worker_health.py`). Every consumer reads a
+projection of it:
+
+| Consumer | Before | After (projection) |
+|---|---|---|
+| scheduler placement | `healthy AND active AND consecutive_failures==0` | `usability == HEALTHY` |
+| reconcile targets | `healthy AND active` | `usability != DEAD` |
+| autoscaler idle map | `active` | `usability != DEAD` (+ carries usability per worker) |
+| pruner | `not healthy or not active` | `usability is DEAD` |
+
+The classifier intentionally **ignores `build_failures` and the teardown thresholds** (those drive
+`apply()`/teardown, not placement), so the projections are *exact* — reconcile/scheduling membership
+is unchanged. The **only** behavior change is the bug fix: `WorkerStatus.is_idle_spare` gates
+scale-down on *idle AND HEALTHY*, so `_verify_slice_idle` no longer reclaims a DEGRADED idle slice as
+free capacity. The full per-tick reconciled ledger remains a reasonable future step, but was not
+needed to fix the bug or unify the predicates, and would have added net code — so it was dropped in
+favor of the property + a thin server-side rollup.
+
+**Reporting — one merged `CapacityTab.vue`.** `AutoscalerTab.vue` (1164) + `SchedulerTab.vue` (451)
+are deleted; one pool-keyed `CapacityTab.vue` replaces them, fed by the existing two RPCs enriched
+with additive usability fields (`VmInfo.usability`, `SliceInfo.schedulable/degraded_slot_count`,
+`ScaleGroupStatus.total_schedulable/degraded_slots`, rolled up server-side in `get_autoscaler_status`).
+Net LOC across the whole change is **negative**.
+
+The merged tab, in one view (degraded/idle-unschedulable badge is computed **per slice**):
+
+```
+ CAPACITY & SCHEDULING
+ ┌ Pools online 4/4 · Slices 12 · Idle spare 3 · Degraded 1 · Demand 5 · Launch 1 · Unmet 2 ┐
+
+ POOLS — CAPACITY & ROUTING
+ Pool                 Avail.     Slices                              Demand Asg Launch Decision
+ v5p·8·usc1a          available  ready 2 · 2 schedulable · 1 idle      3     0   —      selected
+                                 1 degraded · 1 idle·unschedulable
+                                 ⚠ demand blocked on degraded workers — recovery in progress
+ v5p·64·use5a         requesting ready 0                              1     0   1      scaling up
+ v6e·4·euw4a          available  ready 4 · 4 schedulable · 4 idle      0     0   —      idle
+   └ (expand) SliceList: per-host state / idle / failure detail
+
+ UNMET DEMAND      job → reason → entries → example task → accelerator
+ PENDING JOBS (2)  job · user · band · pending reason · submitted        ← "what's not scheduling & why"
+ USERS & QUOTAS    user · jobs · running tasks · by-band · spent/limit · util · band
+ ▸ Diagnostics     recent autoscaler actions · logs  (collapsed)
+```
+
+The live screenshot renders in CI (`test_dashboard_capacity_tab`); chromium could not launch in the
+authoring sandbox.
+
+---
+
 ## 1. The symptom
 
 ```
