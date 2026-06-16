@@ -29,6 +29,25 @@ If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (re
 
 **Shipping a code change ≠ restarting.** marin pins `iris-controller:latest` (`config/marin.yaml:33`), so a restart only re-pulls whatever `:latest` currently is. To deploy a merged controller fix you must first rebuild the image (`gh workflow run "Ops - Docker Images"`, or wait for the Sunday build) and *then* restart — restarting against a stale `:latest` ships nothing. Confirm the controller is running the `:<git-short-hash>` you expect, not just that it came back up. Skipping the rebuild cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
 
+### Controller Checkpoint Rollback (wedged / OOM recovery)
+
+**Symptoms.** The controller is wedged from a bloated local DB — typically a controller-VM OOM after a large job backlog: RPCs hang, the healthcheck times out, and `iris cluster controller restart` / `gcloud compute reset` just reload the same bloated local DB and re-wedge. A plain restart can't help because startup reuses the local DB when it's present (`lib/iris/src/iris/cluster/controller/main.py`).
+
+**Fix.** Roll the controller back to a pre-spike checkpoint. This stops the container (frees RAM), moves the bloated local DB **aside** (never deletes it), restores a *specific* checkpoint, restarts, and verifies the controller answers health checks.
+
+```bash
+# 1. List checkpoints. DB size is a good proxy for backlog/health: a checkpoint
+#    much larger than its neighbors was already bloated — pick an earlier, smaller one.
+iris --config=cluster.yaml cluster controller restore-checkpoint --list
+
+# 2. Restore a chosen pre-spike checkpoint (epoch_ms from --list, or 'latest').
+iris --config=cluster.yaml cluster controller restore-checkpoint --checkpoint 1717000000000
+```
+
+**Rollback cost.** Jobs and state created *after* the chosen checkpoint are dropped. Workers on separate VMs and other infrastructure are unaffected — they re-register with the recovered controller. Checkpoints live at `{remote_state_dir}/controller-state/{epoch_ms}/controller.sqlite3.zst`.
+
+**Safety.** The command refuses if it can't reach the controller VM or the checkpoint is missing. The previous local DB is preserved on the controller VM at `/var/cache/iris/controller/db.bloated.bak.<epoch_ms>`; if the restore script or post-restart health check fails, the container is left stopped and that backup is named in the error so you can investigate or move it back. Not supported on local or K8s/CoreWeave controllers.
+
 ## Job Management
 
 ```bash

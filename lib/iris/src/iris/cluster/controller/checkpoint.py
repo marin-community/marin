@@ -21,11 +21,13 @@ Autoscaler/scaling-group reconciliation lives in autoscaler.py and
 scaling_group.py respectively.
 """
 
+import argparse
 import logging
 import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
@@ -402,3 +404,128 @@ def download_checkpoint_to_local(
 
     logger.info("Synced checkpoint %s to %s", source_dir, local_db_dir)
     return True
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint listing / selection (used by the restore-checkpoint playbook)
+# ---------------------------------------------------------------------------
+
+LATEST_CHECKPOINT = "latest"
+
+
+@dataclass(frozen=True)
+class CheckpointInfo:
+    """A single available controller checkpoint.
+
+    ``db_size_bytes`` is the size of the (compressed, when present) main SQLite
+    file. It is a good proxy for backlog/health when choosing which checkpoint
+    to restore: a much larger DB usually means the controller was already
+    bloated at that point.
+    """
+
+    epoch_ms: int
+    created_at: Timestamp
+    db_size_bytes: int
+    checkpoint_dir: str
+
+    @property
+    def has_db(self) -> bool:
+        return self.db_size_bytes > 0
+
+
+def _main_db_size_bytes(fs, checkpoint_fs_path: str) -> int:
+    """Return the size of the main SQLite file in a checkpoint dir (0 if absent).
+
+    Prefers the compressed ``controller.sqlite3.zst``; falls back to an
+    uncompressed ``controller.sqlite3`` from pre-compression checkpoints.
+    """
+    for name in (f"{ControllerDB.DB_FILENAME}.zst", ControllerDB.DB_FILENAME):
+        candidate = checkpoint_fs_path.rstrip("/") + "/" + name
+        try:
+            return int(fs.info(candidate)["size"])
+        except FileNotFoundError:
+            continue
+    return 0
+
+
+def list_checkpoints(remote_state_dir: str) -> list[CheckpointInfo]:
+    """List available controller checkpoints, newest first.
+
+    Returns an empty list when no ``controller-state/`` directory exists.
+    """
+    entries = _list_checkpoint_entries(remote_state_dir)
+    if entries is None:
+        return []
+
+    fs, _ = fsspec.core.url_to_fs(remote_state_dir.rstrip("/") + "/controller-state")
+    infos: list[CheckpointInfo] = []
+    for entry in entries:
+        basename = entry.rstrip("/").rsplit("/", 1)[-1]
+        if not basename.isdigit():
+            continue
+        epoch_ms = int(basename)
+        infos.append(
+            CheckpointInfo(
+                epoch_ms=epoch_ms,
+                created_at=Timestamp.from_ms(epoch_ms),
+                db_size_bytes=_main_db_size_bytes(fs, entry),
+                checkpoint_dir=_reconstruct_uri(remote_state_dir, entry),
+            )
+        )
+    infos.sort(key=lambda info: info.epoch_ms, reverse=True)
+    return infos
+
+
+def resolve_checkpoint_dir(remote_state_dir: str, checkpoint: str) -> str:
+    """Resolve a checkpoint selector to a concrete checkpoint directory URI.
+
+    ``checkpoint`` is either the literal ``"latest"`` or an ``epoch_ms``
+    timestamp matching a directory under ``controller-state/``. Raises
+    ``ValueError`` if the selector cannot be resolved to an existing checkpoint.
+    """
+    available = list_checkpoints(remote_state_dir)
+    if not available:
+        raise ValueError(f"No controller checkpoints found under {remote_state_dir}/controller-state/")
+
+    if checkpoint == LATEST_CHECKPOINT:
+        return available[0].checkpoint_dir
+
+    if not checkpoint.isdigit():
+        raise ValueError(f"Checkpoint must be 'latest' or an epoch_ms timestamp, got: {checkpoint!r}")
+
+    target = int(checkpoint)
+    for info in available:
+        if info.epoch_ms == target:
+            return info.checkpoint_dir
+
+    known = ", ".join(str(info.epoch_ms) for info in available[:5])
+    raise ValueError(f"Checkpoint {checkpoint} not found under {remote_state_dir}/controller-state/ (recent: {known})")
+
+
+def _cli_main(argv: list[str] | None = None) -> int:
+    """Restore a specific checkpoint into a local db dir.
+
+    Runs inside the controller image (``python -m iris.cluster.controller.checkpoint``)
+    during the ``restore-checkpoint`` playbook so the restore uses the image's own
+    ``download_checkpoint_to_local`` and the VM's ambient GCS credentials.
+    """
+    parser = argparse.ArgumentParser(description="Restore a controller checkpoint into a local db dir.")
+    parser.add_argument(
+        "--remote-state-dir", required=True, help="Cluster remote_state_dir (e.g. gs://bucket/iris/state)"
+    )
+    parser.add_argument(
+        "--db-dir", required=True, type=Path, help="Local db dir to populate (e.g. /var/cache/iris/controller/db)"
+    )
+    parser.add_argument("--checkpoint-dir", required=True, help="Full checkpoint dir URI to restore")
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO, format="[restore-checkpoint] %(message)s")
+    restored = download_checkpoint_to_local(args.remote_state_dir, args.db_dir, checkpoint_dir=args.checkpoint_dir)
+    if not restored:
+        logger.error("Checkpoint not restored: %s", args.checkpoint_dir)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_cli_main())

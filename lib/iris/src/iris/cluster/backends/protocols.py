@@ -51,6 +51,21 @@ class ControllerProvider(Protocol):
         """Stop the controller and clean up its resources."""
         ...
 
+    def restore_checkpoint(
+        self,
+        config: config_pb2.IrisClusterConfig,
+        *,
+        checkpoint_dir: str,
+        remote_state_dir: str,
+    ) -> str:
+        """Roll the controller back to a specific checkpoint in-place on its VM.
+
+        Stops the controller container, moves the current local DB aside (never
+        deletes it), restores ``checkpoint_dir``, restarts, and verifies health.
+        Returns the controller address.
+        """
+        ...
+
     def stop_all(
         self,
         config: config_pb2.IrisClusterConfig,
