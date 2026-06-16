@@ -293,6 +293,7 @@ function group(name: string): ScaleGroupStatus | undefined { return groupIndex.v
 function groupFailures(name: string): number { return group(name)?.consecutiveFailures ?? 0 }
 function groupSlices(name: string): SliceInfo[] { return group(name)?.slices ?? [] }
 function groupHasSlices(name: string): boolean { return groupSlices(name).length > 0 }
+function groupSliceCounts(name: string): Record<string, number> { return group(name)?.sliceStateCounts ?? {} }
 function groupDemand(name: string): number { return group(name)?.currentDemand ?? 0 }
 
 // Per-group slice view-models, built from the same buildSliceView the expanded
@@ -303,12 +304,27 @@ function groupSliceViews(name: string): SliceView[] {
 
 interface SliceStatusCount { status: SliceStatus; count: number; style: SliceStatusStyle }
 
+// Non-ready lifecycle states have authoritative counts in sliceStateCounts and may
+// have no SliceInfo row — `requesting` in particular counts pending scale-ups that
+// have not been granted a slice handle yet.
+const NON_READY_LIFECYCLE: SliceStatus[] = ['requesting', 'booting', 'initializing', 'failed']
+
 // One slice-granular chip per present status, in the canonical display order.
+// Ready slices are split into capacity statuses from their per-slice views; the
+// non-ready states are read from sliceStateCounts so in-flight scale-ups still
+// show even before they materialize as slices.
 function groupStatusSummary(name: string): SliceStatusCount[] {
   const counts = new Map<SliceStatus, number>()
-  for (const v of groupSliceViews(name)) counts.set(v.status, (counts.get(v.status) ?? 0) + 1)
+  for (const v of groupSliceViews(name)) {
+    if (v.lifecycle === 'ready') counts.set(v.status, (counts.get(v.status) ?? 0) + 1)
+  }
+  const lifecycle = groupSliceCounts(name)
+  for (const state of NON_READY_LIFECYCLE) {
+    const n = lifecycle[state] ?? 0
+    if (n > 0) counts.set(state, (counts.get(state) ?? 0) + n)
+  }
   return SLICE_STATUS_SUMMARY_ORDER
-    .filter(s => counts.has(s))
+    .filter(s => (counts.get(s) ?? 0) > 0)
     .map(s => ({ status: s, count: counts.get(s)!, style: SLICE_STATUS_STYLES[s] }))
 }
 
@@ -786,19 +802,27 @@ function sliceIdShort(sliceId?: string): string {
 
                   <!-- Slices (expandable) + schedulable/degraded/idle badges -->
                   <td class="px-3 py-2 text-[13px] align-top">
-                    <button
-                      v-if="groupHasSlices(gs.group)"
-                      class="inline-flex items-center gap-1 cursor-pointer hover:opacity-80 flex-wrap"
-                      :aria-expanded="expandedSlices.has(gs.group)"
-                      :aria-label="(expandedSlices.has(gs.group) ? 'Hide' : 'Show') + ' slices for ' + gs.group"
-                      @click="toggleSlices(gs.group)"
+                    <!-- Slice-granular status chips: one per present status, each a
+                         count of SLICES (never per-host), so counts line up with the
+                         expanded list and the total slice count. Expandable into the
+                         per-slice list only when the group has materialized slices;
+                         a group with only in-flight (requesting) scale-ups still shows
+                         its chips but has nothing to drill into yet. -->
+                    <component
+                      :is="groupHasSlices(gs.group) ? 'button' : 'span'"
+                      v-if="groupStatusSummary(gs.group).length"
+                      class="inline-flex items-center gap-1 flex-wrap text-left"
+                      :class="groupHasSlices(gs.group) ? 'cursor-pointer hover:opacity-80' : ''"
+                      :type="groupHasSlices(gs.group) ? 'button' : undefined"
+                      :aria-expanded="groupHasSlices(gs.group) ? expandedSlices.has(gs.group) : undefined"
+                      :aria-label="groupHasSlices(gs.group)
+                        ? (expandedSlices.has(gs.group) ? 'Hide' : 'Show') + ' slices for ' + gs.group
+                        : undefined"
+                      @click="groupHasSlices(gs.group) && toggleSlices(gs.group)"
                     >
-                      <span class="text-[10px] text-text-muted">
+                      <span v-if="groupHasSlices(gs.group)" class="text-[10px] text-text-muted">
                         {{ expandedSlices.has(gs.group) ? '▼' : '▶' }}
                       </span>
-                      <!-- Slice-granular status chips: one per present status, each a
-                           count of SLICES (never per-host), so counts line up with the
-                           expanded list and the total slice count. -->
                       <span class="inline-flex items-center gap-1 flex-wrap">
                         <span
                           v-for="b in groupStatusSummary(gs.group)"
@@ -810,7 +834,7 @@ function sliceIdShort(sliceId?: string): string {
                           {{ b.count }} {{ b.style.label }}
                         </span>
                       </span>
-                    </button>
+                    </component>
                     <span v-else class="text-text-muted">-</span>
 
                     <!-- Reconciliation note: free capacity vs unmet demand -->
