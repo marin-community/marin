@@ -32,7 +32,7 @@ from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
 from marin.rl.train_worker import TrainWorker
 from marin.rl.weight_transfer import WeightTransferMode
 from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
-from marin.training.run_environment import add_run_env_variables
+from marin.training.run_environment import add_run_env_variables, env_vars_for_dependency_groups
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -128,7 +128,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         runtime = hosted_runtime.runtime
         logger.info("Runtime handles created: curriculum, run_state, weight_transfer coordinator")
 
-        # Create worker environments.
+        # Create worker dependency groups.
         train_extras = _train_worker_extras(config)
         rollout_extras = _rollout_worker_extras(config)
 
@@ -147,15 +147,6 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
             env["JAX_TRACEBACK_FILTERING"] = "off"
             env["TF_CPP_MIN_LOG_LEVEL"] = "0"
         env = add_run_env_variables(env)
-        train_worker_env = create_environment(
-            env_vars=env,
-            extras=train_extras,
-        )
-        rollout_worker_env = create_environment(
-            env_vars=env,
-            extras=rollout_extras,
-        )
-
         # Resource configs
         inference_tpu_type = run_config.inference_tpu_type or run_config.train_tpu_type
         # All Iris compute is preemptible — never set preemptible=False.
@@ -185,6 +176,14 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         rollout_resources = ResourceConfig.with_tpu(
             inference_tpu_type,
             **rollout_resource_kwargs,
+        )
+        train_worker_env = create_environment(
+            env_vars=env_vars_for_dependency_groups(train_resources, train_extras, env),
+            extras=train_extras,
+        )
+        rollout_worker_env = create_environment(
+            env_vars=env_vars_for_dependency_groups(rollout_resources, rollout_extras, env),
+            extras=rollout_extras,
         )
 
         train_job = client.submit(

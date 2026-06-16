@@ -14,6 +14,7 @@ from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environmen
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import VllmEnvironment
+from marin.training.run_environment import env_vars_for_dependency_groups, setdefault_vllm_tpu_build_env
 
 
 def run_one_query(
@@ -94,8 +95,28 @@ def run_one_query(
         raise
 
 
+def run_direct_generate(
+    *,
+    model_name_or_path: str,
+    prompt: str,
+    load_format: str | None,
+    max_model_len: int | None,
+) -> str:
+    from vllm import LLM, SamplingParams  # noqa: PLC0415  # optional dep: vllm
+
+    engine_kwargs: dict = {}
+    if load_format is not None:
+        engine_kwargs["load_format"] = load_format
+    if max_model_len is not None:
+        engine_kwargs["max_model_len"] = max_model_len
+
+    llm = LLM(model=model_name_or_path, **engine_kwargs)
+    outputs = llm.generate([prompt], SamplingParams(temperature=0.2, max_tokens=128))
+    return outputs[0].outputs[0].text
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Smoke-test a vLLM TPU server via OpenAI-compatible HTTP API.")
+    parser = argparse.ArgumentParser(description="Smoke-test vLLM TPU inference.")
     parser.add_argument(
         "--model",
         required=True,
@@ -140,9 +161,24 @@ def main(argv: list[str] | None = None) -> int:
         help="Use /v1/completions instead of /v1/chat/completions.",
     )
     parser.add_argument(
+        "--direct-generate",
+        action="store_true",
+        help="Call vllm.LLM.generate directly instead of launching the HTTP server.",
+    )
+    parser.add_argument(
         "--tpu-type",
         default="v5p-8",
         help="TPU type to request when launching via Fray (default: v5p-8).",
+    )
+    parser.add_argument(
+        "--region",
+        default=None,
+        help="Optional Fray region constraint for the TPU job (for example: europe-west4).",
+    )
+    parser.add_argument(
+        "--zone",
+        default=None,
+        help="Optional Fray zone constraint for the TPU job (for example: europe-west4-a).",
     )
     parser.add_argument(
         "--local",
@@ -158,17 +194,27 @@ def main(argv: list[str] | None = None) -> int:
         if args.local_cache_dir is not None:
             os.environ["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
             os.environ["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
+        for key, value in setdefault_vllm_tpu_build_env({}).items():
+            os.environ.setdefault(key, value)
 
         for i in range(args.repeat):
             start = time.time()
-            output = run_one_query(
-                model_name_or_path=args.model,
-                prompt=args.prompt,
-                load_format=args.load_format,
-                max_model_len=args.max_model_len,
-                port=args.port,
-                use_completions=args.use_completions,
-            )
+            if args.direct_generate:
+                output = run_direct_generate(
+                    model_name_or_path=args.model,
+                    prompt=args.prompt,
+                    load_format=args.load_format,
+                    max_model_len=args.max_model_len,
+                )
+            else:
+                output = run_one_query(
+                    model_name_or_path=args.model,
+                    prompt=args.prompt,
+                    load_format=args.load_format,
+                    max_model_len=args.max_model_len,
+                    port=args.port,
+                    use_completions=args.use_completions,
+                )
             elapsed = time.time() - start
             print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
             print(output)
@@ -178,19 +224,28 @@ def main(argv: list[str] | None = None) -> int:
     if args.local_cache_dir is not None:
         env_vars["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
         env_vars["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
+    dependency_groups = ["eval", "tpu", "vllm"]
 
     def _run() -> None:
         for i in range(args.repeat):
             start = time.time()
             try:
-                output = run_one_query(
-                    model_name_or_path=args.model,
-                    prompt=args.prompt,
-                    load_format=args.load_format,
-                    max_model_len=args.max_model_len,
-                    port=args.port,
-                    use_completions=args.use_completions,
-                )
+                if args.direct_generate:
+                    output = run_direct_generate(
+                        model_name_or_path=args.model,
+                        prompt=args.prompt,
+                        load_format=args.load_format,
+                        max_model_len=args.max_model_len,
+                    )
+                else:
+                    output = run_one_query(
+                        model_name_or_path=args.model,
+                        prompt=args.prompt,
+                        load_format=args.load_format,
+                        max_model_len=args.max_model_len,
+                        port=args.port,
+                        use_completions=args.use_completions,
+                    )
             except Exception:
                 traceback.print_exc()
                 raise
@@ -199,15 +254,17 @@ def main(argv: list[str] | None = None) -> int:
             print(output)
 
     client = current_client()
-    resources = ResourceConfig.with_tpu(args.tpu_type)
+    regions = [args.region] if args.region is not None else None
+    resources = ResourceConfig.with_tpu(args.tpu_type, regions=regions, zone=args.zone)
+    placement = args.zone or args.region or "default-placement"
     job_request = JobRequest(
-        name=f"vllm-smoke:{args.tpu_type}",
+        name=f"vllm-smoke:{args.tpu_type}:{placement}",
         entrypoint=Entrypoint.from_callable(_run),
         resources=resources,
         environment=create_environment(
-            extras=["eval", "tpu", "vllm"],
+            extras=dependency_groups,
             pip_packages=(),
-            env_vars=env_vars or None,
+            env_vars=env_vars_for_dependency_groups(resources, dependency_groups, env_vars),
         ),
     )
     job = client.submit(job_request)
