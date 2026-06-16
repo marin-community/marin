@@ -389,6 +389,16 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   to **v6e-8 interactive (w4d)** so the 3×3 completes (budget ~66k, under cap). It's the
   least-informative corner (doubly-edge), not an axis-neighbor of the center — the optimum
   check doesn't depend on it. All 9 E4 cells now in flight._
+- **Controller outage ~08:46–12:10Z (~3.5h):** the iris controller query API hung (all
+  RPCs DEADLINE_EXCEEDED); at ~11:00Z every active child crashed (W&B heartbeats lost) and
+  when the controller returned the surviving parent drivers also FAILED on terminal child
+  state (`JobFailedError: child JOB_STATE_KILLED`, failure_count=1 — outage-transient, not
+  OOM/code). No progress lost (10-min checkpoints). **~12:20Z resubmitted all 9 still-needed
+  cells from checkpoints on reliable single-host v6e-8** (avoiding fragile multi-host right
+  after an outage): w2u=E2 7e-4/0.2 + critical E4 (7e-4/0.1, 7e-4/0.2, 5e-4/0.05, 5e-4/0.1,
+  1e-3/0.1) on interactive; 3 E4 corners (5e-4/0.2, 1e-3/0.05, 1e-3/0.2) on batch. w4b
+  7e-4/0.05 kept running. The 2 E2 1e-3 cells whose parents FAILED were already complete
+  (recorded 2.996/2.989) — not resubmitted.
 - Grid (final-step `eval/contacts-v1-val/loss`):
 
   | wd \ lr | 5e-4 | 7e-4 | 1e-3 |
