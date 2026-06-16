@@ -1502,7 +1502,7 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
     assert len(constraints_from_json(job.constraints_json)) == 0
 
 
-def test_launch_job_deprecated_reservation_becomes_availability_hint(service, state):
+def test_launch_job_deprecated_reservation_becomes_availability_constraint(service, state):
     """A pre-availability client's ``reservation`` field is converted to hard
     availability constraints at ingestion and nothing reservation-shaped is persisted."""
     request = controller_pb2.Controller.LaunchJobRequest(
@@ -1511,7 +1511,7 @@ def test_launch_job_deprecated_reservation_becomes_availability_hint(service, st
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
     )
-    # Two entries for the same accelerator collapse to a single hint.
+    # Two entries for the same accelerator collapse to a single constraint.
     request.reservation.entries.add().resources.device.CopyFrom(tpu_device("v5litepod-16"))
     request.reservation.entries.add().resources.device.CopyFrom(tpu_device("v5litepod-16"))
 
