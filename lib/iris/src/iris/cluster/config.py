@@ -444,7 +444,7 @@ def _deep_merge_defaults(target: config_pb2.DefaultsConfig, source: config_pb2.D
     for field_desc in source.DESCRIPTOR.fields:
         if field_desc.message_type is not None:
             continue
-        if field_desc.label == field_desc.LABEL_REPEATED:
+        if field_desc.is_repeated:
             continue
         if source.HasField(field_desc.name):
             setattr(target, field_desc.name, getattr(source, field_desc.name))

@@ -221,7 +221,7 @@ def kebab_to_pascal(name: str) -> str:
 
 def _is_simple_field(field: FieldDescriptor) -> bool:
     """Check if a protobuf field is a simple scalar type that maps to Click."""
-    if field.label == FieldDescriptor.LABEL_REPEATED:
+    if field.is_repeated:
         return False
     if field.message_type is not None:
         return False
