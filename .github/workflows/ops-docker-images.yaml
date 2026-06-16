@@ -19,7 +19,9 @@ jobs:
   # Iris Images - Worker, controller, and task images pushed to GHCR
   # Uses a single multi-stage Dockerfile (lib/iris/Dockerfile) with --target.
   # Controller and worker share all layers up to Python deps; the worker adds
-  # only the Docker CLI. Task is an independent stage with marin root context.
+  # only the Docker CLI. All targets build from the marin repo root context:
+  # the deps stage COPYs the root uv.lock and every workspace member's
+  # pyproject.toml (plus lib/rigging source), all of which live above lib/iris.
   iris-images:
     # Run on: manual trigger OR weekly schedule (02:00 UTC on Sundays)
     if: |
@@ -31,13 +33,10 @@ jobs:
         include:
           - image: iris-worker
             target: worker
-            context: lib/iris
           - image: iris-controller
             target: controller
-            context: lib/iris
           - image: iris-task
             target: task
-            context: .
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -70,7 +69,7 @@ jobs:
             --tag ghcr.io/marin-community/${{ matrix.image }}:latest \
             --tag ghcr.io/marin-community/${{ matrix.image }}:${{ steps.set-tags.outputs.DATE_TAG }} \
             --tag ghcr.io/marin-community/${{ matrix.image }}:${{ steps.set-tags.outputs.HASH_TAG }} \
-            ${{ matrix.context }}
+            .
 
   # Finelog Image - Standalone log server (lib/finelog)
   finelog-image:
