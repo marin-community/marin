@@ -6,20 +6,24 @@
 import difflib
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections import defaultdict
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from rigging.timing import Timestamp
 
 from iris.cluster.constraints import (
+    AVAILABILITY_PREFIX,
     AttributeValue,
     Constraint,
     ConstraintIndex,
     DeviceType,
     PlacementRequirements,
     availability_key,
+    device_variant_constraint,
     extract_placement_requirements,
     get_device_type_enum,
+    is_availability_key,
     routing_constraints,
     soft_constraint_score,
     split_hard_soft,
@@ -32,7 +36,112 @@ from iris.cluster.controller.autoscaler.models import (
     UnmetDemand,
 )
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
-from iris.rpc import config_pb2
+from iris.cluster.types import gpu_device, tpu_device
+from iris.rpc import config_pb2, job_pb2
+
+# Synthetic task id stem for an availability probe (see availability_probe_entries).
+_AVAILABILITY_PROBE_TASK = "__availability_probe__"
+
+
+def empirical_zone_capabilities(groups: Iterable[ScalingGroup], timestamp: Timestamp) -> dict[str, frozenset[str]]:
+    """Map zone -> accelerator variants the cluster has EMPIRICALLY confirmed available.
+
+    A variant counts for a zone when an accelerator group in that zone's *region*
+    currently has >0 successfully-allocated (``READY``) slices and is not erroring
+    (``QUOTA_EXCEEDED``/``BACKOFF``) — i.e. we actually scaled it up and got capacity,
+    not merely that a group is configured there. This replaces the old optimistic
+    "configured and not quota-blocked" map: a configured-but-never-launched group
+    advertises nothing until a scale-up (e.g. an availability probe) succeeds.
+
+    Rolled up to region so every zone in a region inherits the region's live variants
+    ("schedule me where the accelerator can be found" is a regional question); the
+    returned map stays keyed by zone so the worker/group enrichment consumers are
+    unchanged. Only zones belonging to a region with ≥1 live variant appear.
+    """
+    region_variants: dict[str, set[str]] = defaultdict(set)
+    zones_by_region: dict[str, set[str]] = defaultdict(set)
+    for group in groups:
+        zone = group.zone
+        if zone is None:
+            continue
+        region = group.region or zone
+        zones_by_region[region].add(zone)
+        resources = group.resources
+        variant = resources.device_variant if resources is not None else ""
+        if not variant or group.ready_slice_count() == 0:
+            continue
+        if group.availability(timestamp).status in (GroupAvailability.QUOTA_EXCEEDED, GroupAvailability.BACKOFF):
+            continue
+        region_variants[region].add(variant.lower())
+
+    caps: dict[str, frozenset[str]] = {}
+    for region, zones in zones_by_region.items():
+        variants = frozenset(region_variants.get(region, ()))
+        if not variants:
+            continue
+        for zone in zones:
+            caps[zone] = variants
+    return caps
+
+
+def availability_probe_entries(
+    groups: Sequence[ScalingGroup],
+    demand_entries: Sequence[DemandEntry],
+    available_variants: frozenset[str],
+) -> list[DemandEntry]:
+    """Convert unmet ``availability:<variant>`` demand into accelerator scale-up demand.
+
+    A job carrying ``availability:V`` cannot be placed until some region has live V
+    capacity, but empirical availability can only be discovered by attempting a
+    scale-up. For each V that a pending entry constrains on and that is not yet
+    available, emit **one** synthetic demand entry for a V slice — routed to V's group
+    by device variant (NOT by availability, which would be circular). When the
+    scale-up succeeds V becomes available and the constrained job places, leaving the
+    pending set, so this probe demand naturally subsides on the next tick. Probe
+    slices an orchestrator does not promptly claim are reclaimed by idle-scaledown.
+    """
+    wanted: set[str] = set()
+    for entry in demand_entries:
+        for constraint in entry.constraints:
+            if is_availability_key(constraint.key):
+                wanted.add(constraint.key[len(AVAILABILITY_PREFIX) :])
+    to_probe = wanted - available_variants
+    if not to_probe:
+        return []
+
+    group_by_variant: dict[str, ScalingGroup] = {}
+    for group in groups:
+        resources = group.resources
+        variant = resources.device_variant.lower() if resources is not None and resources.device_variant else ""
+        if variant in to_probe and variant not in group_by_variant:
+            group_by_variant[variant] = group
+
+    probes: list[DemandEntry] = []
+    for variant in sorted(to_probe):
+        group = group_by_variant.get(variant)
+        if group is None:
+            continue  # no configured group provides it — nothing to probe
+        probes.append(_availability_probe_entry(variant, group))
+    return probes
+
+
+def _availability_probe_entry(variant: str, group: ScalingGroup) -> DemandEntry:
+    """One non-coscheduled demand entry shaped to scale a single slice of ``group``."""
+    resources = group.resources
+    if resources is not None and resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU:
+        device = gpu_device(resources.device_variant, resources.device_count or 1)
+    else:
+        # tpu_device infers the per-VM chip count, which matches the group's per-VM
+        # device_count, so check_resource_fit accepts one VM's worth of accelerator.
+        device = tpu_device(variant)
+    constraints = [device_variant_constraint([variant])]
+    return DemandEntry(
+        task_ids=(f"{_AVAILABILITY_PROBE_TASK}:{variant}",),
+        coschedule_group_id=None,
+        normalized=extract_placement_requirements(constraints),
+        constraints=constraints,
+        resources=job_pb2.ResourceSpecProto(device=device),
+    )
 
 
 def additive_req(entry: DemandEntry) -> AdditiveReq:
@@ -436,9 +545,10 @@ def _enriched_group_attrs(
     """A group's routing attributes plus its zone's ``availability:<variant>`` markers.
 
     A hard ``availability:<variant>`` constraint on a job's demand restricts routing
-    to groups whose zone can provision that variant, so a CPU orchestrator's CPU
-    demand is steered into a zone where its accelerator can later be found (and is
-    held back from zones that can never provide it).
+    to groups whose zone has empirically yielded that variant (live, non-erroring
+    slices — see :func:`empirical_zone_capabilities`), so a CPU orchestrator's CPU
+    demand is steered into a zone where its accelerator has actually been found (and
+    is held back from zones that have never provided it).
     """
     attrs = group.to_attributes()
     for variant in zone_capabilities.get(group.zone or "", ()):

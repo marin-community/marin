@@ -20,7 +20,7 @@ The run_once() flow splits into two phases:
 import logging
 import urllib.error
 import urllib.request
-from collections import defaultdict, deque
+from collections import deque
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -50,9 +50,13 @@ from iris.cluster.controller.autoscaler.recovery import (
     load_autoscaler_checkpoint,
     restore_autoscaler_state,
 )
-from iris.cluster.controller.autoscaler.routing import job_feasibility, route_demand
+from iris.cluster.controller.autoscaler.routing import (
+    availability_probe_entries,
+    empirical_zone_capabilities,
+    job_feasibility,
+    route_demand,
+)
 from iris.cluster.controller.autoscaler.scaling_group import (
-    GroupAvailability,
     ScalingGroup,
     build_worker_config_for_group,
 )
@@ -334,9 +338,18 @@ class Autoscaler:
         """
         ts = timestamp or Timestamp.now()
 
-        routing_decision = route_demand(
-            list(self._groups.values()), demand_entries, ts, zone_capabilities=self.zone_capabilities(ts)
-        )
+        # Empirical availability: a variant is "available" in a region only once a
+        # scale-up there has succeeded. Convert each unmet availability:<variant>
+        # constraint into a probe scale-up of that accelerator group so capacity can
+        # be discovered/established; the demand subsides once the constrained job
+        # places (see availability_probe_entries).
+        caps = self.zone_capabilities(ts)
+        available_variants = frozenset(variant for variants in caps.values() for variant in variants)
+        probes = availability_probe_entries(list(self._groups.values()), demand_entries, available_variants)
+        if probes:
+            demand_entries = list(demand_entries) + probes
+
+        routing_decision = route_demand(list(self._groups.values()), demand_entries, ts, zone_capabilities=caps)
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
         # Build cached views eagerly here so dashboard/service RPCs never pay
         # the conversion cost on the hot path (#4844).
@@ -372,30 +385,17 @@ class Autoscaler:
         return scale_plan.decisions()
 
     def zone_capabilities(self, timestamp: Timestamp | None = None) -> dict[str, frozenset[str]]:
-        """Map zone -> {device_variant} the cluster is configured to provision there.
+        """Map zone -> {device_variant} the cluster has EMPIRICALLY confirmed available.
 
         Used by routing (to filter scaling groups) and by the scheduler (to inject
         ``availability:<variant>`` markers onto workers) so a hard availability
-        constraint confines a job to a zone where its accelerator can be found.
-
-        A variant counts for a zone if a configured accelerator group for it
-        exists there and is not hard-quota-blocked (QUOTA_EXCEEDED); transient
-        states (AT_MAX_SLICES, BACKOFF, REQUESTING) still count, since the zone
-        *can* provide it once capacity frees up. CPU-only groups carry no variant
-        and contribute nothing — availability markers are accelerators only.
+        constraint confines a job to a region where its accelerator has actually been
+        found. A variant counts only after a scale-up succeeded (≥1 live ``READY``
+        slice, not erroring) — see :func:`empirical_zone_capabilities`. The probe in
+        :meth:`evaluate` bootstraps capacity for an as-yet-unobserved variant.
         """
         ts = timestamp or Timestamp.now()
-        caps: dict[str, set[str]] = defaultdict(set)
-        for group in self._groups.values():
-            zone = group.zone
-            resources = group.resources
-            variant = resources.device_variant if resources is not None else ""
-            if zone is None or not variant:
-                continue
-            if group.availability(ts).status is GroupAvailability.QUOTA_EXCEEDED:
-                continue
-            caps[zone].add(variant.lower())
-        return {zone: frozenset(variants) for zone, variants in caps.items()}
+        return empirical_zone_capabilities(self._groups.values(), ts)
 
     def execute(
         self,

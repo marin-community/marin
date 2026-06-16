@@ -121,12 +121,15 @@ def enrich_workers_with_availability(
 ) -> list[WorkerSnapshot]:
     """Add each worker's zone ``availability:<variant>`` markers to its attributes.
 
-    A worker inherits the accelerator variants its *zone* can provision (inferred
-    from the autoscaler). A hard ``availability:<variant>`` job constraint then
-    filters placement to workers in a capable zone, so a CPU orchestrator is placed
-    only in the zone where its accelerator can be found (and waits otherwise). Keys
-    on the existing ``zone`` attribute (the same one ``--zone``/``--region``
-    matching uses); workers without a zone are passed through unchanged.
+    A worker inherits the accelerator variants its *zone* has been EMPIRICALLY
+    confirmed to provide (a live, non-erroring slice in the zone's region — see
+    :func:`empirical_zone_capabilities`). A hard ``availability:<variant>`` job
+    constraint then filters placement to workers in such a zone, so a CPU
+    orchestrator is placed only where its accelerator has actually been obtained
+    (and waits otherwise; the availability probe meanwhile scales the variant up so
+    the zone can become available). Keys on the existing ``zone`` attribute (the
+    same one ``--zone``/``--region`` matching uses); workers without a zone are
+    passed through unchanged.
     """
     if not zone_capabilities:
         return workers

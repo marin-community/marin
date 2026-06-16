@@ -241,11 +241,12 @@ def run_scheduling_decision(
     (plus the autoscaler-derived ``zone_capabilities`` snapshot) and every output
     is plain data.
 
-    ``zone_capabilities`` (zone -> accelerator variants the zone can provision) is
-    folded onto worker attributes as ``availability:<variant>`` markers so a hard
-    availability constraint confines a job to workers in a capable zone. Only the
-    variants some pending task actually constrains on are injected, so the per-worker
-    copy touches just the workers in a zone that provisions a demanded variant.
+    ``zone_capabilities`` (zone -> accelerator variants empirically available there,
+    from live scaling-group state) is folded onto worker attributes as
+    ``availability:<variant>`` markers so a hard availability constraint confines a
+    job to workers in a zone where the accelerator has actually been obtained. Only
+    the variants some pending task actually constrains on are injected, so the
+    per-worker copy touches just the workers in a zone with a demanded variant.
     """
     ctx = snapshot.context
     trace = snapshot.trace
