@@ -77,6 +77,20 @@ class WorkerLiveness:
     build_failures: int = 0
 
 
+def _mark_reached(state: WorkerLiveness, now_ms: int) -> None:
+    """Record that a worker was reached this tick.
+
+    Refreshes the heartbeat, asserts healthy/active, and clears the
+    consecutive-failure counter. Shared by the lifecycle seed
+    (:meth:`WorkerHealthTracker.heartbeat`) and the steady-state REACHED fold
+    (:meth:`WorkerHealthTracker.apply`) so the two cannot drift.
+    """
+    state.last_heartbeat_ms = now_ms
+    state.healthy = True
+    state.active = True
+    state.consecutive_failures = 0
+
+
 class WorkerHealthTracker:
     """In-memory source of truth for worker liveness."""
 
@@ -108,11 +122,7 @@ class WorkerHealthTracker:
         """
         with self._lock:
             for wid in worker_ids:
-                state = self._states.setdefault(wid, WorkerLiveness())
-                state.last_heartbeat_ms = now_ms
-                state.healthy = True
-                state.active = True
-                state.consecutive_failures = 0
+                _mark_reached(self._states.setdefault(wid, WorkerLiveness()), now_ms)
 
     # -- The single liveness-accounting mutation site -----------------------
 
@@ -130,10 +140,7 @@ class WorkerHealthTracker:
             for event in events:
                 state = self._states.setdefault(event.worker_id, WorkerLiveness())
                 if event.kind is WorkerHealthEventKind.REACHED:
-                    state.last_heartbeat_ms = now_ms
-                    state.healthy = True
-                    state.active = True
-                    state.consecutive_failures = 0
+                    _mark_reached(state, now_ms)
                 elif event.kind is WorkerHealthEventKind.UNREACHABLE:
                     state.consecutive_failures += 1
                 elif event.kind is WorkerHealthEventKind.BUILD_FAILED:
