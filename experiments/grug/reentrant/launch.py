@@ -78,6 +78,12 @@ def env_int(key: str, default: int) -> int:
     return int(raw) if raw else default
 
 
+def env_float(key: str, default: float) -> float:
+    """Read a float from ``os.environ[key]``, falling back to ``default`` when unset/empty."""
+    raw = os.environ.get(key, "")
+    return float(raw) if raw else default
+
+
 def slimpajama_6b_data() -> LmDataConfig:
     """SlimPajama-6B, llama3-tokenized with block-shuffle, re-tokenized on first run.
 
@@ -267,8 +273,21 @@ e3_reentrant = reentrant_step(
     tags=["moe", "reentrant", "e3-randdepth"],
 )
 
+# E5 — convergence-regularized re-entrant: E3 plus a training-only core-consistency
+# penalty (mean normalized squared delta between consecutive core-loop states). Pulls
+# the weight-tied core toward a contractive/fixed-point map so deeper-than-trained
+# test-time loops stop drifting. CONSISTENCY_WEIGHT tunes lambda; eval metric is
+# unchanged (penalty is training-only).
+_E5_MODEL = dataclasses.replace(_E3_MODEL, core_consistency_weight=env_float("CONSISTENCY_WEIGHT", 1.0))
+e5_reentrant = reentrant_step(
+    name="grug/reentrant_e5_consistency",
+    run_id=_resolve_run_id("reentrant_e5_consistency"),
+    model=_E5_MODEL,
+    tags=["moe", "reentrant", "e5-consistency"],
+)
+
 # Experiment registry. Select with GRUG_EXPERIMENT (comma-separated names); default E0.
-_STEPS = {"e0": e0_baseline, "e1": e1_reentrant, "e2": e2_reentrant, "e3": e3_reentrant}
+_STEPS = {"e0": e0_baseline, "e1": e1_reentrant, "e2": e2_reentrant, "e3": e3_reentrant, "e5": e5_reentrant}
 
 
 if __name__ == "__main__":

@@ -130,6 +130,11 @@ class GrugModelConfig:
     recurrence_choices: tuple[int, ...] = ()
     """E3: the set of loop counts to sample among when randomize_recurrence is True
     (e.g. (2, 4, 8)). Empty unless randomize_recurrence."""
+    core_consistency_weight: float = 0.0
+    """E5: weight on the core-consistency penalty (mean normalized squared delta
+    between consecutive core-loop hidden states). 0 disables it (E0-E3 unchanged).
+    >0 pulls the weight-tied core toward a contractive/fixed-point map so extra
+    test-time loops stop drifting."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -661,6 +666,12 @@ class Transformer(eqx.Module):
         # config default exactly, so E0/E1/E2 are unchanged.
         n_recurrence = recurrence_steps if recurrence_steps is not None else cfg.recurrence_steps
         core_iter_stats: list[list[dict[str, jax.Array]]] = [[] for _ in core_blocks]
+        # E5: accumulate the per-iteration normalized squared delta between
+        # consecutive core-loop states. Gated on the static config so E0-E3 trace
+        # to the identical jaxpr (no penalty op, no extra metric key).
+        track_consistency = cfg.core_consistency_weight > 0
+        consistency_accum = jnp.zeros((), dtype=jnp.float32)
+        x_prev = hidden
         for t in range(n_recurrence):
             for c, block in enumerate(core_blocks):
                 film = None
@@ -672,6 +683,12 @@ class Transformer(eqx.Module):
                 hidden, stats = apply_block(block, hidden, eff_idx, film)
                 core_iter_stats[c].append(stats)
                 eff_idx += 1
+            if track_consistency:
+                delta = hidden - x_prev
+                num = jnp.sum(jnp.square(delta.astype(jnp.float32)), axis=-1)
+                den = jnp.sum(jnp.square(x_prev.astype(jnp.float32)), axis=-1) + cfg.layer_norm_eps
+                consistency_accum = consistency_accum + jnp.mean(num / den)
+                x_prev = hidden
         per_block_stats.extend(_mean_router_stats(s) for s in core_iter_stats)
 
         for block in coda_blocks:
@@ -686,6 +703,8 @@ class Transformer(eqx.Module):
             "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in per_block_stats], axis=0),
             "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in per_block_stats], axis=0),
         }
+        if track_consistency:
+            router_metrics["core_consistency"] = consistency_accum / n_recurrence
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
 
@@ -730,10 +749,20 @@ class Transformer(eqx.Module):
         rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
         aux_loss = self.config.router_z_loss_coef * rzl
         loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
+        # E5: training-only core-consistency penalty. Gated on the static config so
+        # weight==0 (E0-E3) leaves the eval (reduction="none") path untouched.
+        consistency_weighted = None
+        if reduction != "none" and self.config.core_consistency_weight > 0:
+            consistency = router_metrics["core_consistency"]
+            consistency_weighted = self.config.core_consistency_weight * consistency
+            loss = loss + consistency_weighted
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
+            if "core_consistency" in router_metrics:
+                summarized_metrics["train/core_consistency"] = router_metrics["core_consistency"]
+                summarized_metrics["train/core_consistency_weighted"] = consistency_weighted
             return loss, summarized_metrics
         return loss
 

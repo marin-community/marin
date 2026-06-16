@@ -593,6 +593,125 @@ def test_reentrant_recurrence_override_changes_effective_depth():
         assert not jnp.array_equal(logits, logits_r4)
 
 
+def _small_reentrant_consistency_config(model_module, *, core_consistency_weight: float):
+    """1 prelude + 1 core looped 4x + 1 coda re-entrant config (FiLM off, E3/E5 path)."""
+    return model_module.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=64,
+        num_layers=3,
+        num_prelude_layers=1,
+        num_coda_layers=1,
+        recurrence_steps=4,
+        iteration_film=False,
+        num_heads=2,
+        num_kv_heads=2,
+        num_experts=4,
+        num_experts_per_token=2,
+        shared_expert_intermediate_dim=64,
+        max_seq_len=8,
+        core_consistency_weight=core_consistency_weight,
+    )
+
+
+def test_reentrant_core_consistency_does_not_touch_eval_loss():
+    """E5's core-consistency penalty must be training-only: with reduction="none"
+    (the eval path), a model with core_consistency_weight>0 returns the exact same
+    per-position loss as the identical model with weight=0. Comparability of the eval
+    cross-entropy across E5 and the baselines depends on this.
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+
+    cfg_off = _small_reentrant_consistency_config(model_module, core_consistency_weight=0.0)
+    cfg_on = _small_reentrant_consistency_config(model_module, core_consistency_weight=1.0)
+
+    mesh = compact_grug_mesh()
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(2 * 8, dtype=jnp.int32).reshape(2, 8) % cfg_off.vocab_size
+    weights = jnp.ones((2, 8), dtype=jnp.float32)
+    token_pspec = jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None)
+
+    def eval_loss(cfg, sharded_tokens, sharded_weights):
+        # Both configs only differ in core_consistency_weight (a static field), so the
+        # same PRNG key gives bit-identical params; the only possible divergence is the
+        # penalty leaking into the eval path.
+        model = model_module.Transformer.init(cfg, key=key)
+        return jax.jit(lambda m, t, w: m.next_token_loss(t, w, reduction="none", logsumexp_weight=None))(
+            model, sharded_tokens, sharded_weights
+        )
+
+    with _reset_abstract_mesh(), set_mesh(mesh):
+        sharded_tokens = jax.sharding.reshard(tokens, token_pspec)
+        sharded_weights = jax.sharding.reshard(weights, token_pspec)
+        loss_off = eval_loss(cfg_off, sharded_tokens, sharded_weights)
+        loss_on = eval_loss(cfg_on, sharded_tokens, sharded_weights)
+
+    assert loss_off.shape == (2, 8)
+    assert jnp.array_equal(loss_off, loss_on)
+
+
+def test_reentrant_core_consistency_adds_positive_term_to_training_loss():
+    """With weight>0 and reduction="mean", the scalar training loss is strictly greater
+    than the weight=0 loss (the penalty is positive), and the raw ``train/core_consistency``
+    metric is surfaced, finite, and >= 0.
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+
+    cfg_off = _small_reentrant_consistency_config(model_module, core_consistency_weight=0.0)
+    cfg_on = _small_reentrant_consistency_config(model_module, core_consistency_weight=1.0)
+
+    mesh = compact_grug_mesh()
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(2 * 8, dtype=jnp.int32).reshape(2, 8) % cfg_off.vocab_size
+    weights = jnp.ones((2, 8), dtype=jnp.float32)
+    token_pspec = jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None)
+
+    def train_loss(cfg, sharded_tokens, sharded_weights):
+        model = model_module.Transformer.init(cfg, key=key)
+        return jax.jit(
+            lambda m, t, w: m.next_token_loss(t, w, reduction="mean", logsumexp_weight=None, return_router_metrics=True)
+        )(model, sharded_tokens, sharded_weights)
+
+    with _reset_abstract_mesh(), set_mesh(mesh):
+        sharded_tokens = jax.sharding.reshard(tokens, token_pspec)
+        sharded_weights = jax.sharding.reshard(weights, token_pspec)
+        loss_off, metrics_off = train_loss(cfg_off, sharded_tokens, sharded_weights)
+        loss_on, metrics_on = train_loss(cfg_on, sharded_tokens, sharded_weights)
+
+    raw = metrics_on["train/core_consistency"]
+    assert jnp.isfinite(raw)
+    assert float(raw) >= 0.0
+    assert float(raw) > 0.0  # random init produces a nonzero per-loop delta
+    # weight==1.0 adds the raw penalty; the training loss must grow by exactly that.
+    assert float(loss_on) > float(loss_off)
+    assert jnp.allclose(loss_on, loss_off + raw, atol=1e-5)
+    assert jnp.allclose(metrics_on["train/core_consistency_weighted"], raw, atol=1e-6)
+    # The weight=0 model never computes the penalty, so it has no such metric.
+    assert "train/core_consistency" not in metrics_off
+
+
+def test_reentrant_core_consistency_absent_when_disabled():
+    """With weight=0 (the E0-E3 default) the forward never adds a ``core_consistency``
+    key to router_metrics, so the static gate in next_token_loss stays clean and the
+    baseline traces are unchanged.
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+
+    cfg = _small_reentrant_consistency_config(model_module, core_consistency_weight=0.0)
+
+    mesh = compact_grug_mesh()
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(2 * 8, dtype=jnp.int32).reshape(2, 8) % cfg.vocab_size
+    token_pspec = jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None)
+
+    with _reset_abstract_mesh(), set_mesh(mesh):
+        sharded_tokens = jax.sharding.reshard(tokens, token_pspec)
+        model = model_module.Transformer.init(cfg, key=key)
+        _, router_metrics = jax.jit(lambda m, t: m(t))(model, sharded_tokens)
+
+    assert "core_consistency" not in router_metrics
+
+
 def test_reentrant_film_params_use_plain_adam_not_adamh():
     """E2's FiLM tables must be optimized by plain Adam, not AdamH.
 
