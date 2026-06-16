@@ -1885,6 +1885,211 @@ Conclusion:
   `--vllm-dtype float32` score mode or to emit a bfloat16 native-reference
   route record, then rerun the same small diagnostic.
 
+## 2026-06-16 - Small Diagnostic Float32 vLLM Dtype Check
+
+Goal: determine whether the token `0`, layer `0` small-diagnostic route
+mismatch is caused by installed vLLM TPU running the model in `bfloat16`, or by
+an implementation/runtime mismatch that remains when vLLM is asked to run the
+score path in `float32`.
+
+Branches and commits:
+
+- Marin base branch: `codex/grugmoe-routing-localize-20260615`.
+- Marin diagnostic branch: `codex/grugmoe-float32-routing-debug-20260615` at
+  `9cc52f838bd8ba62fae32a4f37c690ec1195723a` for the TPU run.
+- vLLM: unchanged at `c6f0608ddadb6bdd39a16b857b5affe660b1259e`.
+- tpu-inference: unchanged at
+  `0cf0ed8cb92f1731ec9fb7bc1c291c9ab00364af`.
+
+Diagnostic code change:
+
+- Added temporary `--vllm-dtype {bfloat16,float32}` to
+  `installed_vllm_full_canary_smoke.py`.
+- Default remains `bfloat16`.
+- The score path now passes the requested dtype to `LLM(...)` and prints
+  `score_vllm_dtype=...`; the serve path also accepts the same flag for
+  consistency.
+
+Local checks:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-float32-routing-debug-20260615
+python -m py_compile experiments/grug/moe/installed_vllm_full_canary_smoke.py
+VLLM_TARGET_DEVICE=tpu uv lock --check
+git diff --check
+./infra/pre-commit.py experiments/grug/moe/installed_vllm_full_canary_smoke.py
+env -u PYTHONPATH VLLM_TARGET_DEVICE=tpu \
+  uv run --locked --package marin-core --extra vllm --extra eval \
+  python -m experiments.grug.moe.installed_vllm_full_canary_smoke --help
+```
+
+Result: all local checks passed; help showed
+`--vllm-dtype {bfloat16,float32}`.
+
+TPU command:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-float32-routing-debug-20260615
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 7200 \
+  --cpu 16 \
+  --memory 256GB \
+  --disk 300GB \
+  --job-name grugmoe-float32-routing-debug-$(date +%Y%m%d-%H%M%S) \
+  -e VLLM_TARGET_DEVICE tpu \
+  -- env -u PYTHONPATH \
+    VLLM_TARGET_DEVICE=tpu \
+    PYTHONUNBUFFERED=1 \
+    LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304 \
+    bash -lc 'set -euo pipefail
+OUTPUT_DIR=/tmp/grugmoe-float32-routing-debug-installed-vllm
+uv run --locked --package marin-core --extra vllm --extra eval \
+  python -m experiments.grug.moe.installed_vllm_full_canary_smoke \
+  --phase export \
+  --model-size small-diagnostic \
+  --output-dir "$OUTPUT_DIR" \
+  --max-shard-size 4194304 \
+  --generation-tokens 3 \
+  --routing-debug \
+  --routing-debug-token-position 0 \
+  --routing-debug-layer 0 \
+  --routing-debug-vector-limit 16
+uv run --locked --package marin-core --extra vllm --extra eval \
+  python -m experiments.grug.moe.installed_vllm_full_canary_smoke \
+  --phase score \
+  --model-size small-diagnostic \
+  --output-dir "$OUTPUT_DIR" \
+  --artifact-dir "$OUTPUT_DIR/grugmoe-inference" \
+  --reference-path "$OUTPUT_DIR/installed_vllm_reference.json" \
+  --max-shard-size 4194304 \
+  --generation-tokens 3 \
+  --vllm-dtype float32 \
+  --routing-debug \
+  --routing-debug-token-position 0 \
+  --routing-debug-layer 0 \
+  --routing-debug-vector-limit 16'
+```
+
+Final TPU job:
+
+- `/romain/grugmoe-float32-routing-debug-20260616-000101`.
+- Region/TPU: `europe-west4`, `v6e-4`.
+- Final state: failed in the expected score-phase routing guard with
+  `AssertionError: 3 routed-expert mismatches had boundary margin > 0.01`.
+- Duration: `2 minutes and 57.47 seconds`.
+- The job intentionally ran `export` plus `score`, not the API server `serve`
+  phase, to isolate the requested score/debug path.
+
+Export/load evidence:
+
+- Config source: `small diagnostic GrugMoE`.
+- Shape:
+  `{"head_dim":128,"hidden_dim":512,"intermediate_dim":1024,"max_seq_len":16,"num_experts":4,"num_experts_per_token":2,"num_heads":4,"num_kv_heads":1,"num_layers":2,"shared_expert_intermediate_dim":512,"sliding_window":8,"vocab_size":4096}`.
+- `artifact_bytes=81845277`, `shard_count=14`, `max_shard_size=4194304`,
+  `expected_tensors=46`, `consumed_tensors=46`, `missing=[]`,
+  `unexpected=[]`.
+- Standalone loaded native artifact still matched the Levanter/manual-copy
+  reference for hidden states, logits, and routed expert IDs before entering the
+  installed vLLM score path.
+
+Float32 score evidence:
+
+- `score_vllm_dtype=float32`.
+- vLLM engine config logged `dtype=torch.float32`.
+- TPU runtime initialized the score LLM successfully:
+  `score_llm_initialized=True`.
+- KV cache was also initialized with `regular_attn_dtype=float32`.
+- Prepared vLLM padding buckets: token paddings `[16]`, request paddings `[8]`.
+- Score prompt token IDs:
+  `[1, 42, 128, 2048, 17, 3072, 5, 63, 3045, 2536, 3106]`.
+- Score generated token IDs: `[2951]`.
+- Fixed-continuation generated token IDs: `[3045, 2536, 3106]`.
+
+Selected-token logprobs remained close to the unchanged Levanter reference:
+
+- `max_abs_delta=0.0019140243530273438`.
+- `mean_abs_delta=0.0013613700866699219`.
+- Token 3045 at position 8: Levanter `-6.945110321044922`, vLLM float32
+  `-6.9455718994140625`, delta `0.000461578369140625`.
+- Token 2536 at position 9: Levanter `-6.994075775146484`, vLLM float32
+  `-6.995784282684326`, delta `0.0017085075378417969`.
+- Token 3106 at position 10: Levanter `-7.133152961730957`, vLLM float32
+  `-7.135066986083984`, delta `0.0019140243530273438`.
+
+Token `0`, layer `0` comparison:
+
+- Levanter/manual reference:
+  - router input hidden state dtype `float32`, first values
+    `[0.8003653287887573, 0.9361541867256165, 0.4786311388015747,
+    0.3288799822330475, 0.019369488582015038, -0.6378109455108643,
+    0.14827126264572144, -0.4013029634952545]`, `l2=11.270750380335834`.
+  - raw/biased router logits:
+    `[0.11579327285289764, 0.18306951224803925,
+    0.1365107148885727, -0.06385284662246704]`.
+  - router bias: `[0.0, 0.0, 0.0, 0.0]`.
+  - top-k with boundary: experts `[1, 2, 0]`, logits
+    `[0.18306951224803925, 0.1365107148885727,
+    0.11579327285289764]`.
+  - selected top-k experts: `[1, 2]`.
+  - combine weights: `[0.5456399917602539, 0.5340747833251953]`.
+  - router margin: `0.02071744203567505`.
+- Installed vLLM float32 tpu-inference route hook:
+  - router input hidden state dtype `float32`, first values
+    `[0.8536180853843689, 0.9874662756919861, 0.4545571804046631,
+    0.3482293486595154, 0.19358250498771667, -0.4921537935733795,
+    0.1852644979953766, -0.5816210508346558]`, `l2=11.270728155300965`.
+  - raw/biased router logits:
+    `[0.19385746121406555, 0.13631269335746765,
+    0.02195437252521515, -0.03043171763420105]`.
+  - router bias: `[0.0, 0.0, 0.0, 0.0]`.
+  - top-k with boundary: experts `[0, 1, 2]`, logits
+    `[0.19385746121406555, 0.13631269335746765,
+    0.02195437252521515]`.
+  - selected top-k experts: `[0, 1]`.
+  - combine weights: `[0.5483131408691406, 0.5340254902839661]`.
+  - router margin: `0.1143583208322525`.
+- Final vLLM output plumbing:
+  - `CompletionOutput.routed_experts` shape `[11, 2, 2]`.
+  - token `0`, all layer routes: `[[0, 1], [3, 1]]`.
+  - token `0`, layer `0`, reported top-k: `[0, 1]`.
+
+Routing summary:
+
+- `token_layer_count=22`, `top_k=2`.
+- `ordered_topk_match_count=17`, `ordered_topk_match_rate=0.7727272727272727`.
+- `unordered_full_match_count=19`,
+  `unordered_full_match_rate=0.8636363636363636`.
+- `top1_match_count=19`, `top1_match_rate=0.8636363636363636`.
+- `mismatch_count=5`, `suspicious_mismatch_count=3`,
+  `low_margin_boundary_mismatch_count=0`.
+- Suspicious mismatches remained:
+  - token `0`, layer `0`: Levanter `[1, 2]`, vLLM `[0, 1]`.
+  - token `0`, layer `1`: Levanter `[3, 0]`, vLLM `[3, 1]`.
+  - token `1`, layer `1`: Levanter `[2, 3]`, vLLM `[2, 1]`.
+
+Conclusion:
+
+- Float32 is supported on TPU for this installed vLLM score path.
+- The token `0`, layer `0` route does not move to Levanter's `[1, 2]` under
+  `--vllm-dtype float32`; it remains `[0, 1]`.
+- This rules out the prior mismatch as simple bfloat16 precision drift at the
+  installed vLLM dtype boundary. The route hook now reports `float32` inputs and
+  logits, but its router input hidden state is already different from the
+  unchanged Levanter/manual reference.
+- The standalone tpu-inference artifact path still matches Levanter during the
+  export validation, so the next implementation area to debug is not the router
+  top-k/output plumbing and not the static artifact loader. The next boundary is
+  the installed vLLM TPU runtime path into `GrugMoeModel.__call__`: compare
+  `input_ids`, `attention_metadata.input_positions`, padded token/request
+  handling, post-embedding hidden states, layer-0 `attn_in`, layer-0 attention
+  output, the residual `x + attn`, and `self.mlp_gated_norm(self.rms_mlp(x))`
+  before the route call.
+
 ## Scope
 
 In scope:
