@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""d=512 EP=2 5000-T/N, 4x compute-opt batch, **heuristic_v1 + AdamH** (instead of v2 + MuonH).
+"""d=512 EP=2 5000-T/N, 4x compute-opt batch, **heuristic_adamh + AdamH** (instead of v2 + MuonH).
 
 Same model/data/batch/steps/tokens/min_lr_ratio as ``moe_may_5000tn_4x_d512_ep2`` (the v2+MuonH
 baseline) -- the only thing that changes is the optimizer side:
 
-  * Heuristic switches from ``heuristic_v2.MoeMuonHHeuristic`` to ``heuristic_v1.MoeAdamHHeuristic``.
+  * Heuristic switches from ``heuristic_muonh.MoeMuonHHeuristic`` to ``heuristic_adamh.MoeAdamHHeuristic``.
     v1's LR formula uses different exponents (lr_tokens_exp=-0.2813, lr_dim_exp=-0.3678) fit on the
     v16 sweep, vs v2's MuonH-calibrated values.
   * Optimizer becomes ``GrugMoeAdamHConfig`` (built via ``build_optimizer_config``) -- plain AdamH,
@@ -26,7 +26,7 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
-from experiments.grug.moe.heuristic_v1 import MoeAdamHHeuristic
+from experiments.grug.moe.heuristic_adamh import MoeAdamHHeuristic
 from experiments.grug.moe.launch import NEMOTRON_MIX_WITH_DEFAULT_VALIDATION, GrugMoeLaunchConfig, run_grug_moe_trial
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
@@ -90,7 +90,7 @@ if __name__ == "__main__":
         steps=[overtrained_step],
         description=(
             f"d={_DIM} EP={_EP} 5000-T/N overtrained, 4x compute-opt batch ({_BS}), "
-            f"min_lr_ratio={_MIN_LR_RATIO}, heuristic_v1 + AdamH, steps={_STEPS}, "
+            f"min_lr_ratio={_MIN_LR_RATIO}, heuristic_adamh + AdamH, steps={_STEPS}, "
             f"tokens={_tokens:.2e}. v4-32 us-central2."
         ),
     )

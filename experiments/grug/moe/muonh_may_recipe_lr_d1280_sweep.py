@@ -27,7 +27,7 @@ from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
-from experiments.grug.moe.heuristic_v1 import SEQ_LEN, moe_adamh_heuristic
+from experiments.grug.moe.heuristic_adamh import SEQ_LEN, moe_adamh_heuristic
 from experiments.grug.moe.launch import (
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
     GrugMoeLaunchConfig,

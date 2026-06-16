@@ -24,7 +24,7 @@ import dataclasses
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 
-from experiments.grug.moe.heuristic_v1 import build_from_heuristic
+from experiments.grug.moe.heuristic_adamh import build_from_heuristic
 from experiments.grug.moe.launch import NEMOTRON_MIX_WITH_DEFAULT_VALIDATION
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe.per_token_loss import PerTokenLossConfig, run_per_token_loss

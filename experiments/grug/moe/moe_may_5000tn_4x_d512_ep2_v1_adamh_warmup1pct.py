@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""d=512 EP=2 5000-T/N, 4x compute-opt batch, heuristic_v1 + AdamH, **warmup=1%**.
+"""d=512 EP=2 5000-T/N, 4x compute-opt batch, heuristic_adamh + AdamH, **warmup=1%**.
 
 Sibling of ``moe_may_5000tn_4x_d512_ep2_v1_adamh`` -- same optimizer recipe and
 heuristic, but with ``warmup=0.01`` (1pct, matching the May Recipe / MuonH default)
-instead of the heuristic_v1 default of ``warmup=0.1`` (10pct).
+instead of the heuristic_adamh default of ``warmup=0.1`` (10pct).
 
 This isolates the "warmup fraction" axis from the "optimizer choice" axis when
 comparing against the v2 + MuonH d=512 4x base (which also uses 1% warmup).
@@ -23,7 +23,7 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
-from experiments.grug.moe.heuristic_v1 import MoeAdamHHeuristic
+from experiments.grug.moe.heuristic_adamh import MoeAdamHHeuristic
 from experiments.grug.moe.launch import NEMOTRON_MIX_WITH_DEFAULT_VALIDATION, GrugMoeLaunchConfig, run_grug_moe_trial
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
@@ -88,7 +88,7 @@ if __name__ == "__main__":
         steps=[overtrained_step],
         description=(
             f"d={_DIM} EP={_EP} 5000-T/N overtrained, 4x compute-opt batch ({_BS}), "
-            f"min_lr_ratio={_MIN_LR_RATIO}, heuristic_v1 + AdamH, warmup={_WARMUP} (1pct), "
+            f"min_lr_ratio={_MIN_LR_RATIO}, heuristic_adamh + AdamH, warmup={_WARMUP} (1pct), "
             f"steps={_STEPS}, tokens={_tokens:.2e}. v4-32 us-central2."
         ),
     )

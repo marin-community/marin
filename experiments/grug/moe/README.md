@@ -76,7 +76,7 @@ were intentionally dropped so the recipe is the recipe):
 - **No gradient clipping**: `max_grad_norm = None` on the MuonH config
   (v16 used `max_grad_norm = 1.0`).
 - **Warmup 1%** of training (v16 used 10%).
-- **LR refit** in `heuristic_v2.py` (`MoeMuonHHeuristic`): refit on the
+- **LR refit** in `heuristic_muonh.py` (`MoeMuonHHeuristic`): refit on the
   MuonH-on-May-Recipe LR sweep (17 cells, R²=0.996, issue #5951):
   `muonh_lr = 18.31 · tokens^-0.395 · dim^-0.150 · sqrt(B)`
   (equivalently `adam_lr = 0.06602 · tokens^-0.395 · dim^-0.150 · sqrt(tpb)`).
@@ -136,7 +136,7 @@ are the baseline runs that ablation experiments compare against.
 ### May Recipe (drop-1e18 fit, issue #6074) — current baseline
 
 Reference runs on **v4-32 us-central2 with EP=2**, MuonH optimizer
-(`muonh_lr` from `heuristic_v2.MoeMuonHHeuristic.build_muonh_config`), 1pct-noclip
+(`muonh_lr` from `heuristic_muonh.MoeMuonHHeuristic.build_muonh_config`), 1pct-noclip
 schedule, no permanent step-interval checkpoints.
 
 | Budget   | Dim    | Layers | bs  | Steps    | Tokens  | Paloma macro | v4-32 tok/s | Runtime | Run |

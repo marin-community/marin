@@ -30,7 +30,7 @@ from fray.cluster import ResourceConfig
 from levanter.data.text import LmDataConfig
 
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe.heuristic_v2 import MoeMuonHHeuristic
+from experiments.grug.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.grug.moe.model import GrugModelConfig
 
 logger = logging.getLogger(__name__)

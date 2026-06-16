@@ -4,7 +4,7 @@
 """d=512 EP=1 May Recipe compute-optimal baseline, with rms_attn weight init=0.
 
 Same compute-optimal cell as the d=512 entry of ``launch.py``'s ``_COMPUTE_OPT_CELLS``
-(bs=32, steps=10_980, tokens=1.44e9, MuonH on heuristic_v2, EP=1).  Only model
+(bs=32, steps=10_980, tokens=1.44e9, MuonH on heuristic_muonh, EP=1).  Only model
 change: the per-block ``rms_attn`` (RMS norm on the attention input) initialises
 its learnable scale to **zero** instead of one.
 
@@ -31,7 +31,7 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
-from experiments.grug.moe.heuristic_v2 import MoeMuonHHeuristic
+from experiments.grug.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.grug.moe.launch import NEMOTRON_MIX_WITH_DEFAULT_VALIDATION, GrugMoeLaunchConfig, run_grug_moe_trial
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 

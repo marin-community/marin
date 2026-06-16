@@ -35,7 +35,7 @@ from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe.heuristic_v2 import MoeMuonHHeuristic
+from experiments.grug.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.grug.moe.model import GrugModelConfig
 
 logger = logging.getLogger(__name__)

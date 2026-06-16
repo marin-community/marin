@@ -21,7 +21,7 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
-from experiments.grug.moe.heuristic_v2 import MoeMuonHHeuristic
+from experiments.grug.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.grug.moe.launch import NEMOTRON_MIX_WITH_DEFAULT_VALIDATION, GrugMoeLaunchConfig, run_grug_moe_trial
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 

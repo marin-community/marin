@@ -47,7 +47,7 @@ from marin.processing.tokenize.data_configs import interpolate_mixture_weights
 from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.defaults import default_tokenize, default_validation_sets
-from experiments.grug.moe.heuristic_v2 import MoeMuonHHeuristic
+from experiments.grug.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.long_context_datasets import longmino_bucket_token_counts, longmino_by_bucket

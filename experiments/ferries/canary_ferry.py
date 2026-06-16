@@ -43,7 +43,7 @@ from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 from rigging.filesystem import marin_prefix, marin_temp_bucket
 
-from experiments.grug.moe.heuristic_v2 import build_from_heuristic
+from experiments.grug.moe.heuristic_adamh import build_from_heuristic
 from experiments.grug.moe.launch import (
     GRUG_MOE_TRIAL_MODEL,
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,

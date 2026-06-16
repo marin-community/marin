@@ -4,7 +4,7 @@
 """d=512 EP=1 May Recipe compute-optimal baseline, with absolute-value router.
 
 Same compute-optimal cell as the d=512 entry of ``launch.py``'s ``_COMPUTE_OPT_CELLS``
-(bs=32, steps=10_980, tokens=1.44e9, MuonH on heuristic_v2, EP=1), with **one model
+(bs=32, steps=10_980, tokens=1.44e9, MuonH on heuristic_muonh, EP=1), with **one model
 change**: the MoE router routes on ``|x @ router|`` instead of the signed value.
 
 Specifically (see ``MoEMLP.__call__`` and ``GrugModelConfig.abs_value_routing``):
@@ -29,7 +29,7 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
-from experiments.grug.moe.heuristic_v2 import MoeMuonHHeuristic
+from experiments.grug.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.grug.moe.launch import NEMOTRON_MIX_WITH_DEFAULT_VALIDATION, GrugMoeLaunchConfig, run_grug_moe_trial
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
@@ -42,7 +42,7 @@ _EP: int = 1
 _heuristic = MoeMuonHHeuristic()
 # Build the standard model config, then flip ``abs_value_routing`` on. Everything
 # else (num_layers, num_experts, intermediate_dim, GQA, etc.) is unchanged from
-# the heuristic_v2 d=512 compute-opt baseline.
+# the heuristic_muonh d=512 compute-opt baseline.
 _model_base = _heuristic.build_model_config(_DIM, seq_len=_SEQ)
 _model = dataclasses.replace(_model_base, abs_value_routing=True)
 _tokens = float(_STEPS * _BS * _SEQ)

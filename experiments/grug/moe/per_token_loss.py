@@ -52,7 +52,7 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 
 from experiments.defaults import _submit_train_job
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
-from experiments.grug.moe.heuristic_v1 import build_from_heuristic
+from experiments.grug.moe.heuristic_adamh import build_from_heuristic
 from experiments.grug.moe.launch import NEMOTRON_MIX_WITH_DEFAULT_VALIDATION
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
