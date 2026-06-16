@@ -34,6 +34,7 @@ from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
@@ -316,6 +317,15 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         seed=config.seed,
         train_batch_size=config.batch_size,
         num_train_steps=config.steps,
+        mesh=MeshConfig(
+            axes={
+                "data": -1,
+                "expert": config.grug_trainer.expert_axis_size,
+                "model": config.grug_trainer.model_axis_size,
+            },
+            dcn_axes={"replica_dcn": -1},
+            compute_mapping={"batch": ["replica_dcn", "data", "expert"]},
+        ),
         profiler=config.profiler,
         watch=config.watch,
         mp=jmp.get_policy(config.mp),

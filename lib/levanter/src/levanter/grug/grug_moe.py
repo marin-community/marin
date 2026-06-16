@@ -33,8 +33,10 @@ from levanter.grug._moe.common import (
     MoEExpertMlpPspecs,
     MoeActivation,
     MoeImplementation,
+    MoERematMode,
     PspecAxis,
     resolve_moe_implementation,
+    resolve_moe_remat_mode,
     split_moe_w13_output,
 )
 from levanter.grug._moe.ep_common import (
@@ -67,6 +69,7 @@ class MoEExpertMlp(eqx.Module):
     implementation: MoeImplementation = eqx.field(static=True)
     activation: MoeActivation = eqx.field(static=True)
     capacity_factor: float = eqx.field(static=True)
+    remat_mode: MoERematMode = eqx.field(static=True)
 
     @staticmethod
     def init(
@@ -79,9 +82,11 @@ class MoEExpertMlp(eqx.Module):
         implementation: MoeImplementation | str | None = None,
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+        remat_mode: MoERematMode = "none",
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
+        resolved_remat_mode = resolve_moe_remat_mode(remat_mode)
         k_gate, k_up, k_down = jax.random.split(key, 3)
         w_gate = _init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), initializer_std)
         w_up = _init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), initializer_std)
@@ -96,6 +101,7 @@ class MoEExpertMlp(eqx.Module):
             implementation=resolved_implementation,
             activation=activation,
             capacity_factor=capacity_factor,
+            remat_mode=resolved_remat_mode,
         )
 
     @named_call
@@ -118,6 +124,7 @@ class MoEExpertMlp(eqx.Module):
             implementation=self.implementation,
             mesh=mesh,
             capacity_factor=self.capacity_factor,
+            remat_mode=self.remat_mode,
             report_capacity_overflow=report_capacity_overflow,
         )
 
@@ -134,6 +141,7 @@ def moe_mlp(
     implementation: MoeImplementation | str | None = None,
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+    remat_mode: MoERematMode = "none",
     report_capacity_overflow: bool = False,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
@@ -146,6 +154,7 @@ def moe_mlp(
     dropped expert assignments from EP capacity clipping.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
+    resolved_remat_mode = resolve_moe_remat_mode(remat_mode)
 
     if mesh is None:
         mesh = _current_mesh()
@@ -230,6 +239,7 @@ def moe_mlp(
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
+                remat_mode=resolved_remat_mode,
             ),
             mesh=mesh,
             in_specs=(

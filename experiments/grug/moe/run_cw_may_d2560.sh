@@ -17,6 +17,7 @@ KUBECONFIG_PATH="${KUBECONFIG:-$HOME/.kube/coreweave-iris-gpu}"
 MARIN_PREFIX="s3://marin-na/marin/"
 RUN_ID=""
 SUBMIT=false
+TASK_IMAGE="${MAY_TASK_IMAGE:-}"
 
 GPU_REPLICAS=32
 EXPERT_AXIS=8
@@ -31,8 +32,10 @@ DATA="slimpajama"
 REMAT="save_moe"
 USE_PKO="${MAY_USE_PKO:-true}"
 PKO_ON_LAST_LAYER="${MAY_PKO_ON_LAST_LAYER:-true}"
+BLOCK_CROSS_DOCUMENT_ATTENTION="${MAY_BLOCK_CROSS_DOCUMENT_ATTENTION:-true}"
 INPUT_EMBED_SHARDING="${MAY_INPUT_EMBED_SHARDING:-hidden_batch}"
 OUTPUT_PROJ_SHARDING="${MAY_OUTPUT_PROJ_SHARDING:-lm_head}"
+EXPERT_3D_OPTIMIZER="${MAY_EXPERT_3D_OPTIMIZER:-muonh}"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 LIVE_PARAM_MODE="param"
 ATTENTION_IMPLEMENTATION="gpu_fa4_cute"
@@ -63,6 +66,7 @@ Options:
   --prefix URI              MARIN_PREFIX for outputs (default: s3://marin-na/marin/).
   --cluster NAME            Iris cluster name (default: cw-us-east-02a).
   --kubeconfig PATH         Kubeconfig path (default: $KUBECONFIG or ~/.kube/coreweave-iris-gpu).
+  --task-image IMAGE        Task image override for child GPU jobs (sets MAY_TASK_IMAGE).
   --nodes N                 H100 node count / MAY_GPU_REPLICAS (default: 32).
   --worker-cpu N            MAY_CPU_PER_REPLICA for each H100 worker pod (default: 32).
   --expert-axis N           MAY_EXPERT_AXIS (default: 8).
@@ -81,8 +85,11 @@ Options:
   --remat MODE              MAY_REMAT: save_moe or recompute_all (default: save_moe).
   --use-pko BOOL            MAY_USE_PKO diagnostic toggle (default: true).
   --pko-on-last-layer BOOL  MAY_PKO_ON_LAST_LAYER diagnostic toggle (default: true).
+  --block-cross-document-attention BOOL
+                            MAY_BLOCK_CROSS_DOCUMENT_ATTENTION for synthetic data (default: true).
   --input-embed-sharding MODE MAY_INPUT_EMBED_SHARDING: hidden_batch or replicated (default: hidden_batch).
   --output-proj-sharding MODE MAY_OUTPUT_PROJ_SHARDING: lm_head or replicated (default: lm_head).
+  --expert-3d-optimizer MODE MAY_EXPERT_3D_OPTIMIZER: muonh or adamh (default: muonh).
   --mp POLICY               MAY_MP policy string.
   --live-param-mode MODE    MAY_LIVE_PARAM_MODE: param or compute_with_master (default: param).
   --attention NAME          MAY_ATTENTION_IMPLEMENTATION (default: gpu_fa4_cute).
@@ -124,6 +131,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --kubeconfig)
             KUBECONFIG_PATH="$2"
+            shift 2
+            ;;
+        --task-image)
+            TASK_IMAGE="$2"
             shift 2
             ;;
         --nodes)
@@ -198,12 +209,20 @@ while [ "$#" -gt 0 ]; do
             PKO_ON_LAST_LAYER="$2"
             shift 2
             ;;
+        --block-cross-document-attention)
+            BLOCK_CROSS_DOCUMENT_ATTENTION="$2"
+            shift 2
+            ;;
         --input-embed-sharding)
             INPUT_EMBED_SHARDING="$2"
             shift 2
             ;;
         --output-proj-sharding)
             OUTPUT_PROJ_SHARDING="$2"
+            shift 2
+            ;;
+        --expert-3d-optimizer)
+            EXPERT_3D_OPTIMIZER="$2"
             shift 2
             ;;
         --mp)
@@ -281,6 +300,15 @@ case "$OUTPUT_PROJ_SHARDING" in
         ;;
 esac
 
+case "$EXPERT_3D_OPTIMIZER" in
+    muonh|adamh)
+        ;;
+    *)
+        echo "ERROR: --expert-3d-optimizer must be muonh or adamh, got: $EXPERT_3D_OPTIMIZER" >&2
+        exit 1
+        ;;
+esac
+
 if [ -f "$ENV_FILE" ] || [ "$ENV_FILE_EXPLICIT" = true ]; then
     R2_EXPORTS="$("${REPO_ROOT}/scripts/iris/cloudflare_r2_env.sh" "$ENV_FILE")"
 else
@@ -302,6 +330,7 @@ ENV_ARGS=(
     -e AWS_ENDPOINT_URL_S3 "$AWS_ENDPOINT_URL_S3"
     -e MAY_GPU_REPLICAS "$GPU_REPLICAS"
     -e MAY_CPU_PER_REPLICA "$WORKER_CPU"
+    -e MAY_TASK_IMAGE "$TASK_IMAGE"
     -e MAY_EXPERT_AXIS "$EXPERT_AXIS"
     -e MAY_REPLICA_AXIS "$REPLICA_AXIS"
     -e MAY_MODEL_AXIS "$MODEL_AXIS"
@@ -314,8 +343,10 @@ ENV_ARGS=(
     -e MAY_REMAT "$REMAT"
     -e MAY_USE_PKO "$USE_PKO"
     -e MAY_PKO_ON_LAST_LAYER "$PKO_ON_LAST_LAYER"
+    -e MAY_BLOCK_CROSS_DOCUMENT_ATTENTION "$BLOCK_CROSS_DOCUMENT_ATTENTION"
     -e MAY_INPUT_EMBED_SHARDING "$INPUT_EMBED_SHARDING"
     -e MAY_OUTPUT_PROJ_SHARDING "$OUTPUT_PROJ_SHARDING"
+    -e MAY_EXPERT_3D_OPTIMIZER "$EXPERT_3D_OPTIMIZER"
     -e MAY_MP "$MP"
     -e MAY_LIVE_PARAM_MODE "$LIVE_PARAM_MODE"
     -e MAY_ATTENTION_IMPLEMENTATION "$ATTENTION_IMPLEMENTATION"
@@ -358,6 +389,7 @@ prefix: $MARIN_PREFIX
 r2_endpoint: $AWS_ENDPOINT_URL
 nodes: $GPU_REPLICAS
 worker_cpu: $WORKER_CPU
+task_image: ${TASK_IMAGE:-default}
 mesh axes: replica=$REPLICA_AXIS expert=$EXPERT_AXIS model=$MODEL_AXIS
 batch: $BATCH
 seq_len: $SEQ_LEN
@@ -375,8 +407,10 @@ log_jaxprs: $LOG_JAXPRS
 log_xla_hlo: $LOG_XLA_HLO
 use_pko: $USE_PKO
 pko_on_last_layer: $PKO_ON_LAST_LAYER
+block_cross_document_attention: $BLOCK_CROSS_DOCUMENT_ATTENTION
 input_embed_sharding: $INPUT_EMBED_SHARDING
 output_proj_sharding: $OUTPUT_PROJ_SHARDING
+expert_3d_optimizer: $EXPERT_3D_OPTIMIZER
 attention: $ATTENTION_IMPLEMENTATION
 ce_implementation: ${CE_IMPLEMENTATION:-default}
 moe_implementation: $MOE_IMPLEMENTATION

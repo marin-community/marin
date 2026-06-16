@@ -28,6 +28,8 @@ MoeImplementation: TypeAlias = Literal[
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
+MoERematMode: TypeAlias = Literal["none", "recompute_all", "save_moe"]
+_VALID_MOE_REMAT_MODES = get_args(MoERematMode)
 _EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep")
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
@@ -77,6 +79,13 @@ def resolve_moe_implementation(implementation: MoeImplementation | str | None) -
         valid = ", ".join(repr(choice) for choice in _VALID_MOE_IMPLEMENTATIONS)
         raise ValueError(f"implementation must be one of {valid} or None, got {implementation!r}")
     return cast(MoeImplementation, implementation)
+
+
+def resolve_moe_remat_mode(remat_mode: MoERematMode) -> MoERematMode:
+    if remat_mode not in _VALID_MOE_REMAT_MODES:
+        valid = ", ".join(repr(choice) for choice in _VALID_MOE_REMAT_MODES)
+        raise ValueError(f"remat_mode must be one of {valid}, got {remat_mode!r}")
+    return cast(MoERematMode, remat_mode)
 
 
 def split_moe_w13_output(

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from typing import Literal
 
 import jax
 import jax.numpy as jnp
@@ -12,6 +13,9 @@ from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe.adamh import scale_by_adamh
+
+Expert3DOptimizer = Literal["muonh", "adamh"]
+VALID_EXPERT_3D_OPTIMIZERS: tuple[Expert3DOptimizer, ...] = ("muonh", "adamh")
 
 
 def _uses_adamh_baseline_adam_group(path_lower: str) -> bool:
@@ -73,8 +77,20 @@ def _match_named_sharding_to_params(updates, params):
     return jax.tree.map(match_sharding, updates, params, is_leaf=lambda x: x is None)
 
 
+def _match_named_sharding_to_updates(params, updates):
+    def match_sharding(param, update):
+        if update is None or not hasattr(param, "shape"):
+            return param
+        target_sharding = _target_named_sharding(update)
+        if target_sharding is None:
+            return param
+        return jax.sharding.reshard(param, target_sharding)
+
+    return jax.tree.map(match_sharding, params, updates, is_leaf=lambda x: x is None)
+
+
 def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float):
-    direction_updates = _match_named_sharding_to_params(direction_updates, params)
+    params = _match_named_sharding_to_updates(params, direction_updates)
 
     def scale_invariant_update(param, update):
         if update is None:
@@ -84,16 +100,22 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
         if param.ndim == 2:
             param_norm = jnp.linalg.norm(param)
             update_norm = jnp.linalg.norm(update)
-            new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
-            new_param_norm = jnp.linalg.norm(new_param)
-            return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+            step_scale = learning_rate * param_norm / jnp.maximum(update_norm, 1e-10)
+            dot = jnp.sum(param * update)
+            new_param_norm_sq = param_norm**2 - 2 * step_scale * dot + step_scale**2 * update_norm**2
+            new_param_norm = jnp.sqrt(jnp.maximum(new_param_norm_sq, 1e-30))
+            rescale = param_norm / jnp.maximum(new_param_norm, 1e-10)
+            return (rescale - 1) * param - rescale * step_scale * update
 
         axes = tuple(range(1, param.ndim))
         param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
         update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
-        new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
-        new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
-        return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+        step_scale = learning_rate * param_norm / jnp.maximum(update_norm, 1e-10)
+        dot = jnp.sum(param * update, axis=axes, keepdims=True)
+        new_param_norm_sq = param_norm**2 - 2 * step_scale * dot + step_scale**2 * update_norm**2
+        new_param_norm = jnp.sqrt(jnp.maximum(new_param_norm_sq, 1e-30))
+        rescale = param_norm / jnp.maximum(new_param_norm, 1e-10)
+        return (rescale - 1) * param - rescale * step_scale * update
 
     return jax.tree.map(
         scale_invariant_update,
@@ -165,6 +187,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate))
+                components.append(_match_named_update_sharding())
                 return optax.chain(*components)
 
             def adamh_expert_transform():
@@ -172,6 +195,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, expert_lr))
+                components.append(_match_named_update_sharding())
                 return optax.chain(*components)
 
             def adam_transform():
@@ -180,6 +204,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
                 components.append(optax.scale(-adam_lr))
+                components.append(_match_named_update_sharding())
                 return optax.chain(*components)
 
             return optax.multi_transform(
@@ -234,8 +259,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muon_epsilon: float = 1e-8
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
+    expert_3d_optimizer: Expert3DOptimizer = "muonh"
 
     def build(self, num_train_steps):
+        if self.expert_3d_optimizer not in VALID_EXPERT_3D_OPTIMIZERS:
+            valid = ", ".join(VALID_EXPERT_3D_OPTIMIZERS)
+            raise ValueError(f"expert_3d_optimizer={self.expert_3d_optimizer!r} must be one of {valid}")
+
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
 
@@ -262,6 +292,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, lr))
+                components.append(_match_named_update_sharding())
                 return optax.chain(*components)
 
             def adam_transform_at(lr):
@@ -270,6 +301,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
                 components.append(optax.scale(-lr))
+                components.append(_match_named_update_sharding())
                 return optax.chain(*components)
 
             return optax.multi_transform(
@@ -287,7 +319,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         )
 
     def create_mask(self, params):
+        if self.expert_3d_optimizer not in VALID_EXPERT_3D_OPTIMIZERS:
+            valid = ", ".join(VALID_EXPERT_3D_OPTIMIZERS)
+            raise ValueError(f"expert_3d_optimizer={self.expert_3d_optimizer!r} must be one of {valid}")
+
         paths = leaf_key_paths(params)
+        expert_3d_optimizer = self.expert_3d_optimizer
 
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
@@ -298,6 +335,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "adamh"
             if "gated_norm" in path_lower:
                 return "muonh"
+            if ".mlp.expert_mlp.w_" in path_lower and hasattr(param, "ndim") and param.ndim == 3:
+                return expert_3d_optimizer
             if hasattr(param, "ndim") and param.ndim in (2, 3):
                 return "muonh"
             return "adam"
@@ -306,6 +345,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
 
 __all__ = [
+    "VALID_EXPERT_3D_OPTIMIZERS",
+    "Expert3DOptimizer",
     "GrugMoeAdamHConfig",
     "GrugMoeMuonHConfig",
     "scale_with_grug_muonh",

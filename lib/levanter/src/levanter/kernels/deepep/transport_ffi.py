@@ -225,12 +225,14 @@ def _intranode_source_bytes(deepep_root: Path) -> bytes:
 
 
 def _prepare_intranode_source(build_dir: Path, deepep_root: Path) -> Path:
-    dispatch_threads = _dispatch_thread_override()
-    if dispatch_threads is None or dispatch_threads == _UPSTREAM_DISPATCH_THREADS:
+    source = _intranode_source(deepep_root)
+    source_bytes = source.read_bytes()
+    patched_bytes = _intranode_source_bytes(deepep_root)
+    if patched_bytes == source_bytes:
         return _intranode_source(deepep_root)
     patched_source = build_dir / "generated" / "intranode.cu"
     patched_source.parent.mkdir(parents=True, exist_ok=True)
-    patched_source.write_bytes(_intranode_source_bytes(deepep_root))
+    patched_source.write_bytes(patched_bytes)
     return patched_source
 
 

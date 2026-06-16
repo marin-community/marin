@@ -530,6 +530,7 @@ class MoEMLP(eqx.Module):
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                remat_mode=cfg.remat_mode,
             ),
             cfg=cfg,
         )
@@ -624,6 +625,26 @@ class Block(eqx.Module):
         )
 
     @named_call
+    def _attention_update(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        *,
+        use_pko: bool,
+        pko_doc_starts: Bool[Array, "B S"] | None,
+    ) -> Float[Array, "B S D"]:
+        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        return _batch_reshard(x + self.attn(attn_in, mask, use_pko=use_pko, pko_doc_starts=pko_doc_starts))
+
+    @named_call
+    def _mlp_update(self, x: Float[Array, "B S D"]) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        mlp_in = _batch_reshard(self.mlp_gated_norm(self.rms_mlp(x)))
+        mlp_out, router_stats = self.mlp(mlp_in)
+        if self.shared is not None:
+            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+        return _batch_reshard(x + mlp_out), router_stats
+
+    @named_call
     def __call__(
         self,
         x: Float[Array, "B S D"],
@@ -632,14 +653,26 @@ class Block(eqx.Module):
         use_pko: bool = False,
         pko_doc_starts: Bool[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = _batch_reshard(x + self.attn(attn_in, mask, use_pko=use_pko, pko_doc_starts=pko_doc_starts))
-        mlp_in = _batch_reshard(self.mlp_gated_norm(self.rms_mlp(x)))
-        mlp_out, router_stats = self.mlp(mlp_in)
-        if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
-        x = _batch_reshard(x + mlp_out)
-        return x, router_stats
+        x = self._attention_update(x, mask, use_pko=use_pko, pko_doc_starts=pko_doc_starts)
+        return self._mlp_update(x)
+
+    @named_call
+    def call_with_transport_safe_remat(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        *,
+        remat_policy,
+        use_pko: bool = False,
+        pko_doc_starts: Bool[Array, "B S"] | None = None,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        x = eqx.filter_checkpoint(self._attention_update, policy=remat_policy)(
+            x,
+            mask,
+            use_pko=use_pko,
+            pko_doc_starts=pko_doc_starts,
+        )
+        return self._mlp_update(x)
 
 
 class Transformer(eqx.Module):
@@ -705,6 +738,7 @@ class Transformer(eqx.Module):
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
         else:
             remat_policy = None
+        uses_effectful_moe = resolve_moe_implementation(cfg.moe_implementation) == "deepep"
 
         moe_router_stats: list[dict[str, jax.Array]] = []
         num_blocks = len(self.blocks)
@@ -715,6 +749,13 @@ class Transformer(eqx.Module):
             block_kwargs = {"use_pko": use_pko, "pko_doc_starts": pko_doc_starts if use_pko else None}
             if cfg.remat_mode == "none":
                 hidden, router_stats = block(hidden, layer_mask, **block_kwargs)
+            elif uses_effectful_moe:
+                hidden, router_stats = block.call_with_transport_safe_remat(
+                    hidden,
+                    layer_mask,
+                    remat_policy=remat_policy,
+                    **block_kwargs,
+                )
             else:
                 hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
                     hidden,
