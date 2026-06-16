@@ -18,6 +18,8 @@ from google.cloud import storage
 
 
 USER_CONFIG_PATH = Path(".config/marin/config.yaml")
+LOCAL_CONFIG_PATH = Path(".levanter.yaml")
+DEPRECATED_LOCAL_CONFIG_PATH = Path(".config")
 
 
 @dataclass(frozen=True)
@@ -104,15 +106,15 @@ def add_arg(parser: argparse.ArgumentParser, config: CliConfig, flags: list[str]
 
 
 def load_config() -> CliConfig:
-    d = _load_yaml_mapping(Path.home() / USER_CONFIG_PATH)
+    config_dict = _load_yaml_mapping(Path.home() / USER_CONFIG_PATH)
 
-    if os.path.exists(".levanter.yaml"):
-        d = _merge_config_dicts(d, _load_yaml_mapping(Path(".levanter.yaml")))
-    elif os.path.exists(".config"):
+    if LOCAL_CONFIG_PATH.exists():
+        config_dict = _merge_config_dicts(config_dict, _load_yaml_mapping(LOCAL_CONFIG_PATH))
+    elif DEPRECATED_LOCAL_CONFIG_PATH.exists():
         warnings.warn("Using deprecated .config file. Please rename to .levanter.yaml")
-        d = _merge_config_dicts(d, _load_yaml_mapping(Path(".config")))
+        config_dict = _merge_config_dicts(config_dict, _load_yaml_mapping(DEPRECATED_LOCAL_CONFIG_PATH))
 
-    return draccus.decode(CliConfig, d)
+    return draccus.decode(CliConfig, config_dict)
 
 
 def _load_yaml_mapping(path: Path) -> dict[str, Any]:
