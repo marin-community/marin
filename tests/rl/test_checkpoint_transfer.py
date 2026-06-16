@@ -62,7 +62,7 @@ def _create_checkpoint_entries(
     fs.makedirs(path, exist_ok=True)
 
     for step in steps or []:
-        checkpoint_path = posixpath.join(path, f"step_{step}")
+        checkpoint_path = posixpath.join(path, f"{checkpoint_transfer.CHECKPOINT_STEP_PREFIX}{step}")
         fs.makedirs(checkpoint_path, exist_ok=True)
         timestamp = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC) + datetime.timedelta(seconds=step)
         with fs.open(posixpath.join(checkpoint_path, "metadata.json"), "w") as f:

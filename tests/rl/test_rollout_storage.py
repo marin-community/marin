@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 from marin.rl.decoding import DecodingConfig
 from marin.rl.rollout_storage import (
+    ROLLOUT_FILE_SUFFIX,
     RolloutStorageConfig,
     StorageType,
 )
@@ -125,8 +126,8 @@ def test_file_storage_timestamp_ordering(tmp_path):
     first_batch = create_test_rollout_batch(1)
     second_batch = create_test_rollout_batch(2)
     files = [
-        (f"{timestamp:020d}_zhost_000001.pkl", first_batch),
-        (f"{timestamp:020d}_ahost_000002.pkl", second_batch),
+        (f"{timestamp:020d}_zhost_000001{ROLLOUT_FILE_SUFFIX}", first_batch),
+        (f"{timestamp:020d}_ahost_000002{ROLLOUT_FILE_SUFFIX}", second_batch),
     ]
     for filename, batch in files:
         with (storage_path / filename).open("wb") as f:
