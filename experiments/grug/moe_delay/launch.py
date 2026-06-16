@@ -11,8 +11,9 @@ staleness / corrector settings:
 
     GRUG_OPT        muon | adamh                 (default muon)
     GRUG_TAU        gradient delay in steps      (default 0)
-    GRUG_CORRECTOR  none | dc_asgd | dc_asgd_ema (default none)
+    GRUG_CORRECTOR  none | dc_asgd | dc_asgd_ema | weight_pred  (default none)
     GRUG_DC_LAMBDA  DC-ASGD strength             (default 1.0)
+    GRUG_PRED_SCALE weight_pred horizon as a multiple of tau    (default 1.0)
     GRUG_STEPS      train steps (short for fast iteration)  (default 3000)
     GRUG_SEED       seed                         (default 0)
     GRUG_HIDDEN     model hidden dim             (default 512)
@@ -101,7 +102,9 @@ def _env(key: str, default: str) -> str:
     return raw if raw else default
 
 
-def _build_optimizer(opt: str, base_opt, tau: int, corrector: str, dc_lambda: float) -> OptimizerConfig:
+def _build_optimizer(
+    opt: str, base_opt, tau: int, corrector: str, dc_lambda: float, pred_scale: float
+) -> OptimizerConfig:
     """Build a delayed optimizer config for the selected arm.
 
     ``base_opt`` is the heuristic-tuned ``GrugMoeAdamHConfig`` for this model
@@ -110,7 +113,9 @@ def _build_optimizer(opt: str, base_opt, tau: int, corrector: str, dc_lambda: fl
     """
     if opt == "adamh":
         fields = {f.name: getattr(base_opt, f.name) for f in dataclasses.fields(base_opt)}
-        return DelayedGrugMoeAdamHConfig(**fields, tau=tau, corrector=corrector, dc_lambda=dc_lambda)
+        return DelayedGrugMoeAdamHConfig(
+            **fields, tau=tau, corrector=corrector, dc_lambda=dc_lambda, pred_scale=pred_scale
+        )
     if opt == "muon":
         return DelayedGrugMuonConfig(
             learning_rate=DEFAULT_MUON_LR,
@@ -125,6 +130,7 @@ def _build_optimizer(opt: str, base_opt, tau: int, corrector: str, dc_lambda: fl
             tau=tau,
             corrector=corrector,
             dc_lambda=dc_lambda,
+            pred_scale=pred_scale,
         )
     raise ValueError(f"unknown GRUG_OPT={opt!r}; expected 'muon' or 'adamh'")
 
@@ -134,6 +140,7 @@ def _make_step() -> ExecutorStep:
     tau = int(_env("GRUG_TAU", "0"))
     corrector = _env("GRUG_CORRECTOR", "none")
     dc_lambda = float(_env("GRUG_DC_LAMBDA", "1.0"))
+    pred_scale = float(_env("GRUG_PRED_SCALE", "1.0"))
     steps = int(_env("GRUG_STEPS", "3000"))
     seed = int(_env("GRUG_SEED", "0"))
     hidden = int(_env("GRUG_HIDDEN", "512"))
@@ -142,9 +149,14 @@ def _make_step() -> ExecutorStep:
     group = _env("GRUG_GROUP", "delay-pp-batch1")
 
     model, base_opt, batch, _full_steps = build_from_heuristic(budget=budget, hidden_dim=hidden)
-    optimizer = _build_optimizer(opt, base_opt, tau, corrector, dc_lambda)
+    optimizer = _build_optimizer(opt, base_opt, tau, corrector, dc_lambda, pred_scale)
 
-    corr_tag = corrector if corrector == "none" else f"{corrector}-l{dc_lambda:g}"
+    if corrector == "none":
+        corr_tag = "none"
+    elif corrector == "weight_pred":
+        corr_tag = f"weight_pred-p{pred_scale:g}"
+    else:
+        corr_tag = f"{corrector}-l{dc_lambda:g}"
     run_id = f"delay-{opt}-d{hidden}-tau{tau}-{corr_tag}-s{seed}-st{steps}"
 
     launch = GrugMoeLaunchConfig(

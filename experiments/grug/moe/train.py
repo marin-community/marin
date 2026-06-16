@@ -7,7 +7,9 @@ import dataclasses
 import functools
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Protocol, runtime_checkable
 
 import equinox as eqx
 import jax
@@ -284,6 +286,21 @@ def initial_state(
     )
 
 
+@runtime_checkable
+class SupportsForwardPrediction(Protocol):
+    """An optimizer config whose optimizer evaluates gradients at predicted weights.
+
+    ``make_forward_predictor`` returns a function mapping the optimizer state to a
+    parameter offset; the train step then evaluates the gradient at
+    ``params + offset`` while still applying the update at the real params (this is
+    the seam for weight-prediction delay correction, see
+    ``experiments/grug/moe_delay/delay_optim.py``). Returns ``None`` to opt out, so
+    the train loop stays decoupled from any specific optimizer.
+    """
+
+    def make_forward_predictor(self) -> Callable[[optax.OptState], optax.Updates] | None: ...
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -291,6 +308,7 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
+    forward_predictor: Callable[[optax.OptState], optax.Updates] | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -323,7 +341,15 @@ def _make_train_step(
                 return_router_metrics=True,
             )
 
-        (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
+        # Weight prediction (delay correction) evaluates the gradient at predicted
+        # weights w + delta while the update is still applied at the real weights.
+        if forward_predictor is None:
+            forward_params = qb_params
+        else:
+            offset = forward_predictor(state.opt_state)
+            forward_params = jax.tree_util.tree_map(lambda p, d: p + d, qb_params, offset)
+
+        (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(forward_params)
         metrics = {"train/loss": loss, **summarized_metrics}
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
         params = optax.apply_updates(qb_params, updates)
@@ -380,12 +406,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
     watch_config = trainer.watch
+    forward_predictor = None
+    if isinstance(config.optimizer, SupportsForwardPrediction):
+        forward_predictor = config.optimizer.make_forward_predictor()
     train_step = _make_train_step(
         optimizer,
         trainer.mp,
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
+        forward_predictor=forward_predictor,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)

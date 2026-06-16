@@ -73,6 +73,29 @@ def test_dc_asgd_runs():
         print(f"OK  corrector={corrector} runs and stays finite")
 
 
+def test_weight_pred_predictor():
+    # weight_pred exposes a forward predictor; other correctors do not.
+    assert DelayedGrugMuonConfig(tau=4, corrector="none").make_forward_predictor() is None
+    cfg = DelayedGrugMuonConfig(tau=4, corrector="weight_pred", pred_scale=1.0)
+    predict = cfg.make_forward_predictor()
+    assert predict is not None
+
+    lr = 0.1
+    wrapped = wrap_delayed(optax.sgd(lr), tau=4, corrector="weight_pred")
+    p = _params()
+    sw = wrapped.init(p)
+    # Initial last_update is zero, so the predicted offset is zero.
+    assert jnp.allclose(predict(sw)["a"], 0.0), "initial predicted offset must be zero"
+    key = jax.random.PRNGKey(5)
+    last_u = None
+    for _ in range(6):
+        key, sub = jax.random.split(key)
+        last_u, sw = wrapped.update(_grads(sub), sw, params=p)
+    # Predicted offset must equal tau * pred_scale * the last applied update.
+    assert jnp.allclose(predict(sw)["a"], 4.0 * last_u["a"]), "predictor must be tau * last_update"
+    print("OK  weight_pred forward predictor tracks tau * last_update")
+
+
 def test_jit_and_config():
     # The wrapper must be jit-able (the grug loop jits the whole step) and the
     # config subclass must instantiate (multiple-inheritance dataclass sanity).
@@ -97,5 +120,6 @@ if __name__ == "__main__":
     test_tau0_identical()
     test_tau1_delays()
     test_dc_asgd_runs()
+    test_weight_pred_predictor()
     test_jit_and_config()
     print("\nall delay-wrapper smoke checks passed")
