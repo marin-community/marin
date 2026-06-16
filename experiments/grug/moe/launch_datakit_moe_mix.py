@@ -28,6 +28,11 @@ _STORE_PREFIX = "datakit/store_8ac06c74"
 # one sequence per block, while aligning cleanly with the heuristic batch size.
 _MIXTURE_BLOCK_SIZE = 49_152
 _PHASE_1_START_FRACTION = 0.8
+ENABLE_SIMULATED_EPOCHING = True
+
+# Natural size of ``datakit/store_8ac06c74`` from Will's datakit-moe-mix branch:
+# 167 mixable bucket caches plus the 33-cache tail component.
+_TARGET_BUDGET_TOKENS = 10_372_343_704_053
 
 _BUCKET_PHASE_WEIGHTS: tuple[tuple[str, float, float], ...] = (
     ("c01q0", 0.022957, 0.031937),
@@ -285,8 +290,32 @@ def _datakit_components() -> dict[str, DatasetComponent | ConcatDatasetComponent
     }
 
 
-def _datakit_data_config(*, total_steps: int, batch_size: int) -> LmDataConfig:
+def _simulated_experiment_budget(*, total_steps: int, batch_size: int, max_seq_len: int) -> int:
+    return total_steps * batch_size * max_seq_len
+
+
+def _datakit_data_config(
+    *,
+    total_steps: int,
+    batch_size: int,
+    max_seq_len: int,
+    enable_simulated_epoching: bool,
+) -> LmDataConfig:
     phase_1_start = _phase_1_start_step(total_steps, batch_size)
+    budget_kwargs = {}
+    if enable_simulated_epoching:
+        experiment_budget = _simulated_experiment_budget(
+            total_steps=total_steps,
+            batch_size=batch_size,
+            max_seq_len=max_seq_len,
+        )
+        if experiment_budget > _TARGET_BUDGET_TOKENS:
+            raise ValueError(f"experiment_budget {experiment_budget} exceeds target_budget {_TARGET_BUDGET_TOKENS}")
+        budget_kwargs = {
+            "target_budget": _TARGET_BUDGET_TOKENS,
+            "experiment_budget": experiment_budget,
+        }
+
     data = LmDataConfig(
         tokenizer=marin_tokenizer,
         cache_dir=None,
@@ -297,6 +326,7 @@ def _datakit_data_config(*, total_steps: int, batch_size: int) -> LmDataConfig:
         ],
         auto_build_caches=False,
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
+        **budget_kwargs,
     )
     return add_validation_sets_to_mixture(data, default_validation_sets(tokenizer=marin_tokenizer))
 
@@ -317,7 +347,12 @@ datakit_moe_mix = ExecutorStep(
     fn=run_grug_moe_trial,
     config=GrugMoeLaunchConfig(
         model=versioned(_model),
-        data=_datakit_data_config(total_steps=_steps, batch_size=_batch_size),
+        data=_datakit_data_config(
+            total_steps=_steps,
+            batch_size=_batch_size,
+            max_seq_len=_model.max_seq_len,
+            enable_simulated_epoching=ENABLE_SIMULATED_EPOCHING,
+        ),
         output_path=this_output_path(),
         run_id=f"datakit_moe_mix_{_SLUG}",
         resources=versioned(ResourceConfig.with_tpu("v4-8", zone="us-central2-b", preemptible=False)),
