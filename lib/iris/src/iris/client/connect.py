@@ -126,7 +126,7 @@ def create_client_token_provider(
 
 
 def _resolve_token_provider(proto: config_pb2.IrisClusterConfig, cluster_name: str) -> TokenProvider | None:
-    """Mirror the CLI's token resolution: config auth first, else stored login token."""
+    """Return a provider from the config's auth block, else the stored ``iris login`` token, else None."""
     if proto.HasField("auth"):
         return create_client_token_provider(proto.auth, cluster_name=cluster_name)
     credential = load_token(cluster_name) or load_any_token()

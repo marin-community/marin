@@ -164,8 +164,7 @@ def _override_resource_field(value: object, config: LaunchConfig) -> tuple[objec
     Returns ``(new_value, changed)``. Only accelerator (TPU/GPU) resources are
     rewritten; CPU resources (inline data-prep steps) are left untouched so their
     cached output paths stay stable. A ``VersionedValue`` wrapper is preserved so
-    the step's version hash keeps tracking the resources — which is exactly where
-    grug-style steps stash the TPU config consumed at submit time.
+    the resources keep participating in the step's version hash.
     """
     if isinstance(value, VersionedValue):
         resources: object = value.value
@@ -184,17 +183,12 @@ def _override_resource_field(value: object, config: LaunchConfig) -> tuple[objec
 def _apply_overrides_to_step(step: ExecutorStep, config: LaunchConfig) -> ExecutorStep:
     """Apply ``--tpu_type`` / ``--region`` / ``--zone`` to a step's accelerator resources.
 
-    A training step carries its :class:`ResourceConfig` in up to two places that
-    must agree: ``ExecutorStep.resources`` (used to schedule the Fray job) and the
-    step's ``config.resources`` (read at submit time — e.g. the grug templates,
-    whose ``run_grug`` path submits the real job from ``config.resources`` while
-    ``ExecutorStep.resources`` is ``None``). Override both so they can't drift.
-    ``config.resources`` is usually wrapped in ``versioned(...)``; the wrapper is
-    preserved. Only accelerator resources are touched, so inline CPU data-prep
-    steps keep their cached identity. ``ExecutorStep.resources`` is not part of a
-    step's version hash (its output path is stable), whereas a versioned
-    ``config.resources`` is — so a swapped TPU/region yields a fresh run, the
-    intended behavior when the script is re-targeted at new hardware.
+    A step may carry its :class:`ResourceConfig` in two places that must agree:
+    ``ExecutorStep.resources`` (used to schedule the Fray job) and the step's
+    ``config.resources`` (read at submit time). Either, both, or neither may be
+    set, so override both. ``config.resources`` is often wrapped in
+    ``versioned(...)``; the wrapper is preserved. Only accelerator resources are
+    touched, so inline CPU data-prep steps keep their cached identity.
     """
     replacements: dict[str, object] = {}
     new_step_resources, step_changed = _override_resource_field(step.resources, config)

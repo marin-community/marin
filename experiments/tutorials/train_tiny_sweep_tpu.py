@@ -127,9 +127,15 @@ def _sweep_worker_entrypoint(sweep_root: str) -> None:
 
 @draccus.wrap()
 def main(config: LaunchConfig):
-    # This sweep pins its TPU type in ``RESOURCES`` (it is baked into every
-    # trial config at module load), so ``--tpu_type``/``--region`` are not
-    # honored here — edit ``RESOURCES`` for a different accelerator.
+    # RESOURCES is baked into every trial config and the sweep lock path at
+    # module load, and each worker re-imports this module — so --tpu_type /
+    # --region / --zone cannot be honored. Reject them rather than silently
+    # training on the wrong hardware; edit RESOURCES for a different accelerator.
+    if config.tpu_type is not None or config.region is not None or config.zone is not None:
+        raise ValueError(
+            "train_tiny_sweep_tpu pins its accelerator in RESOURCES, so --tpu_type/--region/--zone "
+            "are not supported here. Edit RESOURCES in the script for a different accelerator or region."
+        )
     with launch_session(config):
         client = fray_client.current_client()
 
