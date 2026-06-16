@@ -547,6 +547,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
                             step=step,
                         )
+                    extra_scalar_keys = (
+                        "train/core_consistency",
+                        "train/core_consistency_weighted",
+                        "train/anytime_ce",
+                        "train/anytime_ce_weighted",
+                    )
+                    extra_scalars = {key: metrics[key] for key in extra_scalar_keys if key in metrics}
+                    if extra_scalars:
+                        levanter.tracker.log(extra_scalars, step=step)
 
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)

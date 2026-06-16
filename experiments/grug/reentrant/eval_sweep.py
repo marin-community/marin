@@ -46,6 +46,7 @@ from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.reentrant.launch import (
     _E3_MODEL,
+    _E6_MODEL,
     _REENTRANT_RESOURCES,
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
     _baseline_optimizer,
@@ -66,6 +67,21 @@ logger = logging.getLogger(__name__)
 # wandb x-axis / per-R metric prefixes for the depth sweep.
 _SWEEP_PREFIX = "sweep"
 _DEFAULT_RECURRENCE_VALUES: tuple[int, ...] = (2, 4, 8, 16, 32)
+
+# Which model config to restore the checkpoint with. E4's anytime supervision adds
+# no params, so its checkpoint shares E3's param tree (restore with E3, no readout
+# overhead). E64 shares E6's tree (depth-conditioned router bias present, anytime
+# off for eval). Keyed by SWEEP_MODEL (default e3).
+_SWEEP_MODELS = {"e3": _E3_MODEL, "e4": _E3_MODEL, "e6": _E6_MODEL, "e64": _E6_MODEL}
+
+
+def _resolve_sweep_model() -> GrugModelConfig:
+    name = os.environ.get("SWEEP_MODEL", "e3").strip()
+    if name not in _SWEEP_MODELS:
+        raise ValueError(f"SWEEP_MODEL must be one of {sorted(_SWEEP_MODELS)}, got {name!r}")
+    return _SWEEP_MODELS[name]
+
+
 # A per-tag macro loss whose tag name contains this substring is surfaced as the
 # headline paloma loss. The default validation sets carry a "paloma" parent tag.
 _PALOMA_TAG_SUBSTRING = "paloma"
@@ -326,15 +342,18 @@ def _parse_recurrence_values(raw: str) -> tuple[int, ...]:
 
 
 def _build_eval_sweep_step() -> ExecutorStep:
-    """Build the ExecutorStep for the E3 depth-scaling eval sweep from env config.
+    """Build the ExecutorStep for a depth-scaling eval sweep from env config.
 
-    The eval reuses the exact E3 model/data/resources so the restored checkpoint
-    matches its train-time train-state layout. CHECKPOINT_PATH (the gs:// E3
+    The eval reuses the exact train-time model/data/resources so the restored
+    checkpoint matches its train-state layout. SWEEP_MODEL (default e3) selects
+    which variant's model config to restore with; CHECKPOINT_PATH (the gs://
     checkpoint dir) is required; RECURRENCE_VALUES defaults to "2,4,8,16,32".
     """
     checkpoint_path = os.environ.get("CHECKPOINT_PATH", "")
     if not checkpoint_path:
-        raise ValueError("CHECKPOINT_PATH must be set to the gs:// E3 checkpoint dir.")
+        raise ValueError("CHECKPOINT_PATH must be set to the gs:// checkpoint dir.")
+    sweep_model_name = os.environ.get("SWEEP_MODEL", "e3").strip()
+    sweep_model = _resolve_sweep_model()
     recurrence_values = _parse_recurrence_values(
         os.environ.get("RECURRENCE_VALUES", ",".join(str(v) for v in _DEFAULT_RECURRENCE_VALUES))
     )
@@ -350,20 +369,20 @@ def _build_eval_sweep_step() -> ExecutorStep:
     )
 
     return ExecutorStep(
-        name="grug/reentrant_e3_eval_sweep",
+        name=f"grug/reentrant_{sweep_model_name}_eval_sweep",
         fn=run_grug_eval_sweep,
         config=GrugEvalSweepLaunchConfig(
-            model=versioned(_E3_MODEL),
+            model=versioned(sweep_model),
             data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
             output_path=this_output_path(),
-            run_id=_resolve_run_id("reentrant_e3_eval_sweep"),
+            run_id=_resolve_run_id(f"reentrant_{sweep_model_name}_eval_sweep"),
             resources=versioned(_REENTRANT_RESOURCES),
             batch_size=versioned(env_int("EVAL_BATCH_SIZE", 512)),
             seed=versioned(0),
             mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
             tracker=WandbConfig(
                 project="marin_moe",
-                tags=["moe", "reentrant", "e3-randdepth", "depth-sweep"],
+                tags=["moe", "reentrant", sweep_model_name, "depth-sweep"],
                 group="reentrant-eval-sweep",
                 name=None,
             ),

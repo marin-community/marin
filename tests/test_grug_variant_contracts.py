@@ -712,6 +712,274 @@ def test_reentrant_core_consistency_absent_when_disabled():
     assert "core_consistency" not in router_metrics
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"depth_conditioned_routing": True},
+        {"anytime_supervision": True},
+        {"depth_conditioned_routing": True, "anytime_supervision": True},
+        {"randomize_recurrence": True, "recurrence_choices": (2, 4, 8), "depth_conditioned_routing": True},
+        {"randomize_recurrence": True, "recurrence_choices": (2, 4, 8), "anytime_supervision": True},
+    ],
+    ids=["e6", "e4", "e64", "e6_randdepth", "e4_randdepth"],
+)
+def test_reentrant_e4_e6_full_train_step_lowers(overrides):
+    """A full re-entrant train step (value_and_grad through the deep-supervision /
+    depth-router terms, the AdamH param-group mask over the new params, and the
+    sharded forward) must lower for the E4/E6/E64 variants. This is the cheap
+    guarantee that the new code paths trace before any cluster spend -- it would
+    catch an AdamH-on-zeros NaN-by-construction, a bad shard spec on the new param,
+    or a tracing error in the per-iteration CE loop.
+    """
+    train_module = importlib.import_module("experiments.grug.reentrant.train")
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+    optimizer_module = importlib.import_module("experiments.grug.reentrant.optimizer")
+
+    cfg = model_module.GrugModelConfig(
+        vocab_size=1024,
+        num_layers=3,
+        num_prelude_layers=1,
+        num_coda_layers=1,
+        recurrence_steps=4,
+        **overrides,
+    )
+    # Use the real AdamH (not plain adam) so the param-group mask over the new
+    # tables is exercised -- a zero-init table landing in adamh would NaN here.
+    optimizer = optimizer_module.GrugMoeAdamHConfig().build(num_train_steps=2)
+    mp = jmp.get_policy("f32")
+    train_step = train_module._make_train_step(optimizer, mp, z_loss_weight=1e-4, ema_beta=None)
+    mesh, token_pspec = model_module.debug_mesh_and_token_pspec(num_devices=4)
+    batch = GrugLmExample(
+        tokens=jnp.zeros((8, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((8, 4), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    def one_step():
+        sharded_batch = dataclasses.replace(
+            batch,
+            tokens=jax.sharding.reshard(batch.tokens, token_pspec),
+            loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
+        )
+        state = train_module.initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
+        return train_step(state, sharded_batch, compute_watch=False)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        out_state_shape, out_metrics_shape, _ = eqx.filter_eval_shape(one_step)
+
+    assert out_metrics_shape["train/loss"].shape == ()
+    if overrides.get("anytime_supervision"):
+        assert "train/anytime_ce" in out_metrics_shape
+    assert out_state_shape.pending_qb_betas.shape[0] == cfg.num_layers
+
+
+def _small_reentrant_config(model_module, **overrides):
+    """1 prelude + 1 core looped 4x + 1 coda re-entrant config (FiLM off), with
+    arbitrary field overrides for the E4/E6 variants."""
+    kwargs = dict(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=64,
+        num_layers=3,
+        num_prelude_layers=1,
+        num_coda_layers=1,
+        recurrence_steps=4,
+        iteration_film=False,
+        num_heads=2,
+        num_kv_heads=2,
+        num_experts=4,
+        num_experts_per_token=2,
+        shared_expert_intermediate_dim=64,
+        max_seq_len=8,
+    )
+    kwargs.update(overrides)
+    return model_module.GrugModelConfig(**kwargs)
+
+
+def test_reentrant_depth_conditioned_routing_is_identity_at_init():
+    """E6's depth-conditioned router bias must be identity at init: a model built
+    with ``depth_conditioned_routing=True`` and one without, from the SAME PRNG
+    key, must produce numerically identical forward outputs.
+
+    The bias table is zero-initialized and consumes no PRNG key, so every other
+    param is bit-identical and ``router_logits + 0 == router_logits``. This is the
+    contract that lets E6 be a strict superset of E3 (it can only diverge once the
+    per-depth router bias learns).
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+
+    cfg_e3 = _small_reentrant_config(model_module, depth_conditioned_routing=False)
+    cfg_e6 = _small_reentrant_config(model_module, depth_conditioned_routing=True)
+
+    mesh = compact_grug_mesh()
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(2 * 8, dtype=jnp.int32).reshape(2, 8) % cfg_e3.vocab_size
+    token_pspec = jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None)
+
+    def forward(cfg):
+        sharded_tokens = jax.sharding.reshard(tokens, token_pspec)
+        model = model_module.Transformer.init(cfg, key=key)
+        return model, jax.jit(lambda m, t: m.logits(t))(model, sharded_tokens)
+
+    with _reset_abstract_mesh(), set_mesh(mesh):
+        model_e3, logits_e3 = forward(cfg_e3)
+        model_e6, logits_e6 = forward(cfg_e6)
+
+    assert model_e3.core_router_bias is None
+    assert model_e6.core_router_bias is not None
+    expected_shape = (cfg_e6.max_trained_recurrence, cfg_e6.num_core_layers, cfg_e6.num_experts)
+    assert model_e6.core_router_bias.shape == expected_shape
+    # Zero bias => bit-identical forward outputs from the same key.
+    assert jnp.array_equal(logits_e3, logits_e6)
+
+
+def test_reentrant_depth_router_bias_changes_routing_once_learned():
+    """A nonzero per-depth router bias must actually move the forward output: it is
+    the mechanism by which each core traversal can activate a different expert
+    mixture. Setting one depth-slice's bias strongly toward one expert changes the
+    logits relative to the zero-init model.
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+
+    cfg = _small_reentrant_config(model_module, depth_conditioned_routing=True)
+    mesh = compact_grug_mesh()
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(2 * 8, dtype=jnp.int32).reshape(2, 8) % cfg.vocab_size
+    token_pspec = jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None)
+
+    with _reset_abstract_mesh(), set_mesh(mesh):
+        sharded_tokens = jax.sharding.reshard(tokens, token_pspec)
+        model = model_module.Transformer.init(cfg, key=key)
+        logits_zero = jax.jit(lambda m, t: m.logits(t))(model, sharded_tokens)
+        # Push iteration 0's first core layer hard toward expert 0.
+        biased = model.core_router_bias.at[0, 0, 0].set(50.0)
+        model_biased = eqx.tree_at(lambda m: m.core_router_bias, model, biased)
+        logits_biased = jax.jit(lambda m, t: m.logits(t))(model_biased, sharded_tokens)
+
+    assert jnp.all(jnp.isfinite(logits_biased))
+    assert not jnp.array_equal(logits_zero, logits_biased)
+
+
+def test_reentrant_anytime_does_not_touch_eval_loss():
+    """E4's anytime deep-supervision must be training-only: with reduction="none"
+    (the eval path), a model with anytime_supervision=True returns the exact same
+    per-position loss as the identical model with it off. E4's checkpoint shares
+    E3's param tree, so the only possible divergence is the term leaking into eval.
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+
+    cfg_off = _small_reentrant_config(model_module, anytime_supervision=False)
+    cfg_on = _small_reentrant_config(model_module, anytime_supervision=True)
+
+    mesh = compact_grug_mesh()
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(2 * 8, dtype=jnp.int32).reshape(2, 8) % cfg_off.vocab_size
+    weights = jnp.ones((2, 8), dtype=jnp.float32)
+    token_pspec = jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None)
+
+    def eval_loss(cfg, sharded_tokens, sharded_weights):
+        model = model_module.Transformer.init(cfg, key=key)
+        return jax.jit(lambda m, t, w: m.next_token_loss(t, w, reduction="none", logsumexp_weight=None))(
+            model, sharded_tokens, sharded_weights
+        )
+
+    with _reset_abstract_mesh(), set_mesh(mesh):
+        sharded_tokens = jax.sharding.reshard(tokens, token_pspec)
+        sharded_weights = jax.sharding.reshard(weights, token_pspec)
+        loss_off = eval_loss(cfg_off, sharded_tokens, sharded_weights)
+        loss_on = eval_loss(cfg_on, sharded_tokens, sharded_weights)
+
+    assert loss_off.shape == (2, 8)
+    assert jnp.array_equal(loss_off, loss_on)
+
+
+def test_reentrant_anytime_adds_positive_term_to_training_loss():
+    """With anytime_supervision and reduction="mean", the scalar training loss is
+    strictly greater than with it off (the averaged deep-supervision CE is
+    positive), and the raw ``train/anytime_ce`` metric is surfaced and finite.
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+
+    cfg_off = _small_reentrant_config(model_module, anytime_supervision=False)
+    cfg_on = _small_reentrant_config(model_module, anytime_supervision=True, anytime_supervision_weight=1.0)
+
+    mesh = compact_grug_mesh()
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(2 * 8, dtype=jnp.int32).reshape(2, 8) % cfg_off.vocab_size
+    weights = jnp.ones((2, 8), dtype=jnp.float32)
+    token_pspec = jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None)
+
+    def train_loss(cfg, sharded_tokens, sharded_weights):
+        model = model_module.Transformer.init(cfg, key=key)
+        return jax.jit(
+            lambda m, t, w: m.next_token_loss(t, w, reduction="mean", logsumexp_weight=None, return_router_metrics=True)
+        )(model, sharded_tokens, sharded_weights)
+
+    with _reset_abstract_mesh(), set_mesh(mesh):
+        sharded_tokens = jax.sharding.reshard(tokens, token_pspec)
+        sharded_weights = jax.sharding.reshard(weights, token_pspec)
+        loss_off, metrics_off = train_loss(cfg_off, sharded_tokens, sharded_weights)
+        loss_on, metrics_on = train_loss(cfg_on, sharded_tokens, sharded_weights)
+
+    raw = metrics_on["train/anytime_ce"]
+    assert jnp.isfinite(raw)
+    assert float(raw) > 0.0
+    assert float(loss_on) > float(loss_off)
+    assert jnp.allclose(loss_on, loss_off + raw, atol=1e-5)
+    assert jnp.allclose(metrics_on["train/anytime_ce_weighted"], raw, atol=1e-6)
+    # The anytime-off model never computes the term, so it has no such metric.
+    assert "train/anytime_ce" not in metrics_off
+
+
+def test_reentrant_anytime_readouts_absent_when_disabled():
+    """With anytime_supervision off (the default) the forward never adds an
+    ``anytime_readouts`` key to router_metrics, so E0-E3/E5/E6 traces are unchanged.
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+
+    cfg = _small_reentrant_config(model_module, anytime_supervision=False)
+
+    mesh = compact_grug_mesh()
+    key = jax.random.PRNGKey(0)
+    tokens = jnp.arange(2 * 8, dtype=jnp.int32).reshape(2, 8) % cfg.vocab_size
+    token_pspec = jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None)
+
+    with _reset_abstract_mesh(), set_mesh(mesh):
+        sharded_tokens = jax.sharding.reshard(tokens, token_pspec)
+        model = model_module.Transformer.init(cfg, key=key)
+        _, router_metrics = jax.jit(lambda m, t: m(t))(model, sharded_tokens)
+
+    assert "anytime_readouts" not in router_metrics
+
+
+def test_reentrant_depth_router_bias_uses_plain_adam_not_adamh():
+    """E6's depth-conditioned router bias must be optimized by plain Adam, not
+    AdamH. The table is zero-initialized; AdamH divides by the parameter norm,
+    giving 0/0 = NaN at init (the failure that bit E2's FiLM). The mask routes
+    ``core_router_bias`` to the ``adam`` group via the ``router_bias`` substring
+    rule rather than falling through ``ndim >= 2`` into ``adamh``.
+    """
+    model_module = importlib.import_module("experiments.grug.reentrant.model")
+    optimizer_module = importlib.import_module("experiments.grug.reentrant.optimizer")
+    leaf_key_paths = importlib.import_module("levanter.utils.jax_utils").leaf_key_paths
+
+    cfg = _small_reentrant_config(model_module, depth_conditioned_routing=True)
+
+    with _reset_abstract_mesh(), set_mesh(compact_grug_mesh()):
+        model = model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
+
+    def path_str(p):
+        return ".".join(p) if isinstance(p, (list, tuple)) else str(p)
+
+    mask = optimizer_module.GrugMoeAdamHConfig().create_mask(model)
+    paths = [path_str(p) for p in jax.tree.leaves(leaf_key_paths(model))]
+    groups = jax.tree.leaves(mask)
+
+    bias_groups = [g for path, g in zip(paths, groups, strict=True) if "core_router_bias" in path.lower()]
+    assert bias_groups, "expected core_router_bias in the tree when depth_conditioned_routing=True"
+    assert all(g == "adam" for g in bias_groups), f"depth router bias must use plain adam, got {set(bias_groups)}"
+
+
 def test_reentrant_film_params_use_plain_adam_not_adamh():
     """E2's FiLM tables must be optimized by plain Adam, not AdamH.
 

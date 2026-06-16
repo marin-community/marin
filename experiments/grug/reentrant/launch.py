@@ -286,8 +286,63 @@ e5_reentrant = reentrant_step(
     tags=["moe", "reentrant", "e5-consistency"],
 )
 
+# E6 — depth-conditioned MoE routing: E3 plus a learned per-(iteration, core-layer)
+# additive router-logit bias, so each core traversal activates a DIFFERENT expert
+# mixture. Directly targets the E0-E5 structural failure (a single residual core
+# re-applied in place can't both keep computing and converge): depth-varying expert
+# selection makes each loop a genuinely different transformation while staying
+# weight-tied. Zero-init bias => numerically identical to E3 at step 0.
+_E6_MODEL = dataclasses.replace(_E3_MODEL, depth_conditioned_routing=True)
+e6_reentrant = reentrant_step(
+    name="grug/reentrant_e6_depthroute",
+    run_id=_resolve_run_id("reentrant_e6_depthroute"),
+    model=_E6_MODEL,
+    tags=["moe", "reentrant", "e6-depthroute"],
+)
+
+# E4 — anytime deep-supervision: E3 plus a training-only CE term read off the shared
+# output head after EACH core iteration (averaged). Rewards USEFUL refinement at
+# every depth (the direct fix for E5's freeze, which suppressed refinement) and makes
+# every depth anytime-decodable. ANYTIME_WEIGHT tunes the term. No new params, so the
+# checkpoint is depth-sweepable with the E3 model config.
+_E4_MODEL = dataclasses.replace(
+    _E3_MODEL,
+    anytime_supervision=True,
+    anytime_supervision_weight=env_float("ANYTIME_WEIGHT", 1.0),
+)
+e4_reentrant = reentrant_step(
+    name="grug/reentrant_e4_anytime",
+    run_id=_resolve_run_id("reentrant_e4_anytime"),
+    model=_E4_MODEL,
+    tags=["moe", "reentrant", "e4-anytime"],
+)
+
+# E64 — combined: depth-conditioned routing (E6) AND anytime deep-supervision (E4).
+# Tests whether genuinely depth-varying computation plus a per-depth usefulness
+# signal together beat each alone.
+_E64_MODEL = dataclasses.replace(
+    _E6_MODEL,
+    anytime_supervision=True,
+    anytime_supervision_weight=env_float("ANYTIME_WEIGHT", 1.0),
+)
+e64_reentrant = reentrant_step(
+    name="grug/reentrant_e64_depthroute_anytime",
+    run_id=_resolve_run_id("reentrant_e64_depthroute_anytime"),
+    model=_E64_MODEL,
+    tags=["moe", "reentrant", "e64-combined"],
+)
+
 # Experiment registry. Select with GRUG_EXPERIMENT (comma-separated names); default E0.
-_STEPS = {"e0": e0_baseline, "e1": e1_reentrant, "e2": e2_reentrant, "e3": e3_reentrant, "e5": e5_reentrant}
+_STEPS = {
+    "e0": e0_baseline,
+    "e1": e1_reentrant,
+    "e2": e2_reentrant,
+    "e3": e3_reentrant,
+    "e5": e5_reentrant,
+    "e6": e6_reentrant,
+    "e4": e4_reentrant,
+    "e64": e64_reentrant,
+}
 
 
 if __name__ == "__main__":

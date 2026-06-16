@@ -135,6 +135,25 @@ class GrugModelConfig:
     between consecutive core-loop hidden states). 0 disables it (E0-E3 unchanged).
     >0 pulls the weight-tied core toward a contractive/fixed-point map so extra
     test-time loops stop drifting."""
+    depth_conditioned_routing: bool = False
+    """E6: when True and the core is looped, the MoE router gets a learned
+    per-(iteration, core-layer) additive logit bias, so each core traversal
+    activates a DIFFERENT expert mixture (depth-conditioned routing). This makes
+    the weight-tied loop a genuinely depth-varying map (f_t != f) instead of one
+    fixed residual map re-applied in place -- the structural failure E0-E5 hit.
+    Sized to max_trained_recurrence; eval at deeper R reuses the last entry.
+    Zero-init, so step 0 is numerically identical to the routing=False variant."""
+    anytime_supervision: bool = False
+    """E4: when True and the core is looped, training adds a deep-supervision CE
+    term read off the shared output head (final_norm + output_proj) after EACH
+    core iteration, averaged over iterations and weighted by
+    anytime_supervision_weight. Rewards monotonically-USEFUL refinement at every
+    depth (the fix for E5's freeze, which suppressed refinement) and makes every
+    depth anytime-decodable. Training-only: the eval (reduction='none') path and
+    the parameter tree are unchanged (no new params)."""
+    anytime_supervision_weight: float = 1.0
+    """E4: relative weight on the averaged per-iteration deep-supervision CE term.
+    Only used when anytime_supervision is True."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -189,6 +208,18 @@ class GrugModelConfig:
     def effective_depth(self) -> int:
         """Number of block applications per forward (compute depth)."""
         return self.num_prelude_layers + self.num_core_layers * self.recurrence_steps + self.num_coda_layers
+
+    @property
+    def max_trained_recurrence(self) -> int:
+        """Deepest core-loop count the model is trained at.
+
+        Sizes the per-depth tables (FiLM, depth-conditioned router bias). With
+        randomized recurrence this is max(recurrence_choices); otherwise the
+        static recurrence_steps. Eval at a deeper R reuses the last table entry.
+        """
+        if self.randomize_recurrence and self.recurrence_choices:
+            return max(self.recurrence_choices)
+        return self.recurrence_steps
 
 
 def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
@@ -443,11 +474,19 @@ class MoEMLP(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
+        router_logit_bias: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        # `router_logit_bias` (E6) is an optional learned per-expert (E,) additive bias,
+        # added to the router logits with gradient so it shapes BOTH expert
+        # selection and the sigmoid combine weights. Distinct from `router_bias`,
+        # the stop-gradient QB load-balancing threshold. None reproduces the
+        # depth_conditioned_routing=False path exactly (E0-E5 unchanged).
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+        if router_logit_bias is not None:
+            router_logits = router_logits + router_logit_bias.astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
@@ -530,10 +569,13 @@ class Block(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
         film: tuple[jax.Array, jax.Array] | None = None,
+        router_logit_bias: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         # `film` is an optional (scale, shift) pair, each shape (D,), broadcast over
         # (B, S, D). The same modulation is applied after both gated-norms so a
         # weight-tied core block can be told which loop iteration it is on (E2).
+        # `router_logit_bias` (E6) is an optional per-expert (E,) additive bias on
+        # the MoE router logits for depth-conditioned expert selection.
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         if film is not None:
             scale, shift = film
@@ -542,7 +584,7 @@ class Block(eqx.Module):
         mlp_in = _batch_reshard(self.mlp_gated_norm(self.rms_mlp(x)))
         if film is not None:
             mlp_in = mlp_in * (1.0 + scale) + shift
-        mlp_out, router_stats = self.mlp(mlp_in)
+        mlp_out, router_stats = self.mlp(mlp_in, router_logit_bias=router_logit_bias)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
@@ -572,6 +614,7 @@ class Transformer(eqx.Module):
     final_gated_norm: GatedNorm
     core_film_scale: jax.Array | None
     core_film_shift: jax.Array | None
+    core_router_bias: jax.Array | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -592,6 +635,16 @@ class Transformer(eqx.Module):
             film_shape = (cfg.recurrence_steps, cfg.num_core_layers, cfg.hidden_dim)
             core_film_scale = reshard(jnp.zeros(film_shape, dtype=jnp.float32), P(None, None, None))
             core_film_shift = reshard(jnp.zeros(film_shape, dtype=jnp.float32), P(None, None, None))
+        # E6: per-(iteration, core-layer, expert) additive router-logit bias for
+        # depth-conditioned routing. Zeros => identity at init and consumes no PRNG
+        # key, so every other param stays bit-identical to the routing=False model.
+        # Sized to the deepest trained core depth; the matching name substring
+        # "router_bias" routes it to plain Adam (not AdamH), so the zero init can't
+        # trigger the AdamH 0/0 NaN that bit E2's FiLM.
+        core_router_bias = None
+        if cfg.depth_conditioned_routing and cfg.max_trained_recurrence > 1:
+            bias_shape = (cfg.max_trained_recurrence, cfg.num_core_layers, cfg.num_experts)
+            core_router_bias = reshard(jnp.zeros(bias_shape, dtype=jnp.float32), P(None, None, None))
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -602,6 +655,7 @@ class Transformer(eqx.Module):
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             core_film_scale=core_film_scale,
             core_film_shift=core_film_shift,
+            core_router_bias=core_router_bias,
             config=cfg,
         )
 
@@ -651,9 +705,10 @@ class Transformer(eqx.Module):
             h: jax.Array,
             idx: int,
             film: tuple[jax.Array, jax.Array] | None = None,
+            router_logit_bias: jax.Array | None = None,
         ) -> tuple[jax.Array, dict[str, jax.Array]]:
             layer_mask = long_mask if idx % 4 == 3 else short_mask
-            return eqx.filter_checkpoint(block, policy=remat_policy)(h, layer_mask, film)
+            return eqx.filter_checkpoint(block, policy=remat_policy)(h, layer_mask, film, router_logit_bias)
 
         per_block_stats: list[dict[str, jax.Array]] = []
         for block in prelude_blocks:
@@ -672,6 +727,14 @@ class Transformer(eqx.Module):
         track_consistency = cfg.core_consistency_weight > 0
         consistency_accum = jnp.zeros((), dtype=jnp.float32)
         x_prev = hidden
+        # E4: collect a readout (shared head: final_norm + final_gated_norm) after
+        # each core iteration so next_token_loss can deep-supervise every depth.
+        # Gated on the static config so E0/E1/E2/E3/E5/E6 trace to the identical
+        # jaxpr (no readout op, no extra metric key). The intermediates skip the
+        # coda (cheap), so they regularize the core to be decodable at every depth;
+        # the final output still flows through the coda below.
+        track_anytime = cfg.anytime_supervision and cfg.max_trained_recurrence > 1
+        anytime_readouts: list[jax.Array] = []
         for t in range(n_recurrence):
             for c, block in enumerate(core_blocks):
                 film = None
@@ -680,7 +743,13 @@ class Transformer(eqx.Module):
                     # override deeper than trained, reuse the last iteration's FiLM.
                     film_t = min(t, cfg.recurrence_steps - 1)
                     film = (self.core_film_scale[film_t, c], self.core_film_shift[film_t, c])
-                hidden, stats = apply_block(block, hidden, eff_idx, film)
+                router_logit_bias = None
+                if self.core_router_bias is not None:
+                    # E6: depth-conditioned router bias. Sized to max_trained_recurrence;
+                    # eval deeper than trained reuses the last iteration's bias.
+                    bias_t = min(t, cfg.max_trained_recurrence - 1)
+                    router_logit_bias = self.core_router_bias[bias_t, c]
+                hidden, stats = apply_block(block, hidden, eff_idx, film, router_logit_bias)
                 core_iter_stats[c].append(stats)
                 eff_idx += 1
             if track_consistency:
@@ -689,6 +758,8 @@ class Transformer(eqx.Module):
                 den = jnp.sum(jnp.square(x_prev.astype(jnp.float32)), axis=-1) + cfg.layer_norm_eps
                 consistency_accum = consistency_accum + jnp.mean(num / den)
                 x_prev = hidden
+            if track_anytime:
+                anytime_readouts.append(self.final_gated_norm(self.final_norm(hidden)))
         per_block_stats.extend(_mean_router_stats(s) for s in core_iter_stats)
 
         for block in coda_blocks:
@@ -705,6 +776,11 @@ class Transformer(eqx.Module):
         }
         if track_consistency:
             router_metrics["core_consistency"] = consistency_accum / n_recurrence
+        if track_anytime:
+            # (n_recurrence, B, S, D). Consumed by next_token_loss (training only)
+            # and dropped before _summarize_router_metrics, so it never escapes the
+            # train_step metrics dict.
+            router_metrics["anytime_readouts"] = jnp.stack(anytime_readouts, axis=0)
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
 
@@ -756,6 +832,29 @@ class Transformer(eqx.Module):
             consistency = router_metrics["core_consistency"]
             consistency_weighted = self.config.core_consistency_weight * consistency
             loss = loss + consistency_weighted
+        # E4: training-only anytime deep-supervision. For each per-iteration readout
+        # collected in the forward, compute CE against the same labels through the
+        # shared output head, average over iterations, and add a weighted term.
+        # Gated on reduction so the eval (reduction="none") path is byte-identical.
+        anytime_ce = None
+        anytime_ce_weighted = None
+        if reduction != "none" and self.config.anytime_supervision and "anytime_readouts" in router_metrics:
+            readouts = router_metrics["anytime_readouts"]
+            n_iter = readouts.shape[0]
+            ce_sum = jnp.zeros((), dtype=loss_dtype)
+            for t in range(n_iter):
+                ce_sum = ce_sum + fused_linear_softmax_cross_entropy_loss(
+                    readouts[t],
+                    self.output_proj,
+                    labels,
+                    weight=loss_weight,
+                    reduction=reduction,
+                    logsumexp_weight=logsumexp_weight,
+                    dtype=loss_dtype,
+                )
+            anytime_ce = ce_sum / n_iter
+            anytime_ce_weighted = self.config.anytime_supervision_weight * anytime_ce
+            loss = loss + anytime_ce_weighted
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
@@ -763,6 +862,9 @@ class Transformer(eqx.Module):
             if "core_consistency" in router_metrics:
                 summarized_metrics["train/core_consistency"] = router_metrics["core_consistency"]
                 summarized_metrics["train/core_consistency_weighted"] = consistency_weighted
+            if anytime_ce is not None:
+                summarized_metrics["train/anytime_ce"] = anytime_ce
+                summarized_metrics["train/anytime_ce_weighted"] = anytime_ce_weighted
             return loss, summarized_metrics
         return loss
 
