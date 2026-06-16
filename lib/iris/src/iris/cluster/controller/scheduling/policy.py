@@ -154,8 +154,7 @@ def demanded_availability_variants(pending_task_rows: list[PendingTask]) -> set[
     marker matters solely when a pending job filters on it, and in practice a tiny
     set of variants (often just one, e.g. ``v5p-8``) is ever reserved. Restricting
     enrichment to this set confines the per-worker copy to the few workers in a
-    zone that provisions a demanded variant. A substring pre-check skips JSON
-    parsing for the common task that carries no availability constraint at all.
+    zone that provisions a demanded variant.
 
     Returned variants are lowercased to match the ``zone_capabilities`` map (both
     sides come through :func:`availability_key`).
@@ -163,6 +162,8 @@ def demanded_availability_variants(pending_task_rows: list[PendingTask]) -> set[
     variants: set[str] = set()
     for task in pending_task_rows:
         constraints_json = task.constraints_json
+        # Substring pre-check: skip JSON parsing for the common task that carries
+        # no availability constraint at all.
         if not constraints_json or AVAILABILITY_PREFIX not in constraints_json:
             continue
         for constraint in constraints_from_json(constraints_json):
