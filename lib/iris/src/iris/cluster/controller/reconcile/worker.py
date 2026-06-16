@@ -86,12 +86,20 @@ class WorkerReconcileResult:
     an RPC error, where it is meaningless): a worker that responds but reports
     unhealthy — e.g. a failed disk — is still counted as a liveness failure so
     it is eventually reaped.
+
+    ``responder_worker_id`` is the ``worker_id`` the responding daemon stamped on
+    its Reconcile response. It is the *answerer's* identity, which can differ
+    from the targeted :attr:`worker_id` if the controller dialed a stale address
+    that a different live worker now owns (GCP recycles a deleted worker's
+    internal IP onto a new VM). ``None`` on an RPC error or when the daemon did
+    not report an id.
     """
 
     worker_id: WorkerId
     observations: list[worker_pb2.Worker.AttemptObservation]
     error: str | None = None
     self_healthy: bool = True
+    responder_worker_id: str | None = None
 
 
 # ---------------------------------------------------------------------------

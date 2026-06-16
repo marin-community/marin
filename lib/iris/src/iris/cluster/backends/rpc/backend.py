@@ -191,9 +191,27 @@ class RpcTaskBackend:
         worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = list(zip(plans, results, strict=True))
         health_events: list[WorkerHealthEvent] = []
         for plan, result in worker_results:
+            address = snapshot.worker_addresses[plan.worker_id]
             if result.error is not None:
                 health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
-                self.stub_factory.evict(snapshot.worker_addresses[plan.worker_id])
+                self.stub_factory.evict(address)
+            elif result.responder_worker_id is not None and result.responder_worker_id != str(plan.worker_id):
+                # Misrouted reconcile: a *different* live worker answered at this
+                # address. GCP recycles a deleted worker's internal IP onto a new
+                # VM, so the controller's stale address for the dead worker now
+                # points at someone else. Counting the impostor's healthy reply as
+                # REACHED would resurrect the dead worker (reset its failures to 0)
+                # and keep it schedulable — a black hole that accepts and kills
+                # every task. Treat it as UNREACHABLE so the stale worker accrues
+                # failures and is reaped, and drop the impostor's stub.
+                logger.warning(
+                    "Reconcile for worker %s at %s was answered by %s (recycled address); marking unreachable",
+                    plan.worker_id,
+                    address,
+                    result.responder_worker_id,
+                )
+                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+                self.stub_factory.evict(address)
             elif not result.self_healthy:
                 health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
             else:
@@ -301,6 +319,7 @@ class RpcTaskBackend:
                     observations=list(response.observed),
                     error=None,
                     self_healthy=response.health.healthy,
+                    responder_worker_id=response.worker_id or None,
                 )
             except Exception as e:
                 return WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e))
