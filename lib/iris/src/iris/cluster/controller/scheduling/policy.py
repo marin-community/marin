@@ -152,8 +152,7 @@ def reservation_unsatisfied(
     demand: the reservation's holder task provisions the reserved capacity, and
     the real task runs only once that capacity exists. Waiting for the claim also
     fixes the reservation's zone before the task is placed or routed, so the
-    autoscaler never boots capacity in the wrong zone (see
-    :func:`inject_taint_constraints` for the zone pin then applied to the parent).
+    autoscaler never boots capacity in the wrong zone.
 
     Both the scheduling gate (:func:`apply_scheduling_gates`) and the demand
     path (:func:`compute_demand_entries`) consult this predicate so they agree.
@@ -181,10 +180,9 @@ def reservation_zones_from_claims(
 ) -> dict[JobName, frozenset[str]]:
     """Zones in which each reserving job's workers were claimed, keyed by job.
 
-    A directly-reserved job is pinned to these zones (see
-    :func:`inject_taint_constraints`) so it runs beside its reservation. A job is
-    absent until at least one of its entries is claimed on a zone-reporting
-    worker.
+    A directly-reserved job is constrained to these zones so it runs beside its
+    reservation. A job is absent until at least one of its entries is claimed on
+    a zone-reporting worker.
     """
     zones_by_wire: dict[str, set[str]] = defaultdict(set)
     attrs_by_worker = {w.worker_id: w.attributes for w in workers}
