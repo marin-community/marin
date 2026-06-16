@@ -385,6 +385,10 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   LR {5e-4, 7e-4, 1e-3} × WD {0.05, 0.1, 0.2}, 9 cells, batch on v5p family + v6e-16
   (center 7e-4/0.1 on v5p-64). Confirms 7e-4 interior (5e-4 below, 1e-3 above) and extends
   WD to 0.2 (E2 best was on the wd0.1 edge). Expensive: 4-epoch ≈ 17.8k steps/run.
+  _~07:20Z: the `1e-3/0.2` corner sat pending 4.5h on batch ("no workers match"); relocated
+  to **v6e-8 interactive (w4d)** so the 3×3 completes (budget ~66k, under cap). It's the
+  least-informative corner (doubly-edge), not an axis-neighbor of the center — the optimum
+  check doesn't depend on it. All 9 E4 cells now in flight._
 - Grid (final-step `eval/contacts-v1-val/loss`):
 
   | wd \ lr | 5e-4 | 7e-4 | 1e-3 |
