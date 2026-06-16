@@ -45,7 +45,12 @@ from iris.cluster.backends.gcp.service import (
     VmCreateRequest,
     operation_error,
 )
-from iris.cluster.backends.gcp.ssh import OS_LOGIN_METADATA, ssh_impersonate_service_account
+from iris.cluster.backends.gcp.ssh import (
+    OS_LOGIN_METADATA,
+    ssh_impersonate_service_account,
+    ssh_public_fallback_requested,
+    ssh_tunnel_through_iap,
+)
 from iris.cluster.backends.remote_exec import GceRemoteExec
 from iris.cluster.backends.types import (
     InfraError,
@@ -355,7 +360,13 @@ class GcpWorkerProvider:
             zone=zone,
             vm_name=config.name,
             impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
+            tunnel_through_iap=ssh_tunnel_through_iap(self._ssh_config),
         )
+        if ssh_public_fallback_requested(self._ssh_config):
+            logger.warning(
+                "GCP public-IP SSH fallback explicitly requested; IAP SSH is disabled for worker VM %s",
+                config.name,
+            )
 
         return GcpStandaloneWorkerHandle(
             _vm_id=construct_worker_id(config.name, 0),
@@ -785,7 +796,13 @@ class GcpWorkerProvider:
                 zone=vm.zone,
                 vm_name=vm.name,
                 impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
+                tunnel_through_iap=ssh_tunnel_through_iap(self._ssh_config),
             )
+            if ssh_public_fallback_requested(self._ssh_config):
+                logger.warning(
+                    "GCP public-IP SSH fallback explicitly requested; IAP SSH is disabled for worker VM %s",
+                    vm.name,
+                )
             handles.append(
                 GcpStandaloneWorkerHandle(
                     _vm_id=construct_worker_id(vm.name, 0),

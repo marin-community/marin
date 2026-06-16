@@ -20,7 +20,11 @@ from rigging.timing import Timestamp
 
 from iris.cluster.backends._worker_base import RemoteExecWorkerBase
 from iris.cluster.backends.gcp.service import GcpService
-from iris.cluster.backends.gcp.ssh import ssh_impersonate_service_account
+from iris.cluster.backends.gcp.ssh import (
+    ssh_impersonate_service_account,
+    ssh_public_fallback_requested,
+    ssh_tunnel_through_iap,
+)
 from iris.cluster.backends.remote_exec import GceRemoteExec, GcloudRemoteExec
 from iris.cluster.backends.types import (
     CloudSliceState,
@@ -350,8 +354,15 @@ class GcpSliceHandle:
                 vm_id=self._slice_id,
                 worker_index=i,
                 impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
+                tunnel_through_iap=ssh_tunnel_through_iap(self._ssh_config),
                 _address=internal_ip,
             )
+            if ssh_public_fallback_requested(self._ssh_config):
+                logger.warning(
+                    "GCP public-IP SSH fallback explicitly requested; IAP SSH is disabled for TPU worker %s[%d]",
+                    self._slice_id,
+                    i,
+                )
             workers.append(
                 GcpWorkerHandle(
                     _vm_id=f"{self._slice_id}-worker-{i}",
@@ -473,7 +484,13 @@ class GcpVmSliceHandle:
             zone=self._zone,
             vm_name=self._vm_name,
             impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
+            tunnel_through_iap=ssh_tunnel_through_iap(self._ssh_config),
         )
+        if ssh_public_fallback_requested(self._ssh_config):
+            logger.warning(
+                "GCP public-IP SSH fallback explicitly requested; IAP SSH is disabled for VM slice %s",
+                self._vm_name,
+            )
         worker = GcpStandaloneWorkerHandle(
             _vm_id=f"{self._slice_id}-worker-0",
             _internal_address=vm_info.internal_ip,

@@ -226,6 +226,10 @@ iris key list / iris key revoke       # manage API keys
 
 ### Connecting
 
+IAP SSH requires the `allow-iap-ssh` firewall rule and IAM checks below. Until
+those are verified, public-IP SSH may still be the only working named-cluster
+tunnel path.
+
 ```bash
 # SSH tunnel (IAP)
 gcloud compute ssh iris-controller-marin --zone=us-central1-a \
@@ -237,6 +241,50 @@ gcloud compute ssh iris-controller-marin --zone=us-central1-a \
 ```
 
 Configs: `marin.yaml` (production), `marin-dev.yaml` (dev, smaller scale caps).
+
+To make a named-cluster or exact-file auto-tunnel use IAP, set:
+
+```yaml
+defaults:
+  ssh:
+    impersonate_service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+    tunnel_through_iap: true
+```
+
+`tunnel_through_iap: false` is an explicit public-IP SSH override, not an
+automatic fallback. Do not flip `marin.yaml`, `marin-dev.yaml`, or
+`smoke-gcp.yaml` to IAP until the live IAP firewall rule and IAM preflight have
+passed.
+
+Before disabling public SSH, verify:
+
+```bash
+# IAP ingress rule exists.
+gcloud compute firewall-rules describe allow-iap-ssh --project=hai-gcp-models
+
+# The impersonated SSH service account has IAP + OS Login at project or instance scope.
+gcloud projects get-iam-policy hai-gcp-models \
+  --flatten='bindings[].members' \
+  --filter='bindings.members:serviceAccount:iris-controller@hai-gcp-models.iam.gserviceaccount.com AND bindings.role:(roles/iap.tunnelResourceAccessor OR roles/compute.osLogin OR roles/compute.osAdminLogin)'
+
+gcloud compute instances get-iam-policy iris-controller-marin \
+  --project=hai-gcp-models \
+  --zone=us-central1-a \
+  --flatten='bindings[].members' \
+  --filter='bindings.members:serviceAccount:iris-controller@hai-gcp-models.iam.gserviceaccount.com AND bindings.role:(roles/iap.tunnelResourceAccessor OR roles/compute.osLogin OR roles/compute.osAdminLogin)'
+
+# Operators can impersonate that service account.
+gcloud iam service-accounts get-iam-policy \
+  iris-controller@hai-gcp-models.iam.gserviceaccount.com \
+  --project=hai-gcp-models \
+  --flatten='bindings[].members' \
+  --filter='bindings.role:roles/iam.serviceAccountTokenCreator AND bindings.members:user:USER_EMAIL'
+```
+
+TPU worker debug access is a separate gate. Before disabling
+`default-allow-ssh`, run a real TPU worker SSH check with IAP enabled and verify
+the TPU command path, OS Login metadata, and IAP firewall reachability. If that
+check has not passed, keep public SSH enabled.
 
 ### GCP Resources
 

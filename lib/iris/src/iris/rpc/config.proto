@@ -317,13 +317,14 @@ message WorkerConfig {
 // SSH configuration. GCP cluster SSH always uses gcloud auto-detection
 // (OS Login vs metadata is determined by the VM's own enable-oslogin
 // metadata), so there's no auth-mode knob here. The fields below cover
-// the manual provider and the gcloud impersonation flag.
+// the manual provider and explicit gcloud SSH options.
 message SshConfig {
   string user = 1;                        // Default: "root"
   string key_file = 2;                    // Path to SSH private key
   int32 port = 3;                         // Default: 22
   iris.time.Duration connect_timeout = 4;  // Default: 30s
   string impersonate_service_account = 7; // Optional SA email for gcloud impersonation
+  bool tunnel_through_iap = 8;             // Use GCP Identity-Aware Proxy for gcloud SSH
   reserved 5, 6;  // formerly auth_mode (enum), os_login_user (string)
 }
 

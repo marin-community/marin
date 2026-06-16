@@ -342,18 +342,20 @@ class WorkerConfig(_message.Message):
     def __init__(self, docker_image: _Optional[str] = ..., host: _Optional[str] = ..., port: _Optional[int] = ..., port_range: _Optional[str] = ..., worker_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., cache_dir: _Optional[str] = ..., default_task_image: _Optional[str] = ..., task_env: _Optional[_Mapping[str, str]] = ..., runtime: _Optional[str] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., gpu_count: _Optional[int] = ..., capacity_type: _Optional[_Union[CapacityType, str]] = ..., cpu_millicores: _Optional[int] = ..., worker_attributes: _Optional[_Mapping[str, str]] = ..., poll_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., slice_id: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., storage_prefix: _Optional[str] = ..., auth_token: _Optional[str] = ...) -> None: ...
 
 class SshConfig(_message.Message):
-    __slots__ = ("user", "key_file", "port", "connect_timeout", "impersonate_service_account")
+    __slots__ = ("user", "key_file", "port", "connect_timeout", "impersonate_service_account", "tunnel_through_iap")
     USER_FIELD_NUMBER: _ClassVar[int]
     KEY_FILE_FIELD_NUMBER: _ClassVar[int]
     PORT_FIELD_NUMBER: _ClassVar[int]
     CONNECT_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
     IMPERSONATE_SERVICE_ACCOUNT_FIELD_NUMBER: _ClassVar[int]
+    TUNNEL_THROUGH_IAP_FIELD_NUMBER: _ClassVar[int]
     user: str
     key_file: str
     port: int
     connect_timeout: _time_pb2.Duration
     impersonate_service_account: str
-    def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., impersonate_service_account: _Optional[str] = ...) -> None: ...
+    tunnel_through_iap: bool
+    def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., impersonate_service_account: _Optional[str] = ..., tunnel_through_iap: _Optional[bool] = ...) -> None: ...
 
 class StorageConfig(_message.Message):
     __slots__ = ("local_state_dir", "remote_state_dir")

@@ -490,6 +490,7 @@ class TestSshConfigMerging:
             user="ubuntu",
             key_file="~/.ssh/cluster_key",
             impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
+            tunnel_through_iap=True,
         )
         ssh_config_proto.connect_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(60)))
 
@@ -502,6 +503,7 @@ class TestSshConfigMerging:
         assert ssh_config.key_file == "~/.ssh/cluster_key"
         assert ssh_config.port == 22  # DEFAULT_SSH_PORT
         assert ssh_config.impersonate_service_account == "iris-controller@test-project.iam.gserviceaccount.com"
+        assert ssh_config.tunnel_through_iap is True
         assert ssh_config.connect_timeout.milliseconds == 60_000
 
     def test_applies_per_group_ssh_overrides(self):
@@ -536,7 +538,19 @@ class TestSshConfigMerging:
         assert ssh_config.key_file == ""
         assert ssh_config.port == 22
         assert ssh_config.impersonate_service_account == ""
+        assert ssh_config.tunnel_through_iap is False
+        assert not ssh_config.HasField("tunnel_through_iap")
         assert ssh_config.connect_timeout.milliseconds == 30_000
+
+    def test_preserves_explicit_public_ssh_fallback(self):
+        """get_ssh_config preserves explicit tunnel_through_iap=false presence."""
+        config = config_pb2.IrisClusterConfig()
+        config.defaults.ssh.CopyFrom(config_pb2.SshConfig(tunnel_through_iap=False))
+
+        ssh_config = get_ssh_config(config)
+
+        assert ssh_config.tunnel_through_iap is False
+        assert ssh_config.HasField("tunnel_through_iap")
 
     def test_validate_config_requires_gcp_service_accounts(self):
         config = config_pb2.IrisClusterConfig()

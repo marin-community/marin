@@ -14,6 +14,7 @@ OS_LOGIN_METADATA = {
     "enable-oslogin": "TRUE",
     "block-project-ssh-keys": "TRUE",
 }
+GCLOUD_TUNNEL_THROUGH_IAP_FLAG = "--tunnel-through-iap"
 
 
 def ssh_impersonate_service_account(
@@ -23,3 +24,18 @@ def ssh_impersonate_service_account(
     if ssh_config and ssh_config.impersonate_service_account:
         return ssh_config.impersonate_service_account
     return None
+
+
+def ssh_tunnel_through_iap(
+    ssh_config: config_pb2.SshConfig | None,
+) -> bool:
+    return bool(ssh_config and ssh_config.tunnel_through_iap)
+
+
+def ssh_public_fallback_requested(
+    ssh_config: config_pb2.SshConfig | None,
+) -> bool:
+    """Return whether public-IP SSH was explicitly requested over IAP."""
+    if ssh_config is None:
+        return False
+    return ssh_config.HasField("tunnel_through_iap") and not ssh_config.tunnel_through_iap

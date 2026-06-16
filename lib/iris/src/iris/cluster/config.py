@@ -1024,6 +1024,8 @@ def get_ssh_config(
         port=port,
         impersonate_service_account=impersonate_service_account,
     )
+    if ssh.HasField("tunnel_through_iap"):
+        result.tunnel_through_iap = ssh.tunnel_through_iap
     result.connect_timeout.CopyFrom(connect_timeout)
     return result
 

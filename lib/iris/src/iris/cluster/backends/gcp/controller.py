@@ -19,7 +19,12 @@ from dataclasses import dataclass
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from iris.cluster.backends.gcp.service import GcpService
-from iris.cluster.backends.gcp.ssh import ssh_impersonate_service_account
+from iris.cluster.backends.gcp.ssh import (
+    GCLOUD_TUNNEL_THROUGH_IAP_FLAG,
+    ssh_impersonate_service_account,
+    ssh_public_fallback_requested,
+    ssh_tunnel_through_iap,
+)
 from iris.cluster.backends.gcp.workers import GcpWorkerProvider
 from iris.cluster.backends.types import (
     Labels,
@@ -157,6 +162,7 @@ def _build_tunnel_ssh_cmd(
     vm_name: str,
     local_port: int,
     effective_service_account: str | None,
+    tunnel_through_iap: bool,
 ) -> list[str]:
     """Build a `gcloud compute ssh` tunnel command.
 
@@ -173,6 +179,8 @@ def _build_tunnel_ssh_cmd(
     ]
     if effective_service_account:
         cmd.append(f"--impersonate-service-account={effective_service_account}")
+    if tunnel_through_iap:
+        cmd.append(GCLOUD_TUNNEL_THROUGH_IAP_FLAG)
     cmd.extend(
         [
             "--",
@@ -217,6 +225,7 @@ def _establish_tunnel(
     vm_name: str,
     local_port: int,
     effective_service_account: str | None,
+    tunnel_through_iap: bool,
     timeout: float,
 ) -> subprocess.Popen:
     """Open an SSH tunnel to the controller VM."""
@@ -226,6 +235,7 @@ def _establish_tunnel(
         vm_name=vm_name,
         local_port=local_port,
         effective_service_account=effective_service_account,
+        tunnel_through_iap=tunnel_through_iap,
     )
     proc = subprocess.Popen(
         cmd,
@@ -259,6 +269,9 @@ def _gcp_tunnel(
     from the VM's own enable-oslogin metadata.
     """
     effective_service_account = ssh_impersonate_service_account(ssh_config)
+    tunnel_through_iap = ssh_tunnel_through_iap(ssh_config)
+    if ssh_public_fallback_requested(ssh_config):
+        logger.warning("GCP public-IP SSH fallback explicitly requested; IAP SSH is disabled for this tunnel")
     _check_gcloud_ssh_key()
 
     if local_port is None:
@@ -280,6 +293,7 @@ def _gcp_tunnel(
             vm_name=vm.name,
             local_port=local_port,
             effective_service_account=effective_service_account,
+            tunnel_through_iap=tunnel_through_iap,
             timeout=timeout,
         ),
         retryable=lambda e: isinstance(e, RuntimeError) and _is_transient_ssh_error(str(e)),

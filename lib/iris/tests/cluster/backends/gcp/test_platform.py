@@ -24,6 +24,7 @@ from iris.cluster.backends.gcp.handles import (
     _composite_slice_state,
 )
 from iris.cluster.backends.gcp.service import OperationStatus, TpuCreateRequest, VmCreateRequest
+from iris.cluster.backends.gcp.ssh import GCLOUD_TUNNEL_THROUGH_IAP_FLAG
 from iris.cluster.backends.gcp.workers import (
     GcpWorkerProvider,
     _run_tpu_bootstrap,
@@ -256,10 +257,81 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
 
     ssh_cmd = popen_mock.call_args.args[0]
     assert f"--impersonate-service-account={ssh_config.impersonate_service_account}" in ssh_cmd
+    assert GCLOUD_TUNNEL_THROUGH_IAP_FLAG not in ssh_cmd
     # No explicit user@vm prefix or --ssh-key-file: gcloud auto-detects.
     assert "iris-controller-iris" in ssh_cmd
     assert "@iris-controller-iris" not in " ".join(ssh_cmd)
     assert not any("--ssh-key-file" in arg for arg in ssh_cmd)
+
+
+def test_gcp_tunnel_uses_iap_when_configured():
+    """Tunnel passes --tunnel-through-iap only when requested by SshConfig."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    _register_controller_vm(gcp_service, os_login=True)
+
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    ssh_config = config_pb2.SshConfig(
+        impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
+        tunnel_through_iap=True,
+    )
+    worker_provider = GcpWorkerProvider(
+        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
+    )
+    controller = GcpControllerProvider(worker_provider=worker_provider)
+
+    ssh_proc = unittest.mock.Mock()
+    ssh_proc.poll.return_value = None
+    ssh_proc.terminate.return_value = None
+    ssh_proc.wait.return_value = 0
+
+    with (
+        unittest.mock.patch("iris.cluster.backends.gcp.controller._check_gcloud_ssh_key"),
+        unittest.mock.patch("iris.cluster.backends.gcp.controller.find_free_port", return_value=10042),
+        unittest.mock.patch("iris.cluster.backends.gcp.controller.wait_for_port"),
+        unittest.mock.patch(
+            "iris.cluster.backends.gcp.controller.subprocess.Popen", return_value=ssh_proc
+        ) as popen_mock,
+    ):
+        with controller.tunnel("unused") as tunneled:
+            assert tunneled == "http://127.0.0.1:10042"
+
+    ssh_cmd = popen_mock.call_args.args[0]
+    assert f"--impersonate-service-account={ssh_config.impersonate_service_account}" in ssh_cmd
+    assert GCLOUD_TUNNEL_THROUGH_IAP_FLAG in ssh_cmd
+
+
+def test_gcp_tunnel_explicit_public_fallback_warns(caplog: pytest.LogCaptureFixture):
+    """Explicit tunnel_through_iap=false warns and stays on public-IP SSH."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    _register_controller_vm(gcp_service, os_login=True)
+
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    ssh_config = config_pb2.SshConfig(tunnel_through_iap=False)
+    worker_provider = GcpWorkerProvider(
+        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
+    )
+    controller = GcpControllerProvider(worker_provider=worker_provider)
+
+    ssh_proc = unittest.mock.Mock()
+    ssh_proc.poll.return_value = None
+    ssh_proc.terminate.return_value = None
+    ssh_proc.wait.return_value = 0
+
+    with (
+        caplog.at_level("WARNING"),
+        unittest.mock.patch("iris.cluster.backends.gcp.controller._check_gcloud_ssh_key"),
+        unittest.mock.patch("iris.cluster.backends.gcp.controller.find_free_port", return_value=10042),
+        unittest.mock.patch("iris.cluster.backends.gcp.controller.wait_for_port"),
+        unittest.mock.patch(
+            "iris.cluster.backends.gcp.controller.subprocess.Popen", return_value=ssh_proc
+        ) as popen_mock,
+    ):
+        with controller.tunnel("unused") as tunneled:
+            assert tunneled == "http://127.0.0.1:10042"
+
+    ssh_cmd = popen_mock.call_args.args[0]
+    assert GCLOUD_TUNNEL_THROUGH_IAP_FLAG not in ssh_cmd
+    assert "public-IP SSH fallback explicitly requested" in caplog.text
 
 
 def test_gce_remote_exec_builds_optional_flags_inline():
@@ -279,6 +351,20 @@ def test_gce_remote_exec_builds_optional_flags_inline():
     assert cmd[-2:] == ["--command", "echo ok"]
 
 
+def test_gce_remote_exec_builds_iap_flag_when_configured():
+    remote_exec = GceRemoteExec(
+        project_id="test-project",
+        zone="us-central1-a",
+        vm_name="vm-1",
+        tunnel_through_iap=True,
+    )
+
+    cmd = remote_exec._build_cmd("echo ok")
+
+    assert GCLOUD_TUNNEL_THROUGH_IAP_FLAG in cmd
+    assert cmd[-2:] == ["--command", "echo ok"]
+
+
 def test_gcloud_remote_exec_builds_optional_flags_inline():
     remote_exec = GcloudRemoteExec(
         project_id="test-project",
@@ -294,6 +380,21 @@ def test_gcloud_remote_exec_builds_optional_flags_inline():
     assert cmd[:6] == ["gcloud", "compute", "tpus", "tpu-vm", "ssh", "slice-1"]
     assert "--ssh-key-file=/tmp/test-key" in cmd
     assert "--impersonate-service-account=svc@test-project.iam.gserviceaccount.com" in cmd
+    assert cmd[-2:] == ["--command", "echo ok"]
+
+
+def test_gcloud_remote_exec_builds_iap_flag_when_configured():
+    remote_exec = GcloudRemoteExec(
+        project_id="test-project",
+        _zone="us-west4-a",
+        vm_id="slice-1",
+        worker_index=0,
+        tunnel_through_iap=True,
+    )
+
+    cmd = remote_exec._build_cmd("echo ok")
+
+    assert GCLOUD_TUNNEL_THROUGH_IAP_FLAG in cmd
     assert cmd[-2:] == ["--command", "echo ok"]
 
 
@@ -942,6 +1043,32 @@ def test_gcp_tpu_slice_propagates_explicit_ssh_impersonation_account():
     remote_exec = status.workers[0]._remote_exec
     assert isinstance(remote_exec, GcloudRemoteExec)
     assert remote_exec.impersonate_service_account == ssh_config.impersonate_service_account
+
+
+def test_gcp_tpu_slice_propagates_iap_ssh_config():
+    """SshConfig.tunnel_through_iap is forwarded onto the TPU remote exec."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
+    ssh_config = config_pb2.SshConfig(tunnel_through_iap=True)
+    platform = GcpWorkerProvider(
+        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
+    )
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-tpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5litepod-8",
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
+    cfg.gcp.service_account = "iris-worker@test-project.iam.gserviceaccount.com"
+
+    handle = platform.create_slice(cfg)
+    status = handle.describe()
+
+    remote_exec = status.workers[0]._remote_exec
+    assert isinstance(remote_exec, GcloudRemoteExec)
+    assert remote_exec.tunnel_through_iap is True
 
 
 # =============================================================================
