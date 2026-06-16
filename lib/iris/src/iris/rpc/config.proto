@@ -403,6 +403,12 @@ message DefaultsConfig {
   reserved 5;  // was: string default_task_image
   WorkerConfig worker = 6;
   map<string, string> task_env = 7;  // Env vars injected into every task container
+  // Names of environment variables captured from the operator's shell at
+  // `iris cluster start` and injected into every task. A missing name aborts
+  // the launch. Values never travel through the ConfigMap: on Kubernetes they
+  // are written to a Secret (`iris-task-env`) referenced via envFrom; on GCP
+  // they are folded into task_env in the bootstrap config shipped to the VM.
+  repeated string inject_env = 8;
 }
 
 // ============================================================================

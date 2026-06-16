@@ -40,6 +40,7 @@ from iris.cluster.backends.types import (
     RemoteWorkerHandle,
     StandaloneWorkerHandle,
 )
+from iris.cluster.inject_env import with_injected_task_env
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -380,9 +381,11 @@ def start_controller(
         vm.terminate(wait=True)
         raise RuntimeError(f"Controller VM {vm_config.name} did not become reachable within 300s")
 
-    # Bootstrap
+    # Bootstrap. Fold operator-injected env into task_env here: the launcher's
+    # shell is the only place the values exist, and the shipped config is the
+    # only channel to the controller VM and its workers.
     bootstrap_script = build_controller_bootstrap_script_from_config(
-        config,
+        with_injected_task_env(config),
         resolve_image=_resolve_image,
         fresh=fresh,
     )
@@ -424,7 +427,9 @@ def restart_controller(
 
     logger.info("Restarting controller container in-place on VM %s", vm.vm_id)
 
-    bootstrap_script = build_controller_bootstrap_script_from_config(config, resolve_image=_resolve_image)
+    bootstrap_script = build_controller_bootstrap_script_from_config(
+        with_injected_task_env(config), resolve_image=_resolve_image
+    )
     vm.bootstrap(bootstrap_script)
 
     address = f"http://{vm.internal_address}:{port}"
