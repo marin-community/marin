@@ -10,16 +10,13 @@ that drains it into the caller's write transaction. Kept separate from
 ``db``/``schema``/``projections``.
 
 Row deltas flush via bulk ``executemany`` statements (one per entity group);
-endpoint deletions write within the Tx; in-memory health bumps and audit log
-lines are deferred to ``cur``'s post-commit hooks so a rolled-back transaction
-leaves no observable trace.
+endpoint deletions write within the Tx; audit log lines are deferred to ``cur``'s
+post-commit hooks so a rolled-back transaction leaves no observable trace. Health
+is owned by the controller and folded through a single ``apply`` site, so this
+sink never touches it.
 """
 
-from __future__ import annotations
-
-from rigging.timing import Timestamp
 from sqlalchemy import bindparam, func
-from sqlalchemy import literal as sa_literal
 from sqlalchemy import update as sa_update
 
 from iris.cluster.controller.audit_logging import log_event
@@ -31,11 +28,8 @@ from iris.cluster.controller.reconcile.effects import (
     JobRowDelta,
     TaskRowDelta,
 )
-from iris.cluster.controller.reconcile.policy import CANCEL_GUARD_STATES
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
-from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import TERMINAL_JOB_STATES
 from iris.rpc import job_pb2
 
 
@@ -43,8 +37,8 @@ def _flush_tasks(cur: Tx, deltas: list[TaskRowDelta]) -> None:
     """Bulk-flush task deltas.
 
     Split by terminal vs active state: terminal rows additionally null out
-    ``current_worker_id`` / ``current_worker_address`` (matching the legacy
-    ``TaskMutation.apply``). ``container_id`` is applied in a small secondary
+    ``current_worker_id`` / ``current_worker_address`` so a finished task no
+    longer points at a worker. ``container_id`` is applied in a small secondary
     executemany over only the rows that carry one, so the main statement shape
     stays uniform across rows.
     """
@@ -150,12 +144,7 @@ def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
 
 
 def _flush_jobs(cur: Tx, deltas: list[JobRowDelta]) -> None:
-    """Bulk-flush job deltas in two groups: recompute writes and cascade kills.
-
-    The kill group keeps the SQL ``WHERE state NOT IN guard`` guard for safety;
-    the in-memory merge already enforces it. Cancel kills (which widen the guard)
-    are issued separately so each executemany uses a single guard set.
-    """
+    """Bulk-flush job deltas: recompute writes, then cascade kills."""
     recompute = [d for d in deltas if not d.is_cascade_kill]
     if recompute:
         params = [
@@ -182,12 +171,11 @@ def _flush_jobs(cur: Tx, deltas: list[JobRowDelta]) -> None:
             params,
         )
 
-    # Cascade kills split by guard width so each executemany uses one guard set.
-    for allow_overwrite in (False, True):
-        kills = [d for d in deltas if d.is_cascade_kill and d.allow_overwrite_worker_failed == allow_overwrite]
-        if not kills:
-            continue
-        guard_states = CANCEL_GUARD_STATES if allow_overwrite else TERMINAL_JOB_STATES
+    # Cascade kills flush unconditionally: merge_cascade_kill already drops a kill
+    # onto an already-terminal job, and snapshot load and this flush share one write
+    # transaction, so the live row cannot diverge from the guarded basis.
+    kills = [d for d in deltas if d.is_cascade_kill]
+    if kills:
         params = [
             {
                 "b_job_id": d.job_id,
@@ -198,14 +186,9 @@ def _flush_jobs(cur: Tx, deltas: list[JobRowDelta]) -> None:
             for d in kills
         ]
         c = jobs_table.c
-        # Render the guard as inline literals (NOT an expanding ``IN``): expanding
-        # bind params are incompatible with executemany. The in-memory merge in
-        # ``merge_cascade_kill`` already enforces this guard; the SQL guard is a
-        # harmless safety net.
-        guard_clause = c.state.not_in([sa_literal(s) for s in sorted(guard_states)])
         cur.execute(
             sa_update(jobs_table)
-            .where(c.job_id == bindparam("b_job_id"), guard_clause)
+            .where(c.job_id == bindparam("b_job_id"))
             .values(
                 state=job_pb2.JOB_STATE_KILLED,
                 error=bindparam("b_error"),
@@ -222,16 +205,16 @@ def commit_effects(
     cur: Tx,
     effects: ControllerEffects,
     *,
-    health: WorkerHealthTracker,
     endpoints: EndpointsProjection,
-    now: Timestamp,
 ) -> None:
     """Record a batch's ``effects`` within the caller's write transaction.
 
     Row deltas flush via bulk ``executemany`` statements (one per entity group).
-    Endpoint deletions write within the Tx. In-memory health bumps and audit log
-    lines are deferred to ``cur``'s post-commit hooks so a rolled-back
-    transaction leaves no observable trace.
+    Endpoint deletions write within the Tx. Audit log lines are deferred to
+    ``cur``'s post-commit hooks so a rolled-back transaction leaves no observable
+    trace. Health is NOT mutated here: ``effects.health.build_failed`` rides back
+    to the controller, which folds it (with the backend's transport-observed
+    events) through the single ``WorkerHealthTracker.apply`` site.
     """
     _flush_tasks(cur, list(effects.tasks.values()))
     _flush_attempts(cur, list(effects.attempts.values()))
@@ -240,20 +223,10 @@ def commit_effects(
     for d in effects.endpoint_deletions:
         endpoints.remove_by_task(cur, d.task_id)
 
-    health_heartbeat = effects.health.heartbeat
-    health_build_failed = effects.health.build_failed
-    health_make_unhealthy = effects.health.make_unhealthy
     log_events = effects.log_events
-    if health_heartbeat or health_build_failed or health_make_unhealthy or log_events:
-        commit_ms = now.epoch_ms()
+    if log_events:
 
         def _post_commit() -> None:
-            if health_heartbeat:
-                health.heartbeat(list(health_heartbeat), commit_ms)
-            for wid in health_build_failed:
-                health.build_failed(wid)
-            for wid in health_make_unhealthy:
-                health.mark_unhealthy(wid)
             for ev in log_events:
                 details = {k: v for k, v in ev.details}
                 log_event(ev.action, ev.entity_id, trigger=ev.trigger, **details)

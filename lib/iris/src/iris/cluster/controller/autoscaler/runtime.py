@@ -17,17 +17,25 @@ The run_once() flow splits into two phases:
 - update(): CPU phase — evaluate demand and execute scale-up decisions
 """
 
-from __future__ import annotations
-
 import logging
 import urllib.error
 import urllib.request
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from typing import TypeVar
 
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Duration, Timestamp, TokenBucket
 
+from iris.cluster.backends.protocols import WorkerInfraProvider
+from iris.cluster.backends.types import (
+    CloudSliceState,
+    QuotaExhaustedError,
+    RemoteWorkerHandle,
+    SliceHandle,
+    SliceStatus,
+)
 from iris.cluster.constraints import Constraint
 from iris.cluster.controller.autoscaler.models import (
     DemandEntry,
@@ -37,26 +45,19 @@ from iris.cluster.controller.autoscaler.models import (
 from iris.cluster.controller.autoscaler.operations import (
     terminate_slices_for_workers as terminate_slices_for_workers_operation,
 )
-from iris.cluster.controller.autoscaler.planning import ScalePlan, build_scale_plan
+from iris.cluster.controller.autoscaler.planning import build_scale_plan
 from iris.cluster.controller.autoscaler.recovery import (
     load_autoscaler_checkpoint,
     restore_autoscaler_state,
 )
 from iris.cluster.controller.autoscaler.routing import job_feasibility, route_demand
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build_worker_config_for_group
+from iris.cluster.controller.autoscaler.state import AutoscalerState, GroupPersist, SlicePersist
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
-from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import (
-    CloudSliceState,
-    QuotaExhaustedError,
-    RemoteWorkerHandle,
-    SliceHandle,
-)
+from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
 from iris.cluster.types import WorkerStatusMap
-from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_proto import duration_from_proto, timestamp_to_proto
 
@@ -65,6 +66,11 @@ logger = logging.getLogger(__name__)
 
 # After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
 DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
+
+# Project-wide cap on slice creates per minute, shared across all scale groups.
+# Per-group limits don't coordinate, so a fan-out across groups in one cycle can
+# burst past GCP's per-project create quota (tpu.googleapis.com/qps/create, ~91/min).
+DEFAULT_CREATE_RATE_LIMIT = 60
 
 # How long the autoscaler waits for a worker /health response per probe.
 _HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
@@ -76,6 +82,40 @@ _HEALTH_PROBE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({
 # Cap concurrent /health probes. ~1000 VMs in production; serializing 3 s
 # timeouts would blow past evaluation_interval (10 s default).
 _HEALTH_PROBE_MAX_WORKERS = 64
+
+# Cap concurrent describe() calls in refresh(). Each is a blocking GCP round-trip
+# (two for a still-queued reserved slice), so a large reserved backlog would
+# otherwise serialize into tens of seconds and starve the shared control loop.
+_REFRESH_DESCRIBE_MAX_WORKERS = 64
+
+# Cap concurrent slice create/terminate cloud requests issued in one phase. The
+# fan-out keeps a burst (cold-start scale-up, mass-preemption teardown) within
+# the phase budget instead of serializing one bounded HTTP round-trip at a time.
+_CLOUD_OP_MAX_WORKERS = 16
+
+_T = TypeVar("_T")
+_R = TypeVar("_R")
+
+
+def _run_io_batch(
+    items: Sequence[_T],
+    issue: Callable[[_T], _R],
+    *,
+    max_workers: int,
+    thread_name_prefix: str,
+) -> list[_R]:
+    """Run a pure-I/O ``issue`` over ``items`` on a bounded, joined thread pool.
+
+    The pool only performs cloud/network I/O and *returns* its results; callers
+    fold those results into autoscaler state serially afterward. Because no
+    shared state is touched inside the pool, the fan-out is race-free regardless
+    of its width, and it joins before returning so the phase stays bounded.
+    """
+    if not items:
+        return []
+    workers = min(max_workers, len(items))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=thread_name_prefix) as pool:
+        return list(pool.map(issue, items))
 
 
 def _probe_worker_health(worker_url: str) -> bool:
@@ -91,6 +131,39 @@ def _probe_worker_health(worker_url: str) -> bool:
         return 200 <= resp.status < 300
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
         return False
+
+
+def _safe_describe(slice_id: str, handle: SliceHandle) -> SliceStatus | None:
+    """Describe a slice on the fan-out pool, returning None (logged) if it raises."""
+    try:
+        return handle.describe()
+    except Exception as e:
+        # A failed poll is transient: skip this slice this tick and retry. A slice
+        # that stays unresolvable is failed via the UNKNOWN/unresolvable-timeout path.
+        logger.warning("Failed to poll slice %s: %s", slice_id, e)
+        return None
+
+
+@dataclass
+class _ScaleUpRequest:
+    """One scale-up to issue this phase: a group, its reason, and the pending action."""
+
+    group: ScalingGroup
+    reason: str
+    action: vm_pb2.AutoscalerAction
+
+
+@dataclass
+class _ScaleUpOutcome:
+    """Result of issuing one create: the slice handle on success, else the error.
+
+    Captured as plain data so the issuing fan-out touches no shared state; the
+    outcome is classified and folded into autoscaler state serially.
+    """
+
+    request: _ScaleUpRequest
+    handle: SliceHandle | None = None
+    error: Exception | None = None
 
 
 class Autoscaler:
@@ -111,10 +184,9 @@ class Autoscaler:
         scale_groups: dict[str, ScalingGroup],
         evaluation_interval: Duration,
         platform: WorkerInfraProvider,
-        threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
-        db: ControllerDB | None = None,
         unresolvable_timeout: Duration = DEFAULT_UNRESOLVABLE_TIMEOUT,
+        create_rate_limit: int = DEFAULT_CREATE_RATE_LIMIT,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -122,18 +194,22 @@ class Autoscaler:
             scale_groups: Map of scale group name to ScalingGroup instance
             evaluation_interval: How often to evaluate scaling decisions
             platform: WorkerInfraProvider instance for shutdown lifecycle
-            threads: Optional thread container for testing
             base_worker_config: Base worker config merged with per-group overrides
                 and passed to platform.create_slice(). None disables bootstrap (test/local mode).
-            db: Optional DB handle for write-through persistence of tracked workers.
             unresolvable_timeout: How long a slice can remain UNKNOWN before being treated as FAILED.
+            create_rate_limit: Project-wide ceiling on slice-creation requests per minute,
+                shared across all scale groups. See ``DEFAULT_CREATE_RATE_LIMIT``.
         """
         self._groups = scale_groups
         self._platform = platform
-        self._db = db
         self.evaluation_interval = evaluation_interval
         self._base_worker_config = base_worker_config
         self._unresolvable_timeout = unresolvable_timeout
+
+        # Project-wide slice-creation throttle, shared across all groups. Deferred
+        # scale-ups are retried on the next evaluation cycle.
+        self._create_rate_limit = create_rate_limit
+        self._create_bucket = TokenBucket(capacity=create_rate_limit, refill_period=Duration.from_minutes(1))
 
         # Centralized per-worker state indexed by worker_id
         self._worker_registry = WorkerRegistry()
@@ -141,19 +217,13 @@ class Autoscaler:
         # Bounded log of recent autoscaler actions for dashboard/debugging
         self._action_log: deque[vm_pb2.AutoscalerAction] = deque(maxlen=100)
 
-        # Most recent routing decision (for status API)
-        self._last_scale_plan: ScalePlan | None = None
         self._last_evaluation: Timestamp = Timestamp.from_ms(0)
 
-        # Derived views of _last_scale_plan, built lazily and invalidated by
-        # evaluate(). Dashboard polls (GetJobStatus, ListJobs) hit these on
-        # every pending job; building them per request was the bottleneck
-        # described in #4844.
+        # Most recent routing decision, materialized as status protos. Dashboard
+        # polls (GetJobStatus, ListJobs) hit these on every pending job; building
+        # them per request was the bottleneck described in #4844.
         self._last_routing_decision_proto: vm_pb2.RoutingDecision | None = None
         self._last_pending_hints: dict[str, PendingHint] | None = None
-
-        # Thread management
-        self._threads = threads if threads is not None else get_thread_container()
 
     @classmethod
     def from_config(
@@ -161,19 +231,15 @@ class Autoscaler:
         scale_groups: dict[str, ScalingGroup],
         config: config_pb2.AutoscalerConfig,
         platform: WorkerInfraProvider,
-        threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
-        db: ControllerDB | None = None,
-    ) -> Autoscaler:
+    ) -> "Autoscaler":
         """Create autoscaler from proto config.
 
         Args:
             scale_groups: Map of scale group name to ScalingGroup instance
             config: Autoscaler configuration proto (with defaults already applied)
             platform: WorkerInfraProvider instance for shutdown lifecycle
-            threads: Optional thread container for testing
             base_worker_config: Base worker config merged with per-group overrides
-            db: Optional DB handle for write-through persistence.
 
         Returns:
             Configured Autoscaler instance
@@ -182,42 +248,21 @@ class Autoscaler:
             scale_groups=scale_groups,
             evaluation_interval=duration_from_proto(config.evaluation_interval),
             platform=platform,
-            threads=threads,
             base_worker_config=base_worker_config,
-            db=db,
         )
-
-    def _wait_for_inflight(self) -> None:
-        """Wait for in-flight scale-ups to complete without terminating anything.
-
-        Test-only: Waits for all scale-up threads to complete.
-        """
-        self._threads.wait()
 
     def shutdown(self) -> None:
         """Shutdown the autoscaler, terminate all VM groups, and clean up platform.
 
-        Shutdown ordering:
-        1. Stop all threads in the autoscaler's ThreadContainer. This signals
-           stop_events for both in-flight scale-up threads AND worker lifecycle
-           threads (via child containers), then joins with timeout.
-        2. Terminate all VM groups — calls Worker.stop() for final cleanup
-           of any workers that didn't exit in step 1.
-        3. Shutdown platform — clears local tracking state.
+        Cloud operations (scale-up, terminate) run synchronously inside the
+        autoscale phase — there are no background threads to join — so shutdown
+        is just: terminate all tracked slices, then release platform resources.
         """
-        # Stop all threads (scale-ups + workers) via ThreadContainer.
-        # Using stop() rather than wait() because wait() doesn't signal
-        # stop_events and would block forever on worker-lifecycle threads.
-        self._threads.stop()
-
-        # Step 2: Terminate VMs and cleanup (idempotent with step 1)
         for group in self._groups.values():
             group.terminate_all()
-
-        # Step 3: Shutdown platform (cleanup remaining threads)
         self._platform.shutdown()
 
-    def __enter__(self) -> Autoscaler:
+    def __enter__(self) -> "Autoscaler":
         return self
 
     def __exit__(self, *exc) -> None:
@@ -287,7 +332,6 @@ class Autoscaler:
 
         routing_decision = route_demand(list(self._groups.values()), demand_entries, ts)
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
-        self._last_scale_plan = scale_plan
         # Build cached views eagerly here so dashboard/service RPCs never pay
         # the conversion cost on the hot path (#4844).
         self._last_routing_decision_proto = routing_decision_to_proto(
@@ -328,6 +372,11 @@ class Autoscaler:
     ) -> None:
         """Execute scale-up decisions.
 
+        Runs in three steps so the cloud I/O never races autoscaler state:
+        plan (serial: apply rate limits, mark pending, build the issue list),
+        issue (bounded parallel: submit the creates, capturing handle-or-error
+        as data), then fold (serial: record each outcome into group state).
+
         Args:
             decisions: List of scaling decisions to execute.
             timestamp: Current timestamp.
@@ -335,6 +384,12 @@ class Autoscaler:
         # Aggregate rate-limited decisions per group so we emit a single summary
         # line per group per cycle instead of one per deferred slice (#5580).
         rate_limited: dict[str, list[ScalingDecision]] = {}
+        # Scale-ups deferred by the project-wide create budget (not a per-group
+        # limit), summarized once per cycle so a global throttle doesn't spam a
+        # line per group.
+        create_throttled = 0
+        # Plan: gate each decision and mark it pending before any I/O.
+        to_issue: list[_ScaleUpRequest] = []
         for decision in decisions:
             group = self._groups.get(decision.scale_group)
             if not group:
@@ -342,10 +397,41 @@ class Autoscaler:
                 continue
 
             if decision.action == ScalingAction.SCALE_UP:
+                # Per-group gate first: it honors the group's health/quota block,
+                # so we never spend the scarce global create budget on a group
+                # that couldn't scale anyway.
                 if not group.try_acquire_scale_up(timestamp):
                     rate_limited.setdefault(decision.scale_group, []).append(decision)
                     continue
-                self._execute_scale_up(group, timestamp, reason=decision.reason)
+                if not self._create_bucket.try_acquire(now=timestamp):
+                    create_throttled += 1
+                    continue
+                group.begin_scale_up(timestamp=timestamp)
+                action = self._log_action("scale_up", group.name, reason=decision.reason, status="pending")
+                to_issue.append(_ScaleUpRequest(group=group, reason=decision.reason, action=action))
+
+        # Issue the creates in a bounded parallel fan-out (pure I/O), then fold
+        # each outcome into state serially.
+        outcomes = _run_io_batch(
+            to_issue,
+            lambda req: self._issue_scale_up(req, timestamp),
+            max_workers=_CLOUD_OP_MAX_WORKERS,
+            thread_name_prefix="scale-up",
+        )
+        for outcome in outcomes:
+            self._fold_scale_up(outcome, timestamp)
+
+        if create_throttled:
+            logger.info(
+                "Throttled %d scale-up(s) to stay under the global create limit (%d/min)",
+                create_throttled,
+                self._create_rate_limit,
+            )
+            self._log_action(
+                "create_throttled",
+                "",
+                reason=f"deferred={create_throttled} limit={self._create_rate_limit}/min",
+            )
 
         for scale_group, deferred in rate_limited.items():
             # All decisions in a cycle share the same target/demand snapshot;
@@ -364,61 +450,62 @@ class Autoscaler:
                 reason=summary,
             )
 
-    def _execute_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> None:
-        """Initiate async scale-up for a scale group.
+    def _issue_scale_up(self, request: _ScaleUpRequest, ts: Timestamp) -> _ScaleUpOutcome:
+        """Submit one create and return the handle-or-error as data. Pure I/O.
 
-        Increments the group's pending scale-up counter and spawns a background
-        thread for the actual scale-up work. The counter is included in
-        slice_count(), preventing double scale-up.
+        Runs inside the bounded issue fan-out, so it must not touch shared
+        autoscaler/group state: ``group.scale_up`` only submits the create LRO
+        (bounded; it does not wait) and returns a handle. The exception is
+        captured rather than raised so a single failed create can't abort the
+        whole batch; classification and state changes happen in
+        :meth:`_fold_scale_up`.
         """
-        group.begin_scale_up(timestamp=ts)
-
-        def _scale_up_wrapper(stop_event):
-            self._do_scale_up(group, ts, reason)
-
-        self._threads.spawn(
-            target=_scale_up_wrapper,
-            name=f"scale-up-{group.name}",
-        )
-
-    def _do_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> bool:
-        """Execute the actual blocking scale-up work.
-
-        This runs in a background thread and should not be called directly.
-        Use _execute_scale_up instead. Bootstrap is handled internally by the
-        platform when cluster_config is provided.
-
-        Returns:
-            True if scale-up succeeded, False otherwise.
-        """
-        action = self._log_action("scale_up", group.name, reason=reason, status="pending")
-
-        slice_obj = None
-
+        group = request.group
         try:
-            logger.info("Scaling up %s: %s", group.name, reason)
+            logger.info("Scaling up %s: %s", group.name, request.reason)
             wc = self._per_group_worker_config(group)
-            slice_obj = group.scale_up(worker_config=wc, timestamp=ts)
-            group.complete_scale_up(slice_obj, ts)
-            logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
-            action.slice_id = slice_obj.slice_id
+            handle = group.scale_up(worker_config=wc, timestamp=ts)
+            return _ScaleUpOutcome(request=request, handle=handle)
+        except Exception as e:
+            # Captured as data (not swallowed): _fold_scale_up classifies it,
+            # records the failure on the group, and logs with a stack trace.
+            return _ScaleUpOutcome(request=request, error=e)
+
+    def _fold_scale_up(self, outcome: _ScaleUpOutcome, ts: Timestamp) -> None:
+        """Fold one create outcome into group state. Serial; mutates shared state.
+
+        Success records the slice as BOOTING (it then advances BOOTING→READY/
+        FAILED via the describe() poll in :meth:`refresh`). Quota/error failures
+        clear the pending scale-up and feed the group's detector so the freed
+        demand re-plans on the next cycle.
+        """
+        request = outcome.request
+        group, action = request.group, request.action
+
+        if outcome.error is None:
+            handle = outcome.handle
+            assert handle is not None, "a successful scale-up must carry a slice handle"
+            group.complete_scale_up(handle, ts)
+            logger.info("Created slice %s for group %s", handle.slice_id, group.name)
+            action.slice_id = handle.slice_id
             action.status = "completed"
-            return True
-        except QuotaExhaustedError as e:
+            return
+
+        error = outcome.error
+        if isinstance(error, QuotaExhaustedError):
             group.cancel_scale_up()
-            group.record_quota_exceeded(str(e), ts)
-            logger.warning("Quota exceeded for %s: %s", group.name, e)
+            group.record_quota_exceeded(str(error), ts)
+            logger.warning("Quota exceeded for %s: %s", group.name, error)
             action.action_type = "quota_exceeded"
             action.status = "failed"
-            action.reason = str(e)
-            return False
-        except Exception as e:
-            group.cancel_scale_up()
-            logger.exception("Failed to create slice for %s: %s", group.name, e)
-            action.status = "failed"
-            action.reason = f"{reason} - error: {e}"
-            group.record_create_failed(ts)
-            return False
+            action.reason = str(error)
+            return
+
+        group.cancel_scale_up()
+        logger.error("Failed to create slice for %s: %s", group.name, error, exc_info=error)
+        action.status = "failed"
+        action.reason = f"{request.reason} - error: {error}"
+        group.record_create_failed(ts)
 
     def _per_group_worker_config(self, group: ScalingGroup) -> config_pb2.WorkerConfig | None:
         """Build per-group WorkerConfig by merging base config with scale group overrides."""
@@ -440,62 +527,80 @@ class Autoscaler:
         self._worker_registry.unregister_slice_workers(slice_id, worker_ids)
 
     def refresh(self, worker_status_map: WorkerStatusMap, timestamp: Timestamp | None = None) -> None:
-        """State-read phase: scale down idle slices from currently tracked state."""
+        """Poll non-READY slices and scale down idle ones.
+
+        Reading a slice's cloud state is a blocking GCP round-trip (two for a
+        still-queued reserved slice). A large reserved backlog would serialize
+        into tens of seconds and, since this runs inline on the shared control
+        loop, starve reconcile — so the reads are fanned out over a bounded pool
+        and folded serially (see the phase comments below).
+        """
         timestamp = timestamp or Timestamp.now()
 
-        for group in self._groups.values():
-            for slice_id, handle in group.non_ready_slice_handles():
-                try:
-                    status = handle.describe()
-                except Exception as e:
-                    logger.warning("Failed to poll slice %s: %s", slice_id, e)
-                    continue
+        # Phase 1: snapshot every non-READY slice across all groups.
+        targets = [
+            (group, slice_id, handle)
+            for group in self._groups.values()
+            for slice_id, handle in group.non_ready_slice_handles()
+        ]
 
-                if status.state == CloudSliceState.READY:
-                    worker_ids = [w.worker_id for w in status.workers]
-                    worker_urls = self._worker_urls(status.workers)
-                    group.mark_slice_ready(slice_id, worker_ids, worker_urls=worker_urls)
-                    self._register_slice_workers(status.workers, slice_id, group.name)
-                    self._log_action(
-                        "slice_ready",
-                        group.name,
-                        slice_id,
-                        reason=f"bootstrap completed ({len(worker_ids)} workers)",
-                    )
-                elif status.state == CloudSliceState.FAILED:
-                    group.mark_slice_failed(slice_id, error_message=status.error_message)
+        # Phase 2: fan out the blocking describe() over a bounded pool.
+        statuses = _run_io_batch(
+            targets,
+            lambda t: _safe_describe(t[1], t[2]),
+            max_workers=_REFRESH_DESCRIBE_MAX_WORKERS,
+            thread_name_prefix="slice-describe",
+        )
+
+        # Phase 3: fold describe results into group state serially.
+        for (group, slice_id, handle), status in zip(targets, statuses, strict=True):
+            if status is None:
+                continue
+            if status.state == CloudSliceState.READY:
+                worker_ids = [w.worker_id for w in status.workers]
+                worker_urls = self._worker_urls(status.workers)
+                group.mark_slice_ready(slice_id, worker_ids, worker_urls=worker_urls)
+                self._register_slice_workers(status.workers, slice_id, group.name)
+                self._log_action(
+                    "slice_ready",
+                    group.name,
+                    slice_id,
+                    reason=f"bootstrap completed ({len(worker_ids)} workers)",
+                )
+            elif status.state == CloudSliceState.FAILED:
+                group.mark_slice_failed(slice_id, error_message=status.error_message)
+                group.scale_down(slice_id)
+                self._unregister_slice_workers(slice_id)
+                group.record_slice_boot_failed(slice_id, timestamp)
+                reason = status.error_message if status.error_message else "bootstrap failed"
+                self._log_action(
+                    "slice_failed",
+                    group.name,
+                    slice_id,
+                    reason=reason,
+                    status="failed",
+                )
+            elif status.state == CloudSliceState.UNKNOWN:
+                age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
+                if age >= self._unresolvable_timeout:
+                    group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
                     group.scale_down(slice_id)
                     self._unregister_slice_workers(slice_id)
                     group.record_slice_boot_failed(slice_id, timestamp)
-                    reason = status.error_message if status.error_message else "bootstrap failed"
                     self._log_action(
                         "slice_failed",
                         group.name,
                         slice_id,
-                        reason=reason,
+                        reason=f"TPU unresolvable for {age}",
                         status="failed",
                     )
-                elif status.state == CloudSliceState.UNKNOWN:
-                    age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
-                    if age >= self._unresolvable_timeout:
-                        group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
-                        group.scale_down(slice_id)
-                        self._unregister_slice_workers(slice_id)
-                        group.record_slice_boot_failed(slice_id, timestamp)
-                        self._log_action(
-                            "slice_failed",
-                            group.name,
-                            slice_id,
-                            reason=f"TPU unresolvable for {age}",
-                            status="failed",
-                        )
-                    else:
-                        logger.debug(
-                            "Slice %s UNKNOWN (age %s < timeout %s); will retry",
-                            slice_id,
-                            age,
-                            self._unresolvable_timeout,
-                        )
+                else:
+                    logger.debug(
+                        "Slice %s UNKNOWN (age %s < timeout %s); will retry",
+                        slice_id,
+                        age,
+                        self._unresolvable_timeout,
+                    )
 
         for group in self._groups.values():
             target_capacity = min(group.current_demand + group.buffer_slices, group.max_slices)
@@ -522,21 +627,22 @@ class Autoscaler:
         zero workers, so there is nothing to probe and no heartbeat row to expire,
         and the slice is reaped via a per-slice no-worker counter instead.
 
-        Per-worker counters live on SliceState. PING_FAILURE_THRESHOLD
-        consecutive failures (~100s at the default 10s evaluation interval,
-        matching the heartbeat-path threshold) trip termination. Worker URLs
+        Per-worker counters live on SliceState. CONSECUTIVE_FAILURE_THRESHOLD
+        consecutive failures (~100s at the default 10s evaluation interval) trip
+        termination — the same constant the controller's worker-liveness
+        tracker uses for its reconcile-failure threshold. Worker URLs
         come from the slice handle, refreshed lazily via ``handle.describe()``
         when SliceState has none cached (e.g. after a controller restart).
-        Probes are fanned out across a thread pool so a partitioned AZ
-        doesn't burn the entire evaluation interval at the 3s per-probe
-        timeout. Slice teardown runs serially after all probes complete.
+        Probes are fanned out over a bounded thread pool so a partitioned AZ
+        doesn't burn the entire evaluation interval at the 3s per-probe timeout.
+        The pool returns results; slice teardown is folded in serially after.
         """
         timestamp = timestamp or Timestamp.now()
 
         # Phase 1: collect every (group, slice_id, worker_id, worker_url) probe
         # target. A READY slice that resolves to zero workers (cloud allocation
         # gone) has nothing to probe; it's tracked via a per-slice counter and
-        # torn down after PING_FAILURE_THRESHOLD sustained empty observations,
+        # torn down after CONSECUTIVE_FAILURE_THRESHOLD sustained empty observations,
         # which the per-worker counters never catch.
         probes: list[tuple[ScalingGroup, str, str, str]] = []
         tripped: dict[str, tuple[ScalingGroup, str]] = {}  # slice_id -> (group, reason)
@@ -549,7 +655,7 @@ class Autoscaler:
                     worker_urls = refreshed
                 if not worker_urls:
                     count = group.record_slice_no_workers(slice_id)
-                    if count >= PING_FAILURE_THRESHOLD and slice_id not in tripped:
+                    if count >= CONSECUTIVE_FAILURE_THRESHOLD and slice_id not in tripped:
                         reason = f"cloud allocation reports no workers ({count}x)"
                         logger.warning("Slice %s: %s; terminating", slice_id, reason)
                         tripped[slice_id] = (group, reason)
@@ -557,16 +663,19 @@ class Autoscaler:
                 for worker_id, worker_url in worker_urls.items():
                     probes.append((group, slice_id, worker_id, worker_url))
 
-        # Phase 2: fan out probes. Bound the pool so we don't melt the controller.
+        # Phase 2: fan out probes over a bounded thread pool, returning results.
         if probes:
-            workers = min(_HEALTH_PROBE_MAX_WORKERS, len(probes))
-            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="health-probe") as pool:
-                results = list(pool.map(lambda p: _probe_worker_health(p[3]), probes))
+            results = _run_io_batch(
+                probes,
+                lambda p: _probe_worker_health(p[3]),
+                max_workers=_HEALTH_PROBE_MAX_WORKERS,
+                thread_name_prefix="health-probe",
+            )
 
             # Phase 3: record results and collect slices that tripped the threshold.
             for (group, slice_id, worker_id, _url), healthy in zip(probes, results, strict=True):
                 count = group.record_health_probe_result(slice_id, worker_id, healthy)
-                if count >= PING_FAILURE_THRESHOLD and slice_id not in tripped:
+                if count >= CONSECUTIVE_FAILURE_THRESHOLD and slice_id not in tripped:
                     reason = f"worker {worker_id} failed /health {count}x"
                     logger.warning("Slice %s: %s; terminating", slice_id, reason)
                     tripped[slice_id] = (group, reason)
@@ -667,6 +776,22 @@ class Autoscaler:
         self.restore_tracked_workers(restored_workers)
         logger.info("Restored %d tracked workers", len(restored_workers))
 
+    def persistable_state(self) -> AutoscalerState:
+        """Snapshot all tracked slices and groups for the controller to persist.
+
+        The in-memory ``ScalingGroup`` state is authoritative during operation;
+        the controller mirrors this snapshot into the ``slices`` /
+        ``scaling_groups`` tables after each capacity call so a restarted
+        controller can recover.
+        """
+        all_slices: list[SlicePersist] = []
+        groups: list[GroupPersist] = []
+        for group in self._groups.values():
+            group_slices, group_row = group.persistable_state()
+            all_slices.extend(group_slices)
+            groups.append(group_row)
+        return AutoscalerState(slices=all_slices, groups=groups)
+
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
         """Get VM info by platform worker ID from the centralized worker registry."""
         return self._worker_registry.vm_info(vm_id)
@@ -735,7 +860,12 @@ class Autoscaler:
         """Terminate the unique slices containing the given workers.
 
         Returns sibling worker IDs that should be failed immediately because
-        their slices are being torn down.
+        their slices are being torn down. The operation detaches the slices from
+        tracking serially (the state mutation), then issues the deletes in a
+        bounded parallel fan-out: each ``terminate_slice_handle`` is a bounded
+        cloud request that catches and logs its own errors and touches no shared
+        state, so the fan-out stays within the phase budget under a mass
+        preemption without racing.
         """
         result = terminate_slices_for_workers_operation(
             groups=self._groups,
@@ -744,23 +874,10 @@ class Autoscaler:
             log_action=self._log_action,
             timestamp=Timestamp.now(),
         )
-        for request in result.termination_requests:
-
-            def _terminate(
-                stop_event,
-                target_group: ScalingGroup = request.group,
-                target_slice_id: str = request.slice_id,
-                target_handle: SliceHandle = request.handle,
-            ) -> None:
-                del stop_event
-                self._terminate_slice_handle(target_group, target_slice_id, target_handle)
-
-            self._threads.spawn(
-                target=_terminate,
-                name=f"slice-terminate-{request.slice_id}",
-            )
-
+        _run_io_batch(
+            result.termination_requests,
+            lambda req: req.group.terminate_slice_handle(req.handle, context="cleaning up anyway"),
+            max_workers=_CLOUD_OP_MAX_WORKERS,
+            thread_name_prefix="slice-terminate",
+        )
         return result.sibling_worker_ids
-
-    def _terminate_slice_handle(self, group: ScalingGroup, slice_id: str, handle: SliceHandle) -> None:
-        group._terminate_slice_handle(handle, context="cleaning up anyway")

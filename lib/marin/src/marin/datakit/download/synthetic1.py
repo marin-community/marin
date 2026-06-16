@@ -7,13 +7,11 @@ Downloads raw parquet files from HuggingFace, then transforms each row into a
 single document by concatenating prompt + score tag + response.
 """
 
-import hashlib
-
 from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import strip_think_tags
+from marin.datakit.download.rollout_transforms import strip_think_tags, text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -55,13 +53,7 @@ def row_to_doc(row: dict) -> list[dict]:
     text = f"{prompt}\n\n{tag}\n\n{response}"
 
     counters.increment("synthetic1/kept")
-    return [
-        {
-            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "text": text,
-            "source": "PrimeIntellect/SYNTHETIC-1",
-        }
-    ]
+    return [text_document(text, "PrimeIntellect/SYNTHETIC-1")]
 
 
 def transform(input_path: str, output_path: str) -> None:

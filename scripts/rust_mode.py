@@ -2,16 +2,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Switch dupekit between dev mode (source build) and user mode (pre-built wheel).
+"""Switch the native (maturin) packages between dev mode (source build) and
+user mode (pre-built wheel).
 
-Operates on pyproject.toml by replacing the block between RUST-DEV markers:
+Covers marin-dupekit and the finelog pair (pure marin-finelog + native
+marin-finelog-server). Operates on each target pyproject.toml by replacing the
+block between RUST-DEV markers:
     # ### BEGIN RUST-DEV SOURCES ###
     ...
     # ### END RUST-DEV SOURCES ###
 
+Two files carry markers: the repo-root pyproject.toml (governs the root
+workspace venv) and lib/finelog/pyproject.toml (governs in-dir `uv run` in
+lib/finelog, which is its own standalone project).
+
 Usage:
-    python scripts/rust_mode.py dev    # insert editable path source
-    python scripts/rust_mode.py user   # clear the block (use pre-built wheel)
+    python scripts/rust_mode.py dev    # insert path sources (build from source)
+    python scripts/rust_mode.py user   # clear the blocks (use pre-built wheels)
     python scripts/rust_mode.py status # print current mode
 """
 
@@ -22,15 +29,32 @@ import sys
 BEGIN = "# ### BEGIN RUST-DEV SOURCES ###"
 END = "# ### END RUST-DEV SOURCES ###"
 
-DEV_SOURCES = 'marin-dupekit = { path = "rust/dupekit", editable = true }'
+# Path sources injected in dev mode, per pyproject. The Python packages are
+# editable so source edits land without reinstalling; marin-finelog-server is a
+# plain path source — its [tool.uv] cache-keys cover the Rust sources, so
+# `uv sync` rebuilds the extension when they change.
+TARGETS = [
+    (
+        pathlib.Path("pyproject.toml"),
+        "\n".join(
+            [
+                'marin-dupekit = { path = "lib/dupekit", editable = true }',
+                'marin-finelog = { path = "lib/finelog", editable = true }',
+                'marin-finelog-server = { path = "lib/finelog/rust" }',
+            ]
+        ),
+    ),
+    (
+        pathlib.Path("lib/finelog/pyproject.toml"),
+        'marin-finelog-server = { path = "rust" }',
+    ),
+]
 
-PYPROJECT = pathlib.Path("pyproject.toml")
 
-
-def _read() -> str:
-    txt = PYPROJECT.read_text()
+def _read(path: pathlib.Path) -> str:
+    txt = path.read_text()
     if BEGIN not in txt or END not in txt:
-        print("ERROR: RUST-DEV markers missing from pyproject.toml", file=sys.stderr)
+        print(f"ERROR: RUST-DEV markers missing from {path}", file=sys.stderr)
         sys.exit(1)
     return txt
 
@@ -53,29 +77,30 @@ def main() -> None:
         sys.exit(1)
 
     mode = sys.argv[1]
-    txt = _read()
+    texts = {path: _read(path) for path, _ in TARGETS}
 
     if mode == "status":
-        current = _current_mode(txt)
-        print(f"Rust build mode: {current}")
-        if current == "dev":
-            print("  dupekit is built from source (rust/dupekit)")
+        modes = {path: _current_mode(txt) for path, txt in texts.items()}
+        overall = "dev" if "dev" in modes.values() else "user"
+        print(f"Rust build mode: {overall}")
+        if overall == "dev":
+            print("  dupekit/finelog are built from source (lib/dupekit, lib/finelog)")
         else:
-            print("  dupekit is installed from pre-built wheel")
+            print("  dupekit/finelog are installed from pre-built wheels")
+        if len(set(modes.values())) > 1:
+            for path, m in modes.items():
+                print(f"  WARNING: mixed state — {path} is in {m} mode")
         return
 
+    for path, dev_sources in TARGETS:
+        inner = dev_sources if mode == "dev" else ""
+        path.write_text(_replace_block(texts[path], inner))
+
     if mode == "dev":
-        if _current_mode(txt) == "dev":
-            print("Already in dev mode.")
-            return
-        new = _replace_block(txt, DEV_SOURCES)
-        PYPROJECT.write_text(new)
-        print("Switched to dev mode: dupekit will build from source.")
-        print("Do NOT commit pyproject.toml in this state.")
+        print("Switched to dev mode: dupekit/finelog will build from source.")
+        print("Do NOT commit pyproject.toml or lib/finelog/pyproject.toml in this state.")
     else:
-        new = _replace_block(txt, "")
-        PYPROJECT.write_text(new)
-        print("Switched to user mode: dupekit from pre-built wheel.")
+        print("Switched to user mode: dupekit/finelog from pre-built wheels.")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,6 @@
 
 """Shared fixtures for controller unit tests."""
 
-import asyncio
 import shutil
 import tempfile
 from contextlib import contextmanager
@@ -13,8 +12,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
 import pytest
-from finelog.rpc import logging_pb2
-from finelog.server import LogServiceImpl
+from finelog.client.proxy import LogServiceProxy
+from iris.cluster.backends.gcp.fake import InMemoryGcpService
+from iris.cluster.backends.gcp.workers import GcpWorkerProvider
+from iris.cluster.backends.types import CloudSliceState
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
     AttributeValue,
@@ -34,13 +35,25 @@ from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.cluster.controller.backend import (
+    AutoscaleResult,
+    BackendCapability,
+    ProviderUnsupportedError,
+    ReconcileResult,
+    ScheduleInput,
+    ScheduleResult,
+    TaskTarget,
+    plans_from_snapshot,
+    run_scheduling_decision,
+)
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.direct_provider import RunTemplateCache
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.provider import ProviderUnsupportedError
-from iris.cluster.controller.reads import SchedulableWorker
+from iris.cluster.controller.reads import ControlSnapshot, SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.reconcile.worker import WorkerReconcileResult
+from iris.cluster.controller.run_template import RunTemplateCache
+from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     jobs_table,
     task_attempts_table,
@@ -49,21 +62,18 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
-from iris.cluster.providers.gcp.fake import InMemoryGcpService
-from iris.cluster.providers.gcp.workers import GcpWorkerProvider
-from iris.cluster.providers.types import CloudSliceState
+from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId, is_job_finished
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Duration, RateLimiter, Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 
-from tests.cluster.conftest import fake_log_client_from_service
+from tests.cluster.backends.conftest import make_mock_platform
 from tests.cluster.controller._test_support import ControllerTestState, set_task_state_for_test
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
-from tests.cluster.providers.conftest import make_mock_platform
 
 check_task_can_be_scheduled = task_row_can_be_scheduled
 
@@ -84,36 +94,53 @@ def check_is_job_finished(j) -> bool:
 
 
 class FakeProvider:
-    """Minimal TaskProvider for tests that only exercise transitions, not RPCs."""
+    """Minimal worker-daemon TaskBackend for tests exercising transitions, not RPCs."""
+
+    name = "worker"
+    capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+    autoscaler = None
+
+    def __init__(self) -> None:
+        # Real Iris scheduler: ``ctrl._run_scheduling`` routes the decision
+        # through ``schedule`` now, so the fake must run the real pipeline for
+        # scheduler/preemption/reservation tests to exercise placement.
+        self._scheduler = Scheduler()
+
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
+        return run_scheduling_decision(self._scheduler, snapshot)
+
+    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
+        # Mirror RpcTaskBackend: build plans from the snapshot, report every
+        # reached worker healthy with no observations (these tests drive task
+        # transitions directly via the transition driver, not through RPCs).
+        plans = plans_from_snapshot(snapshot)
+        worker_results = [(p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
+        events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
+        return ReconcileResult(worker_results=worker_results, health_events=events)
+
+    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+        return AutoscaleResult()
+
+    def attach_autoscaler(self, autoscaler) -> None:
+        self.autoscaler = autoscaler
 
     def get_process_status(
         self,
-        worker_id: WorkerId,
-        address: str | None,
+        target: TaskTarget,
         request: job_pb2.GetProcessStatusRequest,
     ) -> job_pb2.GetProcessStatusResponse:
         raise ProviderUnsupportedError("fake")
 
-    def on_worker_failed(self, worker_id: WorkerId, address: str | None) -> None:
+    def set_log_sink(self, *args, **kwargs) -> None:
         pass
 
     def profile_task(
         self,
-        address: str,
+        target: TaskTarget,
         request: job_pb2.ProfileTaskRequest,
         timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
         raise ProviderUnsupportedError("fake")
-
-    # --- Split heartbeat surface (no-op stubs so split-mode tests can run) ---
-
-    def ping_workers(self, workers):
-        return []
-
-    def dispatch_reconcile_plans(self, plans, addresses):
-        from iris.cluster.controller.reconcile.worker import ReconcileResult
-
-        return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
 
     def close(self) -> None:
         pass
@@ -135,8 +162,8 @@ class MockController:
         self.last_scheduling_context = None
         self.autoscaler = None
         self.provider = Mock()
-        self.has_direct_provider = False
-        self._run_template_cache: RunTemplateCache = RunTemplateCache(256)
+        self.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+        self.run_template_cache: RunTemplateCache = RunTemplateCache(256)
 
 
 @pytest.fixture
@@ -145,48 +172,25 @@ def mock_controller() -> MockController:
 
 
 @pytest.fixture
-def log_service(state, tmp_path) -> LogServiceImpl:
-    """LogServiceImpl with its own internal log store.
+def log_service(embedded_log_server) -> LogServiceProxy:
+    """A LogService client (RPC proxy) against a fresh in-process finelog server.
 
-    Wraps ``push_logs`` / ``fetch_logs`` to force flush (and compact on read)
-    so push→fetch in the same test is synchronously visible. The production
-    path relies on the bg flush tick (5s default); tests can't afford that
-    wait — without the push wrapper, each push's ``await_persisted`` blocks
-    for one flush interval, making N sequential pushes take ~N*5s.
+    The native server makes pushed log entries immediately fetchable (RAM
+    buffer), so push→fetch is synchronously visible within a test without any
+    manual flush. ``LogServiceProxy`` exposes the same async
+    ``push_logs(request, ctx)`` / ``fetch_logs(request, ctx)`` surface the tests
+    drive, so callers are unchanged.
     """
-    svc = LogServiceImpl(log_dir=tmp_path / "log_service_logs")
-    original_fetch = svc.fetch_logs
-
-    async def push_logs(request, ctx):
-        # Append, then force-flush before returning. Bypasses the original
-        # ``await_persisted`` poll-wait that otherwise blocks for one bg
-        # flush tick (5s by default) on every push.
-        if not request.entries:
-            return logging_pb2.PushLogsResponse()
-        await asyncio.to_thread(svc._log_store.append, request.key, list(request.entries))
-        svc._log_store._force_flush()
-        return logging_pb2.PushLogsResponse()
-
-    def fetch_logs(request, ctx):
-        # Force a flush + compaction so just-pushed data is queryable
-        # within the same test, bypassing the production bg tick.
-        svc._log_store._force_flush()
-        svc._log_store._force_compaction()
-        return original_fetch(request, ctx)
-
-    svc.push_logs = push_logs  # type: ignore[method-assign]
-    svc.fetch_logs = fetch_logs  # type: ignore[method-assign]
-    yield svc
-    svc.close()
+    return LogServiceProxy(embedded_log_server.address)
 
 
 @pytest.fixture
-def controller_service(state, log_service, mock_controller, tmp_path) -> ControllerServiceImpl:
+def controller_service(state, log_client, mock_controller, tmp_path) -> ControllerServiceImpl:
     """ControllerServiceImpl with fresh DB, log service, and mock controller."""
     return ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(log_service),
+        log_client=log_client,
         db=state._db,
         health=state._health,
         endpoints=state._endpoints,
@@ -270,6 +274,45 @@ def make_controller(tmp_path):
             errors.append(exc)
     if errors:
         raise errors[0]
+
+
+def _spent_limiter() -> RateLimiter:
+    """A ``RateLimiter`` whose ``should_run()`` returns False (already ran, long interval)."""
+    limiter = RateLimiter(interval_seconds=1e9)
+    limiter.mark_run()
+    return limiter
+
+
+def reconcile_once(ctrl: Controller) -> None:
+    """Drive exactly one reconcile pass through the production control tick.
+
+    Reconcile runs only as a phase of ``Controller._control_tick``, so this forces
+    a reconcile-only tick: the reconcile phase fires while the schedule and
+    autoscale phases are held off.
+    """
+    ctrl._force_reconcile = True
+    ctrl._control_tick(
+        woken=False,
+        schedule_limiter=_spent_limiter(),
+        reconcile_limiter=_spent_limiter(),
+        autoscale_limiter=_spent_limiter(),
+    )
+
+
+def autoscale_once(ctrl: Controller) -> None:
+    """Drive one autoscale pass through the production control tick.
+
+    Autoscale runs only as a phase of ``Controller._control_tick``, always paired
+    with a fresh schedule. In dry-run the tick short-circuits to the schedule-only
+    path, so the autoscale backend call is suppressed.
+    """
+    ctrl._force_reconcile = False
+    ctrl._control_tick(
+        woken=False,
+        schedule_limiter=_spent_limiter(),
+        reconcile_limiter=_spent_limiter(),
+        autoscale_limiter=RateLimiter(interval_seconds=0.0),
+    )
 
 
 def make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:
@@ -942,7 +985,7 @@ def make_demand_entries(
             constraint_list.append(zone_constraint(z))
     return [
         DemandEntry(
-            task_ids=[f"{task_prefix}-{i}"],
+            task_ids=(f"{task_prefix}-{i}",),
             coschedule_group_id=None,
             normalized=normalized,
             constraints=constraint_list,
@@ -979,7 +1022,7 @@ def make_big_demand_entries(
     if coschedule_group_id:
         return [
             DemandEntry(
-                task_ids=[f"{task_prefix}-{i}" for i in range(count)],
+                task_ids=tuple(f"{task_prefix}-{i}" for i in range(count)),
                 coschedule_group_id=coschedule_group_id,
                 normalized=normalized,
                 constraints=[],
@@ -988,7 +1031,7 @@ def make_big_demand_entries(
         ]
     return [
         DemandEntry(
-            task_ids=[f"{task_prefix}-{i}"],
+            task_ids=(f"{task_prefix}-{i}",),
             coschedule_group_id=None,
             normalized=normalized,
             constraints=[],

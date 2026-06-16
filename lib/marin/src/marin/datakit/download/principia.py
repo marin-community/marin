@@ -7,12 +7,11 @@ GPT-OSS-generated math problems with answers. Each row has a problem statement,
 answer, topic, and answer type. We render these into a single document.
 """
 
-import hashlib
-
 from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.rollout_transforms import text_document
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "facebook/principia-collection"
@@ -41,13 +40,7 @@ def row_to_doc(row: dict) -> list[dict]:
     text = "\n\n".join(parts)
 
     counters.increment("principia/kept")
-    return [
-        {
-            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "text": text,
-            "source": "facebook/principia-collection",
-        }
-    ]
+    return [text_document(text, "facebook/principia-collection")]
 
 
 def transform(input_path: str, output_path: str) -> None:

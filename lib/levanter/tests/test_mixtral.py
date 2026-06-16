@@ -16,6 +16,7 @@ from jax import random
 from test_utils import (  # , check_model_works_with_seqlen
     check_load_config,
     parameterize_with_configs,
+    skip_if_hf_model_not_accessible,
     skip_if_no_torch,
     use_test_mesh,
 )
@@ -33,6 +34,7 @@ from levanter.models.mixtral import MixtralConfig, MixtralLMHeadModel  # , Mixtr
 
 
 @skip_if_no_torch
+@skip_if_hf_model_not_accessible("mistralai/Mixtral-8x7B-v0.1")
 def test_mixtral_config():
     # load HF config and convert to levanter config
     hf_config = transformers.MixtralConfig.from_pretrained("mistralai/Mixtral-8x7B-v0.1")
@@ -249,11 +251,16 @@ def test_mixtral_config():
 
 
 @skip_if_no_torch
-def test_mixtral_roundtrip():
-    import torch
-    from transformers import AutoModelForCausalLM, MixtralForCausalLM
+def test_mixtral_roundtrip(local_gpt2_tokenizer_path):
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers import (  # noqa: PLC0415  # optional dep: torch
+        AutoModelForCausalLM,
+        MixtralForCausalLM,
+    )
 
-    converter = MixtralConfig().hf_checkpoint_converter()
+    # Local tokenizer + no remote reference keeps the roundtrip off the Hub; the
+    # tokenizer is incidental (random inputs, logit-equivalence only).
+    converter = MixtralConfig(reference_checkpoint=None, tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
 
     config = MixtralConfig(
         max_seq_len=128,
@@ -297,7 +304,7 @@ def test_mixtral_roundtrip():
         assert torch_out.shape == jax_out.shape, f"{torch_out.shape} != {jax_out.shape}"
         assert np.isclose(torch_out, np.array(jax_out), rtol=1e-4, atol=1e-4).all(), f"{torch_out} != {jax_out}"
 
-        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False, save_tokenizer=False)
         torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()
 
@@ -360,7 +367,7 @@ def test_mixtral_configs(config_file):
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_state_dict_consistency(scan_layers, num_kv_heads):
-    from transformers import MixtralForCausalLM
+    from transformers import MixtralForCausalLM  # noqa: PLC0415  # optional dep: torch
 
     config = MixtralConfig(
         max_seq_len=128,

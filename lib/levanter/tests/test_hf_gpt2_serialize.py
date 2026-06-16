@@ -9,17 +9,17 @@ from typing import Optional, cast
 
 import equinox
 import fsspec
+import haliax as hax
 import jax
-import numpy as onp
+import numpy as np
 import pytest
 from fsspec import AbstractFileSystem
 from jax.random import PRNGKey
 from numpy.testing import assert_allclose
+from test_utils import arrays_only, skip_if_hf_model_not_accessible, skip_if_no_torch
 from transformers import AutoModelForCausalLM
 from transformers import GPT2Config as HfGpt2Config
 from transformers import GPT2LMHeadModel as HfGpt2LMHeadModel
-
-import haliax as hax
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.layers.attention import AttentionMask
@@ -27,7 +27,6 @@ from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.optim import AdamConfig
 from levanter.utils.tree_utils import inference_mode
-from test_utils import arrays_only, skip_if_hf_model_not_accessible, skip_if_no_torch
 from tests.test_utils import use_test_mesh
 
 TEST_GPT2_MODEL_ID = "sshleifer/tiny-gpt2"
@@ -56,7 +55,7 @@ def test_mistral_gpt2_roundtrip():
 
 
 def _roundtrip_compare_gpt2_checkpoint(model_id, revision, config: Optional[Gpt2Config] = None):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     if config is None:
         converter = Gpt2Config(use_flash_attention=False).hf_checkpoint_converter()
@@ -74,7 +73,7 @@ def _roundtrip_compare_gpt2_checkpoint(model_id, revision, config: Optional[Gpt2
         model = inference_mode(model, True)
 
         lm_head = model.embeddings.token_embeddings
-        jax_lm_head = onp.array(lm_head.weight.array)
+        jax_lm_head = np.array(lm_head.weight.array)
         torch_lm_head = torch_model.transformer.wte.weight.detach().cpu().numpy()
         assert torch_lm_head.shape == jax_lm_head.shape
         assert_allclose(jax_lm_head, torch_lm_head, rtol=1e-4, atol=1e-4)
@@ -83,7 +82,7 @@ def _roundtrip_compare_gpt2_checkpoint(model_id, revision, config: Optional[Gpt2
         attn_mask = AttentionMask.causal()
 
         # we compare softmaxes because the numerics are wonky and we usually just care about the softmax
-        torch_out = torch_model(torch.from_numpy(onp.array(input.array)).to(torch.int32).unsqueeze(0))
+        torch_out = torch_model(torch.from_numpy(np.array(input.array)).to(torch.int32).unsqueeze(0))
         torch_out = torch_out.logits[0].detach().cpu().numpy()
         torch_out = jax.nn.softmax(torch_out, axis=-1)
 
@@ -94,7 +93,7 @@ def _roundtrip_compare_gpt2_checkpoint(model_id, revision, config: Optional[Gpt2
         jax_out = compute(input).array
         assert torch_out.shape == jax_out.shape, f"{torch_out.shape} != {jax_out.shape}"
         # get the argmaxes for the two models
-        assert_allclose(torch_out, onp.array(jax_out), rtol=1e-2, atol=1e-2)
+        assert_allclose(torch_out, np.array(jax_out), rtol=1e-2, atol=1e-2)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             converter.save_pretrained(model, tmpdir)
@@ -102,13 +101,11 @@ def _roundtrip_compare_gpt2_checkpoint(model_id, revision, config: Optional[Gpt2
             torch_model2: HfGpt2LMHeadModel = AutoModelForCausalLM.from_pretrained(tmpdir)
             torch_model2.eval()
 
-            torch_out2 = torch_model2(torch.from_numpy(onp.array(input.array)).to(torch.int32).unsqueeze(0))
+            torch_out2 = torch_model2(torch.from_numpy(np.array(input.array)).to(torch.int32).unsqueeze(0))
             torch_out2 = torch_out2.logits[0].detach().cpu().numpy()
             torch_out2 = jax.nn.softmax(torch_out2, axis=-1)
 
-            assert onp.isclose(
-                torch_out2, onp.array(jax_out), rtol=1e-2, atol=1e-2
-            ).all(), f"{torch_out2} != {jax_out}"
+            assert np.isclose(torch_out2, np.array(jax_out), rtol=1e-2, atol=1e-2).all(), f"{torch_out2} != {jax_out}"
 
 
 # Gradient tests
@@ -131,7 +128,7 @@ def test_hf_gradient_fa():
 
 
 def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2Config] = None):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     if config is None:
         hf_config = HfGpt2Config.from_pretrained(model_id, revision=revision)
@@ -151,7 +148,7 @@ def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2
         def torch_loss(model, input_ids) -> torch.Tensor:
             return model(input_ids, labels=input_ids)[0]
 
-        torch_out = torch_loss(torch_model, torch.from_numpy(onp.array(input.array)).to(torch.int64).unsqueeze(0))
+        torch_out = torch_loss(torch_model, torch.from_numpy(np.array(input.array)).to(torch.int64).unsqueeze(0))
 
         def compute_loss(model: LmHeadModel, input_ids):
             example = LmExample.causal(input_ids, eos_id=converter.tokenizer.eos_token_id)
@@ -174,7 +171,7 @@ def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2
             continue
 
         torch_g = state_dict[jax_key]
-        assert onp.isclose(jax_g, torch_g.detach().cpu().numpy(), rtol=1e-2, atol=1e-2).all(), f"{jax_g} != {torch_g}"
+        assert np.isclose(jax_g, torch_g.detach().cpu().numpy(), rtol=1e-2, atol=1e-2).all(), f"{jax_g} != {torch_g}"
 
     # now we also want to check that the optimizers do similar things
     optimizer_config = AdamConfig(weight_decay=0.0, learning_rate=1e-3, warmup=0.0, lr_schedule="constant")
@@ -205,9 +202,9 @@ def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2
             assert key == "token_out_embeddings"
             continue
         torch_p = state_dict[key]
-        assert onp.isclose(
+        assert np.isclose(
             jax_p, torch_p.detach().cpu().numpy(), rtol=1e-3, atol=2e-3
-        ).all(), f"{key}: {onp.linalg.norm(jax_p - torch_p.detach().cpu().numpy(), ord=onp.inf)}"
+        ).all(), f"{key}: {np.linalg.norm(jax_p - torch_p.detach().cpu().numpy(), ord=np.inf)}"
 
 
 def test_hf_save_to_fs_spec():
@@ -233,7 +230,7 @@ def test_hf_save_to_fs_spec():
 
             for key, simple_p in simple_dict.items():
                 loaded_p = loaded_dict[key]
-                assert onp.allclose(simple_p, loaded_p), f"{key}: {onp.linalg.norm(simple_p - loaded_p, ord=onp.inf)}"
+                assert np.allclose(simple_p, loaded_p), f"{key}: {np.linalg.norm(simple_p - loaded_p, ord=np.inf)}"
 
 
 @pytest.mark.slow
@@ -260,7 +257,7 @@ def test_hf_save_to_gcs_roundtrip():
         with use_test_mesh():
             simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
 
-            from gcsfs.retry import HttpError
+            from gcsfs.retry import HttpError  # noqa: PLC0415  # guarded: behind pytest.importorskip("gcsfs")
 
             try:
                 converter.save_pretrained(simple_model, unique_path)
@@ -276,9 +273,9 @@ def test_hf_save_to_gcs_roundtrip():
 
             for key, simple_param in simple_dict.items():
                 loaded_param = loaded_dict[key]
-                assert onp.allclose(
+                assert np.allclose(
                     simple_param, loaded_param
-                ), f"{key}: {onp.linalg.norm(simple_param - loaded_param, ord=onp.inf)}"
+                ), f"{key}: {np.linalg.norm(simple_param - loaded_param, ord=np.inf)}"
     finally:
         with contextlib.suppress(Exception):
             fs.rm(remote_path, recursive=True)

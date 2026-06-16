@@ -13,7 +13,7 @@ import threading
 import time
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple, TypeVar, Union, cast
+from typing import Any, Dict, Generic, List, Optional, Protocol, Sequence, Tuple, TypeVar, Union, cast
 
 import deepdiff
 import jax
@@ -36,8 +36,8 @@ from levanter.data.dataset import AsyncDataset
 from levanter.utils.jax_utils import broadcast_one_to_all
 from levanter.utils.thread_utils import blocking_wait
 
-from ..data._preprocessor import BatchProcessor, BatchResult, dict_from_record_batch
-from ..data.sharded_datasource import ShardedDataSource
+from levanter.data._preprocessor import BatchProcessor, BatchResult, canonicalize_batch, dict_from_record_batch
+from levanter.data.sharded_datasource import ShardedDataSource
 from .jagged_array import JaggedArrayStore, _no_cache_read_context
 from .tree_store import TreeStore
 
@@ -443,7 +443,7 @@ class _TreeCacheReader(Protocol[T_co]):
     async def get_flat_field_batch(self, field: str, offsets: Sequence[int], length: int) -> Sequence[np.ndarray]: ...
 
 
-class _MaterializedTreeCacheReader:
+class _MaterializedTreeCacheReader(Generic[T_co]):
     def __init__(self, store: TreeStore[T_co]):
         self._store = store
 
@@ -498,7 +498,7 @@ class _MaterializedTreeCacheReader:
         return await asyncio.gather(*futures)
 
 
-class _ShardedTreeCacheReader:
+class _ShardedTreeCacheReader(Generic[T_co]):
     def __init__(self, cache: TreeCache[T_co]):
         self._cache = cache
 
@@ -779,7 +779,7 @@ class SerialCacheWriter:
     ):
         self.cache_dir = cache_dir
         self.metadata = metadata
-        self._exemplar = exemplar
+        self._exemplar: Any = exemplar
         self._shard_name = shard_name
         self._tree_store = TreeStore.open(exemplar, self.cache_dir, mode=mode, cache_metadata=True)
         self._is_closed = False
@@ -811,7 +811,7 @@ class SerialCacheWriter:
         if isinstance(batch, pa.RecordBatch):
             batch = dict_from_record_batch(batch)
 
-        cbatch = _canonicalize_batch(batch)  # type: ignore[arg-type]
+        cbatch = canonicalize_batch(batch)  # type: ignore[arg-type]
         self._tree_store.extend(cbatch)
 
 
@@ -976,12 +976,12 @@ def _build_single_shard_cache(
             batch.append(example)
             if len(batch) >= options.batch_size:
                 processed = processor(batch)
-                yield from _canonicalize_batch(processed)
+                yield from canonicalize_batch(processed)
                 batch.clear()
             pbar.update(1)
         if batch:
             processed = processor(batch)
-            yield from _canonicalize_batch(processed)
+            yield from canonicalize_batch(processed)
 
     result = write_levanter_cache(records(), shard_path, metadata=metadata.preprocessor_metadata or {})
 
@@ -1412,35 +1412,20 @@ def _field_counts_from_data_sizes(data_sizes) -> Dict[str, int]:
 
 
 def _render_path_elem(path_elem) -> str:
-    match path_elem:
-        case jtu.DictKey(key):
-            return str(key)
-        case jtu.GetAttrKey(key):
-            return str(key)
-        case jtu.SequenceKey(i):
-            return str(i)
-        case jtu.FlattenedIndexKey(i):
-            return str(i)
-        case _:
-            return str(path_elem)
+    if isinstance(path_elem, jtu.DictKey):
+        return str(path_elem.key)
+    if isinstance(path_elem, jtu.GetAttrKey):
+        return str(path_elem.name)
+    if isinstance(path_elem, jtu.SequenceKey):
+        return str(path_elem.idx)
+    if isinstance(path_elem, jtu.FlattenedIndexKey):
+        return str(path_elem.key)
+    return str(path_elem)
 
 
 def _sanitize_shard_name(name: str) -> str:
     safe = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in name)
     return safe or "shard"
-
-
-def _canonicalize_batch(batch: Union[dict, List[dict]]) -> List[dict]:
-    if isinstance(batch, pa.RecordBatch):
-        batch = dict_from_record_batch(batch)
-
-    if isinstance(batch, dict):
-        keys = list(batch.keys())
-        values = list(batch.values())
-        num_rows = len(values[0]) if values else 0
-        return [{key: values[i][j] for i, key in enumerate(keys)} for j in range(num_rows)]
-    else:
-        return list(batch)
 
 
 def _try_load(path, metadata):

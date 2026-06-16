@@ -16,22 +16,24 @@ import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LmDataConfig
+from levanter.data.text import BlockShuffleConfig, LmDataConfig, TextLmDatasetFormat
 from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
+from marin.processing.tokenize.data_configs import lm_data_config
 from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.defaults import default_validation_sets
 from experiments.grug.moe.heuristic_v2 import MoeMuonHHeuristic
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import nemotron_mix
+from experiments.tokenization import default_tokenize
 
 
 @dataclass(frozen=True)
@@ -57,12 +59,49 @@ class GrugMoeLaunchConfig:
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
     # Mesh size along the "expert" axis (expert-parallelism). 1 = no EP.
     expert_parallel: int = 1
+    checkpointer: CheckpointerConfig | None = None
+    """Override the checkpointer. None builds the default (periodic + final saves
+    under output_path). Throughput experiments point this at node-local disk so a
+    slow object-store commit can't wedge the end-of-run barrier."""
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
     nemotron_mix,
     default_validation_sets(tokenizer=nemotron_mix.tokenizer),
 )
+
+
+def env_int(key: str, default: int) -> int:
+    """Read an int from ``os.environ[key]``, falling back to ``default`` when unset/empty."""
+    raw = os.environ.get(key, "")
+    return int(raw) if raw else default
+
+
+def slimpajama_6b_data() -> LmDataConfig:
+    """SlimPajama-6B, llama3-tokenized with block-shuffle, re-tokenized on first run.
+
+    A small, R2-local corpus for GPU smoke/scale runs; returns a ready-to-train
+    ``LmDataConfig``. A production pretraining mixture would instead need its
+    tokenized cache already materialized to avoid a cross-region tokenize.
+    """
+    tokenize_step = default_tokenize(
+        name="slimpajama-6b-cw",
+        dataset="DKYoon/SlimPajama-6B",
+        tokenizer=llama3_tokenizer,
+        format=TextLmDatasetFormat(),
+    )
+    tokenize_step = dataclasses.replace(
+        tokenize_step,
+        config=dataclasses.replace(
+            tokenize_step.config,
+            # SlimPajama-6B tokenization OOMs at the default 10g worker_resources.
+            worker_resources=ResourceConfig(ram="64g", disk="64g"),
+        ),
+    )
+    return lm_data_config(
+        training_set=tokenize_step,
+        shuffle=BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel"),
+    )
 
 
 def _resolve_run_id(default_run_id: str) -> str:
@@ -94,7 +133,8 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mesh=MeshConfig(axes={"expert": config.expert_parallel}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
-        checkpointer=CheckpointerConfig(
+        checkpointer=config.checkpointer
+        or CheckpointerConfig(
             base_path=os.path.join(config.output_path, "checkpoints"),
             temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,

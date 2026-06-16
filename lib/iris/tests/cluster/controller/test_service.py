@@ -15,10 +15,9 @@ from datetime import date, timedelta
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
-from iris.cluster.controller import direct_provider, ops, reads, writes
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
@@ -26,9 +25,10 @@ from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
+from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.schema import jobs_table, task_attempts_table
+from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,
     FRESHNESS_WINDOW,
@@ -47,7 +47,6 @@ from rigging.timing import Duration, Timestamp
 from sqlalchemy import func
 from sqlalchemy import update as sa_update
 
-from tests.cluster.conftest import fake_log_client_from_service
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
@@ -273,7 +272,7 @@ def test_launch_job_externalizes_large_workdir_files(service, state):
 
     job_id = JobName.root("test-user", "big-pickle-job")
     with state._db.read_snapshot() as snap:
-        template = direct_provider.run_request_template(state._run_template_cache, snap, job_id)
+        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
     assert template is not None
     # Small file stays inline
     assert dict(template.entrypoint.workdir_files) == {"small.txt": small_file}
@@ -289,7 +288,7 @@ def test_launch_job_keeps_small_workdir_files_inline(service, state):
 
     job_id = JobName.root("test-user", "small-pickle-job")
     with state._db.read_snapshot() as snap:
-        template = direct_provider.run_request_template(state._run_template_cache, snap, job_id)
+        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
     assert template is not None
     assert dict(template.entrypoint.workdir_files) == {"_callable.pkl": small_file}
     assert "_callable.pkl" not in template.entrypoint.workdir_file_refs
@@ -307,6 +306,45 @@ def test_launch_job_rejects_duplicate_name(service):
 
     assert exc_info.value.code == Code.ALREADY_EXISTS
     assert "still running" in exc_info.value.message
+
+
+def test_launch_job_rejects_exceeding_per_user_task_cap(service, state, monkeypatch):
+    """A submission that would push the user past the per-user active-task cap is rejected.
+
+    Only non-terminal tasks count: once the first job's tasks finish, the freed
+    budget lets the next submission through.
+    """
+    monkeypatch.setattr(service_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
+
+    # 3 active tasks for test-user: under the cap.
+    service.launch_job(make_job_request("job-a", replicas=3), None)
+
+    # 3 more would bring the total to 6 > 5: rejected, and job-b is not created.
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(make_job_request("job-b", replicas=3), None)
+    assert exc_info.value.code == Code.RESOURCE_EXHAUSTED
+    assert _query_job(state, JobName.root("test-user", "job-b")) is None
+
+    # Finishing job-a's tasks frees the budget; the resubmission now succeeds.
+    with state._db.transaction() as cur:
+        cur.execute(
+            sa_update(tasks_table)
+            .where(tasks_table.c.job_id == JobName.root("test-user", "job-a"))
+            .values(state=job_pb2.TASK_STATE_SUCCEEDED)
+        )
+    service.launch_job(make_job_request("job-b", replicas=3), None)
+    assert _query_job(state, JobName.root("test-user", "job-b")) is not None
+
+
+def test_launch_job_user_task_cap_is_per_user(service, state, monkeypatch):
+    """The cap is scoped per user: one user's tasks don't count against another's."""
+    monkeypatch.setattr(service_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
+
+    service.launch_job(make_job_request("/alice/job", replicas=5), None)
+
+    # Bob is unaffected by Alice's tasks.
+    service.launch_job(make_job_request("/bob/job", replicas=5), None)
+    assert _query_job(state, JobName.from_string("/bob/job")) is not None
 
 
 @pytest.mark.parametrize(
@@ -416,7 +454,6 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
         finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted by prod tenant")],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -487,7 +524,6 @@ def test_existing_job_policy_keep_force_reaps_after_drain_wait(service, state, m
         finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted, worker stuck")],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -833,12 +869,12 @@ def test_terminate_job_allowed_by_owner(service):
     assert status.job.state == job_pb2.JOB_STATE_KILLED
 
 
-def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
+def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, log_client):
     """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
     auth_service = ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
-        log_client=fake_log_client_from_service(LogServiceImpl()),
+        log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),
@@ -862,12 +898,12 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
     assert status.job.state == job_pb2.JOB_STATE_PENDING
 
 
-def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_path):
+def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_path, log_client):
     """Cannot submit a child job under another user's hierarchy."""
     auth_service = ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
-        log_client=fake_log_client_from_service(LogServiceImpl()),
+        log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),
@@ -1471,7 +1507,7 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
 # =============================================================================
 
 
-def test_register_requires_worker_role(state, mock_controller, tmp_path):
+def test_register_requires_worker_role(state, mock_controller, tmp_path, log_client):
     """Non-worker user gets PERMISSION_DENIED on register()."""
     db = state._db
     now = Timestamp.now()
@@ -1482,7 +1518,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
     service = ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(LogServiceImpl()),
+        log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),
@@ -1506,7 +1542,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
         _verified_identity.reset(token)
 
 
-def test_register_allows_worker_role(state, mock_controller, tmp_path):
+def test_register_allows_worker_role(state, mock_controller, tmp_path, log_client):
     """Worker-role user can call register()."""
     db = state._db
     now = Timestamp.now()
@@ -1517,7 +1553,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
     service = ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(LogServiceImpl()),
+        log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),
@@ -1722,19 +1758,3 @@ def test_list_tasks_returns_current_attempt_timing(service, state):
     # exactly one attempt entry — the current one — even if more existed
     assert len(proto.attempts) == 1
     assert proto.attempts[0].attempt_id == proto.current_attempt_id
-
-
-def test_set_task_status_text_handler_is_noop(service):
-    """Deprecated handler must accept and discard the payload without error.
-
-    Old clients still call this RPC; new clients write to iris.task_status.
-    """
-    response = service.set_task_status_text(
-        job_pb2.SetTaskStatusTextRequest(
-            task_id="/u/job/0",
-            status_text_detail_md="ignored",
-            status_text_summary_md="ignored",
-        ),
-        None,
-    )
-    assert isinstance(response, job_pb2.SetTaskStatusTextResponse)

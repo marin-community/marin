@@ -254,7 +254,7 @@ message Controller {
     repeated string running_job_ids = 5;
     string address = 6;                    // Worker RPC address (host:port)
     iris.job.WorkerMetadata metadata = 7;           // Full worker metadata
-    string status_message = 8;             // Error or status message (e.g., "Ping timeout", "Worker crashed")
+    string status_message = 8;             // Error or status message (e.g., "Reconcile timeout", "Worker crashed")
   }
 
   // Sort fields for worker listing
@@ -407,32 +407,11 @@ message Controller {
   message WorkerTaskAttempt {
     string task_id = 1;
     iris.job.TaskAttempt attempt = 2;
-  }
-
-  // --- Provider Status (for direct-dispatch providers like KubernetesProvider) ---
-  message SchedulingEvent {
-    string task_id = 1;
-    int32 attempt_id = 2;
-    string event_type = 3;
-    string reason = 4;
-    string message = 5;
-    iris.time.Timestamp timestamp = 6;
-  }
-
-  message ClusterCapacity {
-    int32 schedulable_nodes = 1;
-    int64 total_cpu_millicores = 2;
-    int64 available_cpu_millicores = 3;
-    int64 total_memory_bytes = 4;
-    int64 available_memory_bytes = 5;
-  }
-
-  message GetProviderStatusRequest {}
-
-  message GetProviderStatusResponse {
-    bool has_direct_provider = 1;
-    repeated SchedulingEvent scheduling_events = 2;
-    ClusterCapacity capacity = 3;
+    // Static resource allocation for this task, inherited from its parent
+    // job's ResourceSpecProto. Lets the worker page compare what the scheduler
+    // reserved against the live usage in the iris.task stats namespace. Unset
+    // when the job declared no resource request.
+    iris.job.ResourceSpecProto resources = 3;
   }
 
   message GetKubernetesClusterStatusRequest {}
@@ -594,9 +573,6 @@ service ControllerService {
   rpc ListApiKeys(iris.job.ListApiKeysRequest) returns (iris.job.ListApiKeysResponse);
   rpc GetCurrentUser(iris.job.GetCurrentUserRequest) returns (iris.job.GetCurrentUserResponse);
 
-  // Provider status (direct-dispatch providers)
-  rpc GetProviderStatus(Controller.GetProviderStatusRequest) returns (Controller.GetProviderStatusResponse);
-
   // Kubernetes cluster status
   rpc GetKubernetesClusterStatus(Controller.GetKubernetesClusterStatusRequest) returns (Controller.GetKubernetesClusterStatusResponse);
 
@@ -611,8 +587,4 @@ service ControllerService {
   // Scheduler state (dashboard)
   rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
 
-  // Deprecated. Discards the payload; status text now writes to the
-  // iris.task_status finelog namespace. Kept one release so pre-cutover
-  // clients don't crash; removal tracked by the iris-status-cleanup cron.
-  rpc SetTaskStatusText(iris.job.SetTaskStatusTextRequest) returns (iris.job.SetTaskStatusTextResponse);
 }

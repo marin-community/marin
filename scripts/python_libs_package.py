@@ -4,12 +4,17 @@
 
 """Build the marin-* lib wheels for PyPI publication.
 
-Builds the eight pure-Python marin-* lib packages (marin-core, marin-iris,
-marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr,
-marin-finelog) into dist/. Publication to PyPI is done by the release
-workflow (.github/workflows/marin-release-libs-wheels.yaml) via
+Builds the seven pure-Python marin-* lib packages (marin-core, marin-iris,
+marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr) into
+dist/. Publication to PyPI is done by the release workflow
+(.github/workflows/marin-release-libs-wheels.yaml) via
 `pypa/gh-action-pypi-publish` with OIDC trusted publishing -- this script
 never uploads anything and never needs a token.
+
+marin-finelog is NOT built here: it has its own release workflow
+(.github/workflows/finelog-release-wheels.yaml) that publishes the pure wheel
+together with its native (maturin) companion marin-finelog-server, mirroring
+marin-dupekit.
 
 Four modes:
     nightly  -- version becomes <dev_base>.dev<YYYYMMDDhhmm> (UTC). <dev_base>
@@ -68,7 +73,6 @@ PACKAGES: dict[str, dict[str, str]] = {
     "marin-zephyr": {"path": "lib/zephyr", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-levanter": {"path": "lib/levanter", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-haliax": {"path": "lib/haliax", "version_file": "src/haliax/__about__.py", "kind": "about_py"},
-    "marin-finelog": {"path": "lib/finelog", "version_file": "pyproject.toml", "kind": "pyproject"},
 }
 
 

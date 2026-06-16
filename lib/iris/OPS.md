@@ -27,6 +27,8 @@ Workflow: dry-run locally (`iris cluster controller serve --dry-run`) -> capture
 
 If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
 
+**Shipping a code change ≠ restarting.** marin pins `iris-controller:latest` (`config/marin.yaml:33`), so a restart only re-pulls whatever `:latest` currently is. To deploy a merged controller fix you must first rebuild the image (`gh workflow run "Ops - Docker Images"`, or wait for the Sunday build) and *then* restart — restarting against a stale `:latest` ships nothing. Confirm the controller is running the `:<git-short-hash>` you expect, not just that it came back up. Skipping the rebuild cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
+
 ## Job Management
 
 ```bash
@@ -163,7 +165,7 @@ Namespaces:
 
 - `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
 - `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
-- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `captured_at`. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — periodic CPU captures are py-spy **speedscope** JSON. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`).
+- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — periodic CPU captures are py-spy **speedscope** JSON. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`).
 
 Retention is finelog segment-based. Target for `iris.profile` is 7 days.
 
@@ -289,6 +291,7 @@ cluster configs.
 | `marin-canary-ferry-coreweave.yaml` | Daily 10AM UTC | GPU canary on CW — shares `iris-ci` controller + H100 nodepool with `iris-smoke-coreweave.yaml` (concurrency group `iris-coreweave-ci-shared`) |
 | `iris-smoke-gcp.yaml` | PRs touching `lib/iris/` | GCP smoke test (ephemeral cluster) |
 | `iris-smoke-coreweave.yaml` | PRs touching `lib/iris/` | CW integration tests (warm cluster) |
+| `ops-docker-images.yaml` | `workflow_dispatch` / Sun 02:00 UTC | Rebuilds + pushes `iris-{controller,worker,task}:latest` to GHCR (see Controller Restart) |
 
 ```bash
 # Trigger manually

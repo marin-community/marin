@@ -60,6 +60,13 @@ Worker Process (on each VM):
 └── Heartbeat reporter (health monitoring)
 ```
 
+The controller drives task execution through a single `TaskBackend` contract with
+two placements: `Placement.IRIS` (Iris schedules task→worker and fans reconcile
+RPCs to worker daemons — the diagram above) and `Placement.BACKEND` (the backend,
+e.g. Kubernetes via Kueue, places tasks itself). See
+[`docs/architecture.md`](docs/architecture.md#the-taskbackend-contract) for the
+contract and how the controller dispatches by placement.
+
 ## Actor System
 
 Iris includes a lightweight actor RPC system for service-style workloads. Actor
@@ -417,10 +424,10 @@ src/iris/
 │   ├── resolver.py          # ClusterResolver
 │   └── worker_pool.py       # Task dispatch
 ├── cluster/                  # Cluster orchestration
-│   ├── manager.py           # connect_cluster() + stop_all(dry_run) free functions
+│   ├── lifecycle.py         # connect_cluster() lifecycle helper
 │   ├── controller/          # Controller service + autoscaler
 │   ├── worker/              # Worker service
-│   └── platform/            # Platform abstractions (GCP, Manual, Local, CoreWeave)
+│   └── providers/           # Provider abstractions (GCP, Manual, Local, CoreWeave)
 ├── rpc/                      # Protocol definitions + generated code
 └── cli/                      # CLI package
     ├── main.py               # Top-level iris group

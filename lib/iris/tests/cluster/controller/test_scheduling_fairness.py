@@ -10,8 +10,7 @@ from iris.cluster.controller.budget import UserTask, compute_effective_band, int
 from iris.cluster.controller.controller import (
     SchedulingOutcome,
 )
-from iris.cluster.controller.scheduling_policy import (
-    _pending_tasks_with_jobs,
+from iris.cluster.controller.scheduling.policy import (
     _sort_pending_tasks_by_resolved_band,
 )
 from iris.cluster.controller.schema import user_budgets_table
@@ -40,13 +39,13 @@ def _submit_user_job(state, user: str, name: str, replicas: int = 1, band: int |
 def _pending(state):
     """Test helper: read pending tasks within a fresh snapshot."""
     with state._db.read_snapshot() as tx:
-        return _pending_tasks_with_jobs(tx)
+        return reads.pending_tasks_with_jobs(tx)
 
 
 def _pending_sorted(state):
     """Test helper: pending tasks resorted by resolved priority band."""
     with state._db.read_snapshot() as tx:
-        tasks = _pending_tasks_with_jobs(tx)
+        tasks = reads.pending_tasks_with_jobs(tx)
         bands = reads.get_priority_bands(tx, {t.job_id for t in tasks})
     return _sort_pending_tasks_by_resolved_band(tasks, bands)
 

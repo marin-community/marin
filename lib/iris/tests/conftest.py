@@ -14,6 +14,9 @@ import warnings
 from pathlib import Path
 
 import pytest
+from finelog.client import LogClient
+from finelog.embedded import is_available as finelog_native_available
+from finelog.embedded import require_embedded_server
 from iris.client.local_client import make_local_client
 from iris.cluster.config import load_config, make_local_config
 from iris.managed_thread import thread_container_scope
@@ -23,6 +26,38 @@ from rigging.timing import Duration, ExponentialBackoff
 
 IRIS_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = IRIS_ROOT / "config" / "test.yaml"
+
+
+@pytest.fixture
+def embedded_log_server(tmp_path):
+    """A fresh in-process native finelog server for tests that exercise logs/stats.
+
+    Boots the same engine the ``finelog-server`` binary runs over a per-test
+    on-disk ``log_dir``. (In-memory mode spawns no maintenance task, so its RAM
+    buffer never flushes to a readable segment — written logs would never be
+    queryable; a disk-backed store serves reads.) Function-scoped so every test
+    gets an isolated store. Tests talk to it over the normal RPC contract via
+    ``finelog.client.LogClient`` or ``finelog.client.proxy.LogServiceProxy``
+    against ``embedded_log_server.address``. Skips when the native extension is
+    unavailable (e.g. a pure-Python install).
+    """
+    if not finelog_native_available():
+        pytest.skip("finelog native server extension (finelog_server) not available")
+    server = require_embedded_server()(log_dir=str(tmp_path / "log-server"))
+    try:
+        yield server
+    finally:
+        server.stop()
+
+
+@pytest.fixture
+def log_client(embedded_log_server):
+    """A ``finelog.client.LogClient`` connected to the per-test embedded server."""
+    client = LogClient.connect(embedded_log_server.address)
+    try:
+        yield client
+    finally:
+        client.close()
 
 
 def _make_controller_only_config() -> config_pb2.IrisClusterConfig:

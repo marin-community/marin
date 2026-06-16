@@ -244,6 +244,8 @@ export interface ListWorkersResponse {
 export interface WorkerTaskAttempt {
   taskId: string
   attempt?: TaskAttempt
+  // Static allocation inherited from the parent job; unset when no request.
+  resources?: ResourceSpecProto
 }
 
 export interface GetWorkerStatusResponse {
@@ -284,6 +286,8 @@ export interface VmInfo {
   stateChangedAt?: ProtoTimestamp
   workerId?: string
   workerHealthy?: boolean
+  /** WorkerUsability: "healthy" | "degraded" | "dead"; empty if not in the roster. */
+  usability?: string
   initPhase?: string
   initLogTail?: string
   initError?: string
@@ -300,6 +304,16 @@ export interface SliceInfo {
   errorMessage?: string
   lastActive?: ProtoTimestamp
   idle?: boolean
+  /**
+   * Authoritative slice lifecycle state from the autoscaler:
+   * "requesting" | "booting" | "initializing" | "ready" | "failed".
+   * Render this directly (via sliceLifecycle()); do NOT infer state from `vms`,
+   * which is empty until a slice's workers register — a booting slice has none.
+   */
+  state?: string
+  /** Per-slice usability rollup over `vms`: HEALTHY vs DEGRADED worker counts. */
+  schedulableSlotCount?: number
+  degradedSlotCount?: number
 }
 
 export interface ScaleGroupConfig {
@@ -323,6 +337,9 @@ export interface ScaleGroupStatus {
   blockedUntil?: ProtoTimestamp
   scaleUpCooldownUntil?: ProtoTimestamp
   idleThresholdMs?: string
+  /** Group-level usability rollup over all slices' VMs: HEALTHY vs DEGRADED. */
+  totalSchedulableSlots?: number
+  totalDegradedSlots?: number
 }
 
 export interface AutoscalerAction {

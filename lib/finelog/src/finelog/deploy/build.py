@@ -51,12 +51,17 @@ def build_image(
     image: str = DEFAULT_IMAGE,
     push: bool = True,
     platform: str = "linux/amd64",
+    cargo_profile: str = "release",
 ) -> None:
     """Build the finelog Docker image and (by default) push it to the registry.
 
     ``image`` should match what the cluster config references; otherwise the
     cluster will keep pulling the old digest. ``push=False`` is useful for
     smoke-testing the Dockerfile locally without registry access.
+
+    ``cargo_profile`` selects the Rust build profile baked into the image.
+    ``release`` (default) is the optimized fat-LTO production build; ``fast``
+    skips LTO for a much quicker final link, suited to dev/test deploys.
     """
     marin_root = find_marin_root()
     dockerfile = marin_root / "lib" / "finelog" / "deploy" / "Dockerfile"
@@ -69,6 +74,8 @@ def build_image(
         platform,
         "--file",
         str(dockerfile),
+        "--build-arg",
+        f"CARGO_PROFILE={cargo_profile}",
         "--tag",
         image,
         "--provenance=false",
@@ -81,6 +88,7 @@ def build_image(
 
     click.echo(f"Building finelog image: {image}")
     click.echo(f"Context: {marin_root}")
+    click.echo(f"Cargo profile: {cargo_profile}")
     click.echo(f"Push: {'enabled' if push else 'disabled (local only)'}")
     result = subprocess.run(cmd)
     if result.returncode != 0:

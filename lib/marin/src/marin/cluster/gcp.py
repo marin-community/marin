@@ -3,8 +3,8 @@
 
 """GCP utilities for cluster management.
 
-This provides functions to get access to the current GCP configuration, list and
-connect to TPUs, and find TPUs by IP address.
+This provides functions to get access to the current GCP configuration, list
+TPUs, and find TPUs or VMs by name or IP address.
 """
 
 import json
@@ -149,48 +149,3 @@ def find_vm_by_ip(target_ip: str, project: str) -> tuple[str, str] | None:
     # zone is a full URL like .../zones/us-central1-a
     zone = instance["zone"].split("/")[-1]
     return name, zone
-
-
-def ssh_to_vm(instance_name: str, zone: str, project: str, extra_args: list[str] | None = None) -> None:
-    """SSH into a GCE VM."""
-    cmd = [
-        "gcloud",
-        "compute",
-        "ssh",
-        instance_name,
-        f"--zone={zone}",
-        f"--project={project}",
-    ]
-
-    if extra_args:
-        cmd.extend(["--", *extra_args])
-
-    subprocess.run(cmd, check=True)
-
-
-def ssh_to_tpu(tpu_name: str, zone: str, project: str, extra_args: list[str] | None = None, worker_id: int = 0) -> None:
-    """SSH into a TPU node.
-
-    Args:
-        tpu_name: Name of the TPU
-        zone: GCP zone
-        project: GCP project
-        extra_args: Additional SSH arguments
-        worker_id: Worker index for multi-worker TPUs (default: 0)
-    """
-    cmd = [
-        "gcloud",
-        "compute",
-        "tpus",
-        "tpu-vm",
-        "ssh",
-        tpu_name,
-        f"--zone={zone}",
-        f"--project={project}",
-        f"--worker={worker_id}",
-    ]
-
-    if extra_args:
-        cmd.extend(["--", *extra_args])
-
-    subprocess.run(cmd, check=True)

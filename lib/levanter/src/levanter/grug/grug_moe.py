@@ -29,6 +29,7 @@ from levanter.grug._moe.common import (
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
     _init_weight,
+    MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
     MoEExpertMlpPspecs,
     MoeActivation,
     MoeImplementation,
@@ -46,7 +47,7 @@ from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
-from levanter.grug._moe.mesh import (
+from levanter.grug.sharding import (
     _batch_spec_from_x,
     _current_mesh,
     _mesh_axis_size,
@@ -170,7 +171,7 @@ def moe_mlp(
     *,
     activation: MoeActivation = ActivationFunctionEnum.silu,
     implementation: MoeImplementation | str | None = None,
-    mesh: jax.sharding.AbstractMesh | None = None,
+    mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:

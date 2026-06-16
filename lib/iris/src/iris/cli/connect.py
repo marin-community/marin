@@ -15,7 +15,9 @@ from pathlib import Path
 
 import click
 
-from iris.rpc.auth import AuthTokenInjector, TokenProvider
+from iris.cluster.backends.local.cluster import LocalCluster
+from iris.cluster.config import IrisConfig
+from iris.rpc.auth import TokenProvider, client_interceptors
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
@@ -68,7 +70,7 @@ def rpc_client(
     timeout_ms: int = 30_000,
 ) -> ControllerServiceClientSync:
     """Create an RPC client with optional auth. Use as a context manager: ``with rpc_client(url) as c:``."""
-    interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
+    interceptors = client_interceptors(token_provider)
     return ControllerServiceClientSync(
         address,
         timeout_ms=timeout_ms,
@@ -92,15 +94,11 @@ def require_controller_url(ctx: click.Context) -> str:
     # Lazy tunnel establishment from config
     config = ctx.obj.get("config") if ctx.obj else None
     if config:
-        from iris.cluster.config import IrisConfig
-
         iris_config = IrisConfig(config)
         bundle = iris_config.provider_bundle()
         ctx.obj["provider_bundle"] = bundle
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
-            from iris.cluster.providers.local.cluster import LocalCluster
-
             cluster = LocalCluster(iris_config.proto)
             controller_address = cluster.start()
             ctx.call_on_close(cluster.close)

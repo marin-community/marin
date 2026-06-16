@@ -12,6 +12,7 @@ from typing import (
     Concatenate,
     Generic,
     Protocol,
+    Self,
     Sequence,
     Type,
     TypeVar,
@@ -29,9 +30,9 @@ import haliax.util
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.util import is_jax_or_hax_array_like
 
-from .._src.scan import ScanCheckpointPolicy, ScanCheckpointSpec
-from .._src.state_dict import ModuleWithStateDictSerialization, StateDict, with_prefix
-from ..axis import Axis
+from haliax._src.scan import ScanCheckpointPolicy, ScanCheckpointSpec
+from haliax._src.state_dict import ModuleWithStateDictSerialization, StateDict, with_prefix
+from haliax.axis import Axis
 
 M = TypeVar("M", bound=eqx.Module)
 M_co = TypeVar("M_co", bound=eqx.Module, covariant=True)
@@ -113,9 +114,7 @@ class BlockFoldable(Protocol[M]):
         self, fn: Callable[[M, CarryT], CarryT], *, unroll: int | bool | None = None
     ) -> Callable[[CarryT], CarryT]: ...
 
-    def fold_via(
-        self, fn: Callable[..., CarryT], *, unroll: int | bool | None = None
-    ) -> Callable[Concatenate[CarryT, P], CarryT]: ...
+    def fold_via(self, fn: Callable[..., CarryT], *, unroll: int | bool | None = None) -> Callable[..., CarryT]: ...
 
     @overload
     def scan_via(
@@ -132,7 +131,7 @@ class BlockFoldable(Protocol[M]):
 
     def scan_via(
         self, fn: Callable[..., tuple[CarryT, OutputT_co]], *, unroll: int | bool | None = None
-    ) -> Callable[P, tuple[CarryT, OutputT_co]]: ...
+    ) -> Callable[..., tuple[CarryT, OutputT_co]]: ...
 
     @overload
     def vmap_via(self, fn: VmapFunction[M, P, OutputT_co]) -> Callable[P, OutputT_co]: ...
@@ -172,13 +171,13 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
 
     @classmethod
     def init(
-        cls: Type[S],
+        cls,
         Block: Axis,
         module: Type[M],
         *,
         gradient_checkpointing: ScanCheckpointSpec = False,
         prevent_cse: bool | None = None,
-    ) -> ModuleInit[S]:
+    ) -> ModuleInit["BlockSeq[M]"]:
         """
         This is a curried init method that takes the Block and module and returns a function that takes
         the arguments to the module's init method. Any NamedArrays in the arguments will be sliced along the
@@ -223,7 +222,8 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
                     (extra_args, extra_kwargs),
                 )
 
-                block_result = block(carry, *block_args, **block_kwargs)
+                # eqx.Module defines __call__ on subclasses but not on the base, so M is not seen as callable.
+                block_result = block(carry, *block_args, **block_kwargs)  # pyrefly: ignore[not-callable]
 
                 if not isinstance(block_result, (tuple, list)) or len(block_result) != 2:
                     raise ValueError(
@@ -249,7 +249,8 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
                     functools.partial(BlockSeq._slice_out, self.Block, i),
                     (args, kwargs),
                 )
-                carry = block(carry, *block_args, **block_kwargs)
+                # eqx.Module defines __call__ on subclasses but not on the base, so M is not seen as callable.
+                carry = block(carry, *block_args, **block_kwargs)  # pyrefly: ignore[not-callable]
                 carry = tree_checkpoint_name(carry, self._carry_ckpt_name)
             return carry
 
@@ -359,7 +360,7 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
     def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"blocks": None}
 
-    def from_state_dict(self: M, state_dict: StateDict, prefix: str | None = None) -> M:
+    def from_state_dict(self, state_dict: StateDict, prefix: str | None = None) -> Self:
         out_blocks = []
         for i, block in enumerate(self.blocks):
             my_prefix = with_prefix(prefix, str(i))
@@ -740,7 +741,7 @@ class Stacked(ModuleWithStateDictSerialization, Generic[M]):
 
         return _unstack_state_dict(state_dict, prefix)
 
-    def from_state_dict(self: M, state_dict: StateDict, prefix: str | None = None) -> M:
+    def from_state_dict(self, state_dict: StateDict, prefix: str | None = None) -> Self:
         # this method needs to "vectorize" the blocks, so that we have a single block h.FOO
         # first just do the normal thing with our own dict, which we'll post-process
         stacked = _stack_state_dict(state_dict, prefix=prefix)

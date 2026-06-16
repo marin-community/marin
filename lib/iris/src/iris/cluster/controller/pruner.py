@@ -16,16 +16,14 @@ import time
 from dataclasses import dataclass
 
 from rigging.timing import Duration, Timestamp
-from sqlalchemy import bindparam, select
 
-from iris.cluster.controller import writes
+from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.schema import jobs_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import TERMINAL_JOB_STATES, WorkerId
+from iris.cluster.types import TERMINAL_JOB_STATES, WorkerId, WorkerUsability
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +48,7 @@ def _find_prunable_worker(health: WorkerHealthTracker, before_ms: int) -> Worker
     on commit of ``remove``), so scanning the tracker is sufficient.
     """
     for worker_id, liveness in health.all().items():
-        if (not liveness.healthy or not liveness.active) and liveness.last_heartbeat_ms < before_ms:
+        if liveness.usability is WorkerUsability.DEAD and liveness.last_heartbeat_ms < before_ms:
             return worker_id
     return None
 
@@ -93,17 +91,7 @@ def prune_old_data(
     jobs_deleted = 0
     while not _stopped():
         with db.read_snapshot() as snap:
-            _prunable_row = snap.execute(
-                select(jobs_table.c.job_id)
-                .where(
-                    jobs_table.c.state.in_(bindparam("terminal_states", expanding=True)),
-                    jobs_table.c.finished_at_ms.is_not(None),
-                    jobs_table.c.finished_at_ms < bindparam("before_ts"),
-                )
-                .limit(1),
-                {"terminal_states": list(TERMINAL_JOB_STATES), "before_ts": Timestamp.from_ms(job_cutoff_ms)},
-            ).first()
-            job_name = _prunable_row.job_id if _prunable_row is not None else None
+            job_name = reads.find_prunable_job(snap, TERMINAL_JOB_STATES, Timestamp.from_ms(job_cutoff_ms))
         if job_name is None:
             break
         with db.transaction() as cur:

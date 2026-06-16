@@ -31,7 +31,6 @@ from iris.rpc.auth import (
     authorize_resource_owner,
     get_verified_identity,
     get_verified_user,
-    hash_token,
     require_identity,
 )
 from iris.rpc.config_pb2 import AuthConfig
@@ -426,22 +425,6 @@ def test_create_client_token_provider_none_when_no_provider(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# hash_token utility
-# ---------------------------------------------------------------------------
-
-
-def test_hash_token_deterministic():
-    assert hash_token("test-token") == hash_token("test-token")
-    assert hash_token("a") != hash_token("b")
-
-
-def test_hash_token_is_sha256_hex():
-    result = hash_token("test")
-    assert len(result) == 64  # SHA-256 hex digest
-    assert all(c in "0123456789abcdef" for c in result)
-
-
-# ---------------------------------------------------------------------------
 # JwtTokenManager (replaces DbTokenVerifier)
 # ---------------------------------------------------------------------------
 
@@ -491,7 +474,6 @@ def test_jwt_token_manager_load_revocations(tmp_path):
     create_api_key(
         db,
         key_id="k-revoked",
-        key_hash="jwt:k-revoked",
         key_prefix="jwt",
         user_id="alice",
         name="test-key",
@@ -503,7 +485,6 @@ def test_jwt_token_manager_load_revocations(tmp_path):
     create_api_key(
         db,
         key_id="k-active",
-        key_hash="jwt:k-active",
         key_prefix="jwt",
         user_id="alice",
         name="active-key",

@@ -53,9 +53,8 @@ from pathlib import Path
 
 import click
 from iris.client import IrisClient
-from iris.cluster.config import load_config
-from iris.cluster.providers.k8s.controller import K8sControllerProvider, _build_controller_deployment
-from iris.cluster.providers.k8s.coreweave_topology import (
+from iris.cluster.backends.k8s.controller import K8sControllerProvider, _build_controller_deployment
+from iris.cluster.backends.k8s.coreweave_topology import (
     CW_FLAVOR_INFINIBAND,
     CW_LABEL_FABRIC,
     CW_LABEL_FLAVOR,
@@ -63,8 +62,9 @@ from iris.cluster.providers.k8s.coreweave_topology import (
     CW_LABEL_NVLINK_DOMAIN,
     CW_LABEL_SUPERPOD,
 )
-from iris.cluster.providers.k8s.service import CloudK8sService
-from iris.cluster.providers.types import Labels
+from iris.cluster.backends.k8s.service import CloudK8sService
+from iris.cluster.backends.types import Labels, find_free_port
+from iris.cluster.config import load_config
 from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
 from iris.rpc import config_pb2, job_pb2
 
@@ -224,7 +224,7 @@ class ControllerTarget:
             image=cfg.controller.image,
             port=port,
             node_selector=node_selector,
-            s3_env_vars=[],
+            task_env_secret=False,
             fresh=False,
         )
         if local_image:
@@ -248,16 +248,26 @@ class ControllerTarget:
         logger.info("controller ready (in-cluster: %s)", addr)
         return addr
 
-    def open_tunnel(self, local_port: int = 10000) -> str:
+    def open_tunnel(self, local_port: int = 0) -> str:
         port = self.cfg.controller.coreweave.port or 10000
         svc = self.cfg.controller.coreweave.service_name or "iris-controller-svc"
+        # Random free port, pinned to 127.0.0.1. A fixed port silently
+        # cross-wires the client: with something else (e.g. a production
+        # controller tunnel) on 127.0.0.1:<port>, kubectl binds only [::1] and
+        # "localhost" resolves to the OTHER listener — the smoke then submits
+        # its gang to that cluster. --address makes a genuine conflict fail
+        # loudly instead.
+        if local_port == 0:
+            local_port = find_free_port()
         self._tunnel = subprocess.Popen(
-            self._kc("port-forward", "-n", self.namespace, f"svc/{svc}", f"{local_port}:{port}"),
+            self._kc(
+                "port-forward", "--address", "127.0.0.1", "-n", self.namespace, f"svc/{svc}", f"{local_port}:{port}"
+            ),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        _wait_port("localhost", local_port, timeout=60)
-        url = f"http://localhost:{local_port}"
+        _wait_port("127.0.0.1", local_port, timeout=60)
+        url = f"http://127.0.0.1:{local_port}"
         logger.info("controller tunnel open: %s", url)
         return url
 

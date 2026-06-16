@@ -1,6 +1,24 @@
-# Only lib/iris/, lib/rigging/, and lib/finelog/ are needed in the build context.
-# Exclude everything else, then selectively re-include.
+# The build context is the marin repo root, but the controller/worker images
+# only need lib/iris/, lib/rigging/, and the workspace metadata that lets the
+# deps stage resolve against the committed root uv.lock. finelog is pulled as a
+# pre-built wheel from the index, not copied as source. Exclude everything,
+# then selectively re-include.
+#
+# NOTE: this allowlist must stay in sync with the COPY paths in the deps stage
+# of Dockerfile — a path that is COPY'd but not re-included here fails the build
+# with "<path>: not found" during context transfer.
 *
+
+# Root lockfile + workspace member pyproject.toml metadata. uv discovers every
+# member listed in the root [tool.uv.workspace] when mapping the lock, so all
+# member manifests must be present even though only iris+rigging install.
+!uv.lock
+!pyproject.toml
+!lib/fray/pyproject.toml
+!lib/haliax/pyproject.toml
+!lib/levanter/pyproject.toml
+!lib/marin/pyproject.toml
+!lib/zephyr/pyproject.toml
 
 !lib/iris/pyproject.toml
 !lib/iris/src/
@@ -16,10 +34,6 @@
 !lib/iris/dashboard/src/
 
 !lib/rigging/
-
-!lib/finelog/pyproject.toml
-!lib/finelog/src/
-!lib/finelog/config/
 
 # Exclude build artifacts within included paths
 **/__pycache__

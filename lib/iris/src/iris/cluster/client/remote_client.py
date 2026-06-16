@@ -17,10 +17,11 @@ from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
-from iris.cluster.client.bundle import BundleCreator
+from iris.cluster.client.bundle import create_workspace_zip
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
+from iris.cluster.runtime.env import with_slice_topology_env
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
 from iris.cluster.worker.stats import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
 from iris.rpc import controller_pb2, job_pb2
@@ -31,6 +32,7 @@ from iris.time_proto import duration_to_proto
 from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)
+
 
 # How long to tolerate controller unavailability before giving up on monitoring.
 # The job itself keeps running server-side; this only affects the client's ability
@@ -145,7 +147,7 @@ class RemoteClusterClient:
 
         if environment is None:
             environment = EnvironmentSpec().to_proto()
-        env_config = environment
+        env_config = with_slice_topology_env(environment, resources, replicas)
 
         runtime_ep = build_runtime_entrypoint(entrypoint, env_config)
 
@@ -170,8 +172,7 @@ class RemoteClusterClient:
             request.bundle_id = self._bundle_id
         else:
             if self._bundle_blob is None and self._workspace is not None:
-                creator = BundleCreator(self._workspace)
-                self._bundle_blob = creator.create_bundle()
+                self._bundle_blob = create_workspace_zip(self._workspace)
                 logger.info(f"Workspace bundle size: {len(self._bundle_blob) / 1024 / 1024:.1f} MB")
             request.bundle_blob = self._bundle_blob or b""
 
@@ -200,7 +201,7 @@ class RemoteClusterClient:
 
         return call_with_retry(f"get_job_status({job_id})", _call)
 
-    def get_job_states(self, job_ids: list[JobName]) -> dict[str, int]:
+    def get_job_states(self, job_ids: list[JobName]) -> dict[str, job_pb2.JobState]:
         """Lightweight batch query returning only the state enum per job."""
 
         def _call():
@@ -212,7 +213,7 @@ class RemoteClusterClient:
 
         return call_with_retry(f"get_job_states({len(job_ids)} jobs)", _call)
 
-    def _poll_job_state(self, job_id: JobName) -> int:
+    def _poll_job_state(self, job_id: JobName) -> job_pb2.JobState:
         """Fetch only the state enum for a single job via the lightweight RPC."""
         states = self.get_job_states([job_id])
         wire_id = job_id.to_wire()

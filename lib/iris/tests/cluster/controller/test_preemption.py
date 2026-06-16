@@ -3,7 +3,7 @@
 
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
-from iris.cluster.constraints import AttributeValue, Constraint, ConstraintOp
+from iris.cluster.constraints import AttributeValue, Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.budget import compute_effective_band
 from iris.cluster.controller.ops.task import Assignment, finalize
@@ -11,15 +11,13 @@ from iris.cluster.controller.reconcile.policy import RESERVATION_HOLDER_JOB_NAME
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.task import resolve_task_failure_state as _resolve_task_failure_state
-from iris.cluster.controller.scheduler import JobRequirements, WorkerCapacity
-from iris.cluster.controller.scheduling_policy import (
+from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
-    RunningTaskInfo,
-    _pending_tasks_with_jobs,
     _sort_pending_tasks_by_resolved_band,
     get_running_tasks_with_band_and_value,
     run_preemption_pass,
 )
+from iris.cluster.controller.scheduling.scheduler import JobRequirements, RunningTaskInfo, WorkerCapacity
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
@@ -617,7 +615,6 @@ def test_preempted_task_retries():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -650,7 +647,6 @@ def test_preempted_task_exhausted_retries():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -936,7 +932,7 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
         assert child_task.priority_band == job_pb2.PRIORITY_BAND_INTERACTIVE
 
         with state._db.read_snapshot() as tx:
-            pending = _pending_tasks_with_jobs(tx)
+            pending = reads.pending_tasks_with_jobs(tx)
             bands = reads.get_priority_bands(tx, {t.job_id for t in pending})
         ordered = _sort_pending_tasks_by_resolved_band(pending, bands)
         ordered_ids = [task.task_id for task in ordered]
@@ -997,7 +993,6 @@ def test_preempted_assigned_task_always_retries():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted while assigned")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1121,7 +1116,6 @@ def test_preemption_nonexistent_task_is_noop():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, JobName.from_wire("/ghost/job:0"), "does not exist")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1133,8 +1127,9 @@ def test_preemption_nonexistent_task_is_noop():
 def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
     """Regression for #5918: worker's post-preempt terminal heartbeat must finalize the attempt.
 
-    ``preempt_task`` marks the attempt PREEMPTED via ``task.mark_task_terminating``,
-    which deliberately leaves ``finished_at_ms`` NULL and relies on the worker's
+    ``preempt_task`` marks the attempt PREEMPTED via
+    ``task.merge_task_termination(stamp_attempt_finished=False)``, which
+    deliberately leaves ``finished_at_ms`` NULL and relies on the worker's
     subsequent terminal-state heartbeat to stamp it. Without the stamp the row
     stays counted by ``resource_usage_by_worker`` and ghost-pins the worker's
     capacity for as long as the worker lives.
@@ -1153,7 +1148,6 @@ def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted by /bob/prod-job:0")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1208,7 +1202,6 @@ def test_preemption_terminal_task_is_noop():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "too late")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1306,7 +1299,6 @@ def test_preempt_task_retries_when_budget_remains():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Evicted by /bob/prod:0")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1345,7 +1337,6 @@ def test_preempt_task_terminal_when_budget_exhausted():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "budget gone")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1370,8 +1361,6 @@ def test_preempt_task_requeues_coscheduled_siblings_on_retry():
     bounced to PENDING so the job re-coschedules atomically. Without this, the
     retry could land on a different slice from the still-RUNNING siblings,
     splitting the SPMD mesh."""
-    from iris.cluster.constraints import WellKnownAttribute
-
     with make_controller_state() as state:
         for i in range(2):
             meta = make_worker_metadata()
@@ -1398,7 +1387,6 @@ def test_preempt_task_requeues_coscheduled_siblings_on_retry():
             result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "evicted")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1431,8 +1419,6 @@ def test_preempt_task_cascades_coscheduled_siblings():
     rolls back to PENDING with retry budget). The job then finalizes terminal
     with no task left active on a half-gone slice.
     """
-    from iris.cluster.constraints import WellKnownAttribute
-
     with make_controller_state() as state:
         # Register 2 workers with TPU attributes for coscheduling
         for i in range(2):
@@ -1463,7 +1449,6 @@ def test_preempt_task_cascades_coscheduled_siblings():
             result0 = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "preempted by prod")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1556,7 +1541,6 @@ def test_preemption_retry_preserves_reservation_holder():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, parent_task.task_id, "Preempted by higher priority")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
@@ -1625,14 +1609,13 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
             finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
-                health=state._health,
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
 
         # Sanity: task went to PENDING (budget remains), attempt row is in
         # PREEMPTED reporting state. ``preempt_task`` is a producer transition
-        # (``finalize_attempt=False``), so ``finished_at_ms`` is intentionally
+        # (``stamp_attempt_finished=False``), so ``finished_at_ms`` is intentionally
         # left NULL — the worker still holds the chips until a terminal
         # heartbeat (or worker-failure synthesis) lands.
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING

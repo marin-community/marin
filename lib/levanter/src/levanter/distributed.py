@@ -13,6 +13,8 @@ from jax._src import clusters
 from iris.cluster.client.job_info import get_job_info
 from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
 
+from levanter.megascale import configure_megascale_from_iris
+
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +41,12 @@ class LevanterSlurmCluster(clusters.SlurmCluster):
 
     # this is mostly copy paste, but it looks at range of different env variables that slurm sometimes sets
     @classmethod
-    def get_coordinator_address(cls, timeout_secs: int | None = None) -> str:
+    def get_coordinator_address(
+        cls, timeout_secs: int | None = None, override_coordinator_port: str | None = None
+    ) -> str:
         # Pick port in ephemeral range [(65535 - 2^12 + 1), 65535]
         id = os.environ[_JOBID_PARAM]
-        port = _choose_port(id)
+        port = override_coordinator_port if override_coordinator_port is not None else _choose_port(id)
 
         # Parse the first hostname of the job
         # If we are looking for 'node001',
@@ -221,6 +225,7 @@ class DistributedConfig:
 
         if get_job_info() is not None:
             logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")
+            configure_megascale_from_iris()
             initialize_iris_jax()
             return
 

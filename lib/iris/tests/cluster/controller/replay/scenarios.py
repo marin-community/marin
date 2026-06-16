@@ -18,9 +18,8 @@ from iris.cluster.controller import ops
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.pruner import prune_old_data
-from iris.cluster.controller.reads import ReservationClaim
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.schema import jobs_table, tasks_table
+from iris.cluster.controller.schema import ReservationClaim, jobs_table, tasks_table
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging import timing
@@ -505,7 +504,7 @@ def scenario_coscheduled_preempt_terminal_cascades_siblings(
     apply_event(transitions, PreemptTask(task_id=tasks[0], reason="evicted-by-prod"))
 
 
-def scenario_direct_provider_cycle(transitions: ControllerTestState, clock: FrozenClock) -> None:
+def scenario_dispatch_cycle(transitions: ControllerTestState, clock: FrozenClock) -> None:
     """Submit a job with no worker, drain to direct-provider, then mark RUNNING."""
     job_id = _submit(transitions, clock, "direct-job")
     (task_id,) = _task_ids(transitions, job_id)
@@ -724,7 +723,7 @@ SCENARIOS: dict[str, Callable[[ControllerTestState, FrozenClock], None]] = {
     "coscheduled_preempt_retry_bounces_siblings": scenario_coscheduled_preempt_retry_bounces_siblings,
     "coscheduled_preempt_terminal_cascades_siblings": scenario_coscheduled_preempt_terminal_cascades_siblings,
     "coscheduled_timeout": scenario_coscheduled_timeout,
-    "direct_provider_cycle": scenario_direct_provider_cycle,
+    "dispatch_cycle": scenario_dispatch_cycle,
     "coscheduled_five_tasks_one_fails_all_terminal": scenario_coscheduled_five_tasks_one_fails_all_terminal,
     "endpoint_register_remove": scenario_endpoint_register_remove,
     "independent_five_tasks_one_fails": scenario_independent_five_tasks_one_fails,

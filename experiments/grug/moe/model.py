@@ -9,6 +9,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 
 import dataclasses
 from dataclasses import dataclass
+from typing import Literal
 
 import equinox as eqx
 import jax
@@ -34,6 +35,7 @@ from levanter.grug.attention import (
     attention,
 )
 from levanter.grug.grug_moe import (
+    MOE_REMAT_SAVE_NAMES,
     MoeActivation,
     MoEExpertMlp,
     MoeImplementation,
@@ -49,18 +51,32 @@ _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 
 
+_BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+
+
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
-    if mesh is None or mesh.empty or axis_name not in mesh.shape:
+    if mesh is None or mesh.empty:
+        raise ValueError("grug/moe requires a non-empty abstract mesh")
+    if axis_name not in mesh.shape:
+        # compact_grug_mesh standardizes on (replica_dcn, data, expert, model) with length-1
+        # axes kept, so any missing axis is a caller bug rather than a "size 1" shortcut.
         raise ValueError(f"grug/moe requires an abstract mesh with axis '{axis_name}'")
     return int(mesh.shape[axis_name])
 
 
+RematMode = Literal["recompute_all", "save_moe"]
+
+
 def _batch_spec() -> P:
-    return P(("data", "expert"))
+    return P(_BATCH_AXES)
 
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
+
+
+def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
+    return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
 
 
 @dataclass(frozen=True)
@@ -89,6 +105,10 @@ class GrugModelConfig:
     router_z_loss_coef: float = 0.0
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    remat_mode: RematMode = "recompute_all"
+    """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
+    backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
+    backward skips re-running expert dispatch and its EP collectives."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -201,9 +221,9 @@ class CausalSelfAttention(eqx.Module):
         # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
         # propagator with ``model`` annotated on ``head_dim`` rather than
         # ``num_q_heads``; force the canonical TP layout so it matches ``aligned_v``.
-        attn_out = reshard(attn_out, P(("data", "expert"), None, "model", None))
+        attn_out = reshard(attn_out, P(_BATCH_AXES, None, "model", None))
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
+        aligned_v = reshard(aligned_v, P(_BATCH_AXES, None, "model", None))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
@@ -290,7 +310,13 @@ class DenseMLP(eqx.Module):
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
-        return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
+        # Reshard after the reshape so the shared-expert output carries the same
+        # canonical batch sharding as the routed MoE output (MoEMLP reshards its
+        # routed result identically). Splitting the fused
+        # ("replica_dcn", "data", "expert") token axis back into (b, s) otherwise
+        # leaks the `expert` mesh axis onto the seq dim, so the shared+routed
+        # residual add fails with a ShardingTypeError on a multi-node mesh.
+        return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
 
 
 def _routing_stats(
@@ -440,25 +466,23 @@ class MoEMLP(eqx.Module):
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
         # Sharded QB: compute beta locally per device, then average.
-        s_minus_alpha = router_logits - qb_alpha
         mesh = get_abstract_mesh()
-        batch_axes = ("data", "expert")
+        s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
         num_devices = 1
-        for a in batch_axes:
-            if a in mesh.shape:
-                num_devices *= mesh.shape[a]
+        for a in _BATCH_AXES:
+            num_devices *= mesh.shape[a]
         local_tokens = s_minus_alpha.shape[0] // num_devices
         qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
 
         def _local_qb_beta(s_ma):
             topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
             beta = topk_vals[:, -1]
-            return jax.lax.pmean(beta, axis_name=batch_axes)
+            return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
 
         router_stats["qb_beta"] = shard_map(
             _local_qb_beta,
             mesh=mesh,
-            in_specs=(P(batch_axes, None),),
+            in_specs=(P(_BATCH_AXES, None),),
             out_specs=P(),
         )(s_minus_alpha)
 
@@ -563,9 +587,20 @@ class Transformer(eqx.Module):
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
+        # moe_may_pr semantics: PKO-aware. Short layers run sliding-window
+        # attention at ``cfg.sliding_window``; long (every 4th + last) layers run
+        # full causal attention. segment_ids passed through for PKO doc-start
+        # zeroing on long layers. main's ``_layer_attention_masks`` halves the
+        # short window and uses the full ``sliding_window`` on long layers; that
+        # changes the architecture and breaks PKO, so we keep the explicit setup.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+
+        if cfg.remat_mode == "save_moe":
+            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+        else:
+            remat_policy = None
 
         num_blocks = len(self.blocks)
         moe_router_stats: list[dict[str, jax.Array]] = []
@@ -574,7 +609,7 @@ class Transformer(eqx.Module):
             is_long = i % 4 == 3 or is_last
             layer_mask = long_mask if is_long else short_mask
             use_pko = is_long
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, use_pko)
+            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask, use_pko)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
@@ -646,15 +681,16 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
     expert = 2 if num_devices % 2 == 0 else 1
     data = max(1, num_devices // expert)
     mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(data, expert, 1),
-        axis_names=("data", "expert", "model"),
+        axis_sizes=(1, data, expert, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
         axis_types=(
+            jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
         ),
     )
-    return mesh, P(("data", "expert"), None)
+    return mesh, P(("replica_dcn", "data", "expert"), None)
 
 
 __all__ = [

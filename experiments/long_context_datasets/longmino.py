@@ -3,7 +3,7 @@
 
 """Longmino (dolma3_longmino_pool) dataset with length-bucket breakdowns."""
 
-from experiments.defaults import default_download
+from experiments.tokenization import default_download
 
 dolma3_longmino_pool_raw = default_download(
     name="dolma3_longmino_pool",

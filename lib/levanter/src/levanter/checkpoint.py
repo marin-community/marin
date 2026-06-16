@@ -130,7 +130,7 @@ def _checkpoint_debug_json(state: Mapping[str, Any]) -> str:
     return json.dumps(dict(state), sort_keys=True, default=str)
 
 
-def _tracemalloc_memory_state() -> dict[str, str]:
+def _tracemalloc_memory_state() -> dict[str, str | None]:
     if not tracemalloc.is_tracing():
         return {}
 
@@ -1128,7 +1128,9 @@ class CheckpointerConfig:
     """Separate base path for temporary (time-policy) checkpoints. When set, temporary checkpoints
     are written here instead of base_path, allowing use of region-local storage with lifecycle TTL."""
 
-    save_interval: timedelta = timedelta(minutes=15)
+    save_interval: Optional[timedelta] = timedelta(minutes=15)
+    """Minimum time between temporary checkpoints. None disables time-policy saves
+    (only `keep` intervals and forced saves, e.g. the final checkpoint, still run)."""
     # TODO: I'd like to write this, but it's not supported by draccus
     # keep: List[CheckpointInterval] = field(default_factory=lambda: [CheckpointInterval(every=1000)])
     keep: Optional[List[dict]] = field(default_factory=lambda: [dict(every=10000)])

@@ -13,96 +13,118 @@ from pathlib import Path
 import pytest
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.reads import healthy_active_workers_with_attributes
+from iris.cluster.controller.reads import healthy_active_workers_with_attributes, list_active_healthy_workers
 from iris.cluster.controller.schema import workers_table
-from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import WorkerId
+from iris.cluster.controller.worker_health import (
+    WorkerHealthEvent,
+    WorkerHealthEventKind,
+    WorkerHealthTracker,
+    WorkerLiveness,
+)
+from iris.cluster.types import WorkerId, WorkerUsability
 from rigging.timing import Timestamp
 from sqlalchemy import insert, select
+
+from tests.cluster.controller._test_support import set_worker_consecutive_failures_for_test
+
+from .conftest import make_worker_metadata, register_worker
 
 
 @pytest.fixture
 def tracker() -> WorkerHealthTracker:
-    return WorkerHealthTracker(ping_threshold=10, build_threshold=10)
+    return WorkerHealthTracker(reconcile_failure_threshold=10, build_threshold=10)
 
 
-def test_ping_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
-    """9 consecutive failures are not enough; 10th trips; a healthy ping resets and requires 10 more."""
+def _unreachable(tracker: WorkerHealthTracker, wid: WorkerId, *, now_ms: int = 0) -> list[WorkerId]:
+    return tracker.apply([WorkerHealthEvent(wid, WorkerHealthEventKind.UNREACHABLE)], now_ms=now_ms)
+
+
+def _reached(tracker: WorkerHealthTracker, wid: WorkerId, *, now_ms: int = 0) -> list[WorkerId]:
+    return tracker.apply([WorkerHealthEvent(wid, WorkerHealthEventKind.REACHED)], now_ms=now_ms)
+
+
+def _build_failed(tracker: WorkerHealthTracker, wid: WorkerId, *, now_ms: int = 0) -> list[WorkerId]:
+    return tracker.apply([WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED)], now_ms=now_ms)
+
+
+def test_reconcile_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
+    """9 consecutive failures are not enough; 10th trips; a REACHED event resets and requires 10 more."""
     wid = WorkerId("w-1")
+    over: list[WorkerId] = []
     for _ in range(9):
-        tracker.ping(wid, healthy=False)
-    assert tracker.workers_over_threshold() == []
-    tracker.ping(wid, healthy=False)
-    assert tracker.workers_over_threshold() == [wid]
+        over = _unreachable(tracker, wid)
+    assert over == []
+    assert _unreachable(tracker, wid) == [wid]
 
     tracker.forget(wid)
     for _ in range(9):
-        tracker.ping(wid, healthy=False)
-    tracker.ping(wid, healthy=True)  # reset
+        _unreachable(tracker, wid)
+    _reached(tracker, wid)  # reset consecutive failures
     for _ in range(9):
-        tracker.ping(wid, healthy=False)
-    assert tracker.workers_over_threshold() == []
-    tracker.ping(wid, healthy=False)
-    assert tracker.workers_over_threshold() == [wid]
+        over = _unreachable(tracker, wid)
+    assert over == []
+    assert _unreachable(tracker, wid) == [wid]
 
 
 def test_build_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
-    """9 build failures are not enough; 10th trips; healthy pings do not reset the counter."""
+    """9 build failures are not enough; 10th trips; a REACHED event does not reset the counter."""
     wid = WorkerId("w-1")
+    over: list[WorkerId] = []
     for _ in range(9):
-        tracker.build_failed(wid)
-    assert tracker.workers_over_threshold() == []
-    tracker.build_failed(wid)
-    assert tracker.workers_over_threshold() == [wid]
+        over = _build_failed(tracker, wid)
+    assert over == []
+    assert _build_failed(tracker, wid) == [wid]
 
-    tracker.ping(wid, healthy=True)
-    assert tracker.workers_over_threshold() == [wid]  # not reset by healthy ping
+    # A REACHED event resets consecutive reconcile failures but NOT build failures.
+    assert _reached(tracker, wid) == [wid]
 
 
-def test_ping_and_build_failures_are_independent(tracker: WorkerHealthTracker) -> None:
+def test_reconcile_and_build_failures_are_independent(tracker: WorkerHealthTracker) -> None:
     """A worker can trip via either path; tripping one does not affect the other counter."""
     wid = WorkerId("w-1")
     for _ in range(5):
-        tracker.ping(wid, healthy=False)
+        _unreachable(tracker, wid)
     for _ in range(5):
-        tracker.build_failed(wid)
-    assert tracker.workers_over_threshold() == []
-    tracker.ping(wid, healthy=False)  # 6 ping failures, still < 10
-    assert tracker.workers_over_threshold() == []
+        _build_failed(tracker, wid)
+    assert tracker.apply([], now_ms=0) == []
+    # 6 reconcile failures, still < 10; build still at 5.
+    assert _unreachable(tracker, wid) == []
 
 
 def test_forget_removes_worker(tracker: WorkerHealthTracker) -> None:
     wid = WorkerId("w-1")
+    over: list[WorkerId] = []
     for _ in range(10):
-        tracker.ping(wid, healthy=False)
-    assert tracker.workers_over_threshold()
+        over = _unreachable(tracker, wid)
+    assert over == [wid]
     tracker.forget(wid)
-    assert tracker.workers_over_threshold() == []
+    assert tracker.apply([], now_ms=0) == []
 
 
 def test_forget_many_drops_only_listed_workers(tracker: WorkerHealthTracker) -> None:
     a, b, c = WorkerId("a"), WorkerId("b"), WorkerId("c")
     for wid in (a, b, c):
         for _ in range(10):
-            tracker.ping(wid, healthy=False)
+            _unreachable(tracker, wid)
     tracker.forget_many([a, c])
-    assert tracker.workers_over_threshold() == [b]
+    assert tracker.apply([], now_ms=0) == [b]
 
 
 def test_per_worker_counters_are_independent(tracker: WorkerHealthTracker) -> None:
     a, b = WorkerId("a"), WorkerId("b")
+    over: list[WorkerId] = []
     for _ in range(10):
-        tracker.ping(a, healthy=False)
-    assert tracker.workers_over_threshold() == [a]
-    assert b not in tracker.workers_over_threshold()
+        over = _unreachable(tracker, a)
+    assert over == [a]
+    assert b not in over
 
 
 def test_snapshot_reports_both_counters(tracker: WorkerHealthTracker) -> None:
     wid = WorkerId("w-1")
     for _ in range(3):
-        tracker.ping(wid, healthy=False)
+        _unreachable(tracker, wid)
     for _ in range(2):
-        tracker.build_failed(wid)
+        _build_failed(tracker, wid)
     assert tracker.snapshot() == {wid: (3, 2)}
 
 
@@ -146,3 +168,55 @@ def test_seeds_liveness_from_persisted_workers(tmp_path: Path) -> None:
         assert ids == {"w-seed-1", "w-seed-2"}
     finally:
         db.close()
+
+
+def test_failing_worker_excluded_from_scheduling_but_still_reconciled(state):
+    """A worker accruing reconcile failures stops getting new placements but is
+    still reconciled, so it can recover or cross the teardown threshold.
+
+    Pins the two-filter split: scheduling placement
+    (``healthy_active_workers_with_attributes``) drops a worker with
+    ``consecutive_failures > 0``, while the reconcile target set
+    (``list_active_healthy_workers``) keeps probing every active worker.
+    """
+    ok = register_worker(state, "w-ok", "w-ok:8080", make_worker_metadata())
+    failing = register_worker(state, "w-failing", "w-failing:8080", make_worker_metadata())
+
+    # Mid-failure: unreachable for one reconcile pass but not yet over threshold.
+    set_worker_consecutive_failures_for_test(state, failing, 1)
+
+    with state._db.read_snapshot() as tx:
+        schedulable = {
+            w.worker_id for w in healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
+        }
+        reconcile_targets = set(list_active_healthy_workers(tx, state._health))
+
+    assert ok in schedulable
+    assert failing not in schedulable, "a failing worker must not receive new placements"
+    assert {ok, failing} <= reconcile_targets, "a failing worker must still be reconciled/probed"
+
+
+@pytest.mark.parametrize(
+    "liveness, expected",
+    [
+        # Reached and clean -> schedulable.
+        (WorkerLiveness(healthy=True, active=True, consecutive_failures=0), WorkerUsability.HEALTHY),
+        # Mid-failure (below threshold) -> reconciled but not placeable.
+        (WorkerLiveness(healthy=True, active=True, consecutive_failures=1), WorkerUsability.DEGRADED),
+        # At/over the teardown threshold is still DEGRADED, NOT a distinct DEAD: the
+        # reconcile pass must keep probing it until apply() reaps it. The threshold
+        # lives in apply(), not in the classifier.
+        (WorkerLiveness(healthy=True, active=True, consecutive_failures=99), WorkerUsability.DEGRADED),
+        # build_failures do NOT affect usability: they drive teardown via apply(),
+        # not placement/reconcile membership. A build-failing but reachable worker
+        # stays schedulable (preserving pre-refactor behavior).
+        (WorkerLiveness(healthy=True, active=True, consecutive_failures=0, build_failures=5), WorkerUsability.HEALTHY),
+        # Not reached / inactive -> excluded everywhere.
+        (WorkerLiveness(healthy=False, active=True, consecutive_failures=0), WorkerUsability.DEAD),
+        (WorkerLiveness(healthy=True, active=False, consecutive_failures=0), WorkerUsability.DEAD),
+        (WorkerLiveness(), WorkerUsability.DEAD),
+    ],
+)
+def test_worker_liveness_usability_classification(liveness: WorkerLiveness, expected: WorkerUsability) -> None:
+    """The single classifier maps liveness to the verdict every predicate projects from."""
+    assert liveness.usability is expected

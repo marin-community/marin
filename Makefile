@@ -1,4 +1,4 @@
-.PHONY: help clean check fix setup_pre_commit rust-dev rust-user rust-status
+.PHONY: help clean check fix setup_pre_commit rust-dev rust-user rust-status configure_gcp_registry_all
 .DEFAULT: help
 
 
@@ -21,6 +21,8 @@ help:
 	@echo "    Switch to user mode (install dupekit from pre-built wheel)"
 	@echo "make rust-status"
 	@echo "    Show current Rust build mode"
+	@echo "make configure_gcp_registry_all"
+	@echo "    Apply the 30d Artifact Registry cleanup policy to the marin repo in every canonical region."
 
 init:
 	conda install -c conda-forge pandoc
@@ -45,6 +47,11 @@ fix:
 
 lint:
 	./infra/pre-commit.py --all-files
+
+# Apply the 30d cleanup policy to the marin repo across every canonical region.
+# The region list is sourced from rigging.filesystem.REGION_TO_DATA_BUCKET.
+configure_gcp_registry_all:
+	uv run infra/configure_gcp_registry.py marin --all-regions
 
 test:
 	export HUGGING_FACE_HUB_TOKEN=$HF_TOKEN

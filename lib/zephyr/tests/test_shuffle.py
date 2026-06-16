@@ -8,10 +8,9 @@ without spinning up a full coordinator.
 """
 
 import pytest
-from zephyr.execution import _worker_ctx_var
 from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
-from zephyr.plan import deterministic_hash
 from zephyr.runners import _InProcessWorkerContext
+from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
     ScatterFileIterator,
     ScatterReader,
@@ -19,6 +18,7 @@ from zephyr.shuffle import (
     _write_chunk_frame,
     _write_scatter,
 )
+from zephyr.worker_context import _worker_ctx_var
 
 
 @pytest.fixture(autouse=True)

@@ -121,7 +121,20 @@ def initialize_jax(
         poll_timeout: Maximum seconds for non-coordinator tasks to wait.
         poll_interval: Initial backoff delay for polling (seconds).
     """
-    import jax  # heavy import; lazy by design
+    import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
+
+    # Idempotent: skip if jax.distributed has already been initialized. This
+    # lets a caller that must touch JAX before levanter.initialize (e.g. via
+    # `hax.named` → `jnp.asarray` while building loss-config args) call
+    # `initialize_jax()` explicitly first; levanter's later call then lands
+    # here as a no-op instead of hitting JAX 0.9+'s
+    # `xla_bridge.backends_are_initialized()` guard, which raises on a second
+    # `jax.distributed.initialize()`. Note this only covers a prior *initialize*
+    # call — merely materializing a JAX array initializes the XLA backend, not
+    # jax.distributed, so `is_initialized()` stays False in that case.
+    if jax.distributed.is_initialized():
+        logger.info("jax.distributed already initialized; skipping")
+        return
 
     # TPU has its own coordinator discovery via the TPU runtime, so avoid the
     # Iris endpoint dance. We still call JAX distributed initialization to
