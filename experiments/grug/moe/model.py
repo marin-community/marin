@@ -182,8 +182,11 @@ class CausalSelfAttention(eqx.Module):
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
 
-        # PKO (Partial Key Offset) + ``pko_first_bos_zero``: shift k.stationary
-        # forward by 1 position and zero at doc-starts BEFORE rms_norm.
+        # Shift the second half of K's head_dim back by one position so the
+        # query at position i sees K[i] on head_dim[:half] but K[i-1] on
+        # head_dim[half:]. Zero the shifted half at document starts so the
+        # cross-half look-back does not leak across docs. Runs before the
+        # rms_norm on Q/K below.
         if use_pko:
             half = head_dim // 2
             k_stationary = k[..., half:]
