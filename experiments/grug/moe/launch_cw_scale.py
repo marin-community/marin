@@ -43,18 +43,19 @@ import datetime
 import os
 from typing import cast
 
+import draccus
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_data
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.train import GrugTrainerConfig
+from experiments.launch import LaunchConfig, launch_executor
 from experiments.llama import llama3_tokenizer_vocab_size
 
 # head_dim is fixed at 128; hidden_dim must be a multiple of it.
@@ -206,8 +207,9 @@ def build_scale_step() -> ExecutorStep:
 scale_moe_step = build_scale_step()
 
 
-def main():
-    executor_main(steps=[scale_moe_step])
+@draccus.wrap()
+def main(config: LaunchConfig):
+    launch_executor(config, steps=[scale_moe_step])
 
 
 if __name__ == "__main__":

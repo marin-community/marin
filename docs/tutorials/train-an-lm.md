@@ -23,24 +23,24 @@ from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 from experiments.defaults import default_train
 from experiments.simple_train_config import SimpleTrainConfig
 
+# Import the self-running launcher (connects to the cluster and runs the executor)
+from experiments.launch import LaunchConfig, launch_executor
+
 # Import model architecture definitions
 from levanter.models.llama import LlamaConfig
-
-# Import the executor framework for running experiments
-from marin.execution.executor import executor_main
 
 # Import evaluation task configuration
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
-# Import logging utilities
-import logging
+# draccus parses the CLI (--cluster, --tpu_type, ...) into a LaunchConfig
+import draccus
 ```
 
 - [`dclm_mixture_config_llama3`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/dclm.py): A predefined dataset configuration for the DCLM mixture, this can be replaced with any tokenized dataset in Marin of the `lm_mixture_data_config` type (e.g. [Dolma](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/dolma.py) or [Nemotron](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/nemotron.py))
 - [`SimpleTrainConfig`][experiments.simple_train_config.SimpleTrainConfig]
 - [`default_train`][experiments.defaults.default_train]: A utility function that creates a training pipeline
 - [`LlamaConfig`][levanter.models.llama.LlamaConfig]: A dataclass that defines the model architecture from [Levanter](https://github.com/stanford-crfm/levanter)
-- [`executor_main`][marin.execution.executor.executor_main]: The main entry point for the Marin executor framework
+- [`launch_executor`][experiments.launch.launch_executor]: Hoists the Iris client for `--cluster` and runs the experiment through the Marin executor framework
 
 ## Setting Up the Model Configuration
 
@@ -122,14 +122,20 @@ model = default_train(
     eval_harness_tasks = [EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"), EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")],  # Evaluation Tasks to run on the checkpoint
 )
 
-# Set up the experiment execution
-if __name__ == "__main__":
-    logger = logging.getLogger(__name__)
-    logger.info("Starting language model training experiment")
-    executor_main(
+# Set up the experiment execution. `launch_executor` (from experiments.launch)
+# makes the script self-running: it connects to the cluster named by `--cluster`
+# and runs `executor_main` for you.
+@draccus.wrap()
+def main(config: LaunchConfig):
+    launch_executor(
+        config,
         steps=[model],  # The training pipeline is a step in the experiment
         description="Language model training experiment",
     )
+
+
+if __name__ == "__main__":
+    main()
 ```
 
 The `default_train` function creates a training pipeline that:
@@ -146,17 +152,20 @@ The `default_train` function creates a training pipeline that:
 
 ## Launching the Training Job
 
-To train the model with experiment tracking, submit the script as a CPU-only
-Iris entrypoint job. `executor_main` inside the script spawns the TPU/GPU
-sub-tasks via Fray:
+Because the script wraps its entrypoint in `launch_executor`, it is
+*self-running*: run it directly from a dev box and pass `--cluster`. The driver
+runs on your machine and spawns the TPU/GPU sub-tasks via Fray. Set
+`MARIN_PREFIX` to the regional bucket where checkpoints and outputs should land:
 
 ```bash
-uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
-  -e WANDB_API_KEY "$WANDB_API_KEY" \
-  -- python -m experiments.${YOUR_EXPERIMENT_SCRIPT}
+MARIN_PREFIX=gs://marin-us-central2 WANDB_API_KEY="$WANDB_API_KEY" \
+  uv run python experiments/${YOUR_EXPERIMENT_SCRIPT}.py --cluster=marin
 ```
 
-See [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md) for the full `iris job run` reference (including `--no-wait` for detached submission and `iris job logs -f` for streaming).
+`--tpu_type=...` / `--region=...` override the script's resources, and
+`--executor.dry_run=True` plans the run without submitting. See
+[`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
+for the Iris CLI reference (including `iris job logs -f` for streaming).
 
 Following Marin's guidelines, name your experiment script `experiments/exp{GITHUB_ISSUE_NUMBER}_{DESCRIPTOR}.py`, where `GITHUB_ISSUE_NUMBER` is the issue number for your experiment and `DESCRIPTOR` is a brief description.
 

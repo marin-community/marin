@@ -10,17 +10,17 @@ Reproduces the DCLM baseline for the 7B/1X (Chinchilla Compute Optimal Model for
 Author: Will Held
 
 Example usage:
-  # Run the training job with wandb logging enabled
-  uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
-    -e WANDB_API_KEY "$WANDB_API_KEY" \
-    -- python -m experiments.tutorials.exp1078_reproduce_dclm_7b1x
+  # Connect to the cluster from your dev box and submit the training job.
+  MARIN_PREFIX=gs://marin-us-central2 WANDB_API_KEY="$WANDB_API_KEY" \
+    uv run python experiments/tutorials/exp1078_reproduce_dclm_7b1x.py --cluster=marin
 """
 
+import draccus
 from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
-from marin.execution.executor import executor_main
 
 from experiments.defaults import SimpleTrainConfig, default_train
+from experiments.launch import LaunchConfig, launch_executor
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 
 # Define the LlamaConfig for a 7B parameter model
@@ -68,9 +68,16 @@ dclm_mixture_model = default_train(
     tags=["HOWTOS", "DCLM_7B_1X"],  # Tags for experiment tracking
 )
 
+
 # Main execution block
-if __name__ == "__main__":
-    executor_main(
+@draccus.wrap()
+def main(config: LaunchConfig):
+    launch_executor(
+        config,
         steps=[dclm_mixture_model],
         description="A How-To Which Reproduces the DCLM 7B/1X Baseline for the competition pool.",
     )
+
+
+if __name__ == "__main__":
+    main()

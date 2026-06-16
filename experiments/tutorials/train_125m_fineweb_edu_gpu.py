@@ -10,10 +10,11 @@ This script demonstrates how to:
 3. Pin outputs to a local Marin prefix for the run
 """
 
+import draccus
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
 
 from experiments.defaults import default_train
+from experiments.launch import LaunchConfig, launch_executor
 from experiments.llama import llama_150m
 from experiments.prebuilt_caches import fineweb_edu_subcache_10M
 from experiments.simple_train_config import SimpleTrainConfig
@@ -36,5 +37,11 @@ llama_150m_fineweb_edu_model = default_train(
     use_default_validation=False,
 )
 
+
+@draccus.wrap()
+def main(config: LaunchConfig):
+    launch_executor(config, steps=[llama_150m_fineweb_edu_model])
+
+
 if __name__ == "__main__":
-    executor_main(steps=[llama_150m_fineweb_edu_model])
+    main()

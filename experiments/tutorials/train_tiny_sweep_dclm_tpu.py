@@ -7,12 +7,13 @@ on a 30M parameter DCLM model using TPU hardware.
 """
 import dataclasses
 
+import draccus
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
 from marin.execution.types import versioned
 
 from experiments.defaults import default_train
 from experiments.evals.task_configs import CORE_TASKS
+from experiments.launch import LaunchConfig, launch_executor
 from experiments.llama import llama_30m
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 from experiments.simple_train_config import SimpleTrainConfig
@@ -59,5 +60,11 @@ for config in sweep_configs:
     )
     runs.append(run)
 
+
+@draccus.wrap()
+def main(config: LaunchConfig):
+    launch_executor(config, steps=runs)
+
+
 if __name__ == "__main__":
-    executor_main(steps=runs)
+    main()

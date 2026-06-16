@@ -9,7 +9,7 @@ import pytest
 from connectrpc._headers import Headers
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cli.main import create_client_token_provider
+from iris.client.connect import create_client_token_provider
 from iris.cluster.controller import writes
 from iris.cluster.controller.auth import JwtTokenManager, create_api_key, revoke_api_key
 from iris.cluster.controller.db import ControllerDB
@@ -390,8 +390,8 @@ def test_null_auth_interceptor_resets_context_on_error():
 
 def test_create_client_token_provider_gcp(tmp_path, monkeypatch):
     # Isolate from real token store
-    monkeypatch.setattr("iris.cli.main.load_token", lambda *a, **kw: None)
-    monkeypatch.setattr("iris.cli.main.load_any_token", lambda *a, **kw: None)
+    monkeypatch.setattr("iris.client.connect.load_token", lambda *a, **kw: None)
+    monkeypatch.setattr("iris.client.connect.load_any_token", lambda *a, **kw: None)
 
     config = AuthConfig(gcp={"project_id": "my-project"})
     provider = create_client_token_provider(config)
@@ -406,10 +406,10 @@ def test_create_client_token_provider_gcp(tmp_path, monkeypatch):
 
 def test_create_client_token_provider_uses_stored_token(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "iris.cli.main.load_token",
+        "iris.client.connect.load_token",
         lambda name, **kw: ClusterCredential(url="http://x", token="stored-tok") if name == "mycluster" else None,
     )
-    monkeypatch.setattr("iris.cli.main.load_any_token", lambda **kw: None)
+    monkeypatch.setattr("iris.client.connect.load_any_token", lambda **kw: None)
 
     config = AuthConfig(gcp={"project_id": "my-project"})
     provider = create_client_token_provider(config, cluster_name="mycluster")
@@ -417,8 +417,8 @@ def test_create_client_token_provider_uses_stored_token(tmp_path, monkeypatch):
 
 
 def test_create_client_token_provider_none_when_no_provider(monkeypatch):
-    monkeypatch.setattr("iris.cli.main.load_token", lambda *a, **kw: None)
-    monkeypatch.setattr("iris.cli.main.load_any_token", lambda *a, **kw: None)
+    monkeypatch.setattr("iris.client.connect.load_token", lambda *a, **kw: None)
+    monkeypatch.setattr("iris.client.connect.load_any_token", lambda *a, **kw: None)
 
     config = AuthConfig()
     assert create_client_token_provider(config) is None

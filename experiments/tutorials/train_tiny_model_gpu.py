@@ -12,12 +12,13 @@ This script demonstrates how to:
 For CPU training, see train_tiny_model_cpu.py
 """
 
+import draccus
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import executor_main
 from marin.execution.types import versioned
 
 from experiments.defaults import default_train
+from experiments.launch import LaunchConfig, launch_executor
 from experiments.llama import llama_nano
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
@@ -58,10 +59,16 @@ nano_wikitext_model = default_train(
 )
 
 
-if __name__ == "__main__":
-    executor_main(
+@draccus.wrap()
+def main(config: LaunchConfig):
+    launch_executor(
+        config,
         steps=[
             wikitext_tokenized,
             nano_wikitext_model,
-        ]
+        ],
     )
+
+
+if __name__ == "__main__":
+    main()

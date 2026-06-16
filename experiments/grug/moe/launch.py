@@ -12,6 +12,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+import draccus
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
@@ -21,7 +22,6 @@ from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_data_config
@@ -31,6 +31,7 @@ from experiments.defaults import default_validation_sets
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.launch import LaunchConfig, launch_executor
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import nemotron_mix
 from experiments.tokenization import default_tokenize
@@ -216,8 +217,14 @@ baseline_moe = ExecutorStep(
 )
 
 
-if __name__ == "__main__":
-    executor_main(
+@draccus.wrap()
+def main(config: LaunchConfig):
+    launch_executor(
+        config,
         steps=[baseline_moe],
         description="Baseline grug MoE (QB+GN+XSA+zloss) on Nemotron mix.",
     )
+
+
+if __name__ == "__main__":
+    main()

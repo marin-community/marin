@@ -98,13 +98,28 @@ number_of_restarts = ExecutorStep(
 )
 ```
 
-To launch an experiment on the shared Iris cluster, submit the executor script
-as the entrypoint of a CPU-only Iris job. The script then uses `executor_main`
-to spawn the accelerated sub-jobs via Fray:
+The example scripts under `experiments/grug/` and `experiments/tutorials/` are
+*self-running*: they hoist the Iris client themselves (via
+`experiments.launch`), so you run them directly from a dev box and pass
+`--cluster`. The driver runs on your machine and `executor_main` spawns the
+accelerated sub-jobs via Fray — there is no separate launcher job to size or
+place. Set `MARIN_PREFIX` to the regional bucket where outputs should land:
+
+```bash
+MARIN_PREFIX=gs://marin-us-central2 WANDB_API_KEY="$WANDB_API_KEY" \
+  uv run python experiments/tutorials/train_tiny_model_tpu.py --cluster=marin
+```
+
+Useful flags: `--tpu_type=v4-8` / `--region=...` override the script's
+resources, and `--executor.dry_run=True` plans without submitting.
+
+A script that has *not* adopted `experiments.launch` is still launched the older
+way — as the entrypoint of a CPU-only Iris job, where `executor_main` inside it
+spawns the sub-jobs:
 
 ```bash
 uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
-  -- python -m experiments.tutorials.hello_world
+  -- python -m experiments.my_experiment
 ```
 
 See [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)

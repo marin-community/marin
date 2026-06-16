@@ -12,6 +12,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+import draccus
 import jax
 import jmp
 import optax
@@ -24,7 +25,6 @@ from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import leaf_key_paths
-from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.training.training import temporary_checkpoint_base_path
@@ -32,6 +32,7 @@ from marin.training.training import temporary_checkpoint_base_path
 from experiments.defaults import default_validation_sets
 from experiments.grug.modular_opt.model import GrugModelConfig
 from experiments.grug.modular_opt.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.launch import LaunchConfig, launch_executor
 from experiments.pretraining_datasets import nemotron_mix
 
 
@@ -291,8 +292,14 @@ grug_modular_opt_trial = ExecutorStep(
 )
 
 
-if __name__ == "__main__":
-    executor_main(
+@draccus.wrap()
+def main(config: LaunchConfig):
+    launch_executor(
+        config,
         steps=[grug_modular_opt_trial],
         description="Template grug modular-opt 130M trial run (~2000 steps) with parameter-group Adam.",
     )
+
+
+if __name__ == "__main__":
+    main()

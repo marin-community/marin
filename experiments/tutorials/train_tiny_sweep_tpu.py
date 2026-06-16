@@ -19,6 +19,7 @@ reachable by its followers.
 import dataclasses
 from dataclasses import dataclass
 
+import draccus
 from fray import client as fray_client
 from fray.cluster import ResourceConfig
 from fray.types import Entrypoint, JobRequest, create_environment
@@ -30,6 +31,7 @@ from marin.training.training import resolve_training_env
 
 from experiments.defaults import _run_training_on_worker, prepare_lm_train
 from experiments.evals.task_configs import CORE_TASKS
+from experiments.launch import LaunchConfig, launch_session
 from experiments.llama import llama_30m
 from experiments.pretraining_datasets.simple import tokenized
 from experiments.simple_train_config import SimpleTrainConfig
@@ -123,20 +125,29 @@ def _sweep_worker_entrypoint(sweep_root: str) -> None:
     claim_and_run(sweep_root, targets, _run_one)
 
 
-if __name__ == "__main__":
-    client = fray_client.current_client()
+@draccus.wrap()
+def main(config: LaunchConfig):
+    # This sweep pins its TPU type in ``RESOURCES`` (it is baked into every
+    # trial config at module load), so ``--tpu_type``/``--region`` are not
+    # honored here — edit ``RESOURCES`` for a different accelerator.
+    with launch_session(config):
+        client = fray_client.current_client()
 
-    env = resolve_training_env(base_env=None, resources=RESOURCES)
-    handles = []
-    for i in range(NUM_WORKERS):
-        handle = client.submit(
-            JobRequest(
-                name=f"{SWEEP_NAME}-{i}",
-                entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[SWEEP_ROOT]),
-                resources=RESOURCES,
-                environment=create_environment(env_vars=env, extras=extras_for_resources(RESOURCES)),
+        env = resolve_training_env(base_env=None, resources=RESOURCES)
+        handles = []
+        for i in range(NUM_WORKERS):
+            handle = client.submit(
+                JobRequest(
+                    name=f"{SWEEP_NAME}-{i}",
+                    entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[SWEEP_ROOT]),
+                    resources=RESOURCES,
+                    environment=create_environment(env_vars=env, extras=extras_for_resources(RESOURCES)),
+                )
             )
-        )
-        handles.append(handle)
-    for h in handles:
-        h.wait(raise_on_failure=True)
+            handles.append(handle)
+        for h in handles:
+            h.wait(raise_on_failure=True)
+
+
+if __name__ == "__main__":
+    main()

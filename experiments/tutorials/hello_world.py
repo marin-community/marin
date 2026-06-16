@@ -12,9 +12,11 @@ import logging
 import os
 from dataclasses import dataclass
 
-from marin.execution.executor import executor_main
+import draccus
 from marin.execution.types import ExecutorStep, output_path_of, this_output_path
 from rigging.filesystem import open_url
+
+from experiments.launch import LaunchConfig, launch_executor
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +89,15 @@ stats = ExecutorStep(
     ),
 )
 
-if __name__ == "__main__":
-    executor_main(
+
+@draccus.wrap()
+def main(config: LaunchConfig):
+    launch_executor(
+        config,
         steps=[data, stats],
         description="Simple experiment to compute stats of some numbers.",
     )
+
+
+if __name__ == "__main__":
+    main()

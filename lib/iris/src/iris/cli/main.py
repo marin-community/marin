@@ -13,59 +13,16 @@ import click
 from rigging.config_discovery import resolve_cluster_config
 from rigging.log_setup import configure_logging
 
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
+from iris.cli.connect import require_controller_url, rpc_client
+from iris.client.connect import IRIS_CLUSTER_CONFIG_DIRS, create_client_token_provider, resolve_cluster_name
 from iris.cluster.backends.k8s.controller import configure_client_s3
 from iris.cluster.config import IrisConfig
-from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token, store_token
-from iris.rpc import config_pb2, controller_pb2, job_pb2
-from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
+from iris.cluster.token_store import load_any_token, load_token, store_token
+from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
 logger = logging.getLogger(__name__)
-
-
-def resolve_cluster_name(
-    config: config_pb2.IrisClusterConfig | None,
-    controller_url: str | None,
-    cli_cluster_name: str | None,
-) -> str:
-    if cli_cluster_name:
-        return cli_cluster_name
-    if config and config.name:
-        return config.name
-    if config and config.controller.WhichOneof("controller") == "local":
-        return "local"
-    if controller_url:
-        return cluster_name_from_url(controller_url)
-    return "default"
-
-
-def create_client_token_provider(
-    auth_config: config_pb2.AuthConfig, cluster_name: str = "default"
-) -> TokenProvider | None:
-    """Create a TokenProvider from an AuthConfig proto for CLI usage.
-
-    Checks the named-cluster token store first (from ``iris login``),
-    then falls back to config-based token providers.
-    """
-    credential = load_token(cluster_name)
-    if credential is None:
-        credential = load_any_token()
-    if credential is not None:
-        return StaticTokenProvider(credential.token)
-
-    provider = auth_config.WhichOneof("provider")
-    if provider is None:
-        return None
-    if provider == "gcp":
-        return GcpAccessTokenProvider()
-    elif provider == "static":
-        tokens = dict(auth_config.static.tokens)
-        if not tokens:
-            raise ValueError("Static auth config requires at least one token")
-        first_token = next(iter(tokens))
-        return StaticTokenProvider(first_token)
-    raise ValueError(f"Unknown auth provider: {provider}")
 
 
 def _configure_client_s3(config) -> None:

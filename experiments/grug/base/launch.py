@@ -12,6 +12,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+import draccus
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
@@ -34,6 +35,7 @@ from experiments.grug.base.train import (
     GrugTrainerConfig,
     _run_grug_local,
 )
+from experiments.launch import LaunchConfig, launch_session, override_resources
 from experiments.pretraining_datasets import nemotron_mix
 
 
@@ -248,5 +250,15 @@ grug_base_launch = GrugBaseLaunchConfig(
 )
 
 
+@draccus.wrap()
+def main(config: LaunchConfig):
+    launch = dataclasses.replace(
+        grug_base_launch,
+        resources=versioned(override_resources(_GRUG_BASE_RESOURCES, config)),
+    )
+    with launch_session(config):
+        train_grug(name="grug/base-trial", launch=launch)
+
+
 if __name__ == "__main__":
-    train_grug(name="grug/base-trial", launch=grug_base_launch)
+    main()

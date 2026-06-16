@@ -30,7 +30,8 @@ from iris.cli.build import (
     find_marin_root,
     get_git_sha,
 )
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
+from iris.cli.connect import require_controller_url, rpc_client
+from iris.client.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.cluster.backends.gcp.bootstrap import build_worker_bootstrap_script
 from iris.cluster.backends.gcp.workers import GcpWorkerProvider
 from iris.cluster.backends.local.cluster import LocalCluster

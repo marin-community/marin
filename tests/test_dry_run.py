@@ -29,17 +29,31 @@ def test_run_dry_runs(config_file, monkeypatch):
     with open(script, "r") as file:
         content = file.read()
 
-        # Hack: Skip files that don't seem to call executor_main
-        if "executor_main(" not in content:
+        # Self-running scripts call ``launch_executor`` (which wraps
+        # ``executor_main``); the rest call ``executor_main`` directly.
+        uses_launch_executor = "launch_executor(" in content
+        if "executor_main(" not in content and not uses_launch_executor:
             pytest.skip(f"Skipping {script} (no executor_main)")
 
         if "nodryrun" in content:
             pytest.skip(f"Skipping {script} (contains nodryrun marker)")
 
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
-        monkeypatch.setattr(
-            sys, "argv", [script, "--dry_run", "True", "--executor_info_base_path", temp_dir, "--prefix", temp_dir]
-        )
+        # ``launch_executor`` parses a ``LaunchConfig`` that embeds the executor
+        # config under ``executor.*``; with no ``--cluster`` it runs locally.
+        if uses_launch_executor:
+            argv = [
+                script,
+                "--executor.dry_run",
+                "True",
+                "--executor.executor_info_base_path",
+                temp_dir,
+                "--executor.prefix",
+                temp_dir,
+            ]
+        else:
+            argv = [script, "--dry_run", "True", "--executor_info_base_path", temp_dir, "--prefix", temp_dir]
+        monkeypatch.setattr(sys, "argv", argv)
         try:
             runpy.run_path(script, run_name="__main__")
         except HttpError as e:
