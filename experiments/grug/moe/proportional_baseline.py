@@ -20,7 +20,7 @@ from marin.processing.tokenize import add_validation_sets_to_mixture
 from experiments.defaults import default_validation_sets
 from experiments.grug.moe.datakit_moe_mix import COMPONENTS, PROPORTIONAL_WEIGHTS, TARGET_BUDGET
 from experiments.grug.moe.grug_moe_mix import GrugEvalConfig, GrugMoeLaunchConfig, GrugTrainerConfig, run_grug_moe_mix
-from experiments.grug.moe.swarm_fisher_dsp import (
+from experiments.grug.moe.launch_swarm import (
     _BATCH,
     _BUDGET,
     _EXPERIMENT_BUDGET,

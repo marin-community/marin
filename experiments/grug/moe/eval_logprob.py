@@ -45,8 +45,8 @@ from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.mesh import MeshConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main
-from marin.execution.types import this_output_path
 from marin.execution.remote import remote
+from marin.execution.types import this_output_path
 from rigging.filesystem import filesystem as marin_filesystem
 
 from experiments.exp1337_eval_suite import LOGPROB_TASKS as _TASK_SPECS
@@ -134,6 +134,7 @@ def _inject_loglikelihood_bpb(task_dict: dict) -> None:
                 "perplexity": log_likelihood,
                 "acc": int(is_greedy),
             }
+
         return _process
 
     for v in task_dict.values():
@@ -160,7 +161,8 @@ def _inject_bpb_into_metric_list(task_dict: dict) -> None:
     insert the bpb metric_fn into ``_metric_fn_list`` (what the runtime
     actually reads at line task.py:1463).
     """
-    from lm_eval.api.registry import get_metric, get_aggregation
+    from lm_eval.api.registry import get_aggregation, get_metric
+
     bpb_entry = {"metric": "bpb", "aggregation": "mean", "higher_is_better": False}
     for v in task_dict.values():
         if hasattr(v, "_config"):
@@ -185,6 +187,38 @@ def _inject_bpb_into_metric_list(task_dict: dict) -> None:
             _inject_bpb_into_metric_list(v[1])
         elif isinstance(v, dict):
             _inject_bpb_into_metric_list(v)
+
+
+def _fill_group_bpb_from_leaves(results: dict) -> None:
+    """Roll leaf ``bpb`` up into group entries that lack it.
+
+    ``_inject_bpb_into_metric_list`` adds bpb to each leaf task, but a group's
+    aggregate is built from the group YAML's ``aggregate_metric_list`` — which
+    upstream configs (e.g. ``mmlu_pro``) don't list bpb in, so ``results[group]``
+    has no ``bpb,none`` even when every subtask does. Compute it as a
+    size-weighted mean over the leaves (matching lm-eval's ``weight_by_size``),
+    so the dashboard's group-level read finds it. Best-effort by design: any
+    schema surprise leaves the result untouched rather than failing the write.
+    """
+    res = results.get("results", {})
+    subtasks = results.get("group_subtasks", {})
+    nsamples = results.get("n-samples", {})
+    for group, leaves in subtasks.items():
+        entry = res.get(group)
+        if not isinstance(entry, dict) or "bpb,none" in entry:
+            continue
+        num = den = 0.0
+        for leaf in leaves:
+            le = res.get(leaf)
+            bpb = le.get("bpb,none") if isinstance(le, dict) else None
+            if not isinstance(bpb, (int, float)):
+                den = 0.0
+                break
+            weight = nsamples.get(leaf, {}).get("effective") or nsamples.get(leaf, {}).get("original") or 1
+            num += bpb * weight
+            den += weight
+        if den > 0:
+            entry["bpb,none"] = num / den
 
 
 def _apply_task_field(task_dict: dict, key: str, value) -> None:
@@ -435,7 +469,6 @@ def run_grug_logprob_eval(config: GrugLogprobEvalConfig) -> None:
         results: dict | None = None
         if is_chief:
             from lm_eval import evaluator as lm_eval_evaluator
-            from lm_eval.tasks import TaskManager, get_task_dict
 
             # Defensive monkey-patch: in lm-eval commit d5e3391, `prepare_print_tasks`
             # crashes with `None + str` when an inline task's alias propagates as None
@@ -444,11 +477,14 @@ def run_grug_logprob_eval(config: GrugLogprobEvalConfig) -> None:
             # than chase further version skew, wrap the function to fall back to the
             # task name when the read returns None.
             from lm_eval import evaluator_utils as _eu
+            from lm_eval.tasks import TaskManager, get_task_dict
+
             # bye-fork removed `prepare_print_tasks` entirely. If the symbol
             # isn't there, the upstream bug we're patching around doesn't
             # apply on this lm-eval revision, so we just skip the patch.
             if hasattr(_eu, "prepare_print_tasks") and not getattr(_eu, "_marin_prepare_print_tasks_patched", False):
                 _orig_prep = _eu.prepare_print_tasks
+
                 def _safe_prep(task_dict, results, task_depth=0, group_depth=0):
                     # Try the upstream aggregation but never let it block result
                     # serialisation. On failure, hand back the input `results`
@@ -466,17 +502,12 @@ def run_grug_logprob_eval(config: GrugLogprobEvalConfig) -> None:
                     except (TypeError, KeyError, AttributeError) as e:
                         logger.warning("MARIN_SAFE_PREP swallowed %s: %s", type(e).__name__, e)
                         return dict(results), {}
+
                 _eu.prepare_print_tasks = _safe_prep
                 _eu._marin_prepare_print_tasks_patched = True
                 # evaluator imports `prepare_print_tasks` by name at module-load,
                 # so rebind the symbol it actually calls.
                 lm_eval_evaluator.prepare_print_tasks = _safe_prep
-                logger.warning(
-                    "MARIN_PATCH installed; eu.id=%r evaluator.id=%r same=%s",
-                    id(_eu.prepare_print_tasks),
-                    id(lm_eval_evaluator.prepare_print_tasks),
-                    _eu.prepare_print_tasks is lm_eval_evaluator.prepare_print_tasks,
-                )
 
             task_dict = get_task_dict([_lm_eval_spec(config.task)], task_manager=TaskManager())
             _apply_task_field(task_dict, "num_fewshot", config.task.num_fewshot)
@@ -492,22 +523,6 @@ def run_grug_logprob_eval(config: GrugLogprobEvalConfig) -> None:
                 # the TaskConfig dataclass field; without this, inline tasks
                 # crash on `None + str` aggregation in `prepare_print_tasks`.
                 _apply_task_field(task_dict, "task_alias", config.task.task_alias)
-            # Diagnostic: dump the leaf task's dump_config alias keys so we can
-            # see in container logs whether the patch propagated. Best-effort
-            # only — bye-fork removed `get_task_list` and `TaskOutput` from
-            # `lm_eval.evaluator_utils`, so skip the dump if it's not there.
-            try:
-                from lm_eval.evaluator_utils import get_task_list, TaskOutput  # type: ignore
-                for _to in get_task_list(task_dict):
-                    logger.warning(
-                        "TASK_ALIAS_DEBUG2 to.task_name=%r to.task_alias=%r "
-                        "to.task_config_keys=%r task_alias_in_config=%r",
-                        _to.task_name, _to.task_alias,
-                        sorted(list(_to.task_config.keys())) if hasattr(_to.task_config, "keys") else "NO_KEYS",
-                        _to.task_config.get("task_alias") if hasattr(_to.task_config, "get") else "NO_GET",
-                    )
-            except ImportError:
-                pass
             lm = _make_grug_lm(
                 transformer,
                 tokenizer,
@@ -533,6 +548,10 @@ def run_grug_logprob_eval(config: GrugLogprobEvalConfig) -> None:
             )
 
     if is_chief and results is not None:
+        try:
+            _fill_group_bpb_from_leaves(results)
+        except Exception as e:
+            logger.warning("group bpb fill skipped: %s", e)
         results_path = os.path.join(config.output_path, "results.json")
         logger.info(f"Uploading logprob results to {results_path}")
         fs = marin_filesystem("gcs")

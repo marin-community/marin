@@ -25,7 +25,7 @@ import shutil
 import tempfile
 import time
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 import fsspec
 import jinja2
@@ -198,8 +198,9 @@ def _make_jinja_env(extensions: list[type]) -> jinja2.Environment:
         lstrip_blocks=True,
         extensions=extensions,
     )
-    env.globals["raise_exception"] = _raise_chat_template_exception
-    env.globals["strftime_now"] = lambda fmt: time.strftime(fmt)
+    env_globals = cast(dict[str, Any], env.globals)
+    env_globals["raise_exception"] = _raise_chat_template_exception
+    env_globals["strftime_now"] = lambda fmt: time.strftime(fmt)
     return env
 
 

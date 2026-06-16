@@ -71,18 +71,43 @@ def _value_spec_or_default(x: jax.Array, default: PartitionSpec, *, replace_repl
     return default
 
 
+def _sanitize_spec_for_mesh(spec: PartitionSpec, mesh: Mesh | jax.sharding.AbstractMesh) -> PartitionSpec:
+    """Replace any axis name in ``spec`` that isn't present on ``mesh`` with
+    ``None`` (replicate along that dimension).
+
+    Lets MoE callers keep their literal ``P("expert", ...)`` specs even
+    when ``compact_grug_mesh`` has dropped ``expert`` from the physical
+    mesh (single-slice with no expert parallelism). Without this, every
+    init-time reshard of a routed expert weight raises ``Resource axis:
+    expert ... is not found in mesh``.
+    """
+    if mesh is None or mesh.empty:
+        return PartitionSpec()
+    axis_names = set(mesh.shape.keys())
+
+    def _clean(elem):
+        if elem is None:
+            return None
+        if isinstance(elem, tuple):
+            kept = tuple(a for a in elem if a in axis_names)
+            return kept if kept else None
+        return elem if elem in axis_names else None
+
+    return PartitionSpec(*(_clean(e) for e in spec))
+
+
 def _reshard_for_init(x: jax.Array, spec: PartitionSpec) -> jax.Array:
     mesh = _current_mesh()
     if mesh is None or mesh.empty:
         return x
-    return reshard(x, NamedSharding(mesh, spec))
+    return reshard(x, NamedSharding(mesh, _sanitize_spec_for_mesh(spec, mesh)))
 
 
 def _reshard_for_shard_map(
     x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None, spec: PartitionSpec
 ) -> jax.Array:
     if mesh is not None and not mesh.empty:
-        return reshard(x, NamedSharding(mesh, spec))
+        return reshard(x, NamedSharding(mesh, _sanitize_spec_for_mesh(spec, mesh)))
     return x
 
 

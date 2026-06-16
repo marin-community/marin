@@ -58,6 +58,11 @@
   .tab-content { display: none; }
   .tab-content.active { display: block; }
   body[data-tab="corr"] .controls-shared { display: none; }
+  /* On the task-results tab you steer task targets directly, so the percentile
+     bars (#chart) are redundant; on the mixture tab you steer the mixture
+     directly, so the per-bucket mixture chart (#chart-mix-detail) is redundant. */
+  body[data-tab="results"] #chart { display: none; }
+  body[data-tab="mixture"] #chart-mix-detail { display: none; }
   /* Sliders */
   .section { margin-bottom: 14px; }
   .section-title { font-weight: 600; font-size: 12px; margin: 0 0 4px; color: #333; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -132,7 +137,14 @@
     the mixture toward that target percentile; other task sliders snap to the
     new mixture's predictions.
     <b>Rank correlations</b> — Pearson r heatmap, phase_0 / phase_1 / sum.
+    Rows ordered by hierarchical clustering (optimal leaf ordering) of each
+    task's correlation profile, so tasks that respond similarly to the data
+    subsets group together.
   </p>
+  <details id="task-coverage" style="margin:8px 0;">
+    <summary class="meta"><b>Regression coverage</b> — <span id="cov-summary"></span></summary>
+    <table id="cov-table" style="border-collapse:collapse;font-size:12px;margin-top:6px;"></table>
+  </details>
   <div class="tabs">
     <button class="tab" data-tab="mixture">By mixture</button>
     <button class="tab active" data-tab="results">By task results</button>
@@ -148,12 +160,15 @@
   <div class="controls-shared">
     <button id="reset-mix">Reset to proportional</button>
     <button id="reset-pareto" title="DSP-optimised mixture predicted to beat proportional on every task by ≥+0.05 z">Reset to predicted Pareto-improver</button>
+    <button id="reset-pareto-steer" title="Projected gradient ascent from proportional on J(w)=mean_t z_t(w) + 5·mean_mathcode z_t(w): lifts every metric where there's no tradeoff, then prioritizes math/code (group means so the few math/code tasks aren't out-voted by the many others)">Maximize (math/code-weighted)</button>
     <label class="view-mode-control" style="margin-left:16px;">view:
       <select id="view-mode">
         <option value="delta" selected>Δ from proportional</option>
         <option value="abs">Absolute weight</option>
+        <option value="epoch">Epoch count</option>
       </select>
     </label>
+    <button id="export-csv" title="Download the currently-viewed mixture (per-bucket phase_0/phase_1 weights) as CSV" style="margin-left:16px;">Export mix CSV</button>
   </div>
   <div id="chart"></div>
   <div id="chart-mix-detail"></div>
@@ -223,7 +238,7 @@ for (const c of data.candidates) {
   const evalBpb = c.evals && (c.evals["eval/paloma/bpb"] || c.evals["eval/paloma/macro_bpb"]);
   const ageLine = (c.minutes_since_ckpt != null) ? `\nlast ckpt: ${c.minutes_since_ckpt.toFixed(0)} min ago` : "";
   const evalLine = evalBpb != null ? `\npaloma bpb: ${evalBpb.toFixed(4)}` : "";
-  const tipText = `#${String(c.idx).padStart(3,"0")} (${stateLabel})\nstep ${c.step.toLocaleString()}/${data.target_steps.toLocaleString()} (${(100*c.step/data.target_steps).toFixed(1)}%)\nloss ${c.loss.toFixed(4)}${ageLine}${evalLine}`;
+  const tipText = `#${String(c.idx).padStart(3,"0")} (${stateLabel})\nstep ${c.step.toLocaleString()}/${data.target_steps.toLocaleString()} (${(100*c.step/data.target_steps).toFixed(1)}%)\nloss ${c.loss == null ? "n/a" : c.loss.toFixed(4)}${ageLine}${evalLine}`;
   cell.addEventListener("mousemove", ev => showTip(tipText, ev));
   cell.addEventListener("mouseleave", hideTip);
   cell.addEventListener("click", () => { if (c.wandb_url) window.open(c.wandb_url, "_blank"); });
@@ -270,7 +285,7 @@ for (const k of orderedEvalKeys) {
   sel.appendChild(opt);
 }
 function renderEval(metric) {
-  const pts = finishedWithEvals.map(c => ({ idx: c.idx, loss: c.loss, v: c.evals[metric] })).filter(p => p.v != null);
+  const pts = finishedWithEvals.map(c => ({ idx: c.idx, loss: c.loss, v: c.evals[metric] })).filter(p => p.v != null && p.loss != null);
   document.getElementById("eval-histogram").replaceChildren(_evalHistogram(pts, metric));
   document.getElementById("eval-scatter").replaceChildren(_evalScatter(pts, metric));
 }
@@ -314,7 +329,32 @@ if (!DSP) {
     `<p class="meta">DSP fit not available (need ≥30 finished candidates).</p>`;
 } else {
   const intro = document.getElementById("explorer-intro");
-  if (intro) intro.firstChild.nodeValue = `Three views on the ${DSP.n_candidates_fit} finished candidates fit by the DSP form. `;
+  if (intro) intro.firstChild.nodeValue = `Three views on ${DSP.n_finished_with_evals} finished candidates (each task fit on the candidates that have it). `;
+  // Regression coverage: which tasks the fit uses + % of finished candidates
+  // that have each. A task below 100% shrinks the fit (only rows with every
+  // task are used), so sparse tasks are highlighted.
+  (function renderCoverage() {
+    const cov = DSP.task_coverage || [];
+    const nFit = cov.filter(t => t.fitted !== false).length;
+    const sum = document.getElementById("cov-summary");
+    if (sum) sum.textContent =
+      `${nFit}/${cov.length} tasks fit (≥30 present) · ${DSP.n_finished_with_evals} finished candidates · `
+      + `each task fit on the candidates that have it`;
+    const tbl = document.getElementById("cov-table");
+    if (tbl) {
+      const body = cov.slice().sort((a, b) => a.pct - b.pct).map(t => {
+        const pct = (t.pct * 100).toFixed(0);
+        const unfit = t.fitted === false;
+        const c = unfit ? ' style="color:#ef4444"' : (t.pct < 0.99 ? ' style="color:#f59e0b"' : '');
+        const note = unfit ? ' <span style="color:#ef4444">(not fit)</span>' : '';
+        return `<tr><td style="padding:1px 10px 1px 0"${c}>${t.task}${note}</td>`
+          + `<td style="padding:1px 10px;text-align:right"${c}>${pct}%</td>`
+          + `<td style="padding:1px 0;text-align:right;color:#888">${t.n}/${DSP.n_finished_with_evals}</td></tr>`;
+      }).join("");
+      tbl.innerHTML = `<tr style="color:#888"><th style="text-align:left">task</th>`
+        + `<th>% finished</th><th>n</th></tr>` + body;
+    }
+  })();
   const TASKS = DSP.task_names;
   const BUCKETS = DSP.bucket_names;
   const D = BUCKETS.length;
@@ -336,7 +376,7 @@ if (!DSP) {
   function normCdf(x) { return 0.5 * (1 + erf(x / Math.SQRT2)); }
 
   // Phase-0 and phase-1 buckets are independent regression domains, so each
-  // has its own rho/tau/a/p (see swarm_dashboard2._predict_dsp). dpred/dw0[d]
+  // has its own rho/tau/a/p (see build.py:_predict_dsp). dpred/dw0[d]
   // depends only on (phase_0 params at d, w0[d], C0[d]); symmetrically for w1.
   function _doseTerms(rho, a, pen, tau, w, c) {
     const z = w * c;
@@ -416,6 +456,8 @@ if (!DSP) {
     if (s0 > 0) for (let d = 0; d < D; d++) MIX0[d] /= s0;
     if (s1 > 0) for (let d = 0; d < D; d++) MIX1[d] /= s1;
   }
+
+  const taskIndexBy = (sub) => TASKS.findIndex(n => n.includes(sub));
 
   // ----- Task sections -----
   function sectionOf(name) {
@@ -573,16 +615,18 @@ if (!DSP) {
 
   function renderMixDetailChart() {
     const mode = document.getElementById("view-mode").value;
+    // c0/c1 are per-bucket "epochs at unit weight" (phase_budget / bucket_tokens),
+    // so epoch count = mixture weight × c. At proportional this is flat (~1 pass).
+    const c0 = DSP.c0, c1 = DSP.c1;
     const labels = bucketOrder.map(i => bucketLabel(BUCKETS[i]));
     const cells = bucketOrder.map(i => {
       const v0 = MIX0[i], v1 = MIX1[i], p0 = DSP.w0_prop[i], p1 = DSP.w1_prop[i];
-      return {
-        label: bucketLabel(BUCKETS[i]),
-        phase_0: mode === "delta" ? v0 - p0 : v0,
-        phase_1: mode === "delta" ? v1 - p1 : v1,
-      };
+      const f0 = mode === "delta" ? v0 - p0 : mode === "epoch" ? v0 * c0[i] : v0;
+      const f1 = mode === "delta" ? v1 - p1 : mode === "epoch" ? v1 * c1[i] : v1;
+      return { label: bucketLabel(BUCKETS[i]), phase_0: f0, phase_1: f1 };
     });
-    const xLabel = mode === "delta" ? "Δ from proportional" : "absolute weight";
+    const xLabel = mode === "delta" ? "Δ from proportional"
+      : mode === "epoch" ? "epochs (passes over data)" : "absolute weight";
     const W = 1100, H = Math.max(420, D * 11 + 60);
     const m = { top: 30, right: 30, bottom: 30, left: 220 };
     const panelW = (W - m.left - m.right - 30) / 2; // 30px gutter
@@ -638,11 +682,16 @@ if (!DSP) {
     const el = document.getElementById("correlation-top");
     el.innerHTML = "";
     if (!corr) { el.textContent = "no correlation data"; return; }
-    let { eval_keys, buckets } = corr;
+    let { eval_keys, buckets, task_order } = corr;
     let mat = corr[corrPhase];
+    // Group similar tasks: order rows by PC1 seriation of their correlation
+    // profiles (task_order from the backend); fall back to input order.
+    const pcaPos = {};
+    (task_order && task_order.length ? task_order : eval_keys.map((_, i) => i))
+      .forEach((idx, p) => { pcaPos[idx] = p; });
     let rowIdx = eval_keys.map((_, i) => i)
       .filter(i => !corrFilter || eval_keys[i].toLowerCase().includes(corrFilter.toLowerCase()))
-      .sort((a, b) => eval_keys[a].localeCompare(eval_keys[b]));
+      .sort((a, b) => (pcaPos[a] ?? a) - (pcaPos[b] ?? b));
 
     const rowH = 14, colW = 12;
     const marginL = 280, marginR = 60, marginT = 80, marginB = 16;
@@ -722,6 +771,25 @@ if (!DSP) {
   });
   document.getElementById("reset-pareto").addEventListener("click", () => {
     for (let d = 0; d < D; d++) { MIX0[d] = DSP.w0_pareto[d]; MIX1[d] = DSP.w1_pareto[d]; }
+    syncMixSliders(0); syncMixSliders(1); syncTaskSlidersFromMix(); updateChart();
+  });
+  // Export the currently-viewed mixture (MIX0/MIX1) as CSV.
+  document.getElementById("export-csv").addEventListener("click", () => {
+    const q = s => `"${String(s).replace(/"/g, '""')}"`;
+    const lines = ["bucket,phase_0,phase_1,sum"];
+    for (let i = 0; i < D; i++) lines.push(`${q(BUCKETS[i])},${MIX0[i]},${MIX1[i]},${MIX0[i] + MIX1[i]}`);
+    const blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "mixture.csv"; a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  // Math/code-prioritized mixture is optimized once in the backend (the Pareto
+  // hinge floor + a reward for the math/code mean z); the button just loads it.
+  document.getElementById("reset-pareto-steer").addEventListener("click", () => {
+    const w0 = DSP.w0_mathcode || DSP.w0_pareto, w1 = DSP.w1_mathcode || DSP.w1_pareto;
+    for (let d = 0; d < D; d++) { MIX0[d] = w0[d]; MIX1[d] = w1[d]; }
     syncMixSliders(0); syncMixSliders(1); syncTaskSlidersFromMix(); updateChart();
   });
   document.getElementById("view-mode").addEventListener("change", updateChart);

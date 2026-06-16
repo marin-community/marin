@@ -19,7 +19,7 @@ import json
 import logging
 import math
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import datasets as hf_datasets
 import equinox as eqx
@@ -92,6 +92,7 @@ def _iter_dataset_docs(ds_config: RawTextEvaluationDataset):
     (David's bundles use both). Supervised datasets (input_key + target_key
     set) yield ``input + target`` concatenated.
     """
+
     def _row_to_text(row: dict) -> str:
         if ds_config.input_key is not None and ds_config.target_key is not None:
             return str(row[ds_config.input_key]) + str(row[ds_config.target_key])
@@ -122,6 +123,7 @@ def _iter_dataset_docs(ds_config: RawTextEvaluationDataset):
     is_parquet = paths[0].endswith(".parquet")
     if is_parquet:
         import pyarrow.parquet as pq
+
         for p in paths:
             with fs.open(f"gs://{p}" if not p.startswith("gs://") else p, "rb") as raw:
                 table = pq.read_table(raw)
@@ -131,9 +133,12 @@ def _iter_dataset_docs(ds_config: RawTextEvaluationDataset):
                     yield text, len(text.encode("utf-8"))
     else:
         import gzip
+
         for p in paths:
-            with fs.open(f"gs://{p}" if not p.startswith("gs://") else p, "rb") as raw, \
-                 gzip.GzipFile(fileobj=raw, mode="rb") as gz:
+            with (
+                fs.open(f"gs://{p}" if not p.startswith("gs://") else p, "rb") as raw,
+                gzip.GzipFile(fileobj=raw, mode="rb") as gz,
+            ):
                 for line in gz:
                     if not line.strip():
                         continue
@@ -332,9 +337,7 @@ def _build_step(model: ModelSpec, bundle) -> ExecutorStep:
 
 
 grug_perplexity_steps: list[ExecutorStep] = [
-    _build_step(model, bundle)
-    for model in _MODEL_SPECS
-    for bundle in registered_perplexity_gap_bundles()
+    _build_step(model, bundle) for model in _MODEL_SPECS for bundle in registered_perplexity_gap_bundles()
 ]
 
 

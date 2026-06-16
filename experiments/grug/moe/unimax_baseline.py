@@ -3,7 +3,7 @@
 
 """UniMax baseline at the swarm's training shape.
 
-Same model/optimizer/steps/phase split/resources as `swarm_fisher_dsp.py` and
+Same model/optimizer/steps/phase split/resources as `launch_swarm.py` and
 `proportional_baseline.py`, but the train_weights are computed via UniMax
 (Chung et al., ICLR 2023) with an 8-epoch cap **per phase**.
 
@@ -30,7 +30,7 @@ from marin.processing.tokenize import add_validation_sets_to_mixture
 from experiments.defaults import default_validation_sets
 from experiments.grug.moe.datakit_moe_mix import COMPONENTS, TARGET_BUDGET
 from experiments.grug.moe.grug_moe_mix import GrugEvalConfig, GrugMoeLaunchConfig, GrugTrainerConfig, run_grug_moe_mix
-from experiments.grug.moe.swarm_fisher_dsp import (
+from experiments.grug.moe.launch_swarm import (
     _BATCH,
     _BUDGET,
     _EXPERIMENT_BUDGET,
@@ -99,9 +99,9 @@ def _unimax_weights(token_counts: dict[str, int], budget: float, epoch_cap: floa
 
 
 _TOKEN_COUNTS_FROM_ARTIFACT = _bucket_token_counts()
-assert len(_TOKEN_COUNTS_FROM_ARTIFACT) == len(COMPONENTS), (
-    f"artifact buckets ({len(_TOKEN_COUNTS_FROM_ARTIFACT)}) != COMPONENTS ({len(COMPONENTS)})"
-)
+assert len(_TOKEN_COUNTS_FROM_ARTIFACT) == len(
+    COMPONENTS
+), f"artifact buckets ({len(_TOKEN_COUNTS_FROM_ARTIFACT)}) != COMPONENTS ({len(COMPONENTS)})"
 
 PHASE0_WEIGHTS = _unimax_weights(_TOKEN_COUNTS_FROM_ARTIFACT, TARGET_BUDGET * _PHASE0_FRAC, _EPOCH_CAP)
 PHASE1_WEIGHTS = _unimax_weights(_TOKEN_COUNTS_FROM_ARTIFACT, TARGET_BUDGET * _PHASE1_FRAC, _EPOCH_CAP)

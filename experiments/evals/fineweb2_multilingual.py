@@ -137,9 +137,20 @@ _FINEWEB2_TOP_50_BY_ROWS_SET = frozenset(FINEWEB2_TOP_50_BY_ROWS)
 _FINEWEB2_INDIC_LANGUAGE_CONFIGS_SET = frozenset(FINEWEB2_INDIC_LANGUAGE_CONFIGS)
 
 
+# In-region GCS stage of the pinned test-split parquets (see
+# experiments/grug/moe/stage_fineweb2_multilingual.py). The perplexity-gap
+# reader can't open real ``hf://datasets/...`` paths (routes them through gcsfs
+# and fails), so the eval reads the staged ``gs://`` copy like the other bundles.
+FINEWEB2_STAGED_GCS_PREFIX = "gs://marin-us-central2/raw/fineweb2_multilingual"
+
+
 def fineweb2_multilingual_parquet_pattern(config: str, split: FineWeb2Split) -> str:
-    """Return the pinned Hugging Face parquet pattern for a FineWeb2 language config split."""
-    return f"hf://datasets/{FINEWEB2_DATASET_ID}@{FINEWEB2_PARQUET_REVISION}/{config}/{split}/*.parquet"
+    """Return the GCS-staged parquet pattern for a FineWeb2 language config split.
+
+    Backed by ``FINEWEB2_PARQUET_REVISION`` of ``FINEWEB2_DATASET_ID``, staged
+    in-region by ``stage_fineweb2_multilingual.py`` (test split only).
+    """
+    return f"{FINEWEB2_STAGED_GCS_PREFIX}/{config}/{split}/*.parquet"
 
 
 def fineweb2_multilingual_tags(config: str) -> list[str]:
