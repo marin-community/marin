@@ -10,8 +10,8 @@ Three layers, exercised in order:
 2. **Wire & dispatch** — ``RpcTaskBackend.reconcile`` fans out via a
    fake stub factory and synthesizes ``WorkerReconcileResult.observations``.
 3. **Apply + e2e** — ``apply_reconcile`` against real SQLite DB state, plus a
-   handful of end-to-end convergence ticks driven through
-   ``Controller._reconcile_tick``.
+   handful of end-to-end convergence ticks driven through the production control
+   tick's reconcile phase (``reconcile_once``).
 """
 
 from __future__ import annotations
@@ -70,6 +70,7 @@ from .conftest import (
     query_job,
     query_task,
     query_worker,
+    reconcile_once,
     register_worker,
     submit_job,
 )
@@ -1151,7 +1152,7 @@ def test_e2e_converges_to_succeeded(make_controller):
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
 
     # Tick 1: ASSIGNED — controller dispatches the inline spec.
-    ctrl._reconcile_tick()
+    reconcile_once(ctrl)
     tick1_desired = list(provider.calls[0][0][0].request.desired)
     assert len(tick1_desired) == 1
     assert tick1_desired[0].HasField("run") and tick1_desired[0].run.HasField(
@@ -1160,11 +1161,11 @@ def test_e2e_converges_to_succeeded(make_controller):
     assert tick1_desired[0].attempt_uid, "controller must emit a non-empty attempt_uid"
 
     # Tick 2: worker reports RUNNING.
-    ctrl._reconcile_tick()
+    reconcile_once(ctrl)
     assert query_task(state, task_id).state == job_pb2.TASK_STATE_RUNNING
 
     # Tick 3: subsequent run intents must not carry inline spec (cache-hit invariant).
-    ctrl._reconcile_tick()
+    reconcile_once(ctrl)
     tick3_desired = list(provider.calls[2][0][0].request.desired)
     assert tick3_desired and tick3_desired[0].HasField("run")
     assert not tick3_desired[0].run.HasField("request"), "subsequent ticks must not carry inline spec"
@@ -1202,8 +1203,8 @@ def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_contro
     with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
 
-    ctrl._reconcile_tick()
-    ctrl._reconcile_tick()
+    reconcile_once(ctrl)
+    reconcile_once(ctrl)
 
     task = query_task(state, task_id)
     assert task.state == job_pb2.TASK_STATE_PENDING
@@ -1327,13 +1328,13 @@ def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller, 
 
     # One failure short of the threshold: still present, still tracked, no teardown.
     for _ in range(_THRESHOLD - 1):
-        ctrl._reconcile_tick()
+        reconcile_once(ctrl)
     assert query_worker(state, wid) is not None
     assert ctrl._health.liveness(wid).consecutive_failures == _THRESHOLD - 1
     assert provider.autoscale_calls == []
 
     # The threshold-crossing tick fails and tears the worker down.
-    ctrl._reconcile_tick()
+    reconcile_once(ctrl)
     assert provider.autoscale_calls == [[wid]]
     assert query_worker(state, wid) is None, "failed worker row should be removed"
     assert wid not in ctrl._health.all(), "failed worker should be forgotten from the tracker"
@@ -1360,7 +1361,7 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     sibling = register_worker(state, _W2, f"{_W2}:8080", make_worker_metadata())
 
     for _ in range(_THRESHOLD):
-        ctrl._reconcile_tick()
+        reconcile_once(ctrl)
 
     assert provider.autoscale_calls == [[dead]]
     assert query_worker(state, dead) is None

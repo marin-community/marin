@@ -67,7 +67,7 @@ from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId, is_job_finished
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Duration, RateLimiter, Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 
@@ -274,6 +274,47 @@ def make_controller(tmp_path):
             errors.append(exc)
     if errors:
         raise errors[0]
+
+
+def _spent_limiter() -> RateLimiter:
+    """A ``RateLimiter`` whose ``should_run()`` returns False (already ran, long interval)."""
+    limiter = RateLimiter(interval_seconds=1e9)
+    limiter.mark_run()
+    return limiter
+
+
+def reconcile_once(ctrl: Controller) -> None:
+    """Drive exactly one reconcile pass through the production control tick.
+
+    The standalone polling loop is gone; reconcile now runs only as a phase of
+    ``Controller._control_tick``. This forces a single reconcile-only tick:
+    ``_force_reconcile`` drives the reconcile phase while the schedule and
+    autoscale limiters never fire.
+    """
+    ctrl._force_reconcile = True
+    ctrl._control_tick(
+        woken=False,
+        schedule_limiter=_spent_limiter(),
+        reconcile_limiter=_spent_limiter(),
+        autoscale_limiter=_spent_limiter(),
+    )
+
+
+def autoscale_once(ctrl: Controller) -> None:
+    """Drive one autoscale pass through the production control tick.
+
+    The standalone autoscaler loop is gone; autoscale now runs only as a phase of
+    ``Controller._control_tick`` (always paired with a fresh schedule). In dry-run
+    the tick short-circuits to the schedule-only path, so the autoscale backend
+    call is suppressed — exactly what the dry-run test asserts.
+    """
+    ctrl._force_reconcile = False
+    ctrl._control_tick(
+        woken=False,
+        schedule_limiter=_spent_limiter(),
+        reconcile_limiter=_spent_limiter(),
+        autoscale_limiter=RateLimiter(interval_seconds=0.0),
+    )
 
 
 def make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:
