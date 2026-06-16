@@ -399,15 +399,16 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   1e-3/0.1) on interactive; 3 E4 corners (5e-4/0.2, 1e-3/0.05, 1e-3/0.2) on batch. w4b
   7e-4/0.05 kept running. The 2 E2 1e-3 cells whose parents FAILED were already complete
   (recorded 2.996/2.989) — not resubmitted.
-- **~19:43Z: 3 E4 corners PARKED on capacity.** Post-outage the cluster has no *stable* free
-  v6e-8/v5p-8 capacity for new jobs — incumbent VMs (grabbed at the 12:20 recovery) run for
-  hours, but freshly-submitted cells get their worker reclaimed within ~24min on **either**
-  pool and **either** band (interactive didn't help — it's VM-level reclaim, not budget
-  preemption). After 6+ failed resubmits, **parked `5e-4/0.2`, `1e-3/0.05`, `1e-3/0.2`** (the
-  least-informative corners — WD/LR edges, NOT axis-neighbors of the 7e-4/0.1 center, so they
-  don't gate the E4 optimum check). Re-attempt when an incumbent cell finishes and frees a
-  stable slot. The 7 incumbent cells (E2 gate 7e-4/0.2 + E4 center & 4 axis-neighbors +
-  5e-4/0.05) are stable and serve all search goals.
+- **3 E4 corners run on BATCH; tolerate choppy progress (user guidance ~20:57Z).** This
+  cluster's scheduler is weak, so **batch jobs often make little progress** — that is EXPECTED,
+  not a problem. Policy for `5e-4/0.2`, `1e-3/0.05`, `1e-3/0.2` (least-informative corners —
+  WD/LR edges, NOT axis-neighbors of 7e-4/0.1, so they don't gate the E4 optimum check):
+  **keep them on batch; just resubmit-from-checkpoint when a parent dies — do NOT escalate to
+  interactive over preemptions, do NOT panic-churn.** Only treat a batch cell as truly stuck
+  if it goes **≥12h without significant progress** (check W&B step). Move a cell to interactive
+  ONLY if it's critical and near the end of its wave, or it must finish faster for a specific
+  reason. (Resubmitted on batch as w4o ~20:57Z.) The 7 incumbent cells (E2 gate 7e-4/0.2 +
+  E4 center & 4 axis-neighbors + 5e-4/0.05) run interactive and serve all search goals.
 - Grid (final-step `eval/contacts-v1-val/loss`):
 
   | wd \ lr | 5e-4 | 7e-4 | 1e-3 |
