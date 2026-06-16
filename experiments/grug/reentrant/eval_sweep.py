@@ -40,7 +40,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
-from marin.training.training import temporary_checkpoint_base_path
+from marin.training.training import resolve_training_env, temporary_checkpoint_base_path
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -259,6 +259,16 @@ def run_eval_sweep(
         checkpoint_path=checkpoint_path,
         recurrence_values=recurrence_values,
     )
+    # GRUG_DIRECT: run the sweep inline on the current accelerator task (submitted
+    # directly with `iris job run --tpu ...`) instead of dispatching a nested job.
+    # Mirrors experiments.grug.reentrant.train.run_grug; applies the same training
+    # env before the entrypoint touches JAX.
+    if os.environ.get("GRUG_DIRECT"):
+        env = resolve_training_env(base_env=None, resources=config.resources)
+        for key, value in env.items():
+            os.environ.setdefault(key, value)
+        entrypoint(config)
+        return
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
