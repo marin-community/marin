@@ -153,32 +153,11 @@ def test_prefix_lm_mask_materializes_dynamic_prefix_lengths():
     np.testing.assert_array_equal(np.asarray(mat.array), expected)
 
 
-def test_prefix_lm_mask_materializes_packed_prefix_mask_with_segment_ids():
-    Pos = hax.Axis("pos", 8)
-    KeyPos = Pos.alias("key_pos")
-    segment_ids = hax.named(jnp.array([0, 0, 0, 0, 1, 1, 1, 1], dtype=jnp.int32), Pos)
-    kv_segment_ids = hax.named(segment_ids.array, KeyPos)
-    prefix_mask = hax.named(jnp.array([True, True, False, False, True, False, False, False]), Pos)
-    mask = AttentionMask.prefix_lm(prefix_mask=prefix_mask, segment_ids=(segment_ids, kv_segment_ids))
-
-    mat = mask.materialize(Pos, KeyPos)
-
-    q = np.arange(Pos.size)[:, None]
-    k = np.arange(KeyPos.size)[None, :]
-    segments = np.array([0, 0, 0, 0, 1, 1, 1, 1])
-    prefix = np.array([True, True, False, False, True, False, False, False])
-    expected = (segments[:, None] == segments[None, :]) & ((k <= q) | prefix[None, :])
-    np.testing.assert_array_equal(np.asarray(mat.array), expected)
-
-
 def test_prefix_lm_mask_materializes_segment_run_prefix_lengths_with_segment_ids():
     Pos = hax.Axis("pos", 8)
     KeyPos = Pos.alias("key_pos")
     segment_ids = hax.named(jnp.array([0, 0, 0, 1, 1, 1, 1, 2], dtype=jnp.int32), Pos)
     kv_segment_ids = hax.named(segment_ids.array, KeyPos)
-    prefix_mask = hax.named(jnp.array([True, True, False, True, False, False, False, False]), Pos)
-    generic_mask = AttentionMask.prefix_lm(prefix_mask=prefix_mask, segment_ids=(segment_ids, kv_segment_ids))
-
     structured_mask = AttentionMask.causal().with_segment_runs(
         segment_ids,
         kv_segment_ids=kv_segment_ids,
@@ -191,10 +170,12 @@ def test_prefix_lm_mask_materializes_segment_run_prefix_lengths_with_segment_ids
     )
     structured_mask = structured_mask.with_prefix_lengths_per_segment(prefix_lengths_per_segment)
 
-    np.testing.assert_array_equal(
-        np.asarray(structured_mask.materialize(Pos, KeyPos).array),
-        np.asarray(generic_mask.materialize(Pos, KeyPos).array),
-    )
+    q = np.arange(Pos.size)[:, None]
+    k = np.arange(KeyPos.size)[None, :]
+    segments = np.array([0, 0, 0, 1, 1, 1, 1, 2])
+    prefix_by_key = np.array([True, True, False, True, False, False, False, False])
+    expected = (segments[:, None] == segments[None, :]) & ((k <= q) | prefix_by_key[None, :])
+    np.testing.assert_array_equal(np.asarray(structured_mask.materialize(Pos, KeyPos).array), expected)
 
 
 def test_attention_sink():
@@ -723,19 +704,6 @@ def _dynamic_prefix_lm_with_segment_ids_mask(case: _TpuSplashMaskCase) -> Attent
     )
 
 
-def _packed_prefix_lm_with_prefix_mask(case: _TpuSplashMaskCase) -> AttentionMask:
-    prefix_mask = jnp.zeros((case.batch.size, case.q_pos.size), dtype=jnp.bool_)
-    prefix_mask = prefix_mask.at[0, :64].set(True)
-    prefix_mask = prefix_mask.at[0, case.block_size : case.block_size + 96].set(True)
-    prefix_mask = prefix_mask.at[1, :96].set(True)
-    prefix_mask = prefix_mask.at[1, 128:192].set(True)
-    segment_ids = _packed_segment_ids_for_splash_case(case)
-    return AttentionMask.prefix_lm(
-        prefix_mask=hax.named(prefix_mask, (case.batch, case.q_pos)),
-        segment_ids=(segment_ids.q, segment_ids.kv),
-    )
-
-
 def _packed_prefix_lm_with_segment_runs_mask(case: _TpuSplashMaskCase) -> AttentionMask:
     segment_ids = _packed_segment_ids_for_splash_case(case)
     mask = AttentionMask.causal().with_segment_runs(
@@ -779,10 +747,6 @@ def test_tpu_splash_attention_dynamic_prefix_lm_mask():
 
 def test_tpu_splash_attention_dynamic_prefix_lm_segment_ids_mask():
     _run_tpu_splash_attention_batched_mask(_dynamic_prefix_lm_with_segment_ids_mask, seed=20)
-
-
-def test_tpu_splash_attention_packed_prefix_lm_prefix_mask():
-    _run_tpu_splash_attention_batched_mask(_packed_prefix_lm_with_prefix_mask, seed=23)
 
 
 def test_tpu_splash_attention_packed_prefix_lm_segment_runs_mask():

@@ -25,7 +25,6 @@ from levanter.kernels.pallas.splash_attention import (
     packed_causal_segment_mask_infos,
     packed_causal_segment_run_mask_infos,
     packed_prefix_lm_segment_run_mask_infos,
-    packed_prefix_lm_mask_infos,
     prefix_lm_mask_infos,
     splash_attention_block_sizes,
     splash_attention_mask_spec_from_fields,
@@ -886,30 +885,6 @@ def _prepare_splash_batch_value(
     return _maybe_flatten(value, (), SPLASH_BATCH_AXIS_NAME)
 
 
-def _prepare_prefix_mask_for_splash(
-    prefix_mask: NamedArray,
-    QPos: Axis,
-    KPos: Axis,
-    q_class,
-    physical_axes_q: PartitionSpec,
-    physical_axes_k: PartitionSpec,
-):
-    batch_axes = tuple(q_class["B"])
-    if QPos.name in {ax.name for ax in prefix_mask.axes} and QPos.name != KPos.name:
-        prefix_mask = prefix_mask.rename({QPos.name: KPos.name})
-    if KPos.name not in {ax.name for ax in prefix_mask.axes}:
-        raise ValueError(f"prefix_mask must contain key position axis {KPos.name}.")
-
-    mask = _prepare_splash_batch_value(
-        prefix_mask,
-        batch_axes=batch_axes,
-        allowed_axis_names={ax.name for ax in batch_axes + (KPos,)},
-        value_name="Prefix mask",
-    )
-    mask = mask.rearrange((SPLASH_BATCH_AXIS_NAME, KPos.name))
-    return mask.astype(jnp.bool_).array, PartitionSpec(physical_axes_q[0], physical_axes_k[2])
-
-
 def _batched_splash_kernel_specs(
     kernel,
     *,
@@ -954,8 +929,6 @@ class _SplashPrefixControls:
     physical_axes_prefix_lengths: PartitionSpec | None
     prefix_lengths_per_segment: jax.Array | None
     physical_axes_prefix_lengths_per_segment: PartitionSpec | None
-    prefix_masks: jax.Array | None
-    physical_axes_prefix_mask: PartitionSpec | None
 
 
 @dataclass(frozen=True)
@@ -1051,27 +1024,17 @@ def _physical_axis_for_binning(axis_groups):
 def _prepare_splash_prefix_controls(
     *,
     mask: Optional[Union[NamedArray, "AttentionMask"]],
-    QPos: Axis,
-    KPos: Axis,
     q_class,
     physical_axes_q: PartitionSpec,
-    physical_axes_k: PartitionSpec,
-    kv_seq_len: int,
 ) -> _SplashPrefixControls:
     prefix_lengths = None
     physical_axes_prefix_lengths = None
     prefix_lengths_per_segment = None
     physical_axes_prefix_lengths_per_segment = None
-    prefix_masks = None
-    physical_axes_prefix_mask = None
 
     prefix_lm = mask.prefix_lm_spec if isinstance(mask, AttentionMask) else None
     if prefix_lm is not None and prefix_lm.prefix_lengths_per_segment is not None:
-        if (
-            prefix_lm.prefix_length is not None
-            or prefix_lm.prefix_lengths is not None
-            or prefix_lm.prefix_mask is not None
-        ):
+        if prefix_lm.prefix_length is not None or prefix_lm.prefix_lengths is not None:
             raise NotImplementedError(
                 "Splash attention does not support prefix_lengths_per_segment combined with other prefix controls."
             )
@@ -1097,8 +1060,6 @@ def _prepare_splash_prefix_controls(
         physical_axes_prefix_lengths_per_segment = PartitionSpec(physical_axes_q[0], None)
 
     if prefix_lm is not None and prefix_lm.prefix_lengths is not None:
-        if prefix_lm.prefix_mask is not None:
-            raise NotImplementedError("Splash attention does not support prefix_lengths combined with prefix_mask.")
         if mask.sliding_window is not None:
             raise NotImplementedError("Splash attention does not support dynamic prefix lengths with sliding windows.")
         prefix_lengths, physical_axes_prefix_lengths = _prepare_prefix_lengths_for_splash(
@@ -1107,30 +1068,11 @@ def _prepare_splash_prefix_controls(
         if prefix_lm.prefix_length is not None:
             prefix_lengths = jnp.maximum(prefix_lengths, prefix_lm.prefix_length)
 
-    if prefix_lm is not None and prefix_lm.prefix_mask is not None:
-        if not mask.is_causal:
-            raise NotImplementedError("Splash attention requires prefix_mask to be part of a causal prefix-LM mask.")
-        if mask.sliding_window is not None:
-            raise NotImplementedError("Splash attention does not support prefix_mask with sliding windows.")
-        prefix_masks, physical_axes_prefix_mask = _prepare_prefix_mask_for_splash(
-            prefix_lm.prefix_mask,
-            QPos,
-            KPos,
-            q_class,
-            physical_axes_q,
-            physical_axes_k,
-        )
-        if prefix_lm.prefix_length is not None:
-            prefix_positions = jnp.arange(kv_seq_len, dtype=jnp.int32)[None, :] < prefix_lm.prefix_length
-            prefix_masks = prefix_masks | prefix_positions
-
     return _SplashPrefixControls(
         prefix_lengths=prefix_lengths,
         physical_axes_prefix_lengths=physical_axes_prefix_lengths,
         prefix_lengths_per_segment=prefix_lengths_per_segment,
         physical_axes_prefix_lengths_per_segment=physical_axes_prefix_lengths_per_segment,
-        prefix_masks=prefix_masks,
-        physical_axes_prefix_mask=physical_axes_prefix_mask,
     )
 
 
@@ -1284,35 +1226,6 @@ def _dynamic_metadata_kernel_plan(
     )
 
 
-def _packed_prefix_kernel_plan(
-    *,
-    prefix_masks: jax.Array,
-    physical_axes_prefix_mask: PartitionSpec,
-    segment_id_lowering: SplashSegmentIdsLowering,
-    context: _SplashKernelContext,
-) -> _SplashKernelPlan:
-    def prefix_metadata(prefix_mask, q_segment_ids, kv_segment_ids):
-        return packed_prefix_lm_mask_infos(
-            prefix_mask=prefix_mask,
-            q_segment_ids=q_segment_ids,
-            kv_segment_ids=kv_segment_ids,
-            q_seq_len=context.q_seq_len,
-            kv_seq_len=context.kv_seq_len,
-            block_sizes=context.block_sizes,
-            head_shards=context.head_shards,
-            q_seq_shards=context.q_seq_shards,
-        )
-
-    return _packed_dynamic_mask_kernel_plan(
-        segment_id_lowering=segment_id_lowering,
-        context=context,
-        metadata_values=(prefix_masks,),
-        metadata_in_axes=(0,),
-        metadata_builder=prefix_metadata,
-        batch_spec=physical_axes_prefix_mask[0],
-    )
-
-
 def _can_use_packed_causal_segment_kernel(
     *,
     mask: Optional[Union[NamedArray, "AttentionMask"]],
@@ -1345,7 +1258,6 @@ def _is_plain_causal_splash_mask(
         and mask.explicit_mask is None
         and prefix_controls.prefix_lengths is None
         and prefix_controls.prefix_lengths_per_segment is None
-        and prefix_controls.prefix_masks is None
     )
 
 
@@ -1373,7 +1285,6 @@ def _can_use_packed_prefix_lm_segment_run_kernel(
         and prefix_lm is not None
         and prefix_lm.prefix_length is None
         and prefix_lm.prefix_lengths is None
-        and prefix_lm.prefix_mask is None
         and prefix_controls.prefix_lengths_per_segment is not None
     )
 
@@ -1534,7 +1445,6 @@ def _static_splash_kernel_plan(
             sliding_window=mask.sliding_window,
             prefix_length=None if mask.prefix_lm_spec is None else mask.prefix_lm_spec.prefix_length,
             prefix_lengths=None if mask.prefix_lm_spec is None else mask.prefix_lm_spec.prefix_lengths,
-            prefix_mask=None if mask.prefix_lm_spec is None else mask.prefix_lm_spec.prefix_mask,
             explicit_mask=mask.explicit_mask,
         )
     elif isinstance(mask, NamedArray):
@@ -1593,15 +1503,6 @@ def _splash_kernel_plan(
 
     if prefix_controls.prefix_lengths_per_segment is not None:
         raise NotImplementedError("Splash attention could not use the packed prefix-LM segment-run fast path.")
-
-    if prefix_controls.prefix_masks is not None:
-        assert prefix_controls.physical_axes_prefix_mask is not None
-        return _packed_prefix_kernel_plan(
-            prefix_masks=prefix_controls.prefix_masks,
-            physical_axes_prefix_mask=prefix_controls.physical_axes_prefix_mask,
-            segment_id_lowering=segment_id_lowering,
-            context=context,
-        )
 
     if prefix_controls.prefix_lengths is not None:
         assert prefix_controls.physical_axes_prefix_lengths is not None
@@ -1731,12 +1632,8 @@ def _prepare_splash_invocation_plan(
 
     prefix_controls = _prepare_splash_prefix_controls(
         mask=mask,
-        QPos=layout.QPos,
-        KPos=layout.KPos,
         q_class=layout.q_class,
         physical_axes_q=layout.physical_axes_q,
-        physical_axes_k=layout.physical_axes_k,
-        kv_seq_len=layout.kv_seq_len,
     )
     segment_id_lowering = _lower_splash_attention_segment_ids(mask=mask, QPos=layout.QPos, KPos=layout.KPos)
     segment_run_controls = _prepare_splash_segment_run_controls(

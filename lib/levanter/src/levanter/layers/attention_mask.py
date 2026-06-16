@@ -91,18 +91,10 @@ class PrefixLmMaskSpec(eqx.Module):
     prefix_length: Optional[int] = eqx.field(default=None, static=True)
     prefix_lengths: Optional[NamedArray] = None
     prefix_lengths_per_segment: Optional[NamedArray] = None
-    prefix_mask: Optional[NamedArray] = None
 
     def __post_init__(self):
-        if (
-            self.prefix_length is None
-            and self.prefix_lengths is None
-            and self.prefix_lengths_per_segment is None
-            and self.prefix_mask is None
-        ):
-            raise ValueError(
-                "PrefixLmMaskSpec requires prefix_length, prefix_lengths, prefix_lengths_per_segment, or prefix_mask."
-            )
+        if self.prefix_length is None and self.prefix_lengths is None and self.prefix_lengths_per_segment is None:
+            raise ValueError("PrefixLmMaskSpec requires prefix_length, prefix_lengths, or prefix_lengths_per_segment.")
         if self.prefix_length is not None and self.prefix_length < 0:
             raise ValueError(f"prefix_length must be non-negative, got {self.prefix_length}.")
 
@@ -217,10 +209,6 @@ class AttentionMask(eqx.Module):
             )
             prefix = combine_masks_or(prefix, dynamic_prefix)
 
-        if prefix_lm is not None and prefix_lm.prefix_mask is not None:
-            prefix_mask = prefix_lm.prefix_mask.rename({QPos.name: KPos.name})[KPos.name, k_slice]
-            prefix = combine_masks_or(prefix, prefix_mask.broadcast_axis(QPos.resize(q_slice.size)))
-
         causal = combine_masks_or(causal, prefix)
 
         if self.explicit_mask is not None:
@@ -270,7 +258,6 @@ class AttentionMask(eqx.Module):
         prefix_length: int | None = None,
         prefix_lengths: NamedArray | None = None,
         prefix_lengths_per_segment: NamedArray | None = None,
-        prefix_mask: NamedArray | None = None,
         sliding_window: Optional[int] = None,
         segment_ids: tuple[NamedArray, NamedArray] | None = None,
     ) -> "AttentionMask":
@@ -280,15 +267,8 @@ class AttentionMask(eqx.Module):
         Non-prefix keys use causal masking, optionally constrained by ``sliding_window``.
         Segment IDs and explicit masks are still applied afterward.
         """
-        if (
-            prefix_length is None
-            and prefix_lengths is None
-            and prefix_lengths_per_segment is None
-            and prefix_mask is None
-        ):
-            raise ValueError(
-                "prefix_lm requires prefix_length, prefix_lengths, prefix_lengths_per_segment, or prefix_mask."
-            )
+        if prefix_length is None and prefix_lengths is None and prefix_lengths_per_segment is None:
+            raise ValueError("prefix_lm requires prefix_length, prefix_lengths, or prefix_lengths_per_segment.")
         if prefix_length is not None and prefix_length < 0:
             raise ValueError(f"prefix_length must be non-negative, got {prefix_length}.")
 
@@ -298,7 +278,6 @@ class AttentionMask(eqx.Module):
                 prefix_length=prefix_length,
                 prefix_lengths=prefix_lengths,
                 prefix_lengths_per_segment=prefix_lengths_per_segment,
-                prefix_mask=prefix_mask,
             ),
             sliding_window=sliding_window,
             segment_ids=segment_ids,
@@ -378,7 +357,6 @@ class AttentionMask(eqx.Module):
                 prefix_length=None if prefix_lm is None else prefix_lm.prefix_length,
                 prefix_lengths=None if prefix_lm is None else prefix_lm.prefix_lengths,
                 prefix_lengths_per_segment=prefix_lengths_per_segment,
-                prefix_mask=None if prefix_lm is None else prefix_lm.prefix_mask,
             ),
         )
 
@@ -619,7 +597,6 @@ def _combine_prefix_lm_and(left: PrefixLmMaskSpec | None, right: PrefixLmMaskSpe
         right,
         combine_length=min,
         combine_lengths=hax.minimum,
-        combine_mask=combine_masks_and,
     )
 
 
@@ -629,7 +606,6 @@ def _combine_prefix_lm_or(left: PrefixLmMaskSpec | None, right: PrefixLmMaskSpec
         right,
         combine_length=max,
         combine_lengths=hax.maximum,
-        combine_mask=combine_masks_or,
     )
 
 
@@ -639,7 +615,6 @@ def _combine_prefix_lm_specs(
     *,
     combine_length: Callable[[int, int], int],
     combine_lengths: Callable[[NamedArray, NamedArray], NamedArray],
-    combine_mask: Callable[[NamedArray | None, NamedArray | None], NamedArray | None],
 ) -> PrefixLmMaskSpec | None:
     if left is None:
         return right
@@ -654,7 +629,6 @@ def _combine_prefix_lm_specs(
             right.prefix_lengths_per_segment,
             combine_lengths,
         ),
-        prefix_mask=combine_mask(left.prefix_mask, right.prefix_mask),
     )
 
 

@@ -21,7 +21,6 @@ from levanter.kernels.pallas.splash_attention import (
     packed_causal_segment_mask_infos,
     packed_causal_segment_run_mask_infos,
     packed_prefix_lm_segment_run_mask_infos,
-    packed_prefix_lm_mask_infos,
     prefix_lm_dkv_mask_info,
     prefix_lm_forward_mask_info,
     splash_attention_block_sizes,
@@ -127,34 +126,6 @@ def test_prefix_lm_dkv_mask_info_matches_dense_prefix_lm(prefix_length):
 
 
 @pytest.mark.parametrize("case_name", ["aligned", "ragged"])
-def test_packed_prefix_lm_mask_info_matches_dense_packed_prefix_lm(case_name):
-    seq_len = 128
-    block_size = 16
-    segment_ids, prefix_mask, block_expectations = _packed_prefix_case(case_name)
-
-    metadata = packed_prefix_lm_mask_infos(
-        prefix_mask=prefix_mask,
-        q_segment_ids=segment_ids,
-        kv_segment_ids=segment_ids,
-        q_seq_len=seq_len,
-        kv_seq_len=seq_len,
-        block_sizes=_packed_metadata_test_block_sizes(block_size),
-    )
-
-    q = np.arange(seq_len)[:, None]
-    kv = np.arange(seq_len)[None, :]
-    segments = np.asarray(segment_ids)
-    expected = (segments[:, None] == segments[None, :]) & ((kv <= q) | np.asarray(prefix_mask)[None, :])
-    _assert_packed_metadata_matches_dense(
-        metadata,
-        expected,
-        seq_len=seq_len,
-        block_size=block_size,
-        **block_expectations,
-    )
-
-
-@pytest.mark.parametrize("case_name", ["aligned", "ragged"])
 def test_packed_causal_segment_mask_info_matches_dense_packed_causal(case_name):
     seq_len = 128
     block_size = 16
@@ -252,12 +223,12 @@ def test_packed_prefix_lm_segment_run_mask_info_matches_dense_packed_prefix_lm()
     )
 
     segment_ids = np.repeat(np.arange(segment_lengths.shape[0], dtype=np.int32), np.asarray(segment_lengths))
-    prefix_mask = np.zeros((seq_len,), dtype=bool)
-    prefix_mask[:20] = True
-    prefix_mask[64:80] = True
+    prefix_by_key = np.zeros((seq_len,), dtype=bool)
+    prefix_by_key[:20] = True
+    prefix_by_key[64:80] = True
     q = np.arange(seq_len)[:, None]
     kv = np.arange(seq_len)[None, :]
-    expected = (segment_ids[:, None] == segment_ids[None, :]) & ((kv <= q) | prefix_mask[None, :])
+    expected = (segment_ids[:, None] == segment_ids[None, :]) & ((kv <= q) | prefix_by_key[None, :])
     _assert_packed_metadata_matches_dense(
         metadata,
         expected,
@@ -288,42 +259,6 @@ def _ragged_segment_ids():
             jnp.full((45,), 3, dtype=jnp.int32),
         ]
     )
-
-
-def _ragged_prefix_mask():
-    prefix_mask = jnp.zeros((128,), dtype=jnp.bool_)
-    for start in (0, 19, 42, 83):
-        prefix_mask = prefix_mask.at[start : start + 5].set(True)
-    return prefix_mask
-
-
-def _packed_prefix_case(case_name):
-    if case_name == "aligned":
-        prefix_mask = jnp.zeros((128,), dtype=jnp.bool_)
-        prefix_mask = prefix_mask.at[:20].set(True)
-        prefix_mask = prefix_mask.at[64:80].set(True)
-        return (
-            _two_segment_ids(),
-            prefix_mask,
-            _block_expectations(
-                partial_q_block=0,
-                partial_kv_block=1,
-                full_q_block=5,
-                full_kv_block=4,
-            ),
-        )
-    if case_name == "ragged":
-        return (
-            _ragged_segment_ids(),
-            _ragged_prefix_mask(),
-            _block_expectations(
-                partial_q_block=1,
-                partial_kv_block=0,
-                full_q_block=4,
-                full_kv_block=3,
-            ),
-        )
-    raise ValueError(f"Unknown packed prefix case: {case_name}.")
 
 
 def _packed_causal_case(case_name):

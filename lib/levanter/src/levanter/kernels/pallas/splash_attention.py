@@ -32,13 +32,11 @@ PartitionSpecEntry = str | Sequence[str | None] | None
 class SplashDynamicPrefixMask(StrEnum):
     """Runtime prefix controls represented outside static Splash mask objects.
 
-    `PREFIX_LENGTHS` is one prefix length per batch element. `PREFIX_MASK` is a
-    per-key boolean mask, normally paired with segment IDs for packed docs.
+    `PREFIX_LENGTHS` is one prefix length per batch element.
     """
 
     NONE = "none"
     PREFIX_LENGTHS = "prefix_lengths"
-    PREFIX_MASK = "prefix_mask"
 
 
 @dataclass(frozen=True)
@@ -87,16 +85,11 @@ def splash_attention_mask_spec_from_fields(
     sliding_window: int | None = None,
     prefix_length: int | None = None,
     prefix_lengths: object | None = None,
-    prefix_mask: object | None = None,
     explicit_mask: object | None = None,
 ) -> SplashAttentionMaskSpec:
     dynamic_prefix = SplashDynamicPrefixMask.NONE
-    if prefix_lengths is not None and prefix_mask is not None:
-        raise ValueError("Splash attention mask spec cannot combine prefix_lengths and prefix_mask.")
     if prefix_lengths is not None:
         dynamic_prefix = SplashDynamicPrefixMask.PREFIX_LENGTHS
-    elif prefix_mask is not None:
-        dynamic_prefix = SplashDynamicPrefixMask.PREFIX_MASK
 
     return SplashAttentionMaskSpec(
         is_causal=is_causal,
@@ -246,76 +239,6 @@ def prefix_lm_mask_infos(
         dq_mask_info=dq_mask_info,
         dkv_mask_info=dkv_mask_info,
     )
-
-
-def packed_prefix_lm_mask_infos(
-    *,
-    prefix_mask: jax.Array,
-    q_segment_ids: jax.Array,
-    kv_segment_ids: jax.Array,
-    q_seq_len: int,
-    kv_seq_len: int,
-    block_sizes: splash_attention_kernel.BlockSizes,
-    head_shards: int = 1,
-    q_seq_shards: int = 1,
-) -> SplashDynamicMaskMetadata:
-    """Build Splash metadata for packed prefix-LM masks.
-
-    The represented mask is ``same_segment(q, kv) & (kv <= q | prefix_mask[kv])``.
-    This supports packed docs by letting callers mark prefix tokens per key
-    position while segment IDs keep those prefix tokens local to their document.
-    """
-    context = _packed_dynamic_mask_context(
-        q_seq_len=q_seq_len,
-        kv_seq_len=kv_seq_len,
-        block_sizes=block_sizes,
-        head_shards=head_shards,
-        q_seq_shards=q_seq_shards,
-        caller="packed_prefix_lm_mask_infos",
-    )
-
-    def mask_block_builder(*, block_q: int, block_kv: int) -> jax.Array:
-        return packed_prefix_lm_block_mask_blocks(
-            prefix_mask=prefix_mask,
-            q_segment_ids=q_segment_ids,
-            kv_segment_ids=kv_segment_ids,
-            q_seq_len=context.q_seq_len,
-            kv_seq_len=context.kv_seq_len,
-            block_q=block_q,
-            block_kv=block_kv,
-        )
-
-    return _blocked_packed_dynamic_mask_infos(mask_block_builder=mask_block_builder, context=context)
-
-
-def packed_prefix_lm_block_mask_blocks(
-    *,
-    prefix_mask: jax.Array,
-    q_segment_ids: jax.Array,
-    kv_segment_ids: jax.Array,
-    q_seq_len: int,
-    kv_seq_len: int,
-    block_q: int,
-    block_kv: int,
-) -> jax.Array:
-    """Build mask blocks for ``same_segment(q, kv) & (kv <= q | prefix_mask[kv])``."""
-    prefix_mask = jnp.asarray(prefix_mask, dtype=jnp.bool_)
-    if prefix_mask.ndim != 1:
-        raise ValueError(f"prefix_mask must be rank 1 after batching, got shape {prefix_mask.shape}.")
-    if prefix_mask.shape[0] != kv_seq_len:
-        raise ValueError(f"prefix_mask length {prefix_mask.shape[0]} must match kv_seq_len={kv_seq_len}.")
-
-    mask_inputs = _blocked_packed_segment_mask_inputs(
-        q_segment_ids=q_segment_ids,
-        kv_segment_ids=kv_segment_ids,
-        q_seq_len=q_seq_len,
-        kv_seq_len=kv_seq_len,
-        block_q=block_q,
-        block_kv=block_kv,
-    )
-    causal_or_prefix = mask_inputs.kv_positions <= mask_inputs.q_positions
-    prefix = prefix_mask.reshape(mask_inputs.kv_blocks, block_kv)[None, :, None, :]
-    return mask_inputs.same_segment & (causal_or_prefix | prefix)
 
 
 def packed_prefix_lm_segment_run_mask_infos(
@@ -1156,12 +1079,12 @@ def lower_splash_attention_mask(
             causal_mask = splash_attention_mask.LogicalAnd(causal_mask, local_mask)
 
         if prefix_lm is not None and prefix_lm.prefix_length is not None:
-            prefix_mask = PrefixMask(
+            static_prefix = PrefixMask(
                 shape=(q_seq_len, kv_seq_len),
                 prefix_length=prefix_lm.prefix_length,
                 shard_count=q_seq_shards,
             )
-            base_mask = splash_attention_mask.LogicalOr(causal_mask, prefix_mask)
+            base_mask = splash_attention_mask.LogicalOr(causal_mask, static_prefix)
         else:
             base_mask = causal_mask
 
