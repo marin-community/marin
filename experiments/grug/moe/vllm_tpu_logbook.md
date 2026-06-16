@@ -2090,6 +2090,413 @@ Conclusion:
   output, the residual `x + attn`, and `self.mlp_gated_norm(self.rms_mlp(x))`
   before the route call.
 
+## 2026-06-16 Forward-Pass Parity and Request-Aware Attention Mask
+
+Branches and commits:
+
+- Marin worktree:
+  `/home/romain/dev/marin-wt/grugmoe-forward-parity-20260616`.
+- Marin branch: `codex/grugmoe-forward-parity-20260616`.
+  - `e6591e0908dc1e9388403df1cc06ee5266e10e4f`: added gated forward-pass
+    diagnostics to the installed vLLM canary/small-diagnostic harness.
+  - `08d4e70d7f269c517f7da9f141d337e5400da312`: pinned the fixed
+    tpu-inference branch in `pyproject.toml` and `uv.lock`.
+- tpu-inference worktree:
+  `/home/romain/dev/marin-wt/grugmoe-routing-debug-tpu-20260615`.
+- tpu-inference branch: `codex/grugmoe-forward-parity-tpu-20260616`.
+  - `a6c23f100c42109410fa0a4d5e668aabd70171e7`: added gated
+    `GRUGMOE_FORWARD_DEBUG` probes.
+  - `8b235ead78efbcad3f775bf9349a6edd479b3a18`: fixed dense GrugMoE
+    attention masking for padded/request slots.
+- vLLM branch unchanged from the prior diagnostic stack:
+  `codex/grugmoe-expert-indices-vllm-20260615`,
+  `c6f0608ddadb6bdd39a16b857b5affe660b1259e`.
+
+Local checks:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-routing-debug-tpu-20260615
+python -m py_compile tpu_inference/models/jax/grugmoe.py
+git diff --check
+
+cd /home/romain/dev/marin-wt/grugmoe-forward-parity-20260616
+python -m py_compile \
+  experiments/grug/moe/installed_vllm_full_canary_smoke.py \
+  experiments/grug/moe/vllm_tpu_parity.py
+VLLM_TARGET_DEVICE=tpu uv lock --check
+git diff --check
+env -u PYTHONPATH VLLM_TARGET_DEVICE=tpu \
+  uv run --locked --package marin-core --extra vllm --extra eval \
+  python -m experiments.grug.moe.installed_vllm_full_canary_smoke --help
+uv run black \
+  experiments/grug/moe/installed_vllm_full_canary_smoke.py \
+  experiments/grug/moe/vllm_tpu_parity.py
+./infra/pre-commit.py \
+  experiments/grug/moe/installed_vllm_full_canary_smoke.py \
+  experiments/grug/moe/vllm_tpu_parity.py \
+  pyproject.toml \
+  uv.lock
+```
+
+Result: all local checks passed after formatting. The help output showed both
+`--forward-debug` and `--vllm-dtype`.
+
+Diagnostic changes:
+
+- Added opt-in forward debug to the Marin installed-vLLM harness:
+  `--forward-debug`, `--forward-debug-token-position`,
+  `--forward-debug-layer`, and `--forward-debug-vector-limit`.
+- The reference JSON can now include Levanter/manual forward summaries for:
+  input IDs, positions, `query_start_loc`, `seq_lens`, embedding output,
+  layer attention input/output, post-attention residual, MLP/router input,
+  layer output, and final hidden state.
+- Added matching gated tpu-inference runtime probes behind
+  `GRUGMOE_FORWARD_DEBUG`.
+- Routing and forward debug selectors are required to target the same
+  token/layer when both are enabled.
+
+Small diagnostic pre-fix probe:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-forward-parity-20260616
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 7200 \
+  --cpu 16 \
+  --memory 256GB \
+  --disk 300GB \
+  --job-name grugmoe-forward-parity-probe-$(date +%Y%m%d-%H%M%S) \
+  -e VLLM_TARGET_DEVICE tpu \
+  -- env -u PYTHONPATH \
+    VLLM_TARGET_DEVICE=tpu \
+    PYTHONUNBUFFERED=1 \
+    LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304 \
+    bash -lc 'set -euo pipefail
+OUTPUT_DIR=/tmp/grugmoe-forward-parity-probe-installed-vllm
+uv run --locked --package marin-core --extra vllm --extra eval \
+  python -m experiments.grug.moe.installed_vllm_full_canary_smoke \
+  --phase export \
+  --model-size small-diagnostic \
+  --output-dir "$OUTPUT_DIR" \
+  --max-shard-size 4194304 \
+  --generation-tokens 3 \
+  --routing-debug \
+  --routing-debug-token-position 0 \
+  --routing-debug-layer 0 \
+  --routing-debug-vector-limit 16 \
+  --forward-debug \
+  --forward-debug-token-position 0 \
+  --forward-debug-layer 0 \
+  --forward-debug-vector-limit 16
+uv run --locked --package marin-core --extra vllm --extra eval \
+  python -m experiments.grug.moe.installed_vllm_full_canary_smoke \
+  --phase score \
+  --model-size small-diagnostic \
+  --output-dir "$OUTPUT_DIR" \
+  --artifact-dir "$OUTPUT_DIR/grugmoe-inference" \
+  --reference-path "$OUTPUT_DIR/installed_vllm_reference.json" \
+  --max-shard-size 4194304 \
+  --generation-tokens 3 \
+  --vllm-dtype float32 \
+  --routing-debug \
+  --routing-debug-token-position 0 \
+  --routing-debug-layer 0 \
+  --routing-debug-vector-limit 16 \
+  --forward-debug \
+  --forward-debug-token-position 0 \
+  --forward-debug-layer 0 \
+  --forward-debug-vector-limit 16'
+```
+
+Pre-fix TPU job:
+
+- Job: `/romain/grugmoe-forward-parity-probe-20260616-004228`.
+- Region/TPU: `europe-west4`, `v6e-4`.
+- Marin commit: `e6591e0908dc1e9388403df1cc06ee5266e10e4f`.
+- tpu-inference commit: `a6c23f100c42109410fa0a4d5e668aabd70171e7`.
+- Final state: failed in the expected routing guard with
+  `AssertionError: 3 routed-expert mismatches had boundary margin > 0.01`.
+- Local full log:
+  `/tmp/grugmoe-forward-parity-probe-20260616-004228.log`.
+
+Pre-fix evidence:
+
+- Installed vLLM runtime score inputs contained padded token slots:
+  `input_ids=[1,42,128,2048,17,3072,5,63,3045,2536,3106,0,0,0,0,0]`,
+  `positions=[0,1,2,3,4,5,6,7,8,9,10,0,0,0,0,0]`,
+  `query_start_loc=[0,11,1,1,1,1,1,1,1]`, and
+  `seq_lens=[11,0,0,0,0,0,0,0]`.
+- First substantial divergence was layer `0` attention output for token `0`:
+  Levanter/manual `layer_attn_output.l2=4.4461622370685903e-07`;
+  installed tpu-inference `layer_attn_output.l2=2.169320345158314`.
+- Embedding output and layer attention input were already close before that
+  stage: Levanter embedding `l2=11.351737170876017`, installed embedding
+  `l2=11.351666454876721`; Levanter attention input `l2=11.294079048357062`,
+  installed attention input `l2=11.294183651988766`.
+- The divergent attention output changed the layer `0` MLP/router input:
+  Levanter first values
+  `[0.8003653287887573, 0.9361541867256165, 0.4786311388015747,
+  0.3288799822330475]`; installed first values
+  `[0.8536180853843689, 0.9874662756919861, 0.4545571804046631,
+  0.3482293486595154]`.
+- Token `0`, layer `0` router logits diverged:
+  Levanter `[0.11579327285289764, 0.18306951224803925,
+  0.1365107148885727, -0.06385284662246704]`; installed
+  `[0.19385746121406555, 0.13631269335746765, 0.02195437252521515,
+  -0.03043171763420105]`.
+- Token `0`, layer `0` selected experts remained wrong:
+  Levanter `[1, 2]`; installed `[0, 1]`.
+- Routing summary:
+  `mismatch_count=5`, `ordered_topk_match_rate=0.7727272727272727`,
+  `unordered_full_match_rate=0.8636363636363636`,
+  `suspicious_mismatch_count=3`.
+- Selected-token logprobs were still numerically close:
+  `max_abs_delta=0.0019140243530273438`,
+  `mean_abs_delta=0.0013613700866699219`.
+
+Conclusion from the pre-fix probe:
+
+- The first real forward-pass divergence was not router top-k, not router bias,
+  and not installed output plumbing. It was layer `0` dense attention output.
+- The installed runtime batch had padded token slots with `input_id=0` and
+  `position=0`. The dense GrugMoE attention mask only enforced positional
+  causal/sliding constraints, so token `0` could attend to padded position-0
+  slots. The Levanter/manual static reference did not include those padded
+  slots.
+
+Fix:
+
+- In tpu-inference `GrugMoeAttention`, added a request-aware dense attention
+  mask built from `attention_metadata.query_start_loc`.
+- The mask keeps the existing causal/sliding-window position behavior and also
+  requires query/key tokens to belong to the same valid request interval.
+- Invalid padded request intervals where `end <= start` are excluded.
+- `query_start_loc` is now passed through `GrugMoeModel`, `GrugMoeDecoderLayer`,
+  and `GrugMoeAttention`.
+- Diagnostics remain gated by env vars and flags.
+
+Small diagnostic fixed rerun:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-forward-parity-20260616
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 7200 \
+  --cpu 16 \
+  --memory 256GB \
+  --disk 300GB \
+  --job-name grugmoe-forward-parity-fix-$(date +%Y%m%d-%H%M%S) \
+  -e VLLM_TARGET_DEVICE tpu \
+  -- env -u PYTHONPATH \
+    VLLM_TARGET_DEVICE=tpu \
+    PYTHONUNBUFFERED=1 \
+    LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304 \
+    bash -lc 'set -euo pipefail
+OUTPUT_DIR=/tmp/grugmoe-forward-parity-fix-installed-vllm
+uv run --locked --package marin-core --extra vllm --extra eval \
+  python -m experiments.grug.moe.installed_vllm_full_canary_smoke \
+  --phase export \
+  --model-size small-diagnostic \
+  --output-dir "$OUTPUT_DIR" \
+  --max-shard-size 4194304 \
+  --generation-tokens 3 \
+  --routing-debug \
+  --routing-debug-token-position 0 \
+  --routing-debug-layer 0 \
+  --routing-debug-vector-limit 16 \
+  --forward-debug \
+  --forward-debug-token-position 0 \
+  --forward-debug-layer 0 \
+  --forward-debug-vector-limit 16
+uv run --locked --package marin-core --extra vllm --extra eval \
+  python -m experiments.grug.moe.installed_vllm_full_canary_smoke \
+  --phase score \
+  --model-size small-diagnostic \
+  --output-dir "$OUTPUT_DIR" \
+  --artifact-dir "$OUTPUT_DIR/grugmoe-inference" \
+  --reference-path "$OUTPUT_DIR/installed_vllm_reference.json" \
+  --max-shard-size 4194304 \
+  --generation-tokens 3 \
+  --vllm-dtype float32 \
+  --routing-debug \
+  --routing-debug-token-position 0 \
+  --routing-debug-layer 0 \
+  --routing-debug-vector-limit 16 \
+  --forward-debug \
+  --forward-debug-token-position 0 \
+  --forward-debug-layer 0 \
+  --forward-debug-vector-limit 16'
+```
+
+Fixed small diagnostic TPU job:
+
+- Job: `/romain/grugmoe-forward-parity-fix-20260616-004826`.
+- Region/TPU: `europe-west4`, `v6e-4`.
+- Marin commit: `08d4e70d7f269c517f7da9f141d337e5400da312`.
+- tpu-inference commit: `8b235ead78efbcad3f775bf9349a6edd479b3a18`.
+- Final state: succeeded, exit `0`, duration `2 minutes and 35.9 seconds`.
+- Local full log:
+  `/tmp/grugmoe-forward-parity-fix-20260616-004826.log`.
+
+Fixed small diagnostic evidence:
+
+- Export/load still consumed all tensors:
+  `expected_tensors=46`, `consumed_tensors=46`, `missing=[]`,
+  `unexpected=[]`.
+- Installed layer `0` attention output for token `0` dropped from the bad
+  `l2=2.169320345158314` to `l2=0.007813026244954918`
+  against the Levanter/manual near-zero
+  `l2=4.4461622370685903e-07`.
+- Installed layer `0` MLP/router input first values became close to Levanter:
+  installed
+  `[0.8002162575721741, 0.9364266991615295, 0.4783151149749756,
+  0.32890501618385315]` versus Levanter
+  `[0.8003653287887573, 0.9361541867256165, 0.4786311388015747,
+  0.3288799822330475]`.
+- Token `0`, layer `0` router logits became close:
+  installed `[0.11683864891529083, 0.18337967991828918,
+  0.13534316420555115, -0.06505805253982544]` versus Levanter
+  `[0.11579327285289764, 0.18306951224803925,
+  0.1365107148885727, -0.06385284662246704]`.
+- Token `0`, layer `0` selected experts matched:
+  installed `[1, 2]`, Levanter `[1, 2]`.
+- Final vLLM routed-experts output for token `0` matched all layers:
+  `[[1, 2], [3, 0]]`.
+- Routing summary:
+  `mismatch_count=0`, `ordered_topk_match_rate=1.0`,
+  `unordered_full_match_rate=1.0`, `top1_match_rate=1.0`,
+  `suspicious_mismatch_count=0`.
+- Selected-token logprobs remained close:
+  `max_abs_delta=0.0019140243530273438`,
+  `mean_abs_delta=0.0013613700866699219`.
+- Final result:
+  `installed_path_result=works:full_canary_logprobs_and_routing`.
+
+Full canary regression command:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-forward-parity-20260616
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 7200 \
+  --cpu 16 \
+  --memory 256GB \
+  --disk 300GB \
+  --job-name grugmoe-forward-parity-full-canary-$(date +%Y%m%d-%H%M%S) \
+  -e VLLM_TARGET_DEVICE tpu \
+  -- env -u PYTHONPATH \
+    VLLM_TARGET_DEVICE=tpu \
+    PYTHONUNBUFFERED=1 \
+    LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304 \
+    bash -lc 'set -euo pipefail
+OUTPUT_DIR=/tmp/grugmoe-forward-parity-full-canary-installed-vllm
+uv run --locked --package marin-core --extra vllm --extra eval \
+  python -m experiments.grug.moe.installed_vllm_full_canary_smoke \
+  --phase all \
+  --model-size full-canary \
+  --output-dir "$OUTPUT_DIR" \
+  --max-shard-size 268435456 \
+  --generation-tokens 3 \
+  --vllm-dtype bfloat16'
+```
+
+Full canary regression result:
+
+- Job: `/romain/grugmoe-forward-parity-full-canary-20260616-005503`.
+- Region/TPU: `europe-west4`, `v6e-4`.
+- Marin commit: `08d4e70d7f269c517f7da9f141d337e5400da312`.
+- tpu-inference commit: `8b235ead78efbcad3f775bf9349a6edd479b3a18`.
+- vLLM commit: `c6f0608ddadb6bdd39a16b857b5affe660b1259e`.
+- Final state: succeeded, exit `0`, duration `12 minutes and 52.29 seconds`.
+- Local full log:
+  `/tmp/grugmoe-forward-parity-full-canary-20260616-005503.log`.
+
+Full canary export/load evidence:
+
+- Config source: `GRUG_MOE_TRIAL_MODEL`.
+- Shape:
+  hidden `1024`, layers `11`, heads `8`, KV heads `2`, experts `64`,
+  experts per token `4`, vocab `128256`, sliding window `4096`.
+- Manual-copy native reference matched Levanter hidden states, logits, and
+  routed experts.
+- Full-forward greedy Levanter/native generated continuation:
+  `[57524, 45040, 67859]`.
+- Sharded training-state export loaded in native tpu-inference and matched
+  Levanter/manual-copy hidden states, logits, and routed expert IDs.
+- `artifact_bytes=5762169526`, `shard_count=26`,
+  `expected_tensors=217`, `consumed_tensors=217`, `missing=[]`,
+  `unexpected=[]`.
+
+Full canary serve evidence:
+
+- `serve_artifact_dir=/tmp/grugmoe-forward-parity-full-canary-installed-vllm/grugmoe-inference`.
+- vLLM server initialized: `vllm_server_initialized=True`.
+- Generate request returned `vllm_generate_status_code=200`.
+- Server smoke generated continuation `[57524, 11239, 42315]` for prompt
+  `[1, 42, 128, 2048, 17, 3072, 5, 63]`.
+- Final result:
+  `installed_path_result=works:full_canary_generate`.
+
+Full canary score/routing evidence:
+
+- `score_vllm_dtype=bfloat16`.
+- Fixed-continuation score generated the Levanter/native continuation:
+  `[57524, 45040, 67859]`.
+- Selected-token logprobs were close:
+  `max_abs_delta=0.008803367614746094`,
+  `mean_abs_delta=0.003093083699544271`.
+- Routing summary:
+  `token_layer_count=121`, `top_k=4`, `top1_match_rate=1.0`,
+  `ordered_topk_match_rate=0.9256198347107438`,
+  `unordered_full_match_rate=0.9752066115702479`,
+  `mismatch_count=9`, `low_margin_boundary_mismatch_count=3`,
+  `suspicious_mismatch_count=0`.
+- The remaining full-canary route differences were either ordering changes in
+  the top-k set or low-margin boundary differences; no high-margin missing-set
+  route mismatch remained.
+- Final result:
+  `installed_path_result=works:full_canary_logprobs_and_routing`.
+
+Remaining caveats:
+
+- The small diagnostic installed attention output is no longer corrupted by
+  padded slots, but it is not bit-exact against the Levanter/manual near-zero
+  value: `l2=0.007813026244954918` versus
+  `4.4461622370685903e-07`. The downstream router inputs, router logits,
+  selected experts, and selected-token logprobs align within the documented
+  tolerance for this task.
+- Full canary bfloat16 still has top-k ordering differences and low-margin
+  boundary substitutions, but top-1 routing is 100%, unordered full top-k set
+  match rate is 97.5%, suspicious mismatches are 0, and logprobs are close.
+- The new forward/routing probes are diagnostic code and remain behind flags or
+  env vars. They should either stay as guarded troubleshooting support or be
+  removed before a production cleanup PR, depending on reviewer preference.
+- This validation covers full-forward prefill/generation smoke. It does not
+  prove multi-step production KV-cache decode quality for a trained external
+  checkpoint.
+
+Next recommended checks:
+
+- Run the same installed-path score/serve smoke on the next real trained
+  GrugMoE checkpoint once one is available.
+- Add a focused decode/KV-cache continuation check if production serving will
+  rely on longer multi-token decode beyond this short smoke.
+- Upstream the request-aware dense attention mask fix to the maintained
+  tpu-inference branch, then decide whether to keep or drop the gated debug
+  probes in the final PR.
+
 ## Scope
 
 In scope:
