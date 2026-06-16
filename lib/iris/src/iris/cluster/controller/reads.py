@@ -34,6 +34,7 @@ from iris.cluster.controller.codec import (
     resource_spec_from_scalars,
 )
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.reconcile.policy import NON_TERMINAL_TASK_STATES
 from iris.cluster.controller.reconcile.worker import ReconcileRow
 from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
@@ -1237,6 +1238,20 @@ def list_active_tasks_for_jobs(
     for jid, task_rows in lists.items():
         result[jid] = tuple(task_rows)
     return result
+
+
+def count_active_tasks_for_user(tx: Tx, user_id: str) -> int:
+    """Return the number of non-terminal tasks across all jobs owned by ``user_id``."""
+    return int(
+        tx.execute(
+            select(func.count())
+            .select_from(tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id))
+            .where(jobs_table.c.user_id == bindparam("user_id"))
+            .where(tasks_table.c.state.in_(bindparam("states", expanding=True))),
+            {"user_id": user_id, "states": list(NON_TERMINAL_TASK_STATES)},
+        ).scalar()
+        or 0
+    )
 
 
 # ---------------------------------------------------------------------------

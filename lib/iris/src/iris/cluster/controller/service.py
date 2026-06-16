@@ -57,6 +57,7 @@ from iris.cluster.controller.projections.endpoints import (
 )
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
+from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
@@ -1040,6 +1041,24 @@ class ControllerServiceImpl:
                     f"if you believe your username ({job_id.user}) should have a higher band — "
                     f"either to be added to the researcher list or to confirm your username is "
                     f"registered correctly.",
+                )
+
+        # Cap the number of non-terminal tasks a single user may hold at once.
+        # A burst of eval submissions once materialized enough tasks to OOM the
+        # controller (#6411); reject up front any submission that would push the
+        # user past the cap. Keyed on job_id.user, so a launcher that admits
+        # tasks gradually stays under the cap as earlier tasks finish.
+        incoming_tasks = int(request.replicas)
+        if incoming_tasks > 0:
+            with self._db.read_snapshot() as _snap:
+                active_tasks = reads.count_active_tasks_for_user(_snap, job_id.user)
+            if active_tasks + incoming_tasks > MAX_ACTIVE_TASKS_PER_USER:
+                raise ConnectError(
+                    Code.RESOURCE_EXHAUSTED,
+                    f"User {job_id.user} has {active_tasks} active task(s); submitting "
+                    f"{incoming_tasks} more would exceed the per-user cap of "
+                    f"{MAX_ACTIVE_TASKS_PER_USER}. Wait for running tasks to finish, or "
+                    f"structure the work as a launcher job that admits tasks gradually.",
                 )
 
         # Reject submissions whose parent is absent or already terminated.

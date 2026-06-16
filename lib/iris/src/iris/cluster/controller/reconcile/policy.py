@@ -14,6 +14,14 @@ from iris.rpc import job_pb2
 MAX_REPLICAS_PER_JOB = 10000
 """Maximum replicas allowed per job to prevent resource exhaustion."""
 
+MAX_ACTIVE_TASKS_PER_USER = 16000
+"""Maximum non-terminal tasks a single user may have admitted at once.
+
+A submission that would push a user past this is rejected up front, before its
+tasks are materialized, to keep one user's burst from OOMing the controller. A
+launcher job that admits tasks gradually stays under the cap as earlier tasks
+finish and free budget. Raise as controller capacity improves (#6411)."""
+
 DEFAULT_MAX_RETRIES_PREEMPTION = 100
 """Default preemption retries. High because worker failures are typically transient."""
 

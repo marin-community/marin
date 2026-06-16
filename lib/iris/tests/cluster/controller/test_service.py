@@ -28,7 +28,7 @@ from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.schema import jobs_table, task_attempts_table
+from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,
     FRESHNESS_WINDOW,
@@ -306,6 +306,45 @@ def test_launch_job_rejects_duplicate_name(service):
 
     assert exc_info.value.code == Code.ALREADY_EXISTS
     assert "still running" in exc_info.value.message
+
+
+def test_launch_job_rejects_exceeding_per_user_task_cap(service, state, monkeypatch):
+    """A submission that would push the user past the per-user active-task cap is rejected.
+
+    Only non-terminal tasks count: once the first job's tasks finish, the freed
+    budget lets the next submission through.
+    """
+    monkeypatch.setattr(service_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
+
+    # 3 active tasks for test-user: under the cap.
+    service.launch_job(make_job_request("job-a", replicas=3), None)
+
+    # 3 more would bring the total to 6 > 5: rejected, and job-b is not created.
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(make_job_request("job-b", replicas=3), None)
+    assert exc_info.value.code == Code.RESOURCE_EXHAUSTED
+    assert _query_job(state, JobName.root("test-user", "job-b")) is None
+
+    # Finishing job-a's tasks frees the budget; the resubmission now succeeds.
+    with state._db.transaction() as cur:
+        cur.execute(
+            sa_update(tasks_table)
+            .where(tasks_table.c.job_id == JobName.root("test-user", "job-a"))
+            .values(state=job_pb2.TASK_STATE_SUCCEEDED)
+        )
+    service.launch_job(make_job_request("job-b", replicas=3), None)
+    assert _query_job(state, JobName.root("test-user", "job-b")) is not None
+
+
+def test_launch_job_user_task_cap_is_per_user(service, state, monkeypatch):
+    """The cap is scoped per user: one user's tasks don't count against another's."""
+    monkeypatch.setattr(service_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
+
+    service.launch_job(make_job_request("/alice/job", replicas=5), None)
+
+    # Bob is unaffected by Alice's tasks.
+    service.launch_job(make_job_request("/bob/job", replicas=5), None)
+    assert _query_job(state, JobName.from_string("/bob/job")) is not None
 
 
 @pytest.mark.parametrize(
