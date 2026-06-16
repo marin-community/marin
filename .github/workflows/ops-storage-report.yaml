@@ -32,9 +32,11 @@ concurrency:
 jobs:
   report:
     runs-on: ubuntu-latest
-    # The scan alone can run up to MAX_SCAN_SECONDS (90 min); leave room for
-    # dedup, aggregation, gist, and the Discord post on top of that.
-    timeout-minutes: 150
+    # The scan usually finishes early once it drains to a few straggler tasks,
+    # but can run up to MAX_SCAN_SECONDS (90 min) plus Iris scheduling overhead;
+    # leave generous room for dedup, aggregation, gist, and the Discord post so
+    # the publish step is never the thing that gets guillotined.
+    timeout-minutes: 240
     env:
       IRIS_CONFIG: lib/iris/config/marin.yaml
     steps:
