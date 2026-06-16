@@ -688,3 +688,12 @@ Loss progression: pf8 baseline 3.5523 -> beta2=0.95 3.5475 -> +lr0.70 3.5407 (be
 tok/s of that run = 293k (contention-dragged, max 319k) -> NOT the clean throughput; the FINAL single
 deliverable must run low-contention to show >=330k. Mapping LR curve (0.55/0.60/0.80, 150834/55/08) for the
 optimum, then run the winning config ALONE for the clean >=330k + 3min-compile + <3.5438 in ONE run.
+
+### MuonH magnitude-direction decoupling — MFU "sink" diagnosis (2026-06-16, issue #6388)
+gate-1 d512: gain_lr=adam_lr (2.26e-3) BEST = paloma 3.5329 (-0.0109 vs base 3.5438). d768@1e-3 = 3.2313.
+Apparent throughput sink (mean 496k vs base 530k = 6.5%) is MOSTLY ARTIFACT: 6.1% of steps are pauses
+(<0.7*median) from the 3-min checkpoint interval (added for preemptible) + evals + data-loader stalls.
+Median=517k, mean-excl-pauses=516k -> TRUE decoupling overhead only ~2.6%. eff_speedup: 0.994 (mean-all)
+-> 1.032 (clean). So gate-1 d512 PASSES with clean tok/s. Recover-MFU plan: re-run winners on RESERVED
+v4-32 with 10-min checkpoints (no preemption -> no frequent-save pauses) to measure clean throughput;
+optionally trim optimizer-step elementwise passes (recover/split/reassemble) for the residual 2.6%.
