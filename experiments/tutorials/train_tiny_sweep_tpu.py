@@ -9,9 +9,14 @@ Submits ``NUM_WORKERS`` independent TPU jobs; each worker races on
 no CPU coordinator. ``SWEEP_NAME`` is the stable lock-path key — bump it to
 start a fresh sweep over the same grid.
 
-This example uses a single-host slice (``v4-8``), so each worker is one
-process. On a multi-host slice the whole gang acts as one worker: its leader
-(task 0) claims targets and the other hosts train alongside it — see
+Run it directly from a dev box; ``--tpu_type`` / ``--region`` pick the
+accelerator (default ``v4-8``)::
+
+    uv run python experiments/tutorials/train_tiny_sweep_tpu.py --cluster=marin
+
+The default ``v4-8`` is a single-host slice, so each worker is one process. On a
+multi-host slice the whole gang acts as one worker: its leader (task 0) claims
+targets and the other hosts train alongside it — see
 ``marin.execution.sweep_coordination``. A multi-host sweep must also pass
 ``ports=["actor"]`` in its ``JobRequest`` so the leader's coordination actor is
 reachable by its followers.
@@ -31,16 +36,16 @@ from marin.training.training import resolve_training_env
 
 from experiments.defaults import _run_training_on_worker, prepare_lm_train
 from experiments.evals.task_configs import CORE_TASKS
-from experiments.launch import LaunchConfig, launch_session
+from experiments.launch import LaunchConfig, launch_session, override_resources
 from experiments.llama import llama_30m
 from experiments.pretraining_datasets.simple import tokenized
 from experiments.simple_train_config import SimpleTrainConfig
 
-RESOURCES = ResourceConfig.with_tpu("v4-8")
-EVALS = CORE_TASKS
+# Default accelerator; --tpu_type / --region override it (see override_resources).
+DEFAULT_TPU_TYPE = "v4-8"
 
 # Stable sweep identifier — derives the lock root so workers from different
-# `iris job run` invocations converge on the same target set. Bump for a fresh sweep.
+# invocations converge on the same target set. Bump for a fresh sweep.
 SWEEP_NAME = "train-tiny-sweep"
 
 # Sweep lock root lives in a fixed region (matches MARIN_REMOTE_STATE_DIR
@@ -54,26 +59,6 @@ SWEEP_ROOT = f"gs://marin-us-central2/sweeps/{SWEEP_NAME}"
 # here. Workers exit when no unclaimed targets remain.
 NUM_WORKERS = 3
 
-small_train_config = SimpleTrainConfig(
-    # Here we define the hardware resources we need.
-    resources=RESOURCES,
-    train_batch_size=128,
-    num_train_steps=10000,
-    # set hyperparameters
-    learning_rate=6e-4,
-    weight_decay=0.1,
-)
-
-sweep_configs = [
-    dataclasses.replace(
-        small_train_config,
-        learning_rate=lr,
-        weight_decay=wd,
-    )
-    for lr in [3e-4, 6e-4, 1e-3]
-    for wd in [0.0, 0.1, 0.2]
-]
-
 
 @dataclass(frozen=True)
 class SweepTrial:
@@ -81,73 +66,77 @@ class SweepTrial:
     raw_config: TrainLmConfig
 
 
-# Build all trials at submission time so workers do no config work. Configs
-# carry placeholders (OutputName, InputName) until resolved on the worker, so
-# checkpoint paths land in the *worker's* region after a cross-region
-# preemption.
-trials = []
-for sc in sweep_configs:
-    # Marin will automatically create unique ids for runs b/c the model_config is versioned
-    # however, we can give each run a unique name for easier identification
-    _name = f"tutorial-slimpajama_6b-30m-sweep-lr{sc.learning_rate}-wd{sc.weight_decay}"
-    _job_name, _raw_config = prepare_lm_train(
-        name=_name,
-        tokenized=tokenized["slimpajama_6b"],
-        model_config=versioned(llama_30m),
-        train_config=sc,
-        tags=["llama", "30m", "slimpajama_6b", "tutorial", "sweep", "test20251117"],
-        eval_harness_tasks=CORE_TASKS,
+def build_targets(resources: ResourceConfig) -> list[SweepTarget]:
+    """Build the LR/WD grid as placeholder-bearing trial configs for ``resources``.
+
+    Configs carry placeholders (OutputName, InputName) until resolved on the
+    worker, so checkpoint paths land in the *worker's* region after a
+    cross-region preemption. All workers in a submission call this with the same
+    ``resources`` and thus agree on the same target set and hardware.
+    """
+    base = SimpleTrainConfig(
+        resources=resources,
+        train_batch_size=128,
+        num_train_steps=10000,
+        learning_rate=6e-4,
+        weight_decay=0.1,
     )
-    trials.append(SweepTrial(name=_job_name, raw_config=_raw_config))
+    targets = []
+    for lr in [3e-4, 6e-4, 1e-3]:
+        for wd in [0.0, 0.1, 0.2]:
+            train_config = dataclasses.replace(base, learning_rate=lr, weight_decay=wd)
+            # A human-readable name per trial; Marin versions the run via model_config.
+            name = f"tutorial-slimpajama_6b-30m-sweep-lr{lr}-wd{wd}"
+            job_name, raw_config = prepare_lm_train(
+                name=name,
+                tokenized=tokenized["slimpajama_6b"],
+                model_config=versioned(llama_30m),
+                train_config=train_config,
+                tags=["llama", "30m", "slimpajama_6b", "tutorial", "sweep", "test20251117"],
+                eval_harness_tasks=CORE_TASKS,
+            )
+            targets.append(SweepTarget(target_id=job_name, config=SweepTrial(name=job_name, raw_config=raw_config)))
+    return targets
 
-targets = [SweepTarget(target_id=t.name, config=t) for t in trials]
 
-
-def _run_one(target: SweepTarget) -> None:
+def _run_one(target: SweepTarget, resources: ResourceConfig) -> None:
     """Resolve the trial's config under this worker's region and train inline."""
     trial: SweepTrial = target.config
     _run_training_on_worker(
         name=trial.name,
         raw_config=trial.raw_config,
         override_output_path=None,
-        resources=RESOURCES,
+        resources=resources,
     )
 
 
-def _sweep_worker_entrypoint(sweep_root: str) -> None:
-    """One TPU sweep worker: loop, claim a target, train inline.
+def _sweep_worker_entrypoint(sweep_root: str, resources: ResourceConfig) -> None:
+    """One TPU sweep worker: build the grid, then loop claiming and training targets.
 
-    ``sweep_root`` is the canonical (region-pinned) lock path baked into the
-    entrypoint args. All TPU replicas — across regions, across resubmissions —
-    contend on the same lock namespace regardless of where Iris schedules
-    them.
+    ``sweep_root`` is the canonical (region-pinned) lock path and ``resources``
+    is the hardware the job was scheduled on — both baked into the entrypoint
+    args. All TPU replicas — across regions, across resubmissions — contend on
+    the same lock namespace regardless of where Iris schedules them.
     """
-    claim_and_run(sweep_root, targets, _run_one)
+    targets = build_targets(resources)
+    claim_and_run(sweep_root, targets, lambda target: _run_one(target, resources))
 
 
 @draccus.wrap()
 def main(config: LaunchConfig):
-    # RESOURCES is baked into every trial config and the sweep lock path at
-    # module load, and each worker re-imports this module — so --tpu_type /
-    # --region / --zone cannot be honored. Reject them rather than silently
-    # training on the wrong hardware; edit RESOURCES for a different accelerator.
-    if config.tpu_type is not None or config.region is not None or config.zone is not None:
-        raise ValueError(
-            "train_tiny_sweep_tpu pins its accelerator in RESOURCES, so --tpu_type/--region/--zone "
-            "are not supported here. Edit RESOURCES in the script for a different accelerator or region."
-        )
+    resources = override_resources(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE), config)
     with launch_session(config):
         client = fray_client.current_client()
 
-        env = resolve_training_env(base_env=None, resources=RESOURCES)
+        env = resolve_training_env(base_env=None, resources=resources)
         handles = []
         for i in range(NUM_WORKERS):
             handle = client.submit(
                 JobRequest(
                     name=f"{SWEEP_NAME}-{i}",
-                    entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[SWEEP_ROOT]),
-                    resources=RESOURCES,
-                    environment=create_environment(env_vars=env, extras=extras_for_resources(RESOURCES)),
+                    entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[SWEEP_ROOT, resources]),
+                    resources=resources,
+                    environment=create_environment(env_vars=env, extras=extras_for_resources(resources)),
                 )
             )
             handles.append(handle)
