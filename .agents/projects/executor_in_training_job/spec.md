@@ -158,7 +158,8 @@ from levanter.data.text import ChatLmDatasetFormat
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 
-from experiments.defaults import default_tokenize, default_validation_sets
+from experiments.defaults import default_tokenize
+from marin.defaults import default_validation_sets
 from experiments.grug.base.launch import GrugBaseLaunchConfig, run_grug_base_trial
 from experiments.grug.base.model import GrugModelConfig
 from experiments.grug.base.train import GrugEvalConfig
@@ -167,20 +168,20 @@ from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.pretraining_datasets.dolmino import tokenize_dolmino
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, this_output_path   # <-- executor_main removed
+from marin.execution.executor import ExecutorStep, this_output_path  # <-- executor_main removed
 from marin.execution.remote import remote
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 # --- Model: 600M Grug ---
 model = GrugModelConfig(
-    vocab_size=128_256,
-    max_seq_len=4096,
-    hidden_dim=1024,
-    intermediate_dim=3584,
-    num_heads=16,
-    num_kv_heads=8,
-    num_layers=24,
+  vocab_size=128_256,
+  max_seq_len=4096,
+  hidden_dim=1024,
+  intermediate_dim=3584,
+  num_heads=16,
+  num_kv_heads=8,
+  num_layers=24,
 )
 
 # --- Schedule ---
@@ -197,63 +198,63 @@ midtrain = {"dolmino_math": dolmino["dolmino/math/metamath-owmfilter"]}
 
 smoltalk = get_instruction_dataset("HuggingFaceTB/smoltalk", splits=["train"])
 sft = {
-    "smoltalk": default_tokenize(
-        name="smoltalk_marin",
-        dataset=smoltalk / "**/*.jsonl.gz",
-        tokenizer=marin_tokenizer,
-        format=ChatLmDatasetFormat(),
-    )
+  "smoltalk": default_tokenize(
+    name="smoltalk_marin",
+    dataset=smoltalk / "**/*.jsonl.gz",
+    tokenizer=marin_tokenizer,
+    format=ChatLmDatasetFormat(),
+  )
 }
 
 # --- Time-varying mixture weights (unchanged) ---
 data = lm_varying_mixture_data_config(
-    components={**pretrain, **midtrain, **sft},
-    weights_list=[
-        (0, {"dclm": 1.0, "dolmino_math": 0.0, "smoltalk": 0.0}),
-        (PRETRAIN_STEPS, {"dclm": 0.7, "dolmino_math": 0.3, "smoltalk": 0.0}),
-        (PRETRAIN_STEPS + MIDTRAIN_STEPS, {"dclm": 0.0, "dolmino_math": 0.0, "smoltalk": 1.0}),
-    ],
+  components={**pretrain, **midtrain, **sft},
+  weights_list=[
+    (0, {"dclm": 1.0, "dolmino_math": 0.0, "smoltalk": 0.0}),
+    (PRETRAIN_STEPS, {"dclm": 0.7, "dolmino_math": 0.3, "smoltalk": 0.0}),
+    (PRETRAIN_STEPS + MIDTRAIN_STEPS, {"dclm": 0.0, "dolmino_math": 0.0, "smoltalk": 1.0}),
+  ],
 )
 data = dataclasses.replace(data, tokenizer=marin_tokenizer)
 data = add_validation_sets_to_mixture(data, default_validation_sets(tokenizer=data.tokenizer))
 
 # --- Training step (unchanged: still an ExecutorStep with embedded upstream deps) ---
 training_step = ExecutorStep(
-    name="reference-pipeline",
-    fn=remote(run_grug_base_trial, resources=ResourceConfig.with_tpu("v4-8")),
-    config=GrugBaseLaunchConfig(
-        model=model,
-        data=data,
-        output_path=this_output_path(),
-        run_id="reference-pipeline",
-        resources=ResourceConfig.with_tpu("v4-8"),
-        steps=TOTAL_STEPS,
-        batch_size=256,
-        seed=0,
-        mp="params=float32,compute=bfloat16,output=bfloat16",
-        tracker=WandbConfig(
-            project="marin",
-            tags=["reference", "pipeline"],
-            group="reference-pipeline",
-            name=None,
-        ),
-        optimizer=AdamConfig(
-            learning_rate=3e-3,
-            weight_decay=0.1,
-            warmup=0.05,
-            decay=0.2,
-        ),
-        eval=GrugEvalConfig(
-            steps_per_eval=500,
-        ),
+  name="reference-pipeline",
+  fn=remote(run_grug_base_trial, resources=ResourceConfig.with_tpu("v4-8")),
+  config=GrugBaseLaunchConfig(
+    model=model,
+    data=data,
+    output_path=this_output_path(),
+    run_id="reference-pipeline",
+    resources=ResourceConfig.with_tpu("v4-8"),
+    steps=TOTAL_STEPS,
+    batch_size=256,
+    seed=0,
+    mp="params=float32,compute=bfloat16,output=bfloat16",
+    tracker=WandbConfig(
+      project="marin",
+      tags=["reference", "pipeline"],
+      group="reference-pipeline",
+      name=None,
     ),
+    optimizer=AdamConfig(
+      learning_rate=3e-3,
+      weight_decay=0.1,
+      warmup=0.05,
+      decay=0.2,
+    ),
+    eval=GrugEvalConfig(
+      steps_per_eval=500,
+    ),
+  ),
 )
 
 if __name__ == "__main__":
-    # @remote → IrisClient.submit, blocks until the training job terminates.
-    # No DAG walk in this entrypoint; the training job materialises its own
-    # tokenize deps once it lands on a TPU in a specific region.
-    training_step.fn(training_step.config)
+  # @remote → IrisClient.submit, blocks until the training job terminates.
+  # No DAG walk in this entrypoint; the training job materialises its own
+  # tokenize deps once it lands on a TPU in a specific region.
+  training_step.fn(training_step.config)
 ```
 
 ### And the matching change in `experiments/grug/base/launch.py`

@@ -20,6 +20,7 @@ from fray import ResourceConfig
 from levanter.data.text import ChatLmDatasetFormat
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.optim import AdamConfig
+from marin.defaults import default_train
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import (
     interpolate_mixture_weights,
@@ -27,7 +28,6 @@ from marin.processing.tokenize.data_configs import (
     lm_varying_mixture_data_config,
 )
 
-from experiments.defaults import default_train
 from experiments.llama import llama_8b
 from experiments.long_context_datasets import (
     finepdfs_edu_by_language,

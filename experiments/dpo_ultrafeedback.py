@@ -7,11 +7,11 @@ Run DPO on the Ultrafeedback preference dataset using Marin's executor framework
 
 from fray.cluster import ResourceConfig
 from levanter.data.text import PreferenceChatLmDatasetFormat
+from marin.defaults import default_dpo
 from marin.execution.executor import executor_main
 from marin.execution.types import output_path_of
 from marin.processing.tokenize import lm_data_config
 
-from experiments.defaults import default_dpo
 from experiments.llama import LLAMA3_CHAT_STOP_TOKEN_IDS, llama_8b
 from experiments.marin_models import marin_tokenizer
 from experiments.models import llama_3_1_8b

@@ -9,9 +9,9 @@ and uses the mixture frmo 1880
 import dataclasses
 
 from fray.cluster import ResourceConfig
+from marin.defaults import default_sft
 from marin.execution.executor import executor_main
 
-from experiments.defaults import default_sft
 from experiments.evals.evals import default_sft_eval
 from experiments.exp1880_sft_baseline import mixture_config
 from experiments.marin_models import marin_tokenizer

@@ -11,10 +11,10 @@ import jax
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
 from levanter.models.llama import LlamaConfig
+from marin.defaults import default_train
 from marin.execution.executor import executor_main
 from marin.execution.types import versioned
 
-from experiments.defaults import default_train
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tokenization import default_tokenize
 

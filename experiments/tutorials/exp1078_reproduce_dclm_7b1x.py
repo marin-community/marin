@@ -18,9 +18,10 @@ Example usage:
 
 from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
+from marin.defaults import default_train
 from marin.execution.executor import executor_main
 
-from experiments.defaults import SimpleTrainConfig, default_train
+from experiments.defaults import SimpleTrainConfig
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 
 # Define the LlamaConfig for a 7B parameter model

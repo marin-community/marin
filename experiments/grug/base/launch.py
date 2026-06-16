@@ -21,12 +21,13 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from marin.defaults import default_validation_sets
 from marin.execution.executor import compute_output_path, materialize, resolve_local_placeholders, unwrap_versioned_value
 from marin.execution.types import this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.training.training import temporary_checkpoint_base_path
 
-from experiments.defaults import _submit_train_job, default_validation_sets
+from experiments.defaults import _submit_train_job
 from experiments.grug.base.model import GrugModelConfig
 from experiments.grug.base.train import (
     GrugEvalConfig,

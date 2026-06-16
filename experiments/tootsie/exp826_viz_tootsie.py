@@ -16,12 +16,12 @@ The differences were structural formatting differences in the eval data:
 The cooldown seems to function as a kind of sharpening/annealing
 """
 
+from marin.defaults import default_validation_sets
 from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 
-from experiments.defaults import default_validation_sets
 from experiments.llama import llama_8b_old_rotary
 from experiments.tootsie.exp600_tootsie import llama3_tokenizer, llama_8b
 

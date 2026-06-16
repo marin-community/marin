@@ -15,7 +15,8 @@ walks through setting up a DPO run end-to-end in Marin.
 ## Required Imports
 
 ```python
-from experiments.defaults import default_dpo
+
+from marin.defaults import default_dpo
 from experiments.llama import llama_3_1_8b
 from experiments.simple_dpo_config import SimpleDPOConfig
 from experiments.tokenization import default_tokenize

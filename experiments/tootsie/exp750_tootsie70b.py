@@ -20,9 +20,9 @@ import dataclasses
 
 from fray.cluster import ResourceConfig
 from levanter.schedule import ScheduleStep
+from marin.defaults import default_train
 from marin.execution.executor import executor_main
 
-from experiments.defaults import default_train
 from experiments.llama import llama_70b
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 from experiments.simple_train_config import SimpleTrainConfig

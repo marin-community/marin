@@ -142,16 +142,16 @@ This function takes a tokenized dataset, a model configuration, and a training c
 
 ```python
 from experiments.llama import llama_nano
-from experiments.defaults import default_train
+from marin.defaults import default_train
 
 nano_tinystories_model = default_train(
-    name="marin-nano-tinystories",
-    tokenized=tinystories_tokenized,
-    model_config=versioned(llama_nano),
-    train_config=nano_train_config,
-    tags=["llama", "nano", "tinystories", "tutorial"],
-    eval_harness_tasks=[],
-    use_default_validation=False,
+  name="marin-nano-tinystories",
+  tokenized=tinystories_tokenized,
+  model_config=versioned(llama_nano),
+  train_config=nano_train_config,
+  tags=["llama", "nano", "tinystories", "tutorial"],
+  eval_harness_tasks=[],
+  use_default_validation=False,
 )
 ```
 
