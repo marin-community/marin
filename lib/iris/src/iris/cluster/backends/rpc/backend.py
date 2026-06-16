@@ -55,15 +55,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_WORKER_RPC_TIMEOUT = Duration.from_seconds(10.0)
 
 # Max concurrent in-flight per-worker RPCs in a fan-out (asyncio.Semaphore width).
-# A full reconcile round costs ~DEFAULT_WORKER_RPC_TIMEOUT * ceil(num_workers /
-# parallelism): once num_workers exceeds the width, a single slow/timing-out
-# worker in each wave adds another timeout window to the round. Keep the width at
-# or above the fleet size so the whole fleet reconciles in one wave and a
-# straggler costs one timeout, not one-per-wave. The RPCs are async coroutines
-# sharing per-worker pyqwest connection pools, so a wider semaphore is cheap (the
-# real concurrency is still bounded by the worker count). 512 covers the current
-# fleet (~350) with headroom; raising it further is safe but only matters as the
-# fleet grows past this width.
+# Kept >= fleet size so the whole fleet reconciles in one wave and a slow worker
+# costs one RPC-timeout window per round, not one per wave.
 RECONCILE_FANOUT_PARALLELISM = 512
 
 # Generous deadline for an "unlimited" exec_in_container (negative timeout). Long

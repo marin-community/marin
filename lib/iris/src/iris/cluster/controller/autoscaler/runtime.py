@@ -83,11 +83,9 @@ _HEALTH_PROBE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({
 # timeouts would blow past evaluation_interval (10 s default).
 _HEALTH_PROBE_MAX_WORKERS = 64
 
-# Cap concurrent slice describe() calls in refresh(). Each describe is a blocking
-# GCP round-trip (two, for a still-queued reserved slice), so a large reserved
-# backlog (dozens of WAITING_FOR_RESOURCES queued resources) would otherwise
-# serialize into tens of seconds and starve the shared control loop. Mirrors
-# _HEALTH_PROBE_MAX_WORKERS.
+# Cap concurrent describe() calls in refresh(). Each is a blocking GCP round-trip
+# (two for a still-queued reserved slice), so a large reserved backlog would
+# otherwise serialize into tens of seconds and starve the shared control loop.
 _REFRESH_DESCRIBE_MAX_WORKERS = 64
 
 # Cap concurrent slice create/terminate cloud requests issued in one phase. The
@@ -136,14 +134,12 @@ def _probe_worker_health(worker_url: str) -> bool:
 
 
 def _safe_describe(slice_id: str, handle: SliceHandle) -> SliceStatus | None:
-    """Describe a slice, returning None (and logging) when the call raises.
-
-    Touches no autoscaler state, so it is safe to run concurrently on the
-    describe pool. A None result means "skip this slice this tick".
-    """
+    """Describe a slice on the fan-out pool, returning None (logged) if it raises."""
     try:
         return handle.describe()
     except Exception as e:
+        # A failed poll is transient: skip this slice this tick and retry. A slice
+        # that stays unresolvable is failed via the UNKNOWN/unresolvable-timeout path.
         logger.warning("Failed to poll slice %s: %s", slice_id, e)
         return None
 
@@ -548,8 +544,7 @@ class Autoscaler:
             for slice_id, handle in group.non_ready_slice_handles()
         ]
 
-        # Phase 2: fan out the blocking describe() over a bounded pool. A describe
-        # that raises is folded as None and the slice retried next tick.
+        # Phase 2: fan out the blocking describe() over a bounded pool.
         statuses = _run_io_batch(
             targets,
             lambda t: _safe_describe(t[1], t[2]),
