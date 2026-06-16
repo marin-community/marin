@@ -370,6 +370,13 @@ class SchedulingContext:
     reservation_entry_counts: dict[JobName, int]
     user_budget_defaults: UserBudgetDefaults
     running_for_preemption: list[RunningTaskInfo] = field(default_factory=list)
+    # Directly-reserved jobs whose own task co-locates on their reservation's
+    # claimed workers — i.e. the job's own resource request targets the same
+    # device class the reservation reserves. Only these are EQ-pinned to (and
+    # gated on) their claimed workers; a reservation whose own task is CPU-only
+    # while it reserves an accelerator is NOT here and schedules like a normal
+    # job. Empty when there are no reservations.
+    colocating_reservation_job_ids: frozenset[JobName] = field(default_factory=frozenset)
 
     # Derived from ``workers`` in __post_init__.
     capacities: dict[WorkerId, WorkerCapacity] = field(init=False)
@@ -433,6 +440,7 @@ class SchedulingContext:
             reservation_entry_counts=self.reservation_entry_counts,
             user_budget_defaults=self.user_budget_defaults,
             running_for_preemption=self.running_for_preemption,
+            colocating_reservation_job_ids=self.colocating_reservation_job_ids,
         )
 
     def matching_workers(self, constraints: Sequence[Constraint]) -> set[WorkerId]:

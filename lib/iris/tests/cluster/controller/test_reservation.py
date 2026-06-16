@@ -203,11 +203,12 @@ def _entrypoint() -> job_pb2.RuntimeEntrypoint:
 def _make_job_request_with_reservation(
     name: str = "res-job",
     reservation_entries: list[job_pb2.ReservationEntry] | None = None,
+    resources: job_pb2.ResourceSpecProto | None = None,
 ) -> controller_pb2.Controller.LaunchJobRequest:
     req = controller_pb2.Controller.LaunchJobRequest(
         name=name,
         entrypoint=_entrypoint(),
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        resources=resources or job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
@@ -689,23 +690,25 @@ def _real_demand(demand):
     return [d for d in demand if not any(RESERVATION_HOLDER_JOB_NAME in t for t in d.task_ids)]
 
 
-def test_demand_gates_real_task_until_reservation_claimed(ctrl):
-    """A reserved job's real task must not emit demand until its reservation is claimed.
+def test_demand_gates_colocating_real_task_until_reservation_claimed(ctrl):
+    """A *co-locating* reserved job's real task must not emit demand until claimed.
 
-    Regression for the europe-west4-a autoscaler thrash: an ``iris run`` job's
-    parent task is a tiny CPU driver that holds a GPU/TPU reservation. While the
-    reservation is unclaimed the scheduler gate (``apply_scheduling_gates``)
-    blocks the parent task, but ``compute_demand_entries`` used to emit CPU
-    demand for it anyway. The autoscaler then booted CPU workers the scheduler
-    would never let the task occupy; they idled out and were reaped every cycle,
-    forever. The demand path must apply the same reservation gate: only the
-    holder task generates demand (to provision the reserved capacity) until the
-    reservation is satisfied.
+    Regression for the europe-west4-a autoscaler thrash, restricted to the case
+    the gate is actually for: a job whose own task runs *on* the reserved worker
+    (here a GPU parent reserving a GPU). While the reservation is unclaimed the
+    scheduler gate (``apply_scheduling_gates``) blocks the parent task; the
+    demand path (``compute_demand_entries``) must apply the same gate so it does
+    not emit demand the scheduler would reject. Only the holder generates demand
+    (to provision the reserved capacity) until the reservation is satisfied.
     """
-    # Parent task is a CPU driver; the reservation is for a GPU no CPU worker can
-    # satisfy, so it stays unclaimed even though a CPU worker is available.
-    _register_worker(ctrl, "cpu1", _cpu_metadata())
-    req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_gpu_device("H100"))])
+    # Parent's own task requests the same device the reservation reserves (GPU),
+    # so it co-locates on the reserved worker. No GPU worker exists yet, so the
+    # reservation stays unclaimed.
+    gpu_resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3, device=_gpu_device("H100"))
+    req = _make_job_request_with_reservation(
+        reservation_entries=[_make_reservation_entry(_gpu_device("H100"))],
+        resources=gpu_resources,
+    )
     jid = _submit_job(ctrl, "j1", req)
 
     _claim_for_reservations(ctrl)
@@ -715,7 +718,7 @@ def test_demand_gates_real_task_until_reservation_claimed(ctrl):
     demand = _demand_no_dry_run(ctrl, claims)
     # Holder provisions the reserved GPU; the parent's real task is gated.
     assert len(_holder_demand(demand)) == 1
-    assert _real_demand(demand) == [], "real task must not emit demand while reservation is unclaimed"
+    assert _real_demand(demand) == [], "co-locating real task must not emit demand while reservation is unclaimed"
 
     # Once a matching worker is claimed, the gate opens and the real task may
     # emit demand again.
@@ -727,6 +730,111 @@ def test_demand_gates_real_task_until_reservation_claimed(ctrl):
     demand = _demand_no_dry_run(ctrl, claims)
     real_ids = {t for d in _real_demand(demand) for t in d.task_ids}
     assert jid.task(0).to_wire() in real_ids
+
+
+def test_device_mismatched_reservation_parent_not_gated(ctrl):
+    """A reservation whose own task targets a different device is NOT gated.
+
+    Regression for the 2026-06-08 canary thrash (and the ``/power`` v5p reserve
+    job that motivated this fix): ``iris run --reserve <tpu> --cpu N`` makes the
+    *parent* a CPU orchestrator that reserves a TPU it never runs on. The parent
+    must not wait on (or be EQ-pinned to) the reserved TPU workers — its own CPU
+    task schedules independently. So its real task emits CPU demand even while
+    the TPU reservation is unclaimed; only the holder provisions the TPU.
+
+    Before the fix the parent was treated as a co-locating reservation: the
+    demand path gated it (no CPU demand) while the scheduler EQ-pinned it to the
+    TPU-only claim, so it could never run, and (once claimed on a preemptible
+    worker the non-preemptible parent could not use) routed phantom CPU demand
+    that booted CPU VMs which idled out and were reaped every cycle.
+    """
+    tpu_device = job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant="v5p-8", count=4))
+    req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(tpu_device)])
+    jid = _submit_job(ctrl, "j1", req)
+
+    _claim_for_reservations(ctrl)
+    claims = read_reservation_claims(ctrl._db)
+    assert claims == {}  # no TPU worker, reservation unfulfilled
+
+    demand = _demand_no_dry_run(ctrl, claims)
+    # Holder provisions the reserved TPU; the CPU parent emits its own real demand.
+    assert len(_holder_demand(demand)) == 1
+    real_ids = {t for d in _real_demand(demand) for t in d.task_ids}
+    assert jid.task(0).to_wire() in real_ids, "device-mismatched parent must emit its own (CPU) demand"
+
+
+def test_device_mismatched_reservation_parent_schedules_on_cpu_worker(ctrl):
+    """The CPU parent of a TPU reservation schedules on a plain CPU worker.
+
+    The end-to-end anti-thrash property: rather than suppressing demand (which
+    left the parent stranded forever), the device-mismatched parent is placed on
+    a CPU worker matching its own request — so the CPU capacity the autoscaler
+    boots for it is actually used, not reaped. The parent must NOT be EQ-pinned
+    to the reservation's claimed workers and must NOT squat on them either.
+    """
+    # A plain CPU worker for the parent, plus a TPU worker the reservation claims.
+    _register_worker(ctrl, "cpu1", _cpu_metadata())
+    tpu_meta = job_pb2.WorkerMetadata(
+        hostname="tpu",
+        ip_address="127.0.0.1",
+        cpu_count=200,
+        memory_bytes=512 * 1024**3,
+        disk_bytes=1000 * 1024**3,
+        tpu_name="tpu-host",
+    )
+    tpu_meta.attributes[WellKnownAttribute.DEVICE_TYPE].CopyFrom(job_pb2.AttributeValue(string_value="tpu"))
+    tpu_meta.attributes[WellKnownAttribute.DEVICE_VARIANT].CopyFrom(job_pb2.AttributeValue(string_value="v5p-8"))
+    _register_worker(ctrl, "tpu1", tpu_meta)
+
+    tpu_device = job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant="v5p-8", count=4))
+    tpu_entry = job_pb2.ReservationEntry(
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3, device=tpu_device),
+        constraints=[device_variant_constraint(["v5p-8"]).to_proto()],
+    )
+    req = _make_job_request_with_reservation(reservation_entries=[tpu_entry])
+    jid = _submit_job(ctrl, "j1", req)
+
+    _claim_for_reservations(ctrl)
+    claims = read_reservation_claims(ctrl._db)
+    # The TPU worker is claimed for the reservation; the CPU worker is free.
+    assert WorkerId("tpu1") in claims
+
+    scheduler = Scheduler()
+    with ctrl._db.read_snapshot() as snap:
+        ctx = build_scheduling_context(
+            snap,
+            ctrl._health,
+            ctrl._worker_attrs,
+            ctrl._config.user_budget_defaults,
+            claims,
+            max_building_tasks=scheduler.max_building_tasks_per_worker,
+        )
+    # The parent is device-mismatched, so it is not a co-locating reservation.
+    assert jid not in ctx.colocating_reservation_job_ids
+
+    gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
+    assert jid.task(0) in gated.schedulable_task_ids, "CPU parent must pass the gate without a claim for itself"
+
+    order = compute_scheduling_order(ctx, gated)
+    jobs = inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
+    # The parent gets the NOT_EXISTS taint of a normal job (keeps it off the
+    # reserved TPU worker), never the EQ pin that stranded it.
+    parent_taint = [c for c in jobs[jid].constraints if c.key == RESERVATION_TAINT_KEY]
+    assert len(parent_taint) == 1
+    assert parent_taint[0].op == ConstraintOp.NOT_EXISTS
+
+    ctx.pending_tasks = list(order.ordered_task_ids)
+    building_counts = {wid: cap.building_task_count for wid, cap in ctx.capacities.items()}
+    ctx = ctx.evolve_with_workers(
+        workers=inject_reservation_taints(list(ctx.workers), claims),
+        jobs=jobs,
+        building_counts=building_counts,
+        max_building_tasks=scheduler.max_building_tasks_per_worker,
+    )
+    preference = preference_pass(ctx, gated.has_reservation, claims)
+    assignments = dict(preference + scheduler.find_assignments(ctx).assignments)
+    # The CPU parent lands on the plain CPU worker, not the reserved TPU worker.
+    assert assignments.get(jid.task(0)) == WorkerId("cpu1")
 
 
 # =============================================================================

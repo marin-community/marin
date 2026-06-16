@@ -22,6 +22,7 @@ from iris.cluster.constraints import (
     AttributeValue,
     Constraint,
     ConstraintOp,
+    DeviceType,
     PlacementRequirements,
     constraints_from_resources,
     evaluate_constraint,
@@ -141,14 +142,24 @@ def reservation_unsatisfied(
     task: PendingTask,
     claims_by_job: dict[str, int],
     reservation_entry_counts: dict[JobName, int],
+    colocating_reservation_job_ids: AbstractSet[JobName],
 ) -> bool:
     """Whether a real task must wait for its job's reservation to be claimed.
 
-    A non-holder task of a directly-reserved job is *unsatisfied* until the
-    number of workers claimed for its reservation reaches the reservation's
-    entry count. Such a task must neither be scheduled nor generate autoscaler
-    demand: the reservation's holder task provisions the reserved capacity, and
-    the real task runs only once that capacity exists.
+    A non-holder task of a *co-locating* directly-reserved job is *unsatisfied*
+    until the number of workers claimed for its reservation reaches the
+    reservation's entry count. Such a task must neither be scheduled nor
+    generate autoscaler demand: the reservation's holder task provisions the
+    reserved capacity, and the real task runs only once that capacity exists.
+
+    A directly-reserved job that does *not* co-locate (its own task targets a
+    different device class than the reservation — e.g. a CPU orchestrator that
+    reserves a TPU) is never gated here: it does not run on the reserved
+    workers, so it schedules on its own resources independent of the
+    reservation. Gating it would strand it whenever the reservation cannot be
+    claimed (device stockout), and EQ-pinning it (see
+    :func:`inject_taint_constraints`) would route phantom CPU demand the
+    scheduler can never satisfy (the 2026-06-08 canary thrash).
 
     Both the scheduling gate (:func:`apply_scheduling_gates`) and the demand
     path (:func:`compute_demand_entries`) consult this predicate so they agree.
@@ -157,6 +168,8 @@ def reservation_unsatisfied(
     thrashes, booting workers that are reaped as idle every cycle.
     """
     if task.is_reservation_holder or not task.has_reservation:
+        return False
+    if task.job_id not in colocating_reservation_job_ids:
         return False
     required = reservation_entry_counts.get(task.job_id, 0)
     return claims_by_job.get(task.job_id.to_wire(), 0) < required
@@ -168,6 +181,43 @@ def _claims_by_job(claims: dict[WorkerId, ReservationClaim] | None) -> dict[str,
     for claim in (claims or {}).values():
         counts[claim.job_id] += 1
     return counts
+
+
+def _own_device_type(res_device_json: str | None) -> DeviceType:
+    """Device class a task's *own* resource request targets (CPU when no accelerator)."""
+    dc = device_counts_from_json(res_device_json)
+    if dc.gpu > 0:
+        return DeviceType.GPU
+    if dc.tpu > 0:
+        return DeviceType.TPU
+    return DeviceType.CPU
+
+
+def _colocating_reservation_job_ids(
+    pending: list[PendingTask],
+    entry_device_types: dict[JobName, frozenset[DeviceType]],
+) -> frozenset[JobName]:
+    """Directly-reserved jobs whose own task co-locates on their reserved workers.
+
+    A ``--reserve`` job co-locates only when its own resource request targets the
+    same device class the reservation reserves (e.g. ``--reserve v5p-8`` with a
+    v5p-8 task). A reservation whose own task is CPU-only while it reserves an
+    accelerator (the common orchestrator/``dev_tpu`` pattern) does NOT co-locate:
+    the reserved workers exist for its holder and descendants, and the parent
+    task itself schedules on a worker matching its own request. Only co-locating
+    jobs are EQ-pinned to and gated on their claimed workers; see
+    :func:`inject_taint_constraints` and :func:`reservation_unsatisfied`.
+    """
+    result: set[JobName] = set()
+    for task in pending:
+        if not task.has_reservation:
+            continue
+        entries = entry_device_types.get(task.job_id)
+        if not entries:
+            continue
+        if _own_device_type(task.res_device_json) in entries:
+            result.add(task.job_id)
+    return frozenset(result)
 
 
 def compute_demand_entries(
@@ -248,11 +298,12 @@ def compute_demand_entries(
     jobs: dict[JobName, JobRequirements] = {}
     has_reservation: set[JobName] = set()
     has_direct_reservation: set[JobName] = set()
+    colocating = ctx.colocating_reservation_job_ids
     for task in pending:
         if task.job_id in jobs:
             continue
         jobs[task.job_id] = job_requirements_from_job(task)
-        if task.has_reservation:
+        if task.has_reservation and task.job_id in colocating:
             has_reservation.add(task.job_id)
             has_direct_reservation.add(task.job_id)
         elif _find_reservation_ancestor(reserved_jobs, task.job_id) is not None:
@@ -303,7 +354,7 @@ def compute_demand_entries(
         # capacity; emitting demand for the real task here would provision
         # generic capacity the scheduler gate will never let it occupy, so the
         # autoscaler would boot workers that idle out and get reaped forever.
-        if reservation_unsatisfied(job_row, claims_by_job, reservation_entry_counts):
+        if reservation_unsatisfied(job_row, claims_by_job, reservation_entry_counts, ctx.colocating_reservation_job_ids):
             continue
 
         job_constraints = constraints_from_json(job_row.constraints_json)
@@ -952,12 +1003,15 @@ def build_scheduling_context(
         user_budget_limits = reads.get_all_user_budget_limits(snap)
         requested_bands = reads.get_priority_bands(snap, {t.job_id for t in pending})
         reserved_jobs = reads.reserved_job_ids(snap)
-        reservation_entry_counts = reads.reservation_entry_counts(snap, {t.job_id for t in pending if t.has_reservation})
+        reserved_pending_ids = {t.job_id for t in pending if t.has_reservation}
+        reservation_entry_counts = reads.reservation_entry_counts(snap, reserved_pending_ids)
+        entry_device_types = reads.reservation_entry_device_types(snap, reserved_pending_ids)
         building_counts = reads.building_counts(snap, [w.worker_id for w in workers])
         running = _running_tasks_with_band_and_value(snap, set(claims.keys()))
 
     snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
     sorted_pending = _sort_pending_tasks_by_resolved_band(pending, requested_bands)
+    colocating_reservations = _colocating_reservation_job_ids(pending, entry_device_types)
     return SchedulingContext(
         workers=snapshots,
         building_counts=building_counts,
@@ -973,6 +1027,7 @@ def build_scheduling_context(
         reservation_entry_counts=reservation_entry_counts,
         user_budget_defaults=defaults,
         running_for_preemption=running,
+        colocating_reservation_job_ids=colocating_reservations,
     )
 
 
@@ -1010,7 +1065,9 @@ def apply_scheduling_gates(
             continue
         # Gate: skip real tasks whose job has an unsatisfied reservation.
         # Holder tasks are always schedulable (they ARE the reservation).
-        if reservation_unsatisfied(task, claims_by_job, ctx.reservation_entry_counts):
+        if reservation_unsatisfied(
+            task, claims_by_job, ctx.reservation_entry_counts, ctx.colocating_reservation_job_ids
+        ):
             filter_counts["reservation_unsatisfied"] += 1
             continue
         if (
@@ -1024,7 +1081,7 @@ def apply_scheduling_gates(
         schedulable_task_ids.append(task.task_id)
         if task.job_id not in jobs:
             jobs[task.job_id] = job_requirements_from_job(task)
-            if task.has_reservation:
+            if task.has_reservation and task.job_id in ctx.colocating_reservation_job_ids:
                 has_reservation.add(task.job_id)
                 has_direct_reservation.add(task.job_id)
             elif _find_reservation_ancestor(ctx.reserved_job_ids, task.job_id) is not None:

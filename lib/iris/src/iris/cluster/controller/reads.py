@@ -27,7 +27,7 @@ from typing import Protocol
 from rigging.timing import Timestamp
 from sqlalchemy import Integer, Row, bindparam, case, cast, func, literal_column, select, tuple_
 
-from iris.cluster.constraints import AttributeValue
+from iris.cluster.constraints import AttributeValue, DeviceType, get_device_type_enum
 from iris.cluster.controller.codec import (
     device_counts_from_json,
     reservation_entries_from_json,
@@ -881,6 +881,33 @@ def reservation_entry_counts(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName
             continue
         counts[row.job_id] = len(reservation_entries_from_json(row.reservation_json))
     return counts
+
+
+def reservation_entry_device_types(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, frozenset[DeviceType]]:
+    """Return ``{job_id: device types across its reservation entries}`` for the requested jobs.
+
+    Used to decide whether a directly-reserved job *co-locates* on its reserved
+    workers: a ``--reserve`` job whose own task targets the reservation's device
+    class runs on the reserved workers, while one whose own task is CPU-only and
+    reserves an accelerator does not (see ``_colocating_reservation_job_ids``).
+    Jobs with no reservation JSON are omitted.
+    """
+    ids = list(job_ids)
+    if not ids:
+        return {}
+    rows = tx.execute(
+        select(job_config_table.c.job_id, job_config_table.c.reservation_json).where(
+            job_config_table.c.job_id.in_(bindparam("job_ids", expanding=True))
+        ),
+        {"job_ids": ids},
+    ).all()
+    result: dict[JobName, frozenset[DeviceType]] = {}
+    for row in rows:
+        if row.reservation_json is None:
+            continue
+        entries = reservation_entries_from_json(row.reservation_json)
+        result[row.job_id] = frozenset(get_device_type_enum(entry.resources.device) for entry in entries)
+    return result
 
 
 def jobs_with_reservations(tx: Tx, states: Iterable[int]) -> Sequence[Row]:
