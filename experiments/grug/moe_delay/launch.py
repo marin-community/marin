@@ -3,10 +3,11 @@
 
 """Delayed-gradient staleness sweep launcher for the grug MoE template.
 
-Reuses the baseline grug-MoE training machinery (`run_grug_moe_trial`) but swaps
-the optimizer for a delayed-gradient wrapper (see `delay_optim.py`). The arm is
-selected entirely by environment variables so a single module can be submitted
-many times to Iris with different staleness / corrector settings:
+Runs grug-MoE training directly on the TPU job (``run_inline`` -> `_run_grug_local`,
+no Fray driver/dispatch hop) with the optimizer swapped for a delayed-gradient
+wrapper (see `delay_optim.py`). The arm is selected entirely by environment
+variables so a single module can be submitted many times with different
+staleness / corrector settings:
 
     GRUG_OPT        muon | adamh                 (default muon)
     GRUG_TAU        gradient delay in steps      (default 0)
@@ -16,33 +17,79 @@ many times to Iris with different staleness / corrector settings:
     GRUG_SEED       seed                         (default 0)
     GRUG_HIDDEN     model hidden dim             (default 512)
     GRUG_BUDGET     compute budget for heuristic sizing/LR  (default 2.19e17)
-    GRUG_TPU        TPU type to reserve          (default v6e-8)
     GRUG_GROUP      wandb group                  (default delay-pp-batch1)
 
-Submit, e.g.:
+Submit directly on a TPU (no reservation, no driver job), e.g.:
 
     GRUG_OPT=muon GRUG_TAU=8 GRUG_CORRECTOR=dc_asgd_ema \
-      .venv/bin/iris --cluster=marin job run --no-wait --reserve v6e-8 \
+      .venv/bin/iris --cluster=marin job run --no-wait --tpu v6e-8 \
+      --enable-extra-resources --extra marin-core:tpu \
       -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe_delay.launch
 """
 
 import dataclasses
 import os
+from datetime import timedelta
 
+import jmp
 from fray.cluster import ResourceConfig
+from levanter.checkpoint import CheckpointerConfig
 from levanter.optim import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
+from levanter.trainer import TrainerConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
+from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import (
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
     GrugMoeLaunchConfig,
-    run_grug_moe_trial,
+    _resolve_tracker,
 )
-from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
+from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, _run_grug_local
 from experiments.grug.moe_delay.delay_optim import DelayedGrugMoeAdamHConfig, DelayedGrugMuonConfig
+
+
+def run_inline(config: GrugMoeLaunchConfig) -> None:
+    """Run grug-MoE training in-process (no Fray driver/dispatch hop).
+
+    Mirrors ``experiments.grug.moe.launch.run_grug_moe_trial`` but calls
+    ``_run_grug_local`` directly so the training runs on whatever job holds the
+    TPU (submitted with ``--tpu``), instead of dispatching a separate worker.
+    The executor still resolves the data-config cache paths before this runs.
+    """
+    trainer = TrainerConfig(
+        id=config.run_id,
+        seed=config.seed,
+        train_batch_size=config.batch_size,
+        num_train_steps=config.steps,
+        profiler=config.profiler,
+        mp=jmp.get_policy(config.mp),
+        tracker=_resolve_tracker(config.tracker, config.run_id),
+        use_explicit_mesh_axes=True,
+        require_accelerator=True,
+        allow_nondivisible_batch_size=False,
+        checkpointer=config.checkpointer
+        or CheckpointerConfig(
+            base_path=os.path.join(config.output_path, "checkpoints"),
+            temporary_base_path=temporary_checkpoint_base_path(config.output_path),
+            append_run_id_to_base_path=False,
+            save_interval=timedelta(hours=24),
+            keep=None,
+        ),
+    )
+    grug_trainer = dataclasses.replace(config.grug_trainer, trainer=trainer)
+    run_config = GrugRunConfig(
+        model=config.model,
+        data=config.data,
+        resources=config.resources,
+        optimizer=config.optimizer,
+        trainer=grug_trainer,
+        eval=config.eval,
+    )
+    _run_grug_local(run_config)
+
 
 # Default Muon matrix-path LR. MuonConfig.lr is unused by the build path (the
 # scheduler reads `learning_rate`), so we set `learning_rate` explicitly.
@@ -127,7 +174,7 @@ def _make_step() -> ExecutorStep:
         ),
     )
 
-    return ExecutorStep(name=f"grug/delay/{run_id}", fn=run_grug_moe_trial, config=launch)
+    return ExecutorStep(name=f"grug/delay/{run_id}", fn=run_inline, config=launch)
 
 
 if __name__ == "__main__":
