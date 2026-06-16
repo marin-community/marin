@@ -4,7 +4,8 @@
 
 - Branch: `codex/splash-prefixlm-block-skipping`
 - Base: current `origin/main` with the shared Splash Attention mask lowering in tree.
-- Research logbook: `.agents/logbooks/splash-prefixlm-block-skipping.md`
+- Research snapshot branch: https://github.com/marin-community/marin/tree/research/splash-prefixlm-block-skipping
+- Research logbook: `.agents/logbooks/splash-prefixlm-block-skipping.md` on the research snapshot branch.
 - Experiment issue: https://github.com/marin-community/marin/issues/6332
 
 ## Goal
@@ -26,7 +27,7 @@ Target hardware for validation and tuning:
 
 - Draft PR: https://github.com/marin-community/marin/pull/6330
 - Latest local change: `_tpu_splash_attention(...)` now separates Splash layout and invocation-plan preparation from prepared kernel execution. The benchmark harness can run a fake multi-layer residual stack with `--layers N`, preparing Splash metadata once per mask variant and reusing it across layer calls.
-- Local validation at the prepared-plan head:
+- Local validation at the prepared-plan head, preserved on the research snapshot branch:
   - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py lib/levanter/tests/kernels/test_bench_splash_attention_masks.py -q` -> `27 passed`.
   - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'prefix_lm or sliding_window_mask or segment_runs' -q` -> `6 passed`.
   - `./infra/pre-commit.py --changed-files --fix` -> passed.

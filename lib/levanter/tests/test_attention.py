@@ -765,31 +765,36 @@ def _packed_causal_segment_runs_mask(case: _TpuSplashMaskCase) -> AttentionMask:
     )
 
 
-@pytest.mark.parametrize(
-    ("build_mask", "seed"),
-    [
-        (_dynamic_prefix_lm_mask, 10),
-        (_dynamic_prefix_lm_with_segment_ids_mask, 20),
-        (_packed_prefix_lm_with_prefix_mask, 23),
-        (_packed_prefix_lm_with_segment_runs_mask, 24),
-        (_packed_causal_segment_ids_mask, 26),
-        (_packed_causal_segment_runs_mask, 28),
-    ],
-    ids=[
-        "dynamic-prefix-lm",
-        "dynamic-prefix-lm-segment-ids",
-        "packed-prefix-lm-prefix-mask",
-        "packed-prefix-lm-segment-runs",
-        "packed-causal-segment-ids",
-        "packed-causal-segment-runs",
-    ],
-)
-def test_tpu_splash_attention_batched_masks(build_mask, seed):
+def _run_tpu_splash_attention_batched_mask(build_mask, *, seed: int):
     if jax.default_backend() != "tpu":
         pytest.skip("TPU only")
 
     case = _tpu_splash_mask_case()
     _run_batched_tpu_splash_mask_case(build_mask(case), case, seed=seed)
+
+
+def test_tpu_splash_attention_dynamic_prefix_lm_mask():
+    _run_tpu_splash_attention_batched_mask(_dynamic_prefix_lm_mask, seed=10)
+
+
+def test_tpu_splash_attention_dynamic_prefix_lm_segment_ids_mask():
+    _run_tpu_splash_attention_batched_mask(_dynamic_prefix_lm_with_segment_ids_mask, seed=20)
+
+
+def test_tpu_splash_attention_packed_prefix_lm_prefix_mask():
+    _run_tpu_splash_attention_batched_mask(_packed_prefix_lm_with_prefix_mask, seed=23)
+
+
+def test_tpu_splash_attention_packed_prefix_lm_segment_runs_mask():
+    _run_tpu_splash_attention_batched_mask(_packed_prefix_lm_with_segment_runs_mask, seed=24)
+
+
+def test_tpu_splash_attention_packed_causal_segment_ids_mask():
+    _run_tpu_splash_attention_batched_mask(_packed_causal_segment_ids_mask, seed=26)
+
+
+def test_tpu_splash_attention_packed_causal_segment_runs_mask():
+    _run_tpu_splash_attention_batched_mask(_packed_causal_segment_runs_mask, seed=28)
 
 
 def test_attention_mask_segment_runs_match_segment_ids():

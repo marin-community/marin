@@ -30,6 +30,12 @@ PartitionSpecEntry = str | Sequence[str | None] | None
 
 
 class SplashDynamicPrefixMask(StrEnum):
+    """Runtime prefix controls represented outside static Splash mask objects.
+
+    `PREFIX_LENGTHS` is one prefix length per batch element. `PREFIX_MASK` is a
+    per-key boolean mask, normally paired with segment IDs for packed docs.
+    """
+
     NONE = "none"
     PREFIX_LENGTHS = "prefix_lengths"
     PREFIX_MASK = "prefix_mask"
@@ -37,7 +43,12 @@ class SplashDynamicPrefixMask(StrEnum):
 
 @dataclass(frozen=True)
 class SplashPrefixLmMaskSpec:
-    """Static or dynamic prefix-LM controls for Splash mask lowering."""
+    """Prefix-LM controls visible to Splash mask planning.
+
+    `prefix_length` is a compile-time scalar prefix shared by the batch.
+    `dynamic_prefix` records which runtime control exists when the exact prefix
+    differs per example or per packed document.
+    """
 
     prefix_length: int | None = None
     dynamic_prefix: SplashDynamicPrefixMask = SplashDynamicPrefixMask.NONE
@@ -45,10 +56,17 @@ class SplashPrefixLmMaskSpec:
 
 @dataclass(frozen=True)
 class SplashAttentionMaskSpec:
-    """Static mask fields consumed by Splash Attention lowering."""
+    """Mask fields consumed by Splash Attention lowering.
+
+    The static lowering path uses `is_causal`, `sliding_window`, and static
+    `prefix_lm.prefix_length` to build Splash `Mask` objects. Runtime-dependent
+    prefix controls are recorded here only so that static lowering can reject
+    them; `attention.py` handles those through compact dynamic `MaskInfo`
+    metadata and per-example kernel planning.
+    """
 
     is_causal: bool = False
-    causal_offset: object | None = None
+    causal_offset: int | None = None
     sliding_window: int | None = None
     prefix_lm: SplashPrefixLmMaskSpec | None = None
     has_explicit_mask: bool = False
@@ -113,6 +131,15 @@ class SplashDynamicMaskMetadata:
 
 @dataclass(frozen=True)
 class _PrefixLmMaskInfoComponents:
+    """Arrays used to assemble a Splash `MaskInfo` for prefix-LM masks.
+
+    `block_mask` marks empty, partial, and full q/kv blocks. `partial_mask_blocks`
+    stores the concrete boolean masks for partial blocks. `data_next` and
+    `mask_next` are Splash's compact lookup tables: for each non-empty q/kv
+    block they tell the kernel which data block and which partial-mask block to
+    load next.
+    """
+
     data_next: jax.Array
     mask_next: jax.Array
     block_mask: jax.Array
@@ -121,6 +148,8 @@ class _PrefixLmMaskInfoComponents:
 
 @dataclass(frozen=True)
 class _PackedDynamicMaskContext:
+    """Common shape and sharding inputs for packed dynamic mask metadata."""
+
     q_seq_len: int
     kv_seq_len: int
     block_sizes: splash_attention_kernel.BlockSizes
@@ -130,6 +159,8 @@ class _PackedDynamicMaskContext:
 
 @dataclass(frozen=True)
 class _PartialMaskCapacities:
+    """Partial-mask slot counts for forward, dQ, and dKV metadata."""
+
     fwd: int
     dq: int
     dkv: int
@@ -137,6 +168,8 @@ class _PartialMaskCapacities:
 
 @dataclass(frozen=True)
 class _SegmentRunBoundaries:
+    """Start/end positions for active contiguous document runs in one packed row."""
+
     active: jax.Array
     starts: jax.Array
     ends: jax.Array
@@ -792,6 +825,12 @@ def _segment_run_prefix_lm_dynamic_mask_info(
     q_seq_shards: int,
     partial_capacity: int,
 ) -> splash_attention_mask_info.MaskInfo:
+    """Build dynamic Splash metadata for packed prefix-LM segment runs.
+
+    Each segment run is one contiguous packed document. Full blocks are detected
+    from interval overlaps, while partial blocks are materialized only for the
+    compact slots selected by `_partial_block_indexing`.
+    """
     if head_shards != 1:
         raise NotImplementedError("Packed dynamic Splash metadata with shared heads currently requires head_shards=1.")
     if seq_len % block_q != 0:
@@ -1079,7 +1118,12 @@ def lower_splash_attention_mask(
     num_heads: int,
     q_seq_shards: int,
 ) -> SplashAttentionMaskLowering:
-    """Lower static structured mask fields to JAX Splash mask objects."""
+    """Lower static structured mask fields to JAX Splash mask objects.
+
+    Dynamic prefix masks intentionally do not lower here. They are represented
+    as compact Splash `MaskInfo` metadata by the packed/dynamic kernel planning
+    path in `attention.py`, where runtime arrays can be vmapped over the batch.
+    """
     if mask is None:
         base_mask = splash_attention_mask.FullMask(_shape=(q_seq_len, kv_seq_len))
     else:
@@ -1202,6 +1246,14 @@ def _prefix_lm_mask_info_components(
     block_kv: int,
     data_next_axis: _PrefixLmDataNextAxis,
 ) -> _PrefixLmMaskInfoComponents:
+    """Compute compact block metadata for a batch-dependent prefix length.
+
+    Prefix-LM has two partial-block sources per query block: the causal boundary
+    and, when distinct, the prefix boundary. We reserve two partial-mask slots
+    per query block and point `mask_next` at the right slot for each partial
+    q/kv block. `data_next` uses q-block indices for dKV and kv-block indices
+    for forward/dQ, matching Splash's expected traversal direction.
+    """
     if block_q != block_kv:
         raise NotImplementedError("Compact prefix-LM metadata currently requires block_q == block_kv.")
     if q_seq_len % block_q != 0:
@@ -1233,6 +1285,8 @@ def _prefix_lm_mask_info_components(
     )
     block_mask = jnp.broadcast_to(block_mask[None, :, :], (num_heads, q_blocks, kv_blocks))
 
+    # Splash interprets data_next in the traversal direction of the kernel role:
+    # forward/dQ advance over KV blocks, while dKV advances over Q blocks.
     data_block_ids = kv_block_ids if data_next_axis == _PrefixLmDataNextAxis.KV else q_block_ids
     data_next = jnp.broadcast_to(data_block_ids, (q_blocks, kv_blocks))
     data_next = jnp.where(block_mask[0] != BLOCK_MASK_EMPTY, data_next, 0).astype(jnp.int32)
@@ -1278,7 +1332,11 @@ def _prefix_lm_mask_info_components(
 
 
 class PrefixMask(splash_attention_mask.Mask):
-    """Splash mask that allows every query to attend to prefix keys."""
+    """Static Splash mask that allows every query to attend to shared prefix keys.
+
+    Packed or batch-dependent prefix-LM masks use compact dynamic metadata
+    instead; this class only covers the cheap static-prefix case.
+    """
 
     _shape: tuple[int, int]
     prefix_length: int

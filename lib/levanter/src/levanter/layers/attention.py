@@ -815,18 +815,27 @@ def _prepare_sinks_for_splash(attn_sink: NamedArray, q_class, physical_axes_q: P
     batch_axes = tuple(q_class["B"])
     head_axes = tuple(q_class["H"])
     allowed_axes = {ax.name for ax in batch_axes + head_axes}
+    extra_axes = tuple(ax for ax in attn_sink.axes if ax.name not in allowed_axes)
+    if extra_axes:
+        raise NotImplementedError(
+            f"Attention sinks contain axes unsupported by splash attention: {', '.join(ax.name for ax in extra_axes)}"
+        )
 
-    sink = _prepare_splash_batch_value(
-        attn_sink,
-        batch_axes=batch_axes,
-        allowed_axis_names=allowed_axes,
-        value_name="Attention sinks",
-    )
+    sink = attn_sink
     sink_axis_names = {ax.name for ax in sink.axes}
+    for ax in batch_axes:
+        if ax.name not in sink_axis_names:
+            sink = sink.broadcast_axis(ax)
+            sink_axis_names.add(ax.name)
     for ax in head_axes:
         if ax.name not in sink_axis_names:
             sink = sink.broadcast_axis(ax)
             sink_axis_names.add(ax.name)
+
+    if batch_axes:
+        sink = _maybe_flatten(sink, batch_axes, SPLASH_BATCH_AXIS_NAME)
+    else:
+        sink = _maybe_flatten(sink, (), SPLASH_BATCH_AXIS_NAME)
 
     if head_axes:
         sink = _maybe_flatten(sink, head_axes, SPLASH_HEAD_AXIS_NAME)

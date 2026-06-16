@@ -24,7 +24,9 @@ from levanter.kernels.pallas.splash_attention import (
     splash_attention_block_sizes,
     splash_partition_spec_shard_factor,
 )
-from levanter.segment_runs import segment_run_metadata_from_segment_ids as _segment_run_metadata_from_segment_ids
+from levanter.layers.attention_mask import (
+    segment_run_metadata_from_segment_id_array as _segment_run_metadata_from_segment_id_array,
+)
 
 _SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
 _SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
@@ -62,7 +64,7 @@ def thd_segment_metadata_from_segment_ids(
     *,
     max_segments: int,
 ) -> ThdSegmentMetadata:
-    metadata = _segment_run_metadata_from_segment_ids(segment_ids, max_segments=max_segments)
+    metadata = _segment_run_metadata_from_segment_id_array(segment_ids, max_segments=max_segments)
     return ThdSegmentMetadata(
         segment_lengths=metadata.segment_lengths,
         num_segments=metadata.num_segments,
