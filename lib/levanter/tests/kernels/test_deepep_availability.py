@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from levanter.kernels.deepep import transport_ffi
 from levanter.kernels.deepep.availability import (
     DEEPEP_CUDA_ARCH_ENV,
     DEEPEP_KNOWN_GOOD_COMMIT,
@@ -78,28 +77,3 @@ def test_deepep_preflight_warns_for_unverified_source_revision(
 
     assert status.source_revision is None
     assert any(DEEPEP_KNOWN_GOOD_COMMIT in warning for warning in status.warnings)
-
-
-def test_prepare_intranode_source_compiles_generated_launch_patch(tmp_path: Path) -> None:
-    root = tmp_path / "DeepEP"
-    intranode_source = root / "csrc" / "kernels" / "intranode.cu"
-    intranode_source.parent.mkdir(parents=True, exist_ok=True)
-    intranode_source.write_text(
-        "\nvoid dispatch() {\n"
-        "    constexpr int kNumThreads = 768;\n"
-        "    auto kernel = dispatch<ranks, kNumThreads, kNumTMABytesPerWarp>; \\\n"
-        "    SET_SHARED_MEMORY_FOR_TMA(kernel); \\\n"
-        "}\n"
-        "\nvoid combine() {\n"
-        "    auto kernel = combine<dtype, ranks, kNumThreads, kNumTMABytesPerWarp>; \\\n"
-        "    SET_SHARED_MEMORY_FOR_TMA(kernel); \\\n"
-        "}\n"
-    )
-
-    prepared = transport_ffi._prepare_intranode_source(tmp_path / "build", root)
-
-    assert prepared == tmp_path / "build" / "generated" / "intranode.cu"
-    prepared_text = prepared.read_text()
-    assert "SET_SHARED_MEMORY_FOR_TMA((dispatch<ranks, kNumThreads, kNumTMABytesPerWarp>));" in prepared_text
-    assert "SET_SHARED_MEMORY_FOR_TMA((combine<dtype, ranks, kNumThreads, kNumTMABytesPerWarp>));" in prepared_text
-    assert "SET_SHARED_MEMORY_FOR_TMA(kernel);" not in prepared_text

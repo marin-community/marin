@@ -81,7 +81,7 @@ def resolve_moe_implementation(implementation: MoeImplementation | str | None) -
     return cast(MoeImplementation, implementation)
 
 
-def resolve_moe_remat_mode(remat_mode: MoERematMode | str) -> MoERematMode:
+def resolve_moe_remat_mode(remat_mode: MoERematMode) -> MoERematMode:
     if remat_mode not in _VALID_MOE_REMAT_MODES:
         valid = ", ".join(repr(choice) for choice in _VALID_MOE_REMAT_MODES)
         raise ValueError(f"remat_mode must be one of {valid}, got {remat_mode!r}")
