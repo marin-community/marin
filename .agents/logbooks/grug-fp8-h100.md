@@ -175,6 +175,33 @@ can run **in parallel with** R4.
   json_logger, on `cw-us-east-02a`. Synthetic harness dropped. Launch command pending; **submit on
   Matt's go-ahead only.**
 
+### 2026-06-17 — R4 submission mechanism verified + draft launch command (NOT run)
+- **Mechanism (verified):** `launch_cw_scale.py` uses `executor_main` + `ResourceConfig.with_gpu` —
+  identical shape to `experiments/ferries/canary_ferry.py`. `get_iris_ctx()`
+  (`lib/iris/src/iris/client/client.py:1072`) detects Iris via `get_job_info()` (pod env): laptop ⇒
+  `LocalClient` (the dry-run), inside an Iris pod ⇒ auto-binds to the controller. So the pattern is
+  the canary runbook: wrap the launcher in a small CPU `iris job run`; the launcher pod detects Iris
+  and submits the H100 training step.
+- **Confirmed config (Matt):** `SCALE_GPU_REPLICAS=1` (one 8×H100 node), d3072 / L4 / 8 experts /
+  EXPERT_AXIS=8 / TOP_K=4 / batch 16 / seq 2048 / 10 steps. Divisibility OK (dry-run validated).
+- **Draft submit (NOT run; awaiting go-ahead):**
+  ```
+  direnv exec . uv run iris --cluster=cw-us-east-02a job run \
+    --job-name grug-r4-bf16-smoke-<ts> --cpu 2 --memory 8GB --disk 16GB --extra cpu \
+    -e MARIN_PREFIX s3://marin-na/marin \
+    -e AWS_ACCESS_KEY_ID "$R2_ACCESS_KEY_ID" -e AWS_SECRET_ACCESS_KEY "$R2_SECRET_ACCESS_KEY" \
+    -e AWS_ENDPOINT_URL https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com \
+    -e AWS_REGION auto -e AWS_DEFAULT_REGION auto \
+    -e SCALE_GPU_REPLICAS 1 -e SCALE_HIDDEN_DIM 3072 -e SCALE_NUM_LAYERS 4 \
+    -e SCALE_NUM_EXPERTS 8 -e SCALE_EXPERT_AXIS 8 -e SCALE_TOP_K 4 \
+    -e SCALE_BATCH 16 -e SCALE_SEQ_LEN 2048 -e SCALE_STEPS 10 \
+    -e SCALE_TRACKER json_logger -e SCALE_CHECKPOINTS local \
+    -- python experiments/grug/moe/launch_cw_scale.py
+  ```
+- **Unknowns to resolve before running:** (1) `NCCL_SOCKET_IFNAME` — canary sets it for multi-GPU
+  NCCL; cw-us-east-02a interface value TBD; (2) HF_TOKEN likely unneeded (cache hit) — include if
+  graph-build complains; (3) confirm the spawned GPU step inherits the correct GPU image/extra.
+
 <!-- New entries below this line. Template:
 ### YYYY-MM-DD HH:MM - <GFP8-NNN short label>
 - Hypothesis:
