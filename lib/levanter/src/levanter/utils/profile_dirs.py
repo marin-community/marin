@@ -15,6 +15,7 @@ from levanter.utils.fsspec_utils import join_path
 from rigging.filesystem import url_to_fs
 
 PROFILER_DIR_NAME = "profiler"
+WANDB_RUNS_SEGMENT = "runs"
 TRAINER_CONFIG_KEY = "trainer"
 
 
@@ -40,7 +41,7 @@ def normalize_run_target(target: str, entity: Optional[str], project: Optional[s
             raise ValueError(f"Could not parse run information from URL: {target}")
         entity = parts[0]
         project = parts[1]
-        if parts[2] == "runs" and len(parts) >= 4:
+        if parts[2] == WANDB_RUNS_SEGMENT and len(parts) >= 4:
             run_id = parts[3]
         else:
             run_id = parts[2]
@@ -55,7 +56,7 @@ def normalize_run_target(target: str, entity: Optional[str], project: Optional[s
     if len(parts) >= 3:
         entity = parts[0]
         project = parts[1]
-        if parts[2] == "runs" and len(parts) >= 4:
+        if parts[2] == WANDB_RUNS_SEGMENT and len(parts) >= 4:
             run_id = parts[3]
         else:
             run_id = parts[2]
