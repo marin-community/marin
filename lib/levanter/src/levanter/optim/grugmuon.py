@@ -268,6 +268,9 @@ def _grug_scale_with_muon(
             else:
                 scale = 0.2 * jnp.sqrt(jnp.maximum(fan_in, fan_out))
             updated *= scale
+            target_sharding = _target_sharding(param)
+            if target_sharding is not None:
+                updated = reshard(updated, target_sharding)
             return updated
 
         if params is None:

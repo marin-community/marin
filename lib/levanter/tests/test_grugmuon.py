@@ -139,3 +139,32 @@ def test_grug_scale_with_muon_uses_momentum_sharding_callback():
     state = jax.eval_shape(transform.init, params)
 
     assert state.momentum_buffer["expert"].sharding == target_sharding
+
+
+def test_grug_scale_with_muon_outputs_param_sharding():
+    mesh = AbstractMesh(
+        axis_sizes=(4, 4, 8, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = {
+        "dense": jax.ShapeDtypeStruct(
+            (2560, 2560),
+            jnp.float32,
+            sharding=NamedSharding(mesh, P("data", "model")),
+        ),
+        "expert": jax.ShapeDtypeStruct(
+            (256, 2560, 2560),
+            jnp.float32,
+            sharding=NamedSharding(mesh, P("expert", "data", "model")),
+        ),
+    }
+    updates = params
+    transform = _grug_scale_with_muon(momentum=0.0, nesterov=False)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        state = jax.eval_shape(transform.init, params)
+        next_updates, _ = jax.eval_shape(transform.update, updates, state, params)
+
+    assert next_updates["dense"].sharding.spec == P("data", "model")
+    assert next_updates["expert"].sharding.spec == P("expert", "data", "model")
