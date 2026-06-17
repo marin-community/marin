@@ -15,6 +15,7 @@ Each (model, bundle) is one ``ExecutorStep`` that emits ``results.json`` with
 """
 
 import dataclasses
+import gzip
 import json
 import logging
 import math
@@ -132,8 +133,6 @@ def _iter_dataset_docs(ds_config: RawTextEvaluationDataset):
                 if text:
                     yield text, len(text.encode("utf-8"))
     else:
-        import gzip
-
         for p in paths:
             with (
                 fs.open(f"gs://{p}" if not p.startswith("gs://") else p, "rb") as raw,

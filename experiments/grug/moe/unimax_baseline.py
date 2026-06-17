@@ -17,7 +17,6 @@ ceiling actually bind on the small buckets, which is the whole point of UniMax.
 """
 
 import json
-import os
 
 import fsspec
 from fray.cluster import ResourceConfig
@@ -44,10 +43,7 @@ from experiments.grug.moe.launch_swarm import (
 from experiments.marin_models import marin_tokenizer
 
 _STORE_ARTIFACT = "gs://marin-us-central2/datakit/store_8ac06c74/.artifact.json"
-# Override via `UNIMAX_EPOCH_CAP=4 python experiments/grug/moe/unimax_baseline.py`
-# at submission time; the cap lands in the step name (`d512_unimax_n{cap}`) so
-# distinct caps produce distinct ExecutorSteps that don't collide.
-_EPOCH_CAP = int(os.environ.get("UNIMAX_EPOCH_CAP", "8"))
+_EPOCH_CAP = 8
 _PHASE0_FRAC = 0.8
 _PHASE1_FRAC = 0.2
 

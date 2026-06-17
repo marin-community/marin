@@ -25,6 +25,7 @@ import argparse
 import csv
 import http.server
 import json
+import math
 import os
 import re
 import shutil
@@ -38,8 +39,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import fsspec
+import jax
+import jax.numpy as jnp
+import numpy as np
 import wandb
+from jax import jit, value_and_grad
+from jax.flatten_util import ravel_pytree
+from scipy.cluster.hierarchy import leaves_list, linkage, optimal_leaf_ordering
+from scipy.optimize import minimize
+from scipy.spatial.distance import pdist
+from scipy.stats import norm, rankdata
+from sklearn.linear_model import Ridge
+from sklearn.manifold import TSNE
 from tqdm import tqdm
+
+from experiments.grug.moe.datakit_moe_mix import _MIXABLE_BUCKETS, _TAIL_BUCKETS, _TOKEN_COUNTS, TARGET_BUDGET
 
 
 def _is_data_mix_metric(key: str) -> bool:
@@ -293,7 +307,6 @@ def fetch_ppl_evals(cache_path: Path = Path("dashboard_ppl_cache.json")) -> dict
     the same keys the W&B surface used to publish — plus a per-prefix rollup for
     the grid. Uses the path+mtime cache so a refresh only re-reads changed files.
     """
-    import math
 
     def _parse(path, blob):
         m = re.search(r"swarm_fisher_dsp_d512_(\d{6})/", path)
@@ -481,9 +494,6 @@ def fetch_gcs_state() -> dict[int, dict]:
 
 
 def compute_tsne(mixtures: dict, cache_path: Path) -> list[list[float]]:
-    import numpy as np
-    from sklearn.manifold import TSNE
-
     if cache_path.exists():
         return json.loads(cache_path.read_text())
     buckets = mixtures["buckets"]
@@ -505,8 +515,6 @@ def compute_correlations(runs: dict[int, dict], gcs: dict[int, dict], mixtures: 
 
     Sign-flips bpb/loss metrics so positive r = "up-weighting helps".
     """
-    import numpy as np
-
     buckets = mixtures["buckets"]
     candidates = mixtures["candidates"]
 
@@ -580,9 +588,6 @@ def compute_correlations(runs: dict[int, dict], gcs: dict[int, dict], mixtures: 
         monotonic in 1 - corr(profile_a, profile_b) — i.e. tasks are grouped by
         how similarly they respond to the buckets, not by overall magnitude.
         """
-        from scipy.cluster.hierarchy import leaves_list, linkage, optimal_leaf_ordering
-        from scipy.spatial.distance import pdist
-
         M = np.nan_to_num(np.asarray(R, dtype=np.float64), nan=0.0)
         if M.shape[0] < 3:
             return list(range(M.shape[0]))
@@ -618,19 +623,6 @@ def fit_dsp_predictors(runs: dict[int, dict], gcs: dict[int, dict], mixtures: di
     Per-bucket c_d = target_budget / bucket_tokens (the natural "epochs at unit
     weight"; gives proportional baseline = token-share).
     """
-    import jax
-    import jax.numpy as jnp
-    import numpy as np
-    from jax import jit, value_and_grad
-    from jax.flatten_util import ravel_pytree
-    from scipy.optimize import minimize
-    from scipy.stats import norm, rankdata
-
-    from experiments.grug.moe.datakit_moe_mix import (
-        _TOKEN_COUNTS,
-        TARGET_BUDGET,
-    )
-
     buckets = mixtures["buckets"]
     candidates = mixtures["candidates"]
 
@@ -975,9 +967,6 @@ def fit_predictors(runs: dict[int, dict], gcs: dict[int, dict], mixtures: dict) 
     Sign-flipped so the predicted target is "higher = better". JS evaluates
     ``y_hat = intercept + coef · w`` live as the user drags sliders.
     """
-    import numpy as np
-    from sklearn.linear_model import Ridge
-
     buckets = mixtures["buckets"]
     bucket_clusters = [_cluster_of(b) for b in buckets]
 
@@ -1037,9 +1026,6 @@ def fit_predictors(runs: dict[int, dict], gcs: dict[int, dict], mixtures: dict) 
             "sigma": float(resid.std()),
         }
 
-    # Proportional baseline mixture (token-share per cluster, normalized).
-    from experiments.grug.moe.datakit_moe_mix import _MIXABLE_BUCKETS, _TAIL_BUCKETS
-
     cluster_tokens: dict[int, int] = defaultdict(int)
     for c, _q, t in _MIXABLE_BUCKETS + _TAIL_BUCKETS:
         cluster_tokens[c] += t
@@ -1089,9 +1075,6 @@ def build_data(api_key: str, mixtures_cache: Path, tsne_cache: Path) -> dict:
     tsne = compute_tsne(mixtures, tsne_cache)
     corr = compute_correlations(runs, gcs, mixtures)
     dsp = fit_dsp_predictors(runs, gcs, mixtures)
-
-    # Dominant cluster (by amplification ratio = weight / token-share) per candidate.
-    from experiments.grug.moe.datakit_moe_mix import _MIXABLE_BUCKETS, _TAIL_BUCKETS
 
     cluster_tokens: dict[int, int] = defaultdict(int)
     for c, _q, t in _MIXABLE_BUCKETS + _TAIL_BUCKETS:

@@ -27,6 +27,7 @@ an `n=-1` sentinel after `evaluate()` returns to release the listeners.
 import dataclasses
 import json
 import logging
+import math
 import os
 from dataclasses import dataclass
 
@@ -94,18 +95,15 @@ def _lm_eval_spec(task: EvalTaskConfig) -> str | dict:
     lm-eval's override-merge path, which drops fields inherited via
     ``include:`` chains in the task's yaml. Inlined tasks need the dict
     form because the full config lives in ``task_kwargs``. ``num_fewshot``
-    and ``task_alias`` are deliberately left out of the returned dict and
+    and ``alias`` are deliberately left out of the returned dict and
     applied post-build via `_apply_num_fewshot`.
     """
     if not task.task_kwargs:
         return task.name
     spec: dict = {"task": task.name}
     spec.update(task.task_kwargs)
-    # Inline tasks have no include-chain to lose so it's safe to also stamp
-    # the alias here; `_apply_task_field` re-stamps post-build for the
-    # registered-task path.
     if task.task_alias:
-        spec["task_alias"] = task.task_alias
+        spec["alias"] = task.task_alias
     return spec
 
 
@@ -119,7 +117,7 @@ def _inject_loglikelihood_bpb(task_dict: dict) -> None:
     this patch, inline tasks like ``logprob_gsm8k_5shot`` produce empty
     ``results[name]`` dicts even though the eval ran on every sample.
     """
-    import math
+    from lm_eval.api.task import Task
 
     NAT_TO_BIT = 1.0 / math.log(2)
 
@@ -138,9 +136,8 @@ def _inject_loglikelihood_bpb(task_dict: dict) -> None:
         return _process
 
     for v in task_dict.values():
-        if hasattr(v, "_config"):
-            output_type = getattr(v._config, "output_type", None)
-            if output_type == "loglikelihood":
+        if isinstance(v, Task):
+            if v._config.output_type == "loglikelihood":
                 v._config.process_results = _make_processor(v)
         elif isinstance(v, tuple) and len(v) == 2 and isinstance(v[1], dict):
             _inject_loglikelihood_bpb(v[1])
@@ -162,27 +159,20 @@ def _inject_bpb_into_metric_list(task_dict: dict) -> None:
     actually reads at line task.py:1463).
     """
     from lm_eval.api.registry import get_aggregation, get_metric
+    from lm_eval.api.task import Task
 
     bpb_entry = {"metric": "bpb", "aggregation": "mean", "higher_is_better": False}
     for v in task_dict.values():
-        if hasattr(v, "_config"):
+        if isinstance(v, Task):
             mlist = list(v._config.metric_list or [])
             if not any(isinstance(m, dict) and m.get("metric") == "bpb" for m in mlist):
                 mlist.append(bpb_entry)
                 v._config.metric_list = mlist
-            # Runtime path: ConfigurableTask.process_results uses
-            # `self._metric_fn_list.keys()` to decide which metrics to emit.
-            # Insert the bpb fn directly so it picks up post-construction.
-            if hasattr(v, "_metric_fn_list") and "bpb" not in v._metric_fn_list:
+            if "bpb" not in v._metric_fn_list:
                 v._metric_fn_list["bpb"] = get_metric("bpb")
-                # Aggregation registry too — `aggregation()` reads from
-                # `self._aggregation_list` when computing rolled-up scores.
-                if hasattr(v, "_aggregation_list"):
-                    v._aggregation_list["bpb"] = get_aggregation("mean")
-                if hasattr(v, "_higher_is_better"):
-                    v._higher_is_better["bpb"] = False
-                if hasattr(v, "_metric_fn_kwargs"):
-                    v._metric_fn_kwargs["bpb"] = {}
+                v._aggregation_list["bpb"] = get_aggregation("mean")
+                v._higher_is_better["bpb"] = False
+                v._metric_fn_kwargs["bpb"] = {}
         elif isinstance(v, tuple) and len(v) == 2 and isinstance(v[1], dict):
             _inject_bpb_into_metric_list(v[1])
         elif isinstance(v, dict):
@@ -227,12 +217,12 @@ def _apply_task_field(task_dict: dict, key: str, value) -> None:
     Mirrors lm-eval's `simple_evaluate`, which sets `num_fewshot` after
     task construction. Setting it post-build keeps the construction-time
     override path (which drops include-chain fields — see `_lm_eval_spec`)
-    out of play. Used for both `num_fewshot` (for the few-shot count) and
-    `alias` (so `prepare_print_tasks` doesn't crash on `None + str` when
-    aggregating inline-task results).
+    out of play.
     """
+    from lm_eval.api.task import Task
+
     for v in task_dict.values():
-        if hasattr(v, "set_config"):
+        if isinstance(v, Task):
             v.set_config(key=key, value=value)
         elif isinstance(v, tuple) and len(v) == 2 and isinstance(v[1], dict):
             _apply_task_field(v[1], key, value)
@@ -469,45 +459,7 @@ def run_grug_logprob_eval(config: GrugLogprobEvalConfig) -> None:
         results: dict | None = None
         if is_chief:
             from lm_eval import evaluator as lm_eval_evaluator
-
-            # Defensive monkey-patch: in lm-eval commit d5e3391, `prepare_print_tasks`
-            # crashes with `None + str` when an inline task's alias propagates as None
-            # somewhere between our spec-time injection and the aggregation read. The
-            # propagation chain works locally but not in the container build; rather
-            # than chase further version skew, wrap the function to fall back to the
-            # task name when the read returns None.
-            from lm_eval import evaluator_utils as _eu
             from lm_eval.tasks import TaskManager, get_task_dict
-
-            # bye-fork removed `prepare_print_tasks` entirely. If the symbol
-            # isn't there, the upstream bug we're patching around doesn't
-            # apply on this lm-eval revision, so we just skip the patch.
-            if hasattr(_eu, "prepare_print_tasks") and not getattr(_eu, "_marin_prepare_print_tasks_patched", False):
-                _orig_prep = _eu.prepare_print_tasks
-
-                def _safe_prep(task_dict, results, task_depth=0, group_depth=0):
-                    # Try the upstream aggregation but never let it block result
-                    # serialisation. On failure, hand back the input `results`
-                    # dict as the aggregated form — it already contains every
-                    # metric/alias entry consolidate_results populated, which is
-                    # what evaluate() ends up dumping to results.json as the
-                    # "results" key. Falling back to an empty defaultdict (the
-                    # previous workaround) silently produced empty results.json
-                    # files even though the eval itself ran successfully.
-                    for _name, _r in list(results.items()):
-                        if isinstance(_r, dict):
-                            _r["alias"] = str(_name)
-                    try:
-                        return _orig_prep(task_dict, results, task_depth, group_depth)
-                    except (TypeError, KeyError, AttributeError) as e:
-                        logger.warning("MARIN_SAFE_PREP swallowed %s: %s", type(e).__name__, e)
-                        return dict(results), {}
-
-                _eu.prepare_print_tasks = _safe_prep
-                _eu._marin_prepare_print_tasks_patched = True
-                # evaluator imports `prepare_print_tasks` by name at module-load,
-                # so rebind the symbol it actually calls.
-                lm_eval_evaluator.prepare_print_tasks = _safe_prep
 
             task_dict = get_task_dict([_lm_eval_spec(config.task)], task_manager=TaskManager())
             _apply_task_field(task_dict, "num_fewshot", config.task.num_fewshot)
@@ -518,11 +470,7 @@ def run_grug_logprob_eval(config: GrugLogprobEvalConfig) -> None:
             _inject_loglikelihood_bpb(task_dict)
             _inject_bpb_into_metric_list(task_dict)
             if config.task.task_alias:
-                # lm-eval's `consolidate_results` propagates the alias via
-                # `task_config["task_alias"]` (evaluator_utils.py:358), reading
-                # the TaskConfig dataclass field; without this, inline tasks
-                # crash on `None + str` aggregation in `prepare_print_tasks`.
-                _apply_task_field(task_dict, "task_alias", config.task.task_alias)
+                _apply_task_field(task_dict, "alias", config.task.task_alias)
             lm = _make_grug_lm(
                 transformer,
                 tokenizer,
