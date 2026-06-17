@@ -56,14 +56,7 @@ class SplashPrefixLmMaskSpec:
 
 @dataclass(frozen=True)
 class SplashAttentionMaskSpec:
-    """Mask fields consumed by Splash Attention lowering.
-
-    The static lowering path uses `is_causal`, `sliding_window`, and static
-    `prefix_lm.prefix_length` to build Splash `Mask` objects. Runtime-dependent
-    prefix controls are recorded here only so that static lowering can reject
-    them; `prepare_splash_kernel_plan` handles those through compact dynamic
-    `MaskInfo` metadata and per-example kernel planning.
-    """
+    """Structured mask fields used to choose and lower a Splash kernel plan."""
 
     is_causal: bool = False
     causal_offset: int | None = None
@@ -121,13 +114,6 @@ class SplashKernelContext:
     q_seq_shards: int
     physical_axes_q: PartitionSpec
     logits_soft_cap: float | None
-
-
-@dataclass(frozen=True)
-class SplashMaskPlanSpec:
-    """Mask capabilities used to select the concrete Splash kernel plan."""
-
-    mask: SplashAttentionMaskSpec | None
 
 
 @dataclass(frozen=True)
@@ -1106,12 +1092,7 @@ def lower_splash_attention_mask(
     num_heads: int,
     q_seq_shards: int,
 ) -> SplashAttentionMaskLowering:
-    """Lower static structured mask fields to JAX Splash mask objects.
-
-    Dynamic prefix masks intentionally do not lower here. They are represented
-    as compact Splash `MaskInfo` metadata by the packed/dynamic kernel planning
-    path in this module, where runtime arrays can be vmapped over the batch.
-    """
+    """Lower static structured mask fields to JAX Splash mask objects."""
     if mask is None:
         base_mask = splash_attention_mask.FullMask(_shape=(q_seq_len, kv_seq_len))
     else:
@@ -1162,7 +1143,7 @@ def lower_splash_attention_mask(
 
 def prepare_splash_kernel_plan(
     *,
-    mask: SplashMaskPlanSpec,
+    mask: SplashAttentionMaskSpec | None,
     prefix_controls: SplashPrefixControls,
     segment_run_controls: SplashSegmentRunControls,
     segment_id_lowering: SplashSegmentIdsLowering,
@@ -1346,7 +1327,7 @@ def _dynamic_metadata_kernel_plan(
 
 def _can_use_packed_causal_segment_kernel(
     *,
-    mask: SplashMaskPlanSpec,
+    mask: SplashAttentionMaskSpec | None,
     prefix_controls: SplashPrefixControls,
     segment_id_lowering: SplashSegmentIdsLowering,
     context: SplashKernelContext,
@@ -1362,17 +1343,16 @@ def _can_use_packed_causal_segment_kernel(
 
 def _is_plain_causal_splash_mask(
     *,
-    mask: SplashMaskPlanSpec,
+    mask: SplashAttentionMaskSpec | None,
     prefix_controls: SplashPrefixControls,
 ) -> bool:
-    mask_spec = mask.mask
     return (
-        mask_spec is not None
-        and mask_spec.is_causal
-        and mask_spec.causal_offset is None
-        and mask_spec.sliding_window is None
-        and mask_spec.prefix_lm is None
-        and not mask_spec.has_explicit_mask
+        mask is not None
+        and mask.is_causal
+        and mask.causal_offset is None
+        and mask.sliding_window is None
+        and mask.prefix_lm is None
+        and not mask.has_explicit_mask
         and prefix_controls.prefix_lengths is None
         and prefix_controls.prefix_lengths_per_segment is None
     )
@@ -1380,7 +1360,7 @@ def _is_plain_causal_splash_mask(
 
 def _can_use_packed_prefix_lm_segment_run_kernel(
     *,
-    mask: SplashMaskPlanSpec,
+    mask: SplashAttentionMaskSpec | None,
     prefix_controls: SplashPrefixControls,
     segment_run_controls: SplashSegmentRunControls,
     context: SplashKernelContext,
@@ -1392,14 +1372,13 @@ def _can_use_packed_prefix_lm_segment_run_kernel(
     if segment_run_controls.segment_lengths is None or segment_run_controls.num_segments is None:
         return False
 
-    mask_spec = mask.mask
-    prefix_lm = None if mask_spec is None else mask_spec.prefix_lm
+    prefix_lm = None if mask is None else mask.prefix_lm
     return (
-        mask_spec is not None
-        and mask_spec.is_causal
-        and mask_spec.causal_offset is None
-        and mask_spec.sliding_window is None
-        and not mask_spec.has_explicit_mask
+        mask is not None
+        and mask.is_causal
+        and mask.causal_offset is None
+        and mask.sliding_window is None
+        and not mask.has_explicit_mask
         and prefix_lm is not None
         and prefix_lm.prefix_length is None
         and prefix_lm.dynamic_prefix == SplashDynamicPrefixMask.PREFIX_LENGTHS_PER_SEGMENT
@@ -1409,7 +1388,7 @@ def _can_use_packed_prefix_lm_segment_run_kernel(
 
 def _can_use_packed_causal_segment_run_kernel(
     *,
-    mask: SplashMaskPlanSpec,
+    mask: SplashAttentionMaskSpec | None,
     prefix_controls: SplashPrefixControls,
     segment_run_controls: SplashSegmentRunControls,
     context: SplashKernelContext,
@@ -1547,13 +1526,13 @@ def _prefix_length_kernel_plan(
 
 def _static_splash_kernel_plan(
     *,
-    mask: SplashMaskPlanSpec,
+    mask: SplashAttentionMaskSpec | None,
     segment_id_lowering: SplashSegmentIdsLowering,
     context: SplashKernelContext,
     mesh: Mesh,
 ) -> SplashKernelPlan:
     mask_lowering = lower_splash_attention_mask(
-        mask=mask.mask,
+        mask=mask,
         q_seq_len=context.q_seq_len,
         kv_seq_len=context.kv_seq_len,
         num_heads=context.num_heads,

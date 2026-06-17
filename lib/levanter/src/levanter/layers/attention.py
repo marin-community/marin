@@ -18,9 +18,9 @@ from jax import numpy as jnp
 from levanter.kernels.pallas.splash_attention import (
     DEFAULT_SPLASH_BLOCK_SIZE,
     SPLASH_BLOCK_GRANULARITY,
+    SplashAttentionMaskSpec,
     SplashKernelContext,
     SplashKernelPlan,
-    SplashMaskPlanSpec,
     SplashPrefixControls,
     SplashSegmentRunControls,
     SplashSegmentIdsLowering,
@@ -1063,16 +1063,18 @@ def _lower_splash_attention_segment_ids(
     )
 
 
-def _splash_mask_plan_spec_from_mask(mask: Optional[Union[NamedArray, "AttentionMask"]]) -> SplashMaskPlanSpec:
+def _splash_attention_mask_spec_from_mask(
+    mask: Optional[Union[NamedArray, "AttentionMask"]],
+) -> SplashAttentionMaskSpec | None:
     if mask is None:
-        return SplashMaskPlanSpec(mask=None)
+        return None
     if isinstance(mask, NamedArray):
         raise NotImplementedError("NamedArray masks are not yet supported for splash attention")
     if not isinstance(mask, AttentionMask):
         raise ValueError(f"Unknown mask type: {mask}")
 
     prefix_lm = mask.prefix_lm_spec
-    mask_spec = splash_attention_mask_spec_from_fields(
+    return splash_attention_mask_spec_from_fields(
         is_causal=mask.is_causal,
         causal_offset=mask.causal_offset,
         sliding_window=mask.sliding_window,
@@ -1081,7 +1083,6 @@ def _splash_mask_plan_spec_from_mask(mask: Optional[Union[NamedArray, "Attention
         prefix_lengths_per_segment=None if prefix_lm is None else prefix_lm.prefix_lengths_per_segment,
         explicit_mask=mask.explicit_mask,
     )
-    return SplashMaskPlanSpec(mask=mask_spec)
 
 
 def _unflatten_bshd(attn_output, q_class, v_class):
@@ -1217,7 +1218,7 @@ def _prepare_splash_invocation_plan(
     return _SplashInvocationPlan(
         mesh=mesh,
         kernel_plan=prepare_splash_kernel_plan(
-            mask=_splash_mask_plan_spec_from_mask(mask),
+            mask=_splash_attention_mask_spec_from_mask(mask),
             prefix_controls=prefix_controls,
             segment_run_controls=segment_run_controls,
             segment_id_lowering=segment_id_lowering,
