@@ -86,15 +86,44 @@ def test_weight_pred_predictor():
     p = _params()
     sw = wrapped.init(p)
     # Initial last_update is zero, so the predicted offset is zero.
-    assert jnp.allclose(predict(sw)["a"], 0.0), "initial predicted offset must be zero"
+    assert jnp.allclose(predict(sw, p)["a"], 0.0), "initial predicted offset must be zero"
     key = jax.random.PRNGKey(5)
     last_u = None
     for _ in range(6):
         key, sub = jax.random.split(key)
         last_u, sw = wrapped.update(_grads(sub), sw, params=p)
     # Predicted offset must equal tau * pred_scale * the last applied update.
-    assert jnp.allclose(predict(sw)["a"], 4.0 * last_u["a"]), "predictor must be tau * last_update"
+    assert jnp.allclose(predict(sw, p)["a"], 4.0 * last_u["a"]), "predictor must be tau * last_update"
     print("OK  weight_pred forward predictor tracks tau * last_update")
+
+
+def test_preorth_predictors():
+    # The wp_* family points the offset along the smoothed raw momentum, scaled to
+    # the realized update RMS, and gates/clamps it. Check each is finite, zero
+    # during the FIFO fill, and respects its gate/clamp.
+    lr = 0.1
+    for corrector in ("wp_preorth", "wp_cautious", "wp_trust", "wp_confidence"):
+        cfg = DelayedGrugMuonConfig(tau=3, corrector=corrector, pred_scale=1.0, trust=0.5)
+        predict = cfg.make_forward_predictor()
+        assert predict is not None, f"{corrector} must expose a predictor"
+        wrapped = wrap_delayed(optax.sgd(lr), tau=3, corrector=corrector, pred_beta=0.9)
+        p = _params()
+        sw = wrapped.init(p)
+        # last_update is zero through the fill -> offset RMS scale is zero -> zero.
+        assert jnp.allclose(predict(sw, p)["a"], 0.0), f"{corrector} offset must be zero during fill"
+        key = jax.random.PRNGKey(7)
+        for _ in range(6):
+            key, sub = jax.random.split(key)
+            _, sw = wrapped.update(_grads(sub), sw, params=p)
+        off = predict(sw, p)
+        assert jnp.all(jnp.isfinite(off["a"])) and jnp.all(jnp.isfinite(off["b"])), f"{corrector} non-finite"
+        # wp_trust clamps the per-leaf offset RMS to trust * rms(param).
+        if corrector == "wp_trust":
+            for k in p:
+                rms_off = float(jnp.sqrt(jnp.mean(off[k] ** 2)))
+                rms_p = float(jnp.sqrt(jnp.mean(p[k] ** 2)))
+                assert rms_off <= 0.5 * rms_p + 1e-5, f"wp_trust must clamp {k}: {rms_off} > {0.5*rms_p}"
+        print(f"OK  {corrector} predictor finite, zero-during-fill, gate/clamp respected")
 
 
 def test_grug_stage_tau():
@@ -156,6 +185,7 @@ if __name__ == "__main__":
     test_tau1_delays()
     test_dc_asgd_runs()
     test_weight_pred_predictor()
+    test_preorth_predictors()
     test_grug_stage_tau()
     test_per_leaf_delay()
     test_jit_and_config()

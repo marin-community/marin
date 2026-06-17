@@ -12,9 +12,12 @@ staleness / corrector settings:
     GRUG_OPT        muon | adamh                 (default muon)
     GRUG_TAU        uniform gradient delay in steps (default 0; ignored if STAGES>0)
     GRUG_STAGES     pipeline stages for the per-stage delay profile (default 0=uniform)
-    GRUG_CORRECTOR  none | dc_asgd | dc_asgd_ema | weight_pred | lr_damp  (default none)
+    GRUG_CORRECTOR  none | dc_asgd | dc_asgd_ema | weight_pred | lr_damp |
+                    wp_preorth | wp_cautious | wp_trust | wp_confidence  (default none)
     GRUG_DC_LAMBDA  DC-ASGD strength             (default 1.0)
-    GRUG_PRED_SCALE weight_pred horizon as a multiple of tau    (default 1.0)
+    GRUG_PRED_SCALE weight_pred / wp_* horizon as a multiple of tau    (default 1.0)
+    GRUG_PRED_BETA  wp_* raw-momentum EMA decay  (default 0.95)
+    GRUG_TRUST      wp_trust trust-ratio clamp   (default 0.01)
     GRUG_LR_DAMP    lr_damp step multiplier      (default 1.0)
     GRUG_STEPS      train steps (short for fast iteration)  (default 3000)
     GRUG_SEED       seed                         (default 0)
@@ -112,6 +115,8 @@ def _build_optimizer(
     corrector: str,
     dc_lambda: float,
     pred_scale: float,
+    pred_beta: float,
+    trust: float,
     lr_damp: float,
     num_stages: int,
     num_layers: int,
@@ -129,6 +134,8 @@ def _build_optimizer(
         corrector=corrector,
         dc_lambda=dc_lambda,
         pred_scale=pred_scale,
+        pred_beta=pred_beta,
+        trust=trust,
         lr_damp=lr_damp,
         num_stages=num_stages,
         num_layers=num_layers,
@@ -158,6 +165,8 @@ def _make_step() -> ExecutorStep:
     corrector = _env("GRUG_CORRECTOR", "none")
     dc_lambda = float(_env("GRUG_DC_LAMBDA", "1.0"))
     pred_scale = float(_env("GRUG_PRED_SCALE", "1.0"))
+    pred_beta = float(_env("GRUG_PRED_BETA", "0.95"))
+    trust = float(_env("GRUG_TRUST", "0.01"))
     lr_damp = float(_env("GRUG_LR_DAMP", "1.0"))
     num_stages = int(_env("GRUG_STAGES", "0"))
     steps = int(_env("GRUG_STEPS", "3000"))
@@ -176,6 +185,8 @@ def _make_step() -> ExecutorStep:
         corrector=corrector,
         dc_lambda=dc_lambda,
         pred_scale=pred_scale,
+        pred_beta=pred_beta,
+        trust=trust,
         lr_damp=lr_damp,
         num_stages=num_stages,
         num_layers=num_layers,
@@ -185,6 +196,10 @@ def _make_step() -> ExecutorStep:
         corr_tag = "none"
     elif corrector == "weight_pred":
         corr_tag = f"weight_pred-p{pred_scale:g}"
+    elif corrector == "wp_trust":
+        corr_tag = f"wp_trust-p{pred_scale:g}t{trust:g}"
+    elif corrector in ("wp_preorth", "wp_cautious", "wp_confidence"):
+        corr_tag = f"{corrector}-p{pred_scale:g}"
     elif corrector == "lr_damp":
         corr_tag = f"lr_damp-d{lr_damp:g}"
     else:

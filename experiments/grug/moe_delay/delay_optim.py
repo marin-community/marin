@@ -41,6 +41,25 @@ meant for. For Muon ``dW`` is the orthogonalized update (post-orthogonalization
 prediction). The optimizer cannot do this alone — it exposes the predicted offset
 via :meth:`make_forward_predictor` and the grug train step computes the forward
 there; see ``experiments/grug/moe/train.py``.
+
+Muon-specific forward predictors (``wp_*``) — a pipeline-parallel Muon variant.
+Newton-Schulz decouples the update magnitude from the gradient and makes the
+orthogonalized *direction* noisy step-to-step, so the post-orthogonalization
+``weight_pred`` extrapolates a jittery signal. These predict instead along the
+*smoothed raw momentum* ``m_raw`` (an EMA of the stale gradient, maintained in
+the wrapper — pre-orthogonalization), pointed in the descent direction ``-m_raw``
+and rescaled to the realized per-leaf step RMS:
+
+- ``wp_preorth``    — raw-momentum-direction prediction (the base PP-Muon mode).
+- ``wp_cautious``   — ``wp_preorth`` with a Cautious-Optimizer sign gate: zero the
+                      coordinates where the predicted descent ``-m_raw`` disagrees
+                      with the realized update, rescaling surviving mass.
+- ``wp_trust``      — ``wp_preorth`` with a LARS-style per-leaf trust-ratio clamp:
+                      cap the offset RMS at ``trust * rms(param)`` (scale-free,
+                      since Muon's magnitude is normalized).
+- ``wp_confidence`` — ``wp_preorth`` scaled by ``relu(cos(-m_raw, last_update))``:
+                      a soft agreement gate that shrinks the prediction when the
+                      momentum and the realized update directions diverge.
 """
 
 from collections.abc import Callable
@@ -48,6 +67,7 @@ from dataclasses import dataclass
 from typing import NamedTuple
 
 import jax
+import jax.numpy as jnp
 import optax
 from levanter.optim import OptimizerConfig
 from levanter.optim.grugmuon import GrugMuonConfig
@@ -55,7 +75,24 @@ from optax import tree_utils as otu
 
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 
-CORRECTORS = ("none", "dc_asgd", "dc_asgd_ema", "weight_pred", "lr_damp")
+CORRECTORS = (
+    "none",
+    "dc_asgd",
+    "dc_asgd_ema",
+    "weight_pred",
+    "lr_damp",
+    "wp_preorth",
+    "wp_cautious",
+    "wp_trust",
+    "wp_confidence",
+)
+
+# Forward-side correctors: they emit a predicted-weight offset and leave the stale
+# gradient untouched (the correction happens in the forward evaluation, not the
+# gradient). The ``wp_*`` family also maintains the raw-momentum buffer ``m_raw``.
+_FORWARD_PRED_CORRECTORS = ("weight_pred", "wp_preorth", "wp_cautious", "wp_trust", "wp_confidence")
+_PREORTH_CORRECTORS = ("wp_preorth", "wp_cautious", "wp_trust", "wp_confidence")
+_EPS = 1e-12
 
 # Grug Transformer fields on the input side of the pipeline (forward first -> first
 # PP stage -> stalest) and the output side (forward last -> last stage -> fresh).
@@ -97,14 +134,17 @@ class DelayState(NamedTuple):
     ``grad_buf`` / ``param_buf`` are length-``tau`` tuples (oldest first) holding
     past gradients and the parameters they were computed at. ``v_ema`` is the
     optional EMA-of-g^2 curvature buffer (``None`` unless ``corrector`` needs it).
+    ``m_raw`` is the optional EMA of the (stale) gradient — the raw, pre-Newton-
+    Schulz momentum the ``wp_*`` predictors extrapolate (``None`` otherwise).
     ``last_update`` is the most recent applied update ``dW`` (used by the
-    ``weight_pred`` forward predictor; zeros otherwise). ``inner`` is the wrapped
-    optimizer's state.
+    forward predictors; zeros otherwise). ``inner`` is the wrapped optimizer's
+    state.
     """
 
     grad_buf: tuple
     param_buf: tuple
     v_ema: optax.Updates | None
+    m_raw: optax.Updates | None
     last_update: optax.Updates
     inner: optax.OptState
 
@@ -117,6 +157,7 @@ def wrap_delayed(
     dc_lambda: float = 1.0,
     dc_beta2: float = 0.99,
     lr_damp: float = 1.0,
+    pred_beta: float = 0.95,
     leaf_tau: Callable[[tuple], int] | None = None,
 ) -> optax.GradientTransformationExtraArgs:
     """Wrap ``inner`` so it receives gradients delayed per parameter.
@@ -137,6 +178,9 @@ def wrap_delayed(
         dc_beta2: EMA decay for the ``dc_asgd_ema`` curvature buffer.
         lr_damp: step multiplier for the ``lr_damp`` corrector (PipeMare-style
             staleness damping); ``<1`` shrinks the applied update.
+        pred_beta: EMA decay for the raw-momentum buffer ``m_raw`` that the
+            ``wp_*`` forward predictors extrapolate. Approximates Muon's internal
+            momentum without reaching into the inner optimizer's opaque state.
         leaf_tau: optional per-leaf delay map (path -> τ) for the per-stage PP
             profile; overrides ``tau`` when provided.
     """
@@ -146,6 +190,7 @@ def wrap_delayed(
         raise ValueError(f"unknown corrector {corrector!r}; expected one of {CORRECTORS}")
     needs_v = corrector == "dc_asgd_ema"
     needs_w = corrector in ("dc_asgd", "dc_asgd_ema")
+    needs_mraw = corrector in _PREORTH_CORRECTORS
     damp = lr_damp if corrector == "lr_damp" else 1.0
 
     def _tau(path) -> int:
@@ -175,11 +220,13 @@ def wrap_delayed(
         # against zeros. Only the DC correctors need the weight history.
         param_buf = tuple(params for _ in range(tau_max)) if needs_w else ()
         v_ema = otu.tree_zeros_like(params) if needs_v else None
+        m_raw = otu.tree_zeros_like(params) if needs_mraw else None
         last_update = otu.tree_zeros_like(params)
-        return DelayState(grad_buf, param_buf, v_ema, last_update, inner.init(params))
+        return DelayState(grad_buf, param_buf, v_ema, m_raw, last_update, inner.init(params))
 
     def _correct(g_stale, v_ema, params, w_stale):
-        if corrector in ("none", "weight_pred", "lr_damp"):
+        if corrector not in ("dc_asgd", "dc_asgd_ema"):
+            # none / lr_damp / forward-predictor modes leave the gradient as-is.
             return g_stale, v_ema
         delta_w = jax.tree.map(lambda a, b: a - b, params, w_stale)
         if corrector == "dc_asgd":
@@ -201,11 +248,61 @@ def wrap_delayed(
             w_stale, new_param_buf = params, ()
 
         corrected, new_v = _correct(g_stale, state.v_ema, params, w_stale)
+        # Raw-momentum buffer (pre-orthogonalization): EMA the *stale* gradient
+        # the optimizer actually applies, so the predictor extrapolates the same
+        # signal that drives the step.
+        if needs_mraw:
+            new_m_raw = jax.tree.map(lambda m, g: pred_beta * m + (1.0 - pred_beta) * g, state.m_raw, g_stale)
+        else:
+            new_m_raw = None
         updates, new_inner = inner.update(corrected, state.inner, params=params)
         updates = _scale(updates)
-        return updates, DelayState(new_grad_buf, new_param_buf, new_v, updates, new_inner)
+        return updates, DelayState(new_grad_buf, new_param_buf, new_v, new_m_raw, updates, new_inner)
 
     return optax.with_extra_args_support(optax.GradientTransformation(init_fn, update_fn))
+
+
+def _rms(x: jax.Array) -> jax.Array:
+    """Root-mean-square of a leaf (scalar), with an epsilon floor."""
+    return jnp.sqrt(jnp.mean(jnp.square(x)) + _EPS)
+
+
+def _preorth_leaf_offset(
+    corrector: str,
+    horizon: float,
+    last_update: jax.Array,
+    m_raw: jax.Array,
+    param: jax.Array,
+    trust: float,
+) -> jax.Array:
+    """Predicted-weight offset for one leaf under a ``wp_*`` (pre-orth) corrector.
+
+    The base prediction points ``horizon`` steps along the *descent* direction of
+    the smoothed raw momentum ``-m_raw``, rescaled to the realized update RMS so
+    its magnitude matches Muon's spectrally-normalized step (which ``last_update``
+    carries) rather than the raw-gradient scale. The ``wp_cautious`` /
+    ``wp_confidence`` / ``wp_trust`` variants then gate or clamp that offset.
+    """
+    descent = -m_raw / _rms(m_raw)  # unit-RMS descent direction (pre-orthogonalization)
+    base = horizon * descent * _rms(last_update)
+    if corrector == "wp_preorth":
+        return base
+    if corrector == "wp_cautious":
+        # Cautious gate: keep coords where the predicted descent agrees with the
+        # realized update, rescale surviving mass to preserve the step size.
+        keep = (descent * last_update > 0).astype(base.dtype)
+        return base * keep / (jnp.mean(keep) + _EPS)
+    if corrector == "wp_confidence":
+        # Soft gate: shrink by the (clipped) cosine between the predicted descent
+        # and the realized update direction.
+        cos = jnp.vdot(descent, last_update) / (_rms(descent) * _rms(last_update) * descent.size)
+        return base * jnp.maximum(0.0, cos)
+    if corrector == "wp_trust":
+        # LARS-style clamp: cap the offset RMS at a trust fraction of the param
+        # scale (scale-free, since Muon's update magnitude is normalized).
+        cap = trust * _rms(param)
+        return base * jnp.minimum(1.0, cap / _rms(base))
+    raise ValueError(f"not a pre-orth corrector: {corrector!r}")
 
 
 @dataclass(frozen=True)
@@ -222,6 +319,10 @@ class _DelayMixin:
     pred_scale: float = 1.0
     # lr_damp: step multiplier for the lr_damp corrector (1.0 = no damping).
     lr_damp: float = 1.0
+    # wp_*: EMA decay for the raw-momentum predictor buffer (approximates Muon's
+    # internal momentum) and the LARS-style trust fraction for wp_trust's clamp.
+    pred_beta: float = 0.95
+    trust: float = 0.01
     # Per-stage PP profile: split the model into num_stages stages over
     # num_layers blocks, delaying each leaf by its stage's τ. num_stages == 0
     # keeps the uniform global `tau`. num_layers is the model's block count.
@@ -241,28 +342,50 @@ class _DelayMixin:
             dc_lambda=self.dc_lambda,
             dc_beta2=self.dc_beta2,
             lr_damp=self.lr_damp,
+            pred_beta=self.pred_beta,
             leaf_tau=self._leaf_tau(),
         )
 
-    def make_forward_predictor(self) -> Callable[[optax.OptState], optax.Updates] | None:
-        """Forward-weight predictor for ``weight_pred``; ``None`` for other modes.
+    def make_forward_predictor(self) -> Callable[[optax.OptState, optax.Params], optax.Updates] | None:
+        """Forward-weight predictor for the forward-side correctors; else ``None``.
 
-        Returns a function mapping the delayed optimizer state to a per-leaf
-        parameter offset ``delta = τ_leaf * pred_scale * last_update``, so the
-        train step evaluates each parameter's gradient at ``w - tau_leaf*lr*dW``.
-        With a per-stage profile τ_leaf is the leaf's own stage delay; otherwise
-        it is the uniform ``tau``.
+        Returns a function mapping ``(opt_state, params)`` to a per-leaf parameter
+        offset, so the train step evaluates each parameter's gradient at
+        ``w + offset`` (predicted weights) while still applying the update at the
+        real weights. The horizon is ``τ_leaf * pred_scale`` — with a per-stage
+        profile τ_leaf is the leaf's own stage delay, otherwise the uniform
+        ``tau``.
+
+        ``weight_pred`` extrapolates the post-orthogonalization update
+        ``last_update`` directly. The ``wp_*`` family instead points the offset
+        along the smoothed raw momentum and applies its gate/clamp; see
+        :func:`_preorth_leaf_offset`.
         """
-        if self.corrector != "weight_pred":
+        if self.corrector not in _FORWARD_PRED_CORRECTORS:
             return None
         leaf_tau = self._leaf_tau()
         ps = self.pred_scale
+        corrector = self.corrector
+        trust = self.trust
+        uniform_tau = float(self.tau)
 
-        def predict(opt_state: optax.OptState) -> optax.Updates:
-            if leaf_tau is None:
-                scale = float(self.tau) * ps
-                return jax.tree.map(lambda u: scale * u, opt_state.last_update)
-            return jax.tree_util.tree_map_with_path(lambda path, u: (leaf_tau(path) * ps) * u, opt_state.last_update)
+        def horizon(path) -> float:
+            return (leaf_tau(path) if leaf_tau is not None else uniform_tau) * ps
+
+        if corrector == "weight_pred":
+
+            def predict(opt_state: optax.OptState, params: optax.Params) -> optax.Updates:
+                return jax.tree_util.tree_map_with_path(lambda path, u: horizon(path) * u, opt_state.last_update)
+
+            return predict
+
+        def predict(opt_state: optax.OptState, params: optax.Params) -> optax.Updates:
+            return jax.tree_util.tree_map_with_path(
+                lambda path, u, m, p: _preorth_leaf_offset(corrector, horizon(path), u, m, p, trust),
+                opt_state.last_update,
+                opt_state.m_raw,
+                params,
+            )
 
         return predict
 

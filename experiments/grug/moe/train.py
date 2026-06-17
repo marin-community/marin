@@ -290,15 +290,15 @@ def initial_state(
 class SupportsForwardPrediction(Protocol):
     """An optimizer config whose optimizer evaluates gradients at predicted weights.
 
-    ``make_forward_predictor`` returns a function mapping the optimizer state to a
-    parameter offset; the train step then evaluates the gradient at
+    ``make_forward_predictor`` returns a function mapping ``(optimizer state,
+    params)`` to a parameter offset; the train step then evaluates the gradient at
     ``params + offset`` while still applying the update at the real params (this is
     the seam for weight-prediction delay correction, see
     ``experiments/grug/moe_delay/delay_optim.py``). Returns ``None`` to opt out, so
     the train loop stays decoupled from any specific optimizer.
     """
 
-    def make_forward_predictor(self) -> Callable[[optax.OptState], optax.Updates] | None: ...
+    def make_forward_predictor(self) -> Callable[[optax.OptState, optax.Params], optax.Updates] | None: ...
 
 
 def _make_train_step(
@@ -308,7 +308,7 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
-    forward_predictor: Callable[[optax.OptState], optax.Updates] | None = None,
+    forward_predictor: Callable[[optax.OptState, optax.Params], optax.Updates] | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -346,7 +346,7 @@ def _make_train_step(
         if forward_predictor is None:
             forward_params = qb_params
         else:
-            offset = forward_predictor(state.opt_state)
+            offset = forward_predictor(state.opt_state, qb_params)
             forward_params = jax.tree_util.tree_map(lambda p, d: p + d, qb_params, offset)
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(forward_params)
