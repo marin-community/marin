@@ -53,6 +53,64 @@ closes.
 
 ---
 
+## Results (executed 2026-06-16/17)
+
+The testbed below was built and run on the d512 grug MoE (E64/K4, 6 layers,
+~14M active / ~290M total), 3000-step runs on v6e-8, metric = gap to the τ=0
+control at matched seed/data/steps. Harness: `experiments/grug/moe_delay/`.
+Live progress + full tables: tracking issue #6431. Four batches, 24 runs, two
+seeds. **All headline numbers below are seed-confirmed (seed 0 + seed 1).**
+
+**1. Muon is 2.6–5.3× more delay-robust than AdamH, and degrades ~linearly in τ
+(no cliff).** Gap to the τ=0 control, uncorrected:
+
+| τ | 2 | 4 | 8 | 16 | 32 |
+|---|---|---|---|---|---|
+| Muon gap | +0.14 | +0.35 | +0.85 | +1.50 | +2.57 |
+| AdamH gap | +0.74 | — | +2.21 | — | — |
+
+The per-step slope (gap/τ ≈ 0.07–0.11) is roughly constant, so staleness cost is
+a smooth, forecastable function of pipeline depth. Muon's τ=8 gap reproduces to
+~1% across seeds (+0.850 / +0.873); AdamH's is noisier (+2.21 / +1.90).
+
+**2. DC-ASGD curvature-reuse is dead in this regime.** The "near-free" idea of
+reusing Adam's second moment `v_t` (or instantaneous `g²`) as the diagonal
+Hessian in `g + λ·(g⊙g)·Δw` recovers ≤3% of AdamH's τ=8 gap at its best λ, does
+nothing or slightly *hurts* with the EMA `v_t`, and is completely inert on Muon.
+The EMA variant being worse than instantaneous `g²` says `v_t` is the wrong
+curvature signal here, not just mis-scaled. Buried (#196 → negative).
+
+**3. Weight prediction works, and it is Muon-specific (the headline).** Evaluating
+the gradient at predicted weights `Ŵ = w − τ·lr·ΔW_muon` (extrapolate the last
+*orthogonalized* update forward by τ; a forward-side corrector, not a gradient
+patch) closes ~46% of Muon's τ=8 gap, reproducible to ~1% with identical Paloma
+macro across seeds. The same correction does **not** reliably help AdamH (0–14%,
+within seed noise) — Muon's orthogonalized update is a clean, well-scaled velocity
+to extrapolate; Adam's raw adaptive step is not.
+
+| Muon, gap to sync | seed 0 | seed 1 |
+|---|---|---|
+| τ=8 uncorrected | +0.850 | +0.873 |
+| τ=8 + weight prediction | +0.471 | +0.458 |
+
+Full-horizon prediction (predict the whole τ steps, `pred_scale=1`) beats
+under-predicting (`0.5`); effectiveness fades as τ grows (53%/45%/19% gap-closed
+at τ=2/8/16) as constant-velocity extrapolation breaks down — realistic per-stage
+PP delays (τ≈1–8) sit in the regime where it works best.
+
+**Bottom line (seed-confirmed).** At τ=8, gap-to-sync goes **AdamH naive +2.2 →
+Muon +0.86 → Muon + weight-prediction +0.46** — optimizer choice plus a near-free
+O(W) corrector recovers ~4.7× of the staleness a throughput-optimal async PP
+schedule would introduce. **Muon makes async PP viable for this model class, and
+weight prediction closes most of the residual at realistic delays.**
+
+**Documented follow-ups (not run):** pre- vs post-orthogonalization prediction
+(this used post-orth, theoretically the correct velocity); a smarter long-horizon
+predictor for τ≥16; per-stage τ (earliest PP stages are stalest); and the
+conditional real-PP validation spike (#199) — now greenlit by the above.
+
+---
+
 ## 1. Motivation and the strategic fork
 
 PP is attractive for Grug in two regimes we care about:
