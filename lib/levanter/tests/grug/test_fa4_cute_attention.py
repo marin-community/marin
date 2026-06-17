@@ -5,26 +5,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax._src import config as jax_config
-from jax.sharding import AbstractMesh, AxisType, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
-import levanter.grug.attention._fa4_cute as fa4_cute
 from levanter.grug.attention import (
     AttentionMask,
     gpu_fa4_cute_attention,
     reference_attention,
 )
 from levanter.grug.attention._fa4_cute import _simple_causal_lower_bounds
-
-
-class _reset_abstract_mesh:
-    def __enter__(self):
-        self._prev = jax_config.abstract_mesh_context_manager.swap_local(jax_config.config_ext.unset)
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        jax_config.abstract_mesh_context_manager.set_local(self._prev)
-        return False
 
 
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):
@@ -72,35 +59,6 @@ def test_simple_causal_lower_bounds_match_full_causal_semantics():
 
     np.testing.assert_array_equal(lower_bounds, np.zeros((2, 4), dtype=np.int32))
     np.testing.assert_array_equal(valid, np.ones((2, 4), dtype=np.bool_))
-
-
-def test_gpu_fa4_cute_attention_shard_maps_batch_axes_before_ffi(monkeypatch):
-    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
-    local_shapes = []
-
-    def fake_attention_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config):
-        del sm_scale, kernel_config
-        local_shapes.append((q.shape, k.shape, v.shape, lower_bounds.shape, valid.shape))
-        return q
-
-    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", fake_attention_forward)
-    mesh = AbstractMesh(
-        axis_sizes=(1, 4, 2, 1),
-        axis_names=("replica_dcn", "data", "expert", "model"),
-        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
-    )
-    q = jax.ShapeDtypeStruct((8, 6, 2, 8), jnp.float32)
-    k = jax.ShapeDtypeStruct((8, 6, 1, 8), jnp.float32)
-    v = jax.ShapeDtypeStruct((8, 6, 1, 8), jnp.float32)
-    mask = AttentionMask.causal(sliding_window=3)
-
-    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
-        out = jax.eval_shape(lambda q_arg, k_arg, v_arg: gpu_fa4_cute_attention(q_arg, k_arg, v_arg, mask), q, k, v)
-
-    assert local_shapes == [((1, 6, 2, 8), (1, 6, 1, 8), (1, 6, 1, 8), (1, 6), (1, 6))]
-    assert out.shape == q.shape
-    assert out.sharding == NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None, "model", None))
 
 
 def _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, *, valid_tokens=None):

@@ -8,8 +8,8 @@ import equinox as eqx
 import jax
 from jax import shard_map
 from jax import numpy as jnp
-from jax.sharding import PartitionSpec as P
-from jax.sharding import get_abstract_mesh, reshard
+from jax.sharding import NamedSharding, PartitionSpec as P
+from jax.sharding import get_abstract_mesh
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug.attention._core import AttentionMask
@@ -185,6 +185,18 @@ def _head_axis(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> str | Non
     return "model"
 
 
+def _assert_sequence_axis_unsharded(name: str, x: jax.Array) -> None:
+    sharding = getattr(x, "sharding", None)
+    if not isinstance(sharding, NamedSharding):
+        return
+
+    spec = tuple(sharding.spec)
+    if len(spec) > 1 and spec[1] is not None:
+        raise ValueError(
+            f"FA4/CuTe shard_map requires unsharded sequence axis for {name}, got sharding {sharding.spec}."
+        )
+
+
 def _fa4_cute_attention_forward_sharded(
     q: jax.Array,
     k: jax.Array,
@@ -221,11 +233,11 @@ def _fa4_cute_attention_forward_sharded(
 
     qkv_spec = P(batch_axes, None, _head_axis(mesh), None)
     metadata_spec = P(batch_axes, None)
-    q = reshard(q, qkv_spec)
-    k = reshard(k, qkv_spec)
-    v = reshard(v, qkv_spec)
-    lower_bounds = reshard(lower_bounds, metadata_spec)
-    valid = reshard(valid, metadata_spec)
+    _assert_sequence_axis_unsharded("q", q)
+    _assert_sequence_axis_unsharded("k", k)
+    _assert_sequence_axis_unsharded("v", v)
+    _assert_sequence_axis_unsharded("lower_bounds", lower_bounds)
+    _assert_sequence_axis_unsharded("valid", valid)
 
     @shard_map(
         mesh=mesh,

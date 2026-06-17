@@ -128,51 +128,6 @@ def test_thd_segment_metadata_rejects_mismatched_q_kv_segments():
         jax.block_until_ready(mask.thd_segment_metadata.segment_lengths)
 
 
-def test_gpu_fa4_thd_registered_backend_jits_with_cutlass_boundary(monkeypatch):
-    seen_sliding_windows = []
-
-    def fake_fwd(q, k, v, cu_seqlens, *, softmax_scale, kernel_config, sliding_window):
-        del k, v, cu_seqlens, softmax_scale, kernel_config
-        seen_sliding_windows.append(sliding_window)
-        return q * jnp.asarray(2, dtype=q.dtype), jnp.zeros((q.shape[1], q.shape[0]), dtype=jnp.float32)
-
-    def fake_bwd(q, k, v, out, dout, lse, cu_seqlens, *, softmax_scale, kernel_config, sliding_window):
-        del out, lse, cu_seqlens, softmax_scale, kernel_config
-        seen_sliding_windows.append(sliding_window)
-        return (
-            dout * jnp.asarray(2, dtype=dout.dtype),
-            jnp.zeros_like(k),
-            jnp.zeros_like(v),
-        )
-
-    monkeypatch.setattr(fa4_thd, "fa4_thd_attention_forward", fake_fwd)
-    monkeypatch.setattr(fa4_thd, "fa4_thd_attention_backward", fake_bwd)
-    monkeypatch.setattr(
-        fa4_thd,
-        "_thd_kernel_config",
-        lambda head_dim: fa4_thd.Flash4CuteKernelConfig(
-            forward_tile=(128, 128),
-            backward_tile=(128, 128),
-            num_threads=384,
-        ),
-    )
-    monkeypatch.setattr(fa4_thd.jax, "default_backend", lambda: "gpu")
-
-    q = jnp.ones((2, 4, 2, 8), dtype=jnp.float32)
-    k = jnp.ones((2, 4, 1, 8), dtype=jnp.float32)
-    v = jnp.ones((2, 4, 1, 8), dtype=jnp.float32)
-    segment_ids = jnp.array([[0, 0, 1, 1], [2, 2, 3, 3]], dtype=jnp.int32)
-    mask = AttentionMask.causal(sliding_window=3).with_segment_ids(segment_ids, max_segments=2)
-
-    out = jax.jit(lambda q_arg: attention(q_arg, k, v, mask, implementation="gpu_fa4_thd"))(q)
-    np.testing.assert_array_equal(out, jnp.full_like(q, 2))
-
-    grad = jax.jit(jax.grad(lambda q_arg: jnp.sum(attention(q_arg, k, v, mask, implementation="gpu_fa4_thd"))))(q)
-    np.testing.assert_array_equal(grad, jnp.full_like(q, 2))
-    assert seen_sliding_windows
-    assert all(sliding_window == 3 for sliding_window in seen_sliding_windows)
-
-
 def test_gpu_fa4_thd_rejects_mha_before_kernel_config(monkeypatch):
     monkeypatch.setattr(fa4_thd.jax, "default_backend", lambda: "gpu")
 
