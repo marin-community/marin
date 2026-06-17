@@ -37,7 +37,7 @@ Hypotheses to test, **not** a ranking — spec says "do not assume A, B, or C is
   `ragged_dot_qt`. Prior: dense `Fp8Dot` presumed **wrong** for ragged until proven otherwise.
 
 ## Baseline
-- **Date:** TBD (R4 — reproduce BF16 Grug MoE baseline; in progress).
+- **Date:** TBD (R4 — reproduce BF16 Grug MoE baseline; **not started**).
 - **Reference recipe (May Recipe, marin#6044):** d2560, 26 layers, GQA 4:1, 256 experts top-4 + shared
   expert, GatedNorm, XSA, half-RoPE, PKO (7/26 layers), ring dispatch, MuonH optimizer; precision
   `params=fp32 / compute=bf16 / output=bf16` (the BF16 baseline FP8 must beat). TPU v4-1024 ref run.
@@ -88,7 +88,7 @@ permute) **= S1 rig + S2 path-A FP8, then S5 + S6** — *not* R4. It depends onl
 can run **in parallel with** R4.
 
 - **Phase 0 — Ramp to green baseline** (days 1–3): R1 ✅ · R2 ✅ · R3 ✅ · **R4 model baseline** ⬜ ·
-  R5 code-read map ⬜ → Gate G0.
+  R5 code-read map ✅ (parallel session) → Gate G0 (blocked on R4).
 - **Phase 1 — Lowering-path spike → decision gate** (days 4–8): dense **S1→S2/S3/S4** · ragged
   **S5→S6a/S6b** · perf targets **S7** (uses R4 profile) · report **S8** → **team review S9 = hard gate**.
 - **Phase 2a — Dense FP8** (spec Wk1): Haliax helper → **PR1**; Grug dense wiring + OWG train step → **PR2**.
@@ -114,6 +114,22 @@ can run **in parallel with** R4.
   = S1 (dense rig) + S2 (path-A FP8) + S5 (ragged rig) + S6. S1 depends only on R3, so the first
   deliverable can start in parallel with R4.
 - Updated the Plan section above; mirrored the same fix into memex `grug-fp8-task-dag.md` (R4/S1/S5).
+
+### 2026-06-17 — R5 done: code-read map (via parallel session)
+- R5 completed in the parallel session (memex `b6e5dfb`, note `2026-06-17-grug-fp8-r5-code-map.md`);
+  key findings folded here so the logbook stands alone.
+- **Existing FP8 path = fragile QDQ pattern-matching.** `dot_general_with_precision` (haliax
+  `fp8.py:121-133`) forces `Precision.DEFAULT` and *discards* the precision arg, leaning on XLA's
+  GemmRewriter to emit `__cublas$lt$matmul$f8`. Near-verbatim Flax port, algorithm unchanged since the
+  2025-11 ingest.
+- **"Slower today" explained.** No `scaled_dot_general` / preset / `kScaledDot` usage anywhere in
+  marin — the QDQ code stood still while XLA gained explicit `kScaledDot` / `ScaledDotRewriter`, so the
+  fragile match can silently fall back to bf16.
+- **Head start.** David prototyped dense wiring on unmerged `origin/codex/grug-generic-fp8`
+  (`9af5f5d09`: `levanter/grug/linear.py` + grug model/train wiring + `test_grug_variant_contracts`
+  FP8 cases) — useful for H1/C1/C2, but it reuses the suspect `Fp8DotGeneralOp`.
+- **Reframes S2:** path A is a *re-measurement* of an existing-but-maybe-broken QDQ path, not a fresh
+  experiment.
 
 <!-- New entries below this line. Template:
 ### YYYY-MM-DD HH:MM - <GFP8-NNN short label>
