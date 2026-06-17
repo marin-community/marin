@@ -193,12 +193,16 @@ LARGE = ModelSpec("large MoE (~d6144, 48L)", hidden=6144, layers=48, seq=4096, n
 
 if __name__ == "__main__":
     hw = Hardware()
-    # Placeholder token-overhead until the iso-loss runs land; override per measurement.
-    measured_overhead = 1.3
+    # Measured token-overhead from the iso-loss cohort (group delay-pp-isoloss,
+    # analyze_isoloss.py): the realistic per-stage PP profile (pp6) with Muon needs
+    # 1.33x the tokens of sync to reach the same loss (1.23x with weight prediction;
+    # a uniform-tau model would wrongly read 2.42x). All arms were still descending,
+    # i.e. a recoverable token tax rather than a quality floor.
+    measured_overhead = 1.33
     print("Pipeline-parallelism throughput vs synchronous DP (v6e, conservative defaults)")
     print(
         f"(dcn_overlap={hw.dcn_overlap}, mfu={hw.mfu}, dcn_bw={hw.dcn_bw_per_chip/1e9:.0f} GB/s/chip, "
-        f"measured token-overhead placeholder={measured_overhead}x)\n"
+        f"measured Muon per-stage-PP token-overhead={measured_overhead}x)\n"
     )
     print("Large MoE over 8 DCN slices, sweeping per-step batch (smaller batch -> comm exposed):")
     for batch in (8e6, 4e6, 2e6, 1e6):
