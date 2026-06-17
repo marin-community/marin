@@ -3,6 +3,7 @@
 
 """Restore-path behavior for scale groups that left config (drain mode)."""
 
+import pytest
 from iris.cluster.backends.types import CloudSliceState, ListedSlice
 from iris.cluster.controller.autoscaler.recovery import AutoscalerCheckpoint, restore_autoscaler_state
 from iris.cluster.controller.autoscaler.scaling_group import (
@@ -122,8 +123,15 @@ def test_configured_group_not_replaced_by_drain():
     assert configured.can_scale_up()  # still a normal, growable group
 
 
-def test_drain_group_reclaims_idle_slice(monkeypatch):
-    """An adopted draining group terminates its slice once the worker goes idle (target=0)."""
+@pytest.mark.parametrize(
+    ("running_task_ids", "expected_slice_count"),
+    [
+        pytest.param(frozenset(), 0, id="idle-reclaimed"),
+        pytest.param(frozenset({"task-1"}), 1, id="busy-kept"),
+    ],
+)
+def test_drain_group_reclaims_only_idle_slices(monkeypatch, running_task_ids, expected_slice_count):
+    """A draining group reclaims an idle slice (target=0) but never kills one running a task."""
     monkeypatch.setattr("iris.cluster.controller.autoscaler.runtime._probe_worker_health", lambda url: True)
     handle = make_fake_slice_handle("slice-001", scale_group="retired-group", all_ready=True)
     platform = make_mock_platform(slices_to_discover=[handle])
@@ -133,28 +141,9 @@ def test_drain_group_reclaims_idle_slice(monkeypatch):
     autoscaler = make_autoscaler({"retired-group": drain})
 
     wid = handle.describe().workers[0].worker_id
-    idle = {wid: WorkerStatus(worker_id=wid, running_task_ids=frozenset())}
-    drain.update_slice_activity(idle, Timestamp.from_ms(2_000))  # stamp quiet_since
-    autoscaler.run_once([], idle, timestamp=Timestamp.from_ms(10_000))
+    status = {wid: WorkerStatus(worker_id=wid, running_task_ids=running_task_ids)}
+    drain.update_slice_activity(status, Timestamp.from_ms(2_000))  # stamp quiet_since
+    autoscaler.run_once([], status, timestamp=Timestamp.from_ms(10_000))
 
-    assert drain.slice_count() == 0  # idle VM reclaimed
-    autoscaler.shutdown()
-
-
-def test_drain_group_keeps_busy_slice(monkeypatch):
-    """A draining group never kills a slice whose worker is still running a task."""
-    monkeypatch.setattr("iris.cluster.controller.autoscaler.runtime._probe_worker_health", lambda url: True)
-    handle = make_fake_slice_handle("slice-001", scale_group="retired-group", all_ready=True)
-    platform = make_mock_platform(slices_to_discover=[handle])
-    drain = _draining_group(platform)
-    drain.reconcile()
-    mark_discovered_ready(drain, [handle])
-    autoscaler = make_autoscaler({"retired-group": drain})
-
-    wid = handle.describe().workers[0].worker_id
-    busy = {wid: WorkerStatus(worker_id=wid, running_task_ids=frozenset({"task-1"}))}
-    drain.update_slice_activity(busy, Timestamp.from_ms(2_000))
-    autoscaler.run_once([], busy, timestamp=Timestamp.from_ms(10_000))
-
-    assert drain.slice_count() == 1  # running task preserved
+    assert drain.slice_count() == expected_slice_count
     autoscaler.shutdown()

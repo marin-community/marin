@@ -273,11 +273,7 @@ def delete_job(tx: Tx, job_id: JobName) -> None:
 
 @writes_to(slices_table)
 def delete_slice(tx: Tx, slice_id: str) -> None:
-    """Delete one orphaned slice row. Slices have no FK cascades, so it is a bare delete.
-
-    Callers (``pruner.prune_old_data``) select orphan candidates with
-    ``reads.find_prunable_slice``.
-    """
+    """Delete one slice row. Slices have no FK cascades, so this is a bare delete."""
     tx.execute(delete(slices_table).where(slices_table.c.slice_id == slice_id))
 
 

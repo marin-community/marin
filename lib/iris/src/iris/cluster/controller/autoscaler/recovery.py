@@ -164,12 +164,7 @@ def restore_autoscaler_state(
 
 
 def _restore_group(group: ScalingGroup, group_snapshot: GroupSnapshot, cloud_handles: list[SliceHandle]) -> None:
-    """Reconcile one group's checkpoint snapshot against live cloud handles and load it in.
-
-    Slice rows discarded here (missing from cloud) are not re-added to the
-    group's in-memory state, so the controller's first wholesale DB sync after
-    the next capacity call deletes them — no explicit purge needed.
-    """
+    """Reconcile one group's checkpoint snapshot against live cloud handles and load it into the group."""
     restore_result = restore_scaling_group(group_snapshot=group_snapshot, cloud_handles=cloud_handles)
     group.restore_from_snapshot(
         slices=restore_result.slices,

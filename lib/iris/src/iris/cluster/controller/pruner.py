@@ -54,6 +54,76 @@ def _find_prunable_worker(health: WorkerHealthTracker, before_ms: int) -> Worker
     return None
 
 
+def _stopped(stop_event: threading.Event | None) -> bool:
+    return stop_event is not None and stop_event.is_set()
+
+
+def _prune_terminal_jobs(
+    db: ControllerDB, endpoints: EndpointsProjection, cutoff_ms: int, stop_event: threading.Event | None, pause: float
+) -> int:
+    """Delete terminal jobs finished before ``cutoff_ms``, one CASCADE (tasks → attempts) at a time."""
+    deleted = 0
+    while not _stopped(stop_event):
+        with db.read_snapshot() as snap:
+            job_name = reads.find_prunable_job(snap, TERMINAL_JOB_STATES, Timestamp.from_ms(cutoff_ms))
+        if job_name is None:
+            break
+        with db.transaction() as cur:
+            # Invalidate endpoint cache BEFORE the CASCADE so the cache
+            # drops rows SQLite is about to delete for us.
+            endpoints.remove_by_job_ids(cur, [job_name])
+            writes.delete_job(cur, job_name)
+        log_event("job_pruned", job_name.to_wire())
+        deleted += 1
+        time.sleep(pause)
+    return deleted
+
+
+def _prune_dead_workers(
+    db: ControllerDB,
+    health: WorkerHealthTracker,
+    worker_attrs: WorkerAttrsProjection,
+    cutoff_ms: int,
+    stop_event: threading.Event | None,
+    pause: float,
+) -> int:
+    """Delete DEAD workers whose last heartbeat predates ``cutoff_ms``, one CASCADE (attributes) at a time."""
+    deleted = 0
+    while not _stopped(stop_event):
+        worker_id = _find_prunable_worker(health, cutoff_ms)
+        if worker_id is None:
+            break
+        with db.transaction() as cur:
+            writes.remove_worker(cur, worker_id, health=health, worker_attrs=worker_attrs)
+        log_event("worker_pruned", str(worker_id))
+        deleted += 1
+        time.sleep(pause)
+    return deleted
+
+
+def _prune_orphan_slices(db: ControllerDB, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
+    """Delete orphaned slice rows older than ``cutoff_ms``, one at a time.
+
+    A slice with no backing worker row has no live VMs behind it, so once it ages
+    past ``slice_retention`` it is garbage. This reaps the dead leftovers of a
+    scale-group rename/removal: a retired group whose VMs are gone leaves only
+    orphan slice rows. A retired group whose VMs are still live is adopted and
+    drained by the autoscaler instead (``recovery.restore_autoscaler_state``).
+    """
+    deleted = 0
+    while not _stopped(stop_event):
+        with db.read_snapshot() as snap:
+            slice_id = reads.find_prunable_slice(snap, cutoff_ms)
+        if slice_id is None:
+            break
+        with db.transaction() as cur:
+            writes.delete_slice(cur, slice_id)
+        log_event("slice_pruned", slice_id)
+        deleted += 1
+        time.sleep(pause)
+    return deleted
+
+
 def prune_old_data(
     db: ControllerDB,
     health: WorkerHealthTracker,
@@ -68,9 +138,9 @@ def prune_old_data(
 ) -> PruneResult:
     """Incrementally delete old data, one row per transaction.
 
-    Designed to run on a background thread. Each deletion holds the write
-    lock for only one CASCADE delete (one job, worker, or slice), then sleeps
-    to let scheduling and heartbeats proceed.
+    Designed to run on a background thread. Each deletion holds the write lock
+    for only one delete (one job, worker, or slice), then sleeps to let
+    scheduling and heartbeats proceed.
 
     Args:
         db: Controller database handle.
@@ -84,63 +154,12 @@ def prune_old_data(
         pause_between_s: Sleep between individual deletes to reduce lock contention.
     """
     now_ms = Timestamp.now().epoch_ms()
-    job_cutoff_ms = now_ms - job_retention.to_ms()
-    worker_cutoff_ms = now_ms - worker_retention.to_ms()
-    slice_cutoff_ms = now_ms - slice_retention.to_ms()
-
-    def _stopped() -> bool:
-        return stop_event is not None and stop_event.is_set()
-
-    # 1. Jobs: one at a time (CASCADE to tasks → attempts, endpoints)
-    jobs_deleted = 0
-    while not _stopped():
-        with db.read_snapshot() as snap:
-            job_name = reads.find_prunable_job(snap, TERMINAL_JOB_STATES, Timestamp.from_ms(job_cutoff_ms))
-        if job_name is None:
-            break
-        with db.transaction() as cur:
-            # Invalidate endpoint cache BEFORE the CASCADE so the cache
-            # drops rows SQLite is about to delete for us.
-            endpoints.remove_by_job_ids(cur, [job_name])
-            writes.delete_job(cur, job_name)
-        log_event("job_pruned", job_name.to_wire())
-        jobs_deleted += 1
-        time.sleep(pause_between_s)
-
-    # 2. Workers: one at a time (CASCADE to attributes).
-    workers_deleted = 0
-    while not _stopped():
-        worker_id = _find_prunable_worker(health, worker_cutoff_ms)
-        if worker_id is None:
-            break
-        with db.transaction() as cur:
-            writes.remove_worker(cur, worker_id, health=health, worker_attrs=worker_attrs)
-        log_event("worker_pruned", str(worker_id))
-        workers_deleted += 1
-        time.sleep(pause_between_s)
-
-    # 3. Orphaned slices: one at a time. A slice with no backing worker row has
-    #    no live VMs behind it; once it ages past slice_retention it is garbage.
-    #    This reaps the dead leftovers of a scale-group rename/removal: retired
-    #    groups whose VMs are gone leave only orphan slice rows (those whose VMs
-    #    are still live are adopted and drained by the autoscaler instead —
-    #    recovery.restore_autoscaler_state).
-    slices_deleted = 0
-    while not _stopped():
-        with db.read_snapshot() as snap:
-            slice_id = reads.find_prunable_slice(snap, slice_cutoff_ms)
-        if slice_id is None:
-            break
-        with db.transaction() as cur:
-            writes.delete_slice(cur, slice_id)
-        log_event("slice_pruned", slice_id)
-        slices_deleted += 1
-        time.sleep(pause_between_s)
-
     result = PruneResult(
-        jobs_deleted=jobs_deleted,
-        workers_deleted=workers_deleted,
-        slices_deleted=slices_deleted,
+        jobs_deleted=_prune_terminal_jobs(db, endpoints, now_ms - job_retention.to_ms(), stop_event, pause_between_s),
+        workers_deleted=_prune_dead_workers(
+            db, health, worker_attrs, now_ms - worker_retention.to_ms(), stop_event, pause_between_s
+        ),
+        slices_deleted=_prune_orphan_slices(db, now_ms - slice_retention.to_ms(), stop_event, pause_between_s),
     )
     if result.total > 0:
         logger.info(
