@@ -55,6 +55,8 @@ WATCH_INTERVAL=0
 LOG_EVERY=1
 LOG_JAXPRS="${MAY_LOG_JAXPRS:-false}"
 LOG_XLA_HLO="${MAY_LOG_XLA_HLO:-false}"
+SAVE_XLA_DUMPS="${MAY_SAVE_XLA_DUMPS:-false}"
+XLA_FLAGS_VALUE="${MAY_XLA_FLAGS:-}"
 
 usage() {
     cat <<'EOF'
@@ -103,6 +105,8 @@ Options:
   --log-every N             MAY_LOG_EVERY train progress/scalar logging cadence (default: 1).
   --log-jaxprs BOOL         MAY_LOG_JAXPRS; true dumps JAXPRs (default: false).
   --log-xla-hlo BOOL        MAY_LOG_XLA_HLO; true dumps XLA HLO (default: false).
+  --save-xla-dumps BOOL     MAY_SAVE_XLA_DUMPS; true uploads XLA_FLAGS dump dir to W&B (default: false).
+  --xla-flags FLAGS         XLA_FLAGS forwarded to worker tasks; defaults to per-run HLO dumps when --save-xla-dumps true.
   -h, --help                Show this help.
 
 This wrapper forwards explicit MAY_* environment variables to Iris; local shell
@@ -273,6 +277,14 @@ while [ "$#" -gt 0 ]; do
             LOG_XLA_HLO="$2"
             shift 2
             ;;
+        --save-xla-dumps)
+            SAVE_XLA_DUMPS="$2"
+            shift 2
+            ;;
+        --xla-flags)
+            XLA_FLAGS_VALUE="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -333,6 +345,10 @@ if [ -z "$RUN_ID" ]; then
     RUN_ID="cw-may-d2560-profile-$(date -u +%Y%m%d-%H%M%S)"
 fi
 
+if [ "$SAVE_XLA_DUMPS" = true ] && [ -z "$XLA_FLAGS_VALUE" ]; then
+    XLA_FLAGS_VALUE="--xla_dump_to=/tmp/xla_dumps/${RUN_ID} --xla_dump_hlo_as_text --xla_dump_hlo_pass_re=.*"
+fi
+
 RUN_TOKENS=$((BATCH * SEQ_LEN * STEPS))
 
 ENV_ARGS=(
@@ -378,8 +394,13 @@ ENV_ARGS=(
     -e MAY_LOG_EVERY "$LOG_EVERY"
     -e MAY_LOG_JAXPRS "$LOG_JAXPRS"
     -e MAY_LOG_XLA_HLO "$LOG_XLA_HLO"
+    -e MAY_SAVE_XLA_DUMPS "$SAVE_XLA_DUMPS"
     -e XLA_PYTHON_CLIENT_MEM_FRACTION "$XLA_MEMORY_FRACTION"
 )
+
+if [ -n "$XLA_FLAGS_VALUE" ]; then
+    ENV_ARGS+=(-e XLA_FLAGS "$XLA_FLAGS_VALUE")
+fi
 
 for maybe_env in WANDB_API_KEY WANDB_ENTITY WANDB_PROJECT MAY_WANDB_GROUP TF_GPU_ALLOCATOR; do
     if [ -n "${!maybe_env:-}" ]; then
@@ -424,6 +445,8 @@ watch_interval: $WATCH_INTERVAL
 log_every: $LOG_EVERY
 log_jaxprs: $LOG_JAXPRS
 log_xla_hlo: $LOG_XLA_HLO
+save_xla_dumps: $SAVE_XLA_DUMPS
+xla_flags: ${XLA_FLAGS_VALUE:-unset}
 use_pko: $USE_PKO
 pko_on_last_layer: $PKO_ON_LAST_LAYER
 block_cross_document_attention: $BLOCK_CROSS_DOCUMENT_ATTENTION

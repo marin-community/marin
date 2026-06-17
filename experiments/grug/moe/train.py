@@ -35,6 +35,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
+from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
@@ -533,6 +534,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         )
         state_callbacks.add_hook(callbacks.pbar_logger(total=trainer.num_train_steps), every=log_every)
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
+        if isinstance(trainer.tracker, WandbConfig) and trainer.tracker.save_xla_dumps:
+            state_callbacks.add_hook(callbacks.wandb_xla_logger(trainer.tracker), every=log_every)
         if profiler_enabled:
             state_callbacks.add_hook(
                 callbacks.profile(

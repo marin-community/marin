@@ -23,6 +23,7 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_LOG_EVERY=1          train progress/scalar logging cadence
     MAY_LOG_JAXPRS=false     disable JAXPR dumps for throughput probes
     MAY_LOG_XLA_HLO=false    disable HLO dumps for throughput probes
+    MAY_SAVE_XLA_DUMPS=false upload XLA_FLAGS dump directory to W&B
     MAY_REMAT=save_moe       none | recompute_all | save_moe
     MAY_USE_PKO=true         enable PKO/doc-start mask path on long layers
     MAY_PKO_ON_LAST_LAYER=true
@@ -202,6 +203,7 @@ def build_tracker(run_id: str):
             group=os.environ.get("MAY_WANDB_GROUP", "grug-moe-cw-may-d2560"),
             name=run_id,
             replicate_path=this_output_path(),
+            save_xla_dumps=env_bool("MAY_SAVE_XLA_DUMPS", False),
         )
     return JsonLoggerConfig(logger_name=os.environ.get("MAY_JSON_LOGGER", "grug_moe_cw_may.metrics"))
 
