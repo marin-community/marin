@@ -50,6 +50,7 @@ def _build_failed(tracker: WorkerHealthTracker, wid: WorkerId, *, now_ms: int = 
 def test_reconcile_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
     """9 consecutive failures are not enough; 10th trips; a REACHED event resets and requires 10 more."""
     wid = WorkerId("w-1")
+    tracker.register(wid, now_ms=0)
     over: list[WorkerId] = []
     for _ in range(9):
         over = _unreachable(tracker, wid)
@@ -57,6 +58,7 @@ def test_reconcile_failure_threshold_boundary(tracker: WorkerHealthTracker) -> N
     assert _unreachable(tracker, wid) == [wid]
 
     tracker.forget(wid)
+    tracker.register(wid, now_ms=0)
     for _ in range(9):
         _unreachable(tracker, wid)
     _reached(tracker, wid)  # reset consecutive failures
@@ -69,6 +71,7 @@ def test_reconcile_failure_threshold_boundary(tracker: WorkerHealthTracker) -> N
 def test_build_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
     """9 build failures are not enough; 10th trips; a REACHED event does not reset the counter."""
     wid = WorkerId("w-1")
+    tracker.register(wid, now_ms=0)
     over: list[WorkerId] = []
     for _ in range(9):
         over = _build_failed(tracker, wid)
@@ -82,6 +85,7 @@ def test_build_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
 def test_reconcile_and_build_failures_are_independent(tracker: WorkerHealthTracker) -> None:
     """A worker can trip via either path; tripping one does not affect the other counter."""
     wid = WorkerId("w-1")
+    tracker.register(wid, now_ms=0)
     for _ in range(5):
         _unreachable(tracker, wid)
     for _ in range(5):
@@ -93,6 +97,7 @@ def test_reconcile_and_build_failures_are_independent(tracker: WorkerHealthTrack
 
 def test_forget_removes_worker(tracker: WorkerHealthTracker) -> None:
     wid = WorkerId("w-1")
+    tracker.register(wid, now_ms=0)
     over: list[WorkerId] = []
     for _ in range(10):
         over = _unreachable(tracker, wid)
@@ -104,6 +109,7 @@ def test_forget_removes_worker(tracker: WorkerHealthTracker) -> None:
 def test_forget_many_drops_only_listed_workers(tracker: WorkerHealthTracker) -> None:
     a, b, c = WorkerId("a"), WorkerId("b"), WorkerId("c")
     for wid in (a, b, c):
+        tracker.register(wid, now_ms=0)
         for _ in range(10):
             _unreachable(tracker, wid)
     tracker.forget_many([a, c])
@@ -112,6 +118,8 @@ def test_forget_many_drops_only_listed_workers(tracker: WorkerHealthTracker) -> 
 
 def test_per_worker_counters_are_independent(tracker: WorkerHealthTracker) -> None:
     a, b = WorkerId("a"), WorkerId("b")
+    tracker.register(a, now_ms=0)
+    tracker.register(b, now_ms=0)
     over: list[WorkerId] = []
     for _ in range(10):
         over = _unreachable(tracker, a)
@@ -121,6 +129,7 @@ def test_per_worker_counters_are_independent(tracker: WorkerHealthTracker) -> No
 
 def test_snapshot_reports_both_counters(tracker: WorkerHealthTracker) -> None:
     wid = WorkerId("w-1")
+    tracker.register(wid, now_ms=0)
     for _ in range(3):
         _unreachable(tracker, wid)
     for _ in range(2):

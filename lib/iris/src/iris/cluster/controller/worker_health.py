@@ -136,14 +136,24 @@ class WorkerHealthTracker:
 
         REACHED bumps the heartbeat and resets the failure count; UNREACHABLE
         increments consecutive failures; BUILD_FAILED increments build failures.
-        Returns every worker currently at/over the reconcile-failure or
+        Events for a ``worker_id`` with no existing entry are dropped — apply
+        only updates known workers; creation is reserved for ``register``/
+        ``heartbeat``. Returns every worker currently at/over the reconcile-failure or
         build-failure threshold so the controller fails and tears them down —
         workers are forgotten on removal, so a returned worker does not repeat
         once gone.
         """
         with self._lock:
             for event in events:
-                state = self._states.setdefault(event.worker_id, WorkerLiveness())
+                state = self._states.get(event.worker_id)
+                if state is None:
+                    # apply() only updates known workers; creation is reserved for
+                    # register/heartbeat. A stray observation — e.g. a REACHED folded
+                    # from an impostor at a dead worker's recycled address — must not
+                    # conjure a fresh, schedulable liveness entry and re-animate a
+                    # forgotten worker.
+                    logger.debug("Dropping health event for unknown worker %s: %s", event.worker_id, event.kind)
+                    continue
                 if event.kind is WorkerHealthEventKind.REACHED:
                     state.last_heartbeat_ms = now_ms
                     state.healthy = True
