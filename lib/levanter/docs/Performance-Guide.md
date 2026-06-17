@@ -32,8 +32,9 @@ Here are the full list of profiling related options:
 
 As usual, these can be specified in the yaml configuration file as well.
 
-In a multi-process setup, each node will save a profile. All of them will be available in the `./logs` directory (on each node),
-or in the remote storage configured for `log_dir`.
+In a multi-process setup, each node saves its own profile under that node's `log_dir` tree. JAX does not merge or align
+those traces automatically, so compare the per-host `plugins/profile/<datetime>/` directories directly if you need a
+cross-host view.
 
 
 ### Examining a Profile
@@ -48,6 +49,9 @@ JAX offers two main ways to examine a profile: Perfetto and TensorBoard.
 
 Open the trace from the run directory, then go to https://ui.perfetto.dev/ and upload `perfetto_trace.json.gz`.
 The file lives under `plugins/profile/<datetime>/` inside the profiler output directory.
+
+If you enabled host profiling, the companion `host_profile.pstats` and `host_profile.txt` files are written alongside the
+JAX trace files in that same profiler directory.
 
 Alternatively, you can enable the `--trainer.profiler.perfetto_link` flag.
 This will generate a link that will automatically upload the `perfetto_trace.json.gz` file in the same directory as the TensorBoard profile.

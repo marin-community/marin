@@ -163,6 +163,8 @@ def profile_ctx(
         - Only process 0 creates the Perfetto link when ``create_perfetto_link`` is True.
         - After exiting the context, the profile remains in ``path`` and the context
           manager performs a cross-process barrier.
+        - When ``host_profile`` is enabled, the cProfile outputs are written into the
+          same directory as the JAX trace files.
     """
     _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
     logger.info("Starting profiler.")
