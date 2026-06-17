@@ -60,7 +60,7 @@ from levanter.main.perplexity_gap import (
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.tracker import current_tracker
 from levanter.tracker.tracker import DictTracker
-from levanter.tokenizers import load_tokenizer
+from levanter.tokenizers import TokenizerBackend, load_tokenizer
 from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 
@@ -96,6 +96,34 @@ def test_tokenize_text_with_byte_spans_covers_utf8_bytes():
     assert spans[0][0] == 0
     assert spans[-1][1] == tokenized.num_bytes
     assert sum(end - start for start, end in spans) == tokenized.num_bytes
+
+
+def test_tokenmonster_byte_spans_keep_control_token_loss_on_source_bytes():
+    pytest.importorskip("tokenmonster")
+
+    tokenizer = load_tokenizer(
+        "tokenmonster:englishcode-32000-consistent-v1",
+        backend=TokenizerBackend.TOKENMONSTER,
+    )
+    text = "TokenMonster"
+
+    tokenized = tokenize_text_with_byte_spans(tokenizer, tokenizer.as_hf_tokenizer(), text)
+
+    assert tokenizer.decode(tokenized.token_ids.tolist()) == text
+    assert tokenizer.decode(tokenized.token_ids[1:].tolist()) == "Monster"
+    assert tokenized.byte_starts[1] == len("Token".encode("utf-8"))
+    assert tokenized.byte_ends[1] == len(text.encode("utf-8"))
+    assert tokenized.byte_starts[2] == tokenized.byte_starts[1]
+    assert tokenized.byte_ends[2] == tokenized.byte_ends[1]
+
+    per_byte_loss = np.zeros(tokenized.num_bytes, dtype=np.float64)
+    _accumulate_token_losses(
+        per_byte_loss,
+        tokenized.byte_starts[1:],
+        tokenized.byte_ends[1:],
+        np.ones(len(tokenized.token_ids) - 1, dtype=np.float64),
+    )
+    assert per_byte_loss.sum() == pytest.approx(len(tokenized.token_ids) - 1)
 
 
 def test_iter_dataset_documents_combines_supervised_input_and_target():

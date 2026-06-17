@@ -9,6 +9,7 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
 
@@ -36,6 +37,115 @@ from levanter.utils.tree_utils import inference_mode
 
 from .test_lm_model_loss import ToyLmConfig, ToyLmHeadModel
 from .test_utils import use_test_mesh
+
+
+class _FixedByteTokenizer:
+    all_special_ids = []
+
+    def get_vocab(self):
+        return {"a": 0, "longtoken": 1}
+
+    def convert_ids_to_tokens(self, idx):
+        return ["a", "longtoken"][idx]
+
+    def encode(self, text, *, add_special_tokens=False):
+        del text, add_special_tokens
+        return [0]
+
+    def decode(self, ids, *, skip_special_tokens=False):
+        del skip_special_tokens
+        return "".join(self.convert_ids_to_tokens(i) for i in ids)
+
+
+class _ZeroByteTokenizer:
+    all_special_ids = []
+
+    def get_vocab(self):
+        return {".": 0, "<zero-byte>": 1, "abc": 2}
+
+    def convert_ids_to_tokens(self, idx):
+        return {0: ".", 1: "<zero-byte>", 2: "abc"}[idx]
+
+    def encode(self, text, *, add_special_tokens=False):
+        assert text == "."
+        del add_special_tokens
+        return [0]
+
+    def decode(self, ids, *, skip_special_tokens=False):
+        del skip_special_tokens
+        token_text = {0: ".", 1: "", 2: "abc"}
+        return "".join(token_text[token_id] for token_id in ids)
+
+
+def test_tagged_evaluator_logs_historical_bpb_and_source_document_bpb():
+    EvalBatch = Axis("batch", len(jax.devices()))
+    examples = [
+        *(GrugLmExample.causal(jnp.asarray([0], dtype=jnp.int32)) for _ in range(EvalBatch.size)),
+        *(GrugLmExample.causal(jnp.asarray([1], dtype=jnp.int32)) for _ in range(EvalBatch.size)),
+    ]
+    dataset = ListAsyncDataset(examples)
+
+    def loss_fn(_model, batch: GrugLmExample) -> LossFnOutput:
+        return (
+            jnp.ones_like(batch.tokens, dtype=jnp.float32),
+            jnp.ones_like(batch.tokens, dtype=jnp.float32),
+            batch.tokens,
+        )
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=[(dataset, ["tiny"])],
+            loss_fn=loss_fn,
+            tokenizer=_FixedByteTokenizer(),
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        result = evaluator.evaluate(jnp.zeros((), dtype=jnp.float32))
+
+    expected_bpb = np.mean(
+        [
+            np.log2(np.e) / len("a".encode("utf-8")),
+            np.log2(np.e) / len("longtoken".encode("utf-8")),
+        ]
+    )
+    expected_source_document_bpb = 2.0 * np.log2(np.e) / (len("a".encode("utf-8")) + len("longtoken".encode("utf-8")))
+    assert result.micro_bpb == pytest.approx(expected_bpb, rel=2e-5)
+    assert result.source_document_bpb == pytest.approx(expected_source_document_bpb, rel=2e-5)
+
+
+def test_tagged_evaluator_source_document_bpb_includes_zero_byte_token_loss():
+    EvalBatch = Axis("batch", len(jax.devices()))
+    examples = [
+        *(
+            GrugLmExample(tokens=jnp.array([1, 1], dtype=jnp.int32), loss_weight=jnp.ones((2,), dtype=jnp.float32))
+            for _ in range(EvalBatch.size)
+        ),
+        *(
+            GrugLmExample(tokens=jnp.array([2, 2], dtype=jnp.int32), loss_weight=jnp.ones((2,), dtype=jnp.float32))
+            for _ in range(EvalBatch.size)
+        ),
+    ]
+
+    def loss_fn(_model, batch: GrugLmExample) -> LossFnOutput:
+        losses = jnp.ones_like(batch.tokens, dtype=jnp.float32)
+        return losses, batch.loss_weight, batch.tokens
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=[(ListAsyncDataset(examples), ["root/mix"])],
+            loss_fn=loss_fn,
+            tokenizer=_ZeroByteTokenizer(),
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        result = evaluator.evaluate(None)
+
+    expected_source_document_bpb = 4.0 * EvalBatch.size * np.log2(np.e) / (6.0 * EvalBatch.size)
+    assert result.source_document_bpb == pytest.approx(expected_source_document_bpb, rel=2e-5)
+    assert result.tag_source_document_bpb["root/mix"] == pytest.approx(expected_source_document_bpb, rel=2e-5)
+    assert result.tag_source_document_bpb["root"] == pytest.approx(expected_source_document_bpb, rel=2e-5)
 
 
 def test_tagged_evaluator_accepts_grug_lm_examples():
