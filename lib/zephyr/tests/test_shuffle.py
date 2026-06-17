@@ -24,7 +24,7 @@ from zephyr.worker_context import _worker_ctx_var
 @pytest.fixture(autouse=True)
 def mock_worker_ctx():
     """Provide a dummy worker context so ScatterWriter can resolve num_workers."""
-    ctx = _InProcessWorkerContext(chunk_prefix="test", execution_id="test", num_workers=1)
+    ctx = _InProcessWorkerContext(chunk_prefix="test", execution_id="test", stage_name="test", num_workers=1)
     token = _worker_ctx_var.set(ctx)
     yield
     _worker_ctx_var.reset(token)

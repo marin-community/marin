@@ -24,12 +24,11 @@ from rigging.filesystem import open_url, unique_temp_path
 
 from zephyr.plan import PhysicalOp, Scatter, Shard
 from zephyr.shuffle import ListShard, _write_scatter
+from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
+from zephyr.worker_context import CounterEntry
 from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
-
-ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/stage/{stage_name}/item_count"
-ZEPHYR_STAGE_BYTES_PROCESSED_KEY = "zephyr/stage/{stage_name}/bytes_processed"
 
 
 class ZephyrWorkerError(RuntimeError):
@@ -157,24 +156,22 @@ class StageThroughput:
 
 
 def _stage_throughput(
-    counters: Mapping[str, int],
-    stage_name: str,
+    counters: Mapping[str, int | float],
     elapsed: float,
 ) -> StageThroughput | None:
-    """Return throughput stats for *stage_name*, or ``None`` if uninstrumented.
+    """Return throughput stats from *counters*, or ``None`` if uninstrumented.
 
-    Returns ``None`` when neither the item nor the byte counter has been
-    recorded for this stage. Map-only stages and stages still in run_stage
-    setup never populate these counters; ``None`` distinguishes that case
-    from a real zero count so callers can suppress misleading "0 items"
-    status lines.
+    Returns ``None`` when neither the item nor the byte counter is present.
+    Map-only stages and stages still in run_stage setup never populate these
+    counters; ``None`` distinguishes that case from a real zero count so
+    callers can suppress misleading "0 items" status lines.
+
+    Callers are responsible for passing stage-filtered counters when needed.
     """
-    item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
-    byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
-    if item_key not in counters and byte_key not in counters:
+    if ZEPHYR_STAGE_ITEM_COUNT_KEY not in counters and ZEPHYR_STAGE_BYTES_PROCESSED_KEY not in counters:
         return None
-    items = counters.get(item_key, 0)
-    bytes_processed = counters.get(byte_key, 0)
+    items = int(counters.get(ZEPHYR_STAGE_ITEM_COUNT_KEY, 0))
+    bytes_processed = int(counters.get(ZEPHYR_STAGE_BYTES_PROCESSED_KEY, 0))
     item_rate = items / elapsed if elapsed > 0 else 0.0
     byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
     return StageThroughput(
@@ -278,5 +275,5 @@ class StageRunner(Protocol):
         task: ShardTask,
         chunk_prefix: str,
         execution_id: str,
-    ) -> tuple[TaskResult, dict[str, int]]: ...
-    def live_counters(self) -> dict[str, int]: ...
+    ) -> tuple[TaskResult, dict[str, CounterEntry]]: ...
+    def live_counters(self) -> dict[str, CounterEntry]: ...
