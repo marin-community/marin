@@ -37,13 +37,13 @@ _EP: int = 4
 
 _heuristic = MoeMuonHHeuristic(min_lr_ratio=0.05)
 _model_base = _heuristic.build_model_config(_DIM, seq_len=_SEQ)
-_model = dataclasses.replace(_model_base, disable_pko=True)
+_model = dataclasses.replace(_model_base, disable_pko=True, use_array_stacked_blocks=True)
 _tokens = float(_STEPS * _BS * _SEQ)
 _optimizer = _heuristic.build_muonh_config(_BS, _tokens, _DIM, seq_len=_SEQ)
 # Snap the data-mix phase transition to a mixture-block boundary so it lands cleanly.
 _phase_step = _phase_1_start_step(_STEPS, _BS)
 
-_run_id = f"june_prep_moe_may_d{_DIM}_ep{_EP}_bs{_BS}"
+_run_id = f"june_prep_moe_may_d{_DIM}_ep{_EP}_bs{_BS}_stacked"
 step = ExecutorStep(
     name=f"grug/{_run_id}",
     fn=run_grug_moe_trial,

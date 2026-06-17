@@ -17,6 +17,7 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 from einops import rearrange
 from haliax.jax_utils import named_call
+from haliax.nn import ArrayStacked
 from jax import random
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
@@ -25,7 +26,7 @@ try:
     from jax.shard_map import shard_map
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
-from jaxtyping import Array, Float, Int, PRNGKeyArray
+from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -114,6 +115,11 @@ class GrugModelConfig:
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
+    use_array_stacked_blocks: bool = False
+    """Stack all transformer blocks into a single ``ArrayStacked[Block]`` and run
+    them through one ``jax.lax.scan``. Collapses N per-layer subgraphs into one
+    scan body so XLA only plans HBM for one iteration's intermediates — needed
+    at scale where the unrolled program OOMs at compile time."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -539,11 +545,22 @@ class Block(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
-        mask: AttentionMask | jax.Array,
+        short_mask: AttentionMask | jax.Array,
+        long_mask: AttentionMask | jax.Array,
+        use_long_mask: Bool[Array, ""] | bool,
         use_pko: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask, use_pko=use_pko)
+        # lax.cond so the body has a uniform shape across scan iterations:
+        # long layers use the full causal mask (and may PKO); short layers
+        # use the sliding-window mask and never PKO.
+        attn_out = jax.lax.cond(
+            jnp.asarray(use_long_mask, dtype=jnp.bool_),
+            lambda _: self.attn(attn_in, long_mask, use_pko=use_pko),
+            lambda _: self.attn(attn_in, short_mask, use_pko=False),
+            operand=None,
+        )
+        x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -552,30 +569,56 @@ class Block(eqx.Module):
         return x, router_stats
 
 
+def _long_layer_schedule(num_layers: int) -> jax.Array:
+    """Bool[num_layers] = True for every 4th layer and the last layer."""
+    idx = jnp.arange(num_layers)
+    return ((idx % 4) == 3) | (idx == num_layers - 1)
+
+
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
     embed_gated_norm: GatedNorm
     output_proj: jax.Array
-    blocks: tuple[Block, ...]
+    # Exactly one of `blocks` / `stacked_blocks` is populated, selected by
+    # `GrugModelConfig.use_array_stacked_blocks`.
+    blocks: tuple[Block, ...] | None
+    stacked_blocks: ArrayStacked[Block] | None
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Transformer":
-        embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
+        if cfg.use_array_stacked_blocks and not cfg.disable_pko:
+            raise ValueError(
+                "use_array_stacked_blocks=True currently requires disable_pko=True "
+                "because CausalSelfAttention reads use_pko at trace time."
+            )
+        keys = random.split(key, cfg.num_layers + 4)
+        embed_key, out_key, embed_gn_key, final_gn_key = keys[:4]
+        block_keys = keys[4:]
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
-        blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+
+        blocks: tuple[Block, ...] | None
+        stacked_blocks: ArrayStacked[Block] | None
+        if cfg.use_array_stacked_blocks:
+            blocks = None
+            stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg=cfg, key=block_keys)
+        else:
+            blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+            stacked_blocks = None
+
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
             output_proj=output_proj,
             blocks=blocks,
+            stacked_blocks=stacked_blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
@@ -605,24 +648,51 @@ class Transformer(eqx.Module):
         else:
             remat_policy = None
 
-        num_blocks = len(self.blocks)
-        moe_router_stats: list[dict[str, jax.Array]] = []
-        for i, block in enumerate(self.blocks):
-            is_last = i == num_blocks - 1
-            is_long = i % 4 == 3 or is_last
-            layer_mask = long_mask if is_long else short_mask
-            use_pko = is_long and not cfg.disable_pko
-            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask, use_pko)
-            moe_router_stats.append(router_stats)
+        if self.blocks is not None:
+            num_blocks = len(self.blocks)
+            moe_router_stats: list[dict[str, jax.Array]] = []
+            for i, block in enumerate(self.blocks):
+                is_last = i == num_blocks - 1
+                is_long = i % 4 == 3 or is_last
+                use_pko = is_long and not cfg.disable_pko
+                hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
+                    hidden, short_mask, long_mask, is_long, use_pko
+                )
+                moe_router_stats.append(router_stats)
+            router_metrics = {
+                "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
+                "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in moe_router_stats], axis=0),
+                "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
+                "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
+                "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
+                "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
+            }
+        else:
+            assert self.stacked_blocks is not None
+            mask_schedule = _long_layer_schedule(cfg.num_layers)
 
-        router_metrics = {
-            "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
-            "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in moe_router_stats], axis=0),
-            "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
-            "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
-            "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
-            "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
-        }
+            def _scan_layers(
+                carry_hidden: Float[Array, "B S D"],
+                scan_inputs: tuple[Block, Bool[Array, ""]],
+            ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+                layer, layer_use_long_mask = scan_inputs
+                return eqx.filter_checkpoint(layer, policy=remat_policy)(
+                    carry_hidden, short_mask, long_mask, layer_use_long_mask, False
+                )
+
+            hidden, stacked_router_stats = jax.lax.scan(
+                _scan_layers,
+                hidden,
+                xs=(self.stacked_blocks.stacked, mask_schedule),
+            )
+            router_metrics = {
+                "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],
+                "routing_counts_per_layer": stacked_router_stats["routing_counts"],
+                "load_balancing_loss_per_layer": stacked_router_stats["load_balancing_loss"],
+                "router_z_loss_per_layer": stacked_router_stats["router_z_loss"],
+                "qb_beta_per_layer": stacked_router_stats["qb_beta"],
+                "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
+            }
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
 
