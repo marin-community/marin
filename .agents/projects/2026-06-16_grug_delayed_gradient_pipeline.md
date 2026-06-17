@@ -61,6 +61,13 @@ control at matched seed/data/steps. Harness: `experiments/grug/moe_delay/`.
 Live progress + full tables: tracking issue #6431. Four batches, 24 runs, two
 seeds. **All headline numbers below are seed-confirmed (seed 0 + seed 1).**
 
+**Verdict:** async PP with Muon is viable in the DCN-bound regime. The realistic
+per-stage staleness profile costs a **1.33× token tax** (1.23× with weight
+prediction) — a recoverable tax, not a quality floor — which the v6e/DCN
+throughput model converts to a **NET 1.13–1.51× useful speedup** exactly where PP
+is the right tool (comm/compute ≥ 1). Modeling PP as a uniform delay reads 2.42×
+and would have wrongly killed it.
+
 **1. Muon is 2.6–5.3× more delay-robust than AdamH, and degrades ~linearly in τ
 (no cliff).** Gap to the τ=0 control, uncorrected:
 
@@ -104,10 +111,59 @@ O(W) corrector recovers ~4.7× of the staleness a throughput-optimal async PP
 schedule would introduce. **Muon makes async PP viable for this model class, and
 weight prediction closes most of the residual at realistic delays.**
 
+**4. Faithful per-stage staleness — uniform τ overstates PP's cost ~2–3×.** Real
+1F1B/async PP is not a single global delay: the *last* stage is fresh (τ=0) and
+staleness grows toward the input embedding (τ=P−1). The harness now injects this
+exact structure via a per-leaf delay profile (`grug_stage_tau`: block i → stage
+`(i·P)//L`, τ=`(P−1)−stage`; input-embedding group stalest, output group fresh)
+instead of one global τ. On a 6000-step iso-loss cohort (group `delay-pp-isoloss`),
+the realistic 6-stage Muon profile (`pp6`) plateaus **+0.086** above sync while a
+uniform **τ=5** model plateaus **+0.282** — 3.3× worse. Because real PP keeps the
+late layers fresh, modeling it as a uniform delay roughly doubles-to-triples the
+apparent cost. This is exactly why the per-layer question matters: it changes the
+verdict.
+
+**5. Iso-loss — staleness is a recoverable token tax, not a quality floor.**
+Reframing from "loss gap at fixed steps" to "extra *tokens* to reach the same
+loss" (`analyze_isoloss.py`): realistic per-stage Muon PP needs **1.33× the
+tokens** of sync to reach matched loss; weight prediction cuts that to **1.23×**;
+the uniform-τ5 model would read 2.42×. AdamH per-stage PP is 2.44× — Muon's 1.33×
+is far better. Crucially, **every** stale arm is still descending at step 6000
+(end-slope −0.045 to −0.12 / 1k steps): these are slow-catch-up trajectories (a
+token tax), not converged quality floors. `lr_damp` (d0.6) does not help
+(1.41× > 1.33×), consistent with weight prediction being the only corrector that
+works on Muon.
+
+| arm (per-stage PP `pp6` unless noted) | plateau | gap | token-overhead |
+|---|---|---|---|
+| sync (Muon τ=0) | 3.471 | — | 1.00× |
+| Muon + weight-prediction | 3.538 | +0.067 | **1.23×** |
+| Muon, uncorrected | 3.557 | +0.086 | **1.33×** |
+| Muon + lr_damp (d0.6) | 3.569 | +0.098 | 1.41× |
+| AdamH, uncorrected | 3.744 | +0.273 | 2.44× |
+| Muon, **uniform τ=5** | 3.753 | +0.282 | 2.42× |
+
+**6. Throughput × token-overhead → the #192 go/no-go.** A parametric v6e/DCN model
+(`pp_throughput_model.py`) compares synchronous data-parallelism (all-reduce the
+gradients over DCN, volume ∝ N_total) against PP (pass only stage-boundary
+activations, volume ∝ batch·hidden). PP's advantage ∝ N_total/(batch·hidden) —
+grows with model size, shrinks with batch — and the decisive quantity is the DCN
+comm/compute ratio. For a 300B-total / 20B-active MoE over 8 slices, PP is **moot
+when compute-bound** (batch ≥4M, ratio ≤0.5: the gradient all-reduce hides under
+compute) and **net-positive once DCN-bound** (batch ≤2M, ratio ≥1). At the
+measured **1.33×** token tax, async PP yields **NET 1.13× useful throughput at
+batch 2M and 1.51× at batch 1M**. The break-even token-overhead at batch 2M is
+1.50×: the realistic per-stage 1.33× clears it, but the uniform-τ 2.42× would
+*fail* it. **So async PP with Muon is viable precisely in the DCN-bound regime
+where you'd reach for PP — and the realistic per-stage staleness profile is what
+flips the verdict from "never worth it" (uniform-τ) to "worth it where it
+matters."**
+
 **Documented follow-ups (not run):** pre- vs post-orthogonalization prediction
 (this used post-orth, theoretically the correct velocity); a smarter long-horizon
-predictor for τ≥16; per-stage τ (earliest PP stages are stalest); and the
-conditional real-PP validation spike (#199) — now greenlit by the above.
+predictor for τ≥16; longer iso-loss runs to confirm the token tax fully closes
+(all arms were still descending at 6k steps); and the conditional real-PP
+validation spike (#199) — now greenlit by the above.
 
 ---
 
