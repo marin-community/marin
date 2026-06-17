@@ -3,8 +3,7 @@
 
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.defaults import SimpleTrainConfig, default_tokenize, default_train
-from marin.defaults.evals import default_eval
+from marin.defaults import SimpleTrainConfig, default_eval, default_tokenize, default_train
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 

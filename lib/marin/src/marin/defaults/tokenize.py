@@ -1,18 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Primitives for tokenization and dataset download."""
+
 import os
 from collections.abc import Sequence
 from typing import Any
 
 from fray import ResourceConfig
-from levanter.data.text import LmDatasetFormatBase, TextLmDatasetFormat
+from levanter.data.text import (
+    LmDatasetFormatBase,
+    TextLmDatasetFormat,
+)
 from levanter.utils import fsspec_utils
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.remote import remote
 from marin.execution.types import ExecutorStep, InputName, VersionedValue, ensure_versioned, this_output_path
-from marin.processing.tokenize import HfDatasetSpec, TokenizeConfig
+from marin.processing.tokenize import (
+    HfDatasetSpec,
+    TokenizeConfig,
+    tokenize,
+)
 from marin.processing.tokenize.tokenize import HfTokenizeConfig
 
 HF_BUCKET_URI_PREFIX = "hf://buckets/"
@@ -170,7 +179,7 @@ def default_tokenize(
         name=os.path.join("tokenized", name),
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=remote(
-            tokenizer,
+            tokenize,
             resources=resources or ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
             pip_dependency_groups=["cpu"],
             env_vars={

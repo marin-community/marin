@@ -17,8 +17,7 @@ from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
 from levanter.optim.clip_update_norm import ClipUpdateNormConfig
 from levanter.schedule import ScheduleStep
-from marin.defaults import default_train
-from marin.defaults.evals import default_base_eval
+from marin.defaults import default_base_eval, default_train
 from marin.execution import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 

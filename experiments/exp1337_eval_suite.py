@@ -62,7 +62,7 @@ Launch via iris:
 """
 
 from fray.cluster import ResourceConfig
-from marin.defaults.evals import (
+from marin.defaults import (
     evaluate_levanter_lm_evaluation_harness,
     evaluate_lm_evaluation_harness,
     extract_model_name_and_path,

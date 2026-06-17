@@ -53,8 +53,8 @@ import pyarrow.parquet as pq
 from datasets import Image as DatasetsImage
 from datasets import load_dataset
 from huggingface_hub import hf_hub_download
-from marin.defaults import CORE_TASKS
-from marin.defaults.evals import (
+from marin.defaults import (
+    CORE_TASKS,
     KEY_GENERATION_TASKS,
     KEY_MULTIPLE_CHOICE_TASKS,
     OPEN_LM_LEADERBOARD_GEN,

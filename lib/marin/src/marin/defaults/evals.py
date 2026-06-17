@@ -45,8 +45,11 @@ EVAL_DEPENDENCY_GROUPS = ["eval", "vllm", "tpu"]
 EVALCHEMY_DEPENDENCY_GROUPS = ["evalchemy", "vllm", "tpu"]
 
 
+"""Engine configuration for vLLM used for evals."""
 DEFAULT_VLLM_ENGINE_KWARGS = {"max_model_len": 4096}
 DEFAULT_LM_EVAL_MODEL_KWARGS = {**DEFAULT_VLLM_ENGINE_KWARGS, "max_gen_toks": 4096}
+
+
 MMLU_0_SHOT = EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot")
 MMLU_5_SHOT = EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")
 MMLU_PRO_5_SHOT = EvalTaskConfig("leaderboard_mmlu_pro", 5, task_alias="mmlu_5shot")
