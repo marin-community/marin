@@ -242,7 +242,9 @@ def _grug_scale_with_muon(
                         )
                     )(x)
                 else:
-                    stack_target_pspec = _batch_sharded_stack_target_pspec(param)
+                    stack_target_pspec = _batch_sharded_stack_target_pspec(x)
+                    if stack_target_pspec is None:
+                        stack_target_pspec = _batch_sharded_stack_target_pspec(param)
                     if stack_target_pspec is None:
                         updated = jax.vmap(
                             lambda matrix: _zeropower_via_newtonschulz_replicated(
