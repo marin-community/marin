@@ -15,8 +15,8 @@ import yaml
 import levanter.tracker
 import levanter.tracker.tracker_fns as tracker_fns
 import levanter.tracker.wandb as wandb_tracker_mod
-from levanter.tracker import CompositeTracker, NoopTracker, TrackerConfig
-from levanter.tracker.tracker import NoopConfig
+from levanter.tracker import BackgroundTracker, CompositeTracker, NoopTracker, TrackerConfig
+from levanter.tracker.tracker import NoopConfig, Tracker
 from levanter.tracker.wandb import WandbTracker, _truncate_wandb_artifact_name, truncate_wandb_run_name
 
 
@@ -97,6 +97,48 @@ def test_tracker_logging_without_global_tracker_emits_no_warning(monkeypatch):
         tracker_fns.log_configuration({"metric": 1.0})
 
     assert not caught
+
+
+def test_log_configuration_artifact_survives_background_upload(monkeypatch):
+    @dataclasses.dataclass
+    class Config:
+        value: int
+
+    class ReadingTracker(Tracker):
+        name = "reading"
+
+        def __init__(self):
+            self.hparams = None
+            self.artifact_text = None
+
+        def log_hyperparameters(self, hparams):
+            self.hparams = hparams
+
+        def log(self, metrics, *, step, commit=None):
+            pass
+
+        def log_summary(self, metrics):
+            pass
+
+        def log_artifact(self, artifact_path, *, name=None, type=None):
+            del name, type
+            with open(artifact_path) as f:
+                self.artifact_text = f.read()
+
+        def finish(self):
+            pass
+
+    inner = ReadingTracker()
+    background = BackgroundTracker(inner)
+    monkeypatch.setattr(tracker_fns, "_global_tracker", background)
+    try:
+        tracker_fns.log_configuration(Config(value=7))
+        assert background._wait_until_idle(timeout=5)
+    finally:
+        background.finish()
+
+    assert inner.hparams == {"value": 7}
+    assert "value: 7" in inner.artifact_text
 
 
 def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch):

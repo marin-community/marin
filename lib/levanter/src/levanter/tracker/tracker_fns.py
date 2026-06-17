@@ -4,7 +4,6 @@
 import contextlib
 import dataclasses
 import logging
-import os
 import tempfile
 import typing
 import warnings
@@ -201,15 +200,14 @@ def log_configuration(hparams: Any, config_name: Optional[str] = None):
     _global_tracker.log_hyperparameters(hparams_dict)
 
     if dataclasses.is_dataclass(hparams):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = os.path.join(tmpdir, "config.yaml")
-            try:
-                with open(config_path, "w") as f:
-                    draccus.dump(hparams, f, encoding="utf-8")
-                    name = config_name or "config.yaml"
-                    _global_tracker.log_artifact(config_path, name=name, type="config")
-            except Exception:  # noqa
-                logger.warning("Failed to dump config to yaml. Skipping logging as artifact.", exc_info=True)
+        try:
+            with tempfile.NamedTemporaryFile("w", prefix="levanter_config_", suffix=".yaml", delete=False) as f:
+                config_path = f.name
+                draccus.dump(hparams, f, encoding="utf-8")
+            name = config_name or "config.yaml"
+            _global_tracker.log_artifact(config_path, name=name, type="config")
+        except Exception:  # noqa
+            logger.warning("Failed to dump config to yaml. Skipping logging as artifact.", exc_info=True)
 
 
 def set_global_tracker(tracker: Tracker):
