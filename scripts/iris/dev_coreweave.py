@@ -325,6 +325,8 @@ def connect(ctx) -> None:
             raise click.ClickException(
                 f"Dev CoreWeave session '{state.session_name}' is no longer active. Use release to clean up."
             )
+    # state.pod is the pod resolved at allocation time. If Iris rescheduled the task
+    # onto a new pod while the job stayed active, this kubectl exec fails; re-allocate.
     run_logged(kubectl_connect_cmd(state.target, state.pod), check=True)
 
 
