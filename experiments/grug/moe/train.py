@@ -39,7 +39,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
-from levanter.utils.logging import LoadingTimeTrackerIterator
+from levanter.utils.logging import LoadingTimeTrackerIterator, save_xla_dumps_to_wandb
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -617,6 +617,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
             )
+            if isinstance(trainer.tracker, WandbConfig) and trainer.tracker.save_xla_dumps:
+                try:
+                    save_xla_dumps_to_wandb(0.0)
+                except BaseException:
+                    logger.exception("Failed to upload XLA dumps after fatal error")
             raise
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
