@@ -89,7 +89,7 @@ def download_profile_dir_for_run(
     download_root: Path | None = None,
 ) -> DownloadedProfileDir:
     """
-    Download the profiler directory for a W&B run.
+    Mirror a run's profiler directory from `trainer.log_dir` and attach metadata.
 
     Args:
         run_target: Bare run id, `entity/project/run_id`, or W&B run URL.
@@ -149,7 +149,7 @@ def summarize_profile_artifact(
     breakdown_mode: str = "exclusive_per_track",
 ) -> ProfileSummary:
     """
-    Summarize a downloaded profile artifact into the normalized schema.
+    Summarize a downloaded profile directory into the normalized schema.
 
     Args:
         profile_dir: Local path to a `jax_profile` artifact directory.
