@@ -3,7 +3,7 @@
 
 """Subprocess child entry point for ``SubprocessRunner``.
 
-``SubprocessRunner`` runs each shard as ``python -m zephyr._shard_subprocess``.
+``SubprocessRunner`` runs each shard as ``python -m zephyr.shard_subprocess``.
 This module is the child body: it loads one ``ShardTask``, runs the stage in a
 clean process, and writes the result file the parent reads back.
 
@@ -13,7 +13,7 @@ the shared in-process helpers) so the module executed via ``python -m`` is never
 pulled in transitively by ``zephyr/__init__.py`` (``__init__`` → ``execution``
 → ``runners``); if it were the ``-m`` target, ``runpy`` would find it already
 in ``sys.modules`` and warn while re-executing its body a second time. Nothing
-in the package-init graph imports ``_shard_subprocess``, so no such warning.
+in the package-init graph imports ``shard_subprocess``, so no such warning.
 """
 
 from __future__ import annotations
@@ -172,7 +172,7 @@ def _execute_shard_subprocess(task_file: str, result_file: str, num_workers: int
 
 def _subprocess_main() -> None:
     if len(sys.argv) != 4:
-        print("Usage: python -m zephyr._shard_subprocess <task_file> <result_file> <num_workers>", file=sys.stderr)
+        print("Usage: python -m zephyr.shard_subprocess <task_file> <result_file> <num_workers>", file=sys.stderr)
         os._exit(1)
     # Bypass interpreter shutdown: PyArrow GCS/Azure filesystem background
     # threads can race with module GC and fire ``std::terminate`` → SIGABRT,

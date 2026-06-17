@@ -10,7 +10,7 @@ Two implementations ship here:
   process. Cheapest; appropriate for tests and pipelines whose user code is
   trusted not to corrupt the worker.
 * ``SubprocessRunner`` — runs the stage in a fresh
-  ``python -m zephyr._shard_subprocess`` subprocess. Each shard gets a clean
+  ``python -m zephyr.shard_subprocess`` subprocess. Each shard gets a clean
   Python heap, Arrow pool, and file descriptors; native crashes (SIGSEGV from
   Arrow/JAX, OOM kill) surface as deterministic ``returncode != 0`` task errors
   instead of bringing down the worker actor. Slower (~700ms of cold-import
@@ -18,7 +18,7 @@ Two implementations ship here:
 
 Pick the runner pipeline-wide via ``ZephyrContext(stage_runner_factory=...)``.
 
-The child-process entry point lives in ``zephyr._shard_subprocess``, kept
+The child-process entry point lives in ``zephyr.shard_subprocess``, kept
 separate so the ``python -m`` target is not also imported during ``zephyr``
 package initialization (which would trip a ``runpy`` re-execution warning).
 """
@@ -189,7 +189,7 @@ class InlineRunner:
 
 
 class SubprocessRunner:
-    """Run each shard in a fresh ``python -m zephyr._shard_subprocess`` subprocess.
+    """Run each shard in a fresh ``python -m zephyr.shard_subprocess`` subprocess.
 
     Provides full memory and crash isolation: native crashes (Arrow/JAX
     SIGSEGV, OOM) terminate only the child and surface as deterministic
@@ -226,7 +226,7 @@ class SubprocessRunner:
             # faulthandler traceback reaches the parent's log before the
             # process dies.
             proc = sp.run(
-                [sys.executable, "-u", "-m", "zephyr._shard_subprocess", task_file, result_file, str(self._num_workers)],
+                [sys.executable, "-u", "-m", "zephyr.shard_subprocess", task_file, result_file, str(self._num_workers)],
                 stdout=sys.stdout,
                 stderr=sys.stderr,
             )
