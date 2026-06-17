@@ -3,6 +3,7 @@
 
 import jax
 import jax.numpy as jnp
+import pytest
 from jax.sharding import AbstractMesh, AxisType, NamedSharding
 from jax.sharding import PartitionSpec as P
 
@@ -13,6 +14,7 @@ from experiments.grug.moe.optimizer import (
     _expert_momentum_sharding,
     _scale_invariant_hyperball_updates,
 )
+from experiments.grug.moe.optimizer_sharding import assert_update_sharding_matches_params
 
 
 def test_grug_moe_adamh_mask_routes_expert_mlp_weights_to_expert_group():
@@ -137,6 +139,55 @@ def test_expert_momentum_sharding_uses_replica_dcn_on_expert_stack_axis():
 
     assert _expert_momentum_sharding(w_gate_up).spec == P(("replica_dcn", "expert"), "data", "model")
     assert _expert_momentum_sharding(w_down).spec == P(("replica_dcn", "expert"), "model", "data")
+
+
+def test_optimizer_sharding_assertion_accepts_matching_expert_pspecs():
+    mesh = AbstractMesh(
+        axis_sizes=(2, 8, 8, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = {
+        "expert": jax.ShapeDtypeStruct(
+            (256, 2560, 5120),
+            jnp.float32,
+            sharding=NamedSharding(mesh, P("expert", "data", "model")),
+        )
+    }
+    updates = {
+        "expert": jax.ShapeDtypeStruct(
+            (256, 2560, 5120),
+            jnp.float32,
+            sharding=NamedSharding(mesh, P("expert", "data", "model")),
+        )
+    }
+
+    assert_update_sharding_matches_params(updates, params, "test")
+
+
+def test_optimizer_sharding_assertion_rejects_lost_expert_axis():
+    mesh = AbstractMesh(
+        axis_sizes=(2, 8, 8, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = {
+        "expert": jax.ShapeDtypeStruct(
+            (256, 2560, 5120),
+            jnp.float32,
+            sharding=NamedSharding(mesh, P("expert", "data", "model")),
+        )
+    }
+    updates = {
+        "expert": jax.ShapeDtypeStruct(
+            (256, 2560, 5120),
+            jnp.float32,
+            sharding=NamedSharding(mesh, P("data", None, None)),
+        )
+    }
+
+    with pytest.raises(AssertionError, match="lost expert-axis sharding"):
+        assert_update_sharding_matches_params(updates, params, "test")
 
 
 def test_scale_invariant_hyperball_updates_matches_materialized_formula():

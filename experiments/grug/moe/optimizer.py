@@ -14,6 +14,7 @@ from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe.adamh import scale_by_adamh
+from experiments.grug.moe.optimizer_sharding import assert_update_sharding_matches_params, target_named_sharding
 
 Expert3DOptimizer = Literal["muonh", "adamh"]
 VALID_EXPERT_3D_OPTIMIZERS: tuple[Expert3DOptimizer, ...] = ("muonh", "adamh")
@@ -32,15 +33,7 @@ def _uses_adamh_baseline_adam_group(path_lower: str) -> bool:
 
 
 def _target_named_sharding(array) -> jax.sharding.NamedSharding | None:
-    if array is None or not hasattr(array, "shape"):
-        return None
-    sharding = getattr(array, "sharding", None)
-    if sharding is None:
-        aval = jax.typeof(array)
-        sharding = getattr(aval, "sharding", None)
-    if isinstance(sharding, jax.sharding.NamedSharding):
-        return sharding
-    return None
+    return target_named_sharding(array)
 
 
 def _expert_momentum_sharding(array) -> jax.sharding.NamedSharding | None:
@@ -184,7 +177,9 @@ def scale_with_grug_muonh(
             raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
 
         muon_updates, next_state = muon_transform.update(updates, state, params)
+        assert_update_sharding_matches_params(muon_updates, params, "MuonH direction_updates before hyperball")
         muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
+        assert_update_sharding_matches_params(muonh_updates, params, "MuonH updates after hyperball")
         return muonh_updates, next_state
 
     return optax.GradientTransformation(init_fn, update_fn)

@@ -12,6 +12,8 @@ import jax.numpy as jnp
 import optax
 from optax import tree_utils as otu
 
+from experiments.grug.moe.optimizer_sharding import assert_update_sharding_matches_params
+
 
 class ScaleByAdamHState(NamedTuple):
     count: chex.Array
@@ -57,11 +59,16 @@ def scale_by_adamh(
         return ScaleByAdamHState(count=jnp.zeros([], jnp.int32), mu=mu, nu=nu)
 
     def update_fn(updates, state, params):
+        assert_update_sharding_matches_params(updates, params, "AdamH input updates")
         mu = otu.tree_update_moment(updates, state.mu, b1, 1)
+        assert_update_sharding_matches_params(mu, params, "AdamH mu")
         nu = otu.tree_update_moment_per_elem_norm(updates, state.nu, b2, 2)
+        assert_update_sharding_matches_params(nu, params, "AdamH nu")
         count_inc = optax.safe_increment(state.count)
         mu_hat = otu.tree_bias_correction(mu, b1, count_inc)
+        assert_update_sharding_matches_params(mu_hat, params, "AdamH mu_hat")
         nu_hat = otu.tree_bias_correction(nu, b2, count_inc)
+        assert_update_sharding_matches_params(nu_hat, params, "AdamH nu_hat")
 
         adam_updates = jax.tree.map(
             lambda m, v: None if m is None else m / (jnp.sqrt(v) + eps),
@@ -69,6 +76,7 @@ def scale_by_adamh(
             nu_hat,
             is_leaf=lambda x: x is None,
         )
+        assert_update_sharding_matches_params(adam_updates, params, "AdamH adam_updates")
         mu = otu.tree_cast(mu, mu_dtype)
 
         def scale_invariant_update(p, u):
@@ -82,6 +90,7 @@ def scale_by_adamh(
             adam_updates,
             is_leaf=lambda x: x is None,
         )
+        assert_update_sharding_matches_params(adamh_updates, params, "AdamH adamh_updates")
 
         return adamh_updates, ScaleByAdamHState(count=count_inc, mu=mu, nu=nu)
 
