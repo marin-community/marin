@@ -3,8 +3,10 @@
 
 # NOTE: Do not explicitly import wandb/other trackers here, as this will cause the tests to trivially pass.
 import dataclasses
+import json
 import logging
 import re
+import threading
 import warnings
 from typing import Tuple
 
@@ -15,9 +17,45 @@ import yaml
 import levanter.tracker
 import levanter.tracker.tracker_fns as tracker_fns
 import levanter.tracker.wandb as wandb_tracker_mod
-from levanter.tracker import CompositeTracker, NoopTracker, TrackerConfig
+from levanter.tracker import BackgroundTracker, CompositeTracker, NoopTracker, TrackerConfig
 from levanter.tracker.tracker import NoopConfig
 from levanter.tracker.wandb import WandbTracker, _truncate_wandb_artifact_name, truncate_wandb_run_name
+
+
+class _HandleAbandonedError(Exception):
+    pass
+
+
+class _FakeWandbRun:
+    step = 0
+
+    def __init__(
+        self,
+        *,
+        finish_error: Exception | None = None,
+        finish_release: threading.Event | None = None,
+    ):
+        self.config = {"learning_rate": 1.0e-4, "model": {"layers": 2}}
+        self.summary = {"train/loss": 6.61, "_step": 99}
+        self.finish_error = finish_error
+        self.finish_release = finish_release
+        self.finish_started = threading.Event()
+        self.finish_calls = 0
+
+    def finish(self):
+        self.finish_calls += 1
+        self.finish_started.set()
+        if self.finish_release is not None:
+            self.finish_release.wait(timeout=5.0)
+        if self.finish_error is not None:
+            raise self.finish_error
+
+
+def _read_tracker_metrics(replicate_path):
+    metrics_path = replicate_path / "tracker_metrics.jsonl"
+    lines = metrics_path.read_text().splitlines()
+    assert len(lines) == 1
+    return json.loads(lines[0])
 
 
 def test_tracker_plugin_stuff_works():
@@ -189,6 +227,96 @@ def test_wandb_tracker_materializes_before_dynamic_stale_step_check(monkeypatch)
     tracker.log({"metric": 2.0}, step=10)
 
     assert converted == [2.0]
+
+
+def test_wandb_tracker_finish_writes_replicate_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
+
+    replicate_path = tmp_path / "replicate"
+    run = _FakeWandbRun()
+    tracker = WandbTracker(run, replicate_path=str(replicate_path))
+
+    tracker.finish()
+
+    assert run.finish_calls == 1
+    assert _read_tracker_metrics(replicate_path) == {
+        "config": run.config,
+        "summary": run.summary,
+    }
+
+
+def test_wandb_tracker_finish_writes_replicate_file_when_finish_raises(tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
+
+    replicate_path = tmp_path / "replicate"
+    run = _FakeWandbRun(finish_error=_HandleAbandonedError("wandb finish abandoned"))
+    tracker = WandbTracker(run, replicate_path=str(replicate_path))
+
+    with pytest.raises(_HandleAbandonedError):
+        tracker.finish()
+
+    assert _read_tracker_metrics(replicate_path) == {
+        "config": run.config,
+        "summary": run.summary,
+    }
+
+
+def test_wandb_tracker_finish_without_replicate_path_writes_no_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
+
+    run = _FakeWandbRun()
+    tracker = WandbTracker(run)
+
+    tracker.finish()
+
+    assert run.finish_calls == 1
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_background_tracker_warns_and_writes_replicate_file_when_wandb_finish_raises(tmp_path, caplog, monkeypatch):
+    monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
+
+    replicate_path = tmp_path / "replicate"
+    run = _FakeWandbRun(finish_error=_HandleAbandonedError("wandb finish abandoned"))
+    wrapped = WandbTracker(run, replicate_path=str(replicate_path))
+    tracker = BackgroundTracker(wrapped, finish_timeout=5.0)
+
+    with caplog.at_level(logging.WARNING, logger="levanter.tracker.background"):
+        tracker.finish()
+
+    assert _read_tracker_metrics(replicate_path) == {
+        "config": run.config,
+        "summary": run.summary,
+    }
+    assert any(
+        record.levelno == logging.WARNING and "raised during finish" in record.message for record in caplog.records
+    )
+
+
+def test_background_tracker_timeout_keeps_replicate_file_when_wandb_finish_hangs(tmp_path, caplog, monkeypatch):
+    monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
+
+    replicate_path = tmp_path / "replicate"
+    finish_release = threading.Event()
+    run = _FakeWandbRun(finish_release=finish_release)
+    wrapped = WandbTracker(run, replicate_path=str(replicate_path))
+    tracker = BackgroundTracker(wrapped, finish_timeout=0.2)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger="levanter.tracker.background"):
+            tracker.finish()
+
+        assert run.finish_started.wait(timeout=1.0)
+        assert _read_tracker_metrics(replicate_path) == {
+            "config": run.config,
+            "summary": run.summary,
+        }
+        assert any(
+            record.levelno == logging.WARNING and "did not exit within" in record.message for record in caplog.records
+        )
+    finally:
+        finish_release.set()
+        tracker._thread.join(timeout=5.0)
 
 
 def test_truncate_wandb_run_name_preserves_scientific_notation_lr_suffix():

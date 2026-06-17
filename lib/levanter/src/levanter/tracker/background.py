@@ -37,7 +37,6 @@ from typing import Any, Optional
 
 from levanter.tracker.tracker import Tracker
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -96,14 +95,22 @@ class BackgroundTracker(Tracker):
                 if item is _SHUTDOWN:
                     return
                 method, args, kwargs = item
+                method_name = method.__name__
                 try:
                     method(*args, **kwargs)
                 except Exception:
-                    logger.exception(
-                        "Background tracker '%s' raised while processing %s; dropping update and continuing.",
-                        self.name,
-                        method.__name__,
-                    )
+                    if method_name == "finish":
+                        logger.warning(
+                            "Background tracker '%s' raised during finish(); continuing shutdown.",
+                            self.name,
+                            exc_info=True,
+                        )
+                    else:
+                        logger.exception(
+                            "Background tracker '%s' raised while processing %s; dropping update and continuing.",
+                            self.name,
+                            method_name,
+                        )
             finally:
                 self._queue.task_done()
 

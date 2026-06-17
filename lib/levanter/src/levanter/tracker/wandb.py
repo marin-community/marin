@@ -23,7 +23,6 @@ from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tracker import TrackerConfig
 from levanter.utils import jax_utils
 
-
 if typing.TYPE_CHECKING:
     import wandb.sdk.lib.disabled
 
@@ -152,10 +151,24 @@ class WandbTracker(Tracker):
             return
 
         logger.info("Finishing wandb run...")
-        # Finish wandb first to ensure all metrics are synced to the summary
-        self.run.finish()
-        # Then write the replicate file with the complete summary
-        self._write_replicate_file()
+        # Preserve the latest in-memory summary before W&B enters its upload
+        # path, which can block indefinitely during shutdown.
+        try:
+            self._write_replicate_file()
+        except Exception:
+            logger.exception("Failed to write preliminary replicate metrics file before wandb run.finish().")
+
+        try:
+            self.run.finish()
+        except Exception:
+            try:
+                self._write_replicate_file()
+            except Exception:
+                logger.exception("Failed to write replicate metrics file after wandb run.finish() raised.")
+            raise
+        else:
+            # Then write the replicate file with the complete summary
+            self._write_replicate_file()
 
     def _write_replicate_file(self):
         if self._replicate_path is None:
