@@ -131,6 +131,21 @@ can run **in parallel with** R4.
 - **Reframes S2:** path A is a *re-measurement* of an existing-but-maybe-broken QDQ path, not a fresh
   experiment.
 
+### 2026-06-17 — R4 start: dry-run validates reduced config + surfaces tokenize dependency
+- **Vehicle:** `experiments/grug/moe/launch_cw_scale.py` — env-parameterized H100 launcher, BF16
+  policy `params=float32,compute=bfloat16,output=bfloat16`, profiler support, executor-submitted.
+- **Dry-run (free):** `SCALE_GPU_REPLICAS=1 SCALE_HIDDEN_DIM=3072 SCALE_NUM_LAYERS=4 SCALE_NUM_EXPERTS=8
+  SCALE_EXPERT_AXIS=8 SCALE_BATCH=16 SCALE_SEQ_LEN=2048 SCALE_STEPS=10 SCALE_TRACKER=json_logger
+  SCALE_CHECKPOINTS=local uv run python experiments/grug/moe/launch_cw_scale.py --dry_run true`
+  → reduced single-node config builds; mesh divisibility OK (num_experts 8 % expert_axis 8 = 0;
+  batch 16 % batch_shards 8 = 0). Step graph = **2 steps**: a SlimPajama-6B **tokenize** + training.
+- **Cost-critical finding:** the real-data run triggers a 6B-token SlimPajama tokenize unless the
+  tokenized cache already exists **in-region** — must verify before any live real-data run (AGENTS.md
+  cross-region guardrail). Motivates doing the **synthetic-data** smoke first (no tokenize dependency).
+- **GPU floor:** one 8×H100 node without editing the launcher (`GPUS_PER_NODE=8` hardcoded);
+  single-GPU needs a file edit. Synthetic data available via `DirectDatasetComponent` (small harness).
+- **Next:** confirm R4 sequence (synthetic smoke → real-data baseline) + scale with Matt before spend.
+
 <!-- New entries below this line. Template:
 ### YYYY-MM-DD HH:MM - <GFP8-NNN short label>
 - Hypothesis:
