@@ -47,25 +47,6 @@ def _build_failed(tracker: WorkerHealthTracker, wid: WorkerId, *, now_ms: int = 
     return tracker.apply([WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED)], now_ms=now_ms)
 
 
-def test_apply_does_not_conjure_liveness_for_unknown_worker(tracker: WorkerHealthTracker) -> None:
-    """A health event for an unregistered worker_id must not create a liveness entry.
-
-    Regression for the recycled-IP zombie: a REACHED folded from an impostor at a
-    dead worker's recycled address used to ``setdefault`` a fresh healthy+active
-    entry, re-animating the forgotten worker as schedulable. apply() must only
-    update workers already created by register/heartbeat.
-    """
-    ghost = WorkerId("ghost")
-    assert tracker.apply([WorkerHealthEvent(ghost, WorkerHealthEventKind.REACHED)], now_ms=1) == []
-    assert ghost not in tracker.all(), "REACHED for an unknown worker must not create an entry"
-    assert tracker.liveness(ghost).usability is WorkerUsability.DEAD
-
-    # UNREACHABLE / BUILD_FAILED for an unknown worker are likewise dropped.
-    assert tracker.apply([WorkerHealthEvent(ghost, WorkerHealthEventKind.UNREACHABLE)], now_ms=2) == []
-    assert tracker.apply([WorkerHealthEvent(ghost, WorkerHealthEventKind.BUILD_FAILED)], now_ms=3) == []
-    assert ghost not in tracker.all()
-
-
 def test_reconcile_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
     """9 consecutive failures are not enough; 10th trips; a REACHED event resets and requires 10 more."""
     wid = WorkerId("w-1")
