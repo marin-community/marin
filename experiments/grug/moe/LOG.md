@@ -706,3 +706,14 @@ MFU sink CONFIRMED = checkpoint-pause artifact: 3-min ckpt -> 6.1% pause steps (
 10-min ckpt -> pause% ~1% (d512 1.1%, d768 0.7%), mean≈clean. True decoupling overhead ~2.6%.
 Gate-1: d512 eff_speedup=1.032 on clean v4 throughput (517k). d768 clean-v4 tok/s pending (v5p numbers
 not comparable to v4 baseline 357696; v4-32 central2 was ready=0). GRUG_CKPT_MIN env added (default 10).
+
+### MuonH decoupling — lm_head gains (AdamH variant), layer/scale-dependent (2026-06-17, #6388)
+Added decoupled-AdamH for lm_head/output_proj (keep Adam direction + row/col gains; shared
+_scale_with_decoupled helper; MUONH_DECOUPLE_LMHEAD). Result is OPPOSITE-SIGNED by scale:
+  d512 +lm_head gains: 3.5408 (vs matrices-only 3.5381) -> HURTS.
+  d768 +lm_head gains: 3.2286 (vs matrices-only 3.2307, -0.0044 vs base 3.2330) -> HELPS, ~doubles margin.
+Gate-1 (est v4 tok/s = baseline*(1-2.6% overhead)):
+  d512 matrices-only: eff_speedup 1.034 (PASS).  d512 +lmhead: <1 (hurts).
+  d768 matrices-only: 0.989.  d768 +lmhead: ~1.00 (break-even).
+Conclusion: matrices-only decoupling + gain_lr=adam_lr passes at d512; d768 margin too thin (flat
+alpha + large budget); lm_head gains help only at d768. No single config cleanly passes both scales.
