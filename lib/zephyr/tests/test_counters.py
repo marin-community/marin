@@ -3,9 +3,9 @@
 
 """Tests for Zephyr user-defined counters: worker API and heartbeat plumbing."""
 
+import logging
 import threading
 
-import pytest
 from zephyr import counters
 from zephyr.counters import ScopedCounters
 from zephyr.execution import ZephyrCoordinator, ZephyrExecutionResult
@@ -279,16 +279,25 @@ def test_aggregation_mixed():
     assert coord.get_counters() == {"total": 30, "peak": 100}
 
 
-def test_aggregation_conflict_raises():
-    """get_counters() raises if snapshots disagree on the aggregation for a key."""
+def test_aggregation_conflict_keeps_first_and_warns(caplog):
+    """Conflicting aggregations keep the first-seen mode and warn, never raising.
+
+    Stats collection must not be able to fault the execution path, so a counter
+    that disagrees on aggregation across snapshots (only possible via user
+    ``set_aggregation`` misuse) resolves to the first-seen mode rather than
+    raising.
+    """
     coord = _make_coordinator(
         [
             CounterSnapshot(counters={"x": CounterEntry(1, Aggregation.MAX)}, generation=1),
             CounterSnapshot(counters={"x": CounterEntry(2, Aggregation.MIN)}, generation=2),
         ]
     )
-    with pytest.raises(ValueError, match="conflicting aggregations"):
-        coord.get_counters()
+    with caplog.at_level(logging.WARNING):
+        result = coord.get_counters()
+    # First-seen aggregation (MAX) wins over the later MIN.
+    assert result == {"x": 2}
+    assert any("conflicting aggregations" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

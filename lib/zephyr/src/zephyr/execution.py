@@ -790,8 +790,10 @@ class ZephyrCoordinator:
             stage: If provided, only include entries with ``entry.stage == stage``.
                 If None (default), include all entries regardless of stage.
 
-        Raises:
-            ValueError: If snapshots disagree on the aggregation for a counter key.
+        If snapshots disagree on a counter's aggregation (only possible for
+        user counters that reuse a name with different ``set_aggregation``
+        modes), the first-seen mode wins and a warning is logged — stats
+        collection never raises into the execution path.
         """
         with self._lock:
             if worker_id is not None:
@@ -808,11 +810,17 @@ class ZephyrCoordinator:
             for k, entry in snap.counters.items():
                 if stage is not None and entry.stage != stage:
                     continue
-                if k in aggregations and aggregations[k] != entry.aggregation:
-                    raise ValueError(
-                        f"Counter {k!r} has conflicting aggregations: {aggregations[k]!r} vs {entry.aggregation!r}"
-                    )
-                aggregations[k] = entry.aggregation
+                if k in aggregations:
+                    if aggregations[k] != entry.aggregation:
+                        logger.warning(
+                            "Counter %r has conflicting aggregations: %r vs %r; keeping %r",
+                            k,
+                            aggregations[k],
+                            entry.aggregation,
+                            aggregations[k],
+                        )
+                else:
+                    aggregations[k] = entry.aggregation
                 values.setdefault(k, []).append(entry.value)
 
         result: dict[str, int | float] = {}
