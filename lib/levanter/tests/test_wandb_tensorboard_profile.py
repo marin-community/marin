@@ -30,7 +30,7 @@ def test_resolve_profile_dir_uses_logged_trainer_log_dir():
     assert resolve_profile_dir(run) == "gs://bucket/logs/trainer-456/profiler"
 
 
-@pytest.mark.parametrize("root_factory", [lambda tmp_path: None, lambda tmp_path: tmp_path / "logs"])
+@pytest.mark.parametrize("root_factory", [lambda _: None, lambda tmp_path: tmp_path / "logs"])
 def test_mirror_profile_dir_returns_existing_local_directory(tmp_path, root_factory):
     source = tmp_path / "logs" / "run-123" / "profiler"
     trace_dir = source / "plugins" / "profile" / "2024_01_01_00_00_00"
