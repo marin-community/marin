@@ -12,6 +12,7 @@ import json
 import logging
 import secrets
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Protocol
@@ -859,6 +860,8 @@ class ControllerProtocol(Protocol):
 
     def wake(self) -> None: ...
 
+    def request_worker_eviction(self, worker_ids: Sequence[WorkerId]) -> None: ...
+
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
     def begin_checkpoint(self) -> tuple[str, Any]: ...
@@ -1611,15 +1614,15 @@ class ControllerServiceImpl:
                 slice_id=request.slice_id,
                 scale_group=request.scale_group,
             )
-        self._evict_recycled_address_owners(worker_id, request.address)
+        self._request_recycled_address_eviction(worker_id, request.address)
         logger.info("Worker registered: %s at %s", worker_id, request.address)
         return controller_pb2.Controller.RegisterResponse(
             worker_id=str(worker_id),
             accepted=True,
         )
 
-    def _evict_recycled_address_owners(self, worker_id: WorkerId, address: str) -> None:
-        """Fail any other worker still holding ``address`` after ``worker_id`` claims it.
+    def _request_recycled_address_eviction(self, worker_id: WorkerId, address: str) -> None:
+        """Queue any other worker still holding ``address`` for eviction.
 
         GCP recycles a deleted worker's internal IP onto a new VM, so the dead
         worker's row keeps the stale address. The controller reconciles by
@@ -1627,28 +1630,21 @@ class ControllerServiceImpl:
         routing by attempt_uid -- zombie-kills its own tasks; the reconcile-time
         identity check misses this when the responder runs an older image that
         echoes no worker_id. The new registrant owns the address, so the prior
-        holder is stale: fail it through the standard reap path so its tasks
-        reschedule and its row is removed.
+        holder is stale and is handed to the controller for fail-and-teardown
+        (deferred to the control-loop thread, where reaping its slice is safe).
         """
         with self._db.read_snapshot() as snap:
             stale = reads.worker_ids_at_address(snap, address, exclude=worker_id)
         if not stale:
             return
         logger.warning(
-            "Worker %s registered at %s held by %d stale row(s) (recycled IP); failing: %s",
+            "Worker %s registered at %s held by %d stale row(s) (recycled IP); evicting: %s",
             worker_id,
             address,
             len(stale),
             [str(wid) for wid in stale],
         )
-        ops.worker.fail(
-            self._db,
-            worker_ids=[str(wid) for wid in stale],
-            reason="address reused by newly-registered worker (recycled IP)",
-            health=self._health,
-            endpoints=self._endpoints,
-            worker_attrs=self._worker_attrs,
-        )
+        self._controller.request_worker_eviction(stale)
 
     def list_workers(
         self,
