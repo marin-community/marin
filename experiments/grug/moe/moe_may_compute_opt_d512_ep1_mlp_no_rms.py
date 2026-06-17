@@ -28,7 +28,7 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
-from experiments.grug.moe.heuristic_v2 import MoeMuonHHeuristic
+from experiments.grug.moe.heuristic_v2 import MoeHeuristicV2
 from experiments.grug.moe.launch import NEMOTRON_MIX_WITH_DEFAULT_VALIDATION, GrugMoeLaunchConfig, run_grug_moe_trial
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
@@ -38,11 +38,11 @@ _SEQ: int = 4096
 _STEPS: int = 10_980  # May Recipe compute-opt for d=512 -- yields 1.44 B tokens
 _EP: int = 1
 
-_heuristic = MoeMuonHHeuristic()
+_heuristic = MoeHeuristicV2()
 _model_base = _heuristic.build_model_config(_DIM, seq_len=_SEQ)
 _model = dataclasses.replace(_model_base, mlp_skip_rms_norm=True)
 _tokens = float(_STEPS * _BS * _SEQ)
-_optimizer = _heuristic.build_muonh_config(_BS, _tokens, _DIM, seq_len=_SEQ)
+_optimizer = _heuristic.build_optimizer_config(_BS, _tokens, _DIM, seq_len=_SEQ)
 
 _run_id = f"moe_may_compute_opt_d{_DIM}_ep{_EP}_mlp_no_rms"
 compute_opt_step = ExecutorStep(
