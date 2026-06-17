@@ -49,7 +49,9 @@ fn log_registered_schema() -> Schema {
         vec![
             Column::new("key", ColumnType::COLUMN_TYPE_STRING, false),
             Column::new("source", ColumnType::COLUMN_TYPE_STRING, false),
-            Column::new("data", ColumnType::COLUMN_TYPE_STRING, false),
+            // The log message body — substring-searched via contains()/LIKE, so
+            // it carries the trigram index.
+            Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
             Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false),
             Column::new("level", ColumnType::COLUMN_TYPE_INT32, false),
         ],
@@ -460,7 +462,8 @@ impl Store {
     }
 
     /// Run one full maintenance cycle for `name`:
-    /// `flush -> compact (planner-drained, or forced L0->L1) -> sync -> evict`.
+    /// `flush -> compact (planner-drained, or forced L0->L1) -> sync -> evict ->
+    /// backfill missing trigram sidecars`.
     ///
     /// This is the body the per-namespace background maintenance task runs on its
     /// tick, and the entry point the `--debug-admin` `POST /debug/maintain` drives
