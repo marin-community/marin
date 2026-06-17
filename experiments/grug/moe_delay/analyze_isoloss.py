@@ -39,9 +39,13 @@ import wandb
 # Tail window (in steps) over which the plateau loss and end-slope are measured.
 TAIL_STEPS = 1500
 PLATEAU_STEPS = 150
-# A run is a quality floor (vs a still-converging token tax) if it has stopped
-# descending (|slope| below this, per 1k steps) yet sits above the sync plateau.
-FLOOR_SLOPE = 0.01
+# Floor-vs-tax classification is *sync-relative*: at the end of a cosine LR
+# schedule every run flattens (the LR has decayed to ~0), so a flat tail alone
+# does not imply a quality floor. A run is a true floor only if it has flattened
+# while the sync run is still meaningfully descending. If both are flat, the gap
+# is whatever residual the budget left -- compare it across budgets to see if it
+# is closing. FLAT_SLOPE is the |slope/1k| below which a tail counts as flat.
+FLAT_SLOPE = 0.005
 FLOOR_GAP = 0.02
 
 
@@ -94,6 +98,8 @@ def main():
 
     sync_steps, sync_loss = curves[args.sync]
     sync_plateau = _plateau(sync_steps, sync_loss)
+    sync_slope = _slope_per_1k(sync_steps, sync_loss)
+    sync_flat = abs(sync_slope) < FLAT_SLOPE
 
     print(f"group={args.group}  sync={args.sync}  sync_plateau={sync_plateau:.4f}  steps={int(sync_steps[-1])}\n")
     print(f"{'run':<46}{'plateau':>9}{'gap':>9}{'slope/1k':>10}{'overhead':>10}  tag")
@@ -107,10 +113,17 @@ def main():
         s_sync = _first_step_below(sync_steps, sync_loss, plateau)
         s_self = _first_step_below(steps, loss, plateau)
         overhead = (s_self / s_sync) if (s_sync and s_self) else float("inf")
+        self_flat = abs(slope) < FLAT_SLOPE
         if name == args.sync:
             tag = "sync-ref"
-        elif gap > FLOOR_GAP and slope > -FLOOR_SLOPE:
-            tag = "QUALITY-FLOOR (flat, above sync)"
+        elif gap <= FLOOR_GAP:
+            tag = "matches sync"
+        elif self_flat and sync_flat:
+            # End of the LR schedule: both runs have flattened. Not a quality
+            # floor -- the residual gap is the budget's, compare across budgets.
+            tag = "converged-at-budget (residual gap; compare budgets)"
+        elif self_flat:
+            tag = "QUALITY-FLOOR (flat while sync still descends)"
         else:
             tag = "token-tax (still descending)"
         print(f"{name:<46}{plateau:>9.4f}{gap:>+9.4f}{slope:>+10.4f}{overhead:>9.2f}x  {tag}")

@@ -193,16 +193,17 @@ LARGE = ModelSpec("large MoE (~d6144, 48L)", hidden=6144, layers=48, seq=4096, n
 
 if __name__ == "__main__":
     hw = Hardware()
-    # Measured token-overhead from the iso-loss cohort (group delay-pp-isoloss,
-    # analyze_isoloss.py): the realistic per-stage PP profile (pp6) with Muon needs
-    # 1.33x the tokens of sync to reach the same loss (1.23x with weight prediction;
-    # a uniform-tau model would wrongly read 2.42x). All arms were still descending,
-    # i.e. a recoverable token tax rather than a quality floor.
-    measured_overhead = 1.33
+    # Measured token-overhead from the iso-loss cohorts (analyze_isoloss.py). The
+    # realistic per-stage PP profile (pp6) with Muon is a *budget-dependent*,
+    # shrinking token tax: 1.33x at 6k steps, 1.16x at 15k (1.11x with weight
+    # prediction), and still descending at 15k -- so the asymptote for a real
+    # (much longer) training run is below 1.16x. A uniform-tau model would wrongly
+    # read 2.42x. We use the conservative converged 1.16x here.
+    measured_overhead = 1.16
     print("Pipeline-parallelism throughput vs synchronous DP (v6e, conservative defaults)")
     print(
         f"(dcn_overlap={hw.dcn_overlap}, mfu={hw.mfu}, dcn_bw={hw.dcn_bw_per_chip/1e9:.0f} GB/s/chip, "
-        f"measured Muon per-stage-PP token-overhead={measured_overhead}x)\n"
+        f"measured converged Muon per-stage-PP token-overhead={measured_overhead}x (15k; shrinking))\n"
     )
     print("Large MoE over 8 DCN slices, sweeping per-step batch (smaller batch -> comm exposed):")
     for batch in (8e6, 4e6, 2e6, 1e6):
