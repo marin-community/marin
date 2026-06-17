@@ -49,8 +49,6 @@ class DownloadedProfileArtifact:
 
 @dataclass(frozen=True)
 class DownloadedProfileDir:
-    """Downloaded profiler directory and associated metadata."""
-
     profile_dir: Path
     run_metadata: RunMetadata
 

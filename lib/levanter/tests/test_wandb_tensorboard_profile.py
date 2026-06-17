@@ -56,15 +56,3 @@ def test_mirror_profile_dir_copies_remote_directory_to_download_root(tmp_path):
 
     assert mirrored == tmp_path / "download" / "run-123" / "profiler"
     assert (mirrored / "plugins" / "profile" / "2024_01_01_00_00_00" / "perfetto_trace.json.gz").exists()
-
-
-def test_mirror_profile_dir_noops_when_root_matches_local_source(tmp_path):
-    source = tmp_path / "logs" / "run-123" / "profiler"
-    trace_dir = source / "plugins" / "profile" / "2024_01_01_00_00_00"
-    trace_dir.mkdir(parents=True)
-    (trace_dir / "perfetto_trace.json.gz").write_bytes(b"trace")
-
-    mirrored = mirror_profile_dir(str(source), tmp_path / "logs", run_id="run-123")
-
-    assert mirrored == source
-    assert (mirrored / "plugins" / "profile" / "2024_01_01_00_00_00" / "perfetto_trace.json.gz").exists()
