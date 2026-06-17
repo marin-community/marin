@@ -39,11 +39,12 @@ smoke tests.
 - Do not open fork PRs. Do not move either fork `main`; fork review happens via
   pushed branches and compare links from the Marin PR.
 
-If a real external blocker remains after repair attempts, do not open a Marin
-PR. Create or update one `marin-community/marin` issue assigned to `@yonromai`,
-titled `TPU-vLLM fork refresh blocked: <short reason>`, with current pins,
-selected release, branch names/SHAs if created, attempted fixes, remaining
-failure, artifacts, and the logs Gist.
+If blocked after repair attempts, do not open a Marin PR. Publish the logs Gist,
+then create or update one `marin-community/marin` issue assigned to `@yonromai`:
+
+- Title: `TPU-vLLM fork refresh blocked: <short reason>`
+- Body: summary, current pins, selected release/LKG, branch SHAs if any, what
+  was tried, the remaining blocker, and the logs Gist.
 
 ## Workspace Setup
 
@@ -252,6 +253,5 @@ PR body:
   refreshed.
 - Retained overlays explain why they still exist; dropped overlays are called
   out with reasons.
-- Required smoke tests pass before PR creation, or the unresolved blocker is in
-  a Marin issue assigned to `@yonromai`.
-- The two curated logs are published as one Gist and linked from the PR/issue.
+- Required smoke tests pass before PR creation, or one blocker issue exists with
+  owner, current state, and logs Gist.
