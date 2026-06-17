@@ -381,7 +381,7 @@ ENV_ARGS=(
     -e XLA_PYTHON_CLIENT_MEM_FRACTION "$XLA_MEMORY_FRACTION"
 )
 
-for maybe_env in WANDB_API_KEY WANDB_ENTITY WANDB_PROJECT MAY_WANDB_GROUP; do
+for maybe_env in WANDB_API_KEY WANDB_ENTITY WANDB_PROJECT MAY_WANDB_GROUP TF_GPU_ALLOCATOR; do
     if [ -n "${!maybe_env:-}" ]; then
         ENV_ARGS+=(-e "$maybe_env" "${!maybe_env}")
     fi

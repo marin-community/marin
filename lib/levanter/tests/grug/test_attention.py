@@ -11,6 +11,7 @@ from jax.sharding import PartitionSpec as P
 
 from levanter.data.text import GrugLmExample
 import levanter.grug.attention._fa4_thd as fa4_thd
+from levanter.grug.attention._fa4_cute_config import flash4_cute_kernel_config
 from levanter.grug.attention import (
     AttentionMask,
     attention,
@@ -202,6 +203,14 @@ def test_gpu_fa4_thd_supports_hopper_kernel_config(monkeypatch):
     assert config.forward_tile == (128, 64)
     assert config.backward_tile == (64, 128)
     assert config.num_threads == 384
+
+
+def test_gpu_fa4_cute_hopper_kernel_config_uses_small_backward_tile():
+    config = flash4_cute_kernel_config(128, arch=90)
+
+    assert config.forward_tile == (128, 64)
+    assert config.backward_tile == (64, 64)
+    assert config.num_threads == 128
 
 
 def test_gpu_fa4_thd_hopper_postprocess_uses_mma_compatible_tile():

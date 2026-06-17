@@ -38,7 +38,7 @@ def flash4_cute_kernel_config(
     if arch_family == 9:
         return Flash4CuteKernelConfig(
             forward_tile=(128, 128 if head_dim <= 64 else 64),
-            backward_tile=(128, 64),
+            backward_tile=(64, 64),
             num_threads=128,
         )
     raise NotImplementedError(f"FA4/CuTe attention does not support SM{arch}.")
