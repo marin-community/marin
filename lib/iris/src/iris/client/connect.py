@@ -27,12 +27,12 @@ from pathlib import Path
 
 from rigging.config_discovery import resolve_cluster_config
 
-from iris.client.client import IrisClient
+from iris.client.client import IrisClient, Job, JobFailedError
 from iris.cluster.backends.k8s.controller import configure_client_s3
 from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import IrisConfig
 from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token
-from iris.rpc import config_pb2
+from iris.rpc import config_pb2, job_pb2
 from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
 
 logger = logging.getLogger(__name__)
@@ -194,3 +194,36 @@ def connect_to_cluster(
             )
         )
         yield client
+
+
+def stream_until_complete(client: IrisClient, job: Job, *, terminate_on_exit: bool = True) -> int:
+    """Stream a job's logs until it finishes; return a shell-style exit code.
+
+    Disconnect-safe, matching ``iris job run``: a dropped connection leaves the
+    job — and anything it spawned — running on the cluster (reconnect with
+    ``iris job logs -f <id>``). Ctrl-C terminates the job and its children when
+    ``terminate_on_exit`` is set.
+
+    Returns 0 on success, 1 on job failure, 130 on Ctrl-C.
+    """
+    logger.info("Streaming logs (Ctrl+C to stop). Reconnect with: iris job logs -f %s", job.job_id)
+    try:
+        try:
+            status = job.wait(stream_logs=True, timeout=float("inf"))
+            logger.info("Job %s finished: %s", job.job_id, job_pb2.JobState.Name(status.state))
+            return 0 if status.state == job_pb2.JOB_STATE_SUCCEEDED else 1
+        except JobFailedError as e:
+            logger.error("Job failed: %s", e)
+            return 1
+    except KeyboardInterrupt:
+        if terminate_on_exit:
+            logger.info("Terminating job %s and its children ...", job.job_id)
+            client.terminate_prefix(job.job_id, exclude_finished=True)
+        return 130
+    except Exception:
+        logger.warning(
+            "Connection lost; job %s is still running. Reconnect with: iris job logs -f %s",
+            job.job_id,
+            job.job_id,
+        )
+        raise

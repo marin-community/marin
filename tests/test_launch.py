@@ -3,6 +3,7 @@
 
 """Behavior tests for the self-running experiment launcher (``experiments/launch.py``)."""
 
+import contextlib
 import dataclasses
 
 import draccus
@@ -10,11 +11,11 @@ import pytest
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import GpuConfig, ResourceConfig
-from marin.execution.executor import ExecutorStep
+from marin.execution.executor import ExecutorMainConfig, ExecutorStep
 from marin.execution.types import VersionedValue, versioned
 
 import experiments.launch as launch
-from experiments.launch import LaunchConfig, launch_session, override_resources
+from experiments.launch import LaunchConfig, override_resources, run_launch
 
 
 def test_launch_config_parses_embedded_executor_flags():
@@ -118,30 +119,89 @@ def test_apply_overrides_leaves_inline_cpu_step_untouched():
     assert launch._apply_overrides_to_step(step, LaunchConfig(region="us-central2")) is step
 
 
-def test_launch_session_hard_fails_when_cluster_passed_inside_job(monkeypatch):
+def _must_not_bootstrap(*args, **kwargs):
+    raise AssertionError("must not bootstrap a coordinator")
+
+
+def _noop_body() -> None:
+    pass
+
+
+@pytest.mark.parametrize("cluster", [None, "marin"])
+def test_run_launch_in_job_runs_body_and_never_bootstraps(monkeypatch, cluster):
+    # Inside an Iris job (the coordinator, or the legacy two-hop), the body runs
+    # *here* against the in-cluster client; an inert --cluster must not trigger
+    # another bootstrap.
     monkeypatch.setattr(launch, "get_job_info", lambda: object())
-    with pytest.raises(RuntimeError, match="inside an Iris job"):
-        with launch_session(LaunchConfig(cluster="marin")):
-            pass
+    monkeypatch.setattr(launch, "_submit_coordinator_job", _must_not_bootstrap)
+    ran = []
+    run_launch(LaunchConfig(cluster=cluster), lambda *a, **k: ran.append((a, k)), 1, x=2)
+    assert ran == [((1,), {"x": 2})]
 
 
-def test_launch_session_legacy_in_job_does_not_hoist_a_client(monkeypatch):
-    # Legacy two-hop (inside an Iris job, no --cluster): launch_session must NOT
-    # connect/hoist a client, so current_client() keeps using the in-cluster
-    # context. Assert the no-hoist behavior, not the warning text.
-    def _must_not_connect(*args, **kwargs):
-        raise AssertionError("connect_to_cluster must not be called in the legacy in-job path")
-
-    monkeypatch.setattr(launch, "get_job_info", lambda: object())
-    monkeypatch.setattr(launch, "connect_to_cluster", _must_not_connect)
-    entered = False
-    with launch_session(LaunchConfig(cluster=None)):
-        entered = True
-    assert entered
-
-
-def test_launch_session_local_when_no_cluster(monkeypatch):
+def test_run_launch_local_runs_body_with_local_client(monkeypatch):
+    # No --cluster: the body runs in-process and current_client() is LocalClient.
     monkeypatch.setattr(launch, "get_job_info", lambda: None)
-    with launch_session(LaunchConfig(cluster=None)):
-        # No client was hoisted: current_client falls back to LocalClient.
-        assert isinstance(current_client(), LocalClient)
+    seen = {}
+    run_launch(LaunchConfig(cluster=None), lambda: seen.update(client=current_client()))
+    assert isinstance(seen["client"], LocalClient)
+
+
+def test_run_launch_dry_run_against_cluster_stays_local(monkeypatch):
+    # A dry run against a cluster stays in-process — no coordinator job.
+    monkeypatch.setattr(launch, "get_job_info", lambda: None)
+    monkeypatch.setattr(launch, "_submit_coordinator_job", _must_not_bootstrap)
+    ran = []
+    cfg = LaunchConfig(cluster="marin", executor=ExecutorMainConfig(dry_run=True))
+    run_launch(cfg, lambda: ran.append(True))
+    assert ran == [True]
+
+
+def test_run_launch_laptop_with_cluster_bootstraps_and_skips_body(monkeypatch):
+    # Laptop + --cluster: run_launch ships the body (and its args/kwargs) to a
+    # coordinator job and exits with its status; the body never runs locally.
+    monkeypatch.setattr(launch, "get_job_info", lambda: None)
+    captured = {}
+
+    def _fake_bootstrap(config, body, args, kwargs):
+        captured.update(cluster=config.cluster, args=args, kwargs=kwargs)
+        return 0
+
+    monkeypatch.setattr(launch, "_submit_coordinator_job", _fake_bootstrap)
+    ran = []
+    with pytest.raises(SystemExit) as exc:
+        run_launch(LaunchConfig(cluster="marin"), lambda *a, **k: ran.append(True), 7, x=9)
+    assert exc.value.code == 0
+    assert captured == {"cluster": "marin", "args": (7,), "kwargs": {"x": 9}}
+    assert ran == []
+
+
+@pytest.mark.parametrize(("detach", "expect_stream"), [(False, True), (True, False)])
+def test_submit_coordinator_job_detach_controls_streaming(monkeypatch, detach, expect_stream):
+    # --detach submits the coordinator without streaming; the default streams.
+    # Pins the CPU-only coordinator extras and exercises the real
+    # Entrypoint.from_callable packing of the body.
+    class _FakeJob:
+        job_id = "job-1"
+
+    submitted = {}
+
+    class _FakeClient:
+        def submit(self, *, entrypoint, name, resources, environment):
+            submitted.update(name=name, extras=environment.extras)
+            return _FakeJob()
+
+    @contextlib.contextmanager
+    def _fake_connect(cluster, *, workspace):
+        yield _FakeClient()
+
+    streamed = []
+    monkeypatch.setattr(launch, "connect_to_cluster", _fake_connect)
+    monkeypatch.setattr(launch, "stream_until_complete", lambda client, job: streamed.append(job) or 0)
+    monkeypatch.setattr(launch, "load_env_vars", lambda flags: {})
+    monkeypatch.setattr(launch, "add_standard_env_vars", lambda env: env)
+
+    rc = launch._submit_coordinator_job(LaunchConfig(cluster="marin", detach=detach), _noop_body, (), {})
+    assert rc == 0
+    assert submitted["extras"] == ["cpu"]
+    assert bool(streamed) is expect_stream

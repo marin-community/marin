@@ -15,36 +15,44 @@ submitted the real training job. The cluster/region/launcher-resources lived in
 the hand-typed command line, which is where mistakes accumulated (forgotten or
 over-sized launcher resources, wrong region).
 
-This module lets a script hoist the Iris client itself, so it runs directly from
-a dev box::
+This module lets a script run directly from a dev box::
 
     uv run python experiments/grug/base/launch.py --cluster=marin
 
-:func:`launch_session` resolves the cluster, opens the controller tunnel, and
-installs a connected Fray client as the current client; the script's existing
-submit path (``executor_main`` or ``current_client().submit``) then targets the
-cluster with no launcher job. :func:`override_resources` applies ``--region`` /
-``--tpu_type`` to a script's :class:`ResourceConfig`.
+:func:`run_launch` runs the script's body — locally for ``--local`` / dry runs,
+otherwise as a small CPU *coordinator* job on the cluster that drives the
+executor/DAG (or direct submits) and spawns training as its children. The
+coordinator outlives this process, so closing the laptop doesn't strand the run
+(its ``.success`` markers are written on the cluster). :func:`override_resources`
+applies ``--region`` / ``--tpu_type`` to a script's :class:`ResourceConfig`.
 """
 
 from __future__ import annotations
 
-import contextlib
 import dataclasses
 import logging
-from collections.abc import Iterator
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fray.current_client import set_current_client
-from fray.iris_backend import FrayIrisClient
 from fray.types import GpuConfig, ResourceConfig, TpuConfig, get_tpu_topology
-from iris.client.connect import connect_to_cluster
+from iris.cli.job import add_standard_env_vars, load_env_vars
+from iris.client.connect import connect_to_cluster, stream_until_complete
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main
 from marin.execution.types import VersionedValue, versioned
 
 logger = logging.getLogger(__name__)
+
+# The coordinator is a small CPU job that runs the executor/DAG (or direct
+# submit) body on the cluster, so the run survives the launching laptop
+# disconnecting. It only schedules and dispatches work — CPU is enough, even
+# though the DAG runner imports levanter/marin and holds a thread pool.
+COORDINATOR_CPU = 1.0
+COORDINATOR_MEMORY = "4GB"
+COORDINATOR_DISK = "10GB"
 
 
 @dataclass
@@ -73,6 +81,12 @@ class LaunchConfig:
     local: bool = False
     """Force local in-process execution even when ``--cluster`` is given."""
 
+    detach: bool = False
+    """Submit the coordinator job and return immediately instead of streaming
+    its logs. The coordinator — and the training it spawns — keeps running on
+    the cluster; reconnect with ``iris job logs -f <id>``. Default streams and
+    blocks until the run finishes."""
+
     executor: ExecutorMainConfig = field(default_factory=ExecutorMainConfig)
     """Embedded executor flags (``--executor.dry_run``, ``--executor.prefix``, ...)."""
 
@@ -90,41 +104,63 @@ def _repo_root() -> Path:
     return root
 
 
-@contextlib.contextmanager
-def launch_session(config: LaunchConfig) -> Iterator[None]:
-    """Hoist a connected Iris client for the duration of the block, or run locally.
+def run_launch(config: LaunchConfig, body: Callable[..., None], *args, **kwargs) -> None:
+    """Run a script's body locally, or as a coordinator job on the cluster.
 
-    - Inside an Iris job with ``--cluster`` set: hard error (the user wrapped the
-      script in ``iris job run`` *and* asked to re-route — a contradiction).
-    - Inside an Iris job without ``--cluster``: the legacy two-hop path. Warn and
-      fall back to the auto-detected in-cluster client (back-compat preserved).
-    - ``--local`` or no ``--cluster``: yield with no hoist (LocalClient fallback).
-    - Otherwise: connect to ``config.cluster`` and install a Fray client as the
-      current client; the script's submit path targets the cluster.
+    ``body`` is the script's actual work — typically ``train`` / ``train_grug`` /
+    ``executor_main`` / a submit loop — invoked as ``body(*args, **kwargs)``.
+
+    - **Already on the cluster** (inside the coordinator we submitted, or the
+      legacy ``iris job run`` two-hop) or **staying local** (``--local``, a dry
+      run, or no ``--cluster``): run ``body`` here.
+    - **Laptop + ``--cluster``**: ship ``body`` to a small CPU *coordinator* job
+      that runs it on the cluster and spawns training as its children, then
+      stream its logs and exit with its status. ``body`` never runs on the
+      laptop, so the executor/DAG and its ``.success`` markers live on the
+      cluster and survive the laptop disconnecting. ``--detach`` returns right
+      after submit instead of streaming.
+
+    For ``body`` to be shipped it must be importable on the worker (a top-level
+    function, like every other Iris entrypoint), and its ``args``/``kwargs`` must
+    be cloudpickle-able (the configs already are — they are shipped to training
+    workers today).
     """
-    if get_job_info() is not None:
-        if config.cluster is not None:
-            raise RuntimeError(
-                f"--cluster={config.cluster!r} was passed, but this script is already running "
-                "inside an Iris job. Self-running examples connect from your dev box: run them "
-                "directly (`uv run python <script> --cluster=...`), not via `uv run iris job run`."
-            )
-        logger.warning(
-            "Running inside an Iris job (legacy `uv run iris job run` path). Self-running "
-            "examples no longer need that wrapper — run them directly from a dev box. "
-            "Using the in-cluster client."
+    if get_job_info() is not None or config.local or config.cluster is None or config.executor.dry_run:
+        body(*args, **kwargs)
+        return
+    raise SystemExit(_submit_coordinator_job(config, body, args, kwargs))
+
+
+def _coordinator_job_name(body: Callable[..., None]) -> str:
+    """A collision-free coordinator job name derived from the body callable."""
+    module = body.__module__.rsplit(".", 1)[-1]
+    return f"{module}-{body.__name__}-{uuid.uuid4().hex[:8]}"
+
+
+def _submit_coordinator_job(config: LaunchConfig, body: Callable[..., None], args: tuple, kwargs: dict) -> int:
+    """Submit a CPU coordinator job that runs ``body`` on the cluster.
+
+    ``body`` and its args are cloudpickled via :meth:`Entrypoint.from_callable`
+    — the same mechanism every other "run this on a worker" site uses — so the
+    coordinator runs the executor/DAG (or direct submits) in-cluster and spawns
+    training as its children. This laptop process only streams its logs
+    (disconnect-safe). Returns the coordinator's exit code.
+    """
+    assert config.cluster is not None
+    env_vars = add_standard_env_vars(load_env_vars(None))
+    resources = ResourceSpec(cpu=COORDINATOR_CPU, memory=COORDINATOR_MEMORY, disk=COORDINATOR_DISK)
+    logger.info("Launching coordinator on cluster %r for %s", config.cluster, body.__qualname__)
+    with connect_to_cluster(config.cluster, workspace=_repo_root()) as client:
+        job = client.submit(
+            entrypoint=Entrypoint.from_callable(body, *args, **kwargs),
+            name=_coordinator_job_name(body),
+            resources=resources,
+            environment=EnvironmentSpec(env_vars=env_vars, extras=["cpu"]),
         )
-        yield
-        return
-
-    if config.local or config.cluster is None:
-        logger.info("No --cluster (or --local): running against the in-process LocalClient.")
-        yield
-        return
-
-    with connect_to_cluster(config.cluster, workspace=_repo_root()) as iris_client:
-        with set_current_client(FrayIrisClient.from_iris_client(iris_client)):
-            yield
+        if config.detach:
+            logger.info("Detached; the coordinator keeps running. Reconnect with: iris job logs -f %s", job.job_id)
+            return 0
+        return stream_until_complete(client, job)
 
 
 def override_resources(resources: ResourceConfig, config: LaunchConfig) -> ResourceConfig:
@@ -205,14 +241,15 @@ def _apply_overrides_to_step(step: ExecutorStep, config: LaunchConfig) -> Execut
 
 
 def launch_executor(config: LaunchConfig, steps: list[ExecutorStep], description: str | None = None) -> None:
-    """Convenience for executor-based examples: hoist the client and run ``executor_main``.
+    """Convenience for executor-based examples: run ``executor_main`` via :func:`run_launch`.
 
     Applies any ``--tpu_type`` / ``--region`` / ``--zone`` overrides to each
-    step's resources, then runs ``executor_main`` inside :func:`launch_session`.
-    Passing ``config.executor`` explicitly bypasses ``executor_main``'s own
-    draccus parse (the CLI was already parsed into ``LaunchConfig``).
+    step's resources, then runs ``executor_main`` through :func:`run_launch` —
+    locally for ``--local`` / dry runs, otherwise on the cluster coordinator
+    (this process only bootstraps it). Passing ``config.executor`` explicitly
+    bypasses ``executor_main``'s own draccus parse (the CLI was already parsed
+    into ``LaunchConfig``).
     """
     if config.tpu_type is not None or config.region is not None or config.zone is not None:
         steps = [_apply_overrides_to_step(step, config) for step in steps]
-    with launch_session(config):
-        executor_main(config.executor, steps=steps, description=description)
+    run_launch(config, executor_main, config.executor, steps=steps, description=description)

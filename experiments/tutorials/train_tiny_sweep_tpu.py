@@ -36,7 +36,7 @@ from marin.training.training import resolve_training_env
 
 from experiments.defaults import _run_training_on_worker, prepare_lm_train
 from experiments.evals.task_configs import CORE_TASKS
-from experiments.launch import LaunchConfig, launch_session, override_resources
+from experiments.launch import LaunchConfig, override_resources, run_launch
 from experiments.llama import llama_30m
 from experiments.pretraining_datasets.simple import tokenized
 from experiments.simple_train_config import SimpleTrainConfig
@@ -122,26 +122,33 @@ def _sweep_worker_entrypoint(sweep_root: str, resources: ResourceConfig) -> None
     claim_and_run(sweep_root, targets, lambda target: _run_one(target, resources))
 
 
+def _launch_sweep(resources: ResourceConfig) -> None:
+    """Submit ``NUM_WORKERS`` independent TPU sweep workers and block until they finish.
+
+    Runs on the coordinator (or locally): each worker races on ``step_lock`` to
+    claim grid targets and trains inline on its own TPU.
+    """
+    client = fray_client.current_client()
+    env = resolve_training_env(base_env=None, resources=resources)
+    handles = []
+    for i in range(NUM_WORKERS):
+        handle = client.submit(
+            JobRequest(
+                name=f"{SWEEP_NAME}-{i}",
+                entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[SWEEP_ROOT, resources]),
+                resources=resources,
+                environment=create_environment(env_vars=env, extras=extras_for_resources(resources)),
+            )
+        )
+        handles.append(handle)
+    for h in handles:
+        h.wait(raise_on_failure=True)
+
+
 @draccus.wrap()
 def main(config: LaunchConfig):
     resources = override_resources(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE), config)
-    with launch_session(config):
-        client = fray_client.current_client()
-
-        env = resolve_training_env(base_env=None, resources=resources)
-        handles = []
-        for i in range(NUM_WORKERS):
-            handle = client.submit(
-                JobRequest(
-                    name=f"{SWEEP_NAME}-{i}",
-                    entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[SWEEP_ROOT, resources]),
-                    resources=resources,
-                    environment=create_environment(env_vars=env, extras=extras_for_resources(resources)),
-                )
-            )
-            handles.append(handle)
-        for h in handles:
-            h.wait(raise_on_failure=True)
+    run_launch(config, _launch_sweep, resources)
 
 
 if __name__ == "__main__":
