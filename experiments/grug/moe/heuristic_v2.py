@@ -253,33 +253,3 @@ class MoeMuonHHeuristic:
 
 
 moe_muonh_heuristic = MoeMuonHHeuristic()
-
-
-def build_from_heuristic(
-    *,
-    budget: float,
-    hidden_dim: int,
-    heuristic: MoeMuonHHeuristic | None = None,
-    target_steps: int = DEFAULT_TARGET_STEPS,
-    min_batch_size: int = MIN_BATCH_SIZE,
-    seq_len: int = SEQ_LEN,
-) -> tuple[GrugModelConfig, GrugMoeAdamHConfig, int, int]:
-    """Construct (model, optimizer, batch_size, num_steps) for a compute budget.
-
-    Uses `MoeMuonHHeuristic` to size the model (from `hidden_dim`) and to set
-    the AdamH hyperparameters (scaled by tokens_per_batch = batch_size * seq_len).
-    Callers who want manual control should continue passing `GrugModelConfig` /
-    `GrugMoeAdamHConfig` directly to `GrugMoeLaunchConfig`.
-    """
-    h = heuristic or MoeMuonHHeuristic()
-    model_cfg = h.build_model_config(hidden_dim, seq_len=seq_len)
-    fpt = compute_flops_per_token(model_cfg)
-    tokens, batch_size, num_steps = compute_tokens_and_batch(
-        budget,
-        fpt,
-        target_steps=target_steps,
-        min_batch_size=min_batch_size,
-        seq_len=seq_len,
-    )
-    optimizer_cfg = h.build_adamh_config(batch_size, tokens, hidden_dim, seq_len=seq_len)
-    return model_cfg, optimizer_cfg, batch_size, num_steps

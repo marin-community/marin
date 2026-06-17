@@ -18,7 +18,7 @@ from marin.execution.types import ExecutorStep, InputName, this_output_path, ver
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
 from experiments.defaults import default_validation_sets
-from experiments.grug.moe.heuristic_adamh import build_from_heuristic
+from experiments.grug.moe.heuristic_v1 import build_from_heuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, run_grug_moe_trial
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.marin_models import marin_tokenizer

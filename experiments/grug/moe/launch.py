@@ -29,7 +29,7 @@ from marin.processing.tokenize.data_configs import lm_data_config
 from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.defaults import default_validation_sets
-from experiments.grug.moe.heuristic_muonh import MoeMuonHHeuristic
+from experiments.grug.moe.heuristic_v2 import MoeMuonHHeuristic
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.llama import llama3_tokenizer
@@ -158,7 +158,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
 
 
 # May Recipe compute-optimal cells from the drop-1e18 isoflop fit
-# (issue #6074). ``MoeMuonHHeuristic`` (heuristic_muonh) supplies LR / beta2 /
+# (issue #6074). ``MoeMuonHHeuristic`` (heuristic_v2) supplies LR / beta2 /
 # epsilon; (bs, steps) hardcoded so callers don't depend on
 # ``compute_tokens_and_batch`` heuristics for cell selection.
 #
