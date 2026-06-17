@@ -114,8 +114,6 @@ class MoeHeuristicV2:
     # --- LR scaling ---
     # May Recipe refit (issue #5951; 17 cells across d{512,768,1024,1280},
     # R^2=0.996):  muonh_lr = 18.31 * tokens^-0.395 * dim^-0.150 * sqrt(B).
-    # ``lr_coeff`` below is the adam_lr coefficient after dividing out
-    # muonh_ratio and sqrt(seq_len=4096): 18.31 / (13/3 * 64) = 0.06602.
     lr_coeff: float = 0.06602
     lr_tokens_exp: float = -0.395
     lr_dim_exp: float = -0.150
