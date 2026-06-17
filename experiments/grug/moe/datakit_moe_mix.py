@@ -7,8 +7,7 @@ The store at ``gs://marin-us-central2/datakit/store_8ac06c74`` is partitioned
 into 40 lexical clusters x 5 quality buckets = 200 tokenized caches. Each
 ``cluster=C/quality=Q`` directory is a single Levanter ``TreeCache`` (one
 consolidated ``shard_ledger.json`` at the root, data left sharded across
-``part-*``; see marin PR #5430), so each bucket loads as a plain
-``DatasetComponent``.
+``part-*``), so each bucket loads as a plain ``DatasetComponent``.
 
 With token-proportional weights, a bucket is only sampled if
 ``weight * mixture_block_size >= 1``. At the maximum block size (65535), 167
@@ -371,5 +370,5 @@ datakit_moe_mix_steps: list[ExecutorStep] = [_build_step()]
 if __name__ == "__main__":
     executor_main(
         steps=datakit_moe_mix_steps,
-        description="Grug MoE on the datakit eu-west4 store mixture (166 proportional buckets + tail).",
+        description="Grug MoE on the datakit us-central2 store mixture (167 proportional buckets + tail).",
     )

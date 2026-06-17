@@ -155,8 +155,8 @@ def _inject_bpb_into_metric_list(task_dict: dict) -> None:
     ``"bpb" in self._metric_fn_list.keys()``. That dict is built once at
     task construction from ``metric_list``, so we patch both: append a
     metric_list entry (for downstream introspection / config dumps) AND
-    insert the bpb metric_fn into ``_metric_fn_list`` (what the runtime
-    actually reads at line task.py:1463).
+    insert the bpb metric_fn into ``_metric_fn_list``, which the runtime reads
+    when deciding which metrics to emit.
     """
     from lm_eval.api.registry import get_aggregation, get_metric
     from lm_eval.api.task import Task
@@ -409,13 +409,11 @@ class GrugLogprobEvalConfig:
     grug_model_config: GrugModelConfig
     checkpoint_path: str
     output_path: str
-    wandb_run_name: str
     task: EvalTaskConfig
     eval_capacity_factor: float = 8.0
     max_eval_instances: int | None = None
     batch_size: int = 8
     max_cont_len: int = 256
-    wandb_tags: tuple[str, ...] = ()
 
 
 def run_grug_logprob_eval(config: GrugLogprobEvalConfig) -> None:
@@ -536,9 +534,7 @@ def _build_eval_step(model: ModelSpec, task: EvalTaskConfig) -> ExecutorStep:
             grug_model_config=grug_model,
             checkpoint_path=InputName.hardcoded(model.checkpoint_subpath),
             output_path=this_output_path(),
-            wandb_run_name=f"{model.slug}_{_task_key(task)}",
             task=task,
-            wandb_tags=("grug", "logprob_eval", model.slug, _task_key(task)),
         ),
     )
 

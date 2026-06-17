@@ -91,7 +91,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         use_explicit_mesh_axes=True,
         # `expert: 1` matches the swarm's sharding (full replication, no
         # expert parallelism). The MoE init check in model.py tolerates the
-        # axis being absent from the post-#6166 compact mesh.
+        # axis being absent from a compact mesh.
         mesh=MeshConfig(axes={"expert": 1}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,

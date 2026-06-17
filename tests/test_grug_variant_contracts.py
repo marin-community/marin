@@ -32,6 +32,7 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 
@@ -215,8 +216,6 @@ def test_grug_moe_data_loaders_build_against_single_expert_mesh():
             )
         ]
     )
-    from levanter.schedule import BatchSchedule
-
     batch_schedule = BatchSchedule(max(1, len(jax.devices())))
 
     # This used to raise: "Resource axis: expert ... is not found in mesh: (..., model)".

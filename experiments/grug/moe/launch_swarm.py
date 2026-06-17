@@ -26,6 +26,7 @@ Components and the 167/33 mixable/tail split are reused from
 """
 
 import csv
+from dataclasses import dataclass
 from math import gcd
 
 import fsspec
@@ -76,7 +77,14 @@ _PHASE1_START_STEP: int = (_STEPS * 4 // 5 // _PHASE1_STEP_MULTIPLE) * _PHASE1_S
 assert _PHASE1_START_STEP * _BATCH % _SWARM_BLOCK_SIZE == 0
 
 
-def _load_swarm_mixtures(path: str) -> list[tuple[int, dict[str, float], dict[str, float]]]:
+@dataclass(frozen=True)
+class SwarmCandidate:
+    idx: int
+    phase_0: dict[str, float]
+    phase_1: dict[str, float]
+
+
+def _load_swarm_mixtures(path: str) -> list[SwarmCandidate]:
     with fsspec.open(path, "rt") as f:
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames or []
@@ -92,8 +100,8 @@ def _load_swarm_mixtures(path: str) -> list[tuple[int, dict[str, float], dict[st
         idx = int(r["experiment_index"])
         w0 = {b: float(r[f"{p0}{b}"]) for b in bucket_names}
         w1 = {b: float(r[f"{p1}{b}"]) for b in bucket_names}
-        candidates.append((idx, w0, w1))
-    indices = [c[0] for c in candidates]
+        candidates.append(SwarmCandidate(idx=idx, phase_0=w0, phase_1=w1))
+    indices = [c.idx for c in candidates]
     assert len(set(indices)) == len(indices), "duplicate experiment_index in swarm CSV"
     return candidates
 
@@ -149,7 +157,9 @@ def _build_step(idx: int, w0: dict[str, float], w1: dict[str, float]) -> Executo
 
 _CANDIDATES = _load_swarm_mixtures(_MIXTURES_CSV)
 
-swarm_fisher_dsp_steps: list[ExecutorStep] = [_build_step(idx, w0, w1) for idx, w0, w1 in _CANDIDATES]
+swarm_fisher_dsp_steps: list[ExecutorStep] = [
+    _build_step(candidate.idx, candidate.phase_0, candidate.phase_1) for candidate in _CANDIDATES
+]
 
 
 if __name__ == "__main__":

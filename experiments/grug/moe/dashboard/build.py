@@ -35,6 +35,7 @@ import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -49,7 +50,6 @@ from scipy.cluster.hierarchy import leaves_list, linkage, optimal_leaf_ordering
 from scipy.optimize import minimize
 from scipy.spatial.distance import pdist
 from scipy.stats import norm, rankdata
-from sklearn.linear_model import Ridge
 from sklearn.manifold import TSNE
 from tqdm import tqdm
 
@@ -123,6 +123,14 @@ _CLUSTER_NAMES = {
     38: "library-and-distance-problems",
     39: "pledge-and-patriotism",
 }
+
+
+@dataclass(frozen=True)
+class CandidateProbe:
+    dir_path: str
+    terminal: str | None
+    max_step: int
+    last_updated: str | None
 
 
 def _idx_from_name(name: str) -> int | None:
@@ -422,7 +430,7 @@ def fetch_gcs_state() -> dict[int, dict]:
     fs = fsspec.filesystem("gs")
     cand_dirs = [d for d in fs.ls(_OUTPUT_PREFIX, detail=False) if "swarm_fisher_dsp_d512_" in d]
 
-    def probe(dir_path: str) -> tuple[str, str | None, int, str | None]:
+    def probe(dir_path: str) -> CandidateProbe:
         terminal = None
         try:
             with fs.open(f"gs://{dir_path}/.executor_status", "rt") as f:
@@ -446,7 +454,12 @@ def fetch_gcs_state() -> dict[int, dict]:
                         break
         except FileNotFoundError:
             pass
-        return dir_path, terminal, max_step, last_updated
+        return CandidateProbe(
+            dir_path=dir_path,
+            terminal=terminal,
+            max_step=max_step,
+            last_updated=last_updated,
+        )
 
     with ThreadPoolExecutor(max_workers=64) as ex:
         results = list(tqdm(ex.map(probe, cand_dirs), total=len(cand_dirs), desc="  gcs state"))
@@ -455,20 +468,20 @@ def fetch_gcs_state() -> dict[int, dict]:
         return (1 if terminal == "SUCCESS" else 0, 1 if terminal is None else 0, step)
 
     by_idx: dict[int, dict] = {}
-    for dir_path, terminal, max_step, last_updated in results:
-        m = _CANDIDATE_RE.search(dir_path)
+    for result in results:
+        m = _CANDIDATE_RE.search(result.dir_path)
         if not m:
             continue
         idx = int(m.group(1))
-        new_rank = rank(terminal, max_step)
+        new_rank = rank(result.terminal, result.max_step)
         existing = by_idx.get(idx)
         if existing is not None and rank(existing["terminal"], existing["step"]) >= new_rank:
             continue
         by_idx[idx] = {
-            "dir": dir_path,
-            "terminal": terminal,
-            "step": max_step,
-            "last_checkpoint_updated": last_updated,
+            "dir": result.dir_path,
+            "terminal": result.terminal,
+            "step": result.max_step,
+            "last_checkpoint_updated": result.last_updated,
         }
 
     now = datetime.now(timezone.utc)
@@ -958,85 +971,6 @@ def fit_dsp_predictors(runs: dict[int, dict], gcs: dict[int, dict], mixtures: di
             }
             for j, k in enumerate(eval_keys)
         ],
-    }
-
-
-def fit_predictors(runs: dict[int, dict], gcs: dict[int, dict], mixtures: dict) -> dict | None:
-    """Per-metric ridge regression on cluster-aggregated weights (phase_0+phase_1).
-
-    Sign-flipped so the predicted target is "higher = better". JS evaluates
-    ``y_hat = intercept + coef · w`` live as the user drags sliders.
-    """
-    buckets = mixtures["buckets"]
-    bucket_clusters = [_cluster_of(b) for b in buckets]
-
-    cluster_ids = sorted({c for c in bucket_clusters if c is not None})
-    n_clusters = len(cluster_ids)
-    cluster_index = {c: i for i, c in enumerate(cluster_ids)}
-
-    rows = []
-    for idx, g in gcs.items():
-        if g.get("state") != "finished":
-            continue
-        wr = runs.get(idx)
-        if not wr or not wr.get("evals"):
-            continue
-        cand = mixtures["candidates"][idx] if idx < len(mixtures["candidates"]) else None
-        if cand is None:
-            continue
-        w_vec = np.zeros(n_clusters)
-        for w0, w1, c in zip(cand["phase_0"], cand["phase_1"], bucket_clusters, strict=True):
-            if c is None:
-                continue
-            w_vec[cluster_index[c]] += w0 + w1
-        # Normalize to a distribution (so coefficients are interpretable as
-        # "moving 1 unit of mixture weight from baseline").
-        s = w_vec.sum()
-        if s > 0:
-            w_vec /= s
-        rows.append((w_vec, wr["evals"]))
-    if len(rows) < 10:
-        return None
-
-    X = np.stack([w for w, _ in rows])
-    eval_keys = sorted({k for _, e in rows for k in e.keys() if _is_data_mix_metric(k)})
-
-    metrics: dict[str, dict] = {}
-    for k in eval_keys:
-        y = np.array([e.get(k, np.nan) for _, e in rows])
-        mask = ~np.isnan(y)
-        if mask.sum() < 10:
-            continue
-        ys = y[mask] * -1.0  # all kept metrics end in /bpb or /loss (lower = better)
-        Xm = X[mask]
-        m = Ridge(alpha=1.0).fit(Xm, ys)
-        # Baseline = mean weights across candidates; predicted at baseline = intercept + coef · mean.
-        baseline = float(m.predict(Xm.mean(axis=0, keepdims=True))[0])
-        # Per-candidate residuals -> sigma for an uncertainty band.
-        resid = ys - m.predict(Xm)
-        metrics[k] = {
-            "intercept": float(m.intercept_),
-            "coef": m.coef_.tolist(),
-            "sign": -1.0,
-            "y_mean": float(ys.mean()),
-            "y_std": float(ys.std()),
-            "y_min": float(ys.min()),
-            "y_max": float(ys.max()),
-            "baseline_pred": baseline,
-            "sigma": float(resid.std()),
-        }
-
-    cluster_tokens: dict[int, int] = defaultdict(int)
-    for c, _q, t in _MIXABLE_BUCKETS + _TAIL_BUCKETS:
-        cluster_tokens[c] += t
-    total = sum(cluster_tokens.values())
-    baseline_weights = [cluster_tokens.get(c, 0) / total for c in cluster_ids]
-
-    return {
-        "cluster_ids": cluster_ids,
-        "cluster_names": {c: _CLUSTER_NAMES.get(c, f"c{c:02d}") for c in cluster_ids},
-        "baseline_weights": baseline_weights,
-        "metrics": metrics,
     }
 
 

@@ -356,9 +356,9 @@ def run_grug_moe_mix(config: GrugMoeLaunchConfig) -> None:
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
-        # `expert: 1` matches the swarm's sharding (and every pre-#6166 grug
-        # MoE run) — full replication, no expert parallelism. The MoE init
-        # check in model.py is tolerant of the axis being absent post-#6166.
+        # `expert: 1` matches the swarm's sharding: full replication, no expert
+        # parallelism. The MoE init check in model.py tolerates the axis being
+        # absent from a compact mesh.
         mesh=MeshConfig(axes={"expert": 1}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,

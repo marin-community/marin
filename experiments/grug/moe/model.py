@@ -50,10 +50,8 @@ _GATED_NORM_RANK = 128
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
     # An absent axis is semantically equivalent to size 1 (full replication
-    # along that logical axis). #6166's `compact_grug_mesh` started dropping
-    # the `expert` name from the mesh whenever expert_axis_size == 1, which
-    # tripped the previous strict check on every single-slice v4-8 MoE run
-    # even though those runs worked fine before the refactor.
+    # along that logical axis). Compact meshes may drop `expert` whenever
+    # expert_axis_size == 1.
     if mesh is None or mesh.empty:
         raise ValueError("grug/moe requires a non-empty abstract mesh")
     return int(mesh.shape.get(axis_name, 1))

@@ -24,8 +24,7 @@ from experiments.grug.moe.launch_swarm import _HIDDEN_DIM, _TARGET_STEPS
 _OUTPUT_PREFIX = "gs://marin-us-central2/grug/"
 _CANDIDATE_RE = re.compile(r"swarm_fisher_dsp_d512_(\d{6})-[a-f0-9]+")
 
-# Logprob task surface — we keep growing this from the all_evals.py PR
-# (marin-community/marin#2663) one eval at a time.
+# Logprob task surface for the swarm checkpoint sweep.
 _EXTRA_LOGPROB_TASKS: tuple[EvalTaskConfig, ...] = (
     EvalTaskConfig("arc_easy", 0, task_alias="arc_easy_0shot"),
     EvalTaskConfig("arc_challenge", 0, task_alias="arc_challenge_0shot"),
@@ -45,8 +44,6 @@ _EXTRA_LOGPROB_TASKS: tuple[EvalTaskConfig, ...] = (
     EvalTaskConfig("truthfulqa_mc2", 0, task_alias="truthfulqa_mc2_0shot"),
     # logiqa skipped: same HF script-loader issue (logiqa.py).
     # logiqa2 keeps: uses parquet-hosted datasets.
-    # Further tasks added one-at-a-time by the orchestrator
-    # (`experiments/grug/moe/_mega_evals_orchestrator.py`).
     EvalTaskConfig("medmcqa", 0, task_alias="medmcqa_0shot"),
     EvalTaskConfig("medqa_4options", 0, task_alias="medqa_0shot"),
     # pubmedqa skipped: HF script-loader deprecated in datasets>=4.0
@@ -233,9 +230,7 @@ def _build_logprob_step(idx: int, ckpt_subpath: str, task: EvalTaskConfig) -> Ex
             grug_model_config=_MODEL,
             checkpoint_path=InputName.hardcoded(ckpt_subpath),
             output_path=this_output_path(),
-            wandb_run_name=f"{slug}_{task_key}",
             task=task,
-            wandb_tags=("grug", "logprob_eval", "swarm_fisher_dsp", slug, task_key),
         ),
     )
 
