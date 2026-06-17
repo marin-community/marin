@@ -488,10 +488,7 @@ def gpu_device(variant: str, count: int = 1) -> job_pb2.DeviceConfig:
         DeviceConfig with the gpu field set.
 
     Raises:
-        ValueError: if count is not a positive integer. A zero count is later
-            coerced to 1 by ``get_gpu_count`` (``count or 1``), and a negative
-            count flows through as a negative ``req_gpu_count`` that inflates
-            advertised scheduler capacity, so both are rejected at construction.
+        ValueError: if count is not a positive integer.
     """
     if count < 1:
         raise ValueError(f"GPU count must be a positive integer, got {count}")
