@@ -91,7 +91,7 @@ function formatRelative(iso: string): string {
   return `${days}d ago`;
 }
 
-// One tier's run strip: latest-run line, success rate, and the 10-day
+// One tier's run strip: latest-run line, success rate, and the last-N-runs
 // history dots. A single-workflow ferry renders exactly one of these; the
 // datakit ferry stacks three (tier1/2/3) under one card.
 function TierStrip({ tier, showLabel }: { tier: FerryTierStatus; showLabel: boolean }) {
@@ -218,7 +218,7 @@ export function FerryPanel() {
       <div className="mb-3 flex items-baseline justify-between">
         <h2 className="text-xl font-semibold text-slate-200">Ferries</h2>
         <div className="text-right text-xs text-slate-500">
-          {data && <span>last {data.windowDays}d</span>}
+          {data && <span>last {data.runLimit} runs</span>}
           {dataUpdatedAt && (
             <span>
               {data ? " · " : ""}

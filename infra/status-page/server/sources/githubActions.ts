@@ -9,9 +9,6 @@
 
 import { githubAuthHeaders, REPO } from "./github.js";
 
-const MAX_WORKFLOW_RUNS_PER_REQUEST = 100;
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
 // A ferry is one card on the dashboard. Most map to a single workflow file;
 // the datakit ferry runs three tiers (tier1/2/3) we surface as three strips
 // under one card. `label` is the per-tier caption (null for single-tier
@@ -57,7 +54,7 @@ export interface FerryTierStatus {
   file: string;
   latest: FerryRun | null;
   history: FerryRun[];
-  successRate: number | null; // [0, 1] over completed runs in the window; null if no completed runs
+  successRate: number | null; // [0, 1] over completed runs in the strip; null if no completed runs
   fetchedAt: string;
   error?: string;
 }
@@ -117,14 +114,16 @@ function computeSuccessRate(runs: FerryRun[]): number | null {
 
 export async function fetchTierStatus(
   tier: FerryTier,
-  windowDays: number,
+  runLimit: number,
 ): Promise<FerryTierStatus> {
   const fetchedAt = new Date().toISOString();
-  const cutoff = new Date(Date.now() - windowDays * MS_PER_DAY);
+  // Fetch a fixed number of most-recent runs rather than a time window: the
+  // datakit tiers run on different cadences (tier1/2 daily, tier3 weekly), so
+  // a shared time window leaves the weekly strip nearly empty. A per-tier run
+  // count gives every strip the same number of bars regardless of cadence.
   const params = new URLSearchParams({
-    per_page: String(MAX_WORKFLOW_RUNS_PER_REQUEST),
+    per_page: String(runLimit),
     branch: "main",
-    created: `>=${cutoff.toISOString()}`,
   });
   const url =
     `https://api.github.com/repos/${REPO}/actions/workflows/${tier.file}` +
@@ -150,10 +149,7 @@ export async function fetchTierStatus(
     }
 
     const data = (await res.json()) as GhRunsResponse;
-    const cutoffMs = cutoff.getTime();
-    const history = (data.workflow_runs ?? [])
-      .map(toFerryRun)
-      .filter((run) => Date.parse(run.startedAt) >= cutoffMs);
+    const history = (data.workflow_runs ?? []).slice(0, runLimit).map(toFerryRun);
     return {
       label: tier.label,
       file: tier.file,
