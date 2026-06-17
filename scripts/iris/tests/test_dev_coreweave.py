@@ -33,6 +33,27 @@ def test_state_round_trip():
     assert DevCoreweaveState.from_json(state.to_json()) == state
 
 
+def test_from_json_defaults_container_when_absent():
+    raw = """
+    {
+        "session_name": "matt",
+        "config_file": "/abs/coreweave.yaml",
+        "job_id": "/matt/dev-cw-matt",
+        "gpu_count": 8,
+        "target": {"namespace": "iris", "kubeconfig_path": "/k/cfg"},
+        "pod": {"namespace": "iris", "pod_name": "dev-cw-matt-abc"}
+    }
+    """
+    state = DevCoreweaveState.from_json(raw)
+    assert state.pod.container == "task"
+    assert state.pod.namespace == "iris"
+    assert state.pod.pod_name == "dev-cw-matt-abc"
+    assert state.session_name == "matt"
+    assert state.job_id == "/matt/dev-cw-matt"
+    assert state.gpu_count == 8
+    assert state.target == CoreweaveTarget(namespace="iris", kubeconfig_path="/k/cfg")
+
+
 def _coreweave_config(namespace: str = "iris", kubeconfig: str = "") -> config_pb2.IrisClusterConfig:
     c = config_pb2.IrisClusterConfig()
     c.platform.coreweave.SetInParent()

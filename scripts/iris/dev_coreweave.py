@@ -211,10 +211,11 @@ def wait_for_running_task(job, *, timeout: float) -> str:
 def wait_for_running_pod(target: CoreweaveTarget, task_id: str, *, timeout: float) -> PodRef:
     """Poll kubectl until the task's backing pod is Running."""
     selector = pod_label_selector(task_id)
+    logger.info("Polling for a Running pod matching selector %s", selector)
     deadline = time.monotonic() + timeout
     last_err = ""
     while time.monotonic() < deadline:
-        result = run_logged(kubectl_get_pods_cmd(target, selector), capture_output=True, text=True)
+        result = subprocess.run(kubectl_get_pods_cmd(target, selector), capture_output=True, text=True)
         if result.returncode == 0:
             pod_name = parse_running_pod(json.loads(result.stdout or "{}"))
             if pod_name:
@@ -251,7 +252,13 @@ def cli(ctx, config: str | None, session_name: str | None, verbose: bool) -> Non
 
 
 @cli.command("allocate")
-@click.option("--gpu-count", default=DEFAULT_GPU_COUNT, show_default=True, help="H100 GPUs to reserve.")
+@click.option(
+    "--gpu-count",
+    default=DEFAULT_GPU_COUNT,
+    show_default=True,
+    help="H100 GPUs to reserve. Only 8 (a whole h100-8x node) is validated; "
+    "smaller values may not schedule on the bare-metal pool.",
+)
 @click.option("--timeout", default=900, show_default=True, help="Seconds to wait for the task to run.")
 @click.option("--pod-timeout", default=120, show_default=True, help="Seconds to wait for the pod to run.")
 @click.pass_context
@@ -320,8 +327,22 @@ def allocate(ctx, gpu_count: int, timeout: int, pod_timeout: int) -> None:
 def connect(ctx) -> None:
     """Open an interactive shell into the reserved pod."""
     state = load_state(state_path(ctx.obj.state_dir, ctx.obj.session_name))
-    with controller_client(state.config_file) as client:
-        if not is_job_active(client, state.job_id):
+    # connect fundamentally only needs `kubectl exec`. The controller liveness check is a
+    # courtesy: if the controller is reachable and reports the job inactive we fail fast,
+    # but if reaching the controller itself fails we proceed, since a healthy pod should
+    # still be reachable when the controller is momentarily unreachable.
+    try:
+        with controller_client(state.config_file) as client:
+            job_active = is_job_active(client, state.job_id)
+    except click.ClickException:
+        raise
+    except Exception:
+        logger.warning(
+            "Could not verify dev CoreWeave job liveness with the controller; attempting to connect anyway.",
+            exc_info=True,
+        )
+    else:
+        if not job_active:
             raise click.ClickException(
                 f"Dev CoreWeave session '{state.session_name}' is no longer active. Use release to clean up."
             )
