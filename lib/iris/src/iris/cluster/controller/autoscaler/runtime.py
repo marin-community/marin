@@ -592,7 +592,7 @@ class Autoscaler:
         )
 
         # Phase 3: fold describe results into group state serially.
-        for (group, slice_id, handle), status in zip(targets, statuses, strict=True):
+        for (group, slice_id, _handle), status in zip(targets, statuses, strict=True):
             if status is None:
                 continue
             if status.state == CloudSliceState.READY:
@@ -620,8 +620,12 @@ class Autoscaler:
                     status="failed",
                 )
             elif status.state == CloudSliceState.UNKNOWN:
-                age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
-                if age >= self._unresolvable_timeout:
+                # Measure how long the slice has been CONTINUOUSLY UNKNOWN, not its
+                # age since creation: a single transient UNKNOWN describe must not
+                # terminate a long-running or freshly-adopted (drained) slice that
+                # still has running tasks.
+                unknown_for = group.note_slice_unknown(slice_id, timestamp)
+                if unknown_for >= self._unresolvable_timeout:
                     group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
                     group.scale_down(slice_id)
                     self._unregister_slice_workers(slice_id)
@@ -630,14 +634,14 @@ class Autoscaler:
                         "slice_failed",
                         group.name,
                         slice_id,
-                        reason=f"TPU unresolvable for {age}",
+                        reason=f"unresolvable for {unknown_for}",
                         status="failed",
                     )
                 else:
                     logger.debug(
-                        "Slice %s UNKNOWN (age %s < timeout %s); will retry",
+                        "Slice %s UNKNOWN (unknown for %s < timeout %s); will retry",
                         slice_id,
-                        age,
+                        unknown_for,
                         self._unresolvable_timeout,
                     )
 
