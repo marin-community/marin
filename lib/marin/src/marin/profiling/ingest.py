@@ -15,6 +15,7 @@ from typing import Any
 import wandb
 from google.protobuf.message import DecodeError
 from levanter.utils.profile_dirs import (
+    PROFILER_DIR_NAME,
     WandbRunLike,
     mirror_profile_dir,
     normalize_run_target,
@@ -34,7 +35,6 @@ from marin.profiling.xplane import MultipleXPlaneFilesError, find_xplane_file, s
 logger = logging.getLogger(__name__)
 
 PROFILE_ARTIFACT_TYPE = "jax_profile"
-PROFILE_DIR_NAME = "profiler"
 
 
 @dataclass(frozen=True)
@@ -282,7 +282,7 @@ def _download_profile_dir_with_metadata(
 ) -> DownloadedProfileDir:
     run_id = resolve_profile_run_id(run)
     local_profile_dir = mirror_profile_dir(profile_dir, download_root, run_id=run_id)
-    metadata = _run_metadata_from_run(run, artifact_ref=profile_dir, artifact_name=PROFILE_DIR_NAME)
+    metadata = _run_metadata_from_run(run, artifact_ref=profile_dir, artifact_name=PROFILER_DIR_NAME)
     return DownloadedProfileDir(profile_dir=local_profile_dir, run_metadata=metadata)
 
 

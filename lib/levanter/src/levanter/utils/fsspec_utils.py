@@ -3,9 +3,6 @@
 
 import glob
 import os
-import shutil
-import tempfile
-from pathlib import Path
 
 import braceexpand
 import fsspec
@@ -69,41 +66,3 @@ def join_path(lhs, rhs):
         return rhs
     else:
         return os.path.join(lhs, rhs)
-
-
-def mirror_directory(source: str, root: Path | None, *, run_id: str, leaf_dirname: str, temp_dir_prefix: str) -> Path:
-    """Mirror a local or remote directory into `root/run_id/leaf_dirname`."""
-    fs, source_path = url_to_fs(source)
-    source_local_path = Path(source_path)
-
-    if root is None:
-        if _is_local_fs(fs):
-            if not source_local_path.exists():
-                raise FileNotFoundError(f"Directory '{source}' does not exist.")
-            return source_local_path
-        root = Path(tempfile.mkdtemp(prefix=temp_dir_prefix))
-    else:
-        root.mkdir(parents=True, exist_ok=True)
-
-    download_path = root / run_id / leaf_dirname
-    if _is_local_fs(fs) and download_path.resolve() == source_local_path.resolve():
-        if not source_local_path.exists():
-            raise FileNotFoundError(f"Directory '{source}' does not exist.")
-        return source_local_path
-
-    if download_path.exists():
-        shutil.rmtree(download_path)
-    download_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if _is_local_fs(fs):
-        if not source_local_path.exists():
-            raise FileNotFoundError(f"Directory '{source}' does not exist.")
-        shutil.copytree(source_local_path, download_path)
-    else:
-        fs.get(source_path, str(download_path), recursive=True)
-    return download_path
-
-
-def _is_local_fs(fs) -> bool:
-    protocol = fs.protocol[0] if isinstance(fs.protocol, tuple) else fs.protocol
-    return protocol in (None, "", "file")
