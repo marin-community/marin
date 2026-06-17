@@ -108,3 +108,34 @@ def require_coreweave_platform(config: config_pb2.IrisClusterConfig) -> Coreweav
     namespace = cw.namespace or "iris"
     kubeconfig_path = os.path.expanduser(cw.kubeconfig_path) if cw.kubeconfig_path else ""
     return CoreweaveTarget(namespace=namespace, kubeconfig_path=kubeconfig_path)
+
+
+def pod_label_selector(task_id: str) -> str:
+    """k8s label selector matching the task pod Iris created for ``task_id``."""
+    return f"{_LABEL_TASK_ID}={_sanitize_label_value(task_id)}"
+
+
+def kubectl_base(target: CoreweaveTarget) -> list[str]:
+    cmd = ["kubectl"]
+    if target.kubeconfig_path:
+        cmd.append(f"--kubeconfig={target.kubeconfig_path}")
+    cmd.append(f"--namespace={target.namespace}")
+    return cmd
+
+
+def kubectl_get_pods_cmd(target: CoreweaveTarget, selector: str) -> list[str]:
+    return kubectl_base(target) + ["get", "pods", "-l", selector, "-o", "json"]
+
+
+def kubectl_connect_cmd(target: CoreweaveTarget, pod: PodRef) -> list[str]:
+    return kubectl_base(target) + ["exec", "-it", pod.pod_name, "-c", pod.container, "--", "bash", "-l"]
+
+
+def parse_running_pod(pods_json: dict) -> str | None:
+    """Return the lexicographically-first Running pod name, or None."""
+    items = pods_json.get("items", [])
+    running = [p for p in items if p.get("status", {}).get("phase") == "Running"]
+    if not running:
+        return None
+    running.sort(key=lambda p: p.get("metadata", {}).get("name", ""))
+    return running[0]["metadata"]["name"]
