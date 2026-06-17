@@ -17,10 +17,21 @@ Per-worker signals:
 - ``healthy`` / ``active``: liveness verdict; set true on REACHED, dropped on
   removal.
 - ``consecutive_failures``: incremented per UNREACHABLE event, reset on REACHED.
-  ``reconcile_failure_threshold`` consecutive failures trip termination (the
-  controller derives it from ``worker_unreachable_grace / poll_interval``).
 - ``build_failures``: monotonic counter incremented per BUILD_FAILED event.
   ``BUILD_FAILURE_THRESHOLD`` build failures trip termination independently.
+
+Termination is **time-based**: a worker is reaped once it has been continuously
+unreachable for ``unreachable_grace_ms`` (wall-clock since its last successful
+reconcile), guarded by a small ``min_unreachable_failures`` floor. Measuring
+elapsed time rather than a failure *count* keeps detection latency fixed at the
+grace regardless of how long a failing reconcile pass takes: when a worker is
+down its reconcile RPC blocks until ``RECONCILE_RPC_TIMEOUT`` (and the
+single-threaded control tick also runs autoscale), so a failing pass costs far
+more than ``poll_interval`` — a count of ``grace / poll_interval`` failures
+would over-wait several-fold. The floor requires a handful of *real* failed
+reconciles before the clock can trip, so a controller stall (which produces no
+reconciles, only ages every heartbeat at once) cannot mass-reap the fleet on
+resume. See ``docs/worker-health.md``.
 
 Thread-safe: ``apply`` runs on the reconcile thread; reads come from the
 scheduler and RPC handler threads.
@@ -33,12 +44,29 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
+from rigging.timing import Duration
+
 from iris.cluster.types import WorkerId, WorkerUsability
 
 logger = logging.getLogger(__name__)
 
-CONSECUTIVE_FAILURE_THRESHOLD = 10
+# Default wall-clock window a worker may be continuously unreachable before
+# teardown. ~50s sits in the fast band of interactive cluster managers (Ray 30s,
+# Kubernetes node 40s, Mesos 75s) and tolerates brief network blips without
+# reaping a multi-VM slice. The controller overrides this from its config.
+DEFAULT_UNREACHABLE_GRACE = Duration.from_seconds(50)
+
+# A worker needs at least this many real failed reconciles before the grace
+# clock can trip it. Guards against a single anomalously long tick (GC pause,
+# controller stall) aging every worker's heartbeat past the grace at once.
+MIN_UNREACHABLE_FAILURES = 3
+
 BUILD_FAILURE_THRESHOLD = 10
+
+# Slice-level probe threshold owned by the autoscaler (not the per-worker
+# liveness tracker below): the number of consecutive empty/failed slice probes,
+# one per autoscale tick, after which the autoscaler tears the slice down.
+CONSECUTIVE_FAILURE_THRESHOLD = 10
 
 
 class WorkerHealthEventKind(StrEnum):
@@ -112,12 +140,15 @@ class WorkerHealthTracker:
     def __init__(
         self,
         *,
-        reconcile_failure_threshold: int = CONSECUTIVE_FAILURE_THRESHOLD,
+        unreachable_grace: Duration = DEFAULT_UNREACHABLE_GRACE,
+        min_unreachable_failures: int = MIN_UNREACHABLE_FAILURES,
         build_threshold: int = BUILD_FAILURE_THRESHOLD,
     ) -> None:
-        assert reconcile_failure_threshold > 0
+        assert unreachable_grace.to_ms() > 0
+        assert min_unreachable_failures > 0
         assert build_threshold > 0
-        self._reconcile_failure_threshold = reconcile_failure_threshold
+        self._unreachable_grace_ms = unreachable_grace.to_ms()
+        self._min_unreachable_failures = min_unreachable_failures
         self._build_threshold = build_threshold
         self._lock = threading.Lock()
         self._states: dict[WorkerId, WorkerLiveness] = {}
@@ -148,8 +179,9 @@ class WorkerHealthTracker:
         increments consecutive failures; BUILD_FAILED increments build failures.
         Events for a ``worker_id`` with no existing entry are dropped — apply
         only updates known workers; creation is reserved for ``register``/
-        ``heartbeat``. Returns every worker currently at/over the reconcile-failure or
-        build-failure threshold so the controller fails and tears them down —
+        ``heartbeat``. Returns every worker currently over a termination
+        threshold (continuously unreachable past the grace, or over the
+        build-failure threshold) so the controller fails and tears them down —
         workers are forgotten on removal, so a returned worker does not repeat
         once gone.
         """
@@ -170,16 +202,17 @@ class WorkerHealthTracker:
                     state.consecutive_failures += 1
                 elif event.kind is WorkerHealthEventKind.BUILD_FAILED:
                     state.build_failures += 1
-            over = [wid for wid, s in self._states.items() if self._over_threshold(s)]
+            over = [wid for wid, s in self._states.items() if self._over_threshold(s, now_ms)]
         if over:
             logger.warning("Workers over health threshold: %s", [str(wid) for wid in over[:10]])
         return over
 
-    def _over_threshold(self, state: WorkerLiveness) -> bool:
-        return (
-            state.consecutive_failures >= self._reconcile_failure_threshold
-            or state.build_failures >= self._build_threshold
+    def _over_threshold(self, state: WorkerLiveness, now_ms: int) -> bool:
+        unreachable = (
+            state.consecutive_failures >= self._min_unreachable_failures
+            and now_ms - state.last_heartbeat_ms >= self._unreachable_grace_ms
         )
+        return unreachable or state.build_failures >= self._build_threshold
 
     # -- Reads --------------------------------------------------------------
 
