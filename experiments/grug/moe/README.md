@@ -84,24 +84,39 @@ were intentionally dropped so the recipe is the recipe):
 
 ## Scaling heuristic
 
-The [`MoeHeuristicV1`](./heuristic.py) in `heuristic.py` turns a compute
-budget and a `hidden_dim` into a full `(model_config, optimizer_config,
-batch_size, num_steps)` tuple. Formulas were fit on the v16 LR sweep (186 runs,
-R²=0.995) and are all anchored at **seq_len = 4096**.
+Two heuristic classes turn `(budget, hidden_dim)` into model + optimizer
+hyperparameters. Both expose `build_model_config(hidden_dim, seq_len)` and
+`build_optimizer_config(batch_size, tokens, hidden_dim, seq_len)`.
 
-- **Adam LR**: `adam_lr = 1.63 · tokens^(-0.2813) · dim^(-0.3678) · sqrt(B)`
-- **AdamH LR**: `lr = (13/3) · adam_lr`
-- **Compute budget**: `C = 3 · flops_per_token(no_lm_head) · tokens`
-- **Epsilon**: `epsilon_base · sqrt(r0/r)` where `r = (B·T0)/(B0·T)`
-- **Beta1**: fixed at 0.9062
-- **Beta2**: `clip(0.999^(B/B0), 0.95, 0.9999)` (constant-token half-life)
-- **Layer count**: `num_layers ≈ dim / (64 + 4·log2(dim) − 9)` (rounded)
-- **GQA**: largest divisor of `num_heads ≤ num_heads / 4`
+- **[`MoeHeuristicV1`](./heuristic_v1.py)** — original v16 AdamH fit
+  (186 runs, R²=0.995). Used on the May 2026 1e23 `129B / A29B MoE V1` hero
+  run; kept as the reference curve for `agent.md` effective-speedup
+  comparisons against v16.
+- **[`MoeHeuristicV2`](./heuristic_v2.py)** — May Recipe refit, MuonH
+  optimizer (issue #5951; 17 cells, R²=0.996). **Current default** for
+  compute-optimal cells and ablation comparisons.
 
-`build_from_heuristic(budget, hidden_dim, target_steps=2**14)` is the main
-entry point — `launch.py` uses it to produce the baseline step. Callers that
-want full manual control pass `GrugModelConfig` and `GrugMoeAdamHConfig`
-directly to `GrugMoeLaunchConfig`.
+LR scaling differs between the two; everything else (compute-budget convention,
+epsilon, beta1/beta2, layer count, GQA) is shared. All formulas anchor at
+**seq_len = 4096** and write batch effects in terms of
+`tokens_per_batch = batch_size · seq_len`.
+
+- **V1 LR**: `adam_lr = 1.63 · tokens^-0.2813 · dim^-0.3678 · sqrt(B)`,
+  `adamh_lr = (13/3) · adam_lr`.
+- **V2 LR**: `adam_lr = 0.06602 · tokens^-0.395 · dim^-0.150 · sqrt(B)`,
+  `muonh_lr = (13/3) · adam_lr`.
+- **Compute budget**: `C = 3 · flops_per_token(no_lm_head) · tokens`.
+- **Epsilon**: `epsilon_coeff · sqrt(tokens / tokens_per_batch)`.
+- **Beta1**: fixed at 0.9062.
+- **Beta2**: `clip(0.999^(tpb/131072), 0.95, 0.9999)` (constant-token half-life).
+- **Layer count**: `num_layers ≈ dim / (64 + 4·log2(dim) − 9)` (rounded).
+- **GQA**: largest divisor of `num_heads ≤ num_heads / 4`.
+
+V1 also exposes a top-level `build_from_heuristic(budget, hidden_dim,
+target_steps=2**14)` helper that returns the full `(model, optimizer,
+batch_size, num_steps)` tuple (used by `canary_ferry.py`). For V2, instantiate
+`MoeHeuristicV2()` and call `build_model_config` / `build_optimizer_config`
+directly — `launch.py` does this for the baseline.
 
 ## v16 isoflop sweep
 
@@ -136,7 +151,7 @@ are the baseline runs that ablation experiments compare against.
 ### May Recipe (drop-1e18 fit, issue #6074) — current baseline
 
 Reference runs on **v4-32 us-central2 with EP=1**, MuonH optimizer
-(`muonh_lr` from `heuristic_v2.MoeHeuristicV2.build_muonh_config`), 1pct-noclip
+(`muonh_lr` from `heuristic_v2.MoeHeuristicV2.build_optimizer_config`), 1pct-noclip
 schedule, no permanent step-interval checkpoints.
 
 | Budget   | Dim    | Layers | bs  | Steps    | Tokens  | Paloma macro | v4-32 tok/s | Runtime | Run |
@@ -188,10 +203,12 @@ Most promotable changes will land in one of three files:
 
 - [`model.py`](./model.py) — architecture tweaks (routing, norms, attention,
   activation functions, expert layout, etc.).
-- [`heuristic.py`](./heuristic.py) — scaling heuristics (LR formula coefficients,
-  depth/width formula, GQA ratio, per-batch-size epsilon/beta2 scaling).
-- [`optimizer.py`](./optimizer.py) — optimizer internals (AdamH components,
-  parameter-group partitioning, per-group learning rates, weight decay).
+- [`heuristic_v2.py`](./heuristic_v2.py) — scaling heuristics (LR formula
+  coefficients, depth/width formula, GQA ratio, per-batch-size epsilon/beta2
+  scaling).
+- [`optimizer.py`](./optimizer.py) — optimizer internals (MuonH / AdamH
+  components, parameter-group partitioning, per-group learning rates,
+  weight decay).
 
 Some discretionary factors may influence the promotion decision even when the
 loss criteria are met — for example, impact on training memory footprint,
@@ -227,12 +244,14 @@ Predicted macro uses `loss(C) = 1.6 + 95.18 · C^(-0.0941)`.
 ## Files
 
 - [`model.py`](./model.py) — `GrugModelConfig` + transformer implementation.
-- [`optimizer.py`](./optimizer.py) — `GrugMoeAdamHConfig` wrapper on top of
-  `AdamHConfig` with expert-param-group awareness.
+- [`optimizer.py`](./optimizer.py) — `GrugMoeAdamHConfig` and
+  `GrugMoeMuonHConfig` wrappers with expert-param-group awareness.
 - [`train.py`](./train.py) — `GrugTrainState`, `train_step`, `_apply_qb_betas`,
   `run_grug` (dispatches a Fray job).
-- [`heuristic.py`](./heuristic.py) — `MoeHeuristicV1` and
-  `build_from_heuristic` entry point.
+- [`heuristic_v1.py`](./heuristic_v1.py) — `MoeHeuristicV1` (AdamH, v16 fit)
+  and `build_from_heuristic` entry point.
+- [`heuristic_v2.py`](./heuristic_v2.py) — `MoeHeuristicV2` (MuonH, May
+  Recipe refit). Current default.
 - [`launch.py`](./launch.py) — `GrugMoeLaunchConfig`, baseline `ExecutorStep`,
   and `executor_main` wiring.
 - [`adamh.py`](./adamh.py) — shared AdamH utilities.
