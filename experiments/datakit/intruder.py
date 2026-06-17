@@ -21,12 +21,6 @@ A coherent bucketing makes the intruder obvious, so detection accuracy runs
 high above the 1/5 = 20% chance baseline. The side whose buckets are more
 coherent yields the higher panel detection rate.
 
-**Why the intruder is drawn from the same side.** To measure a side's
-internal coherence the contrast must be within that side's own bucketing.
-Drawing the intruder from the *other* side would instead measure whether the
-panel can tell lhs documents from rhs documents -- a different question that
-confounds the two bucketings.
-
 **Sequential, anytime-valid stopping.** Trials are drawn from both sides in
 balanced rounds until we can call a winner (or a practical tie) without
 inflating the false-positive rate. Naively peeking at a fixed-horizon
