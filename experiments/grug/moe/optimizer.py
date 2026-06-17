@@ -90,7 +90,7 @@ def _match_named_sharding_to_updates(params, updates):
 
 
 def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float):
-    params = _match_named_sharding_to_updates(params, direction_updates)
+    direction_updates = _match_named_sharding_to_params(direction_updates, params)
 
     def scale_invariant_update(param, update):
         if update is None:
