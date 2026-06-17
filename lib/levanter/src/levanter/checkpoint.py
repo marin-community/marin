@@ -982,9 +982,9 @@ def load_checkpoint_or_initialize(
     return load_or_init
 
 
-def _load_metadata(checkpoint_path, fs=None):
+def _load_metadata(checkpoint_path, fs=None, storage_options: Mapping[str, Any] | None = None):
     if fs is None:
-        fs, _, _ = fsspec.get_fs_token_paths(str(checkpoint_path))
+        fs, _, _ = fsspec.get_fs_token_paths(str(checkpoint_path), storage_options=dict(storage_options or {}))
     with fs.open(os.path.join(checkpoint_path, "metadata.json")) as metadata_in:
         metadata = json.load(metadata_in)
     return metadata
@@ -995,6 +995,7 @@ def discover_checkpoint_candidates(
     *additional_paths: PathLike,
     exclude_paths: Sequence[PathLike] = (),
     max_step: int | None = None,
+    storage_options: Mapping[str, Any] | None = None,
 ) -> list[CheckpointCandidate]:
     """Return complete checkpoint candidates across one or more roots.
 
@@ -1011,7 +1012,7 @@ def discover_checkpoint_candidates(
     candidates_by_path: dict[str, CheckpointCandidate] = {}
 
     for cp_path in all_paths:
-        for candidate in _discover_checkpoint_candidates_single(cp_path):
+        for candidate in _discover_checkpoint_candidates_single(cp_path, storage_options=storage_options):
             if max_step is not None and candidate.step > max_step:
                 continue
             if _is_path_under_any(candidate.path, exclude_paths):
@@ -1039,6 +1040,7 @@ def discover_latest_checkpoint(
     *additional_paths: PathLike,
     exclude_paths: Sequence[PathLike] = (),
     max_step: int | None = None,
+    storage_options: Mapping[str, Any] | None = None,
 ) -> Optional[str]:
     """
     Discover the latest checkpoint across one or more root paths.
@@ -1048,7 +1050,11 @@ def discover_latest_checkpoint(
     """
     all_paths = [str(checkpoint_path)] + [str(p) for p in additional_paths]
     candidates = discover_checkpoint_candidates(
-        checkpoint_path, *additional_paths, exclude_paths=exclude_paths, max_step=max_step
+        checkpoint_path,
+        *additional_paths,
+        exclude_paths=exclude_paths,
+        max_step=max_step,
+        storage_options=storage_options,
     )
 
     if candidates:
@@ -1065,10 +1071,15 @@ def latest_checkpoint_path(
     *additional_paths: PathLike,
     exclude_paths: Sequence[PathLike] = (),
     max_step: int | None = None,
+    storage_options: Mapping[str, Any] | None = None,
 ) -> str:
     """Return the latest concrete checkpoint path across one or more search roots."""
     latest = discover_latest_checkpoint(
-        checkpoint_path, *additional_paths, exclude_paths=exclude_paths, max_step=max_step
+        checkpoint_path,
+        *additional_paths,
+        exclude_paths=exclude_paths,
+        max_step=max_step,
+        storage_options=storage_options,
     )
     if latest is None:
         search_paths = [str(checkpoint_path)] + [str(path) for path in additional_paths]
@@ -1076,13 +1087,15 @@ def latest_checkpoint_path(
     return latest
 
 
-def _discover_checkpoint_candidates_single(checkpoint_path: str) -> list[CheckpointCandidate]:
+def _discover_checkpoint_candidates_single(
+    checkpoint_path: str, storage_options: Mapping[str, Any] | None = None
+) -> list[CheckpointCandidate]:
     """Discover complete checkpoint candidates in a single root path."""
     candidates: list[CheckpointCandidate] = []
 
-    for ckpt_dir in _discover_checkpoint_paths_single(checkpoint_path):
+    for ckpt_dir in _discover_checkpoint_paths_single(checkpoint_path, storage_options=storage_options):
         try:
-            metadata = _load_metadata(ckpt_dir)
+            metadata = _load_metadata(ckpt_dir, storage_options=storage_options)
             step = int(metadata["step"])
             timestamp = datetime.datetime.fromisoformat(metadata["timestamp"])
         except Exception:
@@ -1094,10 +1107,12 @@ def _discover_checkpoint_candidates_single(checkpoint_path: str) -> list[Checkpo
     return sorted(candidates, key=_checkpoint_candidate_sort_key)
 
 
-def _discover_checkpoint_paths_single(checkpoint_path: str) -> list[str]:
+def _discover_checkpoint_paths_single(
+    checkpoint_path: str, storage_options: Mapping[str, Any] | None = None
+) -> list[str]:
     """Discover valid checkpoint directories in a single root path."""
     fs: AbstractFileSystem
-    fs, _ = _get_fs_and_plain_path(checkpoint_path)
+    fs, _ = _get_fs_and_plain_path(checkpoint_path, storage_options=storage_options)
 
     def is_checkpoint_dir(path: str):
         return fs.exists(os.path.join(path, "metadata.json"))
@@ -1113,9 +1128,9 @@ def _discover_checkpoint_paths_single(checkpoint_path: str) -> list[str]:
     return sorted(d for d in ckpt_dirs if is_checkpoint_dir(d))
 
 
-def _get_fs_and_plain_path(path, fs=None):
+def _get_fs_and_plain_path(path, fs=None, storage_options: Mapping[str, Any] | None = None):
     if fs is None:
-        fs, _, (path_to_open,) = fsspec.get_fs_token_paths(str(path))
+        fs, _, (path_to_open,) = fsspec.get_fs_token_paths(str(path), storage_options=dict(storage_options or {}))
     else:
         path_to_open = path
     return fs, path_to_open

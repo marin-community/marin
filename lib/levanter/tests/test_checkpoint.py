@@ -317,6 +317,32 @@ def test_checkpoint_candidate_discovery_sorts_by_numeric_step_before_timestamp()
         assert latest_checkpoint_path(tempdir) == f"{tempdir}/step-10"
 
 
+def test_checkpoint_candidate_discovery_passes_storage_options(monkeypatch, tmp_path):
+    _write_checkpoint_metadata(tmp_path / "step-10", step=10, timestamp="2021-01-01T00:00:00")
+    storage_options = {"use_listings_cache": False, "skip_instance_cache": True}
+    observed_storage_options = []
+    get_fs_token_paths = fsspec.get_fs_token_paths
+
+    def record_get_fs_token_paths(*args, **kwargs):
+        observed_storage_options.append(kwargs.get("storage_options"))
+        return get_fs_token_paths(*args, **kwargs)
+
+    monkeypatch.setattr(fsspec, "get_fs_token_paths", record_get_fs_token_paths)
+
+    candidates = discover_checkpoint_candidates(str(tmp_path), storage_options=storage_options)
+
+    assert candidates == [
+        CheckpointCandidate(
+            path=str(tmp_path / "step-10"),
+            step=10,
+            timestamp=datetime.datetime(2021, 1, 1, 0, 0, 0),
+            metadata={"step": 10, "timestamp": "2021-01-01T00:00:00", "is_temporary": False},
+        )
+    ]
+    assert observed_storage_options
+    assert all(option == storage_options for option in observed_storage_options)
+
+
 def test_checkpoint_candidate_discovery_can_exclude_rejected_lineage_and_max_step():
     with tempfile.TemporaryDirectory() as good_dir, tempfile.TemporaryDirectory() as rejected_dir:
         _write_checkpoint_metadata(pathlib.Path(good_dir) / "step-100", step=100, timestamp="2021-01-01T00:00:00")
