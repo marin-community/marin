@@ -231,8 +231,6 @@ class MoeHeuristicV1:
         )
 
 
-
-
 def build_from_heuristic(
     *,
     budget: float,

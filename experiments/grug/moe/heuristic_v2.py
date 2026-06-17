@@ -251,5 +251,3 @@ class MoeHeuristicV2:
             initializer_std=0.5 / math.sqrt(hidden_size),
             qk_mult=1.3,
         )
-
-
