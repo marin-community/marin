@@ -1,18 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""June MoE prep run d=768 with ``disable_long_rope=True`` at seq_len=8192.
+"""June MoE prep run d=512 with ``disable_long_rope=True`` at seq_len=8192.
 
 Long layers (every 4th + last) skip rotary embedding entirely; short layers
-still apply half-RoPE. Batch size and eval batch size halved so train TPB
-and eval token count stay flat vs the seq_len=4096 reference.
+still apply half-RoPE. Sliding window pinned to 2048 (heuristic default would
+auto-scale to seq_len/2 = 4096). Batch size and eval batch size halved so
+train TPB and eval token count stay flat vs the seq_len=4096 reference.
 
-Submit (us-central2, v4-128, production)::
+Submit (us-central2, v4-32, production)::
 
     WANDB_KEY=$(python3 -c "import os; print(os.environ['WANDB_API_KEY'])") && \\
     .venv/bin/iris --cluster=marin job run --no-wait --region us-central2 \\
         --priority production --no-preemptible -e WANDB_API_KEY "$WANDB_KEY" \\
-        -- python -m experiments.grug.moe.moe_may_june_prep_d768_no_long_rope_seq8k
+        -- python -m experiments.grug.moe.moe_may_june_prep_d512_no_long_rope_seq8k
 """
 
 import dataclasses
@@ -27,10 +28,10 @@ from experiments.grug.moe.launch import GrugMoeLaunchConfig, run_grug_moe_trial
 from experiments.grug.moe.launch_datakit_moe_mix import _datakit_data_config, _phase_1_start_step
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
-_DIM: int = 768
+_DIM: int = 512
 _BS: int = 128  # TPB = 128 * 8192 = 1,048,576 (~1M tokens/batch, same as seq4k)
 _SEQ: int = 8192
-_STEPS: int = 262737
+_STEPS: int = 90122
 _EP: int = 2
 
 _heuristic = MoeMuonHHeuristic(min_lr_ratio=0.05)
@@ -54,7 +55,7 @@ step = ExecutorStep(
         ),
         output_path=this_output_path(),
         run_id=_run_id,
-        resources=versioned(ResourceConfig.with_tpu("v4-128")),
+        resources=versioned(ResourceConfig.with_tpu("v4-32")),
         steps=versioned(_STEPS),
         batch_size=versioned(_BS),
         seed=versioned(0),
@@ -94,6 +95,6 @@ if __name__ == "__main__":
         description=(
             f"June MoE prep d={_DIM} seq={_SEQ} disable_long_rope=True. "
             f"steps={_STEPS}, tokens={_tokens:.2e}, bs={_BS} (TPB=1M), EP={_EP}, "
-            f"disable_pko, ckpt at phase-1 step {_phase_step}. v4-128 us-central2."
+            f"disable_pko, ckpt at phase-1 step {_phase_step}. v4-32 us-central2."
         ),
     )

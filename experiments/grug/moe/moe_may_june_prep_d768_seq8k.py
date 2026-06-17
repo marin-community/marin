@@ -33,13 +33,13 @@ _STEPS: int = 262737
 _EP: int = 2
 
 _heuristic = MoeMuonHHeuristic(min_lr_ratio=0.05)
-_model_base = _heuristic.build_model_config(_DIM, seq_len=_SEQ)  # sliding_window auto = _SEQ // 2 = 4096
-_model = dataclasses.replace(_model_base, disable_pko=True)
+_model_base = _heuristic.build_model_config(_DIM, seq_len=_SEQ)
+_model = dataclasses.replace(_model_base, disable_pko=True, sliding_window=2048)
 _tokens = float(_STEPS * _BS * _SEQ)
 _optimizer = _heuristic.build_muonh_config(_BS, _tokens, _DIM, seq_len=_SEQ)
 _phase_step = _phase_1_start_step(_STEPS, _BS)
 
-_run_id = f"june_prep_moe_may_d{_DIM}_ep{_EP}_bs{_BS}_seq{_SEQ}"
+_run_id = f"june_prep_moe_may_d{_DIM}_ep{_EP}_bs{_BS}_seq{_SEQ}_sw2k"
 step = ExecutorStep(
     name=f"grug/{_run_id}",
     fn=run_grug_moe_trial,
