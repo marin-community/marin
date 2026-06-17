@@ -421,8 +421,37 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
 - Notes:
 
 ### epochs = 8
-- Extrapolated center: `lr≈…, wd≈…`
-- Grid:
+- **Pulled forward ~14:03Z as a speculative wave + multi-host probe (user-directed).** Wave
+  `w8`. LR is pinned (7e-4 = confirmed E1 interior optimum, strong in E2), so spend cells on
+  the **drifting WD axis** (E1 opt 0.05 → E2 opt 0.1 → E4 probing 0.2): grid =
+  **3 LR {5e-4, 7e-4, 1e-3} × 5 WD {0.05, 0.1, 0.2, 0.3, 0.4} = 15 cells**, extending WD
+  upward. Center may shift once E4 confirms; data still useful.
+- **All on multi-host BATCH (off-budget), 3 cells per slice** — doubles as a multi-host
+  stability/throughput re-probe (first multi-host use since the ~3.5h outage). One WD column
+  per slice (promising WDs on faster slices; speculative wd0.4 on the AVOID-flagged v6e-32):
+
+  | slice | WD col | cells (×3 LR) |
+  |---|---|---|
+  | v5p-64 | 0.1  | 5e-4/7e-4/1e-3 × wd0.1 |
+  | v5p-32 | 0.2  | × wd0.2 |
+  | v6e-16 | 0.05 | × wd0.05 |
+  | v5p-16 | 0.3  | × wd0.3 |
+  | v6e-32 | 0.4  | × wd0.4 |
+
+  **Scheduling: be patient — leave a w8 cell pending up to 6h before relocating** (multi-host
+  is contended; batch is aggressive/free). If a cell is pending ≥6h, move it to a different
+  schedulable slice. Watch for multi-host **zombies** (iris "running" but no W&B/iris-log
+  >50m) — kill+resubmit. E8 = 8×4460 = 35,680 steps/run (~2× E4).
+- Grid (final-step `eval/contacts-v1-val/loss`):
+
+  | wd \ lr | 5e-4 | 7e-4 | 1e-3 |
+  |---|---|---|---|
+  | **0.05** | | | |
+  | **0.1**  | | | |
+  | **0.2**  | | | |
+  | **0.3**  | | | |
+  | **0.4**  | | | |
+
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
 - Notes:
 
