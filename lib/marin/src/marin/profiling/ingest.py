@@ -152,7 +152,7 @@ def summarize_profile_artifact(
     Summarize a downloaded profile directory into the normalized schema.
 
     Args:
-        profile_dir: Local path to a `jax_profile` artifact directory.
+        profile_dir: Local path to a profiler directory.
         run_metadata: Optional run metadata to attach.
         warmup_steps: Number of initial steps to exclude from steady-state stats.
         hot_op_limit: Maximum number of hot ops to include.
