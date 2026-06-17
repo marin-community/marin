@@ -3,12 +3,12 @@
     "moe_delay"
   ],
   "base_sha": "81c92c6fd71efca4e16fc23fa1feb07c691206cd",
-  "head_sha": "3f9829e1cb1fff1d648f7cdd414b0ea19203ff37",
+  "head_sha": "e2e3b34ee21eb98b6c47b99ac88ca0f9cd652472",
   "report_count": 1,
   "reports": [
     {
       "closest_variant": "modular_opt",
-      "distance_score": 2241,
+      "distance_score": 2247,
       "report_relpath": "moe_delay/index.html",
       "status_counts": {
         "added": 5,
