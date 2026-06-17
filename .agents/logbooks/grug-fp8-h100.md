@@ -77,9 +77,10 @@ Three ramp/spike tasks all emit "HLO/profiler output on an H100" and are easy to
 distinct purposes:
 - **R3** (✅ 6/15): prove the *profiling pipeline* works — HLO + trace + TC counters for a **toy** FP8
   dot. Synthetic data, 1×H100.
-- **R4** (⬜ next): prove the **BF16 Grug *model*** runs → establish the baseline — synthetic step +
-  short real-data run (~200–500 steps SlimPajama-6B), loss finite, baseline profiler trace. Reduced
-  single-node config first, then EP mesh.
+- **R4** (⬜ in progress): prove the **BF16 Grug *model*** runs → establish the baseline.
+  **Synthetic-data only** (random tokens via `DirectDatasetComponent`; no real data, no tokenize):
+  reduced single-node config, ~10-step smoke → BF16 throughput/MFU baseline + profiler trace.
+  Real-data run dropped to **V2** (2026-06-17 — see log).
 - **S1** (⬜ Phase 1): reusable **dense-dot microbench rig** that paths A/B/C plug into — configurable
   shapes/dtypes, BF16 dense-dot timing + HLO. Synthetic data, 1×H100.
 
@@ -145,6 +146,18 @@ can run **in parallel with** R4.
 - **GPU floor:** one 8×H100 node without editing the launcher (`GPUS_PER_NODE=8` hardcoded);
   single-GPU needs a file edit. Synthetic data available via `DirectDatasetComponent` (small harness).
 - **Next:** confirm R4 sequence (synthetic smoke → real-data baseline) + scale with Matt before spend.
+
+### 2026-06-17 — R4 scope decision: synthetic-only (real-data → V2)
+- **Decision:** R4 reproduces the BF16 *model* baseline on **synthetic random tokens only**; the
+  short real-data run moves to **V2** (criterion 10).
+- **Why:** synthetic is cleaner for the BF16 throughput/MFU baseline (no data-loader variance), and
+  real data's genuine de-risking is *FP8-phase* — (1) FP8 amax/range stability (E4M3 overflow on
+  real-data activation outliers) and (2) router/MoE sanity + realistic ragged group-size
+  distributions. BF16's wide exponent range makes a real-data NaN-check low-value at the baseline.
+- **Bonus:** removes the SlimPajama-6B tokenize + cross-region exposure from the ramp; V2 will verify
+  the in-region cache before the one real-data run.
+- Mirrored to memex `grug-fp8-task-dag.md` (R4 synthetic-only, V2 absorbs the real-data de-risk).
+- **Next:** kick off R4a — synthetic `DirectDatasetComponent` + reduced single-node BF16 smoke on `cw-us-east-02a`.
 
 <!-- New entries below this line. Template:
 ### YYYY-MM-DD HH:MM - <GFP8-NNN short label>
