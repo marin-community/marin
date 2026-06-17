@@ -3,15 +3,28 @@
 
 import jax
 import jax.numpy as jnp
+from jax._src import config as jax_config
+from jax.sharding import AbstractMesh, AxisType, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
 from levanter.optim.grugmuon import (
     GrugMuonConfig,
     STACK_BATCH_SHARDED,
     VMAP_REPLICATED,
+    _batch_sharded_stack_target_pspec,
     _grug_scale_with_muon,
     _zeropower_via_newtonschulz_batched_stack_sharded,
     _zeropower_via_newtonschulz_replicated,
 )
+
+
+class _reset_abstract_mesh:
+    def __enter__(self):
+        self._prev = jax_config.abstract_mesh_context_manager.swap_local(jax_config.config_ext.unset)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        jax_config.abstract_mesh_context_manager.set_local(self._prev)
+        return False
 
 
 def test_grug_scale_with_muon_orthogonalizes_matrix_trailing_dims():
@@ -87,3 +100,21 @@ def test_grug_scale_with_muon_stack_batch_sharded_handles_stacked_expert_tensor(
 
     assert new_updates["moe_tensor"].shape == updates["moe_tensor"].shape
     assert not jnp.array_equal(new_updates["moe_tensor"], updates["moe_tensor"])
+
+
+def test_stack_sharded_target_preserves_param_stack_axis_sharding():
+    mesh = AbstractMesh(
+        axis_sizes=(4, 4, 8, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    param = jax.ShapeDtypeStruct(
+        (256, 2560, 2560),
+        jnp.float32,
+        sharding=NamedSharding(mesh, P("expert", "data", "model")),
+    )
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        target_pspec = _batch_sharded_stack_target_pspec(param)
+
+    assert target_pspec == P("expert", None, None)

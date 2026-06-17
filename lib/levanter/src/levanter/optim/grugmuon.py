@@ -50,6 +50,15 @@ def _batch_sharded_stack_target_pspec(array) -> PartitionSpec | None:
     if mesh.empty:
         return None
 
+    sharding = _target_sharding(array)
+    spec = getattr(sharding, "spec", None)
+    if spec is not None and len(spec) > 0 and spec[0] is not None:
+        stack_axis = spec[0]
+        stack_axis_names = stack_axis if isinstance(stack_axis, tuple) else (stack_axis,)
+        stack_axis_size = math.prod(int(mesh.shape[name]) for name in stack_axis_names if name in mesh.shape)
+        if stack_axis_size > 1 and array.shape[0] % stack_axis_size == 0:
+            return PartitionSpec(stack_axis, None, None)
+
     mesh_shape = tuple((axis_name, axis_size) for axis_name, axis_size in mesh.shape.items() if axis_size > 1)
     if not mesh_shape:
         return None
