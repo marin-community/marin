@@ -27,6 +27,9 @@ _DEFAULT_CLUSTER = "default"
 class ClusterCredential:
     url: str
     token: str
+    # Long-lived OAuth refresh token for an IAP-fronted cluster, used to silently
+    # re-mint the short-lived OIDC ID token. None for non-IAP clusters.
+    iap_refresh_token: str | None = None
 
 
 def cluster_name_from_url(url: str) -> str:
@@ -49,15 +52,21 @@ def store_token(
     url: str,
     token: str,
     *,
+    iap_refresh_token: str | None = None,
     store_path: Path | None = None,
 ) -> None:
-    """Upsert a cluster credential into the token store."""
+    """Upsert a cluster credential into the token store.
+
+    A None ``iap_refresh_token`` preserves any existing one (so a later JWT-only
+    refresh does not wipe the IAP refresh token), rather than clobbering it.
+    """
     path = store_path or _default_store_path()
     with closing(_connect(path)) as conn:
         conn.execute(
-            "INSERT INTO clusters (name, url, token) VALUES (?, ?, ?) "
-            "ON CONFLICT(name) DO UPDATE SET url = excluded.url, token = excluded.token",
-            (cluster_name, url, token),
+            "INSERT INTO clusters (name, url, token, iap_refresh_token) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET url = excluded.url, token = excluded.token, "
+            "iap_refresh_token = COALESCE(excluded.iap_refresh_token, clusters.iap_refresh_token)",
+            (cluster_name, url, token, iap_refresh_token),
         )
         conn.commit()
 
@@ -72,8 +81,10 @@ def load_token(
     if not path.exists():
         return None
     with closing(_connect(path)) as conn:
-        row = conn.execute("SELECT url, token FROM clusters WHERE name = ?", (cluster_name,)).fetchone()
-    return ClusterCredential(url=row[0], token=row[1]) if row else None
+        row = conn.execute(
+            "SELECT url, token, iap_refresh_token FROM clusters WHERE name = ?", (cluster_name,)
+        ).fetchone()
+    return ClusterCredential(url=row[0], token=row[1], iap_refresh_token=row[2]) if row else None
 
 
 def load_any_token(*, store_path: Path | None = None) -> ClusterCredential | None:
@@ -83,10 +94,10 @@ def load_any_token(*, store_path: Path | None = None) -> ClusterCredential | Non
         return None
     with closing(_connect(path)) as conn:
         row = conn.execute(
-            "SELECT url, token FROM clusters ORDER BY (name = ?) DESC, name LIMIT 1",
+            "SELECT url, token, iap_refresh_token FROM clusters ORDER BY (name = ?) DESC, name LIMIT 1",
             (_DEFAULT_CLUSTER,),
         ).fetchone()
-    return ClusterCredential(url=row[0], token=row[1]) if row else None
+    return ClusterCredential(url=row[0], token=row[1], iap_refresh_token=row[2]) if row else None
 
 
 def _default_store_path() -> Path:
@@ -101,4 +112,14 @@ def _connect(store_path: Path) -> sqlite3.Connection:
     if is_new:
         os.chmod(store_path, 0o600)
     conn.execute("CREATE TABLE IF NOT EXISTS clusters (name TEXT PRIMARY KEY, url TEXT NOT NULL, token TEXT NOT NULL)")
+    # Add the IAP refresh-token column to stores created before IAP support.
+    # SQLite has no ADD COLUMN IF NOT EXISTS; the PRAGMA pre-check is a fast path,
+    # and the try/except handles the race where a concurrent writer adds it first.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(clusters)")}
+    if "iap_refresh_token" not in columns:
+        try:
+            conn.execute("ALTER TABLE clusters ADD COLUMN iap_refresh_token TEXT")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc):
+                raise
     return conn

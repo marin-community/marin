@@ -21,7 +21,9 @@ from iris.rpc.auth import (
     CompositeTokenVerifier,
     GcpAccessTokenProvider,
     GcpAccessTokenVerifier,
+    IapIdTokenVerifier,
     NullAuthInterceptor,
+    ProxyAuthTokenInjector,
     StaticTokenProvider,
     StaticTokenVerifier,
     VerifiedIdentity,
@@ -29,6 +31,7 @@ from iris.rpc.auth import (
     _verified_identity,
     authorize,
     authorize_resource_owner,
+    client_interceptors,
     get_verified_identity,
     get_verified_user,
     require_identity,
@@ -185,6 +188,109 @@ def test_token_injector_adds_auth_header():
     result = injector.intercept_unary_sync(handler, "request", ctx)
     assert result == "ok"
     assert captured_headers[0]["authorization"] == "Bearer my-token"
+
+
+def test_proxy_auth_injector_uses_proxy_authorization_header():
+    """The IAP token rides in Proxy-Authorization so IAP consumes it, leaving
+    Authorization free for the Iris JWT."""
+    injector = ProxyAuthTokenInjector(StaticTokenProvider("iap-id-token"))
+    ctx = _make_ctx({})
+    captured = []
+
+    def handler(req, ctx):
+        captured.append(dict(ctx.request_headers()))
+        return "ok"
+
+    assert injector.intercept_unary_sync(handler, "request", ctx) == "ok"
+    assert captured[0]["proxy-authorization"] == "Bearer iap-id-token"
+    assert "authorization" not in captured[0]
+
+
+def test_proxy_auth_injector_skips_when_no_token():
+    injector = ProxyAuthTokenInjector(StaticTokenProvider(""))
+    ctx = _make_ctx({})
+    captured = []
+
+    def handler(req, ctx):
+        captured.append(dict(ctx.request_headers()))
+        return "ok"
+
+    injector.intercept_unary_sync(handler, "request", ctx)
+    assert "proxy-authorization" not in captured[0]
+
+
+def test_client_interceptors_compose_both_layers():
+    """An IAP-fronted cluster attaches both the Iris JWT and the IAP token."""
+    jwt = StaticTokenProvider("jwt")
+    iap = StaticTokenProvider("iap")
+
+    both = client_interceptors(jwt, iap)
+    assert [type(i) for i in both] == [AuthTokenInjector, ProxyAuthTokenInjector]
+
+    assert [type(i) for i in client_interceptors(jwt)] == [AuthTokenInjector]
+    assert [type(i) for i in client_interceptors(None, iap)] == [ProxyAuthTokenInjector]
+    assert client_interceptors(None) == []
+
+
+def test_client_interceptors_attach_distinct_headers():
+    """Both tokens reach the wire in their own headers (no collision)."""
+    interceptors = client_interceptors(StaticTokenProvider("jwt-tok"), StaticTokenProvider("iap-tok"))
+    ctx = _make_ctx({})
+
+    for interceptor in interceptors:
+        interceptor.intercept_unary_sync(lambda req, c: None, "request", ctx)
+
+    headers = dict(ctx.request_headers())
+    assert headers["authorization"] == "Bearer jwt-tok"
+    assert headers["proxy-authorization"] == "Bearer iap-tok"
+
+
+def _verify_oauth2_token_returning(payload):
+    """Patch target factory: a stand-in for google's verify_oauth2_token."""
+    return Mock(return_value=payload)
+
+
+def test_iap_id_token_verifier_accepts_matching_audience():
+    verifier = IapIdTokenVerifier(["desktop-client-id", "iap-client-id"])
+    payload = {"aud": "desktop-client-id", "email": "alice@example.com", "email_verified": True}
+    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning(payload)):
+        identity = verifier.verify("id-token")
+    assert identity == VerifiedIdentity(user_id="alice@example.com", role="user")
+
+
+def test_iap_id_token_verifier_rejects_wrong_audience():
+    verifier = IapIdTokenVerifier(["expected-aud"])
+    payload = {"aud": "some-other-client", "email": "alice@example.com"}
+    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning(payload)):
+        with pytest.raises(ValueError, match="audience"):
+            verifier.verify("id-token")
+
+
+def test_iap_id_token_verifier_rejects_missing_email():
+    verifier = IapIdTokenVerifier(["aud"])
+    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning({"aud": "aud"})):
+        with pytest.raises(ValueError, match="email"):
+            verifier.verify("id-token")
+
+
+def test_iap_id_token_verifier_rejects_unverified_email():
+    verifier = IapIdTokenVerifier(["aud"])
+    payload = {"aud": "aud", "email": "alice@example.com", "email_verified": False}
+    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning(payload)):
+        with pytest.raises(ValueError, match="not verified"):
+            verifier.verify("id-token")
+
+
+def test_iap_id_token_verifier_wraps_google_failure():
+    verifier = IapIdTokenVerifier(["aud"])
+    with patch("google.oauth2.id_token.verify_oauth2_token", side_effect=ValueError("bad signature")):
+        with pytest.raises(ValueError, match="IAP ID token verification failed"):
+            verifier.verify("id-token")
+
+
+def test_iap_id_token_verifier_requires_audiences():
+    with pytest.raises(ValueError, match="at least one audience"):
+        IapIdTokenVerifier([])
 
 
 def test_different_users_get_different_identities(interceptor):

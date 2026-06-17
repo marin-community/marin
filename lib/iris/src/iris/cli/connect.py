@@ -17,7 +17,9 @@ import click
 
 from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import IrisConfig
-from iris.rpc.auth import TokenProvider, client_interceptors
+from iris.cluster.token_store import load_token
+from iris.rpc import config_pb2
+from iris.rpc.auth import IapUserIdTokenProvider, TokenProvider, client_interceptors
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
@@ -67,16 +69,74 @@ IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
 def rpc_client(
     address: str,
     token_provider: TokenProvider | None = None,
+    iap_provider: TokenProvider | None = None,
     timeout_ms: int = 30_000,
 ) -> ControllerServiceClientSync:
-    """Create an RPC client with optional auth. Use as a context manager: ``with rpc_client(url) as c:``."""
-    interceptors = client_interceptors(token_provider)
+    """Create an RPC client with optional auth. Use as a context manager: ``with rpc_client(url) as c:``.
+
+    ``token_provider`` supplies the Iris JWT (``Authorization``); ``iap_provider``
+    supplies the IAP OIDC ID token (``Proxy-Authorization``) for IAP-fronted
+    clusters.
+    """
+    interceptors = client_interceptors(token_provider, iap_provider)
     return ControllerServiceClientSync(
         address,
         timeout_ms=timeout_ms,
         interceptors=interceptors,
         accept_compression=IRIS_RPC_COMPRESSIONS,
         send_compression=None,
+    )
+
+
+def rpc_client_for_ctx(
+    ctx: click.Context,
+    *,
+    url: str | None = None,
+    timeout_ms: int = 30_000,
+) -> ControllerServiceClientSync:
+    """Build an RPC client from the CLI context, threading both auth tokens.
+
+    Resolves the controller URL (establishing a tunnel if needed, unless ``url``
+    is given) and attaches the Iris JWT and IAP token providers stashed on the
+    context by the ``iris`` group. Prefer this over ``rpc_client`` in subcommands
+    so IAP-fronted clusters work uniformly.
+    """
+    controller_url = url or require_controller_url(ctx)
+    obj = ctx.obj or {}
+    return rpc_client(
+        controller_url,
+        obj.get("token_provider"),
+        obj.get("iap_provider"),
+        timeout_ms=timeout_ms,
+    )
+
+
+def iap_config(config: config_pb2.IrisClusterConfig | None) -> config_pb2.IapAuthConfig | None:
+    """Return the IAP auth config if this cluster is IAP-fronted, else None."""
+    if config is None or not config.HasField("auth"):
+        return None
+    if config.auth.WhichOneof("provider") != "iap":
+        return None
+    return config.auth.iap
+
+
+def build_iap_provider(
+    iap: config_pb2.IapAuthConfig,
+    cluster_name: str,
+) -> IapUserIdTokenProvider | None:
+    """Build an IAP ID-token provider from the cached refresh token, or None.
+
+    Returns None when no refresh token is cached yet (i.e. before ``iris login``),
+    so pre-login commands degrade to a clear UNAUTHENTICATED error rather than
+    crashing on a missing credential.
+    """
+    credential = load_token(cluster_name)
+    if credential is None or not credential.iap_refresh_token:
+        return None
+    return IapUserIdTokenProvider(
+        client_id=iap.oauth_client_id,
+        client_secret=iap.oauth_client_secret,
+        refresh_token=credential.iap_refresh_token,
     )
 
 
@@ -91,8 +151,18 @@ def require_controller_url(ctx: click.Context) -> str:
     if controller_url:
         return controller_url
 
-    # Lazy tunnel establishment from config
     config = ctx.obj.get("config") if ctx.obj else None
+
+    # IAP-fronted clusters are reachable directly over HTTPS (gated by IAP at the
+    # ingress) — no SSH tunnel. The public URL comes from the auth config.
+    iap = iap_config(config)
+    if iap is not None:
+        if not iap.url:
+            raise click.ClickException("IAP auth config is missing the ingress 'url'")
+        ctx.obj["controller_url"] = iap.url
+        return iap.url
+
+    # Lazy tunnel establishment from config
     if config:
         iris_config = IrisConfig(config)
         bundle = iris_config.provider_bundle()

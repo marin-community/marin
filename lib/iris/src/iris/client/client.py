@@ -485,6 +485,7 @@ class IrisClient:
         bundle_id: str | None = None,
         timeout_ms: int = 30000,
         token_provider: TokenProvider | None = None,
+        iap_provider: TokenProvider | None = None,
     ) -> "IrisClient":
         """Create an IrisClient for an external client (CLI, laptop, notebook).
 
@@ -501,6 +502,8 @@ class IrisClient:
                 When set, sub-jobs use this bundle ID instead of creating new bundles.
             timeout_ms: RPC timeout in milliseconds
             token_provider: When set, attaches bearer tokens to all outgoing RPCs.
+            iap_provider: When set (IAP-fronted cluster), attaches the OIDC ID
+                token in Proxy-Authorization on all outgoing RPCs.
 
         Returns:
             IrisClient wrapping RemoteClusterClient
@@ -511,6 +514,7 @@ class IrisClient:
             bundle_id=bundle_id,
             timeout_ms=timeout_ms,
             token_provider=token_provider,
+            iap_provider=iap_provider,
             use_controller_proxy=True,
         )
 
@@ -551,8 +555,9 @@ class IrisClient:
         timeout_ms: int,
         token_provider: TokenProvider | None,
         use_controller_proxy: bool,
+        iap_provider: TokenProvider | None = None,
     ) -> "IrisClient":
-        interceptors = client_interceptors(token_provider)
+        interceptors = client_interceptors(token_provider, iap_provider)
 
         cluster = RemoteClusterClient(
             controller_address=controller_address,

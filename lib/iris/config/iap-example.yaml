@@ -1,0 +1,61 @@
+# EXAMPLE: the auth block for an Iris cluster fronted by Google Identity-Aware
+# Proxy (IAP). This is a template, not a deployable cluster.
+#
+# The platform/controller/scale_groups below are shown as `local` purely so this
+# file validates and the auth.iap schema is easy to read in isolation. A real
+# IAP deployment fronts a gcp/coreweave controller with the ingress stood up via
+# infra/iris-iap-gclb/ (GCLB + IAP) or infra/iris-iap-proxy/ (Cloud Run + IAP);
+# copy the `auth:` block into that cluster's config.
+#
+# Login + use:
+#   pip install "marin-iris[iap]"          # desktop OAuth flow needs this extra
+#   iris --cluster=iap-example login        # opens a browser, caches IAP + Iris creds
+#   iris --cluster=iap-example job run -- python train.py
+#
+# The CLI talks directly to auth.iap.url over HTTPS (no SSH tunnel); IAP gates
+# the ingress. Each RPC carries the IAP OIDC ID token in Proxy-Authorization and
+# the Iris JWT in Authorization.
+
+platform:
+  local:
+
+controller:
+  local:
+    port: 0  # auto-assign
+
+worker_provider: {}
+
+auth:
+  iap:
+    # Public HTTPS URL of the IAP ingress (GCLB managed-cert domain, or the
+    # Cloud Run service URL).
+    url: https://iris-example.YOUR_DOMAIN
+    # Desktop OAuth client the CLI drives for the browser login flow. Installed-
+    # app client secrets are non-confidential (RFC 8252 §8.5).
+    oauth_client_id: REPLACE_WITH_DESKTOP_CLIENT_ID.apps.googleusercontent.com
+    oauth_client_secret: REPLACE_WITH_DESKTOP_CLIENT_SECRET
+    # Accepted OIDC ID-token audiences: the desktop client id (user flow) and/or
+    # the IAP-secured OAuth client id (service-account flow).
+    audiences:
+      - REPLACE_WITH_DESKTOP_CLIENT_ID.apps.googleusercontent.com
+    # Optional GCP project the user must belong to (extra authz on top of IAP IAM).
+    project_id: hai-gcp-models
+  admin_users:
+    - russell.power@gmail.com
+  optional: false  # public ingress: tokenless requests are rejected
+
+scale_groups:
+  cpu:
+    num_vms: 1
+    resources:
+      cpu: 16
+      ram: 32GB
+      disk: 100GB
+      device_type: cpu
+      device_variant: cpu
+      capacity_type: on-demand
+    buffer_slices: 1
+    max_slices: 4
+    slice_template:
+      num_vms: 1
+      local:

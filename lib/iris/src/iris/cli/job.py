@@ -552,6 +552,7 @@ def run_iris_job(
     preemptible: bool | None = None,
     task_image: str | None = None,
     token_provider: TokenProvider | None = None,
+    iap_provider: TokenProvider | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
 ) -> int:
@@ -651,6 +652,7 @@ def run_iris_job(
         user=user,
         priority_band=priority_band,
         token_provider=token_provider,
+        iap_provider=iap_provider,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
         task_image=task_image,
@@ -674,6 +676,7 @@ def _submit_and_wait_job(
     user: str | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     token_provider: TokenProvider | None = None,
+    iap_provider: TokenProvider | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
     task_image: str | None = None,
@@ -683,7 +686,9 @@ def _submit_and_wait_job(
     Only KeyboardInterrupt terminates the remote job; connection failures
     are logged and re-raised without killing the job.
     """
-    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=token_provider)
+    client = IrisClient.remote(
+        controller_url, workspace=Path.cwd(), token_provider=token_provider, iap_provider=iap_provider
+    )
     entrypoint = Entrypoint.from_command(*command)
 
     job = client.submit(
@@ -932,6 +937,7 @@ def run(
             preemptible=preemptible,
             task_image=task_image,
             token_provider=ctx.obj.get("token_provider"),
+            iap_provider=ctx.obj.get("iap_provider"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,
         )
@@ -958,7 +964,12 @@ def run(
 def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     """Terminate one or more jobs."""
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
+    client = IrisClient.remote(
+        controller_url,
+        workspace=Path.cwd(),
+        token_provider=ctx.obj.get("token_provider"),
+        iap_provider=ctx.obj.get("iap_provider"),
+    )
     terminated = _terminate_jobs(client, job_id, include_children)
     _print_terminated(terminated)
 
@@ -974,7 +985,12 @@ def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     """Terminate one or more jobs (alias for stop)."""
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
+    client = IrisClient.remote(
+        controller_url,
+        workspace=Path.cwd(),
+        token_provider=ctx.obj.get("token_provider"),
+        iap_provider=ctx.obj.get("iap_provider"),
+    )
     terminated = _terminate_jobs(client, job_id, include_children)
     _print_terminated(terminated)
 
@@ -992,7 +1008,12 @@ def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> None:
     """List jobs with optional filtering."""
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
+    client = IrisClient.remote(
+        controller_url,
+        workspace=Path.cwd(),
+        token_provider=ctx.obj.get("token_provider"),
+        iap_provider=ctx.obj.get("iap_provider"),
+    )
 
     state_value: job_pb2.JobState | None = None
     if state is not None:
@@ -1160,7 +1181,12 @@ def summary(ctx, job_id: str, json_output: bool) -> None:
     existing ``GetJobStatus`` / ``ListTasks`` RPCs (no checkpoint scraping).
     """
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
+    client = IrisClient.remote(
+        controller_url,
+        workspace=Path.cwd(),
+        token_provider=ctx.obj.get("token_provider"),
+        iap_provider=ctx.obj.get("iap_provider"),
+    )
     job_name = JobName.from_wire(job_id)
     job_status = client.status(job_name)
     tasks = client.list_tasks(job_name)
@@ -1210,7 +1236,12 @@ def logs(
         raise click.UsageError("Specify only one of --since-ms or --since-seconds.")
 
     controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
+    client = IrisClient.remote(
+        controller_url,
+        workspace=Path.cwd(),
+        token_provider=ctx.obj.get("token_provider"),
+        iap_provider=ctx.obj.get("iap_provider"),
+    )
 
     if since_seconds is not None:
         since_ms = Timestamp.now().epoch_ms() - (since_seconds * 1000)

@@ -5640,6 +5640,9 @@ controller = [
     { name = "kubernetes" },
     { name = "pyarrow" },
 ]
+iap = [
+    { name = "google-auth-oauthlib" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -5675,6 +5678,7 @@ requires-dist = [
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "google-auth", specifier = ">=2.0" },
+    { name = "google-auth-oauthlib", marker = "extra == 'iap'", specifier = ">=1.0" },
     { name = "google-cloud-tpu", specifier = ">=1.18.0" },
     { name = "grpcio", specifier = ">=1.76.0" },
     { name = "httpx", specifier = ">=0.28.1" },
@@ -5695,7 +5699,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
     { name = "zstandard", specifier = ">=0.22.0" },
 ]
-provides-extras = ["controller", "worker"]
+provides-extras = ["controller", "worker", "iap"]
 
 [package.metadata.requires-dev]
 dev = [

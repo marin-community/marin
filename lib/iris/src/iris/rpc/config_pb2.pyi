@@ -471,17 +471,33 @@ class StaticAuthConfig(_message.Message):
     tokens: _containers.ScalarMap[str, str]
     def __init__(self, tokens: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
+class IapAuthConfig(_message.Message):
+    __slots__ = ("url", "oauth_client_id", "oauth_client_secret", "audiences", "project_id")
+    URL_FIELD_NUMBER: _ClassVar[int]
+    OAUTH_CLIENT_ID_FIELD_NUMBER: _ClassVar[int]
+    OAUTH_CLIENT_SECRET_FIELD_NUMBER: _ClassVar[int]
+    AUDIENCES_FIELD_NUMBER: _ClassVar[int]
+    PROJECT_ID_FIELD_NUMBER: _ClassVar[int]
+    url: str
+    oauth_client_id: str
+    oauth_client_secret: str
+    audiences: _containers.RepeatedScalarFieldContainer[str]
+    project_id: str
+    def __init__(self, url: _Optional[str] = ..., oauth_client_id: _Optional[str] = ..., oauth_client_secret: _Optional[str] = ..., audiences: _Optional[_Iterable[str]] = ..., project_id: _Optional[str] = ...) -> None: ...
+
 class AuthConfig(_message.Message):
-    __slots__ = ("gcp", "static", "admin_users", "optional")
+    __slots__ = ("gcp", "static", "iap", "admin_users", "optional")
     GCP_FIELD_NUMBER: _ClassVar[int]
     STATIC_FIELD_NUMBER: _ClassVar[int]
+    IAP_FIELD_NUMBER: _ClassVar[int]
     ADMIN_USERS_FIELD_NUMBER: _ClassVar[int]
     OPTIONAL_FIELD_NUMBER: _ClassVar[int]
     gcp: GcpAuthConfig
     static: StaticAuthConfig
+    iap: IapAuthConfig
     admin_users: _containers.RepeatedScalarFieldContainer[str]
     optional: bool
-    def __init__(self, gcp: _Optional[_Union[GcpAuthConfig, _Mapping]] = ..., static: _Optional[_Union[StaticAuthConfig, _Mapping]] = ..., admin_users: _Optional[_Iterable[str]] = ..., optional: _Optional[bool] = ...) -> None: ...
+    def __init__(self, gcp: _Optional[_Union[GcpAuthConfig, _Mapping]] = ..., static: _Optional[_Union[StaticAuthConfig, _Mapping]] = ..., iap: _Optional[_Union[IapAuthConfig, _Mapping]] = ..., admin_users: _Optional[_Iterable[str]] = ..., optional: _Optional[bool] = ...) -> None: ...
 
 class WorkerProviderConfig(_message.Message):
     __slots__ = ()

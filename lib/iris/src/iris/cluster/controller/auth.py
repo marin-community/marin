@@ -25,6 +25,7 @@ from iris.cluster.controller.schema import auth_api_keys_table, auth_controller_
 from iris.rpc import config_pb2
 from iris.rpc.auth import (
     GcpAccessTokenVerifier,
+    IapIdTokenVerifier,
     StaticTokenVerifier,
     TokenVerifier,
     VerifiedIdentity,
@@ -351,6 +352,15 @@ def create_controller_auth(
     if provider == "static":
         static_tokens = dict(auth_config.static.tokens)
         login_verifier = StaticTokenVerifier(static_tokens)
+
+    # For IAP, `iris login` presents the OIDC ID token it obtained for the IAP
+    # ingress; the controller verifies it (audience + signature) and mints a JWT.
+    if provider == "iap":
+        audiences = list(auth_config.iap.audiences)
+        if not audiences:
+            raise ValueError("IAP auth config requires at least one audience")
+        gcp_project_id = auth_config.iap.project_id or None
+        login_verifier = IapIdTokenVerifier(audiences, project_id=gcp_project_id)
 
     optional = auth_config.optional
     logger.info(
