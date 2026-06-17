@@ -104,9 +104,14 @@ def require_coreweave_platform(config: config_pb2.IrisClusterConfig) -> Coreweav
             "dev_coreweave requires a CoreWeave/Kubernetes-backed cluster. "
             "For GCP TPU clusters use scripts/iris/dev_tpu.py."
         )
-    cw = config.platform.coreweave
-    namespace = cw.namespace or "iris"
-    kubeconfig_path = os.path.expanduser(cw.kubeconfig_path) if cw.kubeconfig_path else ""
+    # Namespace must come from kubernetes_provider: that is where Iris actually
+    # creates and lists task pods (config.make_provider: kp.namespace or "iris").
+    # Kubeconfig comes from platform.coreweave: that is the operator's laptop
+    # kubeconfig (kubernetes_provider.kubeconfig is the in-cluster controller's,
+    # empty => in-cluster auth, which is wrong for a CLI running off-cluster).
+    namespace = config.kubernetes_provider.namespace or "iris"
+    cw_kubeconfig = config.platform.coreweave.kubeconfig_path
+    kubeconfig_path = os.path.expanduser(cw_kubeconfig) if cw_kubeconfig else ""
     return CoreweaveTarget(namespace=namespace, kubeconfig_path=kubeconfig_path)
 
 
@@ -137,8 +142,7 @@ def parse_running_pod(pods_json: dict) -> str | None:
     running = [p for p in items if p.get("status", {}).get("phase") == "Running"]
     if not running:
         return None
-    running.sort(key=lambda p: p.get("metadata", {}).get("name", ""))
-    return running[0]["metadata"]["name"]
+    return min(running, key=lambda p: p.get("metadata", {}).get("name", ""))["metadata"]["name"]
 
 
 def run_logged(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -172,7 +176,6 @@ def controller_client(config_file: str) -> Iterable[IrisClient]:
 
 
 def state_path(state_dir: Path, session_name: str) -> Path:
-    state_dir.mkdir(parents=True, exist_ok=True)
     return state_dir / f"{session_name}.json"
 
 
@@ -188,16 +191,16 @@ def save_state(path: Path, state: DevCoreweaveState) -> None:
 
 
 def is_job_active(client: IrisClient, job_id: str) -> bool:
-    return client.status(JobName.from_wire(job_id)).state not in INACTIVE_JOB_STATES
+    return client.job_state(JobName.from_wire(job_id)) not in INACTIVE_JOB_STATES
 
 
 def wait_for_running_task(job, *, timeout: float) -> str:
     """Block until the holder job's single task is RUNNING; return its task_id."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        status = job.status()
-        if status.state in TERMINAL_JOB_STATES:
-            error = status.error or job_pb2.JobState.Name(status.state)
+        state = job.state_only()
+        if state in TERMINAL_JOB_STATES:
+            error = job.status().error or job_pb2.JobState.Name(state)
             raise click.ClickException(f"Dev CoreWeave allocation failed: {error}")
         tasks = job.tasks()
         if tasks:
@@ -334,8 +337,6 @@ def connect(ctx) -> None:
     try:
         with controller_client(state.config_file) as client:
             job_active = is_job_active(client, state.job_id)
-    except click.ClickException:
-        raise
     except Exception:
         logger.warning(
             "Could not verify dev CoreWeave job liveness with the controller; attempting to connect anyway.",

@@ -58,7 +58,7 @@ def _coreweave_config(namespace: str = "iris", kubeconfig: str = "") -> config_p
     c = config_pb2.IrisClusterConfig()
     c.platform.coreweave.SetInParent()
     if namespace:
-        c.platform.coreweave.namespace = namespace
+        c.kubernetes_provider.namespace = namespace
     if kubeconfig:
         c.platform.coreweave.kubeconfig_path = kubeconfig
     return c
@@ -75,6 +75,15 @@ def test_require_coreweave_default_namespace_when_unset():
     c = config_pb2.IrisClusterConfig()
     c.platform.coreweave.SetInParent()
     assert require_coreweave_platform(c).namespace == "iris"
+
+
+def test_require_coreweave_namespace_comes_from_kubernetes_provider():
+    # Pods are created/listed in kubernetes_provider.namespace; platform.coreweave.namespace
+    # must not be the source (the two are independent proto fields that can diverge).
+    c = config_pb2.IrisClusterConfig()
+    c.platform.coreweave.namespace = "platform-ns"
+    c.kubernetes_provider.namespace = "pods-live-here"
+    assert require_coreweave_platform(c).namespace == "pods-live-here"
 
 
 def test_require_coreweave_rejects_gcp_with_pointer_to_dev_tpu():
