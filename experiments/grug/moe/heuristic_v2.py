@@ -106,22 +106,20 @@ class MoeHeuristicV2:
 
     Returns a ``MuonH`` optimizer config via ``build_optimizer_config``.
 
-    muonh_lr = adamh_ratio * lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(batch_size)
-    adam_lr  =                lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(batch_size)
-    C = 3 * flops_per_token * tokens  (flops_per_token excludes lm_head)
+    ``adam_lr  = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(tokens_per_batch)``
+    ``muonh_lr = muonh_ratio * adam_lr``
+    ``C       = 3 * flops_per_token * tokens``  (flops_per_token excludes lm_head)
     """
 
     # --- LR scaling ---
-    # adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(tokens_per_batch)
-    # MuonH May Recipe refit (issue #5951, 17 finished cells across d{512,768,1024,1280}
-    # x R{4,10,20,60,120,240} x lr_mult{0.4,0.7,1.0,1.3,1.6}, R^2=0.996):
-    #     muonh_lr = 18.31 * tokens^-0.395 * dim^-0.150 * batch_size^0.5
-    # Converted to adam_lr form via adamh_ratio=13/3 and sqrt(seq_len=4096)=64:
-    #     lr_coeff = 18.31 / (13/3 * 64) = 0.06602
-    lr_coeff: float = 0.06602  # 4.23 / sqrt(4096)
+    # May Recipe refit (issue #5951; 17 cells across d{512,768,1024,1280},
+    # R^2=0.996):  muonh_lr = 18.31 * tokens^-0.395 * dim^-0.150 * sqrt(B).
+    # ``lr_coeff`` below is the adam_lr coefficient after dividing out
+    # muonh_ratio and sqrt(seq_len=4096): 18.31 / (13/3 * 64) = 0.06602.
+    lr_coeff: float = 0.06602
     lr_tokens_exp: float = -0.395
     lr_dim_exp: float = -0.150
-    adamh_ratio: float = 13 / 3
+    muonh_ratio: float = 13 / 3
 
     # --- Base hyperparameters ---
     epsilon_coeff: float = 9.676e-18
@@ -159,9 +157,9 @@ class MoeHeuristicV2:
         return min(self.max_learning_rate, adam_lr)
 
     def _compute_learning_rate(self, tokens_per_batch: int, tokens: float, hidden_dim: int) -> float:
-        """adamh_lr = (13/3) * adam_lr"""
+        """muonh_lr = muonh_ratio * adam_lr"""
         adam_lr = self._compute_adam_lr(tokens_per_batch, tokens, hidden_dim)
-        return min(self.max_learning_rate, self.adamh_ratio * adam_lr)
+        return min(self.max_learning_rate, self.muonh_ratio * adam_lr)
 
     def _compute_epsilon(self, tokens_per_batch: int, tokens: float) -> float:
         """epsilon = epsilon_coeff * sqrt(tokens / tokens_per_batch)"""
