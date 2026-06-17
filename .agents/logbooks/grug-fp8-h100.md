@@ -202,6 +202,32 @@ can run **in parallel with** R4.
   NCCL; cw-us-east-02a interface value TBD; (2) HF_TOKEN likely unneeded (cache hit) — include if
   graph-build complains; (3) confirm the spawned GPU step inherits the correct GPU image/extra.
 
+### 2026-06-17 — R4 launch fully de-risked (3 unknowns resolved; command finalized, NOT run)
+- **NCCL_SOCKET_IFNAME:** cluster-injected via `cw-us-east-02a.yaml` `task_env: NCCL_SOCKET_IFNAME:
+  =enp157s0np0` (+ `host_network: true`). Don't pass it.
+- **HF_TOKEN:** not needed (cache hit ⇒ executor skips tokenize ⇒ no HF download). `create_environment`
+  also auto-forwards it from the launcher env if set (`fray/types.py`). Omit.
+- **GPU image/deps:** spawned step auto-derives deps via `dependency_groups_for_resources(resources,…)`
+  (`step_runner.py:382`) from its `with_gpu("H100",…)` ResourceConfig; base image =
+  `default_task_image: ghcr.io/marin-community/iris-task:latest`. No manual `--extra gpu`.
+- **R2 creds → child step (new risk, resolved):** auto-injected into **all** worker/task pods
+  (`coreweave.md:594-606`): `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` from the `iris-s3-credentials`
+  Secret (created from `R2_*` at `iris cluster start`), `AWS_ENDPOINT_URL` + `FSSPEC_S3` from config,
+  `MARIN_PREFIX` from `task_env`. So no storage env needs passing — cluster manages it.
+- **Also:** `buffer_slices: 32` ⇒ 32 H100 nodes pinned warm (fast scheduling, no ~20-min provision).
+- **Final command (NOT run; submit only on Matt's go-ahead) — only SCALE_* + resources:**
+  ```
+  direnv exec . uv run iris --cluster=cw-us-east-02a job run \
+    --job-name grug-r4-bf16-smoke-<ts> --cpu 2 --memory 8GB --disk 16GB --extra cpu \
+    -e SCALE_GPU_REPLICAS 1 -e SCALE_HIDDEN_DIM 3072 -e SCALE_NUM_LAYERS 4 \
+    -e SCALE_NUM_EXPERTS 8 -e SCALE_EXPERT_AXIS 8 -e SCALE_TOP_K 4 \
+    -e SCALE_BATCH 16 -e SCALE_SEQ_LEN 2048 -e SCALE_STEPS 10 \
+    -e SCALE_TRACKER json_logger -e SCALE_CHECKPOINTS local \
+    -- python experiments/grug/moe/launch_cw_scale.py
+  ```
+  (`direnv exec .` is only for KUBECONFIG so the CLI reaches the controller; storage creds are
+  cluster-side.) Final pre-launch check: `direnv exec . uv run iris --cluster=cw-us-east-02a cluster status`.
+
 <!-- New entries below this line. Template:
 ### YYYY-MM-DD HH:MM - <GFP8-NNN short label>
 - Hypothesis:
