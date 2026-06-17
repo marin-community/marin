@@ -15,7 +15,7 @@ Plogits = P(Pbatch[0], None, "model")
 
 
 def unshard(x: jax.Array) -> jax.Array:
-    return reshard(x, P(None))
+    return reshard(x, P(*(None for _ in range(x.ndim))))
 
 
 def _current_mesh() -> Mesh | jax.sharding.AbstractMesh:

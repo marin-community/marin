@@ -7,14 +7,18 @@ This wraps the shared fused kernel API for TPU and falls back to a full-logits
 reference implementation on non-TPU backends.
 """
 
+from typing import cast
+
 import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh, get_mesh, reshard
 
 from haliax.jax_utils import named_call
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
+    default_implementations,
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
+from levanter.kernels.pallas.fused_cross_entropy_loss.xla import linear_softmax_cross_entropy_loss_xla
 
 
 def _batch_axis_spec(x: jax.Array):
@@ -46,6 +50,21 @@ def _psum_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
     return jax.lax.psum(x, axis_names)
 
 
+def _pmax_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
+    if len(axis_names) == 0:
+        return x
+    if len(axis_names) == 1:
+        return jax.lax.pmax(x, axis_names[0])
+    return jax.lax.pmax(x, axis_names)
+
+
+def _logsumexp_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
+    if len(axis_names) == 0:
+        return x
+    x_max = _pmax_over_axes(jax.lax.stop_gradient(x), axis_names)
+    return x_max + jnp.log(_psum_over_axes(jnp.exp(x - x_max), axis_names))
+
+
 def _current_mesh() -> Mesh | jax.sharding.AbstractMesh:
     try:
         mesh = get_mesh()
@@ -64,6 +83,42 @@ def _reshard_for_shard_map(
     if mesh is not None and not mesh.empty:
         return reshard(x, NamedSharding(mesh, spec))
     return x
+
+
+def _mesh_axis_size(mesh: Mesh | jax.sharding.AbstractMesh | None, axis_name: str) -> int:
+    if mesh is None or mesh.empty:
+        return 1
+    return int(mesh.shape.get(axis_name, 1))
+
+
+def _uses_xla_ce(implementation: str | tuple[str, ...] | None) -> bool:
+    if implementation is None:
+        implementation = default_implementations()
+    if implementation == "xla":
+        return True
+    if isinstance(implementation, tuple):
+        return len(implementation) > 0 and implementation[0] == "xla"
+    return False
+
+
+def _lm_head_spec_for_xla_ce(
+    lm_head: jax.Array,
+    mesh: Mesh | jax.sharding.AbstractMesh | None,
+    implementation: str | tuple[str, ...] | None,
+) -> P:
+    if _uses_xla_ce(implementation) and lm_head.shape[1] % _mesh_axis_size(mesh, "model") == 0:
+        if _mesh_axis_size(mesh, "model") > 1:
+            return P(None, "model")
+    return P(None, None)
+
+
+def _vocab_axis_for_lm_head_spec(lm_head_spec: P) -> str | None:
+    if len(lm_head_spec) < 2:
+        return None
+    vocab_spec = lm_head_spec[1]
+    if isinstance(vocab_spec, str):
+        return vocab_spec
+    return None
 
 
 @named_call
@@ -115,6 +170,7 @@ def fused_linear_softmax_cross_entropy_loss(
     weight_array = weight if weight is not None else jnp.ones_like(labels, dtype=dtype)
     batch_axis_spec = _batch_axis_spec(hidden) if has_mesh else None
     batch_axis_names = _axis_names_from_spec(batch_axis_spec) if has_mesh else ()
+    lm_head_spec = P(None, None)
 
     def _loss_shard(
         shard_hidden: jax.Array,
@@ -126,18 +182,45 @@ def fused_linear_softmax_cross_entropy_loss(
         flat_labels = shard_labels.reshape((-1,)).astype(jnp.int32)
         flat_weight = shard_weight.reshape((-1,))
 
-        loss = fused_cross_entropy_loss_and_logsumexp_penalty(
-            flat_hidden,
-            flat_labels,
-            shard_lm_head,
-            reduction=None,
-            weight=flat_weight,
-            logsumexp_weight=logsumexp_weight,
-            dtype=dtype,
-            logit_soft_cap=None,
-            precision=precision,
-            implementation=implementation,
-        )
+        vocab_axis = _vocab_axis_for_lm_head_spec(lm_head_spec)
+        if vocab_axis is None:
+            loss = fused_cross_entropy_loss_and_logsumexp_penalty(
+                flat_hidden,
+                flat_labels,
+                shard_lm_head,
+                reduction=None,
+                weight=flat_weight,
+                logsumexp_weight=logsumexp_weight,
+                dtype=dtype,
+                logit_soft_cap=None,
+                precision=precision,
+                implementation=implementation,
+            )
+        else:
+            local_vocab_size = shard_lm_head.shape[1]
+            vocab_start = jax.lax.axis_index(vocab_axis) * local_vocab_size
+            local_labels = flat_labels - vocab_start
+            in_vocab_shard = (0 <= local_labels) & (local_labels < local_vocab_size)
+            safe_labels = jnp.clip(local_labels, 0, local_vocab_size - 1)
+            local_loss, local_lse = cast(
+                tuple[jax.Array, jax.Array],
+                linear_softmax_cross_entropy_loss_xla(
+                    flat_hidden,
+                    safe_labels,
+                    shard_lm_head,
+                    dtype=dtype,
+                    logit_soft_cap=None,
+                    precision=precision,
+                ),
+            )
+            local_label_logit = local_lse - local_loss
+            vocab_axis_names = (vocab_axis,)
+            global_lse = _logsumexp_over_axes(local_lse, vocab_axis_names)
+            global_label_logit = _psum_over_axes(jnp.where(in_vocab_shard, local_label_logit, 0.0), vocab_axis_names)
+            loss = global_lse - global_label_logit
+            if logsumexp_weight is not None and logsumexp_weight != 0.0:
+                loss = loss + logsumexp_weight * (global_lse**2)
+            loss = loss * flat_weight.astype(loss.dtype)
 
         if reduction_mode is None:
             return loss.reshape(shard_labels.shape)
@@ -154,7 +237,7 @@ def fused_linear_softmax_cross_entropy_loss(
         return _loss_shard(hidden, lm_head, labels, weight_array)
 
     hidden_spec = P(batch_axis_spec)
-    lm_head_spec = P(None, None)
+    lm_head_spec = _lm_head_spec_for_xla_ce(lm_head, mesh, implementation)
     label_spec = P(batch_axis_spec)
     hidden = _reshard_for_shard_map(hidden, mesh, hidden_spec)
     lm_head = _reshard_for_shard_map(lm_head, mesh, lm_head_spec)

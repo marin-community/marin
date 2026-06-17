@@ -76,7 +76,7 @@ def _resolve_xla_batch_block_size(
     return _largest_divisor_at_most(b_dim, min(requested, inferred))
 
 
-def _infer_tuned_xla_batch_block_size(
+def _infer_preferred_xla_batch_block_size(
     b_dim: int,
     h_dim: int,
     v_dim: int,
@@ -85,7 +85,7 @@ def _infer_tuned_xla_batch_block_size(
     x_dtype: jnp.dtype,
     w_dtype: jnp.dtype,
 ) -> int | None:
-    tuned_block_sizes, has_tuned_match = infer_block_sizes_with_tuned_match(
+    block_sizes, _ = infer_block_sizes_with_tuned_match(
         b_dim,
         h_dim,
         v_dim,
@@ -93,9 +93,7 @@ def _infer_tuned_xla_batch_block_size(
         x_dtype=x_dtype,
         w_dtype=w_dtype,
     )
-    if not has_tuned_match:
-        return None
-    return tuned_block_sizes.b_block_size
+    return block_sizes.b_block_size
 
 
 def _linear_softmax_cross_entropy_loss_streaming_fwd(
@@ -450,7 +448,7 @@ def linear_softmax_cross_entropy_loss_xla(
         b_block_size = _resolve_xla_batch_block_size(
             x.shape[0],
             v_block_size,
-            _infer_tuned_xla_batch_block_size(
+            _infer_preferred_xla_batch_block_size(
                 x.shape[0],
                 x.shape[1],
                 w.shape[1],

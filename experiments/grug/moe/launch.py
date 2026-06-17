@@ -9,14 +9,27 @@ the MoE variant can be iterated independently from the dense base template.
 
 import dataclasses
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import cast
 
+import jax.numpy as jnp
 import jmp
+import numpy as np
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import BlockShuffleConfig, LmDataConfig, TextLmDatasetFormat
+from levanter.data import AsyncDataset
+from levanter.data.text import (
+    BlockShuffleConfig,
+    DirectDatasetComponent,
+    GrugLmExample,
+    LmDataConfig,
+    TextLmDatasetFormat,
+)
+from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -55,12 +68,19 @@ class GrugMoeLaunchConfig:
     tracker: TrackerConfig
     optimizer: OptimizerConfig
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
+    watch: WatchConfig = field(default_factory=WatchConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    checkpointing_enabled: bool = True
+    """False disables checkpoint restore, periodic saves, and final forced saves.
+    Use this for disposable throughput probes where checkpoint I/O would dominate
+    the measured run tail."""
     checkpointer: CheckpointerConfig | None = None
     """Override the checkpointer. None builds the default (periodic + final saves
     under output_path). Throughput experiments point this at node-local disk so a
     slow object-store commit can't wedge the end-of-run barrier."""
+    log_jaxprs: bool = True
+    log_xla_hlo: bool = True
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
@@ -73,6 +93,62 @@ def env_int(key: str, default: int) -> int:
     """Read an int from ``os.environ[key]``, falling back to ``default`` when unset/empty."""
     raw = os.environ.get(key, "")
     return int(raw) if raw else default
+
+
+def env_bool(key: str, default: bool) -> bool:
+    """Read a boolean from ``os.environ[key]``, falling back to ``default`` when unset/empty."""
+    raw = os.environ.get(key, "")
+    if not raw:
+        return default
+    normalized = raw.lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{key}={raw!r} must be a boolean")
+
+
+def validate_local_expert_model_axes(
+    *,
+    expert_axis: int,
+    model_axis: int,
+    local_device_count: int,
+    env_prefix: str,
+) -> None:
+    """Validate that expert/model axes fit cleanly inside one worker."""
+    if expert_axis <= 0:
+        raise ValueError(f"{env_prefix}_EXPERT_AXIS must be positive, got {expert_axis}")
+    if model_axis <= 0:
+        raise ValueError(f"{env_prefix}_MODEL_AXIS must be positive, got {model_axis}")
+    if local_device_count <= 0:
+        raise ValueError(f"local_device_count must be positive, got {local_device_count}")
+
+    local_axis_product = expert_axis * model_axis
+    if local_device_count % local_axis_product != 0:
+        raise ValueError(
+            f"{env_prefix}_EXPERT_AXIS * {env_prefix}_MODEL_AXIS must divide the "
+            f"{local_device_count} GPUs on each worker so expert/model groups stay local; "
+            f"got {expert_axis} * {model_axis} = {local_axis_product}."
+        )
+
+
+def validate_ring_expert_model_axes(
+    *,
+    expert_axis: int,
+    model_axis: int,
+    moe_implementation: str | None,
+    env_prefix: str,
+) -> None:
+    """Reject ring EP/model-axis combinations that fail on CW H100s."""
+    implementation = moe_implementation or "ring"
+    if implementation == "ring" and expert_axis > 1 and model_axis > 1:
+        raise ValueError(
+            f"{env_prefix}_MOE_IMPLEMENTATION=ring currently requires either "
+            f"{env_prefix}_EXPERT_AXIS=1 or {env_prefix}_MODEL_AXIS=1 on CoreWeave H100s; "
+            f"got {env_prefix}_EXPERT_AXIS={expert_axis}, {env_prefix}_MODEL_AXIS={model_axis}. "
+            "Use model_axis>1 only for attention/model-axis diagnostics with expert_axis=1, "
+            "or keep model_axis=1 for ring expert-parallel runs."
+        )
 
 
 def slimpajama_6b_data() -> LmDataConfig:
@@ -102,6 +178,102 @@ def slimpajama_6b_data() -> LmDataConfig:
     )
 
 
+@dataclass(frozen=True)
+class SyntheticGrugDataset(AsyncDataset[GrugLmExample]):
+    """Deterministic in-memory token stream for distributed systems probes."""
+
+    seq_len: int
+    vocab_size: int
+    num_examples: int
+    eos_id: int | None = None
+    eos_interval: int = 0
+    block_cross_document_attention: bool = True
+
+    def __post_init__(self) -> None:
+        if self.seq_len <= 0:
+            raise ValueError(f"seq_len must be positive, got {self.seq_len}")
+        if self.vocab_size <= 1:
+            raise ValueError(f"vocab_size must be greater than 1, got {self.vocab_size}")
+        if self.num_examples <= 0:
+            raise ValueError(f"num_examples must be positive, got {self.num_examples}")
+        if self.eos_interval < 0:
+            raise ValueError(f"eos_interval must be non-negative, got {self.eos_interval}")
+        if self.eos_interval > 0 and self.eos_id is None:
+            raise ValueError("eos_id must be set when eos_interval is positive")
+
+        # Runtime caches are intentionally not dataclass fields. Marin executor
+        # versions configs via dataclasses.replace, which cannot pass init=False fields.
+        object.__setattr__(self, "_positions", np.arange(self.seq_len, dtype=np.int64))
+        loss_weight = (np.arange(self.seq_len) < (self.seq_len - 1)).astype(np.float32)
+        object.__setattr__(self, "_loss_weight", loss_weight)
+        object.__setattr__(self, "_attn_mask", GrugAttentionMask.causal())
+
+    async def async_len(self) -> int:
+        return self.num_examples
+
+    def is_finite(self) -> bool:
+        return True
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[GrugLmExample]:
+        if not indices:
+            return []
+
+        tokens = self._tokens_for_indices(indices)
+        return [self._example_from_tokens(row) for row in tokens]
+
+    def _tokens_for_indices(self, indices: Sequence[int]) -> np.ndarray:
+        positions = cast(np.ndarray, self.__dict__["_positions"])
+        offsets = np.asarray(indices, dtype=np.int64)[:, None] * 9973
+        tokens = (positions[None, :] + offsets) % self.vocab_size
+        if self.eos_interval > 0:
+            tokens[:, self.eos_interval - 1 :: self.eos_interval] = self.eos_id
+
+        return tokens.astype(np.int32, copy=False)
+
+    def _example_from_tokens(self, tokens: np.ndarray) -> GrugLmExample:
+        loss_weight = cast(np.ndarray, self.__dict__["_loss_weight"])
+        attn_mask = cast(GrugAttentionMask, self.__dict__["_attn_mask"])
+        token_array = jnp.asarray(tokens, dtype=jnp.int32)
+        loss_weight_array = jnp.asarray(loss_weight)
+        if self.eos_interval > 0 and self.block_cross_document_attention:
+            assert self.eos_id is not None
+            eos_mask = np.roll(tokens, 1) == self.eos_id
+            eos_mask[0] = False
+            segment_ids = jnp.asarray(np.cumsum(eos_mask, dtype=np.int32))
+            attn_mask = attn_mask.with_segment_ids(segment_ids)
+
+        return GrugLmExample(tokens=token_array, loss_weight=loss_weight_array, attn_mask=attn_mask)
+
+
+def synthetic_grug_data(
+    *,
+    seq_len: int,
+    vocab_size: int,
+    num_examples: int,
+    eos_id: int | None = None,
+    eos_interval: int = 0,
+    block_cross_document_attention: bool = True,
+) -> LmDataConfig:
+    dataset = SyntheticGrugDataset(
+        seq_len=seq_len,
+        vocab_size=vocab_size,
+        num_examples=num_examples,
+        eos_id=eos_id,
+        eos_interval=eos_interval,
+        block_cross_document_attention=block_cross_document_attention,
+    )
+    return LmDataConfig(
+        tokenizer="passthrough",
+        vocab_size=vocab_size,
+        cache_dir=None,
+        auto_build_caches=False,
+        shuffle=False,
+        block_cross_document_attention=block_cross_document_attention,
+        components={"synthetic": DirectDatasetComponent(datasets={"train": dataset, "validation": dataset})},
+        train_weights={"synthetic": 1.0},
+    )
+
+
 def _resolve_run_id(default_run_id: str) -> str:
     """Resolve run id and append `FERRY_DATE` when launching from ferry workflows."""
     run_id = os.environ.get("GRUG_RUN_ID", default_run_id)
@@ -117,27 +289,44 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
     return tracker
 
 
+class DisabledCheckpointerConfig(CheckpointerConfig):
+    """TrainerConfig-compatible checkpoint config that never creates a checkpointer."""
+
+    def create(self, run_id):
+        del run_id
+        return None
+
+
 def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     # Map template launch knobs onto full Levanter TrainerConfig.
+    checkpointer = config.checkpointer or CheckpointerConfig(
+        base_path=os.path.join(config.output_path, "checkpoints"),
+        temporary_base_path=temporary_checkpoint_base_path(config.output_path),
+        append_run_id_to_base_path=False,
+        save_interval=timedelta(minutes=10),
+        keep=None,
+    )
+    load_checkpoint = None
+    if not config.checkpointing_enabled:
+        checkpointer = DisabledCheckpointerConfig(base_path="/tmp/grug-disabled-checkpoints")
+        load_checkpoint = False
+
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
         train_batch_size=config.batch_size,
         num_train_steps=config.steps,
         profiler=config.profiler,
+        watch=config.watch,
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
-        checkpointer=config.checkpointer
-        or CheckpointerConfig(
-            base_path=os.path.join(config.output_path, "checkpoints"),
-            temporary_base_path=temporary_checkpoint_base_path(config.output_path),
-            append_run_id_to_base_path=False,
-            save_interval=timedelta(minutes=10),
-            keep=None,
-        ),
+        load_checkpoint=load_checkpoint,
+        checkpointer=checkpointer,
+        log_jaxprs=config.log_jaxprs,
+        log_xla_hlo=config.log_xla_hlo,
     )
 
     grug_trainer = dataclasses.replace(config.grug_trainer, trainer=trainer)
