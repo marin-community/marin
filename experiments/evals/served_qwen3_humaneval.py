@@ -9,7 +9,7 @@ child jobs. Local mode runs the same broker/proxy/worker loop in the current
 process for single-node checks.
 
 lm-eval runs in an isolated uv environment so the eval client does not share the
-TPU serving environment's `vllm-tpu` dependency set.
+TPU serving environment's `vllm` dependency set.
 
 \b
 Examples:
