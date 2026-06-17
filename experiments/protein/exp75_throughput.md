@@ -117,3 +117,25 @@ token-weighted per type; `tts`/`mfu` averaged. Ranked by `wts` (desc).
 to v6e-32.** Favored order by wts: **`v5p-64` > `v5p-32` > `v6e-16` > `v5p-16` ≫
 `v6e-32`**; `v5p-32` is the best risk-adjusted pick (high wts, only 10% dead). v5p
 MFU ~31–40% vs v6e ~10–15% explains why the v6e gangs underperform their chip count.
+
+## Multi-host re-probe (E8 wave, 2026-06-17 ~14:03Z onward, 3 cells/slice)
+
+Fresh batch probe after the ~3.5h controller outage (first multi-host use since), each
+slice running 3 E8 cells uninterrupted ~2–4h. **Near-best-case wts** — wts ≈ tts
+everywhere, i.e. ~0% dead time *so far* (no preemption gaps yet); sustained wts falls
+once preemptions accumulate.
+
+| slice | wts | ats | tts |
+|---|---:|---:|---:|
+| `v5p-64` | **~323k** | ~323k | ~330k |
+| `v6e-32` | ~185k | ~202k | ~213k |
+| `v5p-32` | ~175k | ~178k | ~198k |
+| `v6e-16` | ~114k | ~124k | ~127k |
+| `v5p-16` | ~90k  | ~95k  | ~102k |
+
+Takeaways: (1) **`v5p-64` ~323k wts ≈ 5× single-host v6e-8 (~64–71k)** — multi-host is
+hugely faster when it holds. (2) `v6e-32` *raw* wts (~185k) is fine in a clean window —
+its AVOID label is about reliability/dead-time, not speed (it's the slice where E8
+`1e-3/0.4` SIGSEGV'd twice and is now capacity-pending). (3) mfu omitted — multi-host
+`throughput/mfu` reads >100% (per-host summing bug). Watch whether these hold before
+shifting the long-pole E4/E8 cells onto v5p-64/v5p-32.
