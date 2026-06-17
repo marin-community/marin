@@ -93,6 +93,12 @@ class GrugModelConfig:
     # MoE (uses ``num_experts``, ``num_experts_per_token``, ``intermediate_dim``;
     # no shared expert, regardless of ``shared_expert_intermediate_dim``).
     alternate_dense_moe: bool = False
+    # When ``alternate_dense_moe=True``, only every ``moe_block_every``-th block
+    # is MoE (the MoE block sits at the end of each window, i.e. indices
+    # ``moe_block_every - 1, 2*moe_block_every - 1, ...``); the rest are dense.
+    # Default 2 reproduces the classic 1-dense-1-MoE alternating pattern. Set
+    # to 4 for "3 dense, 1 MoE" repeating.
+    moe_block_every: int = 2
     # Intermediate dim for the dense blocks when ``alternate_dense_moe=True``.
     # ``None`` defaults to ``3 * hidden_dim``.
     dense_intermediate_dim: int | None = None
@@ -519,7 +525,9 @@ class Block(eqx.Module):
     @staticmethod
     def init(cfg: GrugModelConfig, block_idx: int, *, key: PRNGKeyArray) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
-        is_dense = cfg.alternate_dense_moe and block_idx % 2 == 0
+        # MoE blocks land at the last position of each window of size
+        # ``moe_block_every``; everything else is dense.
+        is_dense = cfg.alternate_dense_moe and (block_idx + 1) % cfg.moe_block_every != 0
         if is_dense:
             dense_inter = cfg.dense_intermediate_dim or 3 * cfg.hidden_dim
             return Block(
