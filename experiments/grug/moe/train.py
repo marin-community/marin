@@ -237,17 +237,20 @@ class GrugTrainState:
 
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
-    """Set router biases from QB betas (computed on previous step)."""
+    """Set router biases from QB betas (computed on previous step).
+
+    ``qb_betas`` is indexed by absolute block index (matches
+    ``qb_beta_per_layer``'s leading dim). Dense blocks have no ``mlp`` and are
+    skipped; their rows in ``qb_betas`` are stub zeros and are ignored.
+    """
     new_blocks = list(model.blocks)
-    moe_idx = 0
     for i, block in enumerate(model.blocks):
         if block.mlp is None:
             continue
-        new_bias = -qb_betas[moe_idx]
+        new_bias = -qb_betas[i]
         new_bias = new_bias - jnp.mean(new_bias)
         new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_bias)
         new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
-        moe_idx += 1
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
@@ -260,13 +263,14 @@ def initial_state(
     ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
-    num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
         opt_state=optimizer.init(params),
         ema_params=params if ema_beta is not None else None,
-        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
+        # One row per block (matches qb_beta_per_layer's leading dim). Dense
+        # rows stay at zero and are skipped by _apply_qb_betas.
+        pending_qb_betas=jnp.zeros((model_config.num_layers, model_config.num_experts)),
     )
 
 

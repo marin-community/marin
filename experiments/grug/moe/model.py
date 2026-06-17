@@ -486,13 +486,18 @@ class MoEMLP(eqx.Module):
 
 
 def _dense_block_router_stats(num_experts: int) -> dict[str, jax.Array]:
-    """Zero stub stats so dense blocks can be stacked alongside MoE blocks."""
+    """Zero stub stats so dense blocks can be stacked alongside MoE blocks.
+
+    Shapes mirror what the MoE block produces:
+    - ``routing_counts`` and ``qb_beta`` are per-expert (shape ``(num_experts,)``);
+    - all other entries are scalars.
+    """
     return {
         "routing_entropy": jnp.float32(0.0),
         "routing_counts": jnp.zeros((num_experts,), dtype=jnp.float32),
         "load_balancing_loss": jnp.float32(0.0),
         "router_z_loss": jnp.float32(0.0),
-        "qb_beta": jnp.float32(0.0),
+        "qb_beta": jnp.zeros((num_experts,), dtype=jnp.float32),
         "capacity_overflow": jnp.float32(0.0),
     }
 
