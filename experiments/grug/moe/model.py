@@ -103,6 +103,10 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.3
     router_z_loss_coef: float = 0.0
+    # When True, the per-block pre-MLP RMSNorm (``rms_mlp``) is skipped; the
+    # MLP input is just ``mlp_gated_norm(x)``. Tests whether the per-dim
+    # GatedNorm alone is sufficient pre-MLP normalization.
+    mlp_skip_rms_norm: bool = False
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
@@ -507,7 +511,7 @@ class Block(eqx.Module):
     rms_attn: RMSNorm
     attn_gated_norm: GatedNorm
     attn: CausalSelfAttention
-    rms_mlp: RMSNorm
+    rms_mlp: RMSNorm | None
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
@@ -520,11 +524,12 @@ class Block(eqx.Module):
             shared = DenseMLP.init(
                 cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
             )
+        rms_mlp = None if cfg.mlp_skip_rms_norm else RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
             attn=CausalSelfAttention.init(cfg, key=attn_key),
-            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            rms_mlp=rms_mlp,
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
@@ -539,7 +544,8 @@ class Block(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask, use_pko=use_pko)
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        pre_mlp = x if self.rms_mlp is None else self.rms_mlp(x)
+        mlp_in = self.mlp_gated_norm(pre_mlp)
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
