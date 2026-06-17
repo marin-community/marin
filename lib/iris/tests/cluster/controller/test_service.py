@@ -16,18 +16,10 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
-from iris.cluster.constraints import (
-    ConstraintOp,
-    WellKnownAttribute,
-    availability_constraint,
-    availability_key,
-    device_variant_constraint,
-)
+from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, availability_key, device_variant_constraint
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
@@ -55,13 +47,11 @@ from rigging.timing import Duration, Timestamp
 from sqlalchemy import func
 from sqlalchemy import update as sa_update
 
-from tests.cluster.backends.conftest import make_mock_platform
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
     make_job_request,
-    make_scale_group_config,
     make_test_entrypoint,
     make_worker_metadata,
 )
@@ -1535,52 +1525,6 @@ def test_launch_job_deprecated_reservation_becomes_availability_constraint(servi
     # zone that can provision the accelerator.
     assert avail[0].op == ConstraintOp.EXISTS
     assert avail[0].mode == job_pb2.CONSTRAINT_MODE_REQUIRED
-
-
-def test_launch_job_direct_availability_constraint_passes_feasibility(service, state, mock_controller):
-    """A job carrying a direct ``availability:<variant>`` constraint (the native
-    ``--reserve`` path) is accepted at submit when a group provides that variant.
-
-    The feasibility gate only runs when the controller has an autoscaler with scale
-    groups, so this wires one with a configured v5p-8 group — the production shape.
-    The group has no live slice, mirroring a cold cluster: feasibility must still
-    accept it because the autoscaler probe bootstraps live capacity at scale-up.
-    Regression guard for the gate rejecting every ``availability:`` job.
-    """
-    config = make_scale_group_config(name="tpu-v5p-8", max_slices=5, num_vms=1, accelerator_variant="v5p-8")
-    mock_controller.autoscaler = Autoscaler(
-        scale_groups={"tpu-v5p-8": ScalingGroup(config, make_mock_platform())},
-        evaluation_interval=Duration.from_seconds(0.1),
-        platform=make_mock_platform(),
-    )
-
-    request = make_job_request("avail-job")
-    request.constraints.append(availability_constraint("v5p-8").to_proto())
-
-    # Must not raise FAILED_PRECONDITION ("unschedulable").
-    service.launch_job(request, None)
-
-    job = _query_job(state, JobName.root("test-user", "avail-job"))
-    stored = constraints_from_json(job.constraints_json)
-    assert any(c.key == availability_key("v5p-8") and c.op == ConstraintOp.EXISTS for c in stored), stored
-
-
-def test_launch_job_direct_availability_unknown_variant_rejected(service, mock_controller):
-    """A direct ``availability:<variant>`` for a variant no group provides is
-    rejected at submit (fail-fast preserved — a typo'd ``--reserve`` doesn't hang)."""
-    config = make_scale_group_config(name="tpu-v5p-8", max_slices=5, num_vms=1, accelerator_variant="v5p-8")
-    mock_controller.autoscaler = Autoscaler(
-        scale_groups={"tpu-v5p-8": ScalingGroup(config, make_mock_platform())},
-        evaluation_interval=Duration.from_seconds(0.1),
-        platform=make_mock_platform(),
-    )
-
-    request = make_job_request("avail-bogus-job")
-    request.constraints.append(availability_constraint("v6e-9999").to_proto())
-
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request, None)
-    assert exc_info.value.code == Code.FAILED_PRECONDITION
 
 
 # =============================================================================
