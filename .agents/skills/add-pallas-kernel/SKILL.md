@@ -111,9 +111,6 @@ Minimum checks: value parity over a shape/dtype grid, gradient parity on small s
 
 For in-tree kernels, add/extend tests under `lib/levanter/tests/kernels/`. Compare the default implementation against the reference on small CPU shapes and accelerator-aligned shapes for fast paths.
 
-
-
-
 ## Cost Estimate Requirement
 
 Add `cost_estimate=` to each `pl.pallas_call`:
@@ -153,7 +150,6 @@ environment unless that axis is under test. Only move the baseline after enough
 repeated evidence, and note the change explicitly.
 
 Always report: compile-including timing (`time-to-first-step`), steady-state timing, and exact hardware type and shape/dtype grid.
-
 
 ## Autotuning Workflow
 
@@ -249,9 +245,6 @@ Ops hygiene checklist before claiming a regression:
 - Lockfiles/state are clean.
 - Comparison uses the same device count.
 - Command/config/env are identical except the tested axis.
-
-
-
 
 ## Further Reading
 

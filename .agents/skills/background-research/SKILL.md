@@ -6,13 +6,9 @@ description: "Forage prior work before or during Marin research threads: search 
 # Skill: Background Research
 
 Use this when a research, design, or experiment thread needs a compact prior-work
-pass before choosing hypotheses, drafting a design, or launching runs. This is a
-subroutine, not an outer loop: compose it with `run-research`, `change-grug`,
-`write-design-doc`, or a domain skill when the work needs context.
+pass before choosing hypotheses, drafting a design, or launching runs.
 
-The value is Marin's spin, not generic search advice. Agents are already good at
-web search; this skill makes them search Marin's own scientific record, preserve
-provenance, and hand off experiment-ready hypotheses.
+Agents are already good at web search; this skill makes them search Marin's own scientific record, preserve provenance, and hand off experiment-ready hypotheses.
 
 ## Effort
 
@@ -38,6 +34,7 @@ effort must cite sources and distinguish evidence from speculation.
 
 Search internal and external sources in parallel when possible, but do not skip
 the internal pass. Prefer durable artifacts over transient conversation.
+Parallelizing with subagents may be good here.
 
 1. Current issue, PR, research logbook, or design file.
 2. GitHub issues and PRs, especially experiment issues and linked comments.
@@ -51,8 +48,7 @@ the internal pass. Prefer durable artifacts over transient conversation.
    Semantic Scholar, and cited references.
 
 For external search, include at least one adversarial query family for
-`medium`/`high`: terms like `failure`, `negative result`, `ablation`, `does not
-improve`, `regression`, `replication`, or `implementation detail`.
+`medium`/`high`.
 
 ## Design-Doc Mode
 
@@ -162,6 +158,9 @@ hypotheses can be revised, falsified, or promoted in the queue, but the evidence
 that caused each state change must remain linked to an append-only logbook
 entry, issue comment, W&B run, commit, or tag.
 
+Make heavy use of links to sources. Ideally link to the line, section, or page
+for specific claims.
+
 ## Hypothesis Quality
 
 Recommended experiments should be actionable without re-reading the full source
@@ -179,16 +178,6 @@ set. Each candidate needs:
 ## What To Skip
 
 - Do not build a global Marin paper library or LLM wiki unless explicitly asked.
-- Do not add new MCP servers or ingestion tools as part of this skill.
 - Do not paste long paper summaries when a claim-level evidence table is enough.
 - Do not use transient conversation as the durable record; file the synthesis in
   the issue/logbook/research file.
-- Do not overrun into experiment execution unless the parent skill asks for it.
-
-## LLM-Wiki Pattern
-
-Borrow the principle, not the product. A background-research brief is a tiny
-scoped wiki page: raw sources remain immutable ground truth, the source ledger
-is the index, and the brief is derived synthesis. If accumulated briefs become
-hard to navigate, add an index later; do not start with global knowledge-base
-machinery.

@@ -44,7 +44,7 @@ correctness, and profiling rules while this skill keeps the research lifecycle. 
 1. A GitHub experiment issue with the `experiment` label.
 2. A logbook at `.agents/logbooks/<topic>.md` containing (compact) experiments, observations, and detailed analysis.
 3. A living hypothesis queue in the logbook, derived from append-only entries
-   and updated as hypotheses are proposed, blocked, falsified, or promoted. 
+   and updated as hypotheses are proposed, blocked, falsified, or promoted.
 4. A long-lived branch, for example `research/<topic>` or `research/<user>/<issue>-topic` that contains the latest logbook,
    research code, configs, small artifacts, test harnesses and the like. The target should be code and config sufficient to reproduce all results.
 5. One or more commit or tag snapshots for meaningful milestones.
