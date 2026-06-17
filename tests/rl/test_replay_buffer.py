@@ -7,6 +7,7 @@ import time
 
 import numpy as np
 import pytest
+from rigging.timing import Duration, ExponentialBackoff
 
 try:
     from marin.rl import train_batch
@@ -136,11 +137,17 @@ def test_replay_buffer():
         writer.write_batch(batch)
 
     with data_loader:
+        collected_new_batches = ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
+            lambda: replay_buffer.get_stats()["total_batches_added"] == 15,
+            timeout=Duration.from_seconds(5.0),
+        )
+        assert collected_new_batches
+        stats = replay_buffer.get_stats()
+        assert stats["env_sizes"] == {"env1": 20, "env2": 10}
+
         rollouts = data_loader.get_rollouts(timeout=5.0)
         assert rollouts is not None
         assert len(rollouts) == 4
-        assert replay_buffer.get_stats()["total_batches_added"] == 15
-        assert replay_buffer.get_stats()["env_sizes"] == {"env1": 20, "env2": 10}
 
 
 def test_replay_buffer_recency_bias():
