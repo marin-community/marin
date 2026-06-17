@@ -1,9 +1,11 @@
 ---
 name: run-research
-description: "Multi-session research workflow: compose logbooks, experiment issues, W&B reporting, documentation updates, and snapshot discipline for long-running investigations."
+description: "Multi-session research workflow: compose logbooks, experiment issues, documentation updates, and snapshot discipline for long-running investigations."
 ---
 
 # Skill: Agent-Directed Research
+
+`run-research` is an "outer loop" representing a standard research workflow in computational science. There are several pieces inside the loop (or used as loop prologue/epilogue). Not all of these pieces are relevant to all projects. Listen to the user and use judgment.
 
 Use this for long-running, exploratory research where an agent iterates on
 benchmarks, experiments, and hypotheses over multiple sessions.
@@ -11,15 +13,15 @@ There are often more specific versions of this skill for specific domains, e.g. 
 
 ## General Principle: Open Development
 
-In Marin, we strive for "open development". All work should be documented in order to make the knowledge accessible to others.
+In Marin, we strive for "open development." All work should be documented in order to make the knowledge accessible to others.
 
 Generally, long-lived work should publish progress updates regularly throughout the development process. (By publish we typically mean updating the GitHub repo and associated issue(s). See below.)
 
-Exceptions of course occur. Don't share secrets like API keys. The user may request that a project not be published (until they are ready). Assume openness by default, however.
+Exceptions of course occur. Don't share secrets like API keys. The user may request that a project not be published (until they are ready). However, assume openness by default.
+
+We instantiate this principle in the research workflow by maintaining a logbook, publishing updates to a coordinating issue, and keeping a durable record of experiments, observations, and conclusions. We also (often) produce a clean production branch with doc changes, reusable code, etc., when an experiment produces a useful result.
 
 ## Subskills
-
-`run-research` is an "outer loop" representing a standard research workflow in computational science. There are several pieces inside the loop (or used as loop prologue/epilogue). Not all of these pieces are relevant to all projects. Listen to the user and use judgment.
 
 Subskills include:
 
@@ -40,10 +42,9 @@ correctness, and profiling rules while this skill keeps the research lifecycle. 
 ## Core Artifacts
 
 1. A GitHub experiment issue with the `experiment` label.
-2. An append-only research logbook at `.agents/logbooks/<topic>.md` containing (compact) experiments, observations, and detailed analysis.
+2. A logbook at `.agents/logbooks/<topic>.md` containing (compact) experiments, observations, and detailed analysis.
 3. A living hypothesis queue in the logbook, derived from append-only entries
-   and updated as hypotheses are proposed, blocked, falsified, or promoted. See
-   `task-logbook` for the append-only/living-index distinction.
+   and updated as hypotheses are proposed, blocked, falsified, or promoted. 
 4. A long-lived branch, for example `research/<topic>` or `research/<user>/<issue>-topic` that contains the latest logbook,
    research code, configs, small artifacts, test harnesses and the like. The target should be code and config sufficient to reproduce all results.
 5. One or more commit or tag snapshots for meaningful milestones.
@@ -68,7 +69,7 @@ when you are ready to create a PR and know the final shape.
 
 ### 1. Prologue
 
-1. Create or switch to a long-lived research branch.
+1. Create or switch to a long-lived research branch. You may already be on one, or the user may have requested a specific branch name. Otherwise, pick a descriptive name like `research/<topic>` or `research/<user>/<issue>-<topic>`.
 2. Create an experiment issue unless scope or visibility needs human confirmation. If the user provides one, use it.
 3. Start the logbook and link both ways: logbook to issue URL, issue body to logbook path. See the skill.
 4. Pick a short experiment ID prefix for the series, for example `MOE-HC-001`, and
@@ -76,7 +77,7 @@ when you are ready to create a PR and know the final shape.
 5. Pick a set of tags to use for all experiments, to be used with W&B, etc.
    Typically this is the ID prefix (without the number), the issue number, and
    anything else reasonable. Try to keep to 2-4 shared tags. You may use more
-   tags as useful.
+   tags to distinguish runs within a project as useful.
 6. Record, as applicable: motivation, problem statement, context, success
    metrics, the initial hypothesis queue, first experiment matrix, relevant
    code paths, references, stop criteria, and the fixed baseline case for
@@ -133,6 +134,8 @@ For each non-trivial experiment:
 4. Follow `task-logbook` for issue-update promotion and cadence.
 
 ### 3. Epilogue: Seal
+
+Sealing should ordinarily only happen if the user requests it or the research has reached the defined goal.
 
 1. Update the issue body with the final TL;DR, conclusion, decision log, and negative-results index. Again, follow the `task-logbook` skill.
 2. Add a final issue comment covering what worked, what did not, confidence
