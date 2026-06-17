@@ -136,21 +136,129 @@ def _is_decouple_matrix(p) -> bool:
 
 
 class _DecoupledGainState(NamedTuple):
-    """State for magnitude-direction decoupled MuonH.
+    """State for magnitude-direction decoupling.
 
-    ``muon`` holds the direction (W_hat) Muon momentum buffer. ``ghat_row``/``ghat_col`` are the
-    RAW per-row/per-col gains (gamma = softplus(ghat)); ``gm_*``/``gv_*`` are their Adam moments.
-    All gain pytrees mirror the params tree, with non-matrix leaves = None.
+    ``dir_state`` holds the direction (W_hat) optimizer state (Muon momentum or AdamH moments).
+    ``ghat_row``/``ghat_col`` are the RAW per-row/per-col gains (gamma = softplus(ghat)); ``gm_*``/
+    ``gv_*`` are their Adam moments. All gain pytrees mirror the params tree, non-matrix leaves = None.
     """
 
     count: jax.Array
-    muon: optax.OptState
+    dir_state: optax.OptState
     ghat_row: optax.Updates
     ghat_col: optax.Updates
     gm_row: optax.Updates
     gv_row: optax.Updates
     gm_col: optax.Updates
     gv_col: optax.Updates
+
+
+def _scale_with_decoupled(direction_init, direction_step, gain_lr, gain_beta1, gain_beta2, gain_eps, gain_mode):
+    """Shared magnitude-direction decoupling (Häggström): W = diag(gamma_row) W_hat diag(gamma_col).
+
+    ``direction_init(params) -> dir_state`` and ``direction_step(g_hat, dir_state, w_hat) ->
+    (w_hat_delta, new_dir_state)`` plug in the direction optimizer, whose update must be
+    norm-preserving on W_hat (keeps it on the sphere) -- e.g. MuonH (NS + hyperball) or AdamH
+    (Adam + hyperball). The gains gamma = softplus(ghat) are stepped by Adam at ``gain_lr``.
+    """
+    if gain_mode not in ("both", "row", "col"):
+        raise ValueError(f"gain_mode must be both|row|col, got {gain_mode!r}")
+    use_row = gain_mode in ("both", "row")
+    use_col = gain_mode in ("both", "col")
+
+    def none_leaf(x):
+        return x is None
+
+    def _row_init(p):
+        return jnp.full(p.shape[:-1], _GAIN_INIT, jnp.float32) if _is_decouple_matrix(p) else None
+
+    def _col_init(p):
+        return jnp.full((*p.shape[:-2], p.shape[-1]), _GAIN_INIT, jnp.float32) if _is_decouple_matrix(p) else None
+
+    def _zeros_like_tree(t):
+        return jax.tree.map(lambda x: None if x is None else jnp.zeros_like(x), t, is_leaf=none_leaf)
+
+    def init_fn(params):
+        ghat_row = jax.tree.map(_row_init, params, is_leaf=none_leaf)
+        ghat_col = jax.tree.map(_col_init, params, is_leaf=none_leaf)
+        return _DecoupledGainState(
+            count=jnp.zeros([], jnp.int32),
+            dir_state=direction_init(params),
+            ghat_row=ghat_row,
+            ghat_col=ghat_col,
+            gm_row=_zeros_like_tree(ghat_row),
+            gv_row=_zeros_like_tree(ghat_row),
+            gm_col=_zeros_like_tree(ghat_col),
+            gv_col=_zeros_like_tree(ghat_col),
+        )
+
+    def _gain_from_raw(ghr, ghc, ref):
+        if not _is_decouple_matrix(ref):
+            return None
+        g = jnp.ones(ref.shape, jnp.float32)
+        if use_row:
+            g = g * jax.nn.softplus(ghr)[..., :, None]
+        if use_col:
+            g = g * jax.nn.softplus(ghc)[..., None, :]
+        return g
+
+    def _adam_gain(ghat, g_gamma, m, v, ref_use, count):
+        if ghat is None or not ref_use:
+            return ghat, m, v
+        grad = jax.nn.sigmoid(ghat) * g_gamma
+        new_m = gain_beta1 * m + (1.0 - gain_beta1) * grad
+        new_v = gain_beta2 * v + (1.0 - gain_beta2) * jnp.square(grad)
+        mhat = new_m / (1.0 - gain_beta1**count)
+        vhat = new_v / (1.0 - gain_beta2**count)
+        new_ghat = ghat - gain_lr * mhat / (jnp.sqrt(vhat) + gain_eps)
+        return new_ghat, new_m, new_v
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("decoupled transform requires params")
+        count = optax.safe_increment(state.count)
+        gain = jax.tree.map(_gain_from_raw, state.ghat_row, state.ghat_col, params, is_leaf=none_leaf)
+        w_hat = jax.tree.map(lambda w, g: None if g is None else w / g, params, gain, is_leaf=none_leaf)
+        g_hat = jax.tree.map(lambda gr, g: None if g is None else gr * g, updates, gain, is_leaf=none_leaf)
+        wg = jax.tree.map(lambda wh, gr: None if wh is None else wh * gr, w_hat, updates, is_leaf=none_leaf)
+        g_gamma_row = jax.tree.map(lambda x: None if x is None else jnp.sum(x, axis=-1), wg, is_leaf=none_leaf)
+        g_gamma_col = jax.tree.map(lambda x: None if x is None else jnp.sum(x, axis=-2), wg, is_leaf=none_leaf)
+        # Direction step: norm-preserving delta for W_hat (keeps it on the sphere).
+        w_hat_delta, new_dir = direction_step(g_hat, state.dir_state, w_hat)
+        w_hat_new = jax.tree.map(lambda wh, d: None if wh is None else wh + d, w_hat, w_hat_delta, is_leaf=none_leaf)
+        row_out = jax.tree.map(
+            lambda gh, gg, m, v: _adam_gain(gh, gg, m, v, use_row, count),
+            state.ghat_row,
+            g_gamma_row,
+            state.gm_row,
+            state.gv_row,
+            is_leaf=none_leaf,
+        )
+        col_out = jax.tree.map(
+            lambda gh, gg, m, v: _adam_gain(gh, gg, m, v, use_col, count),
+            state.ghat_col,
+            g_gamma_col,
+            state.gm_col,
+            state.gv_col,
+            is_leaf=none_leaf,
+        )
+
+        def _is_adam_triple(x):
+            return x is None or (isinstance(x, tuple) and len(x) == 3)
+
+        def unpack(tree, i):
+            return jax.tree.map(lambda x: None if x is None else x[i], tree, is_leaf=_is_adam_triple)
+
+        ghat_row_new, gm_row_new, gv_row_new = unpack(row_out, 0), unpack(row_out, 1), unpack(row_out, 2)
+        ghat_col_new, gm_col_new, gv_col_new = unpack(col_out, 0), unpack(col_out, 1), unpack(col_out, 2)
+        gain_new = jax.tree.map(_gain_from_raw, ghat_row_new, ghat_col_new, params, is_leaf=none_leaf)
+        w_new = jax.tree.map(lambda g, wh: None if g is None else g * wh, gain_new, w_hat_new, is_leaf=none_leaf)
+        delta = jax.tree.map(lambda wn, w: None if wn is None else wn - w, w_new, params, is_leaf=none_leaf)
+        return delta, _DecoupledGainState(
+            count, new_dir, ghat_row_new, ghat_col_new, gm_row_new, gv_row_new, gm_col_new, gv_col_new
+        )
+
+    return optax.GradientTransformation(init_fn, update_fn)
 
 
 def scale_with_grug_muonh_decoupled(
@@ -174,10 +282,6 @@ def scale_with_grug_muonh_decoupled(
     (reduce(W_hat * G), stepped by Adam at its own LR through a softplus reparam); reassemble
     W = gain * W_hat. ``gain_mode`` in {both,row,col}. No weight decay / warmup needed.
     """
-    if gain_mode not in ("both", "row", "col"):
-        raise ValueError(f"gain_mode must be both|row|col, got {gain_mode!r}")
-    use_row = gain_mode in ("both", "row")
-    use_col = gain_mode in ("both", "col")
     muon_transform = _grug_scale_with_muon(
         momentum=momentum,
         nesterov=nesterov,
@@ -187,107 +291,38 @@ def scale_with_grug_muonh_decoupled(
         coefficient_type=coefficient_type,
     )
 
-    def none_leaf(x):
-        return x is None
-
-    def _row_init(p):
-        return jnp.full(p.shape[:-1], _GAIN_INIT, jnp.float32) if _is_decouple_matrix(p) else None
-
-    def _col_init(p):
-        return jnp.full((*p.shape[:-2], p.shape[-1]), _GAIN_INIT, jnp.float32) if _is_decouple_matrix(p) else None
-
-    def _zeros_like_tree(t):
-        return jax.tree.map(lambda x: None if x is None else jnp.zeros_like(x), t, is_leaf=none_leaf)
-
-    def init_fn(params):
-        ghat_row = jax.tree.map(_row_init, params, is_leaf=none_leaf)
-        ghat_col = jax.tree.map(_col_init, params, is_leaf=none_leaf)
-        return _DecoupledGainState(
-            count=jnp.zeros([], jnp.int32),
-            muon=muon_transform.init(params),
-            ghat_row=ghat_row,
-            ghat_col=ghat_col,
-            gm_row=_zeros_like_tree(ghat_row),
-            gv_row=_zeros_like_tree(ghat_row),
-            gm_col=_zeros_like_tree(ghat_col),
-            gv_col=_zeros_like_tree(ghat_col),
-        )
-
-    def _gain_from_raw(ghr, ghc, ref):
-        # gain[..., r, c] = (use_row ? softplus(ghr)[...,:,None] : 1) * (use_col ? softplus(ghc)[...,None,:] : 1)
-        if not _is_decouple_matrix(ref):
-            return None
-        g = jnp.ones(ref.shape, jnp.float32)
-        if use_row:
-            g = g * jax.nn.softplus(ghr)[..., :, None]
-        if use_col:
-            g = g * jax.nn.softplus(ghc)[..., None, :]
-        return g
-
-    def _adam_gain(ghat, g_gamma, m, v, ref_use, count):
-        # Step the raw gain by Adam through the softplus reparam: grad_ghat = sigmoid(ghat) * dL/dgamma.
-        if ghat is None or not ref_use:
-            return ghat, m, v
-        grad = jax.nn.sigmoid(ghat) * g_gamma
-        new_m = gain_beta1 * m + (1.0 - gain_beta1) * grad
-        new_v = gain_beta2 * v + (1.0 - gain_beta2) * jnp.square(grad)
-        mhat = new_m / (1.0 - gain_beta1**count)
-        vhat = new_v / (1.0 - gain_beta2**count)
-        new_ghat = ghat - gain_lr * mhat / (jnp.sqrt(vhat) + gain_eps)
-        return new_ghat, new_m, new_v
-
-    def update_fn(updates, state, params=None):
-        if params is None:
-            raise ValueError("scale_with_grug_muonh_decoupled requires params")
-        count = optax.safe_increment(state.count)
-        gain = jax.tree.map(_gain_from_raw, state.ghat_row, state.ghat_col, params, is_leaf=none_leaf)
-        w_hat = jax.tree.map(lambda w, g: None if g is None else w / g, params, gain, is_leaf=none_leaf)
-        # direction gradient G_hat = gain * G; gain gradients dL/dgamma = reduce(W_hat * G)
-        g_hat = jax.tree.map(lambda gr, g: None if g is None else gr * g, updates, gain, is_leaf=none_leaf)
-        wg = jax.tree.map(lambda wh, gr: None if wh is None else wh * gr, w_hat, updates, is_leaf=none_leaf)
-        g_gamma_row = jax.tree.map(lambda x: None if x is None else jnp.sum(x, axis=-1), wg, is_leaf=none_leaf)
-        g_gamma_col = jax.tree.map(lambda x: None if x is None else jnp.sum(x, axis=-2), wg, is_leaf=none_leaf)
-        # MuonH direction step on W_hat (NS-orthogonalize the momentum of g_hat, then norm-preserving hyperball)
-        direction, new_muon = muon_transform.update(g_hat, state.muon, w_hat)
+    def direction_step(g_hat, dir_state, w_hat):
+        # Muon NS-orthogonalize the momentum of g_hat, then the norm-preserving Frobenius hyperball.
+        direction, new_state = muon_transform.update(g_hat, dir_state, w_hat)
         hb = _scale_invariant_hyperball_updates(w_hat, direction, learning_rate)
-        w_hat_new = jax.tree.map(lambda wh, d: None if wh is None else wh + d, w_hat, hb, is_leaf=none_leaf)
-        # Adam step the gains (own LR, softplus reparam)
-        row_out = jax.tree.map(
-            lambda gh, gg, m, v: _adam_gain(gh, gg, m, v, use_row, count),
-            state.ghat_row,
-            g_gamma_row,
-            state.gm_row,
-            state.gv_row,
-            is_leaf=none_leaf,
-        )
-        col_out = jax.tree.map(
-            lambda gh, gg, m, v: _adam_gain(gh, gg, m, v, use_col, count),
-            state.ghat_col,
-            g_gamma_col,
-            state.gm_col,
-            state.gv_col,
-            is_leaf=none_leaf,
-        )
+        return hb, new_state
 
-        def _is_adam_triple(x):
-            # The (ghat, m, v) tuples from _adam_gain. Length-3 guard avoids matching optax's
-            # MaskedNode (an empty NamedTuple) for leaves outside the muonh group under multi_transform.
-            return x is None or (isinstance(x, tuple) and len(x) == 3)
+    return _scale_with_decoupled(
+        muon_transform.init, direction_step, gain_lr, gain_beta1, gain_beta2, gain_eps, gain_mode
+    )
 
-        def unpack(tree, i):
-            return jax.tree.map(lambda x: None if x is None else x[i], tree, is_leaf=_is_adam_triple)
 
-        ghat_row_new, gm_row_new, gv_row_new = unpack(row_out, 0), unpack(row_out, 1), unpack(row_out, 2)
-        ghat_col_new, gm_col_new, gv_col_new = unpack(col_out, 0), unpack(col_out, 1), unpack(col_out, 2)
-        # reassemble W = gain_new * W_hat_new; emit delta = W_new - W
-        gain_new = jax.tree.map(_gain_from_raw, ghat_row_new, ghat_col_new, params, is_leaf=none_leaf)
-        w_new = jax.tree.map(lambda g, wh: None if g is None else g * wh, gain_new, w_hat_new, is_leaf=none_leaf)
-        delta = jax.tree.map(lambda wn, w: None if wn is None else wn - w, w_new, params, is_leaf=none_leaf)
-        return delta, _DecoupledGainState(
-            count, new_muon, ghat_row_new, ghat_col_new, gm_row_new, gv_row_new, gm_col_new, gv_col_new
-        )
+def scale_with_grug_adamh_decoupled(
+    b1: float = 0.9,
+    b2: float = 0.999,
+    eps: float = 1e-8,
+    learning_rate: float = 0.02,
+    gain_lr: float = 1e-3,
+    gain_beta1: float = 0.9,
+    gain_beta2: float = 0.95,
+    gain_eps: float = 1e-8,
+    gain_mode: str = "both",
+) -> optax.GradientTransformation:
+    """Magnitude-direction decoupled AdamH: W = diag(gamma_row) W_hat diag(gamma_col), direction
+    stepped by AdamH (Adam + Frobenius hyperball, already norm-preserving on W_hat), gains by Adam.
+    Keeps the output head on AdamH (not Muon) while adding per-row/col magnitude gains."""
+    adamh = scale_by_adamh(b1=b1, b2=b2, eps=eps, learning_rate=learning_rate)
 
-    return optax.GradientTransformation(init_fn, update_fn)
+    def direction_step(g_hat, dir_state, w_hat):
+        # AdamH already returns the norm-preserving delta for w_hat (Adam dir + hyperball).
+        return adamh.update(g_hat, dir_state, w_hat)
+
+    return _scale_with_decoupled(adamh.init, direction_step, gain_lr, gain_beta1, gain_beta2, gain_eps, gain_mode)
 
 
 @OptimizerConfig.register_subclass("grug_moe_adamh_v2")
@@ -447,7 +482,24 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, lr))
+                if self.decouple_gains and self.decouple_lm_head:
+                    # lm_head/output_proj: keep AdamH direction, add per-row/col magnitude gains.
+                    components.append(
+                        scale_with_grug_adamh_decoupled(
+                            b1=self.beta1,
+                            b2=self.beta2,
+                            eps=self.epsilon,
+                            learning_rate=lr,
+                            gain_lr=self.gain_lr,
+                            gain_beta1=self.beta1,
+                            gain_beta2=self.beta2,
+                            gain_eps=self.epsilon,
+                            gain_mode=self.gain_mode,
+                        )
+                    )
+                    components.append(_match_named_update_sharding())
+                else:
+                    components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, lr))
                 return optax.chain(*components)
 
             def adam_transform_at(lr):
@@ -484,10 +536,6 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             ):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
-                # With decoupling, optionally route the output head through the decoupled muonh group
-                # so it gets per-row/col magnitude gains too (otherwise stays on plain adamh).
-                if self.decouple_gains and self.decouple_lm_head:
-                    return "muonh"
                 return "adamh"
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
