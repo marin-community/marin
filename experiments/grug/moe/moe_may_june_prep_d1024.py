@@ -35,7 +35,7 @@ _SEQ: int = 4096
 _STEPS: int = 646591
 _EP: int = 4
 
-_heuristic = MoeMuonHHeuristic()
+_heuristic = MoeMuonHHeuristic(min_lr_ratio=0.05)
 _model_base = _heuristic.build_model_config(_DIM, seq_len=_SEQ)
 _model = dataclasses.replace(_model_base, disable_pko=True)
 _tokens = float(_STEPS * _BS * _SEQ)
