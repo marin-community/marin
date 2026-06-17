@@ -103,7 +103,11 @@ DEFAULT_PANEL_MODELS: tuple[PanelModel, ...] = (
     PanelModel("qwen/qwen3.7-max"),
 )
 DEFAULT_MAX_DOC_CHARS = 2_000
-PANELIST_MAX_TOKENS = 512
+# Generous enough to leave room for the JSON answer after a reasoning model
+# burns output tokens thinking (reasoning counts against this budget on
+# OpenAI-compatible gateways); too small a cap makes the reasoning judge
+# truncate before emitting JSON and silently abstain on every trial.
+PANELIST_MAX_TOKENS = 4_096
 
 # --- Sequential-test defaults ---------------------------------------------
 
