@@ -122,6 +122,13 @@ def restore_autoscaler_state(
     for group_snapshot in checkpoint.group_snapshots.values():
         group = groups.get(group_snapshot.name)
         if group is None:
+            # The group was renamed/removed from config. We deliberately do not
+            # adopt its slices here: existing workers keep running (we never kill
+            # their tasks), and once those workers die out the now-unbacked slice
+            # rows are reaped by the pruner's orphan-slice sweep
+            # (pruner.find_prunable_slice). The autoscaler only manages configured
+            # groups; cleanup of retired-group leftovers is liveness-driven, not
+            # config-driven.
             logger.warning(
                 "Checkpoint references scaling group %s which does not exist in config, skipping",
                 group_snapshot.name,

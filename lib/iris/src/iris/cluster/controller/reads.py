@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from rigging.timing import Timestamp
-from sqlalchemy import Integer, Row, bindparam, case, cast, func, literal_column, select, tuple_
+from sqlalchemy import Integer, Row, bindparam, case, cast, exists, func, literal_column, select, tuple_
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.codec import (
@@ -40,6 +40,7 @@ from iris.cluster.controller.schema import (
     job_config_table,
     job_workdir_files_table,
     jobs_table,
+    slices_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -449,6 +450,31 @@ def find_prunable_job(tx: Tx, terminal_states: Iterable[int], before_ts: Timesta
         {"terminal_states": list(terminal_states), "before_ts": before_ts},
     ).first()
     return row.job_id if row is not None else None
+
+
+def find_prunable_slice(tx: Tx, before_ms: int) -> str | None:
+    """Return one orphaned slice older than ``before_ms``, or None.
+
+    A ``slices`` row mirrors a set of live worker VMs. Once no ``workers`` row
+    references the slice (``workers.slice_id``), the slice has no VMs behind it
+    and the row is garbage — independent of whether its scale group still exists
+    in config. ``workers.slice_id`` (written at registration) is the authoritative
+    backing test, not ``slices.worker_ids``, which can go stale/empty while live
+    workers still point at the slice.
+
+    The ``created_at_ms`` floor protects a freshly-created slice whose VMs are
+    still booting and have not registered their workers yet.
+    """
+    row = tx.execute(
+        select(slices_table.c.slice_id)
+        .where(
+            slices_table.c.created_at_ms < bindparam("before_ms"),
+            ~exists().where(workers_table.c.slice_id == slices_table.c.slice_id),
+        )
+        .limit(1),
+        {"before_ms": before_ms},
+    ).first()
+    return row.slice_id if row is not None else None
 
 
 def get_job_detail(tx: Tx, job_id: JobName):

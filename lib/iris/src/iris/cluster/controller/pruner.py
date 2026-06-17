@@ -34,10 +34,11 @@ class PruneResult:
 
     jobs_deleted: int = 0
     workers_deleted: int = 0
+    slices_deleted: int = 0
 
     @property
     def total(self) -> int:
-        return self.jobs_deleted + self.workers_deleted
+        return self.jobs_deleted + self.workers_deleted + self.slices_deleted
 
 
 def _find_prunable_worker(health: WorkerHealthTracker, before_ms: int) -> WorkerId | None:
@@ -61,13 +62,14 @@ def prune_old_data(
     *,
     job_retention: Duration,
     worker_retention: Duration,
+    slice_retention: Duration,
     stop_event: threading.Event | None = None,
     pause_between_s: float = 1.0,
 ) -> PruneResult:
     """Incrementally delete old data, one row per transaction.
 
     Designed to run on a background thread. Each deletion holds the write
-    lock for only one CASCADE delete (one job or one worker), then sleeps
+    lock for only one CASCADE delete (one job, worker, or slice), then sleeps
     to let scheduling and heartbeats proceed.
 
     Args:
@@ -77,12 +79,14 @@ def prune_old_data(
         worker_attrs: Worker attributes projection invalidated on worker removal.
         job_retention: Delete terminal jobs whose finished_at is older than this.
         worker_retention: Delete inactive/unhealthy workers whose last heartbeat is older than this.
+        slice_retention: Delete orphaned slices (no backing worker row) older than this.
         stop_event: If set, abort early (e.g. during shutdown).
         pause_between_s: Sleep between individual deletes to reduce lock contention.
     """
     now_ms = Timestamp.now().epoch_ms()
     job_cutoff_ms = now_ms - job_retention.to_ms()
     worker_cutoff_ms = now_ms - worker_retention.to_ms()
+    slice_cutoff_ms = now_ms - slice_retention.to_ms()
 
     def _stopped() -> bool:
         return stop_event is not None and stop_event.is_set()
@@ -115,15 +119,35 @@ def prune_old_data(
         workers_deleted += 1
         time.sleep(pause_between_s)
 
+    # 3. Orphaned slices: one at a time. A slice with no backing worker row has
+    #    no VMs behind it; once it ages past slice_retention it is garbage,
+    #    whether or not its scale group still exists in config. This is what
+    #    reaps slices stranded by a scale-group rename/removal (the autoscaler's
+    #    own slice cleanup is scoped to configured groups).
+    slices_deleted = 0
+    while not _stopped():
+        with db.read_snapshot() as snap:
+            slice_id = reads.find_prunable_slice(snap, slice_cutoff_ms)
+        if slice_id is None:
+            break
+        with db.transaction() as cur:
+            deleted = writes.delete_slice(cur, slice_id)
+        if deleted:
+            log_event("slice_pruned", slice_id)
+            slices_deleted += 1
+        time.sleep(pause_between_s)
+
     result = PruneResult(
         jobs_deleted=jobs_deleted,
         workers_deleted=workers_deleted,
+        slices_deleted=slices_deleted,
     )
     if result.total > 0:
         logger.info(
-            "Pruned old data: %d jobs, %d workers",
+            "Pruned old data: %d jobs, %d workers, %d slices",
             result.jobs_deleted,
             result.workers_deleted,
+            result.slices_deleted,
         )
         db.optimize()
 

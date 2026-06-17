@@ -22,7 +22,7 @@ import secrets
 from collections.abc import Callable, Iterable
 
 from rigging.timing import Timestamp
-from sqlalchemy import Table, bindparam, case, delete, func, insert, select, text, update
+from sqlalchemy import Table, bindparam, case, delete, exists, func, insert, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
@@ -34,6 +34,7 @@ from iris.cluster.controller.schema import (
     job_config_table,
     jobs_table,
     meta_table,
+    slices_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -268,6 +269,24 @@ def insert_job_config(
 def delete_job(tx: Tx, job_id: JobName) -> None:
     """Delete a job row. ``ON DELETE CASCADE`` handles tasks, attempts, endpoints."""
     tx.execute(delete(jobs_table).where(jobs_table.c.job_id == job_id))
+
+
+@writes_to(slices_table)
+def delete_slice(tx: Tx, slice_id: str) -> int:
+    """Delete ``slice_id`` iff no worker row still references it; return rows deleted.
+
+    The pruner discovers orphan candidates in a read snapshot, so re-check "no
+    worker backs this slice" inside the write transaction — a worker could have
+    registered on a slow-to-boot slice between discovery and deletion. Slices
+    have no FK cascades, so this is a single guarded row delete.
+    """
+    result = tx.execute(
+        delete(slices_table).where(
+            slices_table.c.slice_id == slice_id,
+            ~exists().where(workers_table.c.slice_id == slice_id),
+        )
+    )
+    return result.rowcount
 
 
 @writes_to(jobs_table)
