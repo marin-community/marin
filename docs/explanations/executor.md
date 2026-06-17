@@ -99,12 +99,14 @@ number_of_restarts = ExecutorStep(
 ```
 
 The example scripts under `experiments/grug/` and `experiments/tutorials/` are
-*self-running*: they hoist the Iris client themselves (via
-`experiments.launch`), so you run them directly from a dev box and pass
-`--cluster`. The driver runs on your machine and `executor_main` spawns the
-accelerated sub-jobs via Fray — there is no separate launcher job to size or
-place. Outputs land in the regional bucket inferred from your environment — no
-`MARIN_PREFIX` to set:
+*self-running* (via `experiments.launch`): run them directly and pass
+`--cluster`. The script submits a small CPU *coordinator* job to the cluster
+that runs `executor_main` and spawns the accelerated sub-jobs via Fray; your
+terminal only streams its logs. Because the executor runs on the cluster, the
+run survives your machine disconnecting — reconnect with `iris job logs -f <id>`,
+or pass `--detach` to return right after submitting. (A preempted sub-job is
+retried by Iris and re-resolves its output paths under the new region.) Outputs
+land in the regional bucket inferred on the worker — no `MARIN_PREFIX` to set:
 
 ```bash
 WANDB_API_KEY="$WANDB_API_KEY" \
@@ -112,7 +114,8 @@ WANDB_API_KEY="$WANDB_API_KEY" \
 ```
 
 Useful flags: `--tpu_type=v4-8` / `--region=...` override the script's
-resources, and `--executor.dry_run=True` plans without submitting.
+resources, `--executor.dry_run=True` plans without submitting, and `--local`
+runs the executor in-process.
 
 A script that has *not* adopted `experiments.launch` is still launched the older
 way — as the entrypoint of a CPU-only Iris job, where `executor_main` inside it

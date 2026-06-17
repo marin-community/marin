@@ -69,7 +69,6 @@ dclm_mixture_model = default_train(
 )
 
 
-# Main execution block
 @draccus.wrap()
 def main(config: LaunchConfig):
     launch_executor(

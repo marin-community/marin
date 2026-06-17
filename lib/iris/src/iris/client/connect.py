@@ -3,19 +3,18 @@
 
 """Click-free cluster connection helpers shared by the CLI and the SDK.
 
-The ``iris`` CLI resolves a named cluster, opens a tunnel to its controller,
-and builds an authenticated :class:`~iris.client.client.IrisClient` — but that
-logic was historically spread across the click command tree (``iris.cli.main``
-group + ``iris.cli.connect.require_controller_url`` + per-command client
-construction), reachable only from inside a ``click.Context``.
+Connecting to a cluster means resolving a named cluster to its config, opening a
+tunnel to its controller, and building an authenticated
+:class:`~iris.client.client.IrisClient`. The primitives for that — cluster-config
+search dirs, cluster-name resolution, token-provider creation — live here so both
+the CLI (``iris.cli.*`` imports down from here) and non-CLI callers reach them
+without a ``click.Context``.
 
-This module hoists the click-free primitives — cluster-config search dirs,
-cluster-name resolution, token-provider creation — into one place that both the
-CLI (``iris.cli.*`` import down from here) and non-CLI callers can use, and adds
-:func:`connect_to_cluster`: a context manager that performs the full
-resolve → tunnel → authenticate → connect sequence and yields a live client.
-This is what lets experiment scripts hoist their own Iris client instead of
-being launched via ``uv run iris ... job run -- python -m ...``.
+:func:`connect_to_cluster` runs the full resolve → tunnel → authenticate →
+connect sequence and yields a live client; :func:`stream_until_complete` waits on
+a submitted job, streaming its logs and surviving a dropped connection. Together
+they let an experiment script connect and submit on its own (see
+``experiments/launch.py``) instead of being wrapped in ``uv run iris ... job run``.
 """
 
 from __future__ import annotations
@@ -125,14 +124,6 @@ def create_client_token_provider(
     raise ValueError(f"Unknown auth provider: {provider}")
 
 
-def _resolve_token_provider(proto: config_pb2.IrisClusterConfig, cluster_name: str) -> TokenProvider | None:
-    """Return a provider from the config's auth block, else the stored ``iris login`` token, else None."""
-    if proto.HasField("auth"):
-        return create_client_token_provider(proto.auth, cluster_name=cluster_name)
-    credential = load_token(cluster_name) or load_any_token()
-    return StaticTokenProvider(credential.token) if credential is not None else None
-
-
 @contextlib.contextmanager
 def connect_to_cluster(
     cluster: str,
@@ -167,7 +158,7 @@ def connect_to_cluster(
 
     configure_client_s3(proto)
     name = resolve_cluster_name(proto, None, cluster)
-    token_provider = _resolve_token_provider(proto, name)
+    token_provider = create_client_token_provider(proto.auth, cluster_name=name)
 
     bundle = iris_config.provider_bundle()
 
