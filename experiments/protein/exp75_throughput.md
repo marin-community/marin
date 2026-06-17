@@ -80,6 +80,19 @@ All tables backfilled & verified ~18:00Z, **ranked by `wts`** (token-weighted ov
 all v1 runs on each slice). `dead% = (wall − _runtime)/wall` = fraction of elapsed
 clock the run was preempted/dead.
 
+## By TPU type — window ≥ Mon 2026-06-15 00:00:00 UTC
+
+Throughput grouped by **TPU type** over every `prot-exp75-cv1-*` run whose W&B
+`created_at` is **2026-06-15 00:00:00 UTC or later** (completed + currently-running).
+TPU type taken from each run's `tpu=` W&B tag (kind+chips confirmed against
+`run.metadata["tpu"]`). Computed with the exact per-run pseudocode above,
+token-weighted per type; `tts`/`mfu` averaged. Ranked by `wts` (desc).
+
+| TPU type | wts | ats | tts | mfu |
+|---|---:|---:|---:|---:|
+| `v6e-8` | ~64k | ~72k | ~73k | 14% |
+| `v5p-8` | ~34k | ~58k | ~53k | 40% |
+
 ## Interactive (single-host, counts toward budget)
 
 | slice | chips | wts | ats | tts | mfu | dead% | n | notes |
