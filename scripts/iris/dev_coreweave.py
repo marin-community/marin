@@ -257,6 +257,7 @@ def cli(ctx, config: str | None, session_name: str | None, verbose: bool) -> Non
 @cli.command("allocate")
 @click.option(
     "--gpu-count",
+    type=click.IntRange(min=1),
     default=DEFAULT_GPU_COUNT,
     show_default=True,
     help="H100 GPUs to reserve. Only 8 (a whole h100-8x node) is validated; "

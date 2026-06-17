@@ -5,6 +5,7 @@ import re
 
 import click
 import pytest
+from click.testing import CliRunner
 from iris.cluster.backends.k8s.tasks import _LABEL_TASK_ID, _sanitize_label_value
 from iris.rpc import config_pb2
 
@@ -12,6 +13,7 @@ from scripts.iris.dev_coreweave import (
     CoreweaveTarget,
     DevCoreweaveState,
     PodRef,
+    cli,
     kubectl_base,
     kubectl_connect_cmd,
     kubectl_get_pods_cmd,
@@ -164,3 +166,12 @@ def test_parse_running_pod_is_deterministic_by_name():
 def test_parse_running_pod_none_when_no_running():
     pods = {"items": [{"metadata": {"name": "a"}, "status": {"phase": "Pending"}}]}
     assert parse_running_pod(pods) is None
+
+
+@pytest.mark.parametrize("bad_count", ["0", "-1"])
+def test_allocate_rejects_non_positive_gpu_count(bad_count):
+    # Guards against zero (which Iris helpers treat inconsistently as one GPU) and
+    # negatives (which can corrupt scheduler accounting). Click rejects before submit.
+    result = CliRunner().invoke(cli, ["--config", "x.yaml", "allocate", "--gpu-count", bad_count])
+    assert result.exit_code != 0
+    assert "gpu-count" in result.output.lower()
