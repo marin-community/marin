@@ -300,7 +300,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"
-            if hasattr(param, "ndim") and param.ndim in (2, 3):
+            # Route any matrix-shaped param to muonh: 2D and 3D from the unstacked
+            # path, plus 4D when use_array_stacked_blocks=True adds a leading
+            # num_layers axis. Without including 4D, stacked expert weights fall
+            # through to adam, whose update does not reshard the (unsharded)
+            # gradient from shard_map transposition — XLA then aligns mu / nu
+            # buffers to the unsharded shape and per-chip opt_state explodes.
+            if hasattr(param, "ndim") and param.ndim in (2, 3, 4):
                 return "muonh"
             return "adam"
 
