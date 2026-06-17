@@ -35,7 +35,7 @@ use datafusion_datasource_parquet::ParquetAccessPlan;
 
 use crate::query::sidecar::SidecarManager;
 use crate::store::segment::segment_row_group_count;
-use crate::store::trigram::{needle_trigrams, sidecar_path, INDEXED_COLUMN, MIN_TRIGRAM_LEN};
+use crate::store::trigram::{needle_trigrams, sidecar_path, MIN_TRIGRAM_LEN};
 
 /// An inclusive key range constraining a single column, distilled from a query's
 /// top-level conjuncts. Used to scope which segments' sidecars are read: a
@@ -52,30 +52,16 @@ pub struct StringRange {
     pub hi: Option<Vec<u8>>,
 }
 
-/// Prunable substring needles from every top-level `contains(INDEXED_COLUMN, …)`
-/// or `INDEXED_COLUMN LIKE '%…%'` conjunct, filtered to those long enough to
-/// decompose into at least one trigram (`>= MIN_TRIGRAM_LEN`).
-///
-/// Pure expr inspection, no I/O — the provider calls this on the hot path to
-/// decide (cheaply) whether the substring prune applies at all before touching
-/// any sidecar. A too-short needle constrains no trigram, so dropping it here
-/// keeps the prune off the blocking path entirely for `contains(col, 'ab')`.
-pub fn indexed_column_needles(filters: &[Expr]) -> Vec<String> {
-    substring_needles(filters, INDEXED_COLUMN)
-        .into_iter()
-        .filter(|n| n.len() >= MIN_TRIGRAM_LEN)
-        .collect()
-}
-
-/// Inject access plans for already-extracted `needles`. Does the blocking
-/// sidecar + footer reads (routed through the [`SidecarManager`] cache), so the
-/// provider runs it under `spawn_blocking`. `key_ranges` (from
-/// [`string_column_ranges`]) scopes which segments are consulted by key band.
-/// Returns `plan` unchanged when `needles` is empty or nothing prunes.
+/// Inject access plans for already-extracted per-column `needles` (from
+/// [`substring_needles_by_column`]). Does the blocking sidecar + footer reads
+/// (routed through the [`SidecarManager`] cache), so the provider runs it under
+/// `spawn_blocking`. `key_ranges` (from [`string_column_ranges`]) scopes which
+/// segments are consulted by key band. Returns `plan` unchanged when `needles`
+/// is empty or nothing prunes.
 pub fn apply_with_needles(
     plan: Arc<dyn ExecutionPlan>,
     segment_paths: &[String],
-    needles: &[String],
+    needles: &HashMap<String, Vec<String>>,
     key_ranges: &HashMap<String, StringRange>,
 ) -> Arc<dyn ExecutionPlan> {
     if needles.is_empty() {
@@ -178,7 +164,11 @@ fn apply_bound(range: &mut StringRange, op: Operator, value: Vec<u8>) {
 }
 
 /// Substring needles from every top-level conjunct that constrains `column` to
-/// contain a literal — `contains(column, lit)` or `column LIKE '%lit%'`.
+/// contain a literal — `contains(column, lit)` or `column LIKE '%lit%'`. A
+/// single-column probe over [`substring_column_needle`], used by the extraction
+/// unit tests; production extracts every column at once via
+/// [`substring_needles_by_column`].
+#[cfg(test)]
 fn substring_needles(filters: &[Expr], column: &str) -> Vec<String> {
     filters
         .iter()
@@ -186,52 +176,75 @@ fn substring_needles(filters: &[Expr], column: &str) -> Vec<String> {
         .collect()
 }
 
-/// `Some(needle)` if `expr` constrains `column` to contain a literal substring:
-/// `contains(<column>, <utf8 literal>)`, or a `<column> LIKE` whose pattern is a
-/// single wildcard-framed substring (see [`like_substring`]).
+/// Substring needles grouped by the column each constrains, from every top-level
+/// `contains(col, lit)` / `col LIKE '%lit%'` conjunct whose literal is long
+/// enough to decompose into at least one trigram (`>= MIN_TRIGRAM_LEN`).
+///
+/// Pure expr inspection (no I/O) — the provider calls this on the hot path to
+/// decide (cheaply) whether the substring prune applies at all before touching
+/// any sidecar. A column the query constrains but a given segment's sidecar does
+/// not index is simply ignored when that segment is pruned.
+pub fn substring_needles_by_column(filters: &[Expr]) -> HashMap<String, Vec<String>> {
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    for f in filters {
+        if let Some((column, needle)) = substring_column_needle(f) {
+            if needle.len() >= MIN_TRIGRAM_LEN {
+                out.entry(column).or_default().push(needle);
+            }
+        }
+    }
+    out
+}
+
+/// `Some(needle)` if `expr` constrains `column` to contain a literal substring.
+#[cfg(test)]
 fn substring_needle(expr: &Expr, column: &str) -> Option<String> {
+    substring_column_needle(expr)
+        .filter(|(c, _)| c == column)
+        .map(|(_, needle)| needle)
+}
+
+/// `Some((column, needle))` if `expr` constrains some column to contain a literal
+/// substring: `contains(<col>, <utf8 literal>)`, or a `<col> LIKE` whose pattern
+/// is a single wildcard-framed substring (see [`like_column_substring`]).
+fn substring_column_needle(expr: &Expr) -> Option<(String, String)> {
     match expr {
-        Expr::ScalarFunction(sf) => contains_literal(sf, column),
-        Expr::Like(like) => like_substring(like, column),
+        Expr::ScalarFunction(sf) => contains_column_literal(sf),
+        Expr::Like(like) => like_column_substring(like),
         _ => None,
     }
 }
 
-/// `Some(needle)` if `sf` is exactly `contains(<column>, <utf8 literal>)`.
-fn contains_literal(
+/// `Some((column, needle))` if `sf` is exactly `contains(<column>, <utf8 literal>)`.
+fn contains_column_literal(
     sf: &datafusion::logical_expr::expr::ScalarFunction,
-    column: &str,
-) -> Option<String> {
+) -> Option<(String, String)> {
     if sf.func.name() != "contains" || sf.args.len() != 2 {
         return None;
     }
     let Expr::Column(col) = &sf.args[0] else {
         return None;
     };
-    if col.name != column {
-        return None;
-    }
-    utf8_literal(&sf.args[1])
+    let needle = utf8_literal(&sf.args[1])?;
+    Some((col.name.clone(), needle))
 }
 
-/// `Some(needle)` if `like` is `<column> LIKE '<pattern>'` where the pattern is a
-/// single literal substring framed by `%` wildcards and free of the `_`
-/// single-char wildcard and `\` escape — so a match provably contains `needle`.
+/// `Some((column, needle))` if `like` is `<column> LIKE '<pattern>'` where the
+/// pattern is a single literal substring framed by `%` wildcards and free of the
+/// `_` single-char wildcard and `\` escape — so a match provably contains
+/// `needle`.
 ///
 /// Conservative by construction: `NOT LIKE`, `ILIKE` (case-insensitive), an
 /// explicit escape char, or a pattern with `_`, `\`, or more than one
 /// `%`-separated fragment all return `None` (no prune), because none of those
 /// guarantee `needle` appears verbatim in a matching value.
-fn like_substring(like: &Like, column: &str) -> Option<String> {
+fn like_column_substring(like: &Like) -> Option<(String, String)> {
     if like.negated || like.case_insensitive || like.escape_char.is_some() {
         return None;
     }
     let Expr::Column(col) = like.expr.as_ref() else {
         return None;
     };
-    if col.name != column {
-        return None;
-    }
     let pattern = utf8_literal(&like.pattern)?;
     // `\` is LIKE's implicit escape even with no explicit escape char; `_` is the
     // single-char wildcard. A pattern carrying either has subtler semantics than
@@ -248,7 +261,7 @@ fn like_substring(like: &Like, column: &str) -> Option<String> {
     if fragments.next().is_some() {
         return None;
     }
-    Some(needle.to_string())
+    Some((col.name.clone(), needle.to_string()))
 }
 
 /// The string value of a Utf8 / LargeUtf8 / Utf8View literal, else `None`.
@@ -274,15 +287,21 @@ fn utf8_literal(expr: &Expr) -> Option<String> {
 /// them, and the resident bytes stay within the cache budget.
 fn build_access_plans(
     segment_paths: &[String],
-    needles: &[String],
+    needles: &HashMap<String, Vec<String>>,
     key_ranges: &HashMap<String, StringRange>,
 ) -> HashMap<String, ParquetAccessPlan> {
-    // Decompose each needle into trigrams ONCE, not once per segment — a single
-    // query commonly spans dozens of segments. Needles arrive pre-filtered to
-    // `>= MIN_TRIGRAM_LEN`, so each yields a non-empty trigram set.
-    let needle_trigrams: Vec<Vec<[u8; 3]>> =
-        needles.iter().filter_map(|n| needle_trigrams(n)).collect();
-    if needle_trigrams.is_empty() {
+    // Decompose each constrained column's needles into trigram sets ONCE, not
+    // once per segment — a single query commonly spans dozens of segments.
+    // Needles arrive pre-filtered to `>= MIN_TRIGRAM_LEN`, so each yields a
+    // non-empty set; a column whose needles all degrade is dropped here.
+    let trigrams_by_column: HashMap<&str, Vec<Vec<[u8; 3]>>> = needles
+        .iter()
+        .filter_map(|(col, ns)| {
+            let tg: Vec<Vec<[u8; 3]>> = ns.iter().filter_map(|n| needle_trigrams(n)).collect();
+            (!tg.is_empty()).then_some((col.as_str(), tg))
+        })
+        .collect();
+    if trigrams_by_column.is_empty() {
         return HashMap::new();
     }
 
@@ -332,17 +351,23 @@ fn build_access_plans(
             );
             continue;
         }
-        let Some(index) = manager.get_column(&sidecar, &header, INDEXED_COLUMN) else {
-            continue;
-        };
-        // A row group survives only if it survives EVERY needle's trigram test.
-        let mut keep = vec![true; index.len()];
-        for trigrams in &needle_trigrams {
-            for (k, m) in keep.iter_mut().zip(index.keep_mask_for(trigrams)) {
-                *k &= m;
+        // A row group survives only if it survives EVERY constrained column's
+        // needles. A column this segment's sidecar does not index can't prune, so
+        // it simply contributes no constraint here.
+        let mut keep = vec![true; rg_count];
+        let mut applied_any = false;
+        for (&col, needle_trigrams) in &trigrams_by_column {
+            let Some(index) = manager.get_column(&sidecar, &header, col) else {
+                continue;
+            };
+            applied_any = true;
+            for trigrams in needle_trigrams {
+                for (k, m) in keep.iter_mut().zip(index.keep_mask_for(trigrams)) {
+                    *k &= m;
+                }
             }
         }
-        if keep.iter().all(|&k| k) {
+        if !applied_any || keep.iter().all(|&k| k) {
             continue;
         }
         let mut access = ParquetAccessPlan::new_all(rg_count);
@@ -359,7 +384,7 @@ fn build_access_plans(
     }
     if !out.is_empty() || scoped_out > 0 {
         tracing::debug!(
-            needles = needle_trigrams.len(),
+            indexed_columns = trigrams_by_column.len(),
             segments_pruned = out.len(),
             segments_scoped_out = scoped_out,
             row_groups_skipped = skipped_row_groups,
@@ -506,13 +531,14 @@ mod tests {
 
     #[test]
     fn short_needles_are_dropped_before_the_blocking_path() {
-        // `indexed_column_needles` filters needles too short to form a trigram, so
-        // the provider returns on the hot path without touching a sidecar.
+        // `substring_needles_by_column` filters needles too short to form a
+        // trigram, so the provider returns on the hot path without touching a
+        // sidecar.
         let filters = vec![
             contains_expr("data", "ab"),             // 2 bytes: no trigram
             like_expr("data", "%xy%", false, false), // 2 bytes: no trigram
         ];
-        assert!(indexed_column_needles(&filters).is_empty());
+        assert!(substring_needles_by_column(&filters).is_empty());
     }
 
     #[test]
@@ -579,7 +605,7 @@ mod tests {
         crate::store::trigram::write_sidecar(
             &path,
             std::slice::from_ref(&batch),
-            "data",
+            &["data"],
             Some("key"),
         )
         .unwrap();
@@ -602,7 +628,10 @@ mod tests {
             "Bootstrap completed for TPU here",
         );
         let paths = vec![path];
-        let needles = vec!["Bootstrap completed for TPU".to_string()];
+        let needles = HashMap::from([(
+            "data".to_string(),
+            vec!["Bootstrap completed for TPU".to_string()],
+        )]);
 
         // No key constraint: the needle prunes row group 0, so a plan is produced.
         let unscoped = build_access_plans(&paths, &needles, &HashMap::new());

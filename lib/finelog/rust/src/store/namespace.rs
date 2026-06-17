@@ -11,6 +11,10 @@
 //!   (durability-before-ack).
 //! - `await_persisted(target)` subscribes to the watch and waits, bounded by a
 //!   caller-supplied timeout, nudging the flush task via a `Notify`.
+//! - The flush task seals one L0 per wake but then holds off for
+//!   `MIN_FLUSH_INTERVAL`, so the appends in that window coalesce into a single
+//!   L0 instead of one tiny segment per nudge; a full buffer
+//!   (`SEGMENT_TARGET_BYTES`) bypasses the cooldown via `force_flush`.
 //!
 //! `MemoryNamespace` (no `data_dir`) treats every append as immediately
 //! persisted: it stamps into a RAM buffer, advances `persisted_seq` to the
@@ -27,9 +31,10 @@ use arrow::datatypes::SchemaRef;
 use tokio::sync::{watch, Notify, RwLock};
 
 use crate::errors::StatsError;
+use crate::proto::finelog::stats::ColumnType;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
-use crate::store::compaction::executor::{run_job, PlannedSwap};
+use crate::store::compaction::executor::{read_segment_batches, run_job, PlannedSwap};
 use crate::store::compaction::planner::plan;
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
@@ -39,7 +44,7 @@ use crate::store::schema::{schema_to_arrow, AlignedBatch, Schema};
 use crate::store::segment::{
     discover_segments, read_segment_footer, recover_next_seq, write_segment_to_dir,
 };
-use crate::store::trigram::sidecar_path;
+use crate::store::trigram::{sidecar_path, write_sidecar};
 use crate::store::types::{LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
 
 /// Best-effort removal of a segment's trigram sidecar (`<path>.tgm`), co-located
@@ -54,14 +59,30 @@ fn remove_sidecar(parquet_path: &str) {
     }
 }
 
-/// Target sealed-buffer byte size before a flush is forced.
+/// Buffered-byte size at which an append forces an early flush, short-circuiting
+/// the flush-rate cooldown so a write burst can't buffer unboundedly (and bounds
+/// a single L0's size).
 pub const SEGMENT_TARGET_BYTES: i64 = 100 * 1024 * 1024;
 
-/// Default flush-loop cadence.
+/// Maximum idle gap before the flush task wakes on its own. With steady writes
+/// the per-append nudge drives flushes; this is the ceiling for a quiet namespace.
 pub const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Minimum spacing between consecutive L0 flushes. Every append nudges the flush
+/// task, so without this floor a steadily-written namespace seals a fresh tiny L0
+/// on each wake (many per second). Holding off coalesces all appends in the
+/// window into ONE L0, capping L0 creation at one segment per interval.
+pub const MIN_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Default durability-await budget when the RPC carries no deadline.
 pub const DEFAULT_PERSIST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Trigram sidecars rebuilt per maintenance tick by the background backfill.
+/// Kept at one because a single index build over a terminal-level segment is
+/// itself heavy (the builder currently uses substantial CPU + RAM); rebuilding
+/// one per tick keeps the backfill the lowest-priority maintenance work and
+/// never starves compaction/sync/eviction. Raise once the builder is cheaper.
+pub const BACKFILL_SIDECARS_PER_TICK: usize = 1;
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -117,7 +138,14 @@ pub struct Namespace {
     /// `sync_step` uploads L>=1 LOCAL segments here; eviction flips BOTH->REMOTE.
     remote: Option<RemoteStore>,
     persisted_seq: watch::Sender<i64>,
+    /// Nudged by every append (and a durability await): "there may be data to
+    /// flush". Drives the flush task's normal wake.
     flush_notify: Arc<Notify>,
+    /// Nudged only when a buffer crosses `SEGMENT_TARGET_BYTES`: "flush now,
+    /// don't wait out the rate cooldown". Lets a write burst bypass
+    /// `MIN_FLUSH_INTERVAL` so RAM and L0 size stay bounded, while normal
+    /// per-append nudges (which spam `flush_notify`) keep coalescing.
+    force_flush: Arc<Notify>,
     stop: Arc<Notify>,
     /// Latched stop flag the background tasks check at the TOP of each loop
     /// iteration, in addition to selecting on the `stop` Notify. `Notify`
@@ -221,6 +249,7 @@ impl Namespace {
             remote,
             persisted_seq: tx,
             flush_notify: Arc::new(Notify::new()),
+            force_flush: Arc::new(Notify::new()),
             stop: Arc::new(Notify::new()),
             stopped: AtomicBool::new(false),
             task_handles: Mutex::new(Vec::new()),
@@ -327,9 +356,15 @@ impl Namespace {
             // land in RAM, so advance the high-water mark under the lock.
             self.persisted_seq.send_replace(last_seq);
         }
+        let buffered_bytes = inner.buffers.ram_bytes();
         drop(inner);
         if self.data_dir.is_some() {
             self.flush_notify.notify_one();
+            // A burst that has already buffered a full segment shouldn't wait out
+            // the flush-rate cooldown — flush now to bound RAM and L0 size.
+            if buffered_bytes >= SEGMENT_TARGET_BYTES {
+                self.force_flush.notify_one();
+            }
         }
         last_seq
     }
@@ -363,9 +398,15 @@ impl Namespace {
         if self.data_dir.is_none() {
             self.persisted_seq.send_replace(last_seq);
         }
+        let buffered_bytes = inner.buffers.ram_bytes();
         drop(inner);
         if self.data_dir.is_some() {
             self.flush_notify.notify_one();
+            // A burst that has already buffered a full segment shouldn't wait out
+            // the flush-rate cooldown — flush now to bound RAM and L0 size.
+            if buffered_bytes >= SEGMENT_TARGET_BYTES {
+                self.force_flush.notify_one();
+            }
         }
         last_seq
     }
@@ -626,14 +667,28 @@ impl Namespace {
 
     /// Execute `job` (read+merge+write or rename) then commit the resulting swap.
     fn run_one_job(&self, dir: &std::path::Path, job: &CompactionJob) -> Result<(), StatsError> {
+        let indexed = self.indexed_columns();
         let swap = run_job(
             job,
             dir,
             &self.arrow_schema,
             self.key_column.as_deref(),
+            &indexed,
             |path| self.input_key_bounds(path),
         )?;
         self.commit_swap(swap)
+    }
+
+    /// Names of the schema's STRING columns carrying a trigram substring index
+    /// (see `ColumnIndex::trigram`). The merge + backfill paths build one bloom
+    /// set per returned column.
+    fn indexed_columns(&self) -> Vec<&str> {
+        self.schema
+            .columns
+            .iter()
+            .filter(|c| c.index.trigram && c.r#type == ColumnType::COLUMN_TYPE_STRING)
+            .map(|c| c.name.as_str())
+            .collect()
     }
 
     /// Recover the typed Int64 key bounds for an input segment from the in-memory
@@ -928,10 +983,75 @@ impl Namespace {
         removed_bytes
     }
 
+    // ----- trigram sidecar backfill -------------------------------------
+
+    /// Rebuild trigram sidecars for up to `max` local L>=1 segments missing one.
+    ///
+    /// Compaction only builds a sidecar for the segments it merges (see
+    /// `executor::run_job`); L0 is intentionally unindexed, and a terminal-level
+    /// segment that never re-merges — or any segment written before sidecars
+    /// existed — stays without a `.tgm` and so scans `contains()`/`LIKE`
+    /// unpruned. This background sweep closes that gap for already-durable data.
+    ///
+    /// Bounded per call and run as the lowest-priority maintenance step so the
+    /// parquet reads + index build can't delay compaction/sync/eviction. A no-op
+    /// for namespaces without the indexed string column. Best-effort per segment
+    /// (a read/build failure only leaves that segment unpruned, never wrong),
+    /// mirroring the compaction-time sidecar write. Returns the number rebuilt.
+    ///
+    /// Writes are atomic (`write_sidecar` renames into place), so a query that
+    /// races the backfill sees either the old (absent) or the complete sidecar,
+    /// never a partial one.
+    fn backfill_missing_sidecars(&self, max: usize) -> usize {
+        if self.data_dir.is_none() || max == 0 {
+            return 0;
+        }
+        // Only namespaces with at least one indexed column benefit; skip the
+        // parquet reads entirely otherwise.
+        let indexed = self.indexed_columns();
+        if indexed.is_empty() {
+            return 0;
+        }
+        let candidates: Vec<String> = {
+            let inner = self.inner.lock().unwrap();
+            inner
+                .local_segments
+                .iter()
+                .filter(|s| s.level >= 1)
+                .map(|s| s.path.clone())
+                .filter(|p| !sidecar_path(Path::new(p)).exists())
+                .take(max)
+                .collect()
+        };
+        let mut built = 0;
+        for path in candidates {
+            let p = Path::new(&path);
+            let batches = match read_segment_batches(p) {
+                Ok(batches) => batches,
+                Err(e) => {
+                    tracing::warn!(namespace = %self.name, path = %path, error = %e, "sidecar backfill: read failed");
+                    continue;
+                }
+            };
+            match write_sidecar(p, &batches, &indexed, self.key_column.as_deref()) {
+                Ok(true) => {
+                    built += 1;
+                    tracing::debug!(namespace = %self.name, path = %path, "backfilled trigram sidecar");
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(namespace = %self.name, path = %path, error = %e, "sidecar backfill: write failed")
+                }
+            }
+        }
+        built
+    }
+
     // ----- maintenance orchestration ------------------------------------
 
-    /// Run one full maintenance cycle: `flush -> compact -> sync -> evict`,
-    /// serialized against other maintenance callers via `maint_lock`.
+    /// Run one full maintenance cycle: `flush -> compact -> sync -> evict ->
+    /// backfill sidecars`, serialized against other maintenance callers via
+    /// `maint_lock`.
     ///
     /// Supports an optional forced L0->L1 (the debug `force_compact_l0` flag).
     /// The blocking compaction (read/merge/write +
@@ -972,6 +1092,16 @@ impl Namespace {
         tokio::task::spawn_blocking(move || ns.eviction_step())
             .await
             .map_err(|e| StatsError::Internal(format!("maintenance evict task panicked: {e}")))??;
+
+        // Backfill (blocking parquet reads + index build). Last + bounded so it is
+        // the lowest-priority work: older/terminal segments compaction never
+        // indexed get their trigram sidecars rebuilt a few per tick.
+        let ns = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            ns.backfill_missing_sidecars(BACKFILL_SIDECARS_PER_TICK)
+        })
+        .await
+        .map_err(|e| StatsError::Internal(format!("maintenance backfill task panicked: {e}")))?;
         Ok(())
     }
 
@@ -1259,6 +1389,18 @@ fn spawn_flush_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
             let res = tokio::task::spawn_blocking(move || ns2.flush_once()).await;
             if let Ok(Err(e)) = res {
                 tracing::warn!(namespace = %ns.name, error = %e, "flush task: flush_once failed");
+            }
+            // Flush-rate cooldown: coalesce the appends that arrive during the
+            // window into the next single L0 (cap = one segment per
+            // MIN_FLUSH_INTERVAL) instead of sealing a tiny L0 per nudge. A burst
+            // that fills a whole segment cuts the wait short via `force_flush`.
+            tokio::select! {
+                _ = tokio::time::sleep(MIN_FLUSH_INTERVAL) => {}
+                _ = ns.force_flush.notified() => {}
+                _ = ns.stop.notified() => {
+                    let _ = ns.flush_once();
+                    return;
+                }
             }
         }
     })
@@ -1549,6 +1691,102 @@ mod tests {
         let segs = discover_segments(&ns_dir);
         assert_eq!(segs.len(), 1, "one flush coalesces buffered appends");
         assert_eq!(ns.stats().row_count, 10);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- trigram sidecar backfill ---------------------------------------
+
+    /// Log-form schema carrying the trigram-indexed `data` string column.
+    fn data_schema() -> Schema {
+        with_implicit_seq(Schema::new(
+            vec![
+                Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
+                Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+            ],
+            "timestamp_ms",
+        ))
+    }
+
+    /// `n` rows of searchable `data` + monotonic `timestamp_ms` (non-seq columns
+    /// in registered order, as `append_aligned_batch` expects).
+    fn data_aligned(n: i64, first: i64) -> AlignedBatch {
+        let data: Vec<String> = (0..n)
+            .map(|i| format!("log line {} searchable text", first + i))
+            .collect();
+        let ts: Vec<i64> = (0..n).map(|i| 1000 + first + i).collect();
+        AlignedBatch {
+            arrays: vec![
+                Arc::new(StringArray::from(data)),
+                Arc::new(Int64Array::from(ts)),
+            ],
+            fields: vec![
+                Field::new("data", DataType::Utf8, false),
+                Field::new("timestamp_ms", DataType::Int64, false),
+            ],
+            num_rows: n as usize,
+            byte_size: 48 * n,
+        }
+    }
+
+    #[tokio::test]
+    async fn backfill_rebuilds_missing_trigram_sidecar() {
+        let dir = tempdir();
+        let ns_dir = dir.join("log.test");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns("log.test", data_schema(), Some(ns_dir.clone()), catalog);
+
+        // Two L0 flushes merged to one L1 — the merge builds the sidecar.
+        ns.append_aligned_batch(&data_aligned(5, 0));
+        ns.flush_once().unwrap();
+        let last = ns.append_aligned_batch(&data_aligned(5, 5));
+        ns.flush_once().unwrap();
+        ns.await_persisted(last, Duration::from_secs(10))
+            .await
+            .unwrap();
+        // run_maintenance wraps the merge in spawn_blocking (commit_swap takes the
+        // blocking query-visibility lock); a multi-input merge builds the sidecar.
+        ns.run_maintenance(true).await.unwrap();
+
+        let segs = discover_segments(&ns_dir);
+        assert_eq!(segs.len(), 1, "two L0 merged into one L1");
+        let sidecar = sidecar_path(&segs[0]);
+        assert!(sidecar.exists(), "the merge wrote a sidecar");
+
+        // Simulate a segment compaction never indexed (single-input bump, or one
+        // written before sidecars existed): drop the sidecar.
+        std::fs::remove_file(&sidecar).unwrap();
+        assert!(!sidecar.exists());
+
+        // The backfill rebuilds exactly the one missing sidecar, then idles.
+        assert_eq!(ns.backfill_missing_sidecars(10), 1);
+        assert!(sidecar.exists(), "backfill rebuilt the sidecar");
+        assert_eq!(ns.backfill_missing_sidecars(10), 0, "nothing left to do");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn backfill_is_a_noop_without_the_indexed_column() {
+        let dir = tempdir();
+        let ns_dir = dir.join("iris.worker");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        // worker_schema has no `data` column, so there is nothing to index.
+        let ns = open_ns(
+            "iris.worker",
+            worker_schema(),
+            Some(ns_dir.clone()),
+            catalog,
+        );
+        ns.append_aligned_batch(&aligned(3));
+        ns.flush_once().unwrap();
+        let last = ns.append_aligned_batch(&aligned(3));
+        ns.flush_once().unwrap();
+        ns.await_persisted(last, Duration::from_secs(10))
+            .await
+            .unwrap();
+        ns.run_maintenance(true).await.unwrap();
+
+        assert_eq!(ns.backfill_missing_sidecars(10), 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 
