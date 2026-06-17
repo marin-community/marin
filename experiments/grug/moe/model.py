@@ -115,6 +115,9 @@ class GrugModelConfig:
     # still run full causal attention (no sliding window); only the PKO step
     # is bypassed. Short layers are unaffected (PKO never ran on them).
     disable_pko: bool = False
+    # When True, the long layers skip rotary embedding entirely (Q and K go
+    # into attention un-rotated). Short layers still apply half-RoPE.
+    disable_long_rope: bool = False
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
@@ -190,6 +193,7 @@ class CausalSelfAttention(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
+        disable_rope: bool = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -228,14 +232,15 @@ class CausalSelfAttention(eqx.Module):
 
         q = rms_norm(q)
         k = rms_norm(k)
-        # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim.
-        # Second half is rope-free on every layer.
-        half = head_dim // 2
-        q_rot, k_rot = apply_rotary_embedding(
-            q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
-        )
-        q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-        k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+        if not disable_rope:
+            # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim.
+            # Second half is rope-free on every layer.
+            half = head_dim // 2
+            q_rot, k_rot = apply_rotary_embedding(
+                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+            )
+            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
+            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
@@ -555,15 +560,16 @@ class Block(eqx.Module):
         long_mask: AttentionMask | jax.Array,
         use_long_mask: Bool[Array, ""] | bool,
         use_pko: bool = False,
+        disable_long_rope: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         # lax.cond so the body has a uniform shape across scan iterations:
-        # long layers use the full causal mask (and may PKO); short layers
-        # use the sliding-window mask and never PKO.
+        # long layers use the full causal mask (and may PKO / drop RoPE); short
+        # layers use the sliding-window mask, never PKO, and always RoPE.
         attn_out = jax.lax.cond(
             jnp.asarray(use_long_mask, dtype=jnp.bool_),
-            lambda _: self.attn(attn_in, long_mask, use_pko=use_pko),
-            lambda _: self.attn(attn_in, short_mask, use_pko=False),
+            lambda _: self.attn(attn_in, long_mask, use_pko=use_pko, disable_rope=disable_long_rope),
+            lambda _: self.attn(attn_in, short_mask, use_pko=False, disable_rope=False),
             operand=None,
         )
         x = x + attn_out
@@ -666,7 +672,7 @@ class Transformer(eqx.Module):
                 is_long = i % 4 == 3 or is_last
                 use_pko = is_long and not cfg.disable_pko
                 hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                    hidden, short_mask, long_mask, is_long, use_pko
+                    hidden, short_mask, long_mask, is_long, use_pko, cfg.disable_long_rope
                 )
                 moe_router_stats.append(router_stats)
             router_metrics = {
@@ -687,7 +693,7 @@ class Transformer(eqx.Module):
             ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
                 layer, layer_use_long_mask = scan_inputs
                 return eqx.filter_checkpoint(layer, policy=remat_policy)(
-                    carry_hidden, short_mask, long_mask, layer_use_long_mask, False
+                    carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope
                 )
 
             hidden, stacked_router_stats = jax.lax.scan(
