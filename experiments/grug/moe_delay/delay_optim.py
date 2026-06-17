@@ -294,8 +294,12 @@ def _preorth_leaf_offset(
         return base * keep / (jnp.mean(keep) + _EPS)
     if corrector == "wp_confidence":
         # Soft gate: shrink by the (clipped) cosine between the predicted descent
-        # and the realized update direction.
-        cos = jnp.vdot(descent, last_update) / (_rms(descent) * _rms(last_update) * descent.size)
+        # and the realized update direction. Use sum-of-products, not jnp.vdot:
+        # vdot ravels its operands, and flattening a model-sharded leaf (e.g. the
+        # token embedding) is an unsupported resharding reshape. ``sum`` and the
+        # ``_rms`` reductions are sharding-safe.
+        dot = jnp.sum(descent * last_update)
+        cos = dot / (_rms(descent) * _rms(last_update) * descent.size)
         return base * jnp.maximum(0.0, cos)
     if corrector == "wp_trust":
         # LARS-style clamp: cap the offset RMS at a trust fraction of the param
