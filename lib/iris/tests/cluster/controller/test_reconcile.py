@@ -49,6 +49,7 @@ from iris.cluster.controller.reconcile.worker import (
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.worker_health import (
+    MIN_UNREACHABLE_FAILURES,
     WorkerHealthEvent,
     WorkerHealthEventKind,
 )
@@ -1332,11 +1333,17 @@ class _UnreachableProvider:
         pass
 
 
-# The controller derives the consecutive-failure threshold from
-# round(worker_unreachable_grace / poll_interval). With grace=4s and the default
-# 1s poll, a worker is torn down on the 4th consecutive failed reconcile pass.
-_THRESHOLD = 4
-_SHORT_GRACE = Duration.from_seconds(4)
+# Worker-death detection is time-based: a worker is reaped once it has been
+# continuously unreachable for worker_unreachable_grace (and past the failure
+# floor). Tests force the grace to have elapsed with ``_expire_grace`` rather than
+# sleeping, since the control tick reads the real wall clock.
+_GRACE = Duration.from_seconds(4)
+
+
+def _expire_grace(ctrl, wid: WorkerId) -> None:
+    """Backdate a worker's last heartbeat so the unreachable grace has elapsed."""
+    aged = Timestamp.now().epoch_ms() - _GRACE.to_ms() - 1
+    ctrl._health.set_last_heartbeat_for_test(wid, aged)
 
 
 @pytest.mark.parametrize(
@@ -1353,12 +1360,13 @@ def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller, 
     Two failure modes fold to the same UNREACHABLE signal: the reconcile RPC
     fails outright (``rpc_unreachable``), or it succeeds but the worker
     self-reports unhealthy — e.g. failed disk (``responded_but_unhealthy``,
-    ``error=None`` + ``self_healthy=False``). In both, once the derived threshold
-    of consecutive failures accrues, the controller fails the worker, drives
-    ``backend.autoscale(dead_workers=...)`` to reap the slice, and forgets it.
+    ``error=None`` + ``self_healthy=False``). In both, once the worker has been
+    continuously unreachable for the grace, the controller fails the worker,
+    drives ``backend.autoscale(dead_workers=...)`` to reap the slice, and forgets
+    it.
     """
     provider = _UnreachableProvider(**provider_kwargs)
-    ctrl = make_controller(provider=provider, worker_unreachable_grace=_SHORT_GRACE)
+    ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
     state = ControllerTestState(
         ctrl._db,
         health=ctrl._health,
@@ -1369,14 +1377,16 @@ def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller, 
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
 
-    # One failure short of the threshold: still present, still tracked, no teardown.
-    for _ in range(_THRESHOLD - 1):
+    # Many consecutive failures, but all within the wall-clock grace window:
+    # detection is time-based, so the worker is still tracked, not torn down.
+    for _ in range(MIN_UNREACHABLE_FAILURES + 5):
         reconcile_once(ctrl)
     assert query_worker(state, wid) is not None
-    assert ctrl._health.liveness(wid).consecutive_failures == _THRESHOLD - 1
     assert provider.autoscale_calls == []
 
-    # The threshold-crossing tick fails and tears the worker down.
+    # Once it has been unreachable for the full grace, the next failed reconcile
+    # tears it down and forgets it.
+    _expire_grace(ctrl, wid)
     reconcile_once(ctrl)
     assert provider.autoscale_calls == [[wid]]
     assert query_worker(state, wid) is None, "failed worker row should be removed"
@@ -1391,7 +1401,7 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     whole slice, even though the siblings were reachable every tick.
     """
     provider = _UnreachableProvider(unreachable={_W1}, siblings={_W1: [_W2]})
-    ctrl = make_controller(provider=provider, worker_unreachable_grace=_SHORT_GRACE)
+    ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
     state = ControllerTestState(
         ctrl._db,
         health=ctrl._health,
@@ -1403,8 +1413,11 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     dead = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
     sibling = register_worker(state, _W2, f"{_W2}:8080", make_worker_metadata())
 
-    for _ in range(_THRESHOLD):
+    # Accrue failures past the floor, then expire the grace so the next tick reaps.
+    for _ in range(MIN_UNREACHABLE_FAILURES):
         reconcile_once(ctrl)
+    _expire_grace(ctrl, dead)
+    reconcile_once(ctrl)
 
     assert provider.autoscale_calls == [[dead]]
     assert query_worker(state, dead) is None
@@ -1422,7 +1435,7 @@ def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
     reconcile: eviction is driven by the queue, not by liveness.
     """
     provider = _UnreachableProvider()  # the worker stays reachable every tick
-    ctrl = make_controller(provider=provider, worker_unreachable_grace=_SHORT_GRACE)
+    ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
     state = ControllerTestState(
         ctrl._db,
         health=ctrl._health,
