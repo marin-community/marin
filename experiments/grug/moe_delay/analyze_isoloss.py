@@ -91,8 +91,14 @@ def main():
     args = ap.parse_args()
 
     runs = list(wandb.Api().runs(args.project, filters={"group": args.group}))
-    curves = {r.name: _curve(r) for r in runs}
-    curves = {name: (s, lo) for name, (s, lo) in curves.items() if len(s)}
+    # A preempted run leaves a short/empty "failed" entry alongside its retried
+    # run under the same display name; keep the longest history per name so the
+    # dead attempt never shadows the real curve.
+    curves: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    for r in runs:
+        steps, loss = _curve(r)
+        if len(steps) and (r.name not in curves or len(steps) > len(curves[r.name][0])):
+            curves[r.name] = (steps, loss)
     if args.sync not in curves:
         raise SystemExit(f"sync run {args.sync!r} not found in group {args.group!r}; have {sorted(curves)}")
 
