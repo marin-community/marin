@@ -1,6 +1,6 @@
 ---
 name: refresh-tpu-vllm-forks
-description: Refresh Marin-owned vLLM and tpu-inference fork branches from the newest stable upstream tpu-inference release and its recorded vLLM LKG; rebuild carry/drop/fix overlays; update Marin SHA pins; run TPU smoke tests; and open the single Marin PR. Use for scheduled or manual TPU-vLLM fork-stack refreshes.
+description: Refresh Marin TPU-vLLM forks from a tpu-inference release/LKG pair, update exact SHA pins, run TPU smokes, and open the Marin PR.
 ---
 
 # Skill: Refresh TPU-vLLM Fork Stack
@@ -9,24 +9,18 @@ Read first:
 
 @AGENTS.md
 
-Example run: [marin-community/marin#6453](https://github.com/marin-community/marin/pull/6453).
-
 ## Mission
 
-Run either locally from a human's machine or from a scheduled/manual Marin
-GitHub Actions workflow.
+Marin maintains forks of `vllm` and `tpu-inference` with required patches.
+Update those forks to the latest tested upstream pair, reconcile Marin overlay
+commits, then open the Marin PR that pins the refreshed fork tips.
 
-Refresh Marin's owned `vllm` and `tpu-inference` fork branches only when the
-newest stable upstream `tpu-inference` release selects a newer compatible pair
-through its recorded vLLM LKG. Use the same algorithm in both execution modes;
-only approvals/setup differ.
+Example run: [marin-community/marin#6453](https://github.com/marin-community/marin/pull/6453).
 
-Execution mode:
-
-- GitHub Actions: run autonomously.
-- Local: run interactively. Ask before external mutations: pushing fork
-  branches, publishing the logs Gist, opening the Marin PR, or filing/updating a
-  GitHub issue. Do not ask before required TPU smoke tests.
+Use the same algorithm in CI and local runs. In local/manual mode, ask before
+external mutations: pushing fork branches, publishing the logs Gist, opening the
+Marin PR, or filing/updating a GitHub issue. Do not ask before required TPU
+smoke tests.
 
 | Repo | Role | Upstream |
 | --- | --- | --- |
@@ -38,12 +32,12 @@ Execution mode:
 
 - If no newer upstream pair is selected and no pin metadata needs repair, exit
   successfully with a no-op summary.
-- If the refresh succeeds, open exactly one draft PR in
-  `marin-community/marin`, after required smoke tests pass, and request
-  `@yonromai` as reviewer.
+- If the refresh succeeds, open exactly one draft PR in `marin-community/marin`
+  after required smoke tests pass, and request `@yonromai` as reviewer.
 - The PR updates Marin's fork tip SHAs, refreshes `uv.lock`, and reports bases,
   branches/tips, carried/dropped/fixed overlays, validation, and residual risk.
-- Do not open fork PRs. Do not move either fork `main`.
+- Do not open fork PRs. Do not move either fork `main`; fork review happens via
+  pushed branches and compare links from the Marin PR.
 
 If a real external blocker remains after repair attempts, do not open a Marin
 PR. Create or update one `marin-community/marin` issue assigned to `@yonromai`,
@@ -51,8 +45,7 @@ titled `TPU-vLLM fork refresh blocked: <short reason>`, with current pins,
 selected release, branch names/SHAs if created, attempted fixes, remaining
 failure, artifacts, and the logs Gist.
 
-<details>
-<summary>Workspace Setup</summary>
+## Workspace Setup
 
 - Marin working copy:
   - GitHub Actions: use the checked-out `marin-community/marin` repo.
@@ -83,18 +76,20 @@ git -C tpu-inference fetch --tags origin upstream
 - Before opening a PR or issue, publish both logs to one GitHub Gist and link it
   from the PR/issue.
 
-</details>
-
 ## Algorithm
 
 ### 1. Read Current Pins
 
-- Read current `vllm` and `tpu-inference` SHAs from Marin root
-  `pyproject.toml` `tool.uv.sources`; check `uv.lock` against them.
-- Resolve those SHAs in the scratch fork clones.
+- Prefer managed fork pins: read current `vllm` and `tpu-inference` SHAs from
+  root `pyproject.toml` `tool.uv.sources`; check `uv.lock` against them.
 - Read adjacent GitHub compare-link comments to recover each current upstream
   base. If comments are missing, compute `git merge-base <fork-sha>
   upstream/main` and include repaired compare comments in the Marin change.
+- If Marin is still on legacy package pins such as `vllm-tpu==...` /
+  `tpu-inference==...` in `lib/marin/pyproject.toml`, treat this as a one-time
+  bootstrap migration: record the package versions, do not require old fork SHAs
+  or compare comments, and migrate to exact fork SHA pins after validation.
+- Resolve any old fork SHAs in the scratch fork clones before replaying overlays.
 
 ### 2. Select Bases
 
@@ -151,6 +146,10 @@ For each fork:
 9. Keep history reviewable: no conflict artifacts, unrelated refactors, or
    preserved commits whose behavior is now `drop`.
 
+For bootstrap migrations without pin-derived `old_base..old_tip`, create the
+first managed branches from the selected upstream bases and replay only Marin
+fork deltas whose source and intent are explicit.
+
 Push the finished branch to the corresponding `marin-community` fork.
 
 ### 4. Wire Marin
@@ -170,7 +169,8 @@ Also make only fork-stack update changes needed in Marin:
 
 - remove any old `vllm-tpu==0.19.0` path;
 - make `marin-core[vllm]` own the TPU-vLLM runtime stack;
-- avoid combining generic `tpu` extras with vLLM workers;
+- preserve worker/eval paths that intentionally combine `tpu` and `vllm`
+  extras, unless refreshed-stack validation proves they must change;
 - set `VLLM_TARGET_DEVICE=tpu` for TPU source-build workers.
 
 Do not bundle unrelated usability, cleanup, or refactor work. Log those
@@ -191,6 +191,23 @@ Run before PR creation:
 - bounded brokered Marin runtime smoke, preferring an existing script such as
   `experiments/evals/served_qwen3_humaneval.py` over writing a new smoke.
 
+Run the brokered smoke with a bounded HumanEval sample unless a better existing
+brokered test is already closer to the touched code:
+
+```sh
+uv run python experiments/evals/served_qwen3_humaneval.py \
+  --limit 8 \
+  --region europe-west4 \
+  --tpu-type v6e-4 \
+  --priority interactive \
+  --job-name served-qwen3-humaneval-<run-id> \
+  --output-path /tmp/served-qwen3-humaneval-<run-id>
+```
+
+Inspect the Iris parent, broker, and worker logs; confirm the proxy served
+completions, lm-eval wrote HumanEval metrics and sample outputs, and no
+TPU/vLLM build, import, or runtime tracebacks occurred.
+
 When a workload smoke fails, rerun the same workload against Marin's current
 pins on the old fork stack, using the same Iris target/priority. Fix only
 failures that pass on the old stack and fail on the refreshed stack. If the old
@@ -199,8 +216,10 @@ workload or smoke test as part of this refresh.
 
 ### 6. Review Before PR
 
-Do a PR-review-style pass over the fork commits and Marin diff. Use the Marin
-PR-review skill/playbook as a checklist if available.
+Do a PR-review-style pass over the fork commits and Marin diff. Use
+`.agents/skills/review-pr/` as a checklist, then run
+`./infra/pre-commit.py --review` before opening the PR and fix or respond to
+every finding.
 
 Check that:
 
