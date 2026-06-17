@@ -1,8 +1,9 @@
 # The build context is the marin repo root, but the controller/worker images
-# only need lib/iris/, lib/rigging/, and the workspace metadata that lets the
-# deps stage resolve against the committed root uv.lock. finelog is pulled as a
-# pre-built wheel from the index, not copied as source. Exclude everything,
-# then selectively re-include.
+# only need lib/iris/, lib/rigging/, lib/finelog/, and the workspace metadata
+# that lets the deps stage resolve against the committed root uv.lock. The pure
+# marin-finelog client is a workspace member built from source here; its native
+# companion marin-finelog-server is pulled as a pre-built wheel from the index.
+# Exclude everything, then selectively re-include.
 #
 # NOTE: this allowlist must stay in sync with the COPY paths in the deps stage
 # of Dockerfile — a path that is COPY'd but not re-included here fails the build
@@ -11,7 +12,7 @@
 
 # Root lockfile + workspace member pyproject.toml metadata. uv discovers every
 # member listed in the root [tool.uv.workspace] when mapping the lock, so all
-# member manifests must be present even though only iris+rigging install.
+# member manifests must be present even though only iris+rigging+finelog install.
 !uv.lock
 !pyproject.toml
 !lib/fray/pyproject.toml
@@ -34,6 +35,12 @@
 !lib/iris/dashboard/src/
 
 !lib/rigging/
+
+# marin-finelog (pure-Python client) builds editable from source; the deps stage
+# copies its pyproject + the src/ and config/ inputs its wheel build needs.
+!lib/finelog/pyproject.toml
+!lib/finelog/src/
+!lib/finelog/config/
 
 # Exclude build artifacts within included paths
 **/__pycache__
