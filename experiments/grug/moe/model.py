@@ -104,6 +104,12 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.3
     router_z_loss_coef: float = 0.0
+    # When True, the post-embedding RMSNorm (``embed_norm``) is skipped in the
+    # forward pass; instead the token embedding is multiplied by the static
+    # constant ``1/initializer_std`` so the input to ``embed_gated_norm`` has
+    # the same RMS at init as the original RMSNorm output. The model no longer
+    # rescales per-token; it has to maintain reasonable embed magnitudes itself.
+    embed_skip_rms_norm: bool = False
     # When True, the every-4th-and-last "long" layers skip the Partial Key
     # Offset (no shift of the second half of K, no doc-start zeroing). They
     # still run full causal attention (no sliding window); only the PKO step
@@ -636,7 +642,11 @@ class Transformer(eqx.Module):
         batch_spec = _batch_spec()
         cfg = self.config
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
-        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        if cfg.embed_skip_rms_norm:
+            hidden = hidden * jnp.float32(1.0 / cfg.initializer_std)
+        else:
+            hidden = self.embed_norm(hidden)
+        hidden = self.embed_gated_norm(hidden)
 
         # Short layers: sliding window. Long layers (every 4th + last): full causal.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
