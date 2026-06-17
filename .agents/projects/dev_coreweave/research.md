@@ -37,3 +37,30 @@ but single-backend by intent — we mirror that philosophy rather than generaliz
    tar-over-exec), `execute`, `watch`, `setup_env` — added once the bones work.
 3. **Transport → Iris for scheduling, `kubectl` for access.** Faithful to how
    `dev_tpu.py` uses Iris only to submit/hold/resolve, then shells out to gcloud.
+
+## Live validation (2026-06-17, cw-us-east-02a / marin-gpu)
+
+First real run on the production H100 fleet. Resolves the design's main open question.
+
+- **`allocate` + `connect` work end to end.** `kubectl exec -it` against the Iris
+  task pod gives a real interactive TTY shell — the key unknown. `nvidia-smi -L`
+  inside the pod showed all **8× H100 80GB**. `--gpu-count 8` scheduled cleanly.
+- **Failed-allocate cleanup verified.** An earlier run failed at pod resolution
+  (see kubeconfig note below); the `allocate` cleanup `finally` terminated the
+  holder job (`job list` showed `killed — Terminated by user`), so no H100 node
+  leaked. The state-leak fix and `--force` path are sound in practice.
+- **Kubeconfig must exist at the configured path.** The tool passes
+  `--kubeconfig <platform.coreweave.kubeconfig_path>` verbatim; if that file is
+  absent kubectl errors and pod resolution times out. We deliberately kept this
+  strict (fail-fast on the documented setup) rather than adding a fallback to
+  kubectl's default resolution — operators place creds at
+  `~/.kube/coreweave-iris-gpu` per `lib/iris/docs/coreweave.md`.
+- **Pod env is CPU-JAX by default (image territory, not a tool bug).** The
+  `iris-task` image's `/app` uv venv is synced with the `cpu` extra; bare `python`
+  has no JAX, and `uv run python` falls back to CpuDevice. GPU JAX
+  (`jax[cuda13]`) needs `cd /app && uv sync --extra=gpu` in the pod. This is
+  exactly what a future `setup_env` step should automate — the GPU analog of
+  `dev_tpu.py`'s `uv sync --extra=tpu` is `--extra=gpu`.
+
+**Still open:** does `--gpu-count < 8` schedule on the bare-metal 8×H100 pool?
+(Only `8` exercised so far.)
