@@ -8,13 +8,18 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import fsspec
 import wandb
 from google.protobuf.message import DecodeError
+from rigging.filesystem import url_to_fs
 
 from marin.profiling.schema import ProfileSummary, RunMetadata
 from marin.profiling.trace_summary import (
@@ -28,7 +33,7 @@ from marin.profiling.xplane import MultipleXPlaneFilesError, find_xplane_file, s
 logger = logging.getLogger(__name__)
 
 PROFILE_ARTIFACT_TYPE = "jax_profile"
-DEFAULT_ARTIFACT_ALIAS = "latest"
+PROFILE_DIR_NAME = "profiler"
 
 
 @dataclass(frozen=True)
@@ -38,6 +43,14 @@ class DownloadedProfileArtifact:
     artifact_ref: str
     artifact_name: str
     artifact_dir: Path
+    run_metadata: RunMetadata
+
+
+@dataclass(frozen=True)
+class DownloadedProfileDir:
+    """Downloaded profiler directory and associated metadata."""
+
+    profile_dir: Path
     run_metadata: RunMetadata
 
 
@@ -74,30 +87,26 @@ def download_latest_profile_artifact_for_run(
     *,
     entity: str | None = None,
     project: str | None = None,
-    alias: str = DEFAULT_ARTIFACT_ALIAS,
     download_root: Path | None = None,
-) -> DownloadedProfileArtifact:
+) -> DownloadedProfileDir:
     """
-    Download the latest (or alias-selected) `jax_profile` artifact for a W&B run.
+    Download the profiler directory for a W&B run.
 
     Args:
         run_target: Bare run id, `entity/project/run_id`, or W&B run URL.
         entity: W&B entity when `run_target` is a bare run id.
         project: W&B project when `run_target` is a bare run id.
-        alias: Artifact alias preference (defaults to `latest`).
-        download_root: Optional output directory for artifact download.
+        download_root: Optional output directory where the profiler tree will be mirrored.
     """
     run_entity, run_project, run_id = normalize_run_target(run_target, entity=entity, project=project)
     run_path = f"{run_entity}/{run_project}/{run_id}"
 
     api = wandb.Api()
     run = api.run(run_path)
-    artifact = select_profile_artifact(run, alias=alias)
-    artifact_ref = f"{run_entity}/{run_project}/{artifact.name}"
+    profile_dir = resolve_profile_dir_from_run(run)
 
-    return _download_artifact_with_metadata(
-        artifact=artifact,
-        artifact_ref=artifact_ref,
+    return _download_profile_dir_with_metadata(
+        profile_dir=profile_dir,
         run=run,
         download_root=download_root,
     )
@@ -130,6 +139,19 @@ def find_profile_trace(profile_dir: Path) -> Path:
     raise FileNotFoundError(
         f"No profile trace JSON found under '{profile_dir}'. Expected perfetto_trace.json.gz or *.trace.json(.gz)."
     )
+
+
+def resolve_profile_dir_from_run(run: Any) -> str:
+    """Resolve the profiler directory for a W&B run from trainer config."""
+    trainer_config = run.config.get("trainer")
+    if not isinstance(trainer_config, dict):
+        raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
+
+    log_dir = trainer_config.get("log_dir")
+    if not isinstance(log_dir, str) or not log_dir:
+        raise RuntimeError(f"Run {run.path} does not expose trainer.log_dir.")
+
+    return _join_path(_join_path(log_dir, run.path[-1]), PROFILE_DIR_NAME)
 
 
 def summarize_profile_artifact(
@@ -258,39 +280,6 @@ def normalize_run_target(target: str, *, entity: str | None, project: str | None
     return parts[0], parts[1], run_id
 
 
-def select_profile_artifact(run: Any, *, alias: str | None) -> Any:
-    """
-    Select a `jax_profile` artifact from a W&B run.
-
-    If `alias` matches no artifact, falls back to the most recently updated one.
-    """
-    candidates = [
-        artifact for artifact in run.logged_artifacts() if getattr(artifact, "type", None) == PROFILE_ARTIFACT_TYPE
-    ]
-    if not candidates:
-        raise RuntimeError(f"No artifacts of type '{PROFILE_ARTIFACT_TYPE}' were found for run {run.path}.")
-
-    if alias:
-        for artifact in candidates:
-            if alias in _alias_names(artifact):
-                return artifact
-
-    candidates.sort(
-        key=lambda artifact: getattr(artifact, "updated_at", None) or getattr(artifact, "created_at", None),
-        reverse=True,
-    )
-    return candidates[0]
-
-
-def _alias_names(artifact: Any) -> set[str]:
-    names: set[str] = set()
-    for alias in getattr(artifact, "aliases", None) or []:
-        name = getattr(alias, "name", alias)
-        if name is not None:
-            names.add(str(name))
-    return names
-
-
 def _download_artifact_with_metadata(
     *,
     artifact: Any,
@@ -321,6 +310,17 @@ def _download_artifact_with_metadata(
         artifact_dir=artifact_dir,
         run_metadata=metadata,
     )
+
+
+def _download_profile_dir_with_metadata(
+    *,
+    profile_dir: str,
+    run: Any,
+    download_root: Path | None,
+) -> DownloadedProfileDir:
+    local_profile_dir = _mirror_profile_dir(profile_dir, download_root=download_root, run_id=run.path[-1])
+    metadata = _run_metadata_from_run(run, artifact_ref=profile_dir, artifact_name=PROFILE_DIR_NAME)
+    return DownloadedProfileDir(profile_dir=local_profile_dir, run_metadata=metadata)
 
 
 def _pick_first(mapping: dict[str, Any], *keys: str) -> str | None:
@@ -377,3 +377,45 @@ def _run_metadata_from_run(run: Any, *, artifact_ref: str, artifact_name: str) -
         num_devices=_int_or_none(summary.get("num_devices") or config.get("num_devices")),
         num_hosts=_int_or_none(summary.get("num_hosts") or config.get("num_hosts")),
     )
+
+
+def _mirror_profile_dir(profile_dir: str, *, download_root: Path | None, run_id: str) -> Path:
+    fs, fs_path = url_to_fs(profile_dir)
+    if download_root is None:
+        if _is_local_fs(fs):
+            local_path = Path(fs_path)
+            if not local_path.exists():
+                raise FileNotFoundError(f"Profile directory does not exist: {profile_dir}")
+            return local_path
+        download_root = Path(tempfile.mkdtemp(prefix="marin-profile-"))
+    else:
+        download_root.mkdir(parents=True, exist_ok=True)
+
+    download_path = download_root / run_id / PROFILE_DIR_NAME
+    if download_path.exists():
+        shutil.rmtree(download_path)
+    download_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if _is_local_fs(fs):
+        source_path = Path(fs_path)
+        if not source_path.exists():
+            raise FileNotFoundError(f"Profile directory does not exist: {profile_dir}")
+        shutil.copytree(source_path, download_path)
+    else:
+        fs.get(fs_path, str(download_path), recursive=True)
+    return download_path
+
+
+def _is_local_fs(fs: Any) -> bool:
+    protocol = fs.protocol[0] if isinstance(fs.protocol, tuple) else fs.protocol
+    return protocol in (None, "", "file")
+
+
+def _join_path(lhs: str, rhs: str) -> str:
+    lhs_protocol, lhs_rest = fsspec.core.split_protocol(lhs)
+    rhs_protocol, _ = fsspec.core.split_protocol(rhs)
+    if rhs_protocol is not None:
+        return rhs
+    if lhs_protocol is not None:
+        return f"{lhs_protocol}://{os.path.join(lhs_rest, rhs)}"
+    return os.path.join(lhs, rhs)

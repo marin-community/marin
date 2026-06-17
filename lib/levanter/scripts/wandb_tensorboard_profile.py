@@ -91,6 +91,7 @@ def normalize_run_path(target: str, entity: Optional[str], project: Optional[str
 
 
 def resolve_profile_dir(run: "wandb.apis.public.Run") -> str:
+    run_id = resolve_profile_run_id(run)
     trainer_config = run.config.get("trainer")
     if not isinstance(trainer_config, dict):
         raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
@@ -99,8 +100,19 @@ def resolve_profile_dir(run: "wandb.apis.public.Run") -> str:
     if not log_dir:
         raise RuntimeError(f"Run {run.path} does not expose trainer.log_dir.")
 
-    run_id = run.path[-1]
     return join_path(join_path(str(log_dir), run_id), PROFILER_DIR_NAME)
+
+
+def resolve_profile_run_id(run: "wandb.apis.public.Run") -> str:
+    trainer_config = run.config.get("trainer")
+    if not isinstance(trainer_config, dict):
+        raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
+
+    run_id = trainer_config.get("id")
+    if isinstance(run_id, str) and run_id:
+        return run_id
+
+    return run.path[-1]
 
 
 def _is_local_fs(fs) -> bool:
@@ -121,14 +133,20 @@ def mirror_profile_dir(profile_dir: str, root: Optional[Path], *, run_id: str) -
         root.mkdir(parents=True, exist_ok=True)
 
     download_path = root / run_id / PROFILER_DIR_NAME
+    source_path = Path(fs_path)
+    if _is_local_fs(fs) and download_path.resolve() == source_path.resolve():
+        if not source_path.exists():
+            raise FileNotFoundError(f"Profile directory '{profile_dir}' does not exist.")
+        return source_path
+
     if download_path.exists():
         shutil.rmtree(download_path)
     download_path.parent.mkdir(parents=True, exist_ok=True)
 
     if _is_local_fs(fs):
-        if not Path(fs_path).exists():
+        if not source_path.exists():
             raise FileNotFoundError(f"Profile directory '{profile_dir}' does not exist.")
-        shutil.copytree(fs_path, download_path)
+        shutil.copytree(source_path, download_path)
     else:
         fs.get(fs_path, str(download_path), recursive=True)
     return download_path
@@ -179,7 +197,8 @@ def main() -> None:
 
     try:
         profile_dir = resolve_profile_dir(run)
-        download_path = mirror_profile_dir(profile_dir, args.download_root, run_id=run_id)
+        profile_run_id = resolve_profile_run_id(run)
+        download_path = mirror_profile_dir(profile_dir, args.download_root, run_id=profile_run_id)
     except (RuntimeError, FileNotFoundError) as exc:
         print(f"Failed to resolve profile directory for '{run_path}': {exc}", file=sys.stderr)
         sys.exit(1)
