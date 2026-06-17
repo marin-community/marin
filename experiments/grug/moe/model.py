@@ -103,6 +103,11 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.3
     router_z_loss_coef: float = 0.0
+    # Replaces both ``embed_norm`` (RMSNorm) and ``embed_gated_norm`` (GatedNorm)
+    # with a constant rescale by ``1/initializer_std`` plus a learnable gain
+    # initialized to 1. "off" keeps the default norms; "scalar" adds a single
+    # learnable scalar; "per_dim" adds a learnable (hidden_dim,) gain vector.
+    embed_learnable_gain: Literal["off", "scalar", "per_dim"] = "off"
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
@@ -549,8 +554,11 @@ class Block(eqx.Module):
 
 class Transformer(eqx.Module):
     token_embed: jax.Array
-    embed_norm: RMSNorm
-    embed_gated_norm: GatedNorm
+    # When ``embed_learnable_gain != "off"``, both norms are skipped and replaced
+    # by a constant rescale + ``embed_gain`` (scalar or per-dim, init to 1).
+    embed_norm: RMSNorm | None
+    embed_gated_norm: GatedNorm | None
+    embed_gain: jax.Array | None
     output_proj: jax.Array
     blocks: tuple[Block, ...]
     final_norm: RMSNorm
@@ -565,10 +573,27 @@ class Transformer(eqx.Module):
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+        embed_norm: RMSNorm | None
+        embed_gated_norm: GatedNorm | None
+        embed_gain: jax.Array | None
+        if cfg.embed_learnable_gain == "off":
+            embed_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+            embed_gated_norm = GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key)
+            embed_gain = None
+        else:
+            embed_norm = None
+            embed_gated_norm = None
+            if cfg.embed_learnable_gain == "scalar":
+                embed_gain = jnp.ones((), dtype=jnp.float32)
+            elif cfg.embed_learnable_gain == "per_dim":
+                embed_gain = jnp.ones((cfg.hidden_dim,), dtype=jnp.float32)
+            else:
+                raise ValueError(f"unknown embed_learnable_gain: {cfg.embed_learnable_gain}")
         return Transformer(
             token_embed=token_embed,
-            embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
+            embed_norm=embed_norm,
+            embed_gated_norm=embed_gated_norm,
+            embed_gain=embed_gain,
             output_proj=output_proj,
             blocks=blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -588,7 +613,15 @@ class Transformer(eqx.Module):
         batch_spec = _batch_spec()
         cfg = self.config
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
-        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        if cfg.embed_learnable_gain == "off":
+            assert self.embed_norm is not None and self.embed_gated_norm is not None
+            hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        else:
+            assert self.embed_gain is not None
+            # Python float keeps hidden's dtype (weak-type promotion). The
+            # learnable gain casts to hidden's dtype so optimizer sees fp32
+            # masters but compute stays at the policy's compute dtype.
+            hidden = hidden * (1.0 / cfg.initializer_std) * self.embed_gain.astype(hidden.dtype)
 
         # Short layers: sliding window. Long layers (every 4th + last): full causal.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
