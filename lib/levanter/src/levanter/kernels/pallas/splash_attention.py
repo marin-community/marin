@@ -6,6 +6,7 @@
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import cast
 
 import equinox as eqx
 import jax
@@ -37,6 +38,7 @@ class SplashDynamicPrefixMask(StrEnum):
 
     NONE = "none"
     PREFIX_LENGTHS = "prefix_lengths"
+    PREFIX_LENGTHS_PER_SEGMENT = "prefix_lengths_per_segment"
 
 
 @dataclass(frozen=True)
@@ -59,8 +61,8 @@ class SplashAttentionMaskSpec:
     The static lowering path uses `is_causal`, `sliding_window`, and static
     `prefix_lm.prefix_length` to build Splash `Mask` objects. Runtime-dependent
     prefix controls are recorded here only so that static lowering can reject
-    them; `attention.py` handles those through compact dynamic `MaskInfo`
-    metadata and per-example kernel planning.
+    them; `prepare_splash_kernel_plan` handles those through compact dynamic
+    `MaskInfo` metadata and per-example kernel planning.
     """
 
     is_causal: bool = False
@@ -78,6 +80,64 @@ class SplashAttentionMaskLowering:
     kernel_mask: splash_attention_mask.MultiHeadMask
 
 
+@dataclass(frozen=True)
+class SplashPrefixControls:
+    """Runtime prefix inputs for Splash kernel planning."""
+
+    prefix_lengths: jax.Array | None
+    physical_axes_prefix_lengths: PartitionSpec | None
+    prefix_lengths_per_segment: jax.Array | None
+    physical_axes_prefix_lengths_per_segment: PartitionSpec | None
+
+
+@dataclass(frozen=True)
+class SplashSegmentRunControls:
+    """Runtime contiguous segment-run inputs for Splash kernel planning."""
+
+    segment_lengths: jax.Array | None
+    physical_axes_segment_lengths: PartitionSpec | None
+    num_segments: jax.Array | None
+
+
+@dataclass(frozen=True)
+class SplashKernelPlan:
+    """Splash kernel pytree plus metadata needed by the caller's shard_map."""
+
+    kernel: object
+    kernel_specs: object
+    kernel_vmap_axis: int | None
+    segment_id_lowering: "SplashSegmentIdsLowering"
+
+
+@dataclass(frozen=True)
+class SplashKernelContext:
+    """Shape, sharding, and block-size inputs for Splash kernel selection."""
+
+    q_seq_len: int
+    kv_seq_len: int
+    num_heads: int
+    block_sizes: splash_attention_kernel.BlockSizes
+    head_shards: int
+    q_seq_shards: int
+    physical_axes_q: PartitionSpec
+    logits_soft_cap: float | None
+
+
+@dataclass(frozen=True)
+class SplashMaskPlanSpec:
+    """Mask capabilities used to select the concrete Splash kernel plan."""
+
+    mask: SplashAttentionMaskSpec | None
+
+
+@dataclass(frozen=True)
+class _PackedSegmentIds:
+    q: jax.Array
+    kv: jax.Array
+    q_vmap_axis: int | None
+    kv_vmap_axis: int | None
+
+
 def splash_attention_mask_spec_from_fields(
     *,
     is_causal: bool,
@@ -85,11 +145,16 @@ def splash_attention_mask_spec_from_fields(
     sliding_window: int | None = None,
     prefix_length: int | None = None,
     prefix_lengths: object | None = None,
+    prefix_lengths_per_segment: object | None = None,
     explicit_mask: object | None = None,
 ) -> SplashAttentionMaskSpec:
     dynamic_prefix = SplashDynamicPrefixMask.NONE
+    if prefix_lengths is not None and prefix_lengths_per_segment is not None:
+        raise ValueError("Splash attention mask spec cannot combine prefix_lengths and prefix_lengths_per_segment.")
     if prefix_lengths is not None:
         dynamic_prefix = SplashDynamicPrefixMask.PREFIX_LENGTHS
+    elif prefix_lengths_per_segment is not None:
+        dynamic_prefix = SplashDynamicPrefixMask.PREFIX_LENGTHS_PER_SEGMENT
 
     return SplashAttentionMaskSpec(
         is_causal=is_causal,
@@ -1045,7 +1110,7 @@ def lower_splash_attention_mask(
 
     Dynamic prefix masks intentionally do not lower here. They are represented
     as compact Splash `MaskInfo` metadata by the packed/dynamic kernel planning
-    path in `attention.py`, where runtime arrays can be vmapped over the batch.
+    path in this module, where runtime arrays can be vmapped over the batch.
     """
     if mask is None:
         base_mask = splash_attention_mask.FullMask(_shape=(q_seq_len, kv_seq_len))
@@ -1093,6 +1158,426 @@ def lower_splash_attention_mask(
 
     kernel_mask = splash_attention_mask.MultiHeadMask(masks=[base_mask for _ in range(num_heads)])
     return SplashAttentionMaskLowering(base_mask=base_mask, kernel_mask=kernel_mask)
+
+
+def prepare_splash_kernel_plan(
+    *,
+    mask: SplashMaskPlanSpec,
+    prefix_controls: SplashPrefixControls,
+    segment_run_controls: SplashSegmentRunControls,
+    segment_id_lowering: SplashSegmentIdsLowering,
+    context: SplashKernelContext,
+    mesh: Mesh,
+) -> SplashKernelPlan:
+    """Choose and build the concrete Splash kernel plan for a lowered mask."""
+    if _can_use_packed_prefix_lm_segment_run_kernel(
+        mask=mask,
+        prefix_controls=prefix_controls,
+        segment_run_controls=segment_run_controls,
+        context=context,
+    ):
+        return _packed_prefix_lm_segment_run_kernel_plan(
+            prefix_controls=prefix_controls,
+            segment_run_controls=segment_run_controls,
+            context=context,
+        )
+
+    if prefix_controls.prefix_lengths_per_segment is not None:
+        raise NotImplementedError("Splash attention could not use the packed prefix-LM segment-run fast path.")
+
+    if prefix_controls.prefix_lengths is not None:
+        assert prefix_controls.physical_axes_prefix_lengths is not None
+        return _prefix_length_kernel_plan(
+            prefix_lengths=prefix_controls.prefix_lengths,
+            physical_axes_prefix_lengths=prefix_controls.physical_axes_prefix_lengths,
+            segment_id_lowering=segment_id_lowering,
+            context=context,
+        )
+
+    if _can_use_packed_causal_segment_run_kernel(
+        mask=mask,
+        prefix_controls=prefix_controls,
+        segment_run_controls=segment_run_controls,
+        context=context,
+    ):
+        return _packed_causal_segment_run_kernel_plan(
+            segment_run_controls=segment_run_controls,
+            context=context,
+        )
+
+    if _can_use_packed_causal_segment_kernel(
+        mask=mask,
+        prefix_controls=prefix_controls,
+        segment_id_lowering=segment_id_lowering,
+        context=context,
+    ):
+        return _packed_causal_segment_kernel_plan(
+            segment_id_lowering=segment_id_lowering,
+            context=context,
+        )
+
+    return _static_splash_kernel_plan(
+        mask=mask,
+        segment_id_lowering=segment_id_lowering,
+        context=context,
+        mesh=mesh,
+    )
+
+
+def _batched_splash_kernel_specs(
+    kernel,
+    *,
+    batch_spec,
+    head_spec,
+    q_seq_spec,
+    num_heads: int,
+):
+    def spec_for_leaf(leaf):
+        if leaf is None:
+            return None
+        if not isinstance(leaf, jax.Array):
+            return PartitionSpec()
+        if leaf.ndim == 0:
+            return PartitionSpec()
+        if leaf.ndim >= 4 and leaf.shape[1] == num_heads:
+            return PartitionSpec(batch_spec, head_spec, q_seq_spec, *([None] * (leaf.ndim - 3)))
+        return PartitionSpec(batch_spec, *([None] * (leaf.ndim - 1)))
+
+    return jax.tree_util.tree_map(spec_for_leaf, kernel)
+
+
+def _splash_kernel_from_dynamic_metadata(metadata, block_sizes, logits_soft_cap):
+    return splash_attention_kernel.SplashAttentionKernel(
+        metadata.fwd_mask_info,
+        None if block_sizes.use_fused_bwd_kernel else metadata.dq_mask_info,
+        metadata.dkv_mask_info,
+        block_sizes=block_sizes,
+        is_mqa=False,
+        save_residuals=False,
+        mask_value=splash_attention_kernel.DEFAULT_MASK_VALUE,
+        attn_logits_soft_cap=logits_soft_cap,
+        residual_checkpoint_name=None,
+        mask_function=None,
+        interpret=False,
+    )
+
+
+def _segment_ids_for_packed_mask(
+    segment_id_lowering: SplashSegmentIdsLowering,
+    *,
+    q_seq_len: int,
+    kv_seq_len: int,
+) -> _PackedSegmentIds:
+    if segment_id_lowering.segment_ids is None:
+        q_segment_ids = jnp.zeros((q_seq_len,), dtype=jnp.int32)
+        kv_segment_ids = jnp.zeros((kv_seq_len,), dtype=jnp.int32)
+        return _PackedSegmentIds(q=q_segment_ids, kv=kv_segment_ids, q_vmap_axis=None, kv_vmap_axis=None)
+
+    assert segment_id_lowering.segment_batch_axis is not None
+    return _PackedSegmentIds(
+        q=segment_id_lowering.segment_ids.q,
+        kv=segment_id_lowering.segment_ids.kv,
+        q_vmap_axis=cast(int | None, segment_id_lowering.segment_batch_axis.q),
+        kv_vmap_axis=cast(int | None, segment_id_lowering.segment_batch_axis.kv),
+    )
+
+
+def _packed_dynamic_mask_kernel_plan(
+    *,
+    segment_id_lowering: SplashSegmentIdsLowering,
+    context: SplashKernelContext,
+    metadata_values: tuple[jax.Array, ...],
+    metadata_in_axes: tuple[int | None, ...],
+    metadata_builder,
+    batch_spec,
+) -> SplashKernelPlan:
+    segment_ids = _segment_ids_for_packed_mask(
+        segment_id_lowering,
+        q_seq_len=context.q_seq_len,
+        kv_seq_len=context.kv_seq_len,
+    )
+    if batch_spec is None:
+        assert segment_id_lowering.segment_ids_axes is not None
+        assert segment_ids.q_vmap_axis is not None
+        batch_spec = segment_id_lowering.segment_ids_axes.q[segment_ids.q_vmap_axis]
+
+    def make_kernel(*args):
+        *metadata_args, q_segment_ids, kv_segment_ids = args
+        return metadata_builder(*metadata_args, q_segment_ids, kv_segment_ids)
+
+    return _dynamic_metadata_kernel_plan(
+        context=context,
+        metadata_values=metadata_values + (segment_ids.q, segment_ids.kv),
+        metadata_in_axes=metadata_in_axes + (segment_ids.q_vmap_axis, segment_ids.kv_vmap_axis),
+        metadata_builder=make_kernel,
+        batch_spec=batch_spec,
+        segment_id_lowering=lower_splash_segment_ids(),
+    )
+
+
+def _dynamic_metadata_kernel_plan(
+    *,
+    context: SplashKernelContext,
+    metadata_values: tuple[jax.Array, ...],
+    metadata_in_axes: tuple[int | None, ...],
+    metadata_builder,
+    batch_spec,
+    segment_id_lowering: SplashSegmentIdsLowering,
+) -> SplashKernelPlan:
+    def make_kernel(*metadata_args):
+        metadata = metadata_builder(*metadata_args)
+        return _splash_kernel_from_dynamic_metadata(metadata, context.block_sizes, context.logits_soft_cap)
+
+    splash_kernel = jax.vmap(make_kernel, in_axes=metadata_in_axes)(*metadata_values)
+    kernel_specs = _batched_splash_kernel_specs(
+        splash_kernel,
+        batch_spec=batch_spec,
+        head_spec=context.physical_axes_q[1],
+        q_seq_spec=context.physical_axes_q[2],
+        num_heads=context.num_heads,
+    )
+    return SplashKernelPlan(
+        kernel=splash_kernel,
+        kernel_specs=kernel_specs,
+        kernel_vmap_axis=0,
+        segment_id_lowering=segment_id_lowering,
+    )
+
+
+def _can_use_packed_causal_segment_kernel(
+    *,
+    mask: SplashMaskPlanSpec,
+    prefix_controls: SplashPrefixControls,
+    segment_id_lowering: SplashSegmentIdsLowering,
+    context: SplashKernelContext,
+) -> bool:
+    if context.q_seq_shards != 1:
+        return False
+    if segment_id_lowering.segment_ids is None or segment_id_lowering.segment_batch_axis is None:
+        return False
+    if segment_id_lowering.segment_batch_axis.q is None or segment_id_lowering.segment_batch_axis.kv is None:
+        return False
+    return _is_plain_causal_splash_mask(mask=mask, prefix_controls=prefix_controls)
+
+
+def _is_plain_causal_splash_mask(
+    *,
+    mask: SplashMaskPlanSpec,
+    prefix_controls: SplashPrefixControls,
+) -> bool:
+    mask_spec = mask.mask
+    return (
+        mask_spec is not None
+        and mask_spec.is_causal
+        and mask_spec.causal_offset is None
+        and mask_spec.sliding_window is None
+        and mask_spec.prefix_lm is None
+        and not mask_spec.has_explicit_mask
+        and prefix_controls.prefix_lengths is None
+        and prefix_controls.prefix_lengths_per_segment is None
+    )
+
+
+def _can_use_packed_prefix_lm_segment_run_kernel(
+    *,
+    mask: SplashMaskPlanSpec,
+    prefix_controls: SplashPrefixControls,
+    segment_run_controls: SplashSegmentRunControls,
+    context: SplashKernelContext,
+) -> bool:
+    if context.q_seq_shards != 1:
+        return False
+    if context.q_seq_len != context.kv_seq_len:
+        return False
+    if segment_run_controls.segment_lengths is None or segment_run_controls.num_segments is None:
+        return False
+
+    mask_spec = mask.mask
+    prefix_lm = None if mask_spec is None else mask_spec.prefix_lm
+    return (
+        mask_spec is not None
+        and mask_spec.is_causal
+        and mask_spec.causal_offset is None
+        and mask_spec.sliding_window is None
+        and not mask_spec.has_explicit_mask
+        and prefix_lm is not None
+        and prefix_lm.prefix_length is None
+        and prefix_lm.dynamic_prefix == SplashDynamicPrefixMask.PREFIX_LENGTHS_PER_SEGMENT
+        and prefix_controls.prefix_lengths_per_segment is not None
+    )
+
+
+def _can_use_packed_causal_segment_run_kernel(
+    *,
+    mask: SplashMaskPlanSpec,
+    prefix_controls: SplashPrefixControls,
+    segment_run_controls: SplashSegmentRunControls,
+    context: SplashKernelContext,
+) -> bool:
+    if context.q_seq_shards != 1:
+        return False
+    if context.q_seq_len != context.kv_seq_len:
+        return False
+    if segment_run_controls.segment_lengths is None or segment_run_controls.num_segments is None:
+        return False
+    return _is_plain_causal_splash_mask(mask=mask, prefix_controls=prefix_controls)
+
+
+def _packed_causal_segment_run_kernel_plan(
+    *,
+    segment_run_controls: SplashSegmentRunControls,
+    context: SplashKernelContext,
+) -> SplashKernelPlan:
+    assert segment_run_controls.segment_lengths is not None
+    assert segment_run_controls.num_segments is not None
+    assert segment_run_controls.physical_axes_segment_lengths is not None
+
+    def make_kernel(segment_lengths, num_segments):
+        metadata = packed_causal_segment_run_mask_infos(
+            segment_lengths=segment_lengths,
+            num_segments=num_segments,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
+            block_sizes=context.block_sizes,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+        )
+        return _splash_kernel_from_dynamic_metadata(metadata, context.block_sizes, context.logits_soft_cap)
+
+    return _dynamic_metadata_kernel_plan(
+        context=context,
+        metadata_values=(segment_run_controls.segment_lengths, segment_run_controls.num_segments),
+        metadata_in_axes=(0, 0),
+        metadata_builder=make_kernel,
+        batch_spec=segment_run_controls.physical_axes_segment_lengths[0],
+        segment_id_lowering=lower_splash_segment_ids(),
+    )
+
+
+def _packed_prefix_lm_segment_run_kernel_plan(
+    *,
+    prefix_controls: SplashPrefixControls,
+    segment_run_controls: SplashSegmentRunControls,
+    context: SplashKernelContext,
+) -> SplashKernelPlan:
+    assert prefix_controls.prefix_lengths_per_segment is not None
+    assert prefix_controls.physical_axes_prefix_lengths_per_segment is not None
+    assert segment_run_controls.segment_lengths is not None
+    assert segment_run_controls.num_segments is not None
+
+    def make_kernel(prefix_lengths_per_segment, segment_lengths, num_segments):
+        metadata = packed_prefix_lm_segment_run_mask_infos(
+            prefix_lengths=prefix_lengths_per_segment,
+            segment_lengths=segment_lengths,
+            num_segments=num_segments,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
+            block_sizes=context.block_sizes,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+        )
+        return _splash_kernel_from_dynamic_metadata(metadata, context.block_sizes, context.logits_soft_cap)
+
+    return _dynamic_metadata_kernel_plan(
+        context=context,
+        metadata_values=(
+            prefix_controls.prefix_lengths_per_segment,
+            segment_run_controls.segment_lengths,
+            segment_run_controls.num_segments,
+        ),
+        metadata_in_axes=(0, 0, 0),
+        metadata_builder=make_kernel,
+        batch_spec=prefix_controls.physical_axes_prefix_lengths_per_segment[0],
+        segment_id_lowering=lower_splash_segment_ids(),
+    )
+
+
+def _packed_causal_segment_kernel_plan(
+    *,
+    segment_id_lowering: SplashSegmentIdsLowering,
+    context: SplashKernelContext,
+) -> SplashKernelPlan:
+    def causal_metadata(q_segment_ids, kv_segment_ids):
+        return packed_causal_segment_mask_infos(
+            q_segment_ids=q_segment_ids,
+            kv_segment_ids=kv_segment_ids,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
+            block_sizes=context.block_sizes,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+        )
+
+    return _packed_dynamic_mask_kernel_plan(
+        segment_id_lowering=segment_id_lowering,
+        context=context,
+        metadata_values=(),
+        metadata_in_axes=(),
+        metadata_builder=causal_metadata,
+        batch_spec=None,
+    )
+
+
+def _prefix_length_kernel_plan(
+    *,
+    prefix_lengths: jax.Array,
+    physical_axes_prefix_lengths: PartitionSpec,
+    segment_id_lowering: SplashSegmentIdsLowering,
+    context: SplashKernelContext,
+) -> SplashKernelPlan:
+    def make_prefix_lm_kernel(prefix_length):
+        prefix_metadata = prefix_lm_mask_infos(
+            prefix_length=prefix_length,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
+            num_heads=context.num_heads,
+            block_sizes=context.block_sizes,
+        )
+        return _splash_kernel_from_dynamic_metadata(prefix_metadata, context.block_sizes, context.logits_soft_cap)
+
+    return _dynamic_metadata_kernel_plan(
+        context=context,
+        metadata_values=(prefix_lengths,),
+        metadata_in_axes=(0,),
+        metadata_builder=make_prefix_lm_kernel,
+        batch_spec=physical_axes_prefix_lengths[0],
+        segment_id_lowering=segment_id_lowering,
+    )
+
+
+def _static_splash_kernel_plan(
+    *,
+    mask: SplashMaskPlanSpec,
+    segment_id_lowering: SplashSegmentIdsLowering,
+    context: SplashKernelContext,
+    mesh: Mesh,
+) -> SplashKernelPlan:
+    mask_lowering = lower_splash_attention_mask(
+        mask=mask.mask,
+        q_seq_len=context.q_seq_len,
+        kv_seq_len=context.kv_seq_len,
+        num_heads=context.num_heads,
+        q_seq_shards=context.q_seq_shards,
+    )
+
+    splash_kernel = splash_attention_kernel.make_splash_mha(
+        mask=mask_lowering.kernel_mask,
+        head_shards=context.head_shards,
+        q_seq_shards=context.q_seq_shards,
+        block_sizes=context.block_sizes,
+        attn_logits_soft_cap=context.logits_soft_cap,
+    )
+
+    kernel_sharding = jax.sharding.NamedSharding(
+        mesh, PartitionSpec(context.physical_axes_q[1], context.physical_axes_q[2])
+    )
+    kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
+    return SplashKernelPlan(
+        kernel=splash_kernel,
+        kernel_specs=kernel_specs,
+        kernel_vmap_axis=None,
+        segment_id_lowering=segment_id_lowering,
+    )
 
 
 def prefix_lm_forward_mask_info(
