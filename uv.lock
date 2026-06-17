@@ -5447,6 +5447,7 @@ dependencies = [
     { name = "marin-rigging" },
     { name = "msgspec" },
     { name = "numpy" },
+    { name = "psutil" },
     { name = "tqdm-loggable" },
     { name = "typing-extensions" },
     { name = "vortex-data" },
@@ -5456,13 +5457,11 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 test = [
-    { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
@@ -5480,6 +5479,7 @@ requires-dist = [
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "msgspec", specifier = ">=0.18.0" },
     { name = "numpy", specifier = ">=2.0" },
+    { name = "psutil", specifier = ">=5.9.0" },
     { name = "tqdm-loggable", specifier = ">=0.2" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "vortex-data", specifier = ">=0.61.0" },
@@ -5489,13 +5489,11 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "psutil", specifier = ">=5.9.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 test = [
-    { name = "psutil", specifier = ">=5.9.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },

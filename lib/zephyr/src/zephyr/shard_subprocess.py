@@ -28,22 +28,23 @@ from contextlib import suppress
 from typing import Any
 
 import cloudpickle
+import psutil
 import pyarrow as pa
 from rigging.log_setup import configure_logging
 
-from zephyr.runners import _InProcessWorkerContext, _run_stage_with_ctx
+from zephyr.runners import (
+    SUBPROCESS_STATS_INTERVAL,
+    _InProcessWorkerContext,
+    _periodic_sampler,
+    _run_stage_with_ctx,
+    _sample_process_stats,
+    _set_counter_aggregations,
+)
 from zephyr.stage_io import _ensure_picklable_exception, _stage_throughput
+from zephyr.stats import StatsWriter, ZephyrWorkerStatStatus
 from zephyr.worker_context import _worker_ctx_var
 
 logger = logging.getLogger(__name__)
-
-
-SUBPROCESS_COUNTER_FLUSH_INTERVAL = 5.0
-"""How often the subprocess child flushes its counter dict to disk.
-
-Matches the parent's heartbeat cadence so each beat reads at most one stale
-snapshot before a fresh flush lands.
-"""
 
 
 def _periodic_counter_writer(
@@ -79,7 +80,7 @@ def _periodic_status_logger(
             return
         elapsed = time.monotonic() - monotonic_start
         # Map-only stages never populate these counters; logging zeros is misleading.
-        throughput = _stage_throughput(ctx._counters, stage_name, elapsed)
+        throughput = _stage_throughput(ctx.get_counters(stage_name), elapsed)
         if throughput is None:
             continue
         logger.info(
@@ -109,20 +110,38 @@ def _execute_shard_subprocess(task_file: str, result_file: str, num_workers: int
     stop_event = threading.Event()
     flusher: threading.Thread | None = None
     status_logger: threading.Thread | None = None
+    sampler: threading.Thread | None = None
     result_or_error: Any
     ctx: _InProcessWorkerContext | None = None
+    stats_writer: StatsWriter = StatsWriter(None)
+    proc = psutil.Process()
+    proc.cpu_percent()
+    start_time = 0.0
+    cpu_s_at_start = 0.0
+    _task_failed = True  # cleared to False only on clean _run_stage_with_ctx completion
     try:
         with open(task_file, "rb") as f:
-            task, chunk_prefix, execution_id = cloudpickle.load(f)
+            task, chunk_prefix, execution_id, finelog_url = cloudpickle.load(f)
 
-        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, num_workers=num_workers)
+        start_time = time.monotonic()
+        _cpu = proc.cpu_times()
+        cpu_s_at_start = _cpu.user + _cpu.system
+
+        if finelog_url:
+            stats_writer = StatsWriter.connect(finelog_url)
+
+        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, task.stage_name, num_workers=num_workers)
         _worker_ctx_var.set(ctx)
+        _set_counter_aggregations()
 
         shard_monotonic_start = time.monotonic()
+        stats_writer.emit_worker_stat(
+            task.stage_name, task.shard_idx, execution_id, ZephyrWorkerStatStatus.START, start_time, ctx.get_counters()
+        )
 
         flusher = threading.Thread(
             target=_periodic_counter_writer,
-            args=(stop_event, ctx, counter_file, SUBPROCESS_COUNTER_FLUSH_INTERVAL),
+            args=(stop_event, ctx, counter_file, SUBPROCESS_STATS_INTERVAL),
             daemon=True,
             name="zephyr-subprocess-counter-flusher",
         )
@@ -138,14 +157,33 @@ def _execute_shard_subprocess(task_file: str, result_file: str, num_workers: int
                 task.shard_idx,
                 task.total_shards,
                 shard_monotonic_start,
-                SUBPROCESS_COUNTER_FLUSH_INTERVAL,
+                SUBPROCESS_STATS_INTERVAL,
             ),
             daemon=True,
             name="zephyr-subprocess-status-logger",
         )
         status_logger.start()
 
+        sampler = threading.Thread(
+            target=_periodic_sampler,
+            kwargs={
+                "stop_event": stop_event,
+                "ctx": ctx,
+                "interval": SUBPROCESS_STATS_INTERVAL,
+                "cpu_s_at_start": cpu_s_at_start,
+                "stats_writer": stats_writer,
+                "task": task,
+                "execution_id": execution_id,
+                "start_time": start_time,
+                "proc": proc,
+            },
+            daemon=True,
+            name="zephyr-subprocess-stats-sampler",
+        )
+        sampler.start()
+
         result_or_error = _run_stage_with_ctx(task, chunk_prefix, execution_id, ctx)
+        _task_failed = False
     except Exception as e:
         # Cloudpickling an exception drops ``__traceback__``, so a naive
         # parent re-raise would otherwise show only the parent stack at the
@@ -164,6 +202,18 @@ def _execute_shard_subprocess(task_file: str, result_file: str, num_workers: int
             flusher.join(timeout=2.0)
         if status_logger is not None and status_logger.is_alive():
             status_logger.join(timeout=2.0)
+        if sampler is not None and sampler.is_alive():
+            sampler.join(timeout=2.0)
+        if ctx is not None:
+            if sampler is None or not sampler.is_alive():
+                with suppress(Exception):
+                    _sample_process_stats(cpu_s_at_start, proc)
+            _status = ZephyrWorkerStatStatus.FAILED if _task_failed else ZephyrWorkerStatStatus.END
+            with suppress(Exception):
+                stats_writer.emit_worker_stat(
+                    task.stage_name, task.shard_idx, execution_id, _status, start_time, ctx.get_counters()
+                )
+        stats_writer.close()
 
     with open(result_file, "wb") as f:
         counters_out = dict(ctx._counters) if ctx is not None else {}

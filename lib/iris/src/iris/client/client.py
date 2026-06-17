@@ -837,6 +837,10 @@ class IrisClient:
         """Push markdown status text for the running task to finelog (fire-and-forget)."""
         self._cluster_client.report_task_status_text(task_id, attempt_id, detail_md, summary_md)
 
+    def resolve_endpoint(self, url: str) -> str:
+        """Resolve a logical endpoint URL to a concrete HTTP address via the controller registry."""
+        return self._cluster_client.resolve_endpoint(url)
+
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.
 
