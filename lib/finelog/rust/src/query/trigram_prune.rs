@@ -165,9 +165,7 @@ fn apply_bound(range: &mut StringRange, op: Operator, value: Vec<u8>) {
 
 /// Substring needles from every top-level conjunct that constrains `column` to
 /// contain a literal — `contains(column, lit)` or `column LIKE '%lit%'`. A
-/// single-column probe over [`substring_column_needle`], used by the extraction
-/// unit tests; production extracts every column at once via
-/// [`substring_needles_by_column`].
+/// single-column probe over [`substring_column_needle`].
 #[cfg(test)]
 fn substring_needles(filters: &[Expr], column: &str) -> Vec<String> {
     filters

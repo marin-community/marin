@@ -337,6 +337,21 @@ impl Namespace {
             .collect()
     }
 
+    /// Wake the flush task after an append. Nudges the rate-limited flush loop;
+    /// a buffer that already holds a full segment (`>= SEGMENT_TARGET_BYTES`)
+    /// also trips `force_flush` to bypass the cooldown and bound RAM / L0 size.
+    /// No-op in memory mode, which has no flush task. Call after dropping the
+    /// inner lock.
+    fn notify_flush_after_append(&self, buffered_bytes: i64) {
+        if self.data_dir.is_none() {
+            return;
+        }
+        self.flush_notify.notify_one();
+        if buffered_bytes >= SEGMENT_TARGET_BYTES {
+            self.force_flush.notify_one();
+        }
+    }
+
     /// Stamp `seq` onto `aligned` and append it; returns the last seq allocated
     /// (or `-1` if empty). In memory mode the rows are immediately "persisted".
     pub fn append_aligned_batch(&self, aligned: &AlignedBatch) -> i64 {
@@ -358,14 +373,7 @@ impl Namespace {
         }
         let buffered_bytes = inner.buffers.ram_bytes();
         drop(inner);
-        if self.data_dir.is_some() {
-            self.flush_notify.notify_one();
-            // A burst that has already buffered a full segment shouldn't wait out
-            // the flush-rate cooldown — flush now to bound RAM and L0 size.
-            if buffered_bytes >= SEGMENT_TARGET_BYTES {
-                self.force_flush.notify_one();
-            }
-        }
+        self.notify_flush_after_append(buffered_bytes);
         last_seq
     }
 
@@ -400,14 +408,7 @@ impl Namespace {
         }
         let buffered_bytes = inner.buffers.ram_bytes();
         drop(inner);
-        if self.data_dir.is_some() {
-            self.flush_notify.notify_one();
-            // A burst that has already buffered a full segment shouldn't wait out
-            // the flush-rate cooldown — flush now to bound RAM and L0 size.
-            if buffered_bytes >= SEGMENT_TARGET_BYTES {
-                self.force_flush.notify_one();
-            }
-        }
+        self.notify_flush_after_append(buffered_bytes);
         last_seq
     }
 
@@ -680,8 +681,7 @@ impl Namespace {
     }
 
     /// Names of the schema's STRING columns carrying a trigram substring index
-    /// (see `ColumnIndex::trigram`). The merge + backfill paths build one bloom
-    /// set per returned column.
+    /// (`ColumnIndex::trigram`); one bloom set is built per returned column.
     fn indexed_columns(&self) -> Vec<&str> {
         self.schema
             .columns
