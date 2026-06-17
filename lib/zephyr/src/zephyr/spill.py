@@ -125,20 +125,17 @@ class SpillWriter:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        if exc_type is None:
+            self.close()
+            return
         if self._closed:
             return
         self._closed = True
         try:
-            if exc_type is not None:
-                # Error path: skip final flush (partial file will never be read)
-                # and let ThreadedBatchWriter.__exit__ tear down the thread
-                # without blocking the caller.
-                self._threaded.__exit__(exc_type, exc_val, exc_tb)
-            else:
-                remaining = self._accumulator.flush()
-                if remaining is not None:
-                    self._threaded.submit(remaining)
-                self._threaded.close()
+            # Error path: skip final flush (partial file will never be read)
+            # and let ThreadedBatchWriter.__exit__ tear down the thread
+            # without blocking the caller.
+            self._threaded.__exit__(exc_type, exc_val, exc_tb)
         finally:
             self._writer.close()
 

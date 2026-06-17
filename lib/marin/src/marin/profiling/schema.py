@@ -119,6 +119,12 @@ class BreakdownPart:
     share_of_total: float
 
 
+def breakdown_part(value: float, total: float) -> BreakdownPart:
+    """Build a ``BreakdownPart`` from a duration and the total it is a share of."""
+    share = (value / total) if total > 0 else 0.0
+    return BreakdownPart(total_duration=value, share_of_total=share)
+
+
 @dataclass(frozen=True)
 class TimeBreakdown:
     """Aggregate time buckets used for bottleneck analysis."""
@@ -290,6 +296,16 @@ class ProfileSummary:
             gap_region_contexts=gap_region_contexts,
             optimization_candidates=optimization_candidates,
         )
+
+
+def hierarchical_root_totals(summary: ProfileSummary) -> dict[str, float]:
+    """Map each depth-1 hierarchical region path to its (non-negative) inclusive duration."""
+    totals: dict[str, float] = {}
+    for region in summary.hierarchical_regions:
+        if region.depth != 1:
+            continue
+        totals[region.path] = max(0.0, float(region.inclusive_duration))
+    return totals
 
 
 def profile_summary_from_dict(data: Mapping[str, Any]) -> ProfileSummary:
