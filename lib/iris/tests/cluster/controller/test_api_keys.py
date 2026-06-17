@@ -108,7 +108,7 @@ def test_worker_token_in_api_keys(db):
 
 
 def test_iap_provider_uses_id_token_login_verifier(db):
-    config = config_pb2.AuthConfig(iap={"audiences": ["desktop-client-id"], "project_id": "my-project"})
+    config = config_pb2.AuthConfig(iap={"audiences": ["desktop-client-id"]})
     auth = create_controller_auth(config, db=db)
 
     # IAP login proof is an OIDC ID token verified by IapIdTokenVerifier.

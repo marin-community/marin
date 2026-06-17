@@ -38,8 +38,6 @@ auth:
     # the IAP-secured OAuth client id (service-account flow).
     audiences:
       - REPLACE_WITH_DESKTOP_CLIENT_ID.apps.googleusercontent.com
-    # Optional GCP project the user must belong to (extra authz on top of IAP IAM).
-    project_id: hai-gcp-models
   admin_users:
     - russell.power@gmail.com
   optional: false  # public ingress: tokenless requests are rejected

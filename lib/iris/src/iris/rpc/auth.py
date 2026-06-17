@@ -229,14 +229,14 @@ class IapIdTokenVerifier:
 
     Raises ValueError unless the token's signature and issuer are valid and its
     ``aud`` claim is one of ``audiences`` (the email is taken from the verified
-    claims). Used as the login identity proof for an IAP-fronted controller.
+    claims). Used as the login identity proof for an IAP-fronted controller;
+    IAP's own IAM is the access gate, so no further project check is done here.
     """
 
-    def __init__(self, audiences: Iterable[str], project_id: str | None = None):
+    def __init__(self, audiences: Iterable[str]):
         self._audiences = frozenset(audiences)
         if not self._audiences:
             raise ValueError("IapIdTokenVerifier requires at least one audience")
-        self._project_id = project_id
         self._request = google.auth.transport.requests.Request()
 
     def verify(self, token: str) -> VerifiedIdentity:

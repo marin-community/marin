@@ -359,8 +359,7 @@ def create_controller_auth(
         audiences = list(auth_config.iap.audiences)
         if not audiences:
             raise ValueError("IAP auth config requires at least one audience")
-        gcp_project_id = auth_config.iap.project_id or None
-        login_verifier = IapIdTokenVerifier(audiences, project_id=gcp_project_id)
+        login_verifier = IapIdTokenVerifier(audiences)
 
     optional = auth_config.optional
     logger.info(

@@ -447,11 +447,10 @@ message IapAuthConfig {
   // Accepted OIDC ID-token audiences (the `aud` claim) the controller will
   // verify at login. Typically the desktop client id (user flow) and/or the
   // IAP-secured OAuth client id (service-account flow).
+  //
+  // IAP's own IAM (roles/iap.httpsResourceAccessor) is the access gate; the
+  // controller does not re-check project membership.
   repeated string audiences = 4;
-
-  // Optional GCP project the authenticated user must belong to. Extra authz on
-  // top of IAP's own IAM check; empty disables the project check.
-  string project_id = 5;
 }
 
 message AuthConfig {
