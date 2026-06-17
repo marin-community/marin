@@ -91,3 +91,20 @@ class DevCoreweaveState:
             target=CoreweaveTarget(**data["target"]),
             pod=PodRef(**data["pod"]),
         )
+
+
+def require_coreweave_platform(config: config_pb2.IrisClusterConfig) -> CoreweaveTarget:
+    """Resolve the kubectl target for a CoreWeave cluster, or fail fast.
+
+    Inverts dev_tpu.py's GCP gate: this tool only works against
+    CoreWeave/Kubernetes-backed clusters.
+    """
+    if config.platform.WhichOneof("platform") != "coreweave":
+        raise click.ClickException(
+            "dev_coreweave requires a CoreWeave/Kubernetes-backed cluster. "
+            "For GCP TPU clusters use scripts/iris/dev_tpu.py."
+        )
+    cw = config.platform.coreweave
+    namespace = cw.namespace or "iris"
+    kubeconfig_path = os.path.expanduser(cw.kubeconfig_path) if cw.kubeconfig_path else ""
+    return CoreweaveTarget(namespace=namespace, kubeconfig_path=kubeconfig_path)
