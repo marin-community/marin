@@ -345,17 +345,10 @@ def is_availability_key(key: str) -> bool:
 
 
 def availability_constraint(variant: str) -> Constraint:
-    """Require a zone where ``variant`` has been empirically obtained.
+    """A hard, zone-level constraint requiring ``variant`` to be obtainable there.
 
-    A zone-level placement requirement, not a per-worker one: the scheduler and
-    autoscaler inject ``availability:<variant>`` markers onto workers/groups whose
-    zone currently has live, non-erroring capacity for the accelerator (observed
-    from the autoscaler's running slices, not merely configured), and this EXISTS
-    constraint filters candidates to that marker. A job is placed only where the
-    constraint can be satisfied — it waits rather than landing in a zone that has
-    never yielded the accelerator, while an availability probe scales the variant up
-    so the zone can become available. Accelerators only — CPU/RAM/disk never produce
-    availability markers.
+    Emitted as an ``availability:<variant>`` EXISTS marker (zone-level, not
+    per-worker). Accelerators only — CPU/RAM/disk never produce availability markers.
     """
     return Constraint.create(
         key=availability_key(variant), op=ConstraintOp.EXISTS, mode=job_pb2.CONSTRAINT_MODE_REQUIRED

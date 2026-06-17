@@ -121,15 +121,10 @@ def enrich_workers_with_availability(
 ) -> list[WorkerSnapshot]:
     """Add each worker's zone ``availability:<variant>`` markers to its attributes.
 
-    A worker inherits the accelerator variants its *zone* has been EMPIRICALLY
-    confirmed to provide (a live, non-erroring slice in the zone's region — see
-    :func:`empirical_zone_capabilities`). A hard ``availability:<variant>`` job
-    constraint then filters placement to workers in such a zone, so a CPU
-    orchestrator is placed only where its accelerator has actually been obtained
-    (and waits otherwise; the availability probe meanwhile scales the variant up so
-    the zone can become available). Keys on the existing ``zone`` attribute (the
-    same one ``--zone``/``--region`` matching uses); workers without a zone are
-    passed through unchanged.
+    A worker inherits the accelerator variants its *zone* has been empirically
+    confirmed to provide (see :func:`empirical_zone_capabilities`), which a hard
+    ``availability:<variant>`` constraint then filters placement against. Keys on the
+    existing ``zone`` attribute; workers without a zone pass through unchanged.
     """
     if not zone_capabilities:
         return workers
@@ -150,14 +145,9 @@ def enrich_workers_with_availability(
 def demanded_availability_variants(pending_task_rows: list[PendingTask]) -> set[str]:
     """Accelerator variants some pending task constrains on via ``availability:<variant>``.
 
-    Only these variants need injecting onto workers this tick: an availability
-    marker matters solely when a pending job filters on it, and in practice a tiny
-    set of variants (often just one, e.g. ``v5p-8``) is ever reserved. Restricting
-    enrichment to this set confines the per-worker copy to the few workers in a
-    zone that provisions a demanded variant.
-
     Returned variants are lowercased to match the ``zone_capabilities`` map (both
-    sides come through :func:`availability_key`).
+    sides come through :func:`availability_key`). The caller injects only these onto
+    workers, so a tick with no availability demand rebuilds no worker attributes.
     """
     variants: set[str] = set()
     for task in pending_task_rows:

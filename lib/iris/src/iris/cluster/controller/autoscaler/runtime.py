@@ -387,12 +387,8 @@ class Autoscaler:
     def zone_capabilities(self, timestamp: Timestamp | None = None) -> dict[str, frozenset[str]]:
         """Map zone -> {device_variant} the cluster has EMPIRICALLY confirmed available.
 
-        Used by routing (to filter scaling groups) and by the scheduler (to inject
-        ``availability:<variant>`` markers onto workers) so a hard availability
-        constraint confines a job to a region where its accelerator has actually been
-        found. A variant counts only after a scale-up succeeded (≥1 live ``READY``
-        slice, not erroring) — see :func:`empirical_zone_capabilities`. The probe in
-        :meth:`evaluate` bootstraps capacity for an as-yet-unobserved variant.
+        A variant counts for a zone only after a scale-up there succeeded (≥1 live
+        ``READY`` slice, not erroring) — see :func:`empirical_zone_capabilities`.
         """
         ts = timestamp or Timestamp.now()
         return empirical_zone_capabilities(self._groups.values(), ts)

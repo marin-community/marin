@@ -396,6 +396,25 @@ class GroupFeasibility:
     reason: str | None
 
 
+def _feasibility_group_attrs(group: ScalingGroup) -> dict[str, AttributeValue]:
+    """A group's routing attributes plus a CONFIGURED ``availability:<variant>`` marker.
+
+    Lets :func:`job_feasibility` treat a hard ``availability:<variant>`` constraint as
+    satisfiable against any group configured for that variant.
+    """
+    attrs = group.to_attributes()
+    resources = group.resources
+    if resources is not None and resources.device_variant:
+        # CONFIGURED availability — must stay distinct from the EMPIRICAL (live-slice)
+        # marker _enriched_group_attrs injects under the same key for runtime routing.
+        # Feasibility is the static "can this ever schedule" gate, so a cold region with
+        # no live slice (which the autoscaler probe will scale up) must still pass;
+        # gating submission on live capacity would reject every cold-start availability
+        # job. availability_key normalizes the variant to match the constraint.
+        attrs[availability_key(resources.device_variant)] = AttributeValue("true")
+    return attrs
+
+
 def job_feasibility(
     groups: Sequence[ScalingGroup],
     constraints: Sequence[Constraint],
@@ -406,6 +425,11 @@ def job_feasibility(
     Ignores runtime availability (quota, cooldown, in-flight capacity) — that
     is the autoscaler's job on each tick. This predicate gates LaunchJob at
     submit time so jobs that can never be scheduled fail fast.
+
+    A hard ``availability:<variant>`` constraint is satisfiable against any group
+    *configured* for that variant (see :func:`_feasibility_group_attrs`); the
+    constraint is ANDed with the job's other routing constraints, so an availability
+    job with an incompatible region/zone still fails fast.
 
     Args:
         groups: scaling groups to consider.
@@ -418,7 +442,7 @@ def job_feasibility(
     if not groups_list:
         return GroupFeasibility(feasible=[], reason=None)
 
-    group_attrs = {g.name: g.to_attributes() for g in groups_list}
+    group_attrs = {g.name: _feasibility_group_attrs(g) for g in groups_list}
     group_index = ConstraintIndex.build(group_attrs)
     hard_cs, _ = split_hard_soft(routing_constraints(constraints))
     matching_names = group_index.matching_entities(hard_cs)
