@@ -31,9 +31,9 @@ import sys
 from openai import OpenAI
 
 from experiments.datakit.intruder import (
-    DEFAULT_PANEL_MODELS,
     BucketPool,
     LlmPanelist,
+    default_panel,
     run_intruder_test,
 )
 
@@ -83,8 +83,7 @@ def _openrouter_panel() -> list[LlmPanelist]:
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         sys.exit("OPENROUTER_API_KEY not set. Run with `! OPENROUTER_API_KEY=sk-or-... uv run python -m ...`")
-    client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=api_key)
-    return [LlmPanelist(model=m.slug, client=client, extra_body=dict(m.extra_body)) for m in DEFAULT_PANEL_MODELS]
+    return default_panel(OpenAI(base_url=OPENROUTER_BASE_URL, api_key=api_key))
 
 
 def _probe(panel: list[LlmPanelist]) -> None:
