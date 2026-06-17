@@ -756,6 +756,12 @@ def _assert_single_submit_extras(spy: _SubmitSpy, expected: list[str]) -> None:
     assert spy.requests[0].environment.extras == expected
 
 
+def _assert_single_submit_env(spy: _SubmitSpy, expected: dict[str, str]) -> None:
+    assert len(spy.requests) == 1
+    for key, value in expected.items():
+        assert spy.requests[0].environment.env_vars[key] == value
+
+
 def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
     """Setting ``resources`` on a StepSpec submits ``fn`` as a Fray job."""
     spy = _SubmitSpy(fray_client)
@@ -827,6 +833,25 @@ def test_remote_dependency_groups_can_override_device_extra(tmp_path: Path, fray
     )
 
     _assert_single_submit_extras(_run_step_with_submit_spy(step, fray_client), [])
+
+
+def test_remote_vllm_tpu_dependency_group_sets_target_device(tmp_path: Path, fray_client):
+    resources = ResourceConfig.with_tpu("v6e-4")
+
+    @remote(resources=resources, pip_dependency_groups=["eval", "vllm"])
+    def my_step(output_path: str) -> PathMetadata:
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="remote_vllm_tpu_step",
+        override_output_path=tmp_path.as_posix(),
+        fn=my_step,
+    )
+
+    spy = _run_step_with_submit_spy(step, fray_client)
+
+    _assert_single_submit_extras(spy, ["eval", "vllm"])
+    _assert_single_submit_env(spy, {"VLLM_TARGET_DEVICE": "tpu"})
 
 
 def test_remote_direct_call_uses_device_extra(fray_client):
