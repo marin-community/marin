@@ -120,10 +120,11 @@ def prune_old_data(
         time.sleep(pause_between_s)
 
     # 3. Orphaned slices: one at a time. A slice with no backing worker row has
-    #    no VMs behind it; once it ages past slice_retention it is garbage,
-    #    whether or not its scale group still exists in config. This is what
-    #    reaps slices stranded by a scale-group rename/removal (the autoscaler's
-    #    own slice cleanup is scoped to configured groups).
+    #    no live VMs behind it; once it ages past slice_retention it is garbage.
+    #    This reaps the dead leftovers of a scale-group rename/removal: retired
+    #    groups whose VMs are gone leave only orphan slice rows (those whose VMs
+    #    are still live are adopted and drained by the autoscaler instead —
+    #    recovery.restore_autoscaler_state).
     slices_deleted = 0
     while not _stopped():
         with db.read_snapshot() as snap:
@@ -131,10 +132,9 @@ def prune_old_data(
         if slice_id is None:
             break
         with db.transaction() as cur:
-            deleted = writes.delete_slice(cur, slice_id)
-        if deleted:
-            log_event("slice_pruned", slice_id)
-            slices_deleted += 1
+            writes.delete_slice(cur, slice_id)
+        log_event("slice_pruned", slice_id)
+        slices_deleted += 1
         time.sleep(pause_between_s)
 
     result = PruneResult(

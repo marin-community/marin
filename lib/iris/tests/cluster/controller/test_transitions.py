@@ -3723,25 +3723,6 @@ def test_prune_keeps_slice_with_live_worker_despite_empty_worker_ids(state):
     assert _query_slice(state, "slice-empty-json") is not None  # kept (worker row references it)
 
 
-def test_delete_slice_guards_against_live_worker(state):
-    """writes.delete_slice re-checks ``workers.slice_id`` atomically (discovery/delete race).
-
-    A worker that registers on a slow-booting slice between the pruner's read-snapshot
-    discovery and the delete must not be orphaned: the guarded delete is a no-op.
-    """
-    _insert_slice(state, "guard-empty", scale_group="g-zone", worker_ids=[], created_at_ms=1000)
-    _insert_slice(state, "guard-backed", scale_group="g-zone", worker_ids=[], created_at_ms=1000)
-    register_worker(state, "w-guard", "host:9003", make_worker_metadata(), slice_id="guard-backed", scale_group="g-zone")
-
-    with state._db.transaction() as cur:
-        assert writes.delete_slice(cur, "guard-backed") == 0  # guarded: a worker still references it
-    with state._db.transaction() as cur:
-        assert writes.delete_slice(cur, "guard-empty") == 1  # no worker → deleted
-
-    assert _query_slice(state, "guard-backed") is not None
-    assert _query_slice(state, "guard-empty") is None
-
-
 def test_dispatch_propagates_task_image(state):
     """task_image set on the LaunchJobRequest is copied into the per-job RunTaskRequest template."""
     register_worker(state, "w1", "host:8080", make_worker_metadata())

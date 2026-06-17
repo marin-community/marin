@@ -195,6 +195,7 @@ class Autoscaler:
         base_worker_config: config_pb2.WorkerConfig | None = None,
         unresolvable_timeout: Duration = DEFAULT_UNRESOLVABLE_TIMEOUT,
         create_rate_limit: int = DEFAULT_CREATE_RATE_LIMIT,
+        make_draining_group: Callable[[str], ScalingGroup] | None = None,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -207,8 +208,12 @@ class Autoscaler:
             unresolvable_timeout: How long a slice can remain UNKNOWN before being treated as FAILED.
             create_rate_limit: Project-wide ceiling on slice-creation requests per minute,
                 shared across all scale groups. See ``DEFAULT_CREATE_RATE_LIMIT``.
+            make_draining_group: Builds a scale-to-zero ``ScalingGroup`` for a scale group that has
+                left config but still has live VMs (see ``restore_autoscaler_state``). None disables
+                drain adoption (test/local mode); the factory always wires it in prod.
         """
         self._groups = scale_groups
+        self._make_draining_group = make_draining_group
         self._platform = platform
         self.evaluation_interval = evaluation_interval
         self._base_worker_config = base_worker_config
@@ -240,6 +245,7 @@ class Autoscaler:
         config: config_pb2.AutoscalerConfig,
         platform: WorkerInfraProvider,
         base_worker_config: config_pb2.WorkerConfig | None = None,
+        make_draining_group: Callable[[str], ScalingGroup] | None = None,
     ) -> "Autoscaler":
         """Create autoscaler from proto config.
 
@@ -248,6 +254,8 @@ class Autoscaler:
             config: Autoscaler configuration proto (with defaults already applied)
             platform: WorkerInfraProvider instance for shutdown lifecycle
             base_worker_config: Base worker config merged with per-group overrides
+            make_draining_group: Builds a scale-to-zero group for a retired-but-live scale group
+                (see ``Autoscaler.__init__`` / ``restore_autoscaler_state``).
 
         Returns:
             Configured Autoscaler instance
@@ -257,6 +265,7 @@ class Autoscaler:
             evaluation_interval=duration_from_proto(config.evaluation_interval),
             platform=platform,
             base_worker_config=base_worker_config,
+            make_draining_group=make_draining_group,
         )
 
     def shutdown(self) -> None:
@@ -802,7 +811,7 @@ class Autoscaler:
         tracked workers. Call at startup before loops begin.
         """
         checkpoint = load_autoscaler_checkpoint(db)
-        restored_workers = restore_autoscaler_state(self._groups, checkpoint, platform)
+        restored_workers = restore_autoscaler_state(self._groups, checkpoint, platform, self._make_draining_group)
         self.restore_tracked_workers(restored_workers)
         logger.info("Restored %d tracked workers", len(restored_workers))
 

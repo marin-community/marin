@@ -85,9 +85,25 @@ def create_autoscaler(
             worker_attrs or "none",
         )
 
+    def make_draining_group(name: str) -> ScalingGroup:
+        """Build a scale-to-zero group for a scale group that left config but still has live VMs.
+
+        ``max_slices=0`` makes ``can_scale_up()`` always False, so the group never
+        creates slices; the normal idle scaledown drains its existing slices once
+        their workers go idle. See ``recovery.restore_autoscaler_state``.
+        """
+        return ScalingGroup(
+            config=config_pb2.ScaleGroupConfig(name=name, max_slices=0),
+            platform=platform,
+            label_prefix=label_prefix,
+            idle_threshold=scale_down_delay,
+            scale_down_rate_limit=DEFAULT_SCALE_DOWN_RATE_LIMIT,
+        )
+
     return Autoscaler.from_config(
         scale_groups=scaling_groups,
         config=autoscaler_config,
         platform=platform,
         base_worker_config=base_worker_config,
+        make_draining_group=make_draining_group,
     )

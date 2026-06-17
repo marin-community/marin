@@ -427,9 +427,6 @@ workers_table = Table(
     Column("device_variant", String, nullable=False, server_default="''"),
     Column("slice_id", String, nullable=False, server_default="''"),
     Column("scale_group", String, nullable=False, server_default="''"),
-    # Orphan-slice pruning (pruner.find_prunable_slice) probes "any worker on this
-    # slice?" by slice_id, so keep it indexed.
-    Index("idx_workers_slice_id", "slice_id"),
 )
 
 
