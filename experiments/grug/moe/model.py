@@ -103,6 +103,11 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.3
     router_z_loss_coef: float = 0.0
+    # When True, both ``embed_norm`` (RMSNorm with learnable gain) and
+    # ``embed_gated_norm`` are dropped. The embedding is normalized by the
+    # non-parametric ``rms_norm`` (just variance + rsqrt, no learnable
+    # per-dim gain) and fed directly into block 0.
+    embed_rms_no_gain: bool = False
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
@@ -549,8 +554,8 @@ class Block(eqx.Module):
 
 class Transformer(eqx.Module):
     token_embed: jax.Array
-    embed_norm: RMSNorm
-    embed_gated_norm: GatedNorm
+    embed_norm: RMSNorm | None
+    embed_gated_norm: GatedNorm | None
     output_proj: jax.Array
     blocks: tuple[Block, ...]
     final_norm: RMSNorm
@@ -565,10 +570,18 @@ class Transformer(eqx.Module):
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+        embed_norm: RMSNorm | None
+        embed_gated_norm: GatedNorm | None
+        if cfg.embed_rms_no_gain:
+            embed_norm = None
+            embed_gated_norm = None
+        else:
+            embed_norm = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+            embed_gated_norm = GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key)
         return Transformer(
             token_embed=token_embed,
-            embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
+            embed_norm=embed_norm,
+            embed_gated_norm=embed_gated_norm,
             output_proj=output_proj,
             blocks=blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -588,7 +601,11 @@ class Transformer(eqx.Module):
         batch_spec = _batch_spec()
         cfg = self.config
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
-        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        if cfg.embed_rms_no_gain:
+            hidden = rms_norm(hidden, eps=cfg.layer_norm_eps)
+        else:
+            assert self.embed_norm is not None and self.embed_gated_norm is not None
+            hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
         # Short layers: sliding window. Long layers (every 4th + last): full causal.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
