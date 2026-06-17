@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -16,6 +17,8 @@ from experiments.grug.moe.adamh import scale_by_adamh
 
 Expert3DOptimizer = Literal["muonh", "adamh"]
 VALID_EXPERT_3D_OPTIMIZERS: tuple[Expert3DOptimizer, ...] = ("muonh", "adamh")
+REPLICA_DCN_AXIS = "replica_dcn"
+EXPERT_AXIS = "expert"
 
 
 def _uses_adamh_baseline_adam_group(path_lower: str) -> bool:
@@ -38,6 +41,34 @@ def _target_named_sharding(array) -> jax.sharding.NamedSharding | None:
     if isinstance(sharding, jax.sharding.NamedSharding):
         return sharding
     return None
+
+
+def _expert_momentum_sharding(array) -> jax.sharding.NamedSharding | None:
+    if array is None or not hasattr(array, "shape") or array.ndim != 3:
+        return None
+
+    target_sharding = _target_named_sharding(array)
+    if target_sharding is None:
+        return None
+
+    mesh = target_sharding.mesh
+    if mesh.shape.get(REPLICA_DCN_AXIS, 1) <= 1:
+        return None
+
+    spec = target_sharding.spec
+    if len(spec) != 3 or spec[0] is None:
+        return None
+
+    stack_axis = spec[0] if isinstance(spec[0], tuple) else (spec[0],)
+    if EXPERT_AXIS not in stack_axis or REPLICA_DCN_AXIS in stack_axis:
+        return None
+
+    sharded_stack_axis = (REPLICA_DCN_AXIS, *stack_axis)
+    stack_axis_size = math.prod(int(mesh.shape[name]) for name in sharded_stack_axis if name in mesh.shape)
+    if array.shape[0] % stack_axis_size != 0:
+        return None
+
+    return jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(sharded_stack_axis, *spec[1:]))
 
 
 def _match_named_update_sharding() -> optax.GradientTransformation:
@@ -132,6 +163,7 @@ def scale_with_grug_muonh(
     muon_eps: float = 1e-8,
     learning_rate: float = 0.02,
     coefficient_type: CoefficientType = "quintic",
+    momentum_sharding_fn=None,
 ) -> optax.GradientTransformation:
     """MuonH transform for raw Grug arrays with matrix-shaped trailing dims."""
     muon_transform = _grug_scale_with_muon(
@@ -141,6 +173,7 @@ def scale_with_grug_muonh(
         muon_eps=muon_eps,
         use_kimi_scaling=False,
         coefficient_type=coefficient_type,
+        momentum_sharding_fn=momentum_sharding_fn,
     )
 
     def init_fn(params):
@@ -282,6 +315,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         muon_eps=self.muon_epsilon,
                         learning_rate=learning_rate,
                         coefficient_type=self.coefficient_type,
+                        momentum_sharding_fn=_expert_momentum_sharding,
                     )
                 )
                 components.append(_match_named_update_sharding())

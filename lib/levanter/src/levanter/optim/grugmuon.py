@@ -12,6 +12,7 @@ All 2D arrays are routed to Muon, except those whose path contains
 import math
 from dataclasses import dataclass
 from functools import partial
+from typing import Callable
 
 import jax
 import jax.numpy as jnp
@@ -159,6 +160,7 @@ def _grug_scale_with_muon(
     use_kimi_scaling=False,
     coefficient_type="quintic",
     orthogonalization_layout: str = STACK_BATCH_SHARDED,
+    momentum_sharding_fn: Callable[[jax.Array], jax.sharding.Sharding | None] | None = None,
 ):
     """Muon gradient transformation for raw arrays with matrix-shaped trailing dimensions."""
     steps = int(steps)
@@ -170,19 +172,46 @@ def _grug_scale_with_muon(
 
     def init_fn(params):
         momentum_buffer = otu.tree_zeros_like(params)
+        if momentum_sharding_fn is not None:
+
+            def shard_momentum(momentum_leaf, param):
+                if momentum_leaf is None:
+                    return None
+                target_sharding = momentum_sharding_fn(param)
+                if target_sharding is None:
+                    return momentum_leaf
+                return reshard(momentum_leaf, target_sharding)
+
+            momentum_buffer = jax.tree.map(
+                shard_momentum,
+                momentum_buffer,
+                params,
+                is_leaf=lambda x: x is None,
+            )
         return ScaleByMuonState(momentum_buffer=momentum_buffer)
 
     def update_fn(updates, state, params=None):
         buf = state.momentum_buffer
+
+        def match_state_sharding(update, momentum_leaf):
+            if update is None:
+                return None
+            if momentum_sharding_fn is None:
+                return update
+            target_sharding = _target_sharding(momentum_leaf)
+            if target_sharding is None or not isinstance(target_sharding, jax.sharding.NamedSharding):
+                return update
+            return reshard(update, target_sharding)
+
         buf = jax.tree.map(
-            lambda m, g: None if g is None else momentum * m + g,
+            lambda m, g: None if g is None else momentum * m + match_state_sharding(g, m),
             buf,
             updates,
             is_leaf=lambda x: x is None,
         )
         if nesterov:
             updates = jax.tree.map(
-                lambda m, g: None if g is None else momentum * m + g,
+                lambda m, g: None if g is None else momentum * m + match_state_sharding(g, m),
                 buf,
                 updates,
                 is_leaf=lambda x: x is None,

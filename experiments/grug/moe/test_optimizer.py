@@ -3,9 +3,16 @@
 
 import jax
 import jax.numpy as jnp
+from jax.sharding import AbstractMesh, AxisType, NamedSharding
+from jax.sharding import PartitionSpec as P
 
 from experiments.grug.moe.adamh import _scale_invariant_hyperball_update as _adamh_hyperball_update
-from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig, _scale_invariant_hyperball_updates
+from experiments.grug.moe.optimizer import (
+    GrugMoeAdamHConfig,
+    GrugMoeMuonHConfig,
+    _expert_momentum_sharding,
+    _scale_invariant_hyperball_updates,
+)
 
 
 def test_grug_moe_adamh_mask_routes_expert_mlp_weights_to_expert_group():
@@ -109,6 +116,27 @@ def test_grug_moe_muonh_can_route_routed_expert_weights_to_adamh():
     assert block_mask["mlp"]["expert_mlp"]["w_gate_up"] == "adamh"
     assert block_mask["mlp"]["expert_mlp"]["w_down"] == "adamh"
     assert block_mask["shared"]["w_gate"] == "muonh"
+
+
+def test_expert_momentum_sharding_uses_replica_dcn_on_expert_stack_axis():
+    mesh = AbstractMesh(
+        axis_sizes=(4, 4, 8, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    w_gate_up = jax.ShapeDtypeStruct(
+        (256, 2560, 5120),
+        jnp.float32,
+        sharding=NamedSharding(mesh, P("expert", "data", "model")),
+    )
+    w_down = jax.ShapeDtypeStruct(
+        (256, 5120, 2560),
+        jnp.float32,
+        sharding=NamedSharding(mesh, P("expert", "model", "data")),
+    )
+
+    assert _expert_momentum_sharding(w_gate_up).spec == P(("replica_dcn", "expert"), "data", "model")
+    assert _expert_momentum_sharding(w_down).spec == P(("replica_dcn", "expert"), "model", "data")
 
 
 def test_scale_invariant_hyperball_updates_matches_materialized_formula():

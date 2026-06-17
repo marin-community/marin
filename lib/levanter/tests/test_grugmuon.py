@@ -118,3 +118,24 @@ def test_stack_sharded_target_preserves_param_stack_axis_sharding():
         target_pspec = _batch_sharded_stack_target_pspec(param)
 
     assert target_pspec == P("expert", None, None)
+
+
+def test_grug_scale_with_muon_uses_momentum_sharding_callback():
+    mesh = AbstractMesh(
+        axis_sizes=(4, 4, 8, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = {
+        "expert": jax.ShapeDtypeStruct(
+            (256, 2560, 5120),
+            jnp.float32,
+            sharding=NamedSharding(mesh, P("expert", "data", "model")),
+        )
+    }
+    target_sharding = NamedSharding(mesh, P(("replica_dcn", "expert"), "data", "model"))
+    transform = _grug_scale_with_muon(momentum_sharding_fn=lambda _: target_sharding)
+
+    state = jax.eval_shape(transform.init, params)
+
+    assert state.momentum_buffer["expert"].sharding == target_sharding
