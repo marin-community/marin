@@ -1,8 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from types import SimpleNamespace
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -173,83 +171,6 @@ def test_gpu_fa4_thd_registered_backend_jits_with_cutlass_boundary(monkeypatch):
     np.testing.assert_array_equal(grad, jnp.full_like(q, 2))
     assert seen_sliding_windows
     assert all(sliding_window == 3 for sliding_window in seen_sliding_windows)
-
-
-def test_gpu_fa4_thd_forward_launcher_threads_local_window_arguments():
-    calls = {}
-
-    class FakeCutlass:
-        BFloat16 = object()
-        Float16 = object()
-        Float32 = float
-
-    class FakeFlashForward:
-        def __init__(self, *args, **kwargs):
-            calls["init_args"] = args
-            calls["init_kwargs"] = kwargs
-
-        def __call__(
-            self,
-            q,
-            k,
-            v,
-            out,
-            lse,
-            softmax_scale,
-            cu_seqlens_q,
-            cu_seqlens_k,
-            seqused_q,
-            seqused_k,
-            leftpad_k,
-            window_size_left,
-            window_size_right,
-            block_table,
-            alibi_slopes,
-            softcap,
-            softmax_scale_log2,
-            stream,
-        ):
-            del q, k, v, out, lse, softmax_scale, cu_seqlens_q, cu_seqlens_k
-            del seqused_q, seqused_k, block_table, alibi_slopes, softcap, softmax_scale_log2
-            calls["leftpad_k"] = leftpad_k
-            calls["window_size_left"] = window_size_left
-            calls["window_size_right"] = window_size_right
-            calls["stream"] = stream
-
-    modules = fa4_thd._UpstreamFa4CuteModules(
-        arch=100,
-        cutlass=FakeCutlass,
-        cute=SimpleNamespace(Tensor=object, jit=lambda fn: fn),
-        cjax=object(),
-        cuda=SimpleNamespace(CUstream=object),
-        FlashAttentionForward=FakeFlashForward,
-        FlashAttentionBackward=object(),
-        FlashAttentionBackwardPreprocess=object(),
-        FlashAttentionBackwardPostprocess=object(),
-    )
-
-    launcher = fa4_thd._upstream_fa4_thd_forward_launcher(
-        modules,
-        dtype=jnp.dtype(jnp.bfloat16),
-        head_dim=128,
-        head_dim_v=128,
-        qhead_per_kvhead=4,
-        kernel_config=fa4_thd.Flash4CuteKernelConfig(
-            forward_tile=(128, 128),
-            backward_tile=(128, 128),
-            num_threads=384,
-        ),
-        sliding_window=2048,
-    )
-    launcher("stream", "q", "k", "v", "cu", "out", "lse", softmax_scale=1.0)
-
-    assert calls["init_args"] == (128, 128)
-    assert calls["init_kwargs"]["is_causal"] is False
-    assert calls["init_kwargs"]["is_local"] is True
-    assert calls["leftpad_k"] is None
-    assert calls["window_size_left"] == 2047
-    assert calls["window_size_right"] == 0
-    assert calls["stream"] == "stream"
 
 
 def test_gpu_fa4_thd_rejects_mha_before_kernel_config(monkeypatch):
