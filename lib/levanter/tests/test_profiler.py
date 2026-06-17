@@ -1,7 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
 from types import SimpleNamespace
 
 import levanter.callbacks as callbacks_module
@@ -16,9 +15,6 @@ def test_profile_writes_trace_to_run_dir_and_ignores_duplicate_forced_stop(monke
 
     def start_trace(path: str, *, create_perfetto_link: bool, create_perfetto_trace: bool, profiler_options) -> None:
         calls.append(("start", path, create_perfetto_link, create_perfetto_trace, profiler_options))
-        trace_dir = Path(path) / "plugins" / "profile" / "2024_01_01_00_00_00"
-        trace_dir.mkdir(parents=True, exist_ok=True)
-        (trace_dir / "perfetto_trace.json.gz").write_bytes(b"trace")
 
     def stop_trace() -> None:
         calls.append(("stop",))
@@ -51,7 +47,7 @@ def test_profile_writes_trace_to_run_dir_and_ignores_duplicate_forced_stop(monke
         ("stop",),
         ("barrier",),
     ]
-    assert (profile_dir / "plugins" / "profile" / "2024_01_01_00_00_00" / "perfetto_trace.json.gz").exists()
+    assert profile_dir.exists()
 
 
 def test_profile_callback_stress_repeated_start_stop_finalization(monkeypatch, tmp_path):

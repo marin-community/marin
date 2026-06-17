@@ -23,6 +23,8 @@ import wandb.errors as wandb_errors
 
 from levanter.utils.fsspec_utils import join_path
 
+PROFILER_DIR_NAME = "profiler"
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -51,7 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Download the artifact and print the TensorBoard command without launching it.",
+        help="Mirror the profile directory and print the TensorBoard command without launching it.",
     )
     return parser.parse_args()
 
@@ -98,7 +100,7 @@ def resolve_profile_dir(run: "wandb.apis.public.Run") -> str:
         raise RuntimeError(f"Run {run.path} does not expose trainer.log_dir.")
 
     run_id = run.path[-1]
-    return join_path(join_path(str(log_dir), run_id), "profiler")
+    return join_path(join_path(str(log_dir), run_id), PROFILER_DIR_NAME)
 
 
 def _is_local_fs(fs) -> bool:
@@ -118,7 +120,7 @@ def mirror_profile_dir(profile_dir: str, root: Optional[Path], *, run_id: str) -
     else:
         root.mkdir(parents=True, exist_ok=True)
 
-    download_path = root / run_id / "profiler"
+    download_path = root / run_id / PROFILER_DIR_NAME
     if download_path.exists():
         shutil.rmtree(download_path)
     download_path.parent.mkdir(parents=True, exist_ok=True)
