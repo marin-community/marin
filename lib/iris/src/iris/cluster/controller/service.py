@@ -12,6 +12,7 @@ import json
 import logging
 import secrets
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Protocol
@@ -859,6 +860,8 @@ class ControllerProtocol(Protocol):
 
     def wake(self) -> None: ...
 
+    def request_worker_eviction(self, worker_ids: Sequence[WorkerId]) -> None: ...
+
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
     def begin_checkpoint(self) -> tuple[str, Any]: ...
@@ -1611,11 +1614,31 @@ class ControllerServiceImpl:
                 slice_id=request.slice_id,
                 scale_group=request.scale_group,
             )
+        self._request_recycled_address_eviction(worker_id, request.address)
         logger.info("Worker registered: %s at %s", worker_id, request.address)
         return controller_pb2.Controller.RegisterResponse(
             worker_id=str(worker_id),
             accepted=True,
         )
+
+    def _request_recycled_address_eviction(self, worker_id: WorkerId, address: str) -> None:
+        """Hand any stale prior owner of ``address`` to the controller for teardown.
+
+        Detects a recycled internal IP (see :func:`reads.worker_ids_at_address`)
+        and defers the reap to :meth:`Controller.request_worker_eviction`.
+        """
+        with self._db.read_snapshot() as snap:
+            stale = reads.worker_ids_at_address(snap, address, exclude=worker_id)
+        if not stale:
+            return
+        logger.warning(
+            "Worker %s registered at %s held by %d stale row(s) (recycled IP); evicting: %s",
+            worker_id,
+            address,
+            len(stale),
+            [str(wid) for wid in stale],
+        )
+        self._controller.request_worker_eviction(stale)
 
     def list_workers(
         self,
