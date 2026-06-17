@@ -64,6 +64,11 @@ class GrugMoeLaunchConfig:
     """Override the checkpointer. None builds the default (periodic + final saves
     under output_path). Throughput experiments point this at node-local disk so a
     slow object-store commit can't wedge the end-of-run barrier."""
+    checkpoint_keep: list[dict] | None = None
+    """When ``checkpointer`` is None, splice this into the default ``CheckpointerConfig.keep``.
+    Each entry is a CheckpointInterval dict, e.g. ``[{"every": 10_000}]`` for periodic
+    permanent checkpoints, or ``[{"every": phase_1_start_step, "until": phase_1_start_step}]``
+    to snapshot a specific transition step. Ignored when ``checkpointer`` is set."""
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
@@ -140,7 +145,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
             temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
-            keep=None,
+            keep=config.checkpoint_keep,
         ),
     )
 
