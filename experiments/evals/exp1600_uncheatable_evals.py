@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from fray.cluster import ResourceConfig
-from marin.defaults.evals import (
+from marin.defaults import (
     ACTIVE_DATASETS,
     ALL_UNCHEATABLE_EVAL_DATASETS,
     uncheatable_eval,
