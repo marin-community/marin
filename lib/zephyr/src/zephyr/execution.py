@@ -981,13 +981,9 @@ class ZephyrCoordinator:
 
         result_refs = self._collect_results()
 
-        stage_is_scatter = any(isinstance(op, Scatter) for op in stage.operations)
-        return _regroup_result_refs(
-            result_refs,
-            len(shards),
-            output_shard_count=stage.output_shards,
-            is_scatter=stage_is_scatter,
-        )
+        if any(isinstance(op, Scatter) for op in stage.operations):
+            return _regroup_scatter_refs(result_refs, len(shards), stage.output_shards)
+        return _regroup_map_refs(result_refs, len(shards))
 
     def _compute_join_aux(
         self,
@@ -1419,39 +1415,37 @@ class ZephyrWorker:
             self._host_shutdown_event.set()
 
 
-def _regroup_result_refs(
+def _regroup_scatter_refs(
     result_refs: dict[int, TaskResult],
     input_shard_count: int,
-    output_shard_count: int | None = None,
-    is_scatter: bool = False,
+    output_shard_count: int | None,
 ) -> list[Shard]:
-    """Regroup worker output refs by output shard index without loading data.
+    """Fan a scatter stage's outputs out to its reducers without loading data.
 
-    Non-scatter: each worker's ListShard maps to its own index (identity).
-    Scatter: passes the list of scatter data-file paths to every reducer.
-    Each reducer reads the per-mapper ``.scatter_meta`` sidecars in parallel
-    to build its own ``ScatterReader`` without coordinator-side consolidation.
+    Scatter routes records into exactly ``output_shard_count`` buckets via
+    ``hash(key) % output_shard_count``; spawning more reduce tasks than that
+    produces empty output files for shard indices that no record hashes to.
+    When ``output_shard_count`` is None (group_by auto-detect), inherit the
+    input shard count.
+
+    Every reducer receives the full list of scatter data-file paths and reads
+    the per-mapper ``.scatter_meta`` sidecars in parallel to build its own
+    ``ScatterReader`` — the coordinator never consolidates a manifest.
     """
-    if is_scatter:
-        # Scatter routes records into exactly ``output_shard_count`` buckets via
-        # ``hash(key) % output_shard_count``; spawning more reduce tasks than that
-        # produces empty output files for shard indices that no record hashes to.
-        # When output_shard_count is None (group_by auto-detect), inherit the
-        # input shard count.
-        num_output = output_shard_count if output_shard_count is not None else input_shard_count
+    num_output = output_shard_count if output_shard_count is not None else input_shard_count
+    all_paths: list[str] = []
+    for result in result_refs.values():
+        all_paths.extend(result.shard)
+    shared_refs = MemChunk(items=all_paths)
+    return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
 
-        # Collect all scatter file paths from all workers. The coordinator
-        # does NOT read the sidecars or write a consolidated manifest —
-        # reducers do their own parallel sidecar reads.
-        all_paths: list[str] = []
-        for result in result_refs.values():
-            all_paths.extend(result.shard)
 
-        shared_refs = MemChunk(items=all_paths)
-        return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
+def _regroup_map_refs(result_refs: dict[int, TaskResult], input_shard_count: int) -> list[Shard]:
+    """Map a non-scatter stage's outputs 1:1 from input shard index to output.
 
-    # Non-scatter: 1:1 mapping from input shard index to output. Resharding
-    # to a different shard count belongs to ReshardOp, not here.
+    Each worker's ListShard keeps its own index. Resharding to a different
+    shard count belongs to ReshardOp, not here.
+    """
     num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
     return [result_refs[idx].shard if idx in result_refs else ListShard(refs=[]) for idx in range(num_output)]
 
