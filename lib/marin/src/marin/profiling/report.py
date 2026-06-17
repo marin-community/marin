@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 
-from marin.profiling.schema import ProfileSummary
+from marin.profiling.schema import ProfileSummary, hierarchical_root_totals
 
 
 @dataclass
@@ -91,7 +91,7 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
     lines.append("## Hierarchical Regions")
     lines.append("| Region Path | Depth | Count | Inclusive | Inclusive % | Exclusive | Exclusive % |")
     lines.append("|---|---:|---:|---:|---:|---:|---:|")
-    root_totals = _hierarchical_root_totals(summary)
+    root_totals = hierarchical_root_totals(summary)
     fallback_total = max(root_totals.values(), default=0.0)
     for region in summary.hierarchical_regions[:top_k]:
         inclusive = _fmt(region.inclusive_duration)
@@ -193,15 +193,6 @@ def _inverse_positive(value: float | None) -> float | None:
     if value is None or value <= 0:
         return None
     return 1.0 / value
-
-
-def _hierarchical_root_totals(summary: ProfileSummary) -> dict[str, float]:
-    totals: dict[str, float] = {}
-    for region in summary.hierarchical_regions:
-        if region.depth != 1:
-            continue
-        totals[region.path] = max(0.0, float(region.inclusive_duration))
-    return totals
 
 
 def _md_code(value: str) -> str:
