@@ -1,13 +1,13 @@
 ---
-name: reserve-coreweave
-description: Reserve an Iris-backed CoreWeave H100 pod for fast debugging with dev_coreweave.py.
+name: reserve-gpu
+description: Reserve an Iris-backed CoreWeave H100 pod for fast debugging with dev_gpu.py.
 ---
 
-# Skill: Dev CoreWeave
+# Skill: Dev GPU
 
 Use this skill for the standard fast H100 debugging loop without wiring a full training job each time. It is the GPU counterpart to `reserve-tpu`.
 
-`scripts/iris/dev_coreweave.py` reserves a CoreWeave H100 pod through Iris, waits for the backing Kubernetes pod to come up, and `kubectl exec -it`s you into it. Marin's H100s are CoreWeave Kubernetes pods, not GCE VMs, so access is `kubectl`, not SSH — there is no `ssh`/`scp` transport and no `~/.ssh/config` alias.
+`scripts/iris/dev_gpu.py` reserves a CoreWeave H100 pod through Iris, waits for the backing Kubernetes pod to come up, and `kubectl exec -it`s you into it. Marin's H100s are CoreWeave Kubernetes pods, not GCE VMs, so access is `kubectl`, not SSH — there is no `ssh`/`scp` transport and no `~/.ssh/config` alias.
 
 This is a lean tool: `allocate`, `connect`, `status`, `release`. It does not sync files or run remote env setup (no `execute`/`watch`/`setup_env`). The CoreWeave task image is self-contained; the loop is "reserve a node, shell in." Sync those steps in yourself once connected.
 
@@ -35,9 +35,9 @@ A holder pod sits on an expensive 8×H100 node for the session's lifetime. Relea
 All invocations share this shape; only the subcommand and its flags change:
 
 ```bash
-uv run scripts/iris/dev_coreweave.py \
+uv run scripts/iris/dev_gpu.py \
   --config lib/iris/config/cw-us-east-02a.yaml \
-  --name "$USER-cw" \
+  --name "$USER-gpu" \
   <subcommand> [flags]
 ```
 
@@ -63,8 +63,8 @@ cd /app && uv sync --all-packages --extra=gpu
 Use normal Iris tooling to inspect the backing cluster and holder job:
 
 ```bash
-uv run iris --config=lib/iris/config/cw-us-east-02a.yaml job list --prefix /$USER/dev-cw
-uv run iris --config=lib/iris/config/cw-us-east-02a.yaml job logs /$USER/dev-cw-<name>
+uv run iris --config=lib/iris/config/cw-us-east-02a.yaml job list --prefix /$USER/dev-gpu
+uv run iris --config=lib/iris/config/cw-us-east-02a.yaml job logs /$USER/dev-gpu-<name>
 ```
 
 Inspect the pod directly with the same kubeconfig the tool uses:
@@ -75,7 +75,7 @@ kubectl --kubeconfig ~/.kube/coreweave-iris-gpu --namespace iris get pods -l iri
 
 ## Session behavior
 
-- Local session state lives under `~/.cache/marin/dev_coreweave_iris/`.
+- Local session state lives under `~/.cache/marin/dev_gpu_iris/`.
 - If the `allocate` terminal dies unexpectedly, run `release` to terminate the holder job and clear the stale state file.
 - A failed `allocate` cleans up after itself: the holder job is terminated and the local state file is removed only once the job is confirmed gone, so a failed terminate never orphans an expensive pod with no local record of its job id.
 - `connect` execs into the pod resolved at allocation time. If Iris rescheduled the task onto a new pod while the job stayed active, `connect` fails — re-allocate.
@@ -85,8 +85,8 @@ kubectl --kubeconfig ~/.kube/coreweave-iris-gpu --namespace iris get pods -l iri
 Always pass `--name` to avoid collisions with other agents:
 
 ```bash
-export CW_NAME="${USER}-$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"
-uv run scripts/iris/dev_coreweave.py --config lib/iris/config/cw-us-east-02a.yaml --name "$CW_NAME" allocate
+export GPU_NAME="${USER}-$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"
+uv run scripts/iris/dev_gpu.py --config lib/iris/config/cw-us-east-02a.yaml --name "$GPU_NAME" allocate
 ```
 
 ## Cleanup

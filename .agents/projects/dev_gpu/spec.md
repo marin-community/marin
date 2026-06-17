@@ -1,9 +1,9 @@
-# dev_coreweave: concrete contracts
+# dev_gpu: concrete contracts
 
 ## CLI surface
 
 ```
-uv run scripts/iris/dev_coreweave.py --config <cfg> --name <session> <subcommand>
+uv run scripts/iris/dev_gpu.py --config <cfg> --name <session> <subcommand>
 ```
 
 - `allocate --gpu-count 8 [--timeout 900]` — submit + hold a GPU holder pod;
@@ -17,13 +17,13 @@ concurrent sessions (mirrors `dev_tpu.py`'s `--tpu-name`).
 
 ## Persisted session state
 
-JSON at `~/.cache/marin/dev_coreweave_iris/<session>.json`:
+JSON at `~/.cache/marin/dev_gpu_iris/<session>.json`:
 
 ```json
 {
   "session_name": "matt",
   "config_file": "/abs/path/to/coreweave.yaml",
-  "job_id": "/matt/dev-cw-matt",
+  "job_id": "/matt/dev-gpu-matt",
   "gpu_count": 8,
   "kubeconfig_path": "/Users/matt/.kube/coreweave-iris",
   "pod": {
@@ -37,7 +37,7 @@ JSON at `~/.cache/marin/dev_coreweave_iris/<session>.json`:
 ## Iris contract (reused, unchanged)
 
 - Submit: `IrisClient.submit(entrypoint=Entrypoint.from_command("python", "-c",
-  HOLDER_COMMAND), name=f"dev-cw-{session}", resources=ResourceSpec(cpu=…,
+  HOLDER_COMMAND), name=f"dev-gpu-{session}", resources=ResourceSpec(cpu=…,
   memory=…, device=gpu_device("H100", gpu_count)))`.
 - Wait: poll `job.tasks()[*].status()` until `TASK_STATE_RUNNING`; fail fast on
   `JOB_STATE_FAILED/KILLED/UNSCHEDULABLE/WORKER_FAILED`.

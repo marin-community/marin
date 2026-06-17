@@ -9,9 +9,9 @@ from click.testing import CliRunner
 from iris.cluster.backends.k8s.tasks import _LABEL_TASK_ID, _sanitize_label_value
 from iris.rpc import config_pb2
 
-from scripts.iris.dev_coreweave import (
+from scripts.iris.dev_gpu import (
     CoreweaveTarget,
-    DevCoreweaveState,
+    DevGpuState,
     PodRef,
     cli,
     kubectl_base,
@@ -24,15 +24,15 @@ from scripts.iris.dev_coreweave import (
 
 
 def test_state_round_trip():
-    state = DevCoreweaveState(
+    state = DevGpuState(
         session_name="matt",
         config_file="/abs/coreweave.yaml",
-        job_id="/matt/dev-cw-matt",
+        job_id="/matt/dev-gpu-matt",
         gpu_count=8,
         target=CoreweaveTarget(namespace="iris", kubeconfig_path="/k/cfg"),
-        pod=PodRef(namespace="iris", pod_name="dev-cw-matt-abc", container="task"),
+        pod=PodRef(namespace="iris", pod_name="dev-gpu-matt-abc", container="task"),
     )
-    assert DevCoreweaveState.from_json(state.to_json()) == state
+    assert DevGpuState.from_json(state.to_json()) == state
 
 
 def test_from_json_defaults_container_when_absent():
@@ -40,18 +40,18 @@ def test_from_json_defaults_container_when_absent():
     {
         "session_name": "matt",
         "config_file": "/abs/coreweave.yaml",
-        "job_id": "/matt/dev-cw-matt",
+        "job_id": "/matt/dev-gpu-matt",
         "gpu_count": 8,
         "target": {"namespace": "iris", "kubeconfig_path": "/k/cfg"},
-        "pod": {"namespace": "iris", "pod_name": "dev-cw-matt-abc"}
+        "pod": {"namespace": "iris", "pod_name": "dev-gpu-matt-abc"}
     }
     """
-    state = DevCoreweaveState.from_json(raw)
+    state = DevGpuState.from_json(raw)
     assert state.pod.container == "task"
     assert state.pod.namespace == "iris"
-    assert state.pod.pod_name == "dev-cw-matt-abc"
+    assert state.pod.pod_name == "dev-gpu-matt-abc"
     assert state.session_name == "matt"
-    assert state.job_id == "/matt/dev-cw-matt"
+    assert state.job_id == "/matt/dev-gpu-matt"
     assert state.gpu_count == 8
     assert state.target == CoreweaveTarget(namespace="iris", kubeconfig_path="/k/cfg")
 
@@ -96,9 +96,9 @@ def test_require_coreweave_rejects_gcp_with_pointer_to_dev_tpu():
 
 
 def test_pod_label_selector_matches_iris_label():
-    sel = pod_label_selector("/matt/dev-cw-matt/0")
-    assert sel == f"{_LABEL_TASK_ID}={_sanitize_label_value('/matt/dev-cw-matt/0')}"
-    assert sel == "iris.task_id=matt.dev-cw-matt.0"
+    sel = pod_label_selector("/matt/dev-gpu-matt/0")
+    assert sel == f"{_LABEL_TASK_ID}={_sanitize_label_value('/matt/dev-gpu-matt/0')}"
+    assert sel == "iris.task_id=matt.dev-gpu-matt.0"
 
 
 def test_kubectl_base_with_kubeconfig():
@@ -127,14 +127,14 @@ def test_kubectl_get_pods_cmd():
 
 def test_kubectl_connect_cmd():
     t = CoreweaveTarget(namespace="iris", kubeconfig_path="/k/cfg")
-    pod = PodRef(namespace="iris", pod_name="dev-cw-matt-abc", container="task")
+    pod = PodRef(namespace="iris", pod_name="dev-gpu-matt-abc", container="task")
     assert kubectl_connect_cmd(t, pod) == [
         "kubectl",
         "--kubeconfig=/k/cfg",
         "--namespace=iris",
         "exec",
         "-it",
-        "dev-cw-matt-abc",
+        "dev-gpu-matt-abc",
         "-c",
         "task",
         "--",

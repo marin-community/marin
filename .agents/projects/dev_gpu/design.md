@@ -1,11 +1,11 @@
-# dev_coreweave: ad-hoc CoreWeave H100 dev pods
+# dev_gpu: ad-hoc CoreWeave H100 dev pods
 
 _Why are we doing this? What's the benefit?_
 
 `scripts/iris/dev_tpu.py` (the `reserve-tpu` skill) lets a developer reserve a
 TPU worker through Iris and `ssh` in for ad-hoc dev work without wiring up a full
 training job. There is no GPU equivalent, even though GPU workloads now run on
-CoreWeave H100s. This adds `scripts/iris/dev_coreweave.py`: reserve a
+CoreWeave H100s. This adds `scripts/iris/dev_gpu.py`: reserve a
 CoreWeave H100 pod through Iris and `kubectl exec -it` into it. It unblocks the
 same fast edit/debug loop on the hardware where the GPU work actually runs.
 
@@ -88,7 +88,7 @@ the prototype.
 - **Label-selector truncation collision (known, low risk):** the `iris.task_id`
   label value is sanitized and truncated to 63 chars, so two very long, same-prefix
   task ids could share a selector and `parse_running_pod` could pick the wrong pod.
-  Unreachable for this tool's short `dev-cw-<user>` names; if it ever matters, also
+  Unreachable for this tool's short `dev-gpu-<user>` names; if it ever matters, also
   match `iris.task_hash` (the k8s backend's collision-resistant label) rather than
   re-deriving the hash here.
 - **Sub-node GPU requests (resolved):** `--gpu-count 1` schedules as a fractional
@@ -96,5 +96,5 @@ the prototype.
   `h100-8x` by device type+variant. Works, but a sub-node squatter fragments the
   8-GPU gang pool, so the default stays 8. See research.md "Live validation".
 - **Shared module:** is this prototype the right moment to extract the
-  `dev_tpu.py`/`dev_coreweave.py` common core, or wait until the kubectl path is
+  `dev_tpu.py`/`dev_gpu.py` common core, or wait until the kubectl path is
   proven?

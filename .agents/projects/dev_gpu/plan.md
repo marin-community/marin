@@ -1,4 +1,4 @@
-# dev_coreweave Implementation Plan
+# dev_gpu Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -15,13 +15,13 @@
 - `gpu_device("H100", 8)` exists in `lib/iris/src/iris/cluster/types.py:508`; `.gpu.count == 8`, `.gpu.variant == "H100"`.
 - CoreWeave scale group `h100-8x` in `lib/iris/config/coreweave.yaml` matches `device_type: gpu, device_variant: H100, device_count: 8`.
 - Platform is a proto oneof: `config.platform.WhichOneof("platform")` returns `"coreweave"` / `"gcp"`. `CoreweavePlatformConfig` has `namespace` (default `"iris"`) and `kubeconfig_path` (`lib/iris/src/iris/rpc/config.proto:38`).
-- Task pods are labeled `iris.task_id=<_sanitize_label_value(task_id)>` (`lib/iris/src/iris/cluster/backends/k8s/tasks.py:81,587`), container name `task`. Example: `_sanitize_label_value("/matt/dev-cw-matt/0") == "matt.dev-cw-matt.0"`.
+- Task pods are labeled `iris.task_id=<_sanitize_label_value(task_id)>` (`lib/iris/src/iris/cluster/backends/k8s/tasks.py:81,587`), container name `task`. Example: `_sanitize_label_value("/matt/dev-gpu-matt/0") == "matt.dev-gpu-matt.0"`.
 - `scripts.iris.*` is importable as a namespace package **only with repo root on `sys.path`**. There is no root `conftest.py` and no pytest `pythonpath`, so tests must be run with `uv run python -m pytest …` (the `-m` form puts CWD on the path); the bare `pytest` console script will NOT resolve `from scripts.iris...`.
 
 ## File structure
 
-- **Create** `scripts/iris/dev_coreweave.py` — the CLI tool. One file, mirroring `scripts/iris/dev_tpu.py`'s structure (it is the reference for every reused pattern).
-- **Create** `scripts/iris/tests/test_dev_coreweave.py` — unit tests for the pure helpers.
+- **Create** `scripts/iris/dev_gpu.py` — the CLI tool. One file, mirroring `scripts/iris/dev_tpu.py`'s structure (it is the reference for every reused pattern).
+- **Create** `scripts/iris/tests/test_dev_gpu.py` — unit tests for the pure helpers.
 
 No `__init__.py` files are added (namespace-package imports already work, per the background facts).
 
@@ -30,40 +30,40 @@ No `__init__.py` files are added (namespace-package imports already work, per th
 ### Task 1: Module scaffolding + session-state dataclasses
 
 **Files:**
-- Create: `scripts/iris/dev_coreweave.py`
-- Test: `scripts/iris/tests/test_dev_coreweave.py`
+- Create: `scripts/iris/dev_gpu.py`
+- Test: `scripts/iris/tests/test_dev_gpu.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `scripts/iris/tests/test_dev_coreweave.py`:
+Create `scripts/iris/tests/test_dev_gpu.py`:
 
 ```python
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from scripts.iris.dev_coreweave import CoreweaveTarget, DevCoreweaveState, PodRef
+from scripts.iris.dev_gpu import CoreweaveTarget, DevGpuState, PodRef
 
 
 def test_state_round_trip():
-    state = DevCoreweaveState(
+    state = DevGpuState(
         session_name="matt",
         config_file="/abs/coreweave.yaml",
-        job_id="/matt/dev-cw-matt",
+        job_id="/matt/dev-gpu-matt",
         gpu_count=8,
         target=CoreweaveTarget(namespace="iris", kubeconfig_path="/k/cfg"),
-        pod=PodRef(namespace="iris", pod_name="dev-cw-matt-abc", container="task"),
+        pod=PodRef(namespace="iris", pod_name="dev-gpu-matt-abc", container="task"),
     )
-    assert DevCoreweaveState.from_json(state.to_json()) == state
+    assert DevGpuState.from_json(state.to_json()) == state
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run (from repo root): `uv run python -m pytest scripts/iris/tests/test_dev_coreweave.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'scripts.iris.dev_coreweave'`.
+Run (from repo root): `uv run python -m pytest scripts/iris/tests/test_dev_gpu.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'scripts.iris.dev_gpu'`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create `scripts/iris/dev_coreweave.py`:
+Create `scripts/iris/dev_gpu.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -103,7 +103,7 @@ HOLDER_COMMAND = (
     "time.sleep(365 * 24 * 60 * 60)"
 )
 
-STATE_DIR = Path.home() / ".cache" / "marin" / "dev_coreweave_iris"
+STATE_DIR = Path.home() / ".cache" / "marin" / "dev_gpu_iris"
 DEFAULT_GPU_COUNT = 8
 TASK_CONTAINER = "task"
 GPU_VARIANT = "H100"
@@ -119,7 +119,7 @@ INACTIVE_JOB_STATES = TERMINAL_JOB_STATES | {job_pb2.JOB_STATE_SUCCEEDED}
 
 @dataclass(frozen=True)
 class PodRef:
-    """The k8s pod backing a dev CoreWeave session."""
+    """The k8s pod backing a dev GPU session."""
 
     namespace: str
     pod_name: str
@@ -135,8 +135,8 @@ class CoreweaveTarget:
 
 
 @dataclass(frozen=True)
-class DevCoreweaveState:
-    """Persisted local state for an active dev CoreWeave session."""
+class DevGpuState:
+    """Persisted local state for an active dev GPU session."""
 
     session_name: str
     config_file: str
@@ -149,7 +149,7 @@ class DevCoreweaveState:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
 
     @classmethod
-    def from_json(cls, raw: str) -> DevCoreweaveState:
+    def from_json(cls, raw: str) -> DevGpuState:
         data = json.loads(raw)
         return cls(
             session_name=data["session_name"],
@@ -163,13 +163,13 @@ class DevCoreweaveState:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run python -m pytest scripts/iris/tests/test_dev_coreweave.py -v`
+Run: `uv run python -m pytest scripts/iris/tests/test_dev_gpu.py -v`
 Expected: PASS (1 passed).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/iris/dev_coreweave.py scripts/iris/tests/test_dev_coreweave.py
+git add scripts/iris/dev_gpu.py scripts/iris/tests/test_dev_gpu.py
 git commit -m "[dev-coreweave] Session-state dataclasses + round-trip test"
 ```
 
@@ -178,19 +178,19 @@ git commit -m "[dev-coreweave] Session-state dataclasses + round-trip test"
 ### Task 2: Platform gate (`require_coreweave_platform`)
 
 **Files:**
-- Modify: `scripts/iris/dev_coreweave.py`
-- Test: `scripts/iris/tests/test_dev_coreweave.py`
+- Modify: `scripts/iris/dev_gpu.py`
+- Test: `scripts/iris/tests/test_dev_gpu.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `scripts/iris/tests/test_dev_coreweave.py`:
+Append to `scripts/iris/tests/test_dev_gpu.py`:
 
 ```python
 import click
 import pytest
 from iris.rpc import config_pb2
 
-from scripts.iris.dev_coreweave import require_coreweave_platform
+from scripts.iris.dev_gpu import require_coreweave_platform
 
 
 def _coreweave_config(namespace: str = "iris", kubeconfig: str = "") -> config_pb2.IrisClusterConfig:
@@ -225,12 +225,12 @@ def test_require_coreweave_rejects_gcp_with_pointer_to_dev_tpu():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run python -m pytest scripts/iris/tests/test_dev_coreweave.py -v`
+Run: `uv run python -m pytest scripts/iris/tests/test_dev_gpu.py -v`
 Expected: FAIL — `ImportError: cannot import name 'require_coreweave_platform'`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add to `scripts/iris/dev_coreweave.py` (after the dataclasses):
+Add to `scripts/iris/dev_gpu.py` (after the dataclasses):
 
 ```python
 def require_coreweave_platform(config: config_pb2.IrisClusterConfig) -> CoreweaveTarget:
@@ -241,7 +241,7 @@ def require_coreweave_platform(config: config_pb2.IrisClusterConfig) -> Coreweav
     """
     if config.platform.WhichOneof("platform") != "coreweave":
         raise click.ClickException(
-            "dev_coreweave requires a CoreWeave/Kubernetes-backed cluster. "
+            "dev_gpu requires a CoreWeave/Kubernetes-backed cluster. "
             "For GCP TPU clusters use scripts/iris/dev_tpu.py."
         )
     cw = config.platform.coreweave
@@ -252,13 +252,13 @@ def require_coreweave_platform(config: config_pb2.IrisClusterConfig) -> Coreweav
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `uv run python -m pytest scripts/iris/tests/test_dev_coreweave.py -v`
+Run: `uv run python -m pytest scripts/iris/tests/test_dev_gpu.py -v`
 Expected: PASS (4 passed).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/iris/dev_coreweave.py scripts/iris/tests/test_dev_coreweave.py
+git add scripts/iris/dev_gpu.py scripts/iris/tests/test_dev_gpu.py
 git commit -m "[dev-coreweave] CoreWeave platform gate"
 ```
 
@@ -267,17 +267,17 @@ git commit -m "[dev-coreweave] CoreWeave platform gate"
 ### Task 3: Pure kubectl helpers + pod-JSON parsing
 
 **Files:**
-- Modify: `scripts/iris/dev_coreweave.py`
-- Test: `scripts/iris/tests/test_dev_coreweave.py`
+- Modify: `scripts/iris/dev_gpu.py`
+- Test: `scripts/iris/tests/test_dev_gpu.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `scripts/iris/tests/test_dev_coreweave.py`:
+Append to `scripts/iris/tests/test_dev_gpu.py`:
 
 ```python
 from iris.cluster.backends.k8s.tasks import _LABEL_TASK_ID, _sanitize_label_value
 
-from scripts.iris.dev_coreweave import (
+from scripts.iris.dev_gpu import (
     kubectl_base,
     kubectl_connect_cmd,
     kubectl_get_pods_cmd,
@@ -287,9 +287,9 @@ from scripts.iris.dev_coreweave import (
 
 
 def test_pod_label_selector_matches_iris_label():
-    sel = pod_label_selector("/matt/dev-cw-matt/0")
-    assert sel == f"{_LABEL_TASK_ID}={_sanitize_label_value('/matt/dev-cw-matt/0')}"
-    assert sel == "iris.task_id=matt.dev-cw-matt.0"
+    sel = pod_label_selector("/matt/dev-gpu-matt/0")
+    assert sel == f"{_LABEL_TASK_ID}={_sanitize_label_value('/matt/dev-gpu-matt/0')}"
+    assert sel == "iris.task_id=matt.dev-gpu-matt.0"
 
 
 def test_kubectl_base_with_kubeconfig():
@@ -311,10 +311,10 @@ def test_kubectl_get_pods_cmd():
 
 def test_kubectl_connect_cmd():
     t = CoreweaveTarget(namespace="iris", kubeconfig_path="/k/cfg")
-    pod = PodRef(namespace="iris", pod_name="dev-cw-matt-abc", container="task")
+    pod = PodRef(namespace="iris", pod_name="dev-gpu-matt-abc", container="task")
     assert kubectl_connect_cmd(t, pod) == [
         "kubectl", "--kubeconfig=/k/cfg", "--namespace=iris",
-        "exec", "-it", "dev-cw-matt-abc", "-c", "task", "--", "bash", "-l",
+        "exec", "-it", "dev-gpu-matt-abc", "-c", "task", "--", "bash", "-l",
     ]
 
 
@@ -341,12 +341,12 @@ def test_parse_running_pod_none_when_no_running():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run python -m pytest scripts/iris/tests/test_dev_coreweave.py -v`
+Run: `uv run python -m pytest scripts/iris/tests/test_dev_gpu.py -v`
 Expected: FAIL — `ImportError: cannot import name 'kubectl_base'`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add to `scripts/iris/dev_coreweave.py` (after `require_coreweave_platform`):
+Add to `scripts/iris/dev_gpu.py` (after `require_coreweave_platform`):
 
 ```python
 def pod_label_selector(task_id: str) -> str:
@@ -382,13 +382,13 @@ def parse_running_pod(pods_json: dict) -> str | None:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `uv run python -m pytest scripts/iris/tests/test_dev_coreweave.py -v`
+Run: `uv run python -m pytest scripts/iris/tests/test_dev_gpu.py -v`
 Expected: PASS (12 passed).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/iris/dev_coreweave.py scripts/iris/tests/test_dev_coreweave.py
+git add scripts/iris/dev_gpu.py scripts/iris/tests/test_dev_gpu.py
 git commit -m "[dev-coreweave] Pure kubectl helpers + pod-JSON parsing"
 ```
 
@@ -399,11 +399,11 @@ git commit -m "[dev-coreweave] Pure kubectl helpers + pod-JSON parsing"
 This task wires the I/O layer (Iris client, kubectl subprocess, session files) and the click CLI. It mirrors `scripts/iris/dev_tpu.py` and is validated end-to-end manually in Task 5 (it talks to a live cluster, so it is not unit-tested).
 
 **Files:**
-- Modify: `scripts/iris/dev_coreweave.py`
+- Modify: `scripts/iris/dev_gpu.py`
 
 - [ ] **Step 1: Add the I/O helpers**
 
-Add to `scripts/iris/dev_coreweave.py` (after `parse_running_pod`):
+Add to `scripts/iris/dev_gpu.py` (after `parse_running_pod`):
 
 ```python
 def run_logged(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -441,13 +441,13 @@ def state_path(state_dir: Path, session_name: str) -> Path:
     return state_dir / f"{session_name}.json"
 
 
-def load_state(path: Path) -> DevCoreweaveState:
+def load_state(path: Path) -> DevGpuState:
     if not path.exists():
-        raise click.ClickException(f"No active dev CoreWeave session at {path}")
-    return DevCoreweaveState.from_json(path.read_text())
+        raise click.ClickException(f"No active dev GPU session at {path}")
+    return DevGpuState.from_json(path.read_text())
 
 
-def save_state(path: Path, state: DevCoreweaveState) -> None:
+def save_state(path: Path, state: DevGpuState) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(state.to_json())
 
@@ -463,14 +463,14 @@ def wait_for_running_task(job, *, timeout: float) -> str:
         status = job.status()
         if status.state in TERMINAL_JOB_STATES:
             error = status.error or job_pb2.JobState.Name(status.state)
-            raise click.ClickException(f"Dev CoreWeave allocation failed: {error}")
+            raise click.ClickException(f"Dev GPU allocation failed: {error}")
         tasks = job.tasks()
         if tasks:
             task = tasks[0]
             if task.status().state == job_pb2.TASK_STATE_RUNNING:
                 return str(task.task_id)
         time.sleep(5)
-    raise click.ClickException(f"Timed out waiting for dev CoreWeave task after {int(timeout)}s")
+    raise click.ClickException(f"Timed out waiting for dev GPU task after {int(timeout)}s")
 
 
 def wait_for_running_pod(target: CoreweaveTarget, task_id: str, *, timeout: float) -> PodRef:
@@ -494,7 +494,7 @@ def wait_for_running_pod(target: CoreweaveTarget, task_id: str, *, timeout: floa
 
 - [ ] **Step 2: Add the click CLI**
 
-Add to `scripts/iris/dev_coreweave.py` (after the I/O helpers):
+Add to `scripts/iris/dev_gpu.py` (after the I/O helpers):
 
 ```python
 @dataclass
@@ -506,7 +506,7 @@ class Context:
 
 @click.group()
 @click.option("--config", help="Path to an Iris cluster config file.")
-@click.option("--name", "session_name", help="Local dev CoreWeave session name.")
+@click.option("--name", "session_name", help="Local dev GPU session name.")
 @click.option("--verbose", is_flag=True, help="Enable verbose logging.")
 @click.pass_context
 def cli(ctx, config: str | None, session_name: str | None, verbose: bool) -> None:
@@ -526,7 +526,7 @@ def cli(ctx, config: str | None, session_name: str | None, verbose: bool) -> Non
 @click.option("--pod-timeout", default=120, show_default=True, help="Seconds to wait for the pod to run.")
 @click.pass_context
 def allocate(ctx, gpu_count: int, timeout: int, pod_timeout: int) -> None:
-    """Allocate a dev CoreWeave H100 pod and hold it until Ctrl-C."""
+    """Allocate a dev GPU H100 pod and hold it until Ctrl-C."""
     if not ctx.obj.config_file:
         raise click.ClickException("--config is required")
 
@@ -534,12 +534,12 @@ def allocate(ctx, gpu_count: int, timeout: int, pod_timeout: int) -> None:
     state_file = state_path(ctx.obj.state_dir, session_name)
     if state_file.exists():
         raise click.ClickException(
-            f"Dev CoreWeave session '{session_name}' already exists. Use release first or choose a new --name."
+            f"Dev GPU session '{session_name}' already exists. Use release first or choose a new --name."
         )
 
     target = require_coreweave_platform(IrisConfig.load(ctx.obj.config_file).proto)
 
-    state: DevCoreweaveState | None = None
+    state: DevGpuState | None = None
     with controller_client(ctx.obj.config_file) as client:
         resources = ResourceSpec(
             cpu=0.5, memory="1GB", disk="5GB", device=gpu_device(GPU_VARIANT, gpu_count)
@@ -547,7 +547,7 @@ def allocate(ctx, gpu_count: int, timeout: int, pod_timeout: int) -> None:
         try:
             job = client.submit(
                 entrypoint=Entrypoint.from_command("python", "-c", HOLDER_COMMAND),
-                name=f"dev-cw-{session_name}",
+                name=f"dev-gpu-{session_name}",
                 resources=resources,
             )
         except JobAlreadyExists as exc:
@@ -556,7 +556,7 @@ def allocate(ctx, gpu_count: int, timeout: int, pod_timeout: int) -> None:
         try:
             task_id = wait_for_running_task(job, timeout=timeout)
             pod = wait_for_running_pod(target, task_id, timeout=pod_timeout)
-            state = DevCoreweaveState(
+            state = DevGpuState(
                 session_name=session_name,
                 config_file=ctx.obj.config_file,
                 job_id=str(job.job_id),
@@ -575,9 +575,9 @@ def allocate(ctx, gpu_count: int, timeout: int, pod_timeout: int) -> None:
             while True:
                 time.sleep(30)
                 if not is_job_active(client, str(job.job_id)):
-                    raise click.ClickException("The dev CoreWeave holder job terminated unexpectedly.")
+                    raise click.ClickException("The dev GPU holder job terminated unexpectedly.")
         except KeyboardInterrupt:
-            print("\nReleasing dev CoreWeave session...")
+            print("\nReleasing dev GPU session...")
         finally:
             try:
                 client.terminate(JobName.from_wire(str(job.job_id)))
@@ -595,7 +595,7 @@ def connect(ctx) -> None:
     with controller_client(state.config_file) as client:
         if not is_job_active(client, state.job_id):
             raise click.ClickException(
-                f"Dev CoreWeave session '{state.session_name}' is no longer active. Use release to clean up."
+                f"Dev GPU session '{state.session_name}' is no longer active. Use release to clean up."
             )
     run_logged(kubectl_connect_cmd(state.target, state.pod), check=True)
 
@@ -637,20 +637,20 @@ if __name__ == "__main__":
 
 Run (from repo root):
 ```bash
-uv run python -m pytest scripts/iris/tests/test_dev_coreweave.py -v
-uv run python scripts/iris/dev_coreweave.py --help
+uv run python -m pytest scripts/iris/tests/test_dev_gpu.py -v
+uv run python scripts/iris/dev_gpu.py --help
 ```
 Expected: 12 passed; `--help` lists `allocate`, `connect`, `status`, `release`.
 
 - [ ] **Step 4: Lint**
 
-Run: `./infra/pre-commit.py --files scripts/iris/dev_coreweave.py scripts/iris/tests/test_dev_coreweave.py --fix`
+Run: `./infra/pre-commit.py --files scripts/iris/dev_gpu.py scripts/iris/tests/test_dev_gpu.py --fix`
 Expected: clean (or auto-fixed). Re-run the pytest command above if the formatter changed anything.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/iris/dev_coreweave.py
+git add scripts/iris/dev_gpu.py
 git commit -m "[dev-coreweave] I/O glue + allocate/connect/status/release CLI"
 ```
 
@@ -666,7 +666,7 @@ No automated test covers the live path (it costs an H100 node and needs cluster 
 
 Run (replace the config with the real CoreWeave cluster config; `--gpu-count 8` holds a whole `h100-8x` node):
 ```bash
-uv run python scripts/iris/dev_coreweave.py \
+uv run python scripts/iris/dev_gpu.py \
   --config lib/iris/config/coreweave.yaml --name "$USER-cw" \
   allocate --gpu-count 8
 ```
@@ -675,7 +675,7 @@ Expected: prints `Pod: …`, then "Allocation is active. Press Ctrl-C to release
 - [ ] **Step 2: Connect from a second terminal**
 
 ```bash
-uv run python scripts/iris/dev_coreweave.py --config lib/iris/config/coreweave.yaml --name "$USER-cw" connect
+uv run python scripts/iris/dev_gpu.py --config lib/iris/config/coreweave.yaml --name "$USER-cw" connect
 ```
 Expected: an interactive shell inside the pod. Inside it, confirm GPUs are visible:
 ```bash
@@ -686,7 +686,7 @@ nvidia-smi -L   # expect 8x H100
 - [ ] **Step 3: Status**
 
 ```bash
-uv run python scripts/iris/dev_coreweave.py --config lib/iris/config/coreweave.yaml --name "$USER-cw" status
+uv run python scripts/iris/dev_gpu.py --config lib/iris/config/coreweave.yaml --name "$USER-cw" status
 ```
 Expected: prints the session, job id, pod, and GPU count.
 
@@ -694,18 +694,18 @@ Expected: prints the session, job id, pod, and GPU count.
 
 Either Ctrl-C the `allocate` terminal, or from another shell:
 ```bash
-uv run python scripts/iris/dev_coreweave.py --config lib/iris/config/coreweave.yaml --name "$USER-cw" release
+uv run python scripts/iris/dev_gpu.py --config lib/iris/config/coreweave.yaml --name "$USER-cw" release
 ```
 Expected: holder job terminated, session file gone. Confirm the node is released:
 ```bash
-uv run iris --config lib/iris/config/coreweave.yaml job list --prefix /$USER/dev-cw
+uv run iris --config lib/iris/config/coreweave.yaml job list --prefix /$USER/dev-gpu
 ```
 
 - [ ] **Step 5: Record results**
 
-Append findings (did interactive exec work? did `--gpu-count 8` schedule? any pod-resolution flakiness?) to `.agents/projects/dev_coreweave/research.md` under a new "Live validation" heading, resolving the design's open questions. Commit:
+Append findings (did interactive exec work? did `--gpu-count 8` schedule? any pod-resolution flakiness?) to `.agents/projects/dev_gpu/research.md` under a new "Live validation" heading, resolving the design's open questions. Commit:
 ```bash
-git add .agents/projects/dev_coreweave/research.md
+git add .agents/projects/dev_gpu/research.md
 git commit -m "[dev-coreweave] Record live validation findings"
 ```
 

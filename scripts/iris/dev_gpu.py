@@ -2,7 +2,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Allocate and use development CoreWeave H100 pods on Iris-managed clusters."""
+"""Allocate and use development GPU (CoreWeave H100) pods on Iris-managed clusters."""
 
 from __future__ import annotations
 
@@ -31,11 +31,11 @@ HOLDER_COMMAND = (
     "import signal, sys, time; "
     "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); "
     "signal.signal(signal.SIGINT, lambda *_: sys.exit(0)); "
-    "print('iris dev coreweave holder ready', flush=True); "
+    "print('iris dev gpu holder ready', flush=True); "
     "time.sleep(365 * 24 * 60 * 60)"
 )
 
-STATE_DIR = Path.home() / ".cache" / "marin" / "dev_coreweave_iris"
+STATE_DIR = Path.home() / ".cache" / "marin" / "dev_gpu_iris"
 DEFAULT_GPU_COUNT = 8
 TASK_CONTAINER = "task"
 GPU_VARIANT = "H100"
@@ -51,7 +51,7 @@ INACTIVE_JOB_STATES = TERMINAL_JOB_STATES | {job_pb2.JOB_STATE_SUCCEEDED}
 
 @dataclass(frozen=True)
 class PodRef:
-    """The k8s pod backing a dev CoreWeave session."""
+    """The k8s pod backing a dev GPU session."""
 
     namespace: str
     pod_name: str
@@ -67,8 +67,8 @@ class CoreweaveTarget:
 
 
 @dataclass(frozen=True)
-class DevCoreweaveState:
-    """Persisted local state for an active dev CoreWeave session."""
+class DevGpuState:
+    """Persisted local state for an active dev GPU session."""
 
     session_name: str
     config_file: str
@@ -81,7 +81,7 @@ class DevCoreweaveState:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
 
     @classmethod
-    def from_json(cls, raw: str) -> DevCoreweaveState:
+    def from_json(cls, raw: str) -> DevGpuState:
         data = json.loads(raw)
         return cls(
             session_name=data["session_name"],
@@ -101,7 +101,7 @@ def require_coreweave_platform(config: config_pb2.IrisClusterConfig) -> Coreweav
     """
     if config.platform.WhichOneof("platform") != "coreweave":
         raise click.ClickException(
-            "dev_coreweave requires a CoreWeave/Kubernetes-backed cluster. "
+            "dev_gpu requires a CoreWeave/Kubernetes-backed cluster. "
             "For GCP TPU clusters use scripts/iris/dev_tpu.py."
         )
     # Namespace must come from kubernetes_provider: that is where Iris actually
@@ -179,13 +179,13 @@ def state_path(state_dir: Path, session_name: str) -> Path:
     return state_dir / f"{session_name}.json"
 
 
-def load_state(path: Path) -> DevCoreweaveState:
+def load_state(path: Path) -> DevGpuState:
     if not path.exists():
-        raise click.ClickException(f"No active dev CoreWeave session at {path}")
-    return DevCoreweaveState.from_json(path.read_text())
+        raise click.ClickException(f"No active dev GPU session at {path}")
+    return DevGpuState.from_json(path.read_text())
 
 
-def save_state(path: Path, state: DevCoreweaveState) -> None:
+def save_state(path: Path, state: DevGpuState) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(state.to_json())
 
@@ -201,14 +201,14 @@ def wait_for_running_task(job, *, timeout: float) -> str:
         state = job.state_only()
         if state in TERMINAL_JOB_STATES:
             error = job.status().error or job_pb2.JobState.Name(state)
-            raise click.ClickException(f"Dev CoreWeave allocation failed: {error}")
+            raise click.ClickException(f"Dev GPU allocation failed: {error}")
         tasks = job.tasks()
         if tasks:
             task = tasks[0]
             if task.status().state == job_pb2.TASK_STATE_RUNNING:
                 return str(task.task_id)
         time.sleep(5)
-    raise click.ClickException(f"Timed out waiting for dev CoreWeave task after {int(timeout)}s")
+    raise click.ClickException(f"Timed out waiting for dev GPU task after {int(timeout)}s")
 
 
 def wait_for_running_pod(target: CoreweaveTarget, task_id: str, *, timeout: float) -> PodRef:
@@ -240,11 +240,11 @@ class Context:
 
 @click.group()
 @click.option("--config", help="Path to an Iris cluster config file.")
-@click.option("--name", "session_name", help="Local dev CoreWeave session name.")
+@click.option("--name", "session_name", help="Local dev GPU session name.")
 @click.option("--verbose", is_flag=True, help="Enable verbose logging.")
 @click.pass_context
 def cli(ctx, config: str | None, session_name: str | None, verbose: bool) -> None:
-    """Development CoreWeave H100 pod management for Iris clusters."""
+    """Development GPU (CoreWeave H100) pod management for Iris clusters."""
     ctx.ensure_object(Context)
     ctx.obj.config_file = str(Path(config).resolve()) if config else None
     ctx.obj.session_name = session_name or getpass.getuser()
@@ -267,7 +267,7 @@ def cli(ctx, config: str | None, session_name: str | None, verbose: bool) -> Non
 @click.option("--pod-timeout", default=120, show_default=True, help="Seconds to wait for the pod to run.")
 @click.pass_context
 def allocate(ctx, gpu_count: int, timeout: int, pod_timeout: int) -> None:
-    """Allocate a dev CoreWeave H100 pod and hold it until Ctrl-C."""
+    """Allocate a dev GPU H100 pod and hold it until Ctrl-C."""
     if not ctx.obj.config_file:
         raise click.ClickException("--config is required")
 
@@ -275,18 +275,18 @@ def allocate(ctx, gpu_count: int, timeout: int, pod_timeout: int) -> None:
     state_file = state_path(ctx.obj.state_dir, session_name)
     if state_file.exists():
         raise click.ClickException(
-            f"Dev CoreWeave session '{session_name}' already exists. Use release first or choose a new --name."
+            f"Dev GPU session '{session_name}' already exists. Use release first or choose a new --name."
         )
 
     target = require_coreweave_platform(IrisConfig.load(ctx.obj.config_file).proto)
 
-    state: DevCoreweaveState | None = None
+    state: DevGpuState | None = None
     with controller_client(ctx.obj.config_file) as client:
         resources = ResourceSpec(cpu=0.5, memory="1GB", disk="5GB", device=gpu_device(GPU_VARIANT, gpu_count))
         try:
             job = client.submit(
                 entrypoint=Entrypoint.from_command("python", "-c", HOLDER_COMMAND),
-                name=f"dev-cw-{session_name}",
+                name=f"dev-gpu-{session_name}",
                 resources=resources,
             )
         except JobAlreadyExists as exc:
@@ -295,7 +295,7 @@ def allocate(ctx, gpu_count: int, timeout: int, pod_timeout: int) -> None:
         try:
             task_id = wait_for_running_task(job, timeout=timeout)
             pod = wait_for_running_pod(target, task_id, timeout=pod_timeout)
-            state = DevCoreweaveState(
+            state = DevGpuState(
                 session_name=session_name,
                 config_file=ctx.obj.config_file,
                 job_id=str(job.job_id),
@@ -314,9 +314,9 @@ def allocate(ctx, gpu_count: int, timeout: int, pod_timeout: int) -> None:
             while True:
                 time.sleep(30)
                 if not is_job_active(client, str(job.job_id)):
-                    raise click.ClickException("The dev CoreWeave holder job terminated unexpectedly.")
+                    raise click.ClickException("The dev GPU holder job terminated unexpectedly.")
         except KeyboardInterrupt:
-            print("\nReleasing dev CoreWeave session...")
+            print("\nReleasing dev GPU session...")
         finally:
             terminated = False
             try:
@@ -349,13 +349,13 @@ def connect(ctx) -> None:
             job_active = is_job_active(client, state.job_id)
     except Exception:
         logger.warning(
-            "Could not verify dev CoreWeave job liveness with the controller; attempting to connect anyway.",
+            "Could not verify dev GPU job liveness with the controller; attempting to connect anyway.",
             exc_info=True,
         )
     else:
         if not job_active:
             raise click.ClickException(
-                f"Dev CoreWeave session '{state.session_name}' is no longer active. Use release to clean up."
+                f"Dev GPU session '{state.session_name}' is no longer active. Use release to clean up."
             )
     # state.pod is the pod resolved at allocation time. If Iris rescheduled the task
     # onto a new pod while the job stayed active, this kubectl exec fails; re-allocate.

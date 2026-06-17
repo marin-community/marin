@@ -1,4 +1,4 @@
-# dev_coreweave: research notes
+# dev_gpu: research notes
 
 ## Prior art
 
@@ -28,7 +28,7 @@ but single-backend by intent — we mirror that philosophy rather than generaliz
 
 ## Decisions from brainstorming
 
-1. **Name/scope → `dev_coreweave.py`, k8s-specific.** Mirrors `dev_tpu.py`'s
+1. **Name/scope → `dev_gpu.py`, k8s-specific.** Mirrors `dev_tpu.py`'s
    one-tool-one-backend honesty. Considered and rejected: `dev_gpu.py` with
    backend dispatch (GCP-VM + k8s) — the GCP-GPU path is low-value since Marin's
    H100s aren't on GCP, and the abstraction isn't earned yet.
