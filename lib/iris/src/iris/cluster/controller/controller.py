@@ -402,6 +402,10 @@ class Controller:
         # Set after a tick commits new ASSIGNED rows so the next tick reconciles
         # immediately (dispatching them) instead of waiting a full poll interval.
         self._force_reconcile = False
+        # Workers queued off the control loop for teardown on the next tick; see
+        # request_worker_eviction / _drain_pending_evictions.
+        self._pending_evictions: set[WorkerId] = set()
+        self._pending_evictions_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
         self._control_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
@@ -452,6 +456,20 @@ class Controller:
         of waiting a full poll interval.
         """
         self._tick_wake.set()
+
+    def request_worker_eviction(self, worker_ids: Sequence[WorkerId]) -> None:
+        """Queue workers for fail-and-teardown on the next control tick.
+
+        Called off the control-loop thread (the Register RPC, when a worker claims
+        an address still held by a stale row — a recycled internal IP). The
+        teardown reaps the worker's slice through the autoscaler, which is only
+        safe on the control-loop thread, so the work is deferred to the tick drain.
+        """
+        if not worker_ids:
+            return
+        with self._pending_evictions_lock:
+            self._pending_evictions.update(worker_ids)
+        self.wake()
 
     def _seed_liveness_from_workers(self) -> None:
         """Seed every persisted worker as healthy so the scheduler sees them at startup.
@@ -736,6 +754,8 @@ class Controller:
         if self._config.dry_run:
             self._run_scheduling()
             return
+
+        self._drain_pending_evictions()
 
         run_autoscale = autoscale_limiter.should_run()
         run_schedule = woken or run_autoscale or schedule_limiter.should_run()
@@ -1197,7 +1217,13 @@ class Controller:
         if dead_workers:
             self._fail_and_teardown(dead_workers, snapshot)
 
-    def _fail_and_teardown(self, dead_workers: list[WorkerId], snapshot: reads.ControlSnapshot) -> None:
+    def _fail_and_teardown(
+        self,
+        dead_workers: list[WorkerId],
+        snapshot: reads.ControlSnapshot,
+        *,
+        reason: str = "worker reconcile failure threshold exceeded",
+    ) -> None:
         """Serialize worker failure, tear down slices + siblings, forget the lot.
 
         Fail the dead workers (``ops.worker.fail``), hand them to
@@ -1206,7 +1232,6 @@ class Controller:
         the autoscaler state, and forget every removed worker from the tracker.
         The only health-driven write is removal.
         """
-        reason = "worker reconcile failure threshold exceeded"
         sibling_reason = "unhealthy worker failed, slice terminated"
         for wid in dead_workers:
             log_event("worker_failing", str(wid), trigger=reason)
@@ -1244,6 +1269,23 @@ class Controller:
                 worker_attrs=self._worker_attrs,
             )
         self._health.forget_many(set(removed_ids) | set(auto.removed_workers))
+
+    def _drain_pending_evictions(self) -> None:
+        """Fail-and-teardown the workers queued by :meth:`request_worker_eviction`.
+
+        The snapshot carries only the queued workers' addresses (for cached-stub
+        eviction); their rows still exist because eviction is queued before any
+        failure.
+        """
+        with self._pending_evictions_lock:
+            if not self._pending_evictions:
+                return
+            drained = sorted(self._pending_evictions)
+            self._pending_evictions.clear()
+        with self._db.read_snapshot() as snap:
+            addresses = reads.bulk_get_worker_addresses(snap, drained)
+        snapshot = reads.ControlSnapshot(worker_addresses=addresses, reconcile_rows=[], timeout_rows=[])
+        self._fail_and_teardown(drained, snapshot, reason="address reused by newly-registered worker (recycled IP)")
 
     def _worker_status_map_from_tx(self, tx: Tx) -> WorkerStatusMap:
         """Per-worker idle/running status for the autoscale phase, read from ``tx``.

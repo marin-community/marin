@@ -671,13 +671,21 @@ class ScalingGroup:
         with self._slices_lock:
             return [s.handle for s in self._slices.values()]
 
-    def non_ready_slice_handles(self) -> list[tuple[str, SliceHandle]]:
-        """Snapshot non-READY slice handles for background lifecycle polling."""
+    def slices_needing_describe(self) -> list[tuple[str, SliceHandle]]:
+        """Snapshot slice handles the caller must ``describe()`` this tick.
+
+        Returns not-yet-ready slices (BOOTING/INITIALIZING), plus READY slices
+        the autoscaler tracks no workers for. A READY slice with empty
+        ``worker_ids`` never resolved its membership (e.g. adopted from a
+        checkpoint that recorded none); re-describing lets ``refresh`` repopulate
+        or reap it instead of leaving it stuck DEGRADED.
+        """
         with self._slices_lock:
             return [
                 (slice_id, state.handle)
                 for slice_id, state in self._slices.items()
                 if state.lifecycle in (SliceLifecycleState.BOOTING, SliceLifecycleState.INITIALIZING)
+                or (state.lifecycle == SliceLifecycleState.READY and not state.worker_ids)
             ]
 
     def slice_count(self) -> int:

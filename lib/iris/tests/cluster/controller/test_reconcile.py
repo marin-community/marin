@@ -1412,6 +1412,35 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     assert ctrl._health.all() == {}, "whole slice should be forgotten from the tracker"
 
 
+def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
+    """A queued eviction fails the worker and reaps its slice on the next tick.
+
+    The Register RPC queues a recycled-IP prior owner off the control-loop thread,
+    where reaping a slice via the autoscaler is unsafe. The tick drains it through
+    the same fail-and-teardown path as a reconcile failure --
+    ``backend.autoscale(dead_workers=...)`` -- even though the worker answers every
+    reconcile: eviction is driven by the queue, not by liveness.
+    """
+    provider = _UnreachableProvider()  # the worker stays reachable every tick
+    ctrl = make_controller(provider=provider, worker_unreachable_grace=_SHORT_GRACE)
+    state = ControllerTestState(
+        ctrl._db,
+        health=ctrl._health,
+        endpoints=ctrl._endpoints,
+        worker_attrs=ctrl._worker_attrs,
+        run_template_cache=ctrl._run_template_cache,
+    )
+
+    wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
+
+    ctrl.request_worker_eviction([wid])
+    reconcile_once(ctrl)
+
+    assert provider.autoscale_calls == [[wid]], "drain must drive teardown via backend.autoscale"
+    assert query_worker(state, wid) is None, "evicted worker row should be removed"
+    assert wid not in ctrl._health.all(), "evicted worker should be forgotten from the tracker"
+
+
 # ===========================================================================
 # Section 6: same-batch coscheduling split-slice corruption (#2 / #3)
 # ===========================================================================

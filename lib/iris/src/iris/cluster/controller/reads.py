@@ -1377,6 +1377,22 @@ def bulk_get_worker_addresses(tx: Tx, worker_ids: Iterable[WorkerId]) -> dict[Wo
     return {row.worker_id: str(row.address) for row in rows}
 
 
+def worker_ids_at_address(tx: Tx, address: str, *, exclude: WorkerId) -> list[WorkerId]:
+    """Return worker ids whose row holds ``address``, excluding ``exclude``.
+
+    Detects a recycled internal IP: when GCP reuses a deleted VM's IP for a new
+    one, two rows end up sharing one ``address``. Passing the new registrant as
+    ``exclude`` yields the stale prior owners.
+    """
+    rows = tx.execute(
+        select(workers_table.c.worker_id).where(
+            workers_table.c.address == address,
+            workers_table.c.worker_id != exclude,
+        )
+    ).all()
+    return [WorkerId(str(row.worker_id)) for row in rows]
+
+
 @dataclass(frozen=True, slots=True)
 class SchedulableWorker:
     """Worker shape consumed by the scheduler.

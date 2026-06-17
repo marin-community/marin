@@ -158,6 +158,7 @@ class MockController:
 
     def __init__(self):
         self.wake = Mock()
+        self.request_worker_eviction = Mock()
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.last_scheduling_context = None
         self.autoscaler = None

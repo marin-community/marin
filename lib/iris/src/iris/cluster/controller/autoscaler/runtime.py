@@ -537,11 +537,13 @@ class Autoscaler:
         """
         timestamp = timestamp or Timestamp.now()
 
-        # Phase 1: snapshot every non-READY slice across all groups.
+        # Phase 1: snapshot every slice that needs a describe() — not-yet-ready
+        # slices, plus READY slices the autoscaler tracks no workers for (so an
+        # adopted READY-but-empty slice repopulates instead of staying DEGRADED).
         targets = [
             (group, slice_id, handle)
             for group in self._groups.values()
-            for slice_id, handle in group.non_ready_slice_handles()
+            for slice_id, handle in group.slices_needing_describe()
         ]
 
         # Phase 2: fan out the blocking describe() over a bounded pool.
