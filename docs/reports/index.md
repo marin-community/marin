@@ -79,6 +79,10 @@ This page includes only experiments that have at least one run or report.
 
 ## Training and Performance
 
+- Pipeline Parallelism for MoE Training Under Delayed Gradients [![#6431](https://img.shields.io/github/issues/detail/state/marin-community/marin/6431)](https://github.com/marin-community/marin/issues/6431)
+    - [GitHub Issue #6431](https://github.com/marin-community/marin/issues/6431)
+    - [Report](./pipeline-parallel-moe-staleness.md)
+    - Conclusion: Per-stage staleness makes async pipeline parallelism a recoverable token tax (1.16× at 15k, still shrinking), not a quality floor. Muon plus post-orthogonalization weight prediction is the best cheap O(weights) corrector (1.23×); predicting along the raw momentum is worse than no correction. A v6e/DCN model nets 1.08–1.73× where cross-slice gradient traffic is exposed.
 - INT8 training in Levanter [![#620](https://img.shields.io/github/issues/detail/state/marin-community/marin/620)](https://github.com/marin-community/marin/issues/620)
     - [GitHub Issue #620](https://github.com/marin-community/marin/issues/620)
     - [WandB Report](https://wandb.ai/marin-community/marin/reports/620-Int8-Training--VmlldzoxMTQ4NTY4Mg?accessToken=opus2o11hqwefpfjv1ii6sfjduq0jrdfjho5raj6i0lvi41lkv0u1rj5ij4elyz7)

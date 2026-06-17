@@ -80,6 +80,7 @@ nav:
       - Marin 8B Retro: reports/marin-8b-retro.md
       - Marin 32B Retro: reports/marin-32b-retro.md
       - Markdownified Datasets: reports/markdownified-datasets.md
+      - Pipeline Parallelism & Staleness: reports/pipeline-parallel-moe-staleness.md
   - Developer Guide:
       - Contributing: dev-guide/contributing.md
       - Tutorial Guidelines: dev-guide/tutorial-guidelines.md

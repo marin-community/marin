@@ -168,11 +168,38 @@ viable across most of the multi-slice regime — and the realistic per-stage
 staleness profile is what flips the verdict from "never worth it" (uniform-τ) to
 "worth it where it matters."**
 
-**Documented follow-ups (not run):** pre- vs post-orthogonalization prediction
-(this used post-orth, theoretically the correct velocity); a smarter long-horizon
-predictor for τ≥16; an even-longer run to pin the asymptotic tax (15k confirmed it
-shrinks 1.33×→1.16× and is still falling, but has not fully closed); and the
-conditional real-PP validation spike (#199) — now greenlit by the above.
+**7. Pre- vs post-orthogonalization prediction — post-orth wins, decisively.** A
+follow-up sweep (group `delay-pp-isoloss`, per-stage `pp6`, 6k steps) built a
+PP-specific Muon variant that predicts along the *smoothed raw momentum* (an EMA
+of the stale gradient, pre-Newton-Schulz) instead of the orthogonalized update,
+plus three Muon-aware gate/clamp tricks. The pre-orthogonalization idea is
+**refuted**: raw-momentum prediction is worse than post-orth weight prediction,
+and worse than no correction at all.
+
+| corrector (per-stage `pp6`, 6k steps) | gap to sync | token-overhead |
+|---|---|---|
+| post-orth `weight_pred` (extrapolate the orthogonalized step) | +0.067 | **1.23×** |
+| `wp_trust` (raw-momentum + LARS-style trust clamp) | +0.076 | 1.29× |
+| `wp_confidence` (raw-momentum + cosine soft-gate) | +0.078 | 1.29× |
+| uncorrected `pp6` | +0.086 | 1.33× |
+| `wp_preorth` (raw-momentum, unclamped) | +0.097 | 1.41× |
+| `wp_cautious` (raw-momentum + sign-gate) | +0.098 | 1.41× |
+
+Mechanism: the weights move along `−lr·NS(M)`, and Newton-Schulz substantially
+*rotates* the direction relative to the raw momentum `M` (the whole point of
+Muon), so extrapolating `M` predicts weights the optimizer will not visit. The
+two arms that recover (trust clamp, cosine gate) do so by *suppressing* the
+prediction toward zero; the hard per-coordinate sign-gate does not help, which
+says the failure is a whole-direction rotation, not a few wrong-sign coordinates.
+This confirms the headline of finding 3 — the right velocity to extrapolate is
+Muon's orthogonalized update — and closes the pre-/post-orth question. Single-seed
+(s0); the post-orth-vs-raw-momentum direction is a large, confident gap, the
+trust-vs-confidence near-tie is within plausible seed noise.
+
+**Documented follow-ups (not run):** a smarter long-horizon predictor for τ≥16;
+an even-longer run to pin the asymptotic tax (15k confirmed it shrinks
+1.33×→1.16× and is still falling, but has not fully closed); and the conditional
+real-PP validation spike (#199) — now greenlit by the above.
 
 ---
 
