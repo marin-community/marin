@@ -143,6 +143,9 @@ each logbook. The user (or supervisor agent) may have provided it. Otherwise, th
 If so, create or use a coordinating GitHub issue when the work needs durable public
 coordination. Confirm timing with the human collaborator if scope or visibility is uncertain.
 
+Use the experiment body template in `.agents/skills/file-issue/SKILL.md` when
+creating a new coordinating experiment issue.
+
 ### Issue summary
 
 The issue summary should include a high-level summary, almost like an abstract: What is the problem trying to be solved? What is the goal? Why are we doing this? The target audience should typically be someone with limited knowledge of Marin but generally knowledgeable about the field should be able to read and understand it.
@@ -154,37 +157,6 @@ someone else to reproduce or critique the claim. Do not overclaim.
 As our understanding evolves or work progresses, the issue summary should be kept updated with the current big picture. For example if doing kernel work we might update it with "our kernel is x% of the baseline, but only y% of the target."
 
 When finished, it should be updated with our final status and understanding.
-
-
-### Issue kickoff body
-
-```md
-## TL;DR
-
-
-## Description
-
-(Context someone outside the thread can understand.)
-
-## Hypothesis or Goal
-
-(What are you trying to learn, fix, or achieve?)
-
-## Status
-
-(Current state; update as evidence lands.)
-
-## Links
-
-* Logbook:
-* W&B Report:
-* Important updates:
-
-## Decision Log
-
-## Conclusion
-
-```
 
 Maintain the issue body as the public summary layer:
 

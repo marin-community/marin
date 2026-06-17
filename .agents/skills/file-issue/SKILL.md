@@ -23,7 +23,7 @@ issue templates — these structures live here.
 |---|---|---|
 | **bug** | A bug or regression was found | `bug`, `agent-generated` |
 | **task** | An improvement, refactor, or feature request | `agent-generated` + priority if known |
-| **experiment** | An experiment needs tracking | `experiment`, `agent-generated` (use `.agents/skills/task-logbook/SKILL.md` for the body) |
+| **experiment** | An experiment needs tracking | `experiment`, `agent-generated` |
 
 ### Bug body
 
@@ -54,7 +54,33 @@ issue templates — these structures live here.
 
 ### Experiment body
 
-Use the "Issue kickoff body" in `.agents/skills/task-logbook/SKILL.md`.
+```markdown
+## TL;DR
+
+<One-paragraph current summary. Leave blank only when the work is just being kicked off.>
+
+## Description
+
+<Context someone outside the thread can understand.>
+
+## Hypothesis or Goal
+
+<What are you trying to learn, fix, or achieve?>
+
+## Status
+
+<Current state; update as evidence lands.>
+
+## Links
+
+* Logbook:
+* W&B Report:
+* Important updates:
+
+## Decision Log
+
+## Conclusion
+```
 
 ## Workflow
 
@@ -96,7 +122,8 @@ with a scope tag (e.g. `[levanter] Fix gradient accumulation off-by-one`).
 - No filler ("I noticed...", "During our conversation...").
 - No markdown images or tables.
 - Reference code with `file:line` links, not inline dumps.
-- Keep it under ~200 words; readable in under a minute.
+- Keep bug and task issues under ~200 words; experiment issues may be longer
+  when the tracking context needs it.
 - Include error messages or stack traces in code blocks, trimmed to the
   relevant frames.
 - For task issues: include a concrete Definition of Done.
