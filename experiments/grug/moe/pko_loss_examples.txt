@@ -1,0 +1,109 @@
+PKO vs no-PKO d=1024 1e19 — outliers where PKO underperformed no-PKO
+================================================================================
+
+Example #4: uncheatable_eval/github_cpp — TARGET 'Draw' — string literal mirroring case Draw
+--------------------------------------------------------------------------------
+eval_set = uncheatable_eval/github_cpp
+batch_idx = 13
+target_position = 3994  (= token #466 in doc)
+document spans positions [3528, 4096) = 568 tokens
+loss_pko   = 16.2804
+loss_nopko = 5.4704
+delta      = +10.8099
+target token = 'Draw'  (token_id=8300)
+
+=== Full document prior to target ===
+<|begin_of_text|>#include <iostream>
+using namespace std;
+
+enum enReadShape { Rock = 1,Paper = 2,Scissor = 3 };
+enum enWinner { Player = 1,Computer = 2, Draw = 3 };
+
+struct stResult {
+	int PlayerWonTimes = 0;
+	int ComputerWonTimes = 0;
+	int DrawTimes = 0;
+	string WinnerName = "";
+};
+
+enReadShape ReadPlayerChoice() {
+	cout << "\nChoose your shape \n1-Rock \n2-Paper\n3-Scissor\n";
+	int shape; cin >> shape;
+	return (enReadShape)shape;
+}
+
+int RandomNumber(int From, int To){
+	int randNum = rand() % (To - From + 1) + From;
+	return randNum;
+}
+
+enReadShape ReadComputerChoice() {
+	return  (enReadShape)RandomNumber(1, 3);
+}
+
+string GetReadShapeName(enReadShape choice) {
+	switch (choice) {
+	case Paper: return " Paper";
+	case Rock: return " Rock";
+	case Scissor: return " Scissor";
+	default:
+			return "Invalid";
+	}
+}
+
+enWinner WhoWinTheRound(enReadShape PlayerChoice, enReadShape ComputerChoice) {
+	if(PlayerChoice== ComputerChoice)
+		return enWinner::Draw;
+	switch (PlayerChoice) {
+	case enReadShape::Paper:
+		 if (ComputerChoice == enReadShape::Rock)
+			return enWinner::Player;
+		else
+			return enWinner::Computer;
+
+	case enReadShape::Rock:
+		 if (ComputerChoice == enReadShape::Paper)
+			return enWinner::Computer;
+		else
+			return enWinner::Player;
+
+	case enReadShape::Scissor:
+		 if (ComputerChoice == enReadShape::Paper)
+			return enWinner::Player;
+		else
+			return enWinner::Computer;
+	
+	}
+}
+
+stResult result;
+stResult res(enWinner Winner) {
+	switch(Winner) {
+	case Player:
+		result.PlayerWonTimes++;
+		result.WinnerName = "Player is Won!";
+		break;
+	case Computer:
+		result.ComputerWonTimes++;
+		result.WinnerName = "Computer is Won!";
+		break;
+	case Draw:
+		result.DrawTimes++;
+		result.WinnerName = "
+
+<<< TARGET >>>
+Draw
+
+=== Next 30 tokens ===
+!";
+		break;
+	}
+	return result;
+}
+void SetScreenColor(enWinner winner) {
+	switch (winner) {
+	case Player:
+		system("
+
+================================================================================
+

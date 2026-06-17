@@ -1,20 +1,44 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compute-scaling MuonH heuristic for MoE — May Recipe refit.
+"""Compute-scaling heuristic for MoE — V2 (May Recipe refit).
 
-All empirical fits below were measured on runs with seq_len=4096. The formulas
-use tokens_per_batch (= batch_size * seq_len) so they generalize to other
-sequence lengths, though the coefficients are an extrapolation beyond 4096.
+Successor to ``heuristic_v1`` (V1, used on the May 2026 1e23 hero run
+``129B / A29B MoE V1``). Refit on the May Recipe LR sweep (issue #5951:
+17 cells across d ∈ {512, 768, 1024, 1280}, MuonH optimizer, R²=0.996),
+and is the current default for compute-optimal cells and ablation
+comparisons. All empirical
+fits were measured on runs with seq_len=4096; the formulas are written in
+terms of ``tokens_per_batch = batch_size * seq_len`` so they generalise to
+other sequence lengths, though the coefficients are an extrapolation beyond
+4096.
 
-Formulas (May Recipe refit, issue #5951, 17 cells, R²=0.996):
-- Adam LR: adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(B)
-  (with lr_coeff=0.06602, lr_tokens_exp=-0.395, lr_dim_exp=-0.150)
-- MuonH/AdamH LR: lr = (13/3) * adam_lr
-- Compute budget convention: C = 3 * flops_per_token(no_lm_head) * tokens
-- Epsilon: epsilon = epsilon_base * sqrt(r0/r), where r = (B*T0)/(B0*T)
-- Beta1: fixed at 0.9062
-- Beta2: beta2 = clip(beta2_base^(B/B0), min_beta2, max_beta2)
+What changed from V1:
+- **Optimizer**: MuonH (Newton-Schulz + Frobenius hyperball, scale-invariant
+  updates) on the matrix + GatedNorm group, vs V1's AdamH on the same group.
+  ``adamh`` here only covers the lm_head; ``adam`` covers token_embed,
+  router, biases, attn_gate, and 1-D norm weights.
+- **LR exponents and coefficient**: refit on May Recipe.
+  V1 was ``adam_lr = 1.63 * tokens^-0.2813 * dim^-0.3678 * sqrt(B)``.
+  V2 is ``adam_lr = 0.06602 * tokens^-0.395 * dim^-0.150 * sqrt(B)``
+  (equivalently ``muonh_lr = 18.31 * tokens^-0.395 * dim^-0.150 * sqrt(B)``).
+  Token-exponent moved farther from 0; dim-exponent moved closer to 0.
+- **Schedule**: 1pct warmup + linear decay to 0, ``max_grad_norm=None``
+  (no clipping). V1 used 10pct warmup + 1.0 grad clip.
+- **Architecture changes that come with the recipe** (in ``model.py``,
+  not this file): half-RoPE on every layer, PKO on every-4th + last layer,
+  routing renorm sum 2.5, 256 experts (vs V1's 64), router z-loss off,
+  final-logit z-loss off. The heuristic does not toggle these; they are
+  baked into ``GrugModelConfig`` defaults.
+
+Formulas:
+- Adam LR: ``adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(B)``
+  (``lr_coeff = 0.06602``, ``lr_tokens_exp = -0.395``, ``lr_dim_exp = -0.150``)
+- MuonH/AdamH LR: ``lr = (13/3) * adam_lr``
+- Compute budget convention: ``C = 3 * flops_per_token(no_lm_head) * tokens``
+- Epsilon: ``epsilon = epsilon_base * sqrt(r0/r)`` where ``r = (B*T0)/(B0*T)``
+- Beta1: fixed at ``0.9062``
+- Beta2: ``beta2 = clip(beta2_base^(B/B0), min_beta2, max_beta2)``
 """
 
 import math
@@ -23,7 +47,7 @@ from dataclasses import dataclass
 from levanter.utils.flop_utils import lm_flops_per_token
 
 from experiments.grug.moe.model import GrugModelConfig
-from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig
+from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 
 SEQ_LEN: int = 4096
 MIN_BATCH_SIZE: int = 32
@@ -77,11 +101,13 @@ def compute_tokens_and_batch(
 
 
 @dataclass(frozen=True)
-class MoeMuonHHeuristic:
-    """Compute-scaling AdamH heuristic for MoE models.
+class MoeHeuristicV2:
+    """Compute-scaling heuristic for MoE models (May Recipe refit).
 
-    adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(batch_size)
-    adamh_lr = adamh_ratio * adam_lr
+    Returns a ``MuonH`` optimizer config via ``build_optimizer_config``.
+
+    muonh_lr = adamh_ratio * lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(batch_size)
+    adam_lr  =                lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(batch_size)
     C = 3 * flops_per_token * tokens  (flops_per_token excludes lm_head)
     """
 
@@ -146,35 +172,14 @@ class MoeMuonHHeuristic:
         exponent = tokens_per_batch / self.beta2_reference_tpb
         return max(self.min_beta2, min(self.max_beta2, self.beta2_base**exponent))
 
-    def build_adamh_config(
-        self, batch_size: int, tokens: float, hidden_dim: int, seq_len: int = SEQ_LEN
-    ) -> GrugMoeAdamHConfig:
-        tokens_per_batch = batch_size * seq_len
-        lr = self._compute_learning_rate(tokens_per_batch, tokens, hidden_dim)
-        adam_lr = self._compute_adam_lr(tokens_per_batch, tokens, hidden_dim)
-        epsilon = self._compute_epsilon(tokens_per_batch, tokens)
-        beta2 = self._compute_beta2(tokens_per_batch)
-        return GrugMoeAdamHConfig(
-            learning_rate=lr,
-            adam_lr=adam_lr,
-            min_lr_ratio=self.min_lr_ratio,
-            warmup=self.warmup,
-            beta1=self.beta1,
-            beta2=beta2,
-            epsilon=epsilon,
-            max_grad_norm=self.max_grad_norm,
-            lr_schedule=self.lr_schedule,
-            decay=self.decay,
-        )
-
-    def build_muonh_config(
+    def build_optimizer_config(
         self, batch_size: int, tokens: float, hidden_dim: int, seq_len: int = SEQ_LEN
     ) -> GrugMoeMuonHConfig:
         """Return a ``GrugMoeMuonHConfig`` with May Recipe 1pct-noclip defaults.
 
-        Same LR / beta / epsilon scaling as ``build_adamh_config``, wrapped
-        in the MuonH optimizer config used by the May Recipe (3 LR groups —
-        muonh / adamh / adam) with ``warmup=0.01`` and ``max_grad_norm=None``.
+        MuonH optimizer (3 LR groups — muonh / adamh / adam) with
+        ``warmup=0.01`` and ``max_grad_norm=None``. LR / beta / epsilon
+        scaling is the May Recipe refit (see module docstring).
         """
         tokens_per_batch = batch_size * seq_len
         lr = self._compute_learning_rate(tokens_per_batch, tokens, hidden_dim)

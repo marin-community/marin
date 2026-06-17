@@ -1,20 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compute-scaling AdamH heuristic for MoE ISOFlop sweeps.
+"""Compute-scaling heuristic for MoE — V1 (first Marin MoE formula).
 
-All empirical fits below were measured on runs with seq_len=4096. The formulas
-use tokens_per_batch (= batch_size * seq_len) so they generalize to other
-sequence lengths, though the coefficients are an extrapolation beyond 4096.
+First Marin MoE scaling heuristic, used on the May 2026 1e23 hero run
+(``129B / A29B MoE V1``). Fit on the v16 MoE ISOFlop sweep
+(``group=isoflop-moe-v16`` in the ``dial_moe`` wandb project, AdamH
+optimizer): 186 runs, R²=0.995. All empirical fits were measured on runs with seq_len=4096.
+The formulas are written in terms of ``tokens_per_batch = batch_size *
+seq_len`` so they generalise to other sequence lengths, though the
+coefficients are an extrapolation beyond 4096.
 
-Formulas (fit on v16 LR sweep, 186 runs, R²=0.995):
-- Adam LR: adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(B)
-  (with lr_coeff=1.63, lr_tokens_exp=-0.2813, lr_dim_exp=-0.3678)
-- AdamH LR: lr = (13/3) * adam_lr
-- Compute budget convention: C = 3 * flops_per_token(no_lm_head) * tokens
-- Epsilon: epsilon = epsilon_base * sqrt(r0/r), where r = (B*T0)/(B0*T)
-- Beta1: fixed at 0.9062
-- Beta2: beta2 = clip(beta2_base^(B/B0), min_beta2, max_beta2)
+Formulas:
+- Adam LR: ``adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(B)``
+  (``lr_coeff = 1.63``, ``lr_tokens_exp = -0.2813``, ``lr_dim_exp = -0.3678``)
+- AdamH LR: ``lr = (13/3) * adam_lr``
+- Compute budget convention: ``C = 3 * flops_per_token(no_lm_head) * tokens``
+- Epsilon: ``epsilon = epsilon_base * sqrt(r0/r)`` where ``r = (B*T0)/(B0*T)``
+- Beta1: fixed at ``0.9062``
+- Beta2: ``beta2 = clip(beta2_base^(B/B0), min_beta2, max_beta2)``
+
+Superseded for non-hero runs by ``heuristic_v2``; kept here as the reference
+curve for ``agent.md`` effective-speedup comparisons against v16.
 """
 
 import math
@@ -77,8 +84,10 @@ def compute_tokens_and_batch(
 
 
 @dataclass(frozen=True)
-class MoeAdamHHeuristic:
-    """Compute-scaling AdamH heuristic for MoE models.
+class MoeHeuristicV1:
+    """Compute-scaling heuristic for MoE models (v16 ISOFlop fit).
+
+    Returns an ``AdamH`` optimizer config via ``build_optimizer_config``.
 
     adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(batch_size)
     adamh_lr = adamh_ratio * adam_lr
@@ -228,19 +237,19 @@ def build_from_heuristic(
     *,
     budget: float,
     hidden_dim: int,
-    heuristic: MoeAdamHHeuristic | None = None,
+    heuristic: MoeHeuristicV1 | None = None,
     target_steps: int = DEFAULT_TARGET_STEPS,
     min_batch_size: int = MIN_BATCH_SIZE,
     seq_len: int = SEQ_LEN,
 ) -> tuple[GrugModelConfig, GrugMoeAdamHConfig, int, int]:
     """Construct (model, optimizer, batch_size, num_steps) for a compute budget.
 
-    Uses `MoeAdamHHeuristic` to size the model (from `hidden_dim`) and to set
+    Uses `MoeHeuristicV1` to size the model (from `hidden_dim`) and to set
     the AdamH hyperparameters (scaled by tokens_per_batch = batch_size * seq_len).
     Callers who want manual control should continue passing `GrugModelConfig` /
     `GrugMoeAdamHConfig` directly to `GrugMoeLaunchConfig`.
     """
-    h = heuristic or MoeAdamHHeuristic()
+    h = heuristic or MoeHeuristicV1()
     model_cfg = h.build_model_config(hidden_dim, seq_len=seq_len)
     fpt = compute_flops_per_token(model_cfg)
     tokens, batch_size, num_steps = compute_tokens_and_batch(

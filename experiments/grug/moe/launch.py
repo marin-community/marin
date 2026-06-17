@@ -29,7 +29,7 @@ from marin.processing.tokenize.data_configs import lm_data_config
 from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.defaults import default_validation_sets
-from experiments.grug.moe.heuristic_v2 import MoeMuonHHeuristic
+from experiments.grug.moe.heuristic_v2 import MoeHeuristicV2
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.llama import llama3_tokenizer
@@ -158,7 +158,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
 
 
 # May Recipe compute-optimal cells from the drop-1e18 isoflop fit
-# (issue #6074). ``MoeMuonHHeuristic`` (heuristic_v2) supplies LR / beta2 /
+# (issue #6074). ``MoeHeuristicV2`` (heuristic_v2) supplies LR / beta2 /
 # epsilon; (bs, steps) hardcoded so callers don't depend on
 # ``compute_tokens_and_batch`` heuristics for cell selection.
 #
@@ -175,7 +175,7 @@ _COMPUTE_OPT_CELLS: tuple[tuple[int, int, int], ...] = (
     # (1280, 256, 14_325),
 )
 
-_heuristic = MoeMuonHHeuristic()
+_heuristic = MoeHeuristicV2()
 
 # Public alias for the d=512 baseline GrugModelConfig. Kept because
 # consumers (e.g. experiments/ferries/canary_ferry.py) import it by name.
@@ -185,7 +185,7 @@ compute_opt_steps: list[ExecutorStep] = []
 for _dim, _bs, _steps in _COMPUTE_OPT_CELLS:
     _model = _heuristic.build_model_config(_dim, seq_len=_SEQ_LEN)
     _tokens = float(_steps * _bs * _SEQ_LEN)
-    _optimizer = _heuristic.build_muonh_config(_bs, _tokens, _dim, seq_len=_SEQ_LEN)
+    _optimizer = _heuristic.build_optimizer_config(_bs, _tokens, _dim, seq_len=_SEQ_LEN)
     _run_id = f"moe_may_compute_opt_d{_dim}_demo"
     compute_opt_steps.append(
         ExecutorStep(

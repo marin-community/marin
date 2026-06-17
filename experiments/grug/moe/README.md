@@ -76,7 +76,7 @@ were intentionally dropped so the recipe is the recipe):
 - **No gradient clipping**: `max_grad_norm = None` on the MuonH config
   (v16 used `max_grad_norm = 1.0`).
 - **Warmup 1%** of training (v16 used 10%).
-- **LR refit** in `heuristic_v2.py` (`MoeMuonHHeuristic`): refit on the
+- **LR refit** in `heuristic_v2.py` (`MoeHeuristicV2`): refit on the
   MuonH-on-May-Recipe LR sweep (17 cells, R²=0.996, issue #5951):
   `muonh_lr = 18.31 · tokens^-0.395 · dim^-0.150 · sqrt(B)`
   (equivalently `adam_lr = 0.06602 · tokens^-0.395 · dim^-0.150 · sqrt(tpb)`).
@@ -84,7 +84,7 @@ were intentionally dropped so the recipe is the recipe):
 
 ## Scaling heuristic
 
-The [`MoeAdamHHeuristic`](./heuristic.py) in `heuristic.py` turns a compute
+The [`MoeHeuristicV1`](./heuristic.py) in `heuristic.py` turns a compute
 budget and a `hidden_dim` into a full `(model_config, optimizer_config,
 batch_size, num_steps)` tuple. Formulas were fit on the v16 LR sweep (186 runs,
 R²=0.995) and are all anchored at **seq_len = 4096**.
@@ -136,7 +136,7 @@ are the baseline runs that ablation experiments compare against.
 ### May Recipe (drop-1e18 fit, issue #6074) — current baseline
 
 Reference runs on **v4-32 us-central2 with EP=1**, MuonH optimizer
-(`muonh_lr` from `heuristic_v2.MoeMuonHHeuristic.build_muonh_config`), 1pct-noclip
+(`muonh_lr` from `heuristic_v2.MoeHeuristicV2.build_muonh_config`), 1pct-noclip
 schedule, no permanent step-interval checkpoints.
 
 | Budget   | Dim    | Layers | bs  | Steps    | Tokens  | Paloma macro | v4-32 tok/s | Runtime | Run |
@@ -231,7 +231,7 @@ Predicted macro uses `loss(C) = 1.6 + 95.18 · C^(-0.0941)`.
   `AdamHConfig` with expert-param-group awareness.
 - [`train.py`](./train.py) — `GrugTrainState`, `train_step`, `_apply_qb_betas`,
   `run_grug` (dispatches a Fray job).
-- [`heuristic.py`](./heuristic.py) — `MoeAdamHHeuristic` and
+- [`heuristic.py`](./heuristic.py) — `MoeHeuristicV1` and
   `build_from_heuristic` entry point.
 - [`launch.py`](./launch.py) — `GrugMoeLaunchConfig`, baseline `ExecutorStep`,
   and `executor_main` wiring.
