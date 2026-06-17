@@ -402,10 +402,8 @@ class Controller:
         # Set after a tick commits new ASSIGNED rows so the next tick reconciles
         # immediately (dispatching them) instead of waiting a full poll interval.
         self._force_reconcile = False
-        # Worker rows queued for fail-and-teardown by an off-loop caller (the
-        # Register RPC, on recycled-IP detection). The teardown touches the
-        # autoscaler, which is only safe on the control-loop thread, so it is
-        # drained into _fail_and_teardown there rather than run inline.
+        # Workers queued off the control loop for teardown on the next tick; see
+        # request_worker_eviction / _drain_pending_evictions.
         self._pending_evictions: set[WorkerId] = set()
         self._pending_evictions_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
@@ -1273,12 +1271,11 @@ class Controller:
         self._health.forget_many(set(removed_ids) | set(auto.removed_workers))
 
     def _drain_pending_evictions(self) -> None:
-        """Fail-and-teardown workers queued by ``request_worker_eviction``.
+        """Fail-and-teardown the workers queued by :meth:`request_worker_eviction`.
 
-        Runs on the control-loop thread, so the autoscaler-side slice teardown in
-        ``_fail_and_teardown`` is safe. The snapshot carries only the queued
-        workers' addresses (for cached-stub eviction); their rows are still
-        present because eviction is queued before any failure.
+        The snapshot carries only the queued workers' addresses (for cached-stub
+        eviction); their rows still exist because eviction is queued before any
+        failure.
         """
         with self._pending_evictions_lock:
             if not self._pending_evictions:
