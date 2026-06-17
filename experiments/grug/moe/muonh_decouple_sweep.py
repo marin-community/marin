@@ -68,6 +68,7 @@ _optimizer = dataclasses.replace(
     decouple_gains=_flag("MUONH_DECOUPLE", "1"),
     gain_lr=_f("MUONH_GAIN_LR", 1e-3),
     gain_mode=os.environ.get("MUONH_GAIN_MODE", "both"),
+    decouple_lm_head=_flag("MUONH_DECOUPLE_LMHEAD", "0"),
 )
 
 _run_id = f"muonh_d{_dim}_{_TAG}"

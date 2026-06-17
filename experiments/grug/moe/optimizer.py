@@ -402,6 +402,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     decouple_gains: bool = False
     gain_lr: float = 1e-3
     gain_mode: str = "both"  # both | row | col
+    decouple_lm_head: bool = False  # also route lm_head/output_proj through the decoupled muonh group
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -483,6 +484,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             ):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
+                # With decoupling, optionally route the output head through the decoupled muonh group
+                # so it gets per-row/col magnitude gains too (otherwise stays on plain adamh).
+                if self.decouple_gains and self.decouple_lm_head:
+                    return "muonh"
                 return "adamh"
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
