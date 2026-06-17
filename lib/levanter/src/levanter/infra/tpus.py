@@ -11,8 +11,6 @@ import sys
 import time
 from typing import Optional
 
-import requests  # type: ignore
-
 from levanter.infra.docker import make_docker_run_command
 
 logger = logging.getLogger(__name__)
@@ -275,28 +273,3 @@ def _tpu_ssh_multislice(tpu_name, zone, node_count, *args, ignore_failure=False)
                     print("Ignoring failure:", e)
                 else:
                     raise
-
-
-GCE_TPU_ACCELERATOR_ENDPOINT = "http://metadata.google.internal/computeMetadata/v1/instance/attributes/"
-GCE_TPU_HEADERS = {"Metadata-Flavor": "Google"}
-
-
-def get_current_tpu_is_preempted() -> bool:
-    """curl -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/preempted"""
-    try:
-        preempted_request = requests.get(
-            "http://metadata.google.internal/computeMetadata/v1/instance/preempted",
-            headers=GCE_TPU_HEADERS,
-        )
-        if preempted_request.status_code == 200:
-            return preempted_request.text == "TRUE"
-        else:
-            logging.warning(
-                "Unable to poll TPU preempted status. Got "
-                f"status code: {preempted_request.status_code} and "
-                f"content: {preempted_request.text}"
-            )
-            return False
-    except requests.RequestException as e:
-        logging.debug("Unable to poll TPU preempted status: %s", e)
-        raise e
