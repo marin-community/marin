@@ -84,7 +84,8 @@ final-loss gap to synchronous training at a fixed step budget.
 
 ## How stale is pipeline parallelism, really?
 
-**Takeaway: the per-stage structure is not a detail — it changes the verdict.**
+**Takeaway: the per-stage delay profile changes the throughput verdict; modeling
+the pipeline as one global delay overstates the cost 2–3×.**
 
 On a 6k-step iso-loss cohort, the faithful 6-stage profile (`pp6`) plateaus +0.086
 above synchronous Muon. A uniform τ=5 delay — the same model treated as one global
