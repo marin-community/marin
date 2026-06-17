@@ -1377,6 +1377,24 @@ def bulk_get_worker_addresses(tx: Tx, worker_ids: Iterable[WorkerId]) -> dict[Wo
     return {row.worker_id: str(row.address) for row in rows}
 
 
+def worker_ids_at_address(tx: Tx, address: str, *, exclude: WorkerId) -> list[WorkerId]:
+    """Return worker ids whose row holds ``address``, excluding ``exclude``.
+
+    Detects a recycled internal IP: when GCP deletes a worker VM and reuses its
+    IP for a new VM, the dead worker's row keeps the address, so two rows end up
+    sharing one ``address``. The reconcile dial is by address, so the stale row
+    misroutes its plan to the live worker now at that IP. The new registrant owns
+    the address, so any other holder is a stale prior owner to evict.
+    """
+    rows = tx.execute(
+        select(workers_table.c.worker_id).where(
+            workers_table.c.address == address,
+            workers_table.c.worker_id != exclude,
+        )
+    ).all()
+    return [WorkerId(str(row.worker_id)) for row in rows]
+
+
 @dataclass(frozen=True, slots=True)
 class SchedulableWorker:
     """Worker shape consumed by the scheduler.
