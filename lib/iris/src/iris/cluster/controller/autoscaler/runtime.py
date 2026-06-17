@@ -50,8 +50,16 @@ from iris.cluster.controller.autoscaler.recovery import (
     load_autoscaler_checkpoint,
     restore_autoscaler_state,
 )
-from iris.cluster.controller.autoscaler.routing import job_feasibility, route_demand
-from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build_worker_config_for_group
+from iris.cluster.controller.autoscaler.routing import (
+    availability_probe_entries,
+    empirical_zone_capabilities,
+    job_feasibility,
+    route_demand,
+)
+from iris.cluster.controller.autoscaler.scaling_group import (
+    ScalingGroup,
+    build_worker_config_for_group,
+)
 from iris.cluster.controller.autoscaler.state import AutoscalerState, GroupPersist, SlicePersist
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
@@ -330,7 +338,18 @@ class Autoscaler:
         """
         ts = timestamp or Timestamp.now()
 
-        routing_decision = route_demand(list(self._groups.values()), demand_entries, ts)
+        # Empirical availability: a variant is "available" in a region only once a
+        # scale-up there has succeeded. Convert each unmet availability:<variant>
+        # constraint into a probe scale-up of that accelerator group so capacity can
+        # be discovered/established; the demand subsides once the constrained job
+        # places (see availability_probe_entries).
+        caps = self.zone_capabilities(ts)
+        available_variants = frozenset(variant for variants in caps.values() for variant in variants)
+        probes = availability_probe_entries(list(self._groups.values()), demand_entries, available_variants)
+        if probes:
+            demand_entries = list(demand_entries) + probes
+
+        routing_decision = route_demand(list(self._groups.values()), demand_entries, ts, zone_capabilities=caps)
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
         # Build cached views eagerly here so dashboard/service RPCs never pay
         # the conversion cost on the hot path (#4844).
@@ -364,6 +383,15 @@ class Autoscaler:
                 logger.debug("Scale group %s: scale up blocked", group.name)
 
         return scale_plan.decisions()
+
+    def zone_capabilities(self, timestamp: Timestamp | None = None) -> dict[str, frozenset[str]]:
+        """Map zone -> {device_variant} the cluster has EMPIRICALLY confirmed available.
+
+        A variant counts for a zone only after a scale-up there succeeded (≥1 live
+        ``READY`` slice, not erroring) — see :func:`empirical_zone_capabilities`.
+        """
+        ts = timestamp or Timestamp.now()
+        return empirical_zone_capabilities(self._groups.values(), ts)
 
     def execute(
         self,

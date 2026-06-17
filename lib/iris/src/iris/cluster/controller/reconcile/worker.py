@@ -124,8 +124,8 @@ def _reconcile_worker(
         if row.task_state in _ASSIGNED_STATES:
             spec = job_specs.get(row.job_id)
             if spec is None:
-                # Reservation holder or job disappeared mid-tick; the
-                # scheduler reissues on a subsequent tick.
+                # Job disappeared mid-tick; the scheduler reissues on a
+                # subsequent tick.
                 continue
             req = job_pb2.RunTaskRequest()
             req.CopyFrom(spec)

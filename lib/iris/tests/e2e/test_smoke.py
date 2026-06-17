@@ -24,7 +24,7 @@ from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
 from iris.cluster.lifecycle import connect_cluster
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ReservationEntry, ResourceSpec, gpu_device
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
@@ -71,7 +71,7 @@ def _add_cpu_group(config: config_pb2.IrisClusterConfig, num_workers: int = 4) -
 
 
 def _add_coscheduling_group_4vm(config: config_pb2.IrisClusterConfig) -> None:
-    """4-VM TPU coscheduling group for reservation and large-job tests."""
+    """4-VM TPU coscheduling group for large-job tests."""
     sg = config.scale_groups["tpu_cosched_4"]
     sg.name = "tpu_cosched_4"
     sg.num_vms = 4
@@ -594,23 +594,6 @@ def test_port_allocation(smoke_cluster, capabilities):
     job = smoke_cluster.submit(TestJobs.validate_ports, "smoke-ports", ports=["http", "grpc"])
     status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
-
-
-def test_reservation_gates_scheduling(smoke_cluster):
-    """Unsatisfiable reservation blocks scheduling; regular jobs proceed."""
-    with smoke_cluster.launched_job(
-        TestJobs.quick,
-        "smoke-reserved",
-        reservation=[
-            ReservationEntry(resources=ResourceSpec(cpu=1, memory="1g", device=gpu_device("NONEXISTENT-GPU-9999", 99)))
-        ],
-    ) as reserved:
-        reserved_status = smoke_cluster.status(reserved)
-        assert reserved_status.state == job_pb2.JOB_STATE_PENDING
-
-        regular = smoke_cluster.submit(TestJobs.quick, "smoke-regular-while-reserved")
-        status = smoke_cluster.wait(regular, timeout=smoke_cluster.job_timeout)
-        assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_cancel_job_releases_resources(smoke_cluster):

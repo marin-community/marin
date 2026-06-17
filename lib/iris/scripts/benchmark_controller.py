@@ -1200,10 +1200,10 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # the snapshot closes.
     sched = Scheduler()
     with db.read_snapshot() as _sched_snap:
-        demand_ctx = build_scheduling_context(_sched_snap, health, _NoAttrs(), UserBudgetDefaults(), {})
+        demand_ctx = build_scheduling_context(_sched_snap, health, _NoAttrs(), UserBudgetDefaults())
 
     def _demand():
-        compute_demand_entries(demand_ctx, sched, {})
+        compute_demand_entries(demand_ctx, sched)
 
     bench(
         f"Scheduling: compute_demand_entries (w={len(workers)}, t={len(pending_tasks)})",

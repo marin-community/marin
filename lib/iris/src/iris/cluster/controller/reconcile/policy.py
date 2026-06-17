@@ -25,12 +25,6 @@ finish and free budget. Raise as controller capacity improves (#6411)."""
 DEFAULT_MAX_RETRIES_PREEMPTION = 100
 """Default preemption retries. High because worker failures are typically transient."""
 
-RESERVATION_HOLDER_JOB_NAME = ":reservation:"
-"""Well-known name component for synthetic reservation holder child jobs.
-
-Uses colons to clearly distinguish from user-created jobs and avoid
-accidental collision with normal job names."""
-
 
 # ---------------------------------------------------------------------------
 # Predicate sets

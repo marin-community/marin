@@ -441,12 +441,8 @@ function groupReconcileNote(name: string): ReconcileNote | null {
 // Unmet demand
 // ===========================================================================
 
-const RESERVATION_RE = /^(.+):reservation:\d+$/
-
 function taskIdToJob(taskId: string): string {
   if (!taskId) return 'unknown'
-  const rsvMatch = taskId.match(RESERVATION_RE)
-  if (rsvMatch) return rsvMatch[1]
   const idx = taskId.lastIndexOf('/')
   return idx <= 0 ? taskId : taskId.slice(0, idx)
 }
