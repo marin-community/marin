@@ -16,7 +16,7 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
-from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
+from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, availability_key, device_variant_constraint
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
@@ -1502,6 +1502,31 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
     assert len(constraints_from_json(job.constraints_json)) == 0
 
 
+def test_launch_job_deprecated_reservation_becomes_availability_constraint(service, state):
+    """A pre-availability client's ``reservation`` field is converted to hard
+    availability constraints at ingestion and nothing reservation-shaped is persisted."""
+    request = controller_pb2.Controller.LaunchJobRequest(
+        name=JobName.root("test-user", "old-client-job").to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+    )
+    # Two entries for the same accelerator collapse to a single constraint.
+    request.reservation.entries.add().resources.device.CopyFrom(tpu_device("v5litepod-16"))
+    request.reservation.entries.add().resources.device.CopyFrom(tpu_device("v5litepod-16"))
+
+    service.launch_job(request, None)
+
+    job = _query_job(state, JobName.root("test-user", "old-client-job"))
+    stored = constraints_from_json(job.constraints_json)
+    avail = [c for c in stored if c.key == availability_key("v5litepod-16")]
+    assert len(avail) == 1, stored
+    # Hard, zone-level constraint: EXISTS + REQUIRED — the job is confined to a
+    # zone that can provision the accelerator.
+    assert avail[0].op == ConstraintOp.EXISTS
+    assert avail[0].mode == job_pb2.CONSTRAINT_MODE_REQUIRED
+
+
 # =============================================================================
 # Register Role-Gating Tests
 # =============================================================================
@@ -1574,6 +1599,52 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path, log_clien
         assert resp.accepted
     finally:
         _verified_identity.reset(token)
+
+
+def test_register_requests_eviction_of_recycled_address_owner(service, state, mock_controller):
+    """Registering at an address still held by another row evicts the stale owner.
+
+    GCP recycles a deleted worker's internal IP onto a new VM. Left in place, the
+    dead row makes the controller misroute its address-keyed reconcile to the live
+    worker, which then zombie-kills its own tasks (the recycled-IP cross-talk). The
+    new registrant owns the address, so the prior holder is handed to the
+    controller for fail-and-teardown (deferred to the control-loop thread).
+    """
+    addr = "10.0.0.7:10001"
+    dead, live = WorkerId("dead-worker-0"), WorkerId("live-worker-0")
+    sentinel = WorkerId("__no_match__")
+
+    service.register(
+        controller_pb2.Controller.RegisterRequest(worker_id=str(dead), address=addr, metadata=make_worker_metadata()),
+        None,
+    )
+    with state._db.read_snapshot() as tx:
+        assert reads.worker_ids_at_address(tx, addr, exclude=sentinel) == [dead]
+    mock_controller.request_worker_eviction.assert_not_called()
+
+    service.register(
+        controller_pb2.Controller.RegisterRequest(worker_id=str(live), address=addr, metadata=make_worker_metadata()),
+        None,
+    )
+
+    # The live registrant now shares the address with the stale `dead` row, which
+    # is queued for eviction; the actual teardown rides the control tick.
+    mock_controller.request_worker_eviction.assert_called_once_with([dead])
+
+
+def test_register_distinct_addresses_requests_no_eviction(service, state, mock_controller):
+    """Registering at a fresh address leaves workers at other addresses untouched."""
+    meta = make_worker_metadata()
+    a, b = WorkerId("worker-a"), WorkerId("worker-b")
+    service.register(
+        controller_pb2.Controller.RegisterRequest(worker_id=str(a), address="10.0.0.1:10001", metadata=meta), None
+    )
+    service.register(
+        controller_pb2.Controller.RegisterRequest(worker_id=str(b), address="10.0.0.2:10001", metadata=meta), None
+    )
+    assert state._health.liveness(a).active
+    assert state._health.liveness(b).active
+    mock_controller.request_worker_eviction.assert_not_called()
 
 
 def test_get_scheduler_state_with_running_task(controller_service, state):

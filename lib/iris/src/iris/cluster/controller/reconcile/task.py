@@ -16,7 +16,7 @@ from rigging.timing import Timestamp
 
 from iris.cluster.controller.reconcile.effects import AttemptRowDelta, TaskRowDelta
 from iris.cluster.controller.reconcile.overlay import Overlay
-from iris.cluster.controller.reconcile.policy import FAILURE_TASK_STATES
+from iris.cluster.controller.reconcile.policy import PEER_CASCADE_TRIGGER_STATES
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate, TransitionSnapshot
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
@@ -446,12 +446,22 @@ def apply_one_transition(
             if failure_count <= task.max_retries_failure:
                 task_state = job_pb2.TASK_STATE_PENDING
                 terminal_ms = None
-        elif update.new_state == job_pb2.TASK_STATE_WORKER_FAILED:
-            # Worker loss / infra -> preemption budget. ASSIGNED retries without
-            # charge (the worker never ran the process); EXECUTING (BUILDING/
-            # RUNNING) charges and gates on max_retries_preemption. A truly-dead
-            # worker also misses its next ping/heartbeat (bumped observer-side),
-            # so we don't double-count here.
+        elif update.new_state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_KILLED):
+            # Worker loss / infra (WORKER_FAILED) or an out-of-band container stop
+            # the worker reports as KILLED — a higher-priority job reclaiming the
+            # slice, a node drain, a spot/preemptible reclaim, or a stop directive
+            # the controller issued without recording a matching task transition.
+            # None of these are application failures, so both share the preemption
+            # budget. A genuine user/controller cancel never reaches here: cancel_job
+            # marks the task terminal first, so the worker's echoing KILLED lands on
+            # an already-finished row above and is dropped; a stale stop of an
+            # abandoned attempt arrives under an old attempt_id and is dropped too.
+            # A KILLED that survives to this branch is therefore always the *current*
+            # live attempt stopped out-of-band — which must retry, not fail the job.
+            # ASSIGNED retries without charge (the worker never ran the process);
+            # EXECUTING (BUILDING/RUNNING) charges and gates on max_retries_preemption.
+            # A truly-dead worker also misses its next ping/heartbeat (bumped
+            # observer-side), so we don't double-count here.
             task_state, preemption_count = resolve_task_failure_state(
                 prior_state,
                 preemption_count,
@@ -497,7 +507,7 @@ def apply_one_transition(
         state.emit_endpoint_deletion(update.task_id)
 
     jc = state.job_config(task.job_id)
-    has_cosched = bool(jc is not None and jc.has_coscheduling and update.new_state in FAILURE_TASK_STATES)
+    has_cosched = bool(jc is not None and jc.has_coscheduling and update.new_state in PEER_CASCADE_TRIGGER_STATES)
 
     return TransitionOutcome(
         task_id=update.task_id,

@@ -48,14 +48,19 @@ from iris.rpc.worker_connect import WorkerServiceClient
 
 logger = logging.getLogger(__name__)
 
-# Per-worker RPC deadline applied to every fanned-out worker reconcile call.
-# Combined with the fan-out semaphore this bounds a full reconcile round at
-# ~DEFAULT_WORKER_RPC_TIMEOUT * ceil(num_workers / parallelism), so the control
-# thread is never blocked indefinitely even if the whole fleet is hung.
+# Per-worker RPC deadline for on-demand worker RPCs (profile_task, exec_in_container,
+# get_process_status) and the cached stub's fallback timeout.
 DEFAULT_WORKER_RPC_TIMEOUT = Duration.from_seconds(10.0)
 
+# Tighter per-worker deadline for the reconcile fan-out: a hung worker can't gate
+# the gather-joined round on the slow straggler, and a missed round never reaps a
+# worker (the reconcile-failure threshold is dozens of rounds).
+RECONCILE_RPC_TIMEOUT = Duration.from_seconds(3.0)
+
 # Max concurrent in-flight per-worker RPCs in a fan-out (asyncio.Semaphore width).
-RECONCILE_FANOUT_PARALLELISM = 128
+# Kept >= fleet size so the whole fleet reconciles in one wave and a slow worker
+# costs one RPC-timeout window per round, not one per wave.
+RECONCILE_FANOUT_PARALLELISM = 512
 
 # Generous deadline for an "unlimited" exec_in_container (negative timeout). Long
 # enough for real interactive/debug commands, but not the old ~1-hour stall.
@@ -158,8 +163,17 @@ class RpcTaskBackend:
         self.autoscaler = autoscaler
 
     def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
-        """Run the Iris scheduling decision pipeline over the snapshot."""
-        return run_scheduling_decision(self._scheduler, snapshot)
+        """Run the Iris scheduling decision pipeline over the snapshot.
+
+        Reads the autoscaler's per-zone accelerator-capability map so the
+        scheduler can inject ``availability:<variant>`` markers onto workers and
+        confine a hard availability constraint to a capable zone. Clusters with no
+        autoscaler pass an empty map: no worker gets an availability marker, so a
+        job carrying an availability constraint there stays unschedulable (it has
+        no zone that can satisfy it).
+        """
+        zone_capabilities = self.autoscaler.zone_capabilities() if self.autoscaler is not None else None
+        return run_scheduling_decision(self._scheduler, snapshot, zone_capabilities)
 
     def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
         """Build per-worker plans, fan the Reconcile RPC out, observe liveness.
@@ -189,9 +203,27 @@ class RpcTaskBackend:
         worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = list(zip(plans, results, strict=True))
         health_events: list[WorkerHealthEvent] = []
         for plan, result in worker_results:
+            address = snapshot.worker_addresses[plan.worker_id]
             if result.error is not None:
                 health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
-                self.stub_factory.evict(snapshot.worker_addresses[plan.worker_id])
+                self.stub_factory.evict(address)
+            elif result.responder_worker_id is not None and result.responder_worker_id != str(plan.worker_id):
+                # Misrouted reconcile: a *different* live worker answered at this
+                # address. GCP recycles a deleted worker's internal IP onto a new
+                # VM, so the controller's stale address for the dead worker now
+                # points at someone else. Counting the impostor's healthy reply as
+                # REACHED would resurrect the dead worker (reset its failures to 0)
+                # and keep it schedulable — a black hole that accepts and kills
+                # every task. Treat it as UNREACHABLE so the stale worker accrues
+                # failures and is reaped, and drop the impostor's stub.
+                logger.warning(
+                    "Reconcile for worker %s at %s was answered by %s (recycled address); marking unreachable",
+                    plan.worker_id,
+                    address,
+                    result.responder_worker_id,
+                )
+                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+                self.stub_factory.evict(address)
             elif not result.self_healthy:
                 health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
             else:
@@ -293,15 +325,18 @@ class RpcTaskBackend:
                     await asyncio.sleep(rule.delay_seconds)
                     raise ProviderError("chaos: controller.reconcile")
                 stub = self.stub_factory.get_stub(address)
-                response = await stub.reconcile(plan.request)
+                response = await asyncio.wait_for(
+                    stub.reconcile(plan.request), timeout=RECONCILE_RPC_TIMEOUT.to_seconds()
+                )
                 return WorkerReconcileResult(
                     worker_id=plan.worker_id,
                     observations=list(response.observed),
                     error=None,
                     self_healthy=response.health.healthy,
+                    responder_worker_id=response.worker_id or None,
                 )
             except Exception as e:
-                return WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e))
+                return WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e) or type(e).__name__)
 
     def close(self) -> None:
         if self.autoscaler is not None:

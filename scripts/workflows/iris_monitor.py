@@ -138,19 +138,6 @@ def _row(job: job_pb2.JobStatus | None) -> str:
     return json.dumps(json_format.MessageToDict(job, preserving_proto_field_name=True), sort_keys=True)
 
 
-# Synthetic child of an `iris job run --reserve <tpu>` parent. It only holds the
-# reserved capacity and reaches RUNNING the instant the reservation is recorded —
-# independent of whether the parent orchestrator ever leaves the queue. We exclude it
-# from the started-child check so a held-but-idle reservation cannot mask a parent
-# that is itself stuck pending: otherwise the queue-wait timeout is dropped immediately
-# and the run burns its full wall clock (the caller's job timeout) holding the TPU idle.
-_RESERVATION_HOLDER_SUFFIX = "/:reservation:"
-
-
-def _is_reservation_holder(job_id: str) -> bool:
-    return job_id.rstrip("/").endswith(_RESERVATION_HOLDER_SUFFIX)
-
-
 def _child_started(child: job_pb2.JobStatus) -> bool:
     """A child has left the queue once it reaches RUNNING or a terminal state other than UNSCHEDULABLE."""
     return child.state == job_pb2.JOB_STATE_RUNNING or (
@@ -159,9 +146,9 @@ def _child_started(child: job_pb2.JobStatus) -> bool:
 
 
 def _pick_child(parent_job_id: str, jobs: list[job_pb2.JobStatus]) -> job_pb2.JobStatus | None:
-    """Pick a representative real-work child (prefer non-finished), ignoring the reservation holder."""
+    """Pick a representative child of the parent (prefer non-finished)."""
     prefix = parent_job_id.rstrip("/") + "/"
-    children = [j for j in jobs if j.job_id.startswith(prefix) and not _is_reservation_holder(j.job_id)]
+    children = [j for j in jobs if j.job_id.startswith(prefix)]
     if not children:
         return None
     return next((c for c in children if not is_job_finished(c.state)), children[0])
@@ -218,11 +205,10 @@ def wait_for_child_job(
 ) -> job_pb2.JobStatus:
     """Wait for a parent job to reach a terminal state.
 
-    Fail fast with ``TimeoutError`` if no real-work child reaches ``JOB_STATE_RUNNING`` within
-    ``child_wait_timeout``. The synthetic ``:reservation:`` holder does not count (see ``_pick_child``):
-    it runs as soon as a reservation is recorded, so counting it would let a held-but-idle reservation
-    mask a parent stuck in the queue. Once a real child has started, the child wait timeout is dropped —
-    total runtime is bounded by the caller's wall clock (e.g. GitHub ``timeout-minutes``).
+    Fail fast with ``TimeoutError`` if no child reaches ``JOB_STATE_RUNNING`` within
+    ``child_wait_timeout`` — this catches a parent stuck in the queue before it ever launches work.
+    Once a child has started, the child wait timeout is dropped — total runtime is bounded by the
+    caller's wall clock (e.g. GitHub ``timeout-minutes``).
     """
     prefix = _job_id_prefix(job_id)
     deadline = time.monotonic() + child_wait_timeout

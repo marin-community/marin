@@ -261,6 +261,29 @@ class TestScalingGroupVmGroupOwnership:
         assert group.slice_count() == 3
         assert group.ready_slice_count() == 2
 
+    def test_slices_needing_describe_includes_ready_without_workers(
+        self, scale_group_config: config_pb2.ScaleGroupConfig
+    ):
+        """A READY slice with no tracked workers is re-described, not left DEGRADED.
+
+        An adopted slice can come back READY with empty worker_ids; without
+        re-describing it the autoscaler would never repopulate membership (so it
+        stays "no hosts registered") nor reap it.
+        """
+        discovered = [
+            make_fake_slice_handle("ready-with-workers", all_ready=True),
+            make_fake_slice_handle("still-booting", all_ready=False, vm_states=[vm_pb2.VM_STATE_BOOTING]),
+            make_fake_slice_handle("ready-no-workers", all_ready=True),
+        ]
+        platform = make_mock_platform(slices_to_discover=discovered)
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        _mark_discovered_ready(group, [discovered[0]])
+        group.mark_slice_ready("ready-no-workers", [])  # READY but membership never resolved
+
+        needing = {slice_id for slice_id, _ in group.slices_needing_describe()}
+        assert needing == {"still-booting", "ready-no-workers"}
+
 
 class TestScalingGroupScalingPolicy:
     """Tests for scaling policy decisions (can_scale_up, rate limiting)."""

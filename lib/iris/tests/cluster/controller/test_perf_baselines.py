@@ -3,10 +3,9 @@
 
 """Performance baselines for the SA Core data-layer migration.
 
-Gates the SA Core path of ``reads.jobs_with_reservations`` and the scheduler
-reads (``resource_usage_by_worker`` and the inline reconcile-rows query)
-against a fixed workload to catch regressions. The legacy comparison path
-has been deleted — only the SA Core timings are measured.
+Gates the SA Core scheduler reads (``resource_usage_by_worker`` and the inline
+reconcile-rows query) against a fixed workload to catch regressions. The legacy
+comparison path has been deleted — only the SA Core timings are measured.
 """
 
 import shutil
@@ -26,70 +25,7 @@ from sqlalchemy import select, text
 
 from tests.cluster.controller._test_support import ControllerTestState
 
-_RESERVATION_JOB_COUNT = 200
-_NON_RESERVATION_JOB_COUNT = 200
 _TICKS = 200
-# SA Core adds ~370 µs/call of fixed per-call overhead vs. raw sqlite3. The
-# per-call gate is an absolute µs budget that catches gross regressions
-# (e.g. per-call compile, missing index) while accepting structural SA cost.
-_SA_JOBS_WITH_RESERVATIONS_MAX_US = 5_000
-
-
-def _seed_jobs(db: ControllerDB) -> None:
-    """Insert 200 reservation-holding + 200 plain jobs into the DB."""
-    with db.transaction() as cur:
-        cur.execute(
-            text("INSERT INTO users (user_id, created_at_ms, role) VALUES (:uid, :ts, :role)"),
-            {"uid": "u1", "ts": 1_000, "role": "user"},
-        )
-        for idx in range(_RESERVATION_JOB_COUNT):
-            job_id = f"/u1/res-{idx:04d}"
-            cur.execute(
-                text(
-                    "INSERT INTO jobs ("
-                    "  job_id, user_id, root_job_id, depth, state,"
-                    "  submitted_at_ms, root_submitted_at_ms, num_tasks,"
-                    "  is_reservation_holder, has_reservation"
-                    ") VALUES (:jid, :uid, :jid, 0, :state, :ts, :ts, 1, 1, 1)"
-                ),
-                {"jid": job_id, "uid": "u1", "state": job_pb2.JOB_STATE_RUNNING, "ts": 2_000},
-            )
-            cur.execute(
-                text(
-                    "INSERT INTO job_config (job_id, name, has_reservation, reservation_json)"
-                    " VALUES (:jid, :name, 1, :res)"
-                ),
-                {"jid": job_id, "name": f"res-{idx:04d}", "res": '{"resources":{"cpu":1}}'},
-            )
-        for idx in range(_NON_RESERVATION_JOB_COUNT):
-            job_id = f"/u1/plain-{idx:04d}"
-            cur.execute(
-                text(
-                    "INSERT INTO jobs ("
-                    "  job_id, user_id, root_job_id, depth, state,"
-                    "  submitted_at_ms, root_submitted_at_ms, num_tasks,"
-                    "  is_reservation_holder, has_reservation"
-                    ") VALUES (:jid, :uid, :jid, 0, :state, :ts, :ts, 1, 0, 0)"
-                ),
-                {"jid": job_id, "uid": "u1", "state": job_pb2.JOB_STATE_RUNNING, "ts": 2_000},
-            )
-            cur.execute(
-                text("INSERT INTO job_config (job_id, name) VALUES (:jid, :name)"),
-                {"jid": job_id, "name": f"plain-{idx:04d}"},
-            )
-
-
-@pytest.fixture
-def seeded_db() -> Iterator[ControllerDB]:
-    """Build a temp ``ControllerDB`` seeded with reservation-holder workload."""
-    tmp = Path(tempfile.mkdtemp(prefix="iris_perf_"))
-    db = ControllerDB(db_dir=tmp)
-    try:
-        _seed_jobs(db)
-        yield db
-    finally:
-        db.close()
-        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _measure(callable_, ticks: int) -> float:
@@ -103,26 +39,6 @@ def _measure(callable_, ticks: int) -> float:
         callable_()
     elapsed = perf_counter() - t0
     return elapsed / ticks
-
-
-def test_jobs_with_reservations_perf(seeded_db: ControllerDB) -> None:
-    """Gate SA reads.jobs_with_reservations below a fixed µs ceiling."""
-    states = (job_pb2.JOB_STATE_RUNNING,)
-
-    def _sa_call() -> int:
-        with seeded_db.read_snapshot() as tx:
-            return len(reads.jobs_with_reservations(tx, states))
-
-    assert _sa_call() == _RESERVATION_JOB_COUNT
-
-    sa_per_call = _measure(_sa_call, _TICKS)
-    max_us = _SA_JOBS_WITH_RESERVATIONS_MAX_US
-
-    assert sa_per_call * 1e6 <= max_us, (
-        f"SA reads.jobs_with_reservations too slow: "
-        f"sa={sa_per_call * 1e6:.1f} µs/call > {max_us} µs gate "
-        f"(200 reservation-holders + 200 plain jobs; {_TICKS} iterations)."
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -169,9 +85,8 @@ def _seed_workers_and_attempts(db: ControllerDB) -> None:
                     text(
                         "INSERT INTO jobs ("
                         "  job_id, user_id, root_job_id, depth, state,"
-                        "  submitted_at_ms, root_submitted_at_ms, num_tasks,"
-                        "  is_reservation_holder, has_reservation"
-                        ") VALUES (:jid, :uid, :jid, 0, :state, :ts, :ts, 1, 0, 0)"
+                        "  submitted_at_ms, root_submitted_at_ms, num_tasks"
+                        ") VALUES (:jid, :uid, :jid, 0, :state, :ts, :ts, 1)"
                     ),
                     {"jid": job_id, "uid": "u1", "state": job_pb2.JOB_STATE_RUNNING, "ts": 2_000},
                 )
