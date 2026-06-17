@@ -85,6 +85,12 @@ the prototype.
 - **Pod resolution under retry:** label selector vs. deterministic `_pod_name` —
   which survives an attempt/retry bump cleanly? Prefer the label selector (no need
   to reconstruct `attempt_id`); confirm during implementation.
+- **Label-selector truncation collision (known, low risk):** the `iris.task_id`
+  label value is sanitized and truncated to 63 chars, so two very long, same-prefix
+  task ids could share a selector and `parse_running_pod` could pick the wrong pod.
+  Unreachable for this tool's short `dev-cw-<user>` names; if it ever matters, also
+  match `iris.task_hash` (the k8s backend's collision-resistant label) rather than
+  re-deriving the hash here.
 - **Sub-node GPU requests:** does `--gpu-count < 8` schedule at all on the
   bare-metal 8×H100 pool, or only whole nodes? Default 8 until known.
 - **Shared module:** is this prototype the right moment to extract the

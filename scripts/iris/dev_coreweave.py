@@ -317,11 +317,20 @@ def allocate(ctx, gpu_count: int, timeout: int, pod_timeout: int) -> None:
         except KeyboardInterrupt:
             print("\nReleasing dev CoreWeave session...")
         finally:
+            terminated = False
             try:
                 client.terminate(JobName.from_wire(str(job.job_id)))
+                terminated = True
             except Exception:
-                logger.warning("Failed to terminate holder job %s", job.job_id, exc_info=True)
-            if state is not None:
+                logger.warning(
+                    "Failed to terminate holder job %s; the H100 pod may still be running. "
+                    "Keeping local session state — run `release` to retry cleanup.",
+                    job.job_id,
+                    exc_info=True,
+                )
+            # Only drop the session file once the job is actually gone, so a failed
+            # terminate never orphans an expensive pod with no local record of its job id.
+            if state is not None and terminated:
                 state_file.unlink(missing_ok=True)
 
 
@@ -365,16 +374,26 @@ def status(ctx) -> None:
 
 
 @cli.command("release")
+@click.option("--force", is_flag=True, help="Delete the local session file even if terminating the holder job fails.")
 @click.pass_context
-def release(ctx) -> None:
+def release(ctx, force: bool) -> None:
     """Terminate the holder job and clear the local session file."""
     state_file = state_path(ctx.obj.state_dir, ctx.obj.session_name)
     state = load_state(state_file)
     try:
         with controller_client(state.config_file) as client:
             client.terminate(JobName.from_wire(state.job_id))
-    finally:
-        state_file.unlink(missing_ok=True)
+    except Exception as exc:
+        # Keep the state file on failure so the job id isn't lost while the pod may
+        # still be running; --force is the escape hatch for already-dead jobs.
+        if not force:
+            raise click.ClickException(
+                f"Failed to terminate holder job {state.job_id}; the H100 pod may still be running. "
+                f"Retry `release`, or pass --force to drop local state anyway (then confirm the job is gone "
+                f"with `iris job list`). Error: {exc}"
+            ) from exc
+        logger.warning("Terminate failed but --force given; deleting local session state anyway.", exc_info=True)
+    state_file.unlink(missing_ok=True)
 
 
 def main() -> None:
