@@ -5,6 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title><%= title %></title>
     <script>
+      (function () {
+        var routeMatch = window.location.pathname.match(/^(.*?)(?:\/(?:job|worker|task|status)(?:\/|$))/);
+        var basePath = routeMatch ? (routeMatch[1] || '/') : window.location.pathname;
+        if (!basePath.endsWith('/')) {
+          basePath += '/';
+        }
+        var base = document.createElement('base');
+        base.href = basePath;
+        document.head.appendChild(base);
+
+        var nativeFetch = window.fetch;
+        window.fetch = function (input, init) {
+          if (typeof input === 'string' && input.startsWith('/') && !input.startsWith('//')) {
+            return nativeFetch.call(this, new URL(input.slice(1), document.baseURI).toString(), init);
+          }
+          return nativeFetch.apply(this, arguments);
+        };
+      })();
+
       // Apply dark mode before first paint to prevent flash
       try {
         var stored = localStorage.getItem('iris-dark-mode');

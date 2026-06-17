@@ -7,10 +7,12 @@ Tests verify dashboard functionality through the Connect RPC endpoints.
 The dashboard serves a web UI that fetches data via RPC calls.
 """
 
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 from finelog.server import LogServiceImpl
+from iris.cluster import dashboard_common
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
@@ -57,6 +59,8 @@ from .conftest import (
 # =============================================================================
 # Test Helpers
 # =============================================================================
+
+DASHBOARD_DIR = Path(__file__).parents[3] / "dashboard"
 
 
 def submit_job(
@@ -1095,6 +1099,50 @@ def test_health_endpoint_returns_ok(client):
 
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+def test_dashboard_shell_serves_prefix_safe_html(client, tmp_path, monkeypatch):
+    """Dashboard HTML keeps assets/API calls under the browser-visible prefix."""
+    dist = tmp_path / "dashboard-dist"
+    (dist / "static" / "js").mkdir(parents=True)
+    (dist / "static" / "css").mkdir(parents=True)
+    template = (DASHBOARD_DIR / "src" / "template.html").read_text()
+    html = template.replace("<%= title %>", "Iris Dashboard").replace(
+        '<div id="app"></div>',
+        '<div id="app"></div>\n'
+        '    <script src="static/js/controller.js"></script>\n'
+        '    <link rel="stylesheet" href="static/css/controller.css" />',
+    )
+    (dist / "controller.html").write_text(html)
+    monkeypatch.setattr(dashboard_common, "VUE_DIST_DIR", dist)
+    monkeypatch.setattr(dashboard_common, "DOCKER_VUE_DIST_DIR", tmp_path / "missing-dashboard-dist")
+
+    resp = client.get("/job/test-user/test-job")
+
+    assert resp.status_code == 200
+    assert "document.createElement('base')" in resp.text
+    assert "new URL(input.slice(1), document.baseURI).toString()" in resp.text
+    assert 'src="static/js/controller.js"' in resp.text
+    assert 'href="static/css/controller.css"' in resp.text
+    assert 'src="/static/' not in resp.text
+    assert 'href="/static/' not in resp.text
+
+
+def test_dashboard_frontend_paths_are_prefix_relative():
+    """Dashboard build and RPC helpers avoid root-absolute URLs."""
+    config = (DASHBOARD_DIR / "rsbuild.config.ts").read_text()
+    rpc = (DASHBOARD_DIR / "src" / "composables" / "useRpc.ts").read_text()
+    template = (DASHBOARD_DIR / "src" / "template.html").read_text()
+
+    assert "assetPrefix: 'auto'" in config
+    assert "assetPrefix: '/'" not in config
+    assert "document.baseURI" in rpc
+    assert "fetch(`/${service}/${method}`" not in rpc
+    assert "fetch(`/iris.cluster.ControllerService/" not in rpc
+    assert "fetch(`/finelog.logging.LogService/" not in rpc
+    assert "fetch(`/iris.cluster.WorkerService/" not in rpc
+    assert "window.fetch = function" in template
+    assert "input.startsWith('/')" in template
 
 
 # =============================================================================

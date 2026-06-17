@@ -25,6 +25,10 @@ function handleUnauthorized(resp: Response): void {
   }
 }
 
+export function dashboardApiUrl(path: string): string {
+  return new URL(path.replace(/^\/+/, ''), document.baseURI).toString()
+}
+
 function useRpc<T>(service: string, method: string, body?: RpcBody): RpcState<T> {
   const data = ref<T | null>(null) as Ref<T | null>
   const loading = ref(false)
@@ -37,7 +41,7 @@ function useRpc<T>(service: string, method: string, body?: RpcBody): RpcState<T>
     error.value = null
     try {
       const resolvedBody = typeof body === 'function' ? body() : (body ?? {})
-      const resp = await fetch(`/${service}/${method}`, {
+      const resp = await fetch(dashboardApiUrl(`${service}/${method}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(resolvedBody),
@@ -92,7 +96,7 @@ export class RpcError extends Error {
 /** One-shot RPC call returning a Promise. For use in async functions that
  *  need to call multiple RPCs or handle the response imperatively. */
 export async function controllerRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
-  const resp = await fetch(`/iris.cluster.ControllerService/${method}`, {
+  const resp = await fetch(dashboardApiUrl(`iris.cluster.ControllerService/${method}`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
@@ -120,7 +124,7 @@ export function useStatsRpc<T>(
 
 /**
  * RPC composable for the finelog StatsService routed via the controller's
- * endpoint proxy at /proxy/system.log-server/finelog.stats.StatsService/<Method>.
+ * endpoint proxy at proxy/system.log-server/finelog.stats.StatsService/<Method>.
  */
 export function useLogServerStatsRpc<T>(
   method: string,
@@ -131,7 +135,7 @@ export function useLogServerStatsRpc<T>(
 
 /** One-shot RPC call for LogService. */
 export async function logServiceRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
-  const resp = await fetch(`/finelog.logging.LogService/${method}`, {
+  const resp = await fetch(dashboardApiUrl(`finelog.logging.LogService/${method}`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
@@ -142,7 +146,7 @@ export async function logServiceRpcCall<T>(method: string, body?: Record<string,
 }
 
 export async function workerRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
-  const resp = await fetch(`/iris.cluster.WorkerService/${method}`, {
+  const resp = await fetch(dashboardApiUrl(`iris.cluster.WorkerService/${method}`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),

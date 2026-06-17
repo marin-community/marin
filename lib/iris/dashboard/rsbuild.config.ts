@@ -13,7 +13,7 @@ export default defineConfig({
     distPath: {
       root: 'dist',
     },
-    assetPrefix: '/',
+    assetPrefix: 'auto',
   },
   html: {
     template: './src/template.html',
