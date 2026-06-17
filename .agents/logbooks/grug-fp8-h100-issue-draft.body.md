@@ -85,3 +85,19 @@ FP8 router/softmax/loss/norm, portable checkpoint export, Grug→Haliax-module r
 * BF16 Grug MoE, `params=fp32 / compute=bf16 / output=bf16`. FP8 benchmark shapes: dense MLP at
   **hidden dim 3072 & 4096**, seq 4096 (d3072 matches Russell's 90B-scale H100 run). Reference MFU:
   ~15% BF16 → 20–25% FP8 target. Concrete baseline numbers pending R4.
+
+## Baseline methodology (R4 — in progress)
+
+Russell's full-scale 256-GPU run shows the BF16 Grug MoE trains on H100, but it's a one-off production
+bring-up — too costly to re-run per experiment and not set up as an FP8 control. R4 establishes a
+cheap, single-node (8×H100), reproducible BF16 reference **on the exact launcher and flag-gated config
+FP8 will be toggled on**, so the FP8 result is a clean apples-to-apples delta (same harness, seeds,
+shape, profiler) rather than a cross-run comparison. The first run is a small **correctness + plumbing
+smoke**: confirm BF16 compiles and runs fwd/bwd with finite loss while exercising the real
+expert-parallel MoE ring dispatch, and validate submission + SlimPajama cache hit + profiler capture
+at minimal cost. It produces the first throughput datapoint and profiler trace feeding the Phase-1
+perf-target derivation. The full benchmark-shape baseline (deeper/wider, longer profiler window)
+follows once the smoke confirms the path.
+
+Reduced smoke config: 1 node (8×H100), hidden 3072 / 4 layers / 8 experts top-4 / seq 2048, batch 16,
+10 steps, BF16 (`params=fp32 / compute=bf16 / output=bf16`), SlimPajama-6B (tokenized cache hit).

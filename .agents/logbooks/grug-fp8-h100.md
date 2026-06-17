@@ -228,6 +228,29 @@ can run **in parallel with** R4.
   (`direnv exec .` is only for KUBECONFIG so the CLI reaches the controller; storage creds are
   cluster-side.) Final pre-launch check: `direnv exec . uv run iris --cluster=cw-us-east-02a cluster status`.
 
+### 2026-06-17 — R4 write-up (motivation, goals, parameters)
+*Motivation & goals.* Russell's 256-H100 run already shows the full-recipe BF16 Grug MoE trains on
+H100, but it's a one-off production bring-up — too expensive to re-run per experiment and not set up
+as an FP8 control. R4 instead establishes a **cheap, single-node (8×H100), reproducible BF16 reference
+on the exact launcher and flag-gated config we'll flip FP8 on**, so the eventual FP8 claim is a clean
+apples-to-apples delta (same harness, seeds, shape, profiler) rather than a comparison across differing
+runs. This first run is a deliberately small **correctness + plumbing smoke**: confirm the BF16 model
+compiles and runs forward+backward with finite loss while exercising the real expert-parallel MoE ring
+dispatch, and validate the full path — executor→Iris submission, SlimPajama cache hit, profiler/metric
+capture — at minimal cost (~$20-30 on a warm node). It yields the first throughput datapoint and
+profiler trace feeding the Phase-1 perf-target derivation (S7), and clears Gate G0 before any FP8
+lands. The full benchmark-shape baseline (deeper/wider, longer profiler window) follows once this smoke
+confirms the path.
+
+*Test parameters.*
+- **Hardware:** 1 node = 8xH100 on `cw-us-east-02a` (`SCALE_GPU_REPLICAS=1`), pure intra-node expert
+  parallelism (`EXPERT_AXIS=8`, `REPLICA_AXIS=1`).
+- **Model (reduced):** hidden 3072, 4 layers, 8 experts top-4, seq 2048.
+- **Precision:** BF16 recipe — `params=fp32 / compute=bf16 / output=bf16`.
+- **Run:** batch 16, 10 steps; `json_logger` tracker; local (disposable) checkpoints.
+- **Data:** SlimPajama-6B real slice — tokenized **cache hit** on R2 (`slimpajama-6b-cw-31d2b0`), so no
+  tokenization and no cross-region cost.
+
 <!-- New entries below this line. Template:
 ### YYYY-MM-DD HH:MM - <GFP8-NNN short label>
 - Hypothesis:
