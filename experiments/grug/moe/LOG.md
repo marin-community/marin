@@ -697,3 +697,12 @@ Median=517k, mean-excl-pauses=516k -> TRUE decoupling overhead only ~2.6%. eff_s
 -> 1.032 (clean). So gate-1 d512 PASSES with clean tok/s. Recover-MFU plan: re-run winners on RESERVED
 v4-32 with 10-min checkpoints (no preemption -> no frequent-save pauses) to measure clean throughput;
 optionally trim optimizer-step elementwise passes (recover/split/reassemble) for the residual 2.6%.
+
+### MuonH decoupling — final gate-1 results (2026-06-16, issue #6388)
+FINAL (decoupling beats MuonH on loss at both scales; gain_lr=adam_lr is the rule):
+  d512 gain_lr=2.26e-3 (=adam_lr, v4-32): paloma 3.5329 (-0.0109 vs base 3.5438)
+  d768 gain_lr=1.932e-3 (=adam_lr, v5p-8): paloma 3.2307 (-0.0023 vs base 3.2330; > 3.2313 @1e-3)
+MFU sink CONFIRMED = checkpoint-pause artifact: 3-min ckpt -> 6.1% pause steps (mean 496k vs median 517k);
+10-min ckpt -> pause% ~1% (d512 1.1%, d768 0.7%), mean≈clean. True decoupling overhead ~2.6%.
+Gate-1: d512 eff_speedup=1.032 on clean v4 throughput (517k). d768 clean-v4 tok/s pending (v5p numbers
+not comparable to v4 baseline 357696; v4-32 central2 was ready=0). GRUG_CKPT_MIN env added (default 10).
