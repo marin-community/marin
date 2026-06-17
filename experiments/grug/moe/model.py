@@ -16,7 +16,7 @@ import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
 from einops import rearrange
-from haliax.jax_utils import named_call
+from haliax.jax_utils import named_call, tree_checkpoint_name
 from jax import random
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
@@ -36,6 +36,7 @@ from levanter.grug.attention import (
     with_fa4_cute_metadata,
 )
 from levanter.grug.grug_moe import (
+    DEEPEP_REMAT_SAVE_NAMES,
     MOE_REMAT_SAVE_NAMES,
     MoeActivation,
     MoEExpertMlp,
@@ -50,6 +51,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
 _CROSS_ENTROPY_IMPLEMENTATIONS = ("pallas_gpu", "pallas_tpu", "xla", "reference")
+_CHECKPOINT_BLOCK_ATTENTION_OUTPUT = "grug_block_attention_output"
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -634,7 +636,10 @@ class Block(eqx.Module):
         pko_doc_starts: Bool[Array, "B S"] | None,
     ) -> Float[Array, "B S D"]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        return _batch_reshard(x + self.attn(attn_in, mask, use_pko=use_pko, pko_doc_starts=pko_doc_starts))
+        return tree_checkpoint_name(
+            _batch_reshard(x + self.attn(attn_in, mask, use_pko=use_pko, pko_doc_starts=pko_doc_starts)),
+            _CHECKPOINT_BLOCK_ATTENTION_OUTPUT,
+        )
 
     @named_call
     def _mlp_update(self, x: Float[Array, "B S D"]) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
@@ -654,24 +659,6 @@ class Block(eqx.Module):
         pko_doc_starts: Bool[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         x = self._attention_update(x, mask, use_pko=use_pko, pko_doc_starts=pko_doc_starts)
-        return self._mlp_update(x)
-
-    @named_call
-    def call_with_transport_safe_remat(
-        self,
-        x: Float[Array, "B S D"],
-        mask: AttentionMask | jax.Array,
-        *,
-        remat_policy,
-        use_pko: bool = False,
-        pko_doc_starts: Bool[Array, "B S"] | None = None,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        x = eqx.filter_checkpoint(self._attention_update, policy=remat_policy)(
-            x,
-            mask,
-            use_pko=use_pko,
-            pko_doc_starts=pko_doc_starts,
-        )
         return self._mlp_update(x)
 
 
@@ -734,11 +721,23 @@ class Transformer(eqx.Module):
             batch_size, seq_len = hidden.shape[:2]
             pko_doc_starts = _segment_start_mask(mask, batch_size=batch_size, seq_len=seq_len)
 
+        uses_effectful_moe = resolve_moe_implementation(cfg.moe_implementation) == "deepep"
         if cfg.remat_mode == "save_moe":
-            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+            remat_save_names = MOE_REMAT_SAVE_NAMES
+            if uses_effectful_moe:
+                remat_save_names = (
+                    _CHECKPOINT_BLOCK_ATTENTION_OUTPUT,
+                    *DEEPEP_REMAT_SAVE_NAMES,
+                    *MOE_REMAT_SAVE_NAMES,
+                )
+            remat_policy = jax.checkpoint_policies.save_only_these_names(*remat_save_names)
+        elif uses_effectful_moe and cfg.remat_mode == "recompute_all":
+            remat_policy = jax.checkpoint_policies.save_only_these_names(
+                _CHECKPOINT_BLOCK_ATTENTION_OUTPUT,
+                *DEEPEP_REMAT_SAVE_NAMES,
+            )
         else:
             remat_policy = None
-        uses_effectful_moe = resolve_moe_implementation(cfg.moe_implementation) == "deepep"
 
         moe_router_stats: list[dict[str, jax.Array]] = []
         num_blocks = len(self.blocks)
@@ -749,13 +748,6 @@ class Transformer(eqx.Module):
             block_kwargs = {"use_pko": use_pko, "pko_doc_starts": pko_doc_starts if use_pko else None}
             if cfg.remat_mode == "none":
                 hidden, router_stats = block(hidden, layer_mask, **block_kwargs)
-            elif uses_effectful_moe:
-                hidden, router_stats = block.call_with_transport_safe_remat(
-                    hidden,
-                    layer_mask,
-                    remat_policy=remat_policy,
-                    **block_kwargs,
-                )
             else:
                 hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
                     hidden,

@@ -18,6 +18,19 @@ from jaxtyping import Array, Float, Int
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
+    _CHECKPOINT_DEEPEP_ASSIGNMENT_WEIGHTS,
+    _CHECKPOINT_DEEPEP_CHANNEL_PREFIX_MATRIX,
+    _CHECKPOINT_DEEPEP_IS_TOKEN_IN_RANK,
+    _CHECKPOINT_DEEPEP_LOCAL_GROUP_SIZES,
+    _CHECKPOINT_DEEPEP_NUM_RECV_TOKENS,
+    _CHECKPOINT_DEEPEP_RANK_PREFIX_MATRIX,
+    _CHECKPOINT_DEEPEP_RECV_CHANNEL_PREFIX_MATRIX,
+    _CHECKPOINT_DEEPEP_RECV_SRC_IDX,
+    _CHECKPOINT_DEEPEP_RECV_TOKEN_INDICES,
+    _CHECKPOINT_DEEPEP_RECV_TOPK_IDX,
+    _CHECKPOINT_DEEPEP_RECV_TOPK_WEIGHTS,
+    _CHECKPOINT_DEEPEP_RECV_X,
+    _CHECKPOINT_DEEPEP_SEND_HEAD,
     _CHECKPOINT_EXPERT_HIDDEN,
     MOE_REMAT_SAVE_NAMES,
     MoERematMode,
@@ -136,6 +149,9 @@ def _pack_deepep_local_assignments(
         valid_sorted = jnp.arange(total_assignments, dtype=jnp.int32) < total_valid
         x_dispatch = jnp.where(valid_sorted[:, None], x_dispatch, 0)
         assignment_weights = jnp.where(valid_sorted, assignment_weights, 0)
+        assignment_weights = tree_checkpoint_name(assignment_weights, _CHECKPOINT_DEEPEP_ASSIGNMENT_WEIGHTS)
+        recv_token_indices = tree_checkpoint_name(recv_token_indices, _CHECKPOINT_DEEPEP_RECV_TOKEN_INDICES)
+        local_group_sizes = tree_checkpoint_name(local_group_sizes, _CHECKPOINT_DEEPEP_LOCAL_GROUP_SIZES)
         return DeepEPLocalAssignments(x_dispatch, assignment_weights, recv_token_indices, local_group_sizes)
 
 
@@ -212,6 +228,19 @@ def _moe_mlp_ep_deepep_local(
                 num_experts=num_experts,
                 max_recv_tokens=max_recv_tokens,
             )
+        recv_x = tree_checkpoint_name(recv_x, _CHECKPOINT_DEEPEP_RECV_X)
+        recv_topk_idx = tree_checkpoint_name(recv_topk_idx, _CHECKPOINT_DEEPEP_RECV_TOPK_IDX)
+        recv_topk_weights = tree_checkpoint_name(recv_topk_weights, _CHECKPOINT_DEEPEP_RECV_TOPK_WEIGHTS)
+        recv_src_idx = tree_checkpoint_name(recv_src_idx, _CHECKPOINT_DEEPEP_RECV_SRC_IDX)
+        rank_prefix_matrix = tree_checkpoint_name(rank_prefix_matrix, _CHECKPOINT_DEEPEP_RANK_PREFIX_MATRIX)
+        channel_prefix_matrix = tree_checkpoint_name(channel_prefix_matrix, _CHECKPOINT_DEEPEP_CHANNEL_PREFIX_MATRIX)
+        recv_channel_prefix_matrix = tree_checkpoint_name(
+            recv_channel_prefix_matrix,
+            _CHECKPOINT_DEEPEP_RECV_CHANNEL_PREFIX_MATRIX,
+        )
+        send_head = tree_checkpoint_name(send_head, _CHECKPOINT_DEEPEP_SEND_HEAD)
+        num_recv_tokens = tree_checkpoint_name(num_recv_tokens, _CHECKPOINT_DEEPEP_NUM_RECV_TOKENS)
+        is_token_in_rank = tree_checkpoint_name(is_token_in_rank, _CHECKPOINT_DEEPEP_IS_TOKEN_IN_RANK)
         num_recv_tokens_scalar = jnp.squeeze(num_recv_tokens, axis=0)
         local_assignments = _pack_deepep_local_assignments(
             recv_x,
