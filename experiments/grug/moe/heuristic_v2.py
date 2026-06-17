@@ -252,4 +252,3 @@ class MoeMuonHHeuristic:
         )
 
 
-moe_muonh_heuristic = MoeMuonHHeuristic()

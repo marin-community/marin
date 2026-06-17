@@ -222,7 +222,6 @@ class MoeAdamHHeuristic:
         )
 
 
-moe_adamh_heuristic = MoeAdamHHeuristic()
 
 
 def build_from_heuristic(
