@@ -7,6 +7,7 @@ import gzip
 import json
 from pathlib import Path
 
+from levanter.utils.profile_dirs import RunTarget
 from marin.profiling.ingest import normalize_run_target, summarize_trace
 from marin.profiling.tracking import (
     RegressionThresholds,
@@ -23,16 +24,16 @@ def test_normalize_run_target_variants() -> None:
         "https://wandb.ai/marin-community/marin/runs/abc123",
         entity=None,
         project=None,
-    ) == ("marin-community", "marin", "abc123")
-    assert normalize_run_target("marin-community/marin/abc123", entity=None, project=None) == (
-        "marin-community",
-        "marin",
-        "abc123",
+    ) == RunTarget(entity="marin-community", project="marin", run_id="abc123")
+    assert normalize_run_target("marin-community/marin/abc123", entity=None, project=None) == RunTarget(
+        entity="marin-community",
+        project="marin",
+        run_id="abc123",
     )
-    assert normalize_run_target("abc123", entity="marin-community", project="marin") == (
-        "marin-community",
-        "marin",
-        "abc123",
+    assert normalize_run_target("abc123", entity="marin-community", project="marin") == RunTarget(
+        entity="marin-community",
+        project="marin",
+        run_id="abc123",
     )
 
 

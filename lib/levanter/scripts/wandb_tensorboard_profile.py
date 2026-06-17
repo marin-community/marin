@@ -80,12 +80,12 @@ def main() -> None:
     args = parse_args()
 
     try:
-        entity, project, run_id = normalize_run_target(args.target, args.entity, args.project)
+        run_target = normalize_run_target(args.target, args.entity, args.project)
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    run_path = f"{entity}/{project}/{run_id}"
+    run_path = f"{run_target.entity}/{run_target.project}/{run_target.run_id}"
     api = wandb.Api()
     try:
         run = api.run(run_path)

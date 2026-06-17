@@ -5,15 +5,24 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Optional, Protocol, Tuple
+from typing import Any, Optional, Protocol
 from urllib.parse import urlparse
 
 from levanter.utils.fsspec_utils import join_path
 from rigging.filesystem import url_to_fs
 
 PROFILER_DIR_NAME = "profiler"
+TRAINER_CONFIG_KEY = "trainer"
+
+
+@dataclass(frozen=True)
+class RunTarget:
+    entity: str
+    project: str
+    run_id: str
 
 
 class WandbRunLike(Protocol):
@@ -23,7 +32,7 @@ class WandbRunLike(Protocol):
     summary: Mapping[str, Any]
 
 
-def normalize_run_target(target: str, entity: Optional[str], project: Optional[str]) -> Tuple[str, str, str]:
+def normalize_run_target(target: str, entity: Optional[str], project: Optional[str]) -> RunTarget:
     if target.startswith(("http://", "https://")):
         parsed = urlparse(target)
         parts = [p for p in parsed.path.split("/") if p]
@@ -35,13 +44,13 @@ def normalize_run_target(target: str, entity: Optional[str], project: Optional[s
             run_id = parts[3]
         else:
             run_id = parts[2]
-        return entity, project, run_id
+        return RunTarget(entity=entity, project=project, run_id=run_id)
 
     parts = [p for p in target.split("/") if p]
     if len(parts) == 1:
         if not entity or not project:
             raise ValueError("Bare run ids require --entity and --project.")
-        return entity, project, parts[0]
+        return RunTarget(entity=entity, project=project, run_id=parts[0])
 
     if len(parts) >= 3:
         entity = parts[0]
@@ -50,13 +59,13 @@ def normalize_run_target(target: str, entity: Optional[str], project: Optional[s
             run_id = parts[3]
         else:
             run_id = parts[2]
-        return entity, project, run_id
+        return RunTarget(entity=entity, project=project, run_id=run_id)
 
     raise ValueError(f"Unrecognized run target: {target}")
 
 
 def resolve_profile_run_id(run: WandbRunLike) -> str:
-    trainer_config = run.config.get("trainer")
+    trainer_config = run.config.get(TRAINER_CONFIG_KEY)
     if not isinstance(trainer_config, dict):
         raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
 
@@ -68,7 +77,7 @@ def resolve_profile_run_id(run: WandbRunLike) -> str:
 
 
 def resolve_profile_dir(run: WandbRunLike) -> str:
-    trainer_config = run.config.get("trainer")
+    trainer_config = run.config.get(TRAINER_CONFIG_KEY)
     if not isinstance(trainer_config, dict):
         raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
 

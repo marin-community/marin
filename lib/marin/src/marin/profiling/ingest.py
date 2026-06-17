@@ -99,8 +99,8 @@ def download_profile_dir_for_run(
         project: W&B project when `run_target` is a bare run id.
         download_root: Optional output directory where the profiler tree will be mirrored.
     """
-    run_entity, run_project, run_id = normalize_run_target(run_target, entity=entity, project=project)
-    run_path = f"{run_entity}/{run_project}/{run_id}"
+    run_target_info = normalize_run_target(run_target, entity=entity, project=project)
+    run_path = f"{run_target_info.entity}/{run_target_info.project}/{run_target_info.run_id}"
 
     api = wandb.Api()
     run = api.run(run_path)
