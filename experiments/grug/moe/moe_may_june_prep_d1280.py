@@ -27,7 +27,7 @@ from marin.execution.types import ExecutorStep, this_output_path, versioned
 from experiments.grug.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, run_grug_moe_trial
 from experiments.grug.moe.launch_datakit_moe_mix import _datakit_data_config, _phase_1_start_step
-from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
+from experiments.grug.moe.train import GrugTrainerConfig
 
 _DIM: int = 1280
 _BS: int = 256  # TPB = 256 * 4096 = 1,048,576 (~1M tokens/batch)
@@ -43,7 +43,7 @@ _optimizer = _heuristic.build_muonh_config(_BS, _tokens, _DIM, seq_len=_SEQ)
 # Snap the data-mix phase transition to a mixture-block boundary so it lands cleanly.
 _phase_step = _phase_1_start_step(_STEPS, _BS)
 
-_run_id = f"june_prep_moe_may_d{_DIM}_ep{_EP}_bs{_BS}"
+_run_id = f"june_prep_moe_may_d{_DIM}_ep{_EP}_bs{_BS}_no_eval"
 step = ExecutorStep(
     name=f"grug/{_run_id}",
     fn=run_grug_moe_trial,
@@ -78,15 +78,14 @@ step = ExecutorStep(
                 log_every=1,
             )
         ),
-        eval=versioned(
-            GrugEvalConfig(
-                eval_batch_size=256,
-                steps_per_eval=1000,
-                max_eval_batches=4,
-                eval_current=True,
-                eval_ema=False,
-            )
-        ),
+        # eval disabled: at v4-512 EP=2 the smallest eval_batch_size that
+        # divides the eval data-axis (256 chips) is 256, and compiling the
+        # eval graph alongside the train step pushes the train-step HBM peak
+        # 1.62G over (~30 fp32[256,1280,640] grad all-reduce temps already
+        # consume ~24G). eval=None drops the eval graph entirely so the
+        # train step compiles. We lose the in-run macro_loss curve; final
+        # checkpoint eval is still available offline.
+        eval=None,
     ),
 )
 
