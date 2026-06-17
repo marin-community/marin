@@ -16,6 +16,7 @@ import contextlib
 import ipaddress
 import logging
 import time
+from collections.abc import Iterable
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
@@ -224,20 +225,17 @@ class GcpAccessTokenVerifier:
 
 
 class IapIdTokenVerifier:
-    """Verifies a Google OIDC ID token presented at IAP login.
+    """Verifies a Google OIDC ID token and returns the caller's identity.
 
-    Used as the ``login`` identity proof for an IAP-fronted controller: IAP has
-    already authenticated and IAM-authorized the caller at the ingress, and the
-    same OIDC ID token is verified here (signature against Google's certs, issuer,
-    expiry, and audience) before minting an Iris JWT. The token's ``aud`` must be
-    one of the configured audiences — the desktop OAuth client id (user flow) or
-    the IAP-secured client id (service-account flow).
+    Raises ValueError unless the token's signature and issuer are valid and its
+    ``aud`` claim is one of ``audiences`` (the email is taken from the verified
+    claims). Used as the login identity proof for an IAP-fronted controller.
     """
 
-    def __init__(self, audiences: list[str] | frozenset[str], project_id: str | None = None):
-        if not audiences:
-            raise ValueError("IapIdTokenVerifier requires at least one audience")
+    def __init__(self, audiences: Iterable[str], project_id: str | None = None):
         self._audiences = frozenset(audiences)
+        if not self._audiences:
+            raise ValueError("IapIdTokenVerifier requires at least one audience")
         self._project_id = project_id
         self._request = google.auth.transport.requests.Request()
 
@@ -448,10 +446,8 @@ class AuthTokenInjector:
 class ProxyAuthTokenInjector:
     """Client-side interceptor that attaches the IAP OIDC ID token.
 
-    The token rides in ``Proxy-Authorization`` (not ``Authorization``) so Google
-    IAP consumes and strips it at the ingress, leaving ``Authorization: Bearer
-    <Iris JWT>`` untouched for the controller. This is what lets the IAP
-    transport layer and the Iris application layer authenticate independently.
+    The token is set on ``Proxy-Authorization`` (not ``Authorization``), which
+    IAP consumes at the ingress, leaving ``Authorization`` free for the Iris JWT.
     """
 
     def __init__(self, provider: "TokenProvider"):
@@ -546,12 +542,11 @@ _GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
 
 
 class IapUserIdTokenProvider:
-    """OIDC ID token for IAP from a cached desktop-OAuth refresh token.
+    """Returns a fresh OIDC ID token for IAP from a cached desktop-OAuth refresh token.
 
-    Mirrors :class:`GcpAccessTokenProvider`'s caching, but emits an *ID* token
-    (IAP requires an ID token, not an access token), silently refreshed from the
-    user's long-lived refresh token — no repeated browser prompts. Obtain the
-    initial refresh token once via :func:`run_iap_desktop_login`.
+    IAP requires an ID token (not an access token); this re-mints it from the
+    user's long-lived refresh token with no browser prompt. Obtain the initial
+    refresh token once via :func:`run_iap_desktop_login`.
     """
 
     def __init__(self, client_id: str, client_secret: str, refresh_token: str):
@@ -570,31 +565,6 @@ class IapUserIdTokenProvider:
         if self._creds.id_token is None or not self._creds.valid:
             self._creds.refresh(google.auth.transport.requests.Request())
         return self._creds.id_token
-
-
-class IapServiceAccountIdTokenProvider:
-    """OIDC ID token for IAP from Application Default Credentials.
-
-    For headless callers (CI, on-cluster jobs) that cannot run a browser flow.
-    The ``audience`` must be the IAP-secured OAuth client id. Requires ADC backed
-    by a service account or the GCE metadata server.
-    """
-
-    # IAP ID tokens last ~1h; refresh comfortably before that.
-    _CACHE_SECONDS = 3000
-
-    def __init__(self, audience: str):
-        self._audience = audience
-        self._request = google.auth.transport.requests.Request()
-        self._cached_token: str | None = None
-        self._expires_at: float = 0.0
-
-    def get_token(self) -> str | None:
-        if self._cached_token is not None and time.monotonic() < self._expires_at:
-            return self._cached_token
-        self._cached_token = google.oauth2.id_token.fetch_id_token(self._request, self._audience)
-        self._expires_at = time.monotonic() + self._CACHE_SECONDS
-        return self._cached_token
 
 
 def run_iap_desktop_login(client_id: str, client_secret: str, *, port: int = 0) -> tuple[str, str]:

@@ -219,30 +219,32 @@ def test_proxy_auth_injector_skips_when_no_token():
     assert "proxy-authorization" not in captured[0]
 
 
-def test_client_interceptors_compose_both_layers():
-    """An IAP-fronted cluster attaches both the Iris JWT and the IAP token."""
-    jwt = StaticTokenProvider("jwt")
-    iap = StaticTokenProvider("iap")
-
-    both = client_interceptors(jwt, iap)
-    assert [type(i) for i in both] == [AuthTokenInjector, ProxyAuthTokenInjector]
-
-    assert [type(i) for i in client_interceptors(jwt)] == [AuthTokenInjector]
-    assert [type(i) for i in client_interceptors(None, iap)] == [ProxyAuthTokenInjector]
-    assert client_interceptors(None) == []
-
-
-def test_client_interceptors_attach_distinct_headers():
-    """Both tokens reach the wire in their own headers (no collision)."""
-    interceptors = client_interceptors(StaticTokenProvider("jwt-tok"), StaticTokenProvider("iap-tok"))
+def _headers_after(token_provider, iap_provider):
+    """Run the composed client interceptors and return the headers they set."""
     ctx = _make_ctx({})
-
-    for interceptor in interceptors:
+    for interceptor in client_interceptors(token_provider, iap_provider):
         interceptor.intercept_unary_sync(lambda req, c: None, "request", ctx)
+    return dict(ctx.request_headers())
 
-    headers = dict(ctx.request_headers())
-    assert headers["authorization"] == "Bearer jwt-tok"
-    assert headers["proxy-authorization"] == "Bearer iap-tok"
+
+def test_client_interceptors_attach_each_token_to_its_own_header():
+    """Each provider drives exactly its own header, so the two layers never collide."""
+    jwt = StaticTokenProvider("jwt-tok")
+    iap = StaticTokenProvider("iap-tok")
+
+    both = _headers_after(jwt, iap)
+    assert both["authorization"] == "Bearer jwt-tok"
+    assert both["proxy-authorization"] == "Bearer iap-tok"
+
+    jwt_only = _headers_after(jwt, None)
+    assert jwt_only["authorization"] == "Bearer jwt-tok"
+    assert "proxy-authorization" not in jwt_only
+
+    iap_only = _headers_after(None, iap)
+    assert iap_only["proxy-authorization"] == "Bearer iap-tok"
+    assert "authorization" not in iap_only
+
+    assert _headers_after(None, None) == {}
 
 
 def _verify_oauth2_token_returning(payload):

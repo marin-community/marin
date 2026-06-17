@@ -114,12 +114,16 @@ def _connect(store_path: Path) -> sqlite3.Connection:
     conn.execute("CREATE TABLE IF NOT EXISTS clusters (name TEXT PRIMARY KEY, url TEXT NOT NULL, token TEXT NOT NULL)")
     # Add the IAP refresh-token column to stores created before IAP support.
     # SQLite has no ADD COLUMN IF NOT EXISTS; the PRAGMA pre-check is a fast path,
-    # and the try/except handles the race where a concurrent writer adds it first.
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(clusters)")}
-    if "iap_refresh_token" not in columns:
+    # and on the concurrent-writer race we re-read the schema (rather than match
+    # on the error message, which is not a stable API) to confirm it now exists.
+    if not _has_column(conn, "iap_refresh_token"):
         try:
             conn.execute("ALTER TABLE clusters ADD COLUMN iap_refresh_token TEXT")
-        except sqlite3.OperationalError as exc:
-            if "duplicate column name" not in str(exc):
+        except sqlite3.OperationalError:
+            if not _has_column(conn, "iap_refresh_token"):
                 raise
     return conn
+
+
+def _has_column(conn: sqlite3.Connection, column: str) -> bool:
+    return any(row[1] == column for row in conn.execute("PRAGMA table_info(clusters)"))

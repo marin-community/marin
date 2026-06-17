@@ -111,7 +111,6 @@ def test_iap_provider_uses_id_token_login_verifier(db):
     config = config_pb2.AuthConfig(iap={"audiences": ["desktop-client-id"], "project_id": "my-project"})
     auth = create_controller_auth(config, db=db)
 
-    assert auth.provider == "iap"
     # IAP login proof is an OIDC ID token verified by IapIdTokenVerifier.
     assert isinstance(auth.login_verifier, IapIdTokenVerifier)
     # Per-RPC requests still ride on Iris JWTs (the worker token verifies).

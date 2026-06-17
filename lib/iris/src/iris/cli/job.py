@@ -74,6 +74,17 @@ _STATE_MAP: dict[str, job_pb2.JobState] = {
 }
 
 
+def _remote_client(ctx: click.Context) -> IrisClient:
+    """Build an IrisClient for the current cluster, threading both auth tokens
+    (the Iris JWT and, for IAP-fronted clusters, the IAP ID token) from context."""
+    return IrisClient.remote(
+        require_controller_url(ctx),
+        workspace=Path.cwd(),
+        token_provider=ctx.obj.get("token_provider"),
+        iap_provider=ctx.obj.get("iap_provider"),
+    )
+
+
 def _terminate_jobs(
     client: IrisClient,
     job_ids: tuple[str, ...],
@@ -963,13 +974,7 @@ def run(
 @click.pass_context
 def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     """Terminate one or more jobs."""
-    controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(
-        controller_url,
-        workspace=Path.cwd(),
-        token_provider=ctx.obj.get("token_provider"),
-        iap_provider=ctx.obj.get("iap_provider"),
-    )
+    client = _remote_client(ctx)
     terminated = _terminate_jobs(client, job_id, include_children)
     _print_terminated(terminated)
 
@@ -984,13 +989,7 @@ def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 @click.pass_context
 def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     """Terminate one or more jobs (alias for stop)."""
-    controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(
-        controller_url,
-        workspace=Path.cwd(),
-        token_provider=ctx.obj.get("token_provider"),
-        iap_provider=ctx.obj.get("iap_provider"),
-    )
+    client = _remote_client(ctx)
     terminated = _terminate_jobs(client, job_id, include_children)
     _print_terminated(terminated)
 
@@ -1007,13 +1006,7 @@ def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 @click.pass_context
 def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> None:
     """List jobs with optional filtering."""
-    controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(
-        controller_url,
-        workspace=Path.cwd(),
-        token_provider=ctx.obj.get("token_provider"),
-        iap_provider=ctx.obj.get("iap_provider"),
-    )
+    client = _remote_client(ctx)
 
     state_value: job_pb2.JobState | None = None
     if state is not None:
@@ -1180,13 +1173,7 @@ def summary(ctx, job_id: str, json_output: bool) -> None:
     Works for both running and completed jobs. Data is read from the controller's
     existing ``GetJobStatus`` / ``ListTasks`` RPCs (no checkpoint scraping).
     """
-    controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(
-        controller_url,
-        workspace=Path.cwd(),
-        token_provider=ctx.obj.get("token_provider"),
-        iap_provider=ctx.obj.get("iap_provider"),
-    )
+    client = _remote_client(ctx)
     job_name = JobName.from_wire(job_id)
     job_status = client.status(job_name)
     tasks = client.list_tasks(job_name)
@@ -1235,13 +1222,7 @@ def logs(
     if since_ms is not None and since_seconds is not None:
         raise click.UsageError("Specify only one of --since-ms or --since-seconds.")
 
-    controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(
-        controller_url,
-        workspace=Path.cwd(),
-        token_provider=ctx.obj.get("token_provider"),
-        iap_provider=ctx.obj.get("iap_provider"),
-    )
+    client = _remote_client(ctx)
 
     if since_seconds is not None:
         since_ms = Timestamp.now().epoch_ms() - (since_seconds * 1000)

@@ -179,6 +179,32 @@ def iris(
         ctx.obj["controller_url"] = controller_url
 
 
+def _login_iap(controller_url: str, iap: config_pb2.IapAuthConfig, cluster_name: str) -> None:
+    """Two-step IAP login: desktop OAuth -> Iris JWT, caching both credentials.
+
+    Authenticates to IAP via the browser desktop flow, then exchanges the OIDC
+    ID token for an Iris JWT over the IAP transport (the ID token rides in
+    Proxy-Authorization so IAP admits the exchange request to the controller).
+    """
+    if not iap.oauth_client_id or not iap.oauth_client_secret:
+        raise click.ClickException("IAP auth config is missing oauth_client_id/oauth_client_secret")
+    click.echo("Opening browser to authenticate with Google IAP...")
+    try:
+        id_token, refresh_token = run_iap_desktop_login(iap.oauth_client_id, iap.oauth_client_secret)
+    except Exception as e:
+        raise click.ClickException(f"IAP authentication failed: {e}") from e
+
+    with rpc_client(controller_url, iap_provider=StaticTokenProvider(id_token)) as client:
+        try:
+            response = client.login(job_pb2.LoginRequest(identity_token=id_token))
+        except Exception as e:
+            raise click.ClickException(f"Login failed: {e}") from e
+
+    store_token(cluster_name, controller_url, response.token, iap_refresh_token=refresh_token)
+    click.echo(f"Authenticated as {response.user_id}")
+    click.echo(f"Token stored for cluster '{cluster_name}' (IAP + Iris credentials cached)")
+
+
 @iris.command()
 @click.pass_context
 def login(ctx):
@@ -187,30 +213,9 @@ def login(ctx):
     config = ctx.obj.get("config")
     cluster_name = ctx.obj.get("cluster_name", "default")
 
-    # IAP-fronted cluster: two-step login. First authenticate to IAP via the
-    # desktop OAuth flow (browser), then exchange the resulting OIDC ID token for
-    # an Iris JWT over the IAP transport. The ID token rides in Proxy-Authorization
-    # so IAP admits the exchange request to the controller.
     iap = iap_config(config)
     if iap is not None:
-        if not iap.oauth_client_id or not iap.oauth_client_secret:
-            raise click.ClickException("IAP auth config is missing oauth_client_id/oauth_client_secret")
-        click.echo("Opening browser to authenticate with Google IAP...")
-        try:
-            id_token, refresh_token = run_iap_desktop_login(iap.oauth_client_id, iap.oauth_client_secret)
-        except Exception as e:
-            raise click.ClickException(f"IAP authentication failed: {e}") from e
-
-        iap_provider = StaticTokenProvider(id_token)
-        with rpc_client(controller_url, iap_provider=iap_provider) as client:
-            try:
-                response = client.login(job_pb2.LoginRequest(identity_token=id_token))
-            except Exception as e:
-                raise click.ClickException(f"Login failed: {e}") from e
-
-        store_token(cluster_name, controller_url, response.token, iap_refresh_token=refresh_token)
-        click.echo(f"Authenticated as {response.user_id}")
-        click.echo(f"Token stored for cluster '{cluster_name}' (IAP + Iris credentials cached)")
+        _login_iap(controller_url, iap, cluster_name)
         return
 
     if config and config.HasField("auth"):
