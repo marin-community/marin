@@ -27,7 +27,7 @@ are in `experiments/grug/moe/README.md` — compare against the table there.
 **Baseline scaling law** (May Recipe, drop-1e18 fit, L∞ pinned at 1.6):
 
 ```
-loss(C) = 1.6 + 88.90 · C^(-0.0941)
+loss(C) = 1.6 + 88.32 · C^(-0.0941)
 ```
 
 ### Gate 1: effective speedup at two small scales
@@ -48,7 +48,7 @@ The variant passes gate 2 if:
 2. Fit a new scaling law `loss(C) = 1.6 + A · C^(-alpha)` (asymptote pinned
    at 1.6) on the variant's four optima. Project to 1e21 and 1e23 FLOPs.
    The variant's projected loss must be lower than the baseline's at both
-   budgets (baseline: 2.540 at 1e21, 2.209 at 1e23).
+   budgets (baseline: 2.534 at 1e21, 2.205 at 1e23).
 
 ### Effective speedup calculation
 
@@ -87,19 +87,19 @@ def effective_speedup(baseline_loss, baseline_tps, variant_loss, variant_tps, bu
 ### Example
 
 Suppose at d512 / 3.82e17 FLOPs (May Recipe d=512 compute-optimal point):
-- **Baseline**: macro_loss = 3.5438, tok/s = 530,704 (v4-32 EP=2 reference run)
-- **Variant**: macro_loss = 3.52, tok/s = 510,000 (better loss, 4% slower)
+- **Baseline**: macro_loss = 3.5422, tok/s = 433,986 (v4-32 EP=1 reference run)
+- **Variant**: macro_loss = 3.52, tok/s = 410,000 (better loss, ~5% slower)
 
 ```python
 # 1. Fit A through baseline point
-A_bl = (3.5438 - 1.6) * (3.82e17) ** 0.0941  # ≈ 87.6
+A_bl = (3.5422 - 1.6) * (3.82e17) ** 0.0941  # ≈ 87.7
 
 # 2. Compute baseline needs to reach 3.52
 C_needed = (A_bl / (3.52 - 1.6)) ** (1 / 0.0941)  # > 3.82e17
 
 # 3. Wall-clock comparison
-baseline_time = C_needed / 530_704
-variant_time  = 3.82e17 / 510_000
+baseline_time = C_needed / 433_986
+variant_time  = 3.82e17 / 410_000
 speedup = baseline_time / variant_time
 ```
 
