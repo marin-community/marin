@@ -91,8 +91,10 @@ the prototype.
   Unreachable for this tool's short `dev-cw-<user>` names; if it ever matters, also
   match `iris.task_hash` (the k8s backend's collision-resistant label) rather than
   re-deriving the hash here.
-- **Sub-node GPU requests:** does `--gpu-count < 8` schedule at all on the
-  bare-metal 8×H100 pool, or only whole nodes? Default 8 until known.
+- **Sub-node GPU requests (resolved):** `--gpu-count 1` schedules as a fractional
+  share — the pod gets exactly N GPUs (`nvidia-smi -L` showed 1, not 8), routed to
+  `h100-8x` by device type+variant. Works, but a sub-node squatter fragments the
+  8-GPU gang pool, so the default stays 8. See research.md "Live validation".
 - **Shared module:** is this prototype the right moment to extract the
   `dev_tpu.py`/`dev_coreweave.py` common core, or wait until the kubectl path is
   proven?

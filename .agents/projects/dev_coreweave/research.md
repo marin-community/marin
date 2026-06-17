@@ -57,10 +57,17 @@ First real run on the production H100 fleet. Resolves the design's main open que
   `~/.kube/coreweave-iris-gpu` per `lib/iris/docs/coreweave.md`.
 - **Pod env is CPU-JAX by default (image territory, not a tool bug).** The
   `iris-task` image's `/app` uv venv is synced with the `cpu` extra; bare `python`
-  has no JAX, and `uv run python` falls back to CpuDevice. GPU JAX
-  (`jax[cuda13]`) needs `cd /app && uv sync --extra=gpu` in the pod. This is
-  exactly what a future `setup_env` step should automate — the GPU analog of
-  `dev_tpu.py`'s `uv sync --extra=tpu` is `--extra=gpu`.
-
-**Still open:** does `--gpu-count < 8` schedule on the bare-metal 8×H100 pool?
-(Only `8` exercised so far.)
+  has no JAX, and `uv run python` falls back to CpuDevice. GPU JAX (`jax[cuda13]`)
+  needs `cd /app && uv sync --all-packages --extra=gpu` in the pod — `--all-packages`
+  is required because the `gpu` extra is defined on the sub-packages
+  (marin-levanter / marin-core), not the root project. This is exactly what a
+  future `setup_env` step should automate — the GPU analog of `dev_tpu.py`'s
+  `uv sync --all-packages --extra=tpu` is `--extra=gpu`.
+- **Sub-node `--gpu-count` confirmed (fractional share).** `--gpu-count 1`
+  schedules: it routes to the `h100-8x` group (matched by device type+variant,
+  not count — `lib/iris/AGENTS.md:146`), and the pod requests
+  `nvidia.com/gpu: 1` (+ `rdma/ib: 1` under host_network). `nvidia-smi -L` inside
+  the pod showed **1 H100, not 8** — a fractional share of an 8-GPU node, not a
+  whole box. Caveat: a 1-GPU squatter prevents that node from satisfying a full
+  8-GPU InfiniBand gang, so sub-node requests fragment the pool — which is why
+  the tool defaults to 8.
