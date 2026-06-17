@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "moe_delay"
+  ],
+  "base_sha": "81c92c6fd71efca4e16fc23fa1feb07c691206cd",
+  "head_sha": "675e19892e6e6b5685713c823380d44f4056477b",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "modular_opt",
+      "distance_score": 1539,
+      "report_relpath": "moe_delay/index.html",
+      "status_counts": {
+        "added": 3,
+        "changed": 1,
+        "removed": 2,
+        "unchanged": 1
+      },
+      "variant": "moe_delay"
+    }
+  ]
+}
