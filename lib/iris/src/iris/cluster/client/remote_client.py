@@ -134,7 +134,6 @@ class RemoteClusterClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
-        reservation: job_pb2.ReservationConfig | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
@@ -182,8 +181,6 @@ class RemoteClusterClient:
             request.timeout.CopyFrom(duration_to_proto(timeout))
         if coscheduling is not None:
             request.coscheduling.CopyFrom(coscheduling)
-        if reservation is not None:
-            request.reservation.CopyFrom(reservation)
 
         launch_timeout_ms = max(self._timeout_ms, LAUNCH_JOB_TIMEOUT_FLOOR_MS)
 

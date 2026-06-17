@@ -68,9 +68,6 @@ def assign(
     reads ``tasks.state = ASSIGNED`` rows from a snapshot and fans out Reconcile
     RPCs. This method does not enqueue or fan out anything; the next reconcile
     phase picks up the new ASSIGNED rows (a fresh assignment forces one).
-
-    Reservation-holder assignments are admitted (they anchor the worker
-    for taint-injection) but never produce a worker-bound RunTaskRequest.
     """
     accepted: list[Assignment] = []
     now_ms = Timestamp.now().epoch_ms()

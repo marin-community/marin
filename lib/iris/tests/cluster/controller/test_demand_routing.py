@@ -14,6 +14,7 @@ from iris.cluster.constraints import (
     DeviceType,
     PlacementRequirements,
     WellKnownAttribute,
+    availability_constraint,
     region_constraint,
     zone_constraint,
 )
@@ -1332,6 +1333,46 @@ class TestCheckRoutingFeasibility:
         """Returns None when there are no groups (no validation possible)."""
         autoscaler = self._make_autoscaler({})
         assert autoscaler.job_feasibility([]) is None
+
+    def test_feasible_availability_constraint_matches_configured_group(self):
+        """A hard ``availability:<variant>`` constraint is feasible when some group
+        is *configured* for that variant.
+
+        Feasibility is the static "can this ever schedule" question: an availability
+        job is satisfiable iff a group provides the accelerator, because the
+        autoscaler's probe bootstraps live capacity at scale-up time. The group has
+        no live slice here (no ``mark_slice_ready``), so this exercises the
+        configured-not-yet-empirical case — exactly a cold ``iris run --reserve``.
+        """
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=1, accelerator_variant="v5p-8")
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        assert autoscaler.job_feasibility([availability_constraint("v5p-8")]) is None
+
+    def test_infeasible_availability_constraint_unknown_variant(self):
+        """An ``availability:<variant>`` for a variant no group provides is rejected.
+
+        Preserves the fail-fast: a typo'd ``--reserve`` must not sit pending forever.
+        """
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=1, accelerator_variant="v5p-8")
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        result = autoscaler.job_feasibility([availability_constraint("v6e-9999")])
+        assert result is not None
+
+    def test_infeasible_availability_constraint_with_incompatible_region(self):
+        """``availability:<variant>`` is ANDed with the job's other routing constraints.
+
+        The availability marker must not be evaluated independently: a job that pins a
+        region with no matching group still fails fast even though the variant itself
+        is configured somewhere.
+        """
+        config = make_scale_group_config(
+            name="tpu-group", max_slices=5, num_vms=1, accelerator_variant="v5p-8", zones=["us-central1-a"]
+        )
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        constraints = [availability_constraint("v5p-8"), region_constraint(["europe-west4"])]
+        result = autoscaler.job_feasibility(constraints)
+        assert result is not None
+        assert "region" in result
 
 
 # ---------------------------------------------------------------------------

@@ -31,11 +31,9 @@ from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
-    ReservationClaim,
     job_config_table,
     jobs_table,
     meta_table,
-    reservation_claims_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -179,9 +177,7 @@ def insert_job(
     error: str | None,
     exit_code: int | None,
     num_tasks: int,
-    is_reservation_holder: bool,
     name: str,
-    has_reservation: bool,
 ) -> None:
     """Insert one row into ``jobs``.
 
@@ -203,9 +199,7 @@ def insert_job(
             error=error,
             exit_code=exit_code,
             num_tasks=num_tasks,
-            is_reservation_holder=is_reservation_holder,
             name=name,
-            has_reservation=has_reservation,
         )
     )
 
@@ -216,7 +210,6 @@ def insert_job_config(
     *,
     job_id: JobName,
     name: str,
-    has_reservation: bool,
     res_cpu_millicores: int,
     res_memory_bytes: int,
     res_disk_bytes: int,
@@ -238,7 +231,6 @@ def insert_job_config(
     priority_band: int,
     task_image: str,
     submit_argv_json: list | None = None,
-    reservation_json: str | None = None,
     fail_if_exists: bool = False,
 ) -> None:
     """Insert one row into ``job_config``."""
@@ -246,7 +238,6 @@ def insert_job_config(
         insert(job_config_table).values(
             job_id=job_id,
             name=name,
-            has_reservation=has_reservation,
             res_cpu_millicores=res_cpu_millicores,
             res_memory_bytes=res_memory_bytes,
             res_disk_bytes=res_disk_bytes,
@@ -268,7 +259,6 @@ def insert_job_config(
             priority_band=priority_band,
             task_image=task_image,
             submit_argv_json=submit_argv_json if submit_argv_json is not None else [],
-            reservation_json=reservation_json,
             fail_if_exists=fail_if_exists,
         )
     )
@@ -581,23 +571,3 @@ def set_user_budget(tx: Tx, user_id: str, budget_limit: int, max_band: int, now:
         set_={"budget_limit": budget_limit, "max_band": max_band, "updated_at_ms": now},
     )
     tx.execute(stmt)
-
-
-# ---------------------------------------------------------------------------
-# Reservation claims
-# ---------------------------------------------------------------------------
-
-
-@writes_to(reservation_claims_table)
-def replace_reservation_claims(tx: Tx, claims: dict[WorkerId, ReservationClaim]) -> None:
-    """Replace all reservation claims atomically (DELETE + INSERT)."""
-    tx.execute(delete(reservation_claims_table))
-    if not claims:
-        return
-    tx.execute(
-        insert(reservation_claims_table),
-        [
-            {"worker_id": worker_id, "job_id": claim.job_id, "entry_idx": claim.entry_idx}
-            for worker_id, claim in claims.items()
-        ],
-    )

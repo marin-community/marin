@@ -27,7 +27,6 @@ import cloudpickle
 import humanfriendly
 from rigging.timing import Timestamp
 
-from iris.cluster.constraints import Constraint
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -351,8 +350,6 @@ class PendingTask:
     priority_insertion: int
     job_state: int
     scheduling_deadline_epoch_ms: int | None
-    is_reservation_holder: bool
-    has_reservation: bool
     scheduling_timeout_ms: int | None
     has_coscheduling: bool
     coscheduling_group_by: str | None
@@ -446,31 +443,6 @@ class CoschedulingConfig:
     def to_proto(self) -> job_pb2.CoschedulingConfig:
         """Convert to protobuf representation."""
         return job_pb2.CoschedulingConfig(group_by=self.group_by)
-
-
-@dataclass(frozen=True)
-class ReservationEntry:
-    """A single reservation entry describing one worker's worth of resources.
-
-    Used in the high-level client API. Each entry becomes a demand anchor
-    that the autoscaler provisions before the reserving job schedules.
-
-    Example:
-        >>> ReservationEntry(resources=ResourceSpec(cpu=2, memory="8g"))
-        >>> ReservationEntry(resources=ResourceSpec(cpu=2),
-        ...                  constraints=[Constraint.create(key="region", op=ConstraintOp.EQ, value="us-central1")])
-    """
-
-    resources: "ResourceSpec"
-    constraints: list[Constraint] | None = None
-
-    def to_proto(self) -> job_pb2.ReservationEntry:
-        """Convert to protobuf representation."""
-        constraints_proto = [c.to_proto() for c in self.constraints or []]
-        return job_pb2.ReservationEntry(
-            resources=self.resources.to_proto(),
-            constraints=constraints_proto,
-        )
 
 
 def tpu_device(variant: str, count: int | None = None) -> job_pb2.DeviceConfig:
