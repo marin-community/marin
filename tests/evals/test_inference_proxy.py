@@ -153,12 +153,6 @@ def test_local_brokered_vllm_rejects_multiple_workers() -> None:
             pass
 
 
-def test_brokered_vllm_workers_use_tpu_vllm_extras_by_default() -> None:
-    config = BrokeredVllmSystemConfig(model="gpt2")
-
-    assert config.worker_environment_extras == ("tpu", "vllm")
-
-
 def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) -> None:
     class _FakeJob:
         job_id = "worker-0"

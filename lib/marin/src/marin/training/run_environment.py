@@ -78,11 +78,6 @@ def env_vars_for_dependency_groups(
     """Return environment variables required by the selected dependency groups."""
     env = dict(env_vars or {})
     if "vllm" in dependency_groups and isinstance(resources.device, TpuConfig):
-        setdefault_vllm_tpu_build_env(env)
-    return env
-
-
-def setdefault_vllm_tpu_build_env(env: dict[str, str]) -> dict[str, str]:
-    """Default install/build environment for TPU-targeted vLLM source installs."""
-    env.setdefault(VLLM_TARGET_DEVICE_ENV, VLLM_TPU_TARGET_DEVICE)
+        # vLLM source installs choose CUDA by default unless the TPU target is explicit.
+        env.setdefault(VLLM_TARGET_DEVICE_ENV, VLLM_TPU_TARGET_DEVICE)
     return env

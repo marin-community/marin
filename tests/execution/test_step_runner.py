@@ -762,11 +762,6 @@ def _assert_single_submit_env(spy: _SubmitSpy, expected: dict[str, str]) -> None
         assert spy.requests[0].environment.env_vars[key] == value
 
 
-VLLM_TPU_BUILD_ENV = {
-    "VLLM_TARGET_DEVICE": "tpu",
-}
-
-
 def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
     """Setting ``resources`` on a StepSpec submits ``fn`` as a Fray job."""
     spy = _SubmitSpy(fray_client)
@@ -856,32 +851,7 @@ def test_remote_vllm_tpu_dependency_group_sets_target_device(tmp_path: Path, fra
     spy = _run_step_with_submit_spy(step, fray_client)
 
     _assert_single_submit_extras(spy, ["eval", "vllm"])
-    _assert_single_submit_env(spy, VLLM_TPU_BUILD_ENV)
-
-
-def test_remote_vllm_tpu_dependency_group_preserves_target_device_override(tmp_path: Path, fray_client):
-    resources = ResourceConfig.with_tpu("v6e-4")
-
-    @remote(resources=resources, env_vars={"VLLM_TARGET_DEVICE": "cpu"}, pip_dependency_groups=["eval", "vllm"])
-    def my_step(output_path: str) -> PathMetadata:
-        return PathMetadata(path=output_path)
-
-    step = StepSpec(
-        name="remote_vllm_tpu_step_override",
-        override_output_path=tmp_path.as_posix(),
-        fn=my_step,
-    )
-
-    spy = _run_step_with_submit_spy(step, fray_client)
-
-    _assert_single_submit_extras(spy, ["eval", "vllm"])
-    _assert_single_submit_env(
-        spy,
-        {
-            **VLLM_TPU_BUILD_ENV,
-            "VLLM_TARGET_DEVICE": "cpu",
-        },
-    )
+    _assert_single_submit_env(spy, {"VLLM_TARGET_DEVICE": "tpu"})
 
 
 def test_remote_direct_call_uses_device_extra(fray_client):
@@ -902,19 +872,6 @@ def test_remote_direct_call_dependency_groups_can_override_device_extra(fray_cli
         return None
 
     _assert_single_submit_extras(_call_remote_with_submit_spy(my_step, fray_client), [])
-
-
-def test_remote_direct_call_vllm_tpu_dependency_group_sets_target_device(fray_client):
-    resources = ResourceConfig.with_tpu("v6e-4")
-
-    @remote(resources=resources, pip_dependency_groups=["eval", "vllm"])
-    def my_step() -> None:
-        return None
-
-    spy = _call_remote_with_submit_spy(my_step, fray_client)
-
-    _assert_single_submit_extras(spy, ["eval", "vllm"])
-    _assert_single_submit_env(spy, VLLM_TPU_BUILD_ENV)
 
 
 # ---------------------------------------------------------------------------

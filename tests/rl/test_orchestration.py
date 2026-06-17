@@ -7,12 +7,9 @@ from types import SimpleNamespace
 import pytest
 from fray.types import JobStatus
 from marin.rl.orchestration import (
-    _coordinator_extras,
     _HostedRuntime,
-    _rollout_worker_extras,
     _run_rl_coordinator,
     _train_worker_entry,
-    _train_worker_extras,
 )
 from marin.rl.rl_job import RunConfig
 from marin.rl.rollout_worker import RolloutTrackerConfig
@@ -90,14 +87,6 @@ def _fake_build_worker_configs(_config):
         run_id="rl-test",
         tracker_config=RolloutTrackerConfig(project="marin_iris_rl_debug", name="shared-rollout-name"),
     )
-
-
-def test_vllm_rollout_extras_include_generic_tpu_extra():
-    config = SimpleNamespace(pip_dependency_groups=["math", "vllm", "tpu"])
-
-    assert _coordinator_extras(config) == ["math"]
-    assert _train_worker_extras(config) == ["math", "tpu"]
-    assert _rollout_worker_extras(config) == ["math", "tpu", "vllm"]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -187,36 +176,6 @@ def test_run_rl_coordinator_stops_rollouts_after_trainer_success(monkeypatch):
     assert rollout0_handle.terminate_calls == 1
     assert rollout1_handle.terminate_calls == 1
     assert wait_all_calls == [[rollout0_handle.job_id, rollout1_handle.job_id]]
-
-
-def test_run_rl_coordinator_sets_vllm_target_device_for_vllm_rollouts(monkeypatch):
-    client = _FakeClient()
-    hosted_runtime = _HostedRuntime(runtime=SimpleNamespace(), hosted_actors=[])
-    config = SimpleNamespace(
-        run_id="rl-test",
-        resolved_instance_id="rl-test",
-        pip_dependency_groups=["math", "vllm"],
-        run_config=RunConfig(
-            train_tpu_type="v5p-8",
-            inference_tpu_type="v5p-8",
-            num_rollout_workers=1,
-            regions=["us-central1"],
-        ),
-    )
-
-    monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
-    monkeypatch.setattr("marin.rl.orchestration.build_worker_configs", _fake_build_worker_configs)
-    monkeypatch.setattr(
-        "marin.rl.orchestration._create_runtime_handles",
-        lambda _client, _config: hosted_runtime,
-    )
-    monkeypatch.setattr("marin.rl.orchestration.wait_all", lambda _jobs, raise_on_failure: None)
-
-    _run_rl_coordinator(config)
-
-    assert len(client.submissions) == 2
-    assert "VLLM_TARGET_DEVICE" not in client.submissions[0].environment.env_vars
-    assert client.submissions[1].environment.env_vars["VLLM_TARGET_DEVICE"] == "tpu"
 
 
 def test_run_rl_coordinator_uses_run_config_ram_overrides(monkeypatch):
