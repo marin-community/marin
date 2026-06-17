@@ -78,9 +78,10 @@ distinct purposes:
 - **R3** (✅ 6/15): prove the *profiling pipeline* works — HLO + trace + TC counters for a **toy** FP8
   dot. Synthetic data, 1×H100.
 - **R4** (⬜ in progress): prove the **BF16 Grug *model*** runs → establish the baseline.
-  **Synthetic-data only** (random tokens via `DirectDatasetComponent`; no real data, no tokenize):
+  **Real data, small slice** (SlimPajama-6B cache confirmed complete on R2 — cache hit, no tokenize):
   reduced single-node config, ~10-step smoke → BF16 throughput/MFU baseline + profiler trace.
-  Real-data run dropped to **V2** (2026-06-17 — see log).
+  Synthetic harness dropped (2026-06-17 — net complexity for no benefit once cache confirmed).
+  The FP8 *real-data NaN/router* de-risk remains separate at **V2**.
 - **S1** (⬜ Phase 1): reusable **dense-dot microbench rig** that paths A/B/C plug into — configurable
   shapes/dtypes, BF16 dense-dot timing + HLO. Synthetic data, 1×H100.
 
@@ -158,6 +159,21 @@ can run **in parallel with** R4.
   the in-region cache before the one real-data run.
 - Mirrored to memex `grug-fp8-task-dag.md` (R4 synthetic-only, V2 absorbs the real-data de-risk).
 - **Next:** kick off R4a — synthetic `DirectDatasetComponent` + reduced single-node BF16 smoke on `cw-us-east-02a`.
+
+### 2026-06-17 — R4 data source resolved: real-data slice (SlimPajama-6B cache confirmed on R2)
+- **Reversed the synthetic-only call.** Matt pushed on whether a small real-data slice beats a
+  synthetic harness; investigation confirms it does, and cheaply.
+- **Tokenize cost:** eager batch job (`marin/processing/tokenize/_core.py:307` `take_per_shard`), but
+  bounded by `sample_count`; moot here because the cache already exists.
+- **Cache CONFIRMED complete on R2** (read-only `aws s3 ls`, endpoint
+  `74981a43…r2.cloudflarestorage.com`, prefix `s3://marin-na/marin`):
+  `tokenized/slimpajama-6b-cw-31d2b0/` has `.executor_status = SUCCESS`, train+validation splits,
+  `train/.stats.json = {total_tokens: 5,393,440,120, total_elements: 5,489,000}`, 41 shards
+  (materialized 2026-03-12). Hash `31d2b0` matches the dry-run's expected output path → **executor
+  skips tokenize (cache hit); zero tokenize, zero cross-region cost.**
+- **R4 plan:** reduced-config `launch_cw_scale.py` with `slimpajama_6b_data()` as-is, ~10 steps, BF16,
+  json_logger, on `cw-us-east-02a`. Synthetic harness dropped. Launch command pending; **submit on
+  Matt's go-ahead only.**
 
 <!-- New entries below this line. Template:
 ### YYYY-MM-DD HH:MM - <GFP8-NNN short label>
