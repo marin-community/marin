@@ -5,7 +5,7 @@
 
 from marin.profiling.compare_bundle import ComparisonBundleResult, run_profile_comparison_bundle
 from marin.profiling.ingest import (
-    download_latest_profile_artifact_for_run,
+    download_profile_dir_for_run,
     download_wandb_profile_artifact,
     summarize_profile_artifact,
     summarize_trace,
@@ -32,7 +32,7 @@ __all__ = [
     "assess_profile_regression",
     "build_markdown_report",
     "compare_profile_summaries",
-    "download_latest_profile_artifact_for_run",
+    "download_profile_dir_for_run",
     "download_wandb_profile_artifact",
     "profile_summary_from_dict",
     "publish_profile_summary_artifact",

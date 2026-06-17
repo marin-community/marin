@@ -11,7 +11,7 @@ from pathlib import Path
 
 from marin.profiling.compare_bundle import run_profile_comparison_bundle
 from marin.profiling.ingest import (
-    download_latest_profile_artifact_for_run,
+    download_profile_dir_for_run,
     download_wandb_profile_artifact,
     summarize_profile_artifact,
     summarize_trace,
@@ -398,7 +398,7 @@ def _handle_summarize(args: argparse.Namespace):
         )
 
     if args.run_target:
-        downloaded = download_latest_profile_artifact_for_run(
+        downloaded = download_profile_dir_for_run(
             args.run_target,
             entity=args.entity,
             project=args.project,
@@ -444,7 +444,7 @@ def _resolve_bundle_summary(
     if summary_path is not None:
         return _load_summary(summary_path)
     if run_target is not None:
-        downloaded = download_latest_profile_artifact_for_run(
+        downloaded = download_profile_dir_for_run(
             run_target,
             entity=entity,
             project=project,

@@ -11,17 +11,14 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 
-from rigging.filesystem import url_to_fs
-
 import wandb
 import wandb.errors as wandb_errors
 
-from levanter.utils.fsspec_utils import join_path
+from levanter.utils.fsspec_utils import join_path, mirror_directory
 
 PROFILER_DIR_NAME = "profiler"
 
@@ -115,41 +112,14 @@ def resolve_profile_run_id(run: "wandb.apis.public.Run") -> str:
     return run.path[-1]
 
 
-def _is_local_fs(fs) -> bool:
-    protocol = fs.protocol[0] if isinstance(fs.protocol, tuple) else fs.protocol
-    return protocol in (None, "", "file")
-
-
-def mirror_profile_dir(profile_dir: str, root: Optional[Path], *, run_id: str) -> Path:
-    fs, fs_path = url_to_fs(profile_dir)
-    if root is None:
-        if _is_local_fs(fs):
-            path = Path(fs_path)
-            if not path.exists():
-                raise FileNotFoundError(f"Profile directory '{profile_dir}' does not exist.")
-            return path
-        root = Path(tempfile.mkdtemp(prefix="wandb-profile-"))
-    else:
-        root.mkdir(parents=True, exist_ok=True)
-
-    download_path = root / run_id / PROFILER_DIR_NAME
-    source_path = Path(fs_path)
-    if _is_local_fs(fs) and download_path.resolve() == source_path.resolve():
-        if not source_path.exists():
-            raise FileNotFoundError(f"Profile directory '{profile_dir}' does not exist.")
-        return source_path
-
-    if download_path.exists():
-        shutil.rmtree(download_path)
-    download_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if _is_local_fs(fs):
-        if not source_path.exists():
-            raise FileNotFoundError(f"Profile directory '{profile_dir}' does not exist.")
-        shutil.copytree(source_path, download_path)
-    else:
-        fs.get(fs_path, str(download_path), recursive=True)
-    return download_path
+def mirror_profile_dir(profile_dir: str, root: Path | None, *, run_id: str) -> Path:
+    return mirror_directory(
+        profile_dir,
+        root,
+        run_id=run_id,
+        leaf_dirname=PROFILER_DIR_NAME,
+        temp_dir_prefix="wandb-profile-",
+    )
 
 
 def build_tensorboard_command(executable: str, logdir: Path, port: Optional[int]) -> list[str]:

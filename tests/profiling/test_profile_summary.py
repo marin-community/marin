@@ -606,7 +606,7 @@ def test_summarize_cli_run_target_honors_download_root(tmp_path: Path, monkeypat
         _write_trace(trace_path, step_durations=[100], softmax_duration=10)
         return summarize_trace(trace_path, warmup_steps=0)
 
-    monkeypatch.setattr(cli_module, "download_latest_profile_artifact_for_run", download_profile_dir)
+    monkeypatch.setattr(cli_module, "download_profile_dir_for_run", download_profile_dir)
     monkeypatch.setattr(cli_module, "summarize_profile_artifact", summarize_artifact)
     monkeypatch.setattr(
         sys,
@@ -630,8 +630,8 @@ def test_summarize_cli_run_target_honors_download_root(tmp_path: Path, monkeypat
     assert seen_run_target == [("entity/project/run", None, None)]
 
 
-def test_download_latest_profile_artifact_for_run_mirrors_remote_log_dir(tmp_path: Path, monkeypatch) -> None:
-    source = "memory://wandb/logs/run-123/profiler"
+def test_download_profile_dir_for_run_mirrors_remote_log_dir(tmp_path: Path, monkeypatch) -> None:
+    source = "memory://wandb/logs/trainer-456/profiler"
     fs, fs_path = url_to_fs(source)
     fs.makedirs(f"{fs_path}/plugins/profile/2026_05_11_12_00_00", exist_ok=True)
     with fs.open(f"{fs_path}/plugins/profile/2026_05_11_12_00_00/perfetto_trace.json.gz", "wb") as handle:
@@ -640,7 +640,7 @@ def test_download_latest_profile_artifact_for_run_mirrors_remote_log_dir(tmp_pat
     fake_run = SimpleNamespace(
         path=["entity", "project", "run-123"],
         id="run-123",
-        config={"trainer": {"log_dir": "memory://wandb/logs"}},
+        config={"trainer": {"id": "trainer-456", "log_dir": "memory://wandb/logs"}},
         summary={},
     )
 
@@ -651,12 +651,12 @@ def test_download_latest_profile_artifact_for_run_mirrors_remote_log_dir(tmp_pat
 
     monkeypatch.setattr(ingest_module.wandb, "Api", lambda: FakeApi())
 
-    downloaded = ingest_module.download_latest_profile_artifact_for_run(
+    downloaded = ingest_module.download_profile_dir_for_run(
         "entity/project/run-123",
         download_root=tmp_path / "downloads",
     )
 
-    assert downloaded.profile_dir == tmp_path / "downloads" / "run-123" / "profiler"
+    assert downloaded.profile_dir == tmp_path / "downloads" / "trainer-456" / "profiler"
     assert downloaded.run_metadata.run_id == "run-123"
     assert (downloaded.profile_dir / "plugins" / "profile" / "2026_05_11_12_00_00" / "perfetto_trace.json.gz").exists()
 

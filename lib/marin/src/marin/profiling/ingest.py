@@ -8,18 +8,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
-import shutil
-import tempfile
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
-import fsspec
 import wandb
 from google.protobuf.message import DecodeError
-from rigging.filesystem import url_to_fs
+from levanter.utils.fsspec_utils import join_path, mirror_directory
 
 from marin.profiling.schema import ProfileSummary, RunMetadata
 from marin.profiling.trace_summary import (
@@ -34,6 +31,13 @@ logger = logging.getLogger(__name__)
 
 PROFILE_ARTIFACT_TYPE = "jax_profile"
 PROFILE_DIR_NAME = "profiler"
+
+
+class WandbRunLike(Protocol):
+    config: Mapping[str, Any]
+    path: Sequence[str]
+    id: str
+    summary: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -82,7 +86,7 @@ def download_wandb_profile_artifact(
     )
 
 
-def download_latest_profile_artifact_for_run(
+def download_profile_dir_for_run(
     run_target: str,
     *,
     entity: str | None = None,
@@ -141,8 +145,9 @@ def find_profile_trace(profile_dir: Path) -> Path:
     )
 
 
-def resolve_profile_dir_from_run(run: Any) -> str:
+def resolve_profile_dir_from_run(run: WandbRunLike) -> str:
     """Resolve the profiler directory for a W&B run from trainer config."""
+    run_id = resolve_profile_run_id_from_run(run)
     trainer_config = run.config.get("trainer")
     if not isinstance(trainer_config, dict):
         raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
@@ -151,7 +156,19 @@ def resolve_profile_dir_from_run(run: Any) -> str:
     if not isinstance(log_dir, str) or not log_dir:
         raise RuntimeError(f"Run {run.path} does not expose trainer.log_dir.")
 
-    return _join_path(_join_path(log_dir, run.path[-1]), PROFILE_DIR_NAME)
+    return join_path(join_path(log_dir, run_id), PROFILE_DIR_NAME)
+
+
+def resolve_profile_run_id_from_run(run: WandbRunLike) -> str:
+    trainer_config = run.config.get("trainer")
+    if not isinstance(trainer_config, dict):
+        raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
+
+    run_id = trainer_config.get("id")
+    if isinstance(run_id, str) and run_id:
+        return run_id
+
+    return run.path[-1]
 
 
 def summarize_profile_artifact(
@@ -315,10 +332,17 @@ def _download_artifact_with_metadata(
 def _download_profile_dir_with_metadata(
     *,
     profile_dir: str,
-    run: Any,
+    run: WandbRunLike,
     download_root: Path | None,
 ) -> DownloadedProfileDir:
-    local_profile_dir = _mirror_profile_dir(profile_dir, download_root=download_root, run_id=run.path[-1])
+    run_id = resolve_profile_run_id_from_run(run)
+    local_profile_dir = mirror_directory(
+        profile_dir,
+        download_root,
+        run_id=run_id,
+        leaf_dirname=PROFILE_DIR_NAME,
+        temp_dir_prefix="marin-profile-",
+    )
     metadata = _run_metadata_from_run(run, artifact_ref=profile_dir, artifact_name=PROFILE_DIR_NAME)
     return DownloadedProfileDir(profile_dir=local_profile_dir, run_metadata=metadata)
 
@@ -362,7 +386,7 @@ def _int_or_none(value: Any) -> int | None:
     return None
 
 
-def _run_metadata_from_run(run: Any, *, artifact_ref: str, artifact_name: str) -> RunMetadata:
+def _run_metadata_from_run(run: WandbRunLike, *, artifact_ref: str, artifact_name: str) -> RunMetadata:
     summary = dict(run.summary)
     config = dict(run.config)
     return RunMetadata(
@@ -377,45 +401,3 @@ def _run_metadata_from_run(run: Any, *, artifact_ref: str, artifact_name: str) -
         num_devices=_int_or_none(summary.get("num_devices") or config.get("num_devices")),
         num_hosts=_int_or_none(summary.get("num_hosts") or config.get("num_hosts")),
     )
-
-
-def _mirror_profile_dir(profile_dir: str, *, download_root: Path | None, run_id: str) -> Path:
-    fs, fs_path = url_to_fs(profile_dir)
-    if download_root is None:
-        if _is_local_fs(fs):
-            local_path = Path(fs_path)
-            if not local_path.exists():
-                raise FileNotFoundError(f"Profile directory does not exist: {profile_dir}")
-            return local_path
-        download_root = Path(tempfile.mkdtemp(prefix="marin-profile-"))
-    else:
-        download_root.mkdir(parents=True, exist_ok=True)
-
-    download_path = download_root / run_id / PROFILE_DIR_NAME
-    if download_path.exists():
-        shutil.rmtree(download_path)
-    download_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if _is_local_fs(fs):
-        source_path = Path(fs_path)
-        if not source_path.exists():
-            raise FileNotFoundError(f"Profile directory does not exist: {profile_dir}")
-        shutil.copytree(source_path, download_path)
-    else:
-        fs.get(fs_path, str(download_path), recursive=True)
-    return download_path
-
-
-def _is_local_fs(fs: Any) -> bool:
-    protocol = fs.protocol[0] if isinstance(fs.protocol, tuple) else fs.protocol
-    return protocol in (None, "", "file")
-
-
-def _join_path(lhs: str, rhs: str) -> str:
-    lhs_protocol, lhs_rest = fsspec.core.split_protocol(lhs)
-    rhs_protocol, _ = fsspec.core.split_protocol(rhs)
-    if rhs_protocol is not None:
-        return rhs
-    if lhs_protocol is not None:
-        return f"{lhs_protocol}://{os.path.join(lhs_rest, rhs)}"
-    return os.path.join(lhs, rhs)
