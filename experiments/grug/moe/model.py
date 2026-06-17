@@ -103,6 +103,11 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.3
     router_z_loss_coef: float = 0.0
+    # When True, the every-4th-and-last "long" layers skip the Partial Key
+    # Offset (no shift of the second half of K, no doc-start zeroing). They
+    # still run full causal attention (no sliding window); only the PKO step
+    # is bypassed. Short layers are unaffected (PKO never ran on them).
+    disable_pko: bool = False
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
@@ -606,7 +611,7 @@ class Transformer(eqx.Module):
             is_last = i == num_blocks - 1
             is_long = i % 4 == 3 or is_last
             layer_mask = long_mask if is_long else short_mask
-            use_pko = is_long
+            use_pko = is_long and not cfg.disable_pko
             hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask, use_pko)
             moe_router_stats.append(router_stats)
 
