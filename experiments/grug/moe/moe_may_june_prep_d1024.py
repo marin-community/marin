@@ -30,9 +30,9 @@ from experiments.grug.moe.launch_datakit_moe_mix import _datakit_data_config, _p
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 _DIM: int = 1024
-_BS: int = 256  # TPB = 256 * 4096 = 1,048,576 (~1M tokens/batch)
+_BS: int = 512  # TPB = 512 * 4096 = 2,097,152 (~2M tokens/batch)
 _SEQ: int = 4096
-_STEPS: int = 646591
+_STEPS: int = 323296
 _EP: int = 2
 
 _heuristic = MoeMuonHHeuristic(min_lr_ratio=0.05)
@@ -43,7 +43,7 @@ _optimizer = _heuristic.build_muonh_config(_BS, _tokens, _DIM, seq_len=_SEQ)
 # Snap the data-mix phase transition to a mixture-block boundary so it lands cleanly.
 _phase_step = _phase_1_start_step(_STEPS, _BS)
 
-_run_id = f"june_prep_moe_may_d{_DIM}_ep{_EP}"
+_run_id = f"june_prep_moe_may_d{_DIM}_ep{_EP}_bs{_BS}"
 step = ExecutorStep(
     name=f"grug/{_run_id}",
     fn=run_grug_moe_trial,
@@ -96,7 +96,7 @@ if __name__ == "__main__":
         steps=[step],
         description=(
             f"June MoE prep d={_DIM}: 5000-TPP overtraining on datakit_moe_mix. "
-            f"steps={_STEPS}, tokens={_tokens:.2e}, bs={_BS} (TPB=1M), EP={_EP}, "
+            f"steps={_STEPS}, tokens={_tokens:.2e}, bs={_BS} (TPB=2M), EP={_EP}, "
             f"disable_pko, ckpt at phase-1 step {_phase_step}. v4-256 us-central2."
         ),
     )
