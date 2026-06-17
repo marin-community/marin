@@ -10,10 +10,12 @@ variables so a single module can be submitted many times with different
 staleness / corrector settings:
 
     GRUG_OPT        muon | adamh                 (default muon)
-    GRUG_TAU        gradient delay in steps      (default 0)
-    GRUG_CORRECTOR  none | dc_asgd | dc_asgd_ema | weight_pred  (default none)
+    GRUG_TAU        uniform gradient delay in steps (default 0; ignored if STAGES>0)
+    GRUG_STAGES     pipeline stages for the per-stage delay profile (default 0=uniform)
+    GRUG_CORRECTOR  none | dc_asgd | dc_asgd_ema | weight_pred | lr_damp  (default none)
     GRUG_DC_LAMBDA  DC-ASGD strength             (default 1.0)
     GRUG_PRED_SCALE weight_pred horizon as a multiple of tau    (default 1.0)
+    GRUG_LR_DAMP    lr_damp step multiplier      (default 1.0)
     GRUG_STEPS      train steps (short for fast iteration)  (default 3000)
     GRUG_SEED       seed                         (default 0)
     GRUG_HIDDEN     model hidden dim             (default 512)
@@ -103,19 +105,37 @@ def _env(key: str, default: str) -> str:
 
 
 def _build_optimizer(
-    opt: str, base_opt, tau: int, corrector: str, dc_lambda: float, pred_scale: float
+    opt: str,
+    base_opt,
+    *,
+    tau: int,
+    corrector: str,
+    dc_lambda: float,
+    pred_scale: float,
+    lr_damp: float,
+    num_stages: int,
+    num_layers: int,
 ) -> OptimizerConfig:
     """Build a delayed optimizer config for the selected arm.
 
     ``base_opt`` is the heuristic-tuned ``GrugMoeAdamHConfig`` for this model
     size; the Adam arm reuses its hyperparameters verbatim, the Muon arm borrows
-    its schedule/AdamW-path LR.
+    its schedule/AdamW-path LR. ``num_stages > 0`` selects the realistic per-stage
+    pipeline-parallel delay profile (over ``num_layers`` blocks) instead of the
+    uniform global ``tau``.
     """
+    delay = dict(
+        tau=tau,
+        corrector=corrector,
+        dc_lambda=dc_lambda,
+        pred_scale=pred_scale,
+        lr_damp=lr_damp,
+        num_stages=num_stages,
+        num_layers=num_layers,
+    )
     if opt == "adamh":
         fields = {f.name: getattr(base_opt, f.name) for f in dataclasses.fields(base_opt)}
-        return DelayedGrugMoeAdamHConfig(
-            **fields, tau=tau, corrector=corrector, dc_lambda=dc_lambda, pred_scale=pred_scale
-        )
+        return DelayedGrugMoeAdamHConfig(**fields, **delay)
     if opt == "muon":
         return DelayedGrugMuonConfig(
             learning_rate=DEFAULT_MUON_LR,
@@ -127,10 +147,7 @@ def _build_optimizer(
             min_lr_ratio=base_opt.min_lr_ratio,
             warmup=base_opt.warmup,
             lr_schedule=base_opt.lr_schedule,
-            tau=tau,
-            corrector=corrector,
-            dc_lambda=dc_lambda,
-            pred_scale=pred_scale,
+            **delay,
         )
     raise ValueError(f"unknown GRUG_OPT={opt!r}; expected 'muon' or 'adamh'")
 
@@ -141,6 +158,8 @@ def _make_step() -> ExecutorStep:
     corrector = _env("GRUG_CORRECTOR", "none")
     dc_lambda = float(_env("GRUG_DC_LAMBDA", "1.0"))
     pred_scale = float(_env("GRUG_PRED_SCALE", "1.0"))
+    lr_damp = float(_env("GRUG_LR_DAMP", "1.0"))
+    num_stages = int(_env("GRUG_STAGES", "0"))
     steps = int(_env("GRUG_STEPS", "3000"))
     seed = int(_env("GRUG_SEED", "0"))
     hidden = int(_env("GRUG_HIDDEN", "512"))
@@ -149,15 +168,31 @@ def _make_step() -> ExecutorStep:
     group = _env("GRUG_GROUP", "delay-pp-batch1")
 
     model, base_opt, batch, _full_steps = build_from_heuristic(budget=budget, hidden_dim=hidden)
-    optimizer = _build_optimizer(opt, base_opt, tau, corrector, dc_lambda, pred_scale)
+    num_layers = model.num_layers
+    optimizer = _build_optimizer(
+        opt,
+        base_opt,
+        tau=tau,
+        corrector=corrector,
+        dc_lambda=dc_lambda,
+        pred_scale=pred_scale,
+        lr_damp=lr_damp,
+        num_stages=num_stages,
+        num_layers=num_layers,
+    )
 
     if corrector == "none":
         corr_tag = "none"
     elif corrector == "weight_pred":
         corr_tag = f"weight_pred-p{pred_scale:g}"
+    elif corrector == "lr_damp":
+        corr_tag = f"lr_damp-d{lr_damp:g}"
     else:
         corr_tag = f"{corrector}-l{dc_lambda:g}"
-    run_id = f"delay-{opt}-d{hidden}-tau{tau}-{corr_tag}-s{seed}-st{steps}"
+    # Per-stage PP runs encode the stage count (uniform tau is ignored); uniform
+    # runs encode tau.
+    delay_tag = f"pp{num_stages}" if num_stages > 0 else f"tau{tau}"
+    run_id = f"delay-{opt}-d{hidden}-{delay_tag}-{corr_tag}-s{seed}-st{steps}"
 
     launch = GrugMoeLaunchConfig(
         model=versioned(model),

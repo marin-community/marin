@@ -9,8 +9,9 @@ JAX_PLATFORMS=cpu .venv/bin/python -m experiments.grug.moe_delay._smoke_delay
 import jax
 import jax.numpy as jnp
 import optax
+from jax.tree_util import GetAttrKey, SequenceKey
 
-from experiments.grug.moe_delay.delay_optim import DelayedGrugMuonConfig, wrap_delayed
+from experiments.grug.moe_delay.delay_optim import DelayedGrugMuonConfig, grug_stage_tau, wrap_delayed
 
 
 def _params():
@@ -96,6 +97,40 @@ def test_weight_pred_predictor():
     print("OK  weight_pred forward predictor tracks tau * last_update")
 
 
+def test_grug_stage_tau():
+    # 6 layers, one stage per layer: last block fresh (τ=0), first block stalest.
+    lt = grug_stage_tau(num_layers=6, num_stages=6)
+    assert lt((GetAttrKey("blocks"), SequenceKey(5), GetAttrKey("w"))) == 0
+    assert lt((GetAttrKey("blocks"), SequenceKey(4), GetAttrKey("w"))) == 1
+    assert lt((GetAttrKey("blocks"), SequenceKey(0), GetAttrKey("w"))) == 5
+    # input embedding group is in the first stage (stalest); output group is fresh.
+    assert lt((GetAttrKey("token_embed"),)) == 5
+    assert lt((GetAttrKey("output_proj"),)) == 0
+    # Fewer stages than layers: contiguous chunks, still last stage fresh.
+    lt3 = grug_stage_tau(num_layers=6, num_stages=3)
+    assert lt3((GetAttrKey("blocks"), SequenceKey(0), GetAttrKey("w"))) == 2
+    assert lt3((GetAttrKey("blocks"), SequenceKey(5), GetAttrKey("w"))) == 0
+    print("OK  grug_stage_tau: last stage fresh, τ grows toward the first stage")
+
+
+def test_per_leaf_delay():
+    # Per-leaf profile: delay "a" by 2 steps, keep "b" fresh (τ=0).
+    lr = 0.1
+    leaf_tau = lambda path: 2 if path[0].key == "a" else 0  # noqa: E731
+    wrapped = wrap_delayed(optax.sgd(lr), tau=0, leaf_tau=leaf_tau)
+    p = _params()
+    sw = wrapped.init(p)
+    gs = [_grads(jax.random.PRNGKey(i)) for i in range(4)]
+    for t in range(4):
+        u, sw = wrapped.update(gs[t], sw, params=p)
+        # "b" always applies the *current* gradient (fresh stage).
+        assert jnp.allclose(u["b"], -lr * gs[t]["b"]), f"b must be fresh at step {t}"
+        # "a" applies the gradient from 2 steps ago (zeros during the fill).
+        expected_a = -lr * (gs[t - 2]["a"] if t >= 2 else jnp.zeros_like(gs[t]["a"]))
+        assert jnp.allclose(u["a"], expected_a), f"a must be 2-step-delayed at step {t}"
+    print("OK  per-leaf delay: fresh last stage + 2-step-delayed early stage in one tree")
+
+
 def test_jit_and_config():
     # The wrapper must be jit-able (the grug loop jits the whole step) and the
     # config subclass must instantiate (multiple-inheritance dataclass sanity).
@@ -121,5 +156,7 @@ if __name__ == "__main__":
     test_tau1_delays()
     test_dc_asgd_runs()
     test_weight_pred_predictor()
+    test_grug_stage_tau()
+    test_per_leaf_delay()
     test_jit_and_config()
     print("\nall delay-wrapper smoke checks passed")
