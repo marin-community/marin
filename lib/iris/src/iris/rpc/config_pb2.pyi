@@ -432,7 +432,7 @@ class AutoscalerConfig(_message.Message):
     def __init__(self, evaluation_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_up_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., scale_down_delay: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., startup_grace_period: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_grace_period: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class DefaultsConfig(_message.Message):
-    __slots__ = ("ssh", "autoscaler", "worker", "task_env")
+    __slots__ = ("ssh", "autoscaler", "worker", "task_env", "inject_env")
     class TaskEnvEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -444,11 +444,13 @@ class DefaultsConfig(_message.Message):
     AUTOSCALER_FIELD_NUMBER: _ClassVar[int]
     WORKER_FIELD_NUMBER: _ClassVar[int]
     TASK_ENV_FIELD_NUMBER: _ClassVar[int]
+    INJECT_ENV_FIELD_NUMBER: _ClassVar[int]
     ssh: SshConfig
     autoscaler: AutoscalerConfig
     worker: WorkerConfig
     task_env: _containers.ScalarMap[str, str]
-    def __init__(self, ssh: _Optional[_Union[SshConfig, _Mapping]] = ..., autoscaler: _Optional[_Union[AutoscalerConfig, _Mapping]] = ..., worker: _Optional[_Union[WorkerConfig, _Mapping]] = ..., task_env: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    inject_env: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, ssh: _Optional[_Union[SshConfig, _Mapping]] = ..., autoscaler: _Optional[_Union[AutoscalerConfig, _Mapping]] = ..., worker: _Optional[_Union[WorkerConfig, _Mapping]] = ..., task_env: _Optional[_Mapping[str, str]] = ..., inject_env: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class GcpAuthConfig(_message.Message):
     __slots__ = ("project_id",)

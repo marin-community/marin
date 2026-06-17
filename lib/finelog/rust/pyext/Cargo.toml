@@ -8,12 +8,15 @@ edition = "2021"
 # `finelog-server` binary serves). Iris's controller uses it as its local
 # log-server fallback. The heavy server/store code lives in the `finelog` lib
 # (the sibling crate); this is a thin runtime + lifecycle shim over it.
+# Ships as the `marin-finelog-server` wheel (importable as `finelog_server`),
+# which consumers needing the in-process server (e.g. iris) depend on
+# explicitly; the pure-Python `marin-finelog` client does not.
 #
 # Unlike the `finelog-server` binary, this cdylib does NOT install a custom
 # global allocator (jemalloc is binary-only in `main.rs`) — the host Python
 # process owns the allocator.
 [lib]
-name = "_native"
+name = "finelog_server"
 crate-type = ["cdylib"]
 
 [dependencies]

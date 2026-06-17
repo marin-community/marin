@@ -79,6 +79,9 @@ _REGION_ALIASES: dict[str, str] = {
     "eu-west4": "europe-west4",
 }
 
+# Cloudflare R2 data buckets (S3-compatible, ``s3://`` scheme).
+R2_DATA_BUCKETS: frozenset[str] = frozenset({"marin-na"})
+
 # Allowed TTL-day values. Each value N corresponds to a lifecycle rule on every
 # ``marin-{region}`` bucket that deletes objects under ``tmp/ttl=Nd/`` after N
 # days. Keep in sync with ``infra/configure_buckets.py``.
@@ -114,6 +117,20 @@ def region_from_metadata() -> str | None:
     if "-" not in zone:
         return None
     return zone.rsplit("-", 1)[0]
+
+
+def _s3_bucket_from_prefix(prefix: str | None) -> str | None:
+    """Return the bucket from an ``s3://bucket/…`` prefix, or ``None``.
+
+    Only recognizes buckets in :data:`R2_DATA_BUCKETS`, so unknown S3 buckets
+    (which have no lifecycle rules configured) fall through to the flat
+    non-TTL fallback instead of getting a ``tmp/ttl=Nd/`` path that would
+    never be cleaned up.
+    """
+    if not prefix or not prefix.startswith("s3://"):
+        return None
+    bucket = prefix[len("s3://") :].split("/", 1)[0]
+    return bucket if bucket in R2_DATA_BUCKETS else None
 
 
 def region_from_prefix(prefix: str) -> str | None:
@@ -203,13 +220,18 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
 
         gs://marin-{region}/tmp/ttl={N}d/{prefix}
 
+    For a Cloudflare R2 prefix on a known bucket (:data:`R2_DATA_BUCKETS`),
+    returns a path at the bucket root::
+
+        s3://marin-na/tmp/ttl={N}d/{prefix}
+
     Otherwise falls back to a flat path under the marin prefix::
 
         {marin_prefix}/tmp/{prefix}
 
-    Lifecycle rules on each ``marin-{region}`` bucket — managed by
-    ``infra/configure_buckets.py`` — auto-delete objects under
-    ``tmp/ttl=Nd/`` after *N* days.
+    Lifecycle rules on each ``marin-{region}`` GCS bucket and each R2 data
+    bucket — managed by ``infra/configure_buckets.py`` — auto-delete objects
+    under ``tmp/ttl=Nd/`` after *N* days.
 
     Args:
         ttl_days: Lifecycle TTL in days.  Values not in
@@ -225,9 +247,17 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
 
     mp = marin_prefix()
 
-    region = region_from_prefix(source_prefix) if source_prefix is not None else None
-    if region is None and mp.startswith("gs://"):
-        region = marin_region()
+    # An explicit source_prefix fully determines the backend and region, taking
+    # precedence over the ambient marin prefix and VM metadata so that an R2
+    # source_prefix yields an R2 temp path even on a GCP launcher. Only when
+    # source_prefix is absent do we derive the location from the marin prefix
+    # (and VM metadata for the GCS region).
+    if source_prefix is not None:
+        region = region_from_prefix(source_prefix)
+        s3_bucket = _s3_bucket_from_prefix(source_prefix)
+    else:
+        region = marin_region() if mp.startswith("gs://") else None
+        s3_bucket = _s3_bucket_from_prefix(mp)
 
     if region:
         canonical = _REGION_ALIASES.get(region, region)
@@ -235,6 +265,14 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
         if bucket:
             path = f"gs://{bucket}/{TEMP_PATH_PREFIX}/ttl={ttl_days}d"
             return _append_path_prefix(path, prefix)
+
+    # R2 is single-bucket and non-regional. Place temp at the bucket root so the
+    # `tmp/ttl=Nd/` lifecycle prefix configured by infra/configure_buckets.py
+    # applies — note the runtime marin prefix on R2 is `s3://marin-na/marin`,
+    # so we deliberately strip the `marin/` data subdir here.
+    if s3_bucket:
+        path = f"s3://{s3_bucket}/{TEMP_PATH_PREFIX}/ttl={ttl_days}d"
+        return _append_path_prefix(path, prefix)
 
     if "://" not in mp:
         mp = f"file://{mp}"

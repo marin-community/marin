@@ -1200,10 +1200,10 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # the snapshot closes.
     sched = Scheduler()
     with db.read_snapshot() as _sched_snap:
-        demand_ctx = build_scheduling_context(_sched_snap, health, _NoAttrs(), UserBudgetDefaults(), {})
+        demand_ctx = build_scheduling_context(_sched_snap, health, _NoAttrs(), UserBudgetDefaults())
 
     def _demand():
-        compute_demand_entries(demand_ctx, sched, {})
+        compute_demand_entries(demand_ctx, sched)
 
     bench(
         f"Scheduling: compute_demand_entries (w={len(workers)}, t={len(pending_tasks)})",
@@ -1675,8 +1675,7 @@ def _print_latency_distribution(name: str, latencies: list[float]) -> None:
     max_ms = latencies[-1]
     _results.append((name, p50, p95, len(latencies)))
     print(
-        f"  {name:64s}  n={len(latencies):3d}  "
-        f"p50={p50:7.1f}ms  p95={p95:8.1f}ms  p99={p99:8.1f}ms  max={max_ms:8.1f}ms"
+        f"  {name:64s}  n={len(latencies):3d}  p50={p50:7.1f}ms  p95={p95:8.1f}ms  p99={p99:8.1f}ms  max={max_ms:8.1f}ms"
     )
 
 
@@ -1864,6 +1863,143 @@ def benchmark_apply_contention(db: ControllerDB) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Group: control_isolation (control-loop checkout wait under a dashboard storm)
+# ---------------------------------------------------------------------------
+
+
+def _measure_connection_checkout(engine) -> float:
+    """Check out a read connection and return the wait in ms.
+
+    This is exactly the ``QueuePool.get`` blocking seen in production controller
+    stacks: when every shared connection is busy, a thread needing a read blocks
+    here. The query cost after checkout is identical regardless of
+    which pool is used, so the checkout wait is the only quantity the dedicated
+    control pool changes. A trivial probe query keeps iterations cheap so the
+    distribution has enough samples.
+    """
+    t0 = time.perf_counter()
+    conn = engine.connect()
+    checkout_ms = (time.perf_counter() - t0) * 1000.0
+    try:
+        conn.execute(text("SELECT 1")).all()
+    finally:
+        conn.close()
+    return checkout_ms
+
+
+def _dashboard_storm_read(engine, slow: bool, sample_job_id: str | None) -> None:
+    """One RPC-shaped read against the shared pool.
+
+    ``slow`` runs the ``GetSchedulerState`` pending+running aggregation (seconds
+    on the prod DB — these are what occupy every shared connection and head-of-
+    line block the dashboard); otherwise a single-job ``GetJobState``-shape read.
+    """
+    with db_mod.read_snapshot(engine) as snap:
+        if slow:
+            snap.execute(
+                select(tasks_table.c.task_id, tasks_table.c.priority_band, tasks_table.c.submitted_at_ms).where(
+                    tasks_table.c.state == job_pb2.TASK_STATE_PENDING
+                )
+            ).all()
+            snap.execute(
+                select(tasks_table.c.task_id, tasks_table.c.current_worker_id).where(
+                    tasks_table.c.state == job_pb2.TASK_STATE_RUNNING,
+                    tasks_table.c.current_worker_id.is_not(None),
+                )
+            ).all()
+        elif sample_job_id is not None:
+            snap.execute(select(jobs_table.c.state).where(jobs_table.c.job_id == sample_job_id)).all()
+
+
+def _run_control_read_under_storm(
+    db: ControllerDB,
+    *,
+    victim_engine,
+    sample_job_id: str | None,
+    storm_threads: int,
+    slow_every: int,
+    duration_s: float,
+) -> list[float]:
+    """Sample the connection-checkout wait on a victim thread while ``storm_threads``
+    hammer the shared read pool with a fast/slow RPC mix. Returns checkout waits (ms).
+    """
+    stop = threading.Event()
+    victim_latencies: list[float] = []
+    errors: list[BaseException] = []
+
+    def _victim() -> None:
+        try:
+            while not stop.is_set():
+                victim_latencies.append(_measure_connection_checkout(victim_engine))
+                # Sample every 50ms: frequent enough for a tight distribution,
+                # but not a busy-loop that would itself contend for connections.
+                stop.wait(0.05)
+        except BaseException as e:
+            errors.append(e)
+
+    def _storm() -> None:
+        i = 0
+        try:
+            while not stop.is_set():
+                _dashboard_storm_read(db.sa_read_engine, slow=(i % slow_every == 0), sample_job_id=sample_job_id)
+                i += 1
+        except BaseException as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=_victim, name="control-victim")]
+    threads += [threading.Thread(target=_storm, name=f"dash-storm-{i}") for i in range(storm_threads)]
+    for t in threads:
+        t.start()
+    time.sleep(duration_s)
+    stop.set()
+    for t in threads:
+        t.join(timeout=30.0)
+    if errors:
+        print(f"    storm thread error: {errors[0]!r}")
+    return victim_latencies
+
+
+def benchmark_control_isolation(db: ControllerDB) -> None:
+    """Control-loop connection-checkout wait under a dashboard read storm.
+
+    The control loop's per-tick snapshot must not queue behind a slow dashboard
+    read for a connection. This contrasts the victim (a control-loop thread
+    needing a read connection) checking out from the **shared** RPC read pool vs
+    the **dedicated** control pool while concurrent RPC-shaped reads saturate the
+    shared pool — the before/after for the dedicated control read pool.
+    """
+    with db.read_snapshot() as tx:
+        row = tx.execute(select(jobs_table.c.job_id).limit(1)).first()
+    sample_job_id = str(row.job_id) if row else None
+
+    # Saturate the shared pool with readers, ~1 in 3 of them a slow aggregation.
+    storm_threads = 12
+    slow_every = 3
+    duration_s = 6.0
+    print(f"  (storm: {storm_threads} threads on the shared pool, every {slow_every}th read = slow aggregation)")
+
+    shared = _run_control_read_under_storm(
+        db,
+        victim_engine=db.sa_read_engine,
+        sample_job_id=sample_job_id,
+        storm_threads=storm_threads,
+        slow_every=slow_every,
+        duration_s=duration_s,
+    )
+    _print_latency_distribution("Control checkout: SHARED pool (contends w/ dashboard)", shared)
+
+    dedicated = _run_control_read_under_storm(
+        db,
+        victim_engine=db.sa_control_read_engine,
+        sample_job_id=sample_job_id,
+        storm_threads=storm_threads,
+        slow_every=slow_every,
+        duration_s=duration_s,
+    )
+    _print_latency_distribution("Control checkout: DEDICATED pool (isolated)", dedicated)
+
+
+# ---------------------------------------------------------------------------
 # Shared latency / scenario helpers (used by the rpcs and scenario groups)
 # ---------------------------------------------------------------------------
 
@@ -2037,6 +2173,7 @@ _GROUPS = (
     "dashboard",
     "endpoints",
     "apply_contention",
+    "control_isolation",
     "scenario",
 )
 
@@ -2101,6 +2238,7 @@ def run_cmd(db_path: Path | None, only_group: str | None, scenario_scale: float,
         ("dashboard", benchmark_dashboard),
         ("endpoints", benchmark_endpoints),
         ("apply_contention", benchmark_apply_contention),
+        ("control_isolation", benchmark_control_isolation),
         ("scenario", benchmark_scenario),
     ]
     for name, fn in groups:

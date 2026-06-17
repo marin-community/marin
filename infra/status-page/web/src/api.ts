@@ -18,8 +18,10 @@ export interface FerryRun {
   actor: string;
 }
 
-export interface FerryWorkflowStatus {
-  name: string;
+// One strip within a ferry card. `label` is the tier caption (e.g. "tier1");
+// null for single-workflow ferries, where `file` is shown as the subtitle.
+export interface FerryTierStatus {
+  label: string | null;
   file: string;
   latest: FerryRun | null;
   history: FerryRun[];
@@ -28,9 +30,14 @@ export interface FerryWorkflowStatus {
   error?: string;
 }
 
+export interface FerryGroupStatus {
+  name: string;
+  tiers: FerryTierStatus[];
+}
+
 export interface FerryResponse {
   windowDays: number;
-  workflows: FerryWorkflowStatus[];
+  groups: FerryGroupStatus[];
 }
 
 // Per-commit aggregate check-run status for the last N commits on main.

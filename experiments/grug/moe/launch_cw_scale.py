@@ -121,6 +121,11 @@ def build_data(model: GrugModelConfig):
     raise ValueError(f"SCALE_DATA={data!r} must be 'slimpajama' or 'synthetic'")
 
 
+# Subdirectory of MARIN_PREFIX these scale runs write their per-run output dirs
+# into, so they stay grouped instead of cluttering the prefix root.
+OUTPUT_SUBDIR = "experiments/grug-moe-cw"
+
+
 def build_scale_model() -> GrugModelConfig:
     """~90B-total / ~5B-active sparse MoE (overridable via SCALE_* env vars)."""
     hidden_dim = env_int("SCALE_HIDDEN_DIM", 3072)
@@ -259,7 +264,7 @@ def build_scale_step() -> ExecutorStep:
 
     name = f"grug-moe-cw-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}-cpu{worker_cpu}"
     return ExecutorStep(
-        name=f"{name}-{run_id}",
+        name=f"{OUTPUT_SUBDIR}/{name}-{run_id}",
         fn=run_grug_moe_trial,
         config=GrugMoeLaunchConfig(
             model=versioned(model),

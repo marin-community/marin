@@ -126,6 +126,19 @@ def test_build_pod_manifest_env_vars():
     assert "IRIS_ADVERTISE_HOST" in env_names
 
 
+def test_build_pod_manifest_env_secret_adds_envfrom():
+    req = make_run_req("/test-job/0")
+    manifest = _build_pod_manifest(req, pod_config(env_secret_name="iris-task-env"))
+    container = manifest["spec"]["containers"][0]
+    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
+
+
+def test_build_pod_manifest_no_env_secret_omits_envfrom():
+    req = make_run_req("/test-job/0")
+    manifest = _build_pod_manifest(req, pod_config())
+    assert "envFrom" not in manifest["spec"]["containers"][0]
+
+
 def test_build_pod_manifest_gpu():
     req = make_run_req("/test-job/0")
     req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))

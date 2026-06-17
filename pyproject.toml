@@ -17,20 +17,23 @@ dependencies = [
     "marin-core",
     "marin-rigging",
     "marin-zephyr",
+    # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
+    # workspace member (editable source) so deploy/CLI fixes land without a wheel
+    # republish. Its native companion marin-finelog-server (the in-process
+    # log-server ext, module `finelog_server`, maturin lib/finelog/rust) is NOT a
+    # member: it ships as a pre-built wheel and reaches us transitively via
+    # marin-iris, which depends on it explicitly. `scripts/rust_mode.py dev` swaps
+    # marin-finelog-server to a local source build.
+    "marin-finelog",
     # top level deps. try to keep these small.
     "watchdog",
-    # marin-dupekit and marin-finelog are native (maturin) packages shipped as
-    # pre-built platform wheels (built by their *-release-wheels.yaml workflows)
-    # rather than pure-Python workspace members. A `>= X.Y.Z.dev0` floor opts uv
-    # into the daily nightly wheels (`X.Y.Z.dev<YYYYMMDDhhmm>`); a plain
-    # `>= X.Y.Z` floor pins to a stable tag (`dupekit-v<X.Y.Z>` /
-    # `finelog-v<X.Y.Z>`). uv prefers the higher version, so a stable supersedes
+    # marin-dupekit is a native (maturin) package shipped as pre-built platform
+    # wheels (built by dupekit-release-wheels.yaml) rather than a workspace
+    # member. A `>= X.Y.Z.dev0` floor opts uv into the daily nightly wheels
+    # (`X.Y.Z.dev<YYYYMMDDhhmm>`); a plain `>= X.Y.Z` floor pins to a stable tag
+    # (`dupekit-v<X.Y.Z>`). uv prefers the higher version, so a stable supersedes
     # any earlier dev of the same Z; bump the floor to whichever is newest.
-    # Published by .github/workflows/dupekit-release-wheels.yaml.
     "marin-dupekit >= 0.1.2.dev202606060824",
-    # finelog carries an in-process server ext (finelog._native) the controller
-    # starts; `scripts/rust_mode.py dev` swaps in an editable source locally.
-    "marin-finelog >= 0.2.9",
 ]
 
 [tool.uv]
@@ -113,22 +116,26 @@ conflicts = [
 ]
 
 [tool.uv.workspace]
-# marin-finelog is intentionally NOT a member: it is a native (maturin) package
-# consumed as a pre-built platform wheel (see [project] dependencies and the
-# RUST-DEV SOURCES block below), mirroring marin-dupekit.
 members = [
     "lib/iris",
     "lib/fray",
+    "lib/finelog",
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
 ]
+# lib/finelog/rust (marin-finelog-server, maturin) is NOT a member: the native
+# log-server ext is consumed as a pre-built wheel by default and only built from
+# source under `scripts/rust_mode.py dev`. Exclude it so workspace discovery
+# doesn't pull the nested package into the workspace.
+exclude = ["lib/finelog/rust"]
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
 marin-fray = { workspace = true }
+marin-finelog = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
 marin-core = { workspace = true }

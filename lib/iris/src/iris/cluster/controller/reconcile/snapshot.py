@@ -56,8 +56,7 @@ class JobStateBasis:
 @dataclass(frozen=True, slots=True)
 class JobDescendants:
     job_id: JobName
-    descendants_full: tuple[JobName, ...]  # exclude_holders=False
-    descendants_no_holders: tuple[JobName, ...]  # exclude_holders=True
+    descendants: tuple[JobName, ...]
 
 
 @dataclass(frozen=True, slots=True)

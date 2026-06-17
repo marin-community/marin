@@ -25,7 +25,11 @@ pub struct CompactionConfig {
     pub max_segments_per_level: usize,
     /// Whole-namespace segment cap (eviction trigger).
     pub max_segments_per_namespace: usize,
-    /// Whole-namespace byte cap (eviction trigger).
+    /// Whole-namespace byte cap on locally-retained segments (eviction trigger).
+    /// Once a namespace's local L>=1 segments exceed this, the oldest already-
+    /// offloaded (BOTH) segments have their local copies unlinked; the remote
+    /// archive is kept. At current log volume 15 GiB is ~10 days of backwards
+    /// search.
     pub max_bytes_per_namespace: i64,
     /// Maintenance-loop cadence.
     pub check_interval: Duration,
@@ -37,7 +41,7 @@ impl Default for CompactionConfig {
             level_targets: vec![64 * MIB, 256 * MIB, 256 * MIB],
             max_segments_per_level: 32,
             max_segments_per_namespace: 1000,
-            max_bytes_per_namespace: 100 * 1024 * 1024 * 1024,
+            max_bytes_per_namespace: 15 * 1024 * 1024 * 1024,
             check_interval: Duration::from_secs(30),
         }
     }

@@ -168,6 +168,51 @@ def test_marin_temp_bucket_uses_source_prefix_region_from_local_launcher():
         ) == ("gs://marin-us-east5/tmp/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/run/checkpoints")
 
 
+def test_marin_temp_bucket_r2_uses_bucket_root_ttl_path():
+    """An R2 marin prefix resolves temp to the bucket root, dropping the marin/ subdir."""
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"MARIN_PREFIX": "s3://marin-na/marin"}),
+    ):
+        assert marin_temp_bucket(ttl_days=1, prefix="zephyr") == "s3://marin-na/tmp/ttl=1d/zephyr"
+        assert marin_temp_bucket(ttl_days=14) == "s3://marin-na/tmp/ttl=14d"
+
+
+def test_marin_temp_bucket_r2_uses_source_prefix_bucket():
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {}, clear=True),
+    ):
+        assert (
+            marin_temp_bucket(ttl_days=3, prefix="ferry", source_prefix="s3://marin-na/experiments/grug")
+            == "s3://marin-na/tmp/ttl=3d/ferry"
+        )
+
+
+def test_marin_temp_bucket_r2_source_prefix_overrides_gcs_launcher():
+    """An explicit R2 source_prefix wins over a gs:// MARIN_PREFIX and GCP metadata."""
+    with (
+        patch(
+            "rigging.filesystem.urllib.request.urlopen",
+            return_value=_mock_urlopen(b"projects/12345/zones/us-central1-a"),
+        ),
+        patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
+    ):
+        assert (
+            marin_temp_bucket(ttl_days=7, prefix="out", source_prefix="s3://marin-na/experiments/grug")
+            == "s3://marin-na/tmp/ttl=7d/out"
+        )
+
+
+def test_marin_temp_bucket_unknown_s3_bucket_falls_back_to_flat_path():
+    """Unknown S3 buckets have no lifecycle rules, so they get the flat non-TTL fallback."""
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"MARIN_PREFIX": "s3://some-other-bucket/marin"}),
+    ):
+        assert marin_temp_bucket(ttl_days=1, prefix="x") == "s3://some-other-bucket/marin/tmp/x"
+
+
 def test_marin_temp_bucket_falls_back_to_marin_prefix_when_no_region():
     # Unknown region in MARIN_PREFIX → no entry in REGION_TO_DATA_BUCKET → falls back to marin_prefix/tmp
     with (

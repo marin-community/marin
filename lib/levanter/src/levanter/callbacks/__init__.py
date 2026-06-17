@@ -161,8 +161,10 @@ def profile_ctx(
 
     Notes:
         - Only process 0 creates the Perfetto link when ``create_perfetto_link`` is True.
-        - After stopping the trace, logs the artifact to the current tracker as type
-          "jax_profile" and performs a cross-process barrier.
+        - After exiting the context, the profile remains in ``path`` and the context
+          manager performs a cross-process barrier.
+        - When ``host_profile`` is enabled, the cProfile outputs are written into the
+          same directory as the JAX trace files.
     """
     _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
     logger.info("Starting profiler.")
@@ -192,16 +194,10 @@ def profile_ctx(
         except Exception as e:  # pragma: no cover - optional/diagnostic path
             logger.warning(f"Failed to start cProfile host profiler: {e}")
 
-    def _try_log_host_artifact(artifact_path: str, description: str) -> None:
-        try:
-            levanter.tracker.current_tracker().log_artifact(artifact_path, type="host_profile")
-        except Exception:
-            logger.warning(f"Failed to log host profile {description}", exc_info=True)
-
     try:
         yield
     finally:
-        # Stop host profiler and write artifacts
+        # Stop host profiler and write the profile outputs into the run directory.
         # Do this first because jax.profiler can be very slow to finish
         if pr is not None and stats_path is not None:
             try:
@@ -232,11 +228,6 @@ def profile_ctx(
         if event is not None:
             event.set()
 
-        levanter.tracker.current_tracker().log_artifact(path, type="jax_profile")
-        if stats_path is not None and os.path.exists(stats_path):
-            _try_log_host_artifact(stats_path, "stats")
-        if txt_summary_path is not None and os.path.exists(txt_summary_path):
-            _try_log_host_artifact(txt_summary_path, "summary")
         barrier_sync()
 
 

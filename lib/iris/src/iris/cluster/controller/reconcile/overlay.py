@@ -180,17 +180,16 @@ class Overlay:
                     preemption_count=row.preemption_count,
                     max_retries_failure=row.max_retries_failure,
                     max_retries_preemption=row.max_retries_preemption,
-                    is_reservation_holder=row.is_reservation_holder,
                     has_coscheduling=row.has_coscheduling,
                 )
             out.append(row)
         return out
 
-    def job_descendants(self, job_id: JobName, *, exclude_holders: bool = False) -> list[JobName]:
+    def job_descendants(self, job_id: JobName) -> list[JobName]:
         desc = self._snapshot.job_descendants.get(job_id)
         if desc is None:
             return []
-        return list(desc.descendants_no_holders if exclude_holders else desc.descendants_full)
+        return list(desc.descendants)
 
     def job_preemption_policy(self, job_id: JobName) -> int:
         """Resolve the effective preemption policy.
