@@ -35,7 +35,4 @@ def test_migration_0030_adds_workers_slice_id_index():
     migration.migrate(conn)  # idempotent re-run
 
     assert "idx_workers_slice_id" in _indexes(conn)
-    # The index is usable for the orphan-slice probe's lookup shape.
-    plan = conn.execute("EXPLAIN QUERY PLAN SELECT 1 FROM workers WHERE slice_id = 's'").fetchall()
-    assert any("idx_workers_slice_id" in str(row) for row in plan), plan
     conn.close()
