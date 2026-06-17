@@ -33,10 +33,10 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 CHECKPOINT_STEP_PREFIX = "step_"
-CHECKPOINT_DISCOVERY_STORAGE_OPTIONS = {
-    "use_listings_cache": False,
-    "skip_instance_cache": True,
-}
+CHECKPOINT_DISCOVERY_STORAGE_OPTIONS = (
+    ("use_listings_cache", False),
+    ("skip_instance_cache", True),
+)
 
 
 def _rm_thread(path: str) -> None:
@@ -166,7 +166,7 @@ class GCSCheckpointClient(WeightTransferClient):
         logger.info(f"Search for new checkpoints in {self.config.checkpoint_dir}...")
         checkpoint_candidates = levanter_checkpoint.discover_checkpoint_candidates(
             self.config.checkpoint_dir,
-            storage_options=CHECKPOINT_DISCOVERY_STORAGE_OPTIONS,
+            storage_options=dict(CHECKPOINT_DISCOVERY_STORAGE_OPTIONS),
         )
         if not checkpoint_candidates:
             return None
