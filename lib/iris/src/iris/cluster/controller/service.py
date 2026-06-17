@@ -1622,16 +1622,10 @@ class ControllerServiceImpl:
         )
 
     def _request_recycled_address_eviction(self, worker_id: WorkerId, address: str) -> None:
-        """Queue any other worker still holding ``address`` for eviction.
+        """Hand any stale prior owner of ``address`` to the controller for teardown.
 
-        GCP recycles a deleted worker's internal IP onto a new VM, so the dead
-        worker's row keeps the stale address. The controller reconciles by
-        address, so the RPC reaches the live worker now at that IP, which --
-        routing by attempt_uid -- zombie-kills its own tasks; the reconcile-time
-        identity check misses this when the responder runs an older image that
-        echoes no worker_id. The new registrant owns the address, so the prior
-        holder is stale and is handed to the controller for fail-and-teardown
-        (deferred to the control-loop thread, where reaping its slice is safe).
+        Detects a recycled internal IP (see :func:`reads.worker_ids_at_address`)
+        and defers the reap to :meth:`Controller.request_worker_eviction`.
         """
         with self._db.read_snapshot() as snap:
             stale = reads.worker_ids_at_address(snap, address, exclude=worker_id)
