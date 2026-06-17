@@ -49,8 +49,10 @@ Work spans three packages, respecting dependency direction `haliax → levanter 
 
 ## Hypothesis or Goal
 
-A per-tensor delayed-scaling FP8 recipe can be lowered to genuine H100 cuBLASLt FP8 kernels
-(`__cublas$lt$matmul$f8`) for both the dense projections and the routed-expert GEMMs, is NaN-free on
+A per-tensor delayed-scaling FP8 recipe can be lowered to genuine H100 FP8 tensor-core kernels for
+both the dense projections and the routed-expert GEMMs — verified in HLO + profiler counters, by
+whichever custom call the selected path actually emits (`__cublas$lt$matmul$f8` for dense,
+`__cudnn$blockScaledDot`, the relevant ragged-dot FP8 kernel for experts, or another) — is NaN-free on
 real data, and yields a measured per-step / MFU win over the pinned BF16 baseline — targeting
 ~15% → 20–25% MFU.
 
