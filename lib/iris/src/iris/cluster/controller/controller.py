@@ -313,12 +313,8 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
-        # Detection latency is wall-clock: a worker is reaped once it has been
-        # continuously unreachable for worker_unreachable_grace, measured against
-        # last_heartbeat_ms. This is independent of poll_interval and of how long
-        # a failing reconcile pass takes (RPC timeout + autoscale on the shared
-        # tick), unlike a consecutive-failure count, which over-waits several-fold
-        # because a failing pass costs far more than poll_interval.
+        # Worker-death detection is wall-clock, fixed at the grace regardless of
+        # the reconcile cadence (see WorkerHealthTracker).
         self._health = WorkerHealthTracker(unreachable_grace=config.worker_unreachable_grace)
         self._endpoints = EndpointsProjection(self._db)
         self._worker_attrs = WorkerAttrsProjection(self._db)

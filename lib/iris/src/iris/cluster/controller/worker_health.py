@@ -21,17 +21,14 @@ Per-worker signals:
   ``BUILD_FAILURE_THRESHOLD`` build failures trip termination independently.
 
 Termination is **time-based**: a worker is reaped once it has been continuously
-unreachable for ``unreachable_grace_ms`` (wall-clock since its last successful
-reconcile), guarded by a small ``min_unreachable_failures`` floor. Measuring
-elapsed time rather than a failure *count* keeps detection latency fixed at the
-grace regardless of how long a failing reconcile pass takes: when a worker is
-down its reconcile RPC blocks until ``RECONCILE_RPC_TIMEOUT`` (and the
-single-threaded control tick also runs autoscale), so a failing pass costs far
-more than ``poll_interval`` — a count of ``grace / poll_interval`` failures
-would over-wait several-fold. The floor requires a handful of *real* failed
-reconciles before the clock can trip, so a controller stall (which produces no
-reconciles, only ages every heartbeat at once) cannot mass-reap the fleet on
-resume. See ``docs/worker-health.md``.
+unreachable for ``unreachable_grace`` (wall-clock since its last successful
+reconcile), past a small ``min_unreachable_failures`` floor. Measuring elapsed
+time rather than a failure *count* keeps detection latency fixed at the grace: a
+failing pass blocks until ``RECONCILE_RPC_TIMEOUT`` (and the tick also runs
+autoscale), so it costs far more than ``poll_interval`` — a count of
+``grace / poll_interval`` failures would over-wait several-fold. The floor keeps
+a controller stall — which ages every heartbeat at once without running any
+reconciles — from mass-reaping the fleet on resume.
 
 Thread-safe: ``apply`` runs on the reconcile thread; reads come from the
 scheduler and RPC handler threads.

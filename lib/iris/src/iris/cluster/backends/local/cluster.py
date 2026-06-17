@@ -218,12 +218,8 @@ class LocalCluster:
                 auth_provider=auth.provider,
                 auth=auth,
                 autoscaler_evaluation_interval=duration_from_proto(self._config.defaults.autoscaler.evaluation_interval),
-                # Fast worker-failure detection for local/e2e runs: a worker is
-                # reaped ~10s after its last successful reconcile, instead of the
-                # ~50s production grace. Detection is wall-clock (see
-                # WorkerHealthTracker), so with the default 1s reconcile cadence
-                # the e2e chaos suite still sees teardown after roughly
-                # grace / poll_interval failed passes.
+                # Fast worker-failure detection for local/e2e runs: reaped ~10s
+                # after the last successful reconcile, vs the ~50s production grace.
                 worker_unreachable_grace=Duration.from_seconds(10.0),
             ),
             provider=provider,
