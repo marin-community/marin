@@ -71,12 +71,31 @@ Hypotheses to test, **not** a ranking — spec says "do not assume A, B, or C is
   with clean optimizer/EMA state; H100 synthetic profiles show FP8 matmuls for dense + expert GEMMs
   or documented blocker; NaN-free real-data run; BF16-vs-FP8 benchmark beats baseline toward 20–25% MFU).
 
-## Task DAG status (see memex grug-fp8-task-dag for full ~1-day breakdown)
-- **Done:** W0 (pre-start), R1 (accounts/comms), R2 (local dev env), R3 (H100 cloud env + profiling).
-- **Next:** R4 (reproduce BF16 baseline @ d3072/d4096), R5 (code-read map incl. team's *previous* FP8
-  work), then Phase-1 spike S1–S7 → S8 report → S9 review gate.
-- **First concrete deliverable (David):** a linear (dense MLP) FP8 benchmark harness at d3072/d4096,
-  then analogous for `gmm` + permute ops.
+## Plan (streamlined spine — maps 1:1 to spec phases; full ~1-day breakdown in memex grug-fp8-task-dag)
+
+Three ramp/spike tasks all emit "HLO/profiler output on an H100" and are easy to conflate — they have
+distinct purposes:
+- **R3** (✅ 6/15): prove the *profiling pipeline* works — HLO + trace + TC counters for a **toy** FP8
+  dot. Synthetic data, 1×H100.
+- **R4** (⬜ next): prove the **BF16 Grug *model*** runs → establish the baseline — synthetic step +
+  short real-data run (~200–500 steps SlimPajama-6B), loss finite, baseline profiler trace. Reduced
+  single-node config first, then EP mesh.
+- **S1** (⬜ Phase 1): reusable **dense-dot microbench rig** that paths A/B/C plug into — configurable
+  shapes/dtypes, BF16 dense-dot timing + HLO. Synthetic data, 1×H100.
+
+**David's "first concrete deliverable"** (linear-FP8 benchmark harness @ d3072/d4096, then `gmm` +
+permute) **= S1 rig + S2 path-A FP8, then S5 + S6** — *not* R4. It depends only on R3 (done), so it
+can run **in parallel with** R4.
+
+- **Phase 0 — Ramp to green baseline** (days 1–3): R1 ✅ · R2 ✅ · R3 ✅ · **R4 model baseline** ⬜ ·
+  R5 code-read map ⬜ → Gate G0.
+- **Phase 1 — Lowering-path spike → decision gate** (days 4–8): dense **S1→S2/S3/S4** · ragged
+  **S5→S6a/S6b** · perf targets **S7** (uses R4 profile) · report **S8** → **team review S9 = hard gate**.
+- **Phase 2a — Dense FP8** (spec Wk1): Haliax helper → **PR1**; Grug dense wiring + OWG train step → **PR2**.
+- **Phase 2b — MoE FP8** (spec Wk2): ragged `precision`, `QuantizedRaggedDot`, wire experts → **PR3**
+  (or criterion-9 documented-blocker hatch).
+- **Phase 3 — Validate + benchmark** (spec Wk3–4): V1 synth NaN-free · V2 real-data · V3 BF16-vs-FP8
+  benchmark · V4 vs targets · V5 final lint + 3-file pytest suite.
 
 ## Experiment Log
 
@@ -86,6 +105,15 @@ Hypotheses to test, **not** a ranking — spec says "do not assume A, B, or C is
   #5816 (FP8 recipe on **B200/Blackwell** — sibling, different hardware). This thread is Hopper/H100
   per-tensor FP8.
 - Next action: file the dedicated experiment issue (cross-linking #6367, #5816), then start R4/R5.
+
+### 2026-06-17 — Plan streamlining pass (de-drift R4 vs S1/S5)
+- Reconciled this logbook against the source plan (spec branch `codex/grug-fp8-h100-spec` + memex
+  task DAG). No structural drift; one labeling artifact fixed.
+- **Fix:** the task-DAG R4 line had stapled the dense-MLP/d3072 *benchmark harness* (David's "first
+  deliverable") onto the BF16 *model* baseline. Peeled apart — R4 = model baseline only; the harness
+  = S1 (dense rig) + S2 (path-A FP8) + S5 (ragged rig) + S6. S1 depends only on R3, so the first
+  deliverable can start in parallel with R4.
+- Updated the Plan section above; mirrored the same fix into memex `grug-fp8-task-dag.md` (R4/S1/S5).
 
 <!-- New entries below this line. Template:
 ### YYYY-MM-DD HH:MM - <GFP8-NNN short label>
