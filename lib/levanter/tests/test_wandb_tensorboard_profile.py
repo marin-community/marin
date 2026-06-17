@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from rigging.filesystem import url_to_fs
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "wandb_tensorboard_profile.py"
@@ -29,13 +30,15 @@ def test_resolve_profile_dir_uses_logged_trainer_log_dir():
     assert resolve_profile_dir(run) == "gs://bucket/logs/trainer-456/profiler"
 
 
-def test_mirror_profile_dir_returns_existing_local_directory(tmp_path):
+@pytest.mark.parametrize("root_factory", [lambda tmp_path: None, lambda tmp_path: tmp_path / "logs"])
+def test_mirror_profile_dir_returns_existing_local_directory(tmp_path, root_factory):
     source = tmp_path / "logs" / "run-123" / "profiler"
     trace_dir = source / "plugins" / "profile" / "2024_01_01_00_00_00"
     trace_dir.mkdir(parents=True)
     (trace_dir / "perfetto_trace.json.gz").write_bytes(b"trace")
 
-    mirrored = mirror_profile_dir(str(source), None, run_id="run-123")
+    resolved_root = root_factory(tmp_path)
+    mirrored = mirror_profile_dir(str(source), resolved_root, run_id="run-123")
 
     assert mirrored == source
     assert (mirrored / "plugins" / "profile" / "2024_01_01_00_00_00" / "perfetto_trace.json.gz").exists()

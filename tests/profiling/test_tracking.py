@@ -7,8 +7,8 @@ import gzip
 import json
 from pathlib import Path
 
-from levanter.utils.profile_dirs import RunTarget
-from marin.profiling.ingest import normalize_run_target, summarize_trace
+from levanter.utils.profile_dirs import RunTarget, normalize_run_target
+from marin.profiling.ingest import summarize_trace
 from marin.profiling.tracking import (
     RegressionThresholds,
     append_regression_record,
