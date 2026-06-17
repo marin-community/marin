@@ -161,8 +161,8 @@ def profile_ctx(
 
     Notes:
         - Only process 0 creates the Perfetto link when ``create_perfetto_link`` is True.
-        - After stopping the trace, the profile remains in ``path`` and the callback
-          performs a cross-process barrier.
+        - After exiting the context, the profile remains in ``path`` and the context
+          manager performs a cross-process barrier.
     """
     _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
     logger.info("Starting profiler.")
