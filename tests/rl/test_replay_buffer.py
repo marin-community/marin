@@ -138,6 +138,9 @@ def test_replay_buffer():
     with data_loader:
         rollouts = data_loader.get_rollouts(timeout=5.0)
         assert rollouts is not None
+        assert len(rollouts) == 4
+        assert replay_buffer.get_stats()["total_batches_added"] == 15
+        assert replay_buffer.get_stats()["env_sizes"] == {"env1": 20, "env2": 10}
 
 
 def test_replay_buffer_recency_bias():
