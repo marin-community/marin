@@ -239,6 +239,7 @@ fork-strategy = "fewest"
 [manifest]
 members = [
     "marin-core",
+    "marin-finelog",
     "marin-fray",
     "marin-haliax",
     "marin-iris",
@@ -5406,8 +5407,8 @@ wheels = [
 
 [[package]]
 name = "marin-finelog"
-version = "0.2.10"
-source = { registry = "https://pypi.org/simple" }
+version = "0.2.11"
+source = { editable = "lib/finelog" }
 dependencies = [
     { name = "click" },
     { name = "connect-python" },
@@ -5420,9 +5421,35 @@ dependencies = [
     { name = "pyyaml" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5f/ea/1e53cc39aeb66d747533f6e423f5f202ddd1be9a482406345f9b839217f8/marin_finelog-0.2.10.tar.gz", hash = "sha256:2881a021ad2ac5f0a9a75fada759a130d1533d0e87f97e2f5119de68753d4a0e", size = 52204, upload-time = "2026-06-16T15:21:07.603Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b6/d4/cebe857527ff2703edc2def8748cbe9fd84315bfe24c6e01463a3bb83f58/marin_finelog-0.2.10-py3-none-any.whl", hash = "sha256:9b240454f1f997c0aede999f871051eb5349f7c1b0003c1d2653c69a9f2cefa0", size = 53400, upload-time = "2026-06-16T15:20:53.35Z" },
+
+[package.dev-dependencies]
+dev = [
+    { name = "marin-finelog-server" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.3.1" },
+    { name = "connect-python", specifier = ">=0.9.0" },
+    { name = "duckdb", specifier = ">=1.0.0" },
+    { name = "fsspec", specifier = ">=2024.0.0" },
+    { name = "gcsfs", specifier = ">=2024.0.0" },
+    { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "protobuf", specifier = ">=5.0" },
+    { name = "pyarrow", specifier = ">=23.0.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "zstandard", specifier = ">=0.22" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "marin-finelog-server", specifier = ">=0.2.0.dev0" },
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]
@@ -5653,7 +5680,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,<36" },
-    { name = "marin-finelog", specifier = ">=0.2.10" },
+    { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-finelog-server", specifier = ">=0.2.10" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "pyarrow", marker = "extra == 'controller'", specifier = ">=23.0.0" },
@@ -5973,7 +6000,7 @@ dependencies = [
 requires-dist = [
     { name = "marin-core", editable = "lib/marin" },
     { name = "marin-dupekit", specifier = ">=0.1.2.dev202606060824" },
-    { name = "marin-finelog", specifier = ">=0.2.10" },
+    { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
     { name = "marin-iris", editable = "lib/iris" },
