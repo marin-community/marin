@@ -100,7 +100,7 @@ def test_gpu_fa4_cute_attention_shard_maps_batch_axes_before_ffi(monkeypatch):
 
     assert local_shapes == [((1, 6, 2, 8), (1, 6, 1, 8), (1, 6, 1, 8), (1, 6), (1, 6))]
     assert out.shape == q.shape
-    assert out.sharding == NamedSharding(mesh, P(("data", "expert"), None, None, None))
+    assert out.sharding == NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None, "model", None))
 
 
 def _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, *, valid_tokens=None):

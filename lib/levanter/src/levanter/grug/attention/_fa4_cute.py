@@ -176,7 +176,13 @@ def _validate_head_layout(q: jax.Array, k: jax.Array, *, backend_name: str) -> N
 
 
 def _active_batch_axes(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> tuple[str, ...]:
-    return tuple(axis for axis in _BATCH_AXES if axis in mesh.shape and int(mesh.shape[axis]) > 1)
+    return tuple(axis for axis in _BATCH_AXES if axis in mesh.shape)
+
+
+def _head_axis(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> str | None:
+    if "model" not in mesh.shape or int(mesh.shape["model"]) != 1:
+        return None
+    return "model"
 
 
 def _fa4_cute_attention_forward_sharded(
@@ -213,7 +219,7 @@ def _fa4_cute_attention_forward_sharded(
             kernel_config=kernel_config,
         )
 
-    qkv_spec = P(batch_axes, None, None, None)
+    qkv_spec = P(batch_axes, None, _head_axis(mesh), None)
     metadata_spec = P(batch_axes, None)
     q = reshard(q, qkv_spec)
     k = reshard(k, qkv_spec)
