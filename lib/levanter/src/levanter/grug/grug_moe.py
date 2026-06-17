@@ -29,6 +29,7 @@ from levanter.grug._moe.common import (
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
     _init_weight,
+    DEEPEP_REMAT_SAVE_NAMES as DEEPEP_REMAT_SAVE_NAMES,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
     MoEExpertMlpPspecs,
     MoeActivation,
