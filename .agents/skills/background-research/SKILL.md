@@ -177,7 +177,6 @@ set. Each candidate needs:
 
 ## What To Skip
 
-- Do not build a global Marin paper library or LLM wiki unless explicitly asked.
 - Do not paste long paper summaries when a claim-level evidence table is enough.
 - Do not use transient conversation as the durable record; file the synthesis in
   the issue/logbook/research file.
