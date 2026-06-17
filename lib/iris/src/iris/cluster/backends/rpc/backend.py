@@ -48,11 +48,14 @@ from iris.rpc.worker_connect import WorkerServiceClient
 
 logger = logging.getLogger(__name__)
 
-# Per-worker RPC deadline applied to every fanned-out worker reconcile call.
-# Combined with the fan-out semaphore this bounds a full reconcile round at
-# ~DEFAULT_WORKER_RPC_TIMEOUT * ceil(num_workers / parallelism), so the control
-# thread is never blocked indefinitely even if the whole fleet is hung.
+# Per-worker RPC deadline for on-demand worker RPCs (profile_task, exec_in_container,
+# get_process_status) and the cached stub's fallback timeout.
 DEFAULT_WORKER_RPC_TIMEOUT = Duration.from_seconds(10.0)
+
+# Tighter per-worker deadline for the reconcile fan-out: a hung worker can't gate
+# the gather-joined round on the slow straggler, and a missed round never reaps a
+# worker (the reconcile-failure threshold is dozens of rounds).
+RECONCILE_RPC_TIMEOUT = Duration.from_seconds(3.0)
 
 # Max concurrent in-flight per-worker RPCs in a fan-out (asyncio.Semaphore width).
 # Kept >= fleet size so the whole fleet reconciles in one wave and a slow worker
@@ -313,7 +316,9 @@ class RpcTaskBackend:
                     await asyncio.sleep(rule.delay_seconds)
                     raise ProviderError("chaos: controller.reconcile")
                 stub = self.stub_factory.get_stub(address)
-                response = await stub.reconcile(plan.request)
+                response = await asyncio.wait_for(
+                    stub.reconcile(plan.request), timeout=RECONCILE_RPC_TIMEOUT.to_seconds()
+                )
                 return WorkerReconcileResult(
                     worker_id=plan.worker_id,
                     observations=list(response.observed),
@@ -322,7 +327,7 @@ class RpcTaskBackend:
                     responder_worker_id=response.worker_id or None,
                 )
             except Exception as e:
-                return WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e))
+                return WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e) or type(e).__name__)
 
     def close(self) -> None:
         if self.autoscaler is not None:
