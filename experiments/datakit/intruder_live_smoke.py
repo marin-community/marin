@@ -28,6 +28,7 @@ import logging
 import os
 import sys
 
+import numpy as np
 from openai import OpenAI
 
 from experiments.datakit.intruder import (
@@ -88,8 +89,6 @@ def _openrouter_panel() -> list[LlmPanelist]:
 
 def _probe(panel: list[LlmPanelist]) -> None:
     """One trial, every panelist votes once; print pick vs. truth and any error."""
-    import numpy as np  # noqa: PLC0415  -- local to keep the import out of --run callers' path
-
     pool = BucketPool("coherent", COHERENT_BUCKETS)
     trial = pool.sample_trial(np.random.default_rng(0))
     print(
@@ -107,8 +106,6 @@ def _probe(panel: list[LlmPanelist]) -> None:
 
 def _run(panel: list[LlmPanelist], max_trials: int) -> None:
     """Coherent side vs. shuffled-incoherent side; expect coherent to win."""
-    import numpy as np  # noqa: PLC0415
-
     # Incoherent side: same docs, reshuffled across buckets so no bucket shares a topic.
     all_docs = [d for docs in COHERENT_BUCKETS.values() for d in docs]
     rng = np.random.default_rng(0)

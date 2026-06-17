@@ -427,7 +427,9 @@ def run_intruder_test(
     level ``alpha / 2`` on its panel detection rate (the per-trial fraction of
     panelists that found the intruder). The run stops once at least
     ``min_trials`` per side are in and the difference interval calls a winner or
-    a practical tie, or when ``max_trials`` per side is reached.
+    a practical tie, or when ``max_trials`` trials per side have been attempted.
+    Abstained trials (every panelist failed) count toward the attempt cap, so a
+    misconfigured panel cannot loop indefinitely issuing paid calls.
 
     Returns the verdict plus both sides' accuracies, intervals, and per-model
     detection rates. ``chance_level`` (0.2) is the reference for "coherent at
@@ -446,9 +448,13 @@ def run_intruder_test(
     }
     abstained = 0
     decision: Decision = Decision.INCONCLUSIVE
+    # Bound by *attempted* trials, not completed ones: a trial where every
+    # panelist abstains never advances cs.n, so a completed-count guard could
+    # loop forever (issuing paid calls) on a broken panel or invalid slug.
+    max_rounds = math.ceil(max_trials / batch_size)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        while cs_lhs.n < max_trials:
+        for _round in range(max_rounds):
             for side_pool, cs in ((pool_lhs, cs_lhs), (pool_rhs, cs_rhs)):
                 trials = [side_pool.sample_trial(rng) for _ in range(batch_size)]
                 # (trial, panelist) fan-out; one structured call each.
@@ -482,6 +488,17 @@ def run_intruder_test(
                 _fmt_interval(cs_rhs.interval()),
                 _fmt_interval(_difference_interval(cs_lhs, cs_rhs)),
             )
+
+    if cs_lhs.n == 0 or cs_rhs.n == 0:
+        logger.warning(
+            "intruder test made no progress on a side (%s n=%d, %s n=%d) after %d abstentions -- "
+            "the panel likely failed every call (check model ids / gateway auth)",
+            lhs_name,
+            cs_lhs.n,
+            rhs_name,
+            cs_rhs.n,
+            abstained,
+        )
 
     return IntruderTestResult(
         decision=decision,
