@@ -8,15 +8,19 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
-from urllib.parse import urlparse
+from typing import Any
 
 import wandb
 from google.protobuf.message import DecodeError
-from levanter.utils.fsspec_utils import join_path, mirror_directory
+from levanter.utils.profile_dirs import (
+    WandbRunLike,
+    mirror_profile_dir,
+    normalize_run_target,
+    resolve_profile_dir,
+    resolve_profile_run_id,
+)
 
 from marin.profiling.schema import ProfileSummary, RunMetadata
 from marin.profiling.trace_summary import (
@@ -31,13 +35,6 @@ logger = logging.getLogger(__name__)
 
 PROFILE_ARTIFACT_TYPE = "jax_profile"
 PROFILE_DIR_NAME = "profiler"
-
-
-class WandbRunLike(Protocol):
-    config: Mapping[str, Any]
-    path: Sequence[str]
-    id: str
-    summary: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -107,7 +104,7 @@ def download_profile_dir_for_run(
 
     api = wandb.Api()
     run = api.run(run_path)
-    profile_dir = resolve_profile_dir_from_run(run)
+    profile_dir = resolve_profile_dir(run)
 
     return _download_profile_dir_with_metadata(
         profile_dir=profile_dir,
@@ -143,32 +140,6 @@ def find_profile_trace(profile_dir: Path) -> Path:
     raise FileNotFoundError(
         f"No profile trace JSON found under '{profile_dir}'. Expected perfetto_trace.json.gz or *.trace.json(.gz)."
     )
-
-
-def resolve_profile_dir_from_run(run: WandbRunLike) -> str:
-    """Resolve the profiler directory for a W&B run from trainer config."""
-    run_id = resolve_profile_run_id_from_run(run)
-    trainer_config = run.config.get("trainer")
-    if not isinstance(trainer_config, dict):
-        raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
-
-    log_dir = trainer_config.get("log_dir")
-    if not isinstance(log_dir, str) or not log_dir:
-        raise RuntimeError(f"Run {run.path} does not expose trainer.log_dir.")
-
-    return join_path(join_path(log_dir, run_id), PROFILE_DIR_NAME)
-
-
-def resolve_profile_run_id_from_run(run: WandbRunLike) -> str:
-    trainer_config = run.config.get("trainer")
-    if not isinstance(trainer_config, dict):
-        raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
-
-    run_id = trainer_config.get("id")
-    if isinstance(run_id, str) and run_id:
-        return run_id
-
-    return run.path[-1]
 
 
 def summarize_profile_artifact(
@@ -271,32 +242,6 @@ def summarize_trace(
     )
 
 
-def normalize_run_target(target: str, *, entity: str | None, project: str | None) -> tuple[str, str, str]:
-    """
-    Normalize run target into `(entity, project, run_id)`.
-
-    Accepted target forms:
-    - bare run id (`abc123`) with explicit `entity` and `project`
-    - `entity/project/run_id`
-    - W&B run URL (`https://wandb.ai/entity/project/runs/run_id`)
-    """
-    if target.startswith(("http://", "https://")):
-        parts = [part for part in urlparse(target).path.split("/") if part]
-        if len(parts) < 3:
-            raise ValueError(f"Could not parse run information from URL: {target}")
-    else:
-        parts = [part for part in target.split("/") if part]
-        if len(parts) == 1:
-            if entity is None or project is None:
-                raise ValueError("Bare run ids require --entity and --project.")
-            return entity, project, parts[0]
-        if len(parts) < 3:
-            raise ValueError(f"Unrecognized run target: {target}")
-
-    run_id = parts[3] if parts[2] == "runs" and len(parts) >= 4 else parts[2]
-    return parts[0], parts[1], run_id
-
-
 def _download_artifact_with_metadata(
     *,
     artifact: Any,
@@ -335,14 +280,8 @@ def _download_profile_dir_with_metadata(
     run: WandbRunLike,
     download_root: Path | None,
 ) -> DownloadedProfileDir:
-    run_id = resolve_profile_run_id_from_run(run)
-    local_profile_dir = mirror_directory(
-        profile_dir,
-        download_root,
-        run_id=run_id,
-        leaf_dirname=PROFILE_DIR_NAME,
-        temp_dir_prefix="marin-profile-",
-    )
+    run_id = resolve_profile_run_id(run)
+    local_profile_dir = mirror_profile_dir(profile_dir, download_root, run_id=run_id)
     metadata = _run_metadata_from_run(run, artifact_ref=profile_dir, artifact_name=PROFILE_DIR_NAME)
     return DownloadedProfileDir(profile_dir=local_profile_dir, run_metadata=metadata)
 

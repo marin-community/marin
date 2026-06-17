@@ -12,15 +12,17 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
-from urllib.parse import urlparse
+from typing import Optional
 
 import wandb
 import wandb.errors as wandb_errors
 
-from levanter.utils.fsspec_utils import join_path, mirror_directory
-
-PROFILER_DIR_NAME = "profiler"
+from levanter.utils.profile_dirs import (
+    mirror_profile_dir,
+    normalize_run_target,
+    resolve_profile_dir,
+    resolve_profile_run_id,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,73 +57,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def normalize_run_path(target: str, entity: Optional[str], project: Optional[str]) -> Tuple[str, str, str]:
-    if target.startswith(("http://", "https://")):
-        parsed = urlparse(target)
-        parts = [p for p in parsed.path.split("/") if p]
-        if len(parts) < 3:
-            raise ValueError(f"Could not parse run information from URL: {target}")
-        entity = parts[0]
-        project = parts[1]
-        if parts[2] == "runs" and len(parts) >= 4:
-            run_id = parts[3]
-        else:
-            run_id = parts[2]
-        return entity, project, run_id
-
-    parts = [p for p in target.split("/") if p]
-    if len(parts) == 1:
-        if not entity or not project:
-            raise ValueError("Bare run ids require --entity and --project.")
-        return entity, project, parts[0]
-
-    if len(parts) >= 3:
-        entity = parts[0]
-        project = parts[1]
-        if parts[2] == "runs" and len(parts) >= 4:
-            run_id = parts[3]
-        else:
-            run_id = parts[2]
-        return entity, project, run_id
-
-    raise ValueError(f"Unrecognized run target: {target}")
-
-
-def resolve_profile_dir(run: "wandb.apis.public.Run") -> str:
-    run_id = resolve_profile_run_id(run)
-    trainer_config = run.config.get("trainer")
-    if not isinstance(trainer_config, dict):
-        raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
-
-    log_dir = trainer_config.get("log_dir")
-    if not log_dir:
-        raise RuntimeError(f"Run {run.path} does not expose trainer.log_dir.")
-
-    return join_path(join_path(str(log_dir), run_id), PROFILER_DIR_NAME)
-
-
-def resolve_profile_run_id(run: "wandb.apis.public.Run") -> str:
-    trainer_config = run.config.get("trainer")
-    if not isinstance(trainer_config, dict):
-        raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
-
-    run_id = trainer_config.get("id")
-    if isinstance(run_id, str) and run_id:
-        return run_id
-
-    return run.path[-1]
-
-
-def mirror_profile_dir(profile_dir: str, root: Path | None, *, run_id: str) -> Path:
-    return mirror_directory(
-        profile_dir,
-        root,
-        run_id=run_id,
-        leaf_dirname=PROFILER_DIR_NAME,
-        temp_dir_prefix="wandb-profile-",
-    )
-
-
 def build_tensorboard_command(executable: str, logdir: Path, port: Optional[int]) -> list[str]:
     command = [executable, f"--logdir={logdir}"]
     if port is not None:
@@ -145,7 +80,7 @@ def main() -> None:
     args = parse_args()
 
     try:
-        entity, project, run_id = normalize_run_path(args.target, args.entity, args.project)
+        entity, project, run_id = normalize_run_target(args.target, args.entity, args.project)
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
