@@ -251,6 +251,16 @@ confirms the path.
 - **Data:** SlimPajama-6B real slice — tokenized **cache hit** on R2 (`slimpajama-6b-cw-31d2b0`), so no
   tokenization and no cross-region cost.
 
+### 2026-06-17 — Decision: first public push after R4 baseline
+- **When to go public** (per run-research conventions + David's "work in the open"): post the
+  experiment issue + push the research branch **after the R4 baseline smoke yields a datapoint**, so
+  the issue opens with a concrete result rather than pure plan. (Convention biases earlier — issue is
+  a kickoff artifact — but holding until R4 is a deliberate "open with a number" call.)
+- **Sequence:** R4 smoke (held for Matt's go-ahead) → post issue (`grug-fp8-h100-issue-draft`) + push
+  `research/grug-fp8-h100` so logbook permalinks resolve → issue updates per milestone.
+- **Code** stays separate: clean PR-candidate branch, PRs at PR1/PR2/PR3 checkpoints via Discord
+  `#code-review` (two-branch convention). All public pushes confirmed with Matt first (standing rule).
+
 <!-- New entries below this line. Template:
 ### YYYY-MM-DD HH:MM - <GFP8-NNN short label>
 - Hypothesis:
