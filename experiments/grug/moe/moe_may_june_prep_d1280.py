@@ -33,7 +33,7 @@ _DIM: int = 1280
 _BS: int = 512  # TPB = 512 * 4096 = 2,097,152 (~2M tokens/batch)
 _SEQ: int = 4096
 _STEPS: int = 589371
-_EP: int = 2
+_EP: int = 4
 
 _heuristic = MoeMuonHHeuristic(min_lr_ratio=0.05)
 _model_base = _heuristic.build_model_config(_DIM, seq_len=_SEQ)
