@@ -7,80 +7,96 @@ the dense base template.
 
 ## Architecture
 
-All layers are MoE. No dense initial layers, no load-balancing loss (router
-z-loss only). The architecture choices are hardcoded in
-[`model.py`](./model.py); only shape/size knobs live in `GrugModelConfig`.
+Describes the May Recipe defaults (V2) — what the model + optimizer + schedule
+actually run as on `moe_may_pr` today. The architecture choices are hardcoded
+in [`model.py`](./model.py); only shape/size knobs live in `GrugModelConfig`.
 
-- **Router**: linear projection (fp32) of `hidden_dim → num_experts`. Routing
-  uses a `stop_gradient` bias term that is updated each step from the previous
-  step's QB-β statistics (see `train.py::_apply_qb_betas`).
-- **QB load balancing**: at each step, the router computes per-expert β from
-  the top-k logit threshold and stores it on `GrugTrainState.pending_qb_betas`.
-  On the next step, `router_bias := -β` to push rarely-selected experts up and
-  over-selected experts down. This replaces a traditional aux load-balancing
-  loss — the bias mechanism does the balancing and is invisible to gradients.
-  The full QB computation lives in [`model.py#L350-L385`](./model.py#L350).
-- **Top-k**: `num_experts_per_token = 4` active experts out of `num_experts = 64`.
-- **Combine weights**: sigmoid on unbiased router logits for the selected
-  experts (not softmax).
-- **Shared expert**: one always-on dense MLP per block in parallel with the
-  routed experts (contributes to every token).
-- **GatedNorm**: rank-128 low-rank gating on RMS-normalized input pre-attention
-  and pre-MLP. Acts as a learned per-token gate over the hidden dimension.
+All layers are MoE. No dense initial layers, no auxiliary load-balancing loss
+(QB bias does the balancing), no z-losses (router or final-logit).
+
+**Experts.**
+- `num_experts = 256` routed pool; `num_experts_per_token = 4` active per token.
+- One always-on **shared** dense MLP per block, in parallel with the routed
+  experts (contributes to every token).
+- **MoEMLP** stores per-expert `w_gate` and `w_up` as separate `(e, d, i)`
+  tensors and concatenates on the forward pass.
+
+**Router.**
+- Linear projection of `hidden_dim → num_experts` in **fp32** (cast back at
+  the end). Top-k, softmax, and QB statistics all run in fp32.
+- A `stop_gradient` bias term gets added to the router logits before top-k;
+  the bias is updated each step from the previous step's QB-β statistics
+  (see `train.py::_apply_qb_betas`).
+- **QB load balancing**: per-expert β is the top-k logit threshold averaged
+  across the batch. On the next step, `router_bias := -β`, pushing
+  rarely-selected experts up and over-selected experts down. Replaces an aux
+  load-balancing loss — the bias mechanism is invisible to gradients.
+- **Combine weights**: sigmoid on the *unbiased* router logits of the K
+  selected experts, then **renormalised to sum to 2.5**
+  (`_ROUTING_RENORM_SUM`).
+
+**Attention** (`CausalSelfAttention.__call__`).
+- **GQA**: default ratio 4:1 (`num_kv_heads = num_heads / 4`).
+- **Half-RoPE**: rotary embeddings applied only to the first half of Q/K per
+  head (`q[..., :head_dim/2]`, `k[..., :head_dim/2]`); the second half is
+  rope-free on every layer.
+- **PKO (Partial Key Offset)** on the every-4th + last "long" layers: shift
+  the rope-free second half of K back by one position, zero at document
+  starts (`segment_ids` change), then rms-norm. Short layers skip PKO.
+- **Sliding window**: long layers run full causal attention
+  (`sliding_window = None`). Short layers run `cfg.sliding_window` (default
+  2048).
 - **XSA (Exclusive Self-Attention)**: after attention, subtract the component
-  of each head's output that is parallel to its `aligned_v`. `z = y − (yᵀv / ‖v‖²)·v`
+  of each head's output parallel to its `aligned_v`: `z = y − (yᵀv / ‖v‖²)·v`
   per head. Followed by a headwise sigmoid gate.
-- **RoPE**: standard rotary embeddings (no scaling by default).
-- **GQA**: grouped-query attention. Default ratio in the heuristic is 4:1
-  (`num_kv_heads = num_heads / 4`).
-- **Sliding-window attention**: every 4th layer uses full `sliding_window`;
-  others use half. Specifically, layer `i` uses the long mask iff `i % 4 == 3`.
-- **Fp32 router path**: router logits cast to fp32 before top-k, softmax, and
-  QB statistics.
+
+**Norms.**
+- **GatedNorm**: rank-128 low-rank gate on RMS-normalised input pre-attention
+  and pre-MLP. Acts as a learned per-token gate over the hidden dimension.
+
+**Optimizer + schedule** ([`heuristic_v2.py`](./heuristic_v2.py) +
+[`optimizer.py`](./optimizer.py)).
+- **MuonH** (`GrugMoeMuonHConfig`, registered as `grug_moe_muonh_v1`):
+  Newton-Schulz orthogonalisation + Frobenius-hyperball scale-invariant
+  updates on the matrix + GatedNorm group.
+  - `adamh` (lm_head only).
+  - `adam` (token_embed, router, attn_gate, biases, 1-D norm weights).
+- **No gradient clipping** (`max_grad_norm = None`).
+- **1% warmup**, linear decay to 0, `min_lr_ratio = 0`.
+- LR scaling (fit on the May Recipe sweep, issue #5951, R²=0.996):
+  `muonh_lr = 18.31 · tokens^-0.395 · dim^-0.150 · sqrt(B)`
+  (equivalently `adam_lr = 0.06602 · tokens^-0.395 · dim^-0.150 · sqrt(tpb)`).
+
+**Other.**
 - **Expert parallelism**: `ragged_all_to_all` or ring-based via
   `levanter.grug.grug_moe.moe_mlp` (default: ring). Default capacity factor 1.0.
 
-## May Recipe Updates
+## What changed from V1
 
-Diff vs the v16 baseline architecture above (all changes are baked into
-`model.py` and `optimizer.py`; the `GrugModelConfig` knobs to toggle them
-were intentionally dropped so the recipe is the recipe):
+V1 was the first Marin MoE formula, used on the May 2026 1e23
+``129B / A29B MoE V1`` hero run (`heuristic_v1.MoeHeuristicV1`, AdamH on the
+v16 architecture). Everything below is what moved between V1 and the V2
+defaults documented in the Architecture section above.
 
-- **Half-RoPE on every layer**: rotary embeddings applied only to the first
-  half of Q/K per head (`q[..., :head_dim/2]`, `k[..., :head_dim/2]`); the
-  second half is rope-free on every layer. v16 applied RoPE to the full
-  head dimension.
-- **PKO (Partial Key Offset)** on every-4th + last layer: shift the
-  rope-free second half of K forward by 1 position, then zero at doc-start
-  boundaries (using `segment_ids`), then rms-norm — `pko_first_bos_zero`
-  ordering. v16 had no PKO.
-- **Sliding-window pattern**: every-4th + last layer use `sliding_window=None`
-  (full causal up to `max_seq_len`); other layers use
-  `cfg.sliding_window` (default 2048). v16 used `cfg.sliding_window` on
-  long layers and halved it on short layers, with no last-layer special case.
-- **Split `w_gate` / `w_up`** in MoEMLP: stored as separate `(e, d, i)`
-  tensors and concatenated on the forward pass. v16 stored them fused.
-- **Routing renormalization**: sigmoid combine weights are renormalized to
-  sum to 2.5 across the K selected experts (`_ROUTING_RENORM_SUM = 2.5`).
-  v16 did not renormalize.
-- **MuonH optimizer** (`GrugMoeMuonHConfig`, registered as
-  `grug_moe_muonh_v1`): Newton-Schulz orthogonalization + Frobenius
-  hyperball scale-invariant updates on the weight-matrix + GatedNorm group.
-  v16 used `GrugMoeAdamHConfig` (AdamH) on the same group.
-- **256 experts** at k=4 (vs v16's 64 experts at k=4): bigger expert pool,
-  same active path (4 routed + shared per token).
-- **Router z-loss disabled**: `router_z_loss_coef = 0.0` (v16: 0.001).
-- **Final-logit z-loss disabled**: `GrugTrainerConfig.z_loss_weight = 0.0`
-  (v16: 1e-4) — `logsumexp_weight` resolves to `None` so the fused
-  cross-entropy never applies the logit-stabilization term.
-- **No gradient clipping**: `max_grad_norm = None` on the MuonH config
-  (v16 used `max_grad_norm = 1.0`).
-- **Warmup 1%** of training (v16 used 10%).
-- **LR refit** in `heuristic_v2.py` (`MoeHeuristicV2`): refit on the
-  MuonH-on-May-Recipe LR sweep (17 cells, R²=0.996, issue #5951):
-  `muonh_lr = 18.31 · tokens^-0.395 · dim^-0.150 · sqrt(B)`
-  (equivalently `adam_lr = 0.06602 · tokens^-0.395 · dim^-0.150 · sqrt(tpb)`).
-  v16 used `adam_lr = 1.63 · tokens^-0.2813 · dim^-0.3678 · sqrt(B)`.
+- **Optimizer**: MuonH (V2) vs AdamH (V1) on the matrix + GatedNorm group.
+- **Expert pool**: 256 experts (V2) vs 64 experts (V1), K=4 in both — bigger
+  pool, same active path.
+- **Routing renormalisation**: sigmoid combine weights now renorm to sum 2.5
+  (V2). V1 did not renormalise.
+- **Split `w_gate` / `w_up`** in MoEMLP (V2). V1 stored them fused.
+- **Half-RoPE on every layer** (V2). V1 applied RoPE to the full head_dim.
+- **PKO** on every-4th + last layer (V2). V1 had no PKO.
+- **Sliding-window pattern**: long layers fully causal, short layers at
+  `cfg.sliding_window` (V2). V1 used `cfg.sliding_window` on long layers and
+  halved it on short layers, with no last-layer special case.
+- **Router z-loss off** (V2: `router_z_loss_coef = 0.0`). V1: `0.001`.
+- **Final-logit z-loss off** (V2: `GrugTrainerConfig.z_loss_weight = 0.0`).
+  V1: `1e-4`.
+- **No gradient clipping** (V2: `max_grad_norm = None`). V1: `1.0`.
+- **1% warmup** (V2). V1: 10%.
+- **LR refit** (`heuristic_v2.py`, `MoeHeuristicV2`):
+  V1: `adam_lr = 1.63 · tokens^-0.2813 · dim^-0.3678 · sqrt(B)`.
+  V2: `adam_lr = 0.06602 · tokens^-0.395 · dim^-0.150 · sqrt(B)`.
 
 ## Scaling heuristic
 
@@ -118,35 +134,12 @@ batch_size, num_steps)` tuple (used by `canary_ferry.py`). For V2, instantiate
 `MoeHeuristicV2()` and call `build_model_config` / `build_optimizer_config`
 directly — `launch.py` does this for the baseline.
 
-## v16 isoflop sweep
-
-From the v16 sweep (`group=isoflop-moe-v16` on wandb, project `dial_moe`).
-See [issue #4447](https://github.com/marin-community/marin/issues/4447) for
-the full sweep context, per-cell results, and extrapolation tables. All runs
-use the architecture described above, QB routing, shared expert, GQA 4:1,
-seq_len 4096. The sweep tested multiple hidden dims at each compute budget
-(1e18–3e20) to find the optimal model size per budget.
-
-Scaling laws fit on the v16 sweep optima:
-
-- `N*(C) = 1.09e-2 · C^0.535`
-- `T*(C) = 1.60e+1 · C^0.464`
-- Paloma macro: `1.6 + 95.18 · C^(-0.0941)` (L∞ pinned at 1.6)
-
-Projections:
-
-| Budget | Projected macro |
-|--------|-----------------|
-| 1e21   | 2.606           |
-| 1e23   | 2.252           |
-
-The **measured** 1e21 d2560-v2 run came in at macro **2.599**.
-
 ## Compute-optimal baseline
 
-Using `N*(C)` from the isoflop sweep, we inverted to find the optimal compute
-budget for each hidden dim, then ran each at its predicted optimal budget. These
-are the baseline runs that ablation experiments compare against.
+For each hidden dim we picked a compute budget at the parabola optimum of
+its isoflop curve (V2 / May Recipe: drop-1e18 fit, issue #6074; V1 / v16:
+issue #4447) and ran the cell at that budget. These are the baseline runs
+that ablation experiments compare against.
 
 ### May Recipe (drop-1e18 fit, issue #6074) — current baseline
 
@@ -172,10 +165,12 @@ loss(C) = 1.6 + 88.32 · C^-0.0941
 
 ### v16 baseline (historical reference)
 
-Older AdamH MoE sweep (`group=isoflop-moe-v16` in `marin-community/dial_moe`).
-Kept here because the v16 scaling law (`loss = 1.6 + 95.18 · C^-0.0941`) is the
-reference curve in `experiments/grug/moe/agent.md` for gate-1 / gate-2 effective
-speedup calculations.
+Older AdamH MoE sweep (`group=isoflop-moe-v16` in `marin-community/dial_moe`,
+issue #4447). Kept here because the v16 scaling law
+(`loss = 1.6 + 95.18 · C^-0.0941`) is the reference curve in
+`experiments/grug/moe/agent.md` for gate-1 / gate-2 effective speedup
+calculations. Empirically validated at 1e21: predicted macro 2.606, measured
+d2560-v2 run came in at **2.599**.
 
 | Budget   | Dim      | Layers | Paloma macro | Tokens  | v5p-8 avg tok/s | v5p-8 runtime | Run |
 |----------|----------|--------|-------------|---------|-----------------|---------------|-----|
@@ -213,33 +208,6 @@ Most promotable changes will land in one of three files:
 Some discretionary factors may influence the promotion decision even when the
 loss criteria are met — for example, impact on training memory footprint,
 inference latency / KV-cache size, serving compatibility, or interaction effects with other promotable changes.
-
-## Large run model sizing
-
-Conservative sizing for large runs using equal compute allocation between
-parameters and tokens (exponent fixed to 0.5):
-
-```
-N*(C) = 0.0543 · C^0.5    (active params, no lm_head)
-T*(C) = 3.290  · C^0.5    (tokens)
-token:active_param ratio = 60.6 (constant across all scales)
-total_params ≈ 8 × active_params  (for E=64, K=4 with shared expert)
-```
-
-These formulas fix the exponent to 0.5 for both N and T (equal scaling),
-fit on v16 isoflop sweep parabola optima. The free-fit exponents
-(N: 0.546, T: 0.464) are slightly param-heavy, but the fixed 0.5 is more
-conservative and easier to reason about.
-
-| Budget | Active params | Total params | Tokens  | Predicted macro | Approx dim | Layers |
-|--------|--------------|-------------|---------|-----------------|------------|--------|
-| 1e21   | 1.7B         | ~14B        | 104B    | 2.606           | d2400      | 24     |
-| 1e22   | 5.4B         | ~43B        | 329B    | 2.410           | d3520      | 35     |
-| 1e23   | 17.2B        | ~137B       | 1.0T    | 2.252           | d5170      | 50     |
-| 1e24   | 54.3B        | ~434B       | 3.3T    | 2.125           | d7590      | 71     |
-| 1e25   | 171.7B       | ~1.4T       | 10.4T   | 2.023           | d11150     | 102    |
-
-Predicted macro uses `loss(C) = 1.6 + 95.18 · C^(-0.0941)`.
 
 ## Files
 
