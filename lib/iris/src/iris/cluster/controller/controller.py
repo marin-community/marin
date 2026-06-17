@@ -181,11 +181,12 @@ class ControllerConfig:
 
     worker_unreachable_grace: Duration = field(default_factory=lambda: Duration.from_seconds(50.0))
     """How long a worker may be continuously unreachable (or self-report
-    unhealthy) before the controller fails and tears it down. Realized as a count
-    of consecutive failed reconcile passes — ``round(grace / poll_interval)`` —
-    so detection latency stays fixed regardless of the reconcile cadence. ~50s
-    tolerates brief network blips without reaping a multi-VM slice; tests shorten
-    it for fast deterministic teardown."""
+    unhealthy) before the controller fails and tears it down. Realized as
+    wall-clock elapsed since the worker's last successful reconcile (see
+    ``WorkerHealthTracker``), so detection latency is ~grace regardless of the
+    reconcile cadence or how long a failing pass takes. ~50s tolerates brief
+    network blips without reaping a multi-VM slice; tests shorten it for fast
+    deterministic teardown."""
 
     max_tasks_per_job_per_cycle: int = 4
     """Maximum tasks from a single non-coscheduled job to consider per scheduling
@@ -312,13 +313,9 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
-        # Detection latency is fixed in wall-clock by worker_unreachable_grace and
-        # converted to a consecutive-failure count for the reconcile cadence, so it
-        # is unaffected by poll_interval.
-        reconcile_failure_threshold = max(
-            1, round(config.worker_unreachable_grace.to_seconds() / config.poll_interval.to_seconds())
-        )
-        self._health = WorkerHealthTracker(reconcile_failure_threshold=reconcile_failure_threshold)
+        # Worker-death detection is wall-clock, fixed at the grace regardless of
+        # the reconcile cadence (see WorkerHealthTracker).
+        self._health = WorkerHealthTracker(unreachable_grace=config.worker_unreachable_grace)
         self._endpoints = EndpointsProjection(self._db)
         self._worker_attrs = WorkerAttrsProjection(self._db)
         writes.validate()
