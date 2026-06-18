@@ -1354,11 +1354,17 @@ def _is_retryable_hf_exception(exc: Exception) -> bool:
 def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:
     """Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec"""
     with _patch_hf_hub_download():
-        return _hf_hub_retry(
-            lambda: AutoTokenizer.from_pretrained(
-                model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+        return cast(
+            HfTokenizer,
+            _hf_hub_retry(
+                lambda: AutoTokenizer.from_pretrained(
+                    model_name_or_path,
+                    revision=revision,
+                    cache_dir=local_cache_dir,
+                    trust_remote_code=trust_remote_code,
+                ),
+                action=f"load tokenizer {model_name_or_path!r}",
             ),
-            action=f"load tokenizer {model_name_or_path!r}",
         )
 
 
