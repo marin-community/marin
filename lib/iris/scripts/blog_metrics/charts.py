@@ -148,7 +148,6 @@ def chart_accelerators(daily_dir: str, charts_dir: str) -> None:
     ax.set_ylabel("chips (mean concurrent / day)")
     _style_time_axis(ax)
     ax.set_ylim(bottom=0)
-    _add_milestones(ax, min(days), max(days))
     ax.legend(loc="upper left", fontsize=8, ncol=3, frameon=False)
     _save(fig, charts_dir, "accelerators_chips")
 
@@ -165,7 +164,6 @@ def chart_flops(daily_dir: str, charts_dir: str) -> None:
     ax.set_ylabel("PFLOP/s (mean concurrent / day)")
     _style_time_axis(ax)
     ax.set_ylim(bottom=0)
-    _add_milestones(ax, min(days), max(days))
     ax.legend(loc="upper left", fontsize=8, ncol=3, frameon=False)
     _save(fig, charts_dir, "flops_pflops")
 
@@ -179,7 +177,6 @@ def chart_users(daily_dir: str, charts_dir: str) -> None:
     ax.set_ylabel("distinct users")
     _style_time_axis(ax)
     ax.set_ylim(bottom=0)
-    _add_milestones(ax, min(days), max(days))
     _save(fig, charts_dir, "users")
 
 
@@ -194,7 +191,6 @@ def chart_tasks(daily_dir: str, charts_dir: str) -> None:
     ax.set_ylabel("concurrent tasks")
     _style_time_axis(ax)
     ax.set_ylim(bottom=0)
-    _add_milestones(ax, min(days), max(days))
 
     ax2 = ax.twinx()
     ax2.plot(_dates(user_rows), _floats(user_rows, "active_tasks_ran"), color="0.5", linewidth=1.0, linestyle=":")
@@ -224,7 +220,6 @@ def chart_regions(daily_dir: str, charts_dir: str) -> None:
     ax.set_ylabel("chips (mean concurrent / day)")
     _style_time_axis(ax)
     ax.set_ylim(bottom=0)
-    _add_milestones(ax, min(days), max(days))
     ax.legend(loc="upper left", fontsize=8, ncol=3, frameon=False)
     _save(fig, charts_dir, "accelerators_by_region")
 
@@ -254,7 +249,6 @@ def chart_fleet_utilization(daily_dir: str, charts_dir: str) -> None:
     ax.set_ylim(bottom=0)
     _style_time_axis(ax)
     ax.legend(loc="upper left", fontsize=8, frameon=False)
-    _add_milestones(ax, min(days), max(days))
 
     ax2 = ax.twinx()
     ax2.plot(days, occupancy, color="0.25", linewidth=1.2, linestyle=":", label="occupancy %")
@@ -301,7 +295,6 @@ def chart_preemptible(daily_dir: str, charts_dir: str) -> None:
     ax.set_ylim(bottom=0)
     _style_time_axis(ax)
     ax.legend(loc="upper left", fontsize=8, frameon=False)
-    _add_milestones(ax, min(days), max(days))
 
     ax2 = ax.twinx()
     ax2.plot(days, share, color="0.25", linewidth=1.2, linestyle=":", label="preemptible share")
@@ -399,7 +392,6 @@ def chart_overview(daily_dir: str, charts_dir: str) -> None:
     tot_rows = _load_csv(os.path.join(daily_dir, "accelerators_daily.csv"))
     user_rows = _load_csv(os.path.join(daily_dir, "users_daily.csv"))
     tot_days = _dates(tot_rows)
-    day_min, day_max = min(tot_days), max(tot_days)
 
     fig, axes = plt.subplots(2, 2, figsize=(15, 8.5))
 
@@ -429,7 +421,6 @@ def chart_overview(daily_dir: str, charts_dir: str) -> None:
     for ax in axes.flat:
         _style_time_axis(ax)
         ax.set_ylim(bottom=0)
-        _add_milestones(ax, day_min, day_max)
 
     fig.suptitle("Iris cluster usage — Marin", fontsize=14, y=0.98)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
