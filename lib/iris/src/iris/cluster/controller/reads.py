@@ -805,20 +805,6 @@ def pending_tasks_with_jobs(tx: Tx) -> list[PendingTask]:
     return [task for task in pending_tasks if task_row_can_be_scheduled(task)]
 
 
-def job_states_by_id(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]:
-    """Return ``{job_id: state}`` for the given job IDs (no resource or config columns)."""
-    ids = list(job_ids)
-    if not ids:
-        return {}
-    rows = tx.execute(
-        select(jobs_table.c.job_id, jobs_table.c.state).where(
-            jobs_table.c.job_id.in_(bindparam("job_ids", expanding=True))
-        ),
-        {"job_ids": ids},
-    ).all()
-    return {row.job_id: int(row.state) for row in rows}
-
-
 _RUNNING_TASK_BAND_STMT = (
     select(
         tasks_table.c.task_id,

@@ -19,13 +19,11 @@ Subsets per dataset (each a top-level directory in the raw repo):
 * ``locuslab/fineweb_annotated``: ``score_0`` ... ``score_5``
 """
 
-from fray import ResourceConfig
-
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
-# Mapping of canonical family name → (HF repo id, default revision, subsets).
+# Mapping of canonical family name → (HF repo id, revision, subsets).
 # Revisions pinned 2026-05-14 from https://huggingface.co/api/datasets/<repo>.
 SAFETY_PRETRAINING_FAMILIES: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "moral_education": (
@@ -56,82 +54,13 @@ SAFETY_PRETRAINING_FAMILIES: dict[str, tuple[str, str, tuple[str, ...]]] = {
 }
 
 
-def _download(
-    family: str,
-    *,
-    revision: str | None = None,
-    hf_urls_glob: list[str] | None = None,
-    worker_resources: ResourceConfig | None = None,
-) -> StepSpec:
-    hf_dataset_id, default_revision, _ = SAFETY_PRETRAINING_FAMILIES[family]
-    resolved_revision = revision or default_revision
+def _download(family: str) -> StepSpec:
+    hf_dataset_id, revision, _ = SAFETY_PRETRAINING_FAMILIES[family]
     return download_hf_step(
         f"raw/{family}",
         hf_dataset_id=hf_dataset_id,
-        revision=resolved_revision,
-        hf_urls_glob=hf_urls_glob,
-        override_output_path=f"raw/{family}-{resolved_revision}",
-        worker_resources=worker_resources,
-    )
-
-
-def download_moral_education(
-    *,
-    revision: str | None = None,
-    hf_urls_glob: list[str] | None = None,
-    worker_resources: ResourceConfig | None = None,
-) -> StepSpec:
-    """Download ``locuslab/moral_education`` from HuggingFace."""
-    return _download(
-        "moral_education",
         revision=revision,
-        hf_urls_glob=hf_urls_glob,
-        worker_resources=worker_resources,
-    )
-
-
-def download_safeweb(
-    *,
-    revision: str | None = None,
-    hf_urls_glob: list[str] | None = None,
-    worker_resources: ResourceConfig | None = None,
-) -> StepSpec:
-    """Download ``locuslab/safeweb`` from HuggingFace."""
-    return _download(
-        "safeweb",
-        revision=revision,
-        hf_urls_glob=hf_urls_glob,
-        worker_resources=worker_resources,
-    )
-
-
-def download_refuseweb(
-    *,
-    revision: str | None = None,
-    hf_urls_glob: list[str] | None = None,
-    worker_resources: ResourceConfig | None = None,
-) -> StepSpec:
-    """Download ``locuslab/refuseweb`` from HuggingFace."""
-    return _download(
-        "refuseweb",
-        revision=revision,
-        hf_urls_glob=hf_urls_glob,
-        worker_resources=worker_resources,
-    )
-
-
-def download_fineweb_annotated(
-    *,
-    revision: str | None = None,
-    hf_urls_glob: list[str] | None = None,
-    worker_resources: ResourceConfig | None = None,
-) -> StepSpec:
-    """Download ``locuslab/fineweb_annotated`` from HuggingFace."""
-    return _download(
-        "fineweb_annotated",
-        revision=revision,
-        hf_urls_glob=hf_urls_glob,
-        worker_resources=worker_resources,
+        override_output_path=f"raw/{family}-{revision}",
     )
 
 
