@@ -195,6 +195,7 @@ class Autoscaler:
         base_worker_config: config_pb2.WorkerConfig | None = None,
         unresolvable_timeout: Duration = DEFAULT_UNRESOLVABLE_TIMEOUT,
         create_rate_limit: int = DEFAULT_CREATE_RATE_LIMIT,
+        make_draining_group: Callable[[str], ScalingGroup] | None = None,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -207,8 +208,12 @@ class Autoscaler:
             unresolvable_timeout: How long a slice can remain UNKNOWN before being treated as FAILED.
             create_rate_limit: Project-wide ceiling on slice-creation requests per minute,
                 shared across all scale groups. See ``DEFAULT_CREATE_RATE_LIMIT``.
+            make_draining_group: Builds a scale-to-zero ``ScalingGroup`` for a scale group that has
+                left config but still has live VMs (see ``restore_autoscaler_state``). None disables
+                drain adoption (test/local mode); the factory always wires it in prod.
         """
         self._groups = scale_groups
+        self._make_draining_group = make_draining_group
         self._platform = platform
         self.evaluation_interval = evaluation_interval
         self._base_worker_config = base_worker_config
@@ -240,6 +245,7 @@ class Autoscaler:
         config: config_pb2.AutoscalerConfig,
         platform: WorkerInfraProvider,
         base_worker_config: config_pb2.WorkerConfig | None = None,
+        make_draining_group: Callable[[str], ScalingGroup] | None = None,
     ) -> "Autoscaler":
         """Create autoscaler from proto config.
 
@@ -248,6 +254,8 @@ class Autoscaler:
             config: Autoscaler configuration proto (with defaults already applied)
             platform: WorkerInfraProvider instance for shutdown lifecycle
             base_worker_config: Base worker config merged with per-group overrides
+            make_draining_group: Builds a scale-to-zero group for a retired-but-live scale group
+                (see ``Autoscaler.__init__`` / ``restore_autoscaler_state``).
 
         Returns:
             Configured Autoscaler instance
@@ -257,6 +265,7 @@ class Autoscaler:
             evaluation_interval=duration_from_proto(config.evaluation_interval),
             platform=platform,
             base_worker_config=base_worker_config,
+            make_draining_group=make_draining_group,
         )
 
     def shutdown(self) -> None:
@@ -583,7 +592,7 @@ class Autoscaler:
         )
 
         # Phase 3: fold describe results into group state serially.
-        for (group, slice_id, handle), status in zip(targets, statuses, strict=True):
+        for (group, slice_id, _handle), status in zip(targets, statuses, strict=True):
             if status is None:
                 continue
             if status.state == CloudSliceState.READY:
@@ -611,8 +620,12 @@ class Autoscaler:
                     status="failed",
                 )
             elif status.state == CloudSliceState.UNKNOWN:
-                age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
-                if age >= self._unresolvable_timeout:
+                # Measure how long the slice has been CONTINUOUSLY UNKNOWN, not its
+                # age since creation: a single transient UNKNOWN describe must not
+                # terminate a long-running or freshly-adopted (drained) slice that
+                # still has running tasks.
+                unknown_for = group.note_slice_unknown(slice_id, timestamp)
+                if unknown_for >= self._unresolvable_timeout:
                     group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
                     group.scale_down(slice_id)
                     self._unregister_slice_workers(slice_id)
@@ -621,14 +634,14 @@ class Autoscaler:
                         "slice_failed",
                         group.name,
                         slice_id,
-                        reason=f"TPU unresolvable for {age}",
+                        reason=f"unresolvable for {unknown_for}",
                         status="failed",
                     )
                 else:
                     logger.debug(
-                        "Slice %s UNKNOWN (age %s < timeout %s); will retry",
+                        "Slice %s UNKNOWN (unknown for %s < timeout %s); will retry",
                         slice_id,
-                        age,
+                        unknown_for,
                         self._unresolvable_timeout,
                     )
 
@@ -802,7 +815,7 @@ class Autoscaler:
         tracked workers. Call at startup before loops begin.
         """
         checkpoint = load_autoscaler_checkpoint(db)
-        restored_workers = restore_autoscaler_state(self._groups, checkpoint, platform)
+        restored_workers = restore_autoscaler_state(self._groups, checkpoint, platform, self._make_draining_group)
         self.restore_tracked_workers(restored_workers)
         logger.info("Restored %d tracked workers", len(restored_workers))
 
