@@ -1,7 +1,7 @@
 # TPU CI Docker Image
 # Provides a clean environment with Python and uv for running Marin and Levanter tests.
 
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -9,8 +9,19 @@ ARG RUNNER_USER=github-runner
 ARG RUNNER_UID=1000
 ARG RUNNER_GID=1000
 
-RUN groupadd -g ${RUNNER_GID} ${RUNNER_USER} \
-    && useradd -m -u ${RUNNER_UID} -g ${RUNNER_GID} -s /bin/bash ${RUNNER_USER}
+RUN existing_group="$(getent group "${RUNNER_GID}" | cut -d: -f1)" \
+    && if [ -n "${existing_group}" ] && [ "${existing_group}" != "${RUNNER_USER}" ]; then \
+        groupmod -n "${RUNNER_USER}" "${existing_group}"; \
+    elif [ -z "${existing_group}" ]; then \
+        groupadd -g "${RUNNER_GID}" "${RUNNER_USER}"; \
+    fi \
+    && existing_user="$(getent passwd "${RUNNER_UID}" | cut -d: -f1)" \
+    && if [ -n "${existing_user}" ] && [ "${existing_user}" != "${RUNNER_USER}" ]; then \
+        usermod -l "${RUNNER_USER}" -d "/home/${RUNNER_USER}" -m "${existing_user}"; \
+    elif [ -z "${existing_user}" ]; then \
+        useradd -m -u "${RUNNER_UID}" -g "${RUNNER_GID}" -s /bin/bash "${RUNNER_USER}"; \
+    fi \
+    && usermod -g "${RUNNER_GID}" -G "" -s /bin/bash "${RUNNER_USER}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
