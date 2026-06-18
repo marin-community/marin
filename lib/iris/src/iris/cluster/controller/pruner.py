@@ -4,10 +4,13 @@
 """Background pruning loop for the controller.
 
 ``prune_old_data`` is an incremental maintenance loop that deletes one
-prunable job (or worker) per transaction, sleeping between iterations so
-scheduling and heartbeat traffic can interleave. The actual row-level
+prunable job, worker, or slice per transaction, sleeping between iterations
+so scheduling and heartbeat traffic can interleave. The actual row-level
 deletes live in :mod:`iris.cluster.controller.writes`; this module owns
 only the loop structure that drives them.
+
+Slice pruning is the garbage collector for *abandoned* scaling groups —
+see :func:`_prune_orphan_slices`.
 """
 
 import logging
@@ -102,13 +105,17 @@ def _prune_dead_workers(
 
 
 def _prune_orphan_slices(db: ControllerDB, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
-    """Delete orphaned slice rows older than ``cutoff_ms``, one at a time.
+    """Garbage-collect slice rows left behind by abandoned scaling groups.
 
-    A slice with no backing worker row has no live VMs behind it, so once it ages
-    past ``slice_retention`` it is garbage. This reaps the dead leftovers of a
-    scale-group rename/removal: a retired group whose VMs are gone leaves only
-    orphan slice rows. A retired group whose VMs are still live is adopted and
-    drained by the autoscaler instead (``recovery.restore_autoscaler_state``).
+    A ``slices`` row is orphaned once no ``workers`` row references it: nothing
+    live sits behind it, so after it ages past ``slice_retention`` the row is
+    pure garbage. These accumulate when a scale group is dropped from config
+    *after* its VMs are already gone — neither owner of the table reaps them.
+    The autoscaler's state mirror (``persist_autoscaler_state``) only deletes
+    rows for groups it still tracks, and drain-mode
+    (``recovery.restore_autoscaler_state``) only re-adopts a retired group while
+    its VMs are still alive. An abandoned group is in neither set, so this loop
+    is the only thing that clears its rows.
     """
     deleted = 0
     while not _stopped(stop_event):
@@ -149,7 +156,7 @@ def prune_old_data(
         worker_attrs: Worker attributes projection invalidated on worker removal.
         job_retention: Delete terminal jobs whose finished_at is older than this.
         worker_retention: Delete inactive/unhealthy workers whose last heartbeat is older than this.
-        slice_retention: Delete orphaned slices (no backing worker row) older than this.
+        slice_retention: Delete orphaned slices from abandoned scale groups (no backing worker row) older than this.
         stop_event: If set, abort early (e.g. during shutdown).
         pause_between_s: Sleep between individual deletes to reduce lock contention.
     """
