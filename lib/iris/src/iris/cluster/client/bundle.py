@@ -35,6 +35,7 @@ DEFAULT_EXCLUDE = re.compile(
     | (^|/)docs/images(/|$)
     | (^|/)docs/reports(/|$)
     | (^|/)docs/static(/|$)
+    | (^|/)pr_reviews\.db$
     | (^|/)tests/snapshots(/|$)
     | \.png$                         # plot images
     | \.jpg$
