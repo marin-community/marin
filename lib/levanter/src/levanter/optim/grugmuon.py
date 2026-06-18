@@ -288,6 +288,7 @@ def _zeropower_via_newtonschulz_replicated(
     has_mesh = not jax.sharding.get_abstract_mesh().empty
     if has_mesh:
         X = reshard(X, P(None, None))
+    # Normalize in fp32 so the divisor is precise even for small ‖X‖.
     X = X / (jnp.linalg.norm(X) + eps)
 
     transpose = False
@@ -295,12 +296,19 @@ def _zeropower_via_newtonschulz_replicated(
         X = X.T
         transpose = True
 
+    # Modded-nanogpt-style bf16 NS: cast to bf16 for the iteration body, cast
+    # back to the input dtype before returning so the momentum buffer (held
+    # in fp32 by the caller) is untouched. The caller's apply_updates then
+    # consumes a fp32 delta. Only the matmul precision is reduced.
+    orig_dtype = X.dtype
+    X = X.astype(jnp.bfloat16)
     for i in range(steps):
         a, b, c = coeffs[i % len(coeffs)]
         out_sharding = P(None, None) if has_mesh else None
         A = jnp.einsum("ik,jk->ij", X, X, out_sharding=out_sharding)
         B = b * A + c * jnp.einsum("ik,kj->ij", A, A, out_sharding=out_sharding)
         X = a * X + jnp.einsum("ik,kj->ij", B, X, out_sharding=out_sharding)
+    X = X.astype(orig_dtype)
 
     if transpose:
         X = X.T
@@ -320,6 +328,8 @@ def _zeropower_via_newtonschulz_batched_stack_sharded(
 
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
     has_mesh = not jax.sharding.get_abstract_mesh().empty
+    # Normalize in fp32 (per-matrix Frobenius norm); only the NS iteration body
+    # below runs in bf16.
     X = X / (jnp.linalg.norm(X, axis=(-2, -1), keepdims=True) + eps)
 
     transpose = False
@@ -333,12 +343,18 @@ def _zeropower_via_newtonschulz_batched_stack_sharded(
     if has_mesh and target_pspec is not None:
         X = reshard(X, target_pspec)
 
+    # Modded-nanogpt-style bf16 NS: cast to bf16 for the iteration body, cast
+    # back to the input dtype before returning so the caller's fp32 momentum
+    # buffer / fp32 apply_updates path is unchanged.
+    orig_dtype = X.dtype
+    X = X.astype(jnp.bfloat16)
     X_out_sharding = target_pspec if (has_mesh and target_pspec is not None) else None
     for i in range(steps):
         a, b, c = coeffs[i % len(coeffs)]
         A = jnp.einsum("...ik,...jk->...ij", X, X, out_sharding=X_out_sharding)
         B = b * A + c * jnp.einsum("...ik,...kj->...ij", A, A, out_sharding=X_out_sharding)
         X = a * X + jnp.einsum("...ik,...kj->...ij", B, X, out_sharding=X_out_sharding)
+    X = X.astype(orig_dtype)
 
     if transpose:
         X = jnp.swapaxes(X, -1, -2)
