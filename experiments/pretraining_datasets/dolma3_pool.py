@@ -43,7 +43,7 @@ Usage:
 
 from fray.cluster import ResourceConfig
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.transform.stack_edu.hydrate import StackEduHydrationConfig
 from marin.transform.stack_edu.hydrate import hydrate_stack_edu as hydrate_stack_edu_text

@@ -74,9 +74,11 @@ STRONG_TIER_FAMILIES = {
 }
 SINGLE_PHASE_EXPOSURE_AVERAGE_FAMILY = "single_phase_exposure_average_60m_1p2b"
 SINGLE_PHASE_GRP_NO_L2_FAMILY = "single_phase_grp_no_l2_60m_1p2b"
+SINGLE_PHASE_QSPLIT240_300M_FAMILY = "single_phase_exposure_average_qsplit240_300m_6b"
 SINGLE_PHASE_FAMILIES = {
     SINGLE_PHASE_EXPOSURE_AVERAGE_FAMILY,
     SINGLE_PHASE_GRP_NO_L2_FAMILY,
+    SINGLE_PHASE_QSPLIT240_300M_FAMILY,
 }
 PROPORTIONAL_PERTURBATION_FAMILIES = {
     "proportional_perturbation_60m_1p2b",
@@ -954,13 +956,13 @@ def _single_phase_exposure_average_source_frames() -> list[SourceFrame]:
     frame["status"] = frame["logical_status"].fillna("planned")
     frame = _hydrate_checkpoint_eval_metrics(frame)
     sources: list[SourceFrame] = []
-    for family, group in frame.groupby("family", sort=True):
+    for (family, scale), group in frame.groupby(["family", "scale"], sort=True):
         sources.append(
             SourceFrame(
                 source_name=f"run_registry_{family}",
                 source_uri=str(RUN_REGISTRY_LOGICAL_RUNS_CSV),
                 source_kind="run_registry_checkpoint_metrics",
-                scale="60m_1p2b",
+                scale=str(scale),
                 default_cohort=str(group["cohort"].dropna().iloc[0]) if group["cohort"].notna().any() else family,
                 source_priority=95,
                 frame=group.reset_index(drop=True),

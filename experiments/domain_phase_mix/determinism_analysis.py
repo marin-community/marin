@@ -16,9 +16,9 @@ from typing import Any
 import fsspec
 import numpy as np
 import pandas as pd
-from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
+from levanter.tracker.wandb import truncate_wandb_run_name
+from marin.execution.types import ExecutorStep, InputName, output_path_of, this_output_path
 
-from experiments.defaults import _truncate_wandb_name
 from experiments.domain_phase_mix.mmlu_sl_verb_rerun_common import resolve_unique_checkpoint_root
 
 logger = logging.getLogger(__name__)
@@ -223,7 +223,7 @@ def _phase_weights_to_columns(phase_weights: dict[str, dict[str, float]]) -> dic
 
 
 def _expected_wandb_run_name(experiment_name: str, run_name: str) -> str:
-    return _truncate_wandb_name(f"{experiment_name}/{run_name}")
+    return truncate_wandb_run_name(f"{experiment_name}/{run_name}")
 
 
 def _resolve_wandb_run_for_manifest_row(

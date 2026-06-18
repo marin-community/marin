@@ -23,7 +23,8 @@ from levanter.main.train_lm import LmConfig
 from levanter.optim import MuonHConfig
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import Executor, ExecutorStep, output_path_of, this_output_path
+from marin.execution.executor import Executor
+from marin.execution.types import ExecutorStep, output_path_of, this_output_path
 from marin.training.training import TrainLmOnPodConfig, temporary_checkpoint_base_path
 from rigging.filesystem import marin_prefix
 

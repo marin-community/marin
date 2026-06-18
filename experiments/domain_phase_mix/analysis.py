@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 
 import fsspec
 import numpy as np
-from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
+from marin.execution.types import ExecutorStep, InputName, output_path_of, this_output_path
 
 if TYPE_CHECKING:
     import pandas as pd

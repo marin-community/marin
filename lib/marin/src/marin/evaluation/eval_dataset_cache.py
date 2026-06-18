@@ -52,7 +52,8 @@ import fsspec
 import rigging.filesystem  # noqa: F401
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep, versioned
+from marin.execution.executor import ExecutorStep
+from marin.execution.types import versioned
 from marin.utils import call_with_hf_backoff, fsspec_exists
 
 logger = logging.getLogger(__name__)

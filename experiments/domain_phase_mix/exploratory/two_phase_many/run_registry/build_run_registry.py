@@ -86,6 +86,12 @@ from experiments.domain_phase_mix.launch_single_phase_average_grp_no_l2_60m_1p2b
 from experiments.domain_phase_mix.launch_single_phase_average_grp_no_l2_60m_1p2b import (
     build_run_spec as build_single_phase_grp_no_l2_run_spec,
 )
+from experiments.domain_phase_mix.launch_single_phase_average_qsplit240_300m_6b import (
+    NAME as SINGLE_PHASE_QSPLIT240_300M_SOURCE_EXPERIMENT,
+)
+from experiments.domain_phase_mix.launch_single_phase_average_qsplit240_300m_6b import (
+    build_run_specs as build_single_phase_qsplit240_300m_run_specs,
+)
 from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_1_2b_24b import (
     NAME as PENALTY_1_2B_SOURCE_EXPERIMENT,
 )
@@ -377,6 +383,14 @@ FAMILY_METADATA = {
         family="single_phase_grp_no_l2_60m_1p2b",
         scale="60m_1p2b",
         launcher_module="experiments.domain_phase_mix.launch_single_phase_average_grp_no_l2_60m_1p2b",
+        resubmit_scope="family",
+        objective_metric=OBJECTIVE_METRIC,
+        resubmit_supported=True,
+    ),
+    "single_phase_exposure_average_qsplit240_300m_6b": FamilyMetadata(
+        family="single_phase_exposure_average_qsplit240_300m_6b",
+        scale="300m_6b",
+        launcher_module="experiments.domain_phase_mix.launch_single_phase_average_qsplit240_300m_6b",
         resubmit_scope="family",
         objective_metric=OBJECTIVE_METRIC,
         resubmit_supported=True,
@@ -1813,6 +1827,84 @@ def _single_phase_exposure_average_rows() -> tuple[pd.DataFrame, list[dict[str, 
     return pd.DataFrame(logical_rows), all_attempts
 
 
+def _single_phase_qsplit240_300m_resubmit_hint() -> tuple[str, str]:
+    selector = "--panel representative12 --max-concurrent 256"
+    hint = (
+        "--panel representative12 --max-concurrent 256 --tpu-type v5p-8 " "--tpu-region us-east5 --tpu-zone us-east5-a"
+    )
+    return selector, hint
+
+
+def _single_phase_qsplit240_300m_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    family = "single_phase_exposure_average_qsplit240_300m_6b"
+    metadata = FAMILY_METADATA[family]
+    logical_rows: list[dict[str, Any]] = []
+    all_attempts: list[dict[str, Any]] = []
+    selector, resubmit_hint = _single_phase_qsplit240_300m_resubmit_hint()
+    specs = build_single_phase_qsplit240_300m_run_specs()
+    attempts_by_run_name = _scan_checkpoint_attempts_for_run_names(
+        family=family,
+        source_experiment=SINGLE_PHASE_QSPLIT240_300M_SOURCE_EXPERIMENT,
+        run_ids_by_name={spec.run_name: spec.run_id for spec in specs},
+        objective_metric=metadata.objective_metric,
+    )
+    for spec in specs:
+        attempts = attempts_by_run_name[spec.run_name]
+        all_attempts.extend(attempts)
+        canonical = _canonical_attempt(attempts)
+        logical_rows.append(
+            {
+                "registry_id": f"{family}:{spec.run_name}",
+                "family": family,
+                "scale": metadata.scale,
+                "source_experiment": SINGLE_PHASE_QSPLIT240_300M_SOURCE_EXPERIMENT,
+                "source_name_prefix": SINGLE_PHASE_QSPLIT240_300M_SOURCE_EXPERIMENT,
+                "run_id": spec.run_id,
+                "run_name": spec.run_name,
+                "wandb_run_id": None if canonical is None else canonical["wandb_run_id"],
+                "checkpoint_root": None if canonical is None else canonical["checkpoint_root"],
+                "objective_metric": metadata.objective_metric,
+                "objective_metric_value": None if canonical is None else canonical["objective_metric_value"],
+                "canonical_attempt_root": None if canonical is None else canonical["attempt_root"],
+                "attempt_count": len(attempts),
+                "successful_attempt_count": sum(1 for attempt in attempts if attempt["executor_status"] == "SUCCESS"),
+                "launcher_module": metadata.launcher_module,
+                "resubmit_supported": metadata.resubmit_supported,
+                "resubmit_scope": metadata.resubmit_scope,
+                "resubmit_selector": selector,
+                "resubmit_hint": resubmit_hint,
+                "logical_status": (
+                    "planned" if canonical is None else _normalize_logical_status(str(canonical["executor_status"]))
+                ),
+                "source_status": None if canonical is None else canonical["executor_status"],
+                "experiment_budget": spec.experiment_budget,
+                "realized_experiment_budget": spec.realized_experiment_budget,
+                "target_budget": spec.target_budget,
+                "target_budget_multiplier": spec.target_budget_multiplier,
+                "num_train_steps": spec.num_train_steps,
+                "target_final_checkpoint_step": spec.target_final_checkpoint_step,
+                "model_family": spec.model_family,
+                "trainer_seed": spec.trainer_seed,
+                "data_seed": spec.data_seed,
+                "simulated_epoch_subset_seed": spec.simulated_epoch_subset_seed,
+                "cohort": spec.cohort,
+                "source_run_id": spec.source_run_id,
+                "source_run_name": spec.source_run_name,
+                "source_two_phase_experiment": spec.source_two_phase_experiment,
+                "candidate_run_id": spec.candidate_run_id,
+                "candidate_run_name": spec.candidate_run_name,
+                "candidate_source_experiment": spec.candidate_source_experiment,
+                "single_phase_strategy": spec.single_phase_strategy,
+                "phase_tv": spec.phase_tv,
+                "scale_display_label": spec.scale_display_label,
+                "study_panel": spec.source_panel,
+                "study_cohort": spec.single_phase_strategy,
+                **_flatten_phase_weights(spec.phase_weights),
+            }
+        )
+    return pd.DataFrame(logical_rows), all_attempts
+
+
 def _single_phase_grp_no_l2_resubmit_hint() -> tuple[str, str]:
     selector = "--max-concurrent 1"
     hint = "--max-concurrent 1 --tpu-type v5p-8 --tpu-region us-east5 " "--tpu-zone us-east5-a"
@@ -2381,6 +2473,7 @@ def build_registry(
         _penalty1_2b_rows,
         _baseline_scaling_cell_rows,
         _single_phase_exposure_average_rows,
+        _single_phase_qsplit240_300m_rows,
         _single_phase_grp_no_l2_rows,
         _no_l2_subset_rows,
         _olmix_subset_rows,
