@@ -78,44 +78,63 @@ def bf16_master_with_fp32_residual(
     updates don't get rounded away.
     """
 
-    def _tree_cast(t, dtype):
-        return jax.tree.map(lambda x: x.astype(dtype) if hasattr(x, "dtype") else x, t)
+    _IS_NONE = lambda x: x is None  # noqa: E731
+
+    def _safe(fn):
+        # Wrap a leaf-level operation so explicit None placeholders pass through.
+        def wrapped(*args):
+            if any(a is None for a in args):
+                return None
+            return fn(*args)
+
+        return wrapped
 
     def init_fn(params):
-        residual = jax.tree.map(lambda p: jnp.zeros_like(p, dtype=jnp.float32), params)
-        inner_state = inner.init(_tree_cast(params, jnp.float32))
+        residual = jax.tree.map(
+            _safe(lambda p: jnp.zeros_like(p, dtype=jnp.float32)),
+            params,
+            is_leaf=_IS_NONE,
+        )
+        fp32_init = jax.tree.map(_safe(lambda p: p.astype(jnp.float32)), params, is_leaf=_IS_NONE)
+        inner_state = inner.init(fp32_init)
         return {"inner": inner_state, "residual": residual}
 
     def update_fn(updates, state, params=None):
         if params is None:
             raise ValueError("bf16_master_with_fp32_residual requires params")
 
+        fp32_updates = jax.tree.map(_safe(lambda u: u.astype(jnp.float32)), updates, is_leaf=_IS_NONE)
         fp32_params = jax.tree.map(
-            lambda p, r: p.astype(jnp.float32) + r,
+            _safe(lambda p, r: p.astype(jnp.float32) + r),
             params,
             state["residual"],
-            is_leaf=lambda x: x is None,
+            is_leaf=_IS_NONE,
         )
-        fp32_updates = _tree_cast(updates, jnp.float32)
 
         fp32_step, new_inner = inner.update(fp32_updates, state["inner"], fp32_params)
 
         fp32_new_params = jax.tree.map(
-            lambda p, s: p + s if s is not None else p,
+            _safe(lambda p, s: p + s),
             fp32_params,
             fp32_step,
-            is_leaf=lambda x: x is None,
+            is_leaf=_IS_NONE,
         )
-        bf16_new_params = jax.tree.map(lambda fn: fn.astype(jnp.bfloat16), fp32_new_params)
+        bf16_new_params = jax.tree.map(
+            _safe(lambda fn: fn.astype(jnp.bfloat16)),
+            fp32_new_params,
+            is_leaf=_IS_NONE,
+        )
         new_residual = jax.tree.map(
-            lambda fn, b16: fn - b16.astype(jnp.float32),
+            _safe(lambda fn, b16: fn - b16.astype(jnp.float32)),
             fp32_new_params,
             bf16_new_params,
+            is_leaf=_IS_NONE,
         )
         bf16_step = jax.tree.map(
-            lambda new, old: new - old,
+            _safe(lambda new, old: new - old),
             bf16_new_params,
             params,
+            is_leaf=_IS_NONE,
         )
 
         return bf16_step, {"inner": new_inner, "residual": new_residual}
