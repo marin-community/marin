@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -117,7 +117,7 @@ def make_regression_record(
 ) -> dict[str, Any]:
     """Create a JSON-serializable regression record for history tracking."""
     return {
-        "recorded_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "recorded_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "label": label,
         "before": {
             "source_path": before.source_path,

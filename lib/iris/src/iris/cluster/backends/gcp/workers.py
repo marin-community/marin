@@ -16,7 +16,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
@@ -951,7 +951,7 @@ def _run_tpu_bootstrap(
 
 def _fetch_bootstrap_logs(gcp_service: GcpService, handle: GcpSliceHandle) -> None:
     """Fetch [iris-init] log entries from Cloud Logging for diagnostics."""
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+    cutoff = datetime.now(UTC) - timedelta(minutes=30)
     cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
     log_filter = (
         f'resource.type="gce_instance" '

@@ -23,7 +23,7 @@ import logging
 import time
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from finelog.client import LogClient, Table
@@ -184,7 +184,7 @@ class StatsWriter:
             execution_id=execution_id,
             stage_name=stage_name,
             status=status,
-            ts=datetime.now(timezone.utc).replace(tzinfo=None),
+            ts=datetime.now(UTC).replace(tzinfo=None),
             elapsed=elapsed,
             items=total_items,
             bytes_processed=total_bytes,
@@ -223,7 +223,7 @@ class StatsWriter:
             stage_name=stage_name,
             shard_idx=shard_idx,
             status=status,
-            ts=datetime.now(timezone.utc).replace(tzinfo=None),
+            ts=datetime.now(UTC).replace(tzinfo=None),
             items=items,
             bytes_processed=bytes_processed,
             item_rate=item_rate,
