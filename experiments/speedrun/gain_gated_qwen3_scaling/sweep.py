@@ -60,7 +60,12 @@ from experiments.simple_train_config import SimpleTrainConfig
 
 logger = logging.getLogger(__name__)
 
-REGION = "us-central1"
+# Region for the training children + their data. Both us-central1 and us-east5 mirror
+# the fineweb-edu-10B-ac65f6 cache + paloma, so either is in-region (no cross-region I/O)
+# — set REGION + MARIN_PREFIX + the coordinator's --region together to the same region.
+# Splitting the grid across both regions multiplies the available preemptible v5p-8 spot
+# capacity (the per-region spot pool grants only a few slices at a time).
+REGION = os.environ.get("REGION", "us-central1")
 SEQ_LEN = 4096
 WANDB_ENTITY = "marin-community"
 WANDB_PROJECT = "speedrun"
