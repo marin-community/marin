@@ -119,9 +119,14 @@ def bf16_master_with_fp32_residual(
             fp32_step,
             is_leaf=_IS_NONE,
         )
+        # Dtype-aware truncation: leaves that are already fp32 (e.g. RMSNorm
+        # weights when GrugTrainerConfig.rms_norm_fp32=True) pass through
+        # unchanged -- no precision loss, no need for a residual. Only bf16
+        # leaves get cast to bf16 and accumulate a residual.
         bf16_new_params = jax.tree.map(
-            _safe(lambda fn: fn.astype(jnp.bfloat16)),
+            _safe(lambda fn, orig: fn if orig.dtype == jnp.float32 else fn.astype(jnp.bfloat16)),
             fp32_new_params,
+            params,
             is_leaf=_IS_NONE,
         )
         new_residual = jax.tree.map(

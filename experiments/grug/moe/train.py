@@ -59,6 +59,13 @@ class GrugTrainerConfig:
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+    # When True, RMSNorm and GatedNorm weights are kept in fp32 after
+    # mp.cast_to_param. Useful with bf16 master + fp32 optimizer (bf16_master)
+    # to avoid the bf16 ULP at the natural 1.0 scale of these weights -- small
+    # accumulated updates would otherwise round to 0 and never flip the bf16
+    # representation. The bf16_master wrapper is dtype-aware and skips its
+    # truncation step for fp32 leaves.
+    rms_norm_fp32: bool = False
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -265,6 +272,25 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
+def _cast_rms_norm_weights_fp32(model: Transformer) -> Transformer:
+    """Recast every RMSNorm.weight in ``model`` to fp32."""
+
+    def _to_fp32(w: jax.Array) -> jax.Array:
+        return w.astype(jnp.float32)
+
+    # Top-level embed and final RMSNorms.
+    model = eqx.tree_at(lambda m: m.embed_norm.weight, model, _to_fp32(model.embed_norm.weight))
+    model = eqx.tree_at(lambda m: m.final_norm.weight, model, _to_fp32(model.final_norm.weight))
+    # Per-block RMSNorms (rms_attn / rms_mlp). Walk blocks tuple, replace.
+    new_blocks = []
+    for block in model.blocks:
+        block = eqx.tree_at(lambda b: b.rms_attn.weight, block, _to_fp32(block.rms_attn.weight))
+        block = eqx.tree_at(lambda b: b.rms_mlp.weight, block, _to_fp32(block.rms_mlp.weight))
+        new_blocks.append(block)
+    model = eqx.tree_at(lambda m: m.blocks, model, tuple(new_blocks))
+    return model
+
+
 def initial_state(
     model_config: GrugModelConfig,
     *,
@@ -272,8 +298,11 @@ def initial_state(
     mp: jmp.Policy,
     key: PRNGKeyArray,
     ema_beta: float | None,
+    rms_norm_fp32: bool = False,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    if rms_norm_fp32:
+        params = _cast_rms_norm_weights_fp32(params)
     num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
@@ -423,6 +452,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 mp=trainer.mp,
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
+                rms_norm_fp32=config.trainer.rms_norm_fp32,
             )
 
         state = _init_state(model_key)
