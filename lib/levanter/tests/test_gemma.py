@@ -580,6 +580,23 @@ def test_gemma3_config_from_hf_config_roundtrip():
     assert roundtripped.num_kv_heads == cfg.num_kv_heads
 
 
+def test_gemma3_rejects_unsupported_alternating_attention_export():
+    cfg = Gemma3Config(
+        max_seq_len=128,
+        hidden_dim=16,
+        num_heads=4,
+        num_kv_heads=4,
+        gradient_checkpointing=False,
+        head_dim=4,
+        query_pre_attn_scalar=4,
+        num_layers=4,
+        sliding_window_pattern=2,
+    )
+
+    with pytest.raises(ValueError, match="alternating local/global attention"):
+        cfg.to_hf_config(1000)
+
+
 @skip_if_hf_model_not_accessible("google/gemma-3-1b-pt")
 @skip_if_no_torch
 def test_gemma3_roundtrip():

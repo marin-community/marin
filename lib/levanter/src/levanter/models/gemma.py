@@ -74,10 +74,12 @@ def _gemma3_hf_rope_parameters(
 
 
 def _gemma3_hf_layer_types(num_layers: int, sliding_window_pattern: int | None) -> list[str]:
-    pattern = sliding_window_pattern if sliding_window_pattern is not None else 1
-    return [
-        "sliding_attention" if bool((layer_idx + 1) % pattern) else "full_attention" for layer_idx in range(num_layers)
-    ]
+    if sliding_window_pattern not in (None, 1):
+        raise ValueError(
+            "Gemma3 sliding_window_pattern > 1 is not supported because Levanter does not yet implement "
+            "alternating local/global attention layers."
+        )
+    return ["full_attention"] * num_layers
 
 
 def _gemma3_local_rope_theta_from_hf(hf_config: HfConfig) -> float:
