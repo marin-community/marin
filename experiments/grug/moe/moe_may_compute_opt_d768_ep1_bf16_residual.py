@@ -53,7 +53,7 @@ _optimizer = dataclasses.replace(
     bf16_master=True,
 )
 
-_run_id = f"moe_may_compute_opt_d{_DIM}_ep{_EP}_bf16_residual"
+_run_id = f"moe_may_compute_opt_d{_DIM}_ep{_EP}_bf16_residual_v2"
 compute_opt_step = ExecutorStep(
     name=f"grug/{_run_id}",
     fn=run_grug_moe_trial,
