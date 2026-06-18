@@ -165,7 +165,9 @@ def test_bucketpool_warns_when_bucket_shorter_than_head(caplog):
     """A bucket smaller than head_size is sampled in full and surfaced as a warning, not silently."""
     with caplog.at_level(logging.WARNING, logger="experiments.datakit.intruder"):
         BucketPool(Side.LHS, {"a": ["1", "2", "3", "4", "5"], "b": ["6", "7", "8", "9"]}, head_size=128)
-    assert any(r.levelname == "WARNING" and "head_size" in r.getMessage() for r in caplog.records)
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert 128 in warnings[0].args  # the warning carries the configured head_size, not just prose
 
 
 # ---------------------------------------------------------------------------
