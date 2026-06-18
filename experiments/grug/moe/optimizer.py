@@ -63,7 +63,18 @@ def _match_named_sharding_to_params(updates, params):
     return jax.tree.map(match_sharding, updates, params, is_leaf=lambda x: x is None)
 
 
-def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float):
+def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float, fp32_internal: bool = False):
+    """Frobenius hyperball scale-invariant update.
+
+    When ``fp32_internal=True``, the per-leaf math (norms, division, the
+    normalization step that's supposed to leave ``||param + delta|| == ||param||``)
+    runs on an fp32 copy of ``param`` and ``update``, and the returned delta
+    stays in fp32. That keeps the hyperball's norm invariant precise under
+    bf16-model training: optax.apply_updates does
+    ``(bf16_param + fp32_delta).astype(bf16)`` which is a single, well-defined
+    rounding. With ``fp32_internal=False`` (default) the math runs in the input
+    dtype and the delta is returned in that same dtype -- existing behavior.
+    """
     direction_updates = _match_named_sharding_to_params(direction_updates, params)
 
     def scale_invariant_update(param, update):
@@ -71,19 +82,25 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
             return None
         if not hasattr(param, "ndim"):
             return update
-        if param.ndim == 2:
-            param_norm = jnp.linalg.norm(param)
-            update_norm = jnp.linalg.norm(update)
-            new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
-            new_param_norm = jnp.linalg.norm(new_param)
-            return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+        if fp32_internal:
+            p = param.astype(jnp.float32)
+            u = update.astype(jnp.float32)
+        else:
+            p = param
+            u = update
+        if p.ndim == 2:
+            p_norm = jnp.linalg.norm(p)
+            u_norm = jnp.linalg.norm(u)
+            new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
+            new_p_norm = jnp.linalg.norm(new_p)
+            return new_p / jnp.maximum(new_p_norm, 1e-10) * p_norm - p
 
-        axes = tuple(range(1, param.ndim))
-        param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
-        update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
-        new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
-        new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
-        return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+        axes = tuple(range(1, p.ndim))
+        p_norm = jnp.sqrt(jnp.sum(jnp.square(p), axis=axes, keepdims=True))
+        u_norm = jnp.sqrt(jnp.sum(jnp.square(u), axis=axes, keepdims=True))
+        new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
+        new_p_norm = jnp.sqrt(jnp.sum(jnp.square(new_p), axis=axes, keepdims=True))
+        return new_p / jnp.maximum(new_p_norm, 1e-10) * p_norm - p
 
     return jax.tree.map(
         scale_invariant_update,
@@ -100,8 +117,15 @@ def scale_with_grug_muonh(
     muon_eps: float = 1e-8,
     learning_rate: float = 0.02,
     coefficient_type: CoefficientType = "quintic",
+    hyperball_fp32: bool = False,
 ) -> optax.GradientTransformation:
-    """MuonH transform for raw Grug arrays with matrix-shaped trailing dims."""
+    """MuonH transform for raw Grug arrays with matrix-shaped trailing dims.
+
+    When ``hyperball_fp32=True``, the Frobenius hyperball math is computed in
+    fp32 and the delta is returned in fp32, so the trainer's apply_updates
+    truncates exactly once when adding to bf16 params. Everything upstream
+    (Muon momentum buffer, Newton-Schulz iterations) stays in the input dtype.
+    """
     muon_transform = _grug_scale_with_muon(
         momentum=momentum,
         nesterov=nesterov,
@@ -119,7 +143,9 @@ def scale_with_grug_muonh(
             raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
 
         muon_updates, next_state = muon_transform.update(updates, state, params)
-        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
+        muonh_updates = _scale_invariant_hyperball_updates(
+            params, muon_updates, learning_rate, fp32_internal=hyperball_fp32
+        )
         return muonh_updates, next_state
 
     return optax.GradientTransformation(init_fn, update_fn)
@@ -232,6 +258,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muon_epsilon: float = 1e-8
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
+    # When True, run the Frobenius hyperball math in fp32 and return its delta
+    # as fp32. Designed to pair with ``mp="params=bfloat16,..."``: everything
+    # else (Muon momentum, NS, AdamH mu/nu) stays in the input dtype so
+    # optimizer state stays bf16, but the hyperball's norm invariant is
+    # preserved by a single, well-defined truncation in apply_updates.
+    hyperball_fp32: bool = False
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -250,6 +282,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         muon_eps=self.muon_epsilon,
                         learning_rate=learning_rate,
                         coefficient_type=self.coefficient_type,
+                        hyperball_fp32=self.hyperball_fp32,
                     )
                 )
                 components.append(_match_named_update_sharding())
