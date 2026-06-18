@@ -454,20 +454,25 @@ class _ModelTally:
         return self.correct / self.total if self.total else float("nan")
 
 
+@dataclass(frozen=True)
+class _RoundScores:
+    detection_rates: list[float]  # one per trial that drew >= 1 vote
+    model_hits: dict[str, list[bool]]  # model name -> per-vote correctness this batch
+    n_abstained: int
+
+
 def _score_round(
     trials: Sequence[IntruderTrial],
     judges: Sequence[Panelist],
     pool: ThreadPoolExecutor,
     max_doc_chars: int,
-) -> tuple[list[float], dict[str, list[bool]], int]:
-    """Fan one batch of trials across the panel and fold the votes into scores.
+) -> _RoundScores:
+    """One batch of trials scored against the panel.
 
-    This is the I/O boundary of a round: every ``(trial, panelist)`` pair votes
-    concurrently, then the votes collapse into (a) one detection rate per trial
-    that drew at least one vote -- the fraction of voting panelists that found
-    the intruder -- and (b) per-model correctness for the batch. Failed calls
-    abstain and are counted, not scored. The caller owns the statistics: it
-    feeds the rates to a confidence sequence and the hits to the tallies.
+    Yields the per-trial detection rate -- the fraction of voting panelists that
+    named the intruder -- for each trial that drew at least one vote, the
+    per-model correctness for the batch, and the count of abstentions (failed
+    calls, left unscored).
     """
     jobs = [(t, j) for t in trials for j in judges]
     results = pool.map(lambda tp: (tp[0], tp[1], _vote_correct(tp[1], tp[0], max_doc_chars)), jobs)
@@ -483,7 +488,7 @@ def _score_round(
         per_trial[id(trial)].append(correct)
 
     detection_rates = [sum(hits) / len(hits) for t in trials if (hits := per_trial[id(t)])]
-    return detection_rates, model_hits, n_abstained
+    return _RoundScores(detection_rates, model_hits, n_abstained)
 
 
 def run_intruder_test(
@@ -541,11 +546,11 @@ def run_intruder_test(
         for _round in range(max_rounds):
             for side_pool, cs in ((pool_lhs, cs_lhs), (pool_rhs, cs_rhs)):
                 trials = [side_pool.sample_trial(rng) for _ in range(batch_size)]
-                rates, model_hits, n_abstained = _score_round(trials, judges, pool, max_doc_chars)
-                abstained += n_abstained
-                for rate in rates:
+                scores = _score_round(trials, judges, pool, max_doc_chars)
+                abstained += scores.n_abstained
+                for rate in scores.detection_rates:
                     cs.update(rate)
-                for name, hits in model_hits.items():
+                for name, hits in scores.model_hits.items():
                     side_tally = tallies[name][side_pool.side]
                     for hit in hits:
                         side_tally.record(hit)
