@@ -229,6 +229,42 @@ def chart_regions(daily_dir: str, charts_dir: str) -> None:
     _save(fig, charts_dir, "accelerators_by_region")
 
 
+def chart_fleet_utilization(daily_dir: str, charts_dir: str) -> None:
+    """Fleet occupancy: provisioned TPU chips running a task vs idle, over time.
+
+    The stacked area is the standing fleet split into busy (>=1 task scheduled)
+    and idle chips; the idle band is the "idle accelerator is a waste" gap. The
+    dotted line is occupancy %. This is allocation, not efficiency — a busy chip
+    may still run at low MFU (that is the calibration chart's job).
+    """
+    rows = _load_csv(os.path.join(daily_dir, "utilization_daily.csv"))
+    if not rows:
+        return
+    days = _dates(rows)
+    busy = _floats(rows, "mean_busy_chips")
+    idle = _floats(rows, "mean_idle_chips")
+    total = _floats(rows, "mean_total_chips")
+    occupancy = [100 * v for v in _floats(rows, "occupancy")]
+    overall = 100 * sum(busy) / sum(total) if sum(total) else 0.0
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    ax.stackplot(days, busy, idle, labels=["running a task", "idle"], colors=["#55A868", "#D9D9D9"], alpha=0.95)
+    ax.set_ylabel("TPU chips (mean concurrent)")
+    ax.set_title(f"Fleet occupancy: {overall:.0f}% of provisioned chip-time was running a task")
+    ax.set_ylim(bottom=0)
+    _style_time_axis(ax)
+    ax.legend(loc="upper left", fontsize=8, frameon=False)
+    _add_milestones(ax, min(days), max(days))
+
+    ax2 = ax.twinx()
+    ax2.plot(days, occupancy, color="0.25", linewidth=1.2, linestyle=":", label="occupancy %")
+    ax2.set_ylabel("occupancy (%)", color="0.25")
+    ax2.tick_params(axis="y", colors="0.25")
+    ax2.set_ylim(0, 100)
+    ax2.spines["top"].set_visible(False)
+    _save(fig, charts_dir, "fleet_utilization")
+
+
 def chart_compute_history(daily_dir: str, charts_dir: str) -> None:
     """Realized training compute over the full W&B history, back to 2024.
 
@@ -360,6 +396,7 @@ def run(paths: config.Paths) -> None:
     chart_flops(paths.daily_dir, paths.charts_dir)
     chart_users(paths.daily_dir, paths.charts_dir)
     chart_tasks(paths.daily_dir, paths.charts_dir)
+    chart_fleet_utilization(paths.daily_dir, paths.charts_dir)
     chart_regions(paths.daily_dir, paths.charts_dir)
     chart_overview(paths.daily_dir, paths.charts_dir)
     if os.path.exists(os.path.join(paths.daily_dir, "wandb_compute_daily.csv")):

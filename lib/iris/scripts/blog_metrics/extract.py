@@ -120,6 +120,25 @@ def _build_bucket_tables(con: duckdb.DuckDBPyConnection, worker_glob: str) -> No
         ) GROUP BY 1
         """
     )
+    # Per bucket: provisioned chips split into busy (worker running >=1 task)
+    # vs idle (running_task_count == 0). Drives the fleet-occupancy chart — the
+    # real "are accelerators doing work" signal, independent of W&B.
+    con.execute(
+        f"""
+        CREATE TEMP TABLE bucket_occupancy AS
+        SELECT wr.bucket,
+               sum(vi.chips_per_vm) AS chips_total,
+               sum(CASE WHEN wr.rtc > 0 THEN vi.chips_per_vm ELSE 0 END) AS chips_busy
+        FROM (
+            SELECT time_bucket(INTERVAL '{bucket}', ts) AS bucket, worker_id,
+                   lower(device_variant) AS variant, max(running_task_count) AS rtc
+            FROM read_parquet('{worker_glob}')
+            WHERE lower(device_type) = 'tpu' AND device_variant <> ''
+            GROUP BY 1, 2, 3
+        ) wr JOIN variant_info vi ON wr.variant = vi.variant
+        GROUP BY 1
+        """
+    )
     # Per (bucket, region): concurrent chips, for the regional footprint chart.
     # Region = zone with its trailing "-<letter>" stripped (us-east5-a -> us-east5).
     con.execute(
@@ -188,6 +207,33 @@ def _write_accelerators(con: duckdb.DuckDBPyConnection, daily_dir: str) -> None:
         """
     )
     logger.info("wrote %s", region_csv)
+
+
+def _write_utilization(con: duckdb.DuckDBPyConnection, daily_dir: str) -> None:
+    """Daily fleet occupancy: provisioned chips that were running a task vs idle.
+
+    Occupancy (allocation) is distinct from efficiency (MFU): a chip with a task
+    assigned counts as busy even if that task runs at low MFU. The calibration
+    chart covers the MFU side; this covers the "is anything scheduled on it"
+    side. Requires the ``bucket_occupancy`` temp table.
+    """
+    out = os.path.join(daily_dir, "utilization_daily.csv")
+    con.execute(
+        f"""
+        COPY (
+            SELECT bucket::DATE AS day,
+                   avg(chips_busy) AS mean_busy_chips,
+                   avg(chips_total - chips_busy) AS mean_idle_chips,
+                   avg(chips_total) AS mean_total_chips,
+                   sum(chips_busy) / nullif(sum(chips_total), 0) AS occupancy
+            FROM bucket_occupancy GROUP BY 1 ORDER BY 1
+        ) TO '{out}' (HEADER, DELIMITER ',')
+        """
+    )
+    logger.info("wrote %s", out)
+    summary = con.execute("SELECT sum(chips_busy) / nullif(sum(chips_total), 0) FROM bucket_occupancy").fetchone()
+    if summary and summary[0] is not None:
+        logger.info("fleet occupancy: %.1f%% of provisioned chip-time was running a task", 100 * summary[0])
 
 
 def _write_users(con: duckdb.DuckDBPyConnection, daily_dir: str, task_glob: str) -> None:
@@ -393,6 +439,7 @@ def run(paths: config.Paths) -> None:
     _log_variant_coverage(con, worker_glob)
     _build_bucket_tables(con, worker_glob)
     _write_accelerators(con, paths.daily_dir)
+    _write_utilization(con, paths.daily_dir)
     _write_users(con, paths.daily_dir, task_glob)
     _write_iris_capacity(con, paths.daily_dir)
 

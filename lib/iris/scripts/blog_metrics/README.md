@@ -147,16 +147,18 @@ uv run python scripts/blog_metrics/pipeline.py fetch --with-controller
 - `accelerators_daily.csv` — total chips / workers / PFLOP/s / running tasks (mean + peak).
 - `accelerators_by_family_daily.csv` — mean chips / PFLOP/s / workers per TPU family.
 - `accelerators_by_region_daily.csv` — mean chips per GCP region.
+- `utilization_daily.csv` — fleet occupancy: mean busy vs idle chips and the busy fraction (chips running ≥1 task / chips provisioned). Allocation, not efficiency — the MFU side is `calibration_daily.csv`.
 - `users_daily.csv` — active users (raw + human), distinct tasks run.
 - `iris_capacity_daily.csv` — provisioned device-hours + peak-capacity FLOPs (calibration denominator).
 - `wandb_compute_daily.csv` / `..._by_backend_daily.csv` — realized device-hours + FLOPs back to 2024.
-- `calibration_daily.csv` — overlap-window coverage + effective MFU.
+- `calibration_daily.csv` — June-onward coverage + on-active MFU (all-on-iris window).
 - `submissions_daily.csv` — only with `--with-controller`.
 
 `data/charts/` (`.svg` for the blog, `.png` for preview): `accelerators_chips`,
-`flops_pflops`, `users`, `tasks`, `accelerators_by_region`, `overview`,
-`compute_history` (2024→now, + cumulative), `calibration`. Time-axis charts
-annotate the `config.MILESTONES` that fall inside the window.
+`flops_pflops`, `users`, `tasks`, `fleet_utilization` (occupancy: busy vs idle
+chips), `accelerators_by_region`, `overview`, `compute_history` (2024→now, +
+cumulative), `calibration`. Time-axis charts annotate the `config.MILESTONES`
+that fall inside the window.
 
 ## Editing
 
