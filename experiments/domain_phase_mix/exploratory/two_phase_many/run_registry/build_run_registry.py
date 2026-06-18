@@ -32,9 +32,9 @@ from typing import Any
 
 import fsspec
 import pandas as pd
+from levanter.tracker.wandb import truncate_wandb_run_name
 from marin.execution.executor import compute_output_path
 
-from experiments.defaults import _truncate_wandb_name
 from experiments.domain_phase_mix.launch_baseline_scaling_cell import (
     BaselineScalingMethod,
     baseline_scaling_source_experiment,
@@ -704,7 +704,7 @@ def _wandb_safe_name(name: str) -> str:
     """Return the W&B-safe training name without logging truncation warnings."""
     noise = io.StringIO()
     with contextlib.redirect_stdout(noise), contextlib.redirect_stderr(noise):
-        return _truncate_wandb_name(name)
+        return truncate_wandb_run_name(name)
 
 
 def _checkpoint_status_patterns(*, source_experiment: str, run_name: str, region: str) -> tuple[str, ...]:

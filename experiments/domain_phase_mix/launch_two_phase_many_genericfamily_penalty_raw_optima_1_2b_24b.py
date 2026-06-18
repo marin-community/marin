@@ -12,7 +12,8 @@ import sys
 from dataclasses import dataclass
 
 import fsspec
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import ExecutorMainConfig, executor_main
+from marin.execution.types import ExecutorStep, this_output_path
 
 import experiments.domain_phase_mix.qsplit240_replay as qsplit240_replay
 from experiments.domain_phase_mix import (

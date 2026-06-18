@@ -15,7 +15,8 @@ from typing import Literal
 
 import fsspec
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import ExecutorMainConfig, executor_main
+from marin.execution.types import ExecutorStep, this_output_path
 
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.determinism_analysis import (

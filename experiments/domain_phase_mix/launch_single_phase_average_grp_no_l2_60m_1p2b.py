@@ -22,7 +22,8 @@ import fsspec
 import numpy as np
 import pandas as pd
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import ExecutorMainConfig, executor_main
+from marin.execution.types import ExecutorStep, this_output_path
 from marin.rl.placement import marin_prefix_for_region
 from marin.training.training import TrainLmOnPodConfig
 
