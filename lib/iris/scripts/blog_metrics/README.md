@@ -110,7 +110,7 @@ headline and coverage separately, and the chart plots on-active MFU only.
 
 Run from `lib/iris`. `extract` uses the iris env (duckdb is already a dep);
 `fetch` additionally needs `wandb` (and `WANDB_API_KEY`), `charts` needs
-matplotlib.
+`seaborn` (which pulls in matplotlib).
 
 ```bash
 # 1. Mirror iris.worker + iris.task parquet (~10 GB) + pull W&B run history
@@ -121,10 +121,10 @@ uv run --with wandb python scripts/blog_metrics/pipeline.py fetch
 uv run python scripts/blog_metrics/pipeline.py extract
 
 # 3. Render charts.
-uv run --with matplotlib python scripts/blog_metrics/pipeline.py charts
+uv run --with seaborn python scripts/blog_metrics/pipeline.py charts
 
 # …or all three:
-uv run --with wandb --with matplotlib python scripts/blog_metrics/pipeline.py all
+uv run --with wandb --with seaborn python scripts/blog_metrics/pipeline.py all
 ```
 
 Pass `--no-wandb` to skip the W&B pull (Iris-only charts), or `--force` to
@@ -158,7 +158,8 @@ uv run python scripts/blog_metrics/pipeline.py fetch --with-controller
 `data/charts/` (`.svg` for the blog, `.png` for preview): `accelerators_chips`,
 `flops_pflops`, `users`, `tasks`, `fleet_utilization` (occupancy: busy vs idle
 chips), `preemptible` (preemptible non-v4 vs reserved v4 capacity), `accelerators_by_region`,
-`intraday_regions` (within-day cross-region migration for the candidate day),
+`intraday_regions` + `intraday_regions_share` (within-day cross-region migration
+for the candidate day, absolute and share-of-total),
 `overview`, `compute_history` (2024→now, + cumulative), `calibration`. Only the
 wide `compute_history` annotates the `config.MILESTONES`; the cramped
 Iris-window charts omit them.

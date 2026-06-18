@@ -307,6 +307,8 @@ ignore-missing-imports = [
     "pylatexenc.*",
     "resiliparse",
     "resiliparse.*",
+    "seaborn",
+    "seaborn.*",
     "sympy",
     "sympy.*",
     "tensorboardX",

@@ -22,6 +22,12 @@ mpl.use("Agg")  # headless backend; must precede pyplot import
 import config
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import seaborn as sns
+
+# One elegant, consistent theme for every figure. The "deep" palette is the
+# source of the hand-picked family/region hexes below, so explicitly-colored and
+# auto-colored charts stay visually coherent.
+sns.set_theme(style="whitegrid", context="notebook", palette="deep")
 
 logger = logging.getLogger(__name__)
 
@@ -90,9 +96,7 @@ def _style_time_axis(ax: plt.Axes, *, long_range: bool = False) -> None:
     else:
         ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %-d"))
-    ax.grid(True, axis="y", linewidth=0.4, alpha=0.4)
-    for spine in ("top", "right"):
-        ax.spines[spine].set_visible(False)
+    sns.despine(ax=ax)
 
 
 def _cumulative(values: list[float]) -> list[float]:
@@ -193,6 +197,7 @@ def chart_tasks(daily_dir: str, charts_dir: str) -> None:
     ax.set_ylim(bottom=0)
 
     ax2 = ax.twinx()
+    ax2.grid(False)
     ax2.plot(_dates(user_rows), _floats(user_rows, "active_tasks_ran"), color="0.5", linewidth=1.0, linestyle=":")
     ax2.set_ylabel("distinct tasks run / day (dotted)", color="0.4")
     ax2.tick_params(axis="y", colors="0.4")
@@ -224,13 +229,50 @@ def chart_regions(daily_dir: str, charts_dir: str) -> None:
     _save(fig, charts_dir, "accelerators_by_region")
 
 
+def _intraday_figure(
+    parsed: list[dt.datetime],
+    order: list[str],
+    series: dict[str, list[float]],
+    charts_dir: str,
+    *,
+    normalize: bool,
+) -> None:
+    """Render one intraday cross-region stack: absolute chips, or share of total."""
+    stacks = [list(series[reg]) for reg in order]
+    if normalize:
+        column_total = [sum(stack[i] for stack in stacks) or 1.0 for i in range(len(parsed))]
+        stacks = [[100 * v / column_total[i] for i, v in enumerate(stack)] for stack in stacks]
+    day = parsed[0].date().isoformat()
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    ax.stackplot(parsed, *stacks, labels=order, alpha=0.9)
+    ax.set_xlabel("hour of day (UTC)")
+    ax.set_xlim(parsed[0], parsed[-1])
+    ax.xaxis.set_major_locator(mdates.HourLocator(interval=3))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    sns.despine(ax=ax)
+    if normalize:
+        ax.set_ylim(0, 100)
+        ax.set_ylabel("share of fleet chips (%)")
+        ax.set_title(f"Intraday region mix (share of total) — {day} (UTC)")
+        ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=8, frameon=False)
+        _save(fig, charts_dir, "intraday_regions_share")
+    else:
+        ax.set_ylim(bottom=0)
+        ax.set_ylabel("TPU chips (concurrent)")
+        ax.set_title(f"Intraday compute migration across regions — {day} (UTC)")
+        ax.legend(loc="upper right", fontsize=8, ncol=3, frameon=False)
+        _save(fig, charts_dir, "intraday_regions")
+
+
 def chart_intraday_regions(daily_dir: str, charts_dir: str) -> None:
     """Within-day compute migration across regions for the candidate day.
 
-    Stacked concurrent chips per region at the fine intraday bucket. On the
-    chosen day preemptible capacity hands off between regions through the day
-    while the reserved pool stays flat — visible as the stack's composition
-    shifting even where its height is roughly steady.
+    Renders two views from the same fine-bucket series: absolute concurrent chips
+    per region, and the share-of-total mix. On the chosen day preemptible
+    capacity hands off between regions through the day while the reserved pool
+    stays flat — the share view makes the composition shift explicit even where
+    the absolute height is steady.
     """
     rows = _load_csv(os.path.join(daily_dir, "intraday_regions.csv"))
     if not rows:
@@ -246,20 +288,8 @@ def chart_intraday_regions(daily_dir: str, charts_dir: str) -> None:
         totals[region] = totals.get(region, 0.0) + float(r["chips"])
     order = sorted(series, key=lambda reg: totals[reg], reverse=True)
 
-    fig, ax = plt.subplots(figsize=(11, 5))
-    ax.stackplot(parsed, *[series[reg] for reg in order], labels=order, alpha=0.9)
-    ax.set_title(f"Intraday compute migration across regions - {parsed[0].date().isoformat()} (UTC)")
-    ax.set_ylabel("TPU chips (concurrent)")
-    ax.set_xlabel("hour of day (UTC)")
-    ax.set_ylim(bottom=0)
-    ax.set_xlim(parsed[0], parsed[-1])
-    ax.xaxis.set_major_locator(mdates.HourLocator(interval=3))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-    ax.grid(True, axis="y", linewidth=0.4, alpha=0.4)
-    for spine in ("top", "right"):
-        ax.spines[spine].set_visible(False)
-    ax.legend(loc="upper right", fontsize=8, ncol=3, frameon=False)
-    _save(fig, charts_dir, "intraday_regions")
+    _intraday_figure(parsed, order, series, charts_dir, normalize=False)
+    _intraday_figure(parsed, order, series, charts_dir, normalize=True)
 
 
 def chart_fleet_utilization(daily_dir: str, charts_dir: str) -> None:
@@ -289,6 +319,7 @@ def chart_fleet_utilization(daily_dir: str, charts_dir: str) -> None:
     ax.legend(loc="upper left", fontsize=8, frameon=False)
 
     ax2 = ax.twinx()
+    ax2.grid(False)
     ax2.plot(days, occupancy, color="0.25", linewidth=1.2, linestyle=":", label="occupancy %")
     ax2.set_ylabel("occupancy (%)", color="0.25")
     ax2.tick_params(axis="y", colors="0.25")
@@ -335,6 +366,7 @@ def chart_preemptible(daily_dir: str, charts_dir: str) -> None:
     ax.legend(loc="upper left", fontsize=8, frameon=False)
 
     ax2 = ax.twinx()
+    ax2.grid(False)
     ax2.plot(days, share, color="0.25", linewidth=1.2, linestyle=":", label="preemptible share")
     ax2.set_ylabel("preemptible share (%)", color="0.25")
     ax2.tick_params(axis="y", colors="0.25")
@@ -416,6 +448,7 @@ def chart_calibration(daily_dir: str, charts_dir: str) -> None:
     ax.legend(loc="lower left", fontsize=8, frameon=False)
 
     ax2 = ax.twinx()
+    ax2.grid(False)
     ax2.plot(days, on_active, color="0.4", linewidth=1.2, marker="o", markersize=2.5, label="on-active MFU")
     ax2.set_ylabel("on-active MFU (%)", color="0.4")
     ax2.tick_params(axis="y", colors="0.4")
