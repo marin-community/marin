@@ -17,8 +17,8 @@ bias which documents are tested and skew the comparison.
 
 One **trial** on a side:
 
-    * pick an in-group bucket ``A`` (>= 4 docs) and a different intruder
-      bucket ``B != A`` (>= 1 doc), both *on the same side*;
+    * pick an in-group bucket ``A`` and a different intruder bucket
+      ``B != A`` (every bucket holds >= 4 docs), both *on the same side*;
     * sample 4 docs from ``A`` and 1 from ``B``;
     * shuffle the 5 documents, recording the intruder's position;
     * each panelist names the document it thinks does not belong.
@@ -166,9 +166,11 @@ def _take_head(stream: Iterable[str], head_size: int) -> list[str]:
 class BucketPool:
     """Repeatedly-samplable view of one side's *pre-shuffled* buckets.
 
-    Each bucket must be shuffled by the caller; the pool reads only the first
-    ``head_size`` documents and treats that prefix as a uniform sample without
-    replacement, so a large or lazy bucket is never consumed in full. Trials are
+    Each bucket must be shuffled by the caller and hold at least
+    ``IN_GROUP_COUNT`` (4) documents; the pool reads only the first ``head_size``
+    documents and treats that prefix as a uniform sample without replacement, so
+    a large or lazy bucket is never consumed in full. A bucket whose head falls
+    short of ``head_size`` is sampled in full and a warning is logged. Trials are
     then drawn with replacement from those heads across rounds.
     """
 
@@ -182,19 +184,33 @@ class BucketPool:
             raise ValueError(f"head_size {head_size} < {IN_GROUP_COUNT}: too small to form an in-group")
         self.side = side
         self._docs: dict[str, list[str]] = {b: _take_head(docs, head_size) for b, docs in buckets.items()}
-        self._in_group_buckets = [b for b, docs in self._docs.items() if len(docs) >= IN_GROUP_COUNT]
-        self._nonempty_buckets = [b for b, docs in self._docs.items() if docs]
-        if not self._in_group_buckets:
-            raise ValueError(f"side {side!r}: no bucket has the >= {IN_GROUP_COUNT} documents needed for an in-group")
-        if len(self._nonempty_buckets) < 2:
+
+        too_small = {b: len(docs) for b, docs in self._docs.items() if len(docs) < IN_GROUP_COUNT}
+        if too_small:
+            examples = dict(list(too_small.items())[:5])
             raise ValueError(
-                f"side {side!r}: need >= 2 non-empty buckets to draw an intruder, got {len(self._nonempty_buckets)}"
+                f"side {side!r}: every bucket needs >= {IN_GROUP_COUNT} documents; "
+                f"{len(too_small)} are too small (e.g. {examples})"
+            )
+        if len(self._docs) < 2:
+            raise ValueError(f"side {side!r}: need >= 2 buckets to draw an intruder, got {len(self._docs)}")
+        self._buckets = list(self._docs)
+
+        short = {b: len(docs) for b, docs in self._docs.items() if len(docs) < head_size}
+        if short:
+            logger.warning(
+                "side %r: %d of %d buckets have fewer than head_size=%d documents (smallest %d) and are "
+                "sampled in full, giving the panel fewer distinct documents to judge",
+                side,
+                len(short),
+                len(self._docs),
+                head_size,
+                min(short.values()),
             )
 
     def sample_trial(self, rng: np.random.Generator) -> IntruderTrial:
-        in_group = str(rng.choice(self._in_group_buckets))
-        intruder_choices = [b for b in self._nonempty_buckets if b != in_group]
-        intruder = str(rng.choice(intruder_choices))
+        in_group = str(rng.choice(self._buckets))
+        intruder = str(rng.choice([b for b in self._buckets if b != in_group]))
 
         in_docs = self._docs[in_group]
         in_idx = rng.choice(len(in_docs), size=IN_GROUP_COUNT, replace=False)

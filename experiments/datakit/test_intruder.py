@@ -13,6 +13,7 @@ own guarantee -- anytime-valid coverage -- rather than reimplemented.
 from __future__ import annotations
 
 import hashlib
+import logging
 from itertools import pairwise
 
 import numpy as np
@@ -143,22 +144,29 @@ def test_bucketpool_reads_only_the_head_not_the_whole_bucket():
     assert len(trial.documents) == 5  # still produces valid trials from the head
 
 
-def test_bucketpool_rejects_no_in_group_bucket():
-    """Every bucket smaller than the 4-doc in-group is unusable."""
-    with pytest.raises(ValueError, match="in-group"):
-        BucketPool(Side.LHS, {"a": ["1", "2"], "b": ["3", "4", "5"]})
+def test_bucketpool_rejects_bucket_below_in_group():
+    """Every bucket must hold >= 4 docs; a smaller one is rejected, not silently dropped."""
+    with pytest.raises(ValueError, match="every bucket needs"):
+        BucketPool(Side.LHS, {"a": ["1", "2", "3", "4", "5"], "b": ["1", "2"]})
 
 
-def test_bucketpool_rejects_single_nonempty_bucket():
-    """An intruder needs a second non-empty bucket to come from."""
-    with pytest.raises(ValueError, match=">= 2 non-empty"):
-        BucketPool(Side.LHS, {"a": ["1", "2", "3", "4", "5"], "b": []})
+def test_bucketpool_rejects_fewer_than_two_buckets():
+    """An intruder needs a second bucket to come from."""
+    with pytest.raises(ValueError, match=">= 2 buckets"):
+        BucketPool(Side.LHS, {"a": ["1", "2", "3", "4", "5"]})
 
 
 def test_bucketpool_rejects_head_smaller_than_in_group():
     """A head too small to hold an in-group is a misconfiguration, not a silent empty run."""
     with pytest.raises(ValueError, match="too small to form an in-group"):
         BucketPool(Side.LHS, _labeled_buckets("X"), head_size=2)
+
+
+def test_bucketpool_warns_when_bucket_shorter_than_head(caplog):
+    """A bucket smaller than head_size is sampled in full and surfaced as a warning, not silently."""
+    with caplog.at_level(logging.WARNING, logger="experiments.datakit.intruder"):
+        BucketPool(Side.LHS, {"a": ["1", "2", "3", "4", "5"], "b": ["6", "7", "8", "9"]}, head_size=128)
+    assert any(r.levelname == "WARNING" and "head_size" in r.getMessage() for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
