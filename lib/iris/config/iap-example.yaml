@@ -4,8 +4,8 @@
 # The platform/controller/scale_groups below are shown as `local` purely so this
 # file validates and the auth.iap schema is easy to read in isolation. A real
 # IAP deployment fronts a gcp/coreweave controller with the ingress stood up via
-# infra/iris-iap-gclb/ (GCLB + IAP) or infra/iris-iap-proxy/ (Cloud Run + IAP);
-# copy the `auth:` block into that cluster's config.
+# infra/iris-iap-gclb/ (GCLB + IAP); copy the `auth:` block into that cluster's
+# config.
 #
 # Login + use:
 #   pip install "marin-iris[iap]"          # desktop OAuth flow needs this extra

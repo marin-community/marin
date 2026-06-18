@@ -21,23 +21,10 @@ the resource-name prefix (`iris-<cluster>-*`) and the controller VM's GCE label
 stage is safe to re-run. Run `uv run infra/iris-iap-gclb/iap_gclb.py --help` for
 the subcommands.
 
-## When to use this vs the Cloud Run proxy
-
-There are two ways to put IAP in front of the controller:
-
-| | `iris-iap-gclb/` (this) | `../iris-iap-proxy/` (Cloud Run) |
-|---|---|---|
-| Path | GCLB → IAP → controller VM:10000 | Cloud Run (native IAP) → proxy → controller VM:10000 |
-| Hops | one (direct to VM) | two (extra serverless hop) |
-| Request timeout | LB backend timeout (tunable; set to 120s here) | Cloud Run caps requests at 300s |
-| Setup | static IP + domain + DNS + managed cert | none (serverless URL) |
-| Ops | a handful of LB resources to manage | one Cloud Run service |
-
-Use **GCLB** when you want end-to-end HTTP straight to the controller with no
-extra hop and no fixed serverless request cap on long-polls (the controller
-holds HTTP long-poll requests up to ~120s). Use the **Cloud Run proxy** when
-you want the simplest serverless setup and don't need a custom domain — it's
-fewer moving parts, at the cost of an extra hop and the Cloud Run timeout.
+This supersedes the Cloud Run proxy in `../iris-iap-proxy/`: GCLB reaches the
+controller VM directly (one hop instead of two) and has no fixed serverless
+request cap, so the controller's long-poll requests are not truncated. As this
+rolls out, the Cloud Run proxy is retired.
 
 ## Deploy
 

@@ -7,9 +7,9 @@ fronts an Iris controller VM.
 
     client --HTTPS:443--> GCLB --(IAP)--> backend service --HTTP:10000--> controller VM
 
-This is the alternative to the Cloud Run proxy in ``../iris-iap-proxy/``: GCLB
-talks straight to the controller VM (no extra serverless hop and no Cloud Run
-300s request cap that would truncate long-poll requests).
+This supersedes the Cloud Run proxy in ``../iris-iap-proxy/`` (retired as this
+rolls out): GCLB talks straight to the controller VM (no extra serverless hop
+and no Cloud Run 300s request cap that would truncate long-poll requests).
 
 Every resource is a single ``gcloud`` create guarded by an existence probe, so
 the whole rollout — or any single stage — is safe to re-run. ``deploy`` runs all
