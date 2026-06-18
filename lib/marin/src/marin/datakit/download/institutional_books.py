@@ -60,7 +60,7 @@ def transform(input_path: str, output_path: str) -> None:
         .flat_map(row_to_doc)
         .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
-    ctx = ZephyrContext(name="institutional-books-transform", resources=ResourceConfig(cpu=1, ram="8g"))
+    ctx = ZephyrContext(name="institutional-books-transform", resources=ResourceConfig(cpu=1, ram="32g"))
     ctx.execute(pipeline)
 
 

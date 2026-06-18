@@ -84,7 +84,7 @@ which pins the source list and ``SMOKE_SCALE`` for you.
 
 import argparse
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from fray import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
@@ -246,6 +246,30 @@ SMOKE_SCALE = PipelineScale(
     store_max_workers=64,
 )
 """Small-data sizing: a few sources, K=64, modest workers -- a true e2e smoke."""
+
+CW_SCALE = replace(
+    DEFAULT_SCALE,
+    sample_max_workers=128,
+    embed_max_workers_per_source=64,
+    assign_max_workers_per_source=64,
+    tokenize_max_workers=256,
+    dedup_max_parallelism=800,
+    store_max_workers=1200,
+    # Largest sources (finepdfs-eng, stackv2_code) OOM the default 64g embed
+    # worker on oversized single records; CW nodes have ~1.5-2 TiB, so 128g is safe.
+    embed_worker_resources=ResourceConfig(cpu=8, ram="128g"),
+    # The 800-way (vs DEFAULT 4096) shards are ~5x larger, so a hot LSH bucket can
+    # reach ~70 GiB in one shard -- far past the default 5g disk / 32g ram, which
+    # wedges that shard forever. Size for the hot shard; CW nodes have multi-TB NVMe.
+    dedup_worker_resources=ResourceConfig(cpu=3, ram="64g", disk="128g"),
+)
+"""CoreWeave fixed-fleet sizing: identical to ``DEFAULT_SCALE`` (full K=5000,
+every source) except per-step fan-out is capped to fit the 36-node cluster
+(~4,863 allocatable CPU cores, 110 pods/node => ~3,960 pod ceiling). The
+unbounded ``DEFAULT_SCALE`` counts (embed 512/src, dedup 4096, store 3072)
+assume the autoscaling GCP CPU pool and oversubscribe a fixed fleet on both
+cores and pod count. Only ``max_workers``-style fields change here; those are
+excluded from every step's ``hash_attrs``, so CW and GCP runs share outputs."""
 
 
 def select_sources(names: list[str] | None = None) -> dict[str, StepSpec]:
@@ -618,11 +642,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--scale",
-        choices=("full", "smoke"),
+        choices=("full", "smoke", "cw"),
         default="full",
         help=(
-            "full: production sizing over all sources (K=5000). smoke: small resources + K=64 "
-            "for a quick e2e run -- pair with --sources and a few small sources."
+            "full: production sizing over all sources (K=5000), tuned for the autoscaling GCP "
+            "CPU pool. cw: same full K=5000 DAG but per-step fan-out capped to fit the fixed "
+            "CoreWeave fleet. smoke: small resources + K=64 for a quick e2e run -- pair with "
+            "--sources and a few small sources."
         ),
     )
     parser.add_argument(
@@ -649,7 +675,7 @@ def main() -> None:
     configure_logging(logging.INFO)
 
     names = [s.strip() for s in args.sources.split(",") if s.strip()] if args.sources else None
-    scale = SMOKE_SCALE if args.scale == "smoke" else DEFAULT_SCALE
+    scale = {"full": DEFAULT_SCALE, "smoke": SMOKE_SCALE, "cw": CW_SCALE}[args.scale]
 
     result = reference_datakit_steps(
         select_sources(names),
