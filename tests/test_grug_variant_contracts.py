@@ -214,7 +214,7 @@ def test_grug_moe_variant_threads_moe_implementation_to_kernel():
         raise AssertionError("experiments.grug.moe.model must define debug_mesh_and_token_pspec")
 
     cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
-    cfg = dataclasses.replace(cfg, moe_implementation="ragged_all_to_all")
+    cfg = dataclasses.replace(cfg, moe_implementation="assigned_token")
     optimizer = optax.adam(1e-2)
     mp = jmp.get_policy("f32")
     train_step = make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
@@ -237,7 +237,7 @@ def test_grug_moe_variant_threads_moe_implementation_to_kernel():
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
         closed_jaxpr, _, _ = eqx.filter_make_jaxpr(one_step)()
 
-    assert "ragged_all_to_all" in str(closed_jaxpr)
+    assert "all_gather" in str(closed_jaxpr)
 
 
 def test_grug_moe_data_loaders_build_against_single_expert_mesh():

@@ -7,9 +7,9 @@ Implementation overview:
 - Routing keeps the argsort-grouped dispatch path that emerged as the stable
   default from https://github.com/marin-community/marin/issues/2704 and commit
   89318a910 (and its parent).
-- Expert parallelism keeps the ring-style strategy from
-  https://github.com/marin-community/marin/issues/2710: token-sharded
-  `all_gather` for dispatch, then `psum_scatter` for collection.
+- Expert parallelism keeps ring as a comparator, a plain-XLA assigned-token
+  reference path, and a DeepEP-backed assigned-token transport path for GPU
+  intranode runs.
 - Backend bodies live in the private `levanter.grug._moe` package; this module
   keeps the stable public API used by Grug model code and benchmarks.
 """
@@ -44,7 +44,7 @@ from levanter.grug._moe.ep_common import (
     _shard_a2a_params as _shard_a2a_params,
 )
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
-from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
+from levanter.grug._moe.ep_assigned_token import _moe_mlp_ep_assigned_token_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
@@ -208,8 +208,8 @@ def moe_mlp(
 
         if resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
-        elif resolved_implementation == "ragged_all_to_all":
-            shard_local_fn = _moe_mlp_ep_ragged_a2a_local
+        elif resolved_implementation == "assigned_token":
+            shard_local_fn = _moe_mlp_ep_assigned_token_local
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local
         else:

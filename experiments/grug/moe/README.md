@@ -37,8 +37,9 @@ z-loss only). The architecture choices are hardcoded in
   others use half. Specifically, layer `i` uses the long mask iff `i % 4 == 3`.
 - **Fp32 router path**: router logits cast to fp32 before top-k, softmax, and
   QB statistics.
-- **Expert parallelism**: `ragged_all_to_all` or ring-based via
-  `levanter.grug.grug_moe.moe_mlp` (default: ring). Default capacity factor 1.0.
+- **Expert parallelism**: ring, plain-XLA `assigned_token`, or DeepEP-backed
+  assigned-token transport via `levanter.grug.grug_moe.moe_mlp` (default: ring).
+  Default capacity factor 1.0.
 
 ## Scaling heuristic
 

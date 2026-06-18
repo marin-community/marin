@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+import json
+import time
 
 import numpy as np
 import pytest
@@ -14,7 +16,6 @@ from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
-from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -45,6 +46,18 @@ def _make_ep_mesh_or_none() -> Mesh | None:
     if len(devices) < 2 or len(devices) % 2 != 0:
         return None
     mesh_devices = np.array(devices).reshape(len(devices) // 2, 2, 1)
+    return Mesh(
+        mesh_devices,
+        axis_names=("data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+
+
+def _make_ep_mesh_for_expert_axis_or_none(expert_axis_size: int) -> Mesh | None:
+    devices = jax.devices()
+    if len(devices) < expert_axis_size or len(devices) % expert_axis_size != 0:
+        return None
+    mesh_devices = np.array(devices).reshape(len(devices) // expert_axis_size, expert_axis_size, 1)
     return Mesh(
         mesh_devices,
         axis_names=("data", "expert", "model"),
@@ -170,61 +183,6 @@ def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
     y_default = moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down, mesh=None)
     y_ring = moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down, implementation="ring", mesh=None)
     np.testing.assert_allclose(np.asarray(y_default), np.asarray(y_ring), rtol=1e-5, atol=1e-5)
-
-
-def test_deepep_local_assignment_packing_uses_local_expert_ids():
-    recv_x = jnp.array(
-        [
-            [1.0, 2.0],
-            [3.0, 4.0],
-            [5.0, 6.0],
-        ],
-        dtype=jnp.float32,
-    )
-    recv_topk_idx = jnp.array(
-        [
-            [0, 1],
-            [1, -1],
-            [0, 0],
-        ],
-        dtype=jnp.int32,
-    )
-    recv_topk_weights = jnp.array(
-        [
-            [0.1, 0.2],
-            [0.3, 0.0],
-            [0.4, 0.5],
-        ],
-        dtype=jnp.float32,
-    )
-
-    local_assignments = _pack_deepep_local_assignments(
-        recv_x,
-        recv_topk_idx,
-        recv_topk_weights,
-        local_experts=2,
-        num_recv_tokens=jnp.array(2, dtype=jnp.int32),
-    )
-
-    np.testing.assert_array_equal(np.asarray(local_assignments.local_group_sizes), np.array([1, 2], dtype=np.int32))
-    np.testing.assert_array_equal(
-        np.asarray(local_assignments.recv_token_indices[:3]),
-        np.array([0, 0, 1], dtype=np.int32),
-    )
-    np.testing.assert_allclose(
-        np.asarray(local_assignments.x_dispatch[:3]),
-        np.array([[1.0, 2.0], [1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
-        rtol=0,
-        atol=0,
-    )
-    np.testing.assert_allclose(
-        np.asarray(local_assignments.assignment_weights[:3]),
-        np.array([0.1, 0.2, 0.3], dtype=np.float32),
-        rtol=1e-6,
-        atol=1e-6,
-    )
-    np.testing.assert_allclose(np.asarray(local_assignments.x_dispatch[3:]), 0, rtol=0, atol=0)
-    np.testing.assert_allclose(np.asarray(local_assignments.assignment_weights[3:]), 0, rtol=0, atol=0)
 
 
 def test_prepare_moe_dispatch_indices_match_materialized_dispatch():
@@ -430,7 +388,7 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
     assert mlp.w_down.sharding.spec == P(None, "model", "data")
 
 
-@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
+@pytest.mark.parametrize("implementation", ["ring", "assigned_token"])
 def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
 
@@ -508,12 +466,12 @@ def test_shard_a2a_params_uses_sender_side_output_offsets():
     np.testing.assert_array_equal(np.asarray(output_offsets), np.array([1, 7, 2], dtype=np.int32))
 
 
-def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available():
+def test_moe_mlp_assigned_token_matches_ring_with_ep_axis_when_available():
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
         pytest.skip("requires an even number of >=2 devices")
     if jax.devices()[0].platform == "cpu":
-        pytest.skip("ragged_all_to_all is not implemented on XLA:CPU")
+        pytest.skip("assigned_token is not implemented on XLA:CPU")
 
     tokens = len(jax.devices()) * 8
     hidden_dim = 16
@@ -550,20 +508,195 @@ def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available():
             report_capacity_overflow=True,
             capacity_factor=1.0,
         )
-        ragged_out, ragged_dropped = moe_mlp(
+        assigned_out, assigned_dropped = moe_mlp(
             x,
             selected_experts,
             combine_weights,
             w_up_gate,
             w_down,
-            implementation="ragged_all_to_all",
+            implementation="assigned_token",
             mesh=None,
             report_capacity_overflow=True,
             capacity_factor=1.0,
         )
 
-    np.testing.assert_allclose(np.asarray(ragged_out), np.asarray(ring_out), rtol=1e-5, atol=1e-5)
-    assert int(ragged_dropped) == int(ring_dropped)
+    np.testing.assert_allclose(np.asarray(assigned_out), np.asarray(ring_out), rtol=1e-5, atol=1e-5)
+    assert int(assigned_dropped) == int(ring_dropped)
+
+
+def test_moe_mlp_assigned_token_backward_matches_ring_with_ep_axis_when_available():
+    mesh = _make_ep_mesh_or_none()
+    if mesh is None:
+        pytest.skip("requires an even number of >=2 devices")
+    if jax.devices()[0].platform == "cpu":
+        pytest.skip("assigned_token is not implemented on XLA:CPU")
+
+    tokens = len(jax.devices()) * 8
+    # TPU Pallas GMM backward lowering requires valid block multiples for the
+    # ring reference path; keep this shape small but TPU-lowerable.
+    hidden_dim = 128
+    intermediate_dim = 128
+    num_experts = 4
+    topk = 2
+
+    def loss_fn(implementation, x, selected_experts, combine_weights, w_up_gate, w_down):
+        out = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation=implementation,
+            mesh=None,
+            capacity_factor=1.0,
+        )
+        return jnp.sum(out.astype(jnp.float32))
+
+    with jax.set_mesh(mesh):
+        x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+            key=jax.random.key(33),
+            tokens=tokens,
+            hidden_dim=hidden_dim,
+            intermediate_dim=intermediate_dim,
+            num_experts=num_experts,
+            topk=topk,
+        )
+
+        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        x = jax.sharding.reshard(x, batch_sharding)
+        selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+        combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+        w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
+        w_down = jax.sharding.reshard(w_down, expert_sharding)
+
+        ring_grads = jax.grad(loss_fn, argnums=(1, 3, 4, 5))(
+            "ring",
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+        assigned_grads = jax.grad(loss_fn, argnums=(1, 3, 4, 5))(
+            "assigned_token",
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+
+    for assigned_grad, ring_grad in zip(assigned_grads, ring_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(assigned_grad), np.asarray(ring_grad), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(900)
+def test_moe_mlp_issue6215_d2560_perf_smoke_when_available():
+    mesh = _make_ep_mesh_for_expert_axis_or_none(4)
+    if mesh is None:
+        pytest.skip("requires a device count divisible by expert_axis_size=4")
+    if jax.devices()[0].platform != "gpu":
+        pytest.skip("issue6215 perf smoke requires GPUs")
+    if len(jax.devices()) != 4:
+        pytest.skip("DeepEP issue6215 perf smoke requires exactly 4 visible GPUs")
+
+    batch_size = 8
+    seq_len = 4096
+    tokens = batch_size * seq_len
+    hidden_dim = 2560
+    intermediate_dim = 1280
+    num_experts = 64
+    topk = 4
+
+    token_ids = jnp.arange(tokens, dtype=jnp.int32)[:, None]
+    topk_offsets = jnp.arange(topk, dtype=jnp.int32)[None, :]
+    selected_experts = (token_ids * topk + topk_offsets) % num_experts
+    k_x, k_weights, k_w13, k_w2 = jax.random.split(jax.random.key(6215), 4)
+    x = jax.random.normal(k_x, (tokens, hidden_dim), dtype=jnp.bfloat16)
+    combine_weights = jax.nn.sigmoid(jax.random.normal(k_weights, (tokens, topk), dtype=jnp.float32)).astype(
+        jnp.bfloat16
+    )
+    w_up_gate = jax.random.normal(k_w13, (num_experts, hidden_dim, 2 * intermediate_dim), dtype=jnp.bfloat16)
+    w_down = jax.random.normal(k_w2, (num_experts, intermediate_dim, hidden_dim), dtype=jnp.bfloat16)
+
+    with jax.set_mesh(mesh):
+        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        inputs = (
+            jax.sharding.reshard(x, batch_sharding),
+            jax.sharding.reshard(selected_experts, batch_sharding),
+            jax.sharding.reshard(combine_weights, batch_sharding),
+            jax.sharding.reshard(w_up_gate, expert_sharding),
+            jax.sharding.reshard(w_down, expert_sharding),
+        )
+
+        def run_impl(implementation: MoeImplementation):
+            fn = jax.jit(
+                lambda x, sel, cw, up_gate, down: moe_mlp(
+                    x,
+                    sel,
+                    cw,
+                    up_gate,
+                    down,
+                    activation=ActivationFunctionEnum.silu,
+                    implementation=implementation,
+                    mesh=mesh,
+                    capacity_factor=1.25,
+                    report_capacity_overflow=True,
+                )
+            )
+            compiled_out, compiled_dropped = fn(*inputs)
+            compiled_out.block_until_ready()
+            compiled_dropped.block_until_ready()
+            start = time.perf_counter()
+            out, dropped = fn(*inputs)
+            out.block_until_ready()
+            dropped.block_until_ready()
+            return out, dropped, time.perf_counter() - start
+
+        ring_out, ring_dropped, ring_seconds = run_impl("ring")
+        deepep_out, deepep_dropped, deepep_seconds = run_impl("deepep")
+        assigned_out, assigned_dropped, assigned_seconds = run_impl("assigned_token")
+
+    max_reference_abs = float(jnp.max(jnp.abs(ring_out.astype(jnp.float32))))
+    deepep_max_abs_diff = float(jnp.max(jnp.abs(ring_out.astype(jnp.float32) - deepep_out.astype(jnp.float32))))
+    assigned_max_abs_diff = float(jnp.max(jnp.abs(ring_out.astype(jnp.float32) - assigned_out.astype(jnp.float32))))
+    payload = {
+        "shape": {
+            "batch_size": batch_size,
+            "seq_len": seq_len,
+            "hidden_dim": hidden_dim,
+            "intermediate_dim": intermediate_dim,
+            "num_experts": num_experts,
+            "topk": topk,
+        },
+        "results": {
+            "ring": {
+                "seconds": ring_seconds,
+                "tokens_per_second": tokens / ring_seconds,
+            },
+            "deepep": {
+                "seconds": deepep_seconds,
+                "tokens_per_second": tokens / deepep_seconds,
+                "max_abs_diff": deepep_max_abs_diff,
+                "dropped": int(deepep_dropped),
+            },
+            "assigned_token": {
+                "seconds": assigned_seconds,
+                "tokens_per_second": tokens / assigned_seconds,
+                "max_abs_diff": assigned_max_abs_diff,
+                "dropped": int(assigned_dropped),
+            },
+        },
+        "max_reference_abs": max_reference_abs,
+    }
+    print("ISSUE6215_PERF_SMOKE " + json.dumps(payload, sort_keys=True))
+    assert ring_out.shape == deepep_out.shape == assigned_out.shape == (tokens, hidden_dim)
+    assert int(ring_dropped) == int(deepep_dropped) == int(assigned_dropped)
+    assert deepep_max_abs_diff / max(max_reference_abs, 1.0) < 0.02
+    assert assigned_max_abs_diff / max(max_reference_abs, 1.0) < 0.02
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():
@@ -607,18 +740,18 @@ def test_moe_mlp_runs_with_ep_axis_when_available():
         assert out.shape == (tokens, hidden_dim)
         assert jnp.isfinite(out).all()
 
-        out_ragged = moe_mlp(
+        out_assigned = moe_mlp(
             x,
             selected_experts,
             combine_weights,
             w_up_gate,
             w_down,
             activation=ActivationFunctionEnum.silu,
-            implementation="ragged_all_to_all",
+            implementation="assigned_token",
             mesh=None,
         )
-        assert out_ragged.shape == (tokens, hidden_dim)
-        assert jnp.isfinite(out_ragged).all()
+        assert out_assigned.shape == (tokens, hidden_dim)
+        assert jnp.isfinite(out_assigned).all()
 
 
 def test_functional_moe_mlp_accepts_enum_and_callable_activation():
@@ -761,7 +894,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
     assert int(dropped) > 0
 
 
-def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
+def test_moe_mlp_reports_positive_drop_count_in_assigned_token_when_over_capacity():
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
         pytest.skip("requires an even number of >=2 devices")
@@ -796,7 +929,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
             combine_weights,
             w_up_gate,
             w_down,
-            implementation="ragged_all_to_all",
+            implementation="assigned_token",
             mesh=None,
             report_capacity_overflow=True,
         )
@@ -806,7 +939,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
     assert int(dropped) > 0
 
 
-def test_ragged_a2a_receiver_clipping_respects_capacity():
+def test_assigned_token_receiver_clipping_respects_capacity():
     group_sizes = jnp.array(
         [
             [3, 1, 0, 0],

@@ -221,5 +221,6 @@ filterwarnings = [
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "torch: mark tests that use Torch (deselect with '-m \"not torch\"')",
+    "timeout: override the default per-test timeout",
 ]
 asyncio_default_fixture_loop_scope = "function"
