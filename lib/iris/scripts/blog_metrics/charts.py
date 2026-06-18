@@ -265,6 +265,53 @@ def chart_fleet_utilization(daily_dir: str, charts_dir: str) -> None:
     _save(fig, charts_dir, "fleet_utilization")
 
 
+def chart_preemptible(daily_dir: str, charts_dir: str) -> None:
+    """Preemptible (non-v4) vs reserved (v4) TPU capacity over time.
+
+    v4 is the reserved (guaranteed) pool; everything else (v5e/v5p/v6e) is
+    preemptible. Built from the real per-device iris data, so it only spans the
+    structured window (~May 6 on); W&B carries no device generation, so this
+    split cannot be reconstructed for the pre-iris (Jan-Apr) history.
+    """
+    rows = _load_csv(os.path.join(daily_dir, "accelerators_by_family_daily.csv"))
+    if not rows:
+        return
+    days, by_family = _pivot_family(rows, "mean_pflops")
+    reserved = [0.0] * len(days)
+    preempt = [0.0] * len(days)
+    for family, values in by_family.items():
+        target = reserved if family == "v4" else preempt
+        for i, v in enumerate(values):
+            target[i] += v
+    total = sum(preempt) + sum(reserved)
+    overall = 100 * sum(preempt) / total if total else 0.0
+    share = [100 * p / (p + r) if (p + r) > 0 else 0.0 for p, r in zip(preempt, reserved, strict=True)]
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    ax.stackplot(
+        days,
+        preempt,
+        reserved,
+        labels=["preemptible (non-v4)", "reserved (v4)"],
+        colors=["#4C72B0", "#DD8452"],
+        alpha=0.9,
+    )
+    ax.set_ylabel("TPU capacity (mean PFLOP/s)")
+    ax.set_title(f"Preemptible vs reserved capacity - {overall:.0f}% of compute was preemptible (non-v4)")
+    ax.set_ylim(bottom=0)
+    _style_time_axis(ax)
+    ax.legend(loc="upper left", fontsize=8, frameon=False)
+    _add_milestones(ax, min(days), max(days))
+
+    ax2 = ax.twinx()
+    ax2.plot(days, share, color="0.25", linewidth=1.2, linestyle=":", label="preemptible share")
+    ax2.set_ylabel("preemptible share (%)", color="0.25")
+    ax2.tick_params(axis="y", colors="0.25")
+    ax2.set_ylim(0, 100)
+    ax2.spines["top"].set_visible(False)
+    _save(fig, charts_dir, "preemptible")
+
+
 def chart_compute_history(daily_dir: str, charts_dir: str) -> None:
     """Realized training compute over the full W&B history, back to 2024.
 
@@ -397,6 +444,7 @@ def run(paths: config.Paths) -> None:
     chart_users(paths.daily_dir, paths.charts_dir)
     chart_tasks(paths.daily_dir, paths.charts_dir)
     chart_fleet_utilization(paths.daily_dir, paths.charts_dir)
+    chart_preemptible(paths.daily_dir, paths.charts_dir)
     chart_regions(paths.daily_dir, paths.charts_dir)
     chart_overview(paths.daily_dir, paths.charts_dir)
     if os.path.exists(os.path.join(paths.daily_dir, "wandb_compute_daily.csv")):

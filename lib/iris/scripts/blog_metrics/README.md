@@ -156,9 +156,14 @@ uv run python scripts/blog_metrics/pipeline.py fetch --with-controller
 
 `data/charts/` (`.svg` for the blog, `.png` for preview): `accelerators_chips`,
 `flops_pflops`, `users`, `tasks`, `fleet_utilization` (occupancy: busy vs idle
-chips), `accelerators_by_region`, `overview`, `compute_history` (2024→now, +
-cumulative), `calibration`. Time-axis charts annotate the `config.MILESTONES`
-that fall inside the window.
+chips), `preemptible` (preemptible non-v4 vs reserved v4 capacity), `accelerators_by_region`,
+`overview`, `compute_history` (2024→now, + cumulative), `calibration`. Time-axis
+charts annotate the `config.MILESTONES` that fall inside the window.
+
+The `preemptible` chart needs the real per-device generation, which only the
+iris structured data carries (~May 6 on) — W&B logs `num_devices` but not the
+TPU type, so the v4-vs-non-v4 split **cannot** be reconstructed for the pre-iris
+(Jan–Apr) history.
 
 ## Editing
 
