@@ -646,13 +646,12 @@ class ScatterWriter:
         return ListShard(refs=[MemChunk(items=[self._data_path])])
 
     def abort(self) -> None:
-        """Abort the in-flight upload without committing it.
+        """Discard the output instead of committing it.
 
-        fsspec only finalises an object-store multipart/resumable upload on a
-        clean ``close()``; on a failed or reassigned shard the upload is
-        otherwise left open and R2/S3 keeps billing the uploaded parts (#6488).
-        ``discard()`` aborts it (``s3fs.S3File.discard`` -> ``abort_multipart_upload``).
-        Local files write in place, so we close the handle and remove the
+        A clean ``close()`` is the only thing that finalises an object-store
+        upload; on a failed or reassigned shard the upload is otherwise left
+        open and keeps billing for uploaded parts (see #6488). On remote paths
+        ``discard()`` aborts the upload; on local paths we close and remove the
         partial file.
         """
         if self._out.closed:
@@ -713,6 +712,6 @@ def _write_scatter(
         return writer.close()
     except BaseException:
         # The write loop is not a context manager, so abort the in-flight
-        # upload here to avoid orphaning a multipart upload on R2 (#6488).
+        # upload here to avoid orphaning a multipart upload on R2.
         writer.abort()
         raise
