@@ -73,7 +73,7 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
 
 logger = logging.getLogger(__name__)
 
-NAME = "pinlin_calvin_xu/data_mixture/ngd3dm2_single_phase_exposure_average_qsplit240_300m_6b"
+NAME = "calvin/dm/spavg_q240_300m"
 COHORT = "single_phase_exposure_average_qsplit240_300m"
 SCALE = "300m_6b"
 SCALE_DISPLAY_LABEL = "100M/6B"
