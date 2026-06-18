@@ -17,6 +17,7 @@ from haliax.nn.scan import BlockFoldable, BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config, hf_rope_parameter_mapping
 from levanter.layers.attention import Attention, AttentionBackend, AttentionConfig, AttentionMask
 from levanter.layers.normalization import LayerNormConfigBase
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
@@ -35,6 +36,63 @@ from transformers import Gemma3Config as HfGemma3Config  # noqa: E402
 from transformers import Gemma3TextConfig as _HFGemma3Config  # noqa: E402
 from transformers import GemmaConfig as HfGemmaConfig  # noqa: E402
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
+
+
+def _gemma_rope_config_from_hf(hf_config: HfConfig) -> RotaryEmbeddingsConfig:
+    rope_theta, rope_scaling = hf_rope_config(
+        hf_config,
+        rope_parameter_keys=("full_attention", "sliding_attention"),
+    )
+    return RotaryEmbeddingsConfig.from_hf_config(rope_theta, rope_scaling)
+
+
+def _hf_query_pre_attn_scalar(value: float | int | None, head_dim: int) -> int:
+    scalar = head_dim if value is None else value
+    if int(scalar) != scalar:
+        raise ValueError(f"Gemma query_pre_attn_scalar must be an integer for HF compatibility, got {scalar}.")
+    return int(scalar)
+
+
+def _hf_optional_float(value: float | int | None) -> float | None:
+    return None if value is None else float(value)
+
+
+def _gemma3_hf_rope_parameters(
+    rope_theta: float, rope_scaling: dict | None, rope_local_base_freq: float, layer_types: list[str]
+) -> dict[str, dict[str, object]]:
+    full_attention: dict[str, object] = {"rope_type": "default", "rope_theta": rope_theta}
+    if rope_scaling is not None:
+        full_attention.update(rope_scaling)
+        full_attention["rope_type"] = str(full_attention.pop("type", full_attention.get("rope_type", "default")))
+
+    rope_parameters: dict[str, dict[str, object]] = {}
+    if "full_attention" in layer_types:
+        rope_parameters["full_attention"] = full_attention
+    if "sliding_attention" in layer_types:
+        rope_parameters["sliding_attention"] = {"rope_type": "default", "rope_theta": rope_local_base_freq}
+    return rope_parameters
+
+
+def _gemma3_hf_layer_types(num_layers: int, sliding_window_pattern: int | None) -> list[str]:
+    pattern = sliding_window_pattern if sliding_window_pattern is not None else 1
+    return [
+        "sliding_attention" if bool((layer_idx + 1) % pattern) else "full_attention" for layer_idx in range(num_layers)
+    ]
+
+
+def _gemma3_local_rope_theta_from_hf(hf_config: HfConfig) -> float:
+    rope_local_base_freq = getattr(hf_config, "rope_local_base_freq", None)
+    if rope_local_base_freq is not None:
+        return rope_local_base_freq
+
+    rope_parameters = hf_rope_parameter_mapping(hf_config, include_rope_scaling=True)
+    if rope_parameters is not None:
+        sliding_attention = rope_parameters.get("sliding_attention")
+        if isinstance(sliding_attention, dict):
+            return sliding_attention.get("rope_theta", 10_000.0)
+
+    return 10_000.0
+
 
 # Gemma is... very similar to Llama, so we use much of the same modeling code.
 #
@@ -121,9 +179,7 @@ class GemmaConfig(HFCompatConfig):
             self.num_heads % self.num_kv_heads == 0
         ), f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
 
-    def hf_checkpoint_converter(
-        self, ref_checkpoint: str = "google/gemma-2b"
-    ) -> HFCheckpointConverter["GemmaConfig"]:  # type: ignore
+    def hf_checkpoint_converter(self, ref_checkpoint: str = "google/gemma-2b") -> HFCheckpointConverter["GemmaConfig"]:  # type: ignore
         return HFCheckpointConverter(
             self,
             reference_checkpoint=ref_checkpoint,
@@ -191,7 +247,8 @@ class GemmaConfig(HFCompatConfig):
         ), "Only DefaultRotaryEmbeddingsConfig is supported for Gemma."
         rope_theta, rope_scaling = rope.to_hf_config()
 
-        config = HfGemmaConfig(
+        config = hf_config_from_kwargs(
+            HfGemmaConfig,
             max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
@@ -519,14 +576,15 @@ class Gemma2Config(GemmaConfig):
             rope_theta=rope_theta,
             rope_scaling=rope_scaling,
             # Gemma-2 additions
-            query_pre_attn_scalar=self.query_pre_attn_scalar or self.head_dim,
-            final_logit_softcapping=self.final_logit_softcapping,
-            attn_logit_softcapping=self.attn_logit_softcapping,
+            query_pre_attn_scalar=_hf_query_pre_attn_scalar(self.query_pre_attn_scalar, self.head_dim),
+            final_logit_softcapping=_hf_optional_float(self.final_logit_softcapping),
+            attn_logit_softcapping=_hf_optional_float(self.attn_logit_softcapping),
             sliding_window=self.sliding_window if self.sliding_window is not None else self.max_seq_len,
         )
 
         # Merge user-overrides last so callers can tweak anything.
-        cfg = HfGemma2Config(
+        cfg = hf_config_from_kwargs(
+            HfGemma2Config,
             **common_args,
             _attn_implementation="eager",
             **config_overrides,
@@ -548,8 +606,7 @@ class Gemma2Config(GemmaConfig):
         assert activation_function is not None, "No activation function found in HF configuration."
         activation_function_enum = getattr(ActivationFunctionEnum, activation_function)
 
-        rope_theta, rope_scaling = hf_config.rope_theta, getattr(hf_config, "rope_scaling", None)
-        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, rope_scaling)
+        rope_config = _gemma_rope_config_from_hf(hf_config)
 
         return Gemma2Config(
             max_seq_len=hf_config.max_position_embeddings,
@@ -815,6 +872,7 @@ class Gemma3Config(Gemma2Config):
         rope = self.rope
         assert isinstance(rope, DefaultRotaryEmbeddingsConfig)
         rope_theta, rope_scaling = rope.to_hf_config()
+        layer_types = _gemma3_hf_layer_types(self.num_layers, self.sliding_window_pattern)
 
         common_args = dict(
             max_position_embeddings=self.max_seq_len,
@@ -833,21 +891,25 @@ class Gemma3Config(Gemma2Config):
             vocab_size=vocab_size,
             rope_theta=rope_theta,
             rope_scaling=rope_scaling,
-            use_qk_norm=self.use_qk_norm,
             rope_local_base_freq=self.rope_local_base_freq,
-            query_pre_attn_scalar=self.query_pre_attn_scalar or self.head_dim,
+            rope_parameters=_gemma3_hf_rope_parameters(
+                rope_theta, rope_scaling, self.rope_local_base_freq, layer_types
+            ),
+            use_qk_norm=self.use_qk_norm,
+            query_pre_attn_scalar=_hf_query_pre_attn_scalar(self.query_pre_attn_scalar, self.head_dim),
             final_logit_softcapping=self.final_logit_softcapping,
             attn_logit_softcapping=self.attn_logit_softcapping,
             sliding_window=self.sliding_window if self.sliding_window is not None else self.max_seq_len,
-            # we don't currently suport alternating local/global attention, so every layer is global
-            sliding_window_pattern=self.sliding_window_pattern if self.sliding_window_pattern is not None else 1,
+            # we don't currently suport alternating local/global attention, so every layer is global by default
+            layer_types=layer_types,
             attention_dropout=0.0,
             attention_bias=self.use_bias,  # Gemma3 uses bias in attention
             # we have to set this for some reason even though it's default
             use_cache=True,
         )
 
-        cfg = _HFGemma3Config(
+        cfg = hf_config_from_kwargs(
+            _HFGemma3Config,
             **common_args,
             _attn_implementation="eager",
             **config_overrides,
@@ -868,8 +930,7 @@ class Gemma3Config(Gemma2Config):
         assert activation_function is not None, "No activation function found in HF configuration."
         activation_function_enum = getattr(ActivationFunctionEnum, activation_function)
 
-        rope_theta, rope_scaling = hf_config.rope_theta, getattr(hf_config, "rope_scaling", None)
-        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, rope_scaling)
+        rope_config = _gemma_rope_config_from_hf(hf_config)
 
         return Gemma3Config(
             max_seq_len=hf_config.max_position_embeddings,
@@ -886,7 +947,7 @@ class Gemma3Config(Gemma2Config):
             head_dim=hf_config.head_dim,
             query_pre_attn_scalar=getattr(hf_config, "query_pre_attn_scalar", hf_config.head_dim),
             use_qk_norm=getattr(hf_config, "use_qk_norm", True),
-            rope_local_base_freq=getattr(hf_config, "rope_local_base_freq", 10_000.0),
+            rope_local_base_freq=_gemma3_local_rope_theta_from_hf(hf_config),
         )
 
     def attention_config(self) -> AttentionConfig:  # type: ignore[override]
