@@ -130,14 +130,19 @@ def bf16_master_with_fp32_residual(
             bf16_new_params,
             is_leaf=_IS_NONE,
         )
-        bf16_step = jax.tree.map(
-            _safe(lambda new, old: new - old),
-            bf16_new_params,
+        # Return an fp32 delta so optax.apply_updates does a single, well-defined
+        # truncation: ``(bf16_old + fp32_delta).astype(bf16) == fp32_new.astype(bf16)``.
+        # Returning a bf16 delta instead would lose precision twice (bf16 subtract
+        # to build the delta + bf16 add in apply_updates), drifting the hyperball's
+        # supposed-to-be-invariant param norm visibly across steps.
+        fp32_delta = jax.tree.map(
+            _safe(lambda fn, p: fn - p.astype(jnp.float32)),
+            fp32_new_params,
             params,
             is_leaf=_IS_NONE,
         )
 
-        return bf16_step, {"inner": new_inner, "residual": new_residual}
+        return fp32_delta, {"inner": new_inner, "residual": new_residual}
 
     return optax.GradientTransformation(init_fn, update_fn)
 
