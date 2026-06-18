@@ -431,7 +431,7 @@ message StaticAuthConfig {
 // its own JWT model on top: the client sends the IAP OIDC ID token in the
 // `Proxy-Authorization` header (consumed by IAP) and the Iris JWT in
 // `Authorization` (passed through to the controller). See
-// docs/auth-loopback-transition.md and the `iap-client-auth` design.
+// docs/auth-loopback-transition.md.
 message IapAuthConfig {
   // Public HTTPS URL of the IAP-fronted ingress the CLI connects to directly
   // (no SSH tunnel), e.g. "https://iris-marin.example.com".
