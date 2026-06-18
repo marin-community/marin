@@ -3,6 +3,7 @@
 
 import logging
 import os
+import re
 import subprocess
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -177,6 +178,18 @@ def fsspec_url(fs: fsspec.AbstractFileSystem, path: str) -> str:
     if path.startswith(f"{protocol}://"):
         return path
     return f"{protocol}://{path}"
+
+
+_SCHEME_PATH_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)(.*)$")
+
+
+def normalize_fsspec_url_path(path: str) -> str:
+    """Collapse duplicate slashes after a URL scheme before fsspec lookup."""
+    match = _SCHEME_PATH_RE.match(path)
+    if match is None:
+        return path
+    scheme, rest = match.groups()
+    return scheme + re.sub(r"/{2,}", "/", rest)
 
 
 def is_path_like(path: str) -> bool:

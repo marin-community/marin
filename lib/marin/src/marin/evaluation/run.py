@@ -58,7 +58,13 @@ def evaluate(config: EvaluationConfig) -> None:
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
             wandb_tags=config.wandb_tags,
+            use_wandb_tracker=config.use_wandb_tracker,
             eval_datasets_cache_path=config.eval_datasets_cache_path,
+            log_samples=config.log_samples,
+            sample_log_all=config.sample_log_all,
+            max_logged_samples_per_task=config.max_logged_samples_per_task,
+            sample_smooth_metrics=config.sample_smooth_metrics,
+            drop_samples_after_metrics=config.drop_samples_after_metrics,
         )
     else:
         evaluator.evaluate(

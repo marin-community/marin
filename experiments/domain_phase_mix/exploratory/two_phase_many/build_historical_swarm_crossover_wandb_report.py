@@ -30,9 +30,7 @@ import wandb_workspaces.reports.v2 as wr
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_OUTPUT_DIR = (
-    SCRIPT_DIR / "reference_outputs" / "historical_swarm_crossover_wandb_report_20260527"
-)
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "historical_swarm_crossover_wandb_report_20260527"
 ENTITY = "marin-community"
 PROJECT = "marin"
 METRIC = "eval/uncheatable_eval/github_python/loss"
@@ -192,7 +190,9 @@ def topk_overlap(row: pd.Series, final_row: pd.Series, k: int) -> float:
     return float(len(current_top & final_top) / k)
 
 
-def analyze_histories(histories: pd.DataFrame, metric: str, min_step_coverage: float) -> tuple[pd.DataFrame, pd.DataFrame]:
+def analyze_histories(
+    histories: pd.DataFrame, metric: str, min_step_coverage: float
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Compute rank stability diagnostics by scale and progress."""
     step_rows: list[dict[str, object]] = []
     final_rows: list[dict[str, object]] = []
@@ -315,7 +315,9 @@ def plot_rank_stability(step_stats: pd.DataFrame, output_dir: Path) -> dict[str,
     return paths
 
 
-def plot_loss_curves(histories: pd.DataFrame, final_rankings: pd.DataFrame, metric: str, output_dir: Path) -> dict[str, Path]:
+def plot_loss_curves(
+    histories: pd.DataFrame, final_rankings: pd.DataFrame, metric: str, output_dir: Path
+) -> dict[str, Path]:
     """Write loss curve plots for each historical swarm."""
     paths: dict[str, Path] = {}
     for spec in SWARMS:
@@ -431,7 +433,9 @@ def log_analysis_run(
         tags=["swarm-crossover", "qsplit240", "60m", "300m", "agent-generated"],
         config={
             "metric": METRIC,
-            "source": "experiments/domain_phase_mix/exploratory/two_phase_many/build_historical_swarm_crossover_wandb_report.py",
+            "source": (
+                "experiments/domain_phase_mix/exploratory/two_phase_many/build_historical_swarm_crossover_wandb_report.py"
+            ),
         },
     )
     assert run is not None

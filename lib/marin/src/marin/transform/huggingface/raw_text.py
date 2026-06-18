@@ -20,7 +20,7 @@ from marin.datakit.ingestion_manifest import (
     write_ingestion_metadata_json,
 )
 from marin.transform.huggingface.dataset_to_eval import get_nested_item
-from marin.utils import fsspec_mkdirs, fsspec_url
+from marin.utils import fsspec_mkdirs, fsspec_url, normalize_fsspec_url_path
 from rigging.filesystem import open_url, url_to_fs
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
@@ -91,12 +91,14 @@ def _existing_record_count(output_file: str) -> int:
 
 
 def _surface_data_files(input_path: str, surface: HfRawTextSurfaceConfig) -> list[str]:
-    fs, root = url_to_fs(input_path)
+    normalized_input_path = normalize_fsspec_url_path(input_path)
+    fs, root = url_to_fs(normalized_input_path)
     pattern = posixpath.join(root, surface.input_glob)
     matches = sorted(path for path in fs.glob(pattern) if path.endswith(".parquet"))
     if not matches:
         raise FileNotFoundError(
-            f"No parquet files matched {surface.input_glob!r} for surface {surface.name!r} under {input_path}"
+            f"No parquet files matched {surface.input_glob!r} for surface {surface.name!r} under "
+            f"{normalized_input_path}"
         )
     return [fsspec_url(fs, path) for path in matches]
 

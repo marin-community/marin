@@ -33,23 +33,19 @@ from plotly.subplots import make_subplots
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_LOADINGS = (
-    REPO_ROOT
-    / "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/"
+    REPO_ROOT / "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/"
     "collaborator_grug_v4_aggregate_repro_20260525/sent_raw_metric_matrix_300m_zip/factor_loadings.csv"
 )
 DEFAULT_DSP_READINESS = (
-    REPO_ROOT
-    / "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/"
+    REPO_ROOT / "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/"
     "aggregate_metric_clean_slate_20260518/metric_controllability_effective_exposure_dsp.csv"
 )
 DEFAULT_PROPORTIONAL_NOISE_MATRIX = (
-    REPO_ROOT
-    / "experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/"
+    REPO_ROOT / "experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/"
     "raw_metric_matrix_300m/raw_metric_matrix_300m_with_proportional_noise.csv"
 )
 DEFAULT_OUTPUT_DIR = (
-    REPO_ROOT
-    / "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/"
+    REPO_ROOT / "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/"
     "predictable_metric_factor_pruning_20260527"
 )
 DEFAULT_PREDICTABLE_R = 0.50
@@ -164,8 +160,8 @@ def match_proportional_snr(metric: str, matrix: pd.DataFrame) -> dict[str, objec
             "proportional_snr_metric": candidate,
             "proportional_snr_match_type": match_type,
             "proportional_signal_to_noise": signal_to_noise,
-            "proportional_signal_n": int(len(signal_values)),
-            "proportional_noise_n": int(len(noise_values)),
+            "proportional_signal_n": len(signal_values),
+            "proportional_noise_n": len(noise_values),
             "proportional_signal_scale": signal_scale,
             "proportional_noise_scale": noise_scale,
         }
@@ -475,7 +471,7 @@ def write_summary(joined: pd.DataFrame, output_dir: Path, args: argparse.Namespa
         by_factor.append(
             {
                 "factor": factor,
-                "metric_count": int(len(group)),
+                "metric_count": len(group),
                 "predictable": int(counts.get("predictable", 0)),
                 "borderline": int(counts.get("borderline", 0)),
                 "heldout": int(counts.get("heldout", 0)),
@@ -488,7 +484,7 @@ def write_summary(joined: pd.DataFrame, output_dir: Path, args: argparse.Namespa
         "proportional_noise_matrix": str(args.proportional_noise_matrix),
         "predictable_r_threshold": args.predictable_r,
         "borderline_r_threshold": args.borderline_r,
-        "metric_count": int(len(joined)),
+        "metric_count": len(joined),
         "bucket_counts": {str(k): int(v) for k, v in joined["readiness_bucket"].value_counts().items()},
         "factors": by_factor,
         "factor_columns": factors,

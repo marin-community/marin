@@ -5,8 +5,10 @@ import numpy as np
 import pandas as pd
 
 from experiments.domain_phase_mix.exploratory.paper_plots import (
-    starcoder_two_phase_local_snr_landscape as local_snr,
     starcoder_two_phase_heteroskedastic_landscape as landscape,
+)
+from experiments.domain_phase_mix.exploratory.paper_plots import (
+    starcoder_two_phase_local_snr_landscape as local_snr,
 )
 
 
@@ -85,7 +87,9 @@ def test_render_heteroskedastic_landscape_has_metric_dropdown():
             "status": ["completed"] * 4,
         }
     )
-    summary = landscape.summarize_anchor_noise(_repeat_rows().query("latest_step == 3813"), [landscape.TARGET, "eval/bpb"])
+    summary = landscape.summarize_anchor_noise(
+        _repeat_rows().query("latest_step == 3813"), [landscape.TARGET, "eval/bpb"]
+    )
 
     fig = landscape.render_heteroskedastic_landscape(
         rows,
@@ -98,9 +102,7 @@ def test_render_heteroskedastic_landscape_has_metric_dropdown():
     assert len(fig.data) == 12
     assert len(fig.layout.updatemenus[0].buttons) == 2
     ci_trace_names = [
-        trace.name
-        for trace in fig.data
-        if getattr(trace, "mode", None) == "lines" and "95% CI" in str(trace.name)
+        trace.name for trace in fig.data if getattr(trace, "mode", None) == "lines" and "95% CI" in str(trace.name)
     ]
     assert ci_trace_names
 

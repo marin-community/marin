@@ -557,3 +557,225 @@ Operational lesson:
   `--only-run-name`.
 - For larger file-shaped retry inputs, stage the file to `gs://marin-us-east5`
   and pass a GCS URI rather than a local path.
+
+### 2026-06-08 - central log-tilt projected-controllability analysis
+
+Recollected the final downstream eval outputs for the proportional
+controllability rows from east5 executor prefixes:
+
+- English-lite: `117/117` rows collected.
+- GSM8K/HumanEval: `117/117` rows collected.
+- Noise parity: `117/117` rows collected.
+
+Built a final merged matrix and estimated local proportional-anchor
+controllability from the `39` paired central log-tilt directions. The estimator
+orients all metrics as utility, computes
+`d_v = (U(w_plus) - U(w_minus)) / (2 * alpha)` with `alpha=0.10`, reconstructs
+domain advantage scores `q_i` in the `L2(p)` tangent geometry, and reports
+`G = sqrt(sum_i p_i q_i^2)`.
+
+Artifacts:
+
+- Analysis script:
+  `experiments/domain_phase_mix/exploratory/two_phase_many/analyze_proportional_controllability_log_tilts.py`
+- Output directory:
+  `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/proportional_controllability_log_tilt_analysis_20260609/`
+- Final matrix:
+  `pctrl_final_metric_matrix.csv`
+- Metric summary:
+  `metric_projected_controllability.csv`
+- Directional derivatives:
+  `log_tilt_directional_derivatives.csv`
+- Domain advantages:
+  `domain_advantage_scores.csv`
+- Report:
+  `report.md`
+
+Coverage:
+
+- Final merged matrix has `117` rows and `1107` complete metric columns.
+- All `78` central log-tilt endpoint rows are complete for all estimated
+  metrics.
+
+CC review:
+
+- Invoked with `env -u ANTHROPIC_API_KEY`, Opus 4.8 max effort, resumed Marin
+  session `d0a45bcd-ae4f-4efd-8bd5-3cbcdf4b3490`.
+- Preflight showed `plambdafour@proton.me`, `stripe_subscription`, and no
+  inherited `ANTHROPIC_API_KEY`.
+- Verdict: no estimator blockers. CC verified the target-vs-rest `L2(p)`
+  direction geometry, the least-squares reconstruction, and the materialized
+  log-tilt weights. CC recommended leading with noise-normalized
+  controllability, keeping swarm-SD normalization as an effect-size diagnostic,
+  and propagating approximate proportional-noise uncertainty; the script/report
+  were updated accordingly.
+
+Interpretation:
+
+- The central log-tilts provide a real local projected-controllability estimate,
+  not just a deletion/coverage ablation.
+- Several curated metrics have sizeable noise-normalized local controllability,
+  including agentic-coding BPB, HellaSwag, teacher-forced HumanEval/GSM8K,
+  MMLU, BoolQ, HumanEval pass@1, and GSM8K exact match.
+- Domain advantage signs vary substantially by metric, so this does not support
+  a single scalar quality-discount story.
+- Caveats remain: single-seed endpoints, proportional-anchor noise reused for
+  uncertainty, possible mixture-dependent noise variance, and winner's-curse
+  selection bias across `1107` metrics.
+
+### 2026-06-14 - Old +5pp bumps vs central log-tilts
+
+- Goal: compare the earlier `+0.05` proportional domain-bump interventions
+  against the completed per-domain paired central log-tilts, and separate the
+  observed paired directional derivative from the reconstructed local-gradient
+  / domain-advantage estimate.
+- Command:
+  `uv run python experiments/domain_phase_mix/exploratory/two_phase_many/compare_ppert_bumps_to_log_tilts.py`
+- Method:
+  - Used the 300M domain-bump rows from
+    `metric_registry/proportional_perturbation_scale_transfer/`.
+  - Used log-tilt derivatives and reconstructed `q` scores from
+    `reference_outputs/proportional_controllability_log_tilt_analysis_20260609/`.
+  - Converted each old finite bump effect to a unit `L2(p)` target-vs-rest
+    derivative via `d_bump = Delta * sqrt(p_j * (1 - p_j)) / 0.05`.
+  - Converted each old finite bump effect to a domain-advantage scale via
+    `q_bump = Delta * (1 - p_j) / 0.05`.
+- Artifacts:
+  - Script:
+    `experiments/domain_phase_mix/exploratory/two_phase_many/compare_ppert_bumps_to_log_tilts.py`
+  - Output directory:
+    `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/ppert_bump_vs_log_tilt_comparison_20260614/`
+  - Interactive scatter:
+    `bump_vs_log_tilt_curated_scatter.html`
+  - Summary plot:
+    `bump_vs_log_tilt_curated_summary.html`
+  - Estimated local-gradient heatmap:
+    `estimated_local_gradient_curated_heatmap.html`
+  - Estimated local-gradient dropdown bars:
+    `estimated_local_gradient_curated_bars.html`
+  - Domain-ablation heatmap:
+    `domain_ablation_curated_heatmap.html`
+  - Domain-ablation dropdown bars:
+    `domain_ablation_curated_bars.html`
+  - Domain-ablation vs local-gradient scatter:
+    `domain_ablation_vs_local_gradient_curated_scatter.html`
+  - Domain-level comparison table:
+    `bump_vs_log_tilt_domain_comparison.csv`
+  - Metric summary:
+    `bump_vs_log_tilt_metric_summary.csv`
+  - Domain-ablation comparison table:
+    `domain_ablation_vs_local_gradient_domain_comparison.csv`
+  - Domain-ablation metric summary:
+    `domain_ablation_vs_local_gradient_metric_summary.csv`
+- Coverage:
+  - `43,095` domain-metric rows.
+  - `1,105` common metrics.
+  - `1,026` common reportable metrics.
+  - `41,925` domain-ablation comparison rows.
+  - `1,075` domain-ablation common metrics.
+  - `1,011` domain-ablation common reportable metrics.
+  - All common metrics have all `39` domains.
+  - `23/24` curated metrics plotted; `lm_eval/mmlu_pro_5shot/bpb` was not
+    available in the old bump panel.
+- Result:
+  - Across all reportable common metrics, median directional Spearman between
+    old bump-implied unit derivatives and paired log-tilt derivatives is
+    `0.020`, and median sign agreement is `0.513`.
+  - Across curated metrics, median directional Spearman is `0.152`, median
+    directional sign agreement is `0.564`, median `q` Spearman is `0.115`, and
+    median `q` sign agreement is `0.571`.
+  - For domain deletions compared to the local-gradient prediction
+    `Delta_del = -p_j q_j / (1 - p_j)`, curated metrics have median
+    deletion-delta Spearman `0.179`, median deletion-delta sign agreement
+    `0.526`, median deletion-implied `q` Spearman `0.189`, and median
+    deletion-implied `q` sign agreement `0.526`.
+  - Strongest curated agreement is on agentic-coding BPB and HellaSwag BPB:
+    `eval/agentic_coding/success_macro_bpb` has directional Spearman `0.584`
+    and sign agreement `0.692`; `eval/agentic_coding/failed_macro_bpb` has
+    directional Spearman `0.550` and sign agreement `0.667`;
+    `lm_eval/hellaswag_5shot/bpb` has directional Spearman `0.448` and sign
+    agreement `0.692`.
+  - Domain-deletion agreement is strongest for the same broad families:
+    `eval/agentic_coding/success_macro_bpb` deletion-delta Spearman `0.580`,
+    `eval/agentic_coding/failed_macro_bpb` `0.576`, and
+    `lm_eval/hellaswag_5shot/bpb` `0.465`.
+  - Several hard accuracy metrics are near chance or worse, including
+    `lm_eval/mmlu_5shot/acc`, `lm_eval/mmlu_pro_5shot/acc`,
+    `lm_eval/boolq_10shot/acc`, and `lm_eval/piqa/acc_norm`.
+- Interpretation:
+  - The old `+0.05` bump panel should not be treated as interchangeable with
+    central log-tilt derivatives. It is a larger one-sided finite intervention,
+    and agreement with local central tilts is metric-dependent.
+  - The reconstructed local-gradient/domain-advantage estimate is related to
+    but not identical to paired tilt derivatives; it is the least-squares
+    projection of all redundant target-vs-rest directions onto the centered
+    tangent space.
+  - Domain deletions are even more nonlocal than `+0.05` bumps, especially for
+    large domains. They remain useful as coverage ablations, but they should
+    not be used as clean local-gradient estimates.
+  - This strengthens the case for running explicit paired local tilts in future
+    production swarms when projected-controllability estimates matter, rather
+    than relying only on old bump-style interventions.
+  - The estimated local-gradient plots directly visualize reconstructed
+    domain-advantage coordinates `q_i`; positive `q_i` improves the
+    utility-oriented metric, with BPB/loss metrics sign-flipped so higher is
+    still better.
+  - Corrected signed-utility plot colors after review: signed utility/gradient
+    values now use `RdYlGn` so positive/higher-is-better values are green and
+    negative/lower-is-worse values are red. Base-mass coloring still uses
+    `RdYlGn_r`.
+
+### 2026-06-16 13:34 - Heteroskedastic readiness and DCLM optimization analysis
+
+- Command:
+  - `uv run python experiments/domain_phase_mix/exploratory/two_phase_many/analyze_heteroskedastic_optimization_readiness.py`
+  - `uv run python -m py_compile experiments/domain_phase_mix/exploratory/two_phase_many/analyze_heteroskedastic_optimization_readiness.py`
+- Output directory:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/heteroskedastic_optimization_readiness_20260616/`
+- Key artifacts:
+  - `report.md`
+  - `summary.json`
+  - `metric_optimization_readiness.csv`
+  - `dclm_component_optimization_readiness.csv`
+  - `noise_anchor_sd_scatter.html`
+  - `log_tilt_conservative_q_scatter.html`
+  - `bump_conservative_q_scatter.html`
+  - `optimization_readiness_by_family.html`
+  - `dclm_component_readiness_scatter.html`
+  - `dclm_smooth_proxy_hard_alignment.html`
+- Result:
+  - Recalibrated the log-tilt and `+5pp` bump actuation tests using a
+    conservative repeated-anchor noise scale: the maximum observed utility SD
+    across proportional-variable, run00097-variable, and run00097-fixed
+    repeated anchors.
+  - Over `1,026` reportable metrics, log-tilt BH `q <= 0.05` drops from `341`
+    under proportional-anchor noise to `74` under the max-anchor
+    recalibration.
+  - Over the same reportable metrics, `+5pp` bump BH `q <= 0.05` drops from
+    `326` to `77`.
+  - Optimization-readiness counts are `15` `local_steerable`, `6`
+    `finite_effect_steerable`, `92` `guardrail_detectable`, `312`
+    `fragile_screen_only`, and `601` `weak_or_noise_limited`.
+  - `270/1,026` reportable metrics have max/min repeated-anchor SD ratio at
+    least `2`, confirming substantial mixture-dependent conditional variance.
+  - DCLM Core v2 component readiness: `5/22` smooth component proxies have
+    exact proportional-controllability diagnostics. There are `3`
+    `surrogate_objective_candidate` components, `2`
+    `possible_weighted_objective` components, `3`
+    `proxy_aligned_but_fit_limited` components, and `14`
+    `heldout_or_guardrail` components.
+- Interpretation:
+  - Proportional-noise p-values are useful as a screen, not as sufficient
+    evidence for direct optimization under heteroskedastic noise.
+  - Direct steering should focus on metrics that are both robust under
+    conservative noise and direction-predictable. Robust but direction-unstable
+    metrics should be guardrails or held-out validation targets.
+  - For DCLM Core v2, the strongest current smooth surrogate candidates are
+    `hellaswag_0shot`, `hellaswag_10shot`, and `lambada_0shot`; their smooth
+    proxies align strongly with hard components and have strong DSP OOF fits.
+    None qualifies as a strict direct steering candidate because local
+    actuation evidence is incomplete or guardrail-only.
+  - The near-term optimization path should therefore be a constrained
+    multi-objective search over predictable smooth surrogates, with DCLM hard
+    macro and weak/anti-correlated components held out for validation rather
+    than used as direct objective terms.

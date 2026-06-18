@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from functools import cache, partial
 
+import fsspec
 from fray.cluster import ResourceConfig
 from levanter.main.train_lm import LmConfig
 from levanter.optim import MuonHConfig
@@ -82,6 +83,89 @@ PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION = {
         ),
     },
     "us-east5": {
+        "dolma3_cc/art_and_design_high": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/art_and_design_high-8fd3f7"
+        ),
+        "dolma3_cc/art_and_design_low": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/art_and_design_low-f75d57"
+        ),
+        "dolma3_cc/crime_and_law_high": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/crime_and_law_high-d1e71b"
+        ),
+        "dolma3_cc/crime_and_law_low": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/crime_and_law_low-c5231a"
+        ),
+        "dolma3_cc/education_and_jobs_high": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/education_and_jobs_high-fd5aa1"
+        ),
+        "dolma3_cc/education_and_jobs_low": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/education_and_jobs_low-6d3fc9"
+        ),
+        "dolma3_cc/electronics_and_hardware_high": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/"
+            "dolma3_cc/electronics_and_hardware_high-c901ee"
+        ),
+        "dolma3_cc/electronics_and_hardware_low": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/"
+            "dolma3_cc/electronics_and_hardware_low-35ef64"
+        ),
+        "dolma3_cc/entertainment_high": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/entertainment_high-a099bb"
+        ),
+        "dolma3_cc/entertainment_low": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/entertainment_low-952a40"
+        ),
+        "dolma3_cc/finance_and_business_high": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/finance_and_business_high-71c684"
+        ),
+        "dolma3_cc/finance_and_business_low": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/finance_and_business_low-fe69a6"
+        ),
+        "dolma3_cc/food_and_dining_high": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/food_and_dining_high-103e51"
+        ),
+        "dolma3_cc/food_and_dining_low": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/food_and_dining_low-f491f1"
+        ),
+        "dolma3_cc/games_high": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/games_high-4762ec"
+        ),
+        "dolma3_cc/games_low": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/games_low-a8fdde"
+        ),
+        "dolma3_cc/health_high": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/health_high-d28699"
+        ),
+        "dolma3_cc/health_low": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/health_low-d93c8a"
+        ),
+        "dolma3_cc/history_and_geography_high": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/"
+            "dolma3_cc/history_and_geography_high-b49626"
+        ),
+        "dolma3_cc/history_and_geography_low": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/history_and_geography_low-979799"
+        ),
+        "dolma3_cc/industrial_high": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/industrial_high-818b37"
+        ),
+        "dolma3_cc/industrial_low": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/industrial_low-dbd530"
+        ),
+        "dolma3_cc/literature_high": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/literature_high-bddf01"
+        ),
+        "dolma3_cc/literature_low": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_cc/literature_low-a7a06c"
+        ),
+        "dolma3_cc/science_math_and_technology_high": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/"
+            "dolma3_cc/science_math_and_technology_high-8c6157"
+        ),
+        "dolma3_cc/science_math_and_technology_low": (
+            "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/"
+            "dolma3_cc/science_math_and_technology_low-f3e030"
+        ),
         "dolma3_stack_edu": "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolma3_stack_edu-a7297b",
         "dolmino_stem_heavy_crawl": (
             "gs://marin-us-east5/tokenized/merged/dolma3_dolmino_top_level/" "dolmino_stem_heavy_crawl-e1ec3b"
@@ -89,6 +173,16 @@ PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION = {
     },
 }
 PREBUILT_MERGED_RUNTIME_CACHE_CANONICAL_REGION = "us-central1"
+SOURCE_TOKENIZED_RUNTIME_CACHE_EXACT_PATHS_BY_REGION = {
+    "us-east5": {
+        "arxiv": "gs://marin-us-east5/tokenized/dolma/arxiv-07a51f",
+        "finemath_3plus": "gs://marin-us-east5/tokenized/finemath_3_plus-a26b0f",
+        "wikipedia": "gs://marin-us-east5/tokenized/dolma/wiki-212315",
+    },
+}
+SOURCE_TOKENIZED_RUNTIME_CACHE_GLOB_PREFIXES_BY_REGION = {
+    "us-east5": "gs://marin-us-east5/tokenized/dolma3_dolmino_pool",
+}
 
 SAMPLING_PARAMS = DirichletSamplingParams(
     strategy=SamplingStrategy.DIRICHLET,
@@ -166,7 +260,7 @@ def _prebuilt_merged_runtime_cache_paths(runtime_cache_regions: Sequence[str]) -
     canonical_paths = PREBUILT_MERGED_RUNTIME_CACHE_PATHS_BY_REGION.get(
         PREBUILT_MERGED_RUNTIME_CACHE_CANONICAL_REGION, {}
     )
-    for domain_name in PREFERRED_MERGED_RUNTIME_DOMAIN_NAMES:
+    for domain_name in DOMAIN_NAMES:
         cache_path = canonical_paths.get(domain_name)
         if cache_path is None:
             cache_path = next(
@@ -180,6 +274,93 @@ def _prebuilt_merged_runtime_cache_paths(runtime_cache_regions: Sequence[str]) -
         if cache_path is not None:
             prebuilt_paths[domain_name] = mirror_marin_path(cache_path)
     return prebuilt_paths
+
+
+@cache
+def _read_executor_status(cache_path: str) -> str | None:
+    status_uri = cache_path.rstrip("/") + "/.executor_status"
+    fs, _, paths = fsspec.get_fs_token_paths(status_uri)
+    if len(paths) != 1:
+        raise ValueError(f"Expected one executor-status path for {cache_path!r}, got {paths}")
+    try:
+        with fs.open(paths[0], "rt") as handle:
+            last_line = ""
+            for line in handle:
+                stripped = line.strip()
+                if stripped:
+                    last_line = stripped
+    except FileNotFoundError:
+        return None
+    return last_line or None
+
+
+def _executor_status_is_success(status: str | None) -> bool:
+    if status is None:
+        return False
+    if status == "SUCCESS":
+        return True
+    return '"SUCCESS"' in status
+
+
+@cache
+def _resolve_finished_gcs_cache_path(cache_pattern: str) -> str:
+    if "*" not in cache_pattern:
+        if _executor_status_is_success(_read_executor_status(cache_pattern)):
+            return cache_pattern.rstrip("/")
+        raise ValueError(f"Runtime cache is not complete: {cache_pattern}")
+
+    if not cache_pattern.startswith("gs://"):
+        raise ValueError(f"Wildcard runtime cache patterns must be gs:// paths, got {cache_pattern!r}")
+    parent_uri, _, child_glob = cache_pattern.rpartition("/")
+    if not parent_uri or not child_glob.endswith("*"):
+        raise ValueError(f"Expected a one-level child wildcard cache pattern, got {cache_pattern!r}")
+    child_prefix = child_glob[:-1]
+    candidate_paths = [
+        cache_path
+        for cache_path in _finished_cache_paths_under(parent_uri)
+        if cache_path.rsplit("/", maxsplit=1)[-1].startswith(child_prefix)
+    ]
+    if not candidate_paths:
+        raise ValueError(f"No complete runtime cache matched {cache_pattern!r}")
+    return sorted(candidate_paths)[0]
+
+
+@cache
+def _finished_cache_paths_under(parent_uri: str) -> tuple[str, ...]:
+    if not parent_uri.startswith("gs://"):
+        raise ValueError(f"Finished runtime cache index only supports gs:// paths, got {parent_uri!r}")
+    fs = fsspec.filesystem("gcs")
+    train_paths = fs.glob(f"{parent_uri[len('gs://') :].rstrip('/')}/*/train")
+    cache_paths = sorted(fs.unstrip_protocol(path).rsplit("/", maxsplit=1)[0].rstrip("/") for path in train_paths)
+    return tuple(
+        cache_path for cache_path in cache_paths if _executor_status_is_success(_read_executor_status(cache_path))
+    )
+
+
+@cache
+def _source_tokenized_runtime_cache_path(partition_name: str, runtime_cache_regions: tuple[str, ...]) -> str | None:
+    if len(runtime_cache_regions) != 1:
+        return None
+    region = runtime_cache_regions[0]
+    exact_paths = SOURCE_TOKENIZED_RUNTIME_CACHE_EXACT_PATHS_BY_REGION.get(region, {})
+    if partition_name in exact_paths:
+        return _resolve_finished_gcs_cache_path(exact_paths[partition_name])
+
+    source_prefix = SOURCE_TOKENIZED_RUNTIME_CACHE_GLOB_PREFIXES_BY_REGION.get(region)
+    if source_prefix is None:
+        return None
+    safe_name = partition_name.replace("/", "_")
+    return _resolve_finished_gcs_cache_path(f"{source_prefix}/{safe_name}-*")
+
+
+def _source_tokenized_runtime_cache_configured(partition_name: str, runtime_cache_regions: tuple[str, ...]) -> bool:
+    if len(runtime_cache_regions) != 1:
+        return False
+    region = runtime_cache_regions[0]
+    return (
+        partition_name in SOURCE_TOKENIZED_RUNTIME_CACHE_EXACT_PATHS_BY_REGION.get(region, {})
+        or region in SOURCE_TOKENIZED_RUNTIME_CACHE_GLOB_PREFIXES_BY_REGION
+    )
 
 
 @dataclass(frozen=True)
@@ -220,6 +401,20 @@ def _existing_merged_runtime_cache_config(domain_name: str, cache_path: str) -> 
         cache_path=cache_path,
         tokenizer=marin_tokenizer,
         tags=[domain_name, "top_level_runtime_cache"],
+    )
+
+
+@cache
+def _existing_source_runtime_cache_config(
+    partition_name: str, runtime_cache_regions: tuple[str, ...]
+) -> ExistingTokenizedCacheConfig:
+    cache_path = _source_tokenized_runtime_cache_path(partition_name, runtime_cache_regions)
+    if cache_path is None:
+        raise ValueError(f"No source runtime cache configured for {partition_name!r} in {runtime_cache_regions}")
+    return ExistingTokenizedCacheConfig(
+        cache_path=cache_path,
+        tokenizer=marin_tokenizer,
+        tags=[partition_name, "source_runtime_cache"],
     )
 
 
@@ -302,13 +497,18 @@ def build_top_level_domains(*, runtime_cache_region: str | Sequence[str] = DEFAU
 
         if len(partition_counts) == 1:
             partition_name = next(iter(partition_counts))
+            source_cache_step_fn = (
+                partial(_existing_source_runtime_cache_config, partition_name, normalized_regions)
+                if _source_tokenized_runtime_cache_configured(partition_name, normalized_regions)
+                else _partition_step_fn(partition_name, worker_resources=worker_resources)
+            )
             domains.append(
                 Domain(
                     name=domain_name,
                     components=[
                         DatasetComponent(
                             name=partition_name,
-                            step_fn=_partition_step_fn(partition_name, worker_resources=worker_resources),
+                            step_fn=source_cache_step_fn,
                             weight=partition_counts[partition_name],
                         )
                     ],
@@ -320,7 +520,11 @@ def build_top_level_domains(*, runtime_cache_region: str | Sequence[str] = DEFAU
         components = [
             DatasetComponent(
                 name=partition_name,
-                step_fn=_partition_step_fn(partition_name, worker_resources=worker_resources),
+                step_fn=(
+                    partial(_existing_source_runtime_cache_config, partition_name, normalized_regions)
+                    if _source_tokenized_runtime_cache_configured(partition_name, normalized_regions)
+                    else _partition_step_fn(partition_name, worker_resources=worker_resources)
+                ),
                 weight=partition_counts[partition_name],
             )
             for partition_name in TOP_LEVEL_DOMAIN_PARTITIONS[domain_name]
@@ -466,7 +670,7 @@ def create_two_phase_dolma3_dolmino_top_level_experiment(
     *,
     name: str = NAME,
     experiment_budget: int = EXPERIMENT_BUDGET,
-    target_budget: int = TARGET_BUDGET,
+    target_budget: int | None = TARGET_BUDGET,
     batch_size: int = BATCH_SIZE,
     seq_len: int = SEQ_LEN,
     eval_datasets_cache_path: str | None = EVAL_DATASETS_CACHE_PATH,

@@ -6,6 +6,7 @@ from levanter.data.text import HfDatasetSourceConfig, SupervisedLmDatasetFormat
 from marin.evaluation.perplexity_gap import (
     _cache_key_for_dataset,
     _to_dataset_component,
+    _validation_urls,
     raw_text_dataset,
     supervised_text_dataset,
 )
@@ -98,3 +99,20 @@ def test_hf_dataset_revision_changes_per_dataset_score_cache_key():
 def test_file_backed_raw_dataset_rejects_non_validation_split():
     with pytest.raises(ValueError, match="Hugging Face dataset sources"):
         raw_text_dataset("gs://example-bucket/eval.jsonl", split="test")
+
+
+def test_validation_urls_normalizes_duplicate_slashes_before_glob(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_paths: list[str] = []
+
+    def fake_fsspec_glob(path: str) -> list[str]:
+        captured_paths.append(path)
+        if path == "gs://example-bucket/raw/evals/example/data-*.jsonl.gz":
+            return ["gs://example-bucket/raw/evals/example/data-00000-of-00001.jsonl.gz"]
+        return []
+
+    monkeypatch.setattr("marin.evaluation.perplexity_gap.fsspec_glob", fake_fsspec_glob)
+
+    urls = _validation_urls("gs://example-bucket//raw/evals/example/data-*.jsonl.gz")
+
+    assert captured_paths == ["gs://example-bucket/raw/evals/example/data-*.jsonl.gz"]
+    assert urls == ["gs://example-bucket/raw/evals/example/data-00000-of-00001.jsonl.gz"]

@@ -51,6 +51,24 @@ def test_per_segment_loss():
     assert list(segment_losses.array) == [0.0, 0.6, 0.9]
 
 
+def test_per_segment_loss_preserves_explicit_noncontiguous_segment_ids():
+    import jax
+
+    Pos = hax.Axis("pos", size=10)
+    packer = SequencePacker(Pos=Pos, max_pack_size=10, pad_token=0)
+    packer.add_example(ids=[1, 2, 3], loss_weight=[1, 1, 1], segment_id=4)
+    packer.add_example(ids=[4, 5], loss_weight=[1, 1], segment_id=9)
+    packed = packer.pack()
+    packed = jax.tree_util.tree_map(lambda x: jax.device_put(x) if isinstance(x, jax.Array) else x, packed)
+    losses = hax.named(jnp.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0]), Pos)
+    Segments = hax.Axis("segments", size=3)
+
+    unique_ids, segment_losses = per_segment_loss(packed, losses, max_Segments=Segments)
+
+    assert list(unique_ids.array) == [-1, 4, 9]
+    assert list(segment_losses.array) == [0.0, 0.6, 0.9]
+
+
 def test_can_pack_simple_case():
     Pos = hax.Axis("pos", size=10)
     packer = SequencePacker(Pos=Pos, max_pack_size=2, pad_token=0)
@@ -162,6 +180,22 @@ def test_pack_prompt_completions_simple():
     np.testing.assert_array_equal(packed_2.tokens.array, expected_tokens_2)
     np.testing.assert_array_equal(packed_2.attn_mask.segment_ids[0].array, expected_segment_ids_2)
     np.testing.assert_array_equal(packed_2.loss_weight.array, expected_loss_weight_2)
+
+
+def test_greedy_pack_prompt_completions_preserves_explicit_segment_id():
+    Pos = hax.Axis("pos", size=10)
+    sequences = [
+        PromptCompletion(ids=[1, 2, 3], prompt_length=2, segment_id=11),
+        PromptCompletion(ids=[4, 5], prompt_length=1, segment_id=17),
+    ]
+
+    results = greedy_pack_prompt_completions(Pos, sequences, pad_token=0, max_segments_per_example=2)
+
+    assert len(results) == 1
+    np.testing.assert_array_equal(
+        results[0].attn_mask.segment_ids[0].array,
+        [11, 11, 11, 17, 17, -1, -1, -1, -1, -1],
+    )
 
 
 def test_pack_prompt_completions_exceed_max_buffered_examples():

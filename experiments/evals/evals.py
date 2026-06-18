@@ -86,6 +86,7 @@ def evaluate_lm_evaluation_harness(
     evals: list[EvalTaskConfig],
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = None,
+    generation_params: dict | None = None,
     resource_config: ResourceConfig | None = None,
     apply_chat_template: bool = False,
     wandb_tags: list[str] | None = None,
@@ -122,6 +123,7 @@ def evaluate_lm_evaluation_harness(
             max_eval_instances=max_eval_instances,
             discover_latest_checkpoint=discover_latest_checkpoint,
             engine_kwargs=engine_kwargs,
+            generation_params=generation_params,
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
             wandb_tags=wandb_tags,
@@ -182,6 +184,12 @@ def evaluate_levanter_lm_evaluation_harness(
     discover_latest_checkpoint: bool = True,
     eval_datasets_cache_path: str | None = None,
     eval_datasets_cache_dependency: InputName | str | None = None,
+    log_samples: bool = False,
+    sample_log_all: bool = False,
+    max_logged_samples_per_task: int | None = None,
+    sample_smooth_metrics: bool = False,
+    drop_samples_after_metrics: bool = False,
+    use_wandb_tracker: bool = True,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
@@ -202,6 +210,12 @@ def evaluate_levanter_lm_evaluation_harness(
             apply_chat_template=apply_chat_template,
             eval_datasets_cache_path=versioned(eval_datasets_cache_path),
             eval_datasets_cache_dependency=eval_datasets_cache_dependency,
+            log_samples=log_samples,
+            sample_log_all=sample_log_all,
+            max_logged_samples_per_task=versioned(max_logged_samples_per_task),
+            sample_smooth_metrics=sample_smooth_metrics,
+            drop_samples_after_metrics=drop_samples_after_metrics,
+            use_wandb_tracker=use_wandb_tracker,
         ),
     )
 

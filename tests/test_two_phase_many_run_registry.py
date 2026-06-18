@@ -11,9 +11,11 @@ import pytest
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.run_registry import build_run_registry as run_registry
 from experiments.domain_phase_mix.exploratory.two_phase_many.run_registry.build_run_registry import (
+    _checkpoint_status_patterns,
     _load_qsplit300m_recoveries,
     _qsplit300m_shard_index,
     _summary,
+    _wandb_safe_name,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import build_run_specs
 from experiments.domain_phase_mix.qsplit240_replay import select_run_specs_for_shard
@@ -33,6 +35,34 @@ def test_qsplit300m_shard_index_matches_contiguous_sharding() -> None:
     }
 
     assert observed_by_run_name == expected_by_run_name
+
+
+def test_wandb_safe_name_matches_long_training_prefix() -> None:
+    source_experiment = "pinlin_calvin_xu/data_mixture/ngd3dm2_proportional_controllability_300m"
+
+    assert (
+        _wandb_safe_name(f"{source_experiment}/pctrl_tilt_domain_dolmino_stack_edu_fim_minus")
+        == "pinlin_ca~19b1f8e3/pctrl_tilt_domain_dolmino_stack_edu_fim_minus"
+    )
+    assert (
+        _wandb_safe_name(f"{source_experiment}/pctrl_tilt_domain_dolma3_cc_electronics_and_hardware_low_minus")
+        == "9b638297/lt_domain_dolma3_cc_electronics_and_hardware_low_minus"
+    )
+
+
+def test_checkpoint_status_patterns_include_shortened_training_prefix() -> None:
+    source_experiment = "pinlin_calvin_xu/data_mixture/ngd3dm2_proportional_controllability_300m"
+    run_name = "pctrl_tilt_domain_dolmino_stack_edu_fim_minus"
+
+    patterns = _checkpoint_status_patterns(source_experiment=source_experiment, run_name=run_name, region="us-east5")
+
+    assert patterns == (
+        "gs://marin-us-east5/checkpoints/"
+        "pinlin_calvin_xu/data_mixture/ngd3dm2_proportional_controllability_300m/"
+        "pctrl_tilt_domain_dolmino_stack_edu_fim_minus-*/.executor_status",
+        "gs://marin-us-east5/checkpoints/"
+        "pinlin_ca~19b1f8e3/pctrl_tilt_domain_dolmino_stack_edu_fim_minus-*/.executor_status",
+    )
 
 
 def test_summary_reports_only_missing_qsplit300m_runs() -> None:
@@ -64,10 +94,15 @@ def test_summary_reports_only_missing_qsplit300m_runs() -> None:
             },
         ]
     )
+    logical_runs["scale"] = pd.NA
+    logical_runs["study_path"] = pd.NA
+    logical_runs["has_checkpoint_backed_objective"] = False
+    logical_runs["is_perplexity_ready"] = False
     run_attempts = pd.DataFrame([{"family": "qsplit240_300m_6b", "run_name": "run_00002"}])
     live_watchlist = pd.DataFrame([{"job_state": "RUNNING"}])
+    strong_tier_child_jobs = pd.DataFrame()
 
-    summary = _summary(logical_runs, run_attempts, live_watchlist)
+    summary = _summary(logical_runs, run_attempts, live_watchlist, strong_tier_child_jobs)
 
     assert summary["logical_run_count"] == 4
     assert summary["attempt_count"] == 1

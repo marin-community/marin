@@ -115,6 +115,8 @@ INT_STATE_FIELDS = {
     "expected_checkpoint_step",
     "hf_checkpoint_latest_step",
     "text_dataset_count",
+}
+OPTIONAL_INT_STATE_FIELDS = {
     "max_docs_per_dataset",
     "max_eval_instances",
 }
@@ -140,8 +142,8 @@ class CheckpointFeatureCanarySpec:
     text_bundle_key: str
     text_dataset_count: int
     text_dataset_names: str
-    max_docs_per_dataset: int
-    max_eval_instances: int
+    max_docs_per_dataset: int | None
+    max_eval_instances: int | None
     eligible: bool
     launch_decision: str
     step_name: str
@@ -237,8 +239,8 @@ def _build_state_row_from_values(
     expected_checkpoint_step: int,
     text_bundle_keys: tuple[str, ...],
     text_dataset_names: tuple[str, ...],
-    max_docs_per_dataset: int,
-    max_eval_instances: int,
+    max_docs_per_dataset: int | None,
+    max_eval_instances: int | None,
     default_tpu_type: str,
     default_tpu_region: str,
     default_tpu_zone: str,
@@ -284,8 +286,8 @@ def build_state_row(
     run_name: str,
     text_bundle_keys: tuple[str, ...],
     text_dataset_names: tuple[str, ...],
-    max_docs_per_dataset: int,
-    max_eval_instances: int,
+    max_docs_per_dataset: int | None,
+    max_eval_instances: int | None,
     default_tpu_type: str,
     default_tpu_region: str,
     default_tpu_zone: str,
@@ -323,6 +325,8 @@ def _load_state_rows(path: str | Path) -> list[CheckpointFeatureCanarySpec]:
                 kwargs[field.name] = _bool_value(value)
             elif field.name in INT_STATE_FIELDS:
                 kwargs[field.name] = int(value)
+            elif field.name in OPTIONAL_INT_STATE_FIELDS:
+                kwargs[field.name] = None if pd.isna(value) or value == "" else int(value)
             else:
                 kwargs[field.name] = _string_value(value)
         rows.append(CheckpointFeatureCanarySpec(**kwargs))

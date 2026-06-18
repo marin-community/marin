@@ -20,6 +20,7 @@ from marin.datakit.ingestion_manifest import (
 from marin.transform.huggingface.raw_text import (
     HfRawTextRenderMode,
     HfRawTextSurfaceConfig,
+    _surface_data_files,
     materialize_hf_raw_text,
     render_hf_raw_text,
 )
@@ -33,6 +34,15 @@ def _read_jsonl_gz(path: Path) -> list[dict]:
 def _write_parquet(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_pylist(rows), path)
+
+
+class _FakeGcsFs:
+    protocol = "gs"
+
+    def glob(self, pattern: str) -> list[str]:
+        if pattern == "unit-bucket/raw/raw_web_markup/svg/data/val-*.parquet":
+            return ["unit-bucket/raw/raw_web_markup/svg/data/val-00000-of-00001.parquet"]
+        return []
 
 
 def _manifest(surface: HfRawTextSurfaceConfig) -> IngestionSourceManifest:
@@ -178,6 +188,34 @@ def test_materialize_hf_raw_text_reads_pinned_parquet_and_writes_ingestion_metad
     assert metadata["source_manifest"]["source_metadata"]["hf_revision"] == "abc123"
     assert metadata["materialized_output"]["record_count"] == 2
     assert result["surfaces"][0]["metadata_file"] == str(tmp_path / "out" / "textocr" / "ocr_strings.metadata.json")
+
+
+def test_surface_data_files_normalizes_duplicate_slashes_in_fsspec_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_paths: list[str] = []
+
+    def fake_url_to_fs(path: str):
+        captured_paths.append(path)
+        return _FakeGcsFs(), "unit-bucket/raw/raw_web_markup/svg"
+
+    monkeypatch.setattr("marin.transform.huggingface.raw_text.url_to_fs", fake_url_to_fs)
+
+    files = _surface_data_files(
+        "gs://unit-bucket//raw/raw_web_markup/svg",
+        HfRawTextSurfaceConfig(
+            name="svg_stack_svg_xml_val",
+            dataset_id="test/svg",
+            revision="abc123",
+            config_name="default",
+            split="val",
+            input_glob="data/val-*.parquet",
+            output_filename="svg_stack/svg_xml_val.jsonl.gz",
+            render_mode=HfRawTextRenderMode.STRING_FIELD,
+            field="Svg",
+        ),
+    )
+
+    assert captured_paths == ["gs://unit-bucket/raw/raw_web_markup/svg"]
+    assert files == ["gs://unit-bucket/raw/raw_web_markup/svg/data/val-00000-of-00001.parquet"]
 
 
 def test_materialize_hf_raw_text_missing_fingerprint_fails(tmp_path: Path) -> None:

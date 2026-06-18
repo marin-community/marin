@@ -18,18 +18,14 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from experiments.domain_phase_mix.exploratory.paper_plots.paper_plot_style import (
-    PAPER_AXIS,
     PAPER_BACKGROUND,
-    PAPER_GRID,
     PAPER_TEXT,
 )
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 IMG_DIR = SCRIPT_DIR / "img"
 SOURCE_CSV = SCRIPT_DIR / "data" / "two_phase_starcoder_combined_143_from_wandb.csv"
-HETEROSKEDASTIC_DIR = (
-    SCRIPT_DIR.parent / "reference_outputs" / "starcoder_heteroskedastic_snr_20260523"
-)
+HETEROSKEDASTIC_DIR = SCRIPT_DIR.parent / "reference_outputs" / "starcoder_heteroskedastic_snr_20260523"
 REPEAT_METRICS_CSV = HETEROSKEDASTIC_DIR / "collected_train_only_metrics_live.csv"
 
 OUTPUT_STEM = IMG_DIR / "starcoder_two_phase_heteroskedastic_landscape"
@@ -160,9 +156,7 @@ def _add_snr_columns(summary: pd.DataFrame) -> pd.DataFrame:
 
 
 def _target_anchor_z(summary: pd.DataFrame) -> pd.DataFrame:
-    target_rows = summary[summary["metric"].eq(TARGET)][
-        ["anchor_id", "mean", "std", "count"]
-    ].rename(
+    target_rows = summary[summary["metric"].eq(TARGET)][["anchor_id", "mean", "std", "count"]].rename(
         columns={
             "mean": "target_mean",
             "std": "target_std",

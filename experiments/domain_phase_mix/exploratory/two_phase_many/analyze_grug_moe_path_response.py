@@ -122,7 +122,7 @@ def task_metric_scales(path_df: pd.DataFrame, reference_df: pd.DataFrame | None 
             {
                 "task_alias": task_alias,
                 "preferred_metric": preferred_metric,
-                "metric_scale_n": int(len(observed)),
+                "metric_scale_n": len(observed),
                 "metric_scale_std": std if std > 0.0 else float("nan"),
                 "metric_scale_mad": mad if mad > 0.0 else float("nan"),
                 "metric_scale_min": float(np.min(observed)) if len(observed) else float("nan"),
@@ -493,9 +493,7 @@ def standardized_task_frames(
     if not strict_hidden_dims:
         return pd.DataFrame(), pd.DataFrame()
     complete_task_counts = (
-        coverage_df[
-            coverage_df["complete_path"] & coverage_df["hidden_dim"].isin(strict_hidden_dims)
-        ]
+        coverage_df[coverage_df["complete_path"] & coverage_df["hidden_dim"].isin(strict_hidden_dims)]
         .groupby("task_alias")["hidden_dim"]
         .nunique()
     )
@@ -722,10 +720,7 @@ def write_standardized_plots(
         color_continuous_scale="RdYlGn",
         color_continuous_midpoint=0.0,
         labels={"x": "path t", "y": "task", "color": "standardized delta"},
-        title=(
-            "Grug-MoE v4 path: task deltas divided by empirical task metric std "
-            "(positive is better)"
-        ),
+        title=("Grug-MoE v4 path: task deltas divided by empirical task metric std " "(positive is better)"),
     )
     fig_heatmap.update_layout(height=max(620, 28 * len(order)), margin={"l": 170, "r": 40, "t": 80, "b": 60})
     fig_heatmap.write_html(output_dir / "task_t_standardized_delta_heatmap.html", include_plotlyjs="cdn")
@@ -748,10 +743,7 @@ def write_standardized_plots(
             "metric_scale_std",
             "metric_scale_n",
         ],
-        title=(
-            "Endpoint effect-size ranking: t=1 delta divided by empirical task metric std "
-            "(positive is better)"
-        ),
+        title=("Endpoint effect-size ranking: t=1 delta divided by empirical task metric std " "(positive is better)"),
         labels={"endpoint_delta_std_mean": "endpoint standardized delta", "task_alias": "task"},
     )
     fig_bar.add_vline(x=0.0, line={"color": "#555", "dash": "dot", "width": 1})

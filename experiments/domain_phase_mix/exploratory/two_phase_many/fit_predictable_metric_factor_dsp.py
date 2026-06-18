@@ -45,10 +45,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.reproduce_collabora
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp
 
-PRUNING_OUTPUT_DIR = (
-    Path(__file__).resolve().parent
-    / "reference_outputs/predictable_metric_factor_pruning_20260527"
-)
+PRUNING_OUTPUT_DIR = Path(__file__).resolve().parent / "reference_outputs/predictable_metric_factor_pruning_20260527"
 DEFAULT_SPLIT_CSV = PRUNING_OUTPUT_DIR / "metric_predictable_vs_heldout.csv"
 DEFAULT_OUTPUT_DIR = PRUNING_OUTPUT_DIR / "heldout5_canonical_dsp"
 
@@ -426,7 +423,13 @@ def main() -> None:
     }
     (args.output_dir / "summary.json").write_text(json.dumps(model_metrics, indent=2, sort_keys=True))
     pd.DataFrame([model_metrics]).drop(
-        columns=["heldout_metrics", "mixture_comparisons", "target_correlations", "pred_y_by_label", "full_metric_baseline"]
+        columns=[
+            "heldout_metrics",
+            "mixture_comparisons",
+            "target_correlations",
+            "pred_y_by_label",
+            "full_metric_baseline",
+        ]
     ).to_csv(args.output_dir / "summary.csv", index=False)
     (args.output_dir / "model.json").write_text(json.dumps(dsp.model_to_json(model, model_metrics), indent=2))
     write_report(args.output_dir, model_metrics, top_weights, split)

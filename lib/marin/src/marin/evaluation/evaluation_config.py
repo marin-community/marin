@@ -106,6 +106,11 @@ class EvaluationConfig:
     Tags to add to the wandb run.
     """
 
+    use_wandb_tracker: bool = True
+    """
+    Whether Levanter-backed evaluators should create a W&B tracker.
+    """
+
     base_eval_run_name: str | None = None
     """Custom base name for wandb runs. If set, wandb runs will be named
     evalchemy-{base_eval_run_name}[-step{N}]-{task}-seed{S}."""
@@ -121,6 +126,35 @@ class EvaluationConfig:
 
     This field is not read at runtime. It exists so Executor can see an
     `InputName` and block the evaluation step on a cache-population step.
+    """
+
+    log_samples: bool = False
+    """
+    Whether evaluator backends should persist lm-eval sample payloads when
+    supported.
+    """
+
+    sample_log_all: bool = False
+    """
+    Whether Levanter's lm-eval harness should keep every sample in its
+    additional sample logging payload.
+    """
+
+    max_logged_samples_per_task: int | None = None
+    """
+    Optional per-task cap for Levanter's additional sample logging payload.
+    """
+
+    sample_smooth_metrics: bool = False
+    """
+    Whether to derive aggregate smooth metrics from lm-eval sample payloads
+    before writing evaluator results.
+    """
+
+    drop_samples_after_metrics: bool = False
+    """
+    Whether to remove raw sample payloads after deriving aggregate smooth
+    metrics. Use for large sweeps where only aggregate columns are needed.
     """
 
 

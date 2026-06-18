@@ -157,9 +157,9 @@ def summarize_local_snr(
                     "local_signal_at_radius": local_signal,
                     "snr_amplitude": snr_amplitude,
                     "snr_power": snr_power,
-                    "log10_snr_power": float(np.log10(max(snr_power, EPSILON_VARIANCE)))
-                    if np.isfinite(snr_power)
-                    else np.inf,
+                    "log10_snr_power": (
+                        float(np.log10(max(snr_power, EPSILON_VARIANCE))) if np.isfinite(snr_power) else np.inf
+                    ),
                     "log10_repeat_variance": float(np.log10(max(variance, EPSILON_VARIANCE))),
                     "local_fit_effective_n": gradient.effective_n,
                 }

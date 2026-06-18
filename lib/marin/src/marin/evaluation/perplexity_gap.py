@@ -37,7 +37,7 @@ from marin.execution.executor import ExecutorStep, InputName, VersionedValue, th
 from marin.processing.tokenize import HfDatasetSpec
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 from marin.utilities.wandb_utils import init_wandb
-from marin.utils import fsspec_glob
+from marin.utils import fsspec_glob, normalize_fsspec_url_path
 
 WANDB_PROJECT = "marin-eval"
 GLOB_CHARS = frozenset("*?[")
@@ -339,9 +339,10 @@ def _validation_urls(input_path: str | InputName) -> list[str | InputName]:
         return [input_path]
     if not any(char in input_path for char in GLOB_CHARS):
         return [input_path]
-    matches = sorted(fsspec_glob(input_path))
+    normalized_input_path = normalize_fsspec_url_path(input_path)
+    matches = sorted(fsspec_glob(normalized_input_path))
     if not matches:
-        raise FileNotFoundError(f"No files matched raw-text validation glob: {input_path}")
+        raise FileNotFoundError(f"No files matched raw-text validation glob: {normalized_input_path}")
     return cast(list[str | InputName], matches)
 
 

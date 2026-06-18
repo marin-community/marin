@@ -292,11 +292,7 @@ def build_eval_candidates(
     checkpoints = discover_successful_path_checkpoints(only_run_ids, checkpoint_roots)
     discovered_run_ids = frozenset(checkpoint.run_id for checkpoint in checkpoints)
     status_run_ids = only_run_ids or discovered_run_ids
-    existing_results = (
-        {}
-        if assume_missing
-        else discover_existing_result_statuses(status_run_ids, only_task_aliases)
-    )
+    existing_results = {} if assume_missing else discover_existing_result_statuses(status_run_ids, only_task_aliases)
     for checkpoint in checkpoints:
         if only_run_ids and checkpoint.run_id not in only_run_ids:
             continue

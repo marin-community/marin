@@ -1,8 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
+import pandas as pd
 import pytest
 
+from experiments.domain_phase_mix import build_proportional_controllability_eval_candidates as candidate_builder
 from experiments.domain_phase_mix.launch_proportional_controllability_300m import (
     DEFAULT_EVAL_DATASETS_CACHE_PATH,
     DEFAULT_TPU_REGION,
@@ -11,6 +15,73 @@ from experiments.domain_phase_mix.launch_proportional_controllability_300m impor
     build_launch_artifacts,
     build_run_specs,
 )
+
+
+def _candidate_registry_rows(*, checkpoint_root: str) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for index in range(candidate_builder.EXPECTED_ROWS):
+        rows.append(
+            {
+                "registry_id": f"proportional_controllability_300m_6b:run_{index:05d}",
+                "family": candidate_builder.FAMILY,
+                "scale": "300m_6b",
+                "run_name": f"run_{index:05d}",
+                "logical_status": "completed",
+                "source_experiment": "source",
+                "cohort": "cohort",
+                "checkpoint_root": f"{checkpoint_root}/run_{index:05d}",
+                "target_final_checkpoint_step": 22887,
+                "intervention_id": f"intervention_{index:05d}",
+                "intervention_type": "domain_deletion",
+                "target_domain": "domain",
+                "direction_id": None,
+                "direction_type": None,
+                "tilt_sign": None,
+                "alpha": None,
+                "base_mass": 0.1,
+                "tv_distance": 0.1,
+                "renormalizer": "renormalizer",
+                "objective_metric_value": 1.0,
+            }
+        )
+    return rows
+
+
+def test_candidate_builder_refreshes_right_count_dead_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    stale_registry = pd.DataFrame(_candidate_registry_rows(checkpoint_root="gs://marin-us-east5/stale"))
+    registry_csv = tmp_path / "logical_runs.csv"
+    stale_registry.to_csv(registry_csv, index=False)
+    refreshed = pd.DataFrame(_candidate_registry_rows(checkpoint_root="gs://marin-us-east5/shortened"))
+
+    monkeypatch.setattr(
+        candidate_builder,
+        "_has_exact_hf_checkpoint",
+        lambda checkpoint_root, expected_step: str(checkpoint_root).startswith("gs://marin-us-east5/shortened"),
+    )
+    monkeypatch.setattr(candidate_builder, "_proportional_controllability_rows", lambda: (refreshed, []))
+
+    frame = candidate_builder.build_candidate_frame(run_registry_csv=registry_csv, allow_incomplete=False)
+
+    assert len(frame) == candidate_builder.EXPECTED_ROWS
+    assert frame["checkpoint_root"].str.startswith("gs://marin-us-east5/shortened").all()
+
+
+def test_candidate_builder_rejects_incomplete_exact_hf_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = pd.DataFrame(_candidate_registry_rows(checkpoint_root="gs://marin-us-east5/shortened"))
+    registry_csv = tmp_path / "logical_runs.csv"
+    registry.to_csv(registry_csv, index=False)
+
+    def has_exact_hf_checkpoint(checkpoint_root: object, expected_step: object) -> bool:
+        del expected_step
+        return not str(checkpoint_root).endswith("run_00000")
+
+    monkeypatch.setattr(candidate_builder, "_has_exact_hf_checkpoint", has_exact_hf_checkpoint)
+    monkeypatch.setattr(candidate_builder, "_proportional_controllability_rows", lambda: (registry, []))
+
+    with pytest.raises(ValueError, match="Controllability rows are not target-ready"):
+        candidate_builder.build_candidate_frame(run_registry_csv=registry_csv, allow_incomplete=False)
 
 
 def test_subset_retry_filters_training_steps_by_run_name():

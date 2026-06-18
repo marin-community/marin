@@ -6,8 +6,10 @@ import os
 import shutil
 import socket
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from copy import deepcopy
+from pathlib import Path
 
 from rigging.filesystem import open_url, url_to_fs
 
@@ -17,6 +19,51 @@ from marin.evaluation.utils import is_remote_path, upload_to_gcs
 from marin.inference.vllm_server import VllmEnvironment
 
 logger = logging.getLogger(__name__)
+
+
+def _repo_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "pyproject.toml").exists() and (parent / "experiments").exists():
+            return parent
+    return Path.cwd()
+
+
+def _resolve_repo_relative_path(path: str) -> str:
+    if is_remote_path(path) or os.path.isabs(path):
+        return path
+    return str(_repo_root() / path)
+
+
+def _resolve_data_files(data_files: object) -> object:
+    if isinstance(data_files, str):
+        return _resolve_repo_relative_path(data_files)
+    if isinstance(data_files, list):
+        return [_resolve_data_files(value) for value in data_files]
+    if isinstance(data_files, tuple):
+        return tuple(_resolve_data_files(value) for value in data_files)
+    if isinstance(data_files, Mapping):
+        return {key: _resolve_data_files(value) for key, value in data_files.items()}
+    return data_files
+
+
+def _resolve_task_kwargs(eval_task: EvalTaskConfig) -> dict:
+    task_kwargs = deepcopy(eval_task.task_kwargs or {})
+    dataset_kwargs = task_kwargs.get("dataset_kwargs")
+    if isinstance(dataset_kwargs, dict) and "data_files" in dataset_kwargs:
+        dataset_kwargs["data_files"] = _resolve_data_files(dataset_kwargs["data_files"])
+    return task_kwargs
+
+
+def _lm_eval_task_spec(eval_task: EvalTaskConfig) -> dict:
+    """Return a lm-eval task spec preserving aliases and inline task fields."""
+    spec = {
+        "task": eval_task.name,
+        "num_fewshot": eval_task.num_fewshot,
+    }
+    if eval_task.task_alias is not None:
+        spec["task_alias"] = eval_task.task_alias
+    spec.update(_resolve_task_kwargs(eval_task))
+    return spec
 
 
 def _patch_lm_eval_vllm_compat() -> None:
@@ -35,6 +82,108 @@ def _patch_lm_eval_vllm_compat() -> None:
             return int(sock.getsockname()[1])
 
     vllm.utils.get_open_port = get_open_port
+
+
+def _patch_lm_eval_none_alias_compat(alias_fallbacks: Mapping[str, str] | None = None) -> None:
+    """Patch lm-eval result formatting when task configs carry ``task_alias=None``.
+
+    Some lm-eval Python tasks dump ``task_alias`` with a ``None`` value. Current
+    lm-eval treats the key's presence as an explicit alias and later concatenates
+    it with a string while building the result table, which crashes successful
+    generation evals after metrics have been computed. Normalize only the
+    returned alias values; do not change task loading or metric computation.
+    """
+    from lm_eval import evaluator, evaluator_utils
+
+    fallback_map = dict(getattr(evaluator, "_marin_alias_fallbacks", {}))
+    if alias_fallbacks is not None:
+        fallback_map.update(alias_fallbacks)
+    evaluator._marin_alias_fallbacks = fallback_map
+
+    if getattr(evaluator, "_marin_none_alias_compat", False):
+        return
+
+    evaluate_fn = getattr(evaluator.evaluate, "__wrapped__", evaluator.evaluate)
+    evaluate_globals = evaluate_fn.__globals__
+    original_consolidate_results = evaluate_globals.get("consolidate_results", evaluator.consolidate_results)
+    original_prepare_print_tasks = evaluate_globals.get("prepare_print_tasks", evaluator_utils.prepare_print_tasks)
+
+    def alias_for(task_name: object, alias: object) -> str:
+        if isinstance(alias, str) and alias:
+            return alias
+        task_name_str = str(task_name)
+        return getattr(evaluator, "_marin_alias_fallbacks", {}).get(task_name_str, task_name_str)
+
+    def consolidate_results_without_none_alias(eval_tasks):
+        results, samples, configs, versions, num_fewshot, higher_is_better = original_consolidate_results(eval_tasks)
+        alias_fallbacks_local = getattr(evaluator, "_marin_alias_fallbacks", {})
+        for task_name, metrics in results.items():
+            alias = metrics.get("alias")
+            alias_fallback = alias_fallbacks_local.get(task_name)
+            if alias is None:
+                metrics["alias"] = alias_fallback or task_name
+            elif alias == task_name and alias_fallback is not None:
+                metrics["alias"] = alias_fallback
+        for task_name, config in configs.items():
+            if isinstance(config, dict):
+                alias = config.get("task_alias")
+                alias_fallback = alias_fallbacks_local.get(task_name)
+                if alias is None and alias_fallback is not None:
+                    config["task_alias"] = alias_fallback
+        return results, samples, configs, versions, num_fewshot, higher_is_better
+
+    def prepare_print_tasks_without_none_alias(task_dict, results, task_depth=0, group_depth=0):
+        sanitized_results = {}
+        for task_name, metrics in results.items():
+            if isinstance(metrics, dict):
+                sanitized_metrics = dict(metrics)
+                sanitized_metrics["alias"] = alias_for(task_name, sanitized_metrics.get("alias"))
+                sanitized_results[task_name] = sanitized_metrics
+            else:
+                sanitized_results[task_name] = metrics
+
+        def infer_task_name(task_obj: object, used_names: set[str]) -> str:
+            for attr in ("task_name", "task"):
+                value = getattr(task_obj, attr, None)
+                if isinstance(value, str) and value in sanitized_results:
+                    return value
+            for attr in ("config", "_config"):
+                config = getattr(task_obj, attr, None)
+                if isinstance(config, dict):
+                    for key in ("task", "task_name"):
+                        value = config.get(key)
+                        if isinstance(value, str) and value in sanitized_results:
+                            return value
+            remaining = [task_name for task_name in sanitized_results if task_name not in used_names]
+            if len(remaining) == 1:
+                return remaining[0]
+            raise KeyError("Could not infer lm-eval task name for None task_dict key")
+
+        def sanitize_task_dict(node: dict) -> dict:
+            sanitized_node = {}
+            used_names: set[str] = set()
+            for task_or_group_name, task_or_group_obj in node.items():
+                sanitized_obj = (
+                    sanitize_task_dict(task_or_group_obj) if isinstance(task_or_group_obj, dict) else task_or_group_obj
+                )
+                sanitized_name = task_or_group_name
+                if sanitized_name is None:
+                    sanitized_name = infer_task_name(sanitized_obj, used_names)
+                if isinstance(sanitized_name, str):
+                    used_names.add(sanitized_name)
+                if getattr(sanitized_obj, "task_name", object()) is None:
+                    sanitized_obj = object()
+                sanitized_node[sanitized_name] = sanitized_obj
+            return sanitized_node
+
+        return original_prepare_print_tasks(sanitize_task_dict(task_dict), sanitized_results, task_depth, group_depth)
+
+    evaluator.consolidate_results = consolidate_results_without_none_alias
+    evaluator_utils.consolidate_results = consolidate_results_without_none_alias
+    evaluate_globals["consolidate_results"] = consolidate_results_without_none_alias
+    evaluator_utils.prepare_print_tasks = prepare_print_tasks_without_none_alias
+    evaluate_globals["prepare_print_tasks"] = prepare_print_tasks_without_none_alias
+    evaluator._marin_none_alias_compat = True
 
 
 # TODO: Multiple choice tasks currently don't work on TPUs: https://github.com/vllm-project/vllm/issues/8499
@@ -110,9 +259,9 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                     from lm_eval.utils import simple_parse_args_string
 
                     for eval_task in evals:
-                        result_filepath = os.path.join(
-                            self.RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot"
-                        )
+                        task_label = eval_task.task_alias or eval_task.name
+                        _patch_lm_eval_none_alias_compat({eval_task.name: task_label})
+                        result_filepath = os.path.join(self.RESULTS_PATH, f"{task_label}_{eval_task.num_fewshot}shot")
 
                         # Create the output directory
                         output_dir = os.path.dirname(result_filepath)
@@ -132,13 +281,13 @@ class LMEvaluationHarnessEvaluator(Evaluator):
 
                         results = simple_evaluate(
                             model=lm_eval_model_local,
-                            tasks=[eval_task.name],
-                            num_fewshot=eval_task.num_fewshot,
+                            tasks=[_lm_eval_task_spec(eval_task)],
                             model_args=pretrained_args_local,
                             apply_chat_template=resolved_model.apply_chat_template,
                             batch_size="auto",
                             confirm_run_unsafe_code=True,
                             limit=max_eval_instances if max_eval_instances is not None else None,
+                            gen_kwargs=resolved_model.generation_params or None,
                             evaluation_tracker=evaluation_tracker,
                             log_samples=True,
                         )

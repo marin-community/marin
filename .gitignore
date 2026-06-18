@@ -51,6 +51,8 @@ parts/
 sdist/
 local_store/
 wheels/
+!third_party/wheels/
+!third_party/wheels/*.whl
 share/python-wheels/
 *.egg-info/
 .installed.cfg

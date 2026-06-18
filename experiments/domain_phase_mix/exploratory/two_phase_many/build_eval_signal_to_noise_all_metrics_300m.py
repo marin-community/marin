@@ -37,6 +37,10 @@ DEFAULT_EXTRA_RESULTS_CSVS = (
     SCRIPT_DIR / "metric_registry" / "300m_english_lite_completion" / "300m_english_lite_eval_results_merged.csv",
     SCRIPT_DIR
     / "metric_registry"
+    / "300m_dclm_core_completion"
+    / "300m_dclm_core_eval_results_full_after_retry8_bigbench_rescored_repeatcopy128.csv",
+    SCRIPT_DIR
+    / "metric_registry"
     / "300m_english_lite_completion"
     / "300m_english_lite_eval_results_variable_subset_noise_nowsc.csv",
     SCRIPT_DIR

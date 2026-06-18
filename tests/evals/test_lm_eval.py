@@ -1,12 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import time
 
 import pytest
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig, convert_to_levanter_task_config
 from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.evaluation.evaluators.levanter_lm_eval_evaluator import (
+    _resolve_levanter_eval_tasks,
+    add_sample_smooth_metrics,
+    drop_sample_payloads,
+)
+from marin.evaluation.evaluators.lm_evaluation_harness_evaluator import (
+    _lm_eval_task_spec,
+    _patch_lm_eval_none_alias_compat,
+)
 from marin.evaluation.run import evaluate
 from marin.execution.remote import RemoteCallable
 
@@ -21,6 +31,10 @@ from experiments.evals.task_configs import (
     MMLU_SL_VERB_5_SHOT,
     MMLU_SL_VERB_DOC_TO_CHOICE,
 )
+
+
+def _repo_relative_data_file() -> str:
+    return "experiments/scaling_law_sweeps/dclm_core/custom_tasks/winograd/wsc273.jsonl"
 
 
 @pytest.fixture
@@ -58,6 +72,156 @@ def test_convert_to_levanter_task_config_rejects_unsupported_task_kwargs():
         )
 
 
+def test_lm_eval_task_spec_preserves_alias_and_inline_task_fields():
+    spec = _lm_eval_task_spec(
+        EvalTaskConfig(
+            "winograd",
+            0,
+            task_alias="winograd_0shot",
+            task_kwargs={
+                "dataset_path": "json",
+                "dataset_kwargs": {"data_files": "/tmp/wsc273.jsonl"},
+                "output_type": "multiple_choice",
+            },
+        )
+    )
+
+    assert spec == {
+        "task": "winograd",
+        "num_fewshot": 0,
+        "task_alias": "winograd_0shot",
+        "dataset_path": "json",
+        "dataset_kwargs": {"data_files": "/tmp/wsc273.jsonl"},
+        "output_type": "multiple_choice",
+    }
+
+
+def test_lm_eval_task_spec_resolves_repo_relative_data_files(monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    data_file = repo_root / _repo_relative_data_file()
+    data_file.parent.mkdir(parents=True)
+    data_file.write_text("{}\n")
+    monkeypatch.setattr(
+        "marin.evaluation.evaluators.lm_evaluation_harness_evaluator._repo_root",
+        lambda: repo_root,
+    )
+
+    spec = _lm_eval_task_spec(
+        EvalTaskConfig(
+            "winograd",
+            0,
+            task_alias="winograd_0shot",
+            task_kwargs={
+                "dataset_path": "json",
+                "dataset_kwargs": {"data_files": _repo_relative_data_file()},
+                "output_type": "multiple_choice",
+            },
+        )
+    )
+
+    assert spec["dataset_kwargs"]["data_files"] == str(data_file)
+
+
+def test_levanter_eval_tasks_resolve_repo_relative_data_files(monkeypatch, tmp_path):
+    repo_root = tmp_path / "repo"
+    data_file = repo_root / _repo_relative_data_file()
+    data_file.parent.mkdir(parents=True)
+    data_file.write_text("{}\n")
+    monkeypatch.setattr(
+        "marin.evaluation.evaluators.lm_evaluation_harness_evaluator._repo_root",
+        lambda: repo_root,
+    )
+
+    [task] = _resolve_levanter_eval_tasks(
+        [
+            EvalTaskConfig(
+                "winograd",
+                0,
+                task_alias="winograd_0shot",
+                task_kwargs={
+                    "dataset_path": "json",
+                    "dataset_kwargs": {"data_files": _repo_relative_data_file()},
+                    "output_type": "multiple_choice",
+                },
+            )
+        ]
+    )
+
+    assert task.task_kwargs["dataset_kwargs"]["data_files"] == str(data_file)
+    assert task.task_alias == "winograd_0shot"
+
+
+def test_lm_eval_none_alias_patch_uses_requested_alias_fallback():
+    class FakeTask:
+        VERSION = 1
+
+        def higher_is_better(self):
+            return {}
+
+    _patch_lm_eval_none_alias_compat({"squad_completion": "squad_10shot"})
+
+    from lm_eval.evaluator import consolidate_results
+    from lm_eval.evaluator_utils import TaskOutput
+
+    task_output = TaskOutput(
+        task=FakeTask(),
+        task_name="squad_completion",
+        task_config={"task": "squad_completion", "task_alias": None},
+        version=1,
+        n_shot=10,
+    )
+    results, *_ = consolidate_results([task_output])
+
+    assert results["squad_completion"]["alias"] == "squad_10shot"
+
+
+def test_lm_eval_task_name_alias_patch_uses_requested_alias_fallback():
+    class FakeTask:
+        VERSION = 1
+
+        def higher_is_better(self):
+            return {}
+
+    _patch_lm_eval_none_alias_compat({"squad_completion": "squad_10shot"})
+
+    from lm_eval import evaluator
+    from lm_eval.evaluator_utils import TaskOutput
+
+    task_output = TaskOutput(
+        task=FakeTask(),
+        task_name="squad_completion",
+        task_config={"task": "squad_completion"},
+        version=1,
+        n_shot=10,
+    )
+    results, *_ = evaluator.consolidate_results([task_output])
+
+    assert results["squad_completion"]["alias"] == "squad_10shot"
+
+
+def test_lm_eval_none_alias_patch_sanitizes_prepare_print_tasks():
+    _patch_lm_eval_none_alias_compat({"jeopardy": "jeopardy_10shot"})
+
+    from lm_eval import evaluator
+
+    prepare_print_tasks = evaluator.evaluate.__wrapped__.__globals__["prepare_print_tasks"]
+    task_agg, _group_agg = prepare_print_tasks({"jeopardy": object()}, {"jeopardy": {"alias": None}})
+
+    assert task_agg["jeopardy"]["alias"] == "jeopardy_10shot"
+
+
+def test_lm_eval_none_alias_patch_sanitizes_none_task_dict_key():
+    _patch_lm_eval_none_alias_compat({"jeopardy": "jeopardy_10shot"})
+
+    from lm_eval import evaluator
+
+    task = type("FakeConfigurableTask", (), {"task_name": None})()
+    prepare_print_tasks = evaluator.evaluate.__wrapped__.__globals__["prepare_print_tasks"]
+    task_agg, _group_agg = prepare_print_tasks({None: task}, {"jeopardy": {"alias": None}})
+
+    assert task_agg["jeopardy"]["alias"] == "jeopardy_10shot"
+
+
 def test_olmo_base_easy_overlap_suite_uses_expected_aliases_and_shots():
     assert [task.task_alias for task in OLMO_BASE_EASY_OVERLAP_TASKS] == [
         "mmlu_5shot",
@@ -90,10 +254,12 @@ def test_evaluate_lm_evaluation_harness_sets_code_eval_and_tpu_vllm_env():
         model_path="gs://unit-test/checkpoint",
         evals=list(HUMANEVAL_GSM8K_TASKS),
         resource_config=resource_config,
+        generation_params={"max_gen_toks": 64},
         env_vars={"EXTRA_ENV": "1"},
     )
 
     assert isinstance(step.fn, RemoteCallable)
+    assert step.config.generation_params == {"max_gen_toks": 64}
     assert step.fn.resources == resource_config
     assert step.fn.env_vars["HF_ALLOW_CODE_EVAL"] == "1"
     assert step.fn.env_vars["MARIN_VLLM_MODE"] == "native"
@@ -151,6 +317,155 @@ def test_evaluate_levanter_lm_evaluation_harness_dispatches_remotely_and_preserv
     assert step.config.evaluator == "levanter_lm_evaluation_harness"
     assert step.config.eval_datasets_cache_path.value == "gs://unit-test/cache"
     assert step.config.eval_datasets_cache_dependency == cache_dependency
+
+
+def test_evaluate_levanter_lm_evaluation_harness_preserves_sample_logging_options():
+    resource_config = ResourceConfig.with_tpu("v5p-8")
+    step = evaluate_levanter_lm_evaluation_harness(
+        model_name="unit-test-model",
+        model_path="gs://unit-test/checkpoint",
+        evals=[EvalTaskConfig("hellaswag", 10, task_alias="hellaswag_10shot")],
+        resource_config=resource_config,
+        log_samples=True,
+        sample_log_all=True,
+        max_logged_samples_per_task=20,
+        sample_smooth_metrics=True,
+        drop_samples_after_metrics=True,
+    )
+
+    assert step.config.log_samples is True
+    assert step.config.sample_log_all is True
+    assert step.config.max_logged_samples_per_task.value == 20
+    assert step.config.sample_smooth_metrics is True
+    assert step.config.drop_samples_after_metrics is True
+
+
+def test_evaluate_levanter_lm_evaluation_harness_can_disable_wandb_tracker():
+    step = evaluate_levanter_lm_evaluation_harness(
+        model_name="unit-test-model",
+        model_path="gs://unit-test/checkpoint",
+        evals=[EvalTaskConfig("hellaswag", 10, task_alias="hellaswag_10shot")],
+        resource_config=ResourceConfig.with_tpu("v5p-8"),
+        use_wandb_tracker=False,
+    )
+
+    assert step.config.use_wandb_tracker is False
+
+
+def test_add_sample_smooth_metrics_derives_mcq_aggregate_metrics_and_can_drop_payloads():
+    results = {
+        "results": {"toy_mcq": {"acc,none": 0.5, "outputs": [{"prompt": "large"}]}},
+        "samples": {
+            "toy_mcq": [
+                {
+                    "target": [1],
+                    "arguments": [["prompt", " A"], ["prompt", " BC"], ["prompt", " D"]],
+                    "filtered_resps": [[-3.0, 0.0], [-1.0, 0.0], [-2.0, 0.0]],
+                },
+                {
+                    "target": [0],
+                    "arguments": [["prompt", " A"], ["prompt", " B"], ["prompt", " C"]],
+                    "filtered_resps": [[-4.0, 0.0], [-2.0, 0.0], [-3.0, 0.0]],
+                },
+            ]
+        },
+    }
+
+    add_sample_smooth_metrics(results)
+    metrics = results["results"]["toy_mcq"]
+
+    assert metrics["native_sample_count,none"] == 2.0
+    assert metrics["native_gold_logprob,none"] == pytest.approx(-2.5)
+    assert metrics["native_margin,none"] == pytest.approx(-0.5)
+    assert metrics["native_predicted_correct,none"] == pytest.approx(0.5)
+    first_prob = 1.0 / (math.exp(-2.0) + 1.0 + math.exp(-1.0))
+    second_prob = math.exp(-2.0) / (math.exp(-2.0) + 1.0 + math.exp(-1.0))
+    assert metrics["native_choice_prob,none"] == pytest.approx((first_prob + second_prob) / 2.0)
+    assert metrics["native_gold_bpb,none"] > 0.0
+    assert metrics["native_gold_logprob_stderr,none"] > 0.0
+
+    drop_sample_payloads(results)
+
+    assert "samples" not in results
+    assert "outputs" not in results["results"]["toy_mcq"]
+
+
+def test_add_sample_smooth_metrics_handles_single_continuation_string_targets():
+    results = {
+        "results": {"lambada_0shot": {"acc,none": 0.0}},
+        "samples": {
+            "lambada_0shot": [
+                {
+                    "target": " signs",
+                    "arguments": [["In my palm is a clear stone", " signs"]],
+                    "filtered_resps": [[-9.0, 0.0]],
+                }
+            ],
+            "ambiguous_string_choice": [
+                {
+                    "target": "same ending",
+                    "arguments": [["prompt A", " same ending"], ["prompt B", " same ending"]],
+                    "filtered_resps": [[-2.0, 0.0], [-1.0, 0.0]],
+                }
+            ],
+        },
+    }
+
+    add_sample_smooth_metrics(results)
+
+    assert results["results"]["lambada_0shot"]["native_gold_logprob,none"] == -9.0
+    assert "ambiguous_string_choice" not in results["results"]
+
+
+def test_add_sample_smooth_metrics_infers_string_choice_targets_from_arguments_and_doc():
+    results = {
+        "results": {
+            "commonsense_qa_10shot": {"acc,none": 0.0},
+            "copa_0shot": {"acc,none": 0.0},
+            "winogrande_0shot": {"acc,none": 0.0},
+        },
+        "samples": {
+            "commonsense_qa_10shot": [
+                {
+                    "target": "A",
+                    "arguments": [
+                        ["Question: ...\nAnswer:", " A"],
+                        ["Question: ...\nAnswer:", " B"],
+                        ["Question: ...\nAnswer:", " C"],
+                    ],
+                    "filtered_resps": [[-1.0, 0.0], [-3.0, 0.0], [-4.0, 0.0]],
+                }
+            ],
+            "copa_0shot": [
+                {
+                    "target": " water flowed from the spout.",
+                    "arguments": [
+                        ["The man turned on the faucet therefore", "  the toilet filled with water."],
+                        ["The man turned on the faucet therefore", "  water flowed from the spout."],
+                    ],
+                    "filtered_resps": [[-31.0, 0.0], [-40.0, 0.0]],
+                    "doc": {"label": 1},
+                }
+            ],
+            "winogrande_0shot": [
+                {
+                    "target": "always got the easier cases.",
+                    "arguments": [
+                        ["Sarah was a better surgeon than Maria so Sarah", " always got the easier cases."],
+                        ["Sarah was a better surgeon than Maria so Maria", " always got the easier cases."],
+                    ],
+                    "filtered_resps": [[-28.0, 0.0], [-27.0, 0.0]],
+                    "doc": {"answer": "2"},
+                }
+            ],
+        },
+    }
+
+    add_sample_smooth_metrics(results)
+
+    assert results["results"]["commonsense_qa_10shot"]["native_gold_logprob,none"] == -1.0
+    assert results["results"]["copa_0shot"]["native_gold_logprob,none"] == -40.0
+    assert results["results"]["winogrande_0shot"]["native_gold_logprob,none"] == -27.0
 
 
 @pytest.mark.tpu_ci

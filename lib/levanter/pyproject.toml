@@ -165,13 +165,9 @@ dev = [
   "prompt_toolkit>=3.0.0",
   "matplotlib>=3.7.0",
 ]
-
-
-
-
 [tool.uv]
 find-links = [
-  "https://github.com/marin-community/kitoken/releases/expanded_assets/kitoken-0.10.2-a3012f4",
+  "../../third_party/wheels",
 ]
 conflicts = [
   [

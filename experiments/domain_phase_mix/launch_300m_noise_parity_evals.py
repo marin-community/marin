@@ -467,6 +467,7 @@ def build_eval_steps(
     name_prefix: str,
     state_rows: list[NoiseParityEvalSpec],
     eval_datasets_cache_path: str,
+    child_preemptible: bool = True,
 ) -> tuple[list[ExecutorStep], dict[str, InputName]]:
     """Build parity eval steps for rows requiring launch."""
     from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
@@ -515,6 +516,7 @@ def build_eval_steps(
             row.launch_tpu_type,
             regions=[row.launch_tpu_region],
             zone=row.launch_tpu_zone,
+            preemptible=child_preemptible,
         )
         eval_step = evaluate_levanter_lm_evaluation_harness(
             model_name=row.eval_key,
@@ -571,6 +573,12 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--include-run-name", action="append", default=[])
     parser.add_argument("--collect-from-prefix", action="append", default=[])
     parser.add_argument("--collect-output-csv", default=str(RESULTS_CSV_LOCAL))
+    parser.add_argument(
+        "--child-preemptible",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether child TPU eval steps may run on preemptible TPUs. Use --no-child-preemptible for long retries.",
+    )
     return parser.parse_known_args()
 
 
@@ -613,6 +621,7 @@ def main() -> None:
         name_prefix=args.name_prefix,
         state_rows=state_rows,
         eval_datasets_cache_path=args.eval_datasets_cache_path,
+        child_preemptible=args.child_preemptible,
     )
     collect_step = build_collect_step(
         name_prefix=args.name_prefix,

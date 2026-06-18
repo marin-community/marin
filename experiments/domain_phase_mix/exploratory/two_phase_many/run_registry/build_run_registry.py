@@ -19,6 +19,8 @@ directory instead of re-deriving run identity ad hoc.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import math
 import os
@@ -30,7 +32,9 @@ from typing import Any
 
 import fsspec
 import pandas as pd
+from marin.execution.executor import compute_output_path
 
+from experiments.defaults import _truncate_wandb_name
 from experiments.domain_phase_mix.launch_baseline_scaling_cell import (
     BaselineScalingMethod,
     baseline_scaling_source_experiment,
@@ -40,10 +44,22 @@ from experiments.domain_phase_mix.launch_proportional_controllability_300m impor
     BASE_NAME_PREFIX as PROPORTIONAL_CONTROLLABILITY_BASE_NAME_PREFIX,
 )
 from experiments.domain_phase_mix.launch_proportional_controllability_300m import (
+    DEFAULT_EVAL_DATASETS_CACHE_PATH as PROPORTIONAL_CONTROLLABILITY_EVAL_DATASETS_CACHE_PATH,
+)
+from experiments.domain_phase_mix.launch_proportional_controllability_300m import (
+    DEFAULT_TPU_REGION as PROPORTIONAL_CONTROLLABILITY_TPU_REGION,
+)
+from experiments.domain_phase_mix.launch_proportional_controllability_300m import (
+    DEFAULT_TPU_TYPE as PROPORTIONAL_CONTROLLABILITY_TPU_TYPE,
+)
+from experiments.domain_phase_mix.launch_proportional_controllability_300m import (
+    DEFAULT_TPU_ZONE as PROPORTIONAL_CONTROLLABILITY_TPU_ZONE,
+)
+from experiments.domain_phase_mix.launch_proportional_controllability_300m import (
     FAMILY as PROPORTIONAL_CONTROLLABILITY_FAMILY,
 )
 from experiments.domain_phase_mix.launch_proportional_controllability_300m import (
-    build_run_specs as build_proportional_controllability_run_specs,
+    build_launch_artifacts as build_proportional_controllability_launch_artifacts,
 )
 from experiments.domain_phase_mix.launch_proportional_perturbation_scale_transfer import (
     BASE_NAME_PREFIX as PROPORTIONAL_PERTURBATION_BASE_NAME_PREFIX,
@@ -670,6 +686,63 @@ def _max_checkpoint_step(checkpoint_root: str) -> int | None:
     return max(steps)
 
 
+def _wandb_safe_name(name: str) -> str:
+    """Return the W&B-safe training name without logging truncation warnings."""
+    noise = io.StringIO()
+    with contextlib.redirect_stdout(noise), contextlib.redirect_stderr(noise):
+        return _truncate_wandb_name(name)
+
+
+def _checkpoint_status_patterns(*, source_experiment: str, run_name: str, region: str) -> tuple[str, ...]:
+    """Return exact and W&B-shortened checkpoint status glob patterns."""
+    direct = f"gs://marin-{region}/checkpoints/{source_experiment}/{run_name}-*/.executor_status"
+    shortened_name = _wandb_safe_name(f"{source_experiment}/{run_name}")
+    shortened = f"gs://marin-{region}/checkpoints/{shortened_name}-*/.executor_status"
+    return tuple(dict.fromkeys((direct, shortened)))
+
+
+def _checkpoint_attempt_from_status_path(
+    *,
+    status_path: str,
+    family: str,
+    source_experiment: str,
+    run_name: str,
+    run_id: int | None,
+    objective_metric: str,
+    registry_id: str,
+    include_max_checkpoint_step: bool = True,
+) -> dict[str, Any]:
+    fs, _, _ = fsspec.get_fs_token_paths(status_path)
+    checkpoint_root = status_path.removesuffix("/.executor_status")
+    with fsspec.open(status_path, "r") as handle:
+        executor_status = handle.read().strip()
+    metrics_payload = _read_optional_jsonl_last_record(f"{checkpoint_root}/checkpoints/eval_metrics.jsonl")
+    objective_metric_value = None
+    if metrics_payload is not None and isinstance(metrics_payload.get(objective_metric), int | float):
+        objective_metric_value = float(metrics_payload[objective_metric])
+    else:
+        tracker_summary = _read_optional_tracker_summary(f"{checkpoint_root}/tracker_metrics.jsonl")
+        if tracker_summary is not None and isinstance(tracker_summary.get(objective_metric), int | float):
+            objective_metric_value = float(tracker_summary[objective_metric])
+    return {
+        "registry_id": registry_id,
+        "family": family,
+        "source_experiment": source_experiment,
+        "run_name": run_name,
+        "run_id": run_id,
+        "attempt_root": checkpoint_root,
+        "checkpoint_root": checkpoint_root,
+        "wandb_run_id": _wandb_run_id_from_checkpoint_root(checkpoint_root),
+        "region": _extract_region_from_gcs_path(checkpoint_root),
+        "executor_status": executor_status,
+        "status_updated": _status_updated(fs, status_path),
+        "has_eval_metrics": metrics_payload is not None,
+        "max_checkpoint_step": _max_checkpoint_step(checkpoint_root) if include_max_checkpoint_step else None,
+        "objective_metric": objective_metric,
+        "objective_metric_value": objective_metric_value,
+    }
+
+
 def _normalize_logical_status(status: str | None) -> str:
     if status is None:
         return "planned"
@@ -697,40 +770,28 @@ def _scan_checkpoint_attempts(
     registry_id: str | None = None,
 ) -> list[dict[str, Any]]:
     attempts: list[dict[str, Any]] = []
+    seen_status_paths: set[str] = set()
     for region in CHECKPOINT_REGIONS:
-        pattern = f"gs://marin-{region}/checkpoints/{source_experiment}/{run_name}-*/.executor_status"
-        fs, _, _ = fsspec.get_fs_token_paths(pattern)
-        for match in sorted(fs.glob(pattern)):
-            status_path = match if str(match).startswith("gs://") else f"gs://{match}"
-            checkpoint_root = status_path.removesuffix("/.executor_status")
-            with fsspec.open(status_path, "r") as handle:
-                executor_status = handle.read().strip()
-            metrics_payload = _read_optional_jsonl_last_record(f"{checkpoint_root}/checkpoints/eval_metrics.jsonl")
-            tracker_summary = _read_optional_tracker_summary(f"{checkpoint_root}/tracker_metrics.jsonl")
-            objective_metric_value = None
-            if metrics_payload is not None and isinstance(metrics_payload.get(objective_metric), int | float):
-                objective_metric_value = float(metrics_payload[objective_metric])
-            elif tracker_summary is not None and isinstance(tracker_summary.get(objective_metric), int | float):
-                objective_metric_value = float(tracker_summary[objective_metric])
-            attempts.append(
-                {
-                    "registry_id": registry_id or f"{family}:{run_name}",
-                    "family": family,
-                    "source_experiment": source_experiment,
-                    "run_name": run_name,
-                    "run_id": run_id,
-                    "attempt_root": checkpoint_root,
-                    "checkpoint_root": checkpoint_root,
-                    "wandb_run_id": _wandb_run_id_from_checkpoint_root(checkpoint_root),
-                    "region": _extract_region_from_gcs_path(checkpoint_root),
-                    "executor_status": executor_status,
-                    "status_updated": _status_updated(fs, status_path),
-                    "has_eval_metrics": metrics_payload is not None,
-                    "max_checkpoint_step": _max_checkpoint_step(checkpoint_root),
-                    "objective_metric": objective_metric,
-                    "objective_metric_value": objective_metric_value,
-                }
-            )
+        for pattern in _checkpoint_status_patterns(
+            source_experiment=source_experiment, run_name=run_name, region=region
+        ):
+            fs, _, _ = fsspec.get_fs_token_paths(pattern)
+            for match in sorted(fs.glob(pattern)):
+                status_path = match if str(match).startswith("gs://") else f"gs://{match}"
+                if status_path in seen_status_paths:
+                    continue
+                seen_status_paths.add(status_path)
+                attempts.append(
+                    _checkpoint_attempt_from_status_path(
+                        status_path=status_path,
+                        family=family,
+                        source_experiment=source_experiment,
+                        run_name=run_name,
+                        run_id=run_id,
+                        objective_metric=objective_metric,
+                        registry_id=registry_id or f"{family}:{run_name}",
+                    )
+                )
     return attempts
 
 
@@ -751,42 +812,29 @@ def _scan_checkpoint_attempts_for_run_names(
 ) -> dict[str, list[dict[str, Any]]]:
     expected_run_names = tuple(sorted(run_ids_by_name, key=len, reverse=True))
     attempts_by_run_name: dict[str, list[dict[str, Any]]] = {run_name: [] for run_name in expected_run_names}
+    seen_status_paths: set[str] = set()
     for region in CHECKPOINT_REGIONS:
         pattern = f"gs://marin-{region}/checkpoints/{source_experiment}/*/.executor_status"
         fs, _, _ = fsspec.get_fs_token_paths(pattern)
         for match in sorted(fs.glob(pattern)):
             status_path = match if str(match).startswith("gs://") else f"gs://{match}"
+            if status_path in seen_status_paths:
+                continue
             checkpoint_root = status_path.removesuffix("/.executor_status")
             run_name = _checkpoint_run_name(checkpoint_root, expected_run_names)
             if run_name is None:
                 continue
-            with fsspec.open(status_path, "r") as handle:
-                executor_status = handle.read().strip()
-            metrics_payload = _read_optional_jsonl_last_record(f"{checkpoint_root}/checkpoints/eval_metrics.jsonl")
-            tracker_summary = _read_optional_tracker_summary(f"{checkpoint_root}/tracker_metrics.jsonl")
-            objective_metric_value = None
-            if metrics_payload is not None and isinstance(metrics_payload.get(objective_metric), int | float):
-                objective_metric_value = float(metrics_payload[objective_metric])
-            elif tracker_summary is not None and isinstance(tracker_summary.get(objective_metric), int | float):
-                objective_metric_value = float(tracker_summary[objective_metric])
+            seen_status_paths.add(status_path)
             attempts_by_run_name[run_name].append(
-                {
-                    "registry_id": f"{family}:{run_name}",
-                    "family": family,
-                    "source_experiment": source_experiment,
-                    "run_name": run_name,
-                    "run_id": run_ids_by_name[run_name],
-                    "attempt_root": checkpoint_root,
-                    "checkpoint_root": checkpoint_root,
-                    "wandb_run_id": _wandb_run_id_from_checkpoint_root(checkpoint_root),
-                    "region": _extract_region_from_gcs_path(checkpoint_root),
-                    "executor_status": executor_status,
-                    "status_updated": _status_updated(fs, status_path),
-                    "has_eval_metrics": metrics_payload is not None,
-                    "max_checkpoint_step": _max_checkpoint_step(checkpoint_root),
-                    "objective_metric": objective_metric,
-                    "objective_metric_value": objective_metric_value,
-                }
+                _checkpoint_attempt_from_status_path(
+                    status_path=status_path,
+                    family=family,
+                    source_experiment=source_experiment,
+                    run_name=run_name,
+                    run_id=run_ids_by_name[run_name],
+                    objective_metric=objective_metric,
+                    registry_id=f"{family}:{run_name}",
+                )
             )
     return attempts_by_run_name
 
@@ -1350,14 +1398,46 @@ def _proportional_controllability_rows() -> tuple[pd.DataFrame, list[dict[str, A
     family = PROPORTIONAL_CONTROLLABILITY_FAMILY
     metadata = FAMILY_METADATA[family]
     source_experiment = PROPORTIONAL_CONTROLLABILITY_BASE_NAME_PREFIX
-    specs = build_proportional_controllability_run_specs()
+    launch_noise = io.StringIO()
+    with contextlib.redirect_stdout(launch_noise), contextlib.redirect_stderr(launch_noise):
+        artifacts = build_proportional_controllability_launch_artifacts(
+            base_name_prefix=source_experiment,
+            tpu_type=PROPORTIONAL_CONTROLLABILITY_TPU_TYPE,
+            tpu_regions=(PROPORTIONAL_CONTROLLABILITY_TPU_REGION,),
+            tpu_zone=PROPORTIONAL_CONTROLLABILITY_TPU_ZONE,
+            eval_datasets_cache_path=PROPORTIONAL_CONTROLLABILITY_EVAL_DATASETS_CACHE_PATH,
+            include_eval_harness=False,
+        )
+    specs = artifacts.run_specs
     run_ids_by_name = {spec.run_name: spec.run_id for spec in specs}
-    attempts_by_run_name = _scan_checkpoint_attempts_for_run_names(
-        family=family,
-        source_experiment=source_experiment,
-        run_ids_by_name=run_ids_by_name,
-        objective_metric=metadata.objective_metric,
-    )
+    with contextlib.redirect_stdout(launch_noise), contextlib.redirect_stderr(launch_noise):
+        checkpoint_roots_by_run_name = {
+            spec.run_name: compute_output_path(
+                step.name,
+                step.config,
+                override_output_path=step.override_output_path,
+                prefix=f"gs://marin-{PROPORTIONAL_CONTROLLABILITY_TPU_REGION}",
+            )
+            for spec, step in zip(specs, artifacts.training_steps, strict=True)
+        }
+    attempts_by_run_name: dict[str, list[dict[str, Any]]] = {run_name: [] for run_name in run_ids_by_name}
+    for run_name, checkpoint_root in checkpoint_roots_by_run_name.items():
+        status_path = f"{checkpoint_root.rstrip('/')}/.executor_status"
+        try:
+            attempts_by_run_name[run_name].append(
+                _checkpoint_attempt_from_status_path(
+                    status_path=status_path,
+                    family=family,
+                    source_experiment=source_experiment,
+                    run_name=run_name,
+                    run_id=run_ids_by_name[run_name],
+                    objective_metric=metadata.objective_metric,
+                    registry_id=f"{family}:{run_name}",
+                    include_max_checkpoint_step=False,
+                )
+            )
+        except FileNotFoundError:
+            continue
     rows: list[dict[str, Any]] = []
     all_attempts: list[dict[str, Any]] = []
     for spec in specs:

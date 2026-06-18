@@ -22,7 +22,7 @@ from marin.datakit.ingestion_manifest import (
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
-from marin.utils import fsspec_mkdirs, fsspec_url
+from marin.utils import fsspec_mkdirs, fsspec_url, normalize_fsspec_url_path
 from rigging.filesystem import open_url, url_to_fs
 from zephyr.writers import atomic_rename
 
@@ -116,7 +116,8 @@ def _parquet_file_matches_split(path: str, split: str) -> bool:
 
 
 def _find_split_parquet_files(input_path: str, split: str, subset: str | None) -> list[str]:
-    fs, root = url_to_fs(input_path)
+    normalized_input_path = normalize_fsspec_url_path(input_path)
+    fs, root = url_to_fs(normalized_input_path)
     roots: list[str] = []
     if subset and subset != "default":
         subset_root = posixpath.join(root, subset)
@@ -136,7 +137,7 @@ def _find_split_parquet_files(input_path: str, split: str, subset: str | None) -
         matches.extend(selected)
 
     if not matches:
-        raise FileNotFoundError(f"No parquet files found for split {split!r} under {input_path}")
+        raise FileNotFoundError(f"No parquet files found for split {split!r} under {normalized_input_path}")
 
     return [fsspec_url(fs, path) for path in sorted(set(matches))]
 
