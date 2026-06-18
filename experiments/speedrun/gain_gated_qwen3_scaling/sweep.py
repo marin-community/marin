@@ -107,8 +107,11 @@ class SizeSpec:
 
 
 # 130m only (per the sweep directive). Centers/steps/resources copied verbatim from
-# the HybridMuon / PRISM-Berkeley 130m row (marin#4933).
-SIZE = SizeSpec("130m", llama_150m, 0.016, 0.0032, 128, 4959, "v5p-8", 0.95, 1e-15, 1.0, 0.8)
+# the HybridMuon / PRISM-Berkeley 130m row (marin#4933). TPU is env-overridable
+# (TPU_VARIANT) so part of the grid can run on the abundant v6e-preemptible pool in
+# us-east5-b (REGION=us-east5) while the scarce v5p spot handles the rest.
+_TPU_VARIANT = os.environ.get("TPU_VARIANT", "v5p-8")
+SIZE = SizeSpec("130m", llama_150m, 0.016, 0.0032, 128, 4959, _TPU_VARIANT, 0.95, 1e-15, 1.0, 0.8)
 
 
 def _to_qwen3_from_llama(llama_cfg: LlamaConfig) -> Qwen3Config:
