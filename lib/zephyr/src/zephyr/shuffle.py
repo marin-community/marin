@@ -650,9 +650,7 @@ class ScatterWriter:
 
         A clean ``close()`` is the only thing that finalises an object-store
         upload; on a failed or reassigned shard the upload is otherwise left
-        open and keeps billing for uploaded parts (see #6488). On remote paths
-        ``discard()`` aborts the upload; on local paths we close and remove the
-        partial file.
+        open and keeps billing for uploaded parts (see #6488).
         """
         if self._out.closed:
             return
