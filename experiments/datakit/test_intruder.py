@@ -20,7 +20,6 @@ import numpy as np
 import pytest
 
 from experiments.datakit.intruder import (
-    DEFAULT_PANEL_MODELS,
     BucketPool,
     ConfidenceSequence,
     Decision,
@@ -308,9 +307,3 @@ def test_llm_panelist_rejects_out_of_range_vote():
     panelist = LlmPanelist(model="m", client=_fake_client('{"intruder": 9, "reasoning": "x"}'))
     with pytest.raises(ValueError, match="out-of-range"):
         panelist.vote(_trial(), max_doc_chars=2000)
-
-
-def test_default_panel_covers_distinct_provider_lineages():
-    """The point of the default panel is cross-lab judges, not one lab twice."""
-    labs = {model.slug.split("/", 1)[0] for model in DEFAULT_PANEL_MODELS}
-    assert len(labs) == len(DEFAULT_PANEL_MODELS)

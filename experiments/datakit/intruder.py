@@ -454,6 +454,38 @@ class _ModelTally:
         return self.correct / self.total if self.total else float("nan")
 
 
+def _score_round(
+    trials: Sequence[IntruderTrial],
+    judges: Sequence[Panelist],
+    pool: ThreadPoolExecutor,
+    max_doc_chars: int,
+) -> tuple[list[float], dict[str, list[bool]], int]:
+    """Fan one batch of trials across the panel and fold the votes into scores.
+
+    This is the I/O boundary of a round: every ``(trial, panelist)`` pair votes
+    concurrently, then the votes collapse into (a) one detection rate per trial
+    that drew at least one vote -- the fraction of voting panelists that found
+    the intruder -- and (b) per-model correctness for the batch. Failed calls
+    abstain and are counted, not scored. The caller owns the statistics: it
+    feeds the rates to a confidence sequence and the hits to the tallies.
+    """
+    jobs = [(t, j) for t in trials for j in judges]
+    results = pool.map(lambda tp: (tp[0], tp[1], _vote_correct(tp[1], tp[0], max_doc_chars)), jobs)
+
+    per_trial: dict[int, list[bool]] = {id(t): [] for t in trials}
+    model_hits: dict[str, list[bool]] = {j.name: [] for j in judges}
+    n_abstained = 0
+    for trial, panelist, correct in results:
+        if correct is None:
+            n_abstained += 1
+            continue
+        model_hits[panelist.name].append(correct)
+        per_trial[id(trial)].append(correct)
+
+    detection_rates = [sum(hits) / len(hits) for t in trials if (hits := per_trial[id(t)])]
+    return detection_rates, model_hits, n_abstained
+
+
 def run_intruder_test(
     lhs: dict[str, Iterable[str]],
     rhs: dict[str, Iterable[str]],
@@ -509,20 +541,14 @@ def run_intruder_test(
         for _round in range(max_rounds):
             for side_pool, cs in ((pool_lhs, cs_lhs), (pool_rhs, cs_rhs)):
                 trials = [side_pool.sample_trial(rng) for _ in range(batch_size)]
-                # (trial, panelist) fan-out; one structured call each.
-                jobs = [(t, j) for t in trials for j in judges]
-                results = list(pool.map(lambda tp: (tp[0], tp[1], _vote_correct(tp[1], tp[0], max_doc_chars)), jobs))
-                per_trial: dict[int, list[bool]] = {id(t): [] for t in trials}
-                for trial, panelist, correct in results:
-                    if correct is None:
-                        abstained += 1
-                        continue
-                    tallies[panelist.name][side_pool.side].record(correct)
-                    per_trial[id(trial)].append(correct)
-                for trial in trials:
-                    hits = per_trial[id(trial)]
-                    if hits:  # skip a trial where every panelist abstained
-                        cs.update(sum(hits) / len(hits))
+                rates, model_hits, n_abstained = _score_round(trials, judges, pool, max_doc_chars)
+                abstained += n_abstained
+                for rate in rates:
+                    cs.update(rate)
+                for name, hits in model_hits.items():
+                    side_tally = tallies[name][side_pool.side]
+                    for hit in hits:
+                        side_tally.record(hit)
 
             if cs_lhs.n >= min_trials and cs_rhs.n >= min_trials:
                 verdict = _decide(cs_lhs, cs_rhs, rope)
