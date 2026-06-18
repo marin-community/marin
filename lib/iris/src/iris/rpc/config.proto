@@ -286,6 +286,11 @@ message WorkerConfig {
   reserved 23;  // was: bool preemptible (replaced by capacity_type)
   CapacityType capacity_type = 24;
 
+  // Advertised scheduling CPU capacity (from ScaleGroupResources.cpu_millicores).
+  // The worker reports this as its capacity instead of the probed host count,
+  // letting operators over-commit CPU. 0 means "probe the host".
+  int32 cpu_millicores = 25;
+
   // Scheduling attributes
   map<string, string> worker_attributes = 30;
 
@@ -369,7 +374,7 @@ message CoreweaveControllerConfig {
 message ControllerVmConfig {
   string image = 10;            // Controller docker image (shared by all controller types)
   iris.time.Duration worker_timeout = 12;  // Default: 60s
-  reserved 13;                  // removed: heartbeat_failure_threshold (now hardcoded via PING_FAILURE_THRESHOLD)
+  reserved 13;                  // removed: heartbeat_failure_threshold (now hardcoded via CONSECUTIVE_FAILURE_THRESHOLD)
   reserved 14;                  // removed: use_split_heartbeat (legacy monolithic heartbeat path deleted)
   oneof controller {
     GcpControllerConfig gcp = 1;
@@ -398,6 +403,12 @@ message DefaultsConfig {
   reserved 5;  // was: string default_task_image
   WorkerConfig worker = 6;
   map<string, string> task_env = 7;  // Env vars injected into every task container
+  // Names of environment variables captured from the operator's shell at
+  // `iris cluster start` and injected into every task. A missing name aborts
+  // the launch. Values never travel through the ConfigMap: on Kubernetes they
+  // are written to a Secret (`iris-task-env`) referenced via envFrom; on GCP
+  // they are folded into task_env in the bootstrap config shipped to the VM.
+  repeated string inject_env = 8;
 }
 
 // ============================================================================
@@ -423,8 +434,15 @@ message AuthConfig {
   // When true, authentication is attempted but not required. Requests with
   // valid tokens get the authenticated identity; requests without tokens
   // fall through as anonymous admin. Invalid tokens are still rejected.
-  // This allows gradual rollout of auth on clusters that currently rely on
-  // SSH tunnels.
+  // This trusts tokenless requests from ANY origin, so it is safe only for
+  // private clusters.
+  //
+  // Tokenless requests over a genuine loopback connection (SSH tunnel /
+  // on-host) are ALWAYS trusted as the anonymous admin, independent of this
+  // flag — reaching the loopback interface already implies host-level access.
+  // This is the SSH-tunnel transition path for a public controller; see
+  // docs/auth-loopback-transition.md. Loopback origin is verified from the
+  // transport peer and cannot be spoofed via X-Forwarded-For.
   bool optional = 4;
 }
 
@@ -436,20 +454,61 @@ message AuthConfig {
 // No fields needed — all configuration is in defaults.worker and scale_groups.
 message WorkerProviderConfig {}
 
+// One Kueue topology placement rule (see KueueConfig.topologies).
+message KueueTopology {
+  // Node label the gang shares. Must be a level in the cluster's Kueue
+  // Topology CR for topology-aware scheduling to honor it, e.g.
+  // "ib.coreweave.cloud/leafgroup" or "ds.coreweave.com/nvlink.domain".
+  string node_label = 1;
+  // true  => kueue.x-k8s.io/podset-required-topology  (hard: one domain).
+  // false => kueue.x-k8s.io/podset-preferred-topology (soft: best effort).
+  bool required = 2;
+}
+
+// Kueue gang-admission config for the K8s direct provider. Iris follows the
+// cluster's Kueue conventions rather than dictating its own: these fields map
+// Iris concepts (priority bands, coscheduling group_by) onto whatever
+// WorkloadPriorityClasses and Topology levels the cluster admin provisioned.
+message KueueConfig {
+  // ClusterQueue the cluster's LocalQueue binds to. Admin-provisioned
+  // (cluster-scoped, holds the quota); created by scripts/install_kueue.py
+  // (--with-queues), not by Iris. Setting this ENABLES Kueue gang admission:
+  // empty disables it (coscheduled jobs then fail — there is no non-Kueue
+  // fallback). The LocalQueue itself is owned by Iris, which creates it in its
+  // namespace at controller start (see ensure_kueue_queues) and names it
+  // {label_prefix}-lq — it is derived, not configured.
+  string cluster_queue = 1;
+  // PriorityBand -> WorkloadPriorityClass name. A band with no entry is left
+  // unstamped so Kueue applies its default priority; Iris never invents a class
+  // name, since a missing WorkloadPriorityClass makes Kueue reject the pod.
+  // Keys: "production" | "interactive" | "batch".
+  map<string, string> priority_classes = 2;
+  // group_by attribute -> topology placement. A group_by with no entry gets no
+  // topology annotation (the gang still admits atomically via
+  // pod-group-total-count, just unconstrained). When the whole map is empty the
+  // provider falls back to CoreWeave-convention defaults (see make_provider).
+  map<string, KueueTopology> topologies = 3;
+}
+
 // Configuration for KubernetesProvider: direct Pod dispatch without worker daemons.
 message KubernetesProviderConfig {
   string namespace = 1;    // Kubernetes namespace for task pods (default: "iris")
   string kubeconfig = 2;   // Path to kubeconfig file; empty string uses in-cluster auth
   string default_image = 3; // Default container image for task pods
-  // Topology key for pod affinity on multi-VM gang-scheduled jobs.
-  // When set, sibling task pods for the same job prefer scheduling on nodes
-  // sharing this topology (e.g. "coreweave.cloud/spine" for IB colocation).
-  // Leave empty to disable. Default: "coreweave.cloud/spine".
-  string colocation_topology_key = 4;
   string service_account = 5;    // K8s ServiceAccount for task pods (default: "")
   bool host_network = 6;         // Run task pods with hostNetwork (for NCCL/IB)
   string cache_dir = 7;          // hostPath base for cache mounts (default: "/cache")
   string controller_address = 8; // Controller URL injected into task pods
+  KueueConfig kueue = 9;  // Kueue gang admission; empty kueue.cluster_queue disables it
+  // Namespaces whose preemptible pods Iris may evict to unblock gang
+  // admission. Kueue's topology-aware scheduling counts non-Kueue pods' GPU
+  // requests as fixed node usage and only preempts Kueue Workloads, so
+  // scheduler-preemptible filler pods (e.g. node health-check verification
+  // pods) starve gang admission instead of being displaced. When Iris has
+  // gang work it deletes such pods itself — but only pods that have negative
+  // priority AND request GPUs AND live in one of these namespaces (never in
+  // Iris's own namespace). Empty list disables the feature.
+  repeated string preempt_namespaces = 10;
 }
 
 // ============================================================================
@@ -528,4 +587,8 @@ message IrisClusterConfig {
   // can manage the deployment via `iris cluster log-server` subcommands.
   // Mutually exclusive with endpoints[/system/log-server].
   string log_server_config = 20;
+
+  // Public dashboard origin for this deployment (e.g. "https://iris.oa.dev").
+  // When set, the CLI prints a clickable job URL on submit. Optional.
+  string dashboard_url = 21;
 }

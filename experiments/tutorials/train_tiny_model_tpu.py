@@ -10,12 +10,13 @@ For GPU training, see train_tiny_model_gpu.py
 
 from fray import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import versioned
+from marin.execution.types import versioned
 
-from experiments.defaults import default_tokenize, train
+from experiments.defaults import train
 from experiments.llama import llama_30m
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
+from experiments.tokenization import default_tokenize
 
 RESOURCES = ResourceConfig.with_tpu(
     "v5litepod-16",

@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import glob
 import os
 import tempfile
 import uuid
@@ -12,29 +13,28 @@ import jax.numpy as jnp
 import jmp
 import pytest
 import safetensors
+import transformers
 from chex import assert_trees_all_close, assert_trees_all_equal
-from jax.random import PRNGKey
-
 from haliax import Axis
 from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict
+from jax.random import PRNGKey
+from test_utils import skip_if_no_torch
+from transformers import GPT2Config as HfGpt2Config
 
 from levanter.compat.hf_checkpoints import (
     SAFE_TENSORS_INDEX_NAME,
     SAFE_TENSORS_MODEL,
-    HFCheckpointConverter,
     ModelWithHfSerializationMixin,
+    _causal_lm_architecture_name,
     _convert_to_jnp,
-    converter_from_hf_compat_config,
 )
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
-from levanter.models.llama import LlamaConfig
-from test_utils import skip_if_no_torch
 from tests.test_utils import use_test_mesh
 
 
 @skip_if_no_torch
 def test_conversion_to_jnp_bfloat16():
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     x = torch.arange(10, dtype=torch.bfloat16) / 3.14
     with pytest.raises(TypeError):
@@ -60,7 +60,6 @@ def test_save_sharded_checkpoints():
             converter.save_pretrained(nano_model, tmpdir, max_shard_size=1024)
 
         # make sure we saved a few different files
-        import glob
 
         assert len(glob.glob(tmpdir + "/*.safetensors")) > 1
 
@@ -76,30 +75,6 @@ def test_save_sharded_checkpoints():
             nano_model,
             loaded_model,
         )
-
-
-def test_converter_from_hf_compat_config_uses_explicit_tokenizer(monkeypatch):
-    config = LlamaConfig()
-    tokenizer = object()
-    observed: dict[str, object] = {}
-
-    monkeypatch.setattr(
-        HFCheckpointConverter,
-        "_infer_config_class",
-        staticmethod(lambda hf_config_class, ref, trust_remote_code: object),
-    )
-
-    def fake_infer_tokenizer(tokenizer_arg, ref, trust_remote_code=False):
-        observed["tokenizer_arg"] = tokenizer_arg
-        observed["ref"] = ref
-        return tokenizer_arg
-
-    monkeypatch.setattr(HFCheckpointConverter, "_infer_tokenizer", staticmethod(fake_infer_tokenizer))
-
-    converter = converter_from_hf_compat_config(config, tokenizer=tokenizer)
-
-    assert converter.tokenizer is tokenizer
-    assert observed["tokenizer_arg"] is tokenizer
 
 
 # A simple wrapper to include diverse dtypes in a model
@@ -290,3 +265,50 @@ def test_save_pretrained_to_memory_fs():
             assert_trees_all_close(original_value, reloaded_value)
 
     fs.rm(base_path, recursive=True)
+
+
+def test_causal_lm_architecture_name_is_torch_free():
+    """The degrade path derives `architectures` from the model type without importing torch."""
+    assert _causal_lm_architecture_name(HfGpt2Config) == "GPT2LMHeadModel"
+
+
+def _simulate_hub_offline(monkeypatch):
+    """Make ``AutoConfig.from_pretrained`` fail for Hub ids but still work for local directories,
+    mirroring a real HF outage (local files remain readable)."""
+    real = transformers.AutoConfig.from_pretrained
+
+    def _offline(pretrained_model_name_or_path, *args, **kwargs):
+        if os.path.isdir(str(pretrained_model_name_or_path)):
+            return real(pretrained_model_name_or_path, *args, **kwargs)
+        raise OSError("We couldn't connect to 'https://huggingface.co' to load the files")
+
+    monkeypatch.setattr(transformers.AutoConfig, "from_pretrained", _offline)
+
+
+def test_gpt2_converter_uses_configured_tokenizer_without_hub(local_gpt2_tokenizer_path, monkeypatch):
+    """A configured tokenizer lets the GPT2 converter build without any HF Hub access: the config
+    class is known statically and the tokenizer is loaded from the local directory."""
+    _simulate_hub_offline(monkeypatch)
+
+    converter = Gpt2Config(
+        hidden_dim=32, num_heads=2, num_layers=2, tokenizer=local_gpt2_tokenizer_path
+    ).hf_checkpoint_converter()
+
+    assert converter.HfConfigClass.__name__ == "GPT2Config"
+    assert converter.tokenizer is not None  # loaded from the local directory, not the Hub
+
+
+def test_build_hf_config_dict_degrades_when_reference_unreachable(local_gpt2_tokenizer_path, monkeypatch):
+    """An HF outage must not block a checkpoint save: with a local tokenizer the config is still
+    produced and `architectures` is derived from the model type rather than the reference."""
+    _simulate_hub_offline(monkeypatch)
+
+    config = Gpt2Config(hidden_dim=32, num_heads=2, num_layers=2, max_seq_len=64, tokenizer=local_gpt2_tokenizer_path)
+    converter = config.hf_checkpoint_converter()
+
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
+        dict_config = converter._build_hf_config_dict(model)
+
+    assert dict_config["model_type"] == "gpt2"
+    assert dict_config["architectures"] == ["GPT2LMHeadModel"]

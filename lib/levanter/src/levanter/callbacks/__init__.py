@@ -29,6 +29,7 @@ from levanter.data import DataLoader
 from levanter.metrics import LossFunctionWithMetrics, unwrap_metrics
 from levanter.metrics import fold as fold_metric
 from levanter.tracker.wandb import WandbConfig
+from levanter.utils.fsspec_utils import mkdirs
 from levanter.utils.jax_utils import barrier_sync
 from levanter.utils.logging import save_xla_dumps_to_wandb
 
@@ -38,6 +39,8 @@ def eval_loss_loop(
 ) -> tuple[float, dict[str, float]]:
 
     total_loss = 0.0
+    total_load_time = 0.0
+    total_loss_time = 0.0
     accumulated_metrics: dict = {}
     n = 0
 
@@ -46,28 +49,43 @@ def eval_loss_loop(
     _tqdm_logging_one_time_setup()
     pbar = tqdm(dataset, desc=desc, position=1, leave=False, total=max_batches)
 
-    for batch in pbar:
-        # loss_fn returns (loss, wrapped_metrics) where wrapped_metrics is Dict[str, Metric]
-        loss, wrapped_metrics = loss_fn(model, batch)
+    iter_ = iter(pbar)
+    with jax.named_scope(desc):
+        while True:
+            time_in = time.time()
+            batch = next(iter_, None)
+            if batch is None:
+                break
+            load_time = time.time() - time_in
+            total_load_time += load_time
 
-        for key, metric in wrapped_metrics.items():
-            if key not in accumulated_metrics:
-                accumulated_metrics[key] = metric
-            else:
-                accumulated_metrics[key] = fold_metric(accumulated_metrics[key], metric)
+            # loss_fn returns (loss, wrapped_metrics) where wrapped_metrics is Dict[str, Metric]
+            loss, wrapped_metrics = loss_fn(model, batch)
 
-        total_loss += loss.item()
-        n += 1
+            # Use fold() to accumulate Metric objects
+            for key, metric in wrapped_metrics.items():
+                if key not in accumulated_metrics:
+                    accumulated_metrics[key] = metric
+                else:
+                    accumulated_metrics[key] = fold_metric(accumulated_metrics[key], metric)
 
-        pbar.set_postfix(loss=total_loss / n)
+            total_loss += loss.item()
+            n += 1
+            loss_time = time.time() - time_in - load_time
+            total_loss_time += loss_time
 
-        if max_batches is not None and n >= max_batches:
-            break
+            pbar.set_postfix(loss=total_loss / n)
+
+            if max_batches is not None and n >= max_batches:
+                break
 
     if n > 0:
         total_loss /= n
 
     plain_metrics = unwrap_metrics(accumulated_metrics)
+    plain_metrics["eval/timing/load_time"] = total_load_time
+    plain_metrics["eval/timing/loss_time"] = total_loss_time
+    plain_metrics["eval/timing/num_batches"] = float(n)
     return total_loss, plain_metrics
 
 
@@ -84,9 +102,11 @@ def compute_validation_loss(
         if name:
             prefix += "/" + name
 
-        # Log loss and metrics
+        # Log loss and metrics. eval_loss_loop already namespaces its loop-timing
+        # keys under "eval/"; strip it so this prefix (e.g. "eval/<name>") is applied
+        # once, yielding "eval/<name>/timing/..." instead of "eval/eval/timing/...".
         to_log = {f"{prefix}/loss": loss}
-        to_log.update({f"{prefix}/{k}": v for k, v in metrics.items()})
+        to_log.update({f"{prefix}/{k.removeprefix('eval/')}": v for k, v in metrics.items()})
         levanter.tracker.log(to_log, step=info.step)
 
         if name:
@@ -141,17 +161,16 @@ def profile_ctx(
 
     Notes:
         - Only process 0 creates the Perfetto link when ``create_perfetto_link`` is True.
-        - After stopping the trace, logs the artifact to the current tracker as type
-          "jax_profile" and performs a cross-process barrier.
+        - After exiting the context, the profile remains in ``path`` and the context
+          manager performs a cross-process barrier.
+        - When ``host_profile`` is enabled, the cProfile outputs are written into the
+          same directory as the JAX trace files.
     """
     _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
     logger.info("Starting profiler.")
 
-    # Ensure destination exists
-    try:
-        os.makedirs(path, exist_ok=True)
-    except Exception:
-        pass
+    # Ensure destination exists (handles both local and remote filesystems)
+    mkdirs(path)
 
     if device_profile:
         jax.profiler.start_trace(
@@ -175,16 +194,10 @@ def profile_ctx(
         except Exception as e:  # pragma: no cover - optional/diagnostic path
             logger.warning(f"Failed to start cProfile host profiler: {e}")
 
-    def _try_log_host_artifact(artifact_path: str, description: str) -> None:
-        try:
-            levanter.tracker.current_tracker().log_artifact(artifact_path, type="host_profile")
-        except Exception:
-            logger.warning(f"Failed to log host profile {description}", exc_info=True)
-
     try:
         yield
     finally:
-        # Stop host profiler and write artifacts
+        # Stop host profiler and write the profile outputs into the run directory.
         # Do this first because jax.profiler can be very slow to finish
         if pr is not None and stats_path is not None:
             try:
@@ -215,11 +228,6 @@ def profile_ctx(
         if event is not None:
             event.set()
 
-        levanter.tracker.current_tracker().log_artifact(path, type="jax_profile")
-        if stats_path is not None and os.path.exists(stats_path):
-            _try_log_host_artifact(stats_path, "stats")
-        if txt_summary_path is not None and os.path.exists(txt_summary_path):
-            _try_log_host_artifact(txt_summary_path, "summary")
         barrier_sync()
 
 

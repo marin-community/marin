@@ -14,26 +14,22 @@ bugs where orphaned coordinators and workers consume resources indefinitely.
 from __future__ import annotations
 
 import enum
-import itertools
 import logging
 import os
-import pickle
 import sys
 import threading
 import time
 import traceback
 import uuid
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
-from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any
 
 import cloudpickle
-import humanfriendly
 from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig, current_actor
 from fray.client import JobHandle
 from fray.current_client import current_client, set_current_client
@@ -41,7 +37,7 @@ from fray.local_backend import LocalClient
 from fray.types import Entrypoint, JobRequest
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem import marin_temp_bucket, open_url, url_to_fs
+from rigging.filesystem import TransferBudgetExceeded, marin_temp_bucket, open_url, url_to_fs
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.dataset import Dataset
@@ -56,8 +52,23 @@ from zephyr.plan import (
     StageType,
     compute_plan,
 )
-from zephyr.shuffle import ListShard, MemChunk, _write_scatter
-from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir, unique_temp_path
+from zephyr.runners import InlineRunner, SubprocessRunner
+from zephyr.shuffle import ListShard, MemChunk
+from zephyr.stage_io import (
+    ShardTask,
+    StageRunner,
+    TaskResult,
+    ZephyrWorkerError,
+    _ensure_picklable_exception,
+    _shared_data_path,
+    _stage_throughput,
+)
+from zephyr.stats import (
+    StatsWriter,
+    ZephyrWorkerStatStatus,
+)
+from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot
+from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +84,6 @@ MAX_SHARD_FAILURES = 3
 # storms for any one shard in a multi-shard pipeline.
 MAX_SHARD_INFRA_FAILURES = 20
 
-ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/stage/{stage_name}/item_count"
-ZEPHYR_STAGE_BYTES_PROCESSED_KEY = "zephyr/stage/{stage_name}/bytes_processed"
-
 # Typical status text for a 6-stage pipeline is ~300 chars.
 MAX_STATUS_TEXT_LENGTH = 1000
 
@@ -87,163 +95,23 @@ class ShardFailureKind(enum.StrEnum):
     INFRA = enum.auto()
 
 
-@dataclass(frozen=True)
-class PickleDiskChunk:
-    """Reference to a pickle chunk stored on disk.
-
-    Each write goes to a UUID-unique path to avoid collisions when multiple
-    workers race on the same shard.  No coordinator-side rename is needed;
-    the winning result's paths are used directly and the entire execution
-    directory is cleaned up after the pipeline completes.
-    """
-
-    path: str
-    count: int
-
-    def __iter__(self) -> Iterator:
-        return iter(self.read())
-
-    @classmethod
-    def write(cls, path: str, data: list) -> PickleDiskChunk:
-        """Write *data* to a UUID-unique path derived from *path*.
-
-        The UUID suffix avoids collisions when multiple workers race on
-        the same shard.  The resulting path is used directly for reads —
-        no rename step is required.
-        """
-        ensure_parent_dir(path)
-        data = list(data)
-        count = len(data)
-
-        unique_path = unique_temp_path(path)
-        with open_url(unique_path, "wb") as f:
-            pickle.dump(data, f)
-        return cls(path=unique_path, count=count)
-
-    def read(self) -> list:
-        """Load chunk data from disk."""
-        with open_url(self.path, "rb") as f:
-            return pickle.load(f)
-
-
-# ---------------------------------------------------------------------------
-# Task result
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class CounterSnapshot:
-    """Bundled counter values and monotonically increasing generation tag.
-
-    The generation increments on every snapshot, so each heartbeat and
-    report_result carries a unique tag.  The coordinator uses strict
-    ordering (>) to discard stale or out-of-order updates.
-    """
-
-    counters: dict[str, int]
-    generation: int
-
-    @staticmethod
-    def empty(generation: int = 0) -> CounterSnapshot:
-        return CounterSnapshot(counters={}, generation=generation)
-
-
-@dataclass
-class TaskResult:
-    """Result of a single worker task.
-
-    Always contains a ListShard. For non-scatter stages, refs are
-    PickleDiskChunks. For scatter stages, refs contain file paths
-    (the actual metadata lives in ``.scatter_meta`` sidecar files
-    read lazily by reducers).
-    """
-
-    shard: ListShard
-
-
 def _generate_execution_id() -> str:
     """Generate unique ID for this execution to avoid conflicts."""
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     return f"{ts}-{uuid.uuid4().hex[:8]}"
 
 
-def _format_count(n: float) -> str:
-    """Format a count with SI-style suffixes (K/M/B/T) once it grows past 1k."""
-    abs_n = abs(n)
-    if abs_n >= 1e12:
-        return f"{n / 1e12:.2f}T"
-    if abs_n >= 1e9:
-        return f"{n / 1e9:.2f}B"
-    if abs_n >= 1e6:
-        return f"{n / 1e6:.2f}M"
-    if abs_n >= 1e3:
-        return f"{n / 1e3:.2f}K"
-    if n == int(n):
-        return f"{int(n):,}"
-    return f"{n:.1f}"
+def _format_worker_status_md(active_tasks: int, stage: str) -> tuple[str, str]:
+    """Return ``(detail_md, summary_md)`` for the worker's Iris task-status push.
 
-
-def _format_bytes(n: float) -> str:
-    """Format a byte count with binary (IEC) prefixes."""
-    return humanfriendly.format_size(int(n), binary=True)
-
-
-@dataclass(frozen=True, repr=False)
-class StageThroughput:
-    """Items and bytes processed by a stage with their per-second rates.
-
-    Item counts/rates use SI suffixes (K/M/B/T); byte totals/rates use binary
-    (IEC) prefixes. The default ``%s`` / ``repr`` rendering is the single
-    canonical text form, used by all coordinator, worker, and per-shard log
-    messages:
-
-        ``items=7 (3.5/s), bytes_processed=1 KiB (512 bytes/s)``
+    Returns ``("idle", "idle")`` when no task is in flight or no stage has run
+    yet; otherwise produces a one-line summary plus a two-line detail block.
     """
-
-    items: int
-    bytes_processed: int
-    item_rate: float
-    byte_rate: float
-
-    def __repr__(self) -> str:
-        return (
-            f"items={_format_count(self.items)} ({_format_count(self.item_rate)}/s), "
-            f"bytes_processed={_format_bytes(self.bytes_processed)} ({_format_bytes(self.byte_rate)}/s)"
-        )
-
-
-def _stage_throughput(
-    counters: Mapping[str, int],
-    stage_name: str,
-    elapsed: float,
-) -> StageThroughput | None:
-    """Return throughput stats for *stage_name*, or ``None`` if uninstrumented.
-
-    Returns ``None`` when neither the item nor the byte counter has been
-    recorded for this stage. Map-only stages and stages still in run_stage
-    setup never populate these counters; ``None`` distinguishes that case
-    from a real zero count so callers can suppress misleading "0 items"
-    status lines.
-    """
-    item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
-    byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
-    if item_key not in counters and byte_key not in counters:
-        return None
-    items = counters.get(item_key, 0)
-    bytes_processed = counters.get(byte_key, 0)
-    item_rate = items / elapsed if elapsed > 0 else 0.0
-    byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
-    return StageThroughput(
-        items=items,
-        bytes_processed=bytes_processed,
-        item_rate=item_rate,
-        byte_rate=byte_rate,
-    )
-
-
-def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
-    """Path for a shared data object: {prefix}/{execution_id}/shared/{name}.pkl"""
-    return f"{prefix}/{execution_id}/shared/{name}.pkl"
+    if active_tasks == 0 or not stage:
+        return "idle", "idle"
+    summary = f"**{stage}** — {active_tasks} task(s)"
+    detail = "  \n".join([f"**Stage**: {stage}", f"**Active tasks**: {active_tasks}"])
+    return detail, summary
 
 
 def _push_iris_task_status(
@@ -284,74 +152,6 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
                 logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
 
 
-def _write_pickle_chunks(
-    items: Iterator,
-    source_shard: int,
-    chunk_path_fn: Callable[[int], str],
-) -> ListShard:
-    """Batch a plain item stream into pickle chunk files.
-
-    Returns a ListShard containing PickleDiskChunk references.
-    """
-    chunks: list[Iterable] = []
-    for pidx, batch in enumerate(batchify(items, n=INTERMEDIATE_CHUNK_SIZE)):
-        chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
-        chunks.append(chunk_ref)
-        written = pidx + 1
-        if written % 10 == 0:
-            logger.info(
-                "[shard %d] Wrote %d pickle chunks so far (latest: %d items)",
-                source_shard,
-                written,
-                chunk_ref.count,
-            )
-
-    return ListShard(refs=chunks)
-
-
-def _write_stage_output(
-    stage_gen: Iterator,
-    source_shard: int,
-    stage_dir: str,
-    shard_idx: int,
-    scatter_op: Scatter | None,
-    total_shards: int,
-) -> TaskResult:
-    """Write stage output to disk.
-
-    For scatter stages (``scatter_op`` is set), writes Parquet with envelope
-    wrapping and ``.scatter_meta`` sidecars. Returns TaskResult with compact
-    scatter metadata.
-
-    For non-scatter stages, batches items into pickle chunk files. Returns
-    TaskResult with a ListShard.
-    """
-    if scatter_op is not None:
-        first_item = next(stage_gen, None)
-        if first_item is None:
-            return TaskResult(shard=ListShard(refs=[]))
-
-        full_gen = itertools.chain([first_item], stage_gen)
-
-        num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
-        data_path = f"{stage_dir}/shard-{shard_idx:04d}.shuffle"
-        shard = _write_scatter(
-            full_gen,
-            source_shard,
-            data_path,
-            key_fn=scatter_op.key_fn,
-            num_output_shards=num_output_shards,
-            sort_fn=scatter_op.sort_fn,
-            combiner_fn=scatter_op.combiner_fn,
-        )
-        return TaskResult(shard=shard)
-
-    def chunk_path_fn(idx: int) -> str:
-        return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"
-
-    return TaskResult(shard=_write_pickle_chunks(stage_gen, source_shard, chunk_path_fn))
-
-
 class WorkerState(enum.Enum):
     INIT = "init"
     READY = "ready"
@@ -377,22 +177,6 @@ class PullStatus(enum.StrEnum):
     SHUTDOWN = enum.auto()
 
 
-@dataclass
-class ShardTask:
-    """Describes a unit of work for a worker: one shard through one stage."""
-
-    shard_idx: int
-    total_shards: int
-    shard: Shard
-    operations: list[PhysicalOp]
-    stage_name: str = "output"
-    aux_shards: dict[int, Shard] | None = None
-
-
-class ZephyrWorkerError(RuntimeError):
-    """Raised when a worker encounters a fatal (non-transient) error."""
-
-
 class CoordinatorUnreachable(RuntimeError):
     """Worker lost contact with the coordinator. Retryable at the iris task level."""
 
@@ -401,43 +185,18 @@ class CoordinatorUnreachable(RuntimeError):
 # These are deterministic errors (bad plan, invalid config, programming bugs)
 # that would fail identically on every attempt. Infrastructure errors (OSError,
 # RuntimeError from dead actors, backend actor errors) are NOT listed here so they
-# remain retryable.
-_NON_RETRYABLE_ERRORS = (ZephyrWorkerError, ValueError, TypeError, KeyError, AttributeError, MemoryError)
-
-
-# ---------------------------------------------------------------------------
-# WorkerContext protocol — the public interface exposed to user task code
-# ---------------------------------------------------------------------------
-
-
-class WorkerContext(Protocol):
-    def get_shared(self, name: str) -> Any: ...
-    def increment_counter(self, name: str, value: int = 1) -> None: ...
-    def get_counter_snapshot(self) -> CounterSnapshot: ...
-
-
-_worker_ctx_var: ContextVar[WorkerContext | None] = ContextVar("zephyr_worker_ctx", default=None)
-
-
-def zephyr_worker_ctx() -> WorkerContext:
-    """Get the current worker's context. Only valid inside a worker task."""
-    ctx = _worker_ctx_var.get()
-    if ctx is None:
-        raise RuntimeError("zephyr_worker_ctx() called outside of a worker task")
-    return ctx
-
-
-class StageRunner(Protocol):
-    """Strategy a worker uses to execute a single shard. See ``zephyr.runners``."""
-
-    def execute(
-        self,
-        task: ShardTask,
-        chunk_prefix: str,
-        execution_id: str,
-    ) -> tuple[TaskResult, dict[str, int]]: ...
-
-    def live_counters(self) -> dict[str, int]: ...
+# remain retryable. TransferBudgetExceeded is deterministic: the cross-region
+# budget is global and persists for the life of the process, so every retry hits
+# the same wall while re-transferring data across regions.
+_NON_RETRYABLE_ERRORS = (
+    ZephyrWorkerError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    MemoryError,
+    TransferBudgetExceeded,
+)
 
 
 def _default_stage_runner_factory_for(client: Client) -> Callable[[int], StageRunner]:
@@ -451,11 +210,7 @@ def _default_stage_runner_factory_for(client: Client) -> Callable[[int], StageRu
     the other behavior pass ``stage_runner_factory=...`` explicitly.
     """
     if isinstance(client, LocalClient):
-        from zephyr.runners import InlineRunner  # circular import: runners imports execution
-
         return lambda n: InlineRunner(num_workers=n)
-
-    from zephyr.runners import SubprocessRunner  # circular import: runners imports execution
 
     return lambda n: SubprocessRunner(num_workers=n)
 
@@ -543,6 +298,8 @@ class ZephyrCoordinator:
         # Set at each _start_stage so _log_status can show average throughput since stage start.
         self._stage_monotonic_start: float | None = None
 
+        self._stats_writer: StatsWriter = StatsWriter(None)
+
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
 
@@ -582,6 +339,8 @@ class ZephyrCoordinator:
         self._heartbeat_timeout = heartbeat_timeout
         self._max_shard_failures = max_shard_failures
         self._max_shard_infra_failures = max_shard_infra_failures
+
+        self._stats_writer = StatsWriter.connect()
 
         logger.info("Coordinator initialized")
 
@@ -732,7 +491,6 @@ class ZephyrCoordinator:
         alive = sum(1 for s in states if s in {WorkerState.READY, WorkerState.BUSY})
         dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
 
-        totals = self.get_counters()
         base_msg = "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead"
         base_args = (
             self._execution_id,
@@ -750,7 +508,7 @@ class ZephyrCoordinator:
         # populate these counters. Drop the items/bytes_processed segment for
         # those stages.
         elapsed = time.monotonic() - (self._stage_monotonic_start or time.monotonic())
-        throughput = _stage_throughput(totals, self._stage_name, elapsed)
+        throughput = _stage_throughput(self.get_counters(stage=self._stage_name), elapsed)
         if throughput is not None:
             logger.info(base_msg + "; %s", *base_args, throughput)
         else:
@@ -758,6 +516,18 @@ class ZephyrCoordinator:
         if retried:
             attempts_histogram = dict(sorted(Counter(retried.values()).items()))
             logger.warning("[%s] Shards retried (attempts: shard count): %s", self._execution_id, attempts_histogram)
+
+    def _emit_stage_stat(self, *, failed: bool = False) -> None:
+        """Emit one ZephyrStageStat row to finelog at stage completion or failure."""
+        with self._lock:
+            stage_name = self._stage_name
+            execution_id = self._execution_id
+            total = self._total_shards
+            stage_start = self._stage_monotonic_start
+            elapsed = time.monotonic() - stage_start if stage_start else 0.0
+        status = ZephyrWorkerStatStatus.FAILED if failed else ZephyrWorkerStatStatus.END
+        stage_counters = self.get_counters(stage=stage_name)
+        self._stats_writer.emit_stage_stat(stage_counters, stage_name, execution_id, elapsed, total, status)
 
     def _record_shard_failure(
         self,
@@ -1010,25 +780,61 @@ class ZephyrCoordinator:
                 },
             )
 
-    def get_counters(self, worker_id: str | None = None) -> dict[str, int]:
-        """Return counter values, optionally filtered to a single worker.
+    def get_counters(self, worker_id: str | None = None, *, stage: str | None = None) -> dict[str, int | float]:
+        """Return counter values, optionally filtered to a single worker or stage.
 
         Args:
             worker_id: If provided, return the latest snapshot for this worker
                 only. If None, return totals derived from completed and
-                in-flight snapshots.
+                in-flight snapshots, applying per-key aggregation hints.
+            stage: If provided, only include entries with ``entry.stage == stage``.
+                If None (default), include all entries regardless of stage.
+
+        If snapshots disagree on a counter's aggregation (only possible for
+        user counters that reuse a name with different ``set_aggregation``
+        modes), the first-seen mode wins and a warning is logged — stats
+        collection never raises into the execution path.
         """
         with self._lock:
             if worker_id is not None:
                 snap = self._worker_counters.get(worker_id)
-                return dict(snap.counters) if snap is not None else {}
+                if snap is None:
+                    return {}
+                return {k: e.value for k, e in snap.counters.items() if stage is None or e.stage == stage}
 
-            totals: Counter[str] = Counter()
-            for snap in self._completed_counters:
-                totals.update(snap.counters)
-            for snap in self._worker_counters.values():
-                totals.update(snap.counters)
-            return dict(totals)
+            all_snaps = list(self._completed_counters) + list(self._worker_counters.values())
+
+        aggregations: dict[str, Aggregation] = {}
+        values: dict[str, list[int | float]] = {}
+        for snap in all_snaps:
+            for k, entry in snap.counters.items():
+                if stage is not None and entry.stage != stage:
+                    continue
+                if k in aggregations:
+                    if aggregations[k] != entry.aggregation:
+                        logger.warning(
+                            "Counter %r has conflicting aggregations: %r vs %r; keeping %r",
+                            k,
+                            aggregations[k],
+                            entry.aggregation,
+                            aggregations[k],
+                        )
+                else:
+                    aggregations[k] = entry.aggregation
+                values.setdefault(k, []).append(entry.value)
+
+        result: dict[str, int | float] = {}
+        for k, vals in values.items():
+            match aggregations.get(k, Aggregation.SUM):
+                case Aggregation.SUM:
+                    result[k] = sum(vals)
+                case Aggregation.AVERAGE:
+                    result[k] = sum(vals) / len(vals)
+                case Aggregation.MAX:
+                    result[k] = max(vals)
+                case Aggregation.MIN:
+                    result[k] = min(vals)
+        return result
 
     def get_fatal_error(self) -> str | None:
         with self._lock:
@@ -1224,19 +1030,20 @@ class ZephyrCoordinator:
             "[%s] Starting stage %s (%s) with %d tasks", self._execution_id, stage_label, stage.stage_type, len(tasks)
         )
         self._start_stage(stage_label, stage_index_for_state, tasks, is_last_stage=is_last_stage)
-        self._wait_for_stage()
+        try:
+            self._wait_for_stage()
+        except Exception:
+            self._emit_stage_stat(failed=True)
+            raise
+        self._emit_stage_stat()
 
         self._mark_stage_complete()
 
         result_refs = self._collect_results()
 
-        stage_is_scatter = any(isinstance(op, Scatter) for op in stage.operations)
-        return _regroup_result_refs(
-            result_refs,
-            len(shards),
-            output_shard_count=stage.output_shards,
-            is_scatter=stage_is_scatter,
-        )
+        if any(isinstance(op, Scatter) for op in stage.operations):
+            return _regroup_scatter_refs(result_refs, len(shards), stage.output_shards)
+        return _regroup_map_refs(result_refs, len(shards))
 
     def _compute_join_aux(
         self,
@@ -1297,6 +1104,8 @@ class ZephyrCoordinator:
         if self._coordinator_thread is not None:
             self._coordinator_thread.join(timeout=5.0)
 
+        self._stats_writer.close()
+
         logger.info("Coordinator shutdown complete")
 
     def set_chunk_config(self, prefix: str, execution_id: str) -> None:
@@ -1347,8 +1156,6 @@ class ZephyrWorker:
         # ZephyrContext normally pre-resolves this via _CoordinatorJobConfig;
         # the fallback covers callers that construct a worker directly (tests).
         if stage_runner_factory is None:
-            from zephyr.runners import InlineRunner  # circular import: runners imports execution
-
             stage_runner_factory = lambda n: InlineRunner(num_workers=n)  # noqa: E731
 
         self._coordinator = coordinator_handle
@@ -1357,7 +1164,7 @@ class ZephyrWorker:
         self._num_reduce_workers = reduce_workers_per_actor
         self._shutdown_event = threading.Event()
         self._counter_generation: int = 0
-        self._last_reported_counters: dict[str, int] = {}
+        self._last_reported_counters: dict[str, CounterEntry] = {}
         # Runners and sub-IDs for currently active slots — written by _stage_manager,
         # read (snapshotted) by heartbeat thread.
         self._active_runners: list[StageRunner] = []
@@ -1479,32 +1286,38 @@ class ZephyrWorker:
         """Push worker status text to Iris for UI display. Called on each heartbeat."""
 
         def build_md() -> tuple[str, str]:
-            active = self._active_task_count
             stage = self._current_stage_name
-            if active == 0 or not stage:
-                summary_md = "idle"
-                detail_lines = "idle"
-            else:
-                summary_md = f"**{stage}** — {active} task(s)"
-                detail_lines = [f"**Stage**: {stage}", f"**Active tasks**: {active}"]
-                throughput = _stage_throughput(self._last_reported_counters, stage, 1.0)
-                if throughput is not None:
-                    logger.info("[%s] [%s] throughput: %s", self._worker_id, stage, throughput)
-            return "  \n".join(detail_lines), summary_md
+            stage_values = {k: e.value for k, e in self._last_reported_counters.items() if e.stage == stage}
+            throughput = _stage_throughput(stage_values, 1.0) if stage else None
+            if throughput is not None:
+                logger.info("[%s] [%s] throughput: %s", self._worker_id, stage, throughput)
+            return _format_worker_status_md(self._active_task_count, stage)
 
         _push_iris_task_status(self._iris_status_limiter, build_md)
 
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
-        """Aggregate live counters from all active runners; return None if unchanged."""
+        """Aggregate live counters from all active runners; return None if unchanged.
+
+        When ``num_workers > 1``, multiple runners may be active simultaneously.
+        Each runner's counters are combined using the counter's own aggregation:
+        SUM adds values, MAX/MIN take the extremum, and AVERAGE uses a
+        count-weighted mean so the result is a single representative data point.
+        The coordinator's ``get_counters`` then combines this snapshot with
+        completed-shard snapshots using the same aggregation semantics.
+        """
         runners = list(self._active_runners)  # GIL-safe snapshot
-        current: Counter[str] = Counter()
+        current: dict[str, CounterEntry] = {}
         for r in runners:
-            current.update(r.live_counters())
+            for name, entry in r.live_counters().items():
+                if name not in current:
+                    current[name] = CounterEntry(entry.value, entry.aggregation, entry.stage, entry.count)
+                else:
+                    current[name].merge(entry)
         if current == self._last_reported_counters:
             return None
-        self._last_reported_counters = dict(current)
+        self._last_reported_counters = current
         self._counter_generation += 1
-        return CounterSnapshot(counters=dict(current), generation=self._counter_generation)
+        return CounterSnapshot(counters=current, generation=self._counter_generation)
 
     def _heartbeat_loop(
         self, coordinator: ActorHandle, interval: float = 5.0, max_consecutive_failures: int = 5
@@ -1574,7 +1387,6 @@ class ZephyrWorker:
         stage-boundary exit (re-pool for next stage) from a pipeline-shutdown
         exit (break the outer loop).
         """
-        task_count = 0
         backoff = ExponentialBackoff(initial=0.1, maximum=5.0)
         future: ActorFuture | None = None
         future_start = 0.0
@@ -1641,7 +1453,6 @@ class ZephyrWorker:
                     result,
                     CounterSnapshot(counters=dict(task_counters), generation=self._counter_generation),
                 ).result()
-                task_count += 1
             except Exception:
                 logger.error("Worker %s error on shard %d", worker_id, task.shard_idx, exc_info=True)
                 coordinator.report_error.remote(
@@ -1654,7 +1465,7 @@ class ZephyrWorker:
 
     def _execute_shard(
         self, task: ShardTask, config: dict, stage_runner: StageRunner
-    ) -> tuple[TaskResult, dict[str, int]]:
+    ) -> tuple[TaskResult, dict[str, CounterEntry]]:
         chunk_prefix = config["chunk_prefix"]
         execution_id = config["execution_id"]
         logger.info(
@@ -1679,39 +1490,37 @@ class ZephyrWorker:
             self._host_shutdown_event.set()
 
 
-def _regroup_result_refs(
+def _regroup_scatter_refs(
     result_refs: dict[int, TaskResult],
     input_shard_count: int,
-    output_shard_count: int | None = None,
-    is_scatter: bool = False,
+    output_shard_count: int | None,
 ) -> list[Shard]:
-    """Regroup worker output refs by output shard index without loading data.
+    """Fan a scatter stage's outputs out to its reducers without loading data.
 
-    Non-scatter: each worker's ListShard maps to its own index (identity).
-    Scatter: passes the list of scatter data-file paths to every reducer.
-    Each reducer reads the per-mapper ``.scatter_meta`` sidecars in parallel
-    to build its own ``ScatterReader`` without coordinator-side consolidation.
+    Scatter routes records into exactly ``output_shard_count`` buckets via
+    ``hash(key) % output_shard_count``; spawning more reduce tasks than that
+    produces empty output files for shard indices that no record hashes to.
+    When ``output_shard_count`` is None (group_by auto-detect), inherit the
+    input shard count.
+
+    Every reducer receives the full list of scatter data-file paths and reads
+    the per-mapper ``.scatter_meta`` sidecars in parallel to build its own
+    ``ScatterReader`` — the coordinator never consolidates a manifest.
     """
-    if is_scatter:
-        # Scatter routes records into exactly ``output_shard_count`` buckets via
-        # ``hash(key) % output_shard_count``; spawning more reduce tasks than that
-        # produces empty output files for shard indices that no record hashes to.
-        # When output_shard_count is None (group_by auto-detect), inherit the
-        # input shard count.
-        num_output = output_shard_count if output_shard_count is not None else input_shard_count
+    num_output = output_shard_count if output_shard_count is not None else input_shard_count
+    all_paths: list[str] = []
+    for result in result_refs.values():
+        all_paths.extend(result.shard)
+    shared_refs = MemChunk(items=all_paths)
+    return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
 
-        # Collect all scatter file paths from all workers. The coordinator
-        # does NOT read the sidecars or write a consolidated manifest —
-        # reducers do their own parallel sidecar reads.
-        all_paths: list[str] = []
-        for result in result_refs.values():
-            all_paths.extend(result.shard)
 
-        shared_refs = MemChunk(items=all_paths)
-        return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
+def _regroup_map_refs(result_refs: dict[int, TaskResult], input_shard_count: int) -> list[Shard]:
+    """Map a non-scatter stage's outputs 1:1 from input shard index to output.
 
-    # Non-scatter: 1:1 mapping from input shard index to output. Resharding
-    # to a different shard count belongs to ReshardOp, not here.
+    Each worker's ListShard keeps its own index. Resharding to a different
+    shard count belongs to ReshardOp, not here.
+    """
     num_output = max(max(result_refs.keys(), default=0) + 1, input_shard_count)
     return [result_refs[idx].shard if idx in result_refs else ListShard(refs=[]) for idx in range(num_output)]
 
@@ -1839,19 +1648,21 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
 
         try:
             results = coordinator.run_pipeline.submit(config.plan, config.execution_id).result()
-            counters = coordinator.get_counters.remote().result(timeout=10.0) or {}
-            payload = ZephyrExecutionResult(results=results, counters=counters)
+            raw_counters = coordinator.get_counters.remote().result(timeout=10.0) or {}
+            payload = ZephyrExecutionResult(results=results, counters={k: int(v) for k, v in raw_counters.items()})
 
             ensure_parent_dir(result_path)
             with open_url(result_path, "wb") as f:
                 f.write(cloudpickle.dumps(payload))
         except Exception as e:
             # Persist the exception so the caller can recover the original type
-            # (important for non-retryable error detection).
+            # (important for non-retryable error detection). Normalize first so a
+            # subclass that cannot round-trip through pickle does not make the
+            # caller's revival crash and mask the real failure.
             with suppress(Exception):
                 ensure_parent_dir(result_path)
                 with open_url(result_path, "wb") as f:
-                    f.write(cloudpickle.dumps(e))
+                    f.write(cloudpickle.dumps(_ensure_picklable_exception(e)))
             raise
     finally:
         # Signal coordinator shutdown first so workers receive SHUTDOWN from
@@ -1886,7 +1697,15 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
 def _read_coordinator_result(result_path: str) -> Any:
     """Read the coordinator job's result file. Returns the deserialized object."""
     with open_url(result_path, "rb") as f:
-        return cloudpickle.loads(f.read())
+        data = f.read()
+    try:
+        return cloudpickle.loads(data)
+    except Exception as e:
+        # The coordinator normalizes exceptions before persisting, so a revival
+        # failure here means a genuinely corrupt or version-incompatible payload.
+        # Surface a clear non-retryable error instead of letting an opaque
+        # unpickle error crash the driver mid-recovery.
+        raise ZephyrWorkerError(f"Could not deserialize coordinator result at {result_path}: {e!r}") from e
 
 
 def _try_read_coordinator_result(result_path: str) -> Any:

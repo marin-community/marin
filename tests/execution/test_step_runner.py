@@ -1,8 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextvars
 import json
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import patch
@@ -13,10 +15,11 @@ from fray.types import ResourceConfig
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact, PathMetadata
-from marin.execution.executor import Executor, ExecutorStep, _dag_tpu_regions, resolve_executor_step
+from marin.execution.executor import Executor, _dag_tpu_regions, resolve_executor_step
 from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import ExecutorStep
 from pydantic import BaseModel
 from rigging.filesystem import MARIN_CROSS_REGION_OVERRIDE_ENV
 
@@ -591,7 +594,6 @@ def test_runner_consumes_unbounded_iterator(tmp_path: Path):
     implementation would try to exhaust the generator before running any step
     and hang (caught by the per-test timeout).
     """
-    import threading
 
     stop = threading.Event()
     executed: list[str] = []
@@ -735,6 +737,31 @@ class _SubmitSpy:
         return getattr(self._inner, item)
 
 
+def _run_step_with_submit_spy(step: StepSpec, fray_client) -> _SubmitSpy:
+    spy = _SubmitSpy(fray_client)
+    with set_current_client(spy):
+        StepRunner().run([step])
+    return spy
+
+
+def _call_remote_with_submit_spy(fn, fray_client) -> _SubmitSpy:
+    spy = _SubmitSpy(fray_client)
+    with set_current_client(spy):
+        fn()
+    return spy
+
+
+def _assert_single_submit_extras(spy: _SubmitSpy, expected: list[str]) -> None:
+    assert len(spy.requests) == 1
+    assert spy.requests[0].environment.extras == expected
+
+
+def _assert_single_submit_env(spy: _SubmitSpy, expected: dict[str, str]) -> None:
+    assert len(spy.requests) == 1
+    for key, value in expected.items():
+        assert spy.requests[0].environment.env_vars[key] == value
+
+
 def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
     """Setting ``resources`` on a StepSpec submits ``fn`` as a Fray job."""
     spy = _SubmitSpy(fray_client)
@@ -758,6 +785,93 @@ def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
     assert spy.requests[0].resources == custom
     loaded = Artifact.from_path(tmp_path.as_posix(), PathMetadata)
     assert loaded.path == tmp_path.as_posix()
+
+
+def test_step_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client):
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    def my_step(output_path: str) -> PathMetadata:
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="gpu_resourced_step",
+        override_output_path=tmp_path.as_posix(),
+        fn=my_step,
+        resources=resources,
+    )
+
+    _assert_single_submit_extras(_run_step_with_submit_spy(step, fray_client), ["gpu"])
+
+
+def test_remote_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client):
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    @remote(resources=resources)
+    def my_step(output_path: str) -> PathMetadata:
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="remote_gpu_step",
+        override_output_path=tmp_path.as_posix(),
+        fn=my_step,
+    )
+
+    _assert_single_submit_extras(_run_step_with_submit_spy(step, fray_client), ["gpu"])
+
+
+def test_remote_dependency_groups_can_override_device_extra(tmp_path: Path, fray_client):
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    @remote(resources=resources, pip_dependency_groups=[])
+    def my_step(output_path: str) -> PathMetadata:
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="remote_gpu_step_without_extras",
+        override_output_path=tmp_path.as_posix(),
+        fn=my_step,
+    )
+
+    _assert_single_submit_extras(_run_step_with_submit_spy(step, fray_client), [])
+
+
+def test_remote_vllm_tpu_dependency_group_sets_target_device(tmp_path: Path, fray_client):
+    resources = ResourceConfig.with_tpu("v6e-4")
+
+    @remote(resources=resources, pip_dependency_groups=["eval", "vllm"])
+    def my_step(output_path: str) -> PathMetadata:
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="remote_vllm_tpu_step",
+        override_output_path=tmp_path.as_posix(),
+        fn=my_step,
+    )
+
+    spy = _run_step_with_submit_spy(step, fray_client)
+
+    _assert_single_submit_extras(spy, ["eval", "vllm"])
+    _assert_single_submit_env(spy, {"VLLM_TARGET_DEVICE": "tpu"})
+
+
+def test_remote_direct_call_uses_device_extra(fray_client):
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    @remote(resources=resources)
+    def my_step() -> None:
+        return None
+
+    _assert_single_submit_extras(_call_remote_with_submit_spy(my_step, fray_client), ["gpu"])
+
+
+def test_remote_direct_call_dependency_groups_can_override_device_extra(fray_client):
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    @remote(resources=resources, pip_dependency_groups=[])
+    def my_step() -> None:
+        return None
+
+    _assert_single_submit_extras(_call_remote_with_submit_spy(my_step, fray_client), [])
 
 
 # ---------------------------------------------------------------------------
@@ -1174,7 +1288,6 @@ def test_runner_propagates_context_vars(tmp_path):
     functions dispatched by the thread pool, so ZephyrContext (and anything
     else that calls ``current_client()``) picks up the correct client.
     """
-    import contextvars
 
     test_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("test_var", default=None)
     observed: list[str | None] = []

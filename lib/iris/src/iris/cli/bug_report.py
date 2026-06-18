@@ -14,13 +14,13 @@ from dataclasses import dataclass, field
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 
-from iris.cluster.log_store_helpers import build_log_source
+from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import AuthTokenInjector, TokenProvider
+from iris.rpc.auth import TokenProvider, client_interceptors
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.proto_utils import format_resources, job_state_friendly, task_state_friendly
+from iris.rpc.proto_display import format_resources, job_state_friendly, task_state_friendly
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -119,7 +119,7 @@ def gather_bug_report(
     token_provider: TokenProvider | None = None,
 ) -> BugReport:
     """Gather all diagnostic data for a job into a BugReport."""
-    interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
+    interceptors = client_interceptors(token_provider)
     client = ControllerServiceClientSync(
         controller_url,
         timeout_ms=30000,

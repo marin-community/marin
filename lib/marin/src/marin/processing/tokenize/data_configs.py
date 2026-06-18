@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 
-import numpy
+import numpy as np
 from levanter.data.text import (
     DEFAULT_LM_DATA_SHUFFLE,
     BlockShuffleConfig,
@@ -22,7 +22,7 @@ from levanter.data.text import (
 from levanter.tokenizers import load_tokenizer
 
 from marin.execution import unwrap_versioned_value
-from marin.execution.executor import ExecutorStep, InputName, output_path_of
+from marin.execution.types import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
 TokenizerStep = ExecutorStep[TokenizeConfigBase]
@@ -244,7 +244,7 @@ def interpolate_mixture_weights(mixture_weights: list[dict[str, float]], weights
     if not all(isinstance(w, int | float) for w in weights):
         raise TypeError("All items in weights must be numeric")
 
-    if not numpy.isclose(sum(weights), 1.0):
+    if not np.isclose(sum(weights), 1.0):
         raise ValueError("Weights must sum to 1.0")
 
     combined_weights = {}

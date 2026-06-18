@@ -17,6 +17,7 @@ from marin.profiling.schema import (
     RegionAggregate,
     SemanticFamilyAggregate,
     StepClassSummary,
+    hierarchical_root_totals,
 )
 from marin.profiling.semantics import classify_semantic_family, estimate_flop_proxy
 
@@ -102,7 +103,7 @@ def query_profile_summary(summary: ProfileSummary, question: str, *, top_k: int 
         }
 
     if "region" in normalized or "hierarch" in normalized:
-        root_totals = _hierarchical_root_totals(summary)
+        root_totals = hierarchical_root_totals(summary)
         fallback_total = max(root_totals.values(), default=0.0)
         return {
             "query_type": "hierarchical_regions",
@@ -260,7 +261,7 @@ def _compare_step_classes(before: list[StepClassSummary], after: list[StepClassS
                 "median_before": before_median,
                 "median_after": after_median,
                 "median_delta": _delta(before_median, after_median),
-                "median_regression_pct": _pct_delta(before_median, after_median),
+                "median_regression_pct": pct_delta(before_median, after_median),
             }
         )
     return rows
@@ -344,13 +345,13 @@ def _compare_semantic_families(
                 "before_exclusive_duration": before_exclusive,
                 "after_exclusive_duration": after_exclusive,
                 "exclusive_duration_delta": after_exclusive - before_exclusive,
-                "exclusive_regression_pct": _pct_delta(before_exclusive, after_exclusive),
+                "exclusive_regression_pct": pct_delta(before_exclusive, after_exclusive),
                 "before_flop_proxy_total": before_flops,
                 "after_flop_proxy_total": after_flops,
                 "flop_proxy_ratio": flop_ratio,
                 "before_time_per_flop_proxy": before_time_per_flop,
                 "after_time_per_flop_proxy": after_time_per_flop,
-                "time_per_flop_regression_pct": _pct_delta(before_time_per_flop, after_time_per_flop),
+                "time_per_flop_regression_pct": pct_delta(before_time_per_flop, after_time_per_flop),
                 "time_ratio": time_ratio,
                 "work_ratio": flop_ratio,
                 "efficiency_ratio": (time_ratio / flop_ratio) if time_ratio is not None and flop_ratio else None,
@@ -414,7 +415,8 @@ def _delta(before: float | None, after: float | None) -> float | None:
     return after - before
 
 
-def _pct_delta(before: float | None, after: float | None) -> float | None:
+def pct_delta(before: float | None, after: float | None) -> float | None:
+    """Percent change from ``before`` to ``after``, or ``None`` when undefined."""
     if before is None or after is None:
         return None
     if before <= 0:
@@ -478,15 +480,6 @@ def _region_to_dict(
         "inclusive_share_of_total": inclusive_share,
         "exclusive_share_of_total": exclusive_share,
     }
-
-
-def _hierarchical_root_totals(summary: ProfileSummary) -> dict[str, float]:
-    totals: dict[str, float] = {}
-    for region in summary.hierarchical_regions:
-        if region.depth != 1:
-            continue
-        totals[region.path] = max(0.0, float(region.inclusive_duration))
-    return totals
 
 
 def _find_gap_contexts(summary: ProfileSummary, target: str | None, *, top_k: int) -> list[GapRegionContext]:

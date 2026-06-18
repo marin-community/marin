@@ -123,6 +123,7 @@ export interface JobStatus {
   completedCount?: number
   pendingReason?: string
   hasChildren?: boolean
+  parentJobId?: string
 }
 
 export interface JobQuery {
@@ -134,6 +135,8 @@ export interface JobQuery {
   sortDirection?: string
   offset?: number
   limit?: number
+  // Anchored prefix match against the full wire job_id (e.g. "/alice/").
+  jobIdPrefix?: string
 }
 
 // -- Controller RPC Responses --
@@ -241,6 +244,8 @@ export interface ListWorkersResponse {
 export interface WorkerTaskAttempt {
   taskId: string
   attempt?: TaskAttempt
+  // Static allocation inherited from the parent job; unset when no request.
+  resources?: ResourceSpecProto
 }
 
 export interface GetWorkerStatusResponse {
@@ -281,6 +286,8 @@ export interface VmInfo {
   stateChangedAt?: ProtoTimestamp
   workerId?: string
   workerHealthy?: boolean
+  /** WorkerUsability: "healthy" | "degraded" | "dead"; empty if not in the roster. */
+  usability?: string
   initPhase?: string
   initLogTail?: string
   initError?: string
@@ -297,6 +304,20 @@ export interface SliceInfo {
   errorMessage?: string
   lastActive?: ProtoTimestamp
   idle?: boolean
+  /**
+   * Authoritative slice lifecycle state from the autoscaler:
+   * "requesting" | "booting" | "initializing" | "ready" | "failed".
+   * Render this directly (via sliceLifecycle()); do NOT infer state from `vms`,
+   * which is empty until a slice's workers register — a booting slice has none.
+   */
+  state?: string
+  /** Count of DEGRADED (reachable-but-failing) hosts among `vms`, for detail display. */
+  degradedSlotCount?: number
+  /**
+   * Server-derived placement status of a ready slice: "available" | "in_use" |
+   * "idle" | "degraded". Empty for non-ready slices.
+   */
+  capacityStatus?: string
 }
 
 export interface ScaleGroupConfig {

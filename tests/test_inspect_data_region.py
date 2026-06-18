@@ -12,6 +12,7 @@ import logging
 
 import click
 import pytest
+from rigging.filesystem import REGION_TO_DATA_BUCKET
 
 
 def _normalize_cluster_region(cluster: str) -> str:
@@ -32,7 +33,6 @@ def _validate_data_region(wandb_dict: dict, cluster: str) -> None:
     Raises ``click.ClickException`` if any component's GCS bucket is in a
     different region, preventing accidental cross-region egress charges.
     """
-    from rigging.filesystem import REGION_TO_DATA_BUCKET
 
     logger = logging.getLogger(__name__)
 

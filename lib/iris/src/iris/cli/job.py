@@ -24,34 +24,35 @@ from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
 from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug_report
-from iris.cli.main import require_controller_url
+from iris.cli.connect import require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
 from iris.cluster.constraints import (
     Constraint,
     WellKnownAttribute,
+    availability_constraint,
     device_variant_constraint,
+    get_device_variant,
     infer_preemptible_constraint,
     preemptible_constraint,
     region_constraint,
     zone_constraint,
 )
 from iris.cluster.redaction import redact_submit_argv
+from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     TERMINAL_TASK_STATES,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
     JobName,
-    ReservationEntry,
     ResourceSpec,
-    get_tpu_topology,
     gpu_device,
     tpu_device,
 )
 from iris.rpc import job_pb2
 from iris.rpc.auth import TokenProvider
-from iris.rpc.proto_utils import (
+from iris.rpc.proto_display import (
     PRIORITY_BAND_NAMES,
     job_state_friendly,
     priority_band_value,
@@ -401,20 +402,17 @@ def validate_extra_resources(
         raise click.UsageError(f"--disk {disk} (>= 10 GB) requires --enable-extra-resources.\n{_LARGE_RESOURCE_HINT}")
 
 
-def parse_reservation_spec(spec: str) -> list[ReservationEntry]:
-    """Parse a reservation spec like '4:H100x8' or 'v5litepod-16'.
+def reserve_spec_to_availability(spec: str) -> Constraint:
+    """Turn a ``--reserve`` spec like ``4:H100x8`` or ``v5litepod-16`` into a hard
+    ``availability:<variant>`` constraint.
 
-    Format: [COUNT:]DEVICE_SPEC
-    Tries to resolve DEVICE_SPEC as a known TPU variant first, then falls back
-    to GPU parsing via parse_gpu_spec.
+    Format: ``[COUNT:]DEVICE_SPEC``. The count is ignored — availability is a
+    zone-level placement constraint ("schedule me where this accelerator can be
+    found"), not a capacity hold, so the number of workers is meaningless.
+    DEVICE_SPEC resolves as a known TPU variant first, then falls back to a GPU
+    spec.
     """
-    count = 1
-    device_spec = spec
-    if ":" in spec:
-        count_str, device_spec = spec.split(":", 1)
-        count = int(count_str)
-        if count < 1:
-            raise ValueError(f"Reservation count must be >= 1, got {count}")
+    device_spec = spec.split(":", 1)[1] if ":" in spec else spec
 
     try:
         get_tpu_topology(device_spec)
@@ -423,8 +421,10 @@ def parse_reservation_spec(spec: str) -> list[ReservationEntry]:
         variant, gpu_count = parse_gpu_spec(device_spec)
         device = gpu_device(variant, gpu_count)
 
-    resources = ResourceSpec(device=device)
-    return [ReservationEntry(resources=resources) for _ in range(count)]
+    variant = get_device_variant(device)
+    if not variant:
+        raise click.UsageError(f"--reserve {spec!r} does not name an accelerator variant.")
+    return availability_constraint(variant)
 
 
 def generate_job_name(command: list[str]) -> str:
@@ -449,8 +449,9 @@ def resolve_multinode_defaults(
 
     For TPUs with vm_count > 1, infers replicas from the topology and enables
     coscheduling by ``tpu-name`` so that all tasks land on workers in the same
-    TPU slice. For GPUs with replicas > 1, enables coscheduling by ``pool`` so
-    that all replicas are scheduled together.
+    TPU slice. For GPUs with replicas > 1, enables coscheduling by ``leafgroup``
+    (the H100 InfiniBand multi-node colocation level) so all replicas are
+    scheduled together.
 
     Args:
         tpu: TPU type string (e.g. ``"v6e-32"``), or ``None``.
@@ -464,7 +465,7 @@ def resolve_multinode_defaults(
     """
     if not tpu:
         if gpu and replicas is not None and replicas > 1:
-            return replicas, CoschedulingConfig(group_by="pool")
+            return replicas, CoschedulingConfig(group_by="leafgroup")
         return replicas or 1, None
 
     try:
@@ -549,20 +550,27 @@ def run_iris_job(
     reserve: tuple[str, ...] | None = None,
     priority: str | None = None,
     preemptible: bool | None = None,
+    task_image: str | None = None,
     token_provider: TokenProvider | None = None,
     submit_argv: list[str] | None = None,
+    dashboard_url: str | None = None,
 ) -> int:
     """Core job submission logic.
 
     Args:
         controller_url: Controller URL (from parent context tunnel).
+        dashboard_url: Public dashboard origin (e.g. https://iris.oa.dev). When
+            set, a clickable job URL is logged on submit.
         terminate_on_exit: If True, terminate the job on any non-normal exit
             (KeyboardInterrupt, unexpected exceptions). Normal completion is unaffected.
         regions: If provided, restrict the job to workers in these regions.
         zone: If provided, restrict the job to workers in this zone.
-        reserve: Reservation specs (e.g., ("4:H100x8", "v5litepod-16")).
+        reserve: Hard availability constraints (e.g., ("4:H100x8", "v5litepod-16"))
+            that confine the job to a zone where the named accelerator can be found.
         preemptible: If True/False, force scheduling on (non-)preemptible workers
             and bypass the executor heuristic. If None (default), the heuristic runs.
+        task_image: Optional task container image override. When None, workers use
+            their cluster-configured default task image.
 
     Returns:
         Exit code: 0 for success, 1 for failure
@@ -587,22 +595,12 @@ def run_iris_job(
         preemptible=preemptible,
     )
 
-    reservation: list[ReservationEntry] | None = None
     if reserve:
-        # --reserve is mutually exclusive with --region/--zone: the controller's
-        # claim loop only evaluates each reservation entry's own constraints, so
-        # job-level routing constraints would not gate worker claims (#4988).
-        # A caller who needs a specific region/zone should name it directly; a
-        # caller who uses a reservation is by definition not picking the region.
-        if regions or zone:
-            raise click.UsageError(
-                "--reserve cannot be combined with --region or --zone. "
-                "Use --region/--zone to target a specific location, or --reserve "
-                "to claim from a reservation (which chooses the location for you)."
-            )
-        reservation = []
-        for spec in reserve:
-            reservation.extend(parse_reservation_spec(spec))
+        # --reserve is now a hard, zone-level availability constraint: "schedule me
+        # only in a zone where this accelerator can be found." It filters candidate
+        # zones rather than holding capacity, so it composes with --region/--zone.
+        availability = [reserve_spec_to_availability(spec) for spec in reserve]
+        constraints = [*(constraints or []), *availability]
 
     logger.info(f"Submitting job: {job_name}")
     logger.info(f"Command: {' '.join(command)}")
@@ -625,8 +623,10 @@ def run_iris_job(
         logger.info(f"Zone constraint: {zone}")
     if preemptible is not None:
         logger.info(f"Preemptible constraint: {preemptible}")
-    if reservation:
-        logger.info(f"Reservation: {len(reservation)} entries")
+    if reserve:
+        logger.info(f"Availability constraint: {', '.join(reserve)}")
+    if task_image:
+        logger.info(f"Task image: {task_image}")
 
     logger.info(f"Using controller: {controller_url}")
     priority_band = job_pb2.PRIORITY_BAND_UNSPECIFIED
@@ -649,10 +649,11 @@ def run_iris_job(
         constraints=constraints or None,
         coscheduling=coscheduling,
         user=user,
-        reservation=reservation,
         priority_band=priority_band,
         token_provider=token_provider,
         submit_argv=submit_argv,
+        dashboard_url=dashboard_url,
+        task_image=task_image,
     )
 
 
@@ -671,10 +672,11 @@ def _submit_and_wait_job(
     constraints: list[Constraint] | None = None,
     coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
-    reservation: list[ReservationEntry] | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     token_provider: TokenProvider | None = None,
     submit_argv: list[str] | None = None,
+    dashboard_url: str | None = None,
+    task_image: str | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -695,12 +697,14 @@ def _submit_and_wait_job(
         max_retries_failure=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
         user=user,
-        reservation=reservation,
         priority_band=priority_band,
         submit_argv=submit_argv,
+        task_image=task_image,
     )
 
     logger.info(f"Job submitted: {job.job_id}")
+    if dashboard_url:
+        logger.info(f"Dashboard: {job.job_id.dashboard_url(dashboard_url)}")
     click.echo(str(job.job_id))
 
     if not wait:
@@ -813,9 +817,11 @@ Examples:
     "--reserve",
     multiple=True,
     help=(
-        "Reserve workers before scheduling. Format: [COUNT:]DEVICE "
-        "(e.g., 4:H100x8, v5litepod-16). Can be repeated. Reservation does not "
-        "attach accelerator devices to the task; use --tpu/--gpu for accelerator jobs."
+        "Availability constraint: schedule only in a zone where this accelerator can "
+        "be found (the job waits otherwise). Format: [COUNT:]DEVICE (e.g., 4:H100x8, "
+        "v5litepod-16); the count is ignored. Can be repeated. This only constrains "
+        "placement — it holds no capacity and attaches no device. Use --tpu/--gpu to "
+        "actually request an accelerator."
     ),
 )
 @click.option(
@@ -832,6 +838,15 @@ Examples:
         "Force scheduling on preemptible (--preemptible) or non-preemptible "
         "(--no-preemptible) workers. Overrides the executor heuristic. "
         "Default: heuristic-based (small CPU-only jobs pinned to non-preemptible)."
+    ),
+)
+@click.option(
+    "--task-image",
+    type=str,
+    default=None,
+    help=(
+        "Override the task container image for this job. "
+        "The image must already exist in a registry visible to workers."
     ),
 )
 @click.option(
@@ -862,11 +877,14 @@ def run(
     reserve: tuple[str, ...],
     priority: str | None,
     preemptible: bool | None,
+    task_image: str | None,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
     """Submit jobs to Iris clusters."""
     controller_url = require_controller_url(ctx)
+    config = ctx.obj.get("config") if ctx.obj else None
+    dashboard_url = config.dashboard_url if config else None
     validate_extra_resources(tpu, gpu, memory, disk, enable_extra_resources)
     validate_region_zone(region or None, zone, ctx.obj.get("config"))
 
@@ -912,8 +930,10 @@ def run(
             reserve=reserve or None,
             priority=priority,
             preemptible=preemptible,
+            task_image=task_image,
             token_provider=ctx.obj.get("token_provider"),
             submit_argv=submit_argv,
+            dashboard_url=dashboard_url or None,
         )
     except Exception:
         bundle = ctx.obj.get("provider_bundle")

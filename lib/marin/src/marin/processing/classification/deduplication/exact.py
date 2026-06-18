@@ -87,7 +87,6 @@ def dedup_exact_paragraph(
 
     def aggregate_and_write_to_corresponding_files(file_idx: int, records: Iterator[dict]) -> dict:
         # NOTE: all records belong to the specific file and are sorted by doc_id
-
         input_path = idx_to_path[file_idx]
         output_file = rebase_file_path(
             _find_base_path(input_paths, [input_path]),
@@ -199,7 +198,7 @@ def dedup_exact_document(
     if filetypes is None:
         filetypes = DEFAULT_FILETYPES
 
-    input_files = _collect_input_files(input_paths=input_paths, filetypes=DEFAULT_FILETYPES)
+    input_files = _collect_input_files(input_paths=input_paths, filetypes=filetypes)
     idx_to_path = dict(list(enumerate(input_files)))
     path_to_idx = {v: k for k, v in idx_to_path.items()}
 

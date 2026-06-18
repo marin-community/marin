@@ -8,6 +8,7 @@ import sys
 import iris.cluster.worker.env_probe as env_probe
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.worker import worker as worker_mod
 from iris.cluster.worker.env_probe import (
     DefaultEnvironmentProvider,
     HardwareProbe,
@@ -17,6 +18,7 @@ from iris.cluster.worker.env_probe import (
     check_worker_health,
     construct_worker_id,
 )
+from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import config_pb2
 
 
@@ -207,6 +209,24 @@ def test_cpu_fallback_when_no_config():
     assert attrs[WellKnownAttribute.PREEMPTIBLE].string_value == "false"
 
 
+def test_advertised_cpu_count_from_scale_group_overrides_probe():
+    """Scale-group declared CPU is the advertised capacity, over-committing the host."""
+    hardware = _make_hardware(cpu_count=2)
+
+    metadata = build_worker_metadata(hardware=hardware, cpu_millicores=8000)
+
+    assert metadata.cpu_count == 8
+
+
+def test_advertised_cpu_count_falls_back_to_probe_without_config():
+    """Without a declared CPU capacity, the worker advertises its probed host count."""
+    hardware = _make_hardware(cpu_count=2)
+
+    metadata = build_worker_metadata(hardware=hardware)
+
+    assert metadata.cpu_count == 2
+
+
 def test_custom_worker_attributes_merged():
     """Custom user attributes from YAML worker.attributes are merged into the attributes map."""
     hardware = _make_hardware()
@@ -276,8 +296,6 @@ def test_worker_id_from_slice_id_and_tpu_worker_index(tmp_path, monkeypatch):
     This is the slice_id resolution path (priority 2), which takes precedence over
     GCP metadata inference but not an explicit config.worker_id.
     """
-    from iris.cluster.worker import worker as worker_mod
-    from iris.cluster.worker.worker import Worker, WorkerConfig
 
     hardware = _make_hardware(tpu_worker_id="2", tpu_name="some-tpu-slice")
 
@@ -296,8 +314,6 @@ def test_worker_id_from_slice_id_and_tpu_worker_index(tmp_path, monkeypatch):
 
 def test_worker_id_explicit_config_overrides_slice_id(tmp_path, monkeypatch):
     """An explicit config.worker_id (priority 1) takes precedence over slice_id resolution."""
-    from iris.cluster.worker import worker as worker_mod
-    from iris.cluster.worker.worker import Worker, WorkerConfig
 
     hardware = _make_hardware(tpu_worker_id="2", tpu_name="some-tpu-slice")
     monkeypatch.setattr(worker_mod, "probe_hardware", lambda: hardware)

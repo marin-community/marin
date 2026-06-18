@@ -10,6 +10,7 @@ including both local Levanter checkpoints and HuggingFace repositories.
 
 import logging
 import os
+from typing import cast
 
 import equinox as eqx
 import haliax as hax
@@ -116,7 +117,9 @@ def load_model_from_checkpoint(
                 # will not match between the trainer's model and the rollout worker's model.
                 resize_vocab_to_match_tokenizer=False,
             )
-        return model
+        # `load_pretrained` is typed as returning the broad `ModelWithHfSerializationMixin`,
+        # but loading a config's `model_type` always yields an `LmHeadModel` at runtime.
+        return cast(LmHeadModel, model)
     else:
         # Load from local Levanter checkpoint
         model = eqx.filter_eval_shape(model_config.build, vocab_axis, key=key)

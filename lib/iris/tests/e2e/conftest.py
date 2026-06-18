@@ -21,19 +21,20 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.chaos import reset_chaos
 from iris.client.client import IrisClient, Job
-from iris.cluster.config import connect_cluster, load_config, make_local_config
+from iris.cluster.config import load_config, make_local_config
 from iris.cluster.constraints import Constraint, WellKnownAttribute
+from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
-    ReservationEntry,
     ResourceSpec,
     is_job_finished,
 )
@@ -96,8 +97,6 @@ def pytest_collection_modifyitems(config, items):
     """
     is_cloud = config.getoption("--iris-controller-url") is not None
 
-    import pytest
-
     first_smoke_test = True
     for item in items:
         if item.get_closest_marker("timeout"):
@@ -152,7 +151,6 @@ class IrisTestCluster:
         timeout: Duration | None = None,
         coscheduling: CoschedulingConfig | None = None,
         constraints: list[Constraint] | None = None,
-        reservation: list[ReservationEntry] | None = None,
     ) -> Job:
         """Submit a callable as a job. Returns a Job handle."""
         if memory is None:
@@ -170,7 +168,6 @@ class IrisTestCluster:
             timeout=timeout,
             coscheduling=coscheduling,
             constraints=constraints,
-            reservation=reservation,
         )
 
     def status(self, job: Job) -> job_pb2.JobStatus:
@@ -499,6 +496,9 @@ class _NoOpPage:
     def wait_for_selector(self, selector, **kwargs):
         pass
 
+    def wait_for_timeout(self, timeout):
+        pass
+
     def locator(self, selector, **kwargs):
         return _NoOpLocator()
 
@@ -525,6 +525,15 @@ class _NoOpLocator:
     def count(self):
         return 0
 
+    def get_by_role(self, role, **kwargs):
+        return self
+
+    def click(self, **kwargs):
+        pass
+
+    def wait_for(self, **kwargs):
+        pass
+
 
 def _is_noop_page(page) -> bool:
     return isinstance(page, _NoOpPage)
@@ -534,7 +543,7 @@ def assert_visible(page, selector: str, *, timeout: int = 10_000) -> None:
     """Assert a selector is visible. No-op when Playwright is unavailable."""
     if _is_noop_page(page):
         return
-    from playwright.sync_api import expect
+    from playwright.sync_api import expect  # noqa: PLC0415  # optional dep: playwright
 
     expect(page.locator(selector).first).to_be_visible(timeout=timeout)
 
@@ -553,7 +562,6 @@ def dashboard_goto(page, url: str) -> None:
     """
     if _is_noop_page(page):
         return
-    from urllib.parse import urlparse
 
     parsed = urlparse(url)
     path = parsed.path

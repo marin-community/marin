@@ -52,9 +52,10 @@ Fieldbook when the task changes experiment state.
 uv run pyrefly
 - Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
 
-# Advisory lint review — agentic pass over the branch diff before pushing a PR
+# Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
-- Surfaces `infra/lint.md` rule-catalog findings; advisory, never blocks.
+- Always run this before opening a PR, and always fix or respond to every
+  finding it reports (see the `commit` skill).
 ```
 
 - Python >=3.11. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
@@ -170,12 +171,12 @@ Dependency direction: {`iris`, `haliax`} → {`levanter`, `zephyr`} → `marin`.
 
 ## Testing
 
-- Always fix tests you broke. Do not relax tolerances or hack around failures.
-- Prefer integration-style tests that validate externally-observable behavior.
-- Do not write tautological tests: tests must fail if behavior is wrong, not just if implementation changes.
-- Use pytest fixtures and parameterization to avoid duplication.
-- Prefer top-level `def test_*` with fixtures over test classes.
-- Search for existing test files before creating new ones. Extend existing files first.
-- No mocks unless testing I/O boundaries (network, filesystem). Test against real behavior.
-- No `time.sleep()` in tests — inject `now=time.time()` or mock time instead.
-- Mock at boundaries (e.g., wandb), not internal logger output.
+Read `TESTING.md` before writing or reviewing tests. It is the root testing
+policy for behavior-focused tests, slop-test rejection, mocks/fakes, timing,
+numerical tolerances, and pytest style.
+
+Before touching tests under `lib/*`, also read the nearest module `AGENTS.md`
+and any module `TESTING.md` it references. Module docs define local commands,
+markers, fakes, mocks, optional dependencies, and integration-test boundaries.
+
+Always fix tests you broke. Do not relax tolerances or hack around failures.

@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 import sqlalchemy.exc
-from finelog.server import LogServiceImpl
+from finelog.client.proxy import LogServiceProxy
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import (
@@ -15,23 +15,31 @@ from iris.cluster.controller.auth import (
     _get_or_create_signing_key,
     create_api_key,
     list_api_keys,
-    lookup_api_key_by_hash,
+    lookup_api_key_by_id,
     revoke_api_key,
     revoke_login_keys_for_user,
 )
-from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.controller.backend import BackendCapability
+from iris.cluster.controller.dashboard import (
+    ControllerDashboard,
+    _LegacyFetchLogsRedirect,
+    _RouteAuthMiddleware,
+    _SubdomainProxyMiddleware,
+    requires_auth,
+)
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, hash_token, resolve_auth
+from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, resolve_auth
 from rigging.timing import Timestamp
 from sqlalchemy import text
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from tests.cluster.conftest import fake_log_client_from_service
+from tests.cluster.controller._test_support import ControllerTestState
 
 _TEST_TOKEN = "valid-test-token"
 _TEST_USER = "test-user"
@@ -50,27 +58,28 @@ def db(tmp_path):
 
 @pytest.fixture
 def state(db, tmp_path):
-    s = ControllerTransitions(db)
+    s = ControllerTestState(db)
     yield s
 
 
 @pytest.fixture
-def log_service() -> LogServiceImpl:
-    return LogServiceImpl()
+def log_service(embedded_log_server) -> LogServiceProxy:
+    return LogServiceProxy(embedded_log_server.address)
 
 
 @pytest.fixture
-def service(state, tmp_path, log_service):
+def service(state, tmp_path, log_client):
     controller_mock = Mock()
     controller_mock.wake = Mock()
     controller_mock.autoscaler = None
-    controller_mock.provider = Mock()
-    controller_mock.has_direct_provider = False
+    worker_caps = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+    controller_mock.provider = Mock(capabilities=worker_caps)
+    controller_mock.provider.name = "worker"
+    controller_mock.capabilities = worker_caps
     return ControllerServiceImpl(
-        state,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(log_service),
+        log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),
@@ -253,7 +262,7 @@ def test_read_snapshot_cannot_access_auth_tables(db: ControllerDB):
     with db.transaction() as _tx:
         writes.ensure_user(_tx, "test-user", now)
     _get_or_create_signing_key(db)
-    create_api_key(db, key_id="k1", key_hash="hash1", key_prefix="pfx", user_id="test-user", name="test", now=now)
+    create_api_key(db, key_id="k1", key_prefix="pfx", user_id="test-user", name="test", now=now)
 
     with db.read_snapshot() as q:
         for table in ["api_keys", "controller_secrets", "auth.api_keys"]:
@@ -266,10 +275,10 @@ def test_write_connection_can_access_auth_tables(db: ControllerDB):
     with db.transaction() as _tx:
         writes.ensure_user(_tx, "test-user", now)
     _get_or_create_signing_key(db)
-    create_api_key(db, key_id="k1", key_hash="hash1", key_prefix="pfx", user_id="test-user", name="test", now=now)
+    create_api_key(db, key_id="k1", key_prefix="pfx", user_id="test-user", name="test", now=now)
 
     with db.transaction() as q:
-        rows = q.execute(text(f"SELECT key_id FROM {db.api_keys_table}")).all()
+        rows = q.execute(text("SELECT key_id FROM auth.api_keys")).all()
         assert len(rows) == 1
         assert rows[0].key_id == "k1"
 
@@ -293,13 +302,12 @@ def test_api_key_create_lookup_revoke(db: ControllerDB):
     with db.read_snapshot() as _snap:
         assert reads.get_user_role(_snap, "alice") == "admin"
 
-    create_api_key(
-        db, key_id="k1", key_hash=hash_token("secret1"), key_prefix="sec", user_id="alice", name="my-key", now=now
-    )
+    create_api_key(db, key_id="k1", key_prefix="sec", user_id="alice", name="my-key", now=now)
 
-    found = lookup_api_key_by_hash(db, hash_token("secret1"))
+    found = lookup_api_key_by_id(db, "k1")
     assert found is not None
     assert found.key_id == "k1"
+    assert found.key_prefix == "sec"
 
     keys = list_api_keys(db, user_id="alice")
     assert len(keys) == 1
@@ -315,7 +323,7 @@ def test_jwt_create_and_verify(db: ControllerDB):
     signing_key = _get_or_create_signing_key(db)
     mgr = JwtTokenManager(signing_key, db=db)
 
-    create_api_key(db, key_id="k-bob", key_hash="jwt:k-bob", key_prefix="jwt", user_id="bob", name="test", now=now)
+    create_api_key(db, key_id="k-bob", key_prefix="jwt", user_id="bob", name="test", now=now)
 
     token = mgr.create_token("bob", "user", "k-bob")
     identity = mgr.verify(token)
@@ -332,7 +340,6 @@ def test_revoke_login_keys(db: ControllerDB):
         create_api_key(
             db,
             key_id=f"k-login-{i}",
-            key_hash=f"jwt:k-login-{i}",
             key_prefix="jwt",
             user_id="carol",
             name=f"login-{i}",
@@ -470,19 +477,10 @@ def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier,
     We build a dashboard with a @requires_auth route injected and verify it
     agrees with resolve_auth for every (token, optional) combination.
     """
-    from iris.cluster.controller.dashboard import (
-        ControllerDashboard,
-        _LegacyFetchLogsRedirect,
-        _RouteAuthMiddleware,
-        _SubdomainProxyMiddleware,
-        requires_auth,
-    )
-    from starlette.responses import JSONResponse as _J
-    from starlette.routing import Route
 
     @requires_auth
     def _protected(_request):
-        return _J({"ok": True})
+        return JSONResponse({"ok": True})
 
     dashboard = ControllerDashboard(
         service,

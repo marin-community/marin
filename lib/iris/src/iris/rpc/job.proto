@@ -275,7 +275,7 @@ message ResourceUsage {
   int32 process_count = 6;
 }
 
-// Host-level resource snapshot collected by the worker during each Ping.
+// Host-level resource snapshot collected by the worker during each Reconcile.
 message WorkerResourceSnapshot {
   iris.time.Timestamp timestamp = 1;
   // Host CPU utilization as percentage (0-100 averaged across cores)
@@ -346,14 +346,24 @@ message JobStatus {
 
   // Whether this job currently has direct child jobs.
   bool has_children = 32;
+
+  // Parent job id, if this job was launched as a child of another job.
+  // Empty for root jobs.
+  string parent_job_id = 33;
 }
 
 // ============================================================================
-// RESERVATION
+// RESERVATION (DEPRECATED — back-compat only)
 // ============================================================================
+//
+// Reservations are gone. The controller no longer holds capacity, spawns holder
+// jobs, or gates scheduling. These messages and LaunchJobRequest.reservation are
+// retained ONLY so pre-availability clients don't hard-fail: the server converts
+// any incoming reservation into hard availability:<variant> constraints at
+// ingestion and discards it (nothing reservation-shaped is persisted). Current
+// clients omit the field. Scheduled for removal once stragglers have upgraded.
 
 // A single reservation entry describing one worker's worth of resources.
-// Duplicate entries to reserve multiple workers of the same type.
 message ReservationEntry {
   // Resource spec for one worker.
   ResourceSpecProto resources = 1;
@@ -362,8 +372,7 @@ message ReservationEntry {
   repeated Constraint constraints = 2;
 }
 
-// Reservation configuration attached to a job. The autoscaler pre-provisions
-// capacity and the reserving job is held pending until all entries are fulfilled.
+// Reservation configuration attached to a job (deprecated; see above).
 message ReservationConfig {
   // Resource entries to reserve. Each entry = one worker.
   repeated ReservationEntry entries = 1;
@@ -606,17 +615,15 @@ message RunTaskRequest {
   // Controller-minted attempt routing key (16 hex chars). The worker echoes
   // it back on Reconcile observations so the controller can route by UID.
   string attempt_uid = 12;
-}
 
-// Deprecated. Kept for one release so pre-cutover clients don't crash on the
-// controller's missing RPC; the handler discards the payload and the data
-// flows through the iris.task_status finelog namespace now. Remove once all
-// clients are guaranteed to be running the new binary (deadline tracked in
-// the iris-status-cleanup cron reminder).
-message SetTaskStatusTextRequest {
-  string task_id = 1;
-  string status_text_detail_md = 2;
-  string status_text_summary_md = 3;
-}
+  // Coscheduling configuration for the owning job. Empty group_by => the job
+  // is not coscheduled. On the K8s direct path this drives Kueue gang
+  // admission: all pods carrying the same pod-group-name are admitted
+  // atomically. group_by additionally selects the topology the gang prefers
+  // (soft) or requires (hard) to land on.
+  CoschedulingConfig coscheduling = 13;
 
-message SetTaskStatusTextResponse {}
+  // Effective priority band for the owning job, used to select the Kueue
+  // WorkloadPriorityClass on the K8s direct path. UNSPECIFIED => INTERACTIVE.
+  PriorityBand priority = 14;
+}

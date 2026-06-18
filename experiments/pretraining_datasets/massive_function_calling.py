@@ -9,7 +9,8 @@ adapt it to an ExecutorStep, then wire a tokenize ExecutorStep that reads its
 """
 
 from marin.datakit.download.massive import massive_normalize_steps
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
 from experiments.marin_models import marin_tokenizer

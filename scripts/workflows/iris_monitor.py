@@ -19,11 +19,11 @@ from typing import Literal
 import click
 from google.protobuf import json_format
 from iris.cli.main import create_client_token_provider, resolve_cluster_name
-from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token
 from iris.client import IrisClient
+from iris.cluster.backends.k8s.tasks import _sanitize_label_value
+from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import IrisConfig
-from iris.cluster.providers.k8s.tasks import _sanitize_label_value
-from iris.cluster.providers.local.cluster import LocalCluster
+from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token
 from iris.cluster.types import JobName, is_job_finished
 from iris.rpc import job_pb2
 from iris.rpc.auth import StaticTokenProvider, TokenProvider
@@ -146,7 +146,7 @@ def _child_started(child: job_pb2.JobStatus) -> bool:
 
 
 def _pick_child(parent_job_id: str, jobs: list[job_pb2.JobStatus]) -> job_pb2.JobStatus | None:
-    """Pick a representative child (prefer non-finished). Single-child today; arbitrary order otherwise."""
+    """Pick a representative child of the parent (prefer non-finished)."""
     prefix = parent_job_id.rstrip("/") + "/"
     children = [j for j in jobs if j.job_id.startswith(prefix)]
     if not children:
@@ -205,9 +205,10 @@ def wait_for_child_job(
 ) -> job_pb2.JobStatus:
     """Wait for a parent job to reach a terminal state.
 
-    Fail fast with ``TimeoutError`` if no child reaches ``JOB_STATE_RUNNING`` within ``child_wait_timeout``.
-    Once any child has started, the child wait timeout is dropped — total runtime is bounded by the caller's
-    wall clock (e.g. GitHub ``timeout-minutes``).
+    Fail fast with ``TimeoutError`` if no child reaches ``JOB_STATE_RUNNING`` within
+    ``child_wait_timeout`` — this catches a parent stuck in the queue before it ever launches work.
+    Once a child has started, the child wait timeout is dropped — total runtime is bounded by the
+    caller's wall clock (e.g. GitHub ``timeout-minutes``).
     """
     prefix = _job_id_prefix(job_id)
     deadline = time.monotonic() + child_wait_timeout

@@ -15,6 +15,7 @@ from concurrent.futures import Future
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import cloudpickle
 import pytest
 from fray import ResourceConfig
 from fray.actor import ActorContext
@@ -22,23 +23,54 @@ from fray.local_backend import LocalClient
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import (
+    _NON_RETRYABLE_ERRORS,
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
     CoordinatorUnreachable,
-    CounterSnapshot,
-    ListShard,
-    PickleDiskChunk,
     PullStatus,
-    ShardTask,
-    TaskResult,
     WorkerState,
     ZephyrContext,
     ZephyrCoordinator,
     ZephyrWorker,
     ZephyrWorkerError,
-    zephyr_worker_ctx,
+    _ensure_picklable_exception,
 )
 from zephyr.plan import PhysicalStage, StageType, compute_plan
+from zephyr.shuffle import ListShard
+from zephyr.stage_io import (
+    PickleDiskChunk,
+    ShardTask,
+    TaskResult,
+)
+from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
+from zephyr.worker_context import CounterEntry, CounterSnapshot, zephyr_worker_ctx
+
+
+class _UnpicklableError(Exception):
+    """Mimics rigging's old TransferBudgetExceeded: __init__ args don't match self.args."""
+
+    def __init__(self, a, b, c):
+        self.a, self.b, self.c = a, b, c
+        super().__init__(f"boom {a}/{b}/{c}")  # self.args = (message,) -> revive needs 3 args
+
+
+def test_ensure_picklable_exception_passes_through_picklable():
+    err = ValueError("plain and picklable")
+    assert _ensure_picklable_exception(err) is err
+
+
+def test_ensure_picklable_exception_wraps_unrevivable_and_preserves_message():
+    err = _UnpicklableError(1, 2, 3)
+    err.add_note("--- subprocess traceback ---\nsomewhere")
+    with pytest.raises(TypeError):
+        cloudpickle.loads(cloudpickle.dumps(err))  # confirms the hazard
+
+    safe = _ensure_picklable_exception(err)
+    revived = cloudpickle.loads(cloudpickle.dumps(safe))  # must not raise
+    assert isinstance(revived, ZephyrWorkerError)
+    assert isinstance(revived, _NON_RETRYABLE_ERRORS)  # un-revivable -> fail fast, never retry
+    assert "_UnpicklableError" in str(revived) and "boom 1/2/3" in str(revived)
+    assert any("subprocess traceback" in n for n in revived.__notes__)
 
 
 def test_simple_map(zephyr_ctx):
@@ -404,7 +436,6 @@ def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_pa
     status log should drop the ``items=... bytes_processed=...`` segment rather
     than print misleading zeros. Once either counter is recorded, the segment
     reappears."""
-    from zephyr.execution import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
@@ -427,7 +458,7 @@ def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_pa
 
     # Once a counter snapshot exists, the throughput segment reappears.
     coord._worker_counters["worker-A"] = CounterSnapshot(
-        counters={ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name="map_only"): 7}, generation=1
+        counters={ZEPHYR_STAGE_ITEM_COUNT_KEY: CounterEntry(7, stage="map_only")}, generation=1
     )
     with caplog.at_level(logging.INFO, logger="zephyr.execution"):
         caplog.clear()
@@ -437,7 +468,7 @@ def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_pa
 
     # Same when only the byte counter is present.
     coord._worker_counters["worker-A"] = CounterSnapshot(
-        counters={ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name="map_only"): 1024}, generation=2
+        counters={ZEPHYR_STAGE_BYTES_PROCESSED_KEY: CounterEntry(1024, stage="map_only")}, generation=2
     )
     with caplog.at_level(logging.INFO, logger="zephyr.execution"):
         caplog.clear()

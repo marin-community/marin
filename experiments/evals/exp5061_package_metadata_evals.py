@@ -20,7 +20,7 @@ from marin.datakit.download.npm_registry_metadata import (
     npm_registry_metadata_step,
 )
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.executor import ExecutorStep
+from marin.execution.types import ExecutorStep
 
 ISSUE_5061 = 5061
 EPIC_5005 = 5005

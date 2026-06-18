@@ -104,7 +104,10 @@ class ApertusConfig(LlamaConfig):
     )
     reference_checkpoint: str = "swiss-ai/Apertus-8B-2509"
 
-    def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HFCheckpointConverter["ApertusConfig"]:
+    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; mypy flags the same)
+    def hf_checkpoint_converter(  # pyrefly: ignore[bad-override]
+        self, ref_checkpoint: Optional[str] = None
+    ) -> HFCheckpointConverter["ApertusConfig"]:
         return HFCheckpointConverter(
             self.__class__,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
@@ -143,7 +146,9 @@ class ApertusConfig(LlamaConfig):
             use_qk_norm=getattr(hf_config, "qk_norm", True),
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfApertusConfig:
+    def to_hf_config(  # pyrefly: ignore[bad-override]
+        self, vocab_size: int, config_overrides: Optional[Dict] = None
+    ) -> HfApertusConfig:
         if config_overrides is None:
             config_overrides = {}
 
@@ -180,7 +185,7 @@ class ApertusConfig(LlamaConfig):
         return hf_config
 
     @property
-    def model_type(self) -> Type["ApertusLMHeadModel"]:
+    def model_type(self) -> Type["ApertusLMHeadModel"]:  # pyrefly: ignore[bad-override]
         return ApertusLMHeadModel
 
     def flops_per_token(self, vocab_size: int, context_length: int):

@@ -12,10 +12,9 @@ import jax
 import numpy as np
 from draccus import field
 
-from levanter.tracker import Tracker
 from levanter.tracker.background import maybe_wrap_background
 from levanter.tracker.histogram import SummaryStats
-from levanter.tracker.tracker import NoopTracker, TrackerConfig
+from levanter.tracker.tracker import NoopTracker, Tracker, TrackerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +29,7 @@ class TrackioTracker(Tracker):
     run: TrackioRun
 
     def __init__(self, run: Optional[TrackioRun] = None):
-        import trackio
+        import trackio  # noqa: PLC0415  # optional dep: trackio
 
         if run is None:
             logger.warning("Trackio run is not initialized. Initializing a new run.")
@@ -47,12 +46,12 @@ class TrackioTracker(Tracker):
         for k, v in metrics.items():
             to_log[k] = _convert_value_to_loggable_rec(v)
 
-        import trackio
+        import trackio  # noqa: PLC0415  # optional dep: trackio
 
         trackio.log(to_log, step=step)
 
     def log_summary(self, metrics: typing.Mapping[str, Any]):
-        import trackio
+        import trackio  # noqa: PLC0415  # optional dep: trackio
 
         to_log = {f"summary/{k}": _convert_value_to_loggable_rec(v) for k, v in metrics.items()}
         trackio.log(to_log)
@@ -62,7 +61,7 @@ class TrackioTracker(Tracker):
         logger.warning("Trackio does not currently support artifacts. Skipping upload for %s", artifact_path)
 
     def finish(self):
-        import trackio
+        import trackio  # noqa: PLC0415  # optional dep: trackio
 
         logger.info("Finishing trackio run...")
         trackio.finish()
@@ -136,7 +135,7 @@ class TrackioConfig(TrackerConfig):
     background_finish_timeout: float = 120.0
 
     def init(self, run_id: Optional[str]) -> Tracker:
-        import trackio
+        import trackio  # noqa: PLC0415  # optional dep: trackio
 
         # Only the primary process should log by default.
         if jax.process_index() == 0:

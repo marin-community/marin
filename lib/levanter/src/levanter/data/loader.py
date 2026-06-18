@@ -15,7 +15,7 @@ from typing import Generic, TypeVar
 
 import haliax.partitioning
 import jax
-import numpy
+import numpy as np
 from jax import Array
 from jax import numpy as jnp
 from jax import tree_util as jtu
@@ -618,7 +618,7 @@ def check_sharded_consistency(tree: PyTree, check_disjoint_indices_are_different
             replica_0_array = replica_0_arrays[_to_tuple(shard.index)]
             assert shard.data is not None
 
-            if not numpy.array_equal(shard.data, replica_0_array, equal_nan=True):
+            if not np.array_equal(shard.data, replica_0_array, equal_nan=True):
                 raise ValueError("Shard data does not match replica 0 data", shard, replica_0_array)
 
             if check_disjoint_indices_are_different:

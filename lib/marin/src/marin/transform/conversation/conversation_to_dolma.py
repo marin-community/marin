@@ -9,7 +9,7 @@ Transform conversation format to Dolma format.
 import dataclasses
 
 import draccus
-from marin.execution.executor import THIS_OUTPUT_PATH
+from marin.execution.types import THIS_OUTPUT_PATH
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
 
@@ -50,5 +50,4 @@ convert_conversation_to_dolma = process_dataset
 
 
 if __name__ == "__main__":
-    process_dataset = draccus.wrap(process_dataset)
-    process_dataset()
+    draccus.wrap()(process_dataset)()

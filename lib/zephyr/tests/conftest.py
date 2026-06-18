@@ -11,11 +11,17 @@ import time
 import traceback
 import warnings
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from fray import ResourceConfig
+from fray.actor import ActorContext, _reset_current_actor, _set_current_actor
 from fray.iris_backend import FrayIrisClient
 from fray.local_backend import LocalClient
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.cluster.config import load_config, make_local_config
+from iris.cluster.lifecycle import connect_cluster
+from iris.cluster.types import Entrypoint, ResourceSpec
 from rigging.timing import ExponentialBackoff
 from zephyr import load_file
 from zephyr.execution import ZephyrContext
@@ -35,7 +41,6 @@ def iris_cluster():
     cluster from one test module does not bleed into another. Tests within a
     single module still amortize the cluster startup cost.
     """
-    from iris.cluster.config import connect_cluster, load_config, make_local_config
 
     config = load_config(IRIS_CONFIG)
     config = make_local_config(config)
@@ -73,7 +78,6 @@ def zephyr_ctx(local_client, tmp_path_factory):
 
 def _parent_holder_entrypoint():
     """Long-running no-op that keeps the integration-test parent job alive."""
-    import time
 
     time.sleep(3600)
 
@@ -92,9 +96,6 @@ def integration_client(request):
         yield client
         client.shutdown(wait=True)
     elif request.param == "iris":
-        from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
-        from iris.cluster.types import Entrypoint, ResourceSpec
-
         iris_cluster = request.getfixturevalue("iris_cluster")
         iris_client = IrisClient.remote(iris_cluster, workspace=ZEPHYR_ROOT)
         client = FrayIrisClient.from_iris_client(iris_client)
@@ -141,9 +142,6 @@ def integration_ctx(integration_client, tmp_path_factory):
 @pytest.fixture
 def actor_context():
     """Provide a fake actor context so ZephyrCoordinator can call current_actor()."""
-    from unittest.mock import MagicMock
-
-    from fray.actor import ActorContext, _reset_current_actor, _set_current_actor
 
     token = _set_current_actor(ActorContext(handle=MagicMock(), index=0, group_name="test-coord"))
     yield

@@ -6,7 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 from fray.types import JobStatus
-from marin.rl.orchestration import _HostedRuntime, _run_rl_coordinator, _train_worker_entry
+from marin.rl.orchestration import (
+    _HostedRuntime,
+    _run_rl_coordinator,
+    _train_worker_entry,
+)
 from marin.rl.rl_job import RunConfig
 from marin.rl.rollout_worker import RolloutTrackerConfig
 
@@ -77,16 +81,12 @@ class _FakeRunStateHandle:
         self.mark_failed = _FakeActorMethod()
 
 
-class _FakeRLJob:
-    def __init__(self, _config):
-        pass
-
-    def to_worker_configs(self):
-        return _FakeWorkerConfig(seed=7, run_id="train"), _FakeWorkerConfig(
-            seed=11,
-            run_id="rl-test",
-            tracker_config=RolloutTrackerConfig(project="marin_iris_rl_debug", name="shared-rollout-name"),
-        )
+def _fake_build_worker_configs(_config):
+    return _FakeWorkerConfig(seed=7, run_id="train"), _FakeWorkerConfig(
+        seed=11,
+        run_id="rl-test",
+        tracker_config=RolloutTrackerConfig(project="marin_iris_rl_debug", name="shared-rollout-name"),
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -124,7 +124,7 @@ def test_run_rl_coordinator_shuts_down_hosted_actors_when_child_job_fails(monkey
     )
 
     monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
-    monkeypatch.setattr("marin.rl.orchestration.RLJob", _FakeRLJob)
+    monkeypatch.setattr("marin.rl.orchestration.build_worker_configs", _fake_build_worker_configs)
     monkeypatch.setattr(
         "marin.rl.orchestration._create_runtime_handles",
         lambda _client, _config: _HostedRuntime(runtime=SimpleNamespace(), hosted_actors=hosted_actors),
@@ -158,7 +158,7 @@ def test_run_rl_coordinator_stops_rollouts_after_trainer_success(monkeypatch):
     )
 
     monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
-    monkeypatch.setattr("marin.rl.orchestration.RLJob", _FakeRLJob)
+    monkeypatch.setattr("marin.rl.orchestration.build_worker_configs", _fake_build_worker_configs)
     monkeypatch.setattr(
         "marin.rl.orchestration._create_runtime_handles",
         lambda _client, _config: hosted_runtime,
@@ -196,7 +196,7 @@ def test_run_rl_coordinator_uses_run_config_ram_overrides(monkeypatch):
     )
 
     monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
-    monkeypatch.setattr("marin.rl.orchestration.RLJob", _FakeRLJob)
+    monkeypatch.setattr("marin.rl.orchestration.build_worker_configs", _fake_build_worker_configs)
     monkeypatch.setattr(
         "marin.rl.orchestration._create_runtime_handles",
         lambda _client, _config: hosted_runtime,
@@ -227,7 +227,7 @@ def test_run_rl_coordinator_uses_run_config_zone_for_child_tpu_jobs(monkeypatch)
     )
 
     monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
-    monkeypatch.setattr("marin.rl.orchestration.RLJob", _FakeRLJob)
+    monkeypatch.setattr("marin.rl.orchestration.build_worker_configs", _fake_build_worker_configs)
     monkeypatch.setattr(
         "marin.rl.orchestration._create_runtime_handles",
         lambda _client, _config: hosted_runtime,
@@ -256,15 +256,12 @@ def test_run_rl_coordinator_enables_unbuffered_logs_for_debug_checkpointer(monke
         ),
     )
 
-    class _DebugRLJob(_FakeRLJob):
-        def to_worker_configs(self):
-            trainer = SimpleNamespace(checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=True)))
-            return _FakeWorkerConfig(seed=7, run_id="train", trainer=trainer), _FakeWorkerConfig(
-                seed=11, run_id="rollout"
-            )
+    def _debug_build_worker_configs(_config):
+        trainer = SimpleNamespace(checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=True)))
+        return _FakeWorkerConfig(seed=7, run_id="train", trainer=trainer), _FakeWorkerConfig(seed=11, run_id="rollout")
 
     monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
-    monkeypatch.setattr("marin.rl.orchestration.RLJob", _DebugRLJob)
+    monkeypatch.setattr("marin.rl.orchestration.build_worker_configs", _debug_build_worker_configs)
     monkeypatch.setattr(
         "marin.rl.orchestration._create_runtime_handles",
         lambda _client, _config: hosted_runtime,
@@ -306,23 +303,22 @@ def test_run_rl_coordinator_enables_transfer_debug_env_vars(monkeypatch):
         ),
     )
 
-    class _DebugRLJob(_FakeRLJob):
-        def to_worker_configs(self):
-            trainer = SimpleNamespace(checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=False)))
-            weight_transfer = SimpleNamespace(debug_weight_transfer=True)
-            return _FakeWorkerConfig(
-                seed=7,
-                run_id="train",
-                trainer=trainer,
-                weight_transfer=weight_transfer,
-            ), _FakeWorkerConfig(
-                seed=11,
-                run_id="rollout",
-                weight_transfer=weight_transfer,
-            )
+    def _debug_build_worker_configs(_config):
+        trainer = SimpleNamespace(checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=False)))
+        weight_transfer = SimpleNamespace(debug_weight_transfer=True)
+        return _FakeWorkerConfig(
+            seed=7,
+            run_id="train",
+            trainer=trainer,
+            weight_transfer=weight_transfer,
+        ), _FakeWorkerConfig(
+            seed=11,
+            run_id="rollout",
+            weight_transfer=weight_transfer,
+        )
 
     monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
-    monkeypatch.setattr("marin.rl.orchestration.RLJob", _DebugRLJob)
+    monkeypatch.setattr("marin.rl.orchestration.build_worker_configs", _debug_build_worker_configs)
     monkeypatch.setattr(
         "marin.rl.orchestration._create_runtime_handles",
         lambda _client, _config: hosted_runtime,
@@ -354,7 +350,7 @@ def test_run_rl_coordinator_assigns_stable_rollout_wandb_names(monkeypatch):
     )
 
     monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
-    monkeypatch.setattr("marin.rl.orchestration.RLJob", _FakeRLJob)
+    monkeypatch.setattr("marin.rl.orchestration.build_worker_configs", _fake_build_worker_configs)
     monkeypatch.setattr(
         "marin.rl.orchestration._create_runtime_handles",
         lambda _client, _config: hosted_runtime,

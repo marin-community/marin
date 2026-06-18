@@ -215,14 +215,12 @@ async def _construct_builder_tree_async(exemplar, path, mode, cache_metadata):
 
 
 def _render_path_elem(x):
-    match x:
-        case jtu.DictKey(key):
-            return f"{key}"
-        case jtu.GetAttrKey(key):
-            return f"{key}"
-        case jtu.SequenceKey(i):
-            return f"{i}"
-        case jtu.FlattenedIndexKey(i):
-            return f"{i}"
-        case _:
-            return str(x)
+    if isinstance(x, jtu.DictKey):
+        return f"{x.key}"
+    if isinstance(x, jtu.GetAttrKey):
+        return f"{x.name}"
+    if isinstance(x, jtu.SequenceKey):
+        return f"{x.idx}"
+    if isinstance(x, jtu.FlattenedIndexKey):
+        return f"{x.key}"
+    return str(x)

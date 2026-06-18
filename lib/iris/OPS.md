@@ -27,6 +27,8 @@ Workflow: dry-run locally (`iris cluster controller serve --dry-run`) -> capture
 
 If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
 
+**Shipping a code change ≠ restarting.** marin pins `iris-controller:latest` (`config/marin.yaml:33`), so a restart only re-pulls whatever `:latest` currently is. To deploy a merged controller fix you must first rebuild the image (`gh workflow run "Ops - Docker Images"`, or wait for the Sunday build) and *then* restart — restarting against a stale `:latest` ships nothing. Confirm the controller is running the `:<git-short-hash>` you expect, not just that it came back up. Skipping the rebuild cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
+
 ## Job Management
 
 ```bash
@@ -48,7 +50,7 @@ iris job bug-report /user/job-name      # structured diagnostic dump
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--gpu` requests hardware; `--extra gpu` requests the Python dependency extra.** Need both for GPU JAX jobs.
 - **Use `--gpu` or `--tpu` to request accelerators, instead of `--region` or `--zone`.** Let Iris handle scaling group constraints. Use `--region` or `--zone` when you are trying to pin data to a particular location.
-- **`--reserve`** holds capacity for scheduling only — does not attach accelerator devices. Use `--tpu`/`--gpu` on the task that needs hardware.
+- **`--reserve`** is a hard zone constraint: it confines the job to a zone where the named accelerator has actually been obtained (empirically — a live, non-erroring slice in the region), and the job waits if none exists yet (an availability probe meanwhile scales the accelerator up). It does not hold capacity and does not attach accelerator devices. Use `--tpu`/`--gpu` on the task that needs hardware.
 - **`executor_main` parent jobs** (e.g., canary ferries) submit GPU sub-tasks via Fray. The parent must be CPU-only (`--cpu 1 --memory 2g`), otherwise it hogs the GPU node and deadlocks. Memory at or above 4 GB requires `--enable-extra-resources` (see "Validator opt-in" below).
 
 ## Task Operations
@@ -163,13 +165,33 @@ Namespaces:
 
 - `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
 - `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
-- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `captured_at`. Filter on `source` for one of `/job/.../task/N`, `/system/worker/<id>`, `/system/controller`. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`).
+- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — periodic CPU captures are py-spy **speedscope** JSON. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`).
 
 Retention is finelog segment-based. Target for `iris.profile` is 7 days.
 
 Get a profile for a task — open the dashboard task page and use the "Profile history" panel; rows are CPU captures from the worker's 10-minute periodic loop plus any on-demand captures, click to download. To capture on demand, hit the "Profile now" button on the task page, the worker page (`/system/worker/<id>`), or the controller status page (`/system/controller`).
 
 Profiles are written by the worker (periodic CPU + on-demand all types), by `K8sTaskProvider` (on-demand only), and by the controller for `/system/controller` self-captures.
+
+Query the namespace directly with the finelog CLI (opens a tunnel to the cluster's finelog deployment named by `log_server_config`):
+
+```bash
+cd lib/finelog
+uv run finelog query marin "SELECT source, type, format, count(*) FROM \"iris.profile\"
+  WHERE source LIKE '/user/job/%' AND type='cpu' GROUP BY 1,2,3"
+```
+
+To aggregate a whole job's CPU profiles into a per-worker-sub-job breakdown + merged
+flamegraph, use `scripts/job_profile_summary.py` — it resolves the cluster's finelog
+deployment, pulls every CPU capture under a job (and its descendant sub-jobs), parses the
+speedscope stacks, and reports where CPU is spent:
+
+```bash
+uv run python scripts/job_profile_summary.py /user/job/id          # per-sub-job + top leaves
+uv run python scripts/job_profile_summary.py <dashboard-url>       # accepts iris.oa.dev URLs
+uv run python scripts/job_profile_summary.py /user/job/id --subjob <name> --show-stacks
+uv run python scripts/job_profile_summary.py /user/job/id -o merged.folded --svg flame.svg
+```
 
 ## Users & Auth
 
@@ -251,7 +273,6 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 
 - **Quota is the primary scaling bottleneck.** The autoscaler backs off exponentially per scale group. Check with `iris rpc controller get-autoscaler-status`.
 - **Stuck TPU VMs.** Occasionally a TPU VM gets stuck in DELETING for days. Check: `gcloud compute tpus tpu-vm list --project=hai-gcp-models --zone=- --filter="state=DELETING"`.
-- **Reservation system.** Accelerator jobs create `:reservation:` sub-jobs that hold slices. View with `iris query "SELECT * FROM reservation_claims"`.
 
 ---
 
@@ -269,6 +290,7 @@ cluster configs.
 | `marin-canary-ferry-coreweave.yaml` | Daily 10AM UTC | GPU canary on CW — shares `iris-ci` controller + H100 nodepool with `iris-smoke-coreweave.yaml` (concurrency group `iris-coreweave-ci-shared`) |
 | `iris-smoke-gcp.yaml` | PRs touching `lib/iris/` | GCP smoke test (ephemeral cluster) |
 | `iris-smoke-coreweave.yaml` | PRs touching `lib/iris/` | CW integration tests (warm cluster) |
+| `ops-docker-images.yaml` | `workflow_dispatch` / Sun 02:00 UTC | Rebuilds + pushes `iris-{controller,worker,task}:latest` to GHCR (see Controller Restart) |
 
 ```bash
 # Trigger manually

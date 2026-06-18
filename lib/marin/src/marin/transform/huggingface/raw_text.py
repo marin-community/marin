@@ -21,9 +21,8 @@ from marin.datakit.ingestion_manifest import (
 )
 from marin.transform.huggingface.dataset_to_eval import get_nested_item
 from marin.utils import fsspec_mkdirs, fsspec_url, normalize_fsspec_url_path
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import atomic_rename, open_url, url_to_fs
 from zephyr import Dataset, ZephyrContext
-from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
 

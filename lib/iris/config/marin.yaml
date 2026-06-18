@@ -2,6 +2,7 @@
 # Usage: uv run iris --cluster=marin cluster start
 
 log_server_config: marin
+dashboard_url: https://iris.oa.dev
 
 platform:
   label_prefix: marin
@@ -9,6 +10,8 @@ platform:
     project_id: hai-gcp-models
 
 defaults:
+  ssh:
+    impersonate_service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
   autoscaler:
     evaluation_interval:
       milliseconds: 10000
@@ -44,6 +47,7 @@ controller:
 tpu_pools:
   # v5e (v5litepod) — europe-west4-b, us-west4-a
   # Per-VM: ct5lp-hightpu-4t — 112 vCPU, 192 GiB RAM
+  # max_slices capped to the v5e serving quota (us-west4-a: 128 cores).
   v5e-serving:
     family: v5e
     zones: [europe-west4-b, us-west4-a]
@@ -54,8 +58,8 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
-      4:   { buffer_slices: 2, max_slices: 1024 }
-      8:   { buffer_slices: 2, max_slices: 512 }
+      4:   { buffer_slices: 2, max_slices: 32 }
+      8:   { buffer_slices: 2, max_slices: 16 }
 
   v5e-preemptible:
     family: v5e
@@ -166,11 +170,16 @@ tpu_pools:
 scale_groups:
   # Low-priority fallback CPU VM group for on-demand scheduling.
   # n2-highmem-2: 2 vCPU / 16 GiB, available in all target zones including us-central2-b.
+  # cpu here is the advertised scheduling capacity (canonical), not the physical
+  # core count: entrypoint jobs are almost always small, and these VMs are
+  # on-demand (non-preemptible, no sudden reclaim), so we over-commit CPU 4x to
+  # fill slots that would otherwise sit idle. ram stays physical — it's the real
+  # packing limit and over-committing it would OOM the host.
   cpu_vm_e2_highmem_2_ondemand:
     zones: [us-central1-a, us-central2-b, us-east1-b, us-east1-d, us-east5-a, us-east5-b, us-west1-a, us-west4-a, europe-west4-a, europe-west4-b]
     num_vms: 1
     priority: 500
-    resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
+    resources: { cpu: 8, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
     buffer_slices: 0
     max_slices: 6
     # Override the default /dev/shm tmpfs so disk health and metrics reflect the
@@ -199,7 +208,7 @@ scale_groups:
 user_budgets:
   # Admins: standard budget, may submit PRIORITY_BAND_PRODUCTION for work that
   # must not be downgraded. INTERACTIVE work still counts against the budget.
-  - user_ids: [runner, power, dlwh, rav, romain, held, larry]
+  - user_ids: [runner, power, dlwh, rav, romain, held, larry, wmoss]
     budget_limit: 75000
     max_band: PRIORITY_BAND_PRODUCTION
   # Researchers: standard budget, capped at PRIORITY_BAND_INTERACTIVE.
@@ -222,5 +231,6 @@ user_budgets:
       - ryan
       - marinazh
       - benjaminfeuer
+      - morrisy
     budget_limit: 75000
     max_band: PRIORITY_BAND_INTERACTIVE

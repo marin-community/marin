@@ -72,9 +72,7 @@ class SpillWriter:
     """Writes items to an opaque chunked row-format spill file.
 
     Use ``write`` to stream items; the writer accumulates a byte budget and
-    emits chunks when the budget is exceeded. Use ``write_chunk`` to commit
-    a batch of items as its own chunk immediately (no accumulation) — useful
-    when the caller wants each logical batch to round-trip as one chunk.
+    emits chunks when the budget is exceeded.
 
     Writes are offloaded to a :class:`ThreadedBatchWriter` so one write can be
     in-flight while the caller produces the next batch. Backpressure, error
@@ -110,13 +108,6 @@ class SpillWriter:
         if merged is not None:
             self._threaded.submit(merged)
 
-    def write_chunk(self, items: Iterable[Any]) -> None:
-        """Commit items as their own chunk immediately (no accumulation)."""
-        table = _items_to_table(items)
-        if len(table) == 0:
-            return
-        self._threaded.submit(table)
-
     def close(self) -> None:
         """Flush remaining buffered items and wait for the background writer."""
         if self._closed:
@@ -134,20 +125,17 @@ class SpillWriter:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        if exc_type is None:
+            self.close()
+            return
         if self._closed:
             return
         self._closed = True
         try:
-            if exc_type is not None:
-                # Error path: skip final flush (partial file will never be read)
-                # and let ThreadedBatchWriter.__exit__ tear down the thread
-                # without blocking the caller.
-                self._threaded.__exit__(exc_type, exc_val, exc_tb)
-            else:
-                remaining = self._accumulator.flush()
-                if remaining is not None:
-                    self._threaded.submit(remaining)
-                self._threaded.close()
+            # Error path: skip final flush (partial file will never be read)
+            # and let ThreadedBatchWriter.__exit__ tear down the thread
+            # without blocking the caller.
+            self._threaded.__exit__(exc_type, exc_val, exc_tb)
         finally:
             self._writer.close()
 
@@ -163,15 +151,6 @@ class SpillReader:
     def __init__(self, path: str, *, batch_size: int | None = None) -> None:
         self._path = path
         self._batch_size = batch_size
-
-    @property
-    def path(self) -> str:
-        return self._path
-
-    @property
-    def num_rows(self) -> int:
-        with fsspec.open(self._path, "rb") as f:
-            return pq.ParquetFile(f).metadata.num_rows
 
     @property
     def approx_item_bytes(self) -> int:

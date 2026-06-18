@@ -15,17 +15,20 @@ from datetime import date, timedelta
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
-from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
-from iris.cluster.controller import reads, writes
+from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, availability_key, device_variant_constraint
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
+from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
-from iris.cluster.controller.schema import jobs_table, task_attempts_table
+from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
+from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,
     FRESHNESS_WINDOW,
@@ -34,12 +37,6 @@ from iris.cluster.controller.service import (
     _check_client_freshness,
     _job_status_counts,
     _live_user_stats,
-)
-from iris.cluster.controller.transitions import (
-    Assignment,
-    ControllerTransitions,
-    HeartbeatApplyRequest,
-    TaskUpdate,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
@@ -50,7 +47,8 @@ from rigging.timing import Duration, Timestamp
 from sqlalchemy import func
 from sqlalchemy import update as sa_update
 
-from tests.cluster.conftest import fake_log_client_from_service
+from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
     make_job_request,
@@ -69,7 +67,7 @@ from .conftest import (
 # =============================================================================
 
 
-def _register_worker(state: ControllerTransitions, worker_id: WorkerId) -> None:
+def _register_worker(state: ControllerTestState, worker_id: WorkerId) -> None:
     metadata = job_pb2.WorkerMetadata(
         hostname=str(worker_id),
         ip_address="127.0.0.1",
@@ -78,22 +76,24 @@ def _register_worker(state: ControllerTransitions, worker_id: WorkerId) -> None:
         disk_bytes=100 * 1024**3,
     )
     with state._db.transaction() as cur:
-        state.register_or_refresh_worker(
+        ops.worker.register(
             cur,
             worker_id=worker_id,
             address=f"{worker_id}:8080",
             metadata=metadata,
             ts=Timestamp.now(),
+            health=state._health,
+            worker_attrs=state._worker_attrs,
         )
 
 
-def _set_job_state(state: ControllerTransitions, job_id: JobName, state_value: int) -> None:
+def _set_job_state(state: ControllerTestState, job_id: JobName, state_value: int) -> None:
     with state._db.transaction() as cur:
         cur.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(state=state_value))
 
 
 def _assign_and_transition(
-    state: ControllerTransitions,
+    state: ControllerTestState,
     task_id: JobName,
     worker_id: WorkerId,
     target_state: int,
@@ -101,23 +101,33 @@ def _assign_and_transition(
     error: str | None = None,
 ) -> None:
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_id)])
+        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=worker_id)], health=state._health)
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=worker_id,
-                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=worker_id,
+                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
     if target_state != job_pb2.TASK_STATE_RUNNING:
         with state._db.transaction() as cur:
-            state.apply_task_updates(
+            apply_task_observations(
                 cur,
-                HeartbeatApplyRequest(
-                    worker_id=worker_id,
-                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=target_state, error=error)],
-                ),
+                [
+                    WorkerTaskUpdates(
+                        worker_id=worker_id,
+                        updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=target_state, error=error)],
+                    )
+                ],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
             )
 
 
@@ -147,6 +157,29 @@ def test_launch_job_returns_job_id(service):
     assert status_response.job.state == job_pb2.JOB_STATE_PENDING
 
 
+def test_get_job_status_reports_parent_job_id(service):
+    """get_job_status surfaces parent_job_id for child jobs (empty for roots).
+
+    The dashboard's child-job view uses this to render a "back to parent job"
+    link, so the parent relationship must travel over the RPC, not just the DB.
+    """
+    parent_name = "/test-user/parent"
+    child_name = "/test-user/parent/child"
+    service.launch_job(make_job_request("parent"), None)
+    service.launch_job(make_job_request(child_name), None)
+
+    child_status = service.get_job_status(
+        controller_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string(child_name).to_wire()), None
+    )
+    assert child_status.job.parent_job_id == JobName.from_string(parent_name).to_wire()
+
+    parent_status = service.get_job_status(
+        controller_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string(parent_name).to_wire()), None
+    )
+    assert parent_status.job.parent_job_id == ""
+    assert parent_status.job.has_children
+
+
 def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state):
     request = make_job_request("bundle-job")
     request.bundle_blob = b"bundle-bytes"
@@ -155,6 +188,19 @@ def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state)
     job = _query_job(state, JobName.root("test-user", "bundle-job"))
     assert job is not None
     assert len(job.bundle_id) == 64
+
+
+def test_launch_job_rejects_coscheduling_without_group_by(service):
+    """Coscheduling with an empty group_by is rejected at submit: group_by names the
+    topology level to gang on, and an empty one fails differently (and silently) on each
+    scheduling path downstream."""
+    request = make_job_request("no-group-by")
+    request.coscheduling.SetInParent()  # coscheduling present, group_by left empty
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
 
 
 def test_launch_job_rejects_tpu_chip_count_mismatch(service):
@@ -226,7 +272,7 @@ def test_launch_job_externalizes_large_workdir_files(service, state):
 
     job_id = JobName.root("test-user", "big-pickle-job")
     with state._db.read_snapshot() as snap:
-        template = state.run_request_template(snap, job_id)
+        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
     assert template is not None
     # Small file stays inline
     assert dict(template.entrypoint.workdir_files) == {"small.txt": small_file}
@@ -242,7 +288,7 @@ def test_launch_job_keeps_small_workdir_files_inline(service, state):
 
     job_id = JobName.root("test-user", "small-pickle-job")
     with state._db.read_snapshot() as snap:
-        template = state.run_request_template(snap, job_id)
+        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
     assert template is not None
     assert dict(template.entrypoint.workdir_files) == {"_callable.pkl": small_file}
     assert "_callable.pkl" not in template.entrypoint.workdir_file_refs
@@ -260,6 +306,45 @@ def test_launch_job_rejects_duplicate_name(service):
 
     assert exc_info.value.code == Code.ALREADY_EXISTS
     assert "still running" in exc_info.value.message
+
+
+def test_launch_job_rejects_exceeding_per_user_task_cap(service, state, monkeypatch):
+    """A submission that would push the user past the per-user active-task cap is rejected.
+
+    Only non-terminal tasks count: once the first job's tasks finish, the freed
+    budget lets the next submission through.
+    """
+    monkeypatch.setattr(service_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
+
+    # 3 active tasks for test-user: under the cap.
+    service.launch_job(make_job_request("job-a", replicas=3), None)
+
+    # 3 more would bring the total to 6 > 5: rejected, and job-b is not created.
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(make_job_request("job-b", replicas=3), None)
+    assert exc_info.value.code == Code.RESOURCE_EXHAUSTED
+    assert _query_job(state, JobName.root("test-user", "job-b")) is None
+
+    # Finishing job-a's tasks frees the budget; the resubmission now succeeds.
+    with state._db.transaction() as cur:
+        cur.execute(
+            sa_update(tasks_table)
+            .where(tasks_table.c.job_id == JobName.root("test-user", "job-a"))
+            .values(state=job_pb2.TASK_STATE_SUCCEEDED)
+        )
+    service.launch_job(make_job_request("job-b", replicas=3), None)
+    assert _query_job(state, JobName.root("test-user", "job-b")) is not None
+
+
+def test_launch_job_user_task_cap_is_per_user(service, state, monkeypatch):
+    """The cap is scoped per user: one user's tasks don't count against another's."""
+    monkeypatch.setattr(service_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
+
+    service.launch_job(make_job_request("/alice/job", replicas=5), None)
+
+    # Bob is unaffected by Alice's tasks.
+    service.launch_job(make_job_request("/bob/job", replicas=5), None)
+    assert _query_job(state, JobName.from_string("/bob/job")) is not None
 
 
 @pytest.mark.parametrize(
@@ -366,7 +451,12 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
     child_task = _query_tasks_with_attempts(state, child_job)[0]
     _assign_and_transition(state, child_task.task_id, worker, job_pb2.TASK_STATE_RUNNING)
     with state._db.transaction() as cur:
-        state.preempt_task(cur, child_task.task_id, reason="evicted by prod tenant")
+        finalize(
+            cur,
+            [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted by prod tenant")],
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
+        )
 
     # Sanity: child is terminal but its attempt still holds the worker.
     with state._db.read_snapshot() as snap:
@@ -431,7 +521,12 @@ def test_existing_job_policy_keep_force_reaps_after_drain_wait(service, state, m
     child_task = _query_tasks_with_attempts(state, child_job)[0]
     _assign_and_transition(state, child_task.task_id, worker, job_pb2.TASK_STATE_RUNNING)
     with state._db.transaction() as cur:
-        state.preempt_task(cur, child_task.task_id, reason="evicted, worker stuck")
+        finalize(
+            cur,
+            [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted, worker stuck")],
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
+        )
 
     request = make_job_request(child_name)
     request.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_KEEP
@@ -492,7 +587,9 @@ def test_get_job_status_reports_has_children(service, state):
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     with state._db.transaction() as cur:
-        state.submit_job(cur, child_id, child_req, Timestamp.now())
+        ops.job.submit(
+            cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
+        )
 
     parent = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=parent_id.to_wire()), None)
     assert parent.job.has_children is True
@@ -772,13 +869,12 @@ def test_terminate_job_allowed_by_owner(service):
     assert status.job.state == job_pb2.JOB_STATE_KILLED
 
 
-def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
+def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, log_client):
     """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
     auth_service = ControllerServiceImpl(
-        state,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
-        log_client=fake_log_client_from_service(LogServiceImpl()),
+        log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),
@@ -802,13 +898,12 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
     assert status.job.state == job_pb2.JOB_STATE_PENDING
 
 
-def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_path):
+def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_path, log_client):
     """Cannot submit a child job under another user's hierarchy."""
     auth_service = ControllerServiceImpl(
-        state,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
-        log_client=fake_log_client_from_service(LogServiceImpl()),
+        log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),
@@ -1110,7 +1205,9 @@ def test_list_jobs_all_scope_includes_descendants(service, state):
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     with state._db.transaction() as cur:
-        state.submit_job(cur, child_id, child_req, Timestamp.now())
+        ops.job.submit(
+            cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
+        )
 
     request = controller_pb2.Controller.ListJobsRequest()
     response = service.list_jobs(request, None)
@@ -1135,7 +1232,9 @@ def test_list_jobs_job_query_roots_and_children(service, state):
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
     with state._db.transaction() as cur:
-        state.submit_job(cur, child_id, child_req, Timestamp.now())
+        ops.job.submit(
+            cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
+        )
 
     roots_response = service.list_jobs(
         controller_pb2.Controller.ListJobsRequest(
@@ -1403,12 +1502,37 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
     assert len(constraints_from_json(job.constraints_json)) == 0
 
 
+def test_launch_job_deprecated_reservation_becomes_availability_constraint(service, state):
+    """A pre-availability client's ``reservation`` field is converted to hard
+    availability constraints at ingestion and nothing reservation-shaped is persisted."""
+    request = controller_pb2.Controller.LaunchJobRequest(
+        name=JobName.root("test-user", "old-client-job").to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+    )
+    # Two entries for the same accelerator collapse to a single constraint.
+    request.reservation.entries.add().resources.device.CopyFrom(tpu_device("v5litepod-16"))
+    request.reservation.entries.add().resources.device.CopyFrom(tpu_device("v5litepod-16"))
+
+    service.launch_job(request, None)
+
+    job = _query_job(state, JobName.root("test-user", "old-client-job"))
+    stored = constraints_from_json(job.constraints_json)
+    avail = [c for c in stored if c.key == availability_key("v5litepod-16")]
+    assert len(avail) == 1, stored
+    # Hard, zone-level constraint: EXISTS + REQUIRED — the job is confined to a
+    # zone that can provision the accelerator.
+    assert avail[0].op == ConstraintOp.EXISTS
+    assert avail[0].mode == job_pb2.CONSTRAINT_MODE_REQUIRED
+
+
 # =============================================================================
 # Register Role-Gating Tests
 # =============================================================================
 
 
-def test_register_requires_worker_role(state, mock_controller, tmp_path):
+def test_register_requires_worker_role(state, mock_controller, tmp_path, log_client):
     """Non-worker user gets PERMISSION_DENIED on register()."""
     db = state._db
     now = Timestamp.now()
@@ -1417,10 +1541,9 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
 
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
-        state,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(LogServiceImpl()),
+        log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),
@@ -1444,7 +1567,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
         _verified_identity.reset(token)
 
 
-def test_register_allows_worker_role(state, mock_controller, tmp_path):
+def test_register_allows_worker_role(state, mock_controller, tmp_path, log_client):
     """Worker-role user can call register()."""
     db = state._db
     now = Timestamp.now()
@@ -1453,10 +1576,9 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
 
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
-        state,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(LogServiceImpl()),
+        log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),
@@ -1479,6 +1601,52 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
         _verified_identity.reset(token)
 
 
+def test_register_requests_eviction_of_recycled_address_owner(service, state, mock_controller):
+    """Registering at an address still held by another row evicts the stale owner.
+
+    GCP recycles a deleted worker's internal IP onto a new VM. Left in place, the
+    dead row makes the controller misroute its address-keyed reconcile to the live
+    worker, which then zombie-kills its own tasks (the recycled-IP cross-talk). The
+    new registrant owns the address, so the prior holder is handed to the
+    controller for fail-and-teardown (deferred to the control-loop thread).
+    """
+    addr = "10.0.0.7:10001"
+    dead, live = WorkerId("dead-worker-0"), WorkerId("live-worker-0")
+    sentinel = WorkerId("__no_match__")
+
+    service.register(
+        controller_pb2.Controller.RegisterRequest(worker_id=str(dead), address=addr, metadata=make_worker_metadata()),
+        None,
+    )
+    with state._db.read_snapshot() as tx:
+        assert reads.worker_ids_at_address(tx, addr, exclude=sentinel) == [dead]
+    mock_controller.request_worker_eviction.assert_not_called()
+
+    service.register(
+        controller_pb2.Controller.RegisterRequest(worker_id=str(live), address=addr, metadata=make_worker_metadata()),
+        None,
+    )
+
+    # The live registrant now shares the address with the stale `dead` row, which
+    # is queued for eviction; the actual teardown rides the control tick.
+    mock_controller.request_worker_eviction.assert_called_once_with([dead])
+
+
+def test_register_distinct_addresses_requests_no_eviction(service, state, mock_controller):
+    """Registering at a fresh address leaves workers at other addresses untouched."""
+    meta = make_worker_metadata()
+    a, b = WorkerId("worker-a"), WorkerId("worker-b")
+    service.register(
+        controller_pb2.Controller.RegisterRequest(worker_id=str(a), address="10.0.0.1:10001", metadata=meta), None
+    )
+    service.register(
+        controller_pb2.Controller.RegisterRequest(worker_id=str(b), address="10.0.0.2:10001", metadata=meta), None
+    )
+    assert state._health.liveness(a).active
+    assert state._health.liveness(b).active
+    mock_controller.request_worker_eviction.assert_not_called()
+
+
 def test_get_scheduler_state_with_running_task(controller_service, state):
     """get_scheduler_state aggregates a running task into a (band, user, worker, job) bucket."""
     # Submit a job and move a task to RUNNING
@@ -1491,11 +1659,13 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         replicas=1,
     )
     with state._db.transaction() as cur:
-        state.submit_job(cur, job_id, request, Timestamp.now())
+        ops.job.submit(
+            cur, job_id=job_id, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
+        )
 
     w1 = WorkerId("w1")
     with state._db.transaction() as cur:
-        state.register_or_refresh_worker(
+        ops.worker.register(
             cur,
             worker_id=w1,
             address="w1:8080",
@@ -1507,6 +1677,8 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
                 disk_bytes=100 * 1024**3,
             ),
             ts=Timestamp.now(),
+            health=state._health,
+            worker_attrs=state._worker_attrs,
         )
     task_id = job_id.task(0)
     _assign_and_transition(state, task_id, w1, job_pb2.TASK_STATE_RUNNING)
@@ -1657,19 +1829,3 @@ def test_list_tasks_returns_current_attempt_timing(service, state):
     # exactly one attempt entry — the current one — even if more existed
     assert len(proto.attempts) == 1
     assert proto.attempts[0].attempt_id == proto.current_attempt_id
-
-
-def test_set_task_status_text_handler_is_noop(service):
-    """Deprecated handler must accept and discard the payload without error.
-
-    Old clients still call this RPC; new clients write to iris.task_status.
-    """
-    response = service.set_task_status_text(
-        job_pb2.SetTaskStatusTextRequest(
-            task_id="/u/job/0",
-            status_text_detail_md="ignored",
-            status_text_summary_md="ignored",
-        ),
-        None,
-    )
-    assert isinstance(response, job_pb2.SetTaskStatusTextResponse)

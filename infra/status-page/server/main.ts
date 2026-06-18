@@ -1,7 +1,7 @@
 // Hono entrypoint for the Marin status page.
 //
 // Serves:
-//   GET /api/ferry           — GitHub Actions ferry status (60s cache, last 10 days)
+//   GET /api/ferry           — GitHub Actions ferry status (60s cache, last 14 runs per tier)
 //   GET /api/builds          — GitHub per-commit CI rollup on main (60s cache, last 100 commits)
 //   GET /api/iris            — iris controller reachability (15s cache)
 //   GET /api/control-plane/health — active env Iris + finelog health history
@@ -20,9 +20,10 @@ import { Hono } from "hono";
 import { TTLCache } from "./cache.js";
 import { IrisPingHistory, ServiceHealthHistory, WorkerHistory } from "./history.js";
 import {
-  FERRY_WORKFLOWS,
-  fetchWorkflowStatus,
-  type FerryWorkflowStatus,
+  FERRY_GROUPS,
+  fetchTierStatus,
+  type FerryGroupStatus,
+  type FerryTierStatus,
 } from "./sources/githubActions.js";
 import { fetchBuildsOnMain, type BuildsResponse } from "./sources/githubCommits.js";
 import { irisStatus, pingIris, type IrisPingResult } from "./sources/iris.js";
@@ -35,10 +36,12 @@ import {
 } from "./sources/serviceHealth.js";
 import { workerSnapshot, type WorkersSnapshot } from "./sources/workers.js";
 
-const FERRY_WINDOW_DAYS = 10;
+const FERRY_RUN_LIMIT = 14;
 const BUILD_HISTORY = 100;
 
-const ferryCache = new TTLCache<FerryWorkflowStatus>(60_000);
+// Cache is keyed per tier workflow file so the three datakit tiers share
+// the same shield as the single-workflow ferries.
+const ferryCache = new TTLCache<FerryTierStatus>(60_000);
 const buildCache = new TTLCache<BuildsResponse>(60_000);
 const workersCache = new TTLCache<WorkersSnapshot>(15_000);
 const jobsCache = new TTLCache<JobsSnapshot>(60_000);
@@ -135,12 +138,17 @@ const app = new Hono();
 app.get("/api/health", (c) => c.json({ status: "ok" }));
 
 app.get("/api/ferry", async (c) => {
-  const results = await Promise.all(
-    FERRY_WORKFLOWS.map((wf) =>
-      ferryCache.get(wf.file, () => fetchWorkflowStatus(wf, FERRY_WINDOW_DAYS)),
-    ),
+  const groups: FerryGroupStatus[] = await Promise.all(
+    FERRY_GROUPS.map(async (group) => ({
+      name: group.name,
+      tiers: await Promise.all(
+        group.tiers.map((tier) =>
+          ferryCache.get(tier.file, () => fetchTierStatus(tier, FERRY_RUN_LIMIT)),
+        ),
+      ),
+    })),
   );
-  return c.json({ windowDays: FERRY_WINDOW_DAYS, workflows: results });
+  return c.json({ runLimit: FERRY_RUN_LIMIT, groups });
 });
 
 app.get("/api/builds", async (c) => {

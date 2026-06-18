@@ -24,6 +24,7 @@ import copy
 import dataclasses
 import json
 import logging
+import os
 import random
 import tempfile
 import time
@@ -54,10 +55,11 @@ from levanter.inference.engine import InferenceEngine, InferenceEngineConfig
 from levanter.inference.engine import Request as GenRequest
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.utils import INVALID
+from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
-from levanter.utils.background_iterable import BackgroundIterator
 from levanter.tokenizers import MarinTokenizer
+from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.py_utils import set_global_rng_seeds
 
 try:
@@ -339,7 +341,7 @@ class _LmEvalHarnessWorker:
                 raise ValueError(f"Unknown message type: {message}")
 
     def _receive_message(self):
-        stop_message = jnp.array(_Message.STOP)
+        stop_message = np.array(_Message.STOP)
         message = broadcast_shard(stop_message, PartitionSpec())
         return message.item()
 
@@ -355,7 +357,7 @@ class _LmEvalHarnessWorker:
 
     def _send_message(self, message):
         assert jax.process_index() == 0
-        out = broadcast_shard(jnp.array(message), PartitionSpec())
+        out = broadcast_shard(np.array(message), PartitionSpec())
         return out
 
     def _send_payload(self, payload):
@@ -393,10 +395,12 @@ def get_segment_ids_from_batch(batch: LmExample, max_segments_per_ex: int) -> li
     """
     Extract unique segment IDs from a batch (on host).
     """
-    if batch.attn_mask.segment_ids is None:
+    attn_mask = batch.attn_mask
+    assert isinstance(attn_mask, AttentionMask), "expected a structured AttentionMask with segment ids"
+    if attn_mask.segment_ids is None:
         segment_ids = []
     else:
-        segment_ids = jax.device_get(batch.attn_mask.segment_ids[0].array)
+        segment_ids = jax.device_get(attn_mask.segment_ids[0].array)
 
     unique_segs = np.unique(segment_ids).tolist()
 
@@ -419,7 +423,7 @@ def get_padding_count_from_batch(batch: LmExample, pad_token_id: int) -> tuple[i
     return padding_count, total_tokens
 
 
-def _effective_pad_token_id(tokenizer: MarinTokenizer) -> int:
+def _eval_pad_token_id(tokenizer: MarinTokenizer) -> int:
     """Return a padding token id without mutating read-only tokenizer wrappers."""
     if tokenizer.pad_token_id is not None:
         return tokenizer.pad_token_id
@@ -429,6 +433,7 @@ def _effective_pad_token_id(tokenizer: MarinTokenizer) -> int:
     return tokenizer.eos_token_id
 
 
+# pyrefly: ignore[invalid-inheritance]  # TemplateLM falls back to `object` when the optional lm_eval dep is absent
 class LevanterHarnessLM(TemplateLM):
     """
     Levanter implementation of the LM Eval Harness TemplateLM interface.
@@ -555,10 +560,6 @@ class LevanterHarnessLM(TemplateLM):
 
         return None
 
-    def _log_profiler_artifact(self):
-        """Log profiler artifact to the tracker."""
-        levanter.tracker.current_tracker().log_artifact(self.profiler_config.profile_path, type="jax_profile")
-
     def _handle_profiler_step(self):
         """Check if we should start or stop the profiler at this step."""
         if not self.profiler_config.enabled:
@@ -587,7 +588,6 @@ class LevanterHarnessLM(TemplateLM):
             logger.info(f"Stopping profiler at step {self._current_step}")
             jax.profiler.stop_trace()
             self._profiler_started = False
-            self._log_profiler_artifact()
 
     def _stop_profiler_if_needed(self):
         """Ensure profiler is stopped if it was started."""
@@ -595,7 +595,6 @@ class LevanterHarnessLM(TemplateLM):
             logger.info("Stopping profiler (end of evaluation).")
             jax.profiler.stop_trace()
             self._profiler_started = False
-            self._log_profiler_artifact()
 
     def _loglikelihood_tokens(self, requests, disable_tqdm: bool = False):
         raise NotImplementedError("_loglikelihood_tokens is not yet supported")
@@ -606,7 +605,7 @@ class LevanterHarnessLM(TemplateLM):
         Downstream tasks should attempt to use loglikelihood instead of other
         LM calls whenever possible.
         """
-        pad_token_id = _effective_pad_token_id(self.tokenizer)
+        pad_token_id = _eval_pad_token_id(self.tokenizer)
 
         current_task = getattr(self, "_current_task", "loglikelihood_task")
         for request in requests:
@@ -659,16 +658,11 @@ class LevanterHarnessLM(TemplateLM):
             # Handle profiler start/stop based on step
             self._handle_profiler_step()
 
-            batch = hax.shard(batch, self.axis_resources)
-
             segments_this_batch = get_segment_ids_from_batch(
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
             )
 
             padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token_id)
-            batch = jax.device_put(batch)
-
-            batch = jax.device_put(batch)
 
             out_ids, out_lls, out_correct = self.leader.dispatch_loglikelihood(batch)
 
@@ -779,6 +773,7 @@ class LevanterHarnessLM(TemplateLM):
             return None
 
         # Process stop sequences to ensure EOS is included
+        # pyrefly: ignore[not-callable]  # handle_stop_sequences is None only when the optional lm_eval dep is absent
         processed_until = handle_stop_sequences(until, eos=eos)
 
         if not processed_until:
@@ -823,7 +818,7 @@ class LevanterHarnessLM(TemplateLM):
         # Implement simple generation using InferenceEngine.
         # requests: list[Instance] where args[0] = prompt, args[1] may be stop strings (list[str])
         # kwargs may include max_gen_toks, temperature, n (n_generations), seed
-        _effective_pad_token_id(self.tokenizer)
+        _eval_pad_token_id(self.tokenizer)
 
         # Require a model with paged decode support
         if not hasattr(self.leader.model, "initial_cache") or not hasattr(self.leader.model, "decode"):
@@ -966,6 +961,7 @@ class LevanterHarnessLM(TemplateLM):
                 text = self.tok_decode(full_tokens, skip_special_tokens=True)
 
                 # Post-process the generated text using the imported utility function
+                # pyrefly: ignore[not-callable]  # postprocess_generated_text is None only when the optional lm_eval dep is absent
                 text = postprocess_generated_text(
                     text, gen_kwargs.get("until"), None  # think_end_token - could be made configurable if needed
                 )
@@ -1182,7 +1178,7 @@ class LmEvalHarnessConfig:
         downloading evaluation datasets.
         """
         logger.info("Loading tasks...")
-        import lm_eval.tasks as tasks
+        import lm_eval.tasks as tasks  # noqa: PLC0415  # optional dep: lm_eval
 
         manager = tasks.TaskManager()
         # we need to do it this way b/c i can't figure out how to run e.g. hellaswag 0 shot and 10 shot in a single run
@@ -1216,7 +1212,7 @@ class LmEvalHarnessConfig:
 
         Uses retry logic with exponential backoff to handle HuggingFace rate limits.
         """
-        import lm_eval.tasks as tasks
+        import lm_eval.tasks as tasks  # noqa: PLC0415  # optional dep: lm_eval
 
         task_name = task if isinstance(task, str) else task["task"]
 
@@ -1230,8 +1226,8 @@ class LmEvalHarnessConfig:
         return this_task
 
     def _rename_tasks_for_eval_harness(self, this_task, lm_eval_task_name, our_name):
-        from lm_eval.api.group import ConfigurableGroup
-        from lm_eval.api.task import ConfigurableTask
+        from lm_eval.api.group import ConfigurableGroup  # noqa: PLC0415  # optional dep: lm_eval
+        from lm_eval.api.task import ConfigurableTask  # noqa: PLC0415  # optional dep: lm_eval
 
         # hacky, but this allows us to run multiple instances of the same task with different fewshot settings
         if isinstance(this_task, dict):
@@ -1282,7 +1278,7 @@ class LmEvalHarnessConfig:
         return lm_eval_name
 
     def _get_child_tasks(self, task_group):
-        from lm_eval.api.group import ConfigurableGroup
+        from lm_eval.api.group import ConfigurableGroup  # noqa: PLC0415  # optional dep: lm_eval
 
         out = []
         for k, v in task_group.items():
@@ -1554,11 +1550,14 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
             model_config = config.model
             converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
             converter = converter.replaced(reference_checkpoint=config.checkpoint_path, tokenizer=tokenizer)
-            model = converter.load_pretrained(
-                model_config.model_type,
-                ref=config.checkpoint_path,
-                dtype=config.trainer.mp.compute_dtype,  # type: ignore
-                axis_mapping=parameter_axis_mapping,
+            model = typing.cast(
+                LmHeadModel,
+                converter.load_pretrained(
+                    model_config.model_type,
+                    ref=config.checkpoint_path,
+                    dtype=config.trainer.mp.compute_dtype,  # type: ignore
+                    axis_mapping=parameter_axis_mapping,
+                ),
             )
         else:
             with use_cpu_device():
@@ -1924,7 +1923,7 @@ def _pack_requests(
 ) -> list[LmExample] | tuple[list[LmExample], _TokenizedLoglikelihoodRequests]:
     tokenized = _tokenize_loglikelihood_requests(requests, tokenizer, Pos.size, batch_size=128)
     if pad_token_id is None:
-        pad_token_id = _effective_pad_token_id(tokenizer)
+        pad_token_id = _eval_pad_token_id(tokenizer)
     # TODO: use a better packing algorithm?
     packed = greedy_pack_prompt_completions(
         Pos,

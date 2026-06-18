@@ -15,9 +15,14 @@ Usage:
     uv run python tests/benchmark_parquet_reader.py --size-gb 1 --modes dataset,iter_row_groups
 """
 
+import base64
 import gc
+import json
 import logging
 import os
+import random
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -26,7 +31,10 @@ from typing import Any
 import click
 import psutil
 import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.dataset as pads
 import pyarrow.parquet as pq
+from zephyr.readers import iter_parquet_row_groups
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -46,8 +54,6 @@ def _generate_batch(rows: int, shard_idx: int, chunk_idx: int, offset: int = 0) 
 
     Uses os.urandom text so Parquet compression can't hide the real size.
     """
-    import base64
-    import random
 
     ids = list(range(offset, offset + rows))
     scores = [random.random() * 100 for _ in range(rows)]
@@ -83,9 +89,8 @@ def write_test_file(path: str, target_bytes: int, row_group_mb: int = 100) -> di
     # Calibrate rows per row group from a sample
     sample = _generate_batch(1000, 0, 0)
     sample_table = pa.Table.from_batches([sample])
-    import tempfile as _tf
 
-    with _tf.NamedTemporaryFile(suffix=".parquet") as tmp:
+    with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
         pq.write_table(sample_table, tmp.name)
         disk_bytes_per_row = os.path.getsize(tmp.name) / len(sample_table)
 
@@ -172,7 +177,6 @@ def _mem() -> dict[str, float]:
 
 def read_dataset_full(path: str, limit: int | None = None) -> dict[str, Any]:
     """Full scan via pyarrow.dataset.to_batches."""
-    import pyarrow.dataset as pads
 
     def run():
         ds = pads.dataset(path, format="parquet")
@@ -186,7 +190,6 @@ def read_dataset_full(path: str, limit: int | None = None) -> dict[str, Any]:
 
 def read_rowgroups_full(path: str, limit: int | None = None) -> dict[str, Any]:
     """Full scan via iter_parquet_row_groups."""
-    from zephyr.readers import iter_parquet_row_groups
 
     def run():
         n = 0
@@ -203,9 +206,6 @@ def read_rowgroups_full(path: str, limit: int | None = None) -> dict[str, Any]:
 
 def read_dataset_scatter(path: str, limit: int | None = None) -> dict[str, Any]:
     """Read one (shard, chunk) via dataset Scanner — the old scatter reader."""
-    import pyarrow.compute as pc
-    import pyarrow.dataset as pads
-
     target_shard = _NUM_SHARDS // 2
     target_chunk = _CHUNKS_PER_SHARD // 2
 
@@ -255,9 +255,6 @@ def print_results(results: list[dict[str, Any]]) -> None:
 
 
 def _run_in_subprocess(mode: str, path: str, script_path: str) -> dict[str, Any]:
-    import json
-    import subprocess
-
     cmd = [sys.executable, script_path, "--file", path, "--modes", mode, "--json"]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     if proc.returncode != 0:
@@ -298,8 +295,6 @@ def main(
 
     if json_output:
         assert file_path and len(selected) == 1
-        import json
-
         result = READERS[selected[0]](file_path)
         print(json.dumps(result))
         return
@@ -332,8 +327,6 @@ def main(
         print_results(results)
     finally:
         if tmpdir and not keep_file:
-            import shutil
-
             shutil.rmtree(tmpdir)
             logger.info("Cleaned up %s", tmpdir)
         elif tmpdir:

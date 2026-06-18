@@ -14,7 +14,7 @@ from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environmen
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import VllmEnvironment
-from marin.utils import remove_tpu_lockfile_on_exit
+from marin.training.run_environment import env_vars_for_dependency_groups
 
 
 def run_one_query(
@@ -155,10 +155,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.repeat < 1:
         raise ValueError("--repeat must be >= 1")
 
+    dependency_groups = ["eval", "tpu", "vllm"]
+    resources = ResourceConfig.with_tpu(args.tpu_type)
+    env_vars: dict[str, str] = {}
+    if args.local_cache_dir is not None:
+        env_vars["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
+        env_vars["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
+
     if args.local:
-        if args.local_cache_dir is not None:
-            os.environ["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
-            os.environ["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
+        local_env = env_vars_for_dependency_groups(resources, dependency_groups, env_vars)
+        os.environ.update(env_vars)
+        for key, value in local_env.items():
+            os.environ.setdefault(key, value)
 
         for i in range(args.repeat):
             start = time.time()
@@ -175,41 +183,34 @@ def main(argv: list[str] | None = None) -> int:
             print(output)
         return 0
 
-    env_vars: dict[str, str] = {}
-    if args.local_cache_dir is not None:
-        env_vars["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
-        env_vars["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
-
     def _run() -> None:
-        with remove_tpu_lockfile_on_exit():
-            for i in range(args.repeat):
-                start = time.time()
-                try:
-                    output = run_one_query(
-                        model_name_or_path=args.model,
-                        prompt=args.prompt,
-                        load_format=args.load_format,
-                        max_model_len=args.max_model_len,
-                        port=args.port,
-                        use_completions=args.use_completions,
-                    )
-                except Exception:
-                    traceback.print_exc()
-                    raise
-                elapsed = time.time() - start
-                print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
-                print(output)
+        for i in range(args.repeat):
+            start = time.time()
+            try:
+                output = run_one_query(
+                    model_name_or_path=args.model,
+                    prompt=args.prompt,
+                    load_format=args.load_format,
+                    max_model_len=args.max_model_len,
+                    port=args.port,
+                    use_completions=args.use_completions,
+                )
+            except Exception:
+                traceback.print_exc()
+                raise
+            elapsed = time.time() - start
+            print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
+            print(output)
 
     client = current_client()
-    resources = ResourceConfig.with_tpu(args.tpu_type)
     job_request = JobRequest(
         name=f"vllm-smoke:{args.tpu_type}",
         entrypoint=Entrypoint.from_callable(_run),
         resources=resources,
         environment=create_environment(
-            extras=["eval", "tpu", "vllm"],
+            extras=dependency_groups,
             pip_packages=(),
-            env_vars=env_vars or None,
+            env_vars=env_vars_for_dependency_groups(resources, dependency_groups, env_vars),
         ),
     )
     job = client.submit(job_request)

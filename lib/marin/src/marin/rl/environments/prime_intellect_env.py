@@ -6,6 +6,7 @@ Environment Wrapper for the Environments Hub by Prime-Intellect, which contains 
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
 import logging
+import subprocess
 from typing import Any, ClassVar, cast
 
 import jax.numpy as jnp
@@ -49,7 +50,7 @@ class PrimeIntellectEnv(MarinEnv):
     def _ensure_verifiers_installed(self):
         """Ensure verifiers package is installed."""
         try:
-            import verifiers  # noqa: F401
+            import verifiers  # noqa: F401,PLC0415  # optional dep: verifiers
         except ImportError as e:
             raise ImportError(
                 "The 'verifiers' package is required to use PrimeIntellectEnv. "
@@ -61,7 +62,7 @@ class PrimeIntellectEnv(MarinEnv):
         Get the Verifiers environment for the environment ID.
         """
         self._ensure_verifiers_installed()
-        import verifiers as vf
+        import verifiers as vf  # noqa: PLC0415  # optional dep: verifiers
 
         logger.debug(f"Loading Verifiers environment for {env_id} with arguments: {env_args}")
 
@@ -84,9 +85,8 @@ class PrimeIntellectEnv(MarinEnv):
         del prng_key, system_prompt
         decoding = inference_ctx.resolve_decoding(decoding)
         self._ensure_verifiers_installed()
-        import subprocess
 
-        from verifiers.types import GenerateOutputs
+        from verifiers.types import GenerateOutputs  # noqa: PLC0415  # optional dep: verifiers
 
         # Download/install the environment
         subprocess.run(["prime", "env", "install", self.env_id], check=True)

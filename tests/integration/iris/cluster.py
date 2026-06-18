@@ -10,13 +10,7 @@ from dataclasses import dataclass
 from finelog.rpc import logging_pb2
 from iris.client.client import IrisClient, Job
 from iris.cluster.constraints import Constraint
-from iris.cluster.types import (
-    CoschedulingConfig,
-    Entrypoint,
-    EnvironmentSpec,
-    ReservationEntry,
-    ResourceSpec,
-)
+from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration
 
@@ -57,7 +51,6 @@ class IrisIntegrationCluster:
         timeout: Duration | None = None,
         coscheduling: CoschedulingConfig | None = None,
         constraints: list[Constraint] | None = None,
-        reservation: list[ReservationEntry] | None = None,
     ) -> Job:
         """Submit a callable as a job."""
         return self.client.submit(
@@ -73,7 +66,6 @@ class IrisIntegrationCluster:
             timeout=timeout,
             coscheduling=coscheduling,
             constraints=constraints,
-            reservation=reservation,
         )
 
     def status(self, job: Job) -> job_pb2.JobStatus:

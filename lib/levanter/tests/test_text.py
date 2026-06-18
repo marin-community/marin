@@ -1,9 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 import json
-import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -15,16 +14,12 @@ import pytest
 
 import haliax as hax
 
-from levanter.data import ListAsyncDataset
-import levanter.data.text.datasets as text_datasets
 from levanter.data.text import (
     BatchTokenizer,
     ChatLmDatasetFormat,
     ChatDataset,
     DatasetComponent,
-    DirectDatasetComponent,
     GrugLmExample,
-    HierarchicalMixtureDatasetComponent,
     LmDataConfig,
     LmDatasetFormatBase,
     PreferenceChatLmDatasetFormat,
@@ -168,6 +163,25 @@ def test_merge_split_encodings(local_gpt2_marin_tokenizer):
     reg_out = batch_tokenizer(batch)
 
     assert short_out == reg_out
+
+
+def test_long_string_workaround_matches_whole_encoding_across_many_chunks(local_gpt2_marin_tokenizer):
+    """Cursor-based long-string splitting must match whole-string encoding over many chunks.
+
+    ``_encode_long_string`` walks a cursor over the original text instead of
+    re-slicing the unconsumed tail. This exercises hundreds of cursor advances
+    (~650 chunks at ``_workaround_len=500``) and asserts the ids are byte-for-byte
+    identical to the single-shot path, guarding the O(N) rewrite against drift.
+    """
+    tokenizer = local_gpt2_marin_tokenizer
+    text = "lorem ipsum dolor sit amet " * 12_000  # ~324k chars
+
+    split_tok = BatchTokenizer(tokenizer, _workaround_len=500, long_string_workaround=True)
+    # _workaround_len above any realistic length => never splits => reference path.
+    whole_tok = BatchTokenizer(tokenizer, _workaround_len=10**9, long_string_workaround=True)
+    batch = [{"text": text}]
+
+    assert split_tok(batch) == whole_tok(batch)
 
 
 # ---------------------------------------------------------------------------
@@ -524,354 +538,6 @@ def test_train_set_last_mile_wraps_to_named(tmp_path):
     assert isinstance(named_example, LmExample)
 
 
-def test_hierarchical_component_defers_child_cache_loads_until_first_batch(tmp_path, monkeypatch):
-    child_paths = []
-    for index, tokens in enumerate(([1, 2, 3, 4], [5, 6, 7, 8])):
-        data_path = tmp_path / f"prebuilt_{index}.jsonl"
-        with data_path.open("w") as f:
-            f.write(json.dumps({"input_ids": tokens}) + "\n")
-        child_paths.append(data_path)
-
-    hierarchical = HierarchicalMixtureDatasetComponent(
-        components={
-            "left": DatasetComponent(
-                source=UrlDatasetSourceConfig(train_urls=[str(child_paths[0])], validation_urls=[]),
-                format=PrebuiltLmDatasetFormat(),
-                cache_dir=str(tmp_path / "cache_left"),
-            ),
-            "right": DatasetComponent(
-                source=UrlDatasetSourceConfig(train_urls=[str(child_paths[1])], validation_urls=[]),
-                format=PrebuiltLmDatasetFormat(),
-                cache_dir=str(tmp_path / "cache_right"),
-            ),
-        },
-        train_weights={"left": 0.5, "right": 0.5},
-    )
-
-    for child_component in hierarchical.components.values():
-        source = child_component.source
-        assert source is not None
-        shard_source = source.get_shard_source("train")
-        assert shard_source is not None
-        build_lm_dataset_cache(
-            os.path.join(child_component.cache_dir, "train"),
-            shard_source,
-            child_component.format,
-            text_datasets.PassthroughTokenizer(16),
-        )
-
-    cache_calls: list[str] = []
-    original_build_or_load = text_datasets.build_lm_dataset_cache
-
-    def tracked_build_or_load(*args, **kwargs):
-        cache_calls.append(args[0])
-        return original_build_or_load(*args, **kwargs)
-
-    monkeypatch.setattr("levanter.data.text.datasets.build_lm_dataset_cache", tracked_build_or_load)
-
-    config = LmDataConfig(
-        components={"group": hierarchical},
-        train_weights={"group": 1.0},
-        tokenizer="passthrough",
-        vocab_size=16,
-        shuffle=False,
-    )
-    Pos = hax.Axis("position", 4)
-
-    train_sets = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))
-
-    assert cache_calls == []
-    first = train_sets["group"].as_sync_dataset()[0]
-    assert isinstance(first, GrugLmExample)
-    assert len(cache_calls) == 1
-
-
-def test_hierarchical_component_first_few_examples_stay_on_one_child_cache(tmp_path, monkeypatch):
-    child_paths = []
-    for index, tokens in enumerate(([1, 2, 3, 4], [5, 6, 7, 8])):
-        data_path = tmp_path / f"clustered_{index}.jsonl"
-        with data_path.open("w") as f:
-            f.write(json.dumps({"input_ids": tokens}) + "\n")
-        child_paths.append(data_path)
-
-    hierarchical = HierarchicalMixtureDatasetComponent(
-        components={
-            "left": DatasetComponent(
-                source=UrlDatasetSourceConfig(train_urls=[str(child_paths[0])], validation_urls=[]),
-                format=PrebuiltLmDatasetFormat(),
-                cache_dir=str(tmp_path / "clustered_cache_left"),
-            ),
-            "right": DatasetComponent(
-                source=UrlDatasetSourceConfig(train_urls=[str(child_paths[1])], validation_urls=[]),
-                format=PrebuiltLmDatasetFormat(),
-                cache_dir=str(tmp_path / "clustered_cache_right"),
-            ),
-        },
-        train_weights={"left": 0.5, "right": 0.5},
-    )
-
-    for child_component in hierarchical.components.values():
-        source = child_component.source
-        assert source is not None
-        shard_source = source.get_shard_source("train")
-        assert shard_source is not None
-        build_lm_dataset_cache(
-            os.path.join(child_component.cache_dir, "train"),
-            shard_source,
-            child_component.format,
-            text_datasets.PassthroughTokenizer(16),
-        )
-
-    cache_calls: list[str] = []
-    original_build_or_load = text_datasets.build_lm_dataset_cache
-
-    def tracked_build_or_load(*args, **kwargs):
-        cache_calls.append(args[0])
-        return original_build_or_load(*args, **kwargs)
-
-    monkeypatch.setattr("levanter.data.text.datasets.build_lm_dataset_cache", tracked_build_or_load)
-
-    config = LmDataConfig(
-        components={"group": hierarchical},
-        train_weights={"group": 1.0},
-        tokenizer="passthrough",
-        vocab_size=16,
-        shuffle=False,
-    )
-    Pos = hax.Axis("position", 4)
-
-    train_sets = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))
-    sync_dataset = train_sets["group"].as_sync_dataset()
-
-    for index in range(8):
-        example = sync_dataset[index]
-        assert isinstance(example, GrugLmExample)
-
-    assert len(cache_calls) == 1
-
-
-def test_hierarchical_component_uses_token_counts_for_simulated_epoching_without_loading_children(monkeypatch):
-    hierarchical = HierarchicalMixtureDatasetComponent(
-        components={
-            "left": DatasetComponent(cache_dir="/tmp/does-not-exist-left"),
-            "right": DatasetComponent(cache_dir="/tmp/does-not-exist-right"),
-        },
-        train_weights={"left": 0.5, "right": 0.5},
-        token_counts={"left": 8192, "right": 4096},
-    )
-
-    def fail_load(*args, **kwargs):
-        raise AssertionError("load_lm_dataset_cache should not be called during hierarchical startup")
-
-    monkeypatch.setattr("levanter.data.text.datasets.load_lm_dataset_cache", fail_load)
-
-    config = LmDataConfig(
-        components={"group": hierarchical},
-        train_weights={"group": 1.0},
-        tokenizer="gpt2",
-        shuffle=False,
-        experiment_budget=1024,
-        target_budget=2048,
-    )
-    Pos = hax.Axis("position", 2048)
-
-    train_sets = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))
-
-    assert train_sets["group"].is_finite()
-    assert len(train_sets["group"].as_sync_dataset()) > 0
-
-
-def test_simulated_epoching_fixed_subset_seed_stabilizes_direct_dataset_membership():
-    direct = DirectDatasetComponent(datasets={"train": ListAsyncDataset(list(range(40)))})
-    config = LmDataConfig(
-        components={"group": direct},
-        train_weights={"group": 1.0},
-        tokenizer="passthrough",
-        vocab_size=64,
-        shuffle=True,
-        experiment_budget=20,
-        target_budget=40,
-    )
-    fixed_subset_config = dataclasses.replace(config, simulated_epoch_subset_seed=97)
-    Pos = hax.Axis("position", 4)
-
-    run0 = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))["group"].as_sync_dataset()
-    run1 = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(1))["group"].as_sync_dataset()
-    fixed_run0 = fixed_subset_config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))[
-        "group"
-    ].as_sync_dataset()
-    fixed_run1 = fixed_subset_config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(1))[
-        "group"
-    ].as_sync_dataset()
-
-    run0_values = [run0[i] for i in range(len(run0))]
-    run1_values = [run1[i] for i in range(len(run1))]
-    fixed_run0_values = [fixed_run0[i] for i in range(len(fixed_run0))]
-    fixed_run1_values = [fixed_run1[i] for i in range(len(fixed_run1))]
-
-    assert set(run0_values) != set(run1_values)
-    assert set(fixed_run0_values) == set(fixed_run1_values)
-    assert fixed_run0_values != fixed_run1_values
-
-
-def test_simulated_epoching_fixed_subset_seed_stabilizes_hierarchical_membership(monkeypatch):
-    hierarchical = HierarchicalMixtureDatasetComponent(
-        components={
-            "left": DatasetComponent(cache_dir="/tmp/does-not-exist-left"),
-            "right": DatasetComponent(cache_dir="/tmp/does-not-exist-right"),
-        },
-        train_weights={"left": 0.5, "right": 0.5},
-        token_counts={"left": 20, "right": 20},
-    )
-    config = LmDataConfig(
-        components={"group": hierarchical},
-        train_weights={"group": 1.0},
-        tokenizer="passthrough",
-        vocab_size=64,
-        shuffle=True,
-        experiment_budget=8,
-        target_budget=40,
-    )
-    fixed_subset_config = dataclasses.replace(config, simulated_epoch_subset_seed=97)
-    Pos = hax.Axis("position", 1)
-
-    original_build = text_datasets.LmDataConfig._build_token_dataset_for_component
-
-    def fake_build(self, name, component, Pos, *, split, caches):
-        if isinstance(component, DatasetComponent):
-            if name.endswith("/left"):
-                return ListAsyncDataset(list(range(100, 120)))
-            if name.endswith("/right"):
-                return ListAsyncDataset(list(range(200, 220)))
-        return original_build(self, name, component, Pos, split=split, caches=caches)
-
-    monkeypatch.setattr(text_datasets.LmDataConfig, "_build_token_dataset_for_component", fake_build)
-
-    run0 = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))["group"].as_sync_dataset()
-    run1 = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(1))["group"].as_sync_dataset()
-    fixed_run0 = fixed_subset_config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))[
-        "group"
-    ].as_sync_dataset()
-    fixed_run1 = fixed_subset_config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(1))[
-        "group"
-    ].as_sync_dataset()
-
-    run0_values = [run0[i] for i in range(len(run0))]
-    run1_values = [run1[i] for i in range(len(run1))]
-    fixed_run0_values = [fixed_run0[i] for i in range(len(fixed_run0))]
-    fixed_run1_values = [fixed_run1[i] for i in range(len(fixed_run1))]
-
-    assert set(run0_values) != set(run1_values)
-    assert set(fixed_run0_values) == set(fixed_run1_values)
-    assert fixed_run0_values != fixed_run1_values
-
-
-def test_hierarchical_component_uses_metadata_length_when_tiny_child_weight_rounds_to_zero(monkeypatch):
-    hierarchical = HierarchicalMixtureDatasetComponent(
-        components={
-            "large": DatasetComponent(cache_dir="/tmp/does-not-exist-large"),
-            "tiny": DatasetComponent(cache_dir="/tmp/does-not-exist-tiny"),
-        },
-        train_weights={"large": 40_000, "tiny": 4},
-        token_counts={"large": 40_000, "tiny": 4},
-    )
-
-    def fail_load(*args, **kwargs):
-        raise AssertionError("load_lm_dataset_cache should not be called during hierarchical startup")
-
-    monkeypatch.setattr("levanter.data.text.datasets.load_lm_dataset_cache", fail_load)
-
-    config = LmDataConfig(
-        components={"group": hierarchical},
-        train_weights={"group": 1.0},
-        tokenizer="gpt2",
-        shuffle=False,
-        experiment_budget=1024,
-        target_budget=2048,
-        mixture_block_size=2048,
-    )
-    Pos = hax.Axis("position", 4)
-
-    train_sets = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))
-
-    assert train_sets["group"].is_finite()
-    assert len(train_sets["group"].as_sync_dataset()) == 5000
-
-
-def test_hierarchical_component_skips_empty_validation_split(tmp_path):
-    train_path = tmp_path / "train.jsonl"
-    with train_path.open("w") as f:
-        f.write(json.dumps({"input_ids": [1, 2, 3, 4]}) + "\n")
-
-    hierarchical = HierarchicalMixtureDatasetComponent(
-        components={
-            "left": DatasetComponent(
-                source=UrlDatasetSourceConfig(train_urls=[str(train_path)], validation_urls=[]),
-                format=PrebuiltLmDatasetFormat(),
-                cache_dir=str(tmp_path / "cache_left"),
-            ),
-            "right": DatasetComponent(
-                source=UrlDatasetSourceConfig(train_urls=[str(train_path)], validation_urls=[]),
-                format=PrebuiltLmDatasetFormat(),
-                cache_dir=str(tmp_path / "cache_right"),
-            ),
-        },
-        train_weights={"left": 0.5, "right": 0.5},
-    )
-
-    config = LmDataConfig(
-        components={"group": hierarchical},
-        train_weights={"group": 1.0},
-        tokenizer="passthrough",
-        vocab_size=16,
-        shuffle=False,
-    )
-    Pos = hax.Axis("position", 4)
-
-    assert config.validation_sets(Pos) == {}
-
-
-def test_hierarchical_component_validation_uses_available_children_only(tmp_path):
-    train_path = tmp_path / "train.jsonl"
-    validation_path = tmp_path / "validation.jsonl"
-    with train_path.open("w") as f:
-        f.write(json.dumps({"input_ids": [1, 2, 3, 4]}) + "\n")
-    with validation_path.open("w") as f:
-        f.write(json.dumps({"input_ids": [5, 6, 7, 8]}) + "\n")
-
-    hierarchical = HierarchicalMixtureDatasetComponent(
-        components={
-            "left": DatasetComponent(
-                source=UrlDatasetSourceConfig(train_urls=[str(train_path)], validation_urls=[]),
-                format=PrebuiltLmDatasetFormat(),
-                cache_dir=str(tmp_path / "cache_left"),
-            ),
-            "right": DatasetComponent(
-                source=UrlDatasetSourceConfig(train_urls=[str(train_path)], validation_urls=[str(validation_path)]),
-                format=PrebuiltLmDatasetFormat(),
-                cache_dir=str(tmp_path / "cache_right"),
-            ),
-        },
-        train_weights={"left": 0.5, "right": 0.5},
-    )
-
-    config = LmDataConfig(
-        components={"group": hierarchical},
-        train_weights={"group": 1.0},
-        tokenizer="passthrough",
-        vocab_size=16,
-        shuffle=False,
-    )
-
-    validation_sets = config.validation_grug_sets(seq_len=4)
-
-    assert set(validation_sets) == {"group"}
-    dataset = validation_sets["group"]
-    assert dataset.is_finite()
-    assert len(dataset.as_sync_dataset()) == 1
-    assert isinstance(dataset.as_sync_dataset()[0], GrugLmExample)
-
-
 def test_dataset_for_component_rejects_preference_format():
     component = DatasetComponent(format=PreferenceChatLmDatasetFormat())
     Pos = hax.Axis("position", 8)
@@ -1168,3 +834,43 @@ def test_build_caches_propagates_exception_from_one_component(tmp_path):
     )
     with pytest.raises(ValueError, match="No source and no cache"):
         config.build_caches("train")
+
+
+def test_build_caches_rebuilds_on_unloadable_cache(tmp_path):
+    """A cache dir that exists but won't load (no shard_ledger.json — the
+    leftover of a cache build killed before it finished) must not crash-loop:
+    with auto_build_caches on, build_caches catches the FileNotFoundError and
+    falls through to rebuild rather than propagating it.
+    """
+    records = [{"input_ids": [1, 2, 3, 4]}, {"input_ids": [5, 6, 7, 8]}]
+    data_path = tmp_path / "data.jsonl"
+    with data_path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
+        format=PrebuiltLmDatasetFormat(),
+        cache_dir=str(tmp_path),
+    )
+    config = LmDataConfig(components={"c": component}, tokenizer="passthrough", vocab_size=16)
+    assert config.auto_build_caches  # precondition: rebuild path is enabled
+
+    config.build_caches("train")  # first build → complete cache
+
+    # Reduce the cache dir to "exists but unloadable": keep the directory so
+    # fsspec exists() is True, but empty it so load_lm_dataset_cache raises
+    # FileNotFoundError (no ledger). This is the partial state a killed build
+    # leaves behind.
+    cache_path = next(tmp_path.glob("**/shard_ledger.json")).parent
+    for child in cache_path.iterdir():
+        shutil.rmtree(child) if child.is_dir() else child.unlink()
+    assert cache_path.exists() and not any(cache_path.iterdir())
+
+    rebuilt = config.build_caches("train")["c"]
+    assert (cache_path / "shard_ledger.json").exists(), "rebuild should restore the ledger"
+    Pos = hax.Axis("position", 4)
+    ds = dataset_for_component(
+        component, Pos, rebuilt, eos_id=None, block_cross_document_attention=config.block_cross_document_attention
+    ).as_sync_dataset()
+    np.testing.assert_array_equal(np.asarray(ds[0].tokens), np.array(records[0]["input_ids"], dtype=np.int32))

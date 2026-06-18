@@ -112,7 +112,7 @@ def test_stage_lm_eval_source_renders_mmlu_with_choices_and_answer(tmp_path: Pat
     )
 
     with patch(
-        "marin.transform.evaluation.raw_lm_eval._load_hf_iterable",
+        "marin.transform.evaluation.raw_lm_eval.load_hf_split_iterable",
         side_effect=[
             iter(
                 [
@@ -185,7 +185,7 @@ def test_stage_lm_eval_source_renders_gsm8k_in_icl_format(tmp_path: Path):
     )
 
     with patch(
-        "marin.transform.evaluation.raw_lm_eval._load_hf_iterable",
+        "marin.transform.evaluation.raw_lm_eval.load_hf_split_iterable",
         return_value=iter([_gsm8k_fixture()]),
     ):
         result = stage_lm_eval_source(cfg)

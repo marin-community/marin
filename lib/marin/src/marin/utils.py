@@ -4,9 +4,7 @@
 import logging
 import os
 import re
-import subprocess
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any, TypeVar
 
@@ -247,35 +245,6 @@ def rebase_file_path(
             dot_idx = rel_path.rfind(".")
             rel_path = (rel_path[:dot_idx] if dot_idx != -1 else rel_path) + new_extension
     return os.path.join(base_out_path, rel_path)
-
-
-@contextmanager
-def remove_tpu_lockfile_on_exit() -> Iterator[None]:
-    """Context manager that removes the TPU lockfile when the block exits."""
-    try:
-        yield
-    finally:
-        _hacky_remove_tpu_lockfile()
-
-
-def _hacky_remove_tpu_lockfile():
-    """
-    This is a hack to remove the lockfile that TPU pods create on the host filesystem.
-
-    libtpu only allows one process to access the TPU at a time, and it uses a lockfile to enforce this.
-    Ordinarily a lockfile would be removed when the process exits, but a long-running worker process may not exit until
-    the node is shut down. This means that the lockfile can persist across tasks. This doesn't apply to tasks that fork a
-    new process to do the TPU work, but does apply to tasks that run the TPU code in the same long-running worker
-    process.
-    """
-    try:
-        os.unlink("/tmp/libtpu_lockfile")
-    except FileNotFoundError:
-        pass
-    except PermissionError:
-        result = subprocess.run(["sudo", "rm", "-f", "/tmp/libtpu_lockfile"], capture_output=True)
-        if result.returncode != 0:
-            logger.error("Failed to remove lockfile: %s", result.stderr.decode(errors="replace"))
 
 
 def get_directory_friendly_name(name: str) -> str:

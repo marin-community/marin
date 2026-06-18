@@ -8,9 +8,9 @@ without spinning up a full coordinator.
 """
 
 import pytest
-from zephyr.execution import _worker_ctx_var
-from zephyr.plan import deterministic_hash
+from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
 from zephyr.runners import _InProcessWorkerContext
+from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
     ScatterFileIterator,
     ScatterReader,
@@ -18,12 +18,13 @@ from zephyr.shuffle import (
     _write_chunk_frame,
     _write_scatter,
 )
+from zephyr.worker_context import _worker_ctx_var
 
 
 @pytest.fixture(autouse=True)
 def mock_worker_ctx():
     """Provide a dummy worker context so ScatterWriter can resolve num_workers."""
-    ctx = _InProcessWorkerContext(chunk_prefix="test", execution_id="test", num_workers=1)
+    ctx = _InProcessWorkerContext(chunk_prefix="test", execution_id="test", stage_name="test", num_workers=1)
     token = _worker_ctx_var.set(ctx)
     yield
     _worker_ctx_var.reset(token)
@@ -334,24 +335,18 @@ def test_scatter_file_iterator_multiple_chunks(tmp_path):
 
 
 def test_external_sort_merge_streaming(tmp_path):
-    from zephyr.external_sort import external_sort_merge
-
     iters = [iter([1, 4, 7]), iter([2, 5, 8]), iter([3, 6, 9])]
     result = list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
     assert result == list(range(1, 10))
 
 
 def test_external_sort_merge_single_batch(tmp_path):
-    from zephyr.external_sort import external_sort_merge
-
     iters = [iter([i]) for i in range(10)]
     result = list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
     assert result == list(range(10))
 
 
 def test_external_sort_merge_cleans_up(tmp_path):
-    from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
-
     iters = [iter([i]) for i in range(EXTERNAL_SORT_FAN_IN + 1)]
     list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
     assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"

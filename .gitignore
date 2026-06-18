@@ -218,6 +218,7 @@ archive/
 
 # wandb logs
 wandb
+artifacts
 
 # Offline RL generated artifacts
 experiments/domain_phase_mix/offline_rl/artifacts/
@@ -247,13 +248,15 @@ scr/*
 /scratch
 
 .forge
-.claude
+.claude/*
 !.claude/skills
+!.claude/agents
 .agents/tmp/
 .codex
 .entire
 experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v*/
 experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v*.zip
+.beads
 
 .worktrees
 .obsidian

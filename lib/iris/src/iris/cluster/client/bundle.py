@@ -174,21 +174,3 @@ def _include_generated_build_artifacts(
                 added += 1
     if added:
         logger.debug("Included %d generated build artifact(s) in bundle", added)
-
-
-class BundleCreator:
-    """Helper for creating workspace bundles for Iris job submission."""
-
-    def __init__(self, workspace: Path):
-        self._workspace = workspace
-
-    def create_bundle(self) -> bytes:
-        """Create a workspace bundle.
-
-        Returns:
-            Bundle as bytes (zip file contents)
-
-        Raises:
-            ValueError: If bundle size exceeds MAX_BUNDLE_SIZE_BYTES
-        """
-        return create_workspace_zip(self._workspace, max_size_bytes=MAX_BUNDLE_SIZE_BYTES)

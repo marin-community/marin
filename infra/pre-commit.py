@@ -25,16 +25,19 @@ import json
 import os
 import pathlib
 import re
-import shlex
 import shutil
 import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 
 import click
 import tomllib
 import yaml
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from linter import LINT_REVIEW_AGENT_DEFAULT, run_lint_review
 
 ROOT_DIR = pathlib.Path(__file__).parent.parent
 LEVANTER_LICENSE = ROOT_DIR / "lib/levanter/etc/license_header.txt"
@@ -42,7 +45,6 @@ HALIAX_LICENSE = ROOT_DIR / "lib/haliax/etc/license_header.txt"
 MARIN_LICENSE = ROOT_DIR / "etc/license_header.txt"
 LEVANTER_BLACK_CONFIG = ROOT_DIR / "lib/levanter/pyproject.toml"
 HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
-LINT_CATALOG = ROOT_DIR / "infra/lint.md"
 
 EXCLUDE_PATTERNS = [
     ".git/**",
@@ -235,6 +237,8 @@ def check_black(files: list[pathlib.Path], fix: bool, config: pathlib.Path | Non
 
 
 def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pathlib.Path) -> int:
+    assert license_file is not None, "license_file must be provided"
+
     if not files:
         return 0
 
@@ -781,7 +785,7 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
 
     _ensure_iris_protos()
 
-    args = ["uvx", "pyrefly@0.61.0", "check", "--baseline", ".pyrefly-baseline.json"]
+    args = ["uvx", "pyrefly@1.0.0", "check", "--baseline", ".pyrefly-baseline.json"]
     result = run_cmd(args)
     output = (result.stdout + result.stderr).strip()
     return _record("Pyrefly type checker", result.returncode, output)
@@ -799,8 +803,8 @@ PRECOMMIT_CONFIGS = [
         patterns=["lib/levanter/**/*.py"],
         checks=[
             check_ruff,
-            lambda files, fix: check_black(files, fix, config=LEVANTER_BLACK_CONFIG),
-            lambda files, fix: check_license_headers(files, fix, LEVANTER_LICENSE),
+            partial(check_black, config=LEVANTER_BLACK_CONFIG),
+            partial(check_license_headers, license_file=LEVANTER_LICENSE),
             # check_mypy,
         ],
     ),
@@ -808,8 +812,8 @@ PRECOMMIT_CONFIGS = [
         patterns=["lib/haliax/**/*.py"],
         checks=[
             check_ruff,
-            lambda files, fix: check_black(files, fix, config=HALIAX_BLACK_CONFIG),
-            lambda files, fix: check_license_headers(files, fix, HALIAX_LICENSE),
+            partial(check_black, config=HALIAX_BLACK_CONFIG),
+            partial(check_license_headers, license_file=HALIAX_LICENSE),
         ],
     ),
     PrecommitConfig(
@@ -818,7 +822,7 @@ PRECOMMIT_CONFIGS = [
         checks=[
             check_ruff,
             check_black,
-            lambda files, fix: check_license_headers(files, fix, MARIN_LICENSE),
+            partial(check_license_headers, license_file=MARIN_LICENSE),
         ],
     ),
     PrecommitConfig(
@@ -867,109 +871,10 @@ PRECOMMIT_CONFIGS = [
 ]
 
 
-LINT_REVIEW_AGENT_DEFAULT = "claude -p"
-
-LINT_REVIEW_TIMEOUT = 600
-
-LINT_REVIEW_INSTRUCTIONS = (
-    "Apply the lint catalog above to the branch diff below. Follow the "
-    '"Detector usage" section exactly: emit one finding per line in the format '
-    "it specifies, and emit nothing at all when there are no findings. Work "
-    "from the diff as given; do not re-derive it."
-)
-
-# Env vars that mark a Claude Code session and would re-bind the spawned headless
-# agent to its parent's transcript / session. Stripped before exec so the
-# sub-agent runs as a fresh, isolated session.
-LINT_REVIEW_STRIPPED_ENV = (
-    "ANTHROPIC_API_KEY",  # force subscription auth, not metered API billing
-    "CLAUDECODE",
-    "CLAUDE_CODE_ENTRYPOINT",
-    "CLAUDE_CODE_EXECPATH",
-    "CLAUDE_CODE_SESSION_ID",
-    "CLAUDE_CODE_SSE_PORT",
-)
-
-
-def run_lint_review(agent_command: str) -> int:
-    """Run the advisory `infra/lint.md` catalog over the branch diff via an agent.
-
-    `agent_command` is the headless CLI invocation of the agent that will read
-    the prompt from stdin and print findings to stdout (e.g. `claude -p`,
-    `codex exec`). Callers should pass the command for the agent they are
-    themselves running so the sub-agent matches the calling environment.
-
-    Findings are advisory and never block — they are printed for the author to
-    act on before pushing. Returns 0 in all cases that fit the advisory contract
-    (no findings, findings emitted, agent unavailable, merge-base unresolved,
-    timeout). Returns 1 only when the agent itself ran and exited non-zero,
-    which indicates a tooling bug worth surfacing.
-    """
-    agent_cmd = shlex.split(agent_command)
-    if not agent_cmd or shutil.which(agent_cmd[0]) is None:
-        agent_name = agent_cmd[0] if agent_cmd else "(empty)"
-        click.echo(f"  ⚠ Lint review skipped: agent '{agent_name}' not found on PATH")
-        return 0
-
-    base_result = subprocess.run(
-        ["git", "merge-base", "origin/main", "HEAD"],
-        cwd=ROOT_DIR,
-        capture_output=True,
-        text=True,
-    )
-    if base_result.returncode != 0:
-        click.echo("  ⚠ Lint review skipped: could not resolve merge-base with origin/main")
-        click.echo(f"    (run `git fetch origin main` first; git said: {base_result.stderr.strip()})")
-        return 0
-    merge_base = base_result.stdout.strip()
-    # Diff the working tree against the merge-base: covers all branch work,
-    # committed and uncommitted, so the review runs whether or not the author
-    # has committed before reaching the pre-push checklist.
-    diff = subprocess.run(
-        ["git", "diff", merge_base, "-U15", "--", "*.py", "*.proto"],
-        cwd=ROOT_DIR,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    if not diff.strip():
-        click.echo("Lint review: no Python/proto changes on this branch.")
-        return 0
-
-    prompt = f"{LINT_CATALOG.read_text()}\n\n{LINT_REVIEW_INSTRUCTIONS}\n\n```diff\n{diff}\n```\n"
-
-    # Strip session/auth markers so the headless agent runs as a fresh session
-    # rather than nesting under the calling agent's transcript or being billed
-    # via metered API auth.
-    env = {k: v for k, v in os.environ.items() if k not in LINT_REVIEW_STRIPPED_ENV}
-
-    try:
-        result = subprocess.run(
-            agent_cmd,
-            input=prompt,
-            cwd=ROOT_DIR,
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=LINT_REVIEW_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        click.echo(f"  ⚠ Lint review timed out after {LINT_REVIEW_TIMEOUT}s")
-        return 0
-
-    if result.returncode != 0:
-        click.echo(f"  ⚠ Lint review agent exited {result.returncode}:")
-        click.echo(result.stderr.strip())
-        return 1
-
-    findings = result.stdout.strip()
-    if not findings:
-        click.echo("Lint review: no findings.")
-        return 0
-
-    click.echo("Lint review findings (advisory — search infra/lint.md for each ml-... code):\n")
-    click.echo(findings)
-    return 0
+def _get_check_name(check) -> str:
+    if isinstance(check, partial):
+        return check.func.__name__
+    return check.__name__
 
 
 @click.command()
@@ -989,7 +894,7 @@ def run_lint_review(agent_command: str) -> int:
 @click.option(
     "--review",
     is_flag=True,
-    help="Run the advisory infra/lint.md rule catalog over the branch diff via an agent",
+    help="Run the advisory infra/lint/ rule catalog over the branch diff via per-lane agents",
 )
 @click.option(
     "--agent-command",
@@ -1002,7 +907,22 @@ def run_lint_review(agent_command: str) -> int:
         "sub-agent matches the calling environment."
     ),
 )
+@click.option(
+    "--lint-lane",
+    "lint_lanes",
+    multiple=True,
+    help="With --review, run only these lane(s): complexity, interfaces, robustness, cruft, prose, meta. Repeatable.",
+)
+@click.option(
+    "--lint-compose/--no-lint-compose",
+    "lint_compose",
+    default=True,
+    show_default=True,
+    help="With --review, merge lanes via the composer agent (default) or a deterministic concat.",
+)
 @click.option("--files", "files_opt", multiple=True, help="Files to check (alias for positional args)")
+@click.option("--skip", multiple=True, help="Skip specific checks by name (e.g. ruff, black)")
+@click.option("--only", multiple=True, help="Run only specific checks by name (e.g. ruff, black)")
 @click.argument("files", nargs=-1)
 def main(
     fix: bool,
@@ -1011,11 +931,30 @@ def main(
     pre_commit: bool,
     review: bool,
     agent_command: str,
+    lint_lanes: tuple[str, ...],
+    lint_compose: bool,
     files_opt: tuple[str, ...],
+    skip: tuple[str, ...],
+    only: tuple[str, ...],
     files: tuple[str, ...],
 ):
     if review:
-        sys.exit(run_lint_review(agent_command))
+        sys.exit(run_lint_review(agent_command, lane_names=list(lint_lanes) or None, compose=lint_compose))
+
+    if skip and only:
+        click.echo("Error: --only and --skip are mutually exclusive.", err=True)
+        sys.exit(1)
+
+    known_check_names = {_get_check_name(c) for cfg in PRECOMMIT_CONFIGS for c in cfg.checks}
+    known_short_names = sorted(name.removeprefix("check_") for name in known_check_names)
+    for s in skip:
+        if f"check_{s}" not in known_check_names:
+            click.echo(f"Error: unknown --skip value '{s}'. Valid names: {', '.join(known_short_names)}", err=True)
+            sys.exit(1)
+    for o in only:
+        if f"check_{o}" not in known_check_names:
+            click.echo(f"Error: unknown --only value '{o}'. Valid names: {', '.join(known_short_names)}", err=True)
+            sys.exit(1)
 
     all_files_set: set[pathlib.Path] = set()
     input_files = files_opt + files
@@ -1039,6 +978,9 @@ def main(
     all_files_list = sorted(list(all_files_set))
     exit_codes = []
 
+    skip_set = set(f"check_{s}" for s in skip)
+    only_set = set(f"check_{o}" for o in only)
+
     for config in PRECOMMIT_CONFIGS:
         matched_files = get_matching_files(config.patterns, all_files_list, config.exclude_patterns)
         matched_files = [f for f in matched_files if f.exists()]
@@ -1046,11 +988,16 @@ def main(
             continue
 
         for check in config.checks:
+            check_name = _get_check_name(check)
+            if only_set and check_name not in only_set:
+                continue
+            if check_name in skip_set:
+                continue
             try:
                 exit_code = check(matched_files, fix)
                 exit_codes.append(exit_code)
             except Exception as e:
-                click.echo(f"  Error running check {check.__name__}: {e}")
+                click.echo(f"  Error running check {check_name}: {e}")
                 exit_codes.append(1)
 
     # Print failure details at the end

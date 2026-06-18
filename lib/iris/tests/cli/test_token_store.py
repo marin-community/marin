@@ -3,12 +3,12 @@
 
 from __future__ import annotations
 
-import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from iris.cli.token_store import (
+from iris.cluster.token_store import (
     ClusterCredential,
     cluster_name_from_url,
     load_any_token,
@@ -19,7 +19,7 @@ from iris.cli.token_store import (
 
 @pytest.fixture()
 def store_path(tmp_path: Path) -> Path:
-    return tmp_path / "tokens.json"
+    return tmp_path / "tokens.sqlite"
 
 
 @pytest.mark.parametrize(
@@ -43,7 +43,7 @@ def test_store_and_load_token(store_path: Path):
 
 
 def test_store_token_creates_parent_dirs(tmp_path: Path):
-    store_path = tmp_path / "deep" / "nested" / "tokens.json"
+    store_path = tmp_path / "deep" / "nested" / "tokens.sqlite"
     store_token("c1", "http://host:1", "tok", store_path=store_path)
     assert store_path.exists()
 
@@ -101,35 +101,26 @@ def test_load_any_token_empty_store(store_path: Path):
     assert load_any_token(store_path=store_path) is None
 
 
-def test_legacy_migration(tmp_path: Path):
-    """Old ~/.iris/token file is migrated into tokens.json under 'default'."""
-    legacy = tmp_path / "token"
-    legacy.write_text("legacy-secret\n")
-    store_path = tmp_path / "tokens.json"
+def test_concurrent_writers_do_not_corrupt_store(store_path: Path):
+    """Writers on separate threads — each with its own SQLite connection —
+    serialize on the database lock instead of racing on a shared temp file (the
+    bug that the old JSON+mkstemp store hit under pytest-xdist). Half the writers
+    target distinct keys, half collide on one key to exercise ON CONFLICT."""
 
-    cred = load_token("default", store_path=store_path)
-    assert cred is not None
-    assert cred.token == "legacy-secret"
-    assert not legacy.exists(), "legacy file should be deleted after migration"
+    def write(i: int) -> None:
+        # Even workers insert distinct rows; odd workers all upsert "shared".
+        if i % 2 == 0:
+            store_token(f"c{i}", f"http://host:{i}", f"tok-{i}", store_path=store_path)
+        else:
+            store_token("shared", f"http://shared:{i}", f"tok-{i}", store_path=store_path)
 
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(write, range(40)))
 
-def test_legacy_migration_empty_token(tmp_path: Path):
-    """Empty legacy token file is deleted without creating a store entry."""
-    legacy = tmp_path / "token"
-    legacy.write_text("  \n")
-    store_path = tmp_path / "tokens.json"
-
-    cred = load_any_token(store_path=store_path)
-    assert cred is None
-    assert not legacy.exists()
-
-
-def test_store_format(store_path: Path):
-    """Verify the on-disk JSON matches the expected schema."""
-    store_token("local", "http://127.0.0.1:54321", "abc", store_path=store_path)
-    data = json.loads(store_path.read_text())
-    assert data == {
-        "clusters": {
-            "local": {"url": "http://127.0.0.1:54321", "token": "abc"},
-        },
-    }
+    # Every distinct key survived intact, and the contended key resolved to one
+    # of the writers' values (last-writer-wins) without corrupting the store.
+    for i in range(0, 40, 2):
+        assert load_token(f"c{i}", store_path=store_path) == ClusterCredential(url=f"http://host:{i}", token=f"tok-{i}")
+    shared = load_token("shared", store_path=store_path)
+    assert shared is not None
+    assert shared.url.startswith("http://shared:")

@@ -6,8 +6,7 @@
 - ``iris.worker`` / ``iris.task`` — worker-emitted host and per-attempt
   resource rows. Replace the controller's old in-memory history tables.
 - ``iris.task_status`` — markdown status text pushed from inside a running
-  task via ``RemoteClusterClient.report_task_status_text``. Replaces the
-  in-memory dict that previously backed ``ControllerService.SetTaskStatusText``.
+  task via ``RemoteClusterClient.report_task_status_text``.
 
 The ``iris.profile`` schema lives in ``iris.cluster.runtime.profile`` next to
 the capture machinery — see ``IrisProfile`` and ``PROFILE_NAMESPACE`` there.
@@ -24,6 +23,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import ClassVar
 
+from finelog.client import StoragePolicy
 from rigging.timing import Timestamp
 
 from iris.rpc import job_pb2
@@ -31,6 +31,16 @@ from iris.rpc import job_pb2
 WORKER_STATS_NAMESPACE = "iris.worker"
 TASK_STATS_NAMESPACE = "iris.task"
 TASK_STATUS_NAMESPACE = "iris.task_status"
+
+# Task status rows are only useful while a task is still running — once
+# the job ends the data is dead weight on the finelog server. Cap the
+# namespace at ~1 hour of history or 100 MiB, whichever fires first.
+# Worker / task stats keep the cluster-wide defaults so historical
+# resource-usage queries continue to work.
+TASK_STATUS_STORAGE_POLICY = StoragePolicy(
+    max_bytes=100 * 1024 * 1024,
+    max_age_seconds=3600,
+)
 
 
 def stats_timestamp() -> datetime:

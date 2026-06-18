@@ -35,10 +35,11 @@ from typing import ClassVar
 
 import wandb
 from rigging.filesystem import filesystem as marin_filesystem
+from rigging.filesystem import is_remote_path
 
 from marin.evaluation.evaluation_config import WANDB_PROJECT, EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.evaluation.utils import is_remote_path, upload_to_gcs
+from marin.evaluation.utils import upload_to_gcs
 from marin.inference.vllm_server import resolve_model_name_or_path
 
 logger = logging.getLogger(__name__)
@@ -269,7 +270,7 @@ class EvalchemyEvaluator(Evaluator):
     def _log_lmeval_version(self) -> None:
         """Log lm-eval version for debugging."""
         try:
-            import lm_eval
+            import lm_eval  # noqa: PLC0415  # optional dep: lm_eval
 
             logger.info(f"lm-eval version: {getattr(lm_eval, '__version__', 'unknown')}")
             logger.info(f"lm-eval location: {lm_eval.__file__}")
@@ -763,7 +764,7 @@ _patch_autoconfig_for_gcs()
         """Clean up vLLM state between tasks to release TPU devices."""
         gc.collect()
         try:
-            import vllm.distributed
+            import vllm.distributed  # noqa: PLC0415  # optional dep: vllm
 
             if hasattr(vllm.distributed, "destroy_model_parallel"):
                 vllm.distributed.destroy_model_parallel()

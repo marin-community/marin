@@ -12,11 +12,11 @@ git clone https://github.com/marin-community/marin.git
 cd marin
 uv venv --python 3.11
 source .venv/bin/activate
-uv sync --package marin --group dev
+uv sync --package marin-core --group dev
 make setup_pre_commit
 ```
 
-Alternatively, you can install all the core dependencies and build `marin` as a Python
+Alternatively, you can install all the core dependencies and build the `marin-core`
 package with `make init`.
 
 ### Linting

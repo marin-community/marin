@@ -8,15 +8,23 @@ import math
 import warnings
 from dataclasses import dataclass
 from enum import StrEnum
-from numbers import Integral
-from typing import Literal, Optional, Union, cast, overload
+from typing import Literal, Optional, Union
 
 import equinox as eqx
 import jax
 import jax.random as jrandom
 from jax import numpy as jnp
+from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
 
-from ..inference.utils import is_valid
+from levanter.kernels.pallas.splash_attention import (
+    DEFAULT_SPLASH_BLOCK_SIZE,
+    SplashAttentionMaskSpec,
+    lower_splash_attention_mask,
+    lower_splash_segment_ids,
+    splash_attention_block_sizes,
+    splash_partition_spec_shard_factor,
+)
+from levanter.inference.utils import is_valid
 
 try:
     from jax.experimental.pallas.ops.tpu.ragged_paged_attention import (
@@ -31,7 +39,6 @@ import haliax.haxtyping as ht
 import haliax.nn as hnn
 from haliax import Axis, AxisSelection, AxisSelector, NamedArray, axis_name
 from haliax.jax_utils import maybe_rng_split, named_call
-from haliax.nn.attention import causal_mask, combine_masks_and, combine_masks_or
 from haliax.nn.normalization import LayerNormBase
 from haliax.partitioning import pspec_for_axis, shard_map
 from haliax.types import PrecisionLike
@@ -45,7 +52,8 @@ except Exception:
 else:
     _SPLASH_KERNEL_SUPPORTS_SINKS = "sinks" in inspect.signature(_splash_attention).parameters
 
-from ..inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from .attention_mask import AttentionMask, materialize_mask
 from .kv_cache import KvPageCache
 from .normalization import LayerNormConfigBase
 from .rotary import RotaryEmbeddings, RotaryEmbeddingsConfig
@@ -61,7 +69,6 @@ class AttentionBackend(StrEnum):
     VANILLA = "vanilla"  # regular dot product attention
 
 
-DEFAULT_SPLASH_BLOCK_SIZE = 512
 _SPLASH_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 
 
@@ -271,9 +278,9 @@ def dot_product_attention(
     if attention_out is not None:
         return attention_out
     else:
-        from levanter.models.flash_attention import (
+        from levanter.models.flash_attention import (  # noqa: PLC0415  # circular import: attention -> flash_attention -> attention
             flash_attention,
-        )  # circular import: flash_attention imports attention
+        )
 
         return flash_attention(
             QPos,
@@ -368,7 +375,7 @@ def simple_attention_with_dropout(
     precision: PrecisionLike = None,
     *,
     prng: Optional[PRNGKeyArray] = None,
-    scaling_factor: float | None = None,
+    scaling_factor: float | jax.Array | None = None,
     logits_soft_cap: Optional[float] = None,
 ):
     QPos = query.resolve_axis(QPos)
@@ -518,7 +525,7 @@ def _te_flash_attention(
     scaling_factor: float,
     logits_soft_cap: Optional[float] = None,
 ):
-    from transformer_engine.jax.attention import (  # type: ignore[import]
+    from transformer_engine.jax.attention import (  # type: ignore[import]  # noqa: PLC0415  # optional dep: transformer_engine
         AttnBiasType,
         QKVLayout,
         SequenceDescriptor,
@@ -644,7 +651,9 @@ def _te_flash_attention(
 
 def _te_get_mask_type(mask):
     """Get the TE AttnMaskType from a mask object without materializing it."""
-    from transformer_engine.jax.attention import AttnMaskType  # type: ignore[import]
+    from transformer_engine.jax.attention import (  # type: ignore[import]  # noqa: PLC0415  # optional dep: transformer_engine
+        AttnMaskType,
+    )
 
     if isinstance(mask, NamedArray):
         raise NotImplementedError(
@@ -823,353 +832,6 @@ def _unflatten_bshd(attn_output, q_class, v_class):
     return attn_output
 
 
-def _materialize_segment_mask(
-    segment_ids: NamedArray | tuple[NamedArray, NamedArray],
-    QPos,
-    KPos,
-    q_slice,
-    k_slice,
-) -> NamedArray:
-    """
-    Make a segment mask for attention. This is a mask that prevents attention between different segments.
-    """
-    if isinstance(segment_ids, tuple):
-        if len(segment_ids) != 2:
-            raise ValueError("segment_ids must be a tuple of two NamedArrays")
-        q_segment_ids, kv_segment_ids = segment_ids
-        kv_segment_ids = kv_segment_ids.rename({QPos.name: KPos.name})[KPos.name, k_slice]
-        q_segment_ids = q_segment_ids.rename({QPos.name: QPos})[QPos.name, q_slice]
-    else:
-        kv_segment_ids = segment_ids.rename({QPos.name: KPos.name})[KPos.name, k_slice]
-        q_segment_ids = segment_ids[QPos.name, q_slice]
-
-    return cast(NamedArray, q_segment_ids.broadcast_axis(kv_segment_ids.axes) == kv_segment_ids)
-
-
-def _materialize_sliding_window_mask(
-    window: int, QPos: Axis, KPos: Axis, q_slice: haliax.dslice, k_slice: haliax.dslice
-) -> NamedArray:
-    """Materialize a causal sliding window mask."""
-    sub_q = QPos.resize(q_slice.size)
-    sub_k = KPos.resize(k_slice.size)
-    q_pos = hax.arange(sub_q) + q_slice.start
-    k_pos = hax.arange(sub_k) + k_slice.start
-    diff = q_pos.broadcast_axis(sub_k) - k_pos.broadcast_axis(sub_q)
-    return (diff >= 0) & (diff < window)
-
-
-class AttentionMask(eqx.Module):
-    """
-
-    !!! warning
-        This class is still experimental. I'm not super happy with it yet.
-
-    Represents an attention mask in a structured way to make it easier to optimize attention for particular use cases
-    (causal, prefix, etc.). It is anticipated that this will be extended with new types of masks as needed.
-
-    The abstraction is based on two concepts:
-
-    1) Materialization: An AttentionMask can be materialized for a particular slice of the query and key position axes.
-       Most naively, you can just get the whole mask as a NamedArray. However, in some cases, you might want to
-       only get a particular chunk (e.g. for flash attention).
-    2) Combination: AttentionMasks are represented as an implicit conjunction of multiple masks, each with different
-        kinds of structure. You can combine masks with `&` and `|`. Due to the way jit works, we don't use inheritance
-        or similar to represent different kinds of masks. Instead, we use a single class with different fields.
-
-    In general, it should be safe to batch Attention Masks, but it is important that *all members of a batch have the
-    same set of combined masks*. Otherwise, the batching will not work and you'll get weird errors
-
-    (Perhaps it's ok to use inheritance here? I'm not sure. Splash attention landed on inheritance, so maybe
-    that's a good sign.)
-
-    """
-
-    # If ``is_causal`` is True we apply a lower-triangular causal mask. If ``causal_offset`` is not ``None``
-    # we apply a shifted causal mask such that a query at position *i* can attend to key *j* whenever
-    # ``j <= i + causal_offset``. A ``None`` offset means a static offset of 0 (i.e., standard causal masking).
-    is_causal: bool = eqx.field(default=False, static=True)
-    causal_offset: None | NamedArray = None
-    explicit_mask: Optional[NamedArray] = None
-    segment_ids: tuple[NamedArray, NamedArray] | None = None
-    sliding_window: Optional[int] = eqx.field(default=None, static=True)
-    # CF https://github.com/jax-ml/jax/blob/47858c4ac2fd4757a3b6fc5bb2981b71a71f00c2/jax/experimental/pallas/ops/tpu/flash_attention.py#L34
-    # TODO: add prefixlm
-    # cf https://github.com/google-research/t5x/blob/51a99bff8696c373cc03918707ada1e98cbca407/t5x/examples/decoder_only/layers.py#L978
-
-    def materialize(
-        self,
-        QPos: Axis,
-        KPos: Axis,
-        q_slice: Optional[haliax.dslice] = None,
-        k_slice: Optional[haliax.dslice] = None,
-    ) -> Optional[NamedArray]:
-        """
-        Materialize the mask as a NamedArray. This is useful for attention functions that don't support masks,
-        or for the inner loop
-        """
-        if q_slice is None:
-            q_slice = haliax.dslice(0, QPos.size)
-        if k_slice is None:
-            k_slice = haliax.dslice(0, KPos.size)
-
-        if self.is_causal:
-            # None means static 0 offset
-            offset = 0 if self.causal_offset is None else self.causal_offset
-            shifted_k_start = k_slice.start - offset
-            if isinstance(shifted_k_start, NamedArray):
-                # need to vmap
-                causal = hax.vmap(causal_mask, shifted_k_start.axes)(
-                    QPos.resize(q_slice.size),
-                    KPos.resize(k_slice.size),
-                    q_slice.start,
-                    shifted_k_start,  # type: ignore
-                )
-            else:
-                causal = causal_mask(
-                    QPos.resize(q_slice.size),
-                    KPos.resize(k_slice.size),
-                    q_slice.start,
-                    shifted_k_start,
-                )
-        else:
-            causal = None
-
-        if self.explicit_mask is not None:
-            explicit = self.explicit_mask[QPos, q_slice, KPos, k_slice]
-        else:
-            explicit = None
-
-        mask = combine_masks_and(causal, explicit)
-
-        if self.sliding_window is not None:
-            sw_mask = _materialize_sliding_window_mask(
-                self.sliding_window, QPos, KPos, q_slice=q_slice, k_slice=k_slice
-            )
-            mask = combine_masks_and(mask, sw_mask)
-
-        if self.segment_ids is not None:
-            segment_mask = _materialize_segment_mask(self.segment_ids, QPos, KPos, q_slice, k_slice)
-            mask = combine_masks_and(mask, segment_mask)
-
-        return mask
-
-    # Static constructors --------------------------------------------------
-
-    @staticmethod
-    def causal(
-        *,
-        sliding_window: Optional[int] = None,
-        offset: int | NamedArray | None = None,
-        segment_ids: tuple[NamedArray, NamedArray] | None = None,
-    ) -> "AttentionMask":
-        """Create a causal AttentionMask.
-
-        Args:
-            sliding_window: If provided, restrict each query position to attend only to keys within
-                ``sliding_window`` previous positions.
-            offset:
-                For ``offset == 0`` this is identical to the old ``AttentionMask.causal()``
-                behaviour; larger offsets loosen the restriction so that each query can
-                see ``offset`` additional future tokens.
-        """
-        if isinstance(offset, int | Integral):
-            causal_offset = hax.named(offset, ())
-        else:
-            causal_offset = offset
-
-        return AttentionMask(
-            is_causal=True, causal_offset=causal_offset, sliding_window=sliding_window, segment_ids=segment_ids
-        )
-
-    @staticmethod
-    def explicit(mask: NamedArray) -> "AttentionMask":
-        return AttentionMask(is_causal=False, causal_offset=None, explicit_mask=mask)
-
-    def __post_init__(self):
-        # Normalize legacy single-array segment_ids to a tuple for consistency
-        if self.segment_ids is not None and not isinstance(self.segment_ids, tuple):
-            warnings.warn("Storing segment_ids as a single NamedArray is deprecated. Use a tuple instead.")
-            object.__setattr__(self, "segment_ids", (self.segment_ids, self.segment_ids))
-
-    def with_segment_ids(self, segment_ids: NamedArray, kv_segment_ids: NamedArray | None = None) -> "AttentionMask":
-        """Attach segment ids to the mask.
-
-        Always stores segment ids internally as a tuple ``(q_segment_ids, kv_segment_ids)``.
-        If only a single array is provided, it is used for both queries and keys/values.
-        """
-        # Always store as a tuple; duplicate if only one provided.
-        seg_field: tuple[NamedArray, NamedArray]
-        if kv_segment_ids is None:
-            seg_field = (segment_ids, segment_ids)
-        else:
-            seg_field = (segment_ids, kv_segment_ids)
-
-        return AttentionMask(
-            is_causal=self.is_causal,
-            causal_offset=self.causal_offset,
-            explicit_mask=self.explicit_mask,
-            segment_ids=seg_field,
-            sliding_window=self.sliding_window,
-        )
-
-    def with_sliding_window(self, sliding_window: int | None) -> "AttentionMask":
-        """Return a copy of this mask with ``sliding_window`` applied."""
-        return AttentionMask(
-            is_causal=self.is_causal,
-            causal_offset=self.causal_offset,
-            explicit_mask=self.explicit_mask,
-            segment_ids=self.segment_ids,
-            sliding_window=sliding_window,
-        )
-
-    def __and__(self, other) -> "AttentionMask":
-        # Conjunction: causal if either component is causal.
-        if self.is_causal and other.is_causal:
-            # If both are causal, offsets must agree if both specified; otherwise take the specified one.
-            if self.causal_offset is not None and other.causal_offset is not None:
-                causal_offset = eqx.error_if(
-                    self.causal_offset,
-                    self.causal_offset != other.causal_offset,
-                    "Mismatched causal offsets cannot be combined with &",
-                )
-            else:
-                causal_offset = self.causal_offset if self.causal_offset is not None else other.causal_offset
-            is_causal = True
-        elif self.is_causal:
-            causal_offset = self.causal_offset
-            is_causal = True
-        elif other.is_causal:
-            causal_offset = other.causal_offset
-            is_causal = True
-        else:
-            causal_offset = None
-            is_causal = False
-        explicit_mask = combine_masks_and(self.explicit_mask, other.explicit_mask)
-        segment_ids = self._check_for_same_segment_ids(other)
-        if self.sliding_window is None:
-            sliding_window = other.sliding_window
-        elif other.sliding_window is None:
-            sliding_window = self.sliding_window
-        else:
-            sliding_window = min(self.sliding_window, other.sliding_window)
-
-        return AttentionMask(
-            is_causal=is_causal,
-            causal_offset=causal_offset,
-            explicit_mask=explicit_mask,
-            segment_ids=segment_ids,
-            sliding_window=sliding_window,
-        )
-
-    def __or__(self, other) -> "AttentionMask":
-        # Union: causal only if both are causal with the same offset; otherwise non-causal
-        if (
-            self.is_causal
-            and other.is_causal
-            and (
-                (self.causal_offset is None and other.causal_offset is None)
-                or (self.causal_offset is not None and self.causal_offset == other.causal_offset)
-            )
-        ):
-            is_causal = True
-            causal_offset = self.causal_offset
-        else:
-            is_causal = False
-            causal_offset = None
-        explicit_mask = combine_masks_or(self.explicit_mask, other.explicit_mask)
-        segment_ids = self._check_for_same_segment_ids(other)
-        if self.sliding_window is None or other.sliding_window is None:
-            sliding_window = None
-        else:
-            sliding_window = max(self.sliding_window, other.sliding_window)
-        return AttentionMask(
-            is_causal=is_causal,
-            causal_offset=causal_offset,
-            explicit_mask=explicit_mask,
-            segment_ids=segment_ids,
-            sliding_window=sliding_window,
-        )
-
-    def _check_for_same_segment_ids(self, other):
-        # Normalize possibly non-tuple representations to tuples for comparison.
-        def _as_tuple(si):
-            if si is None:
-                return None
-            if isinstance(si, tuple):
-                return si
-            else:
-                return (si, si)
-
-        self_si = _as_tuple(self.segment_ids)
-        other_si = _as_tuple(other.segment_ids)
-
-        if self_si is not None and other_si is not None:
-            # only one segment mask is allowed
-            # b/c we might do this in jit, we use eqx.error_if
-            # in theory we can do this one by just assigning unique ids to each unique pair...
-            # (but i don't really anticipate needing this)
-            segment_ids = eqx.error_if(
-                hax.logical_or(self_si[0] != other_si[0], self_si[1] != other_si[1]),
-                "Only one segment mask is allowed",
-            )
-        elif self_si is not None:
-            segment_ids = self_si
-        else:
-            segment_ids = other_si
-        return segment_ids
-
-
-@overload
-def materialize_mask(
-    mask: NamedArray | AttentionMask,
-    QPos: Axis,
-    KPos: Axis,
-    q_slice: Optional[haliax.dslice] = None,
-    k_slice: Optional[haliax.dslice] = None,
-) -> NamedArray: ...
-
-
-@overload
-def materialize_mask(
-    mask: Optional[NamedArray | AttentionMask],
-    QPos: Axis,
-    KPos: Axis,
-    q_slice: Optional[haliax.dslice] = None,
-    k_slice: Optional[haliax.dslice] = None,
-) -> Optional[NamedArray]: ...
-
-
-def materialize_mask(
-    mask: Optional[NamedArray | AttentionMask],
-    QPos: Axis,
-    KPos: Axis,
-    q_slice: Optional[haliax.dslice] = None,
-    k_slice: Optional[haliax.dslice] = None,
-) -> Optional[NamedArray]:
-    """
-    Materialize an attention mask if it is an AttentionMask. Otherwise, just return it.
-    """
-    if isinstance(mask, AttentionMask):
-        mask = mask.materialize(QPos, KPos, q_slice=q_slice, k_slice=k_slice)
-        return mask
-    elif isinstance(mask, NamedArray):
-        if q_slice is not None or k_slice is not None:
-            if q_slice is None:
-                q_slice = haliax.dslice(0, QPos.size)
-            if k_slice is None:
-                k_slice = haliax.dslice(0, KPos.size)
-            mask = mask[QPos, q_slice, KPos, k_slice]
-
-        return mask
-    else:
-        assert mask is None
-        return None
-
-
-# TODO: padding mask
-# TODO: FCM mask?
-
-
 def _try_tpu_splash_attention(
     QPos: AxisSelector,
     KPos: AxisSelection,
@@ -1263,12 +925,6 @@ def _tpu_splash_attention(
     logits_soft_cap: float | None = None,
     attn_sink: Optional[NamedArray] = None,
 ) -> Optional[NamedArray]:
-    from jax.experimental.pallas.ops.tpu.splash_attention import (
-        SegmentIds as SplashSegmentIds,
-        splash_attention_kernel,
-        splash_attention_mask,
-    )
-
     # Splash attention requires BHSD format
     # We need to reshape the input to match this format
     if dropout != 0.0:
@@ -1356,19 +1012,19 @@ def _tpu_splash_attention(
         q_segment_ids, kv_segment_ids = segment_ids
         kv_segment_ids = kv_segment_ids.rename({QPos.name: KPos.name})
 
-        segment_ids = SplashSegmentIds(q_segment_ids.array, kv_segment_ids.array)
-        segment_ids_axes = SplashSegmentIds(pspec_for_axis(q_segment_ids.axes), pspec_for_axis(kv_segment_ids.axes))
-
         q_segment_batch_axis = _find_batch_axis_for_segment_ids(QPos, q_segment_ids)
         kv_segment_batch_axis = _find_batch_axis_for_segment_ids(KPos, kv_segment_ids)
 
-        if q_segment_batch_axis is not None or kv_segment_batch_axis is not None:
-            segment_batch_axis = SplashSegmentIds(q_segment_batch_axis, kv_segment_batch_axis)  # type: ignore[arg-type]
-        else:
-            segment_batch_axis = None
+        segment_id_lowering = lower_splash_segment_ids(
+            q_segment_ids=q_segment_ids.array,
+            kv_segment_ids=kv_segment_ids.array,
+            q_segment_ids_axes=pspec_for_axis(q_segment_ids.axes),
+            kv_segment_ids_axes=pspec_for_axis(kv_segment_ids.axes),
+            q_segment_batch_axis=q_segment_batch_axis,
+            kv_segment_batch_axis=kv_segment_batch_axis,
+        )
     else:
-        segment_batch_axis = None
-        segment_ids_axes = None
+        segment_id_lowering = lower_splash_segment_ids()
 
     # MaxText uses a block size of 512
     block_size = block_size or DEFAULT_SPLASH_BLOCK_SIZE
@@ -1377,9 +1033,9 @@ def _tpu_splash_attention(
     mesh = hax.partitioning._get_mesh()
     if mesh is None or mesh.empty:
         raise NotImplementedError("Splash attention requires a non-empty mesh")
-    head_shards = _spec_shard_factor(physical_axes_q[1], mesh)
-    q_seq_shards = _spec_shard_factor(physical_axes_q[2], mesh)
-    kv_seq_shards = _spec_shard_factor(physical_axes_k[2], mesh)
+    head_shards = splash_partition_spec_shard_factor(physical_axes_q[1], mesh)
+    q_seq_shards = splash_partition_spec_shard_factor(physical_axes_q[2], mesh)
+    kv_seq_shards = splash_partition_spec_shard_factor(physical_axes_k[2], mesh)
 
     # K should not be sharded for splash attention
     if physical_axes_k[2] is not None:
@@ -1388,69 +1044,40 @@ def _tpu_splash_attention(
             f"Got KV sequence spec: {physical_axes_k[2]}"
         )
 
-    # Compute block sizes based on per-shard sequence lengths
-    shard_Sq = max(1, Sq // max(1, q_seq_shards))
-    shard_Sk = max(1, Sk // max(1, kv_seq_shards))
-
-    def _compatible_block(shard_len: int, max_block: int) -> int:
-        """Pick largest block <= max_block that divides shard_len; prefer multiples of 128."""
-        if shard_len <= 0:
-            return max_block
-        cap = min(max_block, shard_len)
-        for step in (128, 1):
-            candidate = cap - (cap % step)
-            while candidate >= step:
-                if shard_len % candidate == 0:
-                    return candidate
-                candidate -= step
-        return 1
-
-    block_q = _compatible_block(shard_Sq, block_size)
-    block_kv = _compatible_block(shard_Sk, block_size)
-
-    block_sizes = splash_attention_kernel.BlockSizes(
-        block_q=block_q,
-        block_kv_compute=block_kv,
-        block_kv=block_kv,
-        block_q_dkv=block_q,
-        block_kv_dkv=block_kv,
-        block_kv_dkv_compute=block_q,
-        block_q_dq=block_q,
-        block_kv_dq=block_kv,
+    block_sizes = splash_attention_block_sizes(
+        q_seq_len=Sq,
+        kv_seq_len=Sk,
+        q_seq_shards=q_seq_shards,
+        kv_seq_shards=kv_seq_shards,
+        max_block_size=block_size,
     )
 
     # Create mask with GLOBAL shapes (outside shard_map)
     if mask is None:
-        base_mask = splash_attention_mask.FullMask(_shape=(Sq, Sk))
+        mask_spec = None
     elif isinstance(mask, AttentionMask):
-        if mask.is_causal:
-            if mask.causal_offset is not None:
-                raise NotImplementedError(
-                    "Causal offsets are not supported for splash attention. Please use a standard causal mask."
-                )
-            base_mask = splash_attention_mask.CausalMask((Sq, Sk), offset=0, shard_count=q_seq_shards)
-        else:
-            base_mask = splash_attention_mask.FullMask(_shape=(Sq, Sk))
-        if mask.sliding_window is not None:
-            local_mask = splash_attention_mask.LocalMask(
-                shape=(Sq, Sk),
-                window_size=(mask.sliding_window - 1, None),
-                offset=0,
-                shard_count=q_seq_shards,
-            )
-            base_mask = splash_attention_mask.LogicalAnd(base_mask, local_mask)
-        if mask.explicit_mask is not None:
-            raise NotImplementedError("Explicit masks are not yet supported for splash attention")
+        mask_spec = SplashAttentionMaskSpec(
+            is_causal=mask.is_causal,
+            causal_offset=mask.causal_offset,
+            sliding_window=mask.sliding_window,
+            has_explicit_mask=mask.explicit_mask is not None,
+        )
     elif isinstance(mask, NamedArray):
         raise NotImplementedError("NamedArray masks are not yet supported for splash attention")
     else:
         raise ValueError(f"Unknown mask type: {mask}")
 
-    kernel_mask = splash_attention_mask.MultiHeadMask(masks=[base_mask for _ in range(Hq)])
+    mask_lowering = lower_splash_attention_mask(
+        mask=mask_spec,
+        q_seq_len=Sq,
+        kv_seq_len=Sk,
+        num_heads=Hq,
+        q_seq_shards=q_seq_shards,
+    )
 
     # Create kernel with GLOBAL shapes and q_seq_shards (outside shard_map)
     splash_kernel = splash_attention_kernel.make_splash_mha(
-        mask=kernel_mask,
+        mask=mask_lowering.kernel_mask,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
         block_sizes=block_sizes,
@@ -1468,7 +1095,7 @@ def _tpu_splash_attention(
             physical_axes_q,
             physical_axes_k,
             physical_axes_v,
-            segment_ids_axes,
+            segment_id_lowering.segment_ids_axes,
             physical_axes_sink,
             kernel_specs,
         ),
@@ -1488,10 +1115,10 @@ def _tpu_splash_attention(
 
         return jax.vmap(
             call_kernel,
-            in_axes=(0, 0, 0, segment_batch_axis, sink_in_axes),
+            in_axes=(0, 0, 0, segment_id_lowering.segment_batch_axis, sink_in_axes),
         )(q, k, v, segment_ids, sinks)
 
-    attn_output = wrap_flash_attention(q_, k_, v_, segment_ids, sinks, splash_kernel)
+    attn_output = wrap_flash_attention(q_, k_, v_, segment_id_lowering.segment_ids, sinks, splash_kernel)
 
     attn_output = haliax.named(attn_output, ("B", "H", "S", "D"))
     # the output shape is B, S_q, H_q, D_v. Right now we're requiring D_k == D_v
@@ -1534,22 +1161,6 @@ def _find_batch_axis_for_segment_ids(Pos, segment_ids) -> Optional[int]:
         segment_batch_axis = None
 
     return segment_batch_axis
-
-
-def _spec_shard_factor(entry, mesh) -> int:
-    """Compute product of mesh axis sizes referenced by a PartitionSpec entry."""
-    if mesh is None:
-        return 1
-    if entry is None or entry is PartitionSpec.UNCONSTRAINED:
-        return 1
-    if isinstance(entry, str):
-        return int(mesh.shape.get(entry, 1))
-    prod = 1
-    for e in entry:
-        if e is None or e is PartitionSpec.UNCONSTRAINED:
-            continue
-        prod *= int(mesh.shape.get(e, 1))
-    return prod
 
 
 @dataclass(frozen=True)
@@ -2363,7 +1974,7 @@ class MultiHeadLatentAttention(eqx.Module):
     kv_b_proj: hnn.Linear
     o_proj: hnn.Linear
 
-    q_proj: hnn.Linear = None
+    q_proj: Optional[hnn.Linear] = None
     q_a_proj: Optional[hnn.Linear] = None
     q_a_norm: Optional[LayerNormBase] = None
     q_b_proj: Optional[hnn.Linear] = None
@@ -2476,6 +2087,7 @@ class MultiHeadLatentAttention(eqx.Module):
 
         # Optional step of doing LoRA on Q (as done in DeepSeek).
         if self.config.q_lora_rank is None:
+            assert self.q_proj is not None, "q_lora_rank not defined, but q_proj is missing."
             q = self.q_proj(x, key=k_q_a)
         else:
             assert (

@@ -8,6 +8,7 @@ import haliax as hax
 from haliax.partitioning import ResourceAxis
 import jax
 import jax.numpy as jnp
+import pytest
 from jax.random import PRNGKey
 
 from levanter.tracker.histogram import SummaryStats, sharded_histogram_array
@@ -86,6 +87,25 @@ def test_histogram_counts_include_values_on_the_last_bin_edge():
     assert histogram.histogram is not None
     assert int(histogram.histogram.bucket_counts.sum()) == 3
     assert int(histogram.num) == 3
+
+
+def test_summary_stats_moments_are_eager_and_host_transferable():
+    """mean/variance/rms are materialized fields, not lazy properties.
+
+    Regression for #6108: lazy properties re-dispatched ``jnp`` whenever read,
+    which segfaulted when a SummaryStats was read on a background thread. The
+    moments are now concrete leaves, so ``jax.device_get`` pulls them to host
+    and reading them never touches JAX again.
+    """
+    values = jnp.array([0.0, 1.0, 2.0, 3.0], dtype=jnp.float32)
+    stats = jax.device_get(SummaryStats.from_array(values, include_histogram=False))
+
+    for leaf in jax.tree_util.tree_leaves(stats):
+        assert not isinstance(leaf, jax.Array)
+
+    assert stats.mean == pytest.approx(1.5)
+    assert stats.variance == pytest.approx(1.25)
+    assert stats.rms == pytest.approx((14.0 / 4.0) ** 0.5)
 
 
 def test_summary_stats_can_skip_histogram_bins():

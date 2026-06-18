@@ -41,7 +41,7 @@ from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamHConfig
-from marin.execution.executor import ExecutorStep, InputName
+from marin.execution.types import ExecutorStep, InputName
 from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.scaling_laws import CandidateConfig, pick_v4_type
 from marin.scaling_laws.tpu_utils import V4_SPEC

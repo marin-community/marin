@@ -15,6 +15,7 @@ Otherwise runs in-process against local filesystem.
 """
 
 import argparse
+import json
 import logging
 import os
 import shutil
@@ -32,8 +33,9 @@ from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import Artifact
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import ExecutorStep, this_output_path
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
 from marin.processing.tokenize import lm_data_config
@@ -49,11 +51,40 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_SYNTH_DATA = REPO_ROOT / "tests" / "quickstart-data"
 
+# Reduced GPT-2 tokenizer already vendored in the repo for offline tests. Reused here so the
+# local-mode pipeline never touches HF Hub (frequently unavailable in CI). `load_tokenizer`
+# short-circuits a local directory, so pointing the tokenize step at it skips Hub staging.
+LOCAL_TOKENIZER_FILE = REPO_ROOT / "lib" / "levanter" / "tests" / "gpt2_tokenizer_config.json"
+# Vocab size of the reduced fixture above (matches lib/levanter/tests/conftest.py).
+LOCAL_TOKENIZER_VOCAB_SIZE = 5027
+
 _S3_ENV_KEYS = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_ENDPOINT_URL", "FSSPEC_S3"]
 
 
-def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
-    """Build the full marin data pipeline as executor steps."""
+def _materialize_local_tokenizer(dest_dir: Path) -> str:
+    """Lay out the reduced GPT-2 tokenizer fixture as a loadable tokenizer directory.
+
+    ``config.json`` gives ``AutoTokenizer`` the ``model_type`` it needs to resolve the
+    GPT-2 class offline; ``tokenizer_config.json`` is a minimal, well-formed config so the
+    train step's ``save_pretrained`` round-trip succeeds. Copying the raw ``tokenizer.json``
+    into ``tokenizer_config.json`` would load fine but fail to re-serialize on save.
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy(LOCAL_TOKENIZER_FILE, dest_dir / "tokenizer.json")
+    (dest_dir / "config.json").write_text(json.dumps({"model_type": "gpt2", "vocab_size": LOCAL_TOKENIZER_VOCAB_SIZE}))
+    (dest_dir / "tokenizer_config.json").write_text(
+        json.dumps({"model_max_length": 1024, "tokenizer_class": "GPT2Tokenizer"})
+    )
+    return str(dest_dir)
+
+
+def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[ExecutorStep]:
+    """Build the full marin data pipeline as executor steps.
+
+    ``tokenizer`` is an HF model name or a local directory of tokenizer files.
+    The local-mode runner passes a vendored fixture directory so the pipeline
+    does not depend on HF Hub.
+    """
 
     # Transform HTML to markdown
     transform_hq_data_spec = StepSpec(
@@ -121,7 +152,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             train_paths=[consolidate_step],
             validation_paths=[],
             cache_path=this_output_path(),
-            tokenizer="gpt2",
+            tokenizer=tokenizer,
         ),
     )
 
@@ -148,6 +179,9 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                     num_heads=2,
                     max_seq_len=64,
                     hidden_dim=32,
+                    # Load the converter's tokenizer from the same source as the data so the
+                    # train step's HF-checkpoint save never reaches HF Hub in local mode.
+                    tokenizer=tokenizer,
                 ),
                 trainer=TrainerConfig(
                     train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False
@@ -197,12 +231,12 @@ def _s3_env_vars() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def _run_executor(prefix: str, synth_data: str) -> None:
+def _run_executor(prefix: str, synth_data: str, tokenizer: str) -> None:
     config = ExecutorMainConfig(
         prefix=prefix,
         executor_info_base_path=f"{prefix}/experiments",
     )
-    steps = create_steps("quickstart-tests", synth_data)
+    steps = create_steps("quickstart-tests", synth_data, tokenizer)
     executor_main(config, steps=steps)
 
 
@@ -230,10 +264,14 @@ def main():
         logger.info("Uploading test fixtures to %s", synth_data)
         _upload_tree(LOCAL_SYNTH_DATA, synth_data)
         cleanup = lambda: _rm_s3(prefix)  # noqa: E731
+        # The vendored tokenizer fixture lives on the submitting host's filesystem,
+        # which remote Zephyr pods cannot see, so S3 mode stages "gpt2" from HF Hub.
+        tokenizer = "gpt2"
     else:
         prefix = tempfile.mkdtemp(prefix="iris-marin-itest-")
         synth_data = str(LOCAL_SYNTH_DATA)
         cleanup = lambda: shutil.rmtree(prefix, ignore_errors=True)  # noqa: E731
+        tokenizer = _materialize_local_tokenizer(Path(prefix) / "gpt2-tokenizer")
 
     os.environ["MARIN_PREFIX"] = prefix
     os.environ["WANDB_MODE"] = "disabled"
@@ -262,7 +300,7 @@ def main():
                         name=f"marin-itest-{uuid.uuid4().hex[:8]}",
                         entrypoint=Entrypoint.from_callable(
                             _run_executor,
-                            args=(prefix, synth_data),
+                            args=(prefix, synth_data, tokenizer),
                         ),
                         resources=ResourceConfig.with_cpu(),
                         environment=create_environment(env_vars=env_vars),
@@ -275,7 +313,7 @@ def main():
                 prefix=prefix,
                 executor_info_base_path=f"{prefix}/experiments",
             )
-            steps = create_steps("quickstart-tests", synth_data)
+            steps = create_steps("quickstart-tests", synth_data, tokenizer)
             with set_current_client(iris_client):
                 executor_main(config, steps=steps)
 

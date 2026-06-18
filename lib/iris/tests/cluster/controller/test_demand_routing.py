@@ -3,8 +3,8 @@
 
 """Tests for demand routing and bin packing.
 
-These tests exercise pure scheduling/routing logic. They call route_demand(),
-and first_fit_decreasing() directly -- no platform or provider is needed.
+These tests exercise pure scheduling/routing logic. They call route_demand()
+directly -- no platform or provider is needed.
 """
 
 import pytest
@@ -14,19 +14,24 @@ from iris.cluster.constraints import (
     DeviceType,
     PlacementRequirements,
     WellKnownAttribute,
+    availability_constraint,
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.controller.autoscaler.models import AdditiveReq, DemandEntry
+from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.routing import (
     RoutingBudget,
-    first_fit_decreasing,
     route_demand,
 )
-from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
 from iris.rpc import config_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
 
+from tests.cluster.backends.conftest import (
+    make_mock_platform,
+    make_mock_slice_handle,
+)
 from tests.cluster.controller.conftest import (
     DEFAULT_RESOURCES,
     make_demand_entries,
@@ -38,57 +43,6 @@ from tests.cluster.controller.conftest import (
 from tests.cluster.controller.conftest import (
     mark_discovered_ready as _mark_discovered_ready,
 )
-from tests.cluster.providers.conftest import (
-    make_mock_platform,
-    make_mock_slice_handle,
-)
-
-# ---------------------------------------------------------------------------
-# first_fit_decreasing
-# ---------------------------------------------------------------------------
-
-
-class TestFirstFitDecreasing:
-    """Unit tests for the FFD bin packing helper."""
-
-    def test_basic_packing(self):
-        """4 requests of (50, 50) each into bins of (100, 100) -> 2 VMs."""
-        reqs = [AdditiveReq(cpu_millicores=50, memory_bytes=50, disk_bytes=0) for _ in range(4)]
-        vm_cap = AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=0)
-        assert first_fit_decreasing(reqs, vm_cap) == 2
-
-    def test_empty_reqs_returns_zero(self):
-        vm_cap = AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=0)
-        assert first_fit_decreasing([], vm_cap) == 0
-
-    def test_single_item_per_bin(self):
-        """3 items that each fill a bin entirely -> 3 VMs."""
-        reqs = [AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=0) for _ in range(3)]
-        vm_cap = AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=0)
-        assert first_fit_decreasing(reqs, vm_cap) == 3
-
-    def test_heterogeneous_sizes(self):
-        """Mix of large and small items packs efficiently."""
-        reqs = [
-            AdditiveReq(cpu_millicores=70, memory_bytes=70, disk_bytes=0),
-            AdditiveReq(cpu_millicores=30, memory_bytes=30, disk_bytes=0),
-            AdditiveReq(cpu_millicores=30, memory_bytes=30, disk_bytes=0),
-            AdditiveReq(cpu_millicores=70, memory_bytes=70, disk_bytes=0),
-        ]
-        vm_cap = AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=0)
-        # FFD sorts descending: [70,70,30,30]. 70+30 fits in 1 bin -> 2 VMs
-        assert first_fit_decreasing(reqs, vm_cap) == 2
-
-    def test_disk_dimension(self):
-        """Disk is respected as a packing dimension."""
-        reqs = [
-            AdditiveReq(cpu_millicores=10, memory_bytes=10, disk_bytes=60),
-            AdditiveReq(cpu_millicores=10, memory_bytes=10, disk_bytes=60),
-        ]
-        vm_cap = AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=100)
-        # 60+60 > 100 disk, so these need 2 VMs
-        assert first_fit_decreasing(reqs, vm_cap) == 2
-
 
 # ---------------------------------------------------------------------------
 # group_required_slices via route_demand
@@ -383,7 +337,6 @@ class TestWaterfallRouting:
 
     def test_backoff_group_falls_through_to_fallback(self):
         """When primary group is in BACKOFF, demand falls through to fallback."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10)
         config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20)
@@ -408,7 +361,6 @@ class TestWaterfallRouting:
 
     def test_backoff_group_with_ready_slices_still_falls_through(self):
         """Even with ready slices, a BACKOFF group rejects demand so it falls through."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
         config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10)
@@ -454,7 +406,6 @@ class TestWaterfallRouting:
 
     def test_at_max_slices_causes_fallthrough(self):
         """Groups at AT_MAX_SLICES reject demand, causing fallthrough to lower-priority groups."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config_a = make_scale_group_config(name="group-a", max_slices=1, priority=10)
         config_b = make_scale_group_config(name="group-b", max_slices=5, priority=20)
@@ -1045,7 +996,7 @@ class TestRoutingBinPacking:
         )
         return [
             DemandEntry(
-                task_ids=[f"task-{i}"],
+                task_ids=(f"task-{i}",),
                 coschedule_group_id=None,
                 normalized=normalized,
                 constraints=[],
@@ -1129,14 +1080,14 @@ class TestRoutingBinPacking:
         )
         entries = [
             DemandEntry(
-                task_ids=["t0", "t1"],
+                task_ids=("t0", "t1"),
                 coschedule_group_id="job-1",
                 normalized=normalized,
                 constraints=[],
                 resources=resources,
             ),
             DemandEntry(
-                task_ids=["t2", "t3"],
+                task_ids=("t2", "t3"),
                 coschedule_group_id="job-2",
                 normalized=normalized,
                 constraints=[],
@@ -1172,7 +1123,7 @@ class TestRoutingBinPacking:
         entries = [
             # 1 coscheduled entry (needs 1 slice = 2 VMs)
             DemandEntry(
-                task_ids=["t0", "t1"],
+                task_ids=("t0", "t1"),
                 coschedule_group_id="job-1",
                 normalized=normalized,
                 constraints=[],
@@ -1181,7 +1132,7 @@ class TestRoutingBinPacking:
             # 3 packable entries (all fit in 1 VM -> ceil(1/2) = 1 slice)
             *[
                 DemandEntry(
-                    task_ids=[f"t-pack-{i}"],
+                    task_ids=(f"t-pack-{i}",),
                     coschedule_group_id=None,
                     normalized=normalized,
                     constraints=[],
@@ -1227,7 +1178,7 @@ class TestRoutingBinPacking:
         )
         entries = [
             DemandEntry(
-                task_ids=[f"task-{i}"],
+                task_ids=(f"task-{i}",),
                 coschedule_group_id=None,
                 normalized=normalized,
                 constraints=[],
@@ -1255,8 +1206,6 @@ class TestCheckCoschedulingFeasibility:
         return make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")[0].constraints
 
     def _make_autoscaler(self, groups):
-        from iris.cluster.controller.autoscaler import Autoscaler
-
         return Autoscaler(
             scale_groups=groups,
             evaluation_interval=Duration.from_seconds(0.1),
@@ -1308,8 +1257,6 @@ class TestCheckRoutingFeasibility:
     """Tests for Autoscaler.job_feasibility() (non-coscheduled jobs)."""
 
     def _make_autoscaler(self, groups):
-        from iris.cluster.controller.autoscaler import Autoscaler
-
         return Autoscaler(
             scale_groups=groups,
             evaluation_interval=Duration.from_seconds(0.1),
@@ -1386,6 +1333,46 @@ class TestCheckRoutingFeasibility:
         """Returns None when there are no groups (no validation possible)."""
         autoscaler = self._make_autoscaler({})
         assert autoscaler.job_feasibility([]) is None
+
+    def test_feasible_availability_constraint_matches_configured_group(self):
+        """A hard ``availability:<variant>`` constraint is feasible when some group
+        is *configured* for that variant.
+
+        Feasibility is the static "can this ever schedule" question: an availability
+        job is satisfiable iff a group provides the accelerator, because the
+        autoscaler's probe bootstraps live capacity at scale-up time. The group has
+        no live slice here (no ``mark_slice_ready``), so this exercises the
+        configured-not-yet-empirical case — exactly a cold ``iris run --reserve``.
+        """
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=1, accelerator_variant="v5p-8")
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        assert autoscaler.job_feasibility([availability_constraint("v5p-8")]) is None
+
+    def test_infeasible_availability_constraint_unknown_variant(self):
+        """An ``availability:<variant>`` for a variant no group provides is rejected.
+
+        Preserves the fail-fast: a typo'd ``--reserve`` must not sit pending forever.
+        """
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=1, accelerator_variant="v5p-8")
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        result = autoscaler.job_feasibility([availability_constraint("v6e-9999")])
+        assert result is not None
+
+    def test_infeasible_availability_constraint_with_incompatible_region(self):
+        """``availability:<variant>`` is ANDed with the job's other routing constraints.
+
+        The availability marker must not be evaluated independently: a job that pins a
+        region with no matching group still fails fast even though the variant itself
+        is configured somewhere.
+        """
+        config = make_scale_group_config(
+            name="tpu-group", max_slices=5, num_vms=1, accelerator_variant="v5p-8", zones=["us-central1-a"]
+        )
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        constraints = [availability_constraint("v5p-8"), region_constraint(["europe-west4"])]
+        result = autoscaler.job_feasibility(constraints)
+        assert result is not None
+        assert "region" in result
 
 
 # ---------------------------------------------------------------------------

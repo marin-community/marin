@@ -17,8 +17,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from rigging.filesystem import open_url
-from zephyr.writers import atomic_rename
+from rigging.filesystem import atomic_rename, open_url
 
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_exists, fsspec_mkdirs

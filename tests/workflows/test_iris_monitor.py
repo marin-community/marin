@@ -88,6 +88,38 @@ def test_wait_for_child_job_times_out_when_no_child_starts(monkeypatch: pytest.M
         )
 
 
+def test_wait_for_child_job_real_child_running_drops_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A training child reaching RUNNING drops the queue timeout."""
+    parent_id = "/runner/parent"
+    child_id = f"{parent_id}/grug-train-canary-tpu-1"
+    polls = [
+        [_job(parent_id, "JOB_STATE_RUNNING"), _job(child_id, "JOB_STATE_RUNNING")],
+        [_job(parent_id, "JOB_STATE_SUCCEEDED"), _job(child_id, "JOB_STATE_SUCCEEDED")],
+    ]
+    fake = _FakeClient(polls)
+
+    @contextmanager
+    def fake_open(**_kwargs):
+        yield fake
+
+    monkeypatch.setattr(iris_monitor, "_open_iris_client", fake_open)
+    monkeypatch.setattr(iris_monitor.time, "sleep", lambda _s: None)
+    # Second poll lands past the deadline; the run must still succeed because the real
+    # child already dropped the queue timeout on the first poll.
+    times = iter([0.0, 100.0, 5000.0, 6000.0])
+    monkeypatch.setattr(iris_monitor.time, "monotonic", lambda: next(times))
+
+    result = iris_monitor.wait_for_child_job(
+        parent_id,
+        iris_config=None,
+        controller_url=None,
+        poll_interval=1,
+        child_wait_timeout=3000,
+        repo_root=iris_monitor._REPO_ROOT,
+    )
+    assert result.state == job_pb2.JOB_STATE_SUCCEEDED
+
+
 def test_redact_pod_doc_redacts_env_values_and_preserves_context():
     pod = {
         "metadata": {"name": "worker-0"},

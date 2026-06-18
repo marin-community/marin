@@ -6,7 +6,12 @@ import logging
 import os
 from copy import deepcopy
 
+from fray import GpuConfig, ResourceConfig, TpuConfig
+
 logger = logging.getLogger(__name__)
+
+VLLM_TARGET_DEVICE_ENV = "VLLM_TARGET_DEVICE"
+VLLM_TPU_TARGET_DEVICE = "tpu"
 
 
 def _cli_helpers_module():
@@ -42,4 +47,37 @@ def add_run_env_variables(env: dict[str, str]) -> dict[str, str]:
     if "JAX_COMPILATION_CACHE_DIR" not in env and (val := os.environ.get("JAX_COMPILATION_CACHE_DIR")):
         env["JAX_COMPILATION_CACHE_DIR"] = val
 
+    return env
+
+
+def extras_for_resources(resources: ResourceConfig) -> list[str]:
+    """Return the uv extras for a resource device config."""
+    device = resources.device
+    if isinstance(device, TpuConfig):
+        return ["tpu"]
+    if isinstance(device, GpuConfig):
+        return ["gpu"]
+    return []
+
+
+def dependency_groups_for_resources(
+    resources: ResourceConfig,
+    dependency_groups: list[str] | None,
+) -> list[str]:
+    """Return explicit dependency groups, or infer accelerator extras from resources."""
+    if dependency_groups is not None:
+        return dependency_groups
+    return extras_for_resources(resources)
+
+
+def env_vars_for_dependency_groups(
+    resources: ResourceConfig,
+    dependency_groups: list[str],
+    env_vars: dict[str, str] | None,
+) -> dict[str, str]:
+    """Return environment variables required by the selected dependency groups."""
+    env = dict(env_vars or {})
+    if "vllm" in dependency_groups and isinstance(resources.device, TpuConfig):
+        # vLLM source installs choose CUDA by default unless the TPU target is explicit.
+        env.setdefault(VLLM_TARGET_DEVICE_ENV, VLLM_TPU_TARGET_DEVICE)
     return env

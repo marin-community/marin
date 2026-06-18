@@ -69,25 +69,43 @@ FROM base AS deps
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Rigging and finelog are workspace-local deps not on PyPI with compatible APIs.
-# Copy only metadata first so source changes don't bust the dep cache.
+# Build against the committed root `uv.lock` (`--frozen`) so the image ships the
+# same pinned, tested dependency set as local dev and the rest of CI — no fresh
+# PyPI resolve that can float a transitive (e.g. protobuf) to an untested major.
+# marin-iris's closure is two workspace members built from source — marin-rigging
+# and marin-finelog (the pure-Python finelog client) — plus external/registry
+# deps (the native marin-finelog-server ships as a published wheel). It never
+# pulls the Rust-built members (marin-core, levanter, …), so `--package
+# marin-iris` never asks the toolchain-free slim base to build them.
+# uv must still discover every workspace member to map the lock, so copy each
+# member's pyproject.toml (metadata only) — but only iris+rigging+finelog install.
+# The first sync uses `--no-install-workspace` to install just the external deps
+# (cached across source edits); the second builds iris+rigging+finelog from source.
+# Metadata alone suffices even for marin-haliax's `dynamic = ["version"]`
+# (sourced from src/haliax/__about__.py): under --frozen, uv takes the version
+# from the lock and never invokes a non-installed member's build backend.
+COPY uv.lock pyproject.toml ./
+COPY lib/iris/pyproject.toml ./lib/iris/pyproject.toml
 COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
 COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
-# finelog's pyproject force-includes config/ in the wheel, so the directory
-# must exist even for `uv sync --no-install-project`.
-COPY lib/finelog/config/ ./lib/finelog/config/
-COPY lib/iris/pyproject.toml ./lib/iris/
+COPY lib/fray/pyproject.toml ./lib/fray/pyproject.toml
+COPY lib/haliax/pyproject.toml ./lib/haliax/pyproject.toml
+COPY lib/levanter/pyproject.toml ./lib/levanter/pyproject.toml
+COPY lib/marin/pyproject.toml ./lib/marin/pyproject.toml
+COPY lib/zephyr/pyproject.toml ./lib/zephyr/pyproject.toml
 RUN --mount=type=cache,target=/root/.cache/uv \
-    printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging", "lib/finelog"]\n\n[tool.uv.sources]\nmarin-rigging = { workspace = true }\nmarin-finelog = { workspace = true }\n' > pyproject.toml \
-    && uv sync --package marin-iris --no-install-project
+    uv sync --frozen --package marin-iris --no-install-workspace
 
-# Now copy full source for rigging, finelog, and iris, then install.
+# Now copy full source for rigging, finelog, and iris, then install. finelog's
+# wheel build force-includes its config/ dir, so copy that too (the editable
+# build reads it).
 COPY lib/rigging/src/ ./lib/rigging/src/
 COPY lib/finelog/src/ ./lib/finelog/src/
+COPY lib/finelog/config/ ./lib/finelog/config/
 COPY lib/iris/src/ ./lib/iris/src/
 COPY lib/iris/config/ ./lib/iris/config/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --package marin-iris
+    uv sync --frozen --package marin-iris
 
 # Profiling tools — installed after uv sync so they aren't pruned by the exact sync.
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -122,8 +140,9 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 # ── Stage: controller ────────────────────────────────────────────────
 FROM deps AS controller
 
-# Controller-only deps: duckdb, pyarrow, zstandard.
-RUN uv sync --extra controller --inexact
+# Controller-only deps: duckdb, pyarrow, kubernetes (marin-iris's `controller`
+# extra). --inexact keeps the py-spy/memray installed above from being pruned.
+RUN uv sync --frozen --package marin-iris --extra controller --inexact
 
 LABEL org.opencontainers.image.description="Iris controller image"
 

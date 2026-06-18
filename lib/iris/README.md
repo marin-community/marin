@@ -43,7 +43,9 @@ job.wait()
 ```
 
 For accelerator jobs, request the accelerator on the task itself with `--tpu ...` or `--gpu ...`.
-`--reserve ...` only holds capacity for scheduling and does not attach accelerator devices to the task container.
+`--reserve <accel>` is a hard constraint that confines the job to a zone where `<accel>` has actually
+been obtained (a live, non-erroring slice in the region), and the job waits otherwise; it does not
+attach accelerator devices (use `--tpu`/`--gpu` for that) and does not hold capacity.
 
 ## Architecture
 
@@ -59,6 +61,13 @@ Worker Process (on each VM):
 ├── Task executor (runs jobs in containers)
 └── Heartbeat reporter (health monitoring)
 ```
+
+The controller drives task execution through a single `TaskBackend` contract with
+two placements: `Placement.IRIS` (Iris schedules task→worker and fans reconcile
+RPCs to worker daemons — the diagram above) and `Placement.BACKEND` (the backend,
+e.g. Kubernetes via Kueue, places tasks itself). See
+[`docs/architecture.md`](docs/architecture.md#the-taskbackend-contract) for the
+contract and how the controller dispatches by placement.
 
 ## Actor System
 
@@ -417,10 +426,10 @@ src/iris/
 │   ├── resolver.py          # ClusterResolver
 │   └── worker_pool.py       # Task dispatch
 ├── cluster/                  # Cluster orchestration
-│   ├── manager.py           # connect_cluster() + stop_all(dry_run) free functions
+│   ├── lifecycle.py         # connect_cluster() lifecycle helper
 │   ├── controller/          # Controller service + autoscaler
 │   ├── worker/              # Worker service
-│   └── platform/            # Platform abstractions (GCP, Manual, Local, CoreWeave)
+│   └── providers/           # Provider abstractions (GCP, Manual, Local, CoreWeave)
 ├── rpc/                      # Protocol definitions + generated code
 └── cli/                      # CLI package
     ├── main.py               # Top-level iris group

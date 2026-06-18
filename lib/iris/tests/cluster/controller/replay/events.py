@@ -4,10 +4,10 @@
 """``IrisEvent`` dataclass union + ``apply_event`` dispatcher.
 
 Each variant captures the arguments of one public mutation method on
-``ControllerTransitions``. ``apply_event`` opens a write transaction
+``ControllerTestState``. ``apply_event`` opens a write transaction
 and invokes the matching method.
 
-Multi-transaction orchestrators (``fail_workers``, ``prune_old_data``)
+Multi-transaction orchestrators (``ops.worker.fail``, ``prune_old_data``)
 and ``*_for_test`` helpers are intentionally excluded — scenarios call
 those methods directly when needed.
 """
@@ -15,17 +15,18 @@ those methods directly when needed.
 from dataclasses import dataclass
 from typing import Any
 
+from iris.cluster.controller import ops
+from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates, finalize
 from iris.cluster.controller.projections.endpoints import EndpointRow
-from iris.cluster.controller.reads import ReservationClaim
-from iris.cluster.controller.transitions import (
-    Assignment,
-    ControllerTransitions,
-    HeartbeatApplyRequest,
-    TaskUpdate,
-)
+from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
+
+from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,12 +59,7 @@ class QueueAssignments:
 
 @dataclass(frozen=True, slots=True)
 class ApplyTaskUpdates:
-    request: HeartbeatApplyRequest
-
-
-@dataclass(frozen=True, slots=True)
-class ApplyHeartbeatsBatch:
-    requests: list[HeartbeatApplyRequest]
+    request: WorkerTaskUpdates
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,27 +72,6 @@ class PreemptTask:
 class CancelTasksForTimeout:
     task_ids: frozenset[JobName]
     reason: str
-
-
-@dataclass(frozen=True, slots=True)
-class MarkTaskUnschedulable:
-    task_id: JobName
-    reason: str
-
-
-@dataclass(frozen=True, slots=True)
-class RemoveFinishedJob:
-    job_id: JobName
-
-
-@dataclass(frozen=True, slots=True)
-class RemoveWorker:
-    worker_id: WorkerId
-
-
-@dataclass(frozen=True, slots=True)
-class UpdateWorkerPings:
-    worker_ids: list[WorkerId]
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,36 +94,25 @@ class RemoveEndpoint:
     endpoint_id: str
 
 
-@dataclass(frozen=True, slots=True)
-class ReplaceReservationClaims:
-    claims: dict[WorkerId, ReservationClaim]
-
-
 IrisEvent = (
     SubmitJob
     | CancelJob
     | RegisterOrRefreshWorker
     | QueueAssignments
     | ApplyTaskUpdates
-    | ApplyHeartbeatsBatch
     | PreemptTask
     | CancelTasksForTimeout
-    | MarkTaskUnschedulable
-    | RemoveFinishedJob
-    | RemoveWorker
-    | UpdateWorkerPings
     | DrainForDirectProvider
     | ApplyDirectProviderUpdates
     | AddEndpoint
     | RemoveEndpoint
-    | ReplaceReservationClaims
 )
 
 
-def apply_event(transitions: ControllerTransitions, event: IrisEvent) -> Any:
+def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
     """Dispatch ``event`` to the matching method, opening one write transaction.
 
-    On this branch ``ControllerTransitions`` methods take an explicit
+    On this branch ``ControllerTestState`` methods take an explicit
     ``cur`` and the caller owns transaction scope. ``apply_event`` opens
     one transaction per event so scenarios stay branch-agnostic — same
     granularity as the main-flavor dispatcher that opens its own tx
@@ -157,46 +121,68 @@ def apply_event(transitions: ControllerTransitions, event: IrisEvent) -> Any:
     with transitions._db.transaction() as cur:
         match event:
             case SubmitJob(job_id, request, ts):
-                return transitions.submit_job(cur, job_id, request, ts)
+                return ops.job.submit(
+                    cur,
+                    job_id=job_id,
+                    request=request,
+                    ts=ts,
+                    run_template_cache=transitions._run_template_cache,
+                )
             case CancelJob(job_id, reason):
-                return transitions.cancel_job(cur, job_id, reason)
+                return ops.job.cancel(cur, job_id=job_id, reason=reason, endpoints=transitions._endpoints)
             case RegisterOrRefreshWorker(worker_id, address, metadata, ts, slice_id, scale_group):
-                return transitions.register_or_refresh_worker(
+                return ops.worker.register(
                     cur,
                     worker_id=worker_id,
                     address=address,
                     metadata=metadata,
                     ts=ts,
+                    health=transitions._health,
+                    worker_attrs=transitions._worker_attrs,
                     slice_id=slice_id,
                     scale_group=scale_group,
                 )
             case QueueAssignments(assignments):
-                return transitions.queue_assignments(cur, assignments)
+                return ops.task.assign(cur, assignments, health=transitions._health)
             case ApplyTaskUpdates(request):
-                return transitions.apply_task_updates(cur, request)
-            case ApplyHeartbeatsBatch(requests):
-                return transitions.apply_heartbeats_batch(cur, requests)
+                return apply_task_observations(
+                    cur,
+                    [request],
+                    health=transitions._health,
+                    endpoints=transitions._endpoints,
+                    now=Timestamp.now(),
+                )
             case PreemptTask(task_id, reason):
-                return transitions.preempt_task(cur, task_id, reason)
+                return finalize(
+                    cur,
+                    [TerminalDecision(TerminalKind.PREEMPT, task_id, reason)],
+                    endpoints=transitions._endpoints,
+                    now=Timestamp.now(),
+                )
             case CancelTasksForTimeout(task_ids, reason):
-                return transitions.cancel_tasks_for_timeout(cur, set(task_ids), reason)
-            case MarkTaskUnschedulable(task_id, reason):
-                return transitions.mark_task_unschedulable(cur, task_id, reason)
-            case RemoveFinishedJob(job_id):
-                return transitions.remove_finished_job(cur, job_id)
-            case RemoveWorker(worker_id):
-                return transitions.remove_worker(cur, worker_id)
-            case UpdateWorkerPings(worker_ids):
-                return transitions.update_worker_pings(worker_ids)
+                return finalize(
+                    cur,
+                    [
+                        TerminalDecision(TerminalKind.TIMEOUT, tid, reason)
+                        for tid in sorted(task_ids, key=lambda t: t.to_wire())
+                    ],
+                    endpoints=transitions._endpoints,
+                    now=Timestamp.now(),
+                )
             case DrainForDirectProvider(max_promotions):
-                return transitions.drain_for_direct_provider(cur, max_promotions)
+                return dispatch.drain_for_dispatch(
+                    cur, cache=transitions._run_template_cache, max_promotions=max_promotions
+                )
             case ApplyDirectProviderUpdates(updates):
-                return transitions.apply_direct_provider_updates(cur, updates)
+                return apply_dispatch_updates(
+                    cur,
+                    updates,
+                    endpoints=transitions._endpoints,
+                    now=Timestamp.now(),
+                )
             case AddEndpoint(endpoint):
-                return transitions.add_endpoint(cur, endpoint)
+                return transitions._endpoints.add(cur, endpoint)
             case RemoveEndpoint(endpoint_id):
-                return transitions.remove_endpoint(cur, endpoint_id)
-            case ReplaceReservationClaims(claims):
-                return transitions.replace_reservation_claims(cur, claims)
+                return transitions._endpoints.remove(cur, endpoint_id)
             case _:
                 raise TypeError(f"unhandled IrisEvent variant: {type(event).__name__}")

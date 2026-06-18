@@ -11,7 +11,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from rigging.timing import Timer
 
-from iris.cluster.process_status import get_process_status as _get_process_status
+from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import ProfileTrigger
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.rpc import job_pb2, worker_pb2
@@ -30,7 +30,6 @@ class TaskProvider(Protocol):
     def get_task(self, task_id: str, attempt_id: int = -1) -> TaskInfo | None: ...
     def list_tasks(self) -> list[TaskInfo]: ...
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
-    def handle_ping(self, request: worker_pb2.Worker.PingRequest) -> worker_pb2.Worker.PingResponse: ...
     def handle_reconcile(self, request: worker_pb2.Worker.ReconcileRequest) -> worker_pb2.Worker.ReconcileResponse: ...
     def capture_and_log_profile(
         self,
@@ -99,7 +98,7 @@ class WorkerServiceImpl:
         _ctx: RequestContext,
     ) -> job_pb2.GetProcessStatusResponse:
         """Return local process info (logs are in the central LogService)."""
-        return _get_process_status(self._timer)
+        return get_process_status(self._timer)
 
     def profile_task(
         self,
@@ -140,10 +139,6 @@ class WorkerServiceImpl:
                 raise ConnectError(Code.INVALID_ARGUMENT, "command is required")
             timeout_seconds = request.timeout_seconds if request.timeout_seconds != 0 else 60
             return self._provider.exec_in_container(request.task_id, list(request.command), timeout_seconds)
-
-    def ping(self, request: worker_pb2.Worker.PingRequest, _ctx: RequestContext) -> worker_pb2.Worker.PingResponse:
-        with rpc_error_handler("ping"):
-            return self._provider.handle_ping(request)
 
     def reconcile(
         self, request: worker_pb2.Worker.ReconcileRequest, _ctx: RequestContext

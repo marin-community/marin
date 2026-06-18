@@ -6,7 +6,6 @@ This file represents the best practices for each stage of the pipeline.
 """
 
 import dataclasses
-import hashlib
 import logging
 import os
 from collections.abc import Callable, Sequence
@@ -20,62 +19,51 @@ from fray import ResourceConfig, current_client
 from fray.types import Entrypoint, JobRequest, create_environment
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
+from levanter.adaptor import AdaptorConfig, LoraAdaptorConfig, NoAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import (
     DEFAULT_LM_DATA_SHUFFLE,
-    LmDatasetFormatBase,
     LMMixtureDatasetConfig,
     PreferenceLmDataConfig,
-    TextLmDatasetFormat,
 )
 from levanter.eval_harness import LmEvalHarnessConfig
-from levanter.main.train_dpo import TrainDpoConfig
+from levanter.main.train_dpo import SeparateReferenceConfig, TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
 from levanter.optim.model_averaging import EmaModelAveragingConfig
 from levanter.schedule import BatchSchedule
-from levanter.tracker.wandb import WandbConfig
+from levanter.tracker.wandb import WandbConfig, truncate_wandb_run_name
 from levanter.trainer import TrainerConfig
-from levanter.utils import fsspec_utils
 from levanter.utils.mesh import MeshConfig
-from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
-from marin.execution.executor import (
-    ExecutorStep,
-    InputName,
-    VersionedValue,
-    compute_output_path,
-    ensure_versioned,
-    materialize,
-    resolve_local_placeholders,
-    this_output_path,
-    unwrap_versioned_value,
-    versioned,
-)
-from marin.execution.remote import _sanitize_job_name, remote
+from marin.execution.executor import compute_output_path, materialize, resolve_local_placeholders, unwrap_versioned_value
+from marin.execution.remote import _sanitize_job_name
+from marin.execution.types import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import (
-    HfDatasetSpec,
-    TokenizeConfig,
     TokenizerStep,
     add_validation_sets_to_mixture,
     lm_data_config,
-    tokenize,
+    lm_mixture_data_config,
 )
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
+from marin.training.run_environment import extras_for_resources
 from marin.training.training import (
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
     bake_output_path,
     check_train_config_paths,
-    extras_for_resources,
     impute_run_id,
     resolve_training_env,
     run_levanter_train_dpo,
     run_levanter_train_lm,
 )
 
+from experiments.evals.exp1600_uncheatable_evals import (
+    uncheatable_eval_raw_validation_sets,
+    uncheatable_eval_tokenized,
+)
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.paloma import paloma_raw_validation_sets, paloma_tokenized
 from experiments.simple_dpo_config import SimpleDPOConfig
@@ -85,53 +73,17 @@ from experiments.simple_train_config import SimpleTrainConfig
 logger = logging.getLogger(__name__)
 
 
-HF_BUCKET_URI_PREFIX = "hf://buckets/"
-HF_BUCKET_PATH_PREFIX = "buckets/"
-
-
-def _is_hf_bucket_path(path: str) -> bool:
-    return path.startswith(HF_BUCKET_URI_PREFIX) or path.startswith(HF_BUCKET_PATH_PREFIX)
-
-
-def _normalize_hf_bucket_path(path: str) -> str:
-    if path.startswith(HF_BUCKET_URI_PREFIX):
-        return path.removeprefix("hf://")
-    return path
-
-
-def _truncate_wandb_name(name: str) -> str:
-    """Truncate a run name to fit WANDB's 64-character limit while preserving uniqueness."""
-    if len(name) <= 64:
-        return name
-
-    suffix = name.rsplit("/", 1)[-1]
-    digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
-    reserved = len(digest) + 2
-
-    if len(suffix) + reserved >= 64:
-        suffix_budget = 64 - reserved
-        truncated = f"{digest}/{suffix[-suffix_budget:]}"
-    else:
-        prefix_budget = 64 - len(suffix) - reserved
-        truncated = f"{name[:prefix_budget]}~{digest}/{suffix}"
-
-    logger.warning(f"Truncated name from {name} to {truncated} to fit within WANDB limits.")
-    return truncated
-
-
 def _truncate_wandb_tags(tags: Sequence[str]) -> list[str]:
     """Truncate W&B tags to fit the 64-character limit while preserving order."""
     deduped: list[str] = []
     seen: set[str] = set()
     for tag in tags:
-        truncated = _truncate_wandb_name(tag)
+        truncated = truncate_wandb_run_name(tag)
         if truncated in seen:
             continue
         seen.add(truncated)
         deduped.append(truncated)
     return deduped
-
-
 def _resolve_hf_export_steps(steps_per_hf_export: int | None, steps_per_export: int | None) -> int | None:
     """Resolve the HF export step interval: None means same as checkpoint, -1 means disabled."""
     if steps_per_hf_export is None:
@@ -161,167 +113,8 @@ def _validate_train_length(train_seq_len: int | None, model_config: LmConfig) ->
     return train_length
 
 
-def default_download(
-    name: str,
-    hf_dataset_id: str,
-    revision: str | None = None,
-    override_output_path: str | None = None,
-    **kwargs: Any,
-) -> InputName:
-    """
-    Download a HuggingFace dataset and upload it to a specified path with default configuration.
-
-    Args:
-        name: The name of the Download step. It forms the basis of the output path
-            unless override_output_path is explicitly specified.
-        hf_dataset_id: Hugging Face source. Either `$ORG/$DATASET` on HF Hub or `hf://buckets/...`.
-        revision: The revision of the dataset to download for Hub datasets.
-            Optional for bucket paths.
-        override_output_path: Optional. The output path for the dataset.
-        **kwargs: Additional keyword arguments that are passed to the download config.
-
-    The final output data will reside in '{output_path}/{revision}'.
-    """
-
-    download_kwargs = dict(kwargs)
-    hf_repo_type_prefix = download_kwargs.pop("hf_repo_type_prefix", None)
-    if _is_hf_bucket_path(hf_dataset_id):
-        normalized_dataset_id = _normalize_hf_bucket_path(hf_dataset_id)
-        description = f"Download {hf_dataset_id}"
-        resolved_hf_repo_type_prefix = "" if hf_repo_type_prefix is None else hf_repo_type_prefix
-        resolved_revision = "main" if revision is None else revision
-    else:
-        if revision is None:
-            raise ValueError("revision is required for non-bucket Hugging Face dataset downloads.")
-        normalized_dataset_id = hf_dataset_id
-        description = f"Download {hf_dataset_id} revision {revision}"
-        resolved_hf_repo_type_prefix = "datasets" if hf_repo_type_prefix is None else hf_repo_type_prefix
-        resolved_revision = revision
-
-    step = ExecutorStep(
-        name=name,
-        description=description,
-        fn=download_hf,
-        config=DownloadConfig(
-            hf_dataset_id=normalized_dataset_id,
-            revision=resolved_revision,
-            gcs_output_path=this_output_path(),
-            wait_for_completion=True,
-            hf_repo_type_prefix=resolved_hf_repo_type_prefix,
-            **download_kwargs,
-        ),
-        override_output_path=override_output_path,
-    )
-
-    return step.as_input_name()
-
-
-def default_tokenize(
-    name: str,
-    dataset: InputName | ExecutorStep | str | HfDatasetSpec,
-    tokenizer: str,
-    format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa
-    *,
-    sample_count: int | VersionedValue[int] | None = None,
-    is_validation: bool = False,
-    levanter_batch_size: int | None = None,
-    tags: Sequence[str] = (),
-    resources: ResourceConfig | None = None,
-    worker_resources: ResourceConfig | None = None,
-) -> ExecutorStep:
-    """
-    Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
-
-    Args:
-        name: The name of the tokenized dataset. This is used to form the output path for the executor step.
-            `tokenized/` will be prepended to the name.
-        dataset:  The dataset to tokenize. This can be an InputName, ExecutorStep, a string as a
-            path to the dataset or a HuggingFace dataset ID, or ``HfDatasetSpec`` to specify a
-            dataset with a particular subset name.
-        tokenizer: string HuggingFace tokenizer name. Should be the same as you intend to use in the tokenizer
-            spec for the training run.
-        format: The format of the dataset. This is used to determine how to tokenize the data.
-
-            See [Levanter's documentation](https://levanter.readthedocs.io/en/latest/reference/Data-Formats/)
-            for more details.
-        sample_count: Optional limit on the number of samples to tokenize per shard. If ``None``, tokenize everything.
-        is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
-        tags: Tags to attach to the Levanter dataset source for tagged evaluation.
-    Returns:
-        An ExecutorStep that represents the tokenized dataset.
-    """
-
-    # Common kwargs for config constructors
-    extra_kwargs: dict = {}
-    if worker_resources is not None:
-        extra_kwargs["worker_resources"] = worker_resources
-
-    # sniff out if it's a HuggingFace dataset
-    if isinstance(dataset, HfDatasetSpec):
-        config = HfTokenizeConfig(
-            id=dataset.id,
-            name=dataset.name,
-            cache_path=this_output_path(),
-            tokenizer=ensure_versioned(tokenizer),
-            format=format,
-            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
-            levanter_batch_size=levanter_batch_size,
-            tags=[*tags],
-            **extra_kwargs,
-        )
-    elif (
-        isinstance(dataset, str)
-        and not _is_hf_bucket_path(dataset)
-        and dataset.count("/") == 1
-        and not fsspec_utils.exists(dataset)
-    ):
-        config = HfTokenizeConfig(
-            id=dataset,
-            cache_path=this_output_path(),
-            tokenizer=ensure_versioned(tokenizer),
-            format=format,
-            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
-            levanter_batch_size=levanter_batch_size,
-            tags=[*tags],
-            **extra_kwargs,
-        )
-    else:
-        config = TokenizeConfig(
-            train_paths=[dataset] if not is_validation else [],
-            validation_paths=[dataset] if is_validation else [],
-            cache_path=this_output_path(),
-            tokenizer=ensure_versioned(tokenizer),
-            format=format,
-            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
-            levanter_batch_size=levanter_batch_size,
-            tags=[*tags],
-            **extra_kwargs,
-        )
-
-    return ExecutorStep(
-        name=os.path.join("tokenized", name),
-        description=f"Tokenize raw text using the {tokenizer} tokenizer.",
-        fn=remote(
-            tokenize,
-            resources=resources or ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g"),
-            pip_dependency_groups=["cpu"],
-            env_vars={
-                "TRANSFORMERS_NO_TORCH": "1",
-                "TRANSFORMERS_NO_TORCHVISION": "1",
-                "USE_TORCH": "0",
-                "TORCH_DISABLE_GLOBAL_DEPS": "1",
-            },
-        ),
-        config=config,
-    )
-
-
 @lru_cache  # LRU to make the executor happier
 def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
-    # Avoid circular dependencies
-    # TODO: Will - break apart defaults a bit
-    from experiments.evals.exp1600_uncheatable_evals import uncheatable_eval_tokenized
-
     validation_sets = dict(paloma_tokenized(base_path=base_path, tokenizer=tokenizer))
     validation_sets.update(uncheatable_eval_tokenized(base_path=base_path, tokenizer=tokenizer))
     return validation_sets
@@ -329,8 +122,6 @@ def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> di
 
 @lru_cache
 def default_raw_validation_sets() -> dict[str, Any]:
-    from experiments.evals.exp1600_uncheatable_evals import uncheatable_eval_raw_validation_sets
-
     validation_sets = dict(paloma_raw_validation_sets())
     validation_sets.update(uncheatable_eval_raw_validation_sets())
     return validation_sets
@@ -419,6 +210,7 @@ def _build_train_lm_config(
     wandb_name: str | None = None,
     wandb_group: str | None = None,
     eval_datasets_cache_path: str | None = None,
+    adapter: AdaptorConfig | None = None,
 ) -> tuple[str, TrainLmConfig]:
     """Build the shared ``TrainLmConfig`` body used by ``default_train`` and ``prepare_lm_train``.
 
@@ -433,8 +225,8 @@ def _build_train_lm_config(
     if wandb_group is None:
         wandb_group = os.environ.get("WANDB_GROUP")
 
-    truncated_name = _truncate_wandb_name(name)
-    wandb_display_name = _truncate_wandb_name(wandb_name or name)
+    truncated_name = truncate_wandb_run_name(name)
+    wandb_display_name = truncate_wandb_run_name(wandb_name or name)
 
     wandb_tags = _truncate_wandb_tags(tags)
 
@@ -546,6 +338,7 @@ def _build_train_lm_config(
         data_seed=train_config.data_seed,
         eval_harness_steps=train_config.steps_per_task_eval or 10000,
         eval_harness=harness_config,
+        adapter=adapter if adapter is not None else NoAdaptorConfig(),
     )
 
     return truncated_name, inner_config
@@ -563,6 +356,7 @@ def default_train(
     wandb_group: str | None = None,
     override_output_path: str | None = None,
     eval_datasets_cache_path: str | None = None,
+    adapter: AdaptorConfig | None = None,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -589,6 +383,7 @@ def default_train(
         wandb_name=wandb_name,
         wandb_group=wandb_group,
         eval_datasets_cache_path=eval_datasets_cache_path,
+        adapter=adapter,
     )
 
     pretraining_data = inner_config.data
@@ -809,6 +604,7 @@ def default_sft(
     model_config: LlamaConfig,
     sft_config: SimpleSFTConfig,
     tags: Sequence[str] = (),
+    adapter: AdaptorConfig | None = None,
 ) -> ExecutorStep:
     """
     Creates an ExecutorStep for supervised fine-tuning of a language model.
@@ -872,6 +668,7 @@ def default_sft(
         tags=tags,
         eval_harness_tasks=[],
         use_default_validation=False,
+        adapter=adapter,
     )
 
 
@@ -912,9 +709,14 @@ def default_dpo(
     preference_data = PreferenceLmDataConfig.from_lm_data_config(pretraining_data)
     preference_data = dataclasses.replace(preference_data, permutation_type="feistel")
     dpo_tokenizer_name = unwrap_versioned_value(preference_data.tokenizer)
+    lm_validation_data = lm_mixture_data_config(
+        default_validation_sets(tokenizer=dpo_tokenizer_name),
+        {},
+        missing_weights_are_validation=True,
+        include_raw_paths=False,
+    )
 
-    wandb_display_name = _truncate_wandb_name(name)
-
+    wandb_display_name = truncate_wandb_run_name(name)
     wandb_tags = _truncate_wandb_tags(tags)
 
     steps_per_export = dpo_config.steps_per_checkpoint
@@ -922,12 +724,49 @@ def default_dpo(
 
     train_length = _validate_train_length(dpo_config.train_seq_len, model_config)
 
-    schedule = BatchSchedule(unwrap_versioned_value(dpo_config.train_batch_size))
-    total_examples = schedule.global_data_offset_by_step(dpo_config.num_train_steps)
+    requested_num_train_steps = dpo_config.num_train_steps
+    auto_num_epochs = None
+    if requested_num_train_steps is None:
+        requested_num_train_steps = 1
+        auto_num_epochs = dpo_config.num_epochs
 
-    reference_model_path = dpo_config.reference_model_path or dpo_config.model_name_or_path
-    if reference_model_path is None:
-        raise ValueError("reference_model_path must be set for DPO training.")
+    requested_steps_per_eval = dpo_config.steps_per_eval
+    auto_validation_runs = None
+    if requested_steps_per_eval is None:
+        requested_steps_per_eval = 1
+        auto_validation_runs = 5
+
+    schedule = BatchSchedule(unwrap_versioned_value(dpo_config.train_batch_size))
+    total_examples = schedule.global_data_offset_by_step(requested_num_train_steps)
+
+    reference = dpo_config.reference
+    if isinstance(reference, SeparateReferenceConfig) and not reference.model_path:
+        reference_model_path = dpo_config.reference_model_path or dpo_config.model_name_or_path
+        if reference_model_path is None:
+            raise ValueError("reference_model_path must be set for DPO training when using a separate reference.")
+        reference = dataclasses.replace(
+            reference,
+            model_path=reference_model_path,
+            is_hf=dpo_config.reference_is_hf,
+        )
+
+    # Default DPO LoRA to the topology-stable A=0/B=Gaussian init.
+    # Standard LoRA init is fragile here; see
+    # https://github.com/marin-community/marin/issues/4755.
+    # Users who need paper init can construct TrainDpoConfig directly.
+    if isinstance(dpo_config.adapter, LoraAdaptorConfig):
+        dpo_config = dataclasses.replace(
+            dpo_config,
+            adapter=dataclasses.replace(
+                dpo_config.adapter,
+                a_init_mode="zero",
+                zero_init_b=False,
+            ),
+        )
+
+    hf_save_dtype = dpo_config.hf_save_dtype
+    if not isinstance(dpo_config.adapter, NoAdaptorConfig) and hf_save_dtype is not None:
+        raise ValueError("hf_save_dtype is not supported with adapter-based DPO exports.")
 
     inner_config = TrainDpoConfig(
         data=preference_data,
@@ -939,8 +778,8 @@ def default_dpo(
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=dpo_config.train_batch_size,
-            num_train_steps=dpo_config.num_train_steps,
-            steps_per_eval=dpo_config.steps_per_eval,
+            num_train_steps=requested_num_train_steps,
+            steps_per_eval=requested_steps_per_eval,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
                 keep=_checkpoint_keep(steps_per_export),
@@ -952,6 +791,8 @@ def default_dpo(
                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                 }
             ),
+            per_device_eval_parallelism=dpo_config.per_device_eval_parallelism,
+            profiler=dpo_config.profiler,
             allow_partial_checkpoint=dpo_config.allow_partial_checkpoint,
             allow_nondivisible_batch_size=True,
             quantization=QuantizationConfig(int8=dpo_config.int8) if dpo_config.int8 else None,
@@ -961,6 +802,7 @@ def default_dpo(
         initialize_from_hf=dpo_config.model_name_or_path if initialize_from_hf else False,
         train_seq_len=train_length,
         model=model_config,
+        adapter=dpo_config.adapter,
         optimizer=AdamConfig(
             learning_rate=dpo_config.learning_rate,
             weight_decay=dpo_config.weight_decay,
@@ -970,12 +812,13 @@ def default_dpo(
             min_lr_ratio=dpo_config.min_lr_ratio,
             max_grad_norm=dpo_config.max_grad_norm,
         ),
-        reference_model_path=reference_model_path,
-        reference_is_hf=dpo_config.reference_is_hf,
+        reference=reference,
         beta=dpo_config.beta,
         validation_split_fraction=dpo_config.validation_split_fraction,
+        reference_eval_cache=dpo_config.reference_eval_cache,
+        lm_validation_data=lm_validation_data,
         hf_save_steps=steps_per_export_hf,
-        hf_save_dtype=dpo_config.hf_save_dtype,
+        hf_save_dtype=hf_save_dtype,
         hf_generation_eos_token_ids=dpo_config.hf_generation_eos_token_ids,
         data_seed=dpo_config.seed,
     )
@@ -984,6 +827,8 @@ def default_dpo(
         train_config=inner_config,
         resources=dpo_config.resources,
         output_path=this_output_path(),
+        auto_num_epochs=auto_num_epochs,
+        auto_validation_runs=auto_validation_runs,
     )
 
     model_config = unwrap_versioned_value(model_config)
@@ -991,11 +836,19 @@ def default_dpo(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a model (tokenizer={dpo_tokenizer_name}) for "
-            f"{dpo_config.num_train_steps} (steps) * "
-            f"{dpo_config.train_batch_size} (batch_size) * "
-            f"{train_length} (train_seq_len) "
-            f"= {total_examples * train_length} tokens."
+            (
+                f"Train a model (tokenizer={dpo_tokenizer_name}) for "
+                f"{requested_num_train_steps} (steps) * "
+                f"{dpo_config.train_batch_size} (batch_size) * "
+                f"{train_length} (train_seq_len) "
+                f"= {total_examples * train_length} tokens."
+            )
+            if auto_num_epochs is None
+            else (
+                f"Train a model (tokenizer={dpo_tokenizer_name}) for "
+                f"{dpo_config.num_epochs:g} epoch(s) with runtime-resolved step count "
+                f"and train_seq_len={train_length}."
+            )
         ),
         fn=run_levanter_train_dpo,
         config=config,

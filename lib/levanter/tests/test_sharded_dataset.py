@@ -4,6 +4,9 @@
 import os
 import tempfile
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+
 from levanter.data.sharded_datasource import (
     ParquetDataSource,
     TextUrlDataSource,
@@ -33,9 +36,6 @@ def test_sniff_format_for_json():
 
 def test_sniff_format_for_parquet():
 
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
     with tempfile.NamedTemporaryFile(suffix=".parquet") as f:
         table = pa.table({"col1": [1, 2, 3], "col2": ["a", "b", "c"]})
         pq.write_table(table, f.name)
@@ -45,9 +45,6 @@ def test_sniff_format_for_parquet():
 
 
 def test_basic_parquet_datasource_read_row():
-
-    import pyarrow as pa
-    import pyarrow.parquet as pq
 
     with tempfile.NamedTemporaryFile(suffix=".parquet", delete=True) as f:
         # Create a simple dataset
@@ -72,9 +69,6 @@ def test_basic_parquet_datasource_read_row():
 
 
 def test_text_url_data_source_parquet():
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
     with tempfile.NamedTemporaryFile(suffix=".parquet", delete=True) as f:
         data = {
             "text": ["line1", "line2", "line3", "line4", "line5", "line6"],

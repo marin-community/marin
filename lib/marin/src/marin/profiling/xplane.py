@@ -17,18 +17,7 @@ from typing import Any, cast
 
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
-from marin.profiling.ingest import (
-    _collective_kind,
-    _CompleteTraceEvent,
-    _derive_optimization_candidates,
-    _op_category,
-    _sha256_for_path,
-    _summarize_complete_events,
-    _summarize_semantic_families,
-    _trace_quality_warnings,
-)
 from marin.profiling.schema import (
-    BreakdownPart,
     CommunicationOp,
     DurationStats,
     HotOp,
@@ -39,8 +28,19 @@ from marin.profiling.schema import (
     TimeBreakdown,
     TraceOverview,
     TraceProvenance,
+    breakdown_part,
 )
 from marin.profiling.semantics import canonical_op_name
+from marin.profiling.trace_summary import (
+    CompleteTraceEvent,
+    collective_kind,
+    derive_optimization_candidates,
+    op_category,
+    sha256_for_path,
+    summarize_complete_events,
+    summarize_semantic_families,
+    trace_quality_warnings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ _XSPACE_MESSAGE_CLASS: Any | None = None
 class XPlaneTimeline:
     """Normalized timeline events parsed directly from an XPlane protobuf."""
 
-    events: list[_CompleteTraceEvent]
+    events: list[CompleteTraceEvent]
     process_names: dict[int, str]
     thread_names: dict[tuple[int, int], str]
     num_events_total: int
@@ -105,7 +105,7 @@ def export_xplane_tables(
     count_trace_events: bool = False,
 ) -> XPlaneTableExport:
     """Convert an XPlane protobuf into compact xprof table JSON files."""
-    from xprof.convert import raw_to_tool_data
+    from xprof.convert import raw_to_tool_data  # noqa: PLC0415  # optional dep: xprof
 
     if not xplane_path.exists():
         raise FileNotFoundError(f"XPlane protobuf does not exist: {xplane_path}")
@@ -170,7 +170,7 @@ def summarize_xplane_timeline(
 ) -> ProfileSummary:
     """Summarize directly parsed XPlane timeline events."""
     timeline = parse_xplane_timeline(xplane_path)
-    return _summarize_complete_events(
+    return summarize_complete_events(
         timeline.events,
         source_format="xplane_pb",
         source_path=xplane_path,
@@ -178,7 +178,7 @@ def summarize_xplane_timeline(
         num_events_total=timeline.num_events_total,
         process_names=timeline.process_names,
         thread_names=timeline.thread_names,
-        trace_sha256=_sha256_for_path(xplane_path),
+        trace_sha256=sha256_for_path(xplane_path),
         run_metadata=run_metadata,
         warmup_steps=warmup_steps,
         hot_op_limit=hot_op_limit,
@@ -198,7 +198,7 @@ def parse_xplane_timeline(xplane_path: Path) -> XPlaneTimeline:
 
     process_names: dict[int, str] = {}
     thread_names: dict[tuple[int, int], str] = {}
-    events: list[_CompleteTraceEvent] = []
+    events: list[CompleteTraceEvent] = []
     num_events_total = 0
     quality_warnings = [str(warning) for warning in getattr(xspace, "warnings", [])]
     quality_warnings.extend(str(error) for error in getattr(xspace, "errors", []))
@@ -238,7 +238,7 @@ def parse_xplane_timeline(xplane_path: Path) -> XPlaneTimeline:
 
                 long_name = _string_stat(event_stats, "long_name") or (metadata_name if metadata_name != name else None)
                 events.append(
-                    _CompleteTraceEvent(
+                    CompleteTraceEvent(
                         name=name,
                         canonical_name=canonical_op_name(name),
                         deduplicated_name=_string_stat(event_stats, "deduplicated_name"),
@@ -286,7 +286,7 @@ def summarize_xplane_tables(
     communication_ops = _communication_ops_from_kernel_rows(kernel_rows)
     step_time = _step_time_from_xprof_rows(step_rows, warmup_steps=warmup_steps)
     time_breakdown = _time_breakdown_from_xprof_rows(step_rows, kernel_rows)
-    semantic_families = _summarize_semantic_families(
+    semantic_families = summarize_semantic_families(
         hot_ops,
         total_duration=time_breakdown.total_duration,
         limit=max(hot_op_limit, 50),
@@ -304,7 +304,7 @@ def summarize_xplane_tables(
         source_path=str(xplane_path),
         run_metadata=run_metadata or RunMetadata(),
         trace_overview=trace_overview,
-        trace_provenance=TraceProvenance(trace_sha256=_sha256_for_path(xplane_path)),
+        trace_provenance=TraceProvenance(trace_sha256=sha256_for_path(xplane_path)),
         step_time=step_time,
         time_breakdown=time_breakdown,
         hot_ops=hot_ops,
@@ -315,7 +315,7 @@ def summarize_xplane_tables(
         gap_region_contexts=[],
         optimization_candidates=[],
     )
-    return replace(summary, optimization_candidates=_derive_optimization_candidates(summary))
+    return replace(summary, optimization_candidates=derive_optimization_candidates(summary))
 
 
 def _try_summarize_xprof_tables(
@@ -389,7 +389,7 @@ def _merge_timeline_and_xprof_summaries(
     communication_ops = (
         table_summary.communication_ops if table_summary.communication_ops else timeline_summary.communication_ops
     )
-    semantic_families = _summarize_semantic_families(
+    semantic_families = summarize_semantic_families(
         hot_ops,
         total_duration=time_breakdown.total_duration,
         limit=max(hot_op_limit, 50),
@@ -411,7 +411,7 @@ def _merge_timeline_and_xprof_summaries(
         gap_region_contexts=timeline_summary.gap_region_contexts,
         optimization_candidates=[],
     )
-    return replace(summary, optimization_candidates=_derive_optimization_candidates(summary))
+    return replace(summary, optimization_candidates=derive_optimization_candidates(summary))
 
 
 def _xprof_quality_warnings(summary: ProfileSummary) -> list[str]:
@@ -643,7 +643,7 @@ def _int_like_stat(stats: dict[str, Any], *keys: str) -> int | None:
 
 
 def _trace_event_count_from_xprof(xplane_path: Path) -> int | None:
-    from xprof.convert import raw_to_tool_data
+    from xprof.convert import raw_to_tool_data  # noqa: PLC0415  # optional dep: xprof
 
     data, _content_type = raw_to_tool_data.xspace_to_tool_data(
         [str(xplane_path)],
@@ -752,7 +752,7 @@ def _time_breakdown_from_xprof_rows(rows: list[dict[str, Any]], kernel_rows: lis
     communication = sum(
         _float_value(row, "total_duration_us") or 0.0
         for row in kernel_rows
-        if _op_category(str(row.get("kernel_name") or "")) == "communication"
+        if op_category(str(row.get("kernel_name") or "")) == "communication"
     )
     total = sum(_float_value(row, "total_duration_us") or 0.0 for row in kernel_rows)
     totals["communication"] = communication
@@ -764,17 +764,12 @@ def _make_time_breakdown(duration_basis: str, totals: dict[str, float], *, total
     return TimeBreakdown(
         duration_basis=duration_basis,
         total_duration=total,
-        compute=_breakdown_part(totals["compute"], total),
-        communication=_breakdown_part(totals["communication"], total),
-        host=_breakdown_part(totals["host"], total),
-        stall=_breakdown_part(totals["stall"], total),
-        other=_breakdown_part(totals["other"], total),
+        compute=breakdown_part(totals["compute"], total),
+        communication=breakdown_part(totals["communication"], total),
+        host=breakdown_part(totals["host"], total),
+        stall=breakdown_part(totals["stall"], total),
+        other=breakdown_part(totals["other"], total),
     )
-
-
-def _breakdown_part(value: float, total: float):
-    share = (value / total) if total > 0 else 0.0
-    return BreakdownPart(total_duration=value, share_of_total=share)
 
 
 def _hot_ops_from_kernel_rows(rows: list[dict[str, Any]], *, limit: int) -> list[HotOp]:
@@ -787,7 +782,7 @@ def _hot_ops_from_kernel_rows(rows: list[dict[str, Any]], *, limit: int) -> list
             HotOp(
                 name=name,
                 canonical_name=canonical_op_name(name),
-                category=_op_category(name),
+                category=op_category(name),
                 count=count,
                 total_duration=total_duration,
                 exclusive_duration=total_duration,
@@ -801,9 +796,9 @@ def _communication_ops_from_kernel_rows(rows: list[dict[str, Any]]) -> list[Comm
     aggregate: dict[str, tuple[int, float]] = {}
     for row in rows:
         name = str(row.get("kernel_name") or "")
-        if _op_category(name) != "communication":
+        if op_category(name) != "communication":
             continue
-        collective = _collective_kind(name)
+        collective = collective_kind(name)
         count, total = aggregate.get(collective, (0, 0.0))
         aggregate[collective] = (
             count + (_int_value(row, "occurrences") or 0),
@@ -837,7 +832,7 @@ def _trace_overview_from_xprof_tables(
     if trace_event_count is not None:
         suspected_truncation = trace_event_count == _TRACE_COMPLETE_EVENT_TRUNCATION_THRESHOLD
         if suspected_truncation:
-            _, trace_warnings = _trace_quality_warnings(num_complete_events=trace_event_count)
+            _, trace_warnings = trace_quality_warnings(num_complete_events=trace_event_count)
             warnings.extend(trace_warnings)
 
     statement = step_props.get("device_collectives_statement") or step_props.get("statement")

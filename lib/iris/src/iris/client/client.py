@@ -38,22 +38,21 @@ from iris.cluster.client import (
     resolve_job_user,
 )
 from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
-from iris.cluster.log_store_helpers import build_log_source
+from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
     JobName,
     Namespace,
-    ReservationEntry,
     ResourceSpec,
     TaskAttempt,
     adjust_tpu_replicas,
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import AuthTokenInjector, TokenProvider
-from iris.rpc.proto_utils import job_state_friendly
+from iris.rpc.auth import TokenProvider, client_interceptors
+from iris.rpc.proto_display import job_state_friendly
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -487,7 +486,11 @@ class IrisClient:
         timeout_ms: int = 30000,
         token_provider: TokenProvider | None = None,
     ) -> "IrisClient":
-        """Create an IrisClient for RPC-based cluster execution.
+        """Create an IrisClient for an external client (CLI, laptop, notebook).
+
+        Finelog logs/stats are routed through the controller, the only ingress
+        an external client can reach. In-cluster callers should use
+        :meth:`in_cluster` instead.
 
         Args:
             controller_address: Controller URL (e.g., "http://localhost:8080")
@@ -502,9 +505,54 @@ class IrisClient:
         Returns:
             IrisClient wrapping RemoteClusterClient
         """
-        interceptors = []
-        if token_provider is not None:
-            interceptors.append(AuthTokenInjector(token_provider))
+        return cls._make(
+            controller_address,
+            workspace=workspace,
+            bundle_id=bundle_id,
+            timeout_ms=timeout_ms,
+            token_provider=token_provider,
+            use_controller_proxy=True,
+        )
+
+    @classmethod
+    def in_cluster(
+        cls,
+        controller_address: str,
+        *,
+        workspace: Path | None = None,
+        bundle_id: str | None = None,
+        timeout_ms: int = 30000,
+        token_provider: TokenProvider | None = None,
+    ) -> "IrisClient":
+        """Create an IrisClient for code running inside the cluster (in-task).
+
+        Same as :meth:`remote`, except finelog logs/stats are written straight
+        to the resolved finelog server instead of through the controller's
+        StatsServiceProxy — so high-frequency task-status pushes don't compete
+        for the controller's RPC thread pool. Only valid where the finelog
+        server's internal address is reachable (i.e. inside the cluster).
+        """
+        return cls._make(
+            controller_address,
+            workspace=workspace,
+            bundle_id=bundle_id,
+            timeout_ms=timeout_ms,
+            token_provider=token_provider,
+            use_controller_proxy=False,
+        )
+
+    @classmethod
+    def _make(
+        cls,
+        controller_address: str,
+        *,
+        workspace: Path | None,
+        bundle_id: str | None,
+        timeout_ms: int,
+        token_provider: TokenProvider | None,
+        use_controller_proxy: bool,
+    ) -> "IrisClient":
+        interceptors = client_interceptors(token_provider)
 
         cluster = RemoteClusterClient(
             controller_address=controller_address,
@@ -512,6 +560,7 @@ class IrisClient:
             workspace=workspace,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
+            use_controller_proxy=use_controller_proxy,
         )
         return cls(cluster)
 
@@ -552,7 +601,6 @@ class IrisClient:
         max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
         user: str | None = None,
-        reservation: list[ReservationEntry] | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
@@ -575,7 +623,6 @@ class IrisClient:
             max_retries_preemption: Max retries per task on preemption (default: 100)
             timeout: Per-task timeout (None = no timeout)
             user: Optional explicit user override for top-level jobs
-            reservation: Resource entries to pre-provision before scheduling (None = no reservation)
             task_image: Optional override for the task container image. When None,
                 the worker uses its cluster-configured default_task_image. Used for
                 jobs that need a custom runtime (e.g. an image with runsc/skopeo
@@ -638,8 +685,8 @@ class IrisClient:
             # Always inherit the parent's region unless the child already has
             # an explicit region constraint.  This applies even when the caller
             # passes constraints=[] to clear other inherited constraints —
-            # region pinning ensures children stay co-located with the
-            # reservation's claimed workers.
+            # region pinning keeps a child co-located with the worker that
+            # launched it (where its in-region data and resources live).
             if job_info and job_info.worker_region and not any(c.key == WellKnownAttribute.REGION for c in constraints):
                 inherited_region = region_constraint([job_info.worker_region])
                 constraints = [*constraints, inherited_region]
@@ -649,11 +696,6 @@ class IrisClient:
         environment_proto = environment.to_proto() if environment else None
         constraints_proto = [c.to_proto() for c in constraints or []]
         coscheduling_proto = coscheduling.to_proto() if coscheduling else None
-        reservation_proto = None
-        if reservation:
-            reservation_proto = job_pb2.ReservationConfig(
-                entries=[e.to_proto() for e in reservation],
-            )
 
         try:
             canonical_id = self._cluster_client.submit_job(
@@ -669,7 +711,6 @@ class IrisClient:
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
                 timeout=timeout,
-                reservation=reservation_proto,
                 preemption_policy=preemption_policy,
                 existing_job_policy=existing_job_policy,
                 task_image=task_image,
@@ -743,6 +784,13 @@ class IrisClient:
 
         return list(self._cluster_client.list_jobs(query=query))
 
+    def list_workers(
+        self,
+        query: controller_pb2.Controller.WorkerQuery | None = None,
+    ) -> list[controller_pb2.Controller.WorkerHealthStatus]:
+        """List workers registered with the controller."""
+        return list(self._cluster_client.list_workers(query=query))
+
     def terminate_prefix(
         self,
         prefix: JobName,
@@ -788,6 +836,10 @@ class IrisClient:
     ) -> None:
         """Push markdown status text for the running task to finelog (fire-and-forget)."""
         self._cluster_client.report_task_status_text(task_id, attempt_id, detail_md, summary_md)
+
+    def resolve_endpoint(self, url: str) -> str:
+        """Resolve a logical endpoint URL to a concrete HTTP address via the controller registry."""
+        return self._cluster_client.resolve_endpoint(url)
 
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.
@@ -1034,7 +1086,9 @@ def get_iris_ctx() -> IrisContext | None:
     client = None
     if job_info.controller_address:
         bundle_id = job_info.bundle_id
-        client = IrisClient.remote(
+        # In-task code runs inside the cluster and can reach the finelog server
+        # directly, so task-status pushes bypass the controller's StatsServiceProxy.
+        client = IrisClient.in_cluster(
             controller_address=job_info.controller_address,
             bundle_id=bundle_id,
         )

@@ -7,6 +7,7 @@ import gzip
 import io
 import json
 
+import zstandard as zstd
 from zephyr.dataset import format_shard_path
 from zephyr.writers import write_jsonl_file
 
@@ -108,7 +109,6 @@ def test_write_jsonl_infers_compression_from_zst_extension(tmp_path):
     assert result["count"] == 2
 
     # Verify file was created and is zstd compressed
-    import zstandard as zstd
 
     dctx = zstd.ZstdDecompressor()
     with open(output_path, "rb") as raw_f:

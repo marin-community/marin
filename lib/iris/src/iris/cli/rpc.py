@@ -17,9 +17,9 @@ from google.protobuf import json_format
 from google.protobuf.descriptor import FieldDescriptor
 from google.protobuf.message import Message
 
-from iris.cli.main import require_controller_url
+from iris.cli.connect import require_controller_url
 from iris.rpc import actor_connect, controller_connect, worker_connect
-from iris.rpc.auth import AuthTokenInjector, TokenProvider
+from iris.rpc.auth import TokenProvider, client_interceptors
 
 PROTO_TYPE_TO_CLICK: dict[int, click.ParamType] = {
     FieldDescriptor.TYPE_STRING: click.STRING,
@@ -149,12 +149,6 @@ def get_service(name: str) -> ServiceInfo | None:
     return SERVICES.get(name)
 
 
-def list_services() -> list[ServiceInfo]:
-    """List all registered services."""
-    register_services()
-    return list(SERVICES.values())
-
-
 def build_request(method_info: MethodInfo, json_str: str | None, kwargs: dict[str, Any]) -> Message:
     """Build a protobuf request message from JSON or keyword arguments."""
     if json_str:
@@ -185,7 +179,7 @@ def call_rpc(
         available = ", ".join(service.methods.keys())
         raise ValueError(f"Unknown method '{method_name}' on service '{service_name}'. Available: {available}")
 
-    interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
+    interceptors = client_interceptors(token_provider)
     client = service.client_class(url, interceptors=interceptors)
     try:
         method_fn = getattr(client, method.method_fn_name)
@@ -227,7 +221,7 @@ def kebab_to_pascal(name: str) -> str:
 
 def _is_simple_field(field: FieldDescriptor) -> bool:
     """Check if a protobuf field is a simple scalar type that maps to Click."""
-    if field.label == FieldDescriptor.LABEL_REPEATED:
+    if field.is_repeated:
         return False
     if field.message_type is not None:
         return False
@@ -258,27 +252,28 @@ def _build_options_from_proto(input_type: type[Message]) -> list[click.Option]:
     return options
 
 
-class ServiceCommands(click.MultiCommand):
+class ServiceCommands(click.Group):
     """Dynamic Click group for RPC service methods.
 
-    Lazily generates Click commands from protobuf service definitions.
+    Lazily generates Click commands from protobuf service definitions by
+    overriding ``list_commands``/``get_command`` rather than registering them.
     """
 
     def __init__(self, service_name: str, **attrs):
         super().__init__(**attrs)
         self.service_name = service_name
 
-    def list_commands(self, _ctx: click.Context) -> list[str]:
+    def list_commands(self, ctx: click.Context) -> list[str]:
         svc = get_service(self.service_name)
         if not svc:
             return []
         return [to_kebab_case(m) for m in sorted(svc.methods.keys())]
 
-    def get_command(self, ctx: click.Context, name: str) -> click.Command | None:
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
         svc = get_service(self.service_name)
         if not svc:
             return None
-        pascal_name = kebab_to_pascal(name)
+        pascal_name = kebab_to_pascal(cmd_name)
         method = svc.methods.get(pascal_name)
         if not method:
             return None

@@ -3,8 +3,6 @@
 
 """Scale-up planning helpers built on top of routed demand."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from rigging.timing import Timestamp
@@ -21,10 +19,9 @@ class GroupSliceCounts:
     requesting: int
     pending: int
     total: int
-    capacity_slices: int
 
     @classmethod
-    def from_group(cls, group: ScalingGroup) -> GroupSliceCounts:
+    def from_group(cls, group: ScalingGroup) -> "GroupSliceCounts":
         counts = group.slice_state_counts()
         requesting = counts[SliceLifecycleState.REQUESTING]
         pending = counts[SliceLifecycleState.BOOTING] + counts[SliceLifecycleState.INITIALIZING] + requesting
@@ -35,7 +32,6 @@ class GroupSliceCounts:
             requesting=requesting,
             pending=pending,
             total=total,
-            capacity_slices=ready + pending,
         )
 
 

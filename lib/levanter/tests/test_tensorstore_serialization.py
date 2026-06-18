@@ -5,23 +5,19 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import equinox as eqx
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 import pytest
 from chex import assert_trees_all_close
-from jax.sharding import NamedSharding, PartitionSpec as P
-
-import haliax as hax
-
-from levanter import tensorstore_serialization
-from levanter.tensorstore_serialization import (
-    build_kvstore_spec,
-    tree_deserialize_leaves_tensorstore,
-    tree_serialize_leaves_tensorstore,
-)
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
+
+from levanter.models.gpt2 import Gpt2Mlp
+from levanter.tensorstore_serialization import tree_deserialize_leaves_tensorstore, tree_serialize_leaves_tensorstore
 
 
 def test_tensorstore_checkpoint_simple():
@@ -126,7 +122,6 @@ def test_checkpoint_steps():
 
 def test_tensorstore_gpt2_mlp():
     with use_test_mesh():
-        from levanter.models.gpt2 import Gpt2Mlp
 
         key0 = jax.random.PRNGKey(0)
         key1 = jax.random.PRNGKey(1)
@@ -199,22 +194,3 @@ def test_tensorstore_ok_with_missing():
             m3 = tree_deserialize_leaves_tensorstore(tmpdir, m2, allow_missing=True)
             assert hax.all(m3.a == hax.full(A, 4))
             assert hax.all(m3.b == hax.zeros(A))
-
-
-def test_build_kvstore_spec_resolves_mirror_urls(monkeypatch):
-    captured: list[str] = []
-
-    def fake_resolve_mirror_url(path: str) -> str:
-        captured.append(path)
-        return "gs://marin-us-east5/tokenized/merged/cache/train/input_ids/offsets"
-
-    monkeypatch.setattr(tensorstore_serialization, "resolve_mirror_url", fake_resolve_mirror_url)
-
-    spec = build_kvstore_spec("mirror://tokenized/merged/cache/train/input_ids/offsets")
-
-    assert captured == ["mirror://tokenized/merged/cache/train/input_ids/offsets"]
-    assert spec == {
-        "driver": "gcs",
-        "bucket": "marin-us-east5",
-        "path": "tokenized/merged/cache/train/input_ids/offsets",
-    }

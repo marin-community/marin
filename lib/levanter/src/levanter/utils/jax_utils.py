@@ -13,13 +13,13 @@ import equinox as eqx
 import haliax as hax
 import haliax.partitioning
 import jax
+import jax._src.distributed as jax_distributed
 import numpy as np
 from haliax import is_named_array
 from haliax._src.util import index_where
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceAxis, ResourceMapping
 from jax import numpy as jnp
-import jax._src.distributed as jax_distributed
 from jax._src.mesh import get_concrete_mesh
 from jax.experimental import multihost_utils
 from jax.experimental.multihost_utils import host_local_array_to_global_array
@@ -185,9 +185,9 @@ def barrier_sync(timeout: float = 200):
         return
 
     try:
-        from jaxlib.xla_extension import DistributedRuntimeClient
+        from jaxlib.xla_extension import DistributedRuntimeClient  # noqa: PLC0415  # guarded: jaxlib version fallback
     except ModuleNotFoundError:  # jaxlib>=0.6.2
-        from jax._src.lib import _jax as _jax_lib
+        from jax._src.lib import _jax as _jax_lib  # noqa: PLC0415  # guarded: jaxlib version fallback
 
         DistributedRuntimeClient = _jax_lib.DistributedRuntimeClient
 
@@ -435,7 +435,8 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
      2. Then, inside jit, we select the source'th element of the array, then reshard with the out_axis_specs
 
     """
-    current_mesh: jax.sharding.Mesh = hax.partitioning._get_mesh()
+    current_mesh = hax.partitioning._get_mesh()
+    assert current_mesh is not None, "broadcast_shard requires an active mesh"
 
     axis_names = current_mesh.axis_names
 
@@ -449,12 +450,12 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
 
     def pre_jit(x):
         if jax.process_index() == source:
-            inp = np.array(x)
+            inp = np.asarray(jax.device_get(x))
         else:
-            inp = jnp.zeros(x.shape, dtype=x.dtype)
+            inp = np.zeros(x.shape, dtype=x.dtype)
 
         shape = (len(jax.devices()),) + inp.shape
-        inp = jnp.expand_dims(inp, axis=0)
+        inp = np.expand_dims(inp, axis=0)
         out = jax.make_array_from_callback(shape, sharding, lambda _: inp)
 
         return out

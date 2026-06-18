@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from enum import Enum, IntEnum, StrEnum
 from typing import Any, ClassVar
 
+from iris.cluster.tpu_topology import TpuTopologyInfo, get_tpu_topology
 from iris.rpc import config_pb2, job_pb2
 
 
@@ -323,6 +324,59 @@ def zone_constraint(zone: str) -> Constraint:
     if not zone:
         raise ValueError("zone must be non-empty")
     return Constraint.create(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value=zone)
+
+
+AVAILABILITY_PREFIX = "availability:"
+
+
+def availability_key(variant: str) -> str:
+    """Composite attribute key marking that a zone can provision ``variant``.
+
+    The variant is lowercased to match the canonical ``device-variant`` string
+    that scaling groups and workers already carry (e.g. ``availability:v5p-8``,
+    ``availability:h100``).
+    """
+    return f"{AVAILABILITY_PREFIX}{variant.strip().lower()}"
+
+
+def is_availability_key(key: str) -> bool:
+    """Whether ``key`` is an ``availability:<variant>`` zone-capability marker."""
+    return key.startswith(AVAILABILITY_PREFIX)
+
+
+def availability_constraint(variant: str) -> Constraint:
+    """A hard, zone-level constraint requiring ``variant`` to be obtainable there.
+
+    Emitted as an ``availability:<variant>`` EXISTS marker (zone-level, not
+    per-worker). Accelerators only — CPU/RAM/disk never produce availability markers.
+    """
+    return Constraint.create(
+        key=availability_key(variant), op=ConstraintOp.EXISTS, mode=job_pb2.CONSTRAINT_MODE_REQUIRED
+    )
+
+
+def availability_constraints_from_reservation(reservation: job_pb2.ReservationConfig) -> list[Constraint]:
+    """Map a deprecated ``ReservationConfig`` to hard ``availability:<variant>`` constraints.
+
+    Back-compat shim for pre-availability clients (see job.proto): each reservation
+    entry's accelerator variant becomes one hard availability constraint. Entries
+    with no accelerator device contribute nothing (availability is accelerators
+    only). Deduplicated by key so duplicate entries collapse to a single constraint.
+    """
+    constraints: list[Constraint] = []
+    seen: set[str] = set()
+    for entry in reservation.entries:
+        if not entry.resources.HasField("device"):
+            continue
+        variant = get_device_variant(entry.resources.device)
+        if not variant or variant == "auto":
+            continue
+        key = availability_key(variant)
+        if key in seen:
+            continue
+        seen.add(key)
+        constraints.append(availability_constraint(variant))
+    return constraints
 
 
 def region_constraint(regions: list[str]) -> Constraint:
@@ -739,8 +793,6 @@ def validate_tpu_request(
     Returns ``None`` if the request is valid, or a human-readable error
     message suitable for returning as ``INVALID_ARGUMENT``.
     """
-    from iris.cluster.types import TpuTopologyInfo, get_tpu_topology
-
     if not resources.HasField("device") or not resources.device.HasField("tpu"):
         return None
 
@@ -950,6 +1002,11 @@ def routing_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:
     result = []
     for c in constraints:
         if is_cpu_device_type_constraint(c):
+            continue
+        if is_availability_key(c.key):
+            # Dynamic zone-capability marker: not in CONSTRAINT_REGISTRY but routes
+            # to scaling groups (a group's zone determines its availability markers).
+            result.append(c)
             continue
         desc = CONSTRAINT_REGISTRY.get(c.key)
         if desc is None or not desc.routing:

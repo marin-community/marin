@@ -3,14 +3,13 @@
 
 """Autoscaler status and pending-diagnostic helpers."""
 
-from __future__ import annotations
-
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 
 from iris.cluster.controller.autoscaler.models import DemandEntry, RoutingDecision
-from iris.cluster.controller.autoscaler.routing import _format_variants
+from iris.cluster.controller.autoscaler.routing import format_variants
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2, vm_pb2
 
@@ -21,6 +20,40 @@ class PendingHint:
 
     message: str
     is_scaling_up: bool
+
+
+class SliceCapacityStatus(StrEnum):
+    """Placement status of a ready slice (slice-granular). A fully-booked healthy
+    slice is ``IN_USE``, not free; non-ready slices carry no capacity status."""
+
+    AVAILABLE = "available"  # all hosts healthy, no tasks: free to place on now
+    IN_USE = "in_use"  # all hosts healthy, at least one task running
+    IDLE = "idle"  # all hosts healthy, no tasks, idle past scale-down threshold
+    DEGRADED = "degraded"  # no hosts, or any host unhealthy: not a placement target
+
+
+def slice_capacity_status(
+    *,
+    is_ready: bool,
+    host_count: int,
+    healthy_hosts: int,
+    running_tasks: int,
+    idle: bool,
+) -> str:
+    """Classify a ready slice by placement readiness; "" for non-ready slices.
+
+    DEGRADED if it has no hosts or any host is not HEALTHY (it cannot take a gang
+    job even if some hosts are fine); otherwise split by occupancy.
+    """
+    if not is_ready:
+        return ""
+    if host_count == 0 or healthy_hosts < host_count:
+        return SliceCapacityStatus.DEGRADED
+    if running_tasks > 0:
+        return SliceCapacityStatus.IN_USE
+    if idle:
+        return SliceCapacityStatus.IDLE
+    return SliceCapacityStatus.AVAILABLE
 
 
 def _resource_spec_proto(resources: job_pb2.ResourceSpecProto) -> vm_pb2.ResourceSpec:
@@ -46,7 +79,7 @@ def _entry_to_proto(entry: DemandEntry) -> vm_pb2.DemandEntryStatus:
         task_ids=entry.task_ids,
         coschedule_group_id=entry.coschedule_group_id or "",
         device_type=normalized.device_type.value if normalized.device_type else "",
-        device_variant=_format_variants(normalized.device_variants),
+        device_variant=format_variants(normalized.device_variants),
         preemptible=bool(normalized.preemptible),
         resources=_resource_spec_proto(entry.resources),
     )
@@ -54,9 +87,13 @@ def _entry_to_proto(entry: DemandEntry) -> vm_pb2.DemandEntryStatus:
 
 def routing_decision_to_proto(
     decision: RoutingDecision,
-    group_to_launch: Mapping[str, int] | None = None,
+    group_to_launch: Mapping[str, int],
 ) -> vm_pb2.RoutingDecision:
-    """Convert an internal routing decision into the status proto."""
+    """Convert an internal routing decision into the status proto.
+
+    The ``group_to_launch`` argument is the capacity/rate-clamped launch count and
+    overrides ``decision.group_to_launch`` (the raw demand-derived count) in the proto.
+    """
 
     routed_entries = {
         name: vm_pb2.DemandEntryStatusList(entries=[_entry_to_proto(entry) for entry in entries])
@@ -65,7 +102,7 @@ def routing_decision_to_proto(
     unmet_entries = [
         vm_pb2.UnmetDemand(entry=_entry_to_proto(unmet.entry), reason=unmet.reason) for unmet in decision.unmet_entries
     ]
-    launch_counts = dict(decision.group_to_launch if group_to_launch is None else group_to_launch)
+    launch_counts = dict(group_to_launch)
 
     return vm_pb2.RoutingDecision(
         group_to_launch=launch_counts,

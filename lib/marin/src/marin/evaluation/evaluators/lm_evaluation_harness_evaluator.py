@@ -11,11 +11,11 @@ from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
 
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import is_remote_path, open_url, url_to_fs
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.evaluation.utils import is_remote_path, upload_to_gcs
+from marin.evaluation.utils import upload_to_gcs
 from marin.inference.vllm_server import VllmEnvironment
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ def _lm_eval_task_spec(eval_task: EvalTaskConfig) -> dict:
 def _patch_lm_eval_vllm_compat() -> None:
     """Patch lm-eval/vLLM API drift before lm-eval imports its vLLM backend."""
     try:
-        import vllm.utils
+        import vllm.utils  # noqa: PLC0415  # optional dep: vllm
     except ImportError:
         return
 
@@ -93,7 +93,7 @@ def _patch_lm_eval_none_alias_compat(alias_fallbacks: Mapping[str, str] | None =
     generation evals after metrics have been computed. Normalize only the
     returned alias values; do not change task loading or metric computation.
     """
-    from lm_eval import evaluator, evaluator_utils
+    from lm_eval import evaluator, evaluator_utils  # noqa: PLC0415  # optional dep: lm_eval
 
     fallback_map = dict(getattr(evaluator, "_marin_alias_fallbacks", {}))
     if alias_fallbacks is not None:
@@ -254,9 +254,9 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                 def _run_lm_eval(lm_eval_model_local: str, pretrained_args_local: str) -> None:
                     _patch_lm_eval_vllm_compat()
 
-                    from lm_eval.evaluator import simple_evaluate
-                    from lm_eval.loggers import EvaluationTracker, WandbLogger
-                    from lm_eval.utils import simple_parse_args_string
+                    from lm_eval.evaluator import simple_evaluate  # noqa: PLC0415  # optional dep: lm_eval
+                    from lm_eval.loggers import EvaluationTracker, WandbLogger  # noqa: PLC0415  # optional dep: lm_eval
+                    from lm_eval.utils import simple_parse_args_string  # noqa: PLC0415  # optional dep: lm_eval
 
                     for eval_task in evals:
                         task_label = eval_task.task_alias or eval_task.name

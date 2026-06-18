@@ -19,7 +19,7 @@ from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from google.protobuf import json_format
 
-from iris.cli.main import require_controller_url, rpc_client
+from iris.cli.connect import require_controller_url, rpc_client
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.rpc import job_pb2
 

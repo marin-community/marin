@@ -26,7 +26,12 @@ from rigging.timing import log_time
 import levanter
 from levanter.data import AsyncDataset
 from levanter.data.dataset import MappedAsyncDataset
-from levanter.data.mixture import MixtureDataset, StopStrategy, rescale_mixture_schedule_for_batch_schedule
+from levanter.data.mixture import (
+    ConcatDataset,
+    MixtureDataset,
+    StopStrategy,
+    rescale_mixture_schedule_for_batch_schedule,
+)
 from levanter.data.packing import GreedyPrepackedDataset
 from levanter.data.passthrough_tokenizer import PassthroughTokenizer
 from levanter.data.sharded_datasource import (
@@ -329,6 +334,8 @@ class DatasetComponent(DatasetComponentBase):
     pack: bool | int | Literal["pad"] | None = None
     tags: list[str] | None = None
     split: str = "validation"
+    flat_cache: bool = False
+    """Treat ``cache_dir`` as the cache root directly, without appending ``/<split>``."""
 
 
 @DatasetComponentBase.register_subclass("direct")
@@ -337,6 +344,15 @@ class DirectDatasetComponent(DatasetComponentBase):
     """A programmatic dataset component that supplies AsyncDataset examples directly."""
 
     datasets: Mapping[str, AsyncDataset[GrugLmExample]]
+    tags: list[str] | None = None
+
+
+@DatasetComponentBase.register_subclass("concat")
+@dataclass(frozen=True)
+class ConcatDatasetComponent(DatasetComponentBase):
+    """A logical component formed by concatenating cache-backed children."""
+
+    children: dict[str, DatasetComponent]
     tags: list[str] | None = None
 
 
@@ -805,12 +821,18 @@ class LmDataConfig:
 
     def _cache_for_component(self, name: str, component: DatasetComponent, split: str) -> TreeCache[dict] | None:
         cache_root = _component_cache_dir(name, component, self.cache_dir)
+        if component.flat_cache:
+            if split != "train":
+                return None
+            cache_path = cache_root
+        else:
+            cache_path = os.path.join(cache_root, split)
         source = component.source
 
         if source is None:
             try:
                 return load_lm_dataset_cache(
-                    os.path.join(cache_root, split),
+                    cache_path,
                     component.format,
                     self.the_tokenizer,
                     self.enforce_eos,
@@ -820,7 +842,6 @@ class LmDataConfig:
 
         shard_source = source.get_shard_source(split)
         if shard_source is None:
-            cache_path = os.path.join(cache_root, split)
             if not fsspec_utils.exists(cache_path):
                 logger.warning("No source for %s in %s split and no cache at %s, skipping", name, split, cache_path)
                 return None
@@ -831,7 +852,6 @@ class LmDataConfig:
                 self.enforce_eos,
             )
 
-        cache_path = os.path.join(cache_root, split)
         if not self.auto_build_caches:
             if not fsspec_utils.exists(cache_path):
                 raise FileNotFoundError(f"Cache not found at {cache_path} and auto_build_caches is disabled")
@@ -868,6 +888,26 @@ class LmDataConfig:
                 logger.warning("Direct dataset format missing %s split for component %s", split, name)
                 return None
             return direct
+
+        if isinstance(component, ConcatDatasetComponent):
+            child_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
+            for child_name, child in component.children.items():
+                child_key = f"{name}/{child_name}"
+                cache = caches.get(child_key) if caches is not None else self._cache_for_component(child_key, child, split)
+                if cache is None:
+                    if split == "train":
+                        raise ValueError(f"No cache available for concat child {child_key} in {split} split")
+                    continue
+                child_datasets[child_name] = dataset_for_component(
+                    child,
+                    Pos,
+                    cache,
+                    eos_id=self.the_tokenizer.eos_token_id,
+                    block_cross_document_attention=self.block_cross_document_attention,
+                )
+            if child_datasets:
+                return ConcatDataset(child_datasets)
+            return None
 
         if isinstance(component, DatasetComponent):
             cache = caches.get(name) if caches is not None else self._cache_for_component(name, component, split)
@@ -1188,6 +1228,11 @@ class LmDataConfig:
             if isinstance(component, DirectDatasetComponent):
                 continue
 
+            if isinstance(component, ConcatDatasetComponent):
+                for child_name, child in component.children.items():
+                    items.append((f"{name}/{child_name}", child))
+                continue
+
             if isinstance(component, HierarchicalMixtureDatasetComponent):
                 raise ValueError(
                     "HierarchicalMixtureDatasetComponent does not correspond to a single cache. "
@@ -1212,7 +1257,12 @@ class LmDataConfig:
         ) -> tuple[str, TreeCache[dict] | None, tuple[str, ShardedDataSource, LmDatasetFormatBase] | None]:
             name, component = item
             cache_root = _component_cache_dir(name, component, self.cache_dir)
-            cache_path = os.path.join(cache_root, split)
+            if component.flat_cache:
+                if split != "train":
+                    return name, None, None
+                cache_path = cache_root
+            else:
+                cache_path = os.path.join(cache_root, split)
             source = component.source
 
             if source is None:

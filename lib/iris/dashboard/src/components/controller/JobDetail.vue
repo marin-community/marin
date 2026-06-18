@@ -12,6 +12,7 @@ import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, forma
 import { decodeArrowIpc } from '@/utils/arrow'
 import { getLeafJobName } from '@/utils/jobTree'
 import { batchSummarySql } from '@/utils/taskStatus'
+import { openSpeedscopeWindow } from '@/utils/speedscope'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
@@ -461,6 +462,14 @@ const pageTitle = computed(() => {
   return (name && name !== props.jobId) ? name : `Job: ${props.jobId}`
 })
 
+// Child jobs link back to their parent job; root jobs link to the jobs list.
+const backTo = computed(() => {
+  const parentJobId = job.value?.parentJobId
+  return parentJobId ? `/job/${encodeURIComponent(parentJobId)}` : '/'
+})
+
+const backLabel = computed(() => (job.value?.parentJobId ? 'Back to parent job' : 'Jobs'))
+
 const subtitle = computed(() => {
   if (!job.value) return ''
   return (job.value.name && job.value.name !== props.jobId) ? `ID: ${props.jobId}` : ''
@@ -641,6 +650,9 @@ function buildProfileType(profilerType: string, format: string | null): Record<s
 
 async function handleProfile(taskId: string, profilerType: string, format: string | null) {
   profilingTaskId.value = taskId
+  // Open the viewer synchronously within the click gesture; CPU profiling takes
+  // ~10s, after which a fresh window.open would be blocked as a popup.
+  const pending = profilerType === 'cpu' && (format ?? 'SPEEDSCOPE') === 'SPEEDSCOPE' ? openSpeedscopeWindow() : null
   try {
     const body = {
       target: taskId,
@@ -649,26 +661,34 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
     }
     const resp = await controllerRpcCall<{ profileData?: string; error?: string }>('ProfileTask', body)
     if (resp.error) {
+      pending?.cancel()
       alert(`${profilerType.toUpperCase()} profile failed: ${resp.error}`)
       return
     }
-    if (resp.profileData) {
-      const bin = atob(resp.profileData)
-      const bytes = new Uint8Array(bin.length)
-      for (let i = 0; i < bin.length; i++) {
-        bytes[i] = bin.charCodeAt(i)
-      }
-      const blob = new Blob([bytes], { type: 'application/octet-stream' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      const ts = new Date().toISOString().replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+Z$/, '')
-      const ext = profilerType === 'memory' ? 'bin' : 'out'
-      a.download = `${ts}_profile-${taskId.replace(/\//g, '_')}.${ext}`
-      a.click()
-      URL.revokeObjectURL(url)
+    if (!resp.profileData) {
+      pending?.cancel()
+      return
     }
+    const bin = atob(resp.profileData)
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) {
+      bytes[i] = bin.charCodeAt(i)
+    }
+    if (pending) {
+      pending.show(bytes, taskId)
+      return
+    }
+    const blob = new Blob([bytes], { type: 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const ts = new Date().toISOString().replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+Z$/, '')
+    const ext = profilerType === 'memory' ? 'bin' : 'out'
+    a.download = `${ts}_profile-${taskId.replace(/\//g, '_')}.${ext}`
+    a.click()
+    URL.revokeObjectURL(url)
   } catch (e) {
+    pending?.cancel()
     alert(`${profilerType.toUpperCase()} profile failed: ${e instanceof Error ? e.message : e}`)
   } finally {
     profilingTaskId.value = null
@@ -677,7 +697,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
 </script>
 
 <template>
-  <PageShell :title="pageTitle" back-to="/" back-label="Jobs">
+  <PageShell :title="pageTitle" :back-to="backTo" :back-label="backLabel">
     <template v-if="job?.name" #title-suffix>
       <button
         class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs text-text-muted hover:text-text

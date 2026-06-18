@@ -20,12 +20,12 @@ the execution backend.
    - `marin_dev` / `marin-dev` -> `lib/iris/config/marin-dev.yaml`
    - `coreweave` -> `lib/iris/config/coreweave.yaml`
 3. `resubmit_command` — exact Iris submit command for resubmission; must include `--no-wait`
-4. For Marin TPU training jobs, use `--extra marin:tpu` (not `--extra marin:cpu`)
+4. For Marin TPU training jobs, use `--extra marin-core:tpu` (not `--extra marin-core:cpu`)
 5. For TPU jobs, the resubmit command must request TPU resources with `--tpu <variant>`.
    `--reserve <variant>` only holds capacity; it does not attach TPU devices to the task container.
 
 Example resubmit command:
-`uv run iris --config lib/iris/config/marin.yaml job run --no-wait --extra marin:tpu --tpu v5litepod-16 -- python experiments/tutorials/train_tiny_model_tpu.py`
+`uv run iris --config lib/iris/config/marin.yaml job run --no-wait --extra marin-core:tpu --tpu v5litepod-16 -- python experiments/tutorials/train_tiny_model_tpu.py`
 
 If any required field is missing, ask for it before proceeding.
 
@@ -60,6 +60,13 @@ If any required field is missing, ask for it before proceeding.
   port-binding conflicts).
 - Sleep must be foreground (max ~10 min due to tool timeout). Loop control is at
   agent level, not bash.
+- Screen/process alive is not enough. Check state-file freshness plus
+  stdout/event-log mtime when a monitor writes them; if no monitor state or
+  event update occurs for more than 2 cadences, report `monitor stale`
+  separately from `run unhealthy`.
+- If an Iris/orchestrator query is blocked or inconclusive, do not assume job
+  failure. Cross-check W&B freshness, live logs, checkpoint movement,
+  worker/TPU health, and latest monitor state.
 
 ## MCP-Assisted Monitoring
 
@@ -70,7 +77,7 @@ job through MCP tools, not only Iris CLI commands.
   (`screen`, `tmux`, or one long-running exec session). Record session names,
   ports, and log paths in the state file.
 - Start MCP with a stable local controller URL and streamable HTTP transport:
-  `uv run --package marin marin-mcp-babysitter --controller-url <URL> --cluster <CLUSTER> --transport streamable-http --host 127.0.0.1 --port <PORT>`
+  `uv run --package marin-core marin-mcp-babysitter --controller-url <URL> --cluster <CLUSTER> --transport streamable-http --host 127.0.0.1 --port <PORT>`
 - Verify with `iris_job_summary` and `iris_tail_logs`. For heartbeat monitoring,
   report: job state, latest progress/tick/log line, timestamp, error signal.
 - If the MCP server is reachable but tool calls fail with connection refused to
@@ -140,7 +147,17 @@ part of the setup. The state file allows resume after context reset.
    and failed with exit 137" → cgroup OOM, raise `--memory` on resubmit.
 
 4. PRINT W&B RUN IDS/LINKS (once per training run)
+   - For normal runs, record the active W&B run id/display name/link when W&B is
+     available; many runs use autoassigned ids.
+   - When the launch workflow provides an intended W&B identity, validate the
+     active run id/display name, state, `_timestamp`, `global_step`, and key
+     losses against it. Do not rely only on a stored URL.
+   - During resume catch-up, W&B and checkpoint progress may be stale. Live
+     training-progress log lines with advancing timestamps are sufficient
+     liveness until W&B appears; once W&B is active, require W&B
+     timestamps/steps to keep moving.
 5. REPORT PROGRESS (format: ~<current>/<exact_max>)
+   - Resolve `<exact_max>` from the launched config/code, not from progress-bar display text.
 6. EVALUATE (terminal? error? stalled? -> recover or continue)
 
 7. RECOVER (STOP -> RESUBMIT)
@@ -175,6 +192,23 @@ When EVALUATE detects an error, before recovery:
 - If progress stalls across multiple intervals with `OwnerDiedError`, dead node,
   or unsatisfied resources -> mark `degraded` and notify user.
 - If same error repeats after one fix attempt, do not retry blindly; report to user.
+- Noisy shutdown traces are not decisive by themselves. Terminal Iris/orchestrator
+  status, driver/process exit code, final checkpoint state, and W&B state
+  determine whether a run succeeded.
+
+## Completion
+
+Before declaring the job complete:
+
+- Verify terminal state is successful.
+- Verify W&B is finished or has the expected final state and metrics when W&B is
+  part of the run.
+- Verify the final checkpoint has `metadata.json` when the run is expected to
+  write a checkpoint.
+- Capture final metrics, final step, W&B run id/display name, output root, final
+  checkpoint path, and caveats in the monitoring state or handoff note.
+- Stop/delete monitor heartbeats and resident monitoring sessions that are no
+  longer needed.
 
 ## When to Escalate
 

@@ -58,20 +58,24 @@ jobs:
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1
+        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           allowed_bots: 'claude[bot]'
+
+          # Empty attribution hides Claude Code's default "Co-Authored-By: Claude"
+          # / "Generated with Claude Code" trailers from commits and PR descriptions.
+          settings: '{"attribution":{"commit":"","pr":""}}'
 
           # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
             actions: read
 
           claude_args: |
-            --model opus
+            --model claude-opus-4-8
             --max-turns 250
             --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
-            --system-prompt "Always read and follow the guidelines in AGENTS.md before starting work. You always have the ability to commit and push your changes. Use your MCP tools if available, falling back to git and gh (which you have authorization for) if needed. Before submitting any changes: 1) Run ./infra/pre-commit.py --all-files --fix and fix any issues. 2) Run uv run pytest on tests relevant to your changes. Report on the test status when you provide an update. Always commit and push changes, even if you couldn't get the tests to pass. In any follow-up comments on issues or PRs, state how you tested your changes (which tests you ran and their results)."
+            --system-prompt "Read and follow AGENTS.md (especially its Testing section) and .agents/skills/commit/SKILL.md before starting work. You always have the ability to commit and push your changes. Use your MCP tools if available, falling back to git and gh (which you have authorization for) if needed. NEVER credit yourself: no 'Co-Authored-By: Claude' or 'Generated with Claude Code' trailer in commits, and no self-attribution in PR descriptions. NEVER write tautological, trivial, or slop tests: a test must fail when behavior is wrong, not merely when the code changes; never add a test for a thin wrapper, a one-off script, or just to have one; if a change does not warrant a meaningful test, add none. Before submitting any changes: 1) Run ./infra/pre-commit.py --all-files --fix and fix any issues. 2) Run uv run pytest on tests relevant to your changes. Report on the test status when you provide an update. Always commit and push changes, even if you couldn't get the tests to pass. In any follow-up comments on issues or PRs, state how you tested your changes (which tests you ran and their results)."
 
   triage:
     if: |
@@ -105,14 +109,17 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Triage Issue
-        uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1
+        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           allowed_bots: 'claude[bot]'
+          # Empty attribution hides Claude Code's default "Co-Authored-By: Claude"
+          # / "Generated with Claude Code" trailers from commits and PR descriptions.
+          settings: '{"attribution":{"commit":"","pr":""}}'
           additional_permissions: |
             actions: read
           prompt: |
-            Read AGENTS.md, .agents/skills/fix-issue/SKILL.md, and .agents/skills/author-pr/SKILL.md.
+            Read AGENTS.md, .agents/skills/fix-issue/SKILL.md, and .agents/skills/commit/SKILL.md.
             Then analyze issue #${{ github.event.issue.number }}.
 
             ## Actionability check (do this first)
@@ -158,19 +165,31 @@ jobs:
               do NOT open a PR. Instead, update your comment with root cause analysis, relevant code links,
               and a proposed approach for a human to review before implementation begins.
 
+            ## Tests and attribution (critical)
+
+            Follow the Testing section of AGENTS.md. NEVER write tautological,
+            trivial, or slop tests: a test must fail when the behavior is wrong,
+            not merely when the implementation changes. Do not add a test for a
+            thin wrapper around a library call, for a one-off script, or just to
+            have a test. If a change does not warrant a meaningful test, add none.
+
+            NEVER credit yourself. Do not add a "Co-Authored-By: Claude" or
+            "Generated with Claude Code" trailer to commits, and do not
+            self-attribute in the PR description.
+
             ## PR format (critical)
 
-            When opening a PR, you MUST follow .agents/skills/author-pr/SKILL.md exactly.
+            When opening a PR, you MUST follow .agents/skills/commit/SKILL.md exactly.
             PR descriptions are plain text — no markdown headers, no bullet lists, no emoji,
             no "## Summary" or "## Test plan" sections. Violations will be rejected.
 
             Always produce output — either a PR or an analysis comment. Never silently exit.
           claude_args: |
-            --model opus
+            --model claude-opus-4-8
             --max-turns 250
             --permission-mode acceptEdits
             --allowedTools "Bash(git:*),Bash(./infra/pre-commit.py:*),Bash(uv:*),Bash(pytest:*),Bash(gh:*),Bash(python:*)"
-            --system-prompt "You can commit and push changes. Use MCP tools if available, falling back to git and gh. Always commit and push, even if tests fail. Never post multiple comments — post one comment, then use --edit-last for all updates."
+            --system-prompt "You can commit and push changes. Use MCP tools if available, falling back to git and gh. NEVER credit yourself in commits or PRs (no 'Co-Authored-By: Claude' or 'Generated with Claude Code' trailer). NEVER write tautological or trivial tests — a test must fail when behavior is wrong; do not test thin wrappers or scripts just to have a test. Always commit and push, even if tests fail. Never post multiple comments — post one comment, then use --edit-last for all updates."
 
   autofix:
     if: |
@@ -204,23 +223,33 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Apply Autofix
-        uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1
+        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           allowed_bots: 'claude[bot]'
+          # Empty attribution hides Claude Code's default "Co-Authored-By: Claude"
+          # / "Generated with Claude Code" trailers from commits and PR descriptions.
+          settings: '{"attribution":{"commit":"","pr":""}}'
           prompt: |
             PR: #${{ github.event.pull_request.number }}
             REVIEW: ${{ github.event.review.body }}
 
-            A reviewer has requested autofix. Read AGENTS.md.
+            A reviewer has requested autofix. Read AGENTS.md (especially its
+            Testing section) and .agents/skills/commit/SKILL.md.
 
             1. Fetch the full review with inline comments: `gh pr view ${{ github.event.pull_request.number }} --json reviews,comments`
             2. Fetch inline PR review comments: `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments`
             3. Apply ALL actionable changes from the review comments to the code.
             4. Run ./infra/pre-commit.py --all-files --fix
             5. Run uv run pytest -m 'not slow' on affected tests
-            6. Commit and push changes to the PR branch
+            6. Commit and push changes to the PR branch. NEVER credit yourself:
+               no "Co-Authored-By: Claude" or "Generated with Claude Code" trailer.
             7. Post a comment summarizing what was changed, prefixed with "🤖 Autofix:"
+
+            When a fix needs a regression test, write a meaningful one — never a
+            tautological, trivial, or slop test. A test must fail when the
+            behavior is wrong, not merely when the implementation changes; do not
+            test a thin wrapper or a script just to have a test.
           claude_args: |
             --model claude-sonnet-4-6
             --max-turns 100

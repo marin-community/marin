@@ -195,9 +195,12 @@ class FileRolloutReader(RolloutReader):
         return [file_path for _, file_path in parsed_files]
 
     def read_batch(self, timeout: float | None = None) -> RolloutBatch | None:
-        """Read a single batch with optional timeout."""
+        """Read a single batch with optional timeout.
+
+        A ``timeout`` of None (or non-positive) performs a single non-blocking pass.
+        """
         start_time = time.time()
-        while time.time() - start_time < timeout:
+        while True:
             available_files = self._get_available_files()
             for file_path in available_files:
                 if file_path not in self._read_files:
@@ -209,6 +212,9 @@ class FileRolloutReader(RolloutReader):
                         # a file might be deleted while we're trying to read it, or corrupted
                         logger.error(f"Failed to read rollout file {file_path}: {e}")
                         continue
+
+            if timeout is None or time.time() - start_time >= timeout:
+                return None
 
             time.sleep(1.0)
 

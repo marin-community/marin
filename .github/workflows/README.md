@@ -7,7 +7,7 @@ This directory contains thin trigger YAML around behavior implemented in `script
 | File | Workflow Name | Trigger | Gate Type | Owner Domain | Local Reproduction |
 | --- | --- | --- | --- | --- | --- |
 | `dupekit-release-wheels.yaml` | Dupekit - Release Wheels | PR + push to main + workflow_dispatch | release | dupekit | see job steps |
-| `dupekit-unit.yaml` | Dupekit - Unit | PR + push to main | unit | dupekit | `cd rust/dupekit && uv run --frozen --group test pytest tests/ -v` |
+| `dupekit-unit.yaml` | Dupekit - Unit | PR + push to main | unit | dupekit | `cd lib/dupekit && uv run --frozen --group test pytest tests/ -v` |
 | `fray-unit.yaml` | Fray - Unit | PR + push to main | unit | fray | `cd lib/fray && uv run --group=fray-test pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/` |
 | `haliax-unit.yaml` | Haliax - Unit | PR + push to main | unit | haliax | `JAX_NUM_CPU_DEVICES=8 uv run --package marin-haliax pytest -c pyproject.toml tests` |
 | `iris-dev-restart.yaml` | Iris - Dev Restart | schedule (daily) + workflow_dispatch | ops | iris | see job steps |
@@ -24,9 +24,9 @@ This directory contains thin trigger YAML around behavior implemented in `script
 | `marin-docs.yaml` | Marin - Docs | PR + push to main | docs | marin | `uv run python infra/check_docs_source_links.py` |
 | `marin-integration.yaml` | Marin - Integration | PR + push to main + workflow_dispatch | integration | marin | `uv run pytest tests/integration/iris/` |
 | `marin-lint.yaml` | Marin - Lint | PR + push to main | lint | marin | `./infra/pre-commit.py --all-files` |
-| `marin-release-libs-wheels.yaml` | Marin - Release Libs Wheels | PR + push to main + schedule + workflow_dispatch | release | marin | see job steps |
+| `marin-release-libs-wheels.yaml` | Marin - Release Libs Wheels | PR + tag push + schedule + workflow_dispatch | release | marin | see job steps |
 | `marin-smoke-datakit.yaml` | Marin - Smoke - Datakit | schedule + workflow_dispatch | smoke | marin | see job steps |
-| `marin-unit.yaml` | Marin - Unit | PR + push to main | unit | marin | `uv run --package marin --extra cpu --frozen pytest -n 4 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci and not integration' -v tests/` |
+| `marin-unit.yaml` | Marin - Unit | PR + push to main | unit | marin | `uv run --package marin-core --extra cpu --frozen pytest -n 4 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci and not integration' -v tests/` |
 | `ops-claude-review.yaml` | Ops - Claude Review | PR + issue_comment | ops | claude | see job steps |
 | `ops-claude.yaml` | Ops - Claude | issue_comment + issues | ops | claude | see job steps |
 | `ops-codeql.yaml` | Ops - CodeQL | PR + push to main + schedule | ops | ops | see job steps |

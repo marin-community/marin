@@ -16,9 +16,9 @@ import tarfile
 from collections.abc import Iterable
 
 import requests
-from rigging.filesystem import open_url
+from rigging.filesystem import atomic_rename, open_url
 from tqdm_loggable.auto import tqdm
-from zephyr import Dataset, ZephyrContext, atomic_rename, load_jsonl
+from zephyr import Dataset, ZephyrContext, load_jsonl
 
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_size
@@ -59,7 +59,11 @@ def process_file(input_file: str, output_path: str) -> Iterable[str]:
         with open_url(input_file) as f:
             with tarfile.open(fileobj=f, mode="r:gz") as tr:
                 for info in tr:
-                    with tr.extractfile(info) as file:
+                    file = tr.extractfile(info)
+                    if file is None:
+                        # Non-regular members (e.g. directories) have no extractable content.
+                        continue
+                    with file:
                         file_content = file.read()
                         file_path = os.path.join(output_path, info.name + ".gz")
 

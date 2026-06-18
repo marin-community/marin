@@ -10,9 +10,8 @@ from collections.abc import Iterator
 
 import zstandard
 from fray.cluster import ResourceConfig
-from rigging.filesystem import open_url
+from rigging.filesystem import atomic_rename, open_url
 from zephyr import Dataset, ZephyrContext
-from zephyr.writers import atomic_rename
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.normalize import normalize_step

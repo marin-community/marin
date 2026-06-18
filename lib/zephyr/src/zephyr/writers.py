@@ -10,9 +10,8 @@ import logging
 import os
 import queue
 import threading
-import uuid
 from collections.abc import Callable, Iterable
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
@@ -22,8 +21,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import vortex
 import zstandard as zstd
-from rigging.filesystem import open_url, url_to_fs
-from rigging.timing import ExponentialBackoff, retry_with_backoff
+from rigging.filesystem import atomic_rename, open_url, url_to_fs
 
 from zephyr import counters
 
@@ -47,97 +45,6 @@ _LEVANTER_BATCH_SIZE = 16384
 # Number of items per intermediate pickle chunk between non-scatter stages.
 # Used by ``_write_pickle_chunks`` in execution.py.
 INTERMEDIATE_CHUNK_SIZE = 100_000
-
-
-def unique_temp_path(output_path: str) -> str:
-    """Return a unique temporary path derived from ``output_path``.
-
-    Appends ``.tmp.<uuid>`` to avoid collisions when multiple writers target the
-    same output path (e.g. during network-partition induced worker races).
-    """
-    return f"{output_path}.tmp.{uuid.uuid4().hex}"
-
-
-# AWS error codes that are safe to retry on a server-side multipart copy
-# (``s3fs.S3FileSystem.mv``). ``InvalidPart`` is the R2-specific symptom:
-# every ``UploadPartCopy`` returns 200 but ``CompleteMultipartUpload`` then
-# claims one or more parts are missing.
-_TRANSIENT_S3_ERROR_CODES = frozenset(
-    {
-        "InvalidPart",
-        "InternalError",
-        "ServiceUnavailable",
-        "SlowDown",
-        "RequestTimeout",
-        "RequestTimeTooSkewed",
-    }
-)
-
-# Fragments matched against ``str(exc)`` for the case where s3fs has already
-# translated the underlying ``botocore.ClientError`` into an ``OSError`` and
-# the structured error code is no longer reachable.
-_TRANSIENT_S3_MESSAGE_FRAGMENTS = (
-    "specified parts could not be found",
-    "InternalError",
-    "ServiceUnavailable",
-    "SlowDown",
-    "RequestTimeout",
-)
-
-
-def _is_transient_s3_error(exc: BaseException) -> bool:
-    response = getattr(exc, "response", None)
-    if isinstance(response, dict):
-        code = response.get("Error", {}).get("Code")
-        if code in _TRANSIENT_S3_ERROR_CODES:
-            return True
-    msg = str(exc)
-    return any(frag in msg for frag in _TRANSIENT_S3_MESSAGE_FRAGMENTS)
-
-
-def _mv_with_retry(fs: Any, src: str, dst: str) -> None:
-    def _on_retry(exc: Exception, _attempt: int) -> None:
-        counters.increment("zephyr/atomic_rename_retries")
-
-    retry_with_backoff(
-        lambda: fs.mv(src, dst, recursive=True),
-        retryable=_is_transient_s3_error,
-        max_attempts=4,
-        backoff=ExponentialBackoff(initial=1.0, maximum=8.0, factor=2.0),
-        on_retry=_on_retry,
-        operation=f"atomic_rename fs.mv {src} -> {dst}",
-    )
-
-
-@contextmanager
-def atomic_rename(output_path: str, fs: Any = None) -> Iterable[str]:
-    """Atomic write-and-rename via a sibling temp key.
-
-    Yields ``<output_path>.tmp.<uuid>``; on clean exit, ``fs.mv`` renames the
-    temp into the final path. On exception, the temp key is best-effort
-    deleted and the original exception re-raised.
-
-    Callers may pass a pre-constructed ``fs`` to reuse a configured
-    filesystem (e.g. an ``S3FileSystem`` with ``fixed_upload_size=True``)
-    instead of letting atomic_rename build a default one from ``output_path``.
-
-    Example:
-        with atomic_rename("output.jsonl.gz") as tmp_path:
-            write_data(tmp_path)
-        # File is now at output.jsonl.gz
-    """
-    temp_path = unique_temp_path(output_path)
-    if fs is None:
-        fs = url_to_fs(output_path)[0]
-    try:
-        yield temp_path
-        _mv_with_retry(fs, temp_path, output_path)
-    except Exception:
-        # Best-effort cleanup: temp file may not exist (writer crashed before
-        # creating it) so we tolerate any rm error and re-raise the original.
-        with suppress(Exception):
-            fs.rm(temp_path)
-        raise
 
 
 def ensure_parent_dir(path: str) -> None:
@@ -484,7 +391,7 @@ def _get_existing_row_count(tmp_path: str, exemplar: dict[str, Any]) -> int:
     if not fs.exists(tmp_path):
         return 0
     try:
-        from levanter.store.tree_store import TreeStore
+        from levanter.store.tree_store import TreeStore  # noqa: PLC0415  # optional Levanter cache reader
 
         store = TreeStore.open(exemplar, tmp_path, mode="r", cache_metadata=False)
         return len(store)
@@ -542,7 +449,7 @@ def write_levanter_cache(
     if batch_size < 1:
         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
 
-    from levanter.store.cache import CacheMetadata, SerialCacheWriter
+    from levanter.store.cache import CacheMetadata, SerialCacheWriter  # noqa: PLC0415  # optional Levanter writer
 
     ensure_parent_dir(output_path)
     record_iter = iter(records)

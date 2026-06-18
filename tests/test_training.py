@@ -2,21 +2,34 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
 import os
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from fray import ResourceConfig
+from levanter.adaptor import LoraAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.data.text import DatasetComponent, PreferenceChatLmDatasetFormat, PreferenceLmDataConfig
 from levanter.main import train_lm
+from levanter.main.train_dpo import TrainDpoConfig
 from levanter.trainer import TrainerConfig
+from marin.processing.tokenize import tokenized_cache_stats_path
 from marin.training.training import (
+    TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
+    _enforce_run_id,
+    _maybe_auto_resolve_dpo_schedule,
     _update_config_to_use_out_path,
     doublecheck_paths,
     temporary_checkpoint_base_path,
 )
+
+from experiments.defaults import default_dpo
+from experiments.llama import llama_8b
+from experiments.simple_dpo_config import SimpleDPOConfig
+from experiments.tokenization import default_tokenize
 
 
 @pytest.fixture
@@ -99,6 +112,47 @@ def test_update_config_to_use_out_path_sets_run_specific_temp_checkpoints(traine
         )
 
 
+def test_update_config_to_use_out_path_does_not_enable_adapter_hf_export_without_steps(trainer_config):
+    with patch(
+        "marin.training.training.marin_temp_bucket", return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run"
+    ):
+        config = TrainDpoOnPodConfig(
+            train_config=TrainDpoConfig(
+                trainer=dataclasses.replace(trainer_config, num_train_steps=1),
+                adapter=LoraAdaptorConfig(),
+                hf_save_steps=None,
+            ),
+            resources=ResourceConfig.with_tpu("v4-8"),
+            output_path="gs://bucket/checkpoints/dpo/example-run",
+        )
+
+        updated = _update_config_to_use_out_path(config)
+
+    assert updated.train_config.hf_save_path is None
+    assert updated.train_config.merged_hf_save_path is None
+
+
+def test_update_config_to_use_out_path_routes_adapter_hf_export_to_peft(trainer_config):
+    with patch(
+        "marin.training.training.marin_temp_bucket", return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run"
+    ):
+        config = TrainDpoOnPodConfig(
+            train_config=TrainDpoConfig(
+                trainer=dataclasses.replace(trainer_config, num_train_steps=1),
+                adapter=LoraAdaptorConfig(),
+                hf_save_steps=10,
+            ),
+            resources=ResourceConfig.with_tpu("v4-8"),
+            output_path="gs://bucket/checkpoints/dpo/example-run",
+        )
+
+        updated = _update_config_to_use_out_path(config)
+
+    assert updated.train_config.hf_save_path is None
+    assert updated.train_config.peft_save_path == "gs://bucket/checkpoints/dpo/example-run/hf"
+    assert updated.train_config.merged_hf_save_path is None
+
+
 def test_recursive_path_checking(trainer_config):
     """Paths are checked recursively in nested structures."""
     with (
@@ -151,3 +205,171 @@ def test_pathlib_path_handling(trainer_config):
         )
         with pytest.raises(ValueError, match="not in the same region"):
             doublecheck_paths(config)
+
+
+def test_tokenized_cache_stats_path_handles_local_and_gcs_paths():
+    assert tokenized_cache_stats_path("/tmp/cache", "train") == "/tmp/cache/train/.stats.json"
+    assert (
+        tokenized_cache_stats_path("gs://bucket/cache_root", "validation")
+        == "gs://bucket/cache_root/validation/.stats.json"
+    )
+
+
+def test_output_path_temp_checkpoint_path_is_run_scoped(trainer_config):
+    config = TrainLmOnPodConfig(
+        train_config=train_lm.TrainLmConfig(
+            data={"train_urls": []},  # type: ignore[arg-type]
+            trainer=dataclasses.replace(trainer_config, id=None),
+        ),
+        resources=ResourceConfig.with_tpu("v4-8"),
+        output_path="gs://bucket/checkpoints/dpo/example-run",
+    )
+
+    with patch(
+        "marin.training.training.marin_temp_bucket",
+        return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run",
+    ):
+        updated = _enforce_run_id(_update_config_to_use_out_path(config))
+
+    checkpointer = updated.train_config.trainer.checkpointer
+
+    assert updated.train_config.trainer.id == "example-run"
+    assert checkpointer.append_run_id_to_base_path is False
+    assert checkpointer.base_path == "gs://bucket/checkpoints/dpo/example-run/checkpoints"
+    assert checkpointer.temporary_base_path == "gs://tmp/ttl=14d/checkpoints-temp/example-run"
+    assert checkpointer.expanded_temporary_path("example-run") == "gs://tmp/ttl=14d/checkpoints-temp/example-run"
+
+
+def test_auto_resolve_dpo_schedule_from_stats(trainer_config, tmp_path):
+    train_dir = tmp_path / "train"
+    train_dir.mkdir(parents=True)
+    (train_dir / ".stats.json").write_text(json.dumps({"total_tokens": 0, "total_elements": 108765}))
+
+    data = PreferenceLmDataConfig(
+        components={
+            "prefs": DatasetComponent(
+                cache_dir=str(tmp_path),
+                format=PreferenceChatLmDatasetFormat(),
+            )
+        },
+        train_weights={"prefs": 1.0},
+    )
+    train_config = TrainDpoConfig(
+        data=data,
+        trainer=dataclasses.replace(trainer_config, train_batch_size=64, num_train_steps=1, steps_per_eval=1),
+        validation_split_fraction=None,
+    )
+    config = TrainDpoOnPodConfig(
+        train_config=train_config,
+        resources=ResourceConfig.with_tpu("v4-8"),
+        auto_num_epochs=1.0,
+        auto_validation_runs=5,
+    )
+
+    resolved = _maybe_auto_resolve_dpo_schedule(config)
+
+    assert resolved.train_config.trainer.num_train_steps == 1700
+    assert resolved.train_config.run_initial_eval is True
+    assert resolved.train_config.scheduled_eval_steps == [425, 850, 1275]
+
+
+def test_auto_resolve_dpo_schedule_applies_validation_split(trainer_config, tmp_path):
+    train_dir = tmp_path / "train"
+    train_dir.mkdir(parents=True)
+    (train_dir / ".stats.json").write_text(json.dumps({"total_tokens": 0, "total_elements": 250}))
+
+    data = PreferenceLmDataConfig(
+        components={
+            "prefs": DatasetComponent(
+                cache_dir=str(tmp_path),
+                format=PreferenceChatLmDatasetFormat(),
+            )
+        },
+        train_weights={"prefs": 1.0},
+    )
+    train_config = TrainDpoConfig(
+        data=data,
+        trainer=dataclasses.replace(trainer_config, train_batch_size=128, num_train_steps=1, steps_per_eval=1),
+        validation_split_fraction=0.1,
+    )
+    config = TrainDpoOnPodConfig(
+        train_config=train_config,
+        resources=ResourceConfig.with_tpu("v4-8"),
+        auto_num_epochs=1.0,
+    )
+
+    resolved = _maybe_auto_resolve_dpo_schedule(config)
+
+    assert resolved.train_config.trainer.num_train_steps == 2
+
+
+def test_auto_resolve_dpo_schedule_does_not_require_stats_for_eval_only(trainer_config, tmp_path):
+    data = PreferenceLmDataConfig(
+        components={
+            "prefs": DatasetComponent(
+                cache_dir=str(tmp_path),
+                format=PreferenceChatLmDatasetFormat(),
+            )
+        },
+        train_weights={"prefs": 1.0},
+    )
+    train_config = TrainDpoConfig(
+        data=data,
+        trainer=dataclasses.replace(trainer_config, train_batch_size=64, num_train_steps=100, steps_per_eval=1),
+        validation_split_fraction=None,
+    )
+    config = TrainDpoOnPodConfig(
+        train_config=train_config,
+        resources=ResourceConfig.with_tpu("v4-8"),
+        auto_validation_runs=5,
+    )
+
+    resolved = _maybe_auto_resolve_dpo_schedule(config)
+
+    assert resolved.train_config.trainer.num_train_steps == 100
+    assert resolved.train_config.run_initial_eval is True
+    assert resolved.train_config.scheduled_eval_steps == [25, 50, 75]
+
+
+def test_default_dpo_attaches_lm_validation_sets():
+    tokenized = default_tokenize(
+        name="test_prefs",
+        dataset="gs://example-bucket/preference/train.jsonl.gz",
+        tokenizer="marin-community/marin-tokenizer",
+        format=PreferenceChatLmDatasetFormat(),
+    )
+    lm_validation_steps = {
+        "paloma/c4_en": default_tokenize(
+            name="paloma/c4_en",
+            dataset="gs://example-bucket/paloma/c4_en/val.jsonl.gz",
+            tokenizer="marin-community/marin-tokenizer",
+        ),
+        "uncheatable_eval/github_python": default_tokenize(
+            name="uncheatable_eval/github_python",
+            dataset="gs://example-bucket/uncheatable/github_python.jsonl.gz",
+            tokenizer="marin-community/marin-tokenizer",
+        ),
+    }
+    with patch("experiments.defaults.default_validation_sets", return_value=lm_validation_steps):
+        step = default_dpo(
+            name="dpo/test",
+            tokenized=tokenized,
+            model_config=llama_8b,
+            dpo_config=SimpleDPOConfig(
+                resources=ResourceConfig.with_tpu("v4-8"),
+                tokenizer="marin-community/marin-tokenizer",
+                model_name_or_path="marin-community/marin-8b-instruct",
+                reference_model_path="marin-community/marin-8b-instruct",
+                reference_is_hf=True,
+                validation_split_fraction=None,
+            ),
+        )
+
+    lm_validation_data = step.config.train_config.lm_validation_data
+
+    assert lm_validation_data is not None
+    assert "paloma/c4_en" in lm_validation_data.components
+    assert "uncheatable_eval/github_python" in lm_validation_data.components
+    assert lm_validation_data.train_weights is not None
+    assert all(weight == 0.0 for weight in lm_validation_data.train_weights.values())
+    assert step.config.train_config.lm_validation_prefix == "lm_eval"

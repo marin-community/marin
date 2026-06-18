@@ -3,16 +3,21 @@
 
 # NOTE: Do not explicitly import wandb/other trackers here, as this will cause the tests to trivially pass.
 import dataclasses
-import json
+import logging
 import re
 import warnings
 from typing import Tuple
 
+import draccus
 import pytest
 import yaml
 
 import levanter.tracker
-from levanter.tracker import CompositeTracker, TrackerConfig
+import levanter.tracker.tracker_fns as tracker_fns
+import levanter.tracker.wandb as wandb_tracker_mod
+from levanter.tracker import CompositeTracker, NoopTracker, TrackerConfig
+from levanter.tracker.tracker import NoopConfig
+from levanter.tracker.wandb import WandbTracker, _truncate_wandb_artifact_name, truncate_wandb_run_name
 
 
 def test_tracker_plugin_stuff_works():
@@ -32,8 +37,6 @@ def test_tracker_plugin_default_works():
     class ConfigHolder:
         tracker: TrackerConfig
 
-    import draccus
-
     tconfig = draccus.decode(ConfigHolder, parsed).tracker
 
     assert isinstance(tconfig, TrackerConfig.get_choice_class("wandb"))
@@ -51,10 +54,6 @@ def test_tracker_plugin_multi_parsing_work():
     @dataclasses.dataclass
     class ConfigHolder:
         tracker: TrackerConfig | Tuple[TrackerConfig, ...]
-
-    import draccus
-
-    from levanter.tracker.tracker import NoopConfig
 
     assert isinstance(draccus.decode(ConfigHolder, parsed).tracker, NoopConfig)
 
@@ -74,8 +73,6 @@ def test_get_tracker_by_name(monkeypatch):
     if wandb_config is None:
         pytest.skip("wandb not installed")
 
-    from levanter.tracker import NoopTracker
-
     wandb1 = wandb_config(mode="offline").init(None)
     tracker = CompositeTracker([wandb1, NoopTracker()])
 
@@ -88,8 +85,6 @@ def test_get_tracker_by_name(monkeypatch):
 
 
 def test_tracker_logging_without_global_tracker_emits_no_warning(monkeypatch):
-    import levanter.tracker.tracker_fns as tracker_fns
-
     monkeypatch.setattr(tracker_fns, "_global_tracker", None)
     monkeypatch.setattr(tracker_fns, "_has_logged_missing_tracker", False)
 
@@ -104,50 +99,8 @@ def test_tracker_logging_without_global_tracker_emits_no_warning(monkeypatch):
     assert not caught
 
 
-def test_wandb_tracker_replicates_metadata_and_lm_eval_artifacts(tmp_path):
-    from levanter.tracker.wandb import WandbTracker
-
-    class FakeRun:
-        def __init__(self):
-            self.step = 0
-            self.project = "marin"
-            self.name = "unit/test"
-            self.tags = ["exp-tag", "run-tag"]
-            self.id = "abc123"
-            self.group = "unit-group"
-            self.url = "https://wandb.ai/example/run"
-            self.config = {"foo": "bar"}
-            self.summary = {"eval/paloma/c4_en/bpb": 1.23}
-            self.logged_artifacts = []
-
-        def log_artifact(self, artifact_path, name=None, type=None):
-            self.logged_artifacts.append((artifact_path, name, type))
-
-        def finish(self):
-            return None
-
-    run = FakeRun()
-    tracker = WandbTracker(run, replicate_path=str(tmp_path))
-
-    artifact_path = tmp_path / "lm_eval_harness_results.42.json"
-    artifact_path.write_text('{"ok": true}')
-    tracker.log_artifact(str(artifact_path), name="lm_eval_harness_results.42.json", type="lm_eval_output")
-    tracker.finish()
-
-    mirrored = tmp_path / "lm_eval_artifacts" / "lm_eval_harness_results.42.json"
-    assert mirrored.read_text() == '{"ok": true}'
-
-    metrics_path = tmp_path / "tracker_metrics.jsonl"
-    record = json.loads(metrics_path.read_text().strip())
-    assert record["wandb"]["id"] == "abc123"
-    assert record["wandb"]["name"] == "unit/test"
-    assert record["wandb"]["tags"] == ["exp-tag", "run-tag"]
-
-
 def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch):
     monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
-
-    from levanter.tracker.wandb import WandbTracker, _truncate_wandb_artifact_name
 
     class FakeRun:
         def __init__(self):
@@ -171,9 +124,6 @@ def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch):
 
 def test_wandb_tracker_suppressed_logging_materializes_after_resume_step(monkeypatch):
     monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
-
-    import levanter.tracker.wandb as wandb_tracker_mod
-    from levanter.tracker.wandb import WandbTracker
 
     converted = []
 
@@ -221,9 +171,6 @@ def test_wandb_tracker_suppressed_logging_materializes_after_resume_step(monkeyp
 def test_wandb_tracker_materializes_before_dynamic_stale_step_check(monkeypatch):
     monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
 
-    import levanter.tracker.wandb as wandb_tracker_mod
-    from levanter.tracker.wandb import WandbTracker
-
     converted = []
 
     def fake_convert(value):
@@ -242,3 +189,22 @@ def test_wandb_tracker_materializes_before_dynamic_stale_step_check(monkeypatch)
     tracker.log({"metric": 2.0}, step=10)
 
     assert converted == [2.0]
+
+
+def test_truncate_wandb_run_name_preserves_scientific_notation_lr_suffix():
+    name = "dpo/new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-7_seed2"
+
+    truncated = truncate_wandb_run_name(name)
+
+    assert len(truncated) <= 64
+    assert truncated.endswith("lr7.5e-7_seed2")
+    assert "_-7_seed2" not in truncated
+
+
+def test_truncate_wandb_run_name_logs_warning(caplog):
+    name = "dpo/new_dpo_v2_bloom_speceval_v2_marin_instruct_beta0.1_lr7.5e-7_seed2"
+
+    with caplog.at_level(logging.WARNING):
+        truncate_wandb_run_name(name)
+
+    assert any(record.levelno >= logging.WARNING for record in caplog.records)

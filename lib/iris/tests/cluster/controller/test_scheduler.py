@@ -8,12 +8,16 @@ job requirements) and returns outputs (assignments). It does not dispatch tasks,
 modify state, or run threads.
 """
 
+from collections import Counter
+
 import pytest
-from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller import reads
+from iris.cluster.constraints import AttributeValue, WellKnownAttribute
+from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.scheduler import (
+from iris.cluster.controller.ops.task import Assignment
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
     JobRequirements,
@@ -23,16 +27,18 @@ from iris.cluster.controller.scheduler import (
     WorkerSnapshot,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.schema import worker_attributes_table
-from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
+from iris.cluster.controller.schema import jobs_table, worker_attributes_table
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.worker.env_probe import _build_worker_attributes
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
+from sqlalchemy import update as sa_update
 
 from tests.cluster.conftest import eq_constraint, in_constraint
-from tests.cluster.controller._test_support import set_worker_health_for_test
+from tests.cluster.controller._test_support import ControllerTestState, set_worker_health_for_test
+from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
     building_counts as _building_counts,
@@ -82,8 +88,6 @@ def _job_requirements_from_job(job) -> JobRequirements:
 
 def _decode_worker_attr_value(row):
     """Decode a worker_attributes row value by value_type."""
-    from iris.cluster.constraints import AttributeValue
-
     if row.value_type == "int":
         return AttributeValue(int(row.int_value))
     if row.value_type == "float":
@@ -91,7 +95,7 @@ def _decode_worker_attr_value(row):
     return AttributeValue(str(row.str_value or ""))
 
 
-def _worker_attr(state: ControllerTransitions, worker_id: WorkerId, key: str):
+def _worker_attr(state: ControllerTestState, worker_id: WorkerId, key: str):
     with state._db.read_snapshot() as tx:
         rows = tx.execute(
             select(worker_attributes_table).where(
@@ -104,42 +108,37 @@ def _worker_attr(state: ControllerTransitions, worker_id: WorkerId, key: str):
     return _decode_worker_attr_value(rows[0])
 
 
-def assign_task_to_worker(state: ControllerTransitions, task, worker_id: WorkerId) -> None:
+def assign_task_to_worker(state: ControllerTestState, task, worker_id: WorkerId) -> None:
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)])
+        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
 
 
-def transition_task_to_running(state: ControllerTransitions, task) -> None:
+def transition_task_to_running(state: ControllerTestState, task) -> None:
+    transition_task_to_state(state, task, job_pb2.TASK_STATE_RUNNING)
+
+
+def transition_task_to_state(state: ControllerTestState, task, new_state: int) -> None:
+    # Re-read the live task: callers pass the object captured at submit time,
+    # before assignment minted the current attempt/worker.
+    live = _query_task(state, task.task_id)
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=task.current_worker_id,
-                updates=[
-                    TaskUpdate(
-                        task_id=task.task_id,
-                        attempt_id=task.current_attempt_id,
-                        new_state=job_pb2.TASK_STATE_RUNNING,
-                    )
-                ],
-            ),
-        )
-
-
-def transition_task_to_state(state: ControllerTransitions, task, new_state: int) -> None:
-    with state._db.transaction() as cur:
-        state.apply_task_updates(
-            cur,
-            HeartbeatApplyRequest(
-                worker_id=task.current_worker_id,
-                updates=[
-                    TaskUpdate(
-                        task_id=task.task_id,
-                        attempt_id=task.current_attempt_id,
-                        new_state=new_state,
-                    )
-                ],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=live.current_worker_id,
+                    updates=[
+                        TaskUpdate(
+                            task_id=live.task_id,
+                            attempt_id=live.current_attempt_id,
+                            new_state=new_state,
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
 
 
@@ -177,8 +176,6 @@ def _make_context(
         user_spend={},
         user_budget_limits={},
         requested_bands={},
-        reserved_job_ids=frozenset(),
-        reservation_entry_counts={},
         user_budget_defaults=UserBudgetDefaults(),
     )
 
@@ -210,7 +207,7 @@ def _build_context(scheduler, state):
 
 def schedule_until_done(
     scheduler: Scheduler,
-    state: ControllerTransitions,
+    state: ControllerTestState,
     max_cycles: int = 100,
 ) -> SchedulingResult:
     """Drive the scheduler until no more tasks can be assigned.
@@ -277,22 +274,28 @@ def test_scheduler_returns_empty_when_no_workers(scheduler, state):
     assert len(result.assignments) == 0
 
 
-def test_scheduler_round_robins_tasks_across_workers(scheduler, state):
-    """Verify scheduler distributes tasks across workers instead of packing one worker."""
+def test_scheduler_packs_up_to_assignment_cap_then_spills(scheduler, state):
+    """A worker absorbs up to max_assignments_per_worker new tasks per cycle, then spills.
+
+    With ``DEFAULT_MAX_ASSIGNMENTS_PER_WORKER`` > 1, small tasks co-locate on a
+    worker (so they don't each trigger a new VM) up to the cap, after which load
+    spills to the next worker. Here all six 1-CPU tasks fit on a single 10-CPU
+    worker by capacity, so only the per-cycle cap limits stacking.
+    """
     register_worker(state, "w1", "addr1", make_worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
     register_worker(state, "w2", "addr2", make_worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
-    register_worker(state, "w3", "addr3", make_worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
 
-    submit_job(state, "j1", make_job_request(cpu=2))
-    submit_job(state, "j2", make_job_request(cpu=2))
-    submit_job(state, "j3", make_job_request(cpu=2))
+    for i in range(6):
+        submit_job(state, f"j{i}", make_job_request(cpu=1))
 
-    result = schedule_until_done(scheduler, state)
+    context = _build_context(scheduler, state)
+    result = scheduler.find_assignments(context)
 
-    # All 3 tasks assigned, each to a different worker (round-robin)
-    assert len(result.assignments) == 3
-    assigned_worker_ids = {worker_id for _, worker_id in result.assignments}
-    assert len(assigned_worker_ids) == 3
+    assert len(result.assignments) == 6
+    per_worker = Counter(worker_id for _, worker_id in result.assignments)
+    # One worker fills to the cap; the remainder spills to the second worker.
+    assert max(per_worker.values()) == DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
+    assert len(per_worker) == 2
 
 
 def test_scheduler_assigns_multiple_tasks_to_single_worker(scheduler, state):
@@ -353,9 +356,6 @@ def test_scheduler_detects_timed_out_tasks(state):
     tasks = submit_job(state, "j1", request)
 
     # Manually set deadline epoch to past timestamp in DB.
-    from iris.cluster.controller.schema import jobs_table
-    from sqlalchemy import update as sa_update
-
     with state._db.transaction() as _tx:
         _tx.execute(
             sa_update(jobs_table)
@@ -2054,7 +2054,11 @@ def test_mixed_variant_cluster_many_jobs_all_scheduled(state):
 
 
 def test_dedup_many_tasks_of_one_job_schedule_in_one_cycle(state):
-    """One job with many replicas places one task per worker in a single cycle."""
+    """One job with many replicas places all of them in a single cycle.
+
+    Per-worker stacking may go up to the per-cycle assignment cap; the invariant
+    under test is that the dedup fast-path schedules every replica in one cycle.
+    """
     sched = Scheduler(max_building_tasks_per_worker=1000)
     num_workers = 50
 
@@ -2076,10 +2080,10 @@ def test_dedup_many_tasks_of_one_job_schedule_in_one_cycle(state):
 
     result = sched.find_assignments(context)
 
-    # Default max_assignments_per_worker=1: each worker takes exactly one task.
+    # All replicas place in a single cycle; per-worker stacking is bounded by the cap.
     assert len(result.assignments) == num_workers
-    assigned_workers = {worker_id for _, worker_id in result.assignments}
-    assert len(assigned_workers) == num_workers, "each worker should receive exactly one task"
+    per_worker = Counter(worker_id for _, worker_id in result.assignments)
+    assert max(per_worker.values()) <= DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
 
 
 def test_dedup_excess_tasks_remain_pending_when_workers_saturated(state):
@@ -2110,10 +2114,12 @@ def test_dedup_excess_tasks_remain_pending_when_workers_saturated(state):
 
     result = sched.find_assignments(context)
 
-    # Workers cap at one assignment/cycle, so we get num_workers placements.
-    assert len(result.assignments) == num_workers
-    # One placement per worker.
-    assert len({wid for _, wid in result.assignments}) == num_workers
+    # Workers cap at max_assignments_per_worker/cycle, so one cycle places
+    # num_workers * cap tasks and the rest stay pending.
+    assert len(result.assignments) == num_workers * DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
+    per_worker = Counter(wid for _, wid in result.assignments)
+    assert len(per_worker) == num_workers
+    assert all(c == DEFAULT_MAX_ASSIGNMENTS_PER_WORKER for c in per_worker.values())
 
 
 def test_dedup_unfittable_job_does_not_block_other_jobs(state):
@@ -2158,10 +2164,10 @@ def test_dedup_unfittable_job_does_not_block_other_jobs(state):
     assert assigned_jobs == {"small"}
 
 
-def test_dedup_reservation_pinned_worker_respected_for_later_tasks(scheduler, state):
-    """A worker pre-pinned in the SchedulingContext (e.g., via reservation pre-pass)
-    is still gated by max_assignments_per_worker for non-coscheduled tasks of the
-    same or different jobs in the same cycle.
+def test_dedup_pre_pinned_worker_respected_for_later_tasks(scheduler, state):
+    """A worker pre-pinned in the SchedulingContext (assignment_counts at the
+    per-cycle cap before find_assignments runs) is still gated by
+    max_assignments_per_worker for non-coscheduled tasks in the same cycle.
 
     The dedup must observe assignment_counts mutations from earlier in the pass.
     """
@@ -2172,27 +2178,30 @@ def test_dedup_reservation_pinned_worker_respected_for_later_tasks(scheduler, st
         register_worker(state, f"w{i}", f"addr{i}", meta)
 
     req = controller_pb2.Controller.LaunchJobRequest(
-        name="reserved-job",
+        name="pinned-job",
         entrypoint=_make_test_entrypoint(),
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
         replicas=10,
     )
-    submit_job(state, "reserved-job", req)
+    submit_job(state, "pinned-job", req)
 
     context = _build_context(sched, state)
 
-    # Simulate a reservation pre-pass having pinned worker w0 to one assignment
-    # before find_assignments runs (this is what _run_scheduler_pass phase 4 does).
-    context.assignment_counts[WorkerId("w0")] = 1
-    context.capacities[WorkerId("w0")].deduct(next(iter(context.jobs.values())))
+    # Pin worker w0 up to its per-cycle cap before find_assignments runs. w0 is
+    # now full for the cycle and must be skipped for later tasks.
+    req = next(iter(context.jobs.values()))
+    context.assignment_counts[WorkerId("w0")] = DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
+    for _ in range(DEFAULT_MAX_ASSIGNMENTS_PER_WORKER):
+        context.capacities[WorkerId("w0")].deduct(req)
 
     result = sched.find_assignments(context)
 
-    # Of the 10 pending tasks, only w1 and w2 are still open this cycle.
-    assert len(result.assignments) == 2
-    assigned_workers = {worker_id for _, worker_id in result.assignments}
-    assert assigned_workers == {WorkerId("w1"), WorkerId("w2")}
+    # w0 is at its cap, so only w1 and w2 absorb tasks this cycle, each up to the cap.
+    assert len(result.assignments) == 2 * DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
+    per_worker = Counter(worker_id for _, worker_id in result.assignments)
+    assert set(per_worker) == {WorkerId("w1"), WorkerId("w2")}
+    assert all(c == DEFAULT_MAX_ASSIGNMENTS_PER_WORKER for c in per_worker.values())
 
 
 def test_gpu_job_matches_worker_with_config_variant(scheduler, state):
@@ -2231,8 +2240,6 @@ def test_gpu_job_matches_worker_with_config_variant(scheduler, state):
 
 def _register_worker_with_probed_attributes(state, worker_id, address, metadata):
     """Register a worker, populating attributes via _build_worker_attributes (as real workers do)."""
-    from iris.cluster.worker.env_probe import _build_worker_attributes
-
     # Determine accelerator_type and variant from the device config on metadata,
     # mirroring what the autoscaler would set on WorkerConfig.
     if metadata.device.HasField("tpu"):
