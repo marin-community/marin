@@ -4742,7 +4742,7 @@ requires-dist = [
     { name = "tqdm-loggable" },
     { name = "triton", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=3.6.0,<3.7" },
     { name = "verifiers", marker = "extra == 'rl'", specifier = "==0.1.5" },
-    { name = "vllm", marker = "extra == 'vllm'", git = "https://github.com/marin-community/vllm.git?rev=04321f0f01b8e60d577a85a1b1af688e4433e7e0" },
+    { name = "vllm", marker = "extra == 'vllm'", git = "https://github.com/marin-community/vllm.git?rev=43e648985619749e7d1b232fbe408c7f5995d2d6" },
     { name = "wandb", specifier = ">0.24.0" },
     { name = "warcio" },
 ]
@@ -11167,8 +11167,8 @@ wheels = [
 
 [[package]]
 name = "vllm"
-version = "0.20.1rc1.dev992+g04321f0f0.tpu"
-source = { git = "https://github.com/marin-community/vllm.git?rev=04321f0f01b8e60d577a85a1b1af688e4433e7e0#04321f0f01b8e60d577a85a1b1af688e4433e7e0" }
+version = "0.20.1rc1.dev993+g43e648985.tpu"
+source = { git = "https://github.com/marin-community/vllm.git?rev=43e648985619749e7d1b232fbe408c7f5995d2d6#43e648985619749e7d1b232fbe408c7f5995d2d6" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anthropic" },
