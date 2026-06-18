@@ -33,7 +33,8 @@ Submit on us-east5-a, interactive priority, v5p-8 (per agent.md)::
 
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep, this_output_path, versioned
 
 from experiments.grug.moe.heuristic_v1 import MoeHeuristicV1
 from experiments.grug.moe.launch import (
