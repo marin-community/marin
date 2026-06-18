@@ -57,12 +57,29 @@ export in this project, so neither extends the structured charts.
 
 The **W&B-derived** compute charts reach back to **~2024-04**, covering the
 pre-Iris (Ray-era) history. They measure *realized training compute* from runs
-that logged to W&B (`6 * parameter_count * total_tokens`), which:
+that logged to W&B as `6 * parameter_count * total_tokens`, **capped at each
+run's physical hardware capacity** (`num_devices * runtime * peak * mfu`,
+`config.REALIZED_FLOPS_CEILING_*`). The cap matters a lot:
 
-- covers training + eval runs but **misses non-W&B work** (data/crawl jobs), so
-  it is a compute-usage *proxy*, not the whole cluster;
-- over-counts eval/inference (they do ~2ND, not 6ND);
-- needs no device-type lookup (FLOPs come straight from N and D).
+- W&B's `throughput/total_tokens` (D) is a **cumulative counter that resumed and
+  cooldown runs inherit** from their parent. Uncapped, `6*N*D` counts a flagship
+  lineage many times over — a 1-hour 32B cooldown re-reports the parent's ~6T
+  tokens, so naive `6*N*D` charges it ~1e24 FLOPs (an implied **>1000x MFU**).
+  Summed over all runs that was ~47e24 FLOPs — physically impossible against a
+  fleet that peaked at 2048 chips.
+- Capping each run at the most its *own* `num_devices * runtime` could deliver
+  bounds the corrupted runs at hardware reality while leaving honest runs (whose
+  `6*N*D` is already below the ceiling) at their exact value. The corrected total
+  is **~3e24 FLOPs** — a few final-runs-worth. Because the bound uses each run's
+  own device count, it honors a fleet whose size varied over time.
+- It still **misses non-W&B work** (data/crawl jobs) and projects that don't log
+  token counts, so it is a compute-usage *proxy*, not the whole cluster.
+
+Projects pulled: the flagship `marin` project plus the device-bearing sibling
+projects that log N and D — the MoE training projects (`dial_moe`, `marin_moe`)
+and the two largest optimizer sweeps (`optimizer-scaling`, `Hyperball`). Eval /
+post-training projects log devices but no token counts, so they can't form
+`6*N*D` and are omitted (`config.WANDB_PROJECTS`).
 
 ### Calibration
 

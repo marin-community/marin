@@ -94,13 +94,32 @@ CONCURRENCY_BUCKET = f"{CONCURRENCY_BUCKET_MINUTES} minutes"
 # (~2026-05-06). W&B run history reaches back to the project's start (~2024-04)
 # and is the only source for pre-Iris compute. Each run's summary carries
 # num_devices, _runtime, parameter_count (N) and throughput/total_tokens (D), so
-# realized training FLOPs are estimated as 6*N*D with no device-type lookup.
+# realized training FLOPs are estimated as 6*N*D, capped at physical capacity
+# (see REALIZED_FLOPS_CEILING_* below).
 WANDB_ENTITY = "marin-community"
-WANDB_PROJECTS = ["marin"]
+# The flagship pretraining lives in "marin"; the rest are the sibling projects
+# that log device-bearing runs *with* N and D (so they contribute FLOPs): the
+# MoE training projects and the two largest optimizer sweeps. Eval / post-train
+# projects log devices but no token counts, so they cannot form 6*N*D and are
+# omitted.
+WANDB_PROJECTS = ["marin", "dial_moe", "marin_moe", "optimizer-scaling", "Hyperball"]
 # Multiplier in the standard transformer training-FLOPs estimate 6*N*D
-# (forward+backward MAC*2). Eval/inference runs over-count under this (they do
-# ~2ND), so realized FLOPs from W&B are an upper bound for non-training work.
+# (forward+backward MAC*2).
 TRAINING_FLOPS_PER_PARAM_TOKEN = 6.0
+
+# W&B's throughput/total_tokens (D) is a CUMULATIVE counter that resumed and
+# cooldown runs inherit from their parent, so 6*N*D counts a flagship lineage
+# many times over: a 1-hour 32B cooldown re-reports the parent's ~6T tokens and
+# 6*N*D then attributes ~1e24 FLOPs to it -> an implied >1000x MFU. We therefore
+# cap each run's 6*N*D at the most its *own* hardware-time could physically
+# deliver, ``num_devices * runtime * peak * mfu``. Clean runs (6*N*D below the
+# ceiling) keep their exact estimate; only the cumulative-counter runs are
+# bounded, and the bound uses each run's own device count so it honors a fleet
+# whose size varied over time. The peak is the generous v5p per-chip rate so
+# genuine v5p/v6e runs are never wrongly capped; mfu is a hardware ceiling, not a
+# typical efficiency.
+REALIZED_FLOPS_CEILING_PEAK_BF16 = 459e12  # v5p per-chip bf16 FLOP/s
+REALIZED_FLOPS_CEILING_MFU = 0.6
 
 # The Iris stats window overlaps W&B from this date; used to calibrate the
 # W&B-derived series (realized) against the cluster's provisioned capacity.

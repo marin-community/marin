@@ -258,13 +258,19 @@ def _write_iris_capacity(con: duckdb.DuckDBPyConnection, daily_dir: str) -> None
 
 
 def _write_wandb_compute(con: duckdb.DuckDBPyConnection, daily_dir: str, wandb_parquet: str) -> None:
-    """Daily *realized* compute from W&B runs: device-hours and 6*N*D training FLOPs.
+    """Daily *realized* compute from W&B runs: device-hours and capped 6*N*D FLOPs.
 
-    Each run's totals are spread uniformly across the wall-clock days it spans
-    (``created_at`` .. ``created_at + runtime``), so a multi-day run lands on
-    every day it touched. ``backend`` separates TPU from GPU/CPU work.
+    Each run's FLOPs are estimated as ``6*N*D`` but **capped at the most its own
+    hardware-time could deliver** (``num_devices * runtime * peak * mfu``),
+    because ``total_tokens`` is a cumulative counter that resumed/cooldown runs
+    inherit — see ``config.REALIZED_FLOPS_CEILING_*``. The capped run total and
+    the device-hours are then spread uniformly across the wall-clock days the run
+    spans, so a multi-day run lands on every day it touched. ``backend``
+    separates TPU from GPU/CPU work.
     """
     k = config.TRAINING_FLOPS_PER_PARAM_TOKEN
+    peak = config.REALIZED_FLOPS_CEILING_PEAK_BF16
+    mfu = config.REALIZED_FLOPS_CEILING_MFU
     con.execute(
         f"""
         CREATE TEMP TABLE wandb_exploded AS
@@ -273,15 +279,15 @@ def _write_wandb_compute(con: duckdb.DuckDBPyConnection, daily_dir: str, wandb_p
                    created_at + (greatest(coalesce(runtime_s, 0), 1) * INTERVAL '1 second') AS end_ts,
                    greatest(coalesce(runtime_s, 0), 1) AS dur,
                    num_devices,
-                   coalesce(parameter_count, 0) AS np,
-                   coalesce(total_tokens, 0) AS tok,
+                   least({k} * coalesce(parameter_count, 0) * coalesce(total_tokens, 0),
+                         num_devices * greatest(coalesce(runtime_s, 0), 1) * {peak} * {mfu}) AS run_flops,
                    lower(coalesce(backend, 'unknown')) AS backend
             FROM read_parquet('{wandb_parquet}')
             WHERE created_at IS NOT NULL AND num_devices > 0
         )
         SELECT r.backend, d::DATE AS day,
                num_devices * day_secs / 3600.0 AS device_hours,
-               {k} * np * tok * day_secs / dur AS realized_flops
+               run_flops * day_secs / dur AS realized_flops
         FROM r,
              unnest(generate_series(date_trunc('day', start_ts),
                                     date_trunc('day', end_ts),

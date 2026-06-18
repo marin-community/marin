@@ -230,10 +230,12 @@ def chart_regions(daily_dir: str, charts_dir: str) -> None:
 
 
 def chart_compute_history(daily_dir: str, charts_dir: str) -> None:
-    """Realized training compute (6*N*D) over the full W&B history, back to 2024.
+    """Realized training compute over the full W&B history, back to 2024.
 
-    Top: training FLOPs/day (log) with the Iris stats window shaded. Bottom:
-    cumulative FLOPs in units of 1e24 (the blog's final-run scale).
+    FLOPs are ``6*N*D`` capped at each run's physical hardware capacity (see
+    ``config.REALIZED_FLOPS_CEILING_*``). Top: FLOPs/day (log) with the Iris
+    stats window shaded. Bottom: cumulative FLOPs in units of 1e24 (the blog's
+    final-run scale).
     """
     rows = _load_csv(os.path.join(daily_dir, "wandb_compute_daily.csv"))
     days = _dates(rows)
@@ -246,7 +248,7 @@ def chart_compute_history(daily_dir: str, charts_dir: str) -> None:
     ax_top.plot(days, flops, color="#4C72B0", linewidth=1.2, label="all backends")
     ax_top.plot(days, flops_tpu, color="#C44E52", linewidth=1.0, alpha=0.8, label="TPU only")
     ax_top.set_yscale("log")
-    ax_top.set_ylabel("training FLOPs / day (6*N*D)")
+    ax_top.set_ylabel("training FLOPs / day (capped 6*N*D)")
     ax_top.set_title("Realized training compute over time - W&B run history")
     ax_top.axvspan(iris_start, max(days), color="0.85", alpha=0.5, zorder=0, label="Iris stats window")
     ax_top.legend(loc="upper left", fontsize=8, frameon=False)
