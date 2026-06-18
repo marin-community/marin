@@ -25,6 +25,7 @@ from experiments.datakit.intruder import (
     Decision,
     IntruderTrial,
     LlmPanelist,
+    Side,
     _decide,
     _robbins_radius,
     run_intruder_test,
@@ -47,7 +48,7 @@ class SideAwarePanelist:
     reproducible and thread-safe under the driver's ThreadPoolExecutor.
     """
 
-    def __init__(self, name: str, rate_by_side: dict[str, float]):
+    def __init__(self, name: str, rate_by_side: dict[Side, float]):
         self.name = name
         self._rate_by_side = rate_by_side
 
@@ -96,7 +97,7 @@ def _fake_client(content: str):
 
 def _trial(intruder_index: int = 2) -> IntruderTrial:
     return IntruderTrial(
-        side="lhs",
+        side=Side.LHS,
         in_group_bucket="A",
         intruder_bucket="B",
         documents=tuple(f"doc{i}" for i in range(5)),
@@ -111,8 +112,8 @@ def _trial(intruder_index: int = 2) -> IntruderTrial:
 
 def test_sample_trial_labels_the_intruder_by_origin_bucket():
     """The doc at ``intruder_index`` comes from a different bucket than the other four."""
-    pool = BucketPool("side", _labeled_buckets("X"))
-    rng = np.random.default_rng(0)
+    pool = BucketPool(Side.LHS, _labeled_buckets("X"), np.random.default_rng(0))
+    rng = np.random.default_rng(1)
     for _ in range(200):
         trial = pool.sample_trial(rng)
         assert trial.intruder_bucket != trial.in_group_bucket
@@ -123,16 +124,42 @@ def test_sample_trial_labels_the_intruder_by_origin_bucket():
         assert all(d.startswith(trial.in_group_bucket + "-") for d in in_group_docs)
 
 
+def test_bucketpool_reservoir_caps_large_buckets():
+    """A bucket larger than the reservoir is down-sampled to at most that many distinct docs.
+
+    Observed through the public sampling API: with a tiny reservoir over a huge
+    bucket, the pool can only ever surface up to ``reservoir_size`` distinct docs
+    per bucket, and every doc it surfaces was a real input.
+    """
+    capacity = 8
+    big = {f"b{b}": [f"b{b}-doc{d}" for d in range(1000)] for b in range(3)}
+    pool = BucketPool(Side.LHS, big, np.random.default_rng(0), reservoir_size=capacity)
+    rng = np.random.default_rng(1)
+    seen_by_bucket: dict[str, set[str]] = {b: set() for b in big}
+    inputs = {d for docs in big.values() for d in docs}
+    for _ in range(500):
+        for doc in pool.sample_trial(rng).documents:
+            assert doc in inputs
+            seen_by_bucket[doc.split("-")[0]].add(doc)
+    assert all(len(seen) <= capacity for seen in seen_by_bucket.values())
+
+
 def test_bucketpool_rejects_no_in_group_bucket():
     """Every bucket smaller than the 4-doc in-group is unusable."""
     with pytest.raises(ValueError, match="in-group"):
-        BucketPool("side", {"a": ["1", "2"], "b": ["3", "4", "5"]})
+        BucketPool(Side.LHS, {"a": ["1", "2"], "b": ["3", "4", "5"]}, np.random.default_rng(0))
 
 
 def test_bucketpool_rejects_single_nonempty_bucket():
     """An intruder needs a second non-empty bucket to come from."""
     with pytest.raises(ValueError, match=">= 2 non-empty"):
-        BucketPool("side", {"a": ["1", "2", "3", "4", "5"], "b": []})
+        BucketPool(Side.LHS, {"a": ["1", "2", "3", "4", "5"], "b": []}, np.random.default_rng(0))
+
+
+def test_bucketpool_rejects_reservoir_smaller_than_in_group():
+    """A reservoir too small to hold an in-group is a misconfiguration, not a silent empty run."""
+    with pytest.raises(ValueError, match="too small to form an in-group"):
+        BucketPool(Side.LHS, _labeled_buckets("X"), np.random.default_rng(0), reservoir_size=2)
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +242,7 @@ def test_decide_withholds_verdict_while_intervals_are_wide():
 
 def test_run_intruder_test_picks_the_more_detectable_side():
     """A panel that detects better on one side makes that side the winner."""
-    panel = [SideAwarePanelist("judge", {"coherent": 0.95, "incoherent": 0.25})]
+    panel = [SideAwarePanelist("judge", {Side.LHS: 0.95, Side.RHS: 0.25})]
     result = run_intruder_test(
         _labeled_buckets("A"),
         _labeled_buckets("B"),

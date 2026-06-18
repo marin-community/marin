@@ -48,7 +48,7 @@ import os
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import StrEnum, auto
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -64,6 +64,11 @@ DOCS_PER_TRIAL = 5
 INTRUDER_COUNT = 1
 IN_GROUP_COUNT = DOCS_PER_TRIAL - INTRUDER_COUNT  # 4
 CHANCE_LEVEL = INTRUDER_COUNT / DOCS_PER_TRIAL  # 0.2
+
+# Per-bucket reservoir capacity: each bucket is streamed once into a sample of
+# at most this many docs, bounding memory regardless of bucket size while
+# leaving ample distinct trials (C(reservoir, 4) in-group combinations).
+DEFAULT_RESERVOIR_SIZE = 256
 
 # --- Panel defaults --------------------------------------------------------
 
@@ -122,29 +127,64 @@ DEFAULT_TARGET_TRIALS = 250
 # ---------------------------------------------------------------------------
 
 
+class Side(StrEnum):
+    """Which of the two bucketings a trial was drawn from."""
+
+    LHS = auto()
+    RHS = auto()
+
+
 @dataclass(frozen=True)
 class IntruderTrial:
     """One intruder puzzle: 5 shuffled documents with one labeled intruder."""
 
-    side: str
+    side: Side
     in_group_bucket: str
     intruder_bucket: str
     documents: tuple[str, ...]
     intruder_index: int  # 0-based position of the intruder in ``documents``
 
 
-class BucketPool:
-    """Materialized, repeatedly-samplable view of one side's buckets.
+def _reservoir_sample(stream: Iterable[str], capacity: int, rng: np.random.Generator) -> list[str]:
+    """Uniform sample (without replacement) of up to ``capacity`` items in one pass.
 
-    The input iterables are drained into lists once so trials can be drawn
-    with replacement across rounds. Buckets are assumed small (cluster
-    representatives, label samples); a side that does not hold in memory
-    should be down-sampled by the caller before being passed in.
+    Algorithm R: a bucket of unknown, possibly unbounded length is reduced to a
+    fixed-capacity reservoir in a single stream pass, so a side never has to be
+    fully materialized. A bucket with ``<= capacity`` documents keeps them all.
+    """
+    reservoir: list[str] = []
+    for i, item in enumerate(stream):
+        if i < capacity:
+            reservoir.append(item)
+            continue
+        j = int(rng.integers(0, i + 1))  # uniform in [0, i]
+        if j < capacity:
+            reservoir[j] = item
+    return reservoir
+
+
+class BucketPool:
+    """Repeatedly-samplable view of one side's buckets, bounded by reservoir sampling.
+
+    Each bucket's documents are streamed once into a fixed-capacity reservoir (a
+    uniform sample without replacement of size ``<= reservoir_size``), so memory
+    stays bounded even when a side's buckets do not fit in memory. Trials are
+    then drawn with replacement from the reservoirs across rounds.
     """
 
-    def __init__(self, side: str, buckets: dict[str, Iterable[str]]):
+    def __init__(
+        self,
+        side: Side,
+        buckets: dict[str, Iterable[str]],
+        rng: np.random.Generator,
+        reservoir_size: int = DEFAULT_RESERVOIR_SIZE,
+    ):
+        if reservoir_size < IN_GROUP_COUNT:
+            raise ValueError(f"reservoir_size {reservoir_size} < {IN_GROUP_COUNT}: too small to form an in-group")
         self.side = side
-        self._docs: dict[str, list[str]] = {b: list(docs) for b, docs in buckets.items()}
+        self._docs: dict[str, list[str]] = {
+            b: _reservoir_sample(docs, reservoir_size, rng) for b, docs in buckets.items()
+        }
         self._in_group_buckets = [b for b, docs in self._docs.items() if len(docs) >= IN_GROUP_COUNT]
         self._nonempty_buckets = [b for b, docs in self._docs.items() if docs]
         if not self._in_group_buckets:
@@ -415,6 +455,7 @@ def run_intruder_test(
     batch_size: int = DEFAULT_BATCH_SIZE,
     target_trials: int = DEFAULT_TARGET_TRIALS,
     max_doc_chars: int = DEFAULT_MAX_DOC_CHARS,
+    reservoir_size: int = DEFAULT_RESERVOIR_SIZE,
     seed: int = 42,
     max_workers: int = 16,
 ) -> IntruderTestResult:
@@ -434,15 +475,15 @@ def run_intruder_test(
     all"; the ``difference_interval`` is the reference for "which is better".
     """
     judges: Sequence[Panelist] = panel if panel is not None else default_panel()
-    pool_lhs = BucketPool(lhs_name, lhs)
-    pool_rhs = BucketPool(rhs_name, rhs)
     rng = np.random.default_rng(seed)
+    pool_lhs = BucketPool(Side.LHS, lhs, rng, reservoir_size)
+    pool_rhs = BucketPool(Side.RHS, rhs, rng, reservoir_size)
 
     rho = 1.0 / math.sqrt(target_trials)  # CS tightest near target_trials
     cs_lhs = ConfidenceSequence(alpha=alpha / 2.0, rho=rho)
     cs_rhs = ConfidenceSequence(alpha=alpha / 2.0, rho=rho)
-    tallies: dict[str, dict[str, _ModelTally]] = {
-        j.name: {lhs_name: _ModelTally(), rhs_name: _ModelTally()} for j in judges
+    tallies: dict[str, dict[Side, _ModelTally]] = {
+        j.name: {Side.LHS: _ModelTally(), Side.RHS: _ModelTally()} for j in judges
     }
     abstained = 0
     decision: Decision = Decision.INCONCLUSIVE
@@ -498,6 +539,7 @@ def run_intruder_test(
             abstained,
         )
 
+    side_names = {Side.LHS: lhs_name, Side.RHS: rhs_name}
     return IntruderTestResult(
         decision=decision,
         lhs_name=lhs_name,
@@ -509,7 +551,9 @@ def run_intruder_test(
         difference_interval=_difference_interval(cs_lhs, cs_rhs),
         n_trials_per_side=cs_lhs.n,
         chance_level=CHANCE_LEVEL,
-        per_model_accuracy={name: {side: t.accuracy for side, t in sides.items()} for name, sides in tallies.items()},
+        per_model_accuracy={
+            name: {side_names[side]: t.accuracy for side, t in sides.items()} for name, sides in tallies.items()
+        },
         n_abstained=abstained,
     )
 
