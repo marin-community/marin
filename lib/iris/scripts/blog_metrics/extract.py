@@ -236,6 +236,37 @@ def _write_utilization(con: duckdb.DuckDBPyConnection, daily_dir: str) -> None:
         logger.info("fleet occupancy: %.1f%% of provisioned chip-time was running a task", 100 * summary[0])
 
 
+def _write_intraday_regions(con: duckdb.DuckDBPyConnection, daily_dir: str, worker_glob: str) -> None:
+    """Fine-grained per-region chips for one day, to show intraday cross-region movement.
+
+    Buckets ``config.INTRADAY_CANDIDATE_DAY`` at ``config.INTRADAY_BUCKET`` and
+    sums concurrent chips per region per bucket — the within-day analogue of the
+    daily regional footprint. Heartbeats are ~10s apart so even 30-min buckets
+    are densely populated.
+    """
+    day = config.INTRADAY_CANDIDATE_DAY
+    out = os.path.join(daily_dir, "intraday_regions.csv")
+    con.execute(
+        f"""
+        COPY (
+            WITH hb AS (
+                SELECT worker_id, lower(device_variant) AS variant,
+                       regexp_replace(coalesce(zone, ''), '-[a-z]$', '') AS region,
+                       time_bucket(INTERVAL '{config.INTRADAY_BUCKET}', ts) AS bucket
+                FROM read_parquet('{worker_glob}')
+                WHERE lower(device_type) = 'tpu' AND device_variant <> ''
+                  AND ts::DATE = DATE '{day}'
+                GROUP BY 1, 2, 3, 4
+            )
+            SELECT hb.bucket, hb.region, sum(vi.chips_per_vm) AS chips
+            FROM hb JOIN variant_info vi ON hb.variant = vi.variant
+            GROUP BY 1, 2 ORDER BY 1, 2
+        ) TO '{out}' (HEADER, DELIMITER ',')
+        """
+    )
+    logger.info("wrote %s (intraday regions for %s)", out, day)
+
+
 def _write_users(con: duckdb.DuckDBPyConnection, daily_dir: str, task_glob: str) -> None:
     bots = ", ".join(f"'{u}'" for u in sorted(config.BOT_USERS))
     users_csv = os.path.join(daily_dir, "users_daily.csv")
@@ -440,6 +471,7 @@ def run(paths: config.Paths) -> None:
     _build_bucket_tables(con, worker_glob)
     _write_accelerators(con, paths.daily_dir)
     _write_utilization(con, paths.daily_dir)
+    _write_intraday_regions(con, paths.daily_dir, worker_glob)
     _write_users(con, paths.daily_dir, task_glob)
     _write_iris_capacity(con, paths.daily_dir)
 

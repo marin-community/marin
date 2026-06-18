@@ -224,6 +224,44 @@ def chart_regions(daily_dir: str, charts_dir: str) -> None:
     _save(fig, charts_dir, "accelerators_by_region")
 
 
+def chart_intraday_regions(daily_dir: str, charts_dir: str) -> None:
+    """Within-day compute migration across regions for the candidate day.
+
+    Stacked concurrent chips per region at the fine intraday bucket. On the
+    chosen day preemptible capacity hands off between regions through the day
+    while the reserved pool stays flat — visible as the stack's composition
+    shifting even where its height is roughly steady.
+    """
+    rows = _load_csv(os.path.join(daily_dir, "intraday_regions.csv"))
+    if not rows:
+        return
+    times = sorted({r["bucket"] for r in rows})
+    parsed = [dt.datetime.fromisoformat(t) for t in times]
+    index = {t: i for i, t in enumerate(times)}
+    totals: dict[str, float] = {}
+    series: dict[str, list[float]] = {}
+    for r in rows:
+        region = r["region"] or "(unknown)"
+        series.setdefault(region, [0.0] * len(times))[index[r["bucket"]]] = float(r["chips"])
+        totals[region] = totals.get(region, 0.0) + float(r["chips"])
+    order = sorted(series, key=lambda reg: totals[reg], reverse=True)
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    ax.stackplot(parsed, *[series[reg] for reg in order], labels=order, alpha=0.9)
+    ax.set_title(f"Intraday compute migration across regions - {parsed[0].date().isoformat()} (UTC)")
+    ax.set_ylabel("TPU chips (concurrent)")
+    ax.set_xlabel("hour of day (UTC)")
+    ax.set_ylim(bottom=0)
+    ax.set_xlim(parsed[0], parsed[-1])
+    ax.xaxis.set_major_locator(mdates.HourLocator(interval=3))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    ax.grid(True, axis="y", linewidth=0.4, alpha=0.4)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    ax.legend(loc="upper right", fontsize=8, ncol=3, frameon=False)
+    _save(fig, charts_dir, "intraday_regions")
+
+
 def chart_fleet_utilization(daily_dir: str, charts_dir: str) -> None:
     """Fleet occupancy: provisioned TPU chips running a task vs idle, over time.
 
@@ -437,6 +475,7 @@ def run(paths: config.Paths) -> None:
     chart_fleet_utilization(paths.daily_dir, paths.charts_dir)
     chart_preemptible(paths.daily_dir, paths.charts_dir)
     chart_regions(paths.daily_dir, paths.charts_dir)
+    chart_intraday_regions(paths.daily_dir, paths.charts_dir)
     chart_overview(paths.daily_dir, paths.charts_dir)
     if os.path.exists(os.path.join(paths.daily_dir, "wandb_compute_daily.csv")):
         chart_compute_history(paths.daily_dir, paths.charts_dir)

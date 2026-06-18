@@ -87,6 +87,14 @@ CONTROLLER_LOG_KEY = "/system/controller"
 CONCURRENCY_BUCKET_MINUTES = 10
 CONCURRENCY_BUCKET = f"{CONCURRENCY_BUCKET_MINUTES} minutes"
 
+# A single day chosen to illustrate *intraday* compute migration across regions:
+# preemptible capacity sloshes between regions over the day (on 2026-06-01,
+# us-east5 dominates the morning then hands off to europe-west4 in the
+# afternoon) while the reserved v4 pool (us-central2) holds flat. Bucketed finer
+# than the daily series so the within-day movement is visible.
+INTRADAY_CANDIDATE_DAY = "2026-06-01"
+INTRADAY_BUCKET = "30 minutes"
+
 # --------------------------------------------------------------------------- #
 # W&B long-history source
 # --------------------------------------------------------------------------- #

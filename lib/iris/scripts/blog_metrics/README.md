@@ -147,6 +147,7 @@ uv run python scripts/blog_metrics/pipeline.py fetch --with-controller
 - `accelerators_daily.csv` — total chips / workers / PFLOP/s / running tasks (mean + peak).
 - `accelerators_by_family_daily.csv` — mean chips / PFLOP/s / workers per TPU family.
 - `accelerators_by_region_daily.csv` — mean chips per GCP region.
+- `intraday_regions.csv` — concurrent chips per region at fine (30-min) buckets for `config.INTRADAY_CANDIDATE_DAY`, to show within-day cross-region migration.
 - `utilization_daily.csv` — fleet occupancy: mean busy vs idle chips and the busy fraction (chips running ≥1 task / chips provisioned). Allocation, not efficiency — the MFU side is `calibration_daily.csv`.
 - `users_daily.csv` — active users (raw + human), distinct tasks run.
 - `iris_capacity_daily.csv` — provisioned device-hours + peak-capacity FLOPs (calibration denominator).
@@ -157,8 +158,10 @@ uv run python scripts/blog_metrics/pipeline.py fetch --with-controller
 `data/charts/` (`.svg` for the blog, `.png` for preview): `accelerators_chips`,
 `flops_pflops`, `users`, `tasks`, `fleet_utilization` (occupancy: busy vs idle
 chips), `preemptible` (preemptible non-v4 vs reserved v4 capacity), `accelerators_by_region`,
-`overview`, `compute_history` (2024→now, + cumulative), `calibration`. Time-axis
-charts annotate the `config.MILESTONES` that fall inside the window.
+`intraday_regions` (within-day cross-region migration for the candidate day),
+`overview`, `compute_history` (2024→now, + cumulative), `calibration`. Only the
+wide `compute_history` annotates the `config.MILESTONES`; the cramped
+Iris-window charts omit them.
 
 The `preemptible` chart needs the real per-device generation, which only the
 iris structured data carries (~May 6 on) — W&B logs `num_devices` but not the
