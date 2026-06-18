@@ -687,6 +687,11 @@ class IrisClient:
             # passes constraints=[] to clear other inherited constraints —
             # region pinning keeps a child co-located with the worker that
             # launched it (where its in-region data and resources live).
+            #
+            # An explicit region constraint (any op carrying the region key) opts out:
+            # a PINNED region (region_constraint) or the ANY marker (any_region_constraint,
+            # a region-EXISTS constraint meaning "run anywhere; don't inherit") both satisfy
+            # this guard, so neither gets the parent's region appended.
             if job_info and job_info.worker_region and not any(c.key == WellKnownAttribute.REGION for c in constraints):
                 inherited_region = region_constraint([job_info.worker_region])
                 constraints = [*constraints, inherited_region]

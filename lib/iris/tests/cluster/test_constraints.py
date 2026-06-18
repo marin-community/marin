@@ -13,6 +13,7 @@ from iris.cluster.constraints import (
     DeviceType,
     PlacementRequirements,
     WellKnownAttribute,
+    any_region_constraint,
     evaluate_constraint,
     extract_placement_requirements,
     infer_preemptible_constraint,
@@ -20,6 +21,7 @@ from iris.cluster.constraints import (
     looks_like_executor,
     merge_constraints,
     preemptible_constraint,
+    region_constraint,
     routing_constraints,
     soft_constraint_score,
     split_hard_soft,
@@ -131,6 +133,44 @@ def test_merge_non_canonical_key_appends():
     child = [Constraint.create(key="tpu-name", op=ConstraintOp.EQ, value="pod-b")]
     merged = merge_constraints(parent, child)
     assert len(merged) == 2
+
+
+# --- ANY-region marker (region EXISTS) ---
+
+
+def test_extract_any_region_creates_no_required_region():
+    """The ANY marker imposes no region routing requirement on the autoscaler."""
+    result = extract_placement_requirements([any_region_constraint()])
+    assert result.required_regions is None
+
+
+def test_extract_any_region_mixed_with_pin_raises():
+    """ANY (EXISTS) and a pinned region are contradictory and must be rejected."""
+    with pytest.raises(ValueError, match="conflicting region constraints"):
+        extract_placement_requirements([region_constraint(["us-central1"]), any_region_constraint()])
+
+
+def test_merge_child_any_region_clears_parent_pin():
+    """A child's ANY marker replaces a parent's pinned region (canonical-key override)."""
+    parent = [region_constraint(["us-central1"])]
+    child = [any_region_constraint()]
+    merged = merge_constraints(parent, child)
+    region = [c for c in merged if c.key == WellKnownAttribute.REGION]
+    assert len(region) == 1
+    assert region[0].op == ConstraintOp.EXISTS
+
+
+def test_any_region_matches_workers_with_a_region():
+    """region EXISTS selects every worker that advertises a region; a region-less worker
+    is excluded, so the marker is a real predicate rather than a no-op."""
+    entities = {
+        "w-central": {WellKnownAttribute.REGION: AttributeValue("us-central1")},
+        "w-east": {WellKnownAttribute.REGION: AttributeValue("us-east1")},
+        "w-no-region": {WellKnownAttribute.DEVICE_TYPE: AttributeValue("cpu")},
+    }
+    index = ConstraintIndex.build(entities)
+    matched = index.matching_entities([any_region_constraint()])
+    assert matched == {"w-central", "w-east"}
 
 
 # --- INHERITED_CONSTRAINT_KEYS ---

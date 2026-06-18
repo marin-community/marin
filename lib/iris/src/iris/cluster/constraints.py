@@ -14,6 +14,21 @@ This module is the canonical home for all constraint-related types:
 
 All production code should reference WellKnownAttribute enum members instead of
 raw string literals so that typos are caught at import time.
+
+Region states
+-------------
+A job's region requirement has three distinct states:
+
+- UNSET (no region constraint): "I don't care — inherit the parent worker's region."
+  This is the data-locality-friendly default; IrisClient.submit injects the parent's
+  region so a child co-locates with the worker that launched it.
+- PINNED (``region EQ X`` / ``region IN [...]`` via ``region_constraint``): exactly
+  these regions.
+- ANY (``region EXISTS`` via ``any_region_constraint``): "run anywhere; do NOT inherit
+  the parent's region." Because the marker carries the region key, it suppresses the
+  parent-region injection in IrisClient.submit and clears an inherited pin in
+  ``merge_constraints``, yet matches every worker (all workers have a region attribute)
+  so it imposes no routing restriction.
 """
 
 from __future__ import annotations
@@ -404,6 +419,14 @@ def region_constraint(regions: list[str]) -> Constraint:
     return Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=regions)
 
 
+def any_region_constraint() -> Constraint:
+    """Region constraint meaning ANY: run anywhere, do not inherit the parent's region.
+
+    See the module-level "region states" note for how ANY relates to UNSET and PINNED.
+    """
+    return Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EXISTS)
+
+
 def device_variant_constraint(variants: Sequence[str]) -> Constraint:
     """Constraint requiring scheduling on workers with one of the given device variants.
 
@@ -523,6 +546,23 @@ def _extract_preemptible(constraints: list[Constraint]) -> bool | None:
     return next(iter(values)) if values else None
 
 
+def _extract_regions(constraints: list[Constraint]) -> frozenset[str] | None:
+    """Extract required regions, treating a region-EXISTS (ANY) marker as no requirement.
+
+    A bare ``region EXISTS`` constraint is the ANY marker — "run anywhere; do not inherit
+    the parent's region" — and produces no routing requirement (returns None). Mixing ANY
+    with a pinned region (EQ/IN) is contradictory (you cannot be both anywhere and pinned)
+    and raises. Otherwise this delegates to the shared string-set extractor.
+    """
+    has_any = any(c.op == ConstraintOp.EXISTS for c in constraints)
+    pinned = [c for c in constraints if c.op != ConstraintOp.EXISTS]
+    if has_any and pinned:
+        raise ValueError("conflicting region constraints: cannot combine ANY (region EXISTS) with a pinned region")
+    if has_any:
+        return None
+    return _extract_string_set(pinned, WellKnownAttribute.REGION)
+
+
 def _extract_device_type(constraints: list[Constraint]) -> DeviceType | None:
     values = _extract_string_set(
         constraints,
@@ -557,10 +597,7 @@ def extract_placement_requirements(constraints: Sequence[Constraint]) -> Placeme
             WellKnownAttribute.DEVICE_VARIANT,
         ),
         preemptible=_extract_preemptible(by_key.get(WellKnownAttribute.PREEMPTIBLE, [])),
-        required_regions=_extract_string_set(
-            by_key.get(WellKnownAttribute.REGION, []),
-            WellKnownAttribute.REGION,
-        ),
+        required_regions=_extract_regions(by_key.get(WellKnownAttribute.REGION, [])),
         required_zones=_extract_string_set(
             by_key.get(WellKnownAttribute.ZONE, []),
             WellKnownAttribute.ZONE,
@@ -624,6 +661,8 @@ class ConstraintDescriptor:
 
 
 _EQ_IN = frozenset({job_pb2.CONSTRAINT_OP_EQ, job_pb2.CONSTRAINT_OP_IN})
+# Region additionally allows EXISTS as the explicit ANY-region marker (any_region_constraint).
+_EQ_IN_EXISTS = _EQ_IN | frozenset({job_pb2.CONSTRAINT_OP_EXISTS})
 _EQ_ONLY = frozenset({job_pb2.CONSTRAINT_OP_EQ})
 _ALL_OPS = frozenset(
     {
@@ -665,7 +704,7 @@ _register(
 )
 _register(
     ConstraintDescriptor(
-        key="region", kind=ConstraintKind.TAG, python_type=str, allowed_ops=_EQ_IN, canonical=True, routing=True
+        key="region", kind=ConstraintKind.TAG, python_type=str, allowed_ops=_EQ_IN_EXISTS, canonical=True, routing=True
     )
 )
 _register(
