@@ -4,10 +4,10 @@
 """Document intruder test: which of two bucketings is more coherent?
 
 The document analog of the Chang et al. (2009) word-intrusion test. A
-*bucketing* is a ``dict[str, Iterable[str]]`` mapping a bucket name (a
-cluster id, a topic label, ...) to its member document texts. We compare
-two bucketings, ``lhs`` and ``rhs``, by how easily a panel of LLMs can spot
-an intruder document.
+*bucketing* is a :class:`Buckets` -- a name plus a ``list[Bucket]``, each
+:class:`Bucket` pairing its own name (a cluster id, a topic label, ...) with
+its member document texts. We compare two bucketings, ``lhs`` and ``rhs``, by
+how easily a panel of LLMs can spot an intruder document.
 
 Each bucket must be **pre-shuffled** by the caller. The pool reads only a
 prefix of each bucket and treats it as a uniform sample (see
@@ -153,6 +153,22 @@ class IntruderTrial:
     intruder_index: int  # 0-based position of the intruder in ``documents``
 
 
+@dataclass(frozen=True)
+class Bucket:
+    """A named group of documents (a cluster, a topic label, ...)."""
+
+    name: str
+    docs: Iterable[str]
+
+
+@dataclass(frozen=True)
+class Buckets:
+    """One side's bucketing: a display name and its constituent buckets."""
+
+    name: str
+    buckets: list[Bucket]
+
+
 def _take_head(stream: Iterable[str], head_size: int) -> list[str]:
     """First ``head_size`` documents of a *pre-shuffled* bucket: a uniform sample.
 
@@ -177,13 +193,17 @@ class BucketPool:
     def __init__(
         self,
         side: Side,
-        buckets: dict[str, Iterable[str]],
+        buckets: list[Bucket],
         head_size: int = DEFAULT_HEAD_SIZE,
     ):
         if head_size < IN_GROUP_COUNT:
             raise ValueError(f"head_size {head_size} < {IN_GROUP_COUNT}: too small to form an in-group")
+        names = [b.name for b in buckets]
+        if len(names) != len(set(names)):
+            dupes = sorted({n for n in names if names.count(n) > 1})
+            raise ValueError(f"side {side!r}: duplicate bucket names: {dupes}")
         self.side = side
-        self._docs: dict[str, list[str]] = {b: _take_head(docs, head_size) for b, docs in buckets.items()}
+        self._docs: dict[str, list[str]] = {b.name: _take_head(b.docs, head_size) for b in buckets}
 
         too_small = {b: len(docs) for b, docs in self._docs.items() if len(docs) < IN_GROUP_COUNT}
         if too_small:
@@ -492,12 +512,10 @@ def _score_round(
 
 
 def run_intruder_test(
-    lhs: dict[str, Iterable[str]],
-    rhs: dict[str, Iterable[str]],
+    lhs: Buckets,
+    rhs: Buckets,
     *,
     panel: Sequence[Panelist] | None = None,
-    lhs_name: str = "lhs",
-    rhs_name: str = "rhs",
     alpha: float = DEFAULT_ALPHA,
     rope: float = DEFAULT_ROPE,
     min_trials: int = DEFAULT_MIN_TRIALS,
@@ -525,8 +543,9 @@ def run_intruder_test(
     all"; the ``difference_interval`` is the reference for "which is better".
     """
     judges: Sequence[Panelist] = panel if panel is not None else default_panel()
-    pool_lhs = BucketPool(Side.LHS, lhs, head_size)
-    pool_rhs = BucketPool(Side.RHS, rhs, head_size)
+    lhs_name, rhs_name = lhs.name, rhs.name
+    pool_lhs = BucketPool(Side.LHS, lhs.buckets, head_size)
+    pool_rhs = BucketPool(Side.RHS, rhs.buckets, head_size)
     rng = np.random.default_rng(seed)
 
     rho = 1.0 / math.sqrt(target_trials)  # CS tightest near target_trials

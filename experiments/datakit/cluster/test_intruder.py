@@ -20,7 +20,9 @@ import numpy as np
 import pytest
 
 from experiments.datakit.cluster.intruder import (
+    Bucket,
     BucketPool,
+    Buckets,
     ConfidenceSequence,
     Decision,
     IntruderTrial,
@@ -69,9 +71,9 @@ class DeadPanelist:
         raise RuntimeError("gateway unreachable")
 
 
-def _labeled_buckets(prefix: str, n_buckets: int = 4, docs_per_bucket: int = 6) -> dict[str, list[str]]:
+def _labeled_buckets(prefix: str, n_buckets: int = 4, docs_per_bucket: int = 6) -> list[Bucket]:
     """Buckets whose every doc text encodes its bucket, for label checks."""
-    return {f"{prefix}{b}": [f"{prefix}{b}-doc{d}" for d in range(docs_per_bucket)] for b in range(n_buckets)}
+    return [Bucket(f"{prefix}{b}", [f"{prefix}{b}-doc{d}" for d in range(docs_per_bucket)]) for b in range(n_buckets)]
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +140,7 @@ def test_bucketpool_reads_only_the_head_not_the_whole_bucket():
             assert i < head_size, "BucketPool streamed past the head"
             yield f"{prefix}-doc{i}"
 
-    pool = BucketPool(Side.LHS, {f"b{b}": head_only(f"b{b}") for b in range(3)}, head_size=head_size)
+    pool = BucketPool(Side.LHS, [Bucket(f"b{b}", head_only(f"b{b}")) for b in range(3)], head_size=head_size)
     trial = pool.sample_trial(np.random.default_rng(0))
     assert len(trial.documents) == 5  # still produces valid trials from the head
 
@@ -146,13 +148,19 @@ def test_bucketpool_reads_only_the_head_not_the_whole_bucket():
 def test_bucketpool_rejects_bucket_below_in_group():
     """Every bucket must hold >= 4 docs; a smaller one is rejected, not silently dropped."""
     with pytest.raises(ValueError, match="every bucket needs"):
-        BucketPool(Side.LHS, {"a": ["1", "2", "3", "4", "5"], "b": ["1", "2"]})
+        BucketPool(Side.LHS, [Bucket("a", ["1", "2", "3", "4", "5"]), Bucket("b", ["1", "2"])])
 
 
 def test_bucketpool_rejects_fewer_than_two_buckets():
     """An intruder needs a second bucket to come from."""
     with pytest.raises(ValueError, match=">= 2 buckets"):
-        BucketPool(Side.LHS, {"a": ["1", "2", "3", "4", "5"]})
+        BucketPool(Side.LHS, [Bucket("a", ["1", "2", "3", "4", "5"])])
+
+
+def test_bucketpool_rejects_duplicate_bucket_names():
+    """Two buckets with the same name would silently collapse; reject instead."""
+    with pytest.raises(ValueError, match="duplicate bucket names"):
+        BucketPool(Side.LHS, [Bucket("a", ["1", "2", "3", "4", "5"]), Bucket("a", ["6", "7", "8", "9"])])
 
 
 def test_bucketpool_rejects_head_smaller_than_in_group():
@@ -164,7 +172,11 @@ def test_bucketpool_rejects_head_smaller_than_in_group():
 def test_bucketpool_warns_when_bucket_shorter_than_head(caplog):
     """A bucket smaller than head_size is sampled in full and surfaced as a warning, not silently."""
     with caplog.at_level(logging.WARNING, logger="experiments.datakit.cluster.intruder"):
-        BucketPool(Side.LHS, {"a": ["1", "2", "3", "4", "5"], "b": ["6", "7", "8", "9"]}, head_size=128)
+        BucketPool(
+            Side.LHS,
+            [Bucket("a", ["1", "2", "3", "4", "5"]), Bucket("b", ["6", "7", "8", "9"])],
+            head_size=128,
+        )
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1
     assert 128 in warnings[0].args  # the warning carries the configured head_size, not just prose
@@ -252,11 +264,9 @@ def test_run_intruder_test_picks_the_more_detectable_side():
     """A panel that detects better on one side makes that side the winner."""
     panel = [SideAwarePanelist("judge", {Side.LHS: 0.95, Side.RHS: 0.25})]
     result = run_intruder_test(
-        _labeled_buckets("A"),
-        _labeled_buckets("B"),
+        Buckets("coherent", _labeled_buckets("A")),
+        Buckets("incoherent", _labeled_buckets("B")),
         panel=panel,
-        lhs_name="coherent",
-        rhs_name="incoherent",
         min_trials=16,
         max_trials=400,
         batch_size=8,
@@ -277,8 +287,8 @@ def test_run_intruder_test_terminates_at_cap_when_panel_always_abstains():
     paid calls indefinitely. The run must instead stop and report no progress.
     """
     result = run_intruder_test(
-        _labeled_buckets("A"),
-        _labeled_buckets("B"),
+        Buckets("lhs", _labeled_buckets("A")),
+        Buckets("rhs", _labeled_buckets("B")),
         panel=[DeadPanelist()],
         min_trials=16,
         max_trials=24,
