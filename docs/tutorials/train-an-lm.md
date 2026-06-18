@@ -157,16 +157,19 @@ Because the script wraps its entrypoint in `launch_executor`, it is
 ships the executor to a lightweight CPU **coordinator** job on the cluster, which
 drives the DAG and spawns the TPU/GPU sub-tasks via Fray; your terminal only
 streams logs, so the run survives a disconnect (reconnect with `iris job logs -f
-<id>`, or pass `--detach` to return right after submit). Checkpoints and outputs
-land in the regional bucket inferred on the worker — no `MARIN_PREFIX` to set:
+<id>`, or pass `--detach` to return right after submit). The coordinator bakes
+each step's output path from the marin prefix in *its own* region and pins the
+sub-tasks to that region, so checkpoints and outputs land in the coordinator's
+regional bucket — no `MARIN_PREFIX` to set, and `--region` places the whole run:
 
 ```bash
 WANDB_API_KEY="$WANDB_API_KEY" \
   uv run python experiments/${YOUR_EXPERIMENT_SCRIPT}.py --cluster=marin
 ```
 
-`--tpu_type=...` / `--region=...` override the script's resources, and
-`--executor.dry_run=True` plans the run without submitting. See
+`--tpu_type=...` overrides the script's accelerator and `--region=...` pins the
+coordinator and training to a region; `--executor.dry_run=True` plans the run
+without submitting. See
 [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
 for the Iris CLI reference (including `iris job logs -f` for streaming).
 

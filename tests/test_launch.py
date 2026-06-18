@@ -11,6 +11,7 @@ import pytest
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import GpuConfig, ResourceConfig
+from iris.cluster.constraints import region_constraint, zone_constraint
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep
 from marin.execution.types import VersionedValue, versioned
 
@@ -187,8 +188,8 @@ def test_submit_coordinator_job_detach_controls_streaming(monkeypatch, detach, e
     submitted = {}
 
     class _FakeClient:
-        def submit(self, *, entrypoint, name, resources, environment):
-            submitted.update(name=name, extras=environment.extras)
+        def submit(self, *, entrypoint, name, resources, environment, constraints):
+            submitted.update(name=name, extras=environment.extras, constraints=constraints)
             return _FakeJob()
 
     @contextlib.contextmanager
@@ -204,4 +205,22 @@ def test_submit_coordinator_job_detach_controls_streaming(monkeypatch, detach, e
     rc = launch._submit_coordinator_job(LaunchConfig(cluster="marin", detach=detach), _noop_body, (), {})
     assert rc == 0
     assert submitted["extras"] == ["cpu"]
+    # No --region/--zone, so the coordinator is unconstrained.
+    assert submitted["constraints"] is None
     assert bool(streamed) is expect_stream
+
+
+def test_coordinator_constraints_pin_region_and_zone():
+    # --region/--zone must pin the coordinator (which bakes the executor's output
+    # paths) to the same place --region sends the training, using the same
+    # constraint constructors `iris job run` uses. Unset = no constraint.
+    assert launch._coordinator_constraints(LaunchConfig(cluster="marin")) is None
+    assert launch._coordinator_constraints(LaunchConfig(cluster="marin", region="us-central2")) == [
+        region_constraint(["us-central2"])
+    ]
+    assert launch._coordinator_constraints(LaunchConfig(cluster="marin", zone="us-central2-b")) == [
+        zone_constraint("us-central2-b")
+    ]
+    assert launch._coordinator_constraints(
+        LaunchConfig(cluster="marin", region="us-central2", zone="us-central2-b")
+    ) == [region_constraint(["us-central2"]), zone_constraint("us-central2-b")]

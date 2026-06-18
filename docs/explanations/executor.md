@@ -104,18 +104,27 @@ The example scripts under `experiments/grug/` and `experiments/tutorials/` are
 that runs `executor_main` and spawns the accelerated sub-jobs via Fray; your
 terminal only streams its logs. Because the executor runs on the cluster, the
 run survives your machine disconnecting — reconnect with `iris job logs -f <id>`,
-or pass `--detach` to return right after submitting. (A preempted sub-job is
-retried by Iris and re-resolves its output paths under the new region.) Outputs
-land in the regional bucket inferred on the worker — no `MARIN_PREFIX` to set:
+or pass `--detach` to return right after submitting:
 
 ```bash
 WANDB_API_KEY="$WANDB_API_KEY" \
   uv run python experiments/tutorials/train_tiny_model_tpu.py --cluster=marin
 ```
 
-Useful flags: `--tpu_type=v4-8` / `--region=...` override the script's
-resources, `--executor.dry_run=True` plans without submitting, and `--local`
-runs the executor in-process.
+The coordinator resolves the marin prefix in *its own* region and bakes each
+step's output path from it before dispatching the step, so outputs land in the
+coordinator's regional bucket — no `MARIN_PREFIX` to set. The executor then
+reads that bucket's region back and pins every accelerated sub-job to it (it
+raises rather than running cross-region), so pass `--region` to place the
+coordinator — and with it the whole run — in a specific region. Scripts built on
+`experiments.defaults.train` instead resolve paths on the training worker (see
+[Submitting training jobs](#submitting-training-jobs) below), so they co-locate
+checkpoints with the accelerator even across a cross-region preempt.
+
+Useful flags: `--tpu_type=v4-8` overrides the script's accelerator,
+`--region=...` pins both the coordinator and the run to a region,
+`--executor.dry_run=True` plans without submitting, and `--local` runs the
+executor in-process.
 
 A script that has *not* adopted `experiments.launch` is still launched the older
 way — as the entrypoint of a CPU-only Iris job, where `executor_main` inside it

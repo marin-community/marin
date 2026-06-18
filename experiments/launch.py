@@ -40,6 +40,7 @@ from fray.types import GpuConfig, ResourceConfig, TpuConfig, get_tpu_topology
 from iris.cli.job import add_standard_env_vars, load_env_vars
 from iris.client.connect import connect_to_cluster, stream_until_complete
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.constraints import Constraint, region_constraint, zone_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main
 from marin.execution.types import VersionedValue, versioned
@@ -137,6 +138,26 @@ def _coordinator_job_name(body: Callable[..., None]) -> str:
     return f"{module}-{body.__name__}-{uuid.uuid4().hex[:8]}"
 
 
+def _coordinator_constraints(config: LaunchConfig) -> list[Constraint] | None:
+    """Pin the coordinator to ``--region`` / ``--zone`` when the user specifies one.
+
+    The coordinator resolves ``marin_prefix()`` in its own region and bakes every
+    executor output path from it, so for the executor (``default_train`` +
+    ``executor_main``) path it must land in the same region the run's accelerators
+    do. ``--region`` already constrains the training steps
+    (:func:`override_resources`); pinning the coordinator with the same constraint
+    that ``iris job run`` uses keeps the baked paths in that region. When unset,
+    the scheduler places the coordinator and the executor's own per-step region
+    inference keeps each accelerator with the bucket it baked.
+    """
+    constraints: list[Constraint] = []
+    if config.region is not None:
+        constraints.append(region_constraint([config.region]))
+    if config.zone is not None:
+        constraints.append(zone_constraint(config.zone))
+    return constraints or None
+
+
 def _submit_coordinator_job(config: LaunchConfig, body: Callable[..., None], args: tuple, kwargs: dict) -> int:
     """Submit a CPU coordinator job that runs ``body`` on the cluster.
 
@@ -156,6 +177,7 @@ def _submit_coordinator_job(config: LaunchConfig, body: Callable[..., None], arg
             name=_coordinator_job_name(body),
             resources=resources,
             environment=EnvironmentSpec(env_vars=env_vars, extras=["cpu"]),
+            constraints=_coordinator_constraints(config),
         )
         if config.detach:
             logger.info("Detached; the coordinator keeps running. Reconnect with: iris job logs -f %s", job.job_id)
