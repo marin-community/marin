@@ -13,6 +13,8 @@ The script uses temporary in-memory storage for intermediate operations.
 import json
 import os
 import tempfile
+from collections.abc import Mapping
+from typing import Any, cast
 
 import numpy as np
 from transformers import AutoTokenizer, PreTrainedTokenizer
@@ -25,7 +27,7 @@ from experiments.marin_models import marin_tokenizer as marin_tokenizer_hf_path
 def _inject_special_tokens(
     tokenizer: PreTrainedTokenizer,
     new_tokens: dict[int, str],
-):
+) -> PreTrainedTokenizer:
     """
     Inject special tokens into the tokenizer config.
 
@@ -45,8 +47,20 @@ def _inject_special_tokens(
         tokenizer_config_path = os.path.join(temp_path, "tokenizer_config.json")
         with open(tokenizer_config_path, "r") as f:
             tokenizer_config = json.load(f)
+        added_tokens_decoder = tokenizer_config.setdefault("added_tokens_decoder", {})
         for token_id, token_str in new_tokens.items():
-            tokenizer_config["added_tokens_decoder"][str(token_id)]["content"] = token_str
+            token_config = added_tokens_decoder.setdefault(
+                str(token_id),
+                {
+                    "content": token_str,
+                    "single_word": False,
+                    "lstrip": False,
+                    "rstrip": False,
+                    "normalized": False,
+                    "special": True,
+                },
+            )
+            token_config["content"] = token_str
         with open(tokenizer_config_path, "w") as f:
             json.dump(tokenizer_config, f)
 
@@ -57,16 +71,31 @@ def _inject_special_tokens(
                 tokenizer_json = json.load(f)
             # Update the added_tokens list (id -> content)
             if "added_tokens" in tokenizer_json:
+                seen_token_ids = set()
                 for at in tokenizer_json["added_tokens"]:
                     tid = at.get("id")
                     if tid in new_tokens:
+                        seen_token_ids.add(tid)
                         at["content"] = new_tokens[tid]
+                for tid, token_str in new_tokens.items():
+                    if tid not in seen_token_ids:
+                        tokenizer_json["added_tokens"].append(
+                            {
+                                "id": tid,
+                                "content": token_str,
+                                "single_word": False,
+                                "lstrip": False,
+                                "rstrip": False,
+                                "normalized": False,
+                                "special": True,
+                            }
+                        )
             # Persist the file back
             with open(tokenizer_json_path, "w") as f:
                 json.dump(tokenizer_json, f)
 
         # Load the modified tokenizer
-        return AutoTokenizer.from_pretrained(temp_path)
+        return cast(PreTrainedTokenizer, AutoTokenizer.from_pretrained(temp_path))
 
 
 def create_marin_tokenizer(
@@ -100,7 +129,19 @@ def load_llama3_tokenizer() -> PreTrainedTokenizer:
     Raises:
         OSError, GatedRepoError, HTTPError: If access to the tokenizer is not available
     """
-    return AutoTokenizer.from_pretrained(llama3_tokenizer_hf_path)
+    return cast(PreTrainedTokenizer, AutoTokenizer.from_pretrained(llama3_tokenizer_hf_path))
+
+
+def _apply_chat_template_dict(marin_tokenizer: PreTrainedTokenizer) -> Mapping[str, Any]:
+    return cast(
+        Mapping[str, Any],
+        marin_tokenizer.apply_chat_template(
+            TEST_CONVERSATION,
+            tokenize=True,
+            return_dict=True,
+            return_assistant_tokens_mask=True,
+        ),
+    )
 
 
 # ============ Test data and functions ============
@@ -130,18 +171,14 @@ def chat_template_checks(marin_tokenizer: PreTrainedTokenizer):
     assert marin_tokenizer.tokenize("Hello, how are you?") == llama3_tokenizer.tokenize("Hello, how are you?")
 
     """Test that special tokens are used in chat template."""
-    out = marin_tokenizer.apply_chat_template(
-        TEST_CONVERSATION, tokenize=True, return_dict=True, return_assistant_tokens_mask=True
+    out = _apply_chat_template_dict(marin_tokenizer)
+    special_token_ids = cast(
+        list[int], marin_tokenizer.convert_tokens_to_ids(["<|start_header_id|>", "<|end_header_id|>", "<|eot_id|>"])
     )
-    assert all(
-        token in out["input_ids"]
-        for token in marin_tokenizer.convert_tokens_to_ids(["<|start_header_id|>", "<|end_header_id|>", "<|eot_id|>"])
-    )
+    assert all(token in out["input_ids"] for token in special_token_ids)
 
     """Test that assistant tokens are masked correctly."""
-    out = marin_tokenizer.apply_chat_template(
-        TEST_CONVERSATION, tokenize=True, return_dict=True, return_assistant_tokens_mask=True
-    )
+    out = _apply_chat_template_dict(marin_tokenizer)
     expected_length = len(marin_tokenizer(REASONING_TRACE_EXAMPLE + "I'm doing well, thanks!")["input_ids"]) + len(
         marin_tokenizer("Great!")["input_ids"]
     )
@@ -150,9 +187,7 @@ def chat_template_checks(marin_tokenizer: PreTrainedTokenizer):
     ), f"Expected {expected_length} assistant tokens, got {np.sum(out['assistant_masks'])}"
 
     """Test that decoding of assistant tokens is correct."""
-    out = marin_tokenizer.apply_chat_template(
-        TEST_CONVERSATION, tokenize=True, return_dict=True, return_assistant_tokens_mask=True
-    )
+    out = _apply_chat_template_dict(marin_tokenizer)
     ids = np.array(out["input_ids"])
     expected_text = REASONING_TRACE_EXAMPLE + "I'm doing well, thanks!<|eot_id|>Great!<|eot_id|>"
     assert marin_tokenizer.decode(ids[np.array(out["assistant_masks"]).astype(bool)]) == expected_text
