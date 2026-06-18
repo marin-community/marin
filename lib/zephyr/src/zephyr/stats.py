@@ -166,13 +166,11 @@ class StatsWriter:
         total_shards: int,
         status: ZephyrWorkerStatStatus,
     ) -> None:
-        """Build and emit a ZephyrStageStat row from raw counter snapshots.
+        """Build and emit a ZephyrStageStat row from aggregated stage counters.
 
-        ``completed_counters`` — one dict per finished shard (used for both
-        throughput and resource aggregation).  ``inflight_counters`` — one
-        dict per still-running shard (throughput only; resource stats are
-        excluded because they haven't reached the END sample yet).
-        Pass ``status=ZephyrWorkerStatStatus.FAILED`` when emitting for a failed stage.
+        ``stage_counters`` is the coordinator's reduced view of all shard
+        counters for this stage (throughput plus resource usage). Pass
+        ``status=ZephyrWorkerStatStatus.FAILED`` when emitting for a failed stage.
         """
         if self._stage_table is None:
             return
