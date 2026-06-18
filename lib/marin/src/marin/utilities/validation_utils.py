@@ -11,7 +11,7 @@ raw and processed data).
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel
@@ -48,7 +48,7 @@ def get_size_bytes(blob: str) -> int:
 # === Raw Data Download Utilities ===
 def write_provenance_json(output_path, metadata: dict[str, Any]) -> None:
     logger.info("Writing Dataset `.provenance.json` to `%s`", output_path)
-    metadata["access_time"] = datetime.now(timezone.utc).isoformat()
+    metadata["access_time"] = datetime.now(UTC).isoformat()
 
     # Dot-prefix keeps the sidecar out of data-discovery passes that match by
     # extension (e.g. ``normalize._discover_files`` would otherwise read it as

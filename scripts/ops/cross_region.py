@@ -148,14 +148,14 @@ class TimeWindow:
 
 def parse_window(end_time: str | None, hours: float) -> TimeWindow:
     if end_time is None:
-        end = dt.datetime.now(dt.timezone.utc)
+        end = dt.datetime.now(dt.UTC)
     else:
         text = end_time.replace("Z", "+00:00")
         end = dt.datetime.fromisoformat(text)
         if end.tzinfo is None:
-            end = end.replace(tzinfo=dt.timezone.utc)
+            end = end.replace(tzinfo=dt.UTC)
         else:
-            end = end.astimezone(dt.timezone.utc)
+            end = end.astimezone(dt.UTC)
     start = end - dt.timedelta(hours=hours)
     return TimeWindow(start=start, end=end)
 
@@ -244,7 +244,7 @@ def choose_log_objects(
     before_window: dict | None = None
     chosen: list[dict] = []
     for entry in entries:
-        entry_mtime = entry["mtime"].astimezone(dt.timezone.utc)
+        entry_mtime = entry["mtime"].astimezone(dt.UTC)
         if entry_mtime < mtime_cutoff:
             before_window = entry
             continue
@@ -252,12 +252,12 @@ def choose_log_objects(
 
     if before_window is not None:
         chosen.insert(0, before_window)
-        before_mtime = before_window["mtime"].astimezone(dt.timezone.utc)
+        before_mtime = before_window["mtime"].astimezone(dt.UTC)
         logging.info(f"Included 1 file before cutoff (mtime: {before_mtime.isoformat()})")
 
     if chosen:
-        oldest = chosen[0]["mtime"].astimezone(dt.timezone.utc)
-        newest = chosen[-1]["mtime"].astimezone(dt.timezone.utc)
+        oldest = chosen[0]["mtime"].astimezone(dt.UTC)
+        newest = chosen[-1]["mtime"].astimezone(dt.UTC)
         logging.info(f"Selected {len(chosen)} files (mtime range: {oldest.isoformat()} to {newest.isoformat()})")
         logging.info(f"File names: {[Path(e['name']).name for e in chosen]}")
     return chosen
@@ -620,7 +620,7 @@ def analyze(
 
 
 def _fmt_ms(ms: int) -> str:
-    return dt.datetime.fromtimestamp(ms / 1000, tz=dt.timezone.utc).isoformat()
+    return dt.datetime.fromtimestamp(ms / 1000, tz=dt.UTC).isoformat()
 
 
 def _md_table(headers: list[str], rows: list[list]) -> str:

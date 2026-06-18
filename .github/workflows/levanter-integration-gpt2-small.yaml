@@ -40,9 +40,8 @@ jobs:
           gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
-          version: "0.7.20"
           python-version-file: "pyproject.toml"
           enable-cache: true
           working-directory: lib/levanter
@@ -88,4 +87,3 @@ jobs:
       #     TPU_NAME_IN_SCRIPT="ci-runner-${{ github.run_id }}-levanter-itest-32"
       #     echo "Attempting to delete TPU: $TPU_NAME_IN_SCRIPT in zone ${TPU_ZONE}"
       #     gcloud compute tpus tpu-vm delete $TPU_NAME_IN_SCRIPT --zone ${TPU_ZONE} --quiet || echo "TPU deletion failed or TPU did not exist."
-

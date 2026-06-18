@@ -14,7 +14,7 @@ import time
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
@@ -51,7 +51,7 @@ CANARY_PYPROJECT = """\
 [project]
 name = "iris-canary"
 version = "0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 
 [dependency-groups]
 dev = []
@@ -120,11 +120,11 @@ class ProbeRunner:
 
     async def _run_probe(self, probe: Probe) -> None:
         while True:
-            started_at = datetime.now(timezone.utc)
+            started_at = datetime.now(UTC)
             start = time.monotonic()
             try:
                 is_success = await asyncio.wait_for(asyncio.to_thread(probe.fn), timeout=probe.timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 is_success = False
             except Exception:
                 logger.exception("probe %s raised", probe.name)

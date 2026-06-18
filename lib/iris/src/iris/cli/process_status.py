@@ -11,7 +11,7 @@ controller itself.
 
 import contextlib
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import click
 import humanfriendly
@@ -110,7 +110,7 @@ def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, subs
             for entry in resp.entries:
                 ts = ""
                 if entry.timestamp and entry.timestamp.epoch_ms:
-                    dt = datetime.fromtimestamp(entry.timestamp.epoch_ms / 1000, tz=timezone.utc)
+                    dt = datetime.fromtimestamp(entry.timestamp.epoch_ms / 1000, tz=UTC)
                     ts = dt.strftime("%H:%M:%S")
                 click.echo(f"[{ts}] {entry.data}")
 

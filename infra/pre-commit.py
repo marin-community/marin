@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.12"
 # dependencies = [
 #     "click",
 #     "pyyaml",
@@ -28,12 +28,12 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
 
 import click
-import tomllib
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -316,7 +316,7 @@ def check_mypy(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
 
-    args = ["uvx", "mypy@1.19.1", "--ignore-missing-imports", "--python-version=3.11"]
+    args = ["uvx", "mypy@1.19.1", "--ignore-missing-imports", "--python-version=3.12"]
 
     test_excluded = [f for f in files if not str(f.relative_to(ROOT_DIR)).startswith("tests/")]
     if not test_excluded:
@@ -785,7 +785,15 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
 
     _ensure_iris_protos()
 
-    args = ["uvx", "pyrefly@1.0.0", "check", "--baseline", ".pyrefly-baseline.json"]
+    args = [
+        "uvx",
+        "--from",
+        "pyrefly>=1.0.0,<1.1.0",
+        "pyrefly",
+        "check",
+        "--baseline",
+        ".pyrefly-baseline.json",
+    ]
     result = run_cmd(args)
     output = (result.stdout + result.stderr).strip()
     return _record("Pyrefly type checker", result.returncode, output)

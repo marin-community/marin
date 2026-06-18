@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.12"
 # dependencies = [
 #     "click>=8.0",
 #     "pydantic>=2.0",
@@ -427,7 +427,7 @@ def _gh_paginated(args: list[str]) -> list:
 
 
 def list_merged_prs(repo: str, days: int, limit: int) -> list[dict]:
-    since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).strftime("%Y-%m-%d")
+    since = (dt.datetime.now(dt.UTC) - dt.timedelta(days=days)).strftime("%Y-%m-%d")
     search = f"is:pr is:merged merged:>={since} repo:{repo}"
     data = _gh_json(
         [
@@ -1107,7 +1107,7 @@ def aggregate(
     prs = list_merged_prs(repo, days, limit)
     logger.info("Found %d merged PRs", len(prs))
 
-    aggregator_ts = dt.datetime.now(dt.timezone.utc).isoformat()
+    aggregator_ts = dt.datetime.now(dt.UTC).isoformat()
 
     human_rows: list[list] = []
     pr_rows: list[list] = []
@@ -1266,7 +1266,7 @@ def report(repo: str, days: int, out: str | None, public: bool, no_gist: bool) -
     and `human_comments` (the catchability analysis) plus the linter-fed
     `invocations` and `findings` (the review bot's own activity)."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     start = now - dt.timedelta(days=days)
 
     wandb.init(

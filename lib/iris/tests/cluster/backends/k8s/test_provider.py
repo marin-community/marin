@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from finelog.client.proxy import LogServiceProxy
@@ -909,7 +909,7 @@ def _seed_configmap(k8s, name: str, task_hash: str, created: str) -> None:
 
 
 def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
     recent_ts = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -942,7 +942,7 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
 def test_gc_respects_interval(provider, k8s):
     """_maybe_gc_terminal_resources should only run every _GC_INTERVAL_SECONDS."""
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # Trigger GC once to set _last_gc_time to now.
@@ -1025,7 +1025,7 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
     remove the active attempt's configmap and PDB protection.
     """
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     shared_hash = "shared_hash_12345"
@@ -1119,7 +1119,7 @@ def test_log_collector_set_pods_preserves_cursor_state(k8s, log_client):
     )
 
     # Simulate the collector having advanced the cursor.
-    marker = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    marker = datetime(2026, 1, 1, tzinfo=UTC)
     with collector._lock:
         collector._pods[key].last_timestamp = marker
 
@@ -1313,7 +1313,7 @@ def _seed_gang_pod(
 def test_gc_sweeps_finalizer_wedged_gang_pod(provider, k8s):
     """A Failed gang pod wedged in deletion on the Kueue finalizer is swept by GC
     (finalizer stripped, pod removed, Workload deleted) regardless of age."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     recent_ts = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     group = "wedged-gang-group"
     _seed_gang_pod(
@@ -1337,7 +1337,7 @@ def test_gc_sweeps_crashed_gang_pods_on_short_retention(provider, k8s):
     """A Failed gang pod older than the gang retention (but younger than the 1h
     plain-pod retention) is swept along with its Workload; a non-gang Failed pod
     of the same age keeps the 1h debugging window."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     age_ts = (now - timedelta(seconds=_GANG_GC_MAX_AGE_SECONDS + 60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     group = "crashed-gang-group"
     _seed_gang_pod(k8s, "crashed-gang-pod", group, age_ts)
@@ -1356,7 +1356,7 @@ def test_gc_skips_gang_with_active_sibling(provider, k8s):
     Pending/Running sibling of the same pod group exists: releasing the shared
     Workload would evict the live siblings. Once the gang has no live members,
     the next GC pass sweeps it."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     age_ts = (now - timedelta(seconds=_GANG_GC_MAX_AGE_SECONDS + 60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     group = "skewed-gang-group"
     _seed_gang_pod(k8s, "early-failed-gang-pod", group, age_ts, finalizers=[_KUEUE_MANAGED_FINALIZER])

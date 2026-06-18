@@ -7,7 +7,7 @@ Raison d'être: Home for the Rust code used for text deduplication.
 - **Locally:** This code is auto-magically built by `uv` via Cargo and [Maturin](https://github.com/PyO3/maturin). You
 might need to install them (e.g., `brew install maturin rust` on macOS).
 - **Cluster:** This code is compiled as part of the Docker build (`uv pip install -e ...` step): Maturin builds the Rust
-code and places it in the system `site-packages` (e.g., `/home/ray/anaconda3/lib/python3.11/site-packages/dupekit/dupekit.abi3.so`).
+code and places it in the system `site-packages` (e.g., `/home/ray/anaconda3/lib/python3.12/site-packages/dupekit/dupekit.abi3.so`).
 
 >[!NOTE]
 >What about making `dupekit` a hybrid Python/Rust Maturin workspace? We tried and experienced issues getting

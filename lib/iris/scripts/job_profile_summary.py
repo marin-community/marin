@@ -241,7 +241,7 @@ def leaf_of(stack: str) -> str:
 
 
 # A frame is "native" if py-spy couldn't symbolize it (``<addr>``) or it lives in
-# a shared object (``*.so``/``*.dylib``). The interpreter binary (``python3.11``)
+# a shared object (``*.so``/``*.dylib``). The interpreter binary (``python3.12``)
 # and ``.py`` frames are kept — they carry meaningful symbols (e.g. gc).
 _NATIVE_LIB_RE = re.compile(r"\.so(\.\d+)*$|\.dylib$")
 

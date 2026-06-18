@@ -70,7 +70,7 @@ def test_emit_writes_framed_json_record(fresh_tracer, tmp_path: Path):
 def test_path_filter_keeps_in_root(fresh_tracer, tmp_path: Path):
     tracer, _ = fresh_tracer
     in_root = str(tmp_path / "src" / "module.py")
-    out_of_root = "/usr/lib/python3.11/json/decoder.py"
+    out_of_root = "/usr/lib/python3.12/json/decoder.py"
     assert tracer._path_in_roots(in_root)
     assert not tracer._path_in_roots(out_of_root)
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 import gzip
 import io
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import sinks
@@ -21,7 +21,7 @@ GCS_PREFIX = "gs://bucket/infra/probes"
 
 
 def _result(day: str, name: str = "controller-ping", ok: bool = True) -> ProbeResult:
-    started = datetime.fromisoformat(day).replace(tzinfo=timezone.utc)
+    started = datetime.fromisoformat(day).replace(tzinfo=UTC)
     return ProbeResult(is_success=ok, name=name, started_at=started, wall_time=1.0)
 
 

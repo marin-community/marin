@@ -10,7 +10,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, cast
 
 PROFILE_SUMMARY_SCHEMA_VERSION = "profile_summary.v1"
@@ -277,7 +277,7 @@ class ProfileSummary:
         optimization_candidates: list[OptimizationCandidate],
     ) -> ProfileSummary:
         """Create a summary with default schema version and timestamp."""
-        generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        generated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         return cls(
             schema_version=PROFILE_SUMMARY_SCHEMA_VERSION,
             generated_at_utc=generated_at,

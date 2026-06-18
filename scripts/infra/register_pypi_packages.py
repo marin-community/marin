@@ -68,7 +68,7 @@ build-backend = "hatchling.build"
 name = "{name}"
 version = "0.0.1"
 description = "{description}"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = {{ file = "LICENSE" }}
 
 [tool.hatch.build.targets.wheel]
