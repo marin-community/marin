@@ -12,9 +12,14 @@ controller VM on port `10000`.
               Authorization                            HTTP long-poll)
 ```
 
-One LB stack per cluster (`iris-marin`, `iris-marin-dev`, …). The cluster name
-is the resource-name prefix (`iris-<cluster>-*`) and the GCE discovery label
-(`iris-<cluster>-controller=true`).
+One stack per cluster (`iris-marin`, `iris-marin-dev`, …). The cluster name is
+the resource-name prefix (`iris-<cluster>-*`) and the controller VM's GCE label
+/ network tag (`iris-<cluster>-controller`).
+
+`iap_gclb.py` does the whole rollout idempotently — every resource is one
+`gcloud` create guarded by a `describe` probe, so the full `deploy` or any single
+stage is safe to re-run. Run `uv run infra/iris-iap-gclb/iap_gclb.py --help` for
+the subcommands.
 
 ## When to use this vs the Cloud Run proxy
 
@@ -34,57 +39,54 @@ holds HTTP long-poll requests up to ~120s). Use the **Cloud Run proxy** when
 you want the simplest serverless setup and don't need a custom domain — it's
 fewer moving parts, at the cost of an extra hop and the Cloud Run timeout.
 
-## Prerequisites
-
-- A **domain** with a **DNS A record** pointing at the reserved global static
-  IP (`iris-<cluster>-ip`). A Google-managed SSL cert will not provision until
-  DNS resolves to that IP.
-- An **OAuth consent screen (brand)** and an **IAP OAuth client** in the
-  project. The client id/secret are passed to `--iap` on the backend service.
-
-Run `./deploy.sh <cluster> --setup` to print every one-time command (brand,
-client, static IP, DNS note, managed cert, firewall, IAP IAM grants).
-
-## One-time setup
+## Deploy
 
 ```bash
-./deploy.sh marin --setup     # prints commands; does NOT run them
+uv run infra/iris-iap-gclb/iap_gclb.py deploy marin \
+    --domain iris-marin.example.com \
+    --support-email you@example.com \
+    --member user:you@example.com
 ```
 
-That output covers: `gcloud iap oauth-brands create`, `gcloud iap
-oauth-clients create`, reserving the global static IP, the DNS A-record
-requirement, `gcloud compute ssl-certificates create`, the firewall
-hardening rules, and granting `roles/iap.httpsResourceAccessor` to team
-members on the backend service.
+`deploy` runs all stages in dependency order: ensure the IAP OAuth brand +
+client → reserve the static IP → managed SSL cert → firewall hardening → backend
+(NEG → controller endpoint → health check → backend service → IAP) → frontend
+(URL map → HTTPS proxy → `:443` forwarding rule) → optional IAP IAM grant. It
+discovers the controller VM's internal IP from the `iris-<cluster>-controller`
+label (override with `--controller-ip`), finds or creates the OAuth client
+(override with `--oauth-client-id/secret`), and prints the reserved IP, URL, and
+OAuth client id at the end. Add `--dry-run` to trace every `gcloud` command
+without running it.
 
-## Deploy / teardown
+The one inherently manual step: create a **DNS A record** for the domain
+pointing at the reserved static IP. The Google-managed SSL cert stays
+`PROVISIONING` until that resolves.
+
+## Individual stages
+
+Each stage is a subcommand, runnable on its own and idempotent:
 
 ```bash
-# fill in the reviewer placeholders (see below), then:
-DOMAIN=iris-marin.yourdomain.com \
-OAUTH_CLIENT_ID=... OAUTH_CLIENT_SECRET=... \
-CONTROLLER_IP=10.x.x.x \
-  ./deploy.sh marin
-
-./teardown.sh marin           # deletes the LB stack; keeps IP + OAuth client
+uv run infra/iris-iap-gclb/iap_gclb.py oauth    marin --support-email you@example.com
+uv run infra/iris-iap-gclb/iap_gclb.py address  marin           # reserve + print the static IP
+uv run infra/iris-iap-gclb/iap_gclb.py cert     marin --domain iris-marin.example.com
+uv run infra/iris-iap-gclb/iap_gclb.py firewall marin           # allow LB ranges, deny public
+uv run infra/iris-iap-gclb/iap_gclb.py backend  marin           # NEG + health check + backend + IAP
+uv run infra/iris-iap-gclb/iap_gclb.py frontend marin           # URL map + HTTPS proxy + forwarding rule
+uv run infra/iris-iap-gclb/iap_gclb.py grant    marin --member user:teammate@example.com
+uv run infra/iris-iap-gclb/iap_gclb.py status   marin           # what exists + cert state + reserved IP
+uv run infra/iris-iap-gclb/iap_gclb.py teardown marin           # delete the LB stack (keeps IP + OAuth client)
 ```
-
-`deploy.sh` builds, in order: zonal NEG → health check (`/health` on
-`:10000`) → backend service (HTTP, IAP enabled) → URL map → managed SSL cert
-→ target HTTPS proxy → global forwarding rule (`:443`). It echoes the reserved
-IP and `https://<domain>` at the end. The create commands are not idempotent;
-re-runs may need `gcloud ... update` or a `teardown.sh` first.
 
 ## Firewall hardening
 
-Lock the controller VM's port `10000` down: allow ingress only from the Google
-front-end / health-check / IAP ranges and **deny** direct public ingress.
-
-- Allow `tcp:10000` from `130.211.0.0/22` and `35.191.0.0/16`.
-- Deny `tcp:10000` from `0.0.0.0/0` (lower-priority catch-all).
-
-Both rules are printed by `--setup`. Without them, anyone who learns the VM's
-IP could reach the controller directly, bypassing IAP.
+`firewall` locks the controller VM's port `10000` down: it allows ingress only
+from the Google front-end / health-check / IAP ranges (`130.211.0.0/22`,
+`35.191.0.0/16`) and **denies** direct public ingress (`0.0.0.0/0`, lower
+priority). Without these, anyone who learns the VM's IP could reach the
+controller directly, bypassing IAP. The rules target the
+`iris-<cluster>-controller` network tag, so the controller VM must carry that
+tag.
 
 ## Auth: the two-token model
 
