@@ -162,10 +162,22 @@ TPU usage is capped by a per-user **iris budget** (currently **75,000** units fo
 The objective is to **complete the sweep as fast as possible** while meeting the
 search goals. Schedule for total throughput, not rigid rules:
 
-- **Two bands, your discretion.** `interactive` (budget-bound, not downgraded) +
-  `batch` (off-budget, lower priority, more preemption/scarcity). Fill interactive
-  up to ~cap with high-value work; pile additional work on `batch` for free. Any
-  slice works on either band (`-e BAND interactive|batch`, default interactive).
+- **Two bands, your discretion.** `interactive` (budget-bound, fairly scheduled, not
+  downgraded) + `batch` (off-budget). Fill interactive up to ~cap with high-value work;
+  pile additional work on `batch` for free. Any slice works on either band
+  (`-e BAND interactive|batch`, default interactive).
+- **Batch is an unfair LOTTERY — run lots, don't babysit.** On this TRC cluster batch has
+  no fair scheduler: jobs are preempted constantly and routinely sit **12h+ with no
+  progress — that is NORMAL, not "stuck."** Progress comes from **volume** (only users with
+  many submissions win aggregate throughput), so be **aggressive**: submit freely, cap
+  **~100** batch jobs (non-binding ceiling; off-quota so zero budget cost). Do **NOT**
+  relocate/migrate batch cells, and do **NOT** treat no-progress as failure — only resubmit
+  a batch cell when its parent **actually FAILS**. Reserve `interactive` for critical /
+  near-end-of-wave cells (or ones needed fast), where fairness + budget buy reliability.
+- **Check a run's CURRENT band via iris, not budgets.** `iris --cluster marin query
+  "SELECT priority_band FROM tasks WHERE job_id LIKE '<child>%'"` → **2=interactive,
+  3=batch** (the **child** task; it does NOT inherit the parent driver's band, and band can
+  change mid-life). Budgets only tell you total interactive spend, not a given run's band.
 - **Decide on `wts`; track four metrics.** Per slice, record in
   [`exp75_throughput.md`](exp75_throughput.md): **`wts`** (wall-clock tok/s, incl.
   availability/preemption — **the decision metric**), **`ats`** (active tok/s),
@@ -178,9 +190,10 @@ search goals. Schedule for total throughput, not rigid rules:
 - **Don't oversubscribe one preemptible pool.** Spread big-slice requests across
   the v5p and v6e pools so they actually schedule (bigger = scarcer); excess just
   pends harmlessly off-budget.
-- **≥ 1 h pending → relocate.** A child pending/unschedulable ≥ 1 h → move that
-  *new* launch to a slice that is actually scheduling (any band/size). Never react
-  to short waits; never migrate an in-flight run.
+- **≥ 1 h pending → relocate — INTERACTIVE/critical cells ONLY.** A *critical* child
+  pending/unschedulable ≥ 1 h → move that launch to a slice that is actually scheduling.
+  Do **not** apply this to batch cells — batch pending is the lottery working as intended;
+  leave them queued. Never react to short waits; never migrate a healthy in-flight run.
 - **Multi-host is more bug-prone.** If a multi-host run fails on a coordination bug
   (not a capacity pend / preemption), move that point to a single-host slice and
   **tell the user the bug's nature** — fix while progress continues elsewhere. (The
@@ -406,10 +419,11 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   not a problem. Policy for `5e-4/0.2`, `1e-3/0.05`, `1e-3/0.2` (least-informative corners —
   WD/LR edges, NOT axis-neighbors of 7e-4/0.1, so they don't gate the E4 optimum check):
   **keep them on batch; just resubmit-from-checkpoint when a parent dies — do NOT escalate to
-  interactive over preemptions, do NOT panic-churn.** Only treat a batch cell as truly stuck
-  if it goes **≥12h without significant progress** (check W&B step). Move a cell to interactive
-  ONLY if it's critical and near the end of its wave, or it must finish faster for a specific
-  reason. (Resubmitted on batch as w4o ~20:57Z.) The 7 incumbent cells (E2 gate 7e-4/0.2 +
+  interactive over preemptions, do NOT relocate, do NOT panic-churn.** (Corrected ~03:30Z:
+  12h+ no-progress on batch is NORMAL lottery behavior, not "stuck" — don't relocate on it;
+  see the batch-lottery rule in Scheduling.) Move a cell to interactive ONLY if it's critical
+  and near the end of its wave, or must finish faster. (Resubmitted on batch as w4o ~20:57Z.)
+  The 7 incumbent cells (E2 gate 7e-4/0.2 +
   E4 center & 4 axis-neighbors + 5e-4/0.05) run interactive and serve all search goals.
 - Grid (final-step `eval/contacts-v1-val/loss`):
 
@@ -440,10 +454,10 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   | v5p-16 | 0.3  | × wd0.3 |
   | v6e-32 | 0.4  | × wd0.4 |
 
-  **Scheduling: be patient — leave a w8 cell pending up to 6h before relocating** (multi-host
-  is contended; batch is aggressive/free). If a cell is pending ≥6h, move it to a different
-  schedulable slice. Watch for multi-host **zombies** (iris "running" but no W&B/iris-log
-  >50m) — kill+resubmit. E8 = 8×4460 = 35,680 steps/run (~2× E4).
+  **Scheduling: these are BATCH — don't relocate on pending/no-progress** (that's the lottery;
+  multi-host is contended and batch is off-quota/free, so just leave them queued). Only
+  resubmit-on-batch when a parent **fails**. Still watch for multi-host **zombies** (iris
+  "running" but no W&B/iris-log >50m) — kill+resubmit. E8 = 8×4460 = 35,680 steps/run (~2× E4).
 - Grid (final-step `eval/contacts-v1-val/loss`):
 
   | wd \ lr | 5e-4 | 7e-4 | 1e-3 |
