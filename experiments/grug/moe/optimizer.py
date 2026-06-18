@@ -63,6 +63,66 @@ def _match_named_sharding_to_params(updates, params):
     return jax.tree.map(match_sharding, updates, params, is_leaf=lambda x: x is None)
 
 
+def bf16_master_with_fp32_residual(
+    inner: optax.GradientTransformation,
+) -> optax.GradientTransformation:
+    """Wrap ``inner`` so it operates in fp32 internally while params/updates are bf16.
+
+    The fp32 "master" weight is stored as ``bf16_param + fp32_residual``. On each
+    step the wrapper reconstructs the fp32 view, runs ``inner.update`` in fp32
+    (so momentum, Newton-Schulz, AdamH variance, etc. all keep fp32 precision),
+    applies the fp32 step, then truncates the new fp32 value back to bf16 and
+    stores the truncation error as the next residual. This matches the
+    Keller Jordan modded-nanogpt pattern: bf16 model weights for fast matmuls,
+    fp32 mantissa preserved across the optimizer step so small late-training
+    updates don't get rounded away.
+    """
+
+    def _tree_cast(t, dtype):
+        return jax.tree.map(lambda x: x.astype(dtype) if hasattr(x, "dtype") else x, t)
+
+    def init_fn(params):
+        residual = jax.tree.map(lambda p: jnp.zeros_like(p, dtype=jnp.float32), params)
+        inner_state = inner.init(_tree_cast(params, jnp.float32))
+        return {"inner": inner_state, "residual": residual}
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("bf16_master_with_fp32_residual requires params")
+
+        fp32_params = jax.tree.map(
+            lambda p, r: p.astype(jnp.float32) + r,
+            params,
+            state["residual"],
+            is_leaf=lambda x: x is None,
+        )
+        fp32_updates = _tree_cast(updates, jnp.float32)
+
+        fp32_step, new_inner = inner.update(fp32_updates, state["inner"], fp32_params)
+
+        fp32_new_params = jax.tree.map(
+            lambda p, s: p + s if s is not None else p,
+            fp32_params,
+            fp32_step,
+            is_leaf=lambda x: x is None,
+        )
+        bf16_new_params = jax.tree.map(lambda fn: fn.astype(jnp.bfloat16), fp32_new_params)
+        new_residual = jax.tree.map(
+            lambda fn, b16: fn - b16.astype(jnp.float32),
+            fp32_new_params,
+            bf16_new_params,
+        )
+        bf16_step = jax.tree.map(
+            lambda new, old: new - old,
+            bf16_new_params,
+            params,
+        )
+
+        return bf16_step, {"inner": new_inner, "residual": new_residual}
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float):
     direction_updates = _match_named_sharding_to_params(direction_updates, params)
 
@@ -232,6 +292,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muon_epsilon: float = 1e-8
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
+    # When True, wrap the optimizer with ``bf16_master_with_fp32_residual`` so
+    # the model holds bf16 weights but the optimizer keeps fp32 precision via
+    # a stored residual (Keller Jordan modded-nanogpt pattern). Pair with
+    # ``mp="params=bfloat16,compute=bfloat16,output=bfloat16"``.
+    bf16_master: bool = False
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -277,10 +342,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             }
             return optax.multi_transform(transforms, self.create_mask)
 
-        return optax.inject_hyperparams(optimizer)(
+        base = optax.inject_hyperparams(optimizer)(
             learning_rate=learning_rate_schedule,
             adam_lr=adam_lr_schedule,
         )
+        if self.bf16_master:
+            return bf16_master_with_fp32_residual(base)
+        return base
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
