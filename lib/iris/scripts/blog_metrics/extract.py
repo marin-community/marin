@@ -328,7 +328,18 @@ def _write_calibration(con: duckdb.DuckDBPyConnection, daily_dir: str) -> None:
     """Calibrate W&B realized compute against iris provisioned capacity in the overlap.
 
     Requires the ``iris_capacity_daily`` and ``wandb_compute_daily`` temp tables.
-    Emits a per-day CSV and logs the headline coverage / effective-MFU ratios.
+    Two distinct ratios, kept separate because conflating them is misleading:
+
+    * **coverage** = W&B-logged-TPU device-hours / iris device-hours — what
+      fraction of the standing fleet ran W&B-logged *training* (the rest is
+      non-training / non-logged work, so this is well below 100%);
+    * **on-active MFU** = realized FLOPs per W&B device-hour / fleet peak FLOPs
+      per device-hour — the efficiency of the logged jobs *while they ran*,
+      independent of how much of the fleet they occupied.
+
+    Their product is the "effective MFU vs total fleet", which collapses whenever
+    coverage drops even though efficiency is steady — so we report on-active MFU
+    as the efficiency headline and coverage separately.
     """
     start = config.CALIBRATION_START
     con.execute(
@@ -340,7 +351,9 @@ def _write_calibration(con: duckdb.DuckDBPyConnection, daily_dir: str) -> None:
                w.device_hours_tpu / nullif(i.device_hours, 0) AS device_hours_coverage,
                w.realized_flops_tpu AS wandb_tpu_realized_flops,
                i.capacity_flops AS iris_capacity_flops,
-               w.realized_flops_tpu / nullif(i.capacity_flops, 0) AS effective_mfu
+               w.realized_flops_tpu / nullif(i.capacity_flops, 0) AS effective_mfu,
+               w.realized_flops_tpu * i.device_hours
+                 / nullif(i.capacity_flops * w.device_hours_tpu, 0) AS on_active_mfu
         FROM iris_capacity_daily i
         JOIN wandb_compute_daily w USING (day)
         WHERE i.day >= DATE '{start}'
@@ -354,14 +367,15 @@ def _write_calibration(con: duckdb.DuckDBPyConnection, daily_dir: str) -> None:
     summary = con.execute(
         """
         SELECT sum(wandb_tpu_device_hours) / nullif(sum(iris_device_hours), 0) AS coverage,
-               sum(wandb_tpu_realized_flops) / nullif(sum(iris_capacity_flops), 0) AS effective_mfu
+               sum(wandb_tpu_realized_flops) * sum(iris_device_hours)
+                 / nullif(sum(iris_capacity_flops) * sum(wandb_tpu_device_hours), 0) AS on_active_mfu
         FROM calibration_daily
         """
     ).fetchone()
     if summary and summary[0] is not None:
         logger.info(
-            "calibration (overlap >= %s): W&B-TPU device-hours = %.1f%% of iris provisioned; "
-            "realized FLOPs = %.1f%% of provisioned capacity (effective MFU)",
+            "calibration (all-on-iris window >= %s): W&B-logged training = %.1f%% of fleet device-hours "
+            "(coverage); those jobs ran at %.1f%% MFU while active (on-active MFU)",
             start,
             100 * summary[0],
             100 * (summary[1] or 0),

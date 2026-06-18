@@ -83,13 +83,28 @@ post-training projects log devices but no token counts, so they can't form
 
 ### Calibration
 
-In the **overlap** (from `CALIBRATION_START`), the W&B realized series is
-checked against the Iris-provisioned capacity (`calibration_daily.csv`):
+The W&B realized series is checked against the Iris-provisioned capacity over
+the window where **all training actually ran on Iris** (`CALIBRATION_START`,
+June onward). Earlier is apples-to-oranges: April's v4 runs were still on Ray
+(no Iris logs), and in early-bootstrap May some runs ran elsewhere — W&B
+device-hours *exceed* Iris's on May 7–8 (an impossible >100% coverage), which is
+exactly why the window starts in June.
 
-- **coverage** = W&B-TPU device-hours / Iris provisioned device-hours — what
-  fraction of the standing fleet the W&B-logged jobs occupied;
-- **effective MFU** = W&B realized FLOPs / Iris peak-capacity FLOPs — realized
-  vs theoretical peak. The extract step logs both headline ratios.
+Two ratios, kept **separate** because their product is misleading
+(`calibration_daily.csv`):
+
+- **coverage** = W&B-logged-TPU device-hours / Iris device-hours — what fraction
+  of the standing fleet ran W&B-logged *training*. This is well under 100% (~16%
+  in June) because most fleet work is non-training / not-6ND-loggable (data
+  jobs, RL, evals);
+- **on-active MFU** = realized FLOPs per W&B device-hour ÷ fleet peak per
+  device-hour — the efficiency of the logged jobs *while they ran* (~32% in
+  June, steady).
+
+Their product, "effective MFU vs the whole fleet", craters whenever coverage
+dips (the big multi-day MoE runs ended ~May 19, so it falls ~30× into June) even
+though on-active MFU is steady — so we report on-active MFU as the efficiency
+headline and coverage separately, and the chart plots on-active MFU only.
 
 ## Running
 

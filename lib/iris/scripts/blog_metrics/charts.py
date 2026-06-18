@@ -266,29 +266,46 @@ def chart_compute_history(daily_dir: str, charts_dir: str) -> None:
 
 
 def chart_calibration(daily_dir: str, charts_dir: str) -> None:
-    """Calibrate W&B realized compute vs iris provisioned capacity in the overlap."""
+    """Calibrate W&B realized compute vs iris provisioned capacity (all-on-iris window).
+
+    Primary axis: realized (W&B-logged training) vs provisioned (whole fleet)
+    FLOPs/day — the gap between the lines is the un-logged / non-training work.
+    Secondary axis: **on-active MFU**, the efficiency of the logged jobs while
+    they ran. We deliberately do *not* plot "effective MFU vs total fleet"
+    (realized/capacity): it is on-active MFU times coverage, so it craters
+    whenever coverage dips even though efficiency is steady.
+    """
     rows = _load_csv(os.path.join(daily_dir, "calibration_daily.csv"))
     if not rows:
         return
     days = _dates(rows)
     realized = _floats(rows, "wandb_tpu_realized_flops")
     capacity = _floats(rows, "iris_capacity_flops")
-    mfu = [100 * v for v in _floats(rows, "effective_mfu")]
+    on_active = [100 * v for v in _floats(rows, "on_active_mfu")]
+    # Coverage-weighted headline MFU + mean coverage over the window.
+    realized_sum, capacity_sum = sum(realized), sum(capacity)
+    devhrs = _floats(rows, "wandb_tpu_device_hours")
+    iris_devhrs = _floats(rows, "iris_device_hours")
+    cov_pct = 100 * sum(devhrs) / sum(iris_devhrs) if sum(iris_devhrs) else 0.0
+    mfu_pct = 100 * realized_sum * sum(iris_devhrs) / (capacity_sum * sum(devhrs)) if sum(devhrs) else 0.0
 
     fig, ax = plt.subplots(figsize=(11, 5))
-    ax.plot(days, capacity, color="#8172B3", linewidth=1.6, label="iris provisioned capacity")
-    ax.plot(days, realized, color="#C44E52", linewidth=1.6, label="W&B realized (6*N*D, TPU)")
+    ax.plot(days, capacity, color="#8172B3", linewidth=1.6, label="iris provisioned capacity (whole fleet)")
+    ax.plot(days, realized, color="#C44E52", linewidth=1.6, label="W&B-logged training (on iris)")
     ax.set_yscale("log")
     ax.set_ylabel("FLOPs / day")
-    ax.set_title("Realized vs provisioned compute (Iris x W&B overlap)")
+    ax.set_title(
+        f"Realized vs provisioned compute - W&B-logged training covered {cov_pct:.0f}% "
+        f"of fleet device-hours at {mfu_pct:.0f}% MFU"
+    )
     _style_time_axis(ax)
-    ax.legend(loc="upper left", fontsize=8, frameon=False)
+    ax.legend(loc="lower left", fontsize=8, frameon=False)
 
     ax2 = ax.twinx()
-    ax2.plot(days, mfu, color="0.4", linewidth=1.0, linestyle=":", label="effective MFU")
-    ax2.set_ylabel("effective MFU (%)", color="0.4")
+    ax2.plot(days, on_active, color="0.4", linewidth=1.2, marker="o", markersize=2.5, label="on-active MFU")
+    ax2.set_ylabel("on-active MFU (%)", color="0.4")
     ax2.tick_params(axis="y", colors="0.4")
-    ax2.set_ylim(bottom=0)
+    ax2.set_ylim(0, 100)
     ax2.spines["top"].set_visible(False)
     _save(fig, charts_dir, "calibration")
 

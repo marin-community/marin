@@ -121,9 +121,13 @@ TRAINING_FLOPS_PER_PARAM_TOKEN = 6.0
 REALIZED_FLOPS_CEILING_PEAK_BF16 = 459e12  # v5p per-chip bf16 FLOP/s
 REALIZED_FLOPS_CEILING_MFU = 0.6
 
-# The Iris stats window overlaps W&B from this date; used to calibrate the
-# W&B-derived series (realized) against the cluster's provisioned capacity.
-CALIBRATION_START = "2026-05-07"  # first full day of iris stats data
+# Calibration compares W&B realized compute against iris *provisioned* capacity,
+# so it is only valid where all training actually ran on iris. That holds from
+# early June: April's v4 runs were still on Ray (no iris logs), and May is mixed
+# — iris was bootstrapping (~May 6) and some runs ran elsewhere, so W&B
+# device-hours *exceed* iris's on May 7-8 (an impossible >100% coverage). Start
+# in June for an apples-to-apples window.
+CALIBRATION_START = "2026-06-01"
 
 # --------------------------------------------------------------------------- #
 # FLOPS table (peak bf16 FLOP/s per chip)
