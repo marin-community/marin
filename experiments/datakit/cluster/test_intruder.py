@@ -19,7 +19,7 @@ from itertools import pairwise
 import numpy as np
 import pytest
 
-from experiments.datakit.intruder import (
+from experiments.datakit.cluster.intruder import (
     BucketPool,
     ConfidenceSequence,
     Decision,
@@ -163,7 +163,7 @@ def test_bucketpool_rejects_head_smaller_than_in_group():
 
 def test_bucketpool_warns_when_bucket_shorter_than_head(caplog):
     """A bucket smaller than head_size is sampled in full and surfaced as a warning, not silently."""
-    with caplog.at_level(logging.WARNING, logger="experiments.datakit.intruder"):
+    with caplog.at_level(logging.WARNING, logger="experiments.datakit.cluster.intruder"):
         BucketPool(Side.LHS, {"a": ["1", "2", "3", "4", "5"], "b": ["6", "7", "8", "9"]}, head_size=128)
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1
