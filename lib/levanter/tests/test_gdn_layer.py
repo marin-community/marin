@@ -293,7 +293,7 @@ def test_gdn_layer_decode_matches_hf_one_step():
     Ensures conv-state length K and S-state handoff are correct and parity holds.
     """
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.qwen3_next.modular_qwen3_next import Qwen3NextDynamicCache  # noqa: PLC0415
+    from transformers.models.qwen3_next.modular_qwen3_next import DynamicCache  # noqa: PLC0415
 
     hidden_size, nk, nv, dk, dv, ksz = 128, 4, 8, 8, 8, 4
     hf_cfg, hf_layer = _init_small_hf_layer_with_linear_only(hidden_size, nk, nv, dk, dv, ksz)
@@ -330,11 +330,11 @@ def test_gdn_layer_decode_matches_hf_one_step():
     assert new_state2 is not None, "expected state tuple for decode step"
 
     # ---------- HF prefill with cache ----------
-    cache = Qwen3NextDynamicCache(hf_cfg)
+    cache = DynamicCache(config=hf_cfg)
     with torch.no_grad():
         x_t = torch.from_numpy(np.array(x_full))
         _ = hf_layer(hidden_states=x_t, cache_params=cache, cache_position=torch.arange(L))
-        assert cache.conv_states[0] is not None and cache.recurrent_states[0] is not None
+        assert cache.layers[0].conv_states is not None and cache.layers[0].recurrent_states is not None
 
     # ---------- HF decode one token ----------
     with torch.no_grad():
