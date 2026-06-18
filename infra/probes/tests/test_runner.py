@@ -20,7 +20,7 @@ def _run_briefly(runner, duration=0.15):
     cancels the gather, which propagates CancelledError; we swallow it."""
     try:
         asyncio.run(asyncio.wait_for(runner._run_async(), timeout=duration))
-    except (asyncio.TimeoutError, asyncio.CancelledError):
+    except (TimeoutError, asyncio.CancelledError):
         pass
 
 

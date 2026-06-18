@@ -134,7 +134,7 @@ def _build_step_from_env() -> ExecutorStep:
     if accelerator not in ("tpu", "gpu"):
         raise ValueError(f"Unknown CANARY_ACCELERATOR={accelerator!r}, expected 'tpu' or 'gpu'")
 
-    run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+    run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
 
     if accelerator == "tpu":
         # Representative MoE shape sized to fit the f32 eval gmm in VMEM (see

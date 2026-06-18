@@ -10,7 +10,7 @@
 ```bash
 git clone https://github.com/marin-community/marin.git
 cd marin
-uv venv --python 3.11
+uv venv --python 3.12
 source .venv/bin/activate
 uv sync --package marin-core --group dev
 make setup_pre_commit

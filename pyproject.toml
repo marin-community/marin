@@ -7,7 +7,7 @@ name = "marin-root"
 version = "0.1.0"
 description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     # workspaces
     "marin-iris",
@@ -138,11 +138,8 @@ vllm = { VLLM_TARGET_DEVICE = "tpu" }
 
 [tool.uv.extra-build-dependencies]
 vllm = [
-    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp311-cp311-manylinux_2_28_x86_64.whl ; python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp311-cp311-manylinux_2_28_aarch64.whl ; python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'aarch64'",
     "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'aarch64'",
-    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp311-cp311-win_amd64.whl ; python_version == '3.11' and sys_platform == 'win32' and platform_machine == 'AMD64'",
     "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-win_amd64.whl ; python_version == '3.12' and sys_platform == 'win32' and platform_machine == 'AMD64'",
 ]
 
@@ -176,7 +173,7 @@ explicit = true
 
 [tool.black]
 line-length = 121
-target-version = ["py310"]
+target-version = ["py312"]
 preview = true
 
 # Note :: Grow more strict over time!
@@ -188,7 +185,7 @@ extend-exclude = """
 
 [tool.ruff]
 line-length = 121
-target-version = "py310"
+target-version = "py312"
 
 # Note :: Grow more strict over time!
 # Most of `scripts/**` is excluded until cleaned up, but `scripts/workflows/**`
@@ -220,7 +217,7 @@ select = [
     # two rules are mirrored there via extend-select so they apply repo-wide.
     "TID252", "ICN001",
 ]
-ignore = ["F722", "B008", "UP015", "A005", "E741"]
+ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
@@ -230,6 +227,9 @@ ignore = ["F722", "B008", "UP015", "A005", "E741"]
 # Bloom filter tests deliberately compare an object with itself to exercise its
 # reflexive comparison operators (==, <=, >=, ...), so PLR0124 is expected here.
 "lib/dupekit/tests/test_bloom.py" = ["PLR0124"]
+# The SWE tracer is injected into third-party sandbox images, which can still
+# be older than Marin's own supported Python floor.
+"experiments/swe_rebench_trace/tracer.py" = ["UP036"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]
@@ -237,7 +237,7 @@ known-third-party = ["wandb"]
 
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 
 # Note: Grow more strict over time!
 ignore_missing_imports = true
@@ -245,6 +245,7 @@ exclude = ["marin/", "scripts/"]
 
 # Pyrefly type checker configuration
 [tool.pyrefly]
+python-version = "3.12"
 # Worktrees often live under hidden parent directories (e.g. `.codex/worktrees/*`).
 # Disable pyrefly's built-in exclude heuristics so hidden ancestors do not exclude
 # the entire project when running from those paths.

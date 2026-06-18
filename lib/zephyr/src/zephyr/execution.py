@@ -26,7 +26,7 @@ from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import cloudpickle
@@ -97,7 +97,7 @@ class ShardFailureKind(enum.StrEnum):
 
 def _generate_execution_id() -> str:
     """Generate unique ID for this execution to avoid conflicts."""
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"{ts}-{uuid.uuid4().hex[:8]}"
 
 

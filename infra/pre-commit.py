@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.12"
 # dependencies = [
 #     "click",
 #     "pyyaml",
@@ -28,12 +28,12 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
 
 import click
-import tomllib
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -316,7 +316,7 @@ def check_mypy(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
 
-    args = ["uvx", "mypy@1.19.1", "--ignore-missing-imports", "--python-version=3.11"]
+    args = ["uvx", "mypy@1.19.1", "--ignore-missing-imports", "--python-version=3.12"]
 
     test_excluded = [f for f in files if not str(f.relative_to(ROOT_DIR)).startswith("tests/")]
     if not test_excluded:

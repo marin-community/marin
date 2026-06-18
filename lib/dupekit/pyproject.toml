@@ -9,7 +9,7 @@ name = "marin-dupekit"
 dynamic = ["version"]
 description = "Optimized code for text de-duplication, written in Rust"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",

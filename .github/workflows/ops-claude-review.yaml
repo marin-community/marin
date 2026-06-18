@@ -90,7 +90,7 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.7.20"
-          python-version: "3.11"
+          python-version: "3.12"
           enable-cache: true
 
       - name: Run Lint Review
