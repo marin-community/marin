@@ -386,10 +386,10 @@ class ConfidenceSequence:
 
 
 class Decision(StrEnum):
-    LHS_MORE_COHERENT = "lhs_more_coherent"
-    RHS_MORE_COHERENT = "rhs_more_coherent"
-    PRACTICAL_TIE = "practical_tie"
-    INCONCLUSIVE = "inconclusive"  # max_trials hit without a verdict
+    LHS_MORE_COHERENT = auto()
+    RHS_MORE_COHERENT = auto()
+    PRACTICAL_TIE = auto()
+    INCONCLUSIVE = auto()  # max_trials hit without a verdict
 
 
 def _difference_interval(lhs: ConfidenceSequence, rhs: ConfidenceSequence) -> tuple[float, float]:
