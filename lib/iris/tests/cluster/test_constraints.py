@@ -23,6 +23,7 @@ from iris.cluster.constraints import (
     routing_constraints,
     soft_constraint_score,
     split_hard_soft,
+    validate_gpu_request,
 )
 from iris.rpc import job_pb2
 
@@ -188,6 +189,30 @@ def test_looks_like_executor_false_with_tpu():
 
 def test_looks_like_executor_false_with_gpu():
     assert not looks_like_executor(_make_resources(device="gpu"), replicas=1)
+
+
+def _gpu_resources(count: int) -> job_pb2.ResourceSpecProto:
+    r = job_pb2.ResourceSpecProto(cpu_millicores=500)
+    r.device.gpu.variant = "h100"
+    r.device.gpu.count = count
+    return r
+
+
+def test_validate_gpu_request_accepts_positive_count():
+    assert validate_gpu_request(_gpu_resources(8)) is None
+
+
+@pytest.mark.parametrize("count", [0, -1])
+def test_validate_gpu_request_rejects_non_positive_count(count):
+    error = validate_gpu_request(_gpu_resources(count))
+    assert error is not None
+    assert str(count) in error
+
+
+def test_validate_gpu_request_ignores_non_gpu_requests():
+    assert validate_gpu_request(_make_resources()) is None
+    assert validate_gpu_request(_make_resources(device="cpu")) is None
+    assert validate_gpu_request(_make_resources(device="tpu")) is None
 
 
 def test_looks_like_executor_one_full_cpu():

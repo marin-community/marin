@@ -17,7 +17,15 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.cluster.types import Entrypoint, JobName, TaskAttempt, adjust_tpu_replicas, gpu_device, tpu_device
+from iris.cluster.types import (
+    Entrypoint,
+    JobName,
+    TaskAttempt,
+    adjust_tpu_replicas,
+    get_gpu_count,
+    gpu_device,
+    tpu_device,
+)
 from iris.rpc import job_pb2
 
 
@@ -612,3 +620,21 @@ def test_merge_auto_constraints_with_user_variant_override():
     assert len(dv) == 1
     assert dv[0].op == ConstraintOp.IN
     assert tuple(v.value for v in dv[0].values) == ("v5litepod-16", "v6e-16")
+
+
+def test_get_gpu_count_returns_positive_count():
+    assert get_gpu_count(gpu_device("h100", count=4)) == 4
+
+
+def test_get_gpu_count_zero_without_gpu_field():
+    assert get_gpu_count(tpu_device("v5litepod-16")) == 0
+    assert get_gpu_count(job_pb2.DeviceConfig()) == 0
+
+
+@pytest.mark.parametrize("count", [0, -1])
+def test_get_gpu_count_rejects_non_positive_count(count):
+    # gpu_device() guards count < 1, so build the proto directly to mimic a
+    # corrupt or hand-crafted wire message reaching the reader.
+    device = job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="h100", count=count))
+    with pytest.raises(ValueError, match="GPU device count"):
+        get_gpu_count(device)

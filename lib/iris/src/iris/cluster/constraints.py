@@ -795,6 +795,28 @@ def validate_tpu_request(
     return None
 
 
+def validate_gpu_request(resources: job_pb2.ResourceSpecProto) -> str | None:
+    """Reject GPU requests with a non-positive device count.
+
+    The scheduler subtracts the requested GPU count from a worker's advertised
+    capacity. A negative count would be *added* back, inflating advertised
+    capacity and bypassing the positive fit check; a zero count is requested
+    inconsistently across readers. Reject both at the submit trust boundary
+    (the controller deserializes the wire proto directly and never calls the
+    client-side ``gpu_device`` construction guard).
+
+    Returns ``None`` if the request is valid, or a human-readable error message
+    suitable for returning as ``INVALID_ARGUMENT``.
+    """
+    if not resources.HasField("device") or not resources.device.HasField("gpu"):
+        return None
+
+    count = resources.device.gpu.count
+    if count < 1:
+        return f"GPU count must be >= 1, got {count}."
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Executor heuristic: auto-tag small CPU-only jobs as non-preemptible
 # ---------------------------------------------------------------------------

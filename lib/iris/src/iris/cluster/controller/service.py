@@ -24,7 +24,13 @@ from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 from sqlalchemy import bindparam, case, func, select, text, tuple_
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
+from iris.cluster.constraints import (
+    Constraint,
+    constraints_from_resources,
+    merge_constraints,
+    validate_gpu_request,
+    validate_tpu_request,
+)
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.auth import (
     DEFAULT_JWT_TTL_SECONDS,
@@ -1182,6 +1188,13 @@ class ControllerServiceImpl:
         tpu_error = validate_tpu_request(request.resources, [Constraint.from_proto(c) for c in request.constraints])
         if tpu_error:
             raise ConnectError(Code.INVALID_ARGUMENT, tpu_error)
+
+        # Reject non-positive GPU counts at the trust boundary: a negative count
+        # would inflate the scheduler's advertised capacity and bypass its fit
+        # check, since the controller deserializes the wire proto directly.
+        gpu_error = validate_gpu_request(request.resources)
+        if gpu_error:
+            raise ConnectError(Code.INVALID_ARGUMENT, gpu_error)
 
         # Reject jobs that can never be scheduled so they fail fast instead
         # of sitting in the pending queue. For coscheduled jobs this also

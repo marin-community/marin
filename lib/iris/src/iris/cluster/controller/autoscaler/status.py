@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from iris.cluster.controller.autoscaler.models import DemandEntry, RoutingDecision
 from iris.cluster.controller.autoscaler.routing import format_variants
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2, vm_pb2
 
 
@@ -22,19 +22,12 @@ class PendingHint:
 
 
 def _resource_spec_proto(resources: job_pb2.ResourceSpecProto) -> vm_pb2.ResourceSpec:
-    gpu_count = 0
-    tpu_count = 0
-    if resources.HasField("device"):
-        if resources.device.HasField("gpu"):
-            gpu_count = resources.device.gpu.count or 1
-        if resources.device.HasField("tpu"):
-            tpu_count = resources.device.tpu.count or 0
     return vm_pb2.ResourceSpec(
         cpu_millicores=resources.cpu_millicores,
         memory_bytes=resources.memory_bytes,
         disk_bytes=resources.disk_bytes,
-        gpu_count=gpu_count,
-        tpu_count=tpu_count,
+        gpu_count=get_gpu_count(resources.device),
+        tpu_count=get_tpu_count(resources.device),
     )
 
 

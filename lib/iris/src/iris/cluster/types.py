@@ -313,10 +313,20 @@ class TaskAttempt:
 
 
 def get_gpu_count(device: job_pb2.DeviceConfig) -> int:
-    """Extract GPU count from DeviceConfig."""
-    if device.HasField("gpu"):
-        return device.gpu.count or 1
-    return 0
+    """Extract GPU count from DeviceConfig.
+
+    Raises ``ValueError`` on a non-positive count: the scheduler subtracts this
+    from a worker's advertised GPU capacity, so a zero or negative value would
+    corrupt capacity accounting. Valid requests are guarded at construction
+    (``gpu_device``) and at submit (``validate_gpu_request``), so reaching here
+    with ``count < 1`` means a corrupt or hand-crafted proto.
+    """
+    if not device.HasField("gpu"):
+        return 0
+    count = device.gpu.count
+    if count < 1:
+        raise ValueError(f"GPU device count must be >= 1, got {count}")
+    return count
 
 
 def get_tpu_count(device: job_pb2.DeviceConfig) -> int:
