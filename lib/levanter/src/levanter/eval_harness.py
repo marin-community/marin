@@ -554,10 +554,6 @@ class LevanterHarnessLM(TemplateLM):
 
         return None
 
-    def _log_profiler_artifact(self):
-        """Log profiler artifact to the tracker."""
-        levanter.tracker.current_tracker().log_artifact(self.profiler_config.profile_path, type="jax_profile")
-
     def _handle_profiler_step(self):
         """Check if we should start or stop the profiler at this step."""
         if not self.profiler_config.enabled:
@@ -586,7 +582,6 @@ class LevanterHarnessLM(TemplateLM):
             logger.info(f"Stopping profiler at step {self._current_step}")
             jax.profiler.stop_trace()
             self._profiler_started = False
-            self._log_profiler_artifact()
 
     def _stop_profiler_if_needed(self):
         """Ensure profiler is stopped if it was started."""
@@ -594,7 +589,6 @@ class LevanterHarnessLM(TemplateLM):
             logger.info("Stopping profiler (end of evaluation).")
             jax.profiler.stop_trace()
             self._profiler_started = False
-            self._log_profiler_artifact()
 
     def _loglikelihood_tokens(self, requests, disable_tqdm: bool = False):
         raise NotImplementedError("_loglikelihood_tokens is not yet supported")

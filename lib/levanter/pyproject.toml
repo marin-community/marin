@@ -99,7 +99,7 @@ deepep = [
   # The Levanter wheel ships the JAX FFI shim sources; CUDA toolchain dependencies
   # come from the host GPU environment.
 ]
-tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.39"]
+tpu = ["jax==0.10.0", "jaxlib==0.10.0", "libtpu==0.0.40"]
 torch_test = [
   "torch>=2.7.0",
   "peft>=0.12.0",

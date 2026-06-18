@@ -87,8 +87,9 @@ override-dependencies = [
     "tornado>=6.5.5",
 ]
 conflicts = [
-    # Temporary cross-package conflicts for the GPU JAX 0.10 / non-GPU JAX 0.9 split.
-    # Remove these once CPU, TPU, vLLM, and Fray TPU test paths can share the GPU JAX line.
+    # GPU extras still carry CUDA/Linux-only solver constraints. Keep them out
+    # of non-GPU cross-package splits while allowing TPU and vLLM stacks to
+    # resolve together.
     [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-core", extra = "cpu" },
@@ -132,6 +133,19 @@ members = [
 # doesn't pull the nested package into the workspace.
 exclude = ["lib/finelog/rust"]
 
+[tool.uv.extra-build-variables]
+vllm = { VLLM_TARGET_DEVICE = "tpu" }
+
+[tool.uv.extra-build-dependencies]
+vllm = [
+    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp311-cp311-manylinux_2_28_x86_64.whl ; python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp311-cp311-manylinux_2_28_aarch64.whl ; python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp311-cp311-win_amd64.whl ; python_version == '3.11' and sys_platform == 'win32' and platform_machine == 'AMD64'",
+    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-win_amd64.whl ; python_version == '3.12' and sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
+
 [tool.uv.sources]
 marin-iris = { workspace = true }
 marin-fray = { workspace = true }
@@ -147,6 +161,10 @@ nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
+# https://github.com/marin-community/vllm/compare/7b98f498cdf0bf9cf0ecc37b5c0c994cb94513c3...04321f0f01b8e60d577a85a1b1af688e4433e7e0
+vllm = { git = "https://github.com/marin-community/vllm.git", rev = "04321f0f01b8e60d577a85a1b1af688e4433e7e0" }
+# https://github.com/marin-community/tpu-inference/compare/0045517c4ba75b1d624dba3be8b77e16c18b1a1e...4c38590e29d33451f2b4375a78ad8f70cacd7b98
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "4c38590e29d33451f2b4375a78ad8f70cacd7b98" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 

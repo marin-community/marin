@@ -36,7 +36,7 @@ export interface FerryGroupStatus {
 }
 
 export interface FerryResponse {
-  windowDays: number;
+  runLimit: number;
   groups: FerryGroupStatus[];
 }
 
