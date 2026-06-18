@@ -140,6 +140,12 @@ class SliceState:
     # controller restart), which the per-worker counters never observe.
     # Memory-only.
     no_worker_probes: int = 0
+    # Timestamp of the first describe in the current run of UNKNOWN observations,
+    # cleared whenever the slice resolves to a concrete state (e.g. READY). The
+    # unresolvable-timeout is measured from here, NOT from created_at, so a single
+    # transient UNKNOWN never terminates a long-running or freshly-adopted slice.
+    # Memory-only.
+    unknown_since: Timestamp | None = None
     error_message: str = ""
 
 
@@ -530,6 +536,7 @@ class ScalingGroup:
                 state.worker_urls = dict(worker_urls or {})
                 state.ping_failures = {}
                 state.quiet_since = None
+                state.unknown_since = None  # resolved: reset the unresolvable-timeout clock
         if state is not None:
             logger.info(
                 "slice ready group=%s slice=%s n_workers=%d worker_ids=%s",
@@ -558,6 +565,23 @@ class ScalingGroup:
                 registered,
                 error_message,
             )
+
+    def note_slice_unknown(self, slice_id: str, timestamp: Timestamp) -> Duration:
+        """Record an UNKNOWN describe and return how long the slice has been continuously UNKNOWN.
+
+        The first UNKNOWN observation stamps ``unknown_since``; it is cleared the
+        moment the slice resolves (``mark_slice_ready``). Callers compare the
+        returned duration against the unresolvable-timeout so that one transient
+        UNKNOWN — common for a long-running or freshly-adopted slice — never
+        terminates it, while a slice genuinely stuck UNKNOWN still fails.
+        """
+        with self._slices_lock:
+            state = self._slices.get(slice_id)
+            if state is None:
+                return Duration.from_ms(0)
+            if state.unknown_since is None:
+                state.unknown_since = timestamp
+            return Duration.from_ms(timestamp.epoch_ms() - state.unknown_since.epoch_ms())
 
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.

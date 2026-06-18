@@ -14,7 +14,7 @@ import time
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Protocol, runtime_checkable
 
 try:
@@ -481,7 +481,7 @@ class CloudK8sService:
 
     def rollout_restart(self, resource: K8sResource, name: str) -> None:
         """Restart a rollout by patching the restart annotation."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         patch_body = {
             "spec": {
                 "template": {
@@ -604,7 +604,7 @@ class CloudK8sService:
                 if container:
                     kwargs["container"] = container
                 if since_time is not None:
-                    delta = datetime.now(timezone.utc) - since_time
+                    delta = datetime.now(UTC) - since_time
                     since_sec = max(1, int(delta.total_seconds()) + 1)
                     kwargs["since_seconds"] = since_sec
                 if limit_bytes is not None:
@@ -867,4 +867,4 @@ def _parse_kubectl_log_line(line: str) -> KubectlLogLine:
             logger.warning("Failed to parse timestamp from log line: %r", line[:120])
     else:
         logger.warning("Unexpected log line format (no space-separated timestamp): %r", line[:120])
-    return KubectlLogLine(timestamp=datetime.now(timezone.utc), stream="stdout", data=line)
+    return KubectlLogLine(timestamp=datetime.now(UTC), stream="stdout", data=line)

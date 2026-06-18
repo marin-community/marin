@@ -23,7 +23,7 @@ import logging
 import time
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from finelog.client import LogClient, Table
@@ -166,13 +166,11 @@ class StatsWriter:
         total_shards: int,
         status: ZephyrWorkerStatStatus,
     ) -> None:
-        """Build and emit a ZephyrStageStat row from raw counter snapshots.
+        """Build and emit a ZephyrStageStat row from aggregated stage counters.
 
-        ``completed_counters`` — one dict per finished shard (used for both
-        throughput and resource aggregation).  ``inflight_counters`` — one
-        dict per still-running shard (throughput only; resource stats are
-        excluded because they haven't reached the END sample yet).
-        Pass ``status=ZephyrWorkerStatStatus.FAILED`` when emitting for a failed stage.
+        ``stage_counters`` is the coordinator's reduced view of all shard
+        counters for this stage (throughput plus resource usage). Pass
+        ``status=ZephyrWorkerStatStatus.FAILED`` when emitting for a failed stage.
         """
         if self._stage_table is None:
             return
@@ -186,7 +184,7 @@ class StatsWriter:
             execution_id=execution_id,
             stage_name=stage_name,
             status=status,
-            ts=datetime.now(timezone.utc).replace(tzinfo=None),
+            ts=datetime.now(UTC).replace(tzinfo=None),
             elapsed=elapsed,
             items=total_items,
             bytes_processed=total_bytes,
@@ -225,7 +223,7 @@ class StatsWriter:
             stage_name=stage_name,
             shard_idx=shard_idx,
             status=status,
-            ts=datetime.now(timezone.utc).replace(tzinfo=None),
+            ts=datetime.now(UTC).replace(tzinfo=None),
             items=items,
             bytes_processed=bytes_processed,
             item_rate=item_rate,

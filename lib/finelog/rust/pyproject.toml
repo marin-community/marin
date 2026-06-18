@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "marin-finelog-server"
 version = "0.2.0"
 description = "Native finelog server: in-process (PyO3) embedding of the Rust log store + log service."
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 
 [tool.maturin]
 # The cdylib crate is pyext/ (a thin PyO3 shim over the `finelog` server lib in

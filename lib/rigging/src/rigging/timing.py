@@ -8,7 +8,7 @@ import random
 import threading
 import time
 from collections.abc import Callable, Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TypeVar
 
 logger = logging.getLogger(__name__)
@@ -252,12 +252,12 @@ class Timestamp:
 
     def as_formatted_date(self) -> str:
         """Format as ISO 8601 string in UTC."""
-        dt = datetime.fromtimestamp(self.epoch_seconds(), tz=timezone.utc)
+        dt = datetime.fromtimestamp(self.epoch_seconds(), tz=UTC)
         return dt.isoformat()
 
     def as_short_time(self) -> str:
         """Format as HH:MM:SS for log lines."""
-        dt = datetime.fromtimestamp(self.epoch_seconds(), tz=timezone.utc)
+        dt = datetime.fromtimestamp(self.epoch_seconds(), tz=UTC)
         return dt.strftime("%H:%M:%S")
 
     def age_ms(self) -> int:

@@ -120,7 +120,7 @@ def build_scale_model() -> GrugModelConfig:
 
 
 def build_scale_step() -> ExecutorStep:
-    run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+    run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
 
     replicas = env_int("SCALE_GPU_REPLICAS", 32)
     expert_axis = env_int("SCALE_EXPERT_AXIS", 8)

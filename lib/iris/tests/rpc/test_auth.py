@@ -543,7 +543,7 @@ def test_auth_interceptor_rejects_bidi_stream(interceptor):
 def test_gcp_access_token_provider_caches_token():
     mock_creds = MagicMock()
     mock_creds.token = "cached-token"
-    mock_creds.expiry = datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(hours=1)
+    mock_creds.expiry = datetime.datetime.now(tz=datetime.UTC) + datetime.timedelta(hours=1)
 
     provider = GcpAccessTokenProvider()
     with patch("google.auth.default", return_value=(mock_creds, "project-id")):

@@ -127,7 +127,7 @@ TIERS: dict[str, TierConfig] = {
 
 
 def _build_run_id(pr: int, gate: str) -> str:
-    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
     return f"zephyr-perf-pr{pr}-g{gate}-treatment-{ts}"
 
 

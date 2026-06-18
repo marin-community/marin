@@ -7,7 +7,7 @@
 # GitHub releases (see pyproject.toml [tool.uv] find-links). No marin source
 # is required in the build context.
 
-FROM python:3.11-slim AS base
+FROM python:3.12-slim AS base
 
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
 LABEL org.opencontainers.image.description="probes daemon image"

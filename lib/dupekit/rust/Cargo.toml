@@ -16,8 +16,8 @@ hex = "0.4"
 parquet = { version = "57.1", default-features = false, features = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd"] }
 pyo3 = { version = "0.26", features = [
     "extension-module",
-    "abi3-py311",
-] } # stable ABI with minimum Python version 3.11
+    "abi3-py312",
+] } # stable ABI with minimum Python version 3.12
 rand = "0.8"
 rand_pcg = "0.3"
 regex = "1.10"
