@@ -4,7 +4,7 @@
 """Document intruder test: which of two bucketings is more coherent?
 
 The document analog of the Chang et al. (2009) word-intrusion test. A
-*bucketing* is a :class:`Buckets` -- a name plus a ``list[Bucket]``, each
+*bucketing* is a :class:`BucketPool` -- a name plus a ``list[Bucket]``, each
 :class:`Bucket` pairing its own name (a cluster id, a topic label, ...) with
 its member document texts. We compare two bucketings, ``lhs`` and ``rhs``, by
 how easily a panel of LLMs can spot an intruder document.
@@ -135,24 +135,6 @@ DEFAULT_TARGET_TRIALS = 250
 # ---------------------------------------------------------------------------
 
 
-class Side(StrEnum):
-    """Which of the two bucketings a trial was drawn from."""
-
-    LHS = auto()
-    RHS = auto()
-
-
-@dataclass(frozen=True)
-class IntruderTrial:
-    """One intruder puzzle: 5 shuffled documents with one labeled intruder."""
-
-    side: Side
-    in_group_bucket: str
-    intruder_bucket: str
-    documents: tuple[str, ...]
-    intruder_index: int  # 0-based position of the intruder in ``documents``
-
-
 @dataclass(frozen=True)
 class Bucket:
     """A named group of documents (a cluster, a topic label, ...)."""
@@ -162,11 +144,14 @@ class Bucket:
 
 
 @dataclass(frozen=True)
-class Buckets:
-    """One side's bucketing: a display name and its constituent buckets."""
+class IntruderTrial:
+    """One intruder puzzle: 5 shuffled documents with one labeled intruder."""
 
-    name: str
-    buckets: list[Bucket]
+    side: str  # name of the BucketPool this trial was drawn from
+    in_group_bucket: str
+    intruder_bucket: str
+    documents: tuple[str, ...]
+    intruder_index: int  # 0-based position of the intruder in ``documents``
 
 
 def _take_head(stream: Iterable[str], head_size: int) -> list[str]:
@@ -180,48 +165,49 @@ def _take_head(stream: Iterable[str], head_size: int) -> list[str]:
 
 
 class BucketPool:
-    """Repeatedly-samplable view of one side's *pre-shuffled* buckets.
+    """A named, repeatedly-samplable bucketing of *pre-shuffled* buckets.
 
     Each bucket must be shuffled by the caller and hold at least
     ``IN_GROUP_COUNT`` (4) documents; the pool reads only the first ``head_size``
     documents and treats that prefix as a uniform sample without replacement, so
     a large or lazy bucket is never consumed in full. A bucket whose head falls
     short of ``head_size`` is sampled in full and a warning is logged. Trials are
-    then drawn with replacement from those heads across rounds.
+    then drawn with replacement from those heads across rounds. ``name`` labels
+    the bucketing (lhs vs rhs) on every trial it yields.
     """
 
     def __init__(
         self,
-        side: Side,
+        name: str,
         buckets: list[Bucket],
         head_size: int = DEFAULT_HEAD_SIZE,
     ):
         if head_size < IN_GROUP_COUNT:
             raise ValueError(f"head_size {head_size} < {IN_GROUP_COUNT}: too small to form an in-group")
-        names = [b.name for b in buckets]
-        if len(names) != len(set(names)):
-            dupes = sorted({n for n in names if names.count(n) > 1})
-            raise ValueError(f"side {side!r}: duplicate bucket names: {dupes}")
-        self.side = side
+        bucket_names = [b.name for b in buckets]
+        if len(bucket_names) != len(set(bucket_names)):
+            dupes = sorted({n for n in bucket_names if bucket_names.count(n) > 1})
+            raise ValueError(f"bucketing {name!r}: duplicate bucket names: {dupes}")
+        self.name = name
         self._docs: dict[str, list[str]] = {b.name: _take_head(b.docs, head_size) for b in buckets}
 
         too_small = {b: len(docs) for b, docs in self._docs.items() if len(docs) < IN_GROUP_COUNT}
         if too_small:
             examples = dict(list(too_small.items())[:5])
             raise ValueError(
-                f"side {side!r}: every bucket needs >= {IN_GROUP_COUNT} documents; "
+                f"bucketing {name!r}: every bucket needs >= {IN_GROUP_COUNT} documents; "
                 f"{len(too_small)} are too small (e.g. {examples})"
             )
         if len(self._docs) < 2:
-            raise ValueError(f"side {side!r}: need >= 2 buckets to draw an intruder, got {len(self._docs)}")
+            raise ValueError(f"bucketing {name!r}: need >= 2 buckets to draw an intruder, got {len(self._docs)}")
         self._buckets = list(self._docs)
 
         short = {b: len(docs) for b, docs in self._docs.items() if len(docs) < head_size}
         if short:
             logger.warning(
-                "side %r: %d of %d buckets have fewer than head_size=%d documents (smallest %d) and are "
+                "bucketing %r: %d of %d buckets have fewer than head_size=%d documents (smallest %d) and are "
                 "sampled in full, giving the panel fewer distinct documents to judge",
-                side,
+                name,
                 len(short),
                 len(self._docs),
                 head_size,
@@ -242,7 +228,7 @@ class BucketPool:
         shuffled = tuple(docs[i] for i in order)
         intruder_index = int(np.where(order == DOCS_PER_TRIAL - 1)[0][0])
         return IntruderTrial(
-            side=self.side,
+            side=self.name,
             in_group_bucket=in_group,
             intruder_bucket=intruder,
             documents=shuffled,
@@ -512,8 +498,8 @@ def _score_round(
 
 
 def run_intruder_test(
-    lhs: Buckets,
-    rhs: Buckets,
+    lhs: BucketPool,
+    rhs: BucketPool,
     *,
     panel: Sequence[Panelist] | None = None,
     alpha: float = DEFAULT_ALPHA,
@@ -523,7 +509,6 @@ def run_intruder_test(
     batch_size: int = DEFAULT_BATCH_SIZE,
     target_trials: int = DEFAULT_TARGET_TRIALS,
     max_doc_chars: int = DEFAULT_MAX_DOC_CHARS,
-    head_size: int = DEFAULT_HEAD_SIZE,
     seed: int = 42,
     max_workers: int = 16,
 ) -> IntruderTestResult:
@@ -542,17 +527,17 @@ def run_intruder_test(
     detection rates. ``chance_level`` (0.2) is the reference for "coherent at
     all"; the ``difference_interval`` is the reference for "which is better".
     """
+    if lhs.name == rhs.name:
+        raise ValueError(f"lhs and rhs bucketings must have distinct names, both are {lhs.name!r}")
     judges: Sequence[Panelist] = panel if panel is not None else default_panel()
     lhs_name, rhs_name = lhs.name, rhs.name
-    pool_lhs = BucketPool(Side.LHS, lhs.buckets, head_size)
-    pool_rhs = BucketPool(Side.RHS, rhs.buckets, head_size)
     rng = np.random.default_rng(seed)
 
     rho = 1.0 / math.sqrt(target_trials)  # CS tightest near target_trials
     cs_lhs = ConfidenceSequence(alpha=alpha / 2.0, rho=rho)
     cs_rhs = ConfidenceSequence(alpha=alpha / 2.0, rho=rho)
-    tallies: dict[str, dict[Side, _ModelTally]] = {
-        j.name: {Side.LHS: _ModelTally(), Side.RHS: _ModelTally()} for j in judges
+    tallies: dict[str, dict[str, _ModelTally]] = {
+        j.name: {lhs_name: _ModelTally(), rhs_name: _ModelTally()} for j in judges
     }
     abstained = 0
     decision: Decision = Decision.INCONCLUSIVE
@@ -563,16 +548,16 @@ def run_intruder_test(
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         for _round in range(max_rounds):
-            for side_pool, cs in ((pool_lhs, cs_lhs), (pool_rhs, cs_rhs)):
-                trials = [side_pool.sample_trial(rng) for _ in range(batch_size)]
+            for bucketing, cs in ((lhs, cs_lhs), (rhs, cs_rhs)):
+                trials = [bucketing.sample_trial(rng) for _ in range(batch_size)]
                 scores = _score_round(trials, judges, pool, max_doc_chars)
                 abstained += scores.n_abstained
                 for rate in scores.detection_rates:
                     cs.update(rate)
                 for name, hits in scores.model_hits.items():
-                    side_tally = tallies[name][side_pool.side]
+                    bucketing_tally = tallies[name][bucketing.name]
                     for hit in hits:
-                        side_tally.record(hit)
+                        bucketing_tally.record(hit)
 
             if cs_lhs.n >= min_trials and cs_rhs.n >= min_trials:
                 verdict = _decide(cs_lhs, cs_rhs, rope)
@@ -602,7 +587,6 @@ def run_intruder_test(
             abstained,
         )
 
-    side_names = {Side.LHS: lhs_name, Side.RHS: rhs_name}
     return IntruderTestResult(
         decision=decision,
         lhs_name=lhs_name,
@@ -614,9 +598,7 @@ def run_intruder_test(
         difference_interval=_difference_interval(cs_lhs, cs_rhs),
         n_trials_per_side=cs_lhs.n,
         chance_level=CHANCE_LEVEL,
-        per_model_accuracy={
-            name: {side_names[side]: t.accuracy for side, t in sides.items()} for name, sides in tallies.items()
-        },
+        per_model_accuracy={name: {bn: t.accuracy for bn, t in sides.items()} for name, sides in tallies.items()},
         n_abstained=abstained,
     )
 

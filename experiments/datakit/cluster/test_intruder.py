@@ -22,12 +22,10 @@ import pytest
 from experiments.datakit.cluster.intruder import (
     Bucket,
     BucketPool,
-    Buckets,
     ConfidenceSequence,
     Decision,
     IntruderTrial,
     LlmPanelist,
-    Side,
     _decide,
     _robbins_radius,
     run_intruder_test,
@@ -44,13 +42,13 @@ def _stable_unit(text: str) -> float:
 
 
 class SideAwarePanelist:
-    """Fake judge that detects the intruder at a per-side rate.
+    """Fake judge that detects the intruder at a per-bucketing rate.
 
     Detection is a deterministic function of the trial's content, so a run is
     reproducible and thread-safe under the driver's ThreadPoolExecutor.
     """
 
-    def __init__(self, name: str, rate_by_side: dict[Side, float]):
+    def __init__(self, name: str, rate_by_side: dict[str, float]):
         self.name = name
         self._rate_by_side = rate_by_side
 
@@ -99,7 +97,7 @@ def _fake_client(content: str):
 
 def _trial(intruder_index: int = 2) -> IntruderTrial:
     return IntruderTrial(
-        side=Side.LHS,
+        side="lhs",
         in_group_bucket="A",
         intruder_bucket="B",
         documents=tuple(f"doc{i}" for i in range(5)),
@@ -114,7 +112,7 @@ def _trial(intruder_index: int = 2) -> IntruderTrial:
 
 def test_sample_trial_labels_the_intruder_by_origin_bucket():
     """The doc at ``intruder_index`` comes from a different bucket than the other four."""
-    pool = BucketPool(Side.LHS, _labeled_buckets("X"))
+    pool = BucketPool("lhs", _labeled_buckets("X"))
     rng = np.random.default_rng(1)
     for _ in range(200):
         trial = pool.sample_trial(rng)
@@ -140,7 +138,7 @@ def test_bucketpool_reads_only_the_head_not_the_whole_bucket():
             assert i < head_size, "BucketPool streamed past the head"
             yield f"{prefix}-doc{i}"
 
-    pool = BucketPool(Side.LHS, [Bucket(f"b{b}", head_only(f"b{b}")) for b in range(3)], head_size=head_size)
+    pool = BucketPool("lhs", [Bucket(f"b{b}", head_only(f"b{b}")) for b in range(3)], head_size=head_size)
     trial = pool.sample_trial(np.random.default_rng(0))
     assert len(trial.documents) == 5  # still produces valid trials from the head
 
@@ -148,32 +146,32 @@ def test_bucketpool_reads_only_the_head_not_the_whole_bucket():
 def test_bucketpool_rejects_bucket_below_in_group():
     """Every bucket must hold >= 4 docs; a smaller one is rejected, not silently dropped."""
     with pytest.raises(ValueError, match="every bucket needs"):
-        BucketPool(Side.LHS, [Bucket("a", ["1", "2", "3", "4", "5"]), Bucket("b", ["1", "2"])])
+        BucketPool("lhs", [Bucket("a", ["1", "2", "3", "4", "5"]), Bucket("b", ["1", "2"])])
 
 
 def test_bucketpool_rejects_fewer_than_two_buckets():
     """An intruder needs a second bucket to come from."""
     with pytest.raises(ValueError, match=">= 2 buckets"):
-        BucketPool(Side.LHS, [Bucket("a", ["1", "2", "3", "4", "5"])])
+        BucketPool("lhs", [Bucket("a", ["1", "2", "3", "4", "5"])])
 
 
 def test_bucketpool_rejects_duplicate_bucket_names():
     """Two buckets with the same name would silently collapse; reject instead."""
     with pytest.raises(ValueError, match="duplicate bucket names"):
-        BucketPool(Side.LHS, [Bucket("a", ["1", "2", "3", "4", "5"]), Bucket("a", ["6", "7", "8", "9"])])
+        BucketPool("lhs", [Bucket("a", ["1", "2", "3", "4", "5"]), Bucket("a", ["6", "7", "8", "9"])])
 
 
 def test_bucketpool_rejects_head_smaller_than_in_group():
     """A head too small to hold an in-group is a misconfiguration, not a silent empty run."""
     with pytest.raises(ValueError, match="too small to form an in-group"):
-        BucketPool(Side.LHS, _labeled_buckets("X"), head_size=2)
+        BucketPool("lhs", _labeled_buckets("X"), head_size=2)
 
 
 def test_bucketpool_warns_when_bucket_shorter_than_head(caplog):
     """A bucket smaller than head_size is sampled in full and surfaced as a warning, not silently."""
     with caplog.at_level(logging.WARNING, logger="experiments.datakit.cluster.intruder"):
         BucketPool(
-            Side.LHS,
+            "lhs",
             [Bucket("a", ["1", "2", "3", "4", "5"]), Bucket("b", ["6", "7", "8", "9"])],
             head_size=128,
         )
@@ -262,10 +260,10 @@ def test_decide_withholds_verdict_while_intervals_are_wide():
 
 def test_run_intruder_test_picks_the_more_detectable_side():
     """A panel that detects better on one side makes that side the winner."""
-    panel = [SideAwarePanelist("judge", {Side.LHS: 0.95, Side.RHS: 0.25})]
+    panel = [SideAwarePanelist("judge", {"coherent": 0.95, "incoherent": 0.25})]
     result = run_intruder_test(
-        Buckets("coherent", _labeled_buckets("A")),
-        Buckets("incoherent", _labeled_buckets("B")),
+        BucketPool("coherent", _labeled_buckets("A")),
+        BucketPool("incoherent", _labeled_buckets("B")),
         panel=panel,
         min_trials=16,
         max_trials=400,
@@ -287,8 +285,8 @@ def test_run_intruder_test_terminates_at_cap_when_panel_always_abstains():
     paid calls indefinitely. The run must instead stop and report no progress.
     """
     result = run_intruder_test(
-        Buckets("lhs", _labeled_buckets("A")),
-        Buckets("rhs", _labeled_buckets("B")),
+        BucketPool("lhs", _labeled_buckets("A")),
+        BucketPool("rhs", _labeled_buckets("B")),
         panel=[DeadPanelist()],
         min_trials=16,
         max_trials=24,
@@ -298,6 +296,16 @@ def test_run_intruder_test_terminates_at_cap_when_panel_always_abstains():
     assert result.decision == Decision.INCONCLUSIVE
     assert result.n_trials_per_side == 0
     assert result.n_abstained > 0
+
+
+def test_run_intruder_test_rejects_same_named_bucketings():
+    """The two bucketings must be distinguishable; equal names would collide in the report."""
+    with pytest.raises(ValueError, match="distinct names"):
+        run_intruder_test(
+            BucketPool("same", _labeled_buckets("A")),
+            BucketPool("same", _labeled_buckets("B")),
+            panel=[DeadPanelist()],
+        )
 
 
 # ---------------------------------------------------------------------------
