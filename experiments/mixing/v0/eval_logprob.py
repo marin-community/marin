@@ -51,9 +51,9 @@ from marin.execution.types import this_output_path
 from rigging.filesystem import filesystem as marin_filesystem
 
 from experiments.exp1337_eval_suite import LOGPROB_TASKS as _TASK_SPECS
-from experiments.grug.moe.heuristic import build_from_heuristic
-from experiments.grug.moe.model import GrugModelConfig, Transformer
 from experiments.marin_models import marin_tokenizer
+from experiments.mixing.v0.heuristic import build_from_heuristic
+from experiments.mixing.v0.model import GrugModelConfig, Transformer
 
 logger = logging.getLogger(__name__)
 

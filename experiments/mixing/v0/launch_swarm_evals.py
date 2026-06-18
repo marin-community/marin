@@ -15,11 +15,11 @@ from marin.execution.types import this_output_path
 
 from experiments.evals.perplexity_gap_registry import registered_perplexity_gap_bundles
 from experiments.exp1337_eval_suite import LOGPROB_TASKS
-from experiments.grug.moe.eval_logprob import GrugLogprobEvalConfig, run_grug_logprob_eval
-from experiments.grug.moe.eval_perplexity import GrugPerplexityEvalConfig, run_grug_perplexity_eval
-from experiments.grug.moe.heuristic import build_from_heuristic
-from experiments.grug.moe.launch_swarm import _BUDGET as _EVAL_BUDGET
-from experiments.grug.moe.launch_swarm import _HIDDEN_DIM, _TARGET_STEPS
+from experiments.mixing.v0.eval_logprob import GrugLogprobEvalConfig, run_grug_logprob_eval
+from experiments.mixing.v0.eval_perplexity import GrugPerplexityEvalConfig, run_grug_perplexity_eval
+from experiments.mixing.v0.heuristic import build_from_heuristic
+from experiments.mixing.v0.launch_swarm import _BUDGET as _EVAL_BUDGET
+from experiments.mixing.v0.launch_swarm import _HIDDEN_DIM, _TARGET_STEPS
 
 _OUTPUT_PREFIX = "gs://marin-us-central2/grug/"
 _CANDIDATE_RE = re.compile(r"swarm_fisher_dsp_d512_(\d{6})-[a-f0-9]+")

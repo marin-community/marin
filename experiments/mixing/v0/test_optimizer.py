@@ -3,7 +3,7 @@
 
 import jax.numpy as jnp
 
-from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
+from experiments.mixing.v0.optimizer import GrugMoeAdamHConfig
 
 
 def test_grug_moe_adamh_mask_routes_expert_mlp_weights_to_expert_group():

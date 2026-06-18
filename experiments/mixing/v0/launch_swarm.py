@@ -38,12 +38,12 @@ from marin.execution.types import this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
 from experiments.defaults import default_validation_sets
-from experiments.grug.moe.datakit_moe_mix import COMPONENTS, TARGET_BUDGET
-from experiments.grug.moe.grug_moe_mix import run_grug_moe_mix
-from experiments.grug.moe.heuristic import build_from_heuristic
-from experiments.grug.moe.launch import GrugMoeLaunchConfig
-from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.marin_models import marin_tokenizer
+from experiments.mixing.v0.datakit_moe_mix import COMPONENTS, TARGET_BUDGET
+from experiments.mixing.v0.grug_moe_mix import run_grug_moe_mix
+from experiments.mixing.v0.heuristic import build_from_heuristic
+from experiments.mixing.v0.launch import GrugMoeLaunchConfig
+from experiments.mixing.v0.train import GrugEvalConfig, GrugTrainerConfig
 
 _MIXTURES_CSV = "gs://marin-us-central2/grug-moe/swarm_data/production_swarm_168p_uscentral2_d_optimal_mixtures.csv"
 

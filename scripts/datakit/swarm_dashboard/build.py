@@ -53,7 +53,7 @@ from scipy.stats import norm, rankdata
 from sklearn.manifold import TSNE
 from tqdm import tqdm
 
-from experiments.grug.moe.datakit_moe_mix import _MIXABLE_BUCKETS, _TAIL_BUCKETS, _TOKEN_COUNTS, TARGET_BUDGET
+from experiments.mixing.v0.datakit_buckets import _MIXABLE_BUCKETS, _TAIL_BUCKETS, _TOKEN_COUNTS, TARGET_BUDGET
 
 
 def _is_data_mix_metric(key: str) -> bool:

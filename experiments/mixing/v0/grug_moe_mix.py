@@ -51,10 +51,10 @@ from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.defaults import default_validation_sets
-from experiments.grug.moe.heuristic import build_from_heuristic
-from experiments.grug.moe.launch import GrugMoeLaunchConfig
-from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.marin_models import marin_tokenizer
+from experiments.mixing.v0.heuristic import build_from_heuristic
+from experiments.mixing.v0.launch import GrugMoeLaunchConfig
+from experiments.mixing.v0.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 
 _MERGED_PREFIX = "tokenized/merged/dolma3_dolmino_top_level"
 
