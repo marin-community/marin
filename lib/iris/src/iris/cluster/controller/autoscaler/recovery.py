@@ -4,6 +4,7 @@
 """Autoscaler checkpoint restore helpers."""
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -109,8 +110,24 @@ def restore_autoscaler_state(
     groups: dict[str, ScalingGroup],
     checkpoint: AutoscalerCheckpoint,
     platform: WorkerInfraProvider,
+    make_draining_group: Callable[[str], ScalingGroup] | None = None,
 ) -> dict[str, TrackedWorker]:
-    """Restore scaling groups and tracked workers from a checkpoint."""
+    """Restore scaling groups and tracked workers from a checkpoint.
+
+    Live cloud slices are the source of truth. Each is restored into its scale
+    group:
+
+    - **Configured group** (still in ``marin.yaml``): restored normally and the
+      autoscaler keeps scaling it up and down.
+    - **Retired group with live VMs** (renamed/removed from config): adopted as a
+      *draining* group via ``make_draining_group`` — a scale-to-zero group that
+      never creates new slices but lets the normal idle scaledown reclaim its
+      slices once their workers go idle. Running tasks are never killed; once a
+      slice is reclaimed its row is deleted like any other.
+    - **Retired group with no live VMs**: nothing to adopt; its leftover slice
+      rows are orphan bookkeeping reaped by the pruner's orphan-slice sweep
+      (``pruner.find_prunable_slice``).
+    """
 
     cloud_by_group: dict[str, list[SliceHandle]] = {}
     for listed in platform.list_all_slices():
@@ -119,28 +136,41 @@ def restore_autoscaler_state(
             continue
         cloud_by_group.setdefault(listed.handle.scale_group, []).append(listed.handle)
 
+    # Configured groups: restore from checkpoint reconciled against live cloud.
+    # Retired groups (group is None) fall through to the drain pass below.
     for group_snapshot in checkpoint.group_snapshots.values():
         group = groups.get(group_snapshot.name)
-        if group is None:
+        if group is not None:
+            _restore_group(group, group_snapshot, cloud_by_group.get(group_snapshot.name, []))
+
+    # Drain pass: adopt retired groups that still have live cloud VMs as
+    # scale-to-zero groups so their idle slices get reclaimed like normal.
+    if make_draining_group is not None:
+        for name, cloud_handles in cloud_by_group.items():
+            if name in groups:
+                continue  # configured group, already restored above
             logger.warning(
-                "Checkpoint references scaling group %s which does not exist in config, skipping",
-                group_snapshot.name,
+                "Adopting retired scale group %s (%d live cloud slices) in drain mode: "
+                "no new slices, idle slices reclaimed normally",
+                name,
+                len(cloud_handles),
             )
-            continue
-        restore_result = restore_scaling_group(
-            group_snapshot=group_snapshot,
-            cloud_handles=cloud_by_group.get(group_snapshot.name, []),
-        )
-        group.restore_from_snapshot(
-            slices=restore_result.slices,
-            last_scale_up=restore_result.last_scale_up,
-            last_scale_down=restore_result.last_scale_down,
-        )
-        # Discarded slice rows (missing from cloud) are not re-added to the
-        # group's in-memory state, so the controller's first wholesale DB sync
-        # after the next capacity call deletes them — no explicit purge needed.
+            drain_group = make_draining_group(name)
+            groups[name] = drain_group
+            snapshot = checkpoint.group_snapshots.get(name, GroupSnapshot(name=name))
+            _restore_group(drain_group, snapshot, cloud_handles)
 
     return restore_tracked_workers(checkpoint.tracked_worker_rows)
+
+
+def _restore_group(group: ScalingGroup, group_snapshot: GroupSnapshot, cloud_handles: list[SliceHandle]) -> None:
+    """Reconcile one group's checkpoint snapshot against live cloud handles and load it into the group."""
+    restore_result = restore_scaling_group(group_snapshot=group_snapshot, cloud_handles=cloud_handles)
+    group.restore_from_snapshot(
+        slices=restore_result.slices,
+        last_scale_up=restore_result.last_scale_up,
+        last_scale_down=restore_result.last_scale_down,
+    )
 
 
 def _reclaim_dead_slice(handle: SliceHandle, state: CloudSliceState) -> None:
