@@ -373,7 +373,9 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   | **0.02** | 3.047 | 3.011 | 3.001 | 2.986 | 2.980 | 2.996 |
   | **0.05** | 3.037 | 3.021 | 3.000 | 2.982 | 2.979 | 2.989 |
   | **0.1**  | 3.041 | 3.016 | 2.997 | 2.986 | 2.970 | 2.989 |
-  | **0.2**  | | | | | **2.968** | |
+  | **0.2**  | | | | | 2.968 | |
+  | **0.3**  | | | | | _(run)_ | |
+  | **0.4**  | | | | | **2.947** | |
 
   _**Base 15/15 complete** (~17:15Z). Monotone in LR (7e-4 best ~2.97–2.98 > 5e-4 > … >
   1.75e-4 ~3.04). Best E2 = `7e-4/wd0.1`=**2.970** (high LR + high WD). 7e-4 is the base top
@@ -382,11 +384,13 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ — **NOT confirmed; WD edge
   still open.** `7e-4/wd0.2` landed ~19:30Z at **2.968**, *better* than `7e-4/wd0.1`=2.970
-  (by 0.002). So the 7e-4 WD response is flat-to-still-decreasing across 0.05→0.1→0.2
-  (2.979→2.970→2.968) — the optimum is on the wd0.2 **top edge**, not interior. LR axis IS
-  closed at 7e-4 (5e-4/0.1=2.986, 1e-3/0.1=2.989 both worse). **Extending the WD edge:
-  launched `7e-4/wd0.3` + `7e-4/wd0.4` (E2, ~19:13Z, fast multi-host batch)** to find where
-  WD turns up; accept the optimum once a higher WD lands worse than 2.968.
+  (by 0.002). Then **`7e-4/wd0.4` landed at 2.947** — the WD response KEEPS DESCENDING:
+  2.979→2.970→2.968→**2.947** (0.05→0.1→0.2→0.4), a clear 0.021 drop at the high end. So the
+  optimum is STILL on the (now higher) edge, not interior. LR axis IS closed at 7e-4
+  (5e-4/0.1=2.986, 1e-3/0.1=2.989 both worse). wd0.3 (w2u6) still finishing for the
+  intermediate point. **Surprising: E2 wants high weight decay (≥0.4).** Extending further —
+  **launched `7e-4/wd0.6` + `7e-4/wd0.8`** (E2, fast multi-host batch) to bracket the turn;
+  accept the optimum once a higher WD lands worse than 2.947.
   _~05:43Z: budget hit 82.9k (>78k) and the over-cap downgrade was preempting the critical
   E4 7e-4 column + w2s. Shed ~16.5k by **killing the two speculative wd0.2 corners
   `5e-4/0.2` & `1e-3/0.2`** (w2t) — only `7e-4/0.2` (w2s) is needed to confirm the
