@@ -112,7 +112,7 @@ def _trial(intruder_index: int = 2) -> IntruderTrial:
 
 def test_sample_trial_labels_the_intruder_by_origin_bucket():
     """The doc at ``intruder_index`` comes from a different bucket than the other four."""
-    pool = BucketPool(Side.LHS, _labeled_buckets("X"), np.random.default_rng(0))
+    pool = BucketPool(Side.LHS, _labeled_buckets("X"))
     rng = np.random.default_rng(1)
     for _ in range(200):
         trial = pool.sample_trial(rng)
@@ -124,42 +124,41 @@ def test_sample_trial_labels_the_intruder_by_origin_bucket():
         assert all(d.startswith(trial.in_group_bucket + "-") for d in in_group_docs)
 
 
-def test_bucketpool_reservoir_caps_large_buckets():
-    """A bucket larger than the reservoir is down-sampled to at most that many distinct docs.
+def test_bucketpool_reads_only_the_head_not_the_whole_bucket():
+    """Construction must not stream past ``head_size`` -- buckets may be huge or lazy.
 
-    Observed through the public sampling API: with a tiny reservoir over a huge
-    bucket, the pool can only ever surface up to ``reservoir_size`` distinct docs
-    per bucket, and every doc it surfaces was a real input.
+    Each bucket is a generator that raises if read past the head, so a full scan
+    (or a reservoir pass) would blow up here. This is the contract that makes the
+    pre-shuffled-prefix sampling cheap.
     """
-    capacity = 8
-    big = {f"b{b}": [f"b{b}-doc{d}" for d in range(1000)] for b in range(3)}
-    pool = BucketPool(Side.LHS, big, np.random.default_rng(0), reservoir_size=capacity)
-    rng = np.random.default_rng(1)
-    seen_by_bucket: dict[str, set[str]] = {b: set() for b in big}
-    inputs = {d for docs in big.values() for d in docs}
-    for _ in range(500):
-        for doc in pool.sample_trial(rng).documents:
-            assert doc in inputs
-            seen_by_bucket[doc.split("-")[0]].add(doc)
-    assert all(len(seen) <= capacity for seen in seen_by_bucket.values())
+    head_size = 8
+
+    def head_only(prefix: str):
+        for i in range(1_000_000):
+            assert i < head_size, "BucketPool streamed past the head"
+            yield f"{prefix}-doc{i}"
+
+    pool = BucketPool(Side.LHS, {f"b{b}": head_only(f"b{b}") for b in range(3)}, head_size=head_size)
+    trial = pool.sample_trial(np.random.default_rng(0))
+    assert len(trial.documents) == 5  # still produces valid trials from the head
 
 
 def test_bucketpool_rejects_no_in_group_bucket():
     """Every bucket smaller than the 4-doc in-group is unusable."""
     with pytest.raises(ValueError, match="in-group"):
-        BucketPool(Side.LHS, {"a": ["1", "2"], "b": ["3", "4", "5"]}, np.random.default_rng(0))
+        BucketPool(Side.LHS, {"a": ["1", "2"], "b": ["3", "4", "5"]})
 
 
 def test_bucketpool_rejects_single_nonempty_bucket():
     """An intruder needs a second non-empty bucket to come from."""
     with pytest.raises(ValueError, match=">= 2 non-empty"):
-        BucketPool(Side.LHS, {"a": ["1", "2", "3", "4", "5"], "b": []}, np.random.default_rng(0))
+        BucketPool(Side.LHS, {"a": ["1", "2", "3", "4", "5"], "b": []})
 
 
-def test_bucketpool_rejects_reservoir_smaller_than_in_group():
-    """A reservoir too small to hold an in-group is a misconfiguration, not a silent empty run."""
+def test_bucketpool_rejects_head_smaller_than_in_group():
+    """A head too small to hold an in-group is a misconfiguration, not a silent empty run."""
     with pytest.raises(ValueError, match="too small to form an in-group"):
-        BucketPool(Side.LHS, _labeled_buckets("X"), np.random.default_rng(0), reservoir_size=2)
+        BucketPool(Side.LHS, _labeled_buckets("X"), head_size=2)
 
 
 # ---------------------------------------------------------------------------
