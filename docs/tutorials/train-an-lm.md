@@ -153,10 +153,12 @@ The `default_train` function creates a training pipeline that:
 ## Launching the Training Job
 
 Because the script wraps its entrypoint in `launch_executor`, it is
-*self-running*: run it directly from a dev box and pass `--cluster`. The driver
-runs on your machine and spawns the TPU/GPU sub-tasks via Fray. Checkpoints and
-outputs land in the regional bucket inferred from your environment — no
-`MARIN_PREFIX` to set:
+*self-running*: run it directly from a dev box and pass `--cluster`. Submitting
+ships the executor to a lightweight CPU **coordinator** job on the cluster, which
+drives the DAG and spawns the TPU/GPU sub-tasks via Fray; your terminal only
+streams logs, so the run survives a disconnect (reconnect with `iris job logs -f
+<id>`, or pass `--detach` to return right after submit). Checkpoints and outputs
+land in the regional bucket inferred on the worker — no `MARIN_PREFIX` to set:
 
 ```bash
 WANDB_API_KEY="$WANDB_API_KEY" \
