@@ -30,6 +30,7 @@ fray_test = [
     "pytest-timeout",
     "pytest>=8.3.2",
 ]
+# Exact TPU pins mirror Marin core's TPU/vLLM extras and Levanter's TPU extra.
 fray_tpu_test = ["jax==0.10.0", "jaxlib==0.10.0", "libtpu==0.0.40", { include-group = "fray_test" }]
 
 dev = [{ include-group = "fray_test" }]

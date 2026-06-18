@@ -30,6 +30,9 @@ dependencies = [
     "jax>=0.9.2,<0.11",
     "jaxopt>=0.8.3",
     "marin-levanter[serve]",
+    # Keep Marin's direct tokenizer/chat-template uses explicit while allowing
+    # the workspace to validate the Transformers 5 / HF Hub 1.x stack.
+    "transformers>=4.57.1,<6.0",
     "lxml[html_clean]",
     "lxml-html-clean>=0.4.4",
     "markdownify>=0.14.1",
@@ -148,6 +151,8 @@ gpu = [
   "torch==2.11.0",
   "torchvision==0.26.0",
 ]
+# TPU stack pins are owned with the vLLM TPU extra below and must stay aligned
+# with Levanter's TPU extra and Fray's `fray_tpu_test` group.
 tpu = [
   "jax==0.10.0",
   "jaxlib==0.10.0",
@@ -202,6 +207,8 @@ vizier = [
     "google-vizier[jax]",
 ]
 
+# TPU-vLLM runtime stack. Keep these exact JAX/libtpu/Torch pins aligned with
+# the fork sources in the workspace root and root `extra-build-dependencies.vllm`.
 vllm = [
     "jax==0.10.0",
     "jaxlib==0.10.0",
