@@ -217,6 +217,8 @@ select = [
     # two rules are mirrored there via extend-select so they apply repo-wide.
     "TID252", "ICN001",
 ]
+# Keep UP046/UP047 ignored for now: migrating generics to PEP 695 syntax is
+# out of scope for the Python 3.12 floor bump.
 ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 
 [tool.ruff.lint.per-file-ignores]

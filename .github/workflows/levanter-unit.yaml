@@ -44,9 +44,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install uv and Python
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
-          version: "0.7.20"
           python-version: "3.12"
           enable-cache: true
           working-directory: lib/levanter
@@ -75,9 +74,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install uv and Python
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
-          version: "0.7.20"
           python-version: "3.12"
           enable-cache: true
           working-directory: lib/levanter

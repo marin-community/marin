@@ -785,7 +785,15 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
 
     _ensure_iris_protos()
 
-    args = ["uvx", "pyrefly@1.0.0", "check", "--baseline", ".pyrefly-baseline.json"]
+    args = [
+        "uvx",
+        "--from",
+        "pyrefly>=1.0.0,<1.1.0",
+        "pyrefly",
+        "check",
+        "--baseline",
+        ".pyrefly-baseline.json",
+    ]
     result = run_cmd(args)
     output = (result.stdout + result.stderr).strip()
     return _record("Pyrefly type checker", result.returncode, output)
