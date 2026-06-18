@@ -32,6 +32,14 @@ misses iris **queue/pending** time before a run starts — scarce-slice scheduli
 latency (e.g. v5p-64) is handled separately by the ≥1 h relocate rule. Re-measure
 periodically; never assume bigger = faster.
 
+**Slice/band attribution caveat:** priority **band** and **TPU type** are *start-time*
+scheduling choices, not fixed run properties — a run can be downgraded/upgraded between
+bands and **moved across TPU types** during its life (preemptions, resubmits). So the
+wandb `tpu=` tag is only the run's *initial* slice (and we no longer tag `band` at all).
+Per-slice numbers here are therefore approximate when a run migrated mid-life; for a
+clean per-slice read, use runs that stayed on one slice for their whole measured window
+(e.g. a fresh probe), or attribute by actual worker placement, not the start-time tag.
+
 ### How to compute it (do it exactly this way every time)
 
 Every input is a **single W&B summary scalar per run** — no history scan, no

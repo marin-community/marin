@@ -464,8 +464,13 @@ def build_trial(config: Config, res: ResourceConfig) -> tuple[str, object]:
         f"tokens={fmt_count(tokens)}",
         f"tokens_exact={tokens}",
         f"steps={num_train_steps}",
+        # NOTE: priority band and TPU type are START-TIME scheduling choices only.
+        # A run may be downgraded/upgraded between bands and moved across TPU types
+        # over its life (preemptions, resubmits), so neither is a stable property of
+        # the run -- do NOT tag `band` (it would misrepresent where the run actually
+        # ran). `tpu` below is the *initial* slice only; treat it as a hint, not ground
+        # truth, for any per-slice throughput attribution.
         f"tpu={res.device.variant}",
-        f"band={band()}",
         f"grad_accum={plan.grad_accum_steps}",
     ]
     job_name, raw_config = prepare_lm_train(
