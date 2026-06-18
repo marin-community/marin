@@ -48,7 +48,7 @@ import cloudpickle
 import msgspec
 import zstandard as zstd
 from iris.env_resources import TaskResources
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import is_remote_path, open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
 from zephyr.shard_keys import composite_sort_key, deterministic_hash
@@ -534,8 +534,8 @@ class ScatterWriter:
         self._first_item_bytes: float = 0.0  # logged at close for comparison
 
         ensure_parent_dir(data_path)
-        fs, fs_path = url_to_fs(data_path)
-        self._out = fs.open(fs_path, "wb")
+        self._fs, self._fs_path = url_to_fs(data_path)
+        self._out = self._fs.open(self._fs_path, "wb")
 
     def _flush(self, target: int, buf: list) -> None:
         if self._combiner_fn is not None:
@@ -645,11 +645,39 @@ class ScatterWriter:
 
         return ListShard(refs=[MemChunk(items=[self._data_path])])
 
+    def abort(self) -> None:
+        """Abort the in-flight upload without committing it.
+
+        fsspec only finalises an object-store multipart/resumable upload on a
+        clean ``close()``; on a failed or reassigned shard the upload is
+        otherwise left open and R2/S3 keeps billing the uploaded parts (#6488).
+        ``discard()`` aborts it (``s3fs.S3File.discard`` -> ``abort_multipart_upload``).
+        Local files write in place, so we close the handle and remove the
+        partial file.
+        """
+        if self._out.closed:
+            return
+        if is_remote_path(self._data_path):
+            self._out.discard()
+            return
+        self._out.close()
+        if self._fs.exists(self._fs_path):
+            self._fs.rm(self._fs_path)
+
     def __enter__(self) -> ScatterWriter:
         return self
 
-    def __exit__(self, *exc: Any) -> None:
-        self.close()
+    def __exit__(self, exc_type: type[BaseException] | None, *exc: Any) -> None:
+        if exc_type is not None:
+            self.abort()
+            return
+        try:
+            self.close()
+        except BaseException:
+            # A failure while committing (e.g. a dead R2 connection) would
+            # otherwise leave the multipart upload open. Abort, then re-raise.
+            self.abort()
+            raise
 
 
 def _write_scatter(
@@ -679,6 +707,12 @@ def _write_scatter(
         combiner_fn=combiner_fn,
         buffer_limit_bytes=buffer_limit_bytes,
     )
-    for item in items:
-        writer.write(item)
-    return writer.close()
+    try:
+        for item in items:
+            writer.write(item)
+        return writer.close()
+    except BaseException:
+        # The write loop is not a context manager, so abort the in-flight
+        # upload here to avoid orphaning a multipart upload on R2 (#6488).
+        writer.abort()
+        raise
