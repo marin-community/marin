@@ -851,3 +851,23 @@ Earlier gather-first production path (`/dlwh/iris-run-job-20260619-165623`) was 
 The ppermute bridge removes compiled all-to-alls entirely and also eliminates the GEMM custom calls introduced by the A2A bridge. Median timing improves only slightly: restore-only is 1.014x faster and restore-plus-apply is 1.025x faster than data-first A2A.
 - Interpretation: The ppermute bridge confirms that the semantic target is expressible and that the data-axis A2A can be replaced by explicit point-to-point exchange. It is not enough for the production objective: the all-to-all disappears, but XLA GPU still compiles 112 collective permutes plus 150 all-gathers, so runtime barely moves. This points away from another JAX-level bridge tweak and toward either a lower-level fused/custom grouped-to-FSDP permutation or avoiding the grouped-to-FSDP hot boundary entirely.
 - Next action: Do not integrate the data-ppermute bridge into production yet. The next useful experiment should test a genuinely custom grouped-to-FSDP transfer that preserves the packed/grouped representation and avoids both compiled A2A and hundreds of CP/AG calls, or resume the grouped-bank model-facing representation path.
+
+### 2026-06-19 12:55 PDT - packed data-ppermute bridge reintroduces compiled A2A
+- Hypothesis: The un-packed data-ppermute bridge removed compiled all-to-alls but still emitted many all-gathers and collective permutes. Packing all layer groups by expert weight name before the data-ppermute bridge should reduce logical communication to two all-gathers plus two collective permutes, while preserving the no-A2A StableHLO property.
+- Command:
+  - Code change: added `expert_fsdp_grouped_packed_data_ppermute_apply_boundary` to `experiments/grug/moe/muon_update_bench.py`, with focused coverage in `experiments/grug/moe/test_muon_update_bench.py`. Commit `09edd1cf6` pushed to `codex/research-grug-moe-d2560-mfu`.
+  - Validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -q` -> 62 passed; `./infra/pre-commit.py --files experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix` -> OK.
+  - Local forced-CPU lower-only comparison:
+    `XLA_FLAGS=--xla_force_host_platform_device_count=32 uv run python experiments/grug/moe/muon_update_bench.py --layers 26 --ns4d-group-size 4 --ns4d-group-axis replica_dcn,data --hidden-dim 2560 --intermediate-dim 1280 --num-experts 256 --replica-axis 2 --data-axis 2 --expert-axis 8 --model-axis 1 --bench-kinds expert_fsdp_grouped_explicit_data_ppermute_apply_boundary,expert_fsdp_grouped_packed_data_first_ppermute_apply_boundary,expert_fsdp_grouped_packed_data_ppermute_apply_boundary --mode lower --warmup 0 --iters 1 --disable-abstract-mesh --output /tmp/muon_packed_data_ppermute_l26_lower.json`.
+  - CoreWeave run: parent `/dlwh/iris-run-job-20260619-184935`; child `/dlwh/iris-run-job-20260619-184935/grug-train-MUON-BENCH-D2560-L26-R2D2E8-PACKEDDATAPPERM-H1-G4-N4-cw-20260619-184932`.
+  - Output: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D2E8-PACKEDDATAPPERM-H1-G4-N4-cw-20260619-184932-a86e0c/summary.json`.
+- Result:
+
+| boundary | lowered AG/A2A/CP | compiled AG/A2A/CP | compiled GEMMs | median | mean |
+| --- | --- | --- | ---: | ---: | ---: |
+| un-packed data-ppermute apply | 14/0/14 | 150/0/112 | 0 | 0.210736s | 0.210701s |
+| packed data-first ppermute apply | 0/2/2 | 0/159/16 | 1 | 0.428408s | 0.429760s |
+| packed data-ppermute apply | 2/0/2 | 66/144/16 | 0 | 0.366023s | 0.366362s |
+
+- Interpretation: This is a clean negative result. The new row achieves the intended StableHLO shape (`AG/A2A/CP=2/0/2`), but XLA GPU compiled lowering reintroduces 144 all-to-alls and makes it 1.74x slower than the un-packed data-ppermute bridge. Reducing logical collective count and avoiding StableHLO A2A is not enough; the packed reshape/collective pattern still lowers through expensive A2A-like movement.
+- Next action: Treat the current JAX-level `reshard`/`shard_map` bridge space as exhausted for the FSDP-master hot boundary. Pallas/Triton kernels cannot replace cross-device collectives by themselves; a real lower-level bridge would need a custom collective/custom call, or the production path should avoid this hot restore by keeping a grouped expert-bank representation consumable by the model/apply path.
