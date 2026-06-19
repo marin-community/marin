@@ -17,9 +17,9 @@ Requires a PyPI API token with account-wide scope (project-scoped tokens can't
 create new projects). Create one at https://pypi.org/manage/account/token/
 
 Usage:
-    UV_PUBLISH_TOKEN=pypi-xxxx python scripts/infra/register_pypi_packages.py
-    python scripts/infra/register_pypi_packages.py --dry-run    # build only
-    python scripts/infra/register_pypi_packages.py marin-kitoken  # single package
+    UV_PUBLISH_TOKEN=pypi-xxxx python scripts/register_pypi_packages.py
+    python scripts/register_pypi_packages.py --dry-run    # build only
+    python scripts/register_pypi_packages.py marin-kitoken  # single package
 """
 
 from __future__ import annotations
