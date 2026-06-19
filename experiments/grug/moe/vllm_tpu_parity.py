@@ -52,7 +52,7 @@ import levanter.grug.grug_moe as levanter_grug_moe
 import levanter.main.export_lm_to_hf as export_lm_to_hf
 import numpy as np
 from flax import nnx
-from jax.sharding import AxisType, Mesh
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from levanter.checkpoint import save_checkpoint
 from levanter.grug.grug_moe import moe_mlp
 from levanter.utils.jax_utils import is_inexact_arrayish
@@ -276,8 +276,12 @@ def _forward_debug_payload(
     }
 
 
-def _copy_param(param: nnx.Param, value: Any) -> None:
-    param.value = jnp.asarray(value, dtype=param.value.dtype)
+def _copy_param(param: nnx.Param, value: Any, *, mesh: Mesh | None = None) -> None:
+    if mesh is None:
+        param.value = jnp.asarray(value, dtype=param.value.dtype)
+        return
+    copied = jnp.asarray(jax.device_get(value), dtype=param.value.dtype)
+    param.value = jax.device_put(copied, NamedSharding(mesh, PartitionSpec()))
 
 
 def _tiny_cfg() -> GrugModelConfig:
@@ -1045,37 +1049,37 @@ def check_moe_component(tpu_grugmoe) -> None:
     print("component: native GrugMoeMLP matches Levanter moe_mlp")
 
 
-def _copy_transformer(tpu_model: Any, lev_model: Transformer) -> None:
+def _copy_transformer(tpu_model: Any, lev_model: Transformer, *, mesh: Mesh | None = None) -> None:
     model = tpu_model.model
-    _copy_param(model.token_embed, lev_model.token_embed)
-    _copy_param(model.embed_norm.weight, lev_model.embed_norm.weight)
-    _copy_param(model.embed_gated_norm.w_down, lev_model.embed_gated_norm.w_down)
-    _copy_param(model.embed_gated_norm.w_up, lev_model.embed_gated_norm.w_up)
-    _copy_param(model.final_norm.weight, lev_model.final_norm.weight)
-    _copy_param(model.final_gated_norm.w_down, lev_model.final_gated_norm.w_down)
-    _copy_param(model.final_gated_norm.w_up, lev_model.final_gated_norm.w_up)
-    _copy_param(tpu_model.lm_head.weight, lev_model.output_proj)
+    _copy_param(model.token_embed, lev_model.token_embed, mesh=mesh)
+    _copy_param(model.embed_norm.weight, lev_model.embed_norm.weight, mesh=mesh)
+    _copy_param(model.embed_gated_norm.w_down, lev_model.embed_gated_norm.w_down, mesh=mesh)
+    _copy_param(model.embed_gated_norm.w_up, lev_model.embed_gated_norm.w_up, mesh=mesh)
+    _copy_param(model.final_norm.weight, lev_model.final_norm.weight, mesh=mesh)
+    _copy_param(model.final_gated_norm.w_down, lev_model.final_gated_norm.w_down, mesh=mesh)
+    _copy_param(model.final_gated_norm.w_up, lev_model.final_gated_norm.w_up, mesh=mesh)
+    _copy_param(tpu_model.lm_head.weight, lev_model.output_proj, mesh=mesh)
 
     for tpu_block, lev_block in zip(model.layers, lev_model.blocks, strict=True):
-        _copy_param(tpu_block.rms_attn.weight, lev_block.rms_attn.weight)
-        _copy_param(tpu_block.attn_gated_norm.w_down, lev_block.attn_gated_norm.w_down)
-        _copy_param(tpu_block.attn_gated_norm.w_up, lev_block.attn_gated_norm.w_up)
-        _copy_param(tpu_block.attn.w_q, lev_block.attn.w_q)
-        _copy_param(tpu_block.attn.w_k, lev_block.attn.w_k)
-        _copy_param(tpu_block.attn.w_v, lev_block.attn.w_v)
-        _copy_param(tpu_block.attn.w_o, lev_block.attn.w_o)
-        _copy_param(tpu_block.attn.attn_gate, lev_block.attn.attn_gate)
-        _copy_param(tpu_block.rms_mlp.weight, lev_block.rms_mlp.weight)
-        _copy_param(tpu_block.mlp_gated_norm.w_down, lev_block.mlp_gated_norm.w_down)
-        _copy_param(tpu_block.mlp_gated_norm.w_up, lev_block.mlp_gated_norm.w_up)
-        _copy_param(tpu_block.mlp.router, lev_block.mlp.router)
-        _copy_param(tpu_block.mlp.router_bias, lev_block.mlp.router_bias)
-        _copy_param(tpu_block.mlp.w_gate_up, lev_block.mlp.expert_mlp.w_gate_up)
-        _copy_param(tpu_block.mlp.w_down, lev_block.mlp.expert_mlp.w_down)
+        _copy_param(tpu_block.rms_attn.weight, lev_block.rms_attn.weight, mesh=mesh)
+        _copy_param(tpu_block.attn_gated_norm.w_down, lev_block.attn_gated_norm.w_down, mesh=mesh)
+        _copy_param(tpu_block.attn_gated_norm.w_up, lev_block.attn_gated_norm.w_up, mesh=mesh)
+        _copy_param(tpu_block.attn.w_q, lev_block.attn.w_q, mesh=mesh)
+        _copy_param(tpu_block.attn.w_k, lev_block.attn.w_k, mesh=mesh)
+        _copy_param(tpu_block.attn.w_v, lev_block.attn.w_v, mesh=mesh)
+        _copy_param(tpu_block.attn.w_o, lev_block.attn.w_o, mesh=mesh)
+        _copy_param(tpu_block.attn.attn_gate, lev_block.attn.attn_gate, mesh=mesh)
+        _copy_param(tpu_block.rms_mlp.weight, lev_block.rms_mlp.weight, mesh=mesh)
+        _copy_param(tpu_block.mlp_gated_norm.w_down, lev_block.mlp_gated_norm.w_down, mesh=mesh)
+        _copy_param(tpu_block.mlp_gated_norm.w_up, lev_block.mlp_gated_norm.w_up, mesh=mesh)
+        _copy_param(tpu_block.mlp.router, lev_block.mlp.router, mesh=mesh)
+        _copy_param(tpu_block.mlp.router_bias, lev_block.mlp.router_bias, mesh=mesh)
+        _copy_param(tpu_block.mlp.w_gate_up, lev_block.mlp.expert_mlp.w_gate_up, mesh=mesh)
+        _copy_param(tpu_block.mlp.w_down, lev_block.mlp.expert_mlp.w_down, mesh=mesh)
         if tpu_block.shared is not None and lev_block.shared is not None:
-            _copy_param(tpu_block.shared.w_gate, lev_block.shared.w_gate)
-            _copy_param(tpu_block.shared.w_up, lev_block.shared.w_up)
-            _copy_param(tpu_block.shared.w_down, lev_block.shared.w_down)
+            _copy_param(tpu_block.shared.w_gate, lev_block.shared.w_gate, mesh=mesh)
+            _copy_param(tpu_block.shared.w_up, lev_block.shared.w_up, mesh=mesh)
+            _copy_param(tpu_block.shared.w_down, lev_block.shared.w_down, mesh=mesh)
 
 
 def _levanter_export_mesh() -> Mesh:
@@ -1348,19 +1352,22 @@ def check_production_attention_against_dense(tpu_grugmoe) -> None:
     with _use_runtime_grug_mesh(for_init=True):
         lev_model = Transformer.init(cfg, key=key)
 
-    with _patch_tpu_single_rank(tpu_grugmoe), jax.set_mesh(_tpu_mesh()):
+    tpu_mesh = _tpu_mesh()
+    with _patch_tpu_single_rank(tpu_grugmoe), jax.set_mesh(tpu_mesh):
         dense_model = tpu_grugmoe.GrugMoeForCausalLM(
             _vllm_config(cfg, attention_mode=_DENSE_ATTENTION_MODE),
             jax.random.PRNGKey(12),
-            _tpu_mesh(),
+            tpu_mesh,
         )
         production_model = tpu_grugmoe.GrugMoeForCausalLM(
             _vllm_config(cfg, attention_mode=_PRODUCTION_ATTENTION_MODE),
             jax.random.PRNGKey(13),
-            _tpu_mesh(),
+            tpu_mesh,
         )
-    _copy_transformer(dense_model, lev_model)
-    _copy_transformer(production_model, lev_model)
+    # The Levanter reference initializes on its runtime mesh; copy onto the
+    # tpu-inference mesh so shared-attention outputs and projected values agree.
+    _copy_transformer(dense_model, lev_model, mesh=tpu_mesh)
+    _copy_transformer(production_model, lev_model, mesh=tpu_mesh)
 
     dense_hidden, dense_logits, dense_expert_ids = _native_forward(
         dense_model,
