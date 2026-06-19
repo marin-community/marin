@@ -773,3 +773,21 @@ The data-first variant is about 1.38x faster than the gather-first explicit boun
 Restore-only is only about 4.4 ms faster by median runtime. Both paths compile to the same high collective counts and GEMM custom-call count.
 - Interpretation: This isolates the problem: the hot cost is the grouped-to-FSDP communication lowering, not `optax.apply_updates` or the Python tree shape of the ordinary apply path. Keeping ordinary `apply_updates` after a data-first restore is not the bottleneck; the bottleneck is that XLA GPU compiles the intended 14 logical data-first AG/A2A pairs into `AG=150`, `A2A=98`.
 - Next action: Stop optimizing the post-restore apply path. The next FSDP-master route needs a custom/lower-level grouped-to-FSDP permutation or a different representation that avoids this restore boundary. The grouped-bank path remains the only path so far that is both fast and collective-clean at the R2/D2/E8 L26/T1024 gate.
+
+### 2026-06-19 11:55 PDT - ppermute replica-duplication boundary is slower
+- Hypothesis: For the R2/D2 grouped-to-FSDP restore, replacing the `replica_dcn` all-gather with an explicit `lax.ppermute` should avoid XLA GPU's all-gather decomposition while keeping the data-axis all-to-all. The logical target is still `P(('replica_dcn', 'data'), 'expert', None, None) -> P(None, 'expert', 'data', None)`.
+- Command:
+  - Code change: added `expert_fsdp_grouped_explicit_data_first_ppermute_restore_boundary` and `expert_fsdp_grouped_explicit_data_first_ppermute_apply_boundary` to `experiments/grug/moe/muon_update_bench.py`, plus focused tests in `experiments/grug/moe/test_muon_update_bench.py`. Commit `ef80b16b5` pushed to `codex/research-grug-moe-d2560-mfu`.
+  - Validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -q` -> 58 passed; `./infra/pre-commit.py --changed-files --fix` -> OK.
+  - CoreWeave run: parent `/dlwh/iris-run-job-20260619-180831`; child `/dlwh/iris-run-job-20260619-180831/grug-train-MUON-BENCH-D2560-L26-R2D2E8-PPERMBRIDGE-H1-G4-N4-cw-20260619-180828`.
+  - Output: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D2E8-PPERMBRIDGE-H1-G4-N4-cw-20260619-180828-db472d/summary.json`.
+- Result:
+
+| boundary | lowered AG/A2A/CP | compiled AG/A2A/CP | compiled GEMMs | median | mean |
+| --- | --- | --- | ---: | ---: | ---: |
+| data-first restore-only | 14/14/0 | 150/98/0 | 14 | 0.213987s | 0.213739s |
+| ppermute restore-only | 0/14/14 | 0/105/112 | 14 | 0.276760s | 0.278011s |
+| ppermute restore-plus-apply | 0/14/14 | 0/105/112 | 14 | 0.278392s | 0.280574s |
+
+- Interpretation: The ppermute boundary does exactly what it was supposed to at the StableHLO level: all-gathers disappear and become 14 collective-permutes plus the same 14 logical data all-to-alls. XLA GPU still decomposes the data all-to-all and ppermute path heavily (`A2A=105`, `CP=112`), and the runtime is about 1.29x slower than the data-first all-gather/all-to-all restore. This rules out the R2 ppermute bridge as a production rescue for the FSDP-master restore boundary.
+- Next action: Stop pursuing JAX-level all-gather replacement for this boundary unless we can prove a lower-level communication primitive avoids the compiled A2A/CP explosion. The strongest current evidence still points to either a custom grouped-to-FSDP permutation kernel/collective or a model-facing representation that avoids restoring grouped Muon outputs to FSDP on the hot path.
