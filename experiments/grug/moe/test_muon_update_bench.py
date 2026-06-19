@@ -567,6 +567,7 @@ def test_grouped_expert_bank_consumer_preserves_grouped_bank_without_collectives
         expert_axis=2,
         model_axis=1,
         learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
     )
     mesh = AbstractMesh(
         axis_sizes=(2, 2, 2, 1),
@@ -586,14 +587,27 @@ def test_grouped_expert_bank_consumer_preserves_grouped_bank_without_collectives
         lowered = update_step.trace(params, activations).lower(lowering_platforms=(platform,))
 
     assert_ns4d_sharding(result, expected_spec, "grouped expert bank consumer result")
-    assert result["blocks"][0]["x"].shape == (4, 8, 1, 16)
+    assert result["blocks"][0]["x"].shape == (4, 8, 3, 16)
     hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
     assert hlo_summary.dot_general == 2
     assert hlo_summary.all_gather == 0
     assert hlo_summary.all_reduce == 0
     assert hlo_summary.reduce_scatter == 0
     assert hlo_summary.all_to_all == 0
-    assert grouped_expert_bank_consumer_flops(config) == 4 * 8 * (2 * 16 * 16 + 2 * 8 * 16)
+    assert grouped_expert_bank_consumer_flops(config) == 4 * 8 * 3 * (2 * 16 * 16 + 2 * 8 * 16)
+
+
+def test_hlo_summary_counts_gpu_custom_calls():
+    hlo = """
+    %custom = "stablehlo.custom_call"(%arg0, %arg1) {
+      call_target_name = "__cublas$gemm"
+    } : (tensor<4x4xbf16>, tensor<4x4xbf16>) -> tensor<4x4xbf16>
+    """
+
+    summary = summarize_hlo(hlo)
+
+    assert summary.custom_call == 1
+    assert summary.gpu_gemm_custom_call == 1
 
 
 def test_grouped_expert_layer_slice_boundary_times_compile_only():

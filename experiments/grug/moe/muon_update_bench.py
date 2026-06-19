@@ -78,6 +78,8 @@ NOMINAL_H100_BF16_DENSE_TFLOPS = 989.0
 DOT_GENERAL_RE = re.compile(r"stablehlo\.dot_general")
 BATCHED_STACK_DOT_RE = re.compile(r"batching_dims = \[0\] x \[0\]")
 TWO_BATCH_AXIS_DOT_RE = re.compile(r"batching_dims = \[0, 1\] x \[0, 1\]")
+CUSTOM_CALL_RE = re.compile(r"\bcustom-call\b|stablehlo\.custom_call|mhlo\.custom_call|custom_call")
+GPU_GEMM_CUSTOM_CALL_RE = re.compile(r"(?:cublas\$gemm|gemm|cublas|cutlass|triton)", re.IGNORECASE)
 ALL_GATHER_RE = re.compile(r"\ball-gather\b|stablehlo\.all_gather|mhlo\.all_gather")
 ALL_REDUCE_RE = re.compile(r"\ball-reduce\b|stablehlo\.all_reduce|mhlo\.all_reduce")
 REDUCE_SCATTER_RE = re.compile(r"\breduce-scatter\b|stablehlo\.reduce_scatter|mhlo\.reduce_scatter")
@@ -251,7 +253,7 @@ GROUPED_EXPERT_PATHS = (
     "blocks[*].mlp.expert_mlp.w_gate_up",
     "blocks[*].mlp.expert_mlp.w_down",
 )
-GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT = 1
+DEFAULT_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT = 1
 FULL_PRODUCTION_MUONH_PATHS = (
     "ordinary_blocks[*].attn.w_q",
     "ordinary_blocks[*].attn.w_k",
@@ -303,6 +305,7 @@ class BenchConfig:
     model_axis: int
     learning_rate: float
     ns_compute_dtype: str = "input"
+    grouped_expert_consumer_tokens_per_expert: int = DEFAULT_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT
 
 
 @dataclass(frozen=True)
@@ -338,6 +341,8 @@ class HloSummary:
     dot_general: int
     batched_stack_dot_general: int
     two_batch_axis_dot_general: int
+    custom_call: int
+    gpu_gemm_custom_call: int
     all_gather: int
     all_reduce: int
     reduce_scatter: int
@@ -813,7 +818,7 @@ def synthetic_grouped_expert_consumer_input_specs(mesh: Mesh, config: BenchConfi
                     (
                         group_size,
                         config.num_experts,
-                        GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT,
+                        config.grouped_expert_consumer_tokens_per_expert,
                         config.hidden_dim,
                     ),
                     dtype,
@@ -3238,6 +3243,8 @@ def summarize_hlo(hlo_text: str) -> HloSummary:
         dot_general=len(DOT_GENERAL_RE.findall(hlo_text)),
         batched_stack_dot_general=len(BATCHED_STACK_DOT_RE.findall(hlo_text)),
         two_batch_axis_dot_general=len(TWO_BATCH_AXIS_DOT_RE.findall(hlo_text)),
+        custom_call=len(CUSTOM_CALL_RE.findall(hlo_text)),
+        gpu_gemm_custom_call=len(GPU_GEMM_CUSTOM_CALL_RE.findall(hlo_text)),
         all_gather=len(ALL_GATHER_RE.findall(hlo_text)),
         all_reduce=len(ALL_REDUCE_RE.findall(hlo_text)),
         reduce_scatter=len(REDUCE_SCATTER_RE.findall(hlo_text)),
@@ -3308,7 +3315,7 @@ def ns_dot_flops_for_matrix_shape(shape: tuple[int, int], steps: int) -> int:
 
 
 def grouped_expert_bank_consumer_flops(config: BenchConfig) -> int:
-    tokens_per_expert = GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT
+    tokens_per_expert = config.grouped_expert_consumer_tokens_per_expert
     # Two dense expert MLP projections over grouped expert banks:
     # x @ w_gate_up plus hidden @ w_down. Elementwise gate work is excluded.
     per_layer = (
@@ -4494,6 +4501,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-grouped-stack-size", type=int, default=DEFAULT_MAX_GROUPED_STACK_SIZE)
     parser.add_argument("--sweep-max-grouped-stack-sizes", help="Comma-separated stack caps, e.g. 256,512,832.")
     parser.add_argument(
+        "--grouped-expert-consumer-tokens-per-expert",
+        type=int,
+        default=DEFAULT_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT,
+        help=(
+            "Synthetic routed-token load for expert_grouped_bank_consumer. "
+            "This controls the [group, expert, token, hidden] activation shape."
+        ),
+    )
+    parser.add_argument(
         "--bench-kinds",
         default=MUONH_UPDATE_BENCH,
         help=f"Comma-separated benchmark kinds. Valid: {','.join(BENCH_KINDS)}.",
@@ -4543,6 +4559,8 @@ def parse_str_csv(raw: str) -> tuple[str, ...]:
 
 def config_from_args(args: argparse.Namespace) -> BenchConfig:
     input_dtype = dtype_from_name(args.dtype)
+    if args.grouped_expert_consumer_tokens_per_expert < 1:
+        raise ValueError("--grouped-expert-consumer-tokens-per-expert must be >= 1.")
     return BenchConfig(
         layers=args.layers,
         ns4d_group_size=args.ns4d_group_size,
@@ -4560,6 +4578,7 @@ def config_from_args(args: argparse.Namespace) -> BenchConfig:
         model_axis=args.model_axis,
         learning_rate=args.learning_rate,
         ns_compute_dtype=ns_compute_dtype_name(args.ns_compute_dtype, input_dtype),
+        grouped_expert_consumer_tokens_per_expert=args.grouped_expert_consumer_tokens_per_expert,
     )
 
 
@@ -4814,6 +4833,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "bench_kind": bench_kind,
         "backend_steps": config["backend_steps"],
         "max_grouped_stack_size": config["max_grouped_stack_size"],
+        "grouped_expert_consumer_tokens_per_expert": config["grouped_expert_consumer_tokens_per_expert"],
         "ns4d_group_size": result["metadata"]["ns4d_group_size"],
         "ns4d_padded_group_size": result["metadata"]["ns4d_padded_group_size"],
         "ns4d_input_sharding_spec": result["metadata"]["ns4d_input_sharding_spec"],
@@ -4852,6 +4872,8 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                 "dot_general": result["lowered"]["hlo"]["dot_general"],
                 "batched_stack_dot_general": result["lowered"]["hlo"]["batched_stack_dot_general"],
                 "two_batch_axis_dot_general": result["lowered"]["hlo"]["two_batch_axis_dot_general"],
+                "custom_call": result["lowered"]["hlo"]["custom_call"],
+                "gpu_gemm_custom_call": result["lowered"]["hlo"]["gpu_gemm_custom_call"],
                 "all_gather": result["lowered"]["hlo"]["all_gather"],
                 "all_reduce": result["lowered"]["hlo"]["all_reduce"],
                 "reduce_scatter": result["lowered"]["hlo"]["reduce_scatter"],
@@ -4872,6 +4894,8 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                 "compiled_hlo_two_batch_axis_dot_general": (
                     compiled_hlo["two_batch_axis_dot_general"] if compiled_hlo else None
                 ),
+                "compiled_hlo_custom_call": compiled_hlo["custom_call"] if compiled_hlo else None,
+                "compiled_hlo_gpu_gemm_custom_call": compiled_hlo["gpu_gemm_custom_call"] if compiled_hlo else None,
                 "compiled_hlo_all_gather": compiled_hlo["all_gather"] if compiled_hlo else None,
                 "compiled_hlo_all_reduce": compiled_hlo["all_reduce"] if compiled_hlo else None,
                 "compiled_hlo_reduce_scatter": compiled_hlo["reduce_scatter"] if compiled_hlo else None,
