@@ -256,6 +256,25 @@ def _live_group_axis(mesh, group_axis):
     return None
 
 
+def _live_group_axis_size(mesh, group_axis) -> int:
+    if group_axis is None:
+        return 1
+    if isinstance(group_axis, tuple):
+        return math.prod(_mesh_axis_size(mesh, axis) for axis in group_axis)
+    return _mesh_axis_size(mesh, group_axis)
+
+
+def _live_group_axis_index(mesh, group_axis):
+    if group_axis is None:
+        return None
+    if isinstance(group_axis, tuple):
+        group_index = 0
+        for axis in group_axis:
+            group_index = group_index * _mesh_axis_size(mesh, axis) + lax.axis_index(axis)
+        return group_index
+    return lax.axis_index(group_axis)
+
+
 def _axis_spec_contains(axis_spec, axis_name: str) -> bool:
     if isinstance(axis_spec, tuple):
         return axis_name in axis_spec
@@ -287,6 +306,58 @@ def _pad_grouped_muonh_stack(stacked, padded_size: int):
         return stacked
     pad_width = ((0, padded_size - stacked.shape[0]), (0, 0), (0, 0), (0, 0))
     return jnp.pad(stacked, pad_width)
+
+
+def _enter_grouped_muonh_ns_layout_slice_first_gather(grouped_value, target, sample_param):
+    target_spec = _target_spec(target)
+    param_sharding = _target_named_sharding(sample_param)
+    if (
+        grouped_value.ndim != 4
+        or target_spec is None
+        or target_spec[0] is None
+        or not isinstance(param_sharding, jax.sharding.NamedSharding)
+        or len(param_sharding.spec) != 3
+    ):
+        if target is None:
+            return grouped_value
+        return jax.sharding.reshard(grouped_value, target)
+
+    mesh = param_sharding.mesh
+    group_axis = _live_group_axis(mesh, target_spec[0])
+    data_axis = None
+    for axis_index, axis_spec in enumerate(param_sharding.spec, start=1):
+        if _axis_spec_contains(axis_spec, "data"):
+            data_axis = axis_index
+            break
+
+    data_axis_size = _mesh_axis_size(mesh, "data")
+    if data_axis is not None and grouped_value.shape[data_axis] % data_axis_size != 0:
+        return jax.sharding.reshard(grouped_value, target)
+
+    input_spec = jax.sharding.PartitionSpec(None, *param_sharding.spec)
+
+    def enter_group(local_value):
+        if group_axis is not None:
+            group_axis_size = _live_group_axis_size(mesh, group_axis)
+            group_index = _live_group_axis_index(mesh, group_axis)
+            local_group_size = local_value.shape[0] // group_axis_size
+            local_value = lax.dynamic_slice_in_dim(
+                local_value,
+                group_index * local_group_size,
+                local_group_size,
+                axis=0,
+            )
+        if data_axis is not None and data_axis_size > 1:
+            local_value = lax.all_gather(local_value, axis_name="data", axis=data_axis, tiled=True)
+        return local_value
+
+    return shard_map(
+        enter_group,
+        mesh=mesh,
+        in_specs=input_spec,
+        out_specs=target_spec,
+        check_vma=False,
+    )(grouped_value)
 
 
 def _restore_grouped_muonh_for_split(grouped_update, target, valid_size: int):
@@ -513,8 +584,16 @@ def _grouped_expert_muonh_updates(
             )
             if target is not None:
                 with jax.named_scope("grouped_muonh/reshard_grouped_stack"):
-                    stacked_updates = jax.sharding.reshard(stacked_updates, target)
-                    stacked_params = jax.sharding.reshard(stacked_params, target)
+                    stacked_updates = _enter_grouped_muonh_ns_layout_slice_first_gather(
+                        stacked_updates,
+                        target,
+                        entry_chunk[0][2],
+                    )
+                    stacked_params = _enter_grouped_muonh_ns_layout_slice_first_gather(
+                        stacked_params,
+                        target,
+                        entry_chunk[0][2],
+                    )
 
             with jax.named_scope("grouped_muonh/newton_schulz"):
                 stacked_updates, original_dtype = _cast_for_ns_compute(stacked_updates, ns_compute_dtype)

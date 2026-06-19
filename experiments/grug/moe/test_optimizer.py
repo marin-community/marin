@@ -265,7 +265,7 @@ def test_grouped_expert_muonh_optimizer_returns_fsdp_updates_before_apply():
     assert hlo.count("stablehlo.all_reduce") == 0
     assert hlo.count("stablehlo.reduce_scatter") == 0
     assert hlo.count("stablehlo.all_to_all") == 0
-    assert hlo.count("stablehlo.all_gather") == 2
+    assert hlo.count("stablehlo.all_gather") == 6
 
 
 def test_expert_momentum_sharding_uses_replica_dcn_on_expert_stack_axis():
