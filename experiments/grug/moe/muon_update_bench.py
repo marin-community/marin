@@ -4840,6 +4840,12 @@ def maybe_write_text(path: Path | None, text: str) -> None:
     path.write_text(text)
 
 
+def summarize_compiled_hlo(compiled, output: Path | None) -> HloSummary:
+    hlo_text = compiled.as_text()
+    maybe_write_text(output, hlo_text)
+    return summarize_hlo(hlo_text)
+
+
 def is_tree_update_bench(bench_kind: str) -> bool:
     return bench_kind in (MUONH_UPDATE_BENCH, MUON_DIRECTION_BENCH, HYPERBALL_ONLY_BENCH)
 
@@ -5841,6 +5847,7 @@ def time_tree_update(
     warmup: int,
     iters: int,
     compile_only: bool,
+    compiled_hlo_output: Path | None,
     abstract_mesh_enabled: bool,
 ) -> TimingSummary:
     shardings = synthetic_shardings(mesh, config)
@@ -5877,7 +5884,7 @@ def time_tree_update(
         else:
             raise ValueError(f"Unsupported tree update benchmark kind: {bench_kind!r}")
         compile_seconds = time.perf_counter() - compile_start
-        compiled_hlo = summarize_hlo(compiled.as_text())
+        compiled_hlo = summarize_compiled_hlo(compiled, compiled_hlo_output)
         if compile_only:
             return TimingSummary(compile_seconds, compiled_hlo, [], None, None, None, None)
 
@@ -5930,6 +5937,7 @@ def time_ns4d(
     warmup: int,
     iters: int,
     compile_only: bool,
+    compiled_hlo_output: Path | None,
     abstract_mesh_enabled: bool,
     allow_boundary_collectives: bool,
 ) -> TimingSummary:
@@ -6303,7 +6311,7 @@ def time_ns4d(
         compile_start = time.perf_counter()
         compiled = update_step.lower(*lower_args).compile()
         compile_seconds = time.perf_counter() - compile_start
-        compiled_hlo = summarize_hlo(compiled.as_text())
+        compiled_hlo = summarize_compiled_hlo(compiled, compiled_hlo_output)
         if (
             bench_kind in GROUPED_APPLY_BOUNDARY_BENCHES
             and not is_expert_fsdp_grouped_bench(bench_kind)
@@ -6621,6 +6629,7 @@ def time_ordinary_2d_decomposition(
     warmup: int,
     iters: int,
     compile_only: bool,
+    compiled_hlo_output: Path | None,
     abstract_mesh_enabled: bool,
 ) -> TimingSummary:
     with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
@@ -6694,7 +6703,7 @@ def time_ordinary_2d_decomposition(
         compile_start = time.perf_counter()
         compiled = update_step.lower(*lower_args).compile()
         compile_seconds = time.perf_counter() - compile_start
-        compiled_hlo = summarize_hlo(compiled.as_text())
+        compiled_hlo = summarize_compiled_hlo(compiled, compiled_hlo_output)
         if compile_only:
             return TimingSummary(compile_seconds, compiled_hlo, [], None, None, None, None)
 
@@ -6836,6 +6845,11 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--hlo-output", type=Path)
+    parser.add_argument(
+        "--compiled-hlo-output",
+        type=Path,
+        help="Write compiled XLA HLO text from timing runs. Uses per-label filenames for multi-config sweeps.",
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -7102,6 +7116,7 @@ def run_config(
         result["lowered"] = lower_payload
 
     if args.mode in ("run", "both"):
+        compiled_hlo_path = output_path_for_config(args.compiled_hlo_output, label, total_configs)
         if is_tree_update_bench(bench_kind):
             timing = time_tree_update(
                 mesh,
@@ -7110,6 +7125,7 @@ def run_config(
                 args.warmup,
                 args.iters,
                 args.compile_only,
+                compiled_hlo_path,
                 not args.disable_abstract_mesh,
             )
         elif is_ordinary_2d_decomposition_bench(bench_kind):
@@ -7120,6 +7136,7 @@ def run_config(
                 args.warmup,
                 args.iters,
                 args.compile_only,
+                compiled_hlo_path,
                 not args.disable_abstract_mesh,
             )
         else:
@@ -7130,6 +7147,7 @@ def run_config(
                 args.warmup,
                 args.iters,
                 args.compile_only,
+                compiled_hlo_path,
                 not args.disable_abstract_mesh,
                 args.allow_boundary_collectives,
             )
