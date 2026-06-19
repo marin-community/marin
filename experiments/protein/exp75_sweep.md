@@ -438,7 +438,7 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   | wd \ lr | 5e-4 | 7e-4 | 1e-3 |
   |---|---|---|---|
   | **0.05** | 2.962 | 2.949 | |
-  | **0.1**  | | | 2.942 |
+  | **0.1**  | 2.958 | | 2.942 |
   | **0.2**  | | **2.938** | |
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ — first 3 cells in
