@@ -222,6 +222,44 @@ def test_grug_scale_with_muon_grouped_4d_matches_vmap_replicated():
     assert jnp.array_equal(grouped_updates["vector"], updates["vector"])
 
 
+def test_grug_scale_with_muon_rejects_unknown_ns_compute_dtype():
+    with pytest.raises(ValueError, match="ns_compute_dtype"):
+        _grug_scale_with_muon(ns_compute_dtype="int8")
+
+
+def test_grug_scale_with_muon_can_compute_ns_in_bf16_for_fp32_updates():
+    updates = {
+        "dense": jnp.arange(12, dtype=jnp.float32).reshape(3, 4) / 31 + 0.5,
+        "layer0": {"w_gate_up": jnp.arange(12, dtype=jnp.float32).reshape(1, 3, 4) / 17 + 0.1},
+        "layer1": {"w_gate_up": jnp.arange(12, dtype=jnp.float32).reshape(1, 3, 4) / 19 + 0.2},
+    }
+    bf16_transform = _grug_scale_with_muon(
+        momentum=0.0,
+        nesterov=False,
+        steps=2,
+        use_kimi_scaling=False,
+        orthogonalization_layout=STACK_BATCH_4D_SHARDED,
+        ns_compute_dtype="bf16",
+    )
+    fp32_transform = _grug_scale_with_muon(
+        momentum=0.0,
+        nesterov=False,
+        steps=2,
+        use_kimi_scaling=False,
+        orthogonalization_layout=STACK_BATCH_4D_SHARDED,
+        ns_compute_dtype="input",
+    )
+
+    bf16_updates, _ = bf16_transform.update(updates, bf16_transform.init(updates), updates)
+    fp32_updates, _ = fp32_transform.update(updates, fp32_transform.init(updates), updates)
+
+    assert bf16_updates["dense"].dtype == jnp.float32
+    assert bf16_updates["layer0"]["w_gate_up"].dtype == jnp.float32
+    assert bf16_updates["layer1"]["w_gate_up"].dtype == jnp.float32
+    assert not jnp.array_equal(bf16_updates["dense"], fp32_updates["dense"])
+    assert not jnp.array_equal(bf16_updates["layer0"]["w_gate_up"], fp32_updates["layer0"]["w_gate_up"])
+
+
 def test_stack_sharded_target_uses_replica_data_expert_when_divisible():
     mesh = AbstractMesh(
         axis_sizes=(4, 4, 8, 1),

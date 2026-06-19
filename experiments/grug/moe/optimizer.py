@@ -208,6 +208,7 @@ def scale_with_grug_muonh(
     momentum_sharding_fn=None,
     orthogonalization_layout: str = STACK_BATCH_SHARDED,
     max_grouped_stack_size: int = DEFAULT_MAX_GROUPED_STACK_SIZE,
+    ns_compute_dtype: str = "input",
 ) -> optax.GradientTransformation:
     """MuonH transform for raw Grug arrays with matrix-shaped trailing dims."""
     muon_transform = _grug_scale_with_muon(
@@ -220,6 +221,7 @@ def scale_with_grug_muonh(
         momentum_sharding_fn=momentum_sharding_fn,
         orthogonalization_layout=orthogonalization_layout,
         max_grouped_stack_size=max_grouped_stack_size,
+        ns_compute_dtype=ns_compute_dtype,
     )
 
     def init_fn(params):
@@ -348,6 +350,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     expert_3d_optimizer: Expert3DOptimizer = "muonh"
     orthogonalization_layout: str = STACK_BATCH_SHARDED
     max_grouped_stack_size: int = DEFAULT_MAX_GROUPED_STACK_SIZE
+    ns_compute_dtype: str = "input"
 
     def build(self, num_train_steps):
         if self.expert_3d_optimizer not in VALID_EXPERT_3D_OPTIMIZERS:
@@ -378,6 +381,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         momentum_sharding_fn=_expert_momentum_sharding,
                         orthogonalization_layout=self.orthogonalization_layout,
                         max_grouped_stack_size=self.max_grouped_stack_size,
+                        ns_compute_dtype=self.ns_compute_dtype,
                     )
                 )
                 components.append(_match_named_update_sharding())

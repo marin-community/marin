@@ -1242,6 +1242,7 @@ def build_muonh_transform(config: BenchConfig):
         momentum_sharding_fn=_expert_momentum_sharding,
         orthogonalization_layout=config.orthogonalization_layout,
         max_grouped_stack_size=config.max_grouped_stack_size,
+        ns_compute_dtype=config.ns_compute_dtype,
     )
 
 
@@ -1255,6 +1256,7 @@ def build_direction_transform(config: BenchConfig):
         momentum_sharding_fn=_expert_momentum_sharding,
         orthogonalization_layout=config.orthogonalization_layout,
         max_grouped_stack_size=config.max_grouped_stack_size,
+        ns_compute_dtype=config.ns_compute_dtype,
     )
 
 

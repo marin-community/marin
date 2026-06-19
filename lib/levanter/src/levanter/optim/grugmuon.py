@@ -34,6 +34,37 @@ DEFAULT_MAX_GROUPED_STACK_LOCAL_PER_SHARD = 2
 DEFAULT_GROUPED_4D_GROUP_SIZE = 2
 STACK_PADDING_MAX_OVERHEAD = 1.25
 STACK_BATCH_AXIS_CANDIDATES = ("replica_dcn", "data", "expert")
+NS_COMPUTE_DTYPES = ("input", "bf16", "bfloat16", "fp32", "float32", "fp16", "float16")
+
+
+def _ns_compute_dtype_from_name(name: str, input_dtype: jnp.dtype) -> jnp.dtype:
+    normalized = name.lower()
+    if normalized == "input":
+        return jnp.dtype(input_dtype)
+    if normalized in ("bf16", "bfloat16"):
+        return jnp.dtype(jnp.bfloat16)
+    if normalized in ("fp32", "float32"):
+        return jnp.dtype(jnp.float32)
+    if normalized in ("fp16", "float16"):
+        return jnp.dtype(jnp.float16)
+    valid = ", ".join(NS_COMPUTE_DTYPES)
+    raise ValueError(f"ns_compute_dtype={name!r} must be one of {valid}")
+
+
+def _cast_for_ns_compute(x: jax.Array, ns_compute_dtype: str) -> tuple[jax.Array, jnp.dtype]:
+    original_dtype = jnp.dtype(x.dtype)
+    compute_dtype = _ns_compute_dtype_from_name(ns_compute_dtype, original_dtype)
+    if compute_dtype == original_dtype:
+        return x, original_dtype
+    with jax.named_scope("grug_muon/ns_compute_dtype/cast_input"):
+        return x.astype(compute_dtype), original_dtype
+
+
+def _restore_ns_compute_dtype(x: jax.Array, original_dtype: jnp.dtype) -> jax.Array:
+    if jnp.dtype(x.dtype) == original_dtype:
+        return x
+    with jax.named_scope("grug_muon/ns_compute_dtype/cast_output"):
+        return x.astype(original_dtype)
 
 
 def _target_sharding(array) -> jax.sharding.NamedSharding | PartitionSpec | None:
@@ -273,6 +304,8 @@ class GrugMuonConfig(MuonConfig):
     - Everything else -> AdamW
     """
 
+    ns_compute_dtype: str = "input"
+
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
@@ -288,6 +321,7 @@ class GrugMuonConfig(MuonConfig):
                         self.muon_epsilon,
                         self.use_kimi_scaling,
                         self.coefficient_type,
+                        ns_compute_dtype=self.ns_compute_dtype,
                     )
                 )
                 if self.weight_decay > 0:
@@ -350,10 +384,12 @@ def _grug_scale_with_muon(
     orthogonalization_layout: str = STACK_BATCH_SHARDED,
     momentum_sharding_fn: Callable[[jax.Array], jax.sharding.Sharding | None] | None = None,
     max_grouped_stack_size: int = DEFAULT_MAX_GROUPED_STACK_SIZE,
+    ns_compute_dtype: str = "input",
 ):
     """Muon gradient transformation for raw arrays with matrix-shaped trailing dimensions."""
     steps = int(steps)
     max_grouped_stack_size = int(max_grouped_stack_size)
+    _ns_compute_dtype_from_name(ns_compute_dtype, jnp.float32)
     if max_grouped_stack_size < 1:
         raise ValueError(f"max_grouped_stack_size must be positive, got {max_grouped_stack_size}.")
     if orthogonalization_layout not in ORTHOGONALIZATION_LAYOUTS:
@@ -457,9 +493,10 @@ def _grug_scale_with_muon(
             return updated
 
         def orthogonalize_3d(x, param):
+            x, original_dtype = _cast_for_ns_compute(x, ns_compute_dtype)
             if orthogonalization_layout == VMAP_REPLICATED:
                 with jax.named_scope("grug_muon/orthogonalize_3d_vmap_replicated"):
-                    return jax.vmap(
+                    updated = jax.vmap(
                         lambda matrix: _zeropower_via_newtonschulz_replicated(
                             matrix,
                             steps,
@@ -468,11 +505,12 @@ def _grug_scale_with_muon(
                             None,
                         )
                     )(x)
+                return _restore_ns_compute_dtype(updated, original_dtype)
 
             target_pspec = stack_target_pspec(x, param)
             if target_pspec is None and has_mesh:
                 with jax.named_scope("grug_muon/orthogonalize_3d_vmap_fallback"):
-                    return jax.vmap(
+                    updated = jax.vmap(
                         lambda matrix: _zeropower_via_newtonschulz_replicated(
                             matrix,
                             steps,
@@ -481,15 +519,17 @@ def _grug_scale_with_muon(
                             None,
                         )
                     )(x)
+                return _restore_ns_compute_dtype(updated, original_dtype)
 
             with jax.named_scope("grug_muon/orthogonalize_3d_stack_sharded"):
-                return _zeropower_via_newtonschulz_batched_stack_sharded(
+                updated = _zeropower_via_newtonschulz_batched_stack_sharded(
                     x,
                     steps,
                     muon_eps,
                     coefficient_type,
                     target_pspec,
                 )
+            return _restore_ns_compute_dtype(updated, original_dtype)
 
         def transform_chunked_3d_array(x, param):
             target_pspec = stack_target_pspec(x, param)
@@ -503,17 +543,8 @@ def _grug_scale_with_muon(
             updated_chunks = []
             split_indices = tuple(range(max_stack_size, x.shape[0], max_stack_size))
             for x_chunk in jnp.split(x, split_indices, axis=0):
-                chunk_target_pspec = stack_target_pspec(x_chunk, None)
                 with jax.named_scope("grug_muon/orthogonalize_3d_chunked_stack"):
-                    updated_chunks.append(
-                        _zeropower_via_newtonschulz_batched_stack_sharded(
-                            x_chunk,
-                            steps,
-                            muon_eps,
-                            coefficient_type,
-                            chunk_target_pspec,
-                        )
-                    )
+                    updated_chunks.append(orthogonalize_3d(x_chunk, None))
             updated = jnp.concatenate(updated_chunks, axis=0)
             return scale_and_restore_param_sharding(updated, param)
 
@@ -521,6 +552,7 @@ def _grug_scale_with_muon(
             if not hasattr(x, "ndim") or x.ndim not in (2, 3):
                 return x
             if x.ndim == 2:
+                x, original_dtype = _cast_for_ns_compute(x, ns_compute_dtype)
                 with jax.named_scope("grug_muon/orthogonalize_2d_replicated"):
                     updated = _zeropower_via_newtonschulz_replicated(
                         x,
@@ -529,6 +561,7 @@ def _grug_scale_with_muon(
                         coefficient_type,
                         None,
                     )
+                updated = _restore_ns_compute_dtype(updated, original_dtype)
                 return scale_and_restore_param_sharding(updated, param)
 
             return transform_chunked_3d_array(x, param)
@@ -568,6 +601,7 @@ def _grug_scale_with_muon(
 
                     with jax.named_scope("grug_muon/orthogonalize_3d_grouped_4d_stack"):
                         stacked = jnp.stack([x for _, x, _ in entry_chunk], axis=0)
+                        stacked, original_dtype = _cast_for_ns_compute(stacked, ns_compute_dtype)
                         updated_stacked = _zeropower_via_newtonschulz_grouped_4d_sharded(
                             stacked,
                             steps,
@@ -580,6 +614,7 @@ def _grug_scale_with_muon(
                                 updated_stacked,
                                 _with_target_spec(target, PartitionSpec(None, target_spec[1], None, None)),
                             )
+                        updated_stacked = _restore_ns_compute_dtype(updated_stacked, original_dtype)
                         updated_parts = [
                             jnp.squeeze(updated_part, axis=0)
                             for updated_part in jnp.split(updated_stacked, len(entry_chunk), axis=0)
@@ -652,6 +687,7 @@ def _grug_scale_with_muon(
                             parts.append(x)
                         stack_sizes = [x.shape[0] for x in parts]
                         stacked = jnp.concatenate(parts, axis=0)
+                        stacked, original_dtype = _cast_for_ns_compute(stacked, ns_compute_dtype)
                         updated_stacked = _zeropower_via_newtonschulz_batched_stack_sharded(
                             stacked,
                             steps,
@@ -659,6 +695,7 @@ def _grug_scale_with_muon(
                             coefficient_type,
                             target_pspec,
                         )
+                        updated_stacked = _restore_ns_compute_dtype(updated_stacked, original_dtype)
                         split_indices = []
                         running_size = 0
                         for stack_size in stack_sizes[:-1]:
