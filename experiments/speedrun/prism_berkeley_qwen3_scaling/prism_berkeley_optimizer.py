@@ -146,7 +146,7 @@ def _init_sketch_cache(params, *, sketch_size: int, seed: int):
 def _estimate_spectral_norm(
     matrix: jax.Array,
     sketch: jax.Array,
-    steps: int = 5
+    steps: int = 10
 ) -> jax.Array:
     """
     Uses power iteration to estimate the spectral norm 
@@ -220,27 +220,6 @@ def _prism_berkeley_polar(
     return working
 
 
-def lax_cond_fixed_or_adaptive(
-    use_fixed: bool,
-    fixed_alpha: float,
-    residual: jax.Array,
-    sketch: jax.Array,
-    order: PrismBerkeleyOrder,
-    alpha_grid_points: int,
-) -> jax.Array:
-    return jax.lax.cond(
-        jnp.asarray(use_fixed),
-        lambda _: jnp.asarray(fixed_alpha, dtype=residual.dtype),
-        lambda _: _prism_berkeley_alpha(
-            residual,
-            sketch,
-            order=order,
-            alpha_grid_points=alpha_grid_points,
-        ),
-        operand=None,
-    )
-
-
 class ScaleByPrismBerkeleyState(NamedTuple):
     momentum_buffer: optax.Updates
     sketch_cache: optax.Updates
@@ -250,12 +229,12 @@ def scale_with_prism_berkeley(
     momentum=0.95,
     nesterov=True,
     steps=5,
-    muon_eps=1e-8,
+    muon_eps=1e-7,
     use_kimi_scaling=False,
     order: PrismBerkeleyOrder = 5,
     alpha_grid_points: int = 65,
     fixed_alpha_steps: int = 0,
-    use_spectral_norm: bool = True,
+    use_spectral_norm: bool = False,
     sketch_size: int = 8,
     sketch_seed: int = 0,
 ):
@@ -333,6 +312,126 @@ def scale_with_prism_berkeley(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+def _prism_berkeley_approx_polar(
+    matrix: jax.Array,
+    *,
+    steps: int,
+    eps: float,
+    use_omega_scaling: bool,
+) -> jax.Array:
+
+    chex.assert_rank(matrix, 2)
+
+    if use_omega_scaling:
+        working = matrix / (jnp.linalg.norm(matrix, axis=0) + eps)
+        working = working / jnp.linalg.norm(working)
+    else:
+        working = matrix / (jnp.linalg.norm(matrix) + eps)
+    
+    transposed = False
+    if working.shape[0] < working.shape[1]:
+        working = working.T
+        transposed = True
+
+    working = working.astype(jnp.float32)
+    identity = jnp.eye(working.shape[1], dtype=working.dtype)
+    
+    # PRISM Newton step
+    working_t = working.T
+    working_sq = working_t @ working + 1e-5 * identity
+    cho_factor = jax.lax.linalg.cholesky(working_sq, symmetrize_input=False)
+    update = jax.lax.linalg.triangular_solve(
+        cho_factor, working_t, left_side=True, lower=True, transpose_a=False,
+    )
+    update = jax.lax.linalg.triangular_solve(
+        cho_factor, update, left_side=True, lower=True, transpose_a=True,
+    )
+    update = update.T
+    working = 0.66 * working + 0.006666 * update
+
+    # PRISM Newton-Schulz step
+    working = working.astype(jnp.bfloat16)
+    identity = identity.astype(jnp.bfloat16)
+    for _ in range(2):
+        residual = identity - working.T @ working
+        working = working + 0.5 * working @ residual + 1.45 * working @ (residual @ residual)
+
+    if transposed:
+        working = working.T
+
+    return working
+
+
+class ScaleByApproxPrismBerkeleyState(NamedTuple):
+    momentum_buffer: optax.Updates
+
+
+def scale_with_approx_prism_berkeley(
+    momentum=0.95,
+    nesterov=True,
+    steps=2,
+    muon_eps=1e-7,
+    use_omega_scaling=True,
+    use_kimi_scaling=False,
+):
+    steps = int(steps)
+
+    def init_fn(params):
+        return ScaleByApproxPrismBerkeleyState(
+            momentum_buffer=otu.tree_zeros_like(params),
+        )
+
+    def update_fn(updates, state, params=None):
+        del params
+
+        grad_coeff = 1.0 - momentum
+        momentum_buffer = jax.tree.map(
+            lambda m, g: None if g is None else momentum * m + grad_coeff * g,
+            state.momentum_buffer,
+            updates,
+            is_leaf=lambda x: x is None,
+        )
+        if nesterov:
+            updates = jax.tree.map(
+                lambda m, g: None if g is None else momentum * m + grad_coeff * g,
+                momentum_buffer,
+                updates,
+                is_leaf=lambda x: x is None,
+            )
+        else:
+            updates = momentum_buffer
+
+        def transform_linear_layer(layer: haliax.nn.Linear, sketch: jax.Array | None):
+            assert layer.weight.ndim == 2
+            transformed_weight_array = _prism_berkeley_approx_polar(
+                layer.weight.array,
+                steps=steps,
+                eps=muon_eps,
+                use_omega_scaling=use_omega_scaling,
+            )
+            transformed_weight_array = normalize_2d_update_fro_norm(transformed_weight_array)
+
+            if not use_kimi_scaling:
+                scale = jnp.sqrt(jnp.maximum(1, transformed_weight_array.shape[0] / transformed_weight_array.shape[1]))
+            else:
+                scale = 0.2 * jnp.sqrt(jnp.maximum(transformed_weight_array.shape[0], transformed_weight_array.shape[1]))
+            transformed_weight_array = transformed_weight_array * scale
+
+            return dataclasses.replace(
+                layer,
+                weight=dataclasses.replace(
+                    layer.weight, array=transformed_weight_array.astype(layer.weight.array.dtype)
+                ),
+            )
+
+        transformed_updates = map_flattened_linear_layers(transform_linear_layer, updates, state.sketch_cache)
+        return transformed_updates, ScaleByApproxPrismBerkeleyState(
+            momentum_buffer=momentum_buffer,
+        )
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 @OptimizerConfig.register_subclass("prism_berkeley")
 @dataclass(frozen=True)
 class PrismBerkeleyConfig(OptimizerConfig):
@@ -340,20 +439,21 @@ class PrismBerkeleyConfig(OptimizerConfig):
     adam_lr: float = 6e-4
     momentum: float = 0.95
     nesterov: bool = True
-    backend_steps: int = 5
+    backend_steps: int = 2
     weight_decay: float = 0.0
     adam_weight_decay: float | None = None
     beta1: float = 0.9
     beta2: float = 0.95
     epsilon: float = 1e-8
-    muon_epsilon: float = 1e-8
+    muon_epsilon: float = 1e-7
     adamc_weight_decay: bool = False
     max_grad_norm: float = 1.0
     use_kimi_scaling: bool = False
     order: PrismBerkeleyOrder = 5
     alpha_grid_points: int = 65
     fixed_alpha_steps: int = 0
-    use_spectral_norm: bool = True
+    use_spectral_norm: bool = False
+    use_omega_scaling: bool = True
     sketch_size: int = 8
     sketch_seed: int = 0
 
@@ -384,19 +484,27 @@ class PrismBerkeleyConfig(OptimizerConfig):
         def optimizer(learning_rate, adam_lr, weight_decay, adam_weight_decay):
             def prism_berkeley_transform():
                 components = [
-                    scale_with_prism_berkeley(
+                    # scale_with_prism_berkeley(
+                    #     self.momentum,
+                    #     self.nesterov,
+                    #     self.backend_steps,
+                    #     self.muon_epsilon,
+                    #     self.use_kimi_scaling,
+                    #     self.order,
+                    #     self.alpha_grid_points,
+                    #     self.fixed_alpha_steps,
+                    #     self.use_spectral_norm,
+                    #     self.sketch_size,
+                    #     self.sketch_seed,
+                    # ),
+                    scale_with_approx_prism_berkeley(
                         self.momentum,
                         self.nesterov,
                         self.backend_steps,
                         self.muon_epsilon,
+                        self.use_omega_scaling,
                         self.use_kimi_scaling,
-                        self.order,
-                        self.alpha_grid_points,
-                        self.fixed_alpha_steps,
-                        self.use_spectral_norm,
-                        self.sketch_size,
-                        self.sketch_seed,
-                    ),
+                    )
                     optax.add_decayed_weights(weight_decay, self.build_weight_decay_mask()),
                     optax.scale(-learning_rate),
                 ]
