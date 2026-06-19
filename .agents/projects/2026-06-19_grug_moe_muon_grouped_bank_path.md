@@ -25,6 +25,13 @@ preserved:
 | R2/D2/E8 bf16-NS expert grouped apply-only | L26, 4 nodes | about 0.173 s | AG/AR/RS/A2A = 0/0/0 |
 | R4 persistent grouped-2D apply | L26, 4 nodes | about 0.175-0.177 s | AG/AR/RS = 0/0/0 |
 
+The production `ns_compute_dtype=bf16` knob also works for fp32 inputs. On a
+one-node L4 production-shaped A/B, bf16 Newton-Schulz improved
+`full_production_muonh_optimizer_apply_h3` from about 0.190 s to about
+0.096 s, a 1.98x speedup, with compiled AG/AR/RS/A2A = 0/0/0/0. The equivalent
+L26 one-node fp32-input attempts OOMed during timing, so use smaller layer
+counts or a memory-focused setup when validating fp32-input production paths.
+
 The FSDP-master grouped-boundary path has not met the bar:
 
 | boundary | shape | result |
@@ -71,7 +78,10 @@ explicitly.
 ## Next Integration Gate
 
 Do not launch another full training profile from this path until this gate
-passes.
+passes. The harness now has an initial `expert_grouped_bank_consumer` bench for
+this purpose: it consumes grouped expert banks with grouped
+`[group, expert, token, hidden]` activations and runs the gate/up and down
+expert MLP matmuls without restoring per-layer FSDP leaves.
 
 Build a synthetic model-consumer gate that keeps expert weights grouped through
 the consumer boundary:

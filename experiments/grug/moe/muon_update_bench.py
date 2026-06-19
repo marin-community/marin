@@ -92,6 +92,7 @@ NS4D_DATA_GROUP_APPLY_BENCH = "ns4d_data_group_apply"
 EXPERT_GROUPED_APPLY_BOUNDARY_BENCH = "expert_grouped_apply_boundary"
 EXPERT_GROUPED_LAYER_SLICE_BENCH = "expert_grouped_layer_slice_boundary"
 EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH = "expert_grouped_single_layer_slice_boundary"
+EXPERT_GROUPED_BANK_CONSUMER_BENCH = "expert_grouped_bank_consumer"
 EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH = "expert_grouped_optimizer_apply"
 EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH = "expert_grouped_muonh_optimizer_apply"
 EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH = "expert_only_grouped_muonh_optimizer_apply"
@@ -133,6 +134,7 @@ BENCH_KINDS = (
     EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
     EXPERT_GROUPED_LAYER_SLICE_BENCH,
     EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH,
+    EXPERT_GROUPED_BANK_CONSUMER_BENCH,
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
@@ -171,6 +173,7 @@ NS4D_DATA_SHARDED_BENCHES = (
     EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
     EXPERT_GROUPED_LAYER_SLICE_BENCH,
     EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH,
+    EXPERT_GROUPED_BANK_CONSUMER_BENCH,
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
@@ -217,7 +220,11 @@ GROUPED_APPLY_BOUNDARY_BENCHES = (
     FULL_PRODUCTION_GROUPED_2D_DIRECT_APPLY_BENCH,
     FULL_PRODUCTION_APPLY_ONLY_BENCH,
 )
-GROUPED_PARAM_INPUT_BENCHES = (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH)
+GROUPED_PARAM_INPUT_BENCHES = (
+    EXPERT_GROUPED_LAYER_SLICE_BENCH,
+    EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH,
+    EXPERT_GROUPED_BANK_CONSUMER_BENCH,
+)
 GROUPED_OPTIMIZER_APPLY_BENCHES = (
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
@@ -244,6 +251,7 @@ GROUPED_EXPERT_PATHS = (
     "blocks[*].mlp.expert_mlp.w_gate_up",
     "blocks[*].mlp.expert_mlp.w_down",
 )
+GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT = 1
 FULL_PRODUCTION_MUONH_PATHS = (
     "ordinary_blocks[*].attn.w_q",
     "ordinary_blocks[*].attn.w_k",
@@ -754,6 +762,7 @@ def grouped_expert_group_sizes_for_bench(config: BenchConfig, bench_kind: str) -
     if bench_kind not in (
         EXPERT_GROUPED_LAYER_SLICE_BENCH,
         EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH,
+        EXPERT_GROUPED_BANK_CONSUMER_BENCH,
         EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
@@ -789,6 +798,27 @@ def synthetic_grouped_expert_specs(mesh: Mesh, config: BenchConfig, bench_kind: 
                         for name, shape in shapes.items()
                     }
                 }
+            }
+            for group_size in grouped_expert_group_sizes_for_bench(config, bench_kind)
+        )
+    }
+
+
+def synthetic_grouped_expert_consumer_input_specs(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Any:
+    dtype = dtype_from_name(config.dtype)
+    return {
+        "blocks": tuple(
+            {
+                "x": jax.ShapeDtypeStruct(
+                    (
+                        group_size,
+                        config.num_experts,
+                        GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT,
+                        config.hidden_dim,
+                    ),
+                    dtype,
+                    sharding=grouped_expert_group_sharding(mesh, config, bench_kind, group_size),
+                )
             }
             for group_size in grouped_expert_group_sizes_for_bench(config, bench_kind)
         )
@@ -1129,6 +1159,11 @@ def make_grouped_expert_array_tree(mesh: Mesh, config: BenchConfig, bench_kind: 
             for group_index, group_size in enumerate(grouped_expert_group_sizes_for_bench(config, bench_kind))
         )
     }
+
+
+def make_grouped_expert_consumer_input_tree(mesh: Mesh, config: BenchConfig, bench_kind: str, seed: int) -> Any:
+    specs = synthetic_grouped_expert_consumer_input_specs(mesh, config, bench_kind)
+    return make_array_from_spec_tree(specs, config, seed)
 
 
 def make_productionish_grouped_expert_array_tree(mesh: Mesh, config: BenchConfig, bench_kind: str, seed: int) -> Any:
@@ -1606,6 +1641,30 @@ def expert_grouped_single_layer_slice_step_factory(mesh: Mesh, config: BenchConf
     def update_step(grouped_params):
         with jax.named_scope("muon_update_bench/expert_grouped_single_layer_slice_step"):
             return expert_grouped_single_layer_slice(mesh, config, grouped_params)
+
+    return update_step
+
+
+def grouped_expert_bank_consumer_outputs(config: BenchConfig, grouped_params, activations):
+    """Run a grouped expert-bank MLP consumer without materializing per-layer expert leaves."""
+    output_blocks = []
+    for group_index, _valid_group_size in enumerate(grouped_expert_group_sizes(config)):
+        expert_mlp = grouped_params["blocks"][group_index]["mlp"]["expert_mlp"]
+        x = activations["blocks"][group_index]["x"]
+        with jax.named_scope("muon_update_bench/expert_grouped_bank_consumer/gate_up"):
+            gate_up = jnp.einsum("getd,gedi->geti", x, expert_mlp["w_gate_up"])
+        with jax.named_scope("muon_update_bench/expert_grouped_bank_consumer/activation"):
+            gate, up = jnp.split(gate_up, 2, axis=-1)
+            hidden = jax.nn.silu(gate) * up
+        with jax.named_scope("muon_update_bench/expert_grouped_bank_consumer/down"):
+            output_blocks.append({"x": jnp.einsum("geti,geid->getd", hidden, expert_mlp["w_down"])})
+    return {"blocks": tuple(output_blocks)}
+
+
+def grouped_expert_bank_consumer_step_factory(config: BenchConfig):
+    def update_step(grouped_params, activations):
+        with jax.named_scope("muon_update_bench/expert_grouped_bank_consumer_step"):
+            return grouped_expert_bank_consumer_outputs(config, grouped_params, activations)
 
     return update_step
 
@@ -2517,6 +2576,7 @@ def ns4d_bench_returns_4d_updates(bench_kind: str) -> bool:
         EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
         EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
         EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+        EXPERT_GROUPED_BANK_CONSUMER_BENCH,
         FULL_PRODUCTION_MUONH_OPTIMIZER_APPLY_BENCH,
         FULL_PRODUCTION_GROUPED_2D_MUONH_OPTIMIZER_APPLY_BENCH,
         NS4D_DOTONLY_EINSUM_BENCH,
@@ -2554,6 +2614,8 @@ def ns4d_boundary_status(config: BenchConfig, bench_kind: str) -> str | None:
         return "grouped_blocks_expert_params_slice_to_ep_leaves"
     if bench_kind == EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH:
         return "grouped_blocks_expert_params_slice_one_ep_leaf"
+    if bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH:
+        return "grouped_blocks_expert_bank_consumer"
     if bench_kind == EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH:
         return "grouped_blocks_expert_direction_optimizer_updates_apply"
     if bench_kind == EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH:
@@ -3245,6 +3307,18 @@ def ns_dot_flops_for_matrix_shape(shape: tuple[int, int], steps: int) -> int:
     return steps * (gram_flops + polynomial_flops + apply_flops)
 
 
+def grouped_expert_bank_consumer_flops(config: BenchConfig) -> int:
+    tokens_per_expert = GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT
+    # Two dense expert MLP projections over grouped expert banks:
+    # x @ w_gate_up plus hidden @ w_down. Elementwise gate work is excluded.
+    per_layer = (
+        config.num_experts
+        * tokens_per_expert
+        * (2 * config.hidden_dim * (2 * config.intermediate_dim) + 2 * config.intermediate_dim * config.hidden_dim)
+    )
+    return config.layers * per_layer
+
+
 def estimated_full_production_muonh_ns_dot_flops(config: BenchConfig) -> int:
     per_layer_2d = sum(
         ns_dot_flops_for_matrix_shape(shape, config.backend_steps)
@@ -3265,6 +3339,8 @@ def estimated_ordinary_2d_muonh_ns_dot_flops(config: BenchConfig) -> int:
 
 
 def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
+    if bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH:
+        return grouped_expert_bank_consumer_flops(config)
     if bench_kind in (
         HYPERBALL_ONLY_BENCH,
         ORDINARY_2D_GROUPED_RESTORE_SPLIT_BENCH,
@@ -3313,6 +3389,8 @@ def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
 
 
 def estimated_matrix_count(config: BenchConfig, bench_kind: str) -> int:
+    if bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH:
+        return config.layers * 2 * config.num_experts
     if bench_kind in (
         ORDINARY_2D_MUONH_OPTIMIZER_APPLY_BENCH,
         ORDINARY_2D_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
@@ -3458,6 +3536,7 @@ def lower_ns4d(
         EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
         EXPERT_GROUPED_LAYER_SLICE_BENCH,
         EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH,
+        EXPERT_GROUPED_BANK_CONSUMER_BENCH,
     ):
         specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
     else:
@@ -3469,7 +3548,19 @@ def lower_ns4d(
     else:
         assert_grouped_or_uniform_ns4d_sharding(specs, mesh, config, bench_kind, input_spec, "NS4D input specs")
     if ns4d_bench_uses_grouped_params(bench_kind):
-        if bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
+        if bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH:
+            grouped_specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
+            activation_specs = synthetic_grouped_expert_consumer_input_specs(mesh, config, bench_kind)
+            update_step = jax.jit(grouped_expert_bank_consumer_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(update_step, grouped_specs, activation_specs)
+                lowered = update_step.lower(grouped_specs, activation_specs)
+            assert_grouped_expert_sharding(grouped_specs, mesh, config, bench_kind, "grouped expert bank params")
+            assert_ns4d_sharding(activation_specs, input_spec, "grouped expert bank consumer inputs")
+            if result_sharding is not None:
+                assert_ns4d_sharding(result_specs, result_sharding.spec, "grouped expert bank consumer result")
+            lower_args = None
+        elif bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
             grouped_specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
             if bench_kind == EXPERT_GROUPED_LAYER_SLICE_BENCH:
                 update_step = jax.jit(expert_grouped_layer_slice_step_factory(mesh, config))
@@ -3693,6 +3784,8 @@ def lower_ns4d(
         and not allow_boundary_collectives
     ):
         assert_grouped_apply_has_no_boundary_collectives(hlo_summary, "lowered NS4D grouped apply")
+    if bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH and not allow_boundary_collectives:
+        assert_grouped_apply_has_no_boundary_collectives(hlo_summary, "lowered grouped expert bank consumer")
     return hlo_summary
 
 
@@ -3881,8 +3974,12 @@ def time_ns4d(
             EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
             EXPERT_GROUPED_LAYER_SLICE_BENCH,
             EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH,
+            EXPERT_GROUPED_BANK_CONSUMER_BENCH,
         ):
-            updates = make_grouped_expert_array_tree(mesh, config, bench_kind, seed=1)
+            if bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH:
+                updates = make_grouped_expert_consumer_input_tree(mesh, config, bench_kind, seed=1)
+            else:
+                updates = make_grouped_expert_array_tree(mesh, config, bench_kind, seed=1)
         else:
             updates = make_ns4d_array_tree(mesh, config, bench_kind, seed=1)
         input_spec = ns4d_input_sharding(mesh, config, bench_kind).spec
@@ -3891,10 +3988,16 @@ def time_ns4d(
             assert_grouped_expert_sharding(updates, mesh, config, bench_kind, "expert FSDP grouped updates")
         elif is_expert_fsdp_grouped_muonh_bench(bench_kind):
             assert_expert_fsdp_sharding(updates, "expert FSDP updates")
+        elif bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH:
+            assert_ns4d_sharding(updates, input_spec, "grouped expert bank consumer inputs")
         else:
             assert_grouped_or_uniform_ns4d_sharding(updates, mesh, config, bench_kind, input_spec, "NS4D updates")
         if ns4d_bench_uses_grouped_params(bench_kind):
-            if bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
+            if bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH:
+                params = make_grouped_expert_array_tree(mesh, config, bench_kind, seed=0)
+                update_step = jax.jit(grouped_expert_bank_consumer_step_factory(config))
+                lower_args = (params, updates)
+            elif bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
                 params = None
                 if bench_kind == EXPERT_GROUPED_LAYER_SLICE_BENCH:
                     update_step = jax.jit(expert_grouped_layer_slice_step_factory(mesh, config))
@@ -4018,6 +4121,8 @@ def time_ns4d(
                 pass
             elif is_expert_fsdp_grouped_bench(bench_kind):
                 assert_expert_fsdp_sharding(params, "expert FSDP params")
+            elif bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH:
+                assert_grouped_expert_sharding(params, mesh, config, bench_kind, "grouped expert bank params")
             elif bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
                 assert_grouped_expert_sharding(updates, mesh, config, bench_kind, "grouped expert bank params")
             else:
@@ -4046,6 +4151,8 @@ def time_ns4d(
             and not allow_boundary_collectives
         ):
             assert_grouped_apply_has_no_boundary_collectives(compiled_hlo, "compiled NS4D grouped apply")
+        if bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH and not allow_boundary_collectives:
+            assert_grouped_apply_has_no_boundary_collectives(compiled_hlo, "compiled grouped expert bank consumer")
         if compile_only:
             return TimingSummary(compile_seconds, compiled_hlo, [], None, None, None, None)
 
@@ -4057,9 +4164,17 @@ def time_ns4d(
                 is_expert_fsdp_grouped_bench(bench_kind)
                 or is_expert_only_grouped_muonh_bench(bench_kind)
                 or bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES
-                or bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH)
+                or bench_kind
+                in (
+                    EXPERT_GROUPED_LAYER_SLICE_BENCH,
+                    EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH,
+                    EXPERT_GROUPED_BANK_CONSUMER_BENCH,
+                )
             ):
-                if bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
+                if bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH:
+                    consumer_outputs = compiled(params, updates)
+                    block_until_ready_tree(consumer_outputs)
+                elif bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
                     params = compiled(updates)
                     block_until_ready_tree(params)
                 elif bench_kind == EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH:
@@ -4086,6 +4201,12 @@ def time_ns4d(
                     )
                 elif bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
                     assert_expert_ep_sharding(params, "warmup grouped expert layer slices")
+                elif bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH and result_sharding is not None:
+                    assert_ns4d_sharding(
+                        consumer_outputs,
+                        result_sharding.spec,
+                        "warmup grouped expert bank consumer outputs",
+                    )
                 elif result_sharding is not None:
                     assert_grouped_or_uniform_ns4d_sharding(
                         params,
@@ -4126,9 +4247,17 @@ def time_ns4d(
                 is_expert_fsdp_grouped_bench(bench_kind)
                 or is_expert_only_grouped_muonh_bench(bench_kind)
                 or bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES
-                or bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH)
+                or bench_kind
+                in (
+                    EXPERT_GROUPED_LAYER_SLICE_BENCH,
+                    EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH,
+                    EXPERT_GROUPED_BANK_CONSUMER_BENCH,
+                )
             ):
-                if bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
+                if bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH:
+                    consumer_outputs = compiled(params, updates)
+                    block_until_ready_tree(consumer_outputs)
+                elif bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
                     params = compiled(updates)
                     block_until_ready_tree(params)
                 elif bench_kind == EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH:
@@ -4155,6 +4284,12 @@ def time_ns4d(
                     )
                 elif bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
                     assert_expert_ep_sharding(params, "grouped expert layer slices")
+                elif bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH and result_sharding is not None:
+                    assert_ns4d_sharding(
+                        consumer_outputs,
+                        result_sharding.spec,
+                        "grouped expert bank consumer outputs",
+                    )
                 elif result_sharding is not None:
                     assert_grouped_or_uniform_ns4d_sharding(
                         params,
@@ -4517,6 +4652,7 @@ def run_config(
                 EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
                 EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
                 EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+                EXPERT_GROUPED_BANK_CONSUMER_BENCH,
                 EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH,
                 EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
                 EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
@@ -4565,6 +4701,7 @@ def run_config(
                 EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
                 EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
                 EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+                EXPERT_GROUPED_BANK_CONSUMER_BENCH,
                 EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH,
                 EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
                 EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
