@@ -755,3 +755,21 @@ The run succeeded without the previous 57.84 GiB allocation. Compiled HLO report
 The data-first variant is about 1.38x faster than the gather-first explicit boundary, despite compiling to more all-gathers and more GEMM custom calls. Both variants still compile the intended 14 logical AG/A2A pairs into many more collectives.
 - Interpretation: The direct logical target `P(('replica_dcn', 'data'), 'expert', None, None) -> P(None, 'expert', 'data', None)` is the right communication shape, and ordering the data-axis movement first materially helps. It still does not prove the FSDP-master hot boundary is production-viable: compiled collectives remain high (`AG=150`, `A2A=98`) and the boundary is still slower than the collective-clean grouped MuonH bank-consumer gate at about 0.145s for MuonH plus grouped apply plus grouped consumer.
 - Next action: Keep the data-first boundary as the best measured FSDP-master explicit-communication checkpoint, but do not integrate it into production yet. The next FSDP-master attempt needs a lower-level/custom grouped-to-FSDP permutation or a `shard_map` structure that prevents compiled collective decomposition; otherwise prefer grouped-bank model consumption.
+
+### 2026-06-19 11:35 PDT - data-first restore-only boundary isolates communication cost
+- Hypothesis: If the remaining data-first grouped-to-FSDP cost is mostly `optax.apply_updates` or per-layer tree assembly, a restore-only boundary should be materially faster than restore-plus-apply. If it is mostly communication lowering, restore-only and apply should have nearly the same compiled collectives and timing.
+- Command:
+  - Code change: added `expert_fsdp_grouped_explicit_data_first_a2a_restore_boundary` to `experiments/grug/moe/muon_update_bench.py`, with focused coverage in `experiments/grug/moe/test_muon_update_bench.py`. Commit `ba1be76b4` pushed to `codex/research-grug-moe-d2560-mfu`.
+  - Validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -q` -> 57 passed; `./infra/pre-commit.py --changed-files --fix` -> OK.
+  - CoreWeave run: parent `/dlwh/iris-run-job-20260619-175855`; child `/dlwh/iris-run-job-20260619-175855/grug-train-MUON-BENCH-D2560-L26-R2D2E8-DATAFIRSTRESTORE-H1-G4-N4-cw-20260619-175852`.
+  - Output: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D2E8-DATAFIRSTRESTORE-H1-G4-N4-cw-20260619-175852-81ac33/summary.json`.
+- Result:
+
+| boundary | lowered AG/A2A | compiled AG/A2A | compiled GEMMs | median | mean |
+| --- | --- | --- | ---: | ---: | ---: |
+| data-first restore-only | 14/14 | 150/98 | 14 | 0.213788s | 0.213544s |
+| data-first restore-plus-apply | 14/14 | 150/98 | 14 | 0.218176s | 0.218407s |
+
+Restore-only is only about 4.4 ms faster by median runtime. Both paths compile to the same high collective counts and GEMM custom-call count.
+- Interpretation: This isolates the problem: the hot cost is the grouped-to-FSDP communication lowering, not `optax.apply_updates` or the Python tree shape of the ordinary apply path. Keeping ordinary `apply_updates` after a data-first restore is not the bottleneck; the bottleneck is that XLA GPU compiles the intended 14 logical data-first AG/A2A pairs into `AG=150`, `A2A=98`.
+- Next action: Stop optimizing the post-restore apply path. The next FSDP-master route needs a custom/lower-level grouped-to-FSDP permutation or a different representation that avoids this restore boundary. The grouped-bank path remains the only path so far that is both fast and collective-clean at the R2/D2/E8 L26/T1024 gate.
