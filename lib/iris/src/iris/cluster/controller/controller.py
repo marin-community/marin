@@ -387,6 +387,7 @@ class Controller:
             auth_provider=config.auth_provider,
             auth_optional=config.auth.optional if config.auth else False,
             finelog_stats_service=self._remote_stats_service,
+            iap_assertion_verifier=config.auth.iap_assertion_verifier if config.auth else None,
         )
 
         # Wakes the control-tick driver. A submit triggers a schedule-only

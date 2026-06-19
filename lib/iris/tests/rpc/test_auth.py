@@ -15,12 +15,15 @@ from iris.cluster.controller.auth import JwtTokenManager, create_api_key, revoke
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.token_store import ClusterCredential
 from iris.rpc.auth import (
+    DASHBOARD_ROLE,
+    LOOPBACK_IDENTITY,
     AuthInterceptor,
     AuthTokenInjector,
     AuthzAction,
     CompositeTokenVerifier,
     GcpAccessTokenProvider,
     GcpAccessTokenVerifier,
+    IapAssertionVerifier,
     IapIdTokenVerifier,
     NullAuthInterceptor,
     ProxyAuthTokenInjector,
@@ -30,11 +33,13 @@ from iris.rpc.auth import (
     _extract_cookie,
     _verified_identity,
     authorize,
+    authorize_method,
     authorize_resource_owner,
     client_interceptors,
     get_verified_identity,
     get_verified_user,
     require_identity,
+    resolve_auth,
 )
 from iris.rpc.config_pb2 import AuthConfig
 from rigging.timing import Timestamp
@@ -293,6 +298,149 @@ def test_iap_id_token_verifier_wraps_google_failure():
 def test_iap_id_token_verifier_requires_audiences():
     with pytest.raises(ValueError, match="at least one audience"):
         IapIdTokenVerifier([])
+
+
+# --- IAP signed-header assertion -> implicit read-only dashboard identity -----
+
+_ASSERTION_HEADERS = {"x-goog-iap-jwt-assertion": "signed.assertion.jwt"}
+
+
+def test_iap_assertion_verifier_grants_dashboard_role():
+    verifier = IapAssertionVerifier("/projects/1/global/backendServices/2")
+    payload = {"aud": "/projects/1/global/backendServices/2", "email": "alice@example.com"}
+    with patch("google.oauth2.id_token.verify_token", Mock(return_value=payload)):
+        identity = verifier.identity_from_headers(_ASSERTION_HEADERS)
+    assert identity == VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)
+
+
+def test_iap_assertion_verifier_returns_none_without_header():
+    verifier = IapAssertionVerifier("/projects/1/global/backendServices/2")
+    # No assertion header -> not an IAP request; the caller falls through to
+    # loopback/optional/reject instead of getting a dashboard identity.
+    assert verifier.identity_from_headers({}) is None
+
+
+def test_iap_assertion_verifier_rejects_forged_assertion():
+    verifier = IapAssertionVerifier("/projects/1/global/backendServices/2")
+    with patch("google.oauth2.id_token.verify_token", side_effect=ValueError("Wrong recipient")):
+        with pytest.raises(ValueError, match="IAP assertion verification failed"):
+            verifier.identity_from_headers(_ASSERTION_HEADERS)
+
+
+def test_iap_assertion_verifier_rejects_missing_email():
+    verifier = IapAssertionVerifier("/projects/1/global/backendServices/2")
+    with patch("google.oauth2.id_token.verify_token", Mock(return_value={"aud": "x"})):
+        with pytest.raises(ValueError, match="no email"):
+            verifier.identity_from_headers(_ASSERTION_HEADERS)
+
+
+def test_iap_assertion_verifier_requires_audience():
+    with pytest.raises(ValueError, match="audience"):
+        IapAssertionVerifier("")
+
+
+class _FakeAssertionVerifier:
+    """Stand-in mirroring IapAssertionVerifier's header contract.
+
+    Returns a dashboard identity when the signed-header is present and valid,
+    None when it is absent, and raises when present but forged.
+    """
+
+    def identity_from_headers(self, headers):
+        value = headers.get("x-goog-iap-jwt-assertion")
+        if not value:
+            return None
+        if value == "forged":
+            raise ValueError("IAP assertion verification failed")
+        return VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)
+
+
+def test_resolve_auth_iap_assertion_grants_dashboard_when_tokenless():
+    identity = resolve_auth(
+        None,
+        StaticTokenVerifier({}),
+        optional=False,
+        headers={"x-goog-iap-jwt-assertion": "valid"},
+        iap_assertion_verifier=_FakeAssertionVerifier(),
+    )
+    assert identity == VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)
+
+
+def test_resolve_auth_iris_jwt_wins_over_iap_assertion():
+    # A present Iris JWT outranks the implicit IAP path: a logged-in user keeps
+    # their real role even though IAP also injected an assertion.
+    identity = resolve_auth(
+        "valid-token-alice",
+        StaticTokenVerifier({"valid-token-alice": "alice"}),
+        optional=False,
+        headers={"x-goog-iap-jwt-assertion": "valid"},
+        iap_assertion_verifier=_FakeAssertionVerifier(),
+    )
+    assert identity == VerifiedIdentity(user_id="alice", role="user")
+
+
+def test_resolve_auth_rejects_tokenless_without_assertion():
+    # Behind IAP with optional=false, a tokenless call that carries no valid
+    # assertion (i.e. did not pass IAP) is rejected — never anonymous-admin.
+    with pytest.raises(ValueError, match="Missing authentication"):
+        resolve_auth(
+            None,
+            StaticTokenVerifier({}),
+            optional=False,
+            headers={},
+            iap_assertion_verifier=_FakeAssertionVerifier(),
+        )
+
+
+def test_resolve_auth_rejects_forged_assertion():
+    with pytest.raises(ValueError, match="IAP assertion verification failed"):
+        resolve_auth(
+            None,
+            StaticTokenVerifier({}),
+            optional=False,
+            headers={"x-goog-iap-jwt-assertion": "forged"},
+            iap_assertion_verifier=_FakeAssertionVerifier(),
+        )
+
+
+def test_resolve_auth_loopback_admin_when_no_assertion():
+    # A genuine loopback peer (SSH tunnel) with no assertion still resolves to
+    # the admin identity even when the assertion verifier is configured.
+    identity = resolve_auth(
+        None,
+        StaticTokenVerifier({}),
+        optional=False,
+        client_address="127.0.0.1:54321",
+        headers={},
+        iap_assertion_verifier=_FakeAssertionVerifier(),
+    )
+    assert identity == LOOPBACK_IDENTITY
+
+
+# --- read-only dashboard role: per-method authorization ----------------------
+
+
+@pytest.mark.parametrize("method", ["ListJobs", "GetJobStatus", "ListWorkers", "GetRpcStats"])
+def test_authorize_method_allows_dashboard_reads(method):
+    # Does not raise: read methods are the dashboard role's contract.
+    authorize_method(VerifiedIdentity("alice@example.com", DASHBOARD_ROLE), method)
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["LaunchJob", "TerminateJob", "CreateApiKey", "ExecInContainer", "SetUserBudget", "ExecuteRawQuery"],
+)
+def test_authorize_method_denies_dashboard_mutations(method):
+    with pytest.raises(ConnectError) as exc:
+        authorize_method(VerifiedIdentity("alice@example.com", DASHBOARD_ROLE), method)
+    assert exc.value.code == Code.PERMISSION_DENIED
+
+
+@pytest.mark.parametrize("role", ["admin", "user", "worker"])
+def test_authorize_method_unrestricted_for_other_roles(role):
+    # Non-dashboard roles are not gated by method name here; their mutating
+    # actions are still checked inside the handlers by authorize/owner checks.
+    authorize_method(VerifiedIdentity("alice", role), "LaunchJob")
 
 
 def test_different_users_get_different_identities(interceptor):

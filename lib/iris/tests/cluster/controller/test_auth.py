@@ -7,6 +7,8 @@ from unittest.mock import Mock
 
 import pytest
 import sqlalchemy.exc
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from finelog.client.proxy import LogServiceProxy
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller import reads, writes
@@ -22,6 +24,7 @@ from iris.cluster.controller.auth import (
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.dashboard import (
     ControllerDashboard,
+    _DashboardAuthInterceptor,
     _LegacyFetchLogsRedirect,
     _RouteAuthMiddleware,
     _SubdomainProxyMiddleware,
@@ -32,7 +35,14 @@ from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, resolve_auth
+from iris.rpc.auth import (
+    DASHBOARD_ROLE,
+    SESSION_COOKIE,
+    StaticTokenVerifier,
+    VerifiedIdentity,
+    get_verified_identity,
+    resolve_auth,
+)
 from rigging.timing import Timestamp
 from sqlalchemy import text
 from starlette.responses import JSONResponse
@@ -508,3 +518,64 @@ def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier,
         assert resp.status_code == 200, f"Expected 200 but got {resp.status_code}"
     else:
         assert resp.status_code == 401, f"Expected 401 but got {resp.status_code}"
+
+
+# -- IAP implicit dashboard role through the live auth interceptor ------------
+
+
+class _StubAssertionVerifier:
+    """IapAssertionVerifier stand-in: a present signed-header => dashboard identity."""
+
+    def identity_from_headers(self, headers):
+        if headers.get("x-goog-iap-jwt-assertion"):
+            return VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)
+        return None
+
+
+def _assertion_ctx(method_name: str):
+    """Fake RPC ctx for an IAP-fronted, tokenless request (no Iris JWT)."""
+
+    class _Ctx:
+        def method(self):
+            info = Mock()
+            info.name = method_name  # Mock(name=...) sets repr, not the attribute
+            return info
+
+        def request_headers(self):
+            return {"x-goog-iap-jwt-assertion": "signed.assertion.jwt"}
+
+        def client_address(self):
+            return "10.0.0.7:443"  # arrived via the load balancer, not loopback
+
+    return _Ctx()
+
+
+def test_dashboard_interceptor_allows_read_for_iap_browser():
+    interceptor = _DashboardAuthInterceptor(
+        StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
+    )
+    seen = []
+
+    def handler(_req, _ctx):
+        seen.append(get_verified_identity())
+        return "ok"
+
+    result = interceptor.intercept_unary_sync(handler, "req", _assertion_ctx("ListJobs"))
+    assert result == "ok"
+    assert seen == [VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)]
+
+
+def test_dashboard_interceptor_denies_mutation_for_iap_browser():
+    interceptor = _DashboardAuthInterceptor(
+        StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
+    )
+    ran = []
+
+    def handler(_req, _ctx):
+        ran.append(True)
+        return "ok"
+
+    with pytest.raises(ConnectError) as exc:
+        interceptor.intercept_unary_sync(handler, "req", _assertion_ctx("LaunchJob"))
+    assert exc.value.code == Code.PERMISSION_DENIED
+    assert ran == []  # the handler never runs for a denied mutation

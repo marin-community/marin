@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "iris_session"
 
+# Read-only role granted implicitly to an IAP-authenticated caller that has not
+# run `iris login` (no Iris JWT). It may only call the read RPCs in
+# DASHBOARD_READABLE_RPCS; see authorize_method.
+DASHBOARD_ROLE = "dashboard"
+
 
 @dataclass(frozen=True, slots=True)
 class VerifiedIdentity:
@@ -122,6 +127,57 @@ POLICY: dict[AuthzAction, frozenset[str]] = {
     AuthzAction.MANAGE_OTHER_KEYS: frozenset(),  # admin only
     AuthzAction.MANAGE_BUDGETS: frozenset(),  # admin only
 }
+
+
+# RPC methods the read-only `dashboard` role may call. A default-deny allowlist:
+# a dashboard caller (an IAP-authenticated browser that has not run `iris login`)
+# may invoke only these read methods; everything else — job submit/terminate,
+# worker registration, key/budget management, exec, profiling, raw queries — is
+# denied. A newly added RPC is therefore denied to the dashboard role until it is
+# explicitly listed here, which is the safe direction for a read-only tier.
+DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
+    {
+        # Jobs and tasks
+        "GetJobStatus",
+        "GetJobState",
+        "ListJobs",
+        "GetTaskStatus",
+        "ListTasks",
+        "GetProcessStatus",
+        # Workers, endpoints, scheduler, autoscaler
+        "ListWorkers",
+        "GetWorkerStatus",
+        "ListEndpoints",
+        "GetAutoscalerStatus",
+        "GetSchedulerState",
+        "GetKubernetesClusterStatus",
+        # Identity, users, budgets (read)
+        "GetAuthInfo",
+        "GetCurrentUser",
+        "ListApiKeys",
+        "ListUsers",
+        "GetUserBudget",
+        "ListUserBudgets",
+        # RPC stats panel
+        "GetRpcStats",
+    }
+)
+
+
+def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
+    """Enforce per-method access for restricted roles before dispatch.
+
+    The ``dashboard`` role is read-only: it may call only the methods in
+    ``DASHBOARD_READABLE_RPCS``. Other roles are unrestricted here — their
+    mutating actions remain gated inside the handlers by ``authorize`` /
+    ``authorize_resource_owner``. Raises ``PERMISSION_DENIED`` for a dashboard
+    caller invoking a non-readable method.
+    """
+    if identity.role == DASHBOARD_ROLE and method_name not in DASHBOARD_READABLE_RPCS:
+        raise ConnectError(
+            Code.PERMISSION_DENIED,
+            f"Read-only dashboard access cannot call {method_name}; run `iris login` to authenticate",
+        )
 
 
 def require_identity() -> VerifiedIdentity:
@@ -258,6 +314,81 @@ class IapIdTokenVerifier:
         return VerifiedIdentity(user_id=email, role="user")
 
 
+# IAP injects this signed JWT on every request it admits; its `aud` is the
+# backend-service resource path and it is signed with IAP's own (ES256) keys,
+# published at the URL below.
+IAP_ASSERTION_HEADER = "x-goog-iap-jwt-assertion"
+_IAP_PUBLIC_KEYS_URL = "https://www.gstatic.com/iap/verify/public_key"
+_IAP_CERTS_CACHE_TTL_SECONDS = 3600.0
+
+
+class _CachingCertsRequest:
+    """Wraps a google-auth transport ``Request`` to cache cert-endpoint GETs.
+
+    ``google.oauth2.id_token.verify_token`` re-fetches the signing certs on every
+    call. On the per-RPC assertion path that would be an HTTP round-trip per
+    request; IAP's public keys rotate slowly, so the cert response is cached for
+    a TTL. Only GETs are cached (the verify path issues nothing else).
+    """
+
+    def __init__(self, inner, cache_ttl_seconds: float = _IAP_CERTS_CACHE_TTL_SECONDS):
+        self._inner = inner
+        self._ttl = cache_ttl_seconds
+        self._cache: dict[str, tuple[float, object]] = {}
+
+    def __call__(self, url, method="GET", **kwargs):
+        if method != "GET":
+            return self._inner(url, method=method, **kwargs)
+        cached = self._cache.get(url)
+        if cached is not None and time.monotonic() < cached[0]:
+            return cached[1]
+        response = self._inner(url, method=method, **kwargs)
+        self._cache[url] = (time.monotonic() + self._ttl, response)
+        return response
+
+
+class IapAssertionVerifier:
+    """Verifies IAP's signed ``X-Goog-IAP-JWT-Assertion`` request header.
+
+    IAP signs a JWT asserting the authenticated identity and attaches it to every
+    request it forwards. Verifying its signature and ``aud`` proves the request
+    genuinely passed through IAP for *this* backend, so the asserted email can be
+    trusted without an Iris JWT — an internal caller that bypasses the load
+    balancer cannot forge it. Verified callers are granted the read-only
+    ``dashboard`` role (the implicit-access path for browsers behind IAP).
+    """
+
+    def __init__(self, audience: str, role: str = DASHBOARD_ROLE):
+        if not audience:
+            raise ValueError("IapAssertionVerifier requires a signed-header audience")
+        self._audience = audience
+        self._role = role
+        self._request = _CachingCertsRequest(google.auth.transport.requests.Request())
+
+    def identity_from_headers(self, headers: dict) -> VerifiedIdentity | None:
+        """Return the asserted identity, or None when no assertion header is present.
+
+        Raises ValueError if the header is present but fails verification (a
+        forged, stale, or wrong-audience assertion) so the caller rejects it.
+        """
+        assertion = headers.get(IAP_ASSERTION_HEADER)
+        if not assertion:
+            return None
+        try:
+            payload = google.oauth2.id_token.verify_token(
+                assertion,
+                self._request,
+                audience=self._audience,
+                certs_url=_IAP_PUBLIC_KEYS_URL,
+            )
+        except (ValueError, GoogleAuthError) as exc:
+            raise ValueError(f"IAP assertion verification failed: {exc}") from exc
+        email = payload.get("email")
+        if not email:
+            raise ValueError("IAP assertion has no email claim")
+        return VerifiedIdentity(user_id=email, role=self._role)
+
+
 class CompositeTokenVerifier:
     """Tries multiple verifiers in order, returning the first successful result."""
 
@@ -316,19 +447,30 @@ def resolve_auth(
     *,
     client_address: str | None = None,
     headers: dict | None = None,
+    iap_assertion_verifier: "IapAssertionVerifier | None" = None,
 ) -> VerifiedIdentity | None:
     """Shared auth policy for gRPC interceptors and HTTP middleware.
 
     Returns VerifiedIdentity on success, None for anonymous passthrough.
     Raises ValueError on rejected tokens (invalid token, or missing when required).
 
-    A present token always wins. A tokenless request over a genuine loopback
-    connection is always trusted as the admin user (see ``is_trusted_loopback``
-    and ``LOOPBACK_IDENTITY``) — the SSH-tunnel transition path. Otherwise a
-    missing token is allowed only when ``optional`` is set.
+    Precedence for a tokenless request:
+
+    1. A present Iris JWT always wins (``verifier.verify``).
+    2. With ``iap_assertion_verifier`` set, a verified IAP signed-header
+       assertion grants the read-only ``dashboard`` identity — the implicit
+       access path for an IAP-authenticated browser that has not run
+       ``iris login``. A present-but-invalid assertion is rejected.
+    3. A genuine loopback connection is trusted as the admin user (see
+       ``is_trusted_loopback`` / ``LOOPBACK_IDENTITY``) — the SSH-tunnel path.
+    4. Otherwise a missing token is allowed only when ``optional`` is set.
     """
     if token is not None:
         return verifier.verify(token)
+    if iap_assertion_verifier is not None:
+        iap_identity = iap_assertion_verifier.identity_from_headers(headers or {})
+        if iap_identity is not None:
+            return iap_identity
     if is_trusted_loopback(client_address, headers or {}):
         return LOOPBACK_IDENTITY
     if optional:

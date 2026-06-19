@@ -451,6 +451,18 @@ message IapAuthConfig {
   // IAP's own IAM (roles/iap.httpsResourceAccessor) is the access gate; the
   // controller does not re-check project membership.
   repeated string audiences = 4;
+
+  // Audience of the signed header JWT that IAP injects on every admitted
+  // request (the `X-Goog-IAP-JWT-Assertion` header). For a GCLB backend it is
+  // "/projects/<PROJECT_NUMBER>/global/backendServices/<BACKEND_SERVICE_ID>".
+  //
+  // When set, the controller verifies that signed assertion (signature +
+  // audience) and grants tokenless callers — i.e. a browser that has not run
+  // `iris login` — the read-only `dashboard` role implicitly. Verifying the
+  // Google signature is what makes this safe: an internal caller that bypasses
+  // the load balancer cannot forge the header. Leave empty to disable implicit
+  // dashboard auth (tokenless public requests are then rejected as before).
+  string signed_header_audience = 5;
 }
 
 message AuthConfig {

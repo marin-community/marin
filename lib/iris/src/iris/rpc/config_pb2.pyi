@@ -472,16 +472,18 @@ class StaticAuthConfig(_message.Message):
     def __init__(self, tokens: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class IapAuthConfig(_message.Message):
-    __slots__ = ("url", "oauth_client_id", "oauth_client_secret", "audiences")
+    __slots__ = ("url", "oauth_client_id", "oauth_client_secret", "audiences", "signed_header_audience")
     URL_FIELD_NUMBER: _ClassVar[int]
     OAUTH_CLIENT_ID_FIELD_NUMBER: _ClassVar[int]
     OAUTH_CLIENT_SECRET_FIELD_NUMBER: _ClassVar[int]
     AUDIENCES_FIELD_NUMBER: _ClassVar[int]
+    SIGNED_HEADER_AUDIENCE_FIELD_NUMBER: _ClassVar[int]
     url: str
     oauth_client_id: str
     oauth_client_secret: str
     audiences: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, url: _Optional[str] = ..., oauth_client_id: _Optional[str] = ..., oauth_client_secret: _Optional[str] = ..., audiences: _Optional[_Iterable[str]] = ...) -> None: ...
+    signed_header_audience: str
+    def __init__(self, url: _Optional[str] = ..., oauth_client_id: _Optional[str] = ..., oauth_client_secret: _Optional[str] = ..., audiences: _Optional[_Iterable[str]] = ..., signed_header_audience: _Optional[str] = ...) -> None: ...
 
 class AuthConfig(_message.Message):
     __slots__ = ("gcp", "static", "iap", "admin_users", "optional")

@@ -11,11 +11,27 @@ This supersedes the Cloud Run proxy in ``../iris-iap-proxy/`` (retired as this
 rolls out): GCLB talks straight to the controller VM (no extra serverless hop
 and no Cloud Run 300s request cap that would truncate long-poll requests).
 
+OAuth clients are *not* created here — the IAP OAuth Admin API is being turned
+down, so the clients are created once in the Cloud Console and handed to this
+script as their downloaded JSON secrets files:
+
+* a **Web** OAuth client — IAP's anchor (``oauthSettings.clientId``); also serves
+  the browser sign-in page. Needs the redirect URI
+  ``https://iap.googleapis.com/v1/oauth/clientIds/<id>:handleRedirect``.
+* a **Desktop** OAuth client — what the ``iris`` CLI drives for the browser login
+  flow. Its id is added to ``oauthSettings.programmaticClients`` so IAP admits
+  the CLI's bearer ID token (whose ``aud`` is the desktop client id).
+
 Every resource is a single ``gcloud`` create guarded by an existence probe, so
-the whole rollout — or any single stage — is safe to re-run. ``deploy`` runs all
-stages in dependency order; the per-stage subcommands (``oauth``, ``address``,
-``cert``, ``firewall``, ``backend``, ``frontend``, ``grant``) expose each one on
-its own. ``status`` reports what exists and ``teardown`` deletes the stack.
+the whole rollout — or any single stage — is safe to re-run. ``deploy`` runs the
+stages in dependency order; the per-stage subcommands (``address``, ``cert``,
+``backend``, ``iap``, ``frontend``, ``grant``, ``firewall``) expose each on its
+own. ``status`` reports what exists and ``teardown`` deletes the stack.
+
+The ``firewall`` stage is kept separate and is *not* run by ``deploy`` unless
+``--with-firewall`` is passed: its allow-rule is a prerequisite for the LB health
+check, but its deny-public rule can cut internal task->controller traffic, so it
+stays an explicit, deliberate step.
 
 One stack per cluster: the cluster name is both the resource-name prefix
 (``iris-<cluster>-*``) and the GCE network tag / label used to find and firewall
@@ -24,7 +40,8 @@ the controller VM (``iris-<cluster>-controller``).
 Usage:
     uv run infra/iris-iap-gclb/iap_gclb.py deploy marin \\
         --domain iris-marin.example.com \\
-        --support-email you@example.com \\
+        --web-client-secrets scratch/web.json \\
+        --desktop-client-secrets scratch/desktop.json \\
         --member user:you@example.com
     uv run infra/iris-iap-gclb/iap_gclb.py status marin
     uv run infra/iris-iap-gclb/iap_gclb.py teardown marin
@@ -35,8 +52,10 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
 
 import click
@@ -48,11 +67,10 @@ DEFAULT_ZONE = "us-central1-a"
 CONTROLLER_PORT = 10000
 
 # Google front-end / health-check / IAP source ranges that legitimately reach
-# the controller port; a lower-priority rule denies everything else so nobody
-# can bypass IAP by hitting the VM's IP directly.
+# the controller port; a lower-priority deny rule blocks everything else so
+# nobody can bypass IAP by hitting the VM's IP directly.
 GOOGLE_LB_RANGES = "130.211.0.0/22,35.191.0.0/16"
 IAP_ACCESSOR_ROLE = "roles/iap.httpsResourceAccessor"
-OAUTH_CLIENT_DISPLAY = "Iris GCLB IAP"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -153,91 +171,84 @@ def _ensure(label: str, exists: bool, create_cmd: Sequence[str], *, dry_run: boo
     return True
 
 
-# --------------------------------------------------------------------------- #
-# Stage: IAP OAuth brand + client
-# --------------------------------------------------------------------------- #
+def read_oauth_client(path: str) -> tuple[str, str]:
+    """Return ``(client_id, client_secret)`` from a downloaded Google OAuth client JSON.
 
-
-def _list_brands(stack: Stack) -> list[dict]:
-    result = _run(_iap(stack, "oauth-brands", "list", "--format=json"), capture=True)
-    return json.loads(result.stdout or "[]")
-
-
-def _list_oauth_clients(stack: Stack, brand: str) -> list[dict]:
-    result = _run(_iap(stack, "oauth-clients", "list", brand, "--format=json"), capture=True)
-    return json.loads(result.stdout or "[]")
-
-
-def ensure_brand(stack: Stack, support_email: str | None, *, dry_run: bool) -> str:
-    """Return the project's IAP OAuth brand resource name, creating it if absent.
-
-    A project has at most one brand (the OAuth consent screen), so an existing
-    brand is reused. Creation needs a support email owned by the caller.
+    Accepts both the ``{"web": {...}}`` and ``{"installed": {...}}`` shapes the
+    Cloud Console emits.
     """
-    brands = [] if dry_run else _list_brands(stack)
-    if brands:
-        logger.info("✓ IAP brand exists: %s", brands[0]["name"])
-        return brands[0]["name"]
-    if not support_email:
-        raise click.ClickException("no IAP brand exists yet; pass --support-email to create one")
-    _run(
-        _iap(
-            stack,
-            "oauth-brands",
-            "create",
-            "--application_title=Iris Controller",
-            f"--support_email={support_email}",
-        ),
-        dry_run=dry_run,
-    )
-    if dry_run:
-        return "projects/<PROJECT_NUMBER>/brands/<BRAND_ID>"
-    return _list_brands(stack)[0]["name"]
+    with open(path) as fh:
+        data = json.load(fh)
+    for key in ("web", "installed"):
+        block = data.get(key)
+        if block:
+            return block["client_id"], block["client_secret"]
+    raise click.ClickException(f"{path}: not a Google OAuth client secrets JSON (no 'web'/'installed' key)")
 
 
-def ensure_oauth_client(stack: Stack, brand: str, *, dry_run: bool) -> tuple[str, str]:
-    """Return ``(client_id, client_secret)`` for this cluster's IAP OAuth client.
+# --------------------------------------------------------------------------- #
+# Controller discovery
+# --------------------------------------------------------------------------- #
 
-    Reuses an existing client matched by display name (``describe``/``list``
-    returns the secret for brand-owned clients), otherwise creates one.
-    """
-    display = f"{OAUTH_CLIENT_DISPLAY} ({stack.cluster})"
-    clients = [] if dry_run else _list_oauth_clients(stack, brand)
-    for client in clients:
-        if client.get("displayName") == display:
-            client_id = client["name"].split("/")[-1]
-            logger.info("✓ IAP OAuth client exists: %s", client_id)
-            return client_id, client["secret"]
+
+def _discover_controller(stack: Stack, field: str) -> str:
+    """Return a single field of the controller VM, found by its GCE label."""
     result = _run(
-        _iap(stack, "oauth-clients", "create", brand, f"--display_name={display}", "--format=json"),
-        dry_run=dry_run,
+        _compute(
+            stack,
+            "instances",
+            "list",
+            f"--filter=labels.{stack.controller_label}=true",
+            f"--format=value({field})",
+        ),
         capture=True,
     )
+    values = (result.stdout or "").split()
+    if not values:
+        raise click.ClickException(f"no controller VM labelled {stack.controller_label}=true")
+    if len(values) > 1:
+        raise click.ClickException(f"multiple VMs match {stack.controller_label}=true ({values})")
+    return values[0]
+
+
+def discover_controller_ip(stack: Stack) -> str:
+    """Resolve the controller VM's internal IP from its GCE label."""
+    return _discover_controller(stack, "networkInterfaces[0].networkIP")
+
+
+def discover_controller_name(stack: Stack) -> str:
+    """Resolve the controller VM's instance name from its GCE label."""
+    return _discover_controller(stack, "name")
+
+
+def discover_signed_header_audience(stack: Stack, *, dry_run: bool = False) -> str | None:
+    """Return the IAP signed-header JWT audience for the backend service.
+
+    The controller verifies this audience on IAP's ``X-Goog-IAP-JWT-Assertion``
+    header to grant tokenless browsers the read-only dashboard role. Its value is
+    ``/projects/<PROJECT_NUMBER>/global/backendServices/<BACKEND_SERVICE_ID>``.
+    Returns None if the project number or backend service can't be resolved yet
+    (e.g. dry-run, or before the backend stage has created the service).
+    """
     if dry_run:
-        return "<oauth-client-id>", "<oauth-client-secret>"
-    created = json.loads(result.stdout)
-    return created["name"].split("/")[-1], created["secret"]
-
-
-def resolve_oauth(
-    stack: Stack,
-    client_id: str | None,
-    client_secret: str | None,
-    support_email: str | None,
-    *,
-    dry_run: bool,
-) -> tuple[str, str]:
-    """Use explicit credentials if given, otherwise find/create the OAuth client."""
-    if client_id and client_secret:
-        return client_id, client_secret
-    if client_id or client_secret:
-        raise click.ClickException("pass both --oauth-client-id and --oauth-client-secret, or neither")
-    brand = ensure_brand(stack, support_email, dry_run=dry_run)
-    return ensure_oauth_client(stack, brand, dry_run=dry_run)
+        return None
+    project_number = _run(
+        ["gcloud", "projects", "describe", stack.project, "--format=value(projectNumber)"],
+        capture=True,
+        check=False,
+    ).stdout.strip()
+    backend_id = _run(
+        _compute(stack, "backend-services", "describe", stack.backend, "--global", "--format=value(id)"),
+        capture=True,
+        check=False,
+    ).stdout.strip()
+    if not project_number or not backend_id:
+        return None
+    return f"/projects/{project_number}/global/backendServices/{backend_id}"
 
 
 # --------------------------------------------------------------------------- #
-# Stage: static IP, managed cert, firewall
+# Stage: static IP, managed cert
 # --------------------------------------------------------------------------- #
 
 
@@ -272,8 +283,27 @@ def ensure_cert(stack: Stack, *, dry_run: bool) -> None:
     )
 
 
-def ensure_firewall(stack: Stack, *, dry_run: bool) -> None:
-    """Allow the controller port only from Google LB ranges; deny all other ingress."""
+# --------------------------------------------------------------------------- #
+# Stage: firewall (allow LB ranges; optionally deny public)
+# --------------------------------------------------------------------------- #
+
+
+def ensure_controller_tag(stack: Stack, *, dry_run: bool) -> None:
+    """Tag the controller VM so the firewall rules apply to it (idempotent)."""
+    name = discover_controller_name(stack)
+    logger.info("→ ensuring network tag %s on controller VM %s", stack.controller_label, name)
+    _run(
+        _compute(stack, "instances", "add-tags", name, f"--zone={stack.zone}", f"--tags={stack.controller_label}"),
+        dry_run=dry_run,
+    )
+
+
+def ensure_allow_firewall(stack: Stack, *, dry_run: bool) -> None:
+    """Allow the controller port from the Google front-end / health-check ranges.
+
+    Additive: without it the LB health check cannot reach the controller, so the
+    backend never becomes healthy.
+    """
     _ensure(
         f"firewall allow-LB {stack.allow_firewall}",
         _exists(_compute(stack, "firewall-rules", "describe", stack.allow_firewall)),
@@ -292,6 +322,16 @@ def ensure_firewall(stack: Stack, *, dry_run: bool) -> None:
         ),
         dry_run=dry_run,
     )
+
+
+def ensure_deny_firewall(stack: Stack, *, dry_run: bool) -> None:
+    """Deny all other ingress to the controller port (defence in depth).
+
+    Risky: this overrides ``default-allow-internal`` for the controller port, so
+    any in-cluster component that reaches the controller over the network (e.g.
+    task blob fetch) is cut. Apply only after confirming nothing internal needs
+    direct ``:{port}`` access.
+    """
     _ensure(
         f"firewall deny-public {stack.deny_firewall}",
         _exists(_compute(stack, "firewall-rules", "describe", stack.deny_firewall)),
@@ -313,30 +353,8 @@ def ensure_firewall(stack: Stack, *, dry_run: bool) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Stage: backend (NEG -> health check -> backend service -> IAP)
+# Stage: backend (NEG -> controller endpoint -> health check -> backend service)
 # --------------------------------------------------------------------------- #
-
-
-def discover_controller_ip(stack: Stack) -> str:
-    """Resolve the controller VM's internal IP from its GCE label."""
-    result = _run(
-        _compute(
-            stack,
-            "instances",
-            "list",
-            f"--filter=labels.{stack.controller_label}=true",
-            "--format=value(networkInterfaces[0].networkIP)",
-        ),
-        capture=True,
-    )
-    ips = (result.stdout or "").split()
-    if not ips:
-        raise click.ClickException(
-            f"no controller VM labelled {stack.controller_label}=true; pass --controller-ip explicitly"
-        )
-    if len(ips) > 1:
-        raise click.ClickException(f"multiple VMs match {stack.controller_label}=true ({ips}); pass --controller-ip")
-    return ips[0]
 
 
 def _neg_has_endpoint(stack: Stack, ip: str) -> bool:
@@ -369,16 +387,9 @@ def _backend_has_neg(stack: Stack) -> bool:
     return stack.neg in (result.stdout or "")
 
 
-def ensure_backend(
-    stack: Stack,
-    client_id: str,
-    client_secret: str,
-    controller_ip: str,
-    *,
-    dry_run: bool,
-) -> None:
+def ensure_backend(stack: Stack, controller_name: str, controller_ip: str, *, dry_run: bool) -> None:
     """Build the backend half: zonal NEG -> controller endpoint -> health check
-    -> backend service -> NEG attachment -> IAP enablement."""
+    -> backend service -> NEG attachment. IAP is enabled separately (``ensure_iap``)."""
     _ensure(
         f"zonal NEG {stack.neg}",
         _exists(_compute(stack, "network-endpoint-groups", "describe", stack.neg, f"--zone={stack.zone}")),
@@ -405,7 +416,7 @@ def ensure_backend(
                 "update",
                 stack.neg,
                 f"--zone={stack.zone}",
-                f"--add-endpoint=ip={controller_ip},port={CONTROLLER_PORT}",
+                f"--add-endpoint=instance={controller_name},ip={controller_ip},port={CONTROLLER_PORT}",
             ),
             dry_run=dry_run,
         )
@@ -469,24 +480,65 @@ def ensure_backend(
     else:
         logger.info("✓ NEG %s already attached to backend %s", stack.neg, stack.backend)
 
-    # Enabling IAP is an update, so it is idempotent; re-run to reconcile the
-    # configured OAuth client.
+
+# --------------------------------------------------------------------------- #
+# Stage: enable + configure IAP on the backend service
+# --------------------------------------------------------------------------- #
+
+
+def ensure_iap(stack: Stack, web_id: str, web_secret: str, desktop_id: str, *, dry_run: bool) -> None:
+    """Enable IAP on the backend and bind the OAuth clients.
+
+    The web client anchors IAP (``oauthSettings.clientId``) and renders the
+    browser sign-in page; the desktop client is added to
+    ``oauthSettings.programmaticClients`` so the CLI's bearer ID token (whose
+    ``aud`` is the desktop client id) is admitted. Both ``backend-services
+    update --iap=enabled`` and ``iap settings set`` are reconciling updates, so
+    re-running is safe.
+    """
     logger.info("→ enabling IAP on backend service %s", stack.backend)
     _run(
-        _compute(
-            stack,
-            "backend-services",
-            "update",
-            stack.backend,
-            "--global",
-            f"--iap=enabled,oauth2-client-id={client_id},oauth2-client-secret={client_secret}",
-        ),
+        _compute(stack, "backend-services", "update", stack.backend, "--global", "--iap=enabled"),
         dry_run=dry_run,
     )
 
+    settings = {
+        "access_settings": {
+            "oauth_settings": {
+                "client_id": web_id,
+                "client_secret": web_secret,
+                "programmatic_clients": [desktop_id],
+            }
+        }
+    }
+    logger.info(
+        "→ IAP oauth_settings: clientId=%s programmaticClients=[%s]",
+        web_id,
+        desktop_id,
+    )
+    if dry_run:
+        return
+
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        json.dump(settings, fh)
+        settings_path = fh.name
+    try:
+        _run(
+            _iap(
+                stack,
+                "settings",
+                "set",
+                settings_path,
+                "--resource-type=backend-services",
+                f"--service={stack.backend}",
+            )
+        )
+    finally:
+        os.unlink(settings_path)
+
 
 # --------------------------------------------------------------------------- #
-# Stage: frontend (URL map -> HTTPS proxy -> forwarding rule)
+# Stage: frontend (URL map -> HTTPS proxy -> forwarding rule) + IAM grant
 # --------------------------------------------------------------------------- #
 
 
@@ -547,6 +599,38 @@ def grant_access(stack: Stack, member: str, *, dry_run: bool) -> None:
     )
 
 
+def print_auth_block(
+    stack: Stack,
+    desktop_id: str,
+    desktop_secret: str,
+    member: str | None,
+    signed_header_audience: str | None,
+) -> None:
+    """Print the cluster ``auth.iap`` block to paste into the cluster config."""
+    admin = member.split(":", 1)[-1] if member else "you@example.com"
+    click.echo()
+    click.echo("Add this to the cluster config (the desktop client secret is non-confidential,")
+    click.echo("RFC 8252 §8.5). optional=true keeps tokenless callers working until you cut over:")
+    click.echo()
+    click.echo("auth:")
+    click.echo("  iap:")
+    click.echo(f"    url: https://{stack.domain}")
+    click.echo(f"    oauth_client_id: {desktop_id}")
+    click.echo(f"    oauth_client_secret: {desktop_secret}")
+    click.echo("    audiences:")
+    click.echo(f"      - {desktop_id}")
+    # The signed-header audience opts an IAP-authenticated browser into the
+    # read-only dashboard role without `iris login`.
+    if signed_header_audience:
+        click.echo(f"    signed_header_audience: {signed_header_audience}")
+    else:
+        click.echo("    # signed_header_audience: /projects/<NUM>/global/backendServices/<ID>")
+        click.echo("    #   (re-run `status` once the backend service exists to print it)")
+    click.echo("  admin_users:")
+    click.echo(f"    - {admin}")
+    click.echo("  optional: true")
+
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -557,6 +641,22 @@ def _common_options(func):
     func = click.option("--project", default=DEFAULT_PROJECT, show_default=True, help="GCP project id")(func)
     func = click.option("--zone", default=DEFAULT_ZONE, show_default=True, help="Zone of the controller VM / NEG")(func)
     func = click.option("--dry-run", is_flag=True, help="Trace gcloud commands without running them")(func)
+    return func
+
+
+def _client_options(func):
+    func = click.option(
+        "--web-client-secrets",
+        required=True,
+        type=click.Path(exists=True, dir_okay=False),
+        help="Downloaded JSON for the Web OAuth client (IAP anchor + browser sign-in)",
+    )(func)
+    func = click.option(
+        "--desktop-client-secrets",
+        required=True,
+        type=click.Path(exists=True, dir_okay=False),
+        help="Downloaded JSON for the Desktop OAuth client (the CLI login flow)",
+    )(func)
     return func
 
 
@@ -572,32 +672,41 @@ def cli(verbose: bool) -> None:
 
 @cli.command()
 @_common_options
+@_client_options
 @click.option("--domain", required=True, help="Domain whose DNS A record points at the reserved static IP")
 @click.option("--controller-ip", help="Controller VM internal IP (default: discover from the GCE label)")
-@click.option("--support-email", help="Support email for the IAP brand (only needed to create one)")
-@click.option("--oauth-client-id", help="Existing IAP OAuth client id (default: find/create one)")
-@click.option("--oauth-client-secret", help="Existing IAP OAuth client secret")
 @click.option("--member", help="Principal to grant IAP access, e.g. user:you@example.com")
+@click.option("--with-firewall", is_flag=True, help="Also run the allow-LB firewall stage (tag VM + allow rule)")
 def deploy(
     cluster: str,
     project: str,
     zone: str,
     dry_run: bool,
+    web_client_secrets: str,
+    desktop_client_secrets: str,
     domain: str,
     controller_ip: str | None,
-    support_email: str | None,
-    oauth_client_id: str | None,
-    oauth_client_secret: str | None,
     member: str | None,
+    with_firewall: bool,
 ) -> None:
-    """Run every stage in dependency order to stand up the full stack."""
+    """Run the stages in dependency order to stand up the full stack.
+
+    The deny-public firewall rule is never part of ``deploy`` — add it explicitly
+    with ``firewall <cluster> --deny-public`` once internal access is confirmed.
+    """
     stack = Stack(cluster=cluster, project=project, zone=zone, domain=domain)
+    web_id, web_secret = read_oauth_client(web_client_secrets)
+    desktop_id, desktop_secret = read_oauth_client(desktop_client_secrets)
+    controller_name = discover_controller_name(stack)
     controller_ip = controller_ip or discover_controller_ip(stack)
-    client_id, client_secret = resolve_oauth(stack, oauth_client_id, oauth_client_secret, support_email, dry_run=dry_run)
+
     reserved_ip = ensure_address(stack, dry_run=dry_run)
     ensure_cert(stack, dry_run=dry_run)
-    ensure_firewall(stack, dry_run=dry_run)
-    ensure_backend(stack, client_id, client_secret, controller_ip, dry_run=dry_run)
+    if with_firewall:
+        ensure_controller_tag(stack, dry_run=dry_run)
+        ensure_allow_firewall(stack, dry_run=dry_run)
+    ensure_backend(stack, controller_name, controller_ip, dry_run=dry_run)
+    ensure_iap(stack, web_id, web_secret, desktop_id, dry_run=dry_run)
     ensure_frontend(stack, dry_run=dry_run)
     if member:
         grant_access(stack, member, dry_run=dry_run)
@@ -607,23 +716,14 @@ def deploy(
     click.echo(f"  Reserved IP    : {reserved_ip}")
     click.echo(f"  Domain         : {domain}  (ensure a DNS A record -> {reserved_ip})")
     click.echo(f"  URL            : https://{domain}")
-    click.echo(f"  OAuth client   : {client_id}")
-    click.echo()
-    click.echo(f"The managed cert ({stack.cert}) provisions only after DNS resolves to the")
-    click.echo("reserved IP; expect a few minutes to ACTIVE. Grant more users with:")
-    click.echo(f"  uv run {sys.argv[0]} grant {cluster} --member user:NAME@example.com")
-
-
-@cli.command()
-@_common_options
-@click.option("--support-email", help="Support email for the IAP brand (only needed to create one)")
-def oauth(cluster: str, project: str, zone: str, dry_run: bool, support_email: str | None) -> None:
-    """Ensure the IAP OAuth brand + client exist; print the client id/secret."""
-    stack = Stack(cluster=cluster, project=project, zone=zone)
-    brand = ensure_brand(stack, support_email, dry_run=dry_run)
-    client_id, client_secret = ensure_oauth_client(stack, brand, dry_run=dry_run)
-    click.echo(f"oauth-client-id     : {client_id}")
-    click.echo(f"oauth-client-secret : {client_secret}")
+    click.echo(f"  Web client     : {web_id}")
+    click.echo(f"  Desktop client : {desktop_id}  (programmatic / CLI)")
+    if not with_firewall:
+        click.echo()
+        click.echo("Firewall NOT applied. The backend health check needs the allow-LB rule:")
+        click.echo(f"  uv run {sys.argv[0]} firewall {cluster}")
+    signed_header_audience = discover_signed_header_audience(stack, dry_run=dry_run)
+    print_auth_block(stack, desktop_id, desktop_secret, member, signed_header_audience)
 
 
 @cli.command()
@@ -645,32 +745,48 @@ def cert(cluster: str, project: str, zone: str, dry_run: bool, domain: str) -> N
 
 @cli.command()
 @_common_options
-def firewall(cluster: str, project: str, zone: str, dry_run: bool) -> None:
-    """Allow the controller port from Google LB ranges only; deny public ingress."""
-    ensure_firewall(Stack(cluster=cluster, project=project, zone=zone), dry_run=dry_run)
+@click.option("--deny-public", is_flag=True, help="Also add the deny-public rule (blocks all non-Google ingress)")
+def firewall(cluster: str, project: str, zone: str, dry_run: bool, deny_public: bool) -> None:
+    """Tag the controller VM and allow the Google LB ranges to reach the controller port.
+
+    The allow rule is additive. Pass --deny-public to *also* block every other
+    source — only do that once you've confirmed nothing internal reaches the
+    controller port directly.
+    """
+    stack = Stack(cluster=cluster, project=project, zone=zone)
+    ensure_controller_tag(stack, dry_run=dry_run)
+    ensure_allow_firewall(stack, dry_run=dry_run)
+    if deny_public:
+        ensure_deny_firewall(stack, dry_run=dry_run)
 
 
 @cli.command()
 @_common_options
 @click.option("--controller-ip", help="Controller VM internal IP (default: discover from the GCE label)")
-@click.option("--support-email", help="Support email for the IAP brand (only needed to create one)")
-@click.option("--oauth-client-id", help="Existing IAP OAuth client id (default: find/create one)")
-@click.option("--oauth-client-secret", help="Existing IAP OAuth client secret")
-def backend(
+def backend(cluster: str, project: str, zone: str, dry_run: bool, controller_ip: str | None) -> None:
+    """Build the NEG -> health check -> backend service (no IAP; see the iap stage)."""
+    stack = Stack(cluster=cluster, project=project, zone=zone)
+    controller_name = discover_controller_name(stack)
+    controller_ip = controller_ip or discover_controller_ip(stack)
+    ensure_backend(stack, controller_name, controller_ip, dry_run=dry_run)
+
+
+@cli.command()
+@_common_options
+@_client_options
+def iap(
     cluster: str,
     project: str,
     zone: str,
     dry_run: bool,
-    controller_ip: str | None,
-    support_email: str | None,
-    oauth_client_id: str | None,
-    oauth_client_secret: str | None,
+    web_client_secrets: str,
+    desktop_client_secrets: str,
 ) -> None:
-    """Build the NEG -> health check -> backend service and enable IAP on it."""
+    """Enable IAP on the backend and bind the web + desktop OAuth clients."""
     stack = Stack(cluster=cluster, project=project, zone=zone)
-    controller_ip = controller_ip or discover_controller_ip(stack)
-    client_id, client_secret = resolve_oauth(stack, oauth_client_id, oauth_client_secret, support_email, dry_run=dry_run)
-    ensure_backend(stack, client_id, client_secret, controller_ip, dry_run=dry_run)
+    web_id, web_secret = read_oauth_client(web_client_secrets)
+    desktop_id, _ = read_oauth_client(desktop_client_secrets)
+    ensure_iap(stack, web_id, web_secret, desktop_id, dry_run=dry_run)
 
 
 @cli.command()
@@ -723,22 +839,17 @@ def status(cluster: str, project: str, zone: str, dry_run: bool) -> None:
     )
     if cert_state.returncode == 0 and cert_state.stdout.strip():
         click.echo(f"  cert state  : {cert_state.stdout.strip()}")
+    audience = discover_signed_header_audience(stack)
+    if audience:
+        click.echo(f"  iap jwt aud : {audience}  (auth.iap.signed_header_audience)")
 
 
 @cli.command()
 @_common_options
 @click.option("--release-ip", is_flag=True, help="Also release the reserved static IP (breaks the DNS A record)")
-@click.option("--delete-oauth-client", is_flag=True, help="Also delete this cluster's IAP OAuth client")
-def teardown(
-    cluster: str,
-    project: str,
-    zone: str,
-    dry_run: bool,
-    release_ip: bool,
-    delete_oauth_client: bool,
-) -> None:
-    """Delete the LB stack in dependency order. Keeps the static IP + OAuth client
-    by default so a redeploy reuses the DNS record and consent screen."""
+def teardown(cluster: str, project: str, zone: str, dry_run: bool, release_ip: bool) -> None:
+    """Delete the LB stack in dependency order. Keeps the static IP by default so a
+    redeploy reuses the DNS record. OAuth clients are Console-managed and untouched."""
     stack = Stack(cluster=cluster, project=project, zone=zone)
 
     def _delete(label: str, cmd: Sequence[str]) -> None:
@@ -761,15 +872,6 @@ def teardown(
         _delete(stack.address, _compute(stack, "addresses", "delete", stack.address, "--global"))
     else:
         click.echo(f"Kept static IP {stack.address}; pass --release-ip to release it.")
-
-    if delete_oauth_client and not dry_run:
-        brands = _list_brands(stack)
-        display = f"{OAUTH_CLIENT_DISPLAY} ({cluster})"
-        for client in (brands and _list_oauth_clients(stack, brands[0]["name"])) or []:
-            if client.get("displayName") == display:
-                _delete(client["name"], _iap(stack, "oauth-clients", "delete", client["name"]))
-    elif not delete_oauth_client:
-        click.echo("Kept the IAP OAuth client; pass --delete-oauth-client to remove it.")
 
 
 if __name__ == "__main__":

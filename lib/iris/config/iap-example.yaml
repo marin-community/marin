@@ -38,9 +38,18 @@ auth:
     # the IAP-secured OAuth client id (service-account flow).
     audiences:
       - REPLACE_WITH_DESKTOP_CLIENT_ID.apps.googleusercontent.com
+    # Audience of IAP's signed X-Goog-IAP-JWT-Assertion header (the backend
+    # service resource path). When set, an IAP-authenticated browser that has
+    # not run `iris login` is granted the read-only `dashboard` role implicitly
+    # — it can view the dashboard but not submit/cancel/manage. The deploy
+    # script prints this; leave empty to disable implicit dashboard access.
+    signed_header_audience: /projects/PROJECT_NUMBER/global/backendServices/BACKEND_SERVICE_ID
   admin_users:
     - russell.power@gmail.com
-  optional: false  # public ingress: tokenless requests are rejected
+  # With signed_header_audience set, tokenless browsers behind IAP get read-only
+  # dashboard access; optional=false still rejects tokenless calls that did NOT
+  # pass IAP (no valid assertion), so the controller is never open to anonymous.
+  optional: false
 
 scale_groups:
   cpu:

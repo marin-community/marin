@@ -25,6 +25,7 @@ from iris.cluster.controller.schema import auth_api_keys_table, auth_controller_
 from iris.rpc import config_pb2
 from iris.rpc.auth import (
     GcpAccessTokenVerifier,
+    IapAssertionVerifier,
     IapIdTokenVerifier,
     StaticTokenVerifier,
     TokenVerifier,
@@ -282,6 +283,9 @@ class ControllerAuth:
     gcp_project_id: str | None = None
     jwt_manager: JwtTokenManager | None = None
     optional: bool = False
+    # Verifies IAP's signed-header assertion to grant tokenless browsers the
+    # read-only dashboard role (only when an IAP signed_header_audience is set).
+    iap_assertion_verifier: IapAssertionVerifier | None = None
 
 
 def create_controller_auth(
@@ -355,11 +359,18 @@ def create_controller_auth(
 
     # For IAP, `iris login` presents the OIDC ID token it obtained for the IAP
     # ingress; the controller verifies it (audience + signature) and mints a JWT.
+    iap_assertion_verifier: IapAssertionVerifier | None = None
     if provider == "iap":
         audiences = list(auth_config.iap.audiences)
         if not audiences:
             raise ValueError("IAP auth config requires at least one audience")
         login_verifier = IapIdTokenVerifier(audiences)
+
+        # When the signed-header audience is configured, a tokenless request that
+        # carries a valid IAP assertion is granted the read-only dashboard role.
+        signed_header_audience = auth_config.iap.signed_header_audience
+        if signed_header_audience:
+            iap_assertion_verifier = IapAssertionVerifier(signed_header_audience)
 
     optional = auth_config.optional
     logger.info(
@@ -377,6 +388,7 @@ def create_controller_auth(
         gcp_project_id=gcp_project_id,
         jwt_manager=jwt_mgr,
         optional=optional,
+        iap_assertion_verifier=iap_assertion_verifier,
     )
 
 
