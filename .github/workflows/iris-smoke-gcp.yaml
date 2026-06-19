@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - "lib/iris/**"
-      - "scripts/workflows/iris_monitor.py"
+      - "scripts/ci/iris_monitor.py"
       - ".github/workflows/iris-smoke-gcp.yaml"
   workflow_dispatch:
 
@@ -168,7 +168,7 @@ jobs:
           if [ -n "${IRIS_CONTROLLER_URL:-}" ]; then
             ARGS+=(--controller-url "$IRIS_CONTROLLER_URL")
           fi
-          uv run python scripts/workflows/iris_monitor.py "${ARGS[@]}"
+          uv run python scripts/ci/iris_monitor.py "${ARGS[@]}"
 
       - name: Upload logs
         if: failure()
