@@ -1,0 +1,6 @@
+# All pipeline outputs are reproducible from the scripts, so none are committed:
+#   data/raw/    finelog parquet + W&B cache + GCP audit-event CSVs (multi-GB) — `pipeline.py fetch`
+#   data/daily/  per-day rollup CSVs — `pipeline.py extract`
+#   data/charts/ rendered SVG/PNG — `pipeline.py charts`
+data/
+*.log

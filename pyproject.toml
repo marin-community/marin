@@ -279,6 +279,9 @@ search-path = [
     # benchmark_controller.py imports controller test fixtures from lib/iris/tests
     # (`from tests.cluster.controller... import`), run with lib/iris on sys.path.
     "lib/iris",
+    # blog_metrics is a standalone multi-file script package; its modules import
+    # each other by bare name (pipeline.py adds its own dir to sys.path at runtime).
+    "lib/iris/scripts/blog_metrics",
 ]
 disable-search-path-heuristics = true
 
@@ -315,6 +318,8 @@ ignore-missing-imports = [
     "lm_eval.*",
     "math_verify",
     "math_verify.*",
+    "matplotlib",
+    "matplotlib.*",
     "memray",
     "memray.*",
     "prompt_toolkit",
@@ -323,6 +328,8 @@ ignore-missing-imports = [
     "pylatexenc.*",
     "resiliparse",
     "resiliparse.*",
+    "seaborn",
+    "seaborn.*",
     "sympy",
     "sympy.*",
     "tensorboardX",
@@ -339,6 +346,10 @@ ignore-missing-imports = [
     "verifiers.*",
     "vllm",
     "vllm.*",
+    "wandb",
+    "wandb.*",
+    "wandb_gql",
+    "wandb_gql.*",
     "xprof",
     "xprof.*",
 ]
