@@ -111,12 +111,6 @@ class _InProcessWorkerContext:
                 self._shared_data_cache[name] = cloudpickle.loads(f.read())
         return self._shared_data_cache[name]
 
-    def increment_counter(self, name: str, value: int = 1, stage: str | None = None) -> None:
-        if name in self._counters:
-            self._counters[name].value += value
-        else:
-            self._counters[name] = CounterEntry(value, stage=stage)
-
     def set_counter(self, name: str, value: int | float, stage: str | None = None) -> None:
         if name in self._counters:
             entry = self._counters[name]
