@@ -871,3 +871,22 @@ The ppermute bridge removes compiled all-to-alls entirely and also eliminates th
 
 - Interpretation: This is a clean negative result. The new row achieves the intended StableHLO shape (`AG/A2A/CP=2/0/2`), but XLA GPU compiled lowering reintroduces 144 all-to-alls and makes it 1.74x slower than the un-packed data-ppermute bridge. Reducing logical collective count and avoiding StableHLO A2A is not enough; the packed reshape/collective pattern still lowers through expensive A2A-like movement.
 - Next action: Treat the current JAX-level `reshard`/`shard_map` bridge space as exhausted for the FSDP-master hot boundary. Pallas/Triton kernels cannot replace cross-device collectives by themselves; a real lower-level bridge would need a custom collective/custom call, or the production path should avoid this hot restore by keeping a grouped expert-bank representation consumable by the model/apply path.
+
+### 2026-06-19 13:10 PDT - slice-first group gather cuts the FSDP bridge by ~27%
+- Hypothesis: The current direct `shard_map` bridge gathers the grouped axis before slicing the FSDP `data` shard. For the requested logical movement
+  `P(('replica_dcn', 'data'), 'expert', None, None) -> P(None, 'expert', 'data', None)`, we should slice the local matrix axis by `data` first, then gather the grouped axis. That should avoid communicating full rows that the output FSDP shard will discard.
+- Command:
+  - Code change: added `expert_fsdp_grouped_explicit_slice_first_gather_restore_boundary` and `expert_fsdp_grouped_explicit_slice_first_gather_apply_boundary` to `experiments/grug/moe/muon_update_bench.py`, with focused coverage in `experiments/grug/moe/test_muon_update_bench.py`. Commit `83a8218b9` pushed to `codex/research-grug-moe-d2560-mfu`.
+  - Validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -q` -> 64 passed; `./infra/pre-commit.py --files experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix` -> OK.
+  - CoreWeave run: parent `/dlwh/iris-run-job-20260619-190345`; child `/dlwh/iris-run-job-20260619-190345/grug-train-MUON-BENCH-D2560-L26-R2D2E8-SLICEFIRST-H1-G4-N4-cw-20260619-190343`.
+  - Output: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D2E8-SLICEFIRST-H1-G4-N4-cw-20260619-190343-55a1d8/summary.json`.
+- Result:
+
+| boundary | lowered AG/A2A/CP | compiled AG/A2A/CP | median | mean |
+| --- | --- | --- | ---: | ---: |
+| data-ppermute apply | 14/0/14 | 150/0/112 | 0.2119s | 0.2118-0.2125s |
+| slice-first gather apply | 14/0/0 | 150/0/0 | 0.1553s | 0.1553s |
+
+The slice-first gather bridge is about 1.36x faster than data-ppermute apply on the same 4-node R2/D2/E8 L26 bridge-only run, and it removes compiled collective-permute entirely while keeping compiled all-to-all at zero.
+- Interpretation: This answers the layout question more favorably than the earlier attempts: the direct target is viable if the local row shard is selected before the group-axis gather. It still compiles to 150 all-gathers, so it does not solve the entire FSDP-master objective by itself, but the bridge is now materially cheaper than the previous best un-packed JAX-level bridge.
+- Next action: Integrate this slice-first gather restore into the production grouped MuonH path in place of the data-first A2A restore, then rerun the real grouped MuonH update/apply gate. If production still compiles hundreds of collectives or stalls near ~0.9s, the remaining blocker is interaction with grouped NS/apply rather than this isolated bridge.
