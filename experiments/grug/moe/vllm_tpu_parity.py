@@ -88,6 +88,11 @@ _FORWARD_DEBUG_VALUE_NAMES = (
     "layer_output",
     "final_hidden",
 )
+_GRUGMOE_ATTENTION_MODE_KEY = "grugmoe_attention_mode"
+_DENSE_ATTENTION_MODE = "dense"
+_PRODUCTION_ATTENTION_MODE = "production"
+_PRODUCTION_ATTENTION_LOGITS_TOLERANCE = 5e-2
+_PRODUCTION_ATTENTION_LOGPROB_TOLERANCE = 5e-2
 
 
 class _EmptyMesh:
@@ -389,13 +394,23 @@ def _layer_sliding_window(cfg: GrugModelConfig, layer_index: int) -> int:
     return cfg.sliding_window if layer_index % 4 == 3 else short_window
 
 
-def _hf_config(cfg: GrugModelConfig) -> SimpleNamespace:
-    return SimpleNamespace(**cfg.to_hf_config(cfg.vocab_size).to_dict())
+def _hf_config(
+    cfg: GrugModelConfig,
+    *,
+    attention_mode: str | None = None,
+) -> SimpleNamespace:
+    config_overrides = None if attention_mode is None else {_GRUGMOE_ATTENTION_MODE_KEY: attention_mode}
+    return SimpleNamespace(**cfg.to_hf_config(cfg.vocab_size, config_overrides=config_overrides).to_dict())
 
 
-def _vllm_config(cfg: GrugModelConfig, model_path: Path | None = None) -> SimpleNamespace:
+def _vllm_config(
+    cfg: GrugModelConfig,
+    model_path: Path | None = None,
+    *,
+    attention_mode: str | None = _DENSE_ATTENTION_MODE,
+) -> SimpleNamespace:
     model_config = SimpleNamespace(
-        hf_config=_hf_config(cfg),
+        hf_config=_hf_config(cfg, attention_mode=attention_mode),
         dtype=jnp.float32,
         model=str(model_path) if model_path is not None else "grugmoe-canonical-test",
     )
@@ -407,7 +422,7 @@ def _vllm_config(cfg: GrugModelConfig, model_path: Path | None = None) -> Simple
 
 
 def _tpu_cfg(tpu_grugmoe, cfg: GrugModelConfig):
-    return tpu_grugmoe.GrugMoeConfig.from_hf_config(_hf_config(cfg))
+    return tpu_grugmoe.GrugMoeConfig.from_hf_config(_hf_config(cfg, attention_mode=_DENSE_ATTENTION_MODE))
 
 
 def _tpu_mesh() -> Mesh:
@@ -1246,6 +1261,155 @@ def _native_forward(
     return hidden, logits, expert_ids
 
 
+def _production_attention_metadata(
+    attention_metadata_mod: Any,
+    *,
+    seq_len: int,
+    block_size: int,
+) -> Any:
+    block_count = max(1, (seq_len + block_size - 1) // block_size)
+    return attention_metadata_mod.AttentionMetadata(
+        input_positions=jnp.arange(seq_len, dtype=jnp.int32),
+        block_tables=jnp.arange(block_count, dtype=jnp.int32),
+        seq_lens=jnp.asarray([seq_len], dtype=jnp.int32),
+        query_start_loc=jnp.asarray([0, seq_len], dtype=jnp.int32),
+        request_distribution=jnp.asarray([0, 0, 1], dtype=jnp.int32),
+    )
+
+
+def _native_production_forward(
+    tpu_model: Any,
+    token_ids: jax.Array,
+    attention_metadata_mod: Any,
+    *,
+    block_size: int,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    from tpu_inference.runner.kv_cache import create_kv_caches  # noqa: PLC0415
+
+    cfg = tpu_model.model.config
+    seq_len = int(token_ids.shape[1])
+    block_count = max(4, (seq_len + block_size - 1) // block_size)
+    kv_caches = create_kv_caches(
+        num_blocks=block_count,
+        block_size=block_size,
+        num_kv_heads=cfg.num_kv_heads,
+        head_size=cfg.inferred_head_dim,
+        mesh=_tpu_mesh(),
+        layer_names=["layer"] * cfg.num_layers,
+        cache_dtype=jnp.float32,
+    )
+    metadata = _production_attention_metadata(
+        attention_metadata_mod,
+        seq_len=seq_len,
+        block_size=block_size,
+    )
+    _, hidden, expert_ids = tpu_model.model(kv_caches, token_ids[0], metadata)
+    logits = tpu_model.compute_logits(hidden)
+    if expert_ids is None:
+        raise AssertionError("production GrugMoE model did not return routed expert IDs")
+    return hidden, logits, expert_ids
+
+
+def _selected_next_token_logprobs(
+    logits: jax.Array,
+    token_ids: jax.Array,
+) -> jax.Array:
+    targets = token_ids[0, 1:]
+    logprobs = jax.nn.log_softmax(logits[:-1].astype(jnp.float32), axis=-1)
+    return jnp.take_along_axis(logprobs, targets[:, None], axis=-1)[:, 0]
+
+
+def _delta_summary(actual: Any, expected: Any) -> dict[str, float]:
+    delta = np.abs(np.asarray(actual, dtype=np.float64) - np.asarray(expected, dtype=np.float64))
+    return {
+        "max_abs_delta": float(np.max(delta)) if delta.size else 0.0,
+        "mean_abs_delta": float(np.mean(delta)) if delta.size else 0.0,
+    }
+
+
+def _assert_delta_with_summary(
+    *,
+    label: str,
+    actual: Any,
+    expected: Any,
+    tolerance: float,
+) -> dict[str, float]:
+    summary = _delta_summary(actual, expected)
+    if summary["max_abs_delta"] > tolerance:
+        raise AssertionError(f"{label} exceeded tolerance {tolerance}: {summary}")
+    return summary
+
+
+def check_production_attention_against_dense(tpu_grugmoe) -> None:
+    attention_metadata_mod = importlib.import_module("tpu_inference.layers.common.attention_metadata")
+    cfg = _small_diagnostic_cfg()
+    token_ids = _realistic_prompt_ids(cfg)
+    key = jax.random.PRNGKey(11)
+    with _use_runtime_grug_mesh(for_init=True):
+        lev_model = Transformer.init(cfg, key=key)
+
+    with _patch_tpu_single_rank(tpu_grugmoe), jax.set_mesh(_tpu_mesh()):
+        dense_model = tpu_grugmoe.GrugMoeForCausalLM(
+            _vllm_config(cfg, attention_mode=_DENSE_ATTENTION_MODE),
+            jax.random.PRNGKey(12),
+            _tpu_mesh(),
+        )
+        production_model = tpu_grugmoe.GrugMoeForCausalLM(
+            _vllm_config(cfg, attention_mode=_PRODUCTION_ATTENTION_MODE),
+            jax.random.PRNGKey(13),
+            _tpu_mesh(),
+        )
+    _copy_transformer(dense_model, lev_model)
+    _copy_transformer(production_model, lev_model)
+
+    dense_hidden, dense_logits, dense_expert_ids = _native_forward(
+        dense_model,
+        token_ids,
+        attention_metadata_mod,
+    )
+    (
+        production_hidden,
+        production_logits,
+        production_expert_ids,
+    ) = _native_production_forward(
+        production_model,
+        token_ids,
+        attention_metadata_mod,
+        block_size=16,
+    )
+
+    hidden_summary = _assert_delta_with_summary(
+        label="production-attention hidden",
+        actual=_np(production_hidden),
+        expected=_np(dense_hidden),
+        tolerance=_PRODUCTION_ATTENTION_LOGITS_TOLERANCE,
+    )
+    logits_summary = _assert_delta_with_summary(
+        label="production-attention logits",
+        actual=_np(production_logits),
+        expected=_np(dense_logits),
+        tolerance=_PRODUCTION_ATTENTION_LOGITS_TOLERANCE,
+    )
+    logprob_summary = _assert_delta_with_summary(
+        label="production-attention selected next-token logprobs",
+        actual=_np(_selected_next_token_logprobs(production_logits, token_ids)),
+        expected=_np(_selected_next_token_logprobs(dense_logits, token_ids)),
+        tolerance=_PRODUCTION_ATTENTION_LOGPROB_TOLERANCE,
+    )
+    np.testing.assert_array_equal(
+        _np(production_expert_ids),
+        _np(dense_expert_ids),
+    )
+    print(
+        "production-attention-smoke: "
+        f"mode={_PRODUCTION_ATTENTION_MODE} reference={_DENSE_ATTENTION_MODE} "
+        f"token_ids={np.asarray(token_ids).tolist()[0]} "
+        f"hidden_delta={json.dumps(hidden_summary, sort_keys=True)} "
+        f"logits_delta={json.dumps(logits_summary, sort_keys=True)} "
+        f"logprob_delta={json.dumps(logprob_summary, sort_keys=True)}"
+    )
+
+
 def check_full_forward(tpu_grugmoe) -> None:
     attention_metadata_mod = importlib.import_module("tpu_inference.layers.common.attention_metadata")
     cfg = _tiny_cfg()
@@ -1615,6 +1779,11 @@ def main() -> None:
         help="Run the seeded non-zero GrugTrainState checkpoint -> sharded HF -> native tpu-inference parity check.",
     )
     parser.add_argument(
+        "--production-attention-smoke",
+        action="store_true",
+        help=("Run the small production-attention KV-cache path against the dense reference."),
+    )
+    parser.add_argument(
         "--realistic-config",
         choices=("canary", "scaled", "small-diagnostic"),
         default="canary",
@@ -1683,6 +1852,8 @@ def main() -> None:
     check_moe_component(tpu_grugmoe)
     if not args.component_only:
         check_full_forward(tpu_grugmoe)
+        if args.production_attention_smoke:
+            check_production_attention_against_dense(tpu_grugmoe)
         check_inference_artifact_roundtrip(tpu_grugmoe)
         if args.large_smoke:
             check_large_sharded_artifact_smoke(tpu_grugmoe)

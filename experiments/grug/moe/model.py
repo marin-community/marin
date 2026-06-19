@@ -237,6 +237,7 @@ class GrugModelConfig:
             "initializer_std": self.initializer_std,
             "initializer_range": self.initializer_std,
             "qk_mult": self.qk_mult,
+            "grugmoe_attention_mode": "production",
             "rope_theta": self.rope.theta,
             "tie_word_embeddings": False,
         }

@@ -218,6 +218,7 @@ def export_artifact(
     print("artifact_generation_process=started")
     print("artifact_model_size=" + model_size)
     print("artifact_parity_config=" + config_name)
+    parity.check_production_attention_against_dense(tpu_grugmoe)
     parity.check_realistic_training_state_roundtrip(
         tpu_grugmoe,
         config_name=config_name,
