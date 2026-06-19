@@ -49,12 +49,31 @@ MUON_BENCH_DATA_AXIS=2
 MUON_BENCH_EXPERT_AXIS=4
 ```
 
+For fp32 master/input probes, keep Newton-Schulz compute dtype explicit:
+
+```bash
+MUON_BENCH_DTYPE=fp32
+MUON_BENCH_NS_COMPUTE_DTYPE=bf16
+```
+
+Use `MUON_BENCH_NS_COMPUTE_DTYPE=input` only when explicitly measuring fp32
+Newton-Schulz. On the 2026-06-19 fp32-input R2/D2/E8 expert-only gate, bf16
+Newton-Schulz was about 1.9x faster than fp32 Newton-Schulz while keeping the
+same grouped optimizer/apply representation.
+
 For scale probes, `MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn,data` asks the grouped
 4D path to shard the grouped layer axis over both inter-node replicas and local
 data shards when the group size is divisible by their product. Use this for the
 32/128 GPU Muon-only gates before attempting any train integration run.
 
 Keep `MUON_BENCH_MODEL_AXIS=1` for this single-node harness.
+
+For grouped-bank boundary experiments, prefer
+`expert_grouped_single_layer_slice_boundary` over the all-layer
+`expert_grouped_layer_slice_boundary` at full L26 May shapes. The all-layer
+slice and full dot-only rows can materialize too much state and OOM; the
+single-layer row avoids that failure mode and measures the per-block cost of
+slicing a grouped expert bank into an EP-consumable leaf.
 
 ## Output Fields
 
