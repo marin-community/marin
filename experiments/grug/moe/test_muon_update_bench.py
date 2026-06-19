@@ -22,6 +22,7 @@ from experiments.grug.moe.muon_update_bench import (
     EXPERT_GROUPED_LAYER_SLICE_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
+    EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH,
     EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_APPLY_ONLY_BENCH,
     FULL_PRODUCTION_GROUPED_2D_MUONH_OPTIMIZER_APPLY_BENCH,
@@ -54,6 +55,7 @@ from experiments.grug.moe.muon_update_bench import (
     expert_fsdp_grouped_updates_muonh_apply_step_factory,
     expert_fsdp_grouped_updates_muonh_updates_step_factory,
     expert_grouped_layer_slice_step_factory,
+    expert_grouped_single_layer_slice_step_factory,
     full_production_grouped_2d_persistent_apply_timing_step_factory,
     full_production_muonh_mask,
     full_production_muonh_optimizer_apply_step_factory,
@@ -493,6 +495,47 @@ def test_grouped_expert_layer_slice_boundary_returns_ep_consumable_leaves():
     assert hlo_summary.all_to_all == 0
 
 
+def test_grouped_expert_single_layer_slice_boundary_returns_one_ep_consumable_layer():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = synthetic_grouped_expert_specs(mesh, config, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH)
+    update_step = jax.jit(expert_grouped_single_layer_slice_step_factory(mesh, config))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        result = jax.eval_shape(update_step, params)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(params).lower(lowering_platforms=(platform,))
+
+    assert set(result) == {"mlp"}
+    assert result["mlp"]["expert_mlp"]["w_gate_up"].shape == (8, 16, 16)
+    assert result["mlp"]["expert_mlp"]["w_down"].shape == (8, 8, 16)
+    assert_expert_ep_sharding(result, "grouped expert single layer slice")
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
 def test_grouped_expert_layer_slice_boundary_times_compile_only():
     config = BenchConfig(
         layers=1,
@@ -517,6 +560,41 @@ def test_grouped_expert_layer_slice_boundary_times_compile_only():
         mesh,
         config,
         EXPERT_GROUPED_LAYER_SLICE_BENCH,
+        warmup=0,
+        iters=0,
+        compile_only=True,
+        abstract_mesh_enabled=False,
+        allow_boundary_collectives=True,
+    )
+
+    assert timing.compiled_hlo.all_reduce == 0
+    assert timing.compiled_hlo.all_to_all == 0
+
+
+def test_grouped_expert_single_layer_slice_boundary_times_compile_only():
+    config = BenchConfig(
+        layers=1,
+        ns4d_group_size=1,
+        ns4d_group_axis="none",
+        hidden_dim=4,
+        intermediate_dim=2,
+        num_experts=1,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = create_mesh(replica_axis=1, data_axis=1, expert_axis=1, model_axis=1)
+
+    timing = time_ns4d(
+        mesh,
+        config,
+        EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH,
         warmup=0,
         iters=0,
         compile_only=True,
