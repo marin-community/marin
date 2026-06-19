@@ -1197,8 +1197,8 @@ def test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs()
     assert update_hlo_summary.two_batch_axis_dot_general == 6
     assert hlo_summary.all_gather == 2
     assert update_hlo_summary.all_gather == 2
-    assert hlo_summary.all_to_all == 2
-    assert update_hlo_summary.all_to_all == 2
+    assert hlo_summary.all_to_all == 0
+    assert update_hlo_summary.all_to_all == 0
     assert hlo_summary.all_reduce == 0
     assert update_hlo_summary.all_reduce == 0
     assert hlo_summary.reduce_scatter == 0

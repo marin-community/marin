@@ -264,7 +264,7 @@ def test_grouped_expert_muonh_optimizer_returns_fsdp_updates_before_apply():
     hlo = str(lowered.compiler_ir(dialect="stablehlo"))
     assert hlo.count("stablehlo.all_reduce") == 0
     assert hlo.count("stablehlo.reduce_scatter") == 0
-    assert hlo.count("stablehlo.all_to_all") == 2
+    assert hlo.count("stablehlo.all_to_all") == 0
     assert hlo.count("stablehlo.all_gather") == 2
 
 

@@ -334,7 +334,7 @@ def _restore_grouped_muonh_for_split_target_layout(grouped_update, target, valid
     return grouped_update
 
 
-def _restore_grouped_muonh_for_split_explicit_a2a(grouped_update, target, valid_size: int, sample_param):
+def _restore_grouped_muonh_for_split_slice_first_gather(grouped_update, target, valid_size: int, sample_param):
     target_spec = _target_spec(target)
     param_sharding = _target_named_sharding(sample_param)
     if (
@@ -348,37 +348,28 @@ def _restore_grouped_muonh_for_split_explicit_a2a(grouped_update, target, valid_
 
     mesh = param_sharding.mesh
     group_axis = _live_group_axis(mesh, target_spec[0])
-    if group_axis != (REPLICA_DCN_AXIS, "data"):
-        return _restore_grouped_muonh_for_split_explicit(grouped_update, target, valid_size, sample_param)
-
     data_axis = None
     for axis_index, axis_spec in enumerate(param_sharding.spec, start=1):
         if _axis_spec_contains(axis_spec, "data"):
             data_axis = axis_index
             break
-    if data_axis is None:
-        return _restore_grouped_muonh_for_split_explicit(grouped_update, target, valid_size, sample_param)
 
-    replica_axis_size = _mesh_axis_size(mesh, REPLICA_DCN_AXIS)
     data_axis_size = _mesh_axis_size(mesh, "data")
-    group_axis_size = grouped_update.shape[0]
-    if group_axis_size % (replica_axis_size * data_axis_size) != 0:
-        return _restore_grouped_muonh_for_split_explicit(grouped_update, target, valid_size, sample_param)
-    if grouped_update.shape[data_axis] % data_axis_size != 0:
+    if data_axis is not None and grouped_update.shape[data_axis] % data_axis_size != 0:
         return _restore_grouped_muonh_for_split_explicit(grouped_update, target, valid_size, sample_param)
 
     input_spec = jax.sharding.PartitionSpec(group_axis, target_spec[1], None, None)
     output_spec = jax.sharding.PartitionSpec(None, *param_sharding.spec)
 
     def restore_group(local_update):
-        data_restored = lax.all_to_all(
-            local_update,
-            axis_name="data",
-            split_axis=data_axis,
-            concat_axis=0,
-            tiled=True,
-        )
-        return lax.all_gather(data_restored, axis_name=REPLICA_DCN_AXIS, axis=0, tiled=True)
+        if data_axis is not None and data_axis_size > 1:
+            data_index = lax.axis_index("data")
+            local_axis_size = local_update.shape[data_axis] // data_axis_size
+            start = data_index * local_axis_size
+            local_update = lax.dynamic_slice_in_dim(local_update, start, local_axis_size, axis=data_axis)
+        if group_axis is None:
+            return local_update
+        return lax.all_gather(local_update, axis_name=group_axis, axis=0, tiled=True)
 
     grouped_update = shard_map(
         restore_group,
@@ -538,7 +529,7 @@ def _grouped_expert_muonh_updates(
                 direction = _scale_grouped_muonh_direction(direction)
 
             grouped_update = _grouped_muonh_hyperball_update(stacked_params, direction, learning_rate)
-            grouped_update = _restore_grouped_muonh_for_split_explicit_a2a(
+            grouped_update = _restore_grouped_muonh_for_split_slice_first_gather(
                 grouped_update,
                 target,
                 valid_size,
