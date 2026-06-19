@@ -1191,10 +1191,14 @@ class ControllerServiceImpl:
 
         # Reject non-positive GPU counts at the trust boundary: a negative count
         # would inflate the scheduler's advertised capacity and bypass its fit
-        # check, since the controller deserializes the wire proto directly.
-        gpu_error = validate_gpu_request(request.resources)
-        if gpu_error:
-            raise ConnectError(Code.INVALID_ARGUMENT, gpu_error)
+        # check, since the controller deserializes the wire proto directly. Cover
+        # both the job's own resources and every reservation entry — the
+        # reservation-holder job is materialized from the entry resources, so an
+        # unvalidated entry would otherwise reach the scheduler unchecked.
+        for resources in (request.resources, *(entry.resources for entry in request.reservation.entries)):
+            gpu_error = validate_gpu_request(resources)
+            if gpu_error:
+                raise ConnectError(Code.INVALID_ARGUMENT, gpu_error)
 
         # Reject jobs that can never be scheduled so they fail fast instead
         # of sitting in the pending queue. For coscheduled jobs this also

@@ -518,6 +518,37 @@ def test_launch_job_rejects_empty_name(service, state):
     assert exc_info.value.code == Code.INVALID_ARGUMENT
 
 
+@pytest.mark.parametrize("count", [0, -1])
+def test_launch_job_rejects_non_positive_gpu_count(service, count):
+    """A non-positive GPU count on the job's own resources is rejected at submit."""
+    request = make_job_request("gpu-bad")
+    request.resources.device.gpu.variant = "h100"
+    request.resources.device.gpu.count = count
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
+@pytest.mark.parametrize("count", [0, -1])
+def test_launch_job_rejects_non_positive_gpu_count_in_reservation_entry(service, count):
+    """A reservation entry with a non-positive GPU count is rejected at submit.
+
+    The reservation-holder job is materialized from the entry resources, so a
+    CPU-only top-level request must not smuggle a bad GPU count through an entry.
+    """
+    request = make_job_request("gpu-bad-reservation")
+    entry = request.reservation.entries.add()
+    entry.resources.device.gpu.variant = "h100"
+    entry.resources.device.gpu.count = count
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
 # =============================================================================
 # Job Status Tests
 # =============================================================================
