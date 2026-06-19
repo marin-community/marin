@@ -105,6 +105,8 @@ EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH = "expert_fsdp_grouped_apply_boundary"
 EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH = "expert_fsdp_grouped_restore_boundary"
 EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH = "expert_fsdp_grouped_target_restore_boundary"
 EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH = "expert_fsdp_grouped_target_apply_boundary"
+EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH = "expert_fsdp_grouped_target_apply_chunked_boundary"
+EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_FSDP_BOUNDARY_BENCH = "expert_fsdp_grouped_target_apply_chunked_fsdp_boundary"
 EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH = "expert_fsdp_grouped_explicit_restore_boundary"
 EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH = "expert_fsdp_grouped_explicit_apply_boundary"
 EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH = "expert_fsdp_grouped_explicit_a2a_apply_boundary"
@@ -151,6 +153,8 @@ BENCH_KINDS = (
     EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_FSDP_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
@@ -194,6 +198,8 @@ NS4D_DATA_SHARDED_BENCHES = (
     EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_FSDP_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
@@ -224,6 +230,8 @@ GROUPED_APPLY_BOUNDARY_BENCHES = (
     EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_FSDP_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
@@ -705,6 +713,8 @@ def ns4d_result_sharding(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Na
         EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_FSDP_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
@@ -805,6 +815,8 @@ def grouped_expert_group_sizes_for_bench(config: BenchConfig, bench_kind: str) -
         EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_FSDP_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
@@ -2177,6 +2189,151 @@ def expert_fsdp_grouped_target_apply_outputs(config: BenchConfig, params, groupe
     return {"blocks": tuple(output_blocks)}
 
 
+def expert_fsdp_grouped_target_apply_chunked_outputs(config: BenchConfig, params, grouped_updates):
+    """Apply grouped updates in bounded FSDP-compatible chunks.
+
+    The unchunked target-apply boundary proves the grouped target layout can avoid
+    restore/apply collectives, but it materializes a full padded layer group at
+    once. Chunking by the live group-axis size keeps chunk shapes shard-aligned
+    while bounding peak materialization.
+    """
+    output_blocks = []
+    layer_offset = 0
+    chunk_size = max(1, ns4d_axis_size(config))
+    padded_group_sizes = grouped_expert_group_sizes_for_bench(
+        config,
+        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+    )
+    for group_index, valid_group_size in enumerate(grouped_expert_group_sizes(config)):
+        padded_group_size = padded_group_sizes[group_index]
+        for chunk_start in range(0, padded_group_size, chunk_size):
+            chunk_stop = min(chunk_start + chunk_size, padded_group_size)
+            valid_chunk_stop = min(chunk_stop, valid_group_size)
+            valid_chunk_size = max(0, valid_chunk_stop - chunk_start)
+            if valid_chunk_size == 0:
+                continue
+            chunk_block = {"mlp": {"expert_mlp": {name: None for name in synthetic_shapes(config)}}}
+            for name in synthetic_shapes(config):
+                update = grouped_updates["blocks"][group_index]["mlp"]["expert_mlp"][name][chunk_start:chunk_stop]
+                with jax.named_scope(
+                    f"muon_update_bench/expert_fsdp_grouped_target_apply_chunked/{name}/stack_param_chunk"
+                ):
+                    grouped_param = jnp.stack(
+                        [
+                            params["layers"][layer_index]["mlp"]["expert_mlp"][name]
+                            for layer_index in range(
+                                layer_offset + chunk_start,
+                                layer_offset + chunk_start + valid_chunk_size,
+                            )
+                        ],
+                        axis=0,
+                    )
+                if valid_chunk_size != update.shape[0]:
+                    with jax.named_scope(
+                        f"muon_update_bench/expert_fsdp_grouped_target_apply_chunked/{name}/pad_param_chunk"
+                    ):
+                        pad_width = [
+                            (0, update.shape[0] - valid_chunk_size),
+                            *[(0, 0) for _ in grouped_param.shape[1:]],
+                        ]
+                        grouped_param = jnp.pad(grouped_param, pad_width)
+                first_param = params["layers"][layer_offset + chunk_start]["mlp"]["expert_mlp"][name]
+                target_sharding = _target_sharding(first_param)
+                if isinstance(target_sharding, NamedSharding):
+                    target_group_sharding = NamedSharding(target_sharding.mesh, P(None, *target_sharding.spec))
+                    with jax.named_scope(
+                        f"muon_update_bench/expert_fsdp_grouped_target_apply_chunked/{name}/reshard_param_chunk"
+                    ):
+                        grouped_param = reshard(grouped_param, target_group_sharding)
+                    with jax.named_scope(
+                        f"muon_update_bench/expert_fsdp_grouped_target_apply_chunked/{name}/reshard_update_chunk"
+                    ):
+                        update = reshard(update, target_group_sharding)
+                with jax.named_scope(f"muon_update_bench/expert_fsdp_grouped_target_apply_chunked/{name}/apply_chunk"):
+                    chunk_block["mlp"]["expert_mlp"][name] = optax.apply_updates(grouped_param, update)
+            output_blocks.append(chunk_block)
+        layer_offset += valid_group_size
+    return {"blocks": tuple(output_blocks)}
+
+
+def expert_fsdp_grouped_target_apply_chunked_fsdp_outputs(config: BenchConfig, params, grouped_updates):
+    """Apply grouped updates in target-layout chunks and return FSDP leaves."""
+    output_layers = [
+        {"mlp": {"expert_mlp": {name: None for name in synthetic_shapes(config)}}} for _ in range(config.layers)
+    ]
+    layer_offset = 0
+    chunk_size = max(1, ns4d_axis_size(config))
+    padded_group_sizes = grouped_expert_group_sizes_for_bench(
+        config,
+        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_FSDP_BOUNDARY_BENCH,
+    )
+    for group_index, valid_group_size in enumerate(grouped_expert_group_sizes(config)):
+        padded_group_size = padded_group_sizes[group_index]
+        for chunk_start in range(0, padded_group_size, chunk_size):
+            chunk_stop = min(chunk_start + chunk_size, padded_group_size)
+            valid_chunk_stop = min(chunk_stop, valid_group_size)
+            valid_chunk_size = max(0, valid_chunk_stop - chunk_start)
+            if valid_chunk_size == 0:
+                continue
+            for name in synthetic_shapes(config):
+                update = grouped_updates["blocks"][group_index]["mlp"]["expert_mlp"][name][chunk_start:chunk_stop]
+                with jax.named_scope(
+                    f"muon_update_bench/expert_fsdp_grouped_target_apply_chunked_fsdp/{name}/stack_param_chunk"
+                ):
+                    grouped_param = jnp.stack(
+                        [
+                            params["layers"][layer_index]["mlp"]["expert_mlp"][name]
+                            for layer_index in range(
+                                layer_offset + chunk_start,
+                                layer_offset + chunk_start + valid_chunk_size,
+                            )
+                        ],
+                        axis=0,
+                    )
+                if valid_chunk_size != update.shape[0]:
+                    with jax.named_scope(
+                        f"muon_update_bench/expert_fsdp_grouped_target_apply_chunked_fsdp/{name}/pad_param_chunk"
+                    ):
+                        pad_width = [
+                            (0, update.shape[0] - valid_chunk_size),
+                            *[(0, 0) for _ in grouped_param.shape[1:]],
+                        ]
+                        grouped_param = jnp.pad(grouped_param, pad_width)
+                first_param = params["layers"][layer_offset + chunk_start]["mlp"]["expert_mlp"][name]
+                target_sharding = _target_sharding(first_param)
+                if isinstance(target_sharding, NamedSharding):
+                    target_group_sharding = NamedSharding(target_sharding.mesh, P(None, *target_sharding.spec))
+                    with jax.named_scope(
+                        f"muon_update_bench/expert_fsdp_grouped_target_apply_chunked_fsdp/{name}/reshard_param_chunk"
+                    ):
+                        grouped_param = reshard(grouped_param, target_group_sharding)
+                    with jax.named_scope(
+                        f"muon_update_bench/expert_fsdp_grouped_target_apply_chunked_fsdp/{name}/reshard_update_chunk"
+                    ):
+                        update = reshard(update, target_group_sharding)
+                with jax.named_scope(
+                    f"muon_update_bench/expert_fsdp_grouped_target_apply_chunked_fsdp/{name}/apply_chunk"
+                ):
+                    output = optax.apply_updates(grouped_param, update)
+                if valid_chunk_size != output.shape[0]:
+                    with jax.named_scope(
+                        f"muon_update_bench/expert_fsdp_grouped_target_apply_chunked_fsdp/{name}/slice_valid_chunk"
+                    ):
+                        output = output[:valid_chunk_size]
+                with jax.named_scope(
+                    f"muon_update_bench/expert_fsdp_grouped_target_apply_chunked_fsdp/{name}/split_chunk_to_fsdp"
+                ):
+                    output_parts = [
+                        jnp.squeeze(output_part, axis=0) for output_part in jnp.split(output, valid_chunk_size, axis=0)
+                    ]
+                for local_index, output_part in enumerate(output_parts):
+                    layer_index = layer_offset + chunk_start + local_index
+                    param = params["layers"][layer_index]["mlp"]["expert_mlp"][name]
+                    output_layers[layer_index]["mlp"]["expert_mlp"][name] = _restore_param_sharding(output_part, param)
+        layer_offset += valid_group_size
+    return {"layers": tuple(output_layers)}
+
+
 def _live_group_axis(mesh: Mesh, config: BenchConfig) -> str | tuple[str, ...] | None:
     requested_group_axis = ns4d_group_axis(config)
     if isinstance(requested_group_axis, tuple):
@@ -2473,6 +2630,38 @@ def expert_fsdp_grouped_target_apply_boundary_timing_step_factory(config: BenchC
     def update_step(params, grouped_updates):
         with jax.named_scope("muon_update_bench/expert_fsdp_grouped_target_apply_boundary_timing_step"):
             return expert_fsdp_grouped_target_apply_outputs(config, params, grouped_updates)
+
+    return update_step
+
+
+def expert_fsdp_grouped_target_apply_chunked_boundary_step_factory(config: BenchConfig):
+    def update_step(params, grouped_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_grouped_target_apply_chunked_boundary_step"):
+            return expert_fsdp_grouped_target_apply_chunked_outputs(config, params, grouped_updates)
+
+    return update_step
+
+
+def expert_fsdp_grouped_target_apply_chunked_boundary_timing_step_factory(config: BenchConfig):
+    def update_step(params, grouped_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_grouped_target_apply_chunked_boundary_timing_step"):
+            return expert_fsdp_grouped_target_apply_chunked_outputs(config, params, grouped_updates)
+
+    return update_step
+
+
+def expert_fsdp_grouped_target_apply_chunked_fsdp_boundary_step_factory(config: BenchConfig):
+    def update_step(params, grouped_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_grouped_target_apply_chunked_fsdp_boundary_step"):
+            return expert_fsdp_grouped_target_apply_chunked_fsdp_outputs(config, params, grouped_updates)
+
+    return update_step
+
+
+def expert_fsdp_grouped_target_apply_chunked_fsdp_boundary_timing_step_factory(config: BenchConfig):
+    def update_step(params, grouped_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_grouped_target_apply_chunked_fsdp_boundary_timing_step"):
+            return expert_fsdp_grouped_target_apply_chunked_fsdp_outputs(config, params, grouped_updates)
 
     return update_step
 
@@ -2945,6 +3134,10 @@ def ns4d_boundary_status(config: BenchConfig, bench_kind: str) -> str | None:
         return "expert_fsdp_params_grouped_updates_target_restore_only"
     if bench_kind == EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH:
         return "expert_fsdp_params_grouped_updates_target_apply_grouped"
+    if bench_kind == EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH:
+        return "expert_fsdp_params_grouped_updates_target_apply_chunked_grouped"
+    if bench_kind == EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_FSDP_BOUNDARY_BENCH:
+        return "expert_fsdp_params_grouped_updates_target_apply_chunked_fsdp"
     if bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH:
         return "expert_fsdp_params_grouped_updates_explicit_restore_only"
     if bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH:
@@ -3016,6 +3209,8 @@ def is_expert_fsdp_grouped_boundary_bench(bench_kind: str) -> bool:
         EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_FSDP_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
@@ -3028,6 +3223,8 @@ def is_expert_fsdp_grouped_bench(bench_kind: str) -> bool:
         EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_FSDP_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
@@ -3700,6 +3897,8 @@ def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
         EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_FSDP_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
@@ -4031,6 +4230,42 @@ def lower_ns4d(
             assert_grouped_expert_target_fsdp_sharding(
                 result_specs,
                 "expert FSDP target apply grouped result",
+            )
+            lower_args = None
+        elif bench_kind == EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH:
+            grouped_specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_fsdp_grouped_target_apply_chunked_boundary_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(update_step, specs, grouped_specs)
+                lowered = update_step.lower(specs, grouped_specs)
+            assert_grouped_expert_sharding(
+                grouped_specs,
+                mesh,
+                config,
+                bench_kind,
+                "expert FSDP chunked target apply grouped updates",
+            )
+            assert_grouped_expert_target_fsdp_sharding(
+                result_specs,
+                "expert FSDP chunked target apply grouped result",
+            )
+            lower_args = None
+        elif bench_kind == EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_FSDP_BOUNDARY_BENCH:
+            grouped_specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_fsdp_grouped_target_apply_chunked_fsdp_boundary_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(update_step, specs, grouped_specs)
+                lowered = update_step.lower(specs, grouped_specs)
+            assert_grouped_expert_sharding(
+                grouped_specs,
+                mesh,
+                config,
+                bench_kind,
+                "expert FSDP chunked target apply-to-FSDP grouped updates",
+            )
+            assert_expert_fsdp_sharding(
+                result_specs,
+                "expert FSDP chunked target apply-to-FSDP result",
             )
             lower_args = None
         elif bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH:
@@ -4479,6 +4714,17 @@ def time_ns4d(
                 params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
                 update_step = jax.jit(expert_fsdp_grouped_target_apply_boundary_timing_step_factory(config))
                 lower_args = (params, updates)
+            elif bench_kind == EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH:
+                params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
+                update_step = jax.jit(expert_fsdp_grouped_target_apply_chunked_boundary_timing_step_factory(config))
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_FSDP_BOUNDARY_BENCH:
+                params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
+                update_step = jax.jit(
+                    expert_fsdp_grouped_target_apply_chunked_fsdp_boundary_timing_step_factory(config),
+                    donate_argnums=(0,),
+                )
+                lower_args = (params, updates)
             elif bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH:
                 params = None
                 update_step = jax.jit(expert_fsdp_grouped_explicit_restore_boundary_timing_step_factory(mesh, config))
@@ -4666,7 +4912,10 @@ def time_ns4d(
                 elif bench_kind == EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH:
                     params, optimizer_state, consumer_outputs = compiled(params, updates, optimizer_state, activations)
                     block_until_ready_tree((params, optimizer_state, consumer_outputs))
-                elif bench_kind == EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH:
+                elif bench_kind in (
+                    EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
+                    EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+                ):
                     grouped_target_params = compiled(params, updates)
                     block_until_ready_tree(grouped_target_params)
                 elif is_expert_fsdp_grouped_boundary_bench(bench_kind) or is_expert_fsdp_grouped_updates_muonh_bench(
@@ -4677,7 +4926,10 @@ def time_ns4d(
                 else:
                     params, optimizer_state = compiled(params, updates, optimizer_state)
                     block_until_ready_tree((params, optimizer_state))
-                if bench_kind == EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH:
+                if bench_kind in (
+                    EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
+                    EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+                ):
                     assert_grouped_expert_target_fsdp_sharding(
                         grouped_target_params,
                         "warmup expert FSDP target-apply grouped params",
@@ -4779,7 +5031,10 @@ def time_ns4d(
                 elif bench_kind == EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH:
                     params, optimizer_state, consumer_outputs = compiled(params, updates, optimizer_state, activations)
                     block_until_ready_tree((params, optimizer_state, consumer_outputs))
-                elif bench_kind == EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH:
+                elif bench_kind in (
+                    EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
+                    EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+                ):
                     grouped_target_params = compiled(params, updates)
                     block_until_ready_tree(grouped_target_params)
                 elif is_expert_fsdp_grouped_boundary_bench(bench_kind) or is_expert_fsdp_grouped_updates_muonh_bench(
@@ -4790,7 +5045,10 @@ def time_ns4d(
                 else:
                     params, optimizer_state = compiled(params, updates, optimizer_state)
                     block_until_ready_tree((params, optimizer_state))
-                if bench_kind == EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH:
+                if bench_kind in (
+                    EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
+                    EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+                ):
                     assert_grouped_expert_target_fsdp_sharding(
                         grouped_target_params,
                         "expert FSDP target-apply grouped params",
