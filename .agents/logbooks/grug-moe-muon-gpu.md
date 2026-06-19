@@ -466,3 +466,21 @@ The grouped compute row preserved `P('data', 'expert', None, None)` with zero co
 - Result: The child succeeded on all four tasks. Lowering reported semantic HLO `all_gather=14`, `all_reduce=0`, `reduce_scatter=0`, `all_to_all=0`, `dot_general=0`. Runtime timing compiled to `all_gather=112`, with all-reduce/reduce-scatter/all-to-all/dot still 0. Mean time was consistently about 0.6114s per task (`min_seconds` about 0.610s, median about 0.612s). Compile time was about 1.0-1.1s.
 - Interpretation: Fusing restore with apply avoids the full fp32 update-tree OOM, so the explicit boundary is semantically usable. But the pragmatic "grouped Muon -> FSDP update/apply" boundary is still too expensive in this form: 112 all-gathers and about 0.61s is in the same order as the whole single-node H3 Muon compute target, before counting forward/backward. This makes it unlikely that ordinary FSDP params plus grouped optimizer state is competitive unless the boundary is further batched/overlapped or the model consumes grouped expert-bank params directly.
 - Next action: Keep this benchmark as the clean negative/attribution result. Next implementation should focus on either (1) grouped expert-bank/model-consumable params, or (2) a more explicit batched communication boundary that reduces the 112 independent all-gathers. Do not spend more runs on simple XLA-inferred grouped-to-FSDP reshards.
+
+### 2026-06-19 02:25 PDT - explicit apply boundary group-size sweep
+- Hypothesis: The explicit fused restore+apply boundary might be slow because it emits too many small all-gather launches; increasing the grouped layer chunk from 4 to 8 or 16 should reduce the all-gather count and improve time if launch latency or fragmentation is the main issue.
+- Command:
+  - G8 parent `/dlwh/iris-run-job-20260619-091903`, child `/dlwh/iris-run-job-20260619-091903/grug-train-MUON-BENCH-D2560-L26-R2D2E8-EXPLICITAPPLY-G8G16-N4-cw-20260619-091901`.
+  - G16 parent `/dlwh/iris-run-job-20260619-092124`, child `/dlwh/iris-run-job-20260619-092124/grug-train-MUON-BENCH-D2560-L26-R2D2E8-EXPLICITAPPLY-G16-N4-cw-20260619-092121`.
+- Config: Same R2/D2/E8/M1 4-node explicit fused restore+apply boundary as the G4 run, but with `ns4d_group_size=8` and `ns4d_group_size=16`; fp32 params/updates, backend steps 1, warmup 1, iters 3.
+- Result:
+
+| group size | semantic AG | compiled AG | mean seconds |
+| ---: | ---: | ---: | ---: |
+| 4 | 14 | 112 | 0.6114 |
+| 8 | 8 | 64 | 0.6145 |
+| 16 | 4 | 32 | 0.6138 |
+
+All rows had compiled all-reduce/reduce-scatter/all-to-all/dot-general counts of zero and succeeded on all four tasks.
+- Interpretation: Reducing the number of all-gather ops by 3.5x did not move runtime. This boundary is dominated by total data movement/materialization, not small collective launch count. Group-size tuning is therefore not the lever for making the FSDP-master + grouped-Muon boundary viable.
+- Next action: Stop group-size sweeps for this boundary. The next credible work remains grouped expert-bank/model-consumable params or a different communication/apply design that reduces total bytes or overlaps the boundary with useful work.
