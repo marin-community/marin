@@ -88,18 +88,32 @@ All tables backfilled & verified ~18:00Z, **ranked by `wts`** (token-weighted ov
 all v1 runs on each slice). `dead% = (wall − _runtime)/wall` = fraction of elapsed
 clock the run was preempted/dead.
 
-## By TPU type — window ≥ Mon 2026-06-15 00:00:00 UTC
+## By TPU type — window ≥ Mon 2026-06-15 00:00:00 UTC (refreshed 2026-06-19)
 
 Throughput grouped by **TPU type** over every `prot-exp75-cv1-*` run whose W&B
-`created_at` is **2026-06-15 00:00:00 UTC or later** (completed + currently-running).
-TPU type taken from each run's `tpu=` W&B tag (kind+chips confirmed against
-`run.metadata["tpu"]`). Computed with the exact per-run pseudocode above,
-token-weighted per type; `tts`/`mfu` averaged. Ranked by `wts` (desc).
+`created_at` is **2026-06-15 00:00:00 UTC or later** (all states: finished /
+crashed / killed / running). 31 runs total. Computed with the exact per-run
+pseudocode above, token-weighted per type; `tts`/`mfu` averaged. Ranked by `wts`
+(desc). This refresh **now includes the multi-host E8 probe** (v5p-64/32/16,
+v6e-16/32) that ran after the prior 2026-06-17 read, which only had v6e-8 / v5p-8.
+
+TPU type is each run's **`tpu=` W&B tag** = the run's *starting* slice (not
+`run.metadata["tpu"]`, which reflects only the most-recently-used slice). **Caveat:**
+band/TPU are start-time scheduling choices and **many runs were resubmitted across
+slices** in this window (~22 of 31 runs have a tag slice ≠ their last-used slice), so
+a run's lifetime tokens may span multiple slices while the tag names only the first.
+Grouping is by tag (consistent with the prior report); treat per-type numbers as
+approximate for migrated runs.
 
 | TPU type | wts | ats | tts | mfu |
 |---|---:|---:|---:|---:|
-| `v6e-8` | ~64k | ~72k | ~73k | 14% |
-| `v5p-8` | ~34k | ~58k | ~53k | 40% |
+| `v5p-64` | ~246k | ~317k | ~332k | 31% |
+| `v5p-32` | ~140k | ~212k | ~198k | 37% |
+| `v6e-16` | ~84k | ~120k | ~130k | 12% |
+| `v6e-32` | ~80k | ~191k | ~213k | 10% |
+| `v5p-16` | ~75k | ~109k | ~102k | 38% |
+| `v6e-8` | ~66k | ~73k | ~73k | 14% |
+| `v5p-8` | ~39k | ~60k | ~54k | 40% |
 
 ## Interactive (single-host, counts toward budget)
 
