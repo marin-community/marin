@@ -88,6 +88,19 @@ ALL_REDUCE_RE = re.compile(r"\ball-reduce\b|stablehlo\.all_reduce|mhlo\.all_redu
 REDUCE_SCATTER_RE = re.compile(r"\breduce-scatter\b|stablehlo\.reduce_scatter|mhlo\.reduce_scatter")
 ALL_TO_ALL_RE = re.compile(r"\ball-to-all\b|stablehlo\.all_to_all|mhlo\.all_to_all")
 COLLECTIVE_PERMUTE_RE = re.compile(r"\bcollective-permute\b|stablehlo\.collective_permute|mhlo\.collective_permute")
+ALL_GATHER_INSTRUCTION_RE = re.compile(
+    r"stablehlo\.all_gather|mhlo\.all_gather|=\s*(?:\([^)]*\)\s*)?all-gather(?:-start)?\("
+)
+ALL_REDUCE_INSTRUCTION_RE = re.compile(
+    r"stablehlo\.all_reduce|mhlo\.all_reduce|=\s*(?:\([^)]*\)\s*)?all-reduce(?:-start)?\("
+)
+REDUCE_SCATTER_INSTRUCTION_RE = re.compile(
+    r"stablehlo\.reduce_scatter|mhlo\.reduce_scatter|=\s*(?:\([^)]*\)\s*)?reduce-scatter(?:-start)?\("
+)
+ALL_TO_ALL_INSTRUCTION_RE = re.compile(r"stablehlo\.all_to_all|mhlo\.all_to_all|=\s*[^=\n]+ all-to-all\(")
+COLLECTIVE_PERMUTE_INSTRUCTION_RE = re.compile(
+    r"stablehlo\.collective_permute|mhlo\.collective_permute|=\s*(?:\([^)]*\)\s*)?collective-permute(?:-start)?\("
+)
 MUONH_UPDATE_BENCH = "muonh_update"
 MUON_DIRECTION_BENCH = "muon_direction"
 HYPERBALL_ONLY_BENCH = "hyperball_only"
@@ -4822,11 +4835,11 @@ def summarize_hlo(hlo_text: str) -> HloSummary:
         two_batch_axis_dot_general=len(TWO_BATCH_AXIS_DOT_RE.findall(hlo_text)),
         custom_call=len(CUSTOM_CALL_RE.findall(hlo_text)),
         gpu_gemm_custom_call=len(GPU_GEMM_CUSTOM_CALL_RE.findall(hlo_text)),
-        all_gather=len(ALL_GATHER_RE.findall(hlo_text)),
-        all_reduce=len(ALL_REDUCE_RE.findall(hlo_text)),
-        reduce_scatter=len(REDUCE_SCATTER_RE.findall(hlo_text)),
-        all_to_all=len(ALL_TO_ALL_RE.findall(hlo_text)),
-        collective_permute=len(COLLECTIVE_PERMUTE_RE.findall(hlo_text)),
+        all_gather=len(ALL_GATHER_INSTRUCTION_RE.findall(hlo_text)),
+        all_reduce=len(ALL_REDUCE_INSTRUCTION_RE.findall(hlo_text)),
+        reduce_scatter=len(REDUCE_SCATTER_INSTRUCTION_RE.findall(hlo_text)),
+        all_to_all=len(ALL_TO_ALL_INSTRUCTION_RE.findall(hlo_text)),
+        collective_permute=len(COLLECTIVE_PERMUTE_INSTRUCTION_RE.findall(hlo_text)),
         grouped_scope_mentions=hlo_text.count("orthogonalize_3d_grouped_stack"),
         stack_sharded_scope_mentions=hlo_text.count("orthogonalize_3d_stack_sharded"),
         pad_scope_mentions=hlo_text.count("pad_stack_axis"),

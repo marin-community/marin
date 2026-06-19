@@ -405,6 +405,23 @@ def test_grouped_expert_muonh_optimizer_apply_preserves_grouped_expert_sharding_
     assert hlo_summary.reduce_scatter == 0
 
 
+def test_summarize_hlo_counts_compiled_collective_instructions_not_metadata_mentions():
+    hlo_text = "\n".join(
+        (
+            'ROOT %a2a = bf16[1,2] all-to-all(%param_0), metadata={op_name="foo/all-to-all"}',
+            "%all-to-all-start.29 = ((bf16[1,2]), bf16[1,2]) async-start(%bitcast), "
+            'calls=%async_computation.29, metadata={op_name="foo/all-to-all"}',
+            '%all-to-all-done.29 = bf16[1,2] async-done(%all-to-all-start.29), metadata={op_name="foo"}',
+            "%ag-start.10 = (bf16[1], bf16[4]) all-gather-start(%slice), metadata={op_name='foo'}",
+            "%ag-done.10 = bf16[4,32] all-gather-done(%ag-start.10), metadata={op_name='foo/all_gather'}",
+        )
+    )
+    hlo_summary = summarize_hlo(hlo_text)
+
+    assert hlo_summary.all_to_all == 1
+    assert hlo_summary.all_gather == 1
+
+
 def test_grouped_expert_muonh_optimizer_apply_can_shard_group_over_replica_and_data_without_collectives():
     config = BenchConfig(
         layers=4,
