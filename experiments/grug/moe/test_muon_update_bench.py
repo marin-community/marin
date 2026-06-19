@@ -128,6 +128,7 @@ from experiments.grug.moe.muon_update_bench import (
     ns4d_result_sharding,
     ordinary_2d_grouped_persistent_apply_timing_step_factory,
     ordinary_2d_muonh_optimizer_apply_step_factory,
+    output_path_for_config,
     persistent_grouped_2d_metadata_from_specs,
     real_expert_fsdp_grouped_muonh_optimizer_apply_step_factory,
     real_expert_fsdp_grouped_muonh_optimizer_update_step_factory,
@@ -166,6 +167,21 @@ def test_cw_muon_update_bench_launcher_reads_nesterov_env(monkeypatch):
     step = build_step()
 
     assert step.config.nesterov is False
+
+
+def test_cw_muon_update_bench_launcher_can_write_compiled_hlo(monkeypatch):
+    monkeypatch.setenv("RUN_ID", "muon-update-bench-test")
+    monkeypatch.setenv("MUON_BENCH_WRITE_COMPILED_HLO", "true")
+
+    step = build_step()
+
+    assert step.config.write_compiled_hlo is True
+
+
+def test_output_path_for_config_preserves_remote_uri():
+    output = output_path_for_config("s3://bucket/prefix/compiled_hlo.txt", "label", 2)
+
+    assert output == "s3://bucket/prefix/compiled_hlo_label.txt"
 
 
 def test_ns4d_grouped_apply_preserves_data_expert_sharding_through_apply_boundary():

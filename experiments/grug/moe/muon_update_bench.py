@@ -32,6 +32,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
+import fsspec
 import jax
 import jax.numpy as jnp
 import ml_dtypes
@@ -4833,14 +4834,21 @@ def summarize_hlo(hlo_text: str) -> HloSummary:
     )
 
 
-def maybe_write_text(path: Path | None, text: str) -> None:
+def maybe_write_text(path: Path | str | None, text: str) -> None:
     if path is None:
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text)
+    path_str = str(path)
+    protocol = fsspec.core.split_protocol(path_str)[0]
+    if protocol is not None:
+        with fsspec.open(path_str, "w") as fp:
+            fp.write(text)
+        return
+    local_path = Path(path_str)
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.write_text(text)
 
 
-def summarize_compiled_hlo(compiled, output: Path | None) -> HloSummary:
+def summarize_compiled_hlo(compiled, output: Path | str | None) -> HloSummary:
     hlo_text = compiled.as_text()
     maybe_write_text(output, hlo_text)
     return summarize_hlo(hlo_text)
@@ -6847,7 +6855,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hlo-output", type=Path)
     parser.add_argument(
         "--compiled-hlo-output",
-        type=Path,
         help="Write compiled XLA HLO text from timing runs. Uses per-label filenames for multi-config sweeps.",
     )
     parser.add_argument("--output", type=Path)
@@ -6926,9 +6933,17 @@ def variant_label(config: BenchConfig, bench_kind: str) -> str:
     return f"{bench_kind}_h{config.backend_steps}"
 
 
-def output_path_for_config(path: Path | None, label: str, total_configs: int) -> Path | None:
+def output_path_for_config(path: Path | str | None, label: str, total_configs: int) -> Path | str | None:
     if path is None or total_configs == 1:
         return path
+    if isinstance(path, str):
+        directory, _, filename = path.rpartition("/")
+        stem, dot, suffix = filename.rpartition(".")
+        if not dot:
+            stem = filename
+            suffix = ""
+        named = f"{stem}_{label}.{suffix}" if suffix else f"{stem}_{label}"
+        return f"{directory}/{named}" if directory else named
     return path.with_name(f"{path.stem}_{label}{path.suffix}")
 
 

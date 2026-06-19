@@ -76,6 +76,7 @@ class MuonUpdateBenchLaunchConfig:
     compile_only: bool = False
     disable_abstract_mesh: bool = False
     allow_boundary_collectives: bool = False
+    write_compiled_hlo: bool = False
 
 
 def env_int(key: str, default: int) -> int:
@@ -165,6 +166,7 @@ def _run_args(config: MuonUpdateBenchLaunchConfig) -> SimpleNamespace:
         iters=config.iters,
         compile_only=config.compile_only,
         hlo_output=None,
+        compiled_hlo_output=f"{config.output_path}/compiled_hlo.txt" if config.write_compiled_hlo else None,
         output=None,
         disable_abstract_mesh=config.disable_abstract_mesh,
         allow_boundary_collectives=config.allow_boundary_collectives,
@@ -296,6 +298,7 @@ def build_step() -> ExecutorStep:
         compile_only=env_bool("MUON_BENCH_COMPILE_ONLY", False),
         disable_abstract_mesh=env_bool("MUON_BENCH_DISABLE_ABSTRACT_MESH", False),
         allow_boundary_collectives=env_bool("MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES", False),
+        write_compiled_hlo=env_bool("MUON_BENCH_WRITE_COMPILED_HLO", False),
     )
     return ExecutorStep(
         name=f"{DEFAULT_OUTPUT_SUBDIR}/{run_id}",
