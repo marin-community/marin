@@ -947,3 +947,29 @@ Compared with the data-first production gate, slice-first is about 2.59x faster 
 The compile-only HLO dump confirms the important qualitative change: compiled all-to-all count is now zero for both update-only and restore-then-apply. Runtime improves by about 1.20x versus the previous production slice-first gate.
 - Interpretation: This is the current best pragmatic FSDP-master grouped MuonH checkpoint. Train-state/master params remain in FSDP layout, grouped MuonH computes in `P(('replica_dcn', 'data'), 'expert', None, None)`, and updates return to FSDP before ordinary `apply_updates`. The price is more all-gathers (`14 -> 42`) and a few more GEMM custom calls (`322 -> 329`), but the bad compiled A2A path is gone and the 4-node gate is faster. This validates the user's proposed direct layout target for the outbound direction and shows the remaining compiler issue was the inbound grouped-layout entry.
 - Next action: Integrate this checkpoint into full training/profile validation before calling the production path solved. If full train still underperforms, the next design question is whether to keep a grouped optimizer-state mirror to remove some inbound gathers or accept the explicit FSDP-to-grouped gather as the sync boundary.
+
+### 2026-06-19 13:15 PDT - full-train grouped MuonH production gate succeeds but is slow
+- Hypothesis: The explicit inbound-gather production grouped MuonH checkpoint should work end-to-end in real Grug MoE training with train-state/master params in FSDP layout, MuonH computed in the grouped NS-friendly layout, and grouped updates restored to FSDP before ordinary `apply_updates`.
+- Command:
+  - Commit under test: `512fd5d24` plus logbook checkpoint `814083acf` on `codex/research-grug-moe-d2560-mfu`.
+  - Launch: direct `experiments/grug/moe/run_cw_may_d2560.sh --submit ...` via the May192 launch path.
+  - Parent Iris job: `/dlwh/iris-run-job-20260619-195106`.
+  - Child Iris job: `/dlwh/iris-run-job-20260619-195106/grug-train-GM2560-MAY-192S4096-W2048-B16-R2-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PRODGATE-N2-cw-20260619-1951`.
+  - W&B: `https://wandb.ai/marin-community/marin_moe/runs/GM2560-MAY-192S4096-W2048-B16-R2-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PRODGATE-N2-cw-20260619-1951`.
+  - Output prefix: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/grug-moe-cw-may-d2560-L26-e256-r2-cpu8-GM2560-MAY-192S4096-W2048-B16-R2-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PRODGATE-N2-cw-20260619-1951-00e4ec`.
+- Config: 2 H100 nodes, 16 devices, batch 16, sequence length 4096, sliding window 2048, `replica_dcn=2`, `data=1`, `expert=8`, `model=1`, `batch_shards=16`, synthetic data, no checkpoints, profiler disabled, `gpu_fa4_cute` attention, Pallas CE block size 8192, ring MoE, save-MoE remat, bf16 params/compute/output, `optimizer=muonh`, `expert_3d_optimizer=grouped_muonh`, `expert_grouped_muonh_group_size=2`, MuonH3, `stack_batch_4d_sharded`, `max_grouped_stack_size=512`, and bf16 NS compute.
+- Result: Iris parent and child both reached `JOB_STATE_SUCCEEDED` with exit code 0 and two succeeded training tasks. W&B finished with:
+
+| metric | value |
+| --- | ---: |
+| `global_step` | 7 |
+| `train/loss` | 3.1031787395477295 |
+| `throughput/mfu` | 6.671198732245638 |
+| `throughput/mean_mfu` | 4.980871047127578 |
+| `throughput/tokens_per_second` | 61692.52165774803 |
+| `throughput/duration` | 1.062300555058755 |
+| `throughput/total_tokens` | 524288 |
+
+The logs show the first compiled/initialization-heavy steps dominated wall time, then W&B uploaded steps 0-7 and the run completed successfully. There was no OOM, traceback, rendezvous failure, or Iris task failure; the post-finish coordination-service warnings were shutdown noise after successful W&B sync.
+- Interpretation: The pragmatic grouped MuonH path is functionally validated in full training: it can keep FSDP master/train-state params, enter grouped NS layout, compute MuonH, restore FSDP updates, and use ordinary `apply_updates` without crashing. It is not a performance success yet. Mean MFU is far below the 2-node non-Muon/SGD reference (`May186` at ~17.73 MFU) and below the production goal. This means the explicit bridge fixed the compiled A2A correctness/perf gate in isolation, but full train still needs profiling to find remaining Muon/communication/overlap cost.
+- Next action: Do not call the MuonH production path solved. Launch or inspect a profile variant of this exact shape next, ideally preserving command-buffer-disabled name stacks for readability, and compare the optimizer segment against the 4-node harness expectation. Also consider a 4-node R2/D2 full-train validation if we need to match the harness layout where grouped MuonH uses both `replica_dcn` and `data`.
