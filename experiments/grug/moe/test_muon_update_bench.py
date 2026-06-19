@@ -21,6 +21,8 @@ from experiments.grug.moe.muon_update_bench import (
     EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
+    EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
+    EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
     EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
     EXPERT_GROUPED_BANK_CONSUMER_BENCH,
@@ -69,6 +71,8 @@ from experiments.grug.moe.muon_update_bench import (
     expert_fsdp_grouped_target_apply_boundary_step_factory,
     expert_fsdp_grouped_target_restore_boundary_step_factory,
     expert_fsdp_grouped_updates_muonh_apply_step_factory,
+    expert_fsdp_grouped_updates_muonh_explicit_a2a_apply_step_factory,
+    expert_fsdp_grouped_updates_muonh_explicit_apply_step_factory,
     expert_fsdp_grouped_updates_muonh_updates_step_factory,
     expert_grouped_layer_slice_step_factory,
     expert_grouped_single_layer_slice_step_factory,
@@ -1295,6 +1299,74 @@ def test_expert_fsdp_grouped_updates_muonh_restores_ordinary_expert_updates_befo
     assert hlo_summary.all_reduce == 0
     assert hlo_summary.reduce_scatter == 0
     assert estimated_matrix_count(config, EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH) == config.layers * 16
+
+
+@pytest.mark.parametrize(
+    ("bench_kind", "step_factory", "expected_collective"),
+    [
+        (
+            EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
+            expert_fsdp_grouped_updates_muonh_explicit_apply_step_factory,
+            "all_gather",
+        ),
+        (
+            EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
+            expert_fsdp_grouped_updates_muonh_explicit_a2a_apply_step_factory,
+            "all_to_all",
+        ),
+    ],
+)
+def test_expert_fsdp_grouped_updates_muonh_explicit_restore_then_apply_returns_fsdp_params(
+    bench_kind,
+    step_factory,
+    expected_collective,
+):
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = synthetic_fsdp_expert_specs(mesh, config)
+    grouped_updates = synthetic_grouped_expert_specs(mesh, config, bench_kind)
+    update_step = jax.jit(step_factory(mesh, config))
+
+    assert ns4d_compute_sharding(mesh, config, bench_kind).spec == P(("replica_dcn", "data"), "expert", None, None)
+    assert_expert_fsdp_sharding(params, "expert FSDP params")
+    assert_ns4d_sharding(grouped_updates, P(("replica_dcn", "data"), "expert", None, None), "grouped updates")
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        result, updates = jax.eval_shape(update_step, params, grouped_updates)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(params, grouped_updates).lower(lowering_platforms=(platform,))
+
+    assert_expert_fsdp_sharding(updates, "explicit restored expert FSDP updates")
+    assert_expert_fsdp_sharding(result, "explicit restored expert FSDP apply result")
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.two_batch_axis_dot_general == 6
+    if expected_collective == "all_gather":
+        assert hlo_summary.all_gather > 0
+    else:
+        assert hlo_summary.all_to_all > 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert estimated_matrix_count(config, bench_kind) == config.layers * 16
+    assert estimated_ns_dot_flops(config, bench_kind) > 0
 
 
 def test_expert_fsdp_grouped_updates_muonh_can_return_updates_without_apply():

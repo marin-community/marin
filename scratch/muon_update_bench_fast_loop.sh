@@ -147,6 +147,22 @@ case "$PROFILE" in
         DEFAULT_STEPS="3"
         DEFAULT_CAPS="512"
         ;;
+    expert-fsdp-r2d2e8-l26-h3)
+        DEFAULT_RUN_ID="MUON-BENCH-D2560-L26-R2D2E8-EXPERTFSDP-H3-N4-cw-${STAMP}"
+        DEFAULT_KINDS="expert_only_grouped_muonh_optimizer_apply,expert_fsdp_grouped_updates_muonh_apply,expert_fsdp_grouped_updates_muonh_explicit_apply,expert_fsdp_grouped_updates_muonh_explicit_a2a_apply"
+        DEFAULT_LAYERS=26
+        DEFAULT_GROUP_SIZE=26
+        DEFAULT_GROUP_AXIS=replica_dcn,data
+        DEFAULT_REPLICA_AXIS=2
+        DEFAULT_DATA_AXIS=2
+        DEFAULT_EXPERT_AXIS=8
+        DEFAULT_GPU_REPLICAS=4
+        DEFAULT_WORKER_CPU=8
+        DEFAULT_WORKER_RAM=256g
+        DEFAULT_STEPS="3"
+        DEFAULT_CAPS="512"
+        DEFAULT_ALLOW_BOUNDARY_COLLECTIVES=true
+        ;;
     padding-d2e4)
         DEFAULT_RUN_ID="MUON-BENCH-D2560-L2-D2E4-PADDING-H1H3H5-N1-cw-${STAMP}"
         DEFAULT_KINDS="ns4d_data_group,ns4d_padded_group,ns4d_dotonly_matmul_padded"
@@ -164,7 +180,7 @@ case "$PROFILE" in
         ;;
     *)
         echo "Unknown MUON_BENCH_PROFILE=${PROFILE}" >&2
-        echo "Profiles: fullprod-e8, fullprod-e8-h3, fullprod-e8-l26-h3, fullprod-r4e8-l26-h3, grouped2d-decomp-r4e8-l26-h3, fullprod-r16e8-l26-h3, grouped-d2e4, expert-only-e8-l26-h3, expert-only-r2d2e8-l26-h3, padding-d2e4" >&2
+        echo "Profiles: fullprod-e8, fullprod-e8-h3, fullprod-e8-l26-h3, fullprod-r4e8-l26-h3, grouped2d-decomp-r4e8-l26-h3, fullprod-r16e8-l26-h3, grouped-d2e4, expert-only-e8-l26-h3, expert-only-r2d2e8-l26-h3, expert-fsdp-r2d2e8-l26-h3, padding-d2e4" >&2
         exit 2
         ;;
 esac

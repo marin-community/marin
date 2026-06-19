@@ -110,6 +110,8 @@ EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH = "expert_fsdp_grouped_explici
 EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH = "expert_fsdp_grouped_explicit_a2a_apply_boundary"
 EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH = "expert_fsdp_grouped_updates_muonh_updates"
 EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH = "expert_fsdp_grouped_updates_muonh_apply"
+EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH = "expert_fsdp_grouped_updates_muonh_explicit_apply"
+EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH = "expert_fsdp_grouped_updates_muonh_explicit_a2a_apply"
 EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH = "expert_fsdp_grouped_muonh_optimizer_apply"
 FULL_PRODUCTION_MUONH_OPTIMIZER_APPLY_BENCH = "full_production_muonh_optimizer_apply"
 FULL_PRODUCTION_GROUPED_2D_MUONH_OPTIMIZER_APPLY_BENCH = "full_production_grouped_2d_muonh_optimizer_apply"
@@ -154,6 +156,8 @@ BENCH_KINDS = (
     EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
+    EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
+    EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_GROUPED_2D_MUONH_OPTIMIZER_APPLY_BENCH,
@@ -195,6 +199,8 @@ NS4D_DATA_SHARDED_BENCHES = (
     EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
+    EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
+    EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_GROUPED_2D_MUONH_OPTIMIZER_APPLY_BENCH,
@@ -223,6 +229,8 @@ GROUPED_APPLY_BOUNDARY_BENCHES = (
     EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
+    EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
+    EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_GROUPED_2D_MUONH_OPTIMIZER_APPLY_BENCH,
@@ -609,6 +617,8 @@ def padded_ns4d_group_size(config: BenchConfig, bench_kind: str) -> int:
     group_size = ns4d_group_size(config)
     if bench_kind in (
         EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     ):
@@ -630,6 +640,9 @@ def ns4d_compute_sharding(mesh: Mesh, config: BenchConfig, bench_kind: str) -> N
         if bench_kind
         in (
             EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+            EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
+            EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
+            EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
             EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
         )
         else ns4d_group_size(config)
@@ -697,6 +710,8 @@ def ns4d_result_sharding(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Na
         EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     ):
         return None
@@ -795,6 +810,8 @@ def grouped_expert_group_sizes_for_bench(config: BenchConfig, bench_kind: str) -
         EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     ):
         return sizes
@@ -2582,6 +2599,127 @@ def expert_fsdp_grouped_updates_muonh_apply_timing_step_factory(mesh: Mesh, conf
     return update_step
 
 
+def expert_fsdp_grouped_updates_muonh_explicit_updates(
+    mesh: Mesh, config: BenchConfig, params, grouped_updates, restore_update, scope_name: str
+):
+    """Compute grouped expert MuonH, then explicitly restore FSDP-shaped updates."""
+    output_layers = [
+        {"mlp": {"expert_mlp": {name: None for name in synthetic_shapes(config)}}} for _ in range(config.layers)
+    ]
+    layer_offset = 0
+    for group_index, valid_group_size in enumerate(grouped_expert_group_sizes(config)):
+        for name in synthetic_shapes(config):
+            update = grouped_updates["blocks"][group_index]["mlp"]["expert_mlp"][name]
+            with jax.named_scope(f"muon_update_bench/{scope_name}/{name}/stack_fsdp_params"):
+                stacked_params = jnp.stack(
+                    [
+                        params["layers"][layer_index]["mlp"]["expert_mlp"][name]
+                        for layer_index in range(layer_offset, layer_offset + valid_group_size)
+                    ],
+                    axis=0,
+                )
+            if update.shape[0] != valid_group_size:
+                with jax.named_scope(f"muon_update_bench/{scope_name}/{name}/pad_param_group_axis"):
+                    pad_width = [(0, update.shape[0] - valid_group_size), *[(0, 0) for _ in stacked_params.shape[1:]]]
+                    stacked_params = jnp.pad(stacked_params, pad_width)
+            target_sharding = _target_sharding(update)
+            if isinstance(target_sharding, NamedSharding):
+                with jax.named_scope(f"muon_update_bench/{scope_name}/{name}/reshard_params_to_grouped_update"):
+                    stacked_params = reshard(stacked_params, target_sharding)
+            with jax.named_scope(f"muon_update_bench/{scope_name}/{name}/grouped_ns_hyperball"):
+                direction = zeropower_via_newtonschulz_4d_for_config(update, config)
+                direction = scale_ns4d_direction(direction)
+                update = grouped_4d_hyperball_update(stacked_params, direction, config)
+            with jax.named_scope(f"muon_update_bench/{scope_name}/{name}/explicit_restore_group"):
+                update = restore_update(mesh, config, name, update)
+            if valid_group_size != update.shape[0]:
+                with jax.named_scope(f"muon_update_bench/{scope_name}/{name}/slice_valid_group_axis"):
+                    update = update[:valid_group_size]
+            with jax.named_scope(f"muon_update_bench/{scope_name}/{name}/split_updates_to_fsdp_leaves"):
+                update_parts = [
+                    jnp.squeeze(update_part, axis=0) for update_part in jnp.split(update, valid_group_size, axis=0)
+                ]
+            for local_index, update_part in enumerate(update_parts):
+                layer_index = layer_offset + local_index
+                output_layers[layer_index]["mlp"]["expert_mlp"][name] = update_part
+        layer_offset += valid_group_size
+    return {"layers": tuple(output_layers)}
+
+
+def expert_fsdp_grouped_updates_muonh_explicit_apply_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(params, grouped_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_grouped_updates_muonh_explicit_apply_step"):
+            next_updates = expert_fsdp_grouped_updates_muonh_explicit_updates(
+                mesh,
+                config,
+                params,
+                grouped_updates,
+                _explicit_grouped_update_to_fsdp_group,
+                "expert_fsdp_grouped_updates_muonh_explicit",
+            )
+            with jax.named_scope("muon_update_bench/expert_fsdp_grouped_updates_muonh_explicit/optax_apply_updates"):
+                next_params = optax.apply_updates(params, next_updates)
+            return next_params, next_updates
+
+    return update_step
+
+
+def expert_fsdp_grouped_updates_muonh_explicit_apply_timing_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(params, grouped_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_grouped_updates_muonh_explicit_apply_timing_step"):
+            next_updates = expert_fsdp_grouped_updates_muonh_explicit_updates(
+                mesh,
+                config,
+                params,
+                grouped_updates,
+                _explicit_grouped_update_to_fsdp_group,
+                "expert_fsdp_grouped_updates_muonh_explicit_timing",
+            )
+            with jax.named_scope(
+                "muon_update_bench/expert_fsdp_grouped_updates_muonh_explicit_timing/optax_apply_updates"
+            ):
+                return optax.apply_updates(params, next_updates)
+
+    return update_step
+
+
+def expert_fsdp_grouped_updates_muonh_explicit_a2a_apply_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(params, grouped_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_grouped_updates_muonh_explicit_a2a_apply_step"):
+            next_updates = expert_fsdp_grouped_updates_muonh_explicit_updates(
+                mesh,
+                config,
+                params,
+                grouped_updates,
+                _explicit_grouped_update_to_fsdp_group_a2a,
+                "expert_fsdp_grouped_updates_muonh_explicit_a2a",
+            )
+            with jax.named_scope("muon_update_bench/expert_fsdp_grouped_updates_muonh_explicit_a2a/optax_apply_updates"):
+                next_params = optax.apply_updates(params, next_updates)
+            return next_params, next_updates
+
+    return update_step
+
+
+def expert_fsdp_grouped_updates_muonh_explicit_a2a_apply_timing_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(params, grouped_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_grouped_updates_muonh_explicit_a2a_apply_timing_step"):
+            next_updates = expert_fsdp_grouped_updates_muonh_explicit_updates(
+                mesh,
+                config,
+                params,
+                grouped_updates,
+                _explicit_grouped_update_to_fsdp_group_a2a,
+                "expert_fsdp_grouped_updates_muonh_explicit_a2a_timing",
+            )
+            with jax.named_scope(
+                "muon_update_bench/expert_fsdp_grouped_updates_muonh_explicit_a2a_timing/optax_apply_updates"
+            ):
+                return optax.apply_updates(params, next_updates)
+
+    return update_step
+
+
 def expert_fsdp_grouped_muonh_optimizer_apply_step_factory(mesh: Mesh, config: BenchConfig):
     momentum = optax.trace(MAY_MOMENTUM, nesterov=True)
 
@@ -2817,6 +2955,10 @@ def ns4d_boundary_status(config: BenchConfig, bench_kind: str) -> str | None:
         return "expert_fsdp_params_grouped_updates_muonh_restore_only"
     if bench_kind == EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH:
         return "expert_fsdp_params_grouped_updates_muonh_restore_then_apply"
+    if bench_kind == EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH:
+        return "expert_fsdp_params_grouped_updates_muonh_explicit_restore_then_apply"
+    if bench_kind == EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH:
+        return "expert_fsdp_params_grouped_updates_muonh_explicit_a2a_restore_then_apply"
     if bench_kind == EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH:
         return "expert_fsdp_params_grouped_muonh_restore_then_apply"
     if is_full_production_muonh_bench(bench_kind):
@@ -2863,6 +3005,8 @@ def is_expert_fsdp_grouped_updates_muonh_bench(bench_kind: str) -> bool:
     return bench_kind in (
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
     )
 
 
@@ -2889,6 +3033,8 @@ def is_expert_fsdp_grouped_bench(bench_kind: str) -> bool:
         EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     )
 
@@ -3575,6 +3721,8 @@ def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
         EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     ):
         return sum(
@@ -3623,6 +3771,10 @@ def estimated_matrix_count(config: BenchConfig, bench_kind: str) -> int:
         return config.layers * (per_layer_2d + per_layer_expert)
     if bench_kind in (
         EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     ):
         return sum(grouped_expert_group_sizes_for_bench(config, bench_kind)) * sum(
@@ -3956,6 +4108,28 @@ def lower_ns4d(
             )
             assert_expert_fsdp_sharding(update_specs, "expert FSDP grouped-updates MuonH restored updates")
             assert_expert_fsdp_sharding(result_specs, "expert FSDP grouped-updates MuonH apply result")
+            lower_args = None
+        elif bench_kind in (
+            EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
+            EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
+        ):
+            grouped_specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
+            if bench_kind == EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH:
+                update_step = jax.jit(expert_fsdp_grouped_updates_muonh_explicit_a2a_apply_step_factory(mesh, config))
+            else:
+                update_step = jax.jit(expert_fsdp_grouped_updates_muonh_explicit_apply_step_factory(mesh, config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs, update_specs = jax.eval_shape(update_step, specs, grouped_specs)
+                lowered = update_step.lower(specs, grouped_specs)
+            assert_grouped_expert_sharding(
+                grouped_specs,
+                mesh,
+                config,
+                bench_kind,
+                "expert FSDP grouped-updates explicit MuonH grouped updates",
+            )
+            assert_expert_fsdp_sharding(update_specs, "expert FSDP grouped-updates explicit MuonH restored updates")
+            assert_expert_fsdp_sharding(result_specs, "expert FSDP grouped-updates explicit MuonH apply result")
             lower_args = None
         elif is_expert_fsdp_grouped_muonh_bench(bench_kind):
             optimizer = optax.trace(MAY_MOMENTUM, nesterov=True)
@@ -4334,6 +4508,20 @@ def time_ns4d(
                 params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
                 update_step = jax.jit(
                     expert_fsdp_grouped_updates_muonh_apply_timing_step_factory(mesh, config),
+                    donate_argnums=(0,),
+                )
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH:
+                params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
+                update_step = jax.jit(
+                    expert_fsdp_grouped_updates_muonh_explicit_apply_timing_step_factory(mesh, config),
+                    donate_argnums=(0,),
+                )
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH:
+                params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
+                update_step = jax.jit(
+                    expert_fsdp_grouped_updates_muonh_explicit_a2a_apply_timing_step_factory(mesh, config),
                     donate_argnums=(0,),
                 )
                 lower_args = (params, updates)
