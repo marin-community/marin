@@ -124,6 +124,7 @@ from experiments.grug.moe.muon_update_bench import (
     grouped_expert_sequential_bank_consumer_step_factory,
     grouped_moe_consumer_chunk_tokens,
     grouped_moe_mlp_consumer_step_factory,
+    is_expert_fsdp_grouped_bench,
     ns4d_compute_sharding,
     ns4d_grouped_apply_step_factory,
     ns4d_input_sharding,
@@ -1273,6 +1274,7 @@ def test_expert_fsdp_grouped_apply_boundary_restores_ordinary_expert_updates_bef
         P(("replica_dcn", "data"), "expert", None, None)
     )
     assert_expert_fsdp_sharding(params, "expert FSDP params")
+    assert is_expert_fsdp_grouped_bench(EXPERT_FSDP_GROUPED_EXPLICIT_TUPLE_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH)
     assert_ns4d_sharding(grouped_updates, P(("replica_dcn", "data"), "expert", None, None), "grouped updates")
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
         result, updates = jax.eval_shape(update_step, params, grouped_updates)
