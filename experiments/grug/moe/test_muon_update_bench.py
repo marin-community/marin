@@ -50,6 +50,7 @@ from experiments.grug.moe.muon_update_bench import (
     create_mesh,
     estimate_grouped_2d_muonh,
     estimate_grouping,
+    estimated_boundary_byte_estimates,
     estimated_full_production_muonh_ns_dot_flops,
     estimated_matrix_count,
     estimated_ns_dot_flops,
@@ -1543,6 +1544,62 @@ def test_summary_row_reports_matrix_count_and_stack_estimates():
     assert row["estimated_matrix_count"] == 54
     assert row["grouped_expert_group_count"] == 1
     assert row["group_estimates"] == group_estimates
+
+
+def test_summary_row_reports_boundary_byte_estimates():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    estimates = estimated_boundary_byte_estimates(config, EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH)
+
+    assert estimates is not None
+    assert estimates["fsdp_output_to_grouped_input_ratio"] == 2.0
+    assert estimates["all_gather_slice_peak_to_grouped_input_ratio"] == 4.0
+
+    group_estimates = [asdict(estimate) for estimate in estimate_grouping(config)]
+    result = {
+        "metadata": {
+            "label": "expert_fsdp_grouped_explicit_apply_boundary_h1",
+            "bench_kind": EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH,
+            "config": asdict(config),
+            "devices": 8,
+            "ns4d_group_size": 4,
+            "ns4d_padded_group_size": 4,
+            "ns4d_input_sharding_spec": "P(('replica_dcn', 'data'), 'expert', None, None)",
+            "ns4d_compute_sharding_spec": "P(('replica_dcn', 'data'), 'expert', None, None)",
+            "ns4d_result_sharding_spec": None,
+            "ns4d_boundary_status": "expert_fsdp_params_grouped_updates_explicit_apply",
+            "boundary_collectives_allowed": True,
+            "grouped_expert_group_count": None,
+            "group_estimates": group_estimates,
+        }
+    }
+
+    row = summary_row(result)
+
+    assert row["estimated_boundary_global_update_bytes"] == estimates["global_update_bytes"]
+    assert row["estimated_boundary_grouped_input_per_device_bytes"] == estimates["grouped_input_per_device_bytes"]
+    assert row["estimated_boundary_fsdp_output_per_device_bytes"] == estimates["fsdp_output_per_device_bytes"]
+    assert (
+        row["estimated_boundary_all_gather_slice_peak_per_device_bytes"]
+        == estimates["all_gather_slice_peak_per_device_bytes"]
+    )
+    assert row["estimated_boundary_fsdp_output_to_grouped_input_ratio"] == 2.0
+    assert row["estimated_boundary_all_gather_slice_peak_to_grouped_input_ratio"] == 4.0
 
 
 def test_grouped_4d_hyperball_projects_each_group_expert_matrix_independently():

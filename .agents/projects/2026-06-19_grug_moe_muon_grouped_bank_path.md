@@ -38,6 +38,18 @@ The FSDP-master grouped-boundary path has not met the bar:
 Conclusion: preserving grouped params/updates/results is fast; converting
 grouped updates back to ordinary per-layer FSDP leaves in the hot path is not.
 
+The harness now reports boundary byte estimates for these rows. For the
+R2/D2/E8 May shape, the FSDP output shard is already 2x the grouped input shard
+per device, because the grouped layer axis starts sharded over
+`replica_dcn,data` while the FSDP result replicates layer across those axes and
+only shards one matrix axis over `data`. The all-gather+slice helper transiently
+materializes 4x the grouped input shard per device before discarding the
+unneeded `data` shard. The data all-to-all variant targets the lower-byte
+boundary, but the measured result stayed flat/slightly worse, so packed or
+reshaped versions of the same grouped-to-FSDP conversion are unlikely to be
+enough unless they also reduce the required FSDP output materialization or
+overlap it with useful work.
+
 ## Why The Boundary Is Bad
 
 The model consumes routed expert weights as ordinary per-layer
