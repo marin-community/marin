@@ -791,3 +791,22 @@ Restore-only is only about 4.4 ms faster by median runtime. Both paths compile t
 
 - Interpretation: The ppermute boundary does exactly what it was supposed to at the StableHLO level: all-gathers disappear and become 14 collective-permutes plus the same 14 logical data all-to-alls. XLA GPU still decomposes the data all-to-all and ppermute path heavily (`A2A=105`, `CP=112`), and the runtime is about 1.29x slower than the data-first all-gather/all-to-all restore. This rules out the R2 ppermute bridge as a production rescue for the FSDP-master restore boundary.
 - Next action: Stop pursuing JAX-level all-gather replacement for this boundary unless we can prove a lower-level communication primitive avoids the compiled A2A/CP explosion. The strongest current evidence still points to either a custom grouped-to-FSDP permutation kernel/collective or a model-facing representation that avoids restoring grouped Muon outputs to FSDP on the hot path.
+
+### 2026-06-19 12:20 PDT - packed ppermute reduces HLO collectives but worsens runtime
+- Hypothesis: The ppermute bridge may have failed because it restored each group and expert weight name separately. Packing all grouped blocks by expert weight name before the data-first ppermute boundary should reduce the intended logical communication from 14 A2A/CP pairs to 2 A2A/CP pairs.
+- Command:
+  - Code change: added `expert_fsdp_grouped_packed_data_first_ppermute_apply_boundary` to `experiments/grug/moe/muon_update_bench.py`, with focused tests in `experiments/grug/moe/test_muon_update_bench.py`. Commit `fb277009c` pushed to `codex/research-grug-moe-d2560-mfu`.
+  - Validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -q` -> 59 passed; `./infra/pre-commit.py --changed-files --fix` -> OK.
+  - Local forced-CPU lower-only comparison:
+    `XLA_FLAGS=--xla_force_host_platform_device_count=32 uv run python experiments/grug/moe/muon_update_bench.py --layers 26 --ns4d-group-size 4 --ns4d-group-axis replica_dcn,data --hidden-dim 2560 --intermediate-dim 1280 --num-experts 256 --replica-axis 2 --data-axis 2 --expert-axis 8 --model-axis 1 --bench-kinds expert_fsdp_grouped_explicit_data_first_ppermute_apply_boundary,expert_fsdp_grouped_packed_data_first_ppermute_apply_boundary --mode lower --warmup 0 --iters 1 --disable-abstract-mesh --output /tmp/muon_packed_ppermute_l26_lower.json`.
+  - CoreWeave run: parent `/dlwh/iris-run-job-20260619-181732`; child `/dlwh/iris-run-job-20260619-181732/grug-train-MUON-BENCH-D2560-L26-R2D2E8-PACKEDPPERM-H1-G4-N4-cw-20260619-181728`.
+  - Output: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D2E8-PACKEDPPERM-H1-G4-N4-cw-20260619-181728-6a7dfe/summary.json`.
+- Result:
+
+| boundary | lowered AG/A2A/CP | compiled AG/A2A/CP | compiled GEMMs | median | mean |
+| --- | --- | --- | ---: | ---: | ---: |
+| un-packed data-first ppermute apply | 0/14/14 | 0/105/112 | 14 | 0.278412s | 0.278422s |
+| packed data-first ppermute apply | 0/2/2 | 0/159/16 | 1 | 0.428635s | 0.428295s |
+
+- Interpretation: Packing succeeds at the StableHLO level, but compiled XLA GPU/NCCL lowering gets worse: A2A expands to 159 calls and runtime regresses by about 54% versus the un-packed ppermute path. This mirrors the earlier packed A2A result and confirms that reducing logical collective count is not enough; the large packed data-axis A2A lowers poorly.
+- Next action: Treat the JAX-level grouped-to-FSDP restore space as exhausted for now: plain `reshard` OOMs, explicit per-group A2A is best but still costly, packed A2A is worse, ppermute is worse, and packed ppermute is worst. The next FSDP-master attempt needs a lower-level custom communication boundary, or we should return to a grouped-bank/model-facing representation that avoids this restore boundary.
