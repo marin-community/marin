@@ -32,7 +32,6 @@ from levanter.grug.attention import (
     GrugAttentionImplementation,
     RotaryConfig,
     align_kv_heads,
-    apply_rotary_embedding,
     attention,
 )
 from levanter.grug.grug_moe import (
@@ -130,6 +129,23 @@ class GrugModelConfig:
     scan body so XLA only plans HBM for one iteration's intermediates — needed
     at scale where the unrolled program OOMs at compile time."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # YaRN NTK-by-parts rescaling (Peng et al. 2023). When ``yarn_old_seq_len`` is
+    # set, RoPE inv_freqs are blended between full position interpolation (low-freq
+    # bands) and original NTK (high-freq bands). ``None`` disables YaRN. The base
+    # fields apply to short (sliding-window) layers; ``long_*`` overrides apply to
+    # the every-4th + last "long" full-attention layers (gated on the layer's
+    # ``is_long_layer`` flag, NOT on ``use_pko`` — so YaRN still routes correctly
+    # when ``disable_pko=True``).
+    yarn_old_seq_len: int | None = None
+    yarn_alpha: int = 1
+    yarn_beta: int = 32
+    # When set, applies YaRN twice: first (old -> prior) to reproduce the
+    # training-time rescaling of an already-YaRN-extended checkpoint, then
+    # (prior -> seq_len). Used when extending an already-extended ckpt further.
+    yarn_prior_seq_len: int | None = None
+    long_yarn_old_seq_len: int | None = None
+    long_yarn_prior_seq_len: int | None = None
+    long_qk_mult: float | None = None
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -166,6 +182,65 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
+def _rope_inv_freq(
+    half_dim: int,
+    theta: float,
+    yarn_old_seq_len: int | None,
+    seq_len: int,
+    yarn_alpha: int,
+    yarn_beta: int,
+    yarn_prior_seq_len: int | None = None,
+) -> jax.Array:
+    """RoPE inv_freq with optional YaRN NTK-by-parts rescaling."""
+    inv_freq = 1.0 / (theta ** (jnp.arange(0, half_dim, dtype=jnp.float32) / half_dim))
+    if yarn_old_seq_len is None:
+        return inv_freq
+    if yarn_prior_seq_len is not None:
+        rotations = yarn_old_seq_len * inv_freq / (2 * jnp.pi)
+        mask = jnp.clip((rotations - yarn_alpha) / (yarn_beta - yarn_alpha), 0.0, 1.0)
+        scaling_factor = yarn_old_seq_len / yarn_prior_seq_len
+        inv_freq = inv_freq * (scaling_factor + mask * (1.0 - scaling_factor))
+        yarn_old_seq_len = yarn_prior_seq_len
+    rotations = yarn_old_seq_len * inv_freq / (2 * jnp.pi)
+    mask = jnp.clip((rotations - yarn_alpha) / (yarn_beta - yarn_alpha), 0.0, 1.0)
+    scaling_factor = yarn_old_seq_len / seq_len
+    return inv_freq * (scaling_factor + mask * (1.0 - scaling_factor))
+
+
+def _apply_half_rope(
+    q: jax.Array,
+    k: jax.Array,
+    *,
+    seq_len: int,
+    head_dim: int,
+    rope: RotaryConfig,
+    yarn_old_seq_len: int | None = None,
+    yarn_alpha: int = 1,
+    yarn_beta: int = 32,
+    yarn_prior_seq_len: int | None = None,
+) -> tuple[jax.Array, jax.Array]:
+    """RoPE applied to the first ``head_dim`` channels of q/k, with optional YaRN.
+
+    Matches ``levanter.grug.attention.apply_rotary_embedding`` when
+    ``yarn_old_seq_len=None``; otherwise rescales inv_freqs per Peng et al. 2023.
+    Convention: ``x1, x2 = split(x, 2, axis=-1)``; rotation is
+    ``[x1*cos - x2*sin, x2*cos + x1*sin]``.
+    """
+    half_dim = head_dim // 2
+    inv_freq = _rope_inv_freq(half_dim, rope.theta, yarn_old_seq_len, seq_len, yarn_alpha, yarn_beta, yarn_prior_seq_len)
+    positions = jnp.arange(seq_len, dtype=jnp.float32)
+    angles = positions[:, None] * inv_freq[None, :]
+    cos = jnp.cos(angles)[None, :, None, :]
+    sin = jnp.sin(angles)[None, :, None, :]
+
+    def _apply(x: jax.Array) -> jax.Array:
+        dtype = x.dtype
+        x1, x2 = jnp.split(x, 2, axis=-1)
+        return jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1).astype(dtype)
+
+    return _apply(q), _apply(k)
+
+
 class CausalSelfAttention(eqx.Module):
     w_q: Float[Array, "D NH"]
     w_k: Float[Array, "D MH"]
@@ -194,6 +269,7 @@ class CausalSelfAttention(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
         disable_rope: bool = False,
+        is_long_layer: bool = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -232,16 +308,31 @@ class CausalSelfAttention(eqx.Module):
 
         q = rms_norm(q)
         k = rms_norm(k)
+        # YaRN overrides are gated on ``is_long_layer`` (the every-4th + last
+        # full-attention layers), not on ``use_pko`` — so YaRN routes correctly
+        # when ``disable_pko=True`` and we still want YaRN on long layers.
+        cfg = self.cfg
+        yarn_old = cfg.long_yarn_old_seq_len if is_long_layer else cfg.yarn_old_seq_len
+        yarn_prior = cfg.long_yarn_prior_seq_len if is_long_layer else cfg.yarn_prior_seq_len
+        qk_mult = cfg.long_qk_mult if (is_long_layer and cfg.long_qk_mult is not None) else cfg.qk_mult
         if not disable_rope:
             # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim.
             # Second half is rope-free on every layer.
             half = head_dim // 2
-            q_rot, k_rot = apply_rotary_embedding(
-                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+            q_rot, k_rot = _apply_half_rope(
+                q[..., :half],
+                k[..., :half],
+                seq_len=seq_len,
+                head_dim=half,
+                rope=cfg.rope,
+                yarn_old_seq_len=yarn_old,
+                yarn_alpha=cfg.yarn_alpha,
+                yarn_beta=cfg.yarn_beta,
+                yarn_prior_seq_len=yarn_prior,
             )
             q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
             k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
-        q = q * self.cfg.qk_mult
+        q = q * qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
         # propagator with ``model`` annotated on ``head_dim`` rather than
@@ -568,8 +659,8 @@ class Block(eqx.Module):
         # layers use the sliding-window mask, never PKO, and always RoPE.
         attn_out = jax.lax.cond(
             jnp.asarray(use_long_mask, dtype=jnp.bool_),
-            lambda _: self.attn(attn_in, long_mask, use_pko=use_pko, disable_rope=disable_long_rope),
-            lambda _: self.attn(attn_in, short_mask, use_pko=False, disable_rope=False),
+            lambda _: self.attn(attn_in, long_mask, use_pko=use_pko, disable_rope=disable_long_rope, is_long_layer=True),
+            lambda _: self.attn(attn_in, short_mask, use_pko=False, disable_rope=False, is_long_layer=False),
             operand=None,
         )
         x = x + attn_out

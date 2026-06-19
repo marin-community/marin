@@ -69,6 +69,10 @@ class GrugMoeLaunchConfig:
     Each entry is a CheckpointInterval dict, e.g. ``[{"every": 10_000}]`` for periodic
     permanent checkpoints, or ``[{"every": phase_1_start_step, "until": phase_1_start_step}]``
     to snapshot a specific transition step. Ignored when ``checkpointer`` is set."""
+    load_checkpoint_path: str | None = None
+    """Resume training from this checkpoint path. The trainer restores model
+    weights, optimizer state, and step counter — so the run continues the
+    original LR schedule from that step. ``None`` starts fresh from step 0."""
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
@@ -147,6 +151,8 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
             save_interval=timedelta(minutes=10),
             keep=config.checkpoint_keep,
         ),
+        load_checkpoint=config.load_checkpoint_path is not None,
+        load_checkpoint_path=config.load_checkpoint_path,
     )
 
     grug_trainer = dataclasses.replace(config.grug_trainer, trainer=trainer)
