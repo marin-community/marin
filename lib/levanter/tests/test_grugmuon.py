@@ -260,6 +260,27 @@ def test_grug_scale_with_muon_can_compute_ns_in_bf16_for_fp32_updates():
     assert not jnp.array_equal(bf16_updates["layer0"]["w_gate_up"], fp32_updates["layer0"]["w_gate_up"])
 
 
+def test_replicated_newton_schulz_handles_concrete_sharding_without_abstract_mesh():
+    mesh = jax.make_mesh((1,), ("data",))
+    sharding = NamedSharding(mesh, P(None, "data"))
+    x = jax.device_put(jnp.arange(12, dtype=jnp.float32).reshape(3, 4) / 11 + 0.1, sharding)
+
+    with _reset_abstract_mesh():
+        update = jax.jit(
+            lambda y: _zeropower_via_newtonschulz_replicated(
+                y,
+                steps=2,
+                eps=1e-7,
+                coefficient_type="quintic",
+            )
+        )
+        actual = update(x)
+
+    assert actual.shape == x.shape
+    assert isinstance(actual.sharding, NamedSharding)
+    assert actual.sharding.spec == P(None, None)
+
+
 def test_stack_sharded_target_uses_replica_data_expert_when_divisible():
     mesh = AbstractMesh(
         axis_sizes=(4, 4, 8, 1),

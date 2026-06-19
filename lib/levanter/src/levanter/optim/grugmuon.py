@@ -767,10 +767,15 @@ def _zeropower_via_newtonschulz_replicated(
     del target_pspec  # Kept for signature parity with the other Newton-Schulz helpers.
 
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
-    has_mesh = not jax.sharding.get_abstract_mesh().empty
+    target_sharding = _target_sharding(X)
+    replicated_sharding = None
+    if isinstance(target_sharding, jax.sharding.NamedSharding):
+        replicated_sharding = jax.sharding.NamedSharding(target_sharding.mesh, P(None, None))
+    elif isinstance(target_sharding, PartitionSpec) and not jax.sharding.get_abstract_mesh().empty:
+        replicated_sharding = P(None, None)
     with jax.named_scope("newton_schulz_replicated/normalize_input"):
-        if has_mesh:
-            X = reshard(X, P(None, None))
+        if replicated_sharding is not None:
+            X = reshard(X, replicated_sharding)
         X = X / (jnp.linalg.norm(X) + eps)
 
     transpose = False
@@ -781,7 +786,7 @@ def _zeropower_via_newtonschulz_replicated(
 
     for i in range(steps):
         a, b, c = coeffs[i % len(coeffs)]
-        out_sharding = P(None, None) if has_mesh else None
+        out_sharding = replicated_sharding
         with jax.named_scope(f"newton_schulz_replicated/iter_{i}/gram"):
             A = jnp.einsum("ik,jk->ij", X, X, out_sharding=out_sharding)
         with jax.named_scope(f"newton_schulz_replicated/iter_{i}/polynomial"):
