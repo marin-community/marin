@@ -134,12 +134,12 @@ ALLOWED_TPUS_PER_BASE: dict[str, frozenset[str]] = {
     # memory with --per-device-parallelism on the bigger bases (see iso-token
     # ladder notes in .agents/logbooks/debug_midtrain.md).
     "3e18": frozenset({"v5p-8", "v5p-16", "v6e-8", "v4-8"}),
-    "9e18": frozenset({"v5p-8", "v5p-16", "v6e-4", "v6e-8", "v4-8"}),
-    "2e19": frozenset({"v5p-8", "v5p-16", "v6e-4", "v6e-8", "v4-8"}),
+    "9e18": frozenset({"v5p-8", "v5p-16", "v5p-32", "v6e-4", "v6e-8", "v4-8"}),
+    "2e19": frozenset({"v5p-8", "v5p-16", "v5p-32", "v6e-4", "v6e-8", "v4-8"}),
     "3e19": frozenset({"v5p-8", "v5p-16", "v5p-32", "v6e-4", "v6e-8", "v4-8"}),
     "9e19": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v6e-8", "v4-8", "v4-16"}),
     "2e20": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v4-8", "v4-16"}),
-    "3e20": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v4-8", "v4-16", "v4-32"}),
+    "3e20": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v6e-8", "v4-8", "v4-16", "v4-32"}),
     "1e21": frozenset(
         {"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v5p-128", "v5p-256", "v5p-512", "v4-8", "v4-16", "v4-32"}
     ),

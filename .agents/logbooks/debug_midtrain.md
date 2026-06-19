@@ -822,3 +822,233 @@ floor+power IS a pure power law = the log-log form. (4) iso-token log-log slope 
 vs iso-FLOP −0.098 (half the apparent iso-FLOP "scaling" is the growing D). Plots:
 `sk_midtrain_analysis_fable/error_vs_tokens.png` (500M→2B curve) + `err_fit_compare.png` (Chinchilla vs log-log,
 per held-out scale).
+
+## 2026-06-15 — /goal: tok4b 9-base ladder + 1e22 tok8b (extend the error-vs-tokens curve)
+Launched the full 9-base ladder at **4B** (`--budget-tokens 4000000000`, mix p33m67, lr0.5), batch held
+canonical per base (verified steps = 2× the 2B table). Per-base tok4b step targets: 3e18 122070, 9e18 61035,
+2e19 61035, 3e19 30518, 9e19 15259, 2e20 15259, 3e20 7629, 1e21 1907, 1e22 954.
+
+**Status (2026-06-16 ~06:30Z): 4/9 DONE, 5 running healthy.**
+| base | step/target | state | 4plus/loss |
+|---|---|---|---|
+| 3e18 | 114399/122070 (~94%) | running | 1.1323 (sofar) |
+| 9e18 | 61034/61035 | **DONE** | 1.08628 |
+| 2e19 | 18762/61035 (~31%) | running ← long pole | 1.1860 (sofar) |
+| 3e19 | 14799/30518 (~48%) | running | 1.1042 (sofar) |
+| 9e19 | 15258/15259 | **DONE** | 0.96310 |
+| 2e20 | 9999/15259 (~66%) | running | 0.97674 (sofar) |
+| 3e20 | 7628/7629 | **DONE** | 0.90277 |
+| 1e21 | ~1080/1907 (~57%) | running | 0.93820 (sofar) |
+| 1e22 | 953/954 | **DONE** | **0.79481** |
+4B per-base token trend continues 2B→4B (e.g. 1e22 0.85640→0.79481; 9e19 1.02569→0.96310; 3e20 0.96681→0.90277).
+Slices: 2e19/3e19 on v6e-8 us-east5-b (`...-v6eback-...`); 1e21/2e20 on v5p us-east5; 3e18 on v5p-8 us-east5.
+
+### 1e22 tok8b — relocated v5p-128 → v5p-32 us-east5 (resume from temp step-41)
+Launched 1e22 at **8B** (1907 steps, batch 1024 unchanged) on **v5p-128** ("while we can"). It cleared the
+9.7B HF cold-load (reached step 56) but one worker hit SIGSEGV (exit 139); the gang then could not re-place:
+**v5p-128 went to 0 ready / 0 booting / 0 demand in BOTH us-east5 AND us-central1** (cluster status), gang
+stuck pending >1h. The big-slice window closed. Fix-and-refire: killed the v5p-128 coordinator and relaunched
+on **v5p-32 us-east5** (13 ready) — same region (no cross-region read), HBM fits at pdev16, batch stays 1024
+(4× grad-accum vs v5p-128). Resumed **same attempt a001 from the step-41 temp checkpoint** via
+`--expected-min-step 41` (preflight `_latest_step_across` reads temp ckpts too), so no second HF cold-load.
+Coordinator `delphi-iso-1e22-tok8b-v5p32-20260615-232739`; child = 4-task v5p-32 gang, pending placement.
+~4× slower per step than v5p-128 but actually progresses. Lesson reaffirmed: only relocate UNPLACED gangs to
+chase capacity — never kill a placed/working job for a speculative speedup.
+
+### 2026-06-16 ~15:30Z — 4h silent stall of the 3 remaining 4B/8b jobs + recovery (two bugs)
+After 1e21(4B) finished (0.87504; trend 1.06156→0.99927→0.93687→0.87504), the 3 still-active runs
+(2e19, 3e19 on v6e-8 us-east5-b; 1e22 tok8b on v5p-32 us-east5-a) **all froze simultaneously and sat dead
+~3.9h** before I caught it. Root cause = a host/infra event that killed all three CPU coordinators at once:
+- **3e19 coordinator**: `worker_lost_spec` → state `killed` (terminal, iris does NOT auto-retry a lost host).
+- **1e22 tok8b coordinator**: gone (`not found`).
+- **2e19 coordinator**: `failed` exit 1. **Latent bug**: the 4B coordinators were launched WITHOUT
+  `--expected-min-step`, so when iris retried the coordinator after the host blip, the launcher re-ran a
+  *fresh* `--attempt 2` launch, the anti-clobber guard saw the now-existing checkpoints, and refused
+  (exit 1). A deterministic failure → retries exhausted → terminal.
+Children cascade-died with their coordinators ⇒ W&B heartbeats went stale but steps never advanced.
+**Why it went unnoticed 4h**: my watcher only fired on *finishes*, and one poll-loop had died earlier on a
+transient W&B ConnectTimeout. **Fixes applied:**
+1. **Resume-safe relaunch**: killed/relaunched all 3 with `--expected-min-step` (2e19 @30515 perm, 3e19 @23601
+   temp, tok8b @190 perm). This both resumes from checkpoint AND makes the coordinator idempotent under future
+   iris retries (retry re-runs the same cmd → now a resume, not a clobber-refuse). **Always pass
+   `--expected-min-step` on any long coordinator that can be restarted.**
+2. **Zone bug**: first 2e19/3e19 relaunch used the generic wrapper's `--zone us-east5-a`, but **v6e-8 lives in
+   us-east5-b**; the coordinator `--zone` propagates to the child ⇒ "unschedulable: no groups in zone
+   us-east5-a; did you mean us-east5-b?". Re-relaunched 2e19/3e19 with `--zone us-east5-b`. (v5p-32 tok8b
+   stays us-east5-a — that's where v5p is.) **v6e-8 ⇒ us-east5-b; v5p ⇒ us-east5-a.**
+3. **Stall detection** added to the watcher (`/tmp/watch_stall.py`): any non-DONE run with W&B heartbeat
+   >20min for 2 consecutive polls ⇒ `EVENT_STALL` (with a ~20min warmup so just-resumed runs aren't flagged
+   mid-recompile). Detects a freeze in ~25min instead of 4h.
+Recovery coordinators: `delphi-iso-{2e19,3e19}-tok4b-resb-20260616-082838` (us-east5-b),
+`delphi-iso-1e22-tok8b-v5p32r-20260616-082450` (us-east5-a). 4B ladder 7/9 done; ETA ~12h gated on 2e19.
+
+### 2026-06-16 ~18:00Z — /goal extension: full 8B ladder launched (all 9 bases)
+DRI chose the FULL 8B ladder (apples-to-apples 8B point on error-vs-tokens, same fit anchors as 4B). 8B step
+targets = 2× the 4B table: 3e18 244140, 9e18 122070, 2e19 122070, 3e19 61036, 9e19 30518, 2e20 30518,
+3e20 15258, 1e21 3814, 1e22 1908. **The two giants 3e18 (~3-4d) and 9e18 (~2d) dominate wall-clock** (tiny
+batches → huge step counts). Launched 7 fresh cold-start cells (attempt 1, from HF), all v5p us-east5-a to
+dodge the us-east5-b CPU-coordinator shortage: 3e18/9e18/3e19 → v5p-8; 9e19/2e20/3e20 → v5p-32; 1e21 → v5p-32
+pdev16 (replicating 4B per-base pdev). 1e22 8B already on v5p-128 (~59%, flying). 2e19 8B deferred until its
+4B finishes (~74% now). Coordinators `delphi-iso-{base}-tok8b-20260616-175415`.
+
+Confirmed mechanism (matters for the multi-day giants): a fresh attempt-1 launch self-heals through normal
+iris coordinator preemption-retries — `_is_iris_retry_attempt()` returns True (`attempt_id>0`) and preflight
+bypasses the anti-clobber guard for a matching-manifest retry (preflight.py:295-301), so the retry resumes
+from Levanter's latest checkpoint instead of refusing. Only a TERMINAL coordinator death (host worker_lost →
+killed) needs a manual relaunch with `--expected-min-step`; the stall watcher (`/tmp/watch_8b.py`, >22min
+heartbeat staleness) catches that in ~25min. (Corrects the earlier guess that the clobber guard killed 2e19 —
+the guard is bypassed on retries; 2e19's coordinator died for another reason during the host event.)
+
+## 2026-06-17 — SEALED: 4B ladder COMPLETE (9/9) + error-vs-tokens extended to 4B
+All nine 4B cells finished. Final nemotron_cc_math_v1/4plus loss (best attempt per base), strictly monotonic
+in scale, NO crossover:
+| 3e18 | 9e18 | 2e19 | 3e19 | 9e19 | 2e20 | 3e20 | 1e21 | 1e22 |
+|---|---|---|---|---|---|---|---|---|
+|1.12541|1.08628|1.02741|1.00650|0.96310|0.92644|0.90277|0.87482|**0.79481**|
+
+Endpoint-scaling rerun (fit through 3e20, n=7) adds the 4B held-out error point — it lands right on the flat
+band, headline holds:
+| budget | 1e21 Chin | 1e21 log-log | 1e22 Chin | 1e22 log-log |
+|---|---|---|---|---|
+| 500M | −2.31% | −2.49% | −3.66% | −4.27% |
+| 1B | −2.17% | −2.23% | −3.78% | −3.97% |
+| 2B | −2.12% | −2.12% | −3.59% | −3.60% |
+| **4B** | **−2.28%** | **−2.30%** | **−3.73%** | **−3.77%** |
+| iso-FLOP K=0.20 | +2.92% | +2.11% | **+18.57%** | +15.34% |
+**iso-token extrapolation error is flat & small (1e21 ~−2.3%, 1e22 ~−3.7%) across the full 8× token range
+(500M→4B), sign-flipped vs the iso-FLOP +18.6% "1e22 miss" — which is therefore an iso-FLOP token-budget
+confound (D grows with N), robust to the midtraining budget.** 4B fit: floor=0.0000 amp=1.1924 alpha=0.0482
+(R²=0.99255); log-log slope −0.0482 (vs iso-FLOP −0.0977 — half the apparent iso-FLOP "scaling" is growing D).
+Plot regenerated: `sk_midtrain_analysis_fable/error_vs_tokens.png` (500M→1B→2B→4B curve) + interactive HTML.
+
+### 8B ladder — IN FLIGHT (all 9 launched)
+Per DRI: full 8B ladder (apples-to-apples 8B error point). 1e22 8B DONE = **0.72037** (trend
+0.97412→0.91762→0.85640→0.79481→**0.72037**, clean across 16× tokens). Other 8 launched; once 2e19-4B finished
+its 8B (122k steps) launched too. Ops reality logged below: us-east5 spot is volatile — single-worker v5p-8
+places reliably (giants 3e18/9e18/2e19 live there); multi-worker v5p-32/64 gangs are flaky and hang silently
+(iris reports "running" while the process is wedged → NO auto-retry). A ~1h capacity crunch (2026-06-16 ~02-03Z
+UTC) left everything pending/hung; it resolved on its own and iris re-placed all pending jobs — **lesson: in a
+crunch, stop relaunching (futile churn) and let iris's pending-retry self-heal; only manually relaunch the
+truly HUNG (worker-log silent >15min, not the W&B summary _timestamp which only refreshes at eval).** Giants
+(3e18 244k, 9e18 122k, 2e19 122k steps) are a multi-day tail. Monitor: `/tmp/watch_8bonly.py` (report-only,
+fires on all-9-8B-done). 8B targets = 2× the 4B step counts.
+
+## 2026-06-18 — SEALED: 8B ladder COMPLETE (9/9) — full iso-token study done (500M→8B, 16×)
+All nine 8B cells finished. Final nemotron_cc_math_v1/4plus loss, strictly monotonic in scale, NO crossover:
+| 3e18 | 9e18 | 2e19 | 3e19 | 9e19 | 2e20 | 3e20 | 1e21 | 1e22 |
+|---|---|---|---|---|---|---|---|---|
+|1.06714|1.02996|0.96791|0.94596|0.90147|0.86239|0.83573|0.80592|**0.72012**|
+
+Endpoint-scaling rerun adds the 8B held-out error point (fit through 3e20, n=7): floor=0.0000 amp=1.1400
+alpha=0.0533 (R²=0.99038); log-log slope −0.0535. The 8B point lands in the flat band and the 1e22 error
+actually SHRINKS:
+| budget | 1e21 Chin | 1e21 log-log | 1e22 Chin | 1e22 log-log |
+|---|---|---|---|---|
+| 500M | −2.31% | −2.49% | −3.66% | −4.27% |
+| 1B | −2.17% | −2.23% | −3.78% | −3.97% |
+| 2B | −2.12% | −2.12% | −3.59% | −3.60% |
+| 4B | −2.28% | −2.30% | −3.73% | −3.77% |
+| **8B** | **−2.08%** | **−2.16%** | **−3.07%** | **−3.19%** |
+| iso-FLOP K=0.20 | +2.92% | +2.11% | **+18.57%** | +15.34% |
+**FINAL RESULT: the iso-token N-scaling extrapolation error is flat & small (1e21 ~−2.1%, 1e22 ~−3.1%) across
+the ENTIRE 500M→8B 16× token sweep, sign-flipped vs the iso-FLOP +18.6% "1e22 miss" — which is therefore an
+iso-FLOP token-budget confound (D grows with N on the iso-FLOP ladder), conclusively NOT a 1e22 effect and
+robust across a 16× midtraining-token range.** Per-base token trend holds everywhere (e.g. 1e22
+0.97412→0.91762→0.85640→0.79481→0.72012 across 500M→8B). Plot: `sk_midtrain_analysis_fable/error_vs_tokens.png`
+(500M→8B curve) + interactive HTML.
+
+### 8B ops notes (multi-day grind on us-east5 spot)
+- Single-worker v5p-8 = stable; multi-worker gangs (v5p-16/32/64) coschedule + hang more (silent: iris
+  "running" while wedged → no auto-retry; detect via worker-log silence >15min, NOT W&B summary _timestamp
+  which only refreshes at eval). Recurring host-blip hangs cleared by kill+relaunch-from-temp-checkpoint.
+- **Speedup move (DRI request):** moved the three giants off v5p-8 to bigger v5p (resume-from-checkpoint, same
+  us-east5 bucket, no copy): 3e18→v5p-16 (batch 8 caps data-parallel at 8 chips), 9e18+2e19→v5p-32 (batch 16
+  → 16 chips). Measured ~1.35× (3e18), ~1.7× (9e18), ~1.9× (2e19) — sublinear (tiny batches are overhead-bound)
+  but halved the long-pole ETA (~38h→~20h). Added v5p-32 to 9e18/2e19 allowlists for this.
+- Lesson reaffirmed: in a us-east5 capacity crunch, STOP relaunching (futile thundering-herd churn) — iris's
+  pending-retry self-heals every preempted job once capacity returns; only manually relaunch the truly HUNG.
+
+### 2026-06-18 — Definitive plot: the "1e22 miss" mechanism, side by side
+`sk_midtrain_analysis_fable/isoflop_miss_is_token_artifact.png` — the single clearest figure of the result.
+Two panels, log-log val-loss vs pretrain-FLOP scale C, SAME extrapolation procedure (Chinchilla floor+power
+fit through 3e18–3e20, then predict the held-out 1e21/1e22):
+- **LEFT, iso-FLOP K=0.20 (D grows with N, 0.24B→32B):** 1e22's actual loss (0.56102) sits FAR BELOW the fit's
+  prediction (0.66520) → **+18.58%** — the "miss". 1e22 looks anomalously good only because it also got vastly
+  more midtraining tokens (32B) than the small ladder, which the N-only fit can't see.
+- **RIGHT, iso-token (fixed D = 8B every base):** the same 1e22 model lands ON the fit (pred 0.69805 vs actual
+  0.72012 = **−3.11%**), and 1e21 is **−2.08%**.
+Hold the token budget fixed and the +18.6% miss collapses to ~−3% → **the miss is a token-budget artifact of
+the iso-FLOP ladder, not a 1e22-scale effect.** Per-base iso-FLOP losses used (k0p20 small + 9p25b/32p07b
+large): 3e18 1.43522, 9e18 1.27370, 2e19 1.19341, 3e19 1.13897, 9e19 1.02104, 2e20 0.95401, 3e20 0.90956,
+1e21 0.79353, 1e22 0.56102. Generator: `/tmp/definitive_plot.py` (data fetched live from W&B; fit params from
+the endpoint-scaling print_summary). Companion: `error_vs_tokens.png` (the −2…−4% flat band across 500M→8B).
+
+# ========================================================================
+# HANDOFF FOR NEXT AGENT — 2026-06-18 (iso-token CPT study: COMPLETE)
+# ========================================================================
+
+## TL;DR — the study is DONE and the question is answered
+The iso-token midtraining CPT ladder is complete across **5 token budgets × 9 model scales**
+(500M, 1B, 2B, 4B, 8B × 3e18…1e22), mix p33m67, lr0.5. **No jobs are running.** The original question —
+is the iso-FLOP "1e22 miss" (+18.6% scaling-law over-prediction) real? — is conclusively answered:
+
+**It is an iso-FLOP token-budget artifact, NOT a 1e22 effect.** On the iso-FLOP ladder the midtrain token
+budget D grows with model scale N (0.24B→32B), so the N-only scaling fit can't see the extra tokens and
+1e22 looks anomalously good (+18.6% below the fit). Hold D fixed (iso-token) and the same 1e22 lands ON the
+fit (−3.1%). This holds at EVERY budget across the full 16× token sweep (1e21 ~−2.1%, 1e22 ~−3.1%).
+
+## Final numbers (nemotron_cc_math_v1/4plus val loss; metric key `eval/nemotron_cc_math_v1/4plus/loss`)
+Both ladders strictly monotonic in scale, no crossover.
+- tok4B: 3e18 1.12541 / 9e18 1.08628 / 2e19 1.02741 / 3e19 1.00650 / 9e19 0.96310 / 2e20 0.92644 /
+  3e20 0.90277 / 1e21 0.87482 / 1e22 0.79481
+- tok8B: 3e18 1.06714 / 9e18 1.02996 / 2e19 0.96791 / 3e19 0.94596 / 9e19 0.90147 / 2e20 0.86239 /
+  3e20 0.83573 / 1e21 0.80592 / 1e22 0.72012
+- Held-out error (Chinchilla floor+power fit through 3e20): 1e21 ranges −2.08…−2.31%, 1e22 −3.07…−3.78%
+  across 500M→8B; iso-FLOP K=0.20 is 1e21 +2.92%, **1e22 +18.57%**. Full table is in the
+  "2026-06-18 SEALED" entry above.
+
+## Deliverables / artifacts
+- **Plots** (in `sk_midtrain_analysis_fable/`, which is GITIGNORED):
+  - `isoflop_miss_is_token_artifact.png` — the money figure (2-panel scaling fit: 1e22 off the iso-FLOP fit,
+    on the iso-token fit). Generator: **`scripts/analysis/plot_isoflop_miss_token_artifact.py`** (fetches data
+    live from W&B; fit params hardcoded from print_summary).
+  - `error_vs_tokens.png` — the flat −2…−4% error band across 500M→8B (categorical x-axis, no log-tick
+    garbage). Generator: **`scripts/analysis/plot_isotoken_error_vs_tokens.py`** (error values hardcoded from
+    print_summary). Both generators run from the repo root and write into `sk_midtrain_analysis_fable/`.
+  - `delphi_isotoken_endpoint_scaling.html` — interactive overlay (regenerated by the analysis script).
+- **Analysis script**: `scripts/analysis/delphi_isotoken_endpoint_scaling.py` — rerun to refresh fits +
+  print_summary (the per-budget held-out error table). Slow (~5min, queries W&B); run WITHOUT a `timeout`
+  wrapper or in background. iso-FLOP runs are NOT under the sweep tag — they match `*-k0p20-*` (small) and
+  `*-9p25b-*`/`*-32p07b-*` (1e21/1e22 large) and live in the local cache `midtrain_wandb_data/runs/`.
+
+## ⚠️ UNCOMMITTED — needs a commit (offered to DRI, not yet greenlit)
+The entire investigation is uncommitted on branch `midtrain_data`:
+- `experiments/midtrain_specs/delphi_small_cpt_k020.py`: `--expected-min-step` resume flag, `--budget-tokens`,
+  `--per-device-parallelism`, `--region`/cross-region opt-in, `--no-child-preempt`; allowlist widenings
+  (v4-128→1e22, v6e-8→3e18, **v5p-32→9e18/2e19** added this session for the speedup move).
+- `lib/marin/src/marin/midtraining/budget.py` (`default_budget_label` → 500m/2b/4b/8b).
+- `scripts/analysis/delphi_isotoken_endpoint_scaling.py`, this logbook, `.agents/logbooks/delphi_true_cooldown.md`.
+- New (untracked): `scripts/analysis/plot_isotoken_error_vs_tokens.py` + `scripts/analysis/plot_isoflop_miss_token_artifact.py`
+  (the two figure generators, preserved out of `/tmp` so they survive; `git add` them with the commit).
+When committing: `./infra/pre-commit.py --changed-files --fix`, then commit, then `./infra/pre-commit.py
+--review`, then push. (Worktree at `.claude/worktrees/midtrain`; `.marin.yaml` symlinked for WANDB key.)
+
+## Ops lessons (us-east5 spot is hostile to long multi-job runs)
+- **Single-worker v5p-8 = stable; multi-worker gangs (v5p-16/32/64) coschedule slowly and HANG silently**
+  (iris reports `running` while the process is wedged → no auto-retry). Detect a real hang by **worker-log
+  silence >15min**, NOT the W&B summary `_timestamp` (it only refreshes at eval boundaries → false stalls
+  between evals). Step-advancement is a better signal than timestamp but still pauses during eval.
+- **Resume lever**: relaunch with the SAME `--attempt` + `--expected-min-step <≤latest ckpt>` (find via
+  `gsutil ls .../checkpoints/` and the temp path `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/...`).
+  Levanter resumes from the latest of perm/temp. A *fresh* launch self-heals through iris coordinator
+  preemption-retries (`_is_iris_retry_attempt` → attempt_id>0 bypasses the anti-clobber guard); only a
+  TERMINAL coordinator death (host `worker_lost` → killed) needs a manual relaunch.
+- **In a capacity crunch, STOP relaunching** — it's a futile thundering herd. iris's pending-retry re-places
+  every preempted job once capacity returns; only manually relaunch the truly HUNG.
+- **Speedup**: bigger v5p helps but sublinear for tiny batches (overhead-bound): measured ~1.35×/1.7×/1.9×
+  for 3e18/9e18/2e19. Data-parallel width ≤ global batch ⇒ 3e18 (batch 8) caps at v5p-16 (8 chips);
+  9e18/2e19 (batch 16) cap at v5p-32 (16 chips). **Zone: v6e-8 ⇒ us-east5-b, v5p ⇒ us-east5-a** (coordinator
+  `--zone` propagates to the child).
+
+## What's NOT done (available, not started — all on these CPT checkpoints)
+The other original experiments (#1 decontaminated re-eval, #2–#6) are untouched and unaffected by this study.
