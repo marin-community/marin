@@ -706,3 +706,18 @@ The run succeeded without the previous 57.84 GiB allocation. Compiled HLO report
 
 - Interpretation: The packed form fixes the StableHLO-level granularity problem. The live CoreWeave run is the real test: if compiled HLO still explodes the 2 logical A2As into hundreds of NCCL calls or stays near 1s, the FSDP-master boundary still needs custom communication or a grouped model consumer. If compiled counts stay close to 2 and timing drops materially, the FSDP-master plus packed restore path becomes viable again.
 - Next action: Babysit `/dlwh/iris-run-job-20260619-172133`, extract summary JSON, and compare compiled AG/A2A counts plus median timing against the previous explicit A2A baseline (`AG=112`, `A2A=392`, about 1.07s apply).
+
+### 2026-06-19 10:30 PDT - packed A2A grouped-to-FSDP boundary negative result
+- Hypothesis: Packing all grouped blocks by expert weight name would let XLA GPU compile the grouped-to-FSDP boundary as two large logical A2As and reduce runtime relative to the per-group explicit A2A path.
+- Command:
+  - CoreWeave run: parent `/dlwh/iris-run-job-20260619-172133`; child `/dlwh/iris-run-job-20260619-172133/grug-train-MUON-BENCH-D2560-L26-R2D2E8-PACKEDA2A-H1-G4-N4-cw-20260619-172131`.
+  - Output: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D2E8-PACKEDA2A-H1-G4-N4-cw-20260619-172131-9fbb78/summary.json`.
+- Result:
+
+| boundary | lowered AG/A2A | compiled AG/A2A | compiled GEMMs | median |
+| --- | --- | --- | ---: | ---: |
+| explicit per-group A2A | 14/14 | 112/98 | 7 | 0.305741s |
+| packed A2A | 2/2 | 16/158 | 1 | 0.467800s |
+
+- Interpretation: Packing did reduce logical AG/A2A and compiled AG, but compiled A2A still exploded and runtime regressed by about 53% versus the per-group explicit boundary. The packed path is therefore not a rescue for the FSDP-master hot boundary. The underlying issue is not only HLO-level operation count; XLA GPU/NCCL lowering still decomposes the large data-axis A2A in a way that is slower than the smaller per-group boundary.
+- Next action: Stop treating generic JAX `reshard`, explicit per-group `shard_map`, or packed `shard_map` restore as sufficient for the production FSDP-master path. The remaining plausible routes are (1) keep grouped expert banks live through a grouped/scan-like model consumer, or (2) implement a lower-level custom communication boundary that directly performs the needed grouped-to-FSDP permutation without XLA's A2A decomposition.
