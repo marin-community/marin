@@ -18,6 +18,7 @@ from levanter.optim.grugmuon import (
     _cast_for_ns_compute,
     _grouped_4d_stack_target,
     _grug_scale_with_muon,
+    _ns_compute_dtype_from_name,
     _restore_ns_compute_dtype,
     _target_sharding,
     _target_spec,
@@ -394,6 +395,7 @@ def scale_with_grouped_expert_muonh(
 ) -> optax.GradientTransformation:
     """Expert-only MuonH transform that computes NS on grouped 4D stacks and returns FSDP updates."""
 
+    _ns_compute_dtype_from_name(ns_compute_dtype, jnp.float32)
     if max_grouped_stack_size < 1:
         raise ValueError(f"max_grouped_stack_size={max_grouped_stack_size} must be positive")
     if expert_grouped_muonh_group_size is not None and expert_grouped_muonh_group_size < 1:
@@ -608,6 +610,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError(f"max_grouped_stack_size={self.max_grouped_stack_size} must be positive")
         if self.expert_grouped_muonh_group_size is not None and self.expert_grouped_muonh_group_size < 1:
             raise ValueError(f"expert_grouped_muonh_group_size={self.expert_grouped_muonh_group_size} must be positive")
+        _ns_compute_dtype_from_name(self.ns_compute_dtype, jnp.float32)
 
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)

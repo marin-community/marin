@@ -14,6 +14,7 @@ from experiments.grug.moe.optimizer import (
     GrugMoeSgdConfig,
     _expert_momentum_sharding,
     _scale_invariant_hyperball_updates,
+    scale_with_grouped_expert_muonh,
 )
 from experiments.grug.moe.optimizer_sharding import assert_update_sharding_matches_params
 
@@ -144,6 +145,11 @@ def test_grug_moe_muonh_can_route_routed_expert_weights_to_grouped_muonh():
     assert block_mask["mlp"]["expert_mlp"]["w_gate_up"] == "grouped_muonh"
     assert block_mask["mlp"]["expert_mlp"]["w_down"] == "grouped_muonh"
     assert block_mask["shared"]["w_gate"] == "muonh"
+
+
+def test_grouped_expert_muonh_rejects_unknown_ns_compute_dtype():
+    with pytest.raises(ValueError, match="ns_compute_dtype"):
+        scale_with_grouped_expert_muonh(ns_compute_dtype="int8")
 
 
 def test_grug_moe_sgd_update_is_stateless_and_matches_shapes():
