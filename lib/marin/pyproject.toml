@@ -9,6 +9,9 @@ version = "0.2.0"
 
 requires-python = ">=3.12"
 dependencies = [
+    # Provides the compression.zstd module that fsspec imports to register its
+    # zstd codec on Python < 3.14; required for reading/writing zstd via fsspec.
+    "backports-zstd>=1.0.0; python_version < '3.14'",
     "braceexpand",
     "datasets<5.0.0",
     "draccus>=0.11.6",
