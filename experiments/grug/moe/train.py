@@ -277,6 +277,15 @@ def _make_direct_performance_logger(
                 metrics["throughput/mean_mfu"] = statistics.mean(mfu_samples)
                 metrics["throughput/mfu_sample_count"] = len(mfu_samples)
 
+        logger.info(
+            "Grug direct performance metrics step=%s loss=%s duration=%s tokens_per_second=%s mfu=%s mean_mfu=%s",
+            step,
+            float(loss),
+            metrics.get("throughput/duration"),
+            metrics.get("throughput/tokens_per_second"),
+            metrics.get("throughput/mfu"),
+            metrics.get("throughput/mean_mfu"),
+        )
         levanter.tracker.log(metrics, step=step)
 
     return log_direct_performance

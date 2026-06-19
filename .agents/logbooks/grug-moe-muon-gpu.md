@@ -1008,3 +1008,156 @@ The logs show the first compiled/initialization-heavy steps dominated wall time,
 The tuple path lowers faster and its StableHLO text is smaller, but the compiled HLO is slightly larger and runtime is equal to slightly worse. Most importantly, compiled all-gather count remains 14 and there are still no all-to-alls, all-reduces, reduce-scatters, or collective-permutes.
 - Interpretation: Returning the split FSDP tuple from inside `shard_map` does not make XLA GPU batch away or avoid the grouped all-gathers. It is a useful harness datapoint, but not a production improvement. The current explicit grouped 4D slice-first restore remains the best known production boundary.
 - Next action: Do not integrate the tuple-returning bridge into the production optimizer. Further improvement needs to avoid the grouped-to-FSDP sync boundary, overlap it, or use a lower-level route that communicates exactly the final FSDP slices. Pallas alone will not replace a cross-device collective; it would need to sit around an explicit collective or use a lower-level communication primitive.
+
+### 2026-06-19 14:55 PDT - 2-node profile attempts hang at clique init before step 0
+- Hypothesis: Profiling the current explicit inbound-gather / explicit slice-first-restore grouped MuonH full-train path should show where the gap between the fast 4-node optimizer gate and the slower May192 full train comes from.
+- Command:
+  - Readable profile with command buffers disabled: `bash scratch/launch_may195_fa4_2node_b16_grouped_muonh3_current_readable_profile.sh`.
+  - Normal profile with command buffers enabled: `bash scratch/launch_may196_fa4_2node_b16_grouped_muonh3_current_profile.sh`.
+  - May195 parent `/dlwh/iris-run-job-20260619-212758`, W&B `https://wandb.ai/marin-community/marin_moe/runs/GM2560-MAY-195S4096-W2048-B16-R2-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-CURRENT-READABLEPROFILE-N2-cw-20260619-2127`.
+  - May196 parent `/dlwh/iris-run-job-20260619-214055`, W&B `https://wandb.ai/marin-community/marin_moe/runs/GM2560-MAY-196S4096-W2048-B16-R2-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-CURRENT-PROFILE-N2-cw-20260619-2140`.
+- Config: Both runs matched the May192 B16/R2 full-train grouped MuonH shape, with profiler enabled for two steps and HLO proto upload enabled. May195 additionally set `--xla_gpu_enable_command_buffer=''`; May196 left command buffers enabled.
+- Result: Both runs hung before the first training scalar. May195 reached W&B but never emitted step metrics; task logs showed a clique-initialization rendezvous warning. May196 reproduced the same failure with command buffers enabled: W&B summary remained null for `global_step`, `throughput/mfu`, `throughput/tokens_per_second`, and `train/loss`, while Iris still reported both tasks running and logs showed `Initialize clique: devices=16` rendezvous warnings from task 0. May196 was manually stopped with `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-job-20260619-214055`.
+- Interpretation: The profile hang is not explained by the command-buffer readability flag. The next isolation step is a no-profile B16/R2 run on the current branch to determine whether the current grouped MuonH production path still runs end-to-end after the latest harness-only commits, or whether profiling/HLO proto collection is the trigger.
+- Next action: Launch a non-profile B16/R2 current-branch throughput sanity run before attempting another multihost profile.
+
+### 2026-06-19 15:10 PDT - no-profile current path completes train loop but W&B finalization crashes
+- Hypothesis: If the current explicit inbound-gather / explicit slice-first-restore grouped MuonH production path is still healthy, a no-profile B16/R2 run should get past the May195/May196 clique-init profile hang and complete training.
+- Command:
+  - Launch script: `bash scratch/launch_may197_fa4_2node_b16_grouped_muonh3_current_throughput.sh`.
+  - Parent Iris job: `/dlwh/iris-run-job-20260619-215443`.
+  - Child Iris job: `/dlwh/iris-run-job-20260619-215443/grug-train-GM2560-MAY-197S4096-W2048-B16-R2-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-CURRENT-THROUGHPUT-N2-cw-20260619-2154`.
+  - W&B: `https://wandb.ai/marin-community/marin_moe/runs/GM2560-MAY-197S4096-W2048-B16-R2-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-CURRENT-THROUGHPUT-N2-cw-20260619-2154`.
+- Config: Same B16/R2 shape as May196 but with profiler disabled: 2 H100 nodes, `replica_dcn=2`, `data=1`, `expert=8`, `model=1`, batch 16, sequence length 4096, sliding window 2048, synthetic data, no checkpoints, 8 steps, `gpu_fa4_cute`, Pallas CE block size 8192, ring MoE, save-MoE remat, bf16 params/compute/output, `optimizer=muonh`, `expert_3d_optimizer=grouped_muonh`, group size 2, MuonH3, `stack_batch_4d_sharded`, cap512, bf16 NS compute.
+- Result: The run passed the May195/May196 failure point. Logs show the child created W&B, formed mesh `{'replica_dcn': 2, 'data': 1, 'expert': 8, 'model': 1}`, started step 0 at `21:56:16/17`, finished step 0 at `22:01:08`, finished step 1 at `22:06:00`, finished step 2 at `22:06:01`, then reached `Progress on:train 8.00it/8.00it ... postfix:loss=3.1` at `22:06:09`. There were no rendezvous warnings in the checked logs. W&B then failed finalization with `wandb.sdk.mailbox.mailbox_handle.HandleAbandonedError`, marked the run crashed, and synced no scalar history rows. Iris continued to show the child running after the train loop, so the job was manually stopped to free the nodes.
+- Interpretation: The current production path did not regress back to the May195/May196 clique-init hang; profiler/HLO collection is still the leading suspect for that hang. However, May197 did not provide trustworthy throughput scalars because W&B finalization failed before metrics persisted. The post-step timing from logs is too coarse for a headline number.
+- Next action: Do not launch another identical profile attempt. Continue on the custom grouped-to-FSDP conversion work, and use a future no-profile or lower-overhead metric path if exact full-train throughput is needed.
+
+### 2026-06-19 15:25 PDT - JSON-tracker rerun captures full-train grouped MuonH metrics in logs
+- Hypothesis: The May197 train loop completed but lost scalar evidence because W&B finalization crashed. Logging direct performance metrics before tracker writes and using `json_logger` should preserve exact full-train throughput evidence in Iris logs.
+- Command:
+  - Code change: added a direct `experiments.grug.moe.train` info log before `levanter.tracker.log(...)` with step, loss, duration, tokens/sec, MFU, and mean MFU.
+  - Validation before launch: `uv run python -m py_compile experiments/grug/moe/train.py`; `./infra/pre-commit.py --files experiments/grug/moe/train.py .agents/logbooks/grug-moe-muon-gpu.md --fix`.
+  - Launch script: `bash scratch/launch_may198_fa4_2node_b16_grouped_muonh3_current_throughput_json.sh`.
+  - Parent Iris job: `/dlwh/iris-run-job-20260619-221150`.
+  - Child Iris job: `/dlwh/iris-run-job-20260619-221150/grug-train-GM2560-MAY-198S4096-W2048-B16-R2-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-CURRENT-THROUGHPUTJSON-N2-cw-20260619-2211`.
+- Config: Same B16/R2 current production path as May197, but `--tracker json_logger`: 2 H100 nodes, `replica_dcn=2`, `data=1`, `expert=8`, `model=1`, batch 16, sequence length 4096, sliding window 2048, synthetic data, no checkpoints, 8 steps, `gpu_fa4_cute`, Pallas CE block size 8192, ring MoE, save-MoE remat, bf16 params/compute/output, `optimizer=muonh`, `expert_3d_optimizer=grouped_muonh`, group size 2, MuonH3, `stack_batch_4d_sharded`, cap512, and bf16 NS compute.
+- Result: Iris parent and child reached `JOB_STATE_SUCCEEDED` with zero failures/preemptions. The first two steps were compile/initialization dominated:
+
+| step | duration | tokens/sec | MFU | loss |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 | 292.62-293.23s | ~223.5 | ~0.024 | 11.7917 |
+| 1 | 293.63-293.64s | ~223.2 | ~0.024 | 9.2990 |
+
+Post-compile steps were stable around 1.06s:
+
+| step | duration | tokens/sec | MFU | loss |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 1.055-1.058s | 61.94k-62.09k | 6.70-6.71 | 7.1580 |
+| 3 | 1.059-1.061s | 61.77k-61.90k | 6.68-6.69 | 5.0763 |
+| 4 | 1.059-1.066s | 61.47k-61.87k | 6.65-6.69 | 4.2849 |
+| 5 | 1.056-1.058s | 61.94k-62.05k | 6.70-6.71 | 3.5005 |
+| 6 | 1.056-1.065s | 61.55k-62.04k | 6.66-6.71 | 3.8169 |
+| 7 | 1.058-1.062s | 61.68k-61.94k | 6.67-6.70 | 3.1036 |
+
+- Interpretation: This confirms May192's W&B numbers and May197's coarse log timings without relying on W&B: the current pragmatic FSDP-master grouped MuonH path is correct and stable, but not performant enough. The current 2-node B16 post-warmup full-train rate is only about 6.7 MFU, versus the best 2-node B16 SGD/non-Muon reference at about 17.7 MFU. The explicit inbound/outbound bridge fixed the compiled A2A correctness gate in the isolated optimizer harness, but full training still has a large Muon/communication/overlap gap.
+- Next action: Stop treating tracker/profiler finalization as the main uncertainty. The next useful work is profile/trace attribution of the no-profile-successful current path, or a lower-overhead isolated full-step harness that can decompose optimizer bridge, NS compute, gradient psum, and model fwd/bwd without HLO-profiler rendezvous hangs.
+
+### 2026-06-19 15:35 PDT - R2D1E8 real grouped MuonH optimizer attribution
+- Hypothesis: The May198 full-step gap can be decomposed by running the real `GrugMoeMuonHConfig(expert_3d_optimizer="grouped_muonh")` optimizer path in the standalone Muon update harness on the exact May198 mesh, `replica_dcn=2`, `data=1`, `expert=8`, `model=1`.
+- Command:
+  - Launch: `RUN_ID=MUON-BENCH-D2560-L26-R2D1E8-REALGROUPEDMUONH-CURRENT-H3-G2-CAP512-N2-cw-20260619-222821 ... MUON_BENCH_KINDS=real_expert_fsdp_grouped_muonh_optimizer_update,real_expert_fsdp_grouped_muonh_optimizer_apply ... bash scratch/muon_update_bench_fast_loop.sh iris fullprod-r4e8-l26-h3`.
+  - Parent Iris job: `/dlwh/iris-run-job-20260619-222825`.
+  - Child Iris job: `/dlwh/iris-run-job-20260619-222825/grug-train-MUON-BENCH-D2560-L26-R2D1E8-REALGROUPEDMUONH-CURRENT-H3-G2-CAP512-N2-cw-20260619-222821`.
+  - Output prefix: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D1E8-REALGROUPEDMUONH-CURRENT-H3-G2-CAP512-N2-cw-20260619-222821-081da0`.
+- Config: 2 H100 nodes, 16 devices, `replica_dcn=2`, `data=1`, `expert=8`, `model=1`, layers 26, hidden 2560, intermediate 1280, 256 experts, group size 2, group axis `replica_dcn,data`, bf16 params/updates and bf16 NS compute, MuonH3, cap512, warmup 1, iters 5, compiled HLO output enabled.
+- Result: Parent and child reached `JOB_STATE_SUCCEEDED`. Both update-only and restore-then-apply paths lowered and compiled with no all-to-all, all-reduce, reduce-scatter, or collective-permute. The active collectives are the expected 26 all-gathers.
+
+| bench | lowered AG/A2A/AR/RS/CP | compiled AG/A2A/AR/RS/CP | compiled GEMM custom calls | median | mean | H100 bf16 peak |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| real grouped MuonH update | 26/0/0/0/0 | 26/0/0/0/0 | 533 | 0.4974-0.4980s | 0.4979s | ~30.8% |
+| real grouped MuonH apply | 26/0/0/0/0 | 26/0/0/0/0 | 533 | 0.4770-0.4771s | 0.4769s | ~32.2% |
+
+- Interpretation: On the exact May198 2-node mesh, the real grouped MuonH optimizer+apply path accounts for about `0.48s / 1.06s ~= 45%` of the post-compile full training step. The bridge is no longer exploding into A2As, but it still costs 26 all-gathers and about half a second. Compared with the earlier R2D2E8 4-node harness gate around 0.30s, losing the `data=2` axis and running R2D1E8 materially hurts the optimizer path. The remaining ~0.58s of May198 is outside the expert grouped-MuonH optimizer apply path: model fwd/bwd, gradient collectives, non-expert optimizer work, scheduler gaps, or overlap loss.
+- Next action: Do not spend more effort on generic reshard variants. The next useful experiments are either (1) a 4-node R2D2 full-train grouped MuonH run to see whether the faster optimizer harness transfers to full training, or (2) a lower-overhead full-step decomposition that separates fwd/bwd/grad-psum/non-expert optimizer without enabling the multihost profiler path that hung in May195/196.
+
+### 2026-06-19 15:50 PDT - R2D2 full-train validation relaunched with legal batch shards
+- Hypothesis: The earlier R2D2 optimizer harness was faster than the exact R2D1 May198 optimizer attribution because grouped MuonH could shard over both `replica_dcn` and `data`. A 4-node full-train validation with `replica_dcn=2`, `data=2`, `expert=8`, and `model=1` should show whether that optimizer-path improvement transfers into full training.
+- Command:
+  - Failed first attempt: parent `/dlwh/iris-run-job-20260619-223456` (`May200`) used 4 nodes with batch 16 and failed in the launcher before creating a child:
+    `ValueError: MAY_BATCH=16 must be divisible by batch shards=32`.
+  - Corrected launch: parent `/dlwh/iris-run-job-20260619-223756` (`May201`) with `--batch 32`, the smallest legal batch for 32 global GPUs when `model_axis=1`.
+  - Child Iris job: `/dlwh/iris-run-job-20260619-223756/grug-train-GM2560-MAY-201S4096-W2048-B32-R2D2-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-CURRENT-JSON-N4-cw-20260619-2237`.
+- Config: 4 H100 nodes, 32 devices, batch 32, sequence length 4096, sliding window 2048, 8 train steps, `json_logger`, synthetic data, no checkpoints, no profiler, `replica_dcn=2`, `data=2`, `expert=8`, `model=1`, `gpu_fa4_cute` attention, Pallas CE with block size 8192, ring MoE, save-MoE remat, bf16 params/compute/output, `optimizer=muonh`, `expert_3d_optimizer=grouped_muonh`, ordinary 2D optimizer SGD, group size 4, MuonH3, `stack_batch_4d_sharded`, cap512, and bf16 NS compute.
+- Result: Parent and child reached `JOB_STATE_SUCCEEDED` with zero failures/preemptions. Logs confirm the intended mesh on every task:
+  `Grug compact mesh shape: {'replica_dcn': 2, 'data': 2, 'expert': 8, 'model': 1}; batch_shards=32`.
+  The first two steps were compile/initialization dominated:
+
+| step | duration | tokens/sec | MFU | loss |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 | 380.48-386.27s | 339.33-344.49 | 0.0183-0.0186 | 11.7920 |
+| 1 | 370.07-370.12s | 354.13-354.18 | 0.0191 | 6.5592 |
+
+Post-compile steps were stable around 1.66s:
+
+| step | duration | tokens/sec | MFU | loss |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 1.659-1.660s | 78.94k-79.01k | 4.268-4.272 | 4.1190 |
+| 3 | 1.660-1.662s | 78.88k-78.97k | 4.265-4.270 | 3.5953 |
+| 4 | 1.662-1.667s | 78.65k-78.84k | 4.252-4.263 | 1.7895 |
+| 5 | 1.668-1.672s | 78.38k-78.58k | 4.238-4.249 | 1.6126 |
+| 6 | 1.663-1.678s | 78.10k-78.84k | 4.223-4.263 | 1.4356 |
+| 7 | 1.655-1.660s | 78.98k-79.18k | 4.270-4.281 | 1.2978 |
+
+- Interpretation: Negative scale result. R2D2/B32 is correct and stable, but it does not transfer the faster R2D2 optimizer harness result into better full-train throughput. Relative to May198 R2D1/B16, May201 used twice the GPUs and doubled global batch, but tokens/sec only improved from ~61.5k-62.1k to ~78.1k-79.2k (`~1.27x`) and MFU dropped from ~6.7 to ~4.25. The added `data=2` axis likely helps the isolated optimizer path but loses enough elsewhere, or loses enough overlap, that full train gets worse per GPU.
+- Next action: Stop pushing batch/scale as the next lever for this path. The useful next experiments are attribution on the successful no-profile path: compare exact-shape fwd/bwd+SGD against grouped-MuonH and add a lower-overhead decomposition for gradient collectives / non-expert optimizer / grouped MuonH bridge, avoiding the multihost profiler path that hung in May195/May196.
+
+### 2026-06-19 16:15 PDT - exact R2D1/B16 SGD control on current branch
+- Hypothesis: The current grouped-MuonH full-train path needs an apples-to-apples non-Muon control on the same reliable JSON/no-profile path, rather than comparing only to older speed-lane runs with potentially different flags or code.
+- Command:
+  - Launch: `RUN_ID=GM2560-MAY-202S4096-W2048-B16-R2D1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4SGD-CURRENT-JSON-N2-cw-20260619-2257 ... experiments/grug/moe/run_cw_may_d2560.sh --submit --nodes 2 --batch 16 --replica-axis 2 --expert-axis 8 --model-axis 1 --optimizer sgd --tracker json_logger --profiler-steps 0 --data synthetic --checkpoints none --ce-implementation pallas_gpu --moe-implementation ring --input-embed-sharding replicated --output-proj-sharding replicated --remat save_moe --attention gpu_fa4_cute --mp params=bfloat16,compute=bfloat16,output=bfloat16`.
+  - Parent Iris job: `/dlwh/iris-run-job-20260619-225709`.
+  - Child Iris job: `/dlwh/iris-run-job-20260619-225709/grug-train-GM2560-MAY-202S4096-W2048-B16-R2D1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4SGD-CURRENT-JSON-N2-cw-20260619-2257`.
+- Config: Same mesh/shape as May198 but with top-level SGD instead of grouped MuonH: 2 H100 nodes, 16 devices, `replica_dcn=2`, `data=1`, `expert=8`, `model=1`, batch 16, sequence length 4096, sliding window 2048, 8 train steps, JSON logger, no profiler, synthetic data, no checkpoints, FA4 CuTe attention, Pallas CE block size 8192, ring MoE, save-MoE remat, replicated input/output embeddings, and bf16 params/compute/output.
+- Result: Parent and child reached `JOB_STATE_SUCCEEDED` with zero failures/preemptions. Logs confirm mesh `{'replica_dcn': 2, 'data': 1, 'expert': 8, 'model': 1}; batch_shards=16`. First two steps were compile/initialization dominated:
+
+| step | duration | tokens/sec | MFU | loss |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 | 355.09-356.92s | 183.62-184.56 | 0.0199-0.0200 | 11.7918 |
+| 1 | 334.26-334.30s | 196.04-196.06 | 0.0212 | 11.7922 |
+
+Post-compile steps were stable around 0.65-0.66s:
+
+| step | duration | tokens/sec | MFU | loss |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 0.656-0.660s | 99.37k-99.86k | 10.745-10.798 | 11.7918 |
+| 3 | 0.652-0.658s | 99.60k-100.47k | 10.770-10.864 | 11.7934 |
+| 4 | 0.661-0.663s | 98.86k-99.17k | 10.691-10.724 | 11.7914 |
+| 5 | 0.658-0.662s | 99.05k-99.65k | 10.711-10.776 | 11.7913 |
+| 6 | 0.658-0.660s | 99.25k-99.66k | 10.733-10.777 | 11.7918 |
+| 7 | 0.655-0.662s | 99.01k-100.08k | 10.707-10.822 | 11.7944 |
+
+- Interpretation: This gives a clean same-shape non-Muon floor for the current branch. Compared to May198 R2D1/B16 grouped MuonH at ~1.06s, ~61.5k-62.1k tokens/s, and ~6.7 MFU, the no-Muon control is ~0.40s faster and reaches ~10.7-10.9 MFU. The full-train grouped-MuonH tax is therefore about 0.40s/step on this shape, close to the isolated May199 real grouped-MuonH optimizer/apply path at ~0.477s. That makes the grouped optimizer path the dominant remaining gap, not general fwd/bwd throughput on this current branch.
+- Next action: Focus on reducing or hiding the grouped-MuonH optimizer/apply cost at R2D1 before trying more scale. The next useful harness should measure bridge/NS/apply subpieces or prototype a representation that keeps grouped expert updates consumable by the model without paying the explicit grouped-to-FSDP boundary every step.
+
+### 2026-06-19 16:45 PDT - R2D1 grouped MuonH bridge decomposition
+- Hypothesis: The exact R2D1 grouped-MuonH tax can be split into inbound FSDP/unreduced-gradient to grouped layout, grouped MuonH NS/hyperball compute, outbound grouped-to-FSDP restore, and ordinary `optax.apply_updates` overhead. If ordinary `apply_updates` is the bottleneck, restore+apply should be much slower than restore-only; if the representation boundary is the bottleneck, the restore-only timing should explain most of the gap.
+- Command:
+  - Launch: `RUN_ID=MUON-BENCH-D2560-L26-R2D1E8-GROUPEDMUONH-DECOMP-H3-G2-CAP512-N2-cw-20260619-231728 ... MUON_BENCH_KINDS=real_expert_fsdp_grouped_muonh_optimizer_update,real_expert_fsdp_grouped_muonh_optimizer_apply,expert_fsdp_grouped_updates_muonh_updates,expert_fsdp_grouped_updates_muonh_apply,expert_fsdp_grouped_explicit_slice_first_gather_restore_boundary,expert_fsdp_grouped_explicit_slice_first_gather_apply_boundary ... bash scratch/muon_update_bench_fast_loop.sh iris fullprod-r4e8-l26-h3`.
+  - Parent Iris job: `/dlwh/iris-run-job-20260619-231730`.
+  - Child Iris job: `/dlwh/iris-run-job-20260619-231730/grug-train-MUON-BENCH-D2560-L26-R2D1E8-GROUPEDMUONH-DECOMP-H3-G2-CAP512-N2-cw-20260619-231728`.
+  - Output prefix: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D1E8-GROUPEDMUONH-DECOMP-H3-G2-CAP512-N2-cw-20260619-231728-b9110a`.
+- Config: Exact May198/May202 mesh for the expert optimizer path: 2 H100 nodes, 16 devices, `replica_dcn=2`, `data=1`, `expert=8`, `model=1`, layers 26, hidden 2560, intermediate 1280, 256 experts, group size 2, group axis `replica_dcn,data`, bf16 params/updates, bf16 NS compute, MuonH3, cap512, warmup 1, iters 5, compiled HLO output enabled, and boundary collectives allowed for the explicit bridge probes.
+- Result: Parent and child reached `JOB_STATE_SUCCEEDED`. All six benches compiled with the same healthy collective shape: 26 all-gathers and no all-to-all, all-reduce, reduce-scatter, or collective-permute.
+
+| bench | compiled AG/A2A/AR/RS/CP | compiled GEMM custom calls | median | mean | H100 bf16 peak |
+| --- | --- | ---: | ---: | ---: | ---: |
+| real grouped MuonH update | 26/0/0/0/0 | 533 | ~0.496s | ~0.496s | ~30.9% |
+| real grouped MuonH apply | 26/0/0/0/0 | 533 | ~0.477s | ~0.478s | ~32.2% |
+| grouped-updates MuonH update | 26/0/0/0/0 | 533 | ~0.302s | ~0.303s | ~50.8% |
+| grouped-updates MuonH apply | 26/0/0/0/0 | 533 | ~0.307s | ~0.308s | ~50.0% |
+| explicit slice-first gather restore boundary | 26/0/0/0/0 | 0 | ~0.223s | ~0.223s | n/a |
+| explicit slice-first gather restore+apply boundary | 26/0/0/0/0 | 0 | ~0.229s | ~0.228s | n/a |
+
+- Interpretation: The current pragmatic FSDP-master path is not blocked by ordinary `optax.apply_updates`. Applying already-restored updates costs only about `0.228s - 0.223s ~= 5ms`. The dominant boundary is grouped-to-FSDP restore at about 0.22s, and the inbound FSDP/unreduced-gradient/momentum to grouped layout costs roughly `0.496s - 0.303s ~= 0.19s`. The grouped-updates path reaches about 50% H100 bf16 peak, so the NS/hyperball compute is no longer the primary issue on this shape. The real full-train Muon tax from May198 vs May202 is about 0.40s/step, which is almost exactly explained by inbound grouping plus outbound restore.
+- Next action: Treat the representation boundary as the remaining MuonH target. Do not optimize ordinary `apply_updates` first. The next viable implementation paths are either (1) keep grouped expert banks/updates live long enough that the model or optimizer consumes them without paying a full grouped-to-FSDP restore every step, or (2) replace the explicit slice-first gather boundary with a lower-level/custom grouped-to-FSDP permutation that avoids 26 high-cost all-gathers or overlaps them with useful work.
