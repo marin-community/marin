@@ -46,6 +46,7 @@ from experiments.grug.moe.muon_update_bench import (
     ORDINARY_2D_GROUPED_STACK_NS_BENCH,
     ORDINARY_2D_MUONH_OPTIMIZER_APPLY_BENCH,
     REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+    REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH,
     BenchConfig,
     _stacked_2d_target,
     assert_expert_ep_sharding,
@@ -104,6 +105,7 @@ from experiments.grug.moe.muon_update_bench import (
     ordinary_2d_muonh_optimizer_apply_step_factory,
     persistent_grouped_2d_metadata_from_specs,
     real_expert_fsdp_grouped_muonh_optimizer_apply_step_factory,
+    real_expert_fsdp_grouped_muonh_optimizer_update_step_factory,
     summarize_hlo,
     summary_row,
     synthetic_fsdp_expert_specs,
@@ -975,9 +977,16 @@ def test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs()
     params = synthetic_fsdp_expert_specs(mesh, config)
     grads = synthetic_fsdp_expert_specs(mesh, config)
     optimizer = build_real_expert_fsdp_grouped_muonh_optimizer(config)
-    update_step = jax.jit(real_expert_fsdp_grouped_muonh_optimizer_apply_step_factory(config))
+    apply_step = jax.jit(real_expert_fsdp_grouped_muonh_optimizer_apply_step_factory(config))
+    update_step = jax.jit(real_expert_fsdp_grouped_muonh_optimizer_update_step_factory(config))
 
     assert ns4d_compute_sharding(mesh, config, REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH).spec == P(
+        ("replica_dcn", "data"),
+        "expert",
+        None,
+        None,
+    )
+    assert ns4d_compute_sharding(mesh, config, REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH).spec == P(
         ("replica_dcn", "data"),
         "expert",
         None,
@@ -986,16 +995,24 @@ def test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs()
     assert_expert_fsdp_sharding(params, "real grouped MuonH expert FSDP params")
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
         state = jax.eval_shape(optimizer.init, params)
-        result, _next_state = jax.eval_shape(update_step, params, grads, state)
+        result, _next_state = jax.eval_shape(apply_step, params, grads, state)
+        updates, _next_update_state = jax.eval_shape(update_step, params, grads, state)
         platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
-        lowered = update_step.trace(params, grads, state).lower(lowering_platforms=(platform,))
+        lowered = apply_step.trace(params, grads, state).lower(lowering_platforms=(platform,))
+        lowered_update = update_step.trace(params, grads, state).lower(lowering_platforms=(platform,))
 
     assert_expert_fsdp_sharding(result, "real grouped MuonH expert FSDP apply result")
+    assert_expert_fsdp_sharding(updates, "real grouped MuonH expert FSDP updates")
     hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    update_hlo_summary = summarize_hlo(str(lowered_update.compiler_ir(dialect="stablehlo")))
     assert hlo_summary.two_batch_axis_dot_general == 6
+    assert update_hlo_summary.two_batch_axis_dot_general == 6
     assert hlo_summary.all_reduce == 0
+    assert update_hlo_summary.all_reduce == 0
     assert hlo_summary.reduce_scatter == 0
+    assert update_hlo_summary.reduce_scatter == 0
     assert estimated_matrix_count(config, REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH) == 4 * 16
+    assert estimated_matrix_count(config, REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH) == 4 * 16
 
 
 def test_expert_fsdp_grouped_apply_boundary_restores_ordinary_expert_updates_before_apply():
