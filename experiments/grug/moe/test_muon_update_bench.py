@@ -41,6 +41,7 @@ from experiments.grug.moe.muon_update_bench import (
     build_full_production_muonh_optimizer,
     build_grouped_expert_productionish_optimizer,
     build_ordinary_2d_muonh_optimizer,
+    create_mesh,
     estimate_grouped_2d_muonh,
     estimate_grouping,
     estimated_full_production_muonh_ns_dot_flops,
@@ -79,6 +80,7 @@ from experiments.grug.moe.muon_update_bench import (
     synthetic_ordinary_2d_grouped_persistent_specs,
     synthetic_ordinary_2d_muonh_specs,
     synthetic_productionish_grouped_expert_specs,
+    time_ns4d,
     zeropower_via_newtonschulz_4d_for_config,
 )
 
@@ -489,6 +491,41 @@ def test_grouped_expert_layer_slice_boundary_returns_ep_consumable_leaves():
     assert hlo_summary.all_reduce == 0
     assert hlo_summary.reduce_scatter == 0
     assert hlo_summary.all_to_all == 0
+
+
+def test_grouped_expert_layer_slice_boundary_times_compile_only():
+    config = BenchConfig(
+        layers=1,
+        ns4d_group_size=1,
+        ns4d_group_axis="none",
+        hidden_dim=4,
+        intermediate_dim=2,
+        num_experts=1,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = create_mesh(replica_axis=1, data_axis=1, expert_axis=1, model_axis=1)
+
+    timing = time_ns4d(
+        mesh,
+        config,
+        EXPERT_GROUPED_LAYER_SLICE_BENCH,
+        warmup=0,
+        iters=0,
+        compile_only=True,
+        abstract_mesh_enabled=False,
+        allow_boundary_collectives=True,
+    )
+
+    assert timing.compiled_hlo.all_reduce == 0
+    assert timing.compiled_hlo.all_to_all == 0
 
 
 @pytest.mark.parametrize(

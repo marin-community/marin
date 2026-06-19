@@ -3365,6 +3365,7 @@ def time_ns4d(
             assert_grouped_or_uniform_ns4d_sharding(updates, mesh, config, bench_kind, input_spec, "NS4D updates")
         if ns4d_bench_uses_grouped_params(bench_kind):
             if bench_kind == EXPERT_GROUPED_LAYER_SLICE_BENCH:
+                params = None
                 update_step = jax.jit(expert_grouped_layer_slice_step_factory(mesh, config))
                 lower_args = (updates,)
             elif bench_kind == EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH:
@@ -3464,7 +3465,10 @@ def time_ns4d(
                 assert_grouped_expert_sharding(updates, mesh, config, bench_kind, "grouped expert bank params")
             else:
                 assert_grouped_or_uniform_ns4d_sharding(params, mesh, config, bench_kind, input_spec, "NS4D params")
-            block_until_ready_tree((params, updates, optimizer_state))
+            if bench_kind == EXPERT_GROUPED_LAYER_SLICE_BENCH:
+                block_until_ready_tree(updates)
+            else:
+                block_until_ready_tree((params, updates, optimizer_state))
         else:
             params = None
             block_until_ready_tree(updates)
