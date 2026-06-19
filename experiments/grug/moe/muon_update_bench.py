@@ -341,6 +341,7 @@ class BenchConfig:
     model_axis: int
     learning_rate: float
     ns_compute_dtype: str = "input"
+    nesterov: bool = True
     grouped_expert_consumer_tokens_per_expert: int = DEFAULT_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT
     grouped_expert_consumer_chunk_tokens: int = DEFAULT_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS
     grouped_expert_consumer_chunk_tokens_per_expert: int = DEFAULT_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS_PER_EXPERT
@@ -2007,7 +2008,7 @@ def build_real_expert_fsdp_grouped_muonh_optimizer(config: BenchConfig) -> optax
         learning_rate=config.learning_rate,
         lr_schedule="constant",
         momentum=MAY_MOMENTUM,
-        nesterov=True,
+        nesterov=config.nesterov,
         backend_steps=config.backend_steps,
         muon_epsilon=MAY_MUON_EPSILON,
         max_grad_norm=None,
@@ -5447,6 +5448,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expert-axis", type=int, default=MAY_EXPERT_AXIS)
     parser.add_argument("--model-axis", type=int, default=MAY_MODEL_AXIS)
     parser.add_argument("--learning-rate", type=float, default=MAY_LEARNING_RATE)
+    parser.add_argument(
+        "--no-nesterov",
+        action="store_true",
+        help="Harness-only diagnostic: disable Nesterov in benchmark optimizers that read BenchConfig.nesterov.",
+    )
     parser.add_argument("--mode", choices=("lower", "run", "both"), default="both")
     parser.add_argument(
         "--disable-abstract-mesh",
@@ -5515,6 +5521,7 @@ def config_from_args(args: argparse.Namespace) -> BenchConfig:
         model_axis=args.model_axis,
         learning_rate=args.learning_rate,
         ns_compute_dtype=ns_compute_dtype_name(args.ns_compute_dtype, input_dtype),
+        nesterov=not args.no_nesterov,
         grouped_expert_consumer_tokens_per_expert=args.grouped_expert_consumer_tokens_per_expert,
         grouped_expert_consumer_chunk_tokens=args.grouped_expert_consumer_chunk_tokens,
         grouped_expert_consumer_chunk_tokens_per_expert=args.grouped_expert_consumer_chunk_tokens_per_expert,
