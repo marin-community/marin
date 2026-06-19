@@ -509,3 +509,17 @@ All rows had compiled all-reduce/reduce-scatter/all-to-all/dot-general counts of
 - Result: Production Muon now casts only the Newton-Schulz input to the requested compute dtype and restores the original update dtype before scaling/hyperball/apply. The harness production-transform builders pass through `BenchConfig.ns_compute_dtype`, so existing fp32-input/bf16-NS Muon-only gates exercise the same production knob.
 - Interpretation: This does not solve the grouped-to-FSDP boundary, but it preserves the isolated ~1.9x bf16-NS win as a usable setting for fp32 master/update experiments.
 - Next action: Any fp32-input production MuonH experiment should set `ns_compute_dtype: bf16` explicitly when the goal is throughput, and set `input` only when measuring fp32 NS numerics/perf.
+
+### 2026-06-19 03:55 PDT - production Muon NS dtype A/B
+- Hypothesis: The new production `ns_compute_dtype` knob should reproduce the harness bf16-NS speedup on a production-shaped MuonH optimizer path with fp32 inputs.
+- Command: One-node CoreWeave A/B from `scratch/muon_update_bench_fast_loop.sh`, `dtype=fp32`, `backend_steps=3`, `expert_axis=8`, `model_axis=1`, `bench_kinds=expert_grouped_muonh_optimizer_apply,full_production_muonh_optimizer_apply`. Full L26 attempts `/dlwh/iris-run-job-20260619-095109` (`input`) and `/dlwh/iris-run-job-20260619-095123` (`bf16`) both failed with GPU BFC OOM while timing, so the validation fallback used L4: `/dlwh/iris-run-job-20260619-095453` (`input`) and `/dlwh/iris-run-job-20260619-095512` (`bf16`).
+- Config: L4 output prefixes `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L4-E8-FULLPRODMUONH-FP32NS-INPUT-H3-N1-cw-20260619-095451-06dbb4` and `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L4-E8-FULLPRODMUONH-FP32NS-BF16-H3-N1-cw-20260619-095510-0632d0`.
+- Result:
+
+| row | input NS median | bf16 NS median | speedup | input peak % | bf16 peak % | compiled AG/AR/RS/A2A |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `expert_grouped_muonh_optimizer_apply_h3` | 0.16280s | 0.08547s | 1.90x | 29.01 | 55.26 | 0/0/0/0 |
+| `full_production_muonh_optimizer_apply_h3` | 0.19014s | 0.09624s | 1.98x | 25.25 | 49.88 | 0/0/0/0 |
+
+- Interpretation: The production knob is wired correctly for the production-shaped MuonH path. On fp32 inputs, bf16 Newton-Schulz roughly doubles L4 H3 throughput and preserves the zero-collectives invariant. The L26 one-node OOM means this exact full-production fp32-input A/B should be run at a smaller layer count or with a memory-focused setup unless the full L26 state materialization is reduced.
+- Next action: Keep `ns_compute_dtype=bf16` in fp32-input throughput experiments. This remains orthogonal to the grouped-to-FSDP boundary, whose simple restore/apply variants are still too expensive.
