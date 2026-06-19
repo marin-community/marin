@@ -114,7 +114,7 @@ jobs:
         timeout-minutes: 135
         shell: bash -l {0}
         run: |
-          uv run python scripts/workflows/iris_monitor.py wait \
+          uv run python scripts/ci/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "$IRIS_CONFIG" \
             --poll-interval 30 \
@@ -141,7 +141,7 @@ jobs:
           DIAG_DIR: ${{ github.workspace }}/grug-multislice-diagnostics
         run: |
           mkdir -p "$DIAG_DIR"
-          uv run python scripts/workflows/iris_monitor.py collect \
+          uv run python scripts/ci/iris_monitor.py collect \
             --job-id "$JOB_ID" \
             --iris-config "$IRIS_CONFIG" \
             --provider gcp \

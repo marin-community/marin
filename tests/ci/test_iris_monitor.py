@@ -8,7 +8,7 @@ import pytest
 from iris.rpc import job_pb2
 from rigging.redaction import REDACTED_VALUE
 
-from scripts.workflows import iris_monitor
+from scripts.ci import iris_monitor
 
 
 def _pod(name: str, *, phase: str = "Running", ready: bool = True, deleting: bool = False) -> dict:

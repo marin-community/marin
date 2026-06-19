@@ -9,7 +9,6 @@ paths:
   - infra/status-page
   - lib/iris/dashboard/src
   - lib/finelog/dashboard/src
-  - scripts/ops/storage/dashboard
   - docs/javascript
 paths-ignore:
   - "**/node_modules/**"
