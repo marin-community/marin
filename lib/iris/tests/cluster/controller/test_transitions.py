@@ -11,17 +11,13 @@ They focus on:
 """
 
 import asyncio
-import tempfile
 import threading
-from pathlib import Path
 
 import pytest
 from finelog.rpc import logging_pb2
-from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
+from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.controller import ops, reads, writes
-from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates, finalize
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow
 from iris.cluster.controller.pruner import PruneResult, prune_old_data
@@ -31,11 +27,8 @@ from iris.cluster.controller.reads import WorkerResourceUsage
 # Test Helpers
 # =============================================================================
 from iris.cluster.controller.reconcile import dispatch
-from iris.cluster.controller.reconcile.batches import _kill_non_terminal_tasks
-from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.effects import JobRowDelta
 from iris.cluster.controller.reconcile.job import recompute_state
-from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.overlay import Overlay
 from iris.cluster.controller.reconcile.policy import MAX_REPLICAS_PER_JOB
 from iris.cluster.controller.reconcile.snapshot import (
@@ -53,12 +46,12 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table, workers_table
+from iris.cluster.controller.schema import jobs_table, slices_table, task_attempts_table, tasks_table, workers_table
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
-from sqlalchemy import func, select, text
+from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
 
 from tests.cluster.controller._test_support import ControllerTestState, create_attempt_for_test
@@ -91,9 +84,6 @@ from .conftest import (
 )
 from .conftest import (
     query_task as _query_task,
-)
-from .conftest import (
-    query_tasks_for_job as _query_tasks_for_job,
 )
 from .conftest import (
     query_worker as _query_worker,
@@ -163,8 +153,6 @@ def _build_scheduling_context(scheduler: Scheduler, state: ControllerTestState):
         user_spend={},
         user_budget_limits={},
         requested_bands={},
-        reserved_job_ids=frozenset(),
-        reservation_entry_counts={},
         user_budget_defaults=UserBudgetDefaults(),
     )
 
@@ -733,6 +721,134 @@ def test_batch_success_and_failure_is_order_independent(state, success_first):
     assert _query_task(state, tasks[1].task_id).state == job_pb2.TASK_STATE_FAILED
     assert _query_task(state, tasks[2].task_id).state == job_pb2.TASK_STATE_KILLED
     assert _query_job(state, job_id).state == job_pb2.JOB_STATE_FAILED
+
+
+def _report_worker_state(state, worker_id, task, new_state):
+    """Feed one worker-reported task observation for ``task``'s current attempt."""
+    with state._db.transaction() as cur:
+        apply_task_observations(
+            cur,
+            [
+                WorkerTaskUpdates(
+                    worker_id=worker_id,
+                    updates=[
+                        TaskUpdate(
+                            task_id=task.task_id,
+                            attempt_id=_query_task(state, task.task_id).current_attempt_id,
+                            new_state=new_state,
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
+        )
+
+
+def test_worker_reported_killed_on_live_attempt_retries_under_preemption_budget(state):
+    """A worker-reported KILLED for the current attempt retries; it does not fail the job.
+
+    A worker only reports KILLED when its container is stopped out-of-band — a
+    higher-priority job reclaiming the slice, a node drain, a spot/preemptible
+    reclaim, or a stop directive the controller issued without recording a task
+    transition. None of these are application failures, so the kill is charged to
+    the preemption budget (like WORKER_FAILED) and the task rolls back to PENDING.
+
+    Regression for a production incident: a v5p training task was preempted
+    (attempt 0), retried onto a fresh worker (attempt 1), and that worker reported
+    KILLED ~13s in. The controller terminated the whole job (JOB_STATE_KILLED) with
+    99 of 100 preemption retries unused, and the parent driver's wait() raised.
+    """
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="train",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=1,
+        max_retries_preemption=100,
+    )
+    [task] = submit_job(state, "train", req)
+    job_id = JobName.root("test-user", "train")
+
+    dispatch_task(state, task, worker_id)
+    # Run the attempt first so the kill is charged against the preemption budget
+    # (an EXECUTING task), exactly as in the incident.
+    _report_worker_state(state, worker_id, task, job_pb2.TASK_STATE_RUNNING)
+
+    _report_worker_state(state, worker_id, task, job_pb2.TASK_STATE_KILLED)
+
+    retried = _query_task(state, task.task_id)
+    assert retried.state == job_pb2.TASK_STATE_PENDING, "a live-attempt KILLED must roll the task back to PENDING"
+    assert retried.preemption_count == 1, "the kill must be charged to the preemption budget"
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_RUNNING, "the job must stay alive across the retry"
+
+
+def test_worker_reported_killed_terminal_when_preemption_budget_exhausted(state):
+    """With the preemption budget exhausted, a worker-reported KILLED finalizes
+    the task (as WORKER_FAILED) and the job — the retry is bounded, not infinite."""
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="train",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=1,
+        max_retries_preemption=0,
+    )
+    [task] = submit_job(state, "train", req)
+    job_id = JobName.root("test-user", "train")
+
+    dispatch_task(state, task, worker_id)
+    _report_worker_state(state, worker_id, task, job_pb2.TASK_STATE_RUNNING)
+
+    _report_worker_state(state, worker_id, task, job_pb2.TASK_STATE_KILLED)
+
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_WORKER_FAILED
+
+
+def test_worker_reported_killed_on_coscheduled_task_requeues_the_gang(state):
+    """A worker-reported KILLED on one coscheduled task bounces the whole gang.
+
+    The retry must preserve the coscheduling invariant: when one gang member is
+    stopped out-of-band, every sibling is requeued to PENDING so the job
+    re-coschedules atomically onto a single slice — not left half-running with
+    one member pending. (Mirrors the WORKER_FAILED peer cascade.)
+    """
+    for i in range(4):
+        meta = make_worker_metadata()
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="coschedule-killed",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=4,
+        environment=job_pb2.EnvironmentConfig(),
+        max_retries_preemption=100,
+    )
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+    tasks = submit_job(state, "j-cosched-killed", req)
+    job_id = JobName.root("test-user", "j-cosched-killed")
+
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+    # The coscheduled requeue cascade only fires from EXECUTING states.
+    for i, task in enumerate(tasks):
+        _report_worker_state(state, WorkerId(f"w{i}"), task, job_pb2.TASK_STATE_RUNNING)
+
+    # One member is stopped out-of-band -> reported KILLED with budget to spare.
+    _report_worker_state(state, WorkerId("w0"), tasks[0], job_pb2.TASK_STATE_KILLED)
+
+    # The whole gang bounces to PENDING for atomic re-scheduling; the job survives.
+    for task in tasks:
+        assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING
+    assert _query_task(state, tasks[0].task_id).preemption_count == 1
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_RUNNING
 
 
 def test_max_task_failures_tolerance(state):
@@ -2306,51 +2422,6 @@ def test_compute_demand_entries_marks_invalid_on_conflicting_region_constraints(
     assert demand[0].invalid_reason is not None
 
 
-# =============================================================================
-# Reservation Demand Deduplication Tests
-# =============================================================================
-
-
-def _make_reservation_make_job_request(
-    *,
-    task_device: job_pb2.DeviceConfig,
-    reservation_devices: list[job_pb2.DeviceConfig],
-    replicas: int = 1,
-) -> controller_pb2.Controller.LaunchJobRequest:
-    """Build a LaunchJobRequest with a reservation and task resources.
-
-    Each reservation entry gets auto-generated constraints from its device
-    config, mirroring what the service layer does for the top-level request.
-    This ensures holder jobs get the correct device constraints from the
-    entry, not from the parent.
-    """
-    req = controller_pb2.Controller.LaunchJobRequest(
-        name="reservation-job",
-        entrypoint=_make_test_entrypoint(),
-        resources=job_pb2.ResourceSpecProto(
-            cpu_millicores=1000,
-            memory_bytes=1024**3,
-            device=task_device,
-        ),
-        environment=job_pb2.EnvironmentConfig(),
-        replicas=replicas,
-    )
-    for dev in reservation_devices:
-        entry_resources = job_pb2.ResourceSpecProto(
-            cpu_millicores=1000,
-            memory_bytes=1024**3,
-            device=dev,
-        )
-        entry_constraints = [c.to_proto() for c in constraints_from_resources(entry_resources)]
-        req.reservation.entries.append(
-            job_pb2.ReservationEntry(
-                resources=entry_resources,
-                constraints=entry_constraints,
-            )
-        )
-    return req
-
-
 def _h100_device() -> job_pb2.DeviceConfig:
     return job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="H100", count=8))
 
@@ -2359,125 +2430,8 @@ def _a100_device() -> job_pb2.DeviceConfig:
     return job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="A100", count=8))
 
 
-def _is_synthetic_demand(state: ControllerTestState, demand_entry: DemandEntry) -> bool:
-    """Check if a demand entry comes from a holder job task."""
-    for tid in demand_entry.task_ids:
-        task = _query_task(state, JobName.from_string(tid))
-        if task:
-            job = _query_job(state, task.job_id)
-            if job and job.is_reservation_holder:
-                return True
-    return False
-
-
-def test_demand_reservation_gates_real_tasks_until_claimed(state):
-    """Until the reservation is claimed, only the holder tasks generate demand.
-
-    The holder tasks provision the reserved capacity; the real tasks are gated
-    (mirroring ``apply_scheduling_gates``) so the autoscaler never provisions
-    generic capacity the scheduler will refuse to let them occupy. The claimed
-    case — real tasks resume generating demand — is covered by
-    test_reservation.test_demand_gates_real_task_until_reservation_claimed.
-    """
-    req = _make_reservation_make_job_request(
-        task_device=_h100_device(),
-        reservation_devices=[_h100_device(), _h100_device()],
-        replicas=2,
-    )
-    submit_job(state, "j1", req)
-
-    demand = _demand_entries(state)  # reservation unclaimed
-    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
-    real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
-
-    assert len(synthetic_demand) == 2
-    assert real_demand == []
-
-
-def test_demand_reservation_excess_tasks(state):
-    """2 H100 reservation + 5 H100 tasks: 2 holder demand; real tasks gated until claimed."""
-    req = _make_reservation_make_job_request(
-        task_device=_h100_device(),
-        reservation_devices=[_h100_device(), _h100_device()],
-        replicas=5,
-    )
-    submit_job(state, "j1", req)
-
-    demand = _demand_entries(state)
-    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
-    real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
-
-    assert len(synthetic_demand) == 2
-    assert real_demand == []
-
-
-def test_demand_reservation_holder_uses_entry_resources(state):
-    """Holder tasks use the reservation entry's resource spec, not the parent's.
-
-    Each reservation entry carries its own resources and constraints. The
-    holder job uses the entry's resources so the autoscaler provisions the
-    correct device type even when the parent job differs.
-    """
-    # Job tasks request A100, but reservation entries specify H100.
-    # Holder job should use the entry's H100 resource spec.
-    req = _make_reservation_make_job_request(
-        task_device=_a100_device(),
-        reservation_devices=[_h100_device(), _h100_device()],
-        replicas=2,
-    )
-    submit_job(state, "j1", req)
-
-    demand = _demand_entries(state)
-    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
-    real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
-
-    assert len(synthetic_demand) == 2
-    assert real_demand == []  # real tasks gated until the reservation is claimed
-    # Holder demand uses entry's H100 device, not parent's A100
-    for d in synthetic_demand:
-        assert d.normalized.device_variants == frozenset({"h100"})
-
-
-def test_demand_reservation_mixed_jobs(state):
-    """Reservation job + regular job: demand is independent per job."""
-
-    # h100-job: 3 H100 tasks + 3 reservation entries
-    h100_req = _make_reservation_make_job_request(
-        task_device=_h100_device(),
-        reservation_devices=[_h100_device(), _h100_device(), _h100_device()],
-        replicas=3,
-    )
-    submit_job(state, "h100-job", h100_req)
-
-    a100_req = controller_pb2.Controller.LaunchJobRequest(
-        name="a100-job",
-        entrypoint=_make_test_entrypoint(),
-        resources=job_pb2.ResourceSpecProto(
-            cpu_millicores=1000,
-            memory_bytes=1024**3,
-            device=_a100_device(),
-        ),
-        environment=job_pb2.EnvironmentConfig(),
-        replicas=2,
-    )
-    submit_job(state, "a100-job", a100_req)
-
-    demand = _demand_entries(state)
-    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
-    real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
-
-    # 3 synthetic holder tasks from h100-job's reservation
-    assert len(synthetic_demand) == 3
-
-    # h100-job's real tasks are gated (reservation unclaimed); only a100-job
-    # (no reservation) emits real demand.
-    assert len(real_demand) == 2
-    a100_demand = [d for d in real_demand if d.normalized.device_variants == frozenset({"a100"})]
-    assert len(a100_demand) == 2
-
-
-def test_demand_no_reservation_passes_all_tasks(state):
-    """Job without reservation emits all task demand entries (no synthetic tasks)."""
+def test_demand_passes_all_tasks(state):
+    """Job emits all task demand entries."""
     req = controller_pb2.Controller.LaunchJobRequest(
         name="regular-job",
         entrypoint=_make_test_entrypoint(),
@@ -2493,44 +2447,6 @@ def test_demand_no_reservation_passes_all_tasks(state):
 
     demand = _demand_entries(state)
     assert len(demand) == 3
-    for d in demand:
-        assert not _is_synthetic_demand(state, d)
-
-
-def test_demand_reservation_independent_per_job(state):
-    """Each job's demand is independent — no cross-job interference."""
-
-    # Job A: 2 H100 reservation, 2 H100 tasks
-    job_a_req = _make_reservation_make_job_request(
-        task_device=_h100_device(),
-        reservation_devices=[_h100_device(), _h100_device()],
-        replicas=2,
-    )
-    submit_job(state, "job-a", job_a_req)
-
-    # Job B: no reservation, 2 H100 tasks (must all pass through)
-    job_b_req = controller_pb2.Controller.LaunchJobRequest(
-        name="job-b",
-        entrypoint=_make_test_entrypoint(),
-        resources=job_pb2.ResourceSpecProto(
-            cpu_millicores=1000,
-            memory_bytes=1024**3,
-            device=_h100_device(),
-        ),
-        environment=job_pb2.EnvironmentConfig(),
-        replicas=2,
-    )
-    submit_job(state, "job-b", job_b_req)
-
-    demand = _demand_entries(state)
-    synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
-    real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
-
-    # Job A's 2 synthetic holder tasks
-    assert len(synthetic_demand) == 2
-    # Job A's real tasks are gated (reservation unclaimed); only Job B (no
-    # reservation) emits real demand.
-    assert len(real_demand) == 2
 
 
 # =============================================================================
@@ -3107,7 +3023,7 @@ def test_demand_excludes_building_limited_tasks(state):
     # Now w1 has 2 building tasks (at limit), but has plenty of CPU/memory.
     # The pending task from j1 should be building-limited, not truly unschedulable.
     demand = _demand_entries(state)
-    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+    task_demand = list(demand)
     assert len(task_demand) == 0, "Building-limited task should not generate demand"
 
 
@@ -3132,7 +3048,7 @@ def test_demand_includes_truly_unschedulable_tasks(state):
     submit_job(state, "j1", req)
 
     demand = _demand_entries(state)
-    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+    task_demand = list(demand)
     assert len(task_demand) == 1, "Task with no matching device should generate demand"
 
 
@@ -3157,35 +3073,8 @@ def test_demand_includes_resource_exhausted_tasks(state):
     submit_job(state, "j1", req)
 
     demand = _demand_entries(state)
-    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+    task_demand = list(demand)
     assert len(task_demand) == 1, "Task exceeding worker CPU should generate demand"
-
-
-def test_demand_holders_absorbed_by_dry_run(state):
-    """Holder tasks participate in the dry-run and are absorbed when workers exist.
-
-    Unlike the old design where holders always generated demand, they now
-    participate in the dry-run like normal tasks and are absorbed when matching
-    workers have available capacity. The job's real tasks are gated until the
-    reservation is claimed, so only holder tasks contribute demand here.
-    """
-
-    # Register a large GPU worker with capacity for 1 task
-    register_worker(state, "w1", "10.0.0.1:8080", _gpu_make_worker_metadata(cpu=2, memory_gb=4))
-
-    # Submit a job with reservation (2 entries) and 2 tasks. The reservation is
-    # unclaimed, so the 2 real tasks are gated and only the 2 holder tasks are
-    # live demand. The worker absorbs 1 holder; the other remains as demand.
-    req = _make_reservation_make_job_request(
-        task_device=_h100_device(),
-        reservation_devices=[_h100_device(), _h100_device()],
-        replicas=2,
-    )
-    submit_job(state, "j1", req)
-
-    demand = _demand_entries(state)
-    assert len(demand) == 1
-    assert _is_synthetic_demand(state, demand[0])  # the remaining unabsorbed holder
 
 
 def test_demand_absorbs_capacity_before_emitting(state):
@@ -3210,7 +3099,7 @@ def test_demand_absorbs_capacity_before_emitting(state):
     submit_job(state, "j1", req)
 
     demand = _demand_entries(state)
-    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+    task_demand = list(demand)
     assert len(task_demand) == 1, "Only 1 of 3 tasks should generate demand (2 absorbed)"
 
 
@@ -3232,7 +3121,7 @@ def test_demand_no_workers_falls_back_to_all_pending(state):
 
     # No scheduler, no workers -> all tasks become demand
     demand = _demand_entries(state)
-    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+    task_demand = list(demand)
     assert len(task_demand) == 3
 
 
@@ -3274,7 +3163,7 @@ def test_demand_building_limited_with_multiple_workers(state):
     submit_job(state, "pending-job", req)
 
     demand = _demand_entries(state)
-    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+    task_demand = list(demand)
     assert len(task_demand) == 0, "All workers at building limit -> no demand"
 
 
@@ -3327,136 +3216,10 @@ def test_demand_mixed_building_limited_and_unschedulable(state):
     submit_job(state, "a100-job", a100_req)
 
     demand = _demand_entries(state)
-    task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
+    task_demand = list(demand)
 
     assert len(task_demand) == 1
     assert "a100-job" in task_demand[0].task_ids[0], "Only A100 task should emit demand"
-
-
-# =============================================================================
-# Holder Task Zero-Resource Tests
-# =============================================================================
-
-
-def test_holder_tasks_consume_zero_resources(state):
-    """Holder tasks consume zero resources when assigned to workers."""
-
-    req = _make_reservation_make_job_request(
-        task_device=_h100_device(),
-        reservation_devices=[_h100_device()],
-        replicas=1,
-    )
-    submit_job(state, "j1", req)
-
-    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_make_worker_metadata())
-    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
-    holder_tasks = _query_tasks_for_job(state, holder_job_id)
-    assert len(holder_tasks) == 1
-
-    gpu_used_before = _usage_for_worker(state, wid).gpu_count
-
-    # Assign holder task
-    with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=holder_tasks[0].task_id, worker_id=wid)], health=state._health)
-
-    # Holder tasks have zero res_device_json so they contribute 0 GPUs to
-    # the derived usage, even after assignment.
-    assert _usage_for_worker(state, wid).gpu_count == gpu_used_before
-
-    # But the task should be tracked in running_tasks
-    assert holder_tasks[0].task_id in worker_running_tasks(state, wid)
-
-
-def test_holder_task_cleanup_releases_no_resources(state):
-    """When a holder task finishes, it doesn't release resources it never committed."""
-
-    req = _make_reservation_make_job_request(
-        task_device=_h100_device(),
-        reservation_devices=[_h100_device()],
-        replicas=1,
-    )
-    submit_job(state, "j1", req)
-
-    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_make_worker_metadata())
-    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
-    holder_tasks = _query_tasks_for_job(state, holder_job_id)
-
-    # Assign holder task
-    with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=holder_tasks[0].task_id, worker_id=wid)], health=state._health)
-
-    gpu_used_before = _usage_for_worker(state, wid).gpu_count
-    assert gpu_used_before == 0, "holder must not contribute to derived usage"
-
-    # Kill the holder task via parent job cancellation
-    parent_job_id = JobName.root("test-user", "j1")
-    with state._db.transaction() as cur:
-        ops.job.cancel(cur, job_id=parent_job_id, reason="test", endpoints=state._endpoints)
-
-    # Worker GPUs should still be unchanged (holder never contributed).
-    assert _usage_for_worker(state, wid).gpu_count == gpu_used_before
-
-
-def test_holder_tasks_excluded_from_building_counts(state):
-    """Holder tasks in ASSIGNED state should not consume building slots.
-
-    Without this exclusion, a worker holding only a reservation task would be
-    permanently "at building limit" and the real reserved task could never be
-    assigned to that otherwise idle worker.
-    """
-
-    req = _make_reservation_make_job_request(
-        task_device=_h100_device(),
-        reservation_devices=[_h100_device()],
-        replicas=1,
-    )
-    submit_job(state, "j1", req)
-
-    wid = register_worker(state, "w1", "10.0.0.1:8080", _gpu_make_worker_metadata())
-    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
-    holder_tasks = _query_tasks_for_job(state, holder_job_id)
-    assert len(holder_tasks) == 1
-
-    # Assign holder task — it goes to ASSIGNED state
-    with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=holder_tasks[0].task_id, worker_id=wid)], health=state._health)
-    assert _query_task(state, holder_tasks[0].task_id).state == job_pb2.TASK_STATE_ASSIGNED
-
-    # Building counts should NOT include the holder task
-    building_counts = _building_counts(state)
-    assert building_counts.get(wid, 0) == 0
-
-
-def test_snapshot_round_trip_preserves_reservation_holder(state):
-    """DB checkpoint copy round-trip preserves is_reservation_holder flag."""
-    req = _make_reservation_make_job_request(
-        task_device=_h100_device(),
-        reservation_devices=[_h100_device()],
-        replicas=1,
-    )
-    submit_job(state, "j1", req)
-
-    holder_job_id = JobName.root("test-user", "j1").child(":reservation:")
-    holder_job = _query_job(state, holder_job_id)
-    assert holder_job is not None
-    assert holder_job.is_reservation_holder is True
-
-    # Save and restore
-    with tempfile.TemporaryDirectory() as tmpdir:
-        checkpoint_path = Path(tmpdir) / "controller.sqlite3"
-        state._db.backup_to(checkpoint_path)
-        restored_db = ControllerDB(db_dir=Path(tmpdir))
-        restored_state = ControllerTestState(restored_db)
-
-        restored_holder = _query_job(restored_state, holder_job_id)
-        assert restored_holder is not None
-        assert restored_holder.is_reservation_holder is True
-
-        # Parent should not be a holder
-        parent_job_id = JobName.root("test-user", "j1")
-        restored_parent = _query_job(restored_state, parent_job_id)
-        assert restored_parent is not None
-        assert restored_parent.is_reservation_holder is False
 
 
 # =============================================================================
@@ -3812,6 +3575,7 @@ def test_prune_old_terminal_jobs(state):
         state._worker_attrs,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
+        slice_retention=Duration.from_seconds(86400),
     )
 
     assert result.jobs_deleted == 1
@@ -3847,6 +3611,7 @@ def test_prune_old_inactive_workers(state):
         state._worker_attrs,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
+        slice_retention=Duration.from_seconds(86400),
     )
 
     assert result.workers_deleted == 1
@@ -3864,10 +3629,98 @@ def test_prune_noop_when_nothing_old(state):
         state._worker_attrs,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
+        slice_retention=Duration.from_seconds(86400),
     )
 
     assert result == PruneResult()
     assert result.total == 0
+
+
+def _insert_slice(state, slice_id, *, scale_group, worker_ids, created_at_ms, lifecycle="ready"):
+    with state._db.transaction() as cur:
+        cur.execute(
+            insert(slices_table).values(
+                slice_id=slice_id,
+                scale_group=scale_group,
+                lifecycle=lifecycle,
+                worker_ids=worker_ids,
+                created_at_ms=created_at_ms,
+                error_message="",
+            )
+        )
+
+
+def _query_slice(state, slice_id):
+    with state._db.read_snapshot() as snap:
+        return snap.execute(select(slices_table.c.slice_id).where(slices_table.c.slice_id == slice_id)).first()
+
+
+def test_prune_orphaned_slices(state):
+    """Old slices with no backing worker row are pruned; recent or worker-backed slices are kept.
+
+    The orphan-slice sweep keys off ``workers.slice_id`` (the authoritative
+    liveness signal), is independent of whether the scale group still exists in
+    config, and is age-gated so a freshly-booting slice that hasn't registered
+    its workers yet survives.
+    """
+    now_ms = Timestamp.now().epoch_ms()
+
+    # (1) Old slice, no worker references it, in a scale group that is gone from
+    #     config — exactly the "stranded by a rename" case. Should be deleted.
+    _insert_slice(state, "orphan-old", scale_group="retired_group-zone", worker_ids=[], created_at_ms=1000)
+
+    # (2) Recent slice with no workers yet (still booting). Should be kept by the grace age.
+    _insert_slice(state, "fresh-booting", scale_group="retired_group-zone", worker_ids=[], created_at_ms=now_ms)
+
+    # (3) Old slice still backed by a live worker row. Should be kept regardless of age.
+    register_worker(
+        state, "w-live", "host:9001", make_worker_metadata(), slice_id="live-old", scale_group="some_group-zone"
+    )
+    _insert_slice(state, "live-old", scale_group="some_group-zone", worker_ids=["w-live"], created_at_ms=1000)
+
+    result = prune_old_data(
+        state._db,
+        state._health,
+        state._endpoints,
+        state._worker_attrs,
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        slice_retention=Duration.from_seconds(3600),
+        pause_between_s=0.0,
+    )
+
+    assert result.slices_deleted == 1
+    assert _query_slice(state, "orphan-old") is None  # pruned (old + no worker)
+    assert _query_slice(state, "fresh-booting") is not None  # kept (within grace)
+    assert _query_slice(state, "live-old") is not None  # kept (worker row references it)
+
+
+def test_prune_keeps_slice_with_live_worker_despite_empty_worker_ids(state):
+    """Regression: liveness is ``workers.slice_id``, not the slice's ``worker_ids`` JSON.
+
+    A slice whose ``worker_ids`` list is stale/empty but which a live ``workers``
+    row still points at (via ``workers.slice_id``) must NOT be pruned — deleting
+    it would orphan a worker that is still running tasks.
+    """
+    register_worker(
+        state, "w-attached", "host:9002", make_worker_metadata(), slice_id="slice-empty-json", scale_group="g-zone"
+    )
+    # JSON worker_ids is empty even though w-attached references the slice.
+    _insert_slice(state, "slice-empty-json", scale_group="g-zone", worker_ids=[], created_at_ms=1000)
+
+    result = prune_old_data(
+        state._db,
+        state._health,
+        state._endpoints,
+        state._worker_attrs,
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        slice_retention=Duration.from_seconds(3600),
+        pause_between_s=0.0,
+    )
+
+    assert result.slices_deleted == 0
+    assert _query_slice(state, "slice-empty-json") is not None  # kept (worker row references it)
 
 
 def test_dispatch_propagates_task_image(state):
@@ -3928,6 +3781,7 @@ def test_prune_old_data_short_circuits_when_nothing_prunable(state):
         state._worker_attrs,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
+        slice_retention=Duration.from_seconds(86400),
     )
 
     assert result == PruneResult()
@@ -4306,64 +4160,6 @@ def test_kill_non_terminal_dispatch_tasks(state):
         )
 
     assert _task_state_direct(state, task_ids[0]) == job_pb2.TASK_STATE_KILLED
-
-
-def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harness):
-    """Finalizing a reservation-holder task must not affect a co-tenant's
-    derived usage.
-
-    Under the new derived-usage contract, holder jobs are excluded from
-    ``resource_usage_by_worker`` (the query has
-    ``j.is_reservation_holder = 0``), so terminating a holder task on a
-    co-tenanted worker cannot move the co-tenant's reservation accounting.
-    """
-    worker_id = harness.add_worker("w1")
-
-    real_tasks = harness.submit("real-job", replicas=1)
-    harness.dispatch(real_tasks[0], worker_id)
-
-    baseline_usage = _usage_for_worker(harness.state, worker_id)
-    assert baseline_usage.cpu_millicores > 0
-
-    holder_tasks = harness.submit("holder-job", replicas=1)
-    holder_job_id = JobName.root("test-user", "holder-job")
-    with harness.state._db.transaction() as _tx:
-        _tx.execute(
-            text("UPDATE jobs SET is_reservation_holder = 1 WHERE job_id = :job_id"),
-            {"job_id": holder_job_id.to_wire()},
-        )
-    dispatch_task(harness.state, holder_tasks[0], worker_id)
-
-    # Holder did not consume capacity (it's excluded from the derived map).
-    assert _usage_for_worker(harness.state, worker_id) == baseline_usage
-
-    # Exercise the exact finalization path: _finalize_terminal_job cascades to
-    # the holder sub-job via _kill_non_terminal_tasks. cancel_job has its own
-    # inline gated path and doesn't cover this.
-    with harness.state._db.transaction() as cur:
-        snapshot = load_closed_snapshot(
-            cur,
-            now=Timestamp.from_ms(0),
-            seed_task_ids=[holder_tasks[0].task_id],
-        )
-
-        kill_state = Overlay(snapshot=snapshot)
-        _kill_non_terminal_tasks(
-            kill_state,
-            holder_job_id,
-            "Job finalized",
-            0,
-        )
-        commit_effects(
-            cur,
-            kill_state.effects,
-            endpoints=harness.state._endpoints,
-        )
-
-    # Holder's termination must not touch the co-tenant's derived usage.
-    assert (
-        _usage_for_worker(harness.state, worker_id) == baseline_usage
-    ), "holder finalization leaked into the co-tenant's derived usage"
 
 
 def test_max_failures_kills_dispatch_tasks(state):

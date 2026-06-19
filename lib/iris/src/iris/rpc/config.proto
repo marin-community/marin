@@ -403,6 +403,12 @@ message DefaultsConfig {
   reserved 5;  // was: string default_task_image
   WorkerConfig worker = 6;
   map<string, string> task_env = 7;  // Env vars injected into every task container
+  // Names of environment variables captured from the operator's shell at
+  // `iris cluster start` and injected into every task. A missing name aborts
+  // the launch. Values never travel through the ConfigMap: on Kubernetes they
+  // are written to a Secret (`iris-task-env`) referenced via envFrom; on GCP
+  // they are folded into task_env in the bootstrap config shipped to the VM.
+  repeated string inject_env = 8;
 }
 
 // ============================================================================
@@ -428,8 +434,15 @@ message AuthConfig {
   // When true, authentication is attempted but not required. Requests with
   // valid tokens get the authenticated identity; requests without tokens
   // fall through as anonymous admin. Invalid tokens are still rejected.
-  // This allows gradual rollout of auth on clusters that currently rely on
-  // SSH tunnels.
+  // This trusts tokenless requests from ANY origin, so it is safe only for
+  // private clusters.
+  //
+  // Tokenless requests over a genuine loopback connection (SSH tunnel /
+  // on-host) are ALWAYS trusted as the anonymous admin, independent of this
+  // flag — reaching the loopback interface already implies host-level access.
+  // This is the SSH-tunnel transition path for a public controller; see
+  // docs/auth-loopback-transition.md. Loopback origin is verified from the
+  // transport peer and cannot be spoofed via X-Forwarded-For.
   bool optional = 4;
 }
 

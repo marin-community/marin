@@ -33,7 +33,6 @@ class ClusterClient(Protocol):
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
-        reservation: job_pb2.ReservationConfig | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
@@ -108,5 +107,7 @@ class ClusterClient(Protocol):
     ) -> logging_pb2.FetchLogsResponse: ...
 
     def get_autoscaler_status(self) -> controller_pb2.Controller.GetAutoscalerStatusResponse: ...
+
+    def resolve_endpoint(self, endpoint_name: str) -> str: ...
 
     def shutdown(self, wait: bool = True) -> None: ...

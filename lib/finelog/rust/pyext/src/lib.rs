@@ -161,7 +161,7 @@ impl Drop for EmbeddedServer {
 }
 
 #[pymodule]
-fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn finelog_server(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<EmbeddedServer>()?;
     Ok(())
 }

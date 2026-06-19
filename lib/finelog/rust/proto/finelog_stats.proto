@@ -29,10 +29,21 @@ enum ColumnType {
   COLUMN_TYPE_INT32 = 7;        // pa.int32()
 }
 
+// Secondary indexes a column carries to accelerate queries. Extensible: each
+// index type is its own field, so adding one is additive. All-unset means the
+// column is not indexed.
+message ColumnIndex {
+  // Per-row-group trigram (substring) index, stored in each segment's `.tgm`
+  // sidecar so `contains(col, …)` and `col LIKE '%…%'` queries prune row groups
+  // instead of full-scanning. Only meaningful for STRING columns.
+  bool trigram = 1;
+}
+
 message Column {
   string name = 1;
   ColumnType type = 2;
   bool nullable = 3;
+  ColumnIndex index = 4;
 }
 
 message Schema {

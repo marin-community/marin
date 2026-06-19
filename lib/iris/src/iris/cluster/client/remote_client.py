@@ -17,7 +17,7 @@ from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
-from iris.cluster.client.bundle import BundleCreator
+from iris.cluster.client.bundle import create_workspace_zip
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
@@ -112,7 +112,7 @@ class RemoteClusterClient:
         # adds no RPC for CLI calls that never touch logs.
         self._log_client = LogClient.connect(
             LOG_SERVER_ENDPOINT_NAME,
-            resolver=self._resolve_endpoint,
+            resolver=self.resolve_endpoint,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
         )
@@ -134,7 +134,6 @@ class RemoteClusterClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
-        reservation: job_pb2.ReservationConfig | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
@@ -172,8 +171,7 @@ class RemoteClusterClient:
             request.bundle_id = self._bundle_id
         else:
             if self._bundle_blob is None and self._workspace is not None:
-                creator = BundleCreator(self._workspace)
-                self._bundle_blob = creator.create_bundle()
+                self._bundle_blob = create_workspace_zip(self._workspace)
                 logger.info(f"Workspace bundle size: {len(self._bundle_blob) / 1024 / 1024:.1f} MB")
             request.bundle_blob = self._bundle_blob or b""
 
@@ -183,8 +181,6 @@ class RemoteClusterClient:
             request.timeout.CopyFrom(duration_to_proto(timeout))
         if coscheduling is not None:
             request.coscheduling.CopyFrom(coscheduling)
-        if reservation is not None:
-            request.reservation.CopyFrom(reservation)
 
         launch_timeout_ms = max(self._timeout_ms, LAUNCH_JOB_TIMEOUT_FLOOR_MS)
 
@@ -406,7 +402,7 @@ class RemoteClusterClient:
 
         return call_with_retry("list_endpoints", _call)
 
-    def _resolve_endpoint(self, endpoint_name: str) -> str:
+    def resolve_endpoint(self, endpoint_name: str) -> str:
         """Resolve ``endpoint_name`` to a service address.
 
         When ``use_controller_proxy`` is set (external clients), returns the

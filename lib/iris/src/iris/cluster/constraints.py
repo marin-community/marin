@@ -14,6 +14,22 @@ This module is the canonical home for all constraint-related types:
 
 All production code should reference WellKnownAttribute enum members instead of
 raw string literals so that typos are caught at import time.
+
+Region states
+-------------
+A job's region requirement has three distinct states:
+
+- UNSET (no region constraint): "I don't care — inherit the parent worker's region."
+  This is the data-locality-friendly default; IrisClient.submit injects the parent's
+  region so a child co-locates with the worker that launched it.
+- PINNED (``region EQ X`` / ``region IN [...]`` via ``region_constraint``): exactly
+  these regions.
+- ANY (``region EXISTS`` via ``any_region_constraint``): "run anywhere; do NOT inherit
+  the parent's region." Because the marker carries the region key, it suppresses the
+  parent-region injection in IrisClient.submit and clears an inherited pin in
+  ``merge_constraints``. Having served that opt-out, IrisClient.submit strips it before
+  the job reaches the controller, so it never acts as a scheduling/routing filter (a hard
+  ``region EXISTS`` would otherwise exclude workers/groups that advertise no region).
 """
 
 from __future__ import annotations
@@ -326,6 +342,59 @@ def zone_constraint(zone: str) -> Constraint:
     return Constraint.create(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value=zone)
 
 
+AVAILABILITY_PREFIX = "availability:"
+
+
+def availability_key(variant: str) -> str:
+    """Composite attribute key marking that a zone can provision ``variant``.
+
+    The variant is lowercased to match the canonical ``device-variant`` string
+    that scaling groups and workers already carry (e.g. ``availability:v5p-8``,
+    ``availability:h100``).
+    """
+    return f"{AVAILABILITY_PREFIX}{variant.strip().lower()}"
+
+
+def is_availability_key(key: str) -> bool:
+    """Whether ``key`` is an ``availability:<variant>`` zone-capability marker."""
+    return key.startswith(AVAILABILITY_PREFIX)
+
+
+def availability_constraint(variant: str) -> Constraint:
+    """A hard, zone-level constraint requiring ``variant`` to be obtainable there.
+
+    Emitted as an ``availability:<variant>`` EXISTS marker (zone-level, not
+    per-worker). Accelerators only — CPU/RAM/disk never produce availability markers.
+    """
+    return Constraint.create(
+        key=availability_key(variant), op=ConstraintOp.EXISTS, mode=job_pb2.CONSTRAINT_MODE_REQUIRED
+    )
+
+
+def availability_constraints_from_reservation(reservation: job_pb2.ReservationConfig) -> list[Constraint]:
+    """Map a deprecated ``ReservationConfig`` to hard ``availability:<variant>`` constraints.
+
+    Back-compat shim for pre-availability clients (see job.proto): each reservation
+    entry's accelerator variant becomes one hard availability constraint. Entries
+    with no accelerator device contribute nothing (availability is accelerators
+    only). Deduplicated by key so duplicate entries collapse to a single constraint.
+    """
+    constraints: list[Constraint] = []
+    seen: set[str] = set()
+    for entry in reservation.entries:
+        if not entry.resources.HasField("device"):
+            continue
+        variant = get_device_variant(entry.resources.device)
+        if not variant or variant == "auto":
+            continue
+        key = availability_key(variant)
+        if key in seen:
+            continue
+        seen.add(key)
+        constraints.append(availability_constraint(variant))
+    return constraints
+
+
 def region_constraint(regions: list[str]) -> Constraint:
     """Constraint requiring workers to be in one of the given regions.
 
@@ -349,6 +418,14 @@ def region_constraint(regions: list[str]) -> Constraint:
     if len(regions) == 1:
         return Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value=regions[0])
     return Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=regions)
+
+
+def any_region_constraint() -> Constraint:
+    """Region constraint meaning ANY: run anywhere, do not inherit the parent's region.
+
+    See the module-level "region states" note for how ANY relates to UNSET and PINNED.
+    """
+    return Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EXISTS)
 
 
 def device_variant_constraint(variants: Sequence[str]) -> Constraint:
@@ -571,6 +648,8 @@ class ConstraintDescriptor:
 
 
 _EQ_IN = frozenset({job_pb2.CONSTRAINT_OP_EQ, job_pb2.CONSTRAINT_OP_IN})
+# Region additionally allows EXISTS as the explicit ANY-region marker (any_region_constraint).
+_EQ_IN_EXISTS = _EQ_IN | frozenset({job_pb2.CONSTRAINT_OP_EXISTS})
 _EQ_ONLY = frozenset({job_pb2.CONSTRAINT_OP_EQ})
 _ALL_OPS = frozenset(
     {
@@ -612,7 +691,7 @@ _register(
 )
 _register(
     ConstraintDescriptor(
-        key="region", kind=ConstraintKind.TAG, python_type=str, allowed_ops=_EQ_IN, canonical=True, routing=True
+        key="region", kind=ConstraintKind.TAG, python_type=str, allowed_ops=_EQ_IN_EXISTS, canonical=True, routing=True
     )
 )
 _register(
@@ -939,6 +1018,11 @@ def is_cpu_device_type_constraint(c: Constraint) -> bool:
     return c.key == WellKnownAttribute.DEVICE_TYPE and c.op == ConstraintOp.EQ and c.values[0].value == "cpu"
 
 
+def is_any_region_marker(c: Constraint) -> bool:
+    """True if ``c`` is the ANY-region marker: a ``region EXISTS`` constraint."""
+    return c.key == WellKnownAttribute.REGION and c.op == ConstraintOp.EXISTS
+
+
 def routing_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:
     """Filter to routing-only constraints, stripping CPU device-type.
 
@@ -949,6 +1033,11 @@ def routing_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:
     result = []
     for c in constraints:
         if is_cpu_device_type_constraint(c):
+            continue
+        if is_availability_key(c.key):
+            # Dynamic zone-capability marker: not in CONSTRAINT_REGISTRY but routes
+            # to scaling groups (a group's zone determines its availability markers).
+            result.append(c)
             continue
         desc = CONSTRAINT_REGISTRY.get(c.key)
         if desc is None or not desc.routing:

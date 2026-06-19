@@ -140,6 +140,12 @@ class SliceState:
     # controller restart), which the per-worker counters never observe.
     # Memory-only.
     no_worker_probes: int = 0
+    # Timestamp of the first describe in the current run of UNKNOWN observations,
+    # cleared whenever the slice resolves to a concrete state (e.g. READY). The
+    # unresolvable-timeout is measured from here, NOT from created_at, so a single
+    # transient UNKNOWN never terminates a long-running or freshly-adopted slice.
+    # Memory-only.
+    unknown_since: Timestamp | None = None
     error_message: str = ""
 
 
@@ -530,6 +536,7 @@ class ScalingGroup:
                 state.worker_urls = dict(worker_urls or {})
                 state.ping_failures = {}
                 state.quiet_since = None
+                state.unknown_since = None  # resolved: reset the unresolvable-timeout clock
         if state is not None:
             logger.info(
                 "slice ready group=%s slice=%s n_workers=%d worker_ids=%s",
@@ -558,6 +565,23 @@ class ScalingGroup:
                 registered,
                 error_message,
             )
+
+    def note_slice_unknown(self, slice_id: str, timestamp: Timestamp) -> Duration:
+        """Record an UNKNOWN describe and return how long the slice has been continuously UNKNOWN.
+
+        The first UNKNOWN observation stamps ``unknown_since``; it is cleared the
+        moment the slice resolves (``mark_slice_ready``). Callers compare the
+        returned duration against the unresolvable-timeout so that one transient
+        UNKNOWN — common for a long-running or freshly-adopted slice — never
+        terminates it, while a slice genuinely stuck UNKNOWN still fails.
+        """
+        with self._slices_lock:
+            state = self._slices.get(slice_id)
+            if state is None:
+                return Duration.from_ms(0)
+            if state.unknown_since is None:
+                state.unknown_since = timestamp
+            return Duration.from_ms(timestamp.epoch_ms() - state.unknown_since.epoch_ms())
 
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.
@@ -671,13 +695,21 @@ class ScalingGroup:
         with self._slices_lock:
             return [s.handle for s in self._slices.values()]
 
-    def non_ready_slice_handles(self) -> list[tuple[str, SliceHandle]]:
-        """Snapshot non-READY slice handles for background lifecycle polling."""
+    def slices_needing_describe(self) -> list[tuple[str, SliceHandle]]:
+        """Snapshot slice handles the caller must ``describe()`` this tick.
+
+        Returns not-yet-ready slices (BOOTING/INITIALIZING), plus READY slices
+        the autoscaler tracks no workers for. A READY slice with empty
+        ``worker_ids`` never resolved its membership (e.g. adopted from a
+        checkpoint that recorded none); re-describing lets ``refresh`` repopulate
+        or reap it instead of leaving it stuck DEGRADED.
+        """
         with self._slices_lock:
             return [
                 (slice_id, state.handle)
                 for slice_id, state in self._slices.items()
                 if state.lifecycle in (SliceLifecycleState.BOOTING, SliceLifecycleState.INITIALIZING)
+                or (state.lifecycle == SliceLifecycleState.READY and not state.worker_ids)
             ]
 
     def slice_count(self) -> int:
@@ -919,14 +951,21 @@ class ScalingGroup:
         return terminated
 
     def _verify_slice_idle(self, state: SliceState, worker_status_map: WorkerStatusMap) -> bool:
-        """Verify all workers in a slice are idle before termination.
+        """Verify every known worker in a slice is an idle spare before termination.
 
-        Requires at least one known worker to be idle. If no workers are known at all
-        (none in worker_status_map), returns False -- the slice may still be booting.
-        Zombie slices whose workers disappeared are reaped elsewhere: a dead worker
-        process trips the heartbeat timeout (if a worker row exists) or the per-worker
-        /health probe, and a slice whose backing allocation vanished entirely (no worker
-        rows, nothing to probe) trips the no-worker counter in Autoscaler.probe_health.
+        Gates on ``is_idle_spare`` (idle AND schedulable), not bare ``is_idle``: a
+        slice holding a ``DEGRADED`` worker is reported quiet (it runs no tasks) but
+        is NOT reclaimable spare — the scheduler cannot place onto it, so reclaiming
+        it as free capacity is exactly the autoscaler/scheduler disagreement we are
+        fixing. Such a slice is retained here and torn down by the health threshold
+        path instead.
+
+        Requires at least one known worker. If no workers are known at all (none in
+        worker_status_map), returns False -- the slice may still be booting. Zombie
+        slices whose workers disappeared are reaped elsewhere: a dead worker process
+        trips the heartbeat timeout (if a worker row exists) or the per-worker /health
+        probe, and a slice whose backing allocation vanished entirely (no worker rows,
+        nothing to probe) trips the no-worker counter in Autoscaler.probe_health.
         """
         has_known_worker = False
         for worker_id in state.worker_ids:
@@ -934,7 +973,7 @@ class ScalingGroup:
             if status is None:
                 continue
             has_known_worker = True
-            if not status.is_idle:
+            if not status.is_idle_spare:
                 return False
         return has_known_worker
 

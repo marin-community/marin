@@ -497,7 +497,7 @@ def main() -> None:
         candidate_file.write_text(
             json.dumps(
                 {
-                    "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "generated_at": dt.datetime.now(dt.UTC).isoformat(),
                     "repo": repo,
                     "candidates": candidates,
                 },

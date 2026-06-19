@@ -31,7 +31,6 @@ from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
 from iris.cluster.controller.backend import (
     AutoscaleResult,
@@ -69,14 +68,10 @@ from iris.cluster.controller.reconcile.worker import ReconcileRow
 from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.scheduling.policy import (
     build_scheduling_context,
-    read_reservation_claims,
-    refresh_reservation_claims,
-    refresh_reservation_claims_in_tx,
 )
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
-from iris.cluster.controller.schema import ReservationClaim
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
@@ -88,6 +83,7 @@ from iris.cluster.types import (
     WorkerId,
     WorkerStatus,
     WorkerStatusMap,
+    WorkerUsability,
 )
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
@@ -143,13 +139,11 @@ class _TickInputs:
     """DB-less per-tick inputs the control driver assembles in one read txn.
 
     Only the sections for the phases due this tick are populated; the rest stay
-    at their empty defaults. ``ctx``/``claims`` feed the schedule phase,
-    ``control`` the reconcile phase, ``worker_status_map`` the autoscale phase.
+    at their empty defaults. ``ctx`` feeds the schedule phase, ``control`` the
+    reconcile phase, ``worker_status_map`` the autoscale phase.
     """
 
     ctx: SchedulingContext | None = None
-    claims: dict[WorkerId, ReservationClaim] = field(default_factory=dict)
-    claims_changed: bool = False
     control: "reads.ControlSnapshot" = field(
         default_factory=lambda: reads.ControlSnapshot(worker_addresses={}, reconcile_rows=[], timeout_rows=[])
     )
@@ -170,41 +164,29 @@ class ControllerConfig:
     """Remote URI for controller checkpoints and worker profiles (e.g. gs://bucket/iris/state)."""
 
     scheduler_min_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
-    """Minimum scheduling loop interval (used when cluster is active)."""
-
-    scheduler_max_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
-    """Maximum scheduling loop interval (reached via exponential backoff when idle)."""
+    """Schedule-phase cadence: the control tick runs its schedule phase at most
+    this often (a submit wake still forces an immediate schedule-only mini-tick)."""
 
     autoscaler_evaluation_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
     """How often the controller runs an autoscale provisioning cycle
     (``backend.autoscale``). A capacity-managing backend (k8s) no-ops."""
 
-    single_control_tick: bool = True
-    """When True (default), scheduling, reconcile, and autoscale run as phases of
-    one driver thread: each tick builds a single read snapshot, runs the phases
-    that are due (or, on a wake, a schedule-only mini-tick), and commits through a
-    single end-of-tick write transaction. When False, the legacy structure runs —
-    scheduling, polling/reconcile, and autoscale on three independent loop threads
-    with their own snapshots and commits. The legacy path is a runtime fallback;
-    remove it (and this flag) once the single-tick path has run one release in
-    production without regression. The per-phase cadences are identical either way."""
-
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
-    """Reconcile cadence — the sole reconcile + liveness channel. The polling
-    thread wakes every ``poll_interval`` (or sooner if ``_polling_wake`` is set)
-    and runs ``_reconcile_tick`` against every active worker. The reconcile RPC
-    outcome is the only liveness signal; ``worker_unreachable_grace`` sets how
-    long a worker may stay unreachable before teardown. The Reconcile RPC is also
-    the sole channel that dispatches new ASSIGNED rows and observes worker
-    state."""
+    """Reconcile cadence — the sole reconcile + liveness channel. The control
+    tick runs its reconcile phase every ``poll_interval`` (or sooner when a fresh
+    assignment forces one) against every active worker. The reconcile RPC outcome
+    is the only liveness signal; ``worker_unreachable_grace`` sets how long a
+    worker may stay unreachable before teardown. The Reconcile RPC is also the
+    sole channel that dispatches new ASSIGNED rows and observes worker state."""
 
     worker_unreachable_grace: Duration = field(default_factory=lambda: Duration.from_seconds(50.0))
     """How long a worker may be continuously unreachable (or self-report
-    unhealthy) before the controller fails and tears it down. Realized as a count
-    of consecutive failed reconcile passes — ``round(grace / poll_interval)`` —
-    so detection latency stays fixed regardless of the reconcile cadence. ~50s
-    tolerates brief network blips without reaping a multi-VM slice; tests shorten
-    it for fast deterministic teardown."""
+    unhealthy) before the controller fails and tears it down. Realized as
+    wall-clock elapsed since the worker's last successful reconcile (see
+    ``WorkerHealthTracker``), so detection latency is ~grace regardless of the
+    reconcile cadence or how long a failing pass takes. ~50s tolerates brief
+    network blips without reaping a multi-VM slice; tests shorten it for fast
+    deterministic teardown."""
 
     max_tasks_per_job_per_cycle: int = 4
     """Maximum tasks from a single non-coscheduled job to consider per scheduling
@@ -214,7 +196,7 @@ class ControllerConfig:
 
     checkpoint_interval: Duration | None = None
     """If set, take a periodic best-effort snapshot this often.
-    Runs in the autoscaler loop thread; does not pause scheduling."""
+    Runs on its own checkpoint thread; does not pause the control tick."""
 
     prune_interval: Duration = field(default_factory=lambda: Duration.from_seconds(3600))
     """How often to run the data pruning sweep (default: 1 hour)."""
@@ -224,6 +206,13 @@ class ControllerConfig:
 
     worker_retention: Duration = field(default_factory=lambda: Duration.from_seconds(86400))
     """Delete inactive/unhealthy workers whose last heartbeat exceeds this (default: 24 hours)."""
+
+    slice_retention: Duration = field(default_factory=lambda: Duration.from_seconds(3600))
+    """Delete orphaned slices (no backing worker row) older than this (default: 1 hour).
+
+    Must comfortably exceed worst-case slice boot + worker-registration lag, so a
+    freshly-created slice whose VMs are still booting is never reaped before its
+    workers register."""
 
     local_state_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="iris_controller_state_")))
     """Local directory for controller DB, logs, bundle cache."""
@@ -246,7 +235,7 @@ class ControllerConfig:
     log_service_address: str | None = None
     """Address of an externally-hosted log server (e.g. http://localhost:10001).
     When set, the controller connects to the existing server. When None, the
-    Controller starts an in-process native ``finelog._native`` server on a free
+    Controller starts an in-process native ``finelog_server`` server on a free
     port (used by tests and local-mode runs). In production this address is
     sourced from `endpoints["/system/log-server"]` and passed in here by the
     daemon entrypoint."""
@@ -274,12 +263,9 @@ def _log_client_interceptors(config: "ControllerConfig") -> tuple:
 class Controller:
     """Unified controller managing all components and lifecycle.
 
-    By default (``single_control_tick=True``) one driver thread runs the control
-    tick — schedule -> reconcile -> autoscale as phases over a single read
-    snapshot, committed through one end-of-tick write transaction — alongside the
-    prune and checkpoint housekeeping threads. Setting ``single_control_tick=False``
-    restores the legacy structure (scheduling, polling/reconcile, and autoscale on
-    three independent loop threads) as a one-release runtime fallback.
+    One driver thread runs the control tick — schedule -> reconcile -> autoscale
+    as phases over a single read snapshot, committed through one end-of-tick write
+    transaction — alongside the prune and checkpoint housekeeping threads.
 
     Example:
         ```python
@@ -334,13 +320,9 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
-        # Detection latency is fixed in wall-clock by worker_unreachable_grace and
-        # converted to a consecutive-failure count for the reconcile cadence, so it
-        # is unaffected by poll_interval.
-        reconcile_failure_threshold = max(
-            1, round(config.worker_unreachable_grace.to_seconds() / config.poll_interval.to_seconds())
-        )
-        self._health = WorkerHealthTracker(reconcile_failure_threshold=reconcile_failure_threshold)
+        # Worker-death detection is wall-clock, fixed at the grace regardless of
+        # the reconcile cadence (see WorkerHealthTracker).
+        self._health = WorkerHealthTracker(unreachable_grace=config.worker_unreachable_grace)
         self._endpoints = EndpointsProjection(self._db)
         self._worker_attrs = WorkerAttrsProjection(self._db)
         writes.validate()
@@ -353,9 +335,9 @@ class Controller:
         # The log server is always accessed via RPC. In production the
         # controller's main() starts a subprocess; in tests/local mode the
         # Controller spins up an in-process native finelog server
-        # (finelog._native). After the server is running, all access goes
+        # (finelog_server). After the server is running, all access goes
         # through RPC clients — no branching on hosting mode.
-        self._log_server: Any = None  # finelog._native.EmbeddedServer when started locally
+        self._log_server: Any = None  # finelog_server.EmbeddedServer when started locally
 
         if config.log_service_address:
             self._log_service_address = config.log_service_address
@@ -411,35 +393,24 @@ class Controller:
             finelog_stats_service=self._remote_stats_service,
         )
 
-        # Background loop state. Two wake events drive two threads:
-        #   * ``_scheduling_wake`` — producers that may free capacity (terminal
-        #     heartbeats, attempt finalization). Scheduling tick re-evaluates
-        #     pending tasks.
-        #   * ``_polling_wake`` — producers that change ``tasks.state`` such
-        #     that the per-worker reconcile snapshot differs (new ASSIGNED,
-        #     bulk cancel). Polling tick re-fans-out the next worker batch.
-        #
-        # Most write paths set both: over-waking is cheaper than missing a
-        # capacity-return or a fresh ASSIGNED row.
-        self._scheduling_wake = threading.Event()
-        self._polling_wake = threading.Event()
-        # Wakes the unified control-tick driver (single_control_tick=True). A
-        # submit triggers a schedule-only mini-tick so submit->assign latency is
-        # the schedule time, not gated on the next reconcile cadence.
+        # Wakes the control-tick driver. A submit triggers a schedule-only
+        # mini-tick so submit->assign latency is the schedule time, not gated on
+        # the next reconcile cadence.
         self._tick_wake = threading.Event()
         # Set after a tick commits new ASSIGNED rows so the next tick reconciles
         # immediately (dispatching them) instead of waiting a full poll interval.
         self._force_reconcile = False
+        # Workers queued off the control loop for teardown on the next tick; see
+        # request_worker_eviction / _drain_pending_evictions.
+        self._pending_evictions: set[WorkerId] = set()
+        self._pending_evictions_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
-        self._scheduling_thread: ManagedThread | None = None
-        self._polling_thread: ManagedThread | None = None
-        self._autoscaler_thread: ManagedThread | None = None
         self._control_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
         self._checkpoint_thread: ManagedThread | None = None
 
-        # Throttles the execution-timeout deadline scan in _reconcile_tick.
-        # The reconcile tick runs frequently (poll cadence); the timeout query
+        # Throttles the execution-timeout deadline scan in the reconcile phase.
+        # The reconcile phase runs frequently (poll cadence); the timeout query
         # only needs minute-granularity, so we gate it behind a 60s limiter.
         self._timeout_rate_limiter: RateLimiter = RateLimiter(interval_seconds=60.0)
 
@@ -455,11 +426,6 @@ class Controller:
         # the DB. This is the only ``| None`` attribute on Controller: it is
         # genuinely None before the first scheduling tick has run.
         self._last_scheduling_context: SchedulingContext | None = None
-
-        # Residual demand from the most recent scheduling tick, computed by the
-        # scheduling pass alongside assignments and read by the autoscaler loop.
-        # Empty until the first tick with pending work runs.
-        self._last_residual_demand: list[DemandEntry] = []
 
         # Set to True once start() is called. Used to gate operations that
         # are only valid before the controller loops begin (e.g. LoadCheckpoint).
@@ -481,16 +447,27 @@ class Controller:
             self._periodic_checkpoint_limiter.mark_run()
 
     def wake(self) -> None:
-        """Signal both the scheduling and polling loops to run immediately.
+        """Wake the control tick to run a schedule-only mini-tick immediately.
 
-        Called on new job submission. The scheduling tick picks up the new
-        pending tasks, and the polling tick re-fans-out the next worker batch
-        so any ASSIGNED rows the scheduler writes land on the worker without
-        waiting for a full polling rotation.
+        Called on new job submission so the next tick picks up the new pending
+        tasks (and a fresh assignment then forces the following reconcile) instead
+        of waiting a full poll interval.
         """
-        self._scheduling_wake.set()
-        self._polling_wake.set()
         self._tick_wake.set()
+
+    def request_worker_eviction(self, worker_ids: Sequence[WorkerId]) -> None:
+        """Queue workers for fail-and-teardown on the next control tick.
+
+        Called off the control-loop thread (the Register RPC, when a worker claims
+        an address still held by a stale row — a recycled internal IP). The
+        teardown reaps the worker's slice through the autoscaler, which is only
+        safe on the control-loop thread, so the work is deferred to the tick drain.
+        """
+        if not worker_ids:
+            return
+        with self._pending_evictions_lock:
+            self._pending_evictions.update(worker_ids)
+        self.wake()
 
     def _seed_liveness_from_workers(self) -> None:
         """Seed every persisted worker as healthy so the scheduler sees them at startup.
@@ -517,7 +494,7 @@ class Controller:
 
         Used as a fallback when ``cluster_config.endpoints`` does not declare
         ``/system/log-server`` (and in tests). Backed by the native
-        ``finelog._native`` server (the same engine the ``finelog-server`` binary
+        ``finelog_server`` module (the same engine the ``finelog-server`` binary
         runs), storing segments under ``local_state_dir/log-server`` so written
         logs are queryable: the engine's in-memory mode spawns no maintenance
         task, so its RAM buffer never flushes to a readable segment — only a
@@ -538,21 +515,16 @@ class Controller:
         """Start the dashboard server and the control + housekeeping threads.
 
         Every backend gets the same threads; each phase no-ops where it does not
-        apply. By default the unified control tick drives schedule -> reconcile ->
-        autoscale (``single_control_tick=True``); the reconcile phase is the sole
-        reconcile + liveness channel — it reconciles every active worker
-        (worker-daemon backends) or drains + syncs pods (cluster backends), folds
-        the backend's observed health events, and tears down workers that cross the
-        failure threshold. With ``single_control_tick=False`` the legacy
-        scheduling/polling/autoscaler loop threads run instead.
+        apply. The unified control tick drives schedule -> reconcile -> autoscale;
+        the reconcile phase is the sole reconcile + liveness channel — it
+        reconciles every active worker (worker-daemon backends) or drains + syncs
+        pods (cluster backends), folds the backend's observed health events, and
+        tears down workers that cross the failure threshold.
         """
         self._started = True
         if self._config.dry_run:
             logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
 
-        if not self._config.single_control_tick:
-            self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
-            self._polling_thread = self._threads.spawn(self._run_polling_loop, name="polling-loop")
         if not self._config.dry_run:
             self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
 
@@ -583,25 +555,23 @@ class Controller:
         _install_rpc_executor(self._server, max_workers=_RPC_HANDLER_THREADS)
         self._threads.spawn_server(self._server, name="controller-server")
 
-        # Register cluster endpoints BEFORE spawning the autoscaler. Otherwise the
-        # autoscaler's first tick can create buffer slices whose workers query the
-        # controller for /system/log-server before this dict is populated, returning
-        # an empty result. The slice creation fails, the group enters backoff, and
-        # any task constrained to that group hangs until the backoff expires.
+        # Register cluster endpoints BEFORE spawning the control loop. Otherwise
+        # the autoscale phase's first tick can create buffer slices whose workers
+        # query the controller for /system/log-server before this dict is
+        # populated, returning an empty result. The slice creation fails, the
+        # group enters backoff, and any task constrained to that group hangs until
+        # the backoff expires.
         for name, url in self._config.endpoints.items():
             self._service._system_endpoints[name] = url
             logger.info("Registered system endpoint %s -> %s", name, url)
         self._service._system_endpoints["/system/log-server"] = self._log_service_address
 
-        if self._config.single_control_tick:
-            # One driver runs schedule -> reconcile -> autoscale as phases of a
-            # single tick (one read snapshot + one end-of-tick commit). Spawned
-            # after endpoint registration for the same reason the autoscaler loop
-            # was: its first tick may provision buffer slices whose workers query
-            # /system/log-server. In dry-run it runs the schedule phase only.
-            self._control_thread = self._threads.spawn(self._run_control_loop, name="control-loop")
-        elif not self._config.dry_run:
-            self._autoscaler_thread = self._threads.spawn(self._run_autoscaler_loop, name="autoscaler-loop")
+        # One driver runs schedule -> reconcile -> autoscale as phases of a single
+        # tick (one read snapshot + one end-of-tick commit). Spawned after endpoint
+        # registration because its first autoscale phase may provision buffer slices
+        # whose workers query /system/log-server. In dry-run it runs the schedule
+        # phase only.
+        self._control_thread = self._threads.spawn(self._run_control_loop, name="control-loop")
 
         if self._periodic_checkpoint_limiter is not None and not self._config.dry_run:
             self._checkpoint_thread = self._threads.spawn(self._run_checkpoint_loop, name="checkpoint-loop")
@@ -622,7 +592,7 @@ class Controller:
 
         Shutdown ordering:
         1. Unregister atexit hook so it doesn't fire against a closed DB.
-        2. Stop scheduling/provider/autoscaler loops so no new work is triggered.
+        2. Stop the control loop so no new work is triggered.
         3. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
         4. Stop remaining threads (server) and executors.
         """
@@ -633,25 +603,14 @@ class Controller:
         if self._atexit_registered:
             atexit.unregister(self._atexit_checkpoint)
             self._atexit_registered = False
-        self._scheduling_wake.set()
-        self._polling_wake.set()
         self._tick_wake.set()
         join_timeout = Duration.from_seconds(5.0)
         if self._control_thread:
             self._control_thread.stop()
             self._control_thread.join(timeout=join_timeout)
-        if self._scheduling_thread:
-            self._scheduling_thread.stop()
-            self._scheduling_thread.join(timeout=join_timeout)
-        if self._polling_thread:
-            self._polling_thread.stop()
-            self._polling_thread.join(timeout=join_timeout)
         if self._prune_thread:
             self._prune_thread.stop()
             self._prune_thread.join(timeout=join_timeout)
-        if self._autoscaler_thread:
-            self._autoscaler_thread.stop()
-            self._autoscaler_thread.join(timeout=join_timeout)
         if self._checkpoint_thread:
             self._checkpoint_thread.stop()
             self._checkpoint_thread.join(timeout=join_timeout)
@@ -682,66 +641,6 @@ class Controller:
             logger.info("atexit checkpoint written: %s", path)
         except Exception:
             logger.exception("atexit checkpoint failed")
-
-    def _run_scheduling_loop(self, stop_event: threading.Event) -> None:
-        """Scheduling loop with adaptive backoff.
-
-        Backs off from min to max interval when idle (no pending tasks or no
-        assignments possible). Resets to min interval when woken by a producer
-        that may free capacity or by a new job submission.
-
-        Reconciliation runs on the separate polling thread
-        (``_run_polling_loop``) on its own cadence via the Reconcile RPC.
-        Sharing the
-        same write transaction is no longer required: producers write
-        ``tasks.state = ASSIGNED`` and the polling thread reads that state via
-        a snapshot query, so dispatch never crosses a transaction boundary.
-        """
-        backoff = ExponentialBackoff(
-            initial=self._config.scheduler_min_interval.to_seconds(),
-            maximum=self._config.scheduler_max_interval.to_seconds(),
-            factor=2.0,
-            jitter=0.1,
-        )
-        while not stop_event.is_set():
-            interval = backoff.next_interval()
-            woken = self._scheduling_wake.wait(timeout=interval)
-            self._scheduling_wake.clear()
-
-            if stop_event.is_set():
-                break
-
-            if woken:
-                backoff.reset()
-
-            outcome = self._run_scheduling()
-            if outcome == SchedulingOutcome.ASSIGNMENTS_MADE:
-                backoff.reset()
-
-    def _run_polling_loop(self, stop_event: threading.Event) -> None:
-        """Per-worker reconcile loop on the configured ``poll_interval`` cadence.
-
-        Each tick:
-          1. Snapshot every healthy active worker.
-          2. Fan out the Reconcile RPC carrying the desired-attempt set per
-             worker (ASSIGNED rows to start, BUILDING/RUNNING rows to keep
-             alive, and stops for everything else).
-          3. Apply observation-driven results in one write txn.
-
-        The polling thread is the sole path that pushes work to a worker.
-        Worker auto-kill is implicit: any attempt absent from the desired
-        set on the next reconcile is killed locally by the worker.
-        """
-        tick_seconds = self._config.poll_interval.to_seconds()
-        while not stop_event.is_set():
-            self._polling_wake.wait(timeout=tick_seconds)
-            self._polling_wake.clear()
-            if stop_event.is_set():
-                break
-            try:
-                self._reconcile_tick()
-            except Exception:
-                logger.exception("Polling reconcile tick failed")
 
     def _run_prune_loop(self, stop_event: threading.Event) -> None:
         """Background maintenance: WAL checkpoint every 10 min, full data prune on the configured interval."""
@@ -776,26 +675,15 @@ class Controller:
                         self._worker_attrs,
                         job_retention=self._config.job_retention,
                         worker_retention=self._config.worker_retention,
+                        slice_retention=self._config.slice_retention,
                         stop_event=stop_event,
                     )
                 except Exception:
                     logger.exception("Data pruning failed")
 
-    def _run_autoscaler_loop(self, stop_event: threading.Event) -> None:
-        """Autoscaler loop: runs on its own thread so blocking cloud API calls
-        don't stall scheduling or heartbeats."""
-        limiter = RateLimiter(interval_seconds=self._config.autoscaler_evaluation_interval.to_seconds())
-        while not stop_event.is_set():
-            if not limiter.wait(cancel=stop_event):
-                break
-            try:
-                self._run_autoscaler_once()
-            except Exception:
-                logger.exception("Autoscaler loop iteration failed")
-
     def _run_checkpoint_loop(self, stop_event: threading.Event) -> None:
         """Periodic checkpoint loop: runs on its own thread so the multi-second
-        backup+upload doesn't stall the autoscaler cadence."""
+        backup+upload doesn't stall the control tick cadence."""
         limiter = self._periodic_checkpoint_limiter
         assert limiter is not None, "checkpoint loop spawned without configured limiter"
         while not stop_event.is_set():
@@ -807,7 +695,7 @@ class Controller:
                 logger.exception("Periodic checkpoint failed")
 
     # =========================================================================
-    # Unified control tick (single_control_tick=True)
+    # Unified control tick
     # =========================================================================
 
     def _run_control_loop(self, stop_event: threading.Event) -> None:
@@ -866,6 +754,8 @@ class Controller:
             self._run_scheduling()
             return
 
+        self._drain_pending_evictions()
+
         run_autoscale = autoscale_limiter.should_run()
         run_schedule = woken or run_autoscale or schedule_limiter.should_run()
         run_reconcile = self._force_reconcile or reconcile_limiter.should_run()
@@ -920,7 +810,7 @@ class Controller:
         # dispatch follow-up for fresh assignments, fold health.
         if sched_result is not None:
             self._scheduling_diagnostics = sched_result.diagnostics
-            self._last_scheduling_context = sched_result.post_taint_context
+            self._last_scheduling_context = sched_result.scheduling_context
             if sched_result.assignments:
                 self._force_reconcile = True
                 self._tick_wake.set()
@@ -940,26 +830,23 @@ class Controller:
 
         A placement-owning (``CLUSTER_VIEW``) backend's reconcile snapshot comes
         from the dispatch drain (a write), so it is built first, outside the read
-        txn; the worker-daemon reconcile snapshot, the scheduling context +
-        reservation claims, and the autoscale worker-status map all share the one
-        read snapshot.
+        txn; the worker-daemon reconcile snapshot, the scheduling context, and the
+        autoscale worker-status map all share the one read snapshot.
         """
         drained_control: reads.ControlSnapshot | None = None
         if run_reconcile and self._backend_drains_dispatch:
             drained_control = self._drain_dispatch_snapshot()
 
         inputs = _TickInputs()
-        with self._db.read_snapshot() as snap:
+        # Dedicated control pool: the tick's snapshot must not queue behind a slow
+        # dashboard read for a connection.
+        with self._db.control_read_snapshot() as snap:
             if run_schedule:
-                claims, changed = refresh_reservation_claims_in_tx(snap, self._health, self._worker_attrs)
-                inputs.claims = claims
-                inputs.claims_changed = changed
                 inputs.ctx = build_scheduling_context(
                     snap,
                     self._health,
                     self._worker_attrs,
                     self._config.user_budget_defaults,
-                    claims,
                 )
             if run_reconcile and not self._backend_drains_dispatch:
                 control = reads.load_control_snapshot(snap, self._health, scan_timeouts=scan_timeouts)
@@ -986,11 +873,10 @@ class Controller:
         if not ctx.pending_task_rows:
             # No pending work: empty decision, but keep the context as the
             # dashboard diagnostics snapshot for this tick.
-            return ScheduleResult(post_taint_context=ctx)
+            return ScheduleResult(scheduling_context=ctx)
         return self._task_backend.schedule(
             ScheduleInput(
                 context=ctx,
-                claims=inputs.claims,
                 max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
                 trace=trace,
             )
@@ -1008,24 +894,21 @@ class Controller:
     ) -> ControllerEffects | None:
         """Apply this tick's decisions and observations in one write transaction.
 
-        Order within the txn: reservation claims, schedule decisions, reconcile
-        observations, execution-timeout finalizations, autoscaler state. Returns
-        the reconcile kernel effects (consumed by the health fold) or None when the
-        backend reported no worker results. A no-op tick opens no transaction.
+        Order within the txn: schedule decisions, reconcile observations,
+        execution-timeout finalizations, autoscaler state. Returns the reconcile
+        kernel effects (consumed by the health fold) or None when the backend
+        reported no worker results. A no-op tick opens no transaction.
         """
-        has_claims = inputs.claims_changed
         has_sched = sched_result is not None and bool(
             sched_result.unschedulable or sched_result.assignments or sched_result.preemptions
         )
         has_recon = recon_result is not None and bool(recon_result.worker_results or recon_result.updates)
         has_state = auto_result is not None and auto_result.autoscaler_state is not None
-        if not (has_claims or has_sched or has_recon or timeout_decisions or has_state):
+        if not (has_sched or has_recon or timeout_decisions or has_state):
             return None
 
         reconcile_effects: ControllerEffects | None = None
         with self._db.transaction() as cur:
-            if has_claims:
-                writes.replace_reservation_claims(cur, inputs.claims)
             if sched_result is not None:
                 self._commit_schedule_decisions(cur, sched_result, now)
             if recon_result is not None:
@@ -1058,53 +941,52 @@ class Controller:
             logger.info("Preemption pass: %d tasks preempted", len(result.preemptions))
 
     def _run_scheduling(self) -> SchedulingOutcome:
-        """Run one scheduling cycle.
+        """Run one self-contained scheduling cycle (its own snapshot + commits).
 
-        The controller owns only the I/O: it refreshes reservation claims and
-        builds the scheduling context in a single DB snapshot (which folds in the
-        running-task band/value the preemption pass may evict), hands the
-        resulting DB-less snapshot to ``backend.schedule`` for the pure placement
-        decision, then commits the returned assignments, preemptions, and
-        unschedulable marks. A worker-daemon backend runs the full
-        gates → order → taints → preference → find_assignments → preemption
-        pipeline; a cluster backend returns an empty result (Kueue schedules).
+        This is the dry-run scheduling path; the live control tick computes its
+        schedule via ``_schedule_phase`` and commits it in the shared end-of-tick
+        transaction instead.
 
-        No lock is needed since only one scheduling thread exists. Every DB
+        The controller owns only the I/O: it builds the scheduling context in a
+        single DB snapshot (which folds in the running-task band/value the
+        preemption pass may evict), hands the resulting DB-less snapshot to
+        ``backend.schedule`` for the pure placement decision, then commits the
+        returned assignments, preemptions, and unschedulable marks. A
+        worker-daemon backend runs the full gates → order → find_assignments →
+        preemption pipeline; a cluster backend returns an empty result (Kueue
+        schedules).
+
+        No lock is needed since the control driver is single-threaded. Every DB
         access is serialized by ControllerDB._lock with multi-statement
         mutations wrapped in BEGIN IMMEDIATE transactions.
         """
         self._scheduling_round += 1
         trace = self._scheduling_round % _SCHEDULING_TRACE_INTERVAL == 0
 
-        claims = self._refresh_reservation_claims()
-        with self._db.read_snapshot() as snap:
+        with self._db.control_read_snapshot() as snap:
             ctx = build_scheduling_context(
                 snap,
                 self._health,
                 self._worker_attrs,
                 self._config.user_budget_defaults,
-                claims,
             )
 
         if trace:
             logger.info(
-                "[TRACE round=%d] Phase 0: %d pending tasks, %d workers, %d reservation claims",
+                "[TRACE round=%d] Phase 0: %d pending tasks, %d workers",
                 self._scheduling_round,
                 len(ctx.pending_task_rows),
                 len(ctx.workers),
-                len(claims),
             )
 
         if not ctx.pending_task_rows:
             self._scheduling_diagnostics = {}
             self._last_scheduling_context = ctx
-            self._last_residual_demand = []
             return SchedulingOutcome.NO_PENDING_TASKS
 
         result = self._task_backend.schedule(
             ScheduleInput(
                 context=ctx,
-                claims=claims,
                 max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
                 trace=trace,
             )
@@ -1119,8 +1001,7 @@ class Controller:
         self._apply_preemptions(result.preemptions)
 
         self._scheduling_diagnostics = result.diagnostics
-        self._last_scheduling_context = result.post_taint_context
-        self._last_residual_demand = result.residual_demand
+        self._last_scheduling_context = result.scheduling_context
 
         if result.assignments or result.preemptions:
             log_event(
@@ -1134,15 +1015,6 @@ class Controller:
             return SchedulingOutcome.ASSIGNMENTS_MADE
         return SchedulingOutcome.NO_ASSIGNMENTS
 
-    def _refresh_reservation_claims(self) -> dict[WorkerId, ReservationClaim]:
-        """Read, clean up, and refresh reservation claims. Returns updated claims."""
-        return refresh_reservation_claims(
-            self._db,
-            self._health,
-            self._worker_attrs,
-            persist=not self._config.dry_run,
-        )
-
     def _commit_assignments(self, assignments: list[Assignment]) -> None:
         """Persist scheduler decisions to ``tasks.state = ASSIGNED`` rows.
 
@@ -1151,8 +1023,8 @@ class Controller:
         onto ``tasks.priority_band``. The preemption pass then trusts that
         stamped value instead of recomputing from current spend every tick.
 
-        The polling reconcile thread reads ASSIGNED rows on its next tick
-        (woken via ``_polling_wake``) and fans out the Reconcile RPCs.
+        The next control tick's reconcile phase reads the ASSIGNED rows and fans
+        out the Reconcile RPCs.
         """
         if self._config.dry_run:
             for assignment in assignments:
@@ -1160,9 +1032,6 @@ class Controller:
             return
         with self._db.transaction() as cur:
             ops.task.assign(cur, assignments, health=self._health)
-        # Wake the polling thread; every tick reconciles every healthy worker,
-        # so the new ASSIGNED rows turn into Reconcile RPCs on the next tick.
-        self._polling_wake.set()
 
     def _apply_preemptions(self, preemptions: list[TerminalDecision]) -> None:
         """Finalize the backend's PREEMPT decisions.
@@ -1267,7 +1136,7 @@ class Controller:
         """Build per-job ``RunTaskRequest`` templates for the ASSIGNED reconcile rows.
 
         ``run_request_template`` can return ``None`` for jobs the scheduler hasn't
-        cached yet (e.g. reservation holders); those are dropped from the map.
+        cached yet; those are dropped from the map.
         """
         templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
         for row in reconcile_rows:
@@ -1276,25 +1145,6 @@ class Controller:
             if row.job_id not in templates_by_job:
                 templates_by_job[row.job_id] = dispatch.run_request_template(self._run_template_cache, snap, row.job_id)
         return {jid: spec for jid, spec in templates_by_job.items() if spec is not None}
-
-    def _build_reconcile_snapshot(self, scan_timeouts: bool) -> reads.ControlSnapshot:
-        """Compose the DB-less :class:`ControlSnapshot` the backend reconciles against.
-
-        Worker-daemon backends get the live worker set, their worker-bound
-        attempt rows, the per-job run templates (so the backend builds its own
-        plans), and — when ``scan_timeouts`` — the execution-timeout rows, all
-        from one read transaction. A cluster backend that owns placement instead
-        gets the dispatch drain (``tasks_to_run`` / ``running_tasks``): the
-        controller promotes PENDING→ASSIGNED in a write transaction (the drain is
-        the only write here) and rides the result on the snapshot.
-        """
-        if self._backend_drains_dispatch:
-            return self._drain_dispatch_snapshot()
-
-        with self._db.read_snapshot() as snap:
-            control = reads.load_control_snapshot(snap, self._health, scan_timeouts=scan_timeouts)
-            job_specs = self._build_run_templates(snap, control.reconcile_rows)
-        return dataclasses.replace(control, job_specs=job_specs)
 
     def _drain_dispatch_snapshot(self) -> reads.ControlSnapshot:
         """Promote PENDING->ASSIGNED for a placement-owning backend and ride the drain.
@@ -1316,46 +1166,6 @@ class Controller:
             tasks_to_run=batch.tasks_to_run,
             running_tasks=batch.running_tasks,
         )
-
-    def _reconcile_tick(self) -> None:
-        """One polling-tick reconcile pass: snapshot, drive the backend, apply.
-
-        The sole reconcile + liveness channel. It composes the snapshot, calls
-        ``backend.reconcile`` (uniform across backends), commits the observed
-        task-state changes, folds the backend's observed health events plus any
-        kernel-derived build failures through the single ``health.apply`` site,
-        and tears down workers that crossed the failure threshold. The
-        execution-timeout deadline scan is folded in (gated by
-        ``_timeout_rate_limiter``) for worker-daemon backends.
-        """
-        if self._config.dry_run:
-            return
-
-        now = Timestamp.now()
-        scan_timeouts = self._timeout_rate_limiter.should_run()
-        snapshot = self._build_reconcile_snapshot(scan_timeouts)
-        timeout_decisions = self._timeout_decisions(snapshot.timeout_rows, now.epoch_ms())
-        # A cluster-view backend always reconciles: its reconcile does cluster-wide
-        # GC (stray-pod deletion, terminal-resource cleanup, node refresh) that must
-        # run even on an idle DB. Worker-daemon backends skip a tick with no work.
-        has_work = bool(
-            snapshot.worker_addresses or snapshot.tasks_to_run or snapshot.running_tasks or timeout_decisions
-        )
-        if not self._backend_drains_dispatch and not has_work:
-            return
-
-        result = self._task_backend.reconcile(snapshot)
-
-        reconcile_effects: ControllerEffects | None = None
-        with self._db.transaction() as cur:
-            if result.worker_results:
-                reconcile_effects = apply_reconcile(cur, result.worker_results, endpoints=self._endpoints, now=now)
-            if result.updates:
-                apply_dispatch_updates(cur, result.updates, endpoints=self._endpoints, now=now)
-            if timeout_decisions:
-                finalize(cur, timeout_decisions, endpoints=self._endpoints, now=now)
-
-        self._fold_health(result.health_events, reconcile_effects, snapshot, now)
 
     def _fold_health(
         self,
@@ -1384,7 +1194,13 @@ class Controller:
         if dead_workers:
             self._fail_and_teardown(dead_workers, snapshot)
 
-    def _fail_and_teardown(self, dead_workers: list[WorkerId], snapshot: reads.ControlSnapshot) -> None:
+    def _fail_and_teardown(
+        self,
+        dead_workers: list[WorkerId],
+        snapshot: reads.ControlSnapshot,
+        *,
+        reason: str = "worker reconcile failure threshold exceeded",
+    ) -> None:
         """Serialize worker failure, tear down slices + siblings, forget the lot.
 
         Fail the dead workers (``ops.worker.fail``), hand them to
@@ -1393,7 +1209,6 @@ class Controller:
         the autoscaler state, and forget every removed worker from the tracker.
         The only health-driven write is removal.
         """
-        reason = "worker reconcile failure threshold exceeded"
         sibling_reason = "unhealthy worker failed, slice terminated"
         for wid in dead_workers:
             log_event("worker_failing", str(wid), trigger=reason)
@@ -1432,35 +1247,22 @@ class Controller:
             )
         self._health.forget_many(set(removed_ids) | set(auto.removed_workers))
 
-    def _run_autoscaler_once(self) -> None:
-        """Run one provisioning cycle: build the worker-status snapshot, drive
-        ``backend.autoscale`` with the cached residual demand, persist the state.
+    def _drain_pending_evictions(self) -> None:
+        """Fail-and-teardown the workers queued by :meth:`request_worker_eviction`.
 
-        Called from the autoscaler loop thread with no ``dead_workers`` (teardown
-        rides the reconcile tick's health detection). Demand comes from the
-        scheduling pass via ``_last_residual_demand``. A capacity-managing backend
-        (k8s) no-ops and returns no state. The controller owns every DB read and
-        write; the backend never touches the database.
+        The snapshot carries only the queued workers' addresses (for cached-stub
+        eviction); their rows still exist because eviction is queued before any
+        failure.
         """
-        if self._config.dry_run:
-            logger.info("[DRY-RUN] Skipping autoscaler cycle")
-            return
-
-        snapshot = reads.ControlSnapshot(
-            worker_addresses={},
-            reconcile_rows=[],
-            timeout_rows=[],
-            worker_status_map=self._build_worker_status_map(),
-        )
-        result = self._task_backend.autoscale(snapshot, self._last_residual_demand, dead_workers=[])
-        if result.autoscaler_state is not None:
-            with self._db.transaction() as cur:
-                persist_autoscaler_state(cur, result.autoscaler_state)
-
-    def _build_worker_status_map(self) -> WorkerStatusMap:
-        """Build a map of worker_id to worker status for autoscaler idle tracking."""
-        with self._db.read_snapshot() as tx:
-            return self._worker_status_map_from_tx(tx)
+        with self._pending_evictions_lock:
+            if not self._pending_evictions:
+                return
+            drained = sorted(self._pending_evictions)
+            self._pending_evictions.clear()
+        with self._db.read_snapshot() as snap:
+            addresses = reads.bulk_get_worker_addresses(snap, drained)
+        snapshot = reads.ControlSnapshot(worker_addresses=addresses, reconcile_rows=[], timeout_rows=[])
+        self._fail_and_teardown(drained, snapshot, reason="address reused by newly-registered worker (recycled IP)")
 
     def _worker_status_map_from_tx(self, tx: Tx) -> WorkerStatusMap:
         """Per-worker idle/running status for the autoscale phase, read from ``tx``.
@@ -1469,12 +1271,15 @@ class Controller:
         read transaction.
         """
         result: WorkerStatusMap = {}
-        worker_ids = {wid for wid, l in self._health.all().items() if l.active}
+        liveness = self._health.all()
+        usability = {wid: l.usability for wid, l in liveness.items()}
+        worker_ids = {wid for wid, u in usability.items() if u is not WorkerUsability.DEAD}
         running_by_worker = reads.running_tasks_by_worker(tx, worker_ids)
         for wid in worker_ids:
             result[wid] = WorkerStatus(
                 worker_id=wid,
                 running_task_ids=frozenset(tid.to_wire() for tid in running_by_worker.get(wid, set())),
+                usability=usability[wid],
             )
         return result
 
@@ -1563,11 +1368,6 @@ class Controller:
     @property
     def url(self) -> str:
         return f"http://{self.external_host}:{self.port}"
-
-    @property
-    def reservation_claims(self) -> dict[WorkerId, ReservationClaim]:
-        """Current reservation claims, keyed by worker ID."""
-        return read_reservation_claims(self._db)
 
     @property
     def autoscaler(self) -> Autoscaler | None:

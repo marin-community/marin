@@ -18,6 +18,7 @@ from fray.iris_backend import (
     resolve_coscheduling,
 )
 from fray.types import (
+    ANY_REGION,
     CpuConfig,
     Entrypoint,
     GpuConfig,
@@ -61,6 +62,28 @@ class TestConvertConstraints:
 
         assert c.op == ConstraintOp.IN
         assert tuple(v.value for v in c.values) == ("us-central1", "us-central2")
+
+    def test_regions_unset_produces_no_region_constraint(self):
+        """UNSET (regions=None, the default) emits no region constraint — the child
+        inherits the parent's region at submit time."""
+        resources = ResourceConfig(regions=None)
+        constraints = convert_constraints(resources)
+        assert [c for c in constraints if c.key == "region"] == []
+
+    def test_any_region_produces_single_exists_constraint(self):
+        """ANY ([ANY_REGION]) emits exactly one region-EXISTS marker."""
+        resources = ResourceConfig(regions=[ANY_REGION])
+        constraints = convert_constraints(resources)
+        region_constraints = [c for c in constraints if c.key == "region"]
+        assert len(region_constraints) == 1
+        assert region_constraints[0].op == ConstraintOp.EXISTS
+        assert region_constraints[0].values == ()
+
+    def test_any_region_mixed_with_specific_region_raises(self):
+        """ANY_REGION alongside a concrete region is contradictory and rejected."""
+        resources = ResourceConfig(regions=[ANY_REGION, "us-central1"])
+        with pytest.raises(ValueError, match="ANY_REGION cannot be combined"):
+            convert_constraints(resources)
 
     def test_zone_produces_eq_constraint(self):
         resources = ResourceConfig(zone="us-east1-d")

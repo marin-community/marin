@@ -348,8 +348,8 @@ class SchedulingContext:
     Construction is direct: callers supply ``workers``, ``building_counts``,
     ``max_building_tasks``, and the raw-read fields; ``__post_init__`` derives
     ``capacities``, ``index``, and ``_str_to_wid`` once. To rebuild the index
-    after taint injection mid-tick, use :meth:`evolve_with_workers` which reuses
-    the raw-read fields and only redoes the per-worker derivation.
+    mid-tick, use :meth:`evolve_with_workers` which reuses the raw-read fields
+    and only redoes the per-worker derivation.
 
     Posting lists are read-only after construction; capacity deductions don't
     touch them. Workers are tracked via ``assignment_counts`` to bound tasks
@@ -366,8 +366,6 @@ class SchedulingContext:
     user_spend: dict[str, int]
     user_budget_limits: dict[str, int]
     requested_bands: dict[JobName, int]
-    reserved_job_ids: frozenset[JobName]
-    reservation_entry_counts: dict[JobName, int]
     user_budget_defaults: UserBudgetDefaults
     running_for_preemption: list[RunningTaskInfo] = field(default_factory=list)
 
@@ -410,13 +408,12 @@ class SchedulingContext:
         building_counts: dict[WorkerId, int],
         max_building_tasks: int,
     ) -> "SchedulingContext":
-        """Rebuild capacities/index for taint-injected workers.
+        """Rebuild capacities/index for an updated worker list.
 
         Reuses all raw-read fields (``pending_task_rows``, ``user_spend``, etc.)
-        verbatim. The caller supplies updated ``workers``/``jobs`` (e.g. after
-        reservation taint injection) and fresh ``building_counts``. The
-        returned context starts a fresh placement pass with empty
-        ``assignment_counts`` and an empty soft-score cache.
+        verbatim. The caller supplies updated ``workers``/``jobs`` and fresh
+        ``building_counts``. The returned context starts a fresh placement pass
+        with empty ``assignment_counts`` and an empty soft-score cache.
         """
         return SchedulingContext(
             workers=workers,
@@ -429,8 +426,6 @@ class SchedulingContext:
             user_spend=self.user_spend,
             user_budget_limits=self.user_budget_limits,
             requested_bands=self.requested_bands,
-            reserved_job_ids=self.reserved_job_ids,
-            reservation_entry_counts=self.reservation_entry_counts,
             user_budget_defaults=self.user_budget_defaults,
             running_for_preemption=self.running_for_preemption,
         )

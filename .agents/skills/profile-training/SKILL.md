@@ -6,8 +6,8 @@ description: Profile JAX training and analyze hotspots. Use when profiling or op
 # Skill: Agent-Driven Profiling (XPlane/xprof/TensorBoard/Perfetto)
 
 ## Overview
-Turn a `jax_profile` artifact into a deterministic, agent-consumable summary and
-a concrete optimization workflow:
+Turn a Levanter profile directory into a deterministic, agent-consumable
+summary and a concrete optimization workflow:
 1. capture a representative profile,
 2. ingest to `profile_summary.v1`,
 3. query hotspots and bottlenecks,
@@ -16,13 +16,13 @@ a concrete optimization workflow:
 
 ## Scope
 Ingestion sources:
-- XPlane protobufs inside Levanter `jax_profile` artifacts (source of truth):
+- XPlane protobufs inside Levanter profile directories (source of truth):
   - `plugins/profile/<timestamp>/*.xplane.pb`
   - explicit local `*.xplane.pb` files via `--xplane-file`
 - xprof aggregate tables exported from the same XPlane protobuf when the
   optional `xprof` package is available: step overview timing, kernel stats,
   collective breakdowns, xprof bottleneck statements.
-- Perfetto trace JSON as an explicit/fallback source for old artifacts:
+- Perfetto trace JSON as an explicit/fallback source for older profiles:
   - `plugins/profile/<timestamp>/perfetto_trace.json.gz`
   - `plugins/profile/<timestamp>/*.trace.json.gz`
 
@@ -30,11 +30,11 @@ Prefer XPlane protobuf for new work. Perfetto trace JSON commonly hits the trace
 event cap; XPlane contains the uncapped timeline events needed for named-scope
 regions, pre-op gaps, gap context, process/thread metadata, and xprof aggregate
 tables. Use `--trace-file` only for a specific Perfetto JSON trace or an older
-artifact with no XPlane protobuf.
+profile with no XPlane protobuf.
 
 ## Capture Profiles
-Use Levanter profiler flags so profiles upload consistently as `jax_profile`
-artifacts:
+Use Levanter profiler flags so profiles land under
+`<trainer.log_dir>/<run_id>/profiler`:
 
 ```bash
 uv run ... \
@@ -99,24 +99,24 @@ uv run python lib/marin/tools/profile_summary.py summarize \
   --output /tmp/profile_summary.json
 ```
 
-### Option B: From a W&B run target (auto-pick latest profile artifact)
+### Option B: From a W&B run target
 
 ```bash
 uv run python lib/marin/tools/profile_summary.py summarize \
   --run-target marin-community/marin/grug-125m-profile-apples-pallas_tpu-20260217-225239-055ab2 \
-  --alias latest \
   --download-root /tmp/marin-profiles \
   --output /tmp/profile_summary.json
 ```
 
 `--run-target` accepts: a bare run id (requires `--entity` and `--project`),
-`entity/project/run_id`, or a full W&B run URL.
+`entity/project/run_id`, or a full W&B run URL. The profiler directory is
+resolved from `trainer.log_dir` in the run config.
 
 ### Option C: From a local artifact directory
 
 ```bash
 uv run python lib/marin/tools/profile_summary.py summarize \
-  --profile-dir /path/to/jax_profile_artifact_dir \
+  --profile-dir /path/to/profiler_dir \
   --output /tmp/profile_summary.json
 ```
 

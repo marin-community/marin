@@ -34,6 +34,7 @@ from iris.cluster.backends.types import (
     QuotaExhaustedError,
     RemoteWorkerHandle,
     SliceHandle,
+    SliceStatus,
 )
 from iris.cluster.constraints import Constraint
 from iris.cluster.controller.autoscaler.models import (
@@ -49,8 +50,16 @@ from iris.cluster.controller.autoscaler.recovery import (
     load_autoscaler_checkpoint,
     restore_autoscaler_state,
 )
-from iris.cluster.controller.autoscaler.routing import job_feasibility, route_demand
-from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build_worker_config_for_group
+from iris.cluster.controller.autoscaler.routing import (
+    availability_probe_entries,
+    empirical_zone_capabilities,
+    job_feasibility,
+    route_demand,
+)
+from iris.cluster.controller.autoscaler.scaling_group import (
+    ScalingGroup,
+    build_worker_config_for_group,
+)
 from iris.cluster.controller.autoscaler.state import AutoscalerState, GroupPersist, SlicePersist
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
@@ -81,6 +90,11 @@ _HEALTH_PROBE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({
 # Cap concurrent /health probes. ~1000 VMs in production; serializing 3 s
 # timeouts would blow past evaluation_interval (10 s default).
 _HEALTH_PROBE_MAX_WORKERS = 64
+
+# Cap concurrent describe() calls in refresh(). Each is a blocking GCP round-trip
+# (two for a still-queued reserved slice), so a large reserved backlog would
+# otherwise serialize into tens of seconds and starve the shared control loop.
+_REFRESH_DESCRIBE_MAX_WORKERS = 64
 
 # Cap concurrent slice create/terminate cloud requests issued in one phase. The
 # fan-out keeps a burst (cold-start scale-up, mass-preemption teardown) within
@@ -127,6 +141,17 @@ def _probe_worker_health(worker_url: str) -> bool:
         return False
 
 
+def _safe_describe(slice_id: str, handle: SliceHandle) -> SliceStatus | None:
+    """Describe a slice on the fan-out pool, returning None (logged) if it raises."""
+    try:
+        return handle.describe()
+    except Exception as e:
+        # A failed poll is transient: skip this slice this tick and retry. A slice
+        # that stays unresolvable is failed via the UNKNOWN/unresolvable-timeout path.
+        logger.warning("Failed to poll slice %s: %s", slice_id, e)
+        return None
+
+
 @dataclass
 class _ScaleUpRequest:
     """One scale-up to issue this phase: a group, its reason, and the pending action."""
@@ -170,6 +195,7 @@ class Autoscaler:
         base_worker_config: config_pb2.WorkerConfig | None = None,
         unresolvable_timeout: Duration = DEFAULT_UNRESOLVABLE_TIMEOUT,
         create_rate_limit: int = DEFAULT_CREATE_RATE_LIMIT,
+        make_draining_group: Callable[[str], ScalingGroup] | None = None,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -182,8 +208,12 @@ class Autoscaler:
             unresolvable_timeout: How long a slice can remain UNKNOWN before being treated as FAILED.
             create_rate_limit: Project-wide ceiling on slice-creation requests per minute,
                 shared across all scale groups. See ``DEFAULT_CREATE_RATE_LIMIT``.
+            make_draining_group: Builds a scale-to-zero ``ScalingGroup`` for a scale group that has
+                left config but still has live VMs (see ``restore_autoscaler_state``). None disables
+                drain adoption (test/local mode); the factory always wires it in prod.
         """
         self._groups = scale_groups
+        self._make_draining_group = make_draining_group
         self._platform = platform
         self.evaluation_interval = evaluation_interval
         self._base_worker_config = base_worker_config
@@ -215,6 +245,7 @@ class Autoscaler:
         config: config_pb2.AutoscalerConfig,
         platform: WorkerInfraProvider,
         base_worker_config: config_pb2.WorkerConfig | None = None,
+        make_draining_group: Callable[[str], ScalingGroup] | None = None,
     ) -> "Autoscaler":
         """Create autoscaler from proto config.
 
@@ -223,6 +254,8 @@ class Autoscaler:
             config: Autoscaler configuration proto (with defaults already applied)
             platform: WorkerInfraProvider instance for shutdown lifecycle
             base_worker_config: Base worker config merged with per-group overrides
+            make_draining_group: Builds a scale-to-zero group for a retired-but-live scale group
+                (see ``Autoscaler.__init__`` / ``restore_autoscaler_state``).
 
         Returns:
             Configured Autoscaler instance
@@ -232,6 +265,7 @@ class Autoscaler:
             evaluation_interval=duration_from_proto(config.evaluation_interval),
             platform=platform,
             base_worker_config=base_worker_config,
+            make_draining_group=make_draining_group,
         )
 
     def shutdown(self) -> None:
@@ -313,7 +347,18 @@ class Autoscaler:
         """
         ts = timestamp or Timestamp.now()
 
-        routing_decision = route_demand(list(self._groups.values()), demand_entries, ts)
+        # Empirical availability: a variant is "available" in a region only once a
+        # scale-up there has succeeded. Convert each unmet availability:<variant>
+        # constraint into a probe scale-up of that accelerator group so capacity can
+        # be discovered/established; the demand subsides once the constrained job
+        # places (see availability_probe_entries).
+        caps = self.zone_capabilities(ts)
+        available_variants = frozenset(variant for variants in caps.values() for variant in variants)
+        probes = availability_probe_entries(list(self._groups.values()), demand_entries, available_variants)
+        if probes:
+            demand_entries = list(demand_entries) + probes
+
+        routing_decision = route_demand(list(self._groups.values()), demand_entries, ts, zone_capabilities=caps)
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
         # Build cached views eagerly here so dashboard/service RPCs never pay
         # the conversion cost on the hot path (#4844).
@@ -347,6 +392,15 @@ class Autoscaler:
                 logger.debug("Scale group %s: scale up blocked", group.name)
 
         return scale_plan.decisions()
+
+    def zone_capabilities(self, timestamp: Timestamp | None = None) -> dict[str, frozenset[str]]:
+        """Map zone -> {device_variant} the cluster has EMPIRICALLY confirmed available.
+
+        A variant counts for a zone only after a scale-up there succeeded (≥1 live
+        ``READY`` slice, not erroring) — see :func:`empirical_zone_capabilities`.
+        """
+        ts = timestamp or Timestamp.now()
+        return empirical_zone_capabilities(self._groups.values(), ts)
 
     def execute(
         self,
@@ -510,62 +564,86 @@ class Autoscaler:
         self._worker_registry.unregister_slice_workers(slice_id, worker_ids)
 
     def refresh(self, worker_status_map: WorkerStatusMap, timestamp: Timestamp | None = None) -> None:
-        """State-read phase: scale down idle slices from currently tracked state."""
+        """Poll non-READY slices and scale down idle ones.
+
+        Reading a slice's cloud state is a blocking GCP round-trip (two for a
+        still-queued reserved slice). A large reserved backlog would serialize
+        into tens of seconds and, since this runs inline on the shared control
+        loop, starve reconcile — so the reads are fanned out over a bounded pool
+        and folded serially (see the phase comments below).
+        """
         timestamp = timestamp or Timestamp.now()
 
-        for group in self._groups.values():
-            for slice_id, handle in group.non_ready_slice_handles():
-                try:
-                    status = handle.describe()
-                except Exception as e:
-                    logger.warning("Failed to poll slice %s: %s", slice_id, e)
-                    continue
+        # Phase 1: snapshot every slice that needs a describe() — not-yet-ready
+        # slices, plus READY slices the autoscaler tracks no workers for (so an
+        # adopted READY-but-empty slice repopulates instead of staying DEGRADED).
+        targets = [
+            (group, slice_id, handle)
+            for group in self._groups.values()
+            for slice_id, handle in group.slices_needing_describe()
+        ]
 
-                if status.state == CloudSliceState.READY:
-                    worker_ids = [w.worker_id for w in status.workers]
-                    worker_urls = self._worker_urls(status.workers)
-                    group.mark_slice_ready(slice_id, worker_ids, worker_urls=worker_urls)
-                    self._register_slice_workers(status.workers, slice_id, group.name)
-                    self._log_action(
-                        "slice_ready",
-                        group.name,
-                        slice_id,
-                        reason=f"bootstrap completed ({len(worker_ids)} workers)",
-                    )
-                elif status.state == CloudSliceState.FAILED:
-                    group.mark_slice_failed(slice_id, error_message=status.error_message)
+        # Phase 2: fan out the blocking describe() over a bounded pool.
+        statuses = _run_io_batch(
+            targets,
+            lambda t: _safe_describe(t[1], t[2]),
+            max_workers=_REFRESH_DESCRIBE_MAX_WORKERS,
+            thread_name_prefix="slice-describe",
+        )
+
+        # Phase 3: fold describe results into group state serially.
+        for (group, slice_id, _handle), status in zip(targets, statuses, strict=True):
+            if status is None:
+                continue
+            if status.state == CloudSliceState.READY:
+                worker_ids = [w.worker_id for w in status.workers]
+                worker_urls = self._worker_urls(status.workers)
+                group.mark_slice_ready(slice_id, worker_ids, worker_urls=worker_urls)
+                self._register_slice_workers(status.workers, slice_id, group.name)
+                self._log_action(
+                    "slice_ready",
+                    group.name,
+                    slice_id,
+                    reason=f"bootstrap completed ({len(worker_ids)} workers)",
+                )
+            elif status.state == CloudSliceState.FAILED:
+                group.mark_slice_failed(slice_id, error_message=status.error_message)
+                group.scale_down(slice_id)
+                self._unregister_slice_workers(slice_id)
+                group.record_slice_boot_failed(slice_id, timestamp)
+                reason = status.error_message if status.error_message else "bootstrap failed"
+                self._log_action(
+                    "slice_failed",
+                    group.name,
+                    slice_id,
+                    reason=reason,
+                    status="failed",
+                )
+            elif status.state == CloudSliceState.UNKNOWN:
+                # Measure how long the slice has been CONTINUOUSLY UNKNOWN, not its
+                # age since creation: a single transient UNKNOWN describe must not
+                # terminate a long-running or freshly-adopted (drained) slice that
+                # still has running tasks.
+                unknown_for = group.note_slice_unknown(slice_id, timestamp)
+                if unknown_for >= self._unresolvable_timeout:
+                    group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
                     group.scale_down(slice_id)
                     self._unregister_slice_workers(slice_id)
                     group.record_slice_boot_failed(slice_id, timestamp)
-                    reason = status.error_message if status.error_message else "bootstrap failed"
                     self._log_action(
                         "slice_failed",
                         group.name,
                         slice_id,
-                        reason=reason,
+                        reason=f"unresolvable for {unknown_for}",
                         status="failed",
                     )
-                elif status.state == CloudSliceState.UNKNOWN:
-                    age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
-                    if age >= self._unresolvable_timeout:
-                        group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
-                        group.scale_down(slice_id)
-                        self._unregister_slice_workers(slice_id)
-                        group.record_slice_boot_failed(slice_id, timestamp)
-                        self._log_action(
-                            "slice_failed",
-                            group.name,
-                            slice_id,
-                            reason=f"TPU unresolvable for {age}",
-                            status="failed",
-                        )
-                    else:
-                        logger.debug(
-                            "Slice %s UNKNOWN (age %s < timeout %s); will retry",
-                            slice_id,
-                            age,
-                            self._unresolvable_timeout,
-                        )
+                else:
+                    logger.debug(
+                        "Slice %s UNKNOWN (unknown for %s < timeout %s); will retry",
+                        slice_id,
+                        unknown_for,
+                        self._unresolvable_timeout,
+                    )
 
         for group in self._groups.values():
             target_capacity = min(group.current_demand + group.buffer_slices, group.max_slices)
@@ -737,7 +815,7 @@ class Autoscaler:
         tracked workers. Call at startup before loops begin.
         """
         checkpoint = load_autoscaler_checkpoint(db)
-        restored_workers = restore_autoscaler_state(self._groups, checkpoint, platform)
+        restored_workers = restore_autoscaler_state(self._groups, checkpoint, platform, self._make_draining_group)
         self.restore_tracked_workers(restored_workers)
         logger.info("Restored %d tracked workers", len(restored_workers))
 

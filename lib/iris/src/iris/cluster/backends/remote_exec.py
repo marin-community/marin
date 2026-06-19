@@ -40,6 +40,20 @@ def _extend_gcloud_ssh_options(
     return cmd
 
 
+def _append_gcloud_ssh_command(cmd: list[str], command: str) -> list[str]:
+    """Append the non-interactive flags and remote command shared by gcloud SSH transports."""
+    cmd.extend(["--quiet", "--ssh-flag=-oBatchMode=yes", "--command", command])
+    return cmd
+
+
+def _run_subprocess(cmd: list[str], timeout: Duration) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout.to_seconds())
+
+
+def _popen_streaming(cmd: list[str]) -> subprocess.Popen:
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+
 # ============================================================================
 # Protocol
 # ============================================================================
@@ -126,26 +140,13 @@ class GcloudRemoteExec:
             ssh_key_file=self.ssh_key_file,
             impersonate_service_account=self.impersonate_service_account,
         )
-        cmd.extend(
-            [
-                "--quiet",
-                "--ssh-flag=-oBatchMode=yes",
-                "--command",
-                command,
-            ]
-        )
-        return cmd
+        return _append_gcloud_ssh_command(cmd, command)
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
-        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds())
+        return _run_subprocess(self._build_cmd(command), timeout)
 
     def run_streaming(self, command: str) -> subprocess.Popen:
-        return subprocess.Popen(
-            self._build_cmd(command),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        return _popen_streaming(self._build_cmd(command))
 
 
 @dataclass
@@ -188,26 +189,13 @@ class GceRemoteExec:
             ssh_key_file=self.ssh_key_file,
             impersonate_service_account=self.impersonate_service_account,
         )
-        cmd.extend(
-            [
-                "--quiet",
-                "--ssh-flag=-oBatchMode=yes",
-                "--command",
-                command,
-            ]
-        )
-        return cmd
+        return _append_gcloud_ssh_command(cmd, command)
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
-        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds())
+        return _run_subprocess(self._build_cmd(command), timeout)
 
     def run_streaming(self, command: str) -> subprocess.Popen:
-        return subprocess.Popen(
-            self._build_cmd(command),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        return _popen_streaming(self._build_cmd(command))
 
 
 @dataclass
@@ -256,15 +244,10 @@ class DirectSshRemoteExec:
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
         # +5s buffer over the requested timeout so SSH's own ConnectTimeout fires first.
-        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds() + 5)
+        return _run_subprocess(self._build_cmd(command), Duration.from_seconds(timeout.to_seconds() + 5))
 
     def run_streaming(self, command: str) -> subprocess.Popen:
-        return subprocess.Popen(
-            self._build_cmd(command),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        return _popen_streaming(self._build_cmd(command))
 
 
 # ============================================================================

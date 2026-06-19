@@ -2,28 +2,35 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build (and let CI publish) marin-finelog wheels.
+"""Build (and let CI publish) the marin-finelog dists.
 
 Driven by .github/workflows/finelog-release-wheels.yaml. Mirrors
 lib/dupekit/build_package.py: same nightly/stable/manual mode split and the
 same zig-cross-compiled manylinux + native macOS wheel matrix.
 
-marin-finelog is a native package: lib/finelog/pyproject.toml is a maturin
-project whose `[tool.maturin] manifest-path` points at the rust/pyext
-cdylib crate (the in-process `finelog._native` server). maturin therefore reads
-the wheel version from `[project] version` in lib/finelog/pyproject.toml and
-bundles the pure-Python client/deploy/proto alongside the native extension.
+finelog ships as TWO dists, released in lockstep at one resolved version:
+  - marin-finelog-server: the native package. lib/finelog/rust/pyproject.toml
+    is a maturin project whose `[tool.maturin] manifest-path` points at the
+    pyext cdylib crate (the in-process server, importable as `finelog_server`).
+    Platform wheels are built per-target by the CI matrix.
+  - marin-finelog: pure Python (hatchling) — client/deploy/proto. One
+    py3-none-any wheel, built on the linux matrix leg only so artifacts never
+    collide across legs. It does NOT depend on marin-finelog-server; consumers
+    that need the in-process server (e.g. iris) depend on it explicitly.
 
 Modes:
     nightly  -- `<bumped_patch>-dev.<YYYYMMDDhhmm>` (UTC), where
                 `<bumped_patch>` is one patch above max(pyproject version,
-                latest stable on PyPI). Sorting above the current stable is
-                what lets `marin-finelog >= 0.2.0.dev0` in root pyproject.toml
-                resolve to the latest dev. pyproject never needs to be
-                re-bumped after a stable cut.
+                latest marin-finelog stable on PyPI; the server dist follows
+                the same value). Sorting above the current stable is what lets
+                `marin-finelog >= 0.2.0.dev0`-style floors resolve to the
+                latest dev. pyproject never needs to be re-bumped after a
+                stable cut.
     stable   -- version supplied via --version (extracted from the tag in CI).
-                pyproject.toml is rewritten on disk so maturin builds with that
-                version; the change is not committed.
+                Both pyprojects are rewritten on disk so the builds carry that
+                version; the change is not committed. A stable tag therefore
+                cuts a stable PAIR, so stable-only consumers never need a
+                prerelease opt-in for the server dist.
     manual   -- `<pyproject>+<sha>` (PEP 440 local version). Build-only smoke
                 for PRs and ad-hoc dev; PyPI rejects local-version identifiers,
                 so the publish job declines to run in this mode.
@@ -50,19 +57,33 @@ import urllib.request
 from pathlib import Path
 
 FINELOG_DIR = Path(__file__).resolve().parent
+SERVER_DIR = FINELOG_DIR / "rust"
 REPO_ROOT = FINELOG_DIR.parent.parent
-# maturin reads the wheel version from `[project] version` here, and the
-# `[tool.maturin] manifest-path` (relative to this file) selects the cdylib.
+# The pure dist's pyproject is the canonical version source; the resolved
+# version is stamped into both files so the wheels agree.
 PYPROJECT_PATH = FINELOG_DIR / "pyproject.toml"
+SERVER_PYPROJECT_PATH = SERVER_DIR / "pyproject.toml"
 DIST_DIR = REPO_ROOT / "dist"
 TOOLS_DIR = REPO_ROOT / ".tools"
 
 PYPI_JSON_URL = "https://pypi.org/pypi/marin-finelog/json"
 
 ZIG_VERSION = "0.15.2"
-# ziglang.org's own server is very slow (<0.1 MB/s); use a community mirror
-# from https://ziglang.org/download/community-mirrors.txt instead.
-ZIG_DOWNLOAD_BASE = "https://pkg.earth/zig"
+# Zig tarballs are large and ziglang.org's own server is slow and rate-limited
+# (<0.1 MB/s), so prefer the community mirrors from
+# https://ziglang.org/download/community-mirrors.txt and fall back to the
+# official server only if every mirror fails. Mirrors intermittently 500 or
+# drop the connection (a single hard-coded mirror is a CI flake waiting to
+# happen), so we rotate through several with retries. Each mirror serves the
+# tarball at `<base>/<filename>`; the official server nests it under
+# `/download/<version>/`.
+ZIG_MIRRORS = (
+    "https://pkg.earth/zig",
+    "https://pkg.hexops.org/zig",
+    "https://zig.linus.dev/zig",
+)
+ZIG_OFFICIAL_BASE = "https://ziglang.org/download"
+ZIG_DOWNLOAD_ATTEMPTS_PER_SOURCE = 2
 
 # (rust-triple, manylinux-tag) — manylinux is None for native macOS builds.
 LINUX_TARGETS: list[tuple[str, str | None]] = [
@@ -97,8 +118,31 @@ def _zig_platform_key() -> str:
     return f"{arch_map[machine]}-{os_map[system]}"
 
 
+def _download_zig_archive(filename: str, dest: Path, reporthook) -> None:
+    """Fetch the zig tarball into ``dest``, trying mirrors then ziglang.org.
+
+    Tries each community mirror (a couple of attempts apiece, since they
+    intermittently 500 or drop the connection) before falling back to the slow,
+    rate-limited official server. Raises if every source fails.
+    """
+    sources = [f"{base}/{filename}" for base in ZIG_MIRRORS]
+    sources.append(f"{ZIG_OFFICIAL_BASE}/{ZIG_VERSION}/{filename}")
+    last_error: Exception | None = None
+    for url in sources:
+        for attempt in range(1, ZIG_DOWNLOAD_ATTEMPTS_PER_SOURCE + 1):
+            print(f"Downloading zig {ZIG_VERSION} from {url} (attempt {attempt})...")
+            try:
+                urllib.request.urlretrieve(url, dest, reporthook=reporthook)
+                return
+            except (urllib.error.URLError, OSError) as e:
+                last_error = e
+                print(f"  download failed: {e}")
+                dest.unlink(missing_ok=True)
+    raise RuntimeError(f"Could not download zig {ZIG_VERSION} from any mirror or ziglang.org") from last_error
+
+
 def _ensure_zig() -> str:
-    """Return path to zig binary, downloading from a community mirror if absent."""
+    """Return path to zig binary, downloading it if absent (see _download_zig_archive)."""
     existing = shutil.which("zig")
     if existing:
         return existing
@@ -110,9 +154,6 @@ def _ensure_zig() -> str:
         return str(zig_bin)
 
     filename = f"zig-{plat}-{ZIG_VERSION}.tar.xz"
-    url = f"{ZIG_DOWNLOAD_BASE}/{filename}"
-    print(f"Downloading zig {ZIG_VERSION} for {plat} from {ZIG_DOWNLOAD_BASE}...")
-
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
     archive_path = TOOLS_DIR / filename
 
@@ -131,7 +172,7 @@ def _ensure_zig() -> str:
         else:
             print(f"  zig download: {downloaded / 1e6:.1f} MB")
 
-    urllib.request.urlretrieve(url, archive_path, reporthook=_report)
+    _download_zig_archive(filename, archive_path, _report)
     with tarfile.open(archive_path, "r:xz") as tar:
         tar.extractall(TOOLS_DIR, filter="data")
     archive_path.unlink()
@@ -163,18 +204,19 @@ def _ensure_maturin() -> str:
 
 
 def _maturin(*args: str, env: dict[str, str] | None = None) -> None:
-    """Run maturin from lib/finelog so it reads this package's pyproject.toml.
+    """Run maturin from lib/finelog/rust so it reads the server pyproject.toml.
 
-    The `[tool.maturin] manifest-path` in lib/finelog/pyproject.toml selects the
-    rust/pyext cdylib crate; we deliberately do NOT pass --manifest-path
+    The `[tool.maturin] manifest-path` in lib/finelog/rust/pyproject.toml
+    selects the pyext cdylib crate; we deliberately do NOT pass --manifest-path
     (that would make maturin look for a sibling pyproject next to the crate).
     """
     cmd = [_ensure_maturin(), *args]
-    subprocess.run(cmd, check=True, cwd=FINELOG_DIR, env=env)
+    subprocess.run(cmd, check=True, cwd=SERVER_DIR, env=env)
 
 
-# Match the `[project]` table's `version = "..."` — the first version key in
-# lib/finelog/pyproject.toml (the build-system table above it has none).
+# Match the `[project]` table's `version = "..."` — the first line-anchored
+# version key in each pyproject (the build-system table above it has none, and
+# dependency strings are indented so the anchor skips them).
 _VERSION_RE = re.compile(r'^(version\s*=\s*)"[^"]+"', re.MULTILINE)
 
 
@@ -188,12 +230,13 @@ def _read_project_version() -> str:
 
 
 def _write_project_version(new_version: str) -> None:
-    text = PYPROJECT_PATH.read_text()
-    new_text, n = _VERSION_RE.subn(rf'\1"{new_version}"', text, count=1)
-    if n != 1:
-        print(f"ERROR: Failed to rewrite version in {PYPROJECT_PATH}", file=sys.stderr)
-        sys.exit(1)
-    PYPROJECT_PATH.write_text(new_text)
+    for path in (PYPROJECT_PATH, SERVER_PYPROJECT_PATH):
+        text = path.read_text()
+        new_text, n = _VERSION_RE.subn(rf'\1"{new_version}"', text, count=1)
+        if n != 1:
+            print(f"ERROR: Failed to rewrite version in {path}", file=sys.stderr)
+            sys.exit(1)
+        path.write_text(new_text)
 
 
 def _parse_semver(version: str) -> tuple[int, int, int]:
@@ -301,11 +344,26 @@ def _build_wheels(targets: list[tuple[str, str | None]], use_zig: bool) -> None:
             args.append("--zig")
         _maturin(*args, env=env)
 
-    _list_dist_artifacts("wheel(s)")
+
+def _uv_build(*args: str) -> None:
+    """Build the pure dist with uv, dropping the .gitignore uv writes into the
+    output dir — pypi-publish rejects non-distribution files in packages-dir,
+    and both the artifact upload and the publish step glob all of dist/."""
+    subprocess.run(["uv", "build", *args, "--out-dir", str(DIST_DIR)], check=True, cwd=FINELOG_DIR)
+    (DIST_DIR / ".gitignore").unlink(missing_ok=True)
+
+
+def _build_pure_wheel() -> None:
+    print("\n--- Building marin-finelog (pure) wheel ---")
+    _uv_build("--wheel")
 
 
 def build_linux_wheels() -> None:
     _build_wheels(LINUX_TARGETS, use_zig=True)
+    # The pure wheel is platform-independent; build it on this leg only so the
+    # merged artifacts never contain two copies of the same filename.
+    _build_pure_wheel()
+    _list_dist_artifacts("wheel(s)")
 
 
 def build_macos_wheels() -> None:
@@ -313,22 +371,25 @@ def build_macos_wheels() -> None:
         print("ERROR: macOS wheels require a macOS host (zig can't cross-compile to macOS)", file=sys.stderr)
         sys.exit(1)
     _build_wheels(MAC_TARGETS, use_zig=False)
+    _list_dist_artifacts("wheel(s)")
 
 
-def build_sdist() -> None:
+def build_sdists() -> None:
     # Adds to dist/ rather than resetting it: the release job downloads wheels
     # via download-artifact before invoking us, and we want them in the same
     # directory so `pypa/gh-action-pypi-publish` uploads everything together.
     DIST_DIR.mkdir(exist_ok=True)
-    print("\n--- Building sdist ---")
+    print("\n--- Building marin-finelog-server sdist ---")
     _maturin("sdist", "--out", str(DIST_DIR))
+    print("\n--- Building marin-finelog sdist ---")
+    _uv_build("--sdist")
     _list_dist_artifacts("sdist(s)")
 
 
 _BUILDERS = {
     "linux": build_linux_wheels,
     "macos": build_macos_wheels,
-    "sdist": build_sdist,
+    "sdist": build_sdists,
 }
 
 
@@ -360,14 +421,15 @@ def main() -> None:
         parser.error("--build is required unless --resolve-only is set")
 
     version = args.version if args.version else resolve_version(args.mode, args.version)
-    print(f"marin-finelog version: {version} (mode={args.mode})")
+    print(f"marin-finelog / marin-finelog-server version: {version} (mode={args.mode})")
     _emit_github_output("version", version)
 
     if args.resolve_only:
         return
 
-    # maturin reads version from [project] version in pyproject.toml. Stamp it
-    # for the duration of this build; we never commit the change back.
+    # Both builds read [project] version from their pyproject.toml. Stamp the
+    # resolved version into both for the duration of this build; we never
+    # commit the change back.
     _write_project_version(version)
     _BUILDERS[args.build]()
 

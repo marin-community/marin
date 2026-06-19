@@ -55,7 +55,6 @@ from iris.cluster.controller.reconcile.worker import WorkerReconcileResult
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
-    jobs_table,
     task_attempts_table,
     tasks_table,
     worker_attributes_table,
@@ -67,7 +66,7 @@ from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId, is_job_finished
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Duration, RateLimiter, Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 
@@ -103,7 +102,7 @@ class FakeProvider:
     def __init__(self) -> None:
         # Real Iris scheduler: ``ctrl._run_scheduling`` routes the decision
         # through ``schedule`` now, so the fake must run the real pipeline for
-        # scheduler/preemption/reservation tests to exercise placement.
+        # scheduler/preemption tests to exercise placement.
         self._scheduler = Scheduler()
 
     def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
@@ -158,6 +157,7 @@ class MockController:
 
     def __init__(self):
         self.wake = Mock()
+        self.request_worker_eviction = Mock()
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.last_scheduling_context = None
         self.autoscaler = None
@@ -274,6 +274,45 @@ def make_controller(tmp_path):
             errors.append(exc)
     if errors:
         raise errors[0]
+
+
+def _spent_limiter() -> RateLimiter:
+    """A ``RateLimiter`` whose ``should_run()`` returns False (already ran, long interval)."""
+    limiter = RateLimiter(interval_seconds=1e9)
+    limiter.mark_run()
+    return limiter
+
+
+def reconcile_once(ctrl: Controller) -> None:
+    """Drive exactly one reconcile pass through the production control tick.
+
+    Reconcile runs only as a phase of ``Controller._control_tick``, so this forces
+    a reconcile-only tick: the reconcile phase fires while the schedule and
+    autoscale phases are held off.
+    """
+    ctrl._force_reconcile = True
+    ctrl._control_tick(
+        woken=False,
+        schedule_limiter=_spent_limiter(),
+        reconcile_limiter=_spent_limiter(),
+        autoscale_limiter=_spent_limiter(),
+    )
+
+
+def autoscale_once(ctrl: Controller) -> None:
+    """Drive one autoscale pass through the production control tick.
+
+    Autoscale runs only as a phase of ``Controller._control_tick``, always paired
+    with a fresh schedule. In dry-run the tick short-circuits to the schedule-only
+    path, so the autoscale backend call is suppressed.
+    """
+    ctrl._force_reconcile = False
+    ctrl._control_tick(
+        woken=False,
+        schedule_limiter=_spent_limiter(),
+        reconcile_limiter=_spent_limiter(),
+        autoscale_limiter=RateLimiter(interval_seconds=0.0),
+    )
 
 
 def make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:
@@ -434,7 +473,7 @@ def schedulable_tasks(state: ControllerTestState) -> list:
 
 
 def building_counts(state: ControllerTestState) -> dict[WorkerId, int]:
-    """Count tasks in BUILDING/ASSIGNED state per worker, excluding reservation holders."""
+    """Count tasks in BUILDING/ASSIGNED state per worker."""
     with state._db.read_snapshot() as tx:
         rows = tx.execute(
             select(task_attempts_table.c.worker_id, func.count().label("c"))
@@ -443,11 +482,7 @@ def building_counts(state: ControllerTestState) -> dict[WorkerId, int]:
                 (tasks_table.c.task_id == task_attempts_table.c.task_id)
                 & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
             )
-            .join(jobs_table, tasks_table.c.job_id == jobs_table.c.job_id)
-            .where(
-                tasks_table.c.state.in_([job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED]),
-                jobs_table.c.is_reservation_holder == False,  # noqa: E712
-            )
+            .where(tasks_table.c.state.in_([job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED]))
             .group_by(task_attempts_table.c.worker_id)
             .order_by(task_attempts_table.c.worker_id.asc())
         ).all()
@@ -525,7 +560,7 @@ def submit_job(
 
 # =============================================================================
 # Shared test helpers (deduplicated from test_transitions, test_scheduler,
-# test_service, test_dashboard, test_reservation)
+# test_service, test_dashboard)
 # =============================================================================
 
 

@@ -65,6 +65,16 @@ defaults:
       milliseconds: 2400000    # 40 min — covers autoscaler node provisioning + Pod startup
   task_env:
     MARIN_PREFIX: s3://marin-na/marin
+  # inject_env captures named environment variables from the operator's shell at
+  # `iris cluster start` and injects them into every task (and the controller).
+  # A missing variable aborts the launch. On Kubernetes the values are written to
+  # the `iris-task-env` Secret and projected via envFrom (never the ConfigMap);
+  # on GCP/VM clusters they ride in the bootstrap config. Per-job `-e` overrides
+  # win over injected values. Example (export these before `cluster start`):
+  #
+  # inject_env:
+  #   - WANDB_API_KEY
+  #   - HF_TOKEN
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001

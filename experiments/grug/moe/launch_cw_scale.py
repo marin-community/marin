@@ -81,6 +81,10 @@ SCALE_OPTIMIZER = AdamConfig(
 
 SCALE_TRAINER_DEFAULTS = dict(z_loss_weight=1e-4, ema_beta=None, log_every=1)
 
+# Subdirectory of MARIN_PREFIX these scale runs write their per-run output dirs
+# into, so they stay grouped instead of cluttering the prefix root.
+OUTPUT_SUBDIR = "experiments/grug-moe-cw"
+
 
 def build_scale_model() -> GrugModelConfig:
     """~90B-total / ~5B-active sparse MoE (overridable via SCALE_* env vars)."""
@@ -115,7 +119,7 @@ def build_scale_model() -> GrugModelConfig:
 
 
 def build_scale_step() -> ExecutorStep:
-    run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+    run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
 
     replicas = env_int("SCALE_GPU_REPLICAS", 32)
     expert_axis = env_int("SCALE_EXPERT_AXIS", 8)
@@ -177,7 +181,7 @@ def build_scale_step() -> ExecutorStep:
 
     name = f"grug-moe-cw-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}"
     return ExecutorStep(
-        name=f"{name}-{run_id}",
+        name=f"{OUTPUT_SUBDIR}/{name}-{run_id}",
         fn=run_grug_moe_trial,
         config=GrugMoeLaunchConfig(
             model=versioned(model),

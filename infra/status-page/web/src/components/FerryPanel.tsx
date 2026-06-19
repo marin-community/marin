@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import { useFerry } from "../hooks/useFerry";
-import type { FerryRun, FerryWorkflowStatus } from "../api";
+import type { FerryGroupStatus, FerryRun, FerryTierStatus } from "../api";
 
 // Diagonal gray/red stripe marks cancelled runs — they count as failures
 // for success-rate math but carry a distinct cause worth surfacing.
@@ -91,99 +91,121 @@ function formatRelative(iso: string): string {
   return `${days}d ago`;
 }
 
-function WorkflowCard({ wf }: { wf: FerryWorkflowStatus }) {
-  const latest = wf.latest;
-  const successRate = wf.successRate;
+// One tier's run strip: latest-run line, success rate, and the last-N-runs
+// history dots. A single-workflow ferry renders exactly one of these; the
+// datakit ferry stacks three (tier1/2/3) under one card.
+function TierStrip({ tier, showLabel }: { tier: FerryTierStatus; showLabel: boolean }) {
+  const latest = tier.latest;
+  const successRate = tier.successRate;
   // The API keeps history newest-first for latest-run math. The strip reads
   // more naturally oldest-to-newest, with the most recent run on the right.
-  const visualHistory = wf.history.map((run, index) => ({ run, index })).reverse();
+  const visualHistory = tier.history.map((run, index) => ({ run, index })).reverse();
   // Match the denominator the server uses for `successRate`
   // (githubActions.ts:computeSuccessRate) — completed runs only, not
   // the raw history length which can include queued/in-progress runs.
-  const completedCount = wf.history.filter(
+  const completedCount = tier.history.filter(
     (r) => r.status === "completed" && r.conclusion !== null,
   ).length;
+
+  if (tier.error) {
+    return (
+      <div>
+        {showLabel && <div className="font-mono text-xs text-slate-400">{tier.label}</div>}
+        <div className="text-sm text-rose-400">{tier.error}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-3 text-sm">
+        {showLabel && <span className="font-mono text-xs text-slate-400">{tier.label}</span>}
+        {latest ? (
+          <a
+            href={latest.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 text-slate-200 hover:text-emerald-300"
+          >
+            {(() => {
+              const a = runAppearance(latest);
+              return <span className={`h-3 w-3 rounded-full ${a.className}`} style={a.style} />;
+            })()}
+            <span className="font-mono text-xs">{latest.shaShort}</span>
+            <span className="text-slate-400">{formatRelative(latest.startedAt)}</span>
+            <span className="text-slate-500">({formatDuration(latest.durationSeconds)})</span>
+          </a>
+        ) : (
+          <span className="text-slate-400">no runs yet</span>
+        )}
+        <span className="ml-auto text-slate-400">
+          {successRate === null
+            ? "—"
+            : `${Math.round(successRate * 100)}% success over ${completedCount}`}
+        </span>
+      </div>
+
+      {/* Single-row strip — dots and inter-dot gap shrink on mobile
+          so the visible window fits without wrapping to a second row. */}
+      <div className="mt-2 flex gap-px sm:gap-1">
+        {visualHistory.map(({ run, index }) => {
+          const a = runAppearance(run);
+          const slow = isSlowRun(tier.history, index);
+          const baseline = slow ? slowRunBaseline(tier.history, index) : null;
+          return (
+            <a
+              key={run.id}
+              href={run.url}
+              target="_blank"
+              rel="noreferrer"
+              className={`group relative h-5 w-2 rounded-sm sm:w-2.5 ${a.className} hover:ring-2 hover:ring-slate-400`}
+              style={a.style}
+            >
+              {slow && (
+                <span
+                  aria-label="slow run"
+                  className="pointer-events-none absolute -right-0.5 -top-1 font-bold leading-none text-amber-300"
+                  style={{ fontSize: "10px", textShadow: "0 0 2px #0f172a, 0 0 2px #0f172a" }}
+                >
+                  !
+                </span>
+              )}
+              <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded border border-slate-700 bg-slate-950/95 px-2 py-1 text-xs text-slate-200 shadow-lg group-hover:block">
+                <div className="font-mono text-slate-300">{run.shaShort}</div>
+                <div className="text-slate-400">
+                  {run.conclusion ?? run.status} · {formatRelative(run.startedAt)}
+                </div>
+                <div>wall time: {formatDuration(run.durationSeconds)}</div>
+                {slow && baseline !== null && (
+                  <div className="text-amber-300">
+                    slow · prior {baseline.sampleSize} successful runs mean+1σ ≈{" "}
+                    {formatDuration(Math.round(baseline.threshold))}
+                  </div>
+                )}
+              </div>
+            </a>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function FerryCard({ group }: { group: FerryGroupStatus }) {
+  // Single-workflow ferries show their file as the subtitle; multi-tier
+  // ferries (datakit) caption each strip with its tier label instead.
+  const single = group.tiers.length === 1;
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
       <div className="min-w-0">
-        <h3 className="truncate text-base font-semibold text-slate-100">{wf.name}</h3>
-        <div className="truncate text-xs text-slate-500">{wf.file}</div>
+        <h3 className="truncate text-base font-semibold text-slate-100">{group.name}</h3>
+        {single && <div className="truncate text-xs text-slate-500">{group.tiers[0].file}</div>}
       </div>
-
-      {wf.error ? (
-        <div className="mt-3 text-sm text-rose-400">{wf.error}</div>
-      ) : (
-        <>
-          <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
-            {latest ? (
-              <a
-                href={latest.url}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-2 text-slate-200 hover:text-emerald-300"
-              >
-                {(() => {
-                  const a = runAppearance(latest);
-                  return <span className={`h-3 w-3 rounded-full ${a.className}`} style={a.style} />;
-                })()}
-                <span className="font-mono text-xs">{latest.shaShort}</span>
-                <span className="text-slate-400">{formatRelative(latest.startedAt)}</span>
-                <span className="text-slate-500">({formatDuration(latest.durationSeconds)})</span>
-              </a>
-            ) : (
-              <span className="text-slate-400">no runs yet</span>
-            )}
-            <span className="ml-auto text-slate-400">
-              {successRate === null
-                ? "—"
-                : `${Math.round(successRate * 100)}% success over ${completedCount}`}
-            </span>
-          </div>
-
-          {/* Single-row strip — dots and inter-dot gap shrink on mobile
-              so the visible window fits without wrapping to a second row. */}
-          <div className="mt-3 flex gap-px sm:gap-1">
-            {visualHistory.map(({ run, index }) => {
-              const a = runAppearance(run);
-              const slow = isSlowRun(wf.history, index);
-              const baseline = slow ? slowRunBaseline(wf.history, index) : null;
-              return (
-                <a
-                  key={run.id}
-                  href={run.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className={`group relative h-5 w-2 rounded-sm sm:w-2.5 ${a.className} hover:ring-2 hover:ring-slate-400`}
-                  style={a.style}
-                >
-                  {slow && (
-                    <span
-                      aria-label="slow run"
-                      className="pointer-events-none absolute -right-0.5 -top-1 font-bold leading-none text-amber-300"
-                      style={{ fontSize: "10px", textShadow: "0 0 2px #0f172a, 0 0 2px #0f172a" }}
-                    >
-                      !
-                    </span>
-                  )}
-                  <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded border border-slate-700 bg-slate-950/95 px-2 py-1 text-xs text-slate-200 shadow-lg group-hover:block">
-                    <div className="font-mono text-slate-300">{run.shaShort}</div>
-                    <div className="text-slate-400">
-                      {run.conclusion ?? run.status} · {formatRelative(run.startedAt)}
-                    </div>
-                    <div>wall time: {formatDuration(run.durationSeconds)}</div>
-                    {slow && baseline !== null && (
-                      <div className="text-amber-300">
-                        slow · prior {baseline.sampleSize} successful runs mean+1σ ≈{" "}
-                        {formatDuration(Math.round(baseline.threshold))}
-                      </div>
-                    )}
-                  </div>
-                </a>
-              );
-            })}
-          </div>
-        </>
-      )}
+      <div className="mt-3 space-y-3">
+        {group.tiers.map((tier) => (
+          <TierStrip key={tier.file} tier={tier} showLabel={!single} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -196,7 +218,7 @@ export function FerryPanel() {
       <div className="mb-3 flex items-baseline justify-between">
         <h2 className="text-xl font-semibold text-slate-200">Ferries</h2>
         <div className="text-right text-xs text-slate-500">
-          {data && <span>last {data.windowDays}d</span>}
+          {data && <span>last {data.runLimit} runs</span>}
           {dataUpdatedAt && (
             <span>
               {data ? " · " : ""}
@@ -209,8 +231,8 @@ export function FerryPanel() {
       {error && <div className="text-rose-400">failed to load: {(error as Error).message}</div>}
       {data && (
         <div className="grid gap-3 md:grid-cols-3">
-          {data.workflows.map((wf) => (
-            <WorkflowCard key={wf.file} wf={wf} />
+          {data.groups.map((group) => (
+            <FerryCard key={group.name} group={group} />
           ))}
         </div>
       )}

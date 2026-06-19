@@ -9,16 +9,32 @@
 
 import { githubAuthHeaders, REPO } from "./github.js";
 
-const MAX_WORKFLOW_RUNS_PER_REQUEST = 100;
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
+// A ferry is one card on the dashboard. Most map to a single workflow file;
+// the datakit ferry runs three tiers (tier1/2/3) we surface as three strips
+// under one card. `label` is the per-tier caption (null for single-tier
+// ferries, where the file subtitle identifies the workflow).
+export interface FerryTier {
+  label: string | null;
+  file: string;
+}
 
-export const FERRY_WORKFLOWS = [
-  { name: "Canary ferry", file: "marin-canary-ferry.yaml" },
-  { name: "CW ferry", file: "marin-canary-ferry-coreweave.yaml" },
-  { name: "Datakit ferry", file: "marin-canary-datakit-tier1.yaml" },
-] as const;
+export interface FerryGroupConfig {
+  name: string;
+  tiers: FerryTier[];
+}
 
-export type WorkflowConfig = (typeof FERRY_WORKFLOWS)[number];
+export const FERRY_GROUPS: FerryGroupConfig[] = [
+  { name: "Canary ferry", tiers: [{ label: null, file: "marin-canary-ferry.yaml" }] },
+  { name: "CW ferry", tiers: [{ label: null, file: "marin-canary-ferry-coreweave.yaml" }] },
+  {
+    name: "Datakit ferry",
+    tiers: [
+      { label: "tier1", file: "marin-canary-datakit-tier1.yaml" },
+      { label: "tier2", file: "marin-canary-datakit-tier2.yaml" },
+      { label: "tier3", file: "marin-canary-datakit-tier3.yaml" },
+    ],
+  },
+];
 
 export interface FerryRun {
   id: number;
@@ -33,14 +49,19 @@ export interface FerryRun {
   actor: string;
 }
 
-export interface FerryWorkflowStatus {
-  name: string;
+export interface FerryTierStatus {
+  label: string | null;
   file: string;
   latest: FerryRun | null;
   history: FerryRun[];
-  successRate: number | null; // [0, 1] over completed runs in the window; null if no completed runs
+  successRate: number | null; // [0, 1] over completed runs in the strip; null if no completed runs
   fetchedAt: string;
   error?: string;
+}
+
+export interface FerryGroupStatus {
+  name: string;
+  tiers: FerryTierStatus[];
 }
 
 // GitHub's API response shape for the subset of fields we read. Keeping
@@ -91,32 +112,34 @@ function computeSuccessRate(runs: FerryRun[]): number | null {
   return successes / completed.length;
 }
 
-export async function fetchWorkflowStatus(
-  workflow: WorkflowConfig,
-  windowDays: number,
-): Promise<FerryWorkflowStatus> {
+export async function fetchTierStatus(
+  tier: FerryTier,
+  runLimit: number,
+): Promise<FerryTierStatus> {
   const fetchedAt = new Date().toISOString();
-  const cutoff = new Date(Date.now() - windowDays * MS_PER_DAY);
+  // Fetch a fixed number of most-recent runs rather than a time window: the
+  // datakit tiers run on different cadences (tier1/2 daily, tier3 weekly), so
+  // a shared time window leaves the weekly strip nearly empty. A per-tier run
+  // count gives every strip the same number of bars regardless of cadence.
   const params = new URLSearchParams({
-    per_page: String(MAX_WORKFLOW_RUNS_PER_REQUEST),
+    per_page: String(runLimit),
     branch: "main",
-    created: `>=${cutoff.toISOString()}`,
   });
   const url =
-    `https://api.github.com/repos/${REPO}/actions/workflows/${workflow.file}` +
+    `https://api.github.com/repos/${REPO}/actions/workflows/${tier.file}` +
     `/runs?${params.toString()}`;
 
   // Every failure path returns a snapshot with `error` set instead of
-  // throwing, so callers that aggregate multiple workflows with
-  // Promise.all can surface one-workflow failures in the UI without
-  // turning /api/ferry into a 500.
+  // throwing, so callers that aggregate multiple tiers with Promise.all
+  // can surface one-tier failures in the UI without turning /api/ferry
+  // into a 500.
   try {
     const res = await fetch(url, { headers: githubAuthHeaders() });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       return {
-        name: workflow.name,
-        file: workflow.file,
+        label: tier.label,
+        file: tier.file,
         latest: null,
         history: [],
         successRate: null,
@@ -126,13 +149,10 @@ export async function fetchWorkflowStatus(
     }
 
     const data = (await res.json()) as GhRunsResponse;
-    const cutoffMs = cutoff.getTime();
-    const history = (data.workflow_runs ?? [])
-      .map(toFerryRun)
-      .filter((run) => Date.parse(run.startedAt) >= cutoffMs);
+    const history = (data.workflow_runs ?? []).slice(0, runLimit).map(toFerryRun);
     return {
-      name: workflow.name,
-      file: workflow.file,
+      label: tier.label,
+      file: tier.file,
       latest: history[0] ?? null,
       history,
       successRate: computeSuccessRate(history),
@@ -140,8 +160,8 @@ export async function fetchWorkflowStatus(
     };
   } catch (err) {
     return {
-      name: workflow.name,
-      file: workflow.file,
+      label: tier.label,
+      file: tier.file,
       latest: null,
       history: [],
       successRate: null,

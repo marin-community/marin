@@ -17,7 +17,7 @@ import click
 
 from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import IrisConfig
-from iris.rpc.auth import AuthTokenInjector, TokenProvider
+from iris.rpc.auth import TokenProvider, client_interceptors
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
@@ -70,7 +70,7 @@ def rpc_client(
     timeout_ms: int = 30_000,
 ) -> ControllerServiceClientSync:
     """Create an RPC client with optional auth. Use as a context manager: ``with rpc_client(url) as c:``."""
-    interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
+    interceptors = client_interceptors(token_provider)
     return ControllerServiceClientSync(
         address,
         timeout_ms=timeout_ms,

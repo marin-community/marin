@@ -24,7 +24,7 @@ from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
 from iris.cluster.lifecycle import connect_cluster
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ReservationEntry, ResourceSpec, gpu_device
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
@@ -71,7 +71,7 @@ def _add_cpu_group(config: config_pb2.IrisClusterConfig, num_workers: int = 4) -
 
 
 def _add_coscheduling_group_4vm(config: config_pb2.IrisClusterConfig) -> None:
-    """4-VM TPU coscheduling group for reservation and large-job tests."""
+    """4-VM TPU coscheduling group for large-job tests."""
     sg = config.scale_groups["tpu_cosched_4"]
     sg.name = "tpu_cosched_4"
     sg.num_vms = 4
@@ -509,37 +509,39 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, ca
     )
 
 
-def _wait_for_autoscaler_screenshot_ready(page) -> None:
-    # AutoscalerTab.vue shows only a "Loading autoscaler status…" spinner until its
+def _wait_for_capacity_screenshot_ready(page) -> None:
+    # CapacityTab.vue shows only a "Loading capacity & scheduling…" spinner until its
     # first RPC resolves. Route components are lazy-imported, so during the SPA swap
     # the previously-viewed page (e.g. worker detail, which renders "Scale Group" +
-    # the "local-cpu" group name) is still mounted while the autoscaler chunk loads.
+    # the "local-cpu" group name) is still mounted while the capacity chunk loads.
     # A body-text wait keyed on those strings false-positives on that stale DOM, so
-    # the screenshot then catches the autoscaler spinner. Anchor on the route hash
-    # plus the section headings that only render in the loaded (v-else) branch so the
-    # match can't be satisfied by another page.
+    # the screenshot then catches the spinner. Anchor on the route hash plus section
+    # headings that only render in the loaded (v-else) branch so the match can't be
+    # satisfied by another page. Substring-match the headings (not exact) so dynamic
+    # counts (e.g. "Pending Jobs (3)") and unicode dashes don't break the wait.
     check = """
         () => {
             const text = document.body.textContent || "";
-            const routeReady = decodeURIComponent(window.location.hash) === "#/autoscaler";
+            const routeReady = decodeURIComponent(window.location.hash) === "#/capacity";
             const headings = Array.from(document.querySelectorAll("h3"))
                 .map((heading) => (heading.textContent || "").trim().toLowerCase());
+            const has = (needle) => headings.some((heading) => heading.includes(needle));
             return routeReady
-                && !text.includes("Loading autoscaler status")
-                && headings.includes("waterfall routing")
-                && headings.includes("recent actions")
-                && headings.includes("autoscaler logs");
+                && !text.includes("Loading capacity & scheduling")
+                && has("pools")
+                && has("pending jobs")
+                && has("users & quotas");
         }
     """
     _await_stable_screenshot(page, check)
 
 
-def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
-    """Autoscaler tab shows scale groups."""
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
+def test_dashboard_capacity_tab(smoke_cluster, smoke_page, smoke_screenshot):
+    """Capacity & Scheduling tab shows scale groups, pending jobs, and user quotas."""
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/capacity")
     wait_for_dashboard_ready(smoke_page)
-    _wait_for_autoscaler_screenshot_ready(smoke_page)
-    smoke_screenshot("autoscaler-tab", "Autoscaler tab showing scale group configuration")
+    _wait_for_capacity_screenshot_ready(smoke_page)
+    smoke_screenshot("capacity-tab", "Capacity & Scheduling tab: pools, demand, pending jobs, quotas")
 
 
 def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
@@ -592,23 +594,6 @@ def test_port_allocation(smoke_cluster, capabilities):
     job = smoke_cluster.submit(TestJobs.validate_ports, "smoke-ports", ports=["http", "grpc"])
     status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
-
-
-def test_reservation_gates_scheduling(smoke_cluster):
-    """Unsatisfiable reservation blocks scheduling; regular jobs proceed."""
-    with smoke_cluster.launched_job(
-        TestJobs.quick,
-        "smoke-reserved",
-        reservation=[
-            ReservationEntry(resources=ResourceSpec(cpu=1, memory="1g", device=gpu_device("NONEXISTENT-GPU-9999", 99)))
-        ],
-    ) as reserved:
-        reserved_status = smoke_cluster.status(reserved)
-        assert reserved_status.state == job_pb2.JOB_STATE_PENDING
-
-        regular = smoke_cluster.submit(TestJobs.quick, "smoke-regular-while-reserved")
-        status = smoke_cluster.wait(regular, timeout=smoke_cluster.job_timeout)
-        assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_cancel_job_releases_resources(smoke_cluster):
@@ -1062,7 +1047,8 @@ def _login_for_jwt(url: str, identity_token: str) -> str:
 
 
 def test_static_auth_rpc_access():
-    """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid JWT."""
+    """Static auth over loopback: tokenless requests are trusted as admin
+    (loopback trust), wrong tokens are rejected, valid JWTs are accepted."""
 
     config = _make_controller_only_config()
     config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
@@ -1072,10 +1058,10 @@ def test_static_auth_rpc_access():
     try:
         list_req = controller_pb2.Controller.ListWorkersRequest()
 
-        # Unauthenticated: should be rejected with 401
+        # The test client connects over loopback, so a tokenless request is
+        # trusted as the anonymous admin rather than rejected.
         unauth_client = ControllerServiceClientSync(address=url, timeout_ms=5000)
-        with pytest.raises(ConnectError, match=r"(?i)authenticat"):
-            unauth_client.list_workers(list_req)
+        assert unauth_client.list_workers(list_req) is not None
         unauth_client.close()
 
         # Wrong token: should be rejected

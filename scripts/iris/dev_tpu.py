@@ -500,7 +500,7 @@ set -e
 cd "$HOME/marin"
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source "$HOME/.local/bin/env"
-uv sync --all-packages --extra=tpu --python=3.11 || true
+uv sync --all-packages --extra=tpu --python=3.12 || true
 """
     run_remote_command(node, "bash -lc " + shlex.quote(setup_script))
 

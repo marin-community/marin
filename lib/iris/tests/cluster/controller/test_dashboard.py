@@ -35,8 +35,8 @@ from iris.cluster.controller.scheduling.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
-from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.types import JobName, UserBudgetDefaults
+from iris.cluster.controller.service import ControllerServiceImpl, _overlay_worker_usability
+from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, WorkerUsability
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.rpc.auth import StaticTokenVerifier
 from iris.time_proto import timestamp_to_proto
@@ -138,11 +138,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
                     (tasks_table.c.task_id == task_attempts_table.c.task_id)
                     & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
                 )
-                .join(jobs_table, tasks_table.c.job_id == jobs_table.c.job_id)
-                .where(
-                    tasks_table.c.state.in_([job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED]),
-                    jobs_table.c.is_reservation_holder == False,  # noqa: E712
-                )
+                .where(tasks_table.c.state.in_([job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED]))
                 .group_by(task_attempts_table.c.worker_id)
                 .order_by(task_attempts_table.c.worker_id.asc())
             ).all()
@@ -161,8 +157,6 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
             user_spend={},
             user_budget_limits={},
             requested_bands={},
-            reserved_job_ids=frozenset(),
-            reservation_entry_counts={},
             user_budget_defaults=UserBudgetDefaults(),
         )
 
@@ -514,7 +508,7 @@ def test_get_job_status_returns_original_request(client, state):
         ),
         environment=job_pb2.EnvironmentConfig(
             pip_packages=["torch", "numpy"],
-            python_version="3.11",
+            python_version="3.12",
         ),
         replicas=2,
         constraints=[
@@ -543,7 +537,7 @@ def test_get_job_status_returns_original_request(client, state):
     # Verify environment
     env = returned_request.get("environment", {})
     assert env["pipPackages"] == ["torch", "numpy"]
-    assert env["pythonVersion"] == "3.11"
+    assert env["pythonVersion"] == "3.12"
     # Verify replicas
     assert returned_request["replicas"] == 2
     # Verify constraints
@@ -697,6 +691,72 @@ def test_get_autoscaler_status_populates_worker_id_for_unrostered_vm(client_with
     # when the VM was missing from the roster).
     for vm in vms:
         assert vm["workerId"] == vm["vmId"]
+
+
+def test_overlay_worker_usability_tags_vms_and_per_slice_degraded_count():
+    """The overlay tags each VM with usability/worker_healthy/running_task_count and
+    records the per-slice count of degraded (reachable-but-failing) hosts."""
+    status = vm_pb2.AutoscalerStatus(
+        groups=[
+            vm_pb2.ScaleGroupStatus(
+                name="g",
+                slices=[
+                    vm_pb2.SliceInfo(
+                        slice_id="s1",
+                        state="ready",
+                        vms=[vm_pb2.VmInfo(vm_id="w-healthy"), vm_pb2.VmInfo(vm_id="w-degraded")],
+                    ),
+                    vm_pb2.SliceInfo(slice_id="s2", state="ready", vms=[vm_pb2.VmInfo(vm_id="w-unrostered")]),
+                ],
+            )
+        ]
+    )
+    usability_by_id = {
+        "w-healthy": WorkerUsability.HEALTHY,
+        "w-degraded": WorkerUsability.DEGRADED,
+        # "w-unrostered" intentionally absent from the roster.
+    }
+    running = {WorkerId("w-healthy"): {"task-1"}}
+
+    _overlay_worker_usability(status, usability_by_id, running)
+
+    group = status.groups[0]
+    s1, s2 = group.slices
+    by_id = {vm.vm_id: vm for vm in (*s1.vms, *s2.vms)}
+    assert by_id["w-healthy"].usability == "healthy"
+    assert by_id["w-healthy"].worker_healthy is True
+    assert by_id["w-healthy"].running_task_count == 1
+    assert by_id["w-degraded"].usability == "degraded"
+    assert by_id["w-degraded"].worker_healthy is True
+    # An unrostered VM keeps worker_id/task count but is left unclassified.
+    assert by_id["w-unrostered"].worker_id == "w-unrostered"
+    assert by_id["w-unrostered"].usability == ""
+
+    assert s1.degraded_slot_count == 1
+    assert s2.degraded_slot_count == 0
+
+
+def test_overlay_capacity_status_busy_healthy_slice_is_in_use():
+    """Regression for '40 schedulable' on fully booked slices: a healthy slice that
+    is running tasks is `in_use`, never counted as free/schedulable capacity."""
+    status = vm_pb2.AutoscalerStatus(
+        groups=[
+            vm_pb2.ScaleGroupStatus(
+                name="g",
+                slices=[
+                    vm_pb2.SliceInfo(
+                        slice_id="s",
+                        state="ready",
+                        vms=[vm_pb2.VmInfo(vm_id="a"), vm_pb2.VmInfo(vm_id="b")],
+                    )
+                ],
+            )
+        ]
+    )
+    usability = {"a": WorkerUsability.HEALTHY, "b": WorkerUsability.HEALTHY}
+    _overlay_worker_usability(status, usability, {WorkerId("a"): {"t1"}, WorkerId("b"): {"t2"}})
+
+    assert status.groups[0].slices[0].capacity_status == "in_use"
 
 
 def test_pending_reason_uses_autoscaler_hint_for_scale_up(

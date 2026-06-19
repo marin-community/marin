@@ -10,8 +10,8 @@ Three layers, exercised in order:
 2. **Wire & dispatch** — ``RpcTaskBackend.reconcile`` fans out via a
    fake stub factory and synthesizes ``WorkerReconcileResult.observations``.
 3. **Apply + e2e** — ``apply_reconcile`` against real SQLite DB state, plus a
-   handful of end-to-end convergence ticks driven through
-   ``Controller._reconcile_tick``.
+   handful of end-to-end convergence ticks driven through the production control
+   tick's reconcile phase (``reconcile_once``).
 """
 
 from __future__ import annotations
@@ -49,6 +49,7 @@ from iris.cluster.controller.reconcile.worker import (
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.worker_health import (
+    MIN_UNREACHABLE_FAILURES,
     WorkerHealthEvent,
     WorkerHealthEventKind,
 )
@@ -70,6 +71,7 @@ from .conftest import (
     query_job,
     query_task,
     query_worker,
+    reconcile_once,
     register_worker,
     submit_job,
 )
@@ -594,6 +596,49 @@ def test_reconcile_rpc_failure_returns_error_and_empty_observations():
 
     assert results[0].error == "boom"
     assert list(results[0].observations) == []
+
+
+def test_reconcile_matching_responder_id_is_reached():
+    """A healthy reply stamped with the targeted worker's id counts as REACHED."""
+    stub = _FakeWorkerStub(
+        address=_W1_ADDR,
+        reconcile_response=worker_pb2.Worker.ReconcileResponse(
+            worker_id=_W1, health=worker_pb2.Worker.WorkerHealth(healthy=True)
+        ),
+    )
+    factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
+    provider = RpcTaskBackend(stub_factory=factory)
+
+    result = provider.reconcile(_reconcile_snapshot({WorkerId(_W1): _W1_ADDR}))
+
+    assert result.health_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.REACHED)]
+    assert _W1_ADDR in factory.stubs  # healthy worker's stub kept
+
+
+def test_reconcile_recycled_address_is_unreachable_not_reached():
+    """A healthy reply stamped with a DIFFERENT worker_id (recycled IP) is UNREACHABLE.
+
+    Regression: after a worker's VM is deleted GCP recycles its internal IP onto
+    a new VM. Reconciling the dead worker at its stale address then reaches the
+    *new* worker, which answers healthy. Folding that as REACHED would reset the
+    dead worker's failure count and keep it schedulable forever — a black hole
+    that accepts and kills every task assigned to it. The mismatched id must mark
+    the dead worker UNREACHABLE so it is reaped, and the impostor's stub dropped.
+    """
+    stub = _FakeWorkerStub(
+        address=_W1_ADDR,
+        reconcile_response=worker_pb2.Worker.ReconcileResponse(
+            worker_id=_W2, health=worker_pb2.Worker.WorkerHealth(healthy=True)
+        ),
+    )
+    factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
+    provider = RpcTaskBackend(stub_factory=factory)
+
+    result = provider.reconcile(_reconcile_snapshot({WorkerId(_W1): _W1_ADDR}))
+
+    assert result.health_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.UNREACHABLE)]
+    # The stale stub is evicted so the next tick re-resolves the address.
+    assert _W1_ADDR not in factory.stubs
 
 
 # ===========================================================================
@@ -1151,7 +1196,7 @@ def test_e2e_converges_to_succeeded(make_controller):
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
 
     # Tick 1: ASSIGNED — controller dispatches the inline spec.
-    ctrl._reconcile_tick()
+    reconcile_once(ctrl)
     tick1_desired = list(provider.calls[0][0][0].request.desired)
     assert len(tick1_desired) == 1
     assert tick1_desired[0].HasField("run") and tick1_desired[0].run.HasField(
@@ -1160,11 +1205,11 @@ def test_e2e_converges_to_succeeded(make_controller):
     assert tick1_desired[0].attempt_uid, "controller must emit a non-empty attempt_uid"
 
     # Tick 2: worker reports RUNNING.
-    ctrl._reconcile_tick()
+    reconcile_once(ctrl)
     assert query_task(state, task_id).state == job_pb2.TASK_STATE_RUNNING
 
     # Tick 3: subsequent run intents must not carry inline spec (cache-hit invariant).
-    ctrl._reconcile_tick()
+    reconcile_once(ctrl)
     tick3_desired = list(provider.calls[2][0][0].request.desired)
     assert tick3_desired and tick3_desired[0].HasField("run")
     assert not tick3_desired[0].run.HasField("request"), "subsequent ticks must not carry inline spec"
@@ -1202,8 +1247,8 @@ def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_contro
     with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
 
-    ctrl._reconcile_tick()
-    ctrl._reconcile_tick()
+    reconcile_once(ctrl)
+    reconcile_once(ctrl)
 
     task = query_task(state, task_id)
     assert task.state == job_pb2.TASK_STATE_PENDING
@@ -1288,11 +1333,17 @@ class _UnreachableProvider:
         pass
 
 
-# The controller derives the consecutive-failure threshold from
-# round(worker_unreachable_grace / poll_interval). With grace=4s and the default
-# 1s poll, a worker is torn down on the 4th consecutive failed reconcile pass.
-_THRESHOLD = 4
-_SHORT_GRACE = Duration.from_seconds(4)
+# Worker-death detection is time-based: a worker is reaped once it has been
+# continuously unreachable for worker_unreachable_grace (and past the failure
+# floor). Tests force the grace to have elapsed with ``_expire_grace`` rather than
+# sleeping, since the control tick reads the real wall clock.
+_GRACE = Duration.from_seconds(4)
+
+
+def _expire_grace(ctrl, wid: WorkerId) -> None:
+    """Backdate a worker's last heartbeat so the unreachable grace has elapsed."""
+    aged = Timestamp.now().epoch_ms() - _GRACE.to_ms() - 1
+    ctrl._health.set_last_heartbeat_for_test(wid, aged)
 
 
 @pytest.mark.parametrize(
@@ -1309,12 +1360,13 @@ def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller, 
     Two failure modes fold to the same UNREACHABLE signal: the reconcile RPC
     fails outright (``rpc_unreachable``), or it succeeds but the worker
     self-reports unhealthy — e.g. failed disk (``responded_but_unhealthy``,
-    ``error=None`` + ``self_healthy=False``). In both, once the derived threshold
-    of consecutive failures accrues, the controller fails the worker, drives
-    ``backend.autoscale(dead_workers=...)`` to reap the slice, and forgets it.
+    ``error=None`` + ``self_healthy=False``). In both, once the worker has been
+    continuously unreachable for the grace, the controller fails the worker,
+    drives ``backend.autoscale(dead_workers=...)`` to reap the slice, and forgets
+    it.
     """
     provider = _UnreachableProvider(**provider_kwargs)
-    ctrl = make_controller(provider=provider, worker_unreachable_grace=_SHORT_GRACE)
+    ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
     state = ControllerTestState(
         ctrl._db,
         health=ctrl._health,
@@ -1325,15 +1377,17 @@ def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller, 
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
 
-    # One failure short of the threshold: still present, still tracked, no teardown.
-    for _ in range(_THRESHOLD - 1):
-        ctrl._reconcile_tick()
+    # Many consecutive failures, but all within the wall-clock grace window:
+    # detection is time-based, so the worker is still tracked, not torn down.
+    for _ in range(MIN_UNREACHABLE_FAILURES + 5):
+        reconcile_once(ctrl)
     assert query_worker(state, wid) is not None
-    assert ctrl._health.liveness(wid).consecutive_failures == _THRESHOLD - 1
     assert provider.autoscale_calls == []
 
-    # The threshold-crossing tick fails and tears the worker down.
-    ctrl._reconcile_tick()
+    # Once it has been unreachable for the full grace, the next failed reconcile
+    # tears it down and forgets it.
+    _expire_grace(ctrl, wid)
+    reconcile_once(ctrl)
     assert provider.autoscale_calls == [[wid]]
     assert query_worker(state, wid) is None, "failed worker row should be removed"
     assert wid not in ctrl._health.all(), "failed worker should be forgotten from the tracker"
@@ -1347,7 +1401,7 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     whole slice, even though the siblings were reachable every tick.
     """
     provider = _UnreachableProvider(unreachable={_W1}, siblings={_W1: [_W2]})
-    ctrl = make_controller(provider=provider, worker_unreachable_grace=_SHORT_GRACE)
+    ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
     state = ControllerTestState(
         ctrl._db,
         health=ctrl._health,
@@ -1359,13 +1413,45 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     dead = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
     sibling = register_worker(state, _W2, f"{_W2}:8080", make_worker_metadata())
 
-    for _ in range(_THRESHOLD):
-        ctrl._reconcile_tick()
+    # Accrue failures past the floor, then expire the grace so the next tick reaps.
+    for _ in range(MIN_UNREACHABLE_FAILURES):
+        reconcile_once(ctrl)
+    _expire_grace(ctrl, dead)
+    reconcile_once(ctrl)
 
     assert provider.autoscale_calls == [[dead]]
     assert query_worker(state, dead) is None
     assert query_worker(state, sibling) is None, "reachable slice sibling should be reaped too"
     assert ctrl._health.all() == {}, "whole slice should be forgotten from the tracker"
+
+
+def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
+    """A queued eviction fails the worker and reaps its slice on the next tick.
+
+    The Register RPC queues a recycled-IP prior owner off the control-loop thread,
+    where reaping a slice via the autoscaler is unsafe. The tick drains it through
+    the same fail-and-teardown path as a reconcile failure --
+    ``backend.autoscale(dead_workers=...)`` -- even though the worker answers every
+    reconcile: eviction is driven by the queue, not by liveness.
+    """
+    provider = _UnreachableProvider()  # the worker stays reachable every tick
+    ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
+    state = ControllerTestState(
+        ctrl._db,
+        health=ctrl._health,
+        endpoints=ctrl._endpoints,
+        worker_attrs=ctrl._worker_attrs,
+        run_template_cache=ctrl._run_template_cache,
+    )
+
+    wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
+
+    ctrl.request_worker_eviction([wid])
+    reconcile_once(ctrl)
+
+    assert provider.autoscale_calls == [[wid]], "drain must drive teardown via backend.autoscale"
+    assert query_worker(state, wid) is None, "evicted worker row should be removed"
+    assert wid not in ctrl._health.all(), "evicted worker should be forgotten from the tracker"
 
 
 # ===========================================================================

@@ -3,17 +3,24 @@
 
 """Named-cluster token store for Iris CLI.
 
-Persists per-cluster credentials in ``~/.iris/tokens.json`` so the CLI can
+Persists per-cluster credentials in ``~/.iris/tokens.sqlite`` so the CLI can
 authenticate against multiple controllers without re-logging in each time.
+
+SQLite gives atomic, concurrency-safe writes for free, so there is no
+temp-file/rename dance and no corrupt-file tolerance to maintain: concurrent
+CLI invocations and pytest-xdist workers serialize on the database lock.
 """
 
 from __future__ import annotations
 
-import json
 import os
-from dataclasses import asdict, dataclass
+import sqlite3
+from contextlib import closing
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
+
+_DEFAULT_CLUSTER = "default"
 
 
 @dataclass(frozen=True)
@@ -46,9 +53,13 @@ def store_token(
 ) -> None:
     """Upsert a cluster credential into the token store."""
     path = store_path or _default_store_path()
-    data = _load_store(path)
-    data["clusters"][cluster_name] = asdict(ClusterCredential(url=url, token=token))
-    _save_store(path, data)
+    with closing(_connect(path)) as conn:
+        conn.execute(
+            "INSERT INTO clusters (name, url, token) VALUES (?, ?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET url = excluded.url, token = excluded.token",
+            (cluster_name, url, token),
+        )
+        conn.commit()
 
 
 def load_token(
@@ -58,68 +69,36 @@ def load_token(
 ) -> ClusterCredential | None:
     """Load a specific cluster's credential, or None if not found."""
     path = store_path or _default_store_path()
-    data = _load_store(path)
-    entry = data["clusters"].get(cluster_name)
-    if entry is None:
+    if not path.exists():
         return None
-    return ClusterCredential(url=entry["url"], token=entry["token"])
+    with closing(_connect(path)) as conn:
+        row = conn.execute("SELECT url, token FROM clusters WHERE name = ?", (cluster_name,)).fetchone()
+    return ClusterCredential(url=row[0], token=row[1]) if row else None
 
 
 def load_any_token(*, store_path: Path | None = None) -> ClusterCredential | None:
     """Return the first available credential, preferring the "default" cluster."""
     path = store_path or _default_store_path()
-    data = _load_store(path)
-    clusters = data["clusters"]
-    if not clusters:
+    if not path.exists():
         return None
-    if "default" in clusters:
-        entry = clusters["default"]
-        return ClusterCredential(url=entry["url"], token=entry["token"])
-    first = next(iter(clusters.values()))
-    return ClusterCredential(url=first["url"], token=first["token"])
+    with closing(_connect(path)) as conn:
+        row = conn.execute(
+            "SELECT url, token FROM clusters ORDER BY (name = ?) DESC, name LIMIT 1",
+            (_DEFAULT_CLUSTER,),
+        ).fetchone()
+    return ClusterCredential(url=row[0], token=row[1]) if row else None
 
 
 def _default_store_path() -> Path:
-    return Path.home() / ".iris" / "tokens.json"
+    return Path.home() / ".iris" / "tokens.sqlite"
 
 
-def _load_store(store_path: Path) -> dict:
-    """Load the token store, migrating from the legacy single-token file if needed.
-
-    Tolerates empty or corrupt files (e.g. from a concurrent write) by
-    returning an empty store rather than raising.
-    """
-    if not store_path.exists():
-        _maybe_migrate_legacy(store_path)
-    if store_path.exists():
-        text = store_path.read_text()
-        if text.strip():
-            try:
-                return json.loads(text)
-            except json.JSONDecodeError:
-                return {"clusters": {}}
-    return {"clusters": {}}
-
-
-def _save_store(store_path: Path, data: dict) -> None:
+def _connect(store_path: Path) -> sqlite3.Connection:
+    """Open the store, creating the file (mode 0600) and schema on first use."""
     store_path.parent.mkdir(parents=True, exist_ok=True)
-    # Atomic write via rename to prevent readers from seeing a truncated file
-    # when concurrent processes (e.g. pytest-xdist workers) access the store.
-    tmp_path = store_path.with_suffix(".tmp")
-    tmp_path.write_text(json.dumps(data, indent=2) + "\n")
-    os.chmod(tmp_path, 0o600)
-    tmp_path.rename(store_path)
-
-
-def _maybe_migrate_legacy(store_path: Path) -> None:
-    """Migrate ~/.iris/token (plain text) into the new JSON store under "default"."""
-    legacy_path = store_path.parent / "token"
-    if not legacy_path.exists():
-        return
-    token = legacy_path.read_text().strip()
-    if not token:
-        legacy_path.unlink()
-        return
-    data: dict = {"clusters": {"default": {"url": "", "token": token}}}
-    _save_store(store_path, data)
-    legacy_path.unlink()
+    is_new = not store_path.exists()
+    conn = sqlite3.connect(store_path)
+    if is_new:
+        os.chmod(store_path, 0o600)
+    conn.execute("CREATE TABLE IF NOT EXISTS clusters (name TEXT PRIMARY KEY, url TEXT NOT NULL, token TEXT NOT NULL)")
+    return conn

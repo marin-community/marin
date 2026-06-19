@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 def generate_slice_suffix() -> str:
     """Generate a unique suffix for slice IDs: ``YYYYMMDD-HHMM-<uuid8>``."""
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     short_uuid = uuid.uuid4().hex[:8]
     return f"{now.strftime('%Y%m%d-%H%M')}-{short_uuid}"
 

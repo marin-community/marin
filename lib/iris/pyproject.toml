@@ -5,14 +5,16 @@ build-backend = "hatchling.build"
 [project]
 name = "marin-iris"
 version = "0.2.0"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "marin-rigging",
-    # marin-finelog is a native (maturin) package shipped as a pre-built wheel
-    # (it carries the in-process server ext, finelog._native, the controller
-    # starts). Pinned to the latest stable release, mirroring the root
-    # pyproject.toml floor.
-    "marin-finelog >= 0.2.9",
+    # marin-finelog is the pure-Python client/deploy/proto. The controller also
+    # starts an in-process native log server (module `finelog_server`), which
+    # ships as the separate marin-finelog-server platform wheel; the pure client
+    # does not depend on it, so the controller — its one consumer — pulls it in
+    # explicitly. Both pinned to the latest stable, mirroring root pyproject.
+    "marin-finelog >= 0.2.10",
+    "marin-finelog-server >= 0.2.10",
     "click>=8.3.1",
     "cloudpickle>=3.1.2",
     "connect-python>=0.9.0",
@@ -37,8 +39,6 @@ dependencies = [
 
 [project.optional-dependencies]
 controller = [
-    "duckdb>=1.0.0",
-    "pyarrow>=23.0.0",
     "kubernetes>=31.0.0,<36",
 ]
 worker = []
@@ -55,14 +55,11 @@ examples = [
     "nbformat>=5.10.4",
 ]
 dev = [
-    "duckdb>=1.0.0",
-    "pyarrow>=23.0.0",
     "kubernetes>=31.0.0,<36",
     "ipykernel>=7.1.0",
     "jupyter>=1.1.1",
     "nbconvert>=7.16.6",
     "nbformat>=5.10.4",
-    "pillow>=10.0.0",
     "playwright>=1.49.0",
     "pytest-asyncio",
     "pytest-flakefinder>=1.1.0",

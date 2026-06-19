@@ -1490,26 +1490,41 @@ class TestAutoscalerUnresolvableTimeout:
         return autoscaler, group, handle
 
     def test_unknown_before_timeout_stays_booting(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """A slice in UNKNOWN state before the timeout remains tracked (BOOTING)."""
-        created_at_ms = 0
-        autoscaler, group, _ = self._make_group_with_unknown_slice(scale_group_config, created_at_ms)
+        """A slice UNKNOWN for less than the timeout remains tracked (BOOTING)."""
+        autoscaler, group, _ = self._make_group_with_unknown_slice(scale_group_config, created_at_ms=0)
 
-        # Refresh at 5 min -- well under 15 min timeout
-        autoscaler.refresh({}, timestamp=Timestamp.from_ms(5 * 60 * 1000))
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(0))  # first UNKNOWN starts the clock
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(5 * 60 * 1000))  # 5 min continuously UNKNOWN < 15 min
 
         assert group.slice_count() == 1
         assert group.ready_slice_count() == 0
         autoscaler.shutdown()
 
     def test_unknown_after_timeout_triggers_failure(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """A slice in UNKNOWN state past the timeout is failed and removed."""
-        created_at_ms = 0
-        autoscaler, group, _ = self._make_group_with_unknown_slice(scale_group_config, created_at_ms)
+        """A slice continuously UNKNOWN past the timeout is failed and removed."""
+        autoscaler, group, _ = self._make_group_with_unknown_slice(scale_group_config, created_at_ms=0)
 
-        # Refresh at 16 min -- past the 15 min timeout
-        autoscaler.refresh({}, timestamp=Timestamp.from_ms(16 * 60 * 1000))
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(0))  # first UNKNOWN starts the clock
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(16 * 60 * 1000))  # still UNKNOWN 16 min later > 15 min
 
         assert group.slice_count() == 0
+        autoscaler.shutdown()
+
+    def test_old_slice_survives_single_transient_unknown(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A long-lived slice is not terminated by one transient UNKNOWN describe.
+
+        Regression for the drain-adoption path: the unresolvable timeout measures
+        continuous-UNKNOWN duration, not age since creation, so a freshly-adopted
+        13-day-old slice survives a single describe blip instead of having its
+        running tasks killed.
+        """
+        autoscaler, group, _ = self._make_group_with_unknown_slice(scale_group_config, created_at_ms=0)
+
+        # Slice created at t=0; a lone UNKNOWN describe arrives 14 days later. The old
+        # age-since-creation rule would instantly exceed the 15 min timeout and kill it.
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(14 * 24 * 60 * 60 * 1000))
+
+        assert group.slice_count() == 1
         autoscaler.shutdown()
 
     def test_unknown_then_ready_before_timeout_recovers(self, scale_group_config: config_pb2.ScaleGroupConfig):
@@ -1538,6 +1553,41 @@ class TestAutoscalerUnresolvableTimeout:
         autoscaler.refresh({}, timestamp=Timestamp.from_ms(10 * 60 * 1000))
 
         assert group.ready_slice_count() == 1
+        autoscaler.shutdown()
+
+    def test_describe_failure_isolated_across_slices(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A describe() that raises leaves its slice tracked without aborting peers.
+
+        One slice failing to describe must not prevent the others from being
+        processed; the failed slice stays tracked for retry next tick.
+        """
+        ok_handle = make_mock_slice_handle("slice-ok", created_at_ms=0)
+        bad_handle = make_mock_slice_handle("slice-bad", created_at_ms=0)
+        platform = make_mock_platform(slices_to_discover=[ok_handle, bad_handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+
+        autoscaler = Autoscaler(
+            scale_groups={"test-group": group},
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=platform,
+            unresolvable_timeout=DEFAULT_UNRESOLVABLE_TIMEOUT,
+        )
+
+        # The healthy peer transitions to READY; the other peer's describe raises.
+        worker = make_mock_worker_handle("slice-ok-vm-0", "10.0.2.0", vm_pb2.VM_STATE_READY)
+        ok_handle._status = SliceStatus(state=CloudSliceState.READY, worker_count=1, workers=[worker])
+
+        def _raise() -> SliceStatus:
+            raise RuntimeError("transient GCP describe error")
+
+        bad_handle.describe = _raise
+
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(60 * 1000))
+
+        # Healthy peer processed despite the failure; failing peer left tracked.
+        assert group.ready_slice_count() == 1
+        assert group.slice_count() == 2
         autoscaler.shutdown()
 
 

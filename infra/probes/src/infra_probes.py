@@ -14,7 +14,7 @@ import time
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
@@ -25,6 +25,7 @@ from iris.cluster.constraints import zone_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.rpc import job_pb2
 from result import ProbeResult
+from rigging.filesystem import REGION_TO_DATA_BUCKET
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration
 from sinks import FinelogTableSink, JsonlGcsSink, ProbeSink
@@ -50,7 +51,7 @@ CANARY_PYPROJECT = """\
 [project]
 name = "iris-canary"
 version = "0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 
 [dependency-groups]
 dev = []
@@ -75,7 +76,7 @@ FINELOG_READBACK_POLL_INTERVAL = 0.25
 # dir is the VM's /var/lib/probes host mount; finished daily files roll up to GCS
 # in the same region as the VM (no cross-region egress).
 PROBE_RESULTS_DIR = Path("/var/lib/probes")
-PROBE_RESULTS_GCS_PREFIX = "gs://marin-us-central1/infra/probes"
+PROBE_RESULTS_GCS_PREFIX = f"gs://{REGION_TO_DATA_BUCKET['us-central1']}/infra/probes"
 PROBE_RESULTS_NAMESPACE = "infra.canary.probes"
 
 
@@ -119,11 +120,11 @@ class ProbeRunner:
 
     async def _run_probe(self, probe: Probe) -> None:
         while True:
-            started_at = datetime.now(timezone.utc)
+            started_at = datetime.now(UTC)
             start = time.monotonic()
             try:
                 is_success = await asyncio.wait_for(asyncio.to_thread(probe.fn), timeout=probe.timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 is_success = False
             except Exception:
                 logger.exception("probe %s raised", probe.name)

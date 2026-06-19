@@ -41,6 +41,7 @@ from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
+from rigging.filesystem import marin_prefix, marin_temp_bucket
 
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import (
@@ -80,6 +81,28 @@ _GPU_ATTENTION_IMPLEMENTATIONS: tuple[GrugAttentionImplementation, ...] = (
 # size, step count, and optimizer are all overridden by CANARY_* settings below.
 _HEURISTIC_BUDGET = 1e18
 
+# Canary MoE hidden dim. Deliberately smaller than the d1024 trial model so the
+# canary is a *representative* MoE that fits comfortably rather than one sized to
+# the HBM/VMEM ceiling. The binding constraint is the MoE grouped-matmul (gmm)
+# Pallas kernel's 16M VMEM scratchpad: it holds a double-buffered per-expert
+# weight window of shape [1, hidden_dim, 2*intermediate_dim]. Eval runs the gmm in
+# float32 (the eval loss fn does not cast to the bf16 compute dtype), so that
+# window is twice the size of the train step's. At d1024 the f32 window is 8.4M
+# and the whole kernel needs 16.44M -- 452K over budget, which crashed the first
+# eval deterministically. At d768 the f32 window is 4.7M, leaving the eval gmm a
+# comfortable VMEM margin on both v5p and v4 (VMEM is a fixed 16M on both). 768
+# stays divisible by the heuristic's hidden_head_ratio (128).
+_CANARY_TPU_HIDDEN_DIM = 768
+
+# Subdirectory the canary writes per-run output dirs into, so they stay out of
+# the storage root. On R2 these land under the TTL temp bucket (lifecycle-managed
+# cleanup); on GCS they stay under MARIN_PREFIX.
+CANARY_OUTPUT_SUBDIR = "canary"
+
+# TTL for R2 canary outputs. Lifecycle rules on the bucket delete them after this
+# many days; must be one of rigging.filesystem.ALLOWED_TTL_DAYS.
+CANARY_OUTPUT_TTL_DAYS = 7
+
 
 def _env_bool(key: str, default: bool) -> bool:
     raw = os.environ.get(key, "")
@@ -111,16 +134,20 @@ def _build_step_from_env() -> ExecutorStep:
     if accelerator not in ("tpu", "gpu"):
         raise ValueError(f"Unknown CANARY_ACCELERATOR={accelerator!r}, expected 'tpu' or 'gpu'")
 
-    run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+    run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
 
     if accelerator == "tpu":
-        model = GRUG_MOE_TRIAL_MODEL
+        # Representative MoE shape sized to fit the f32 eval gmm in VMEM (see
+        # _CANARY_TPU_HIDDEN_DIM). Only the model *shape* is taken from the
+        # heuristic; batch size, step count, and optimizer are set below.
+        model, _, _, _ = build_from_heuristic(budget=_HEURISTIC_BUDGET, hidden_dim=_CANARY_TPU_HIDDEN_DIM)
         # Global batch is sized to fit the smallest pool in the fallback list. The
-        # dominant train_step allocation is the MoE expert grouped-matmul over
+        # dominant train_step HBM allocation is the MoE expert grouped-matmul over
         # batch_size * max_seq_len tokens, so per-device HBM scales with the global
-        # batch. At 512 the compiled train_step needs ~42.6 GiB and OOMs on the
-        # v4-8 fallback (~30.75 GiB usable); 128 leaves comfortable headroom on v4
-        # while staying valid on v5p, giving one config across both pools.
+        # batch. 128 leaves comfortable headroom on the v4-8 fallback (~30.75 GiB
+        # usable, ~1/3 of v5p) while staying valid on v5p, giving one config across
+        # both pools. With the smaller representative model above this is well
+        # within v4's budget.
         batch_size = env_int("CANARY_BATCH_SIZE", 128)
         # Hold the step count steady (~476) so wall-clock stays bounded after the
         # batch shrink: tokens = batch_size * max_seq_len * steps.
@@ -220,8 +247,24 @@ def _build_step_from_env() -> ExecutorStep:
     profiler_start_step = env_int("CANARY_PROFILER_START_STEP", 5)
     profiler_num_steps = env_int("CANARY_PROFILER_NUM_STEPS", 25)
 
+    step_name = f"{CANARY_OUTPUT_SUBDIR}/{name}-{run_id}"
+    # On R2 (the CoreWeave canary), the per-run training output goes to the
+    # TTL temp bucket so bucket lifecycle rules sweep it after the TTL. R2 is a
+    # single, region-stable bucket, so the absolute override resolves identically
+    # in the job and in validate_canary_metrics.py (which imports this same step).
+    # The GCS canary keeps outputs under MARIN_PREFIX: it lands in a variable
+    # region and validate relies on mirror:// to find them across buckets, which
+    # an absolute override would defeat. The SlimPajama tokenize cache is a
+    # separate dependency step, so it stays under MARIN_PREFIX either way.
+    override_output_path = (
+        marin_temp_bucket(ttl_days=CANARY_OUTPUT_TTL_DAYS, prefix=step_name)
+        if marin_prefix().startswith("s3://")
+        else None
+    )
+
     return ExecutorStep(
-        name=f"{name}-{run_id}",
+        name=step_name,
+        override_output_path=override_output_path,
         fn=run_grug_moe_trial,
         config=GrugMoeLaunchConfig(
             model=versioned(model),

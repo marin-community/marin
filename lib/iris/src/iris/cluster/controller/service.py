@@ -12,6 +12,7 @@ import json
 import logging
 import secrets
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Protocol
@@ -35,7 +36,8 @@ from iris.cluster.controller.auth import (
     revoke_api_key,
     revoke_login_keys_for_user,
 )
-from iris.cluster.controller.autoscaler.status import PendingHint
+from iris.cluster.controller.autoscaler.scaling_group import SliceLifecycleState
+from iris.cluster.controller.autoscaler.status import PendingHint, slice_capacity_status
 from iris.cluster.controller.backend import BackendCapability, ProviderError, TaskBackend, TaskTarget
 from iris.cluster.controller.budget import (
     compute_effective_band,
@@ -57,6 +59,7 @@ from iris.cluster.controller.projections.endpoints import (
 )
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
+from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
@@ -84,6 +87,7 @@ from iris.cluster.types import (
     TaskAttempt,
     UserBudgetDefaults,
     WorkerId,
+    WorkerUsability,
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
@@ -92,7 +96,6 @@ from iris.rpc.auth import (
     authorize,
     authorize_resource_owner,
     get_verified_identity,
-    get_verified_user,
     require_identity,
 )
 from iris.rpc.proto_display import job_state_friendly, priority_band_name, task_state_friendly
@@ -635,6 +638,46 @@ def _query_from_list_jobs_request(
     return query
 
 
+def _overlay_worker_usability(
+    status: vm_pb2.AutoscalerStatus,
+    usability_by_id: dict[str, WorkerUsability],
+    running: dict[WorkerId, set],
+) -> None:
+    """Overlay per-VM usability and stamp each ready slice's capacity status in place.
+
+    worker_id/running_task_count are always set; usability/worker_healthy only when
+    the worker is in the liveness roster (else left empty rather than mislabelled).
+    Per ready slice we derive a slice-granular ``capacity_status`` from host health
+    and occupancy, plus ``degraded_slot_count`` for detail.
+    """
+    for group in status.groups:
+        for slice_info in group.slices:
+            healthy_hosts = 0
+            degraded_hosts = 0
+            running_tasks = 0
+            for vm in slice_info.vms:
+                vm.worker_id = vm.vm_id
+                vm.running_task_count = len(running.get(WorkerId(vm.vm_id), set()))
+                running_tasks += vm.running_task_count
+                usability = usability_by_id.get(vm.vm_id)
+                if usability is None:
+                    continue
+                vm.usability = str(usability)
+                vm.worker_healthy = usability is not WorkerUsability.DEAD
+                if usability is WorkerUsability.HEALTHY:
+                    healthy_hosts += 1
+                elif usability is WorkerUsability.DEGRADED:
+                    degraded_hosts += 1
+            slice_info.degraded_slot_count = degraded_hosts
+            slice_info.capacity_status = slice_capacity_status(
+                is_ready=slice_info.state == SliceLifecycleState.READY,
+                host_count=len(slice_info.vms),
+                healthy_hosts=healthy_hosts,
+                running_tasks=running_tasks,
+                idle=slice_info.idle,
+            )
+
+
 def _worker_roster(db: ControllerDB) -> list[tuple[Any, dict]]:
     """Return ``(worker_row, attrs_dict)`` pairs for all registered workers.
 
@@ -817,6 +860,8 @@ class ControllerProtocol(Protocol):
 
     def wake(self) -> None: ...
 
+    def request_worker_eviction(self, worker_ids: Sequence[WorkerId]) -> None: ...
+
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
     def begin_checkpoint(self) -> tuple[str, Any]: ...
@@ -994,15 +1039,23 @@ class ControllerServiceImpl:
         if job_id.is_root and ctx is not None:
             _check_client_freshness(request.client_revision_date, date.today())
 
-        # When an auth provider is configured, override the user segment with
-        # the verified identity to prevent impersonation. Only override for
-        # root-level submissions; child jobs inherit the parent's user.
-        verified_user = get_verified_user()
-        if self._auth.provider and verified_user is not None and job_id.is_root:
-            job_id = JobName.root(verified_user, job_id.name)
+        # Reconcile the requested job owner with the authenticated principal.
+        #
+        # The job name's user segment names the *acting* owner the job is
+        # attributed to; the verified identity is the authenticated *principal*.
+        # These are distinct: a non-admin may only act as themselves, so we pin
+        # the owner to the principal to prevent impersonation. An admin — which
+        # includes a trusted-loopback caller (see docs/auth-loopback-transition)
+        # — may submit on behalf of any user, so the requested owner stands.
+        # This makes loopback-trust attribute jobs exactly as null-auth always
+        # has (the name is authoritative), while token users stay pinned.
+        # Only root submissions carry an owner segment; child jobs inherit it.
+        identity = get_verified_identity()
+        if self._auth.provider and identity is not None and job_id.is_root and identity.role != "admin":
+            job_id = JobName.root(identity.user_id, job_id.name)
 
         # For non-root jobs, verify the caller owns the parent hierarchy
-        if self._auth.provider and verified_user is not None and not job_id.is_root:
+        if self._auth.provider and identity is not None and not job_id.is_root:
             self._authorize_job_owner(job_id)
 
         # Priority band validation.
@@ -1033,6 +1086,24 @@ class ControllerServiceImpl:
                     f"if you believe your username ({job_id.user}) should have a higher band — "
                     f"either to be added to the researcher list or to confirm your username is "
                     f"registered correctly.",
+                )
+
+        # Cap the number of non-terminal tasks a single user may hold at once.
+        # A burst of eval submissions once materialized enough tasks to OOM the
+        # controller (#6411); reject up front any submission that would push the
+        # user past the cap. Keyed on job_id.user, so a launcher that admits
+        # tasks gradually stays under the cap as earlier tasks finish.
+        incoming_tasks = int(request.replicas)
+        if incoming_tasks > 0:
+            with self._db.read_snapshot() as _snap:
+                active_tasks = reads.count_active_tasks_for_user(_snap, job_id.user)
+            if active_tasks + incoming_tasks > MAX_ACTIVE_TASKS_PER_USER:
+                raise ConnectError(
+                    Code.RESOURCE_EXHAUSTED,
+                    f"User {job_id.user} has {active_tasks} active task(s); submitting "
+                    f"{incoming_tasks} more would exceed the per-user cap of "
+                    f"{MAX_ACTIVE_TASKS_PER_USER}. Wait for running tasks to finish, or "
+                    f"structure the work as a launcher job that admits tasks gradually.",
                 )
 
         # Reject submissions whose parent is absent or already terminated.
@@ -1543,11 +1614,31 @@ class ControllerServiceImpl:
                 slice_id=request.slice_id,
                 scale_group=request.scale_group,
             )
+        self._request_recycled_address_eviction(worker_id, request.address)
         logger.info("Worker registered: %s at %s", worker_id, request.address)
         return controller_pb2.Controller.RegisterResponse(
             worker_id=str(worker_id),
             accepted=True,
         )
+
+    def _request_recycled_address_eviction(self, worker_id: WorkerId, address: str) -> None:
+        """Hand any stale prior owner of ``address`` to the controller for teardown.
+
+        Detects a recycled internal IP (see :func:`reads.worker_ids_at_address`)
+        and defers the reap to :meth:`Controller.request_worker_eviction`.
+        """
+        with self._db.read_snapshot() as snap:
+            stale = reads.worker_ids_at_address(snap, address, exclude=worker_id)
+        if not stale:
+            return
+        logger.warning(
+            "Worker %s registered at %s held by %d stale row(s) (recycled IP); evicting: %s",
+            worker_id,
+            address,
+            len(stale),
+            [str(wid) for wid in stale],
+        )
+        self._controller.request_worker_eviction(stale)
 
     def list_workers(
         self,
@@ -1760,8 +1851,8 @@ class ControllerServiceImpl:
 
         workers = _worker_roster(self._db)
         liveness_by_id = self._health.liveness_many(w.worker_id for w, _attrs in workers)
-        worker_id_to_health: dict[str, bool] = {
-            str(w.worker_id): liveness_by_id[w.worker_id].healthy for w, _attrs in workers
+        usability_by_id: dict[str, WorkerUsability] = {
+            str(w.worker_id): liveness_by_id[w.worker_id].usability for w, _attrs in workers
         }
 
         # Look up running tasks for every VM in the status. The vm_id IS the
@@ -1778,17 +1869,7 @@ class ControllerServiceImpl:
         else:
             running = {}
 
-        for group in status.groups:
-            for slice_info in group.slices:
-                for vm in slice_info.vms:
-                    # worker_id and running_task_count are intrinsic to the VM
-                    # and always populated; health is overlaid only when the
-                    # worker is present in the liveness roster.
-                    vm.worker_id = vm.vm_id
-                    vm.running_task_count = len(running.get(WorkerId(vm.vm_id), set()))
-                    healthy = worker_id_to_health.get(vm.vm_id)
-                    if healthy is not None:
-                        vm.worker_healthy = healthy
+        _overlay_worker_usability(status, usability_by_id, running)
 
         return controller_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 

@@ -3,7 +3,6 @@
 
 """Download and filter HPLT v3.0 dataset, keeping only non-Common Crawl sources (WIDE, survey)."""
 
-import json
 import logging
 import os
 from collections.abc import Iterator
@@ -12,11 +11,11 @@ from dataclasses import dataclass
 from functools import cache
 
 import requests
-import zstandard
 from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.http_session import build_retrying_session
+from marin.datakit.download.zstd_jsonl import iter_jsonl_from_zstd_stream
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -72,30 +71,6 @@ GOOD_TOP_REGISTERS = frozenset({"HI", "LY", "SP"})
 
 # Crawl ID prefixes for non-CC sources we want to keep
 NON_CC_PREFIXES = ("wide", "survey")
-
-
-def _iter_jsonl_from_zstd_stream(raw_stream) -> Iterator[dict]:
-    """Yield parsed JSON objects from a zstd-compressed JSONL stream."""
-    dctx = zstandard.ZstdDecompressor()
-    with dctx.stream_reader(raw_stream) as reader:
-        buf = bytearray()
-        while True:
-            chunk = reader.read(1048576)
-            if not chunk:
-                break
-            buf.extend(chunk)
-            while True:
-                newline_pos = buf.find(b"\n")
-                if newline_pos < 0:
-                    break
-                line_bytes = bytes(buf[:newline_pos])
-                del buf[: newline_pos + 1]
-                if not line_bytes.strip():
-                    continue
-                yield json.loads(line_bytes)
-        # Flush trailing bytes (last record may lack a trailing newline)
-        if buf.strip():
-            yield json.loads(bytes(buf))
 
 
 def passes_quality_filter(doc: dict, wds_tier: int) -> bool:
@@ -191,7 +166,7 @@ def _download_and_filter_shard(shard: HpltShard) -> Iterator[dict]:
     num_kept = 0
     try:
         with closing(response):
-            for record in _iter_jsonl_from_zstd_stream(response.raw):
+            for record in iter_jsonl_from_zstd_stream(response.raw):
                 num_input += 1
                 crawl_id = record.get("crawl_id", "")
                 if not _is_non_cc_source(crawl_id):

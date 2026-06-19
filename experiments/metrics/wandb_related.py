@@ -3,7 +3,7 @@
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import wandb
@@ -117,7 +117,7 @@ def get_all_runs_over_period(
 
         # Filter runs by update date
         if num_days is not None:
-            time_window = datetime.now(timezone.utc) - timedelta(days=num_days)
+            time_window = datetime.now(UTC) - timedelta(days=num_days)
             filtered_runs = [
                 run for run in runs if datetime.strptime(run.updated_at, "%Y-%m-%dT%H:%M:%S%z") >= time_window
             ]

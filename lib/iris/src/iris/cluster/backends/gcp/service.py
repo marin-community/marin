@@ -417,11 +417,17 @@ class CloudGcpService:
         self._valid_zones: set[str] = set(KNOWN_GCP_ZONES)
         self._valid_accelerator_types: set[str] = set(KNOWN_TPU_TYPES)
         self._tpu_alpha_client_cached: tpu_v2alpha1.TpuClient | None = None
+        self._tpu_alpha_client_lock = threading.Lock()
 
     @property
     def _tpu_alpha_client(self) -> tpu_v2alpha1.TpuClient:
+        # Double-checked under a lock: the describe/create/terminate fan-outs reach
+        # the queued-resource path concurrently, so an unguarded check-then-set
+        # could build (and leak the channel of) a redundant TpuClient per thread.
         if self._tpu_alpha_client_cached is None:
-            self._tpu_alpha_client_cached = tpu_v2alpha1.TpuClient()
+            with self._tpu_alpha_client_lock:
+                if self._tpu_alpha_client_cached is None:
+                    self._tpu_alpha_client_cached = tpu_v2alpha1.TpuClient()
         return self._tpu_alpha_client_cached
 
     @property

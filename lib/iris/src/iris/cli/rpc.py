@@ -19,7 +19,7 @@ from google.protobuf.message import Message
 
 from iris.cli.connect import require_controller_url
 from iris.rpc import actor_connect, controller_connect, worker_connect
-from iris.rpc.auth import AuthTokenInjector, TokenProvider
+from iris.rpc.auth import TokenProvider, client_interceptors
 
 PROTO_TYPE_TO_CLICK: dict[int, click.ParamType] = {
     FieldDescriptor.TYPE_STRING: click.STRING,
@@ -179,7 +179,7 @@ def call_rpc(
         available = ", ".join(service.methods.keys())
         raise ValueError(f"Unknown method '{method_name}' on service '{service_name}'. Available: {available}")
 
-    interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
+    interceptors = client_interceptors(token_provider)
     client = service.client_class(url, interceptors=interceptors)
     try:
         method_fn = getattr(client, method.method_fn_name)
@@ -221,7 +221,7 @@ def kebab_to_pascal(name: str) -> str:
 
 def _is_simple_field(field: FieldDescriptor) -> bool:
     """Check if a protobuf field is a simple scalar type that maps to Click."""
-    if field.label == FieldDescriptor.LABEL_REPEATED:
+    if field.is_repeated:
         return False
     if field.message_type is not None:
         return False

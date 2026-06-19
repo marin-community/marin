@@ -19,6 +19,7 @@ import sys
 import urllib.parse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, NewType
 
@@ -26,7 +27,6 @@ import cloudpickle
 import humanfriendly
 from rigging.timing import Timestamp
 
-from iris.cluster.constraints import Constraint
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -350,8 +350,6 @@ class PendingTask:
     priority_insertion: int
     job_state: int
     scheduling_deadline_epoch_ms: int | None
-    is_reservation_holder: bool
-    has_reservation: bool
     scheduling_timeout_ms: int | None
     has_coscheduling: bool
     coscheduling_group_by: str | None
@@ -374,16 +372,54 @@ class UserBudgetDefaults:
     max_band: int = job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
+class WorkerUsability(StrEnum):
+    """How the control loop may use a worker, derived from its liveness.
+
+    Consumers project this verdict rather than re-deriving it from the raw
+    ``healthy``/``active``/``consecutive_failures`` fields:
+
+    - scheduling placement targets ``HEALTHY`` only;
+    - the reconcile pass targets ``HEALTHY | DEGRADED`` (it keeps probing a
+      mid-failure worker so it can recover or cross the teardown threshold);
+    - autoscaler idle-spare accounting counts ``HEALTHY`` only, so a ``DEGRADED``
+      idle worker is never reclaimed as free capacity.
+    """
+
+    HEALTHY = "healthy"
+    """Active, healthy, no consecutive failures — a placement target."""
+
+    DEGRADED = "degraded"
+    """Active and healthy but accumulating failures — reconciled, NOT placeable,
+    and NOT counted as idle spare. Torn down by the health threshold path, not
+    by capacity scale-down."""
+
+    DEAD = "dead"
+    """Not active or not healthy — excluded from reconcile, scheduling, and
+    idle tracking."""
+
+
 @dataclass(frozen=True)
 class WorkerStatus:
     """Worker status keyed by worker_id for autoscaler idle tracking."""
 
     worker_id: str
     running_task_ids: frozenset[str]
+    usability: WorkerUsability = WorkerUsability.HEALTHY
 
     @property
     def is_idle(self) -> bool:
         return len(self.running_task_ids) == 0
+
+    @property
+    def is_idle_spare(self) -> bool:
+        """Idle AND schedulable — safe to reclaim via scale-down.
+
+        A ``DEGRADED`` idle worker is not a spare: counting it as reclaimable
+        headroom is exactly what let the autoscaler call an unschedulable slice
+        "idle — eligible for scale-down" while the scheduler was still waiting
+        for that pool.
+        """
+        return self.is_idle and self.usability is WorkerUsability.HEALTHY
 
 
 WorkerStatusMap = dict[str, WorkerStatus]
@@ -407,31 +443,6 @@ class CoschedulingConfig:
     def to_proto(self) -> job_pb2.CoschedulingConfig:
         """Convert to protobuf representation."""
         return job_pb2.CoschedulingConfig(group_by=self.group_by)
-
-
-@dataclass(frozen=True)
-class ReservationEntry:
-    """A single reservation entry describing one worker's worth of resources.
-
-    Used in the high-level client API. Each entry becomes a demand anchor
-    that the autoscaler provisions before the reserving job schedules.
-
-    Example:
-        >>> ReservationEntry(resources=ResourceSpec(cpu=2, memory="8g"))
-        >>> ReservationEntry(resources=ResourceSpec(cpu=2),
-        ...                  constraints=[Constraint.create(key="region", op=ConstraintOp.EQ, value="us-central1")])
-    """
-
-    resources: "ResourceSpec"
-    constraints: list[Constraint] | None = None
-
-    def to_proto(self) -> job_pb2.ReservationEntry:
-        """Convert to protobuf representation."""
-        constraints_proto = [c.to_proto() for c in self.constraints or []]
-        return job_pb2.ReservationEntry(
-            resources=self.resources.to_proto(),
-            constraints=constraints_proto,
-        )
 
 
 def tpu_device(variant: str, count: int | None = None) -> job_pb2.DeviceConfig:
@@ -527,8 +538,10 @@ class ResourceSpec:
     disk: str | int = 0
     device: job_pb2.DeviceConfig | None = None
 
-    # Accelerator tasks need enough CPU to avoid bottlenecking on data loading.
-    MIN_ACCELERATOR_CPU_MILLICORES = 32_000
+    # Accelerator tasks default to enough CPU to avoid bottlenecking on data
+    # loading, but explicit CPU requests are preserved for quota-constrained
+    # queues and diagnostic runs.
+    MIN_ACCELERATOR_CPU_MILLICORES = 4_000
 
     def to_proto(self) -> job_pb2.ResourceSpecProto:
         """Convert to wire format."""

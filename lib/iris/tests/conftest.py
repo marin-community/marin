@@ -42,7 +42,7 @@ def embedded_log_server(tmp_path):
     unavailable (e.g. a pure-Python install).
     """
     if not finelog_native_available():
-        pytest.skip("finelog native extension (finelog._native) not available")
+        pytest.skip("finelog native server extension (finelog_server) not available")
     server = require_embedded_server()(log_dir=str(tmp_path / "log-server"))
     try:
         yield server

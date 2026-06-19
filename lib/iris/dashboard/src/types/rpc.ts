@@ -286,6 +286,8 @@ export interface VmInfo {
   stateChangedAt?: ProtoTimestamp
   workerId?: string
   workerHealthy?: boolean
+  /** WorkerUsability: "healthy" | "degraded" | "dead"; empty if not in the roster. */
+  usability?: string
   initPhase?: string
   initLogTail?: string
   initError?: string
@@ -309,6 +311,13 @@ export interface SliceInfo {
    * which is empty until a slice's workers register — a booting slice has none.
    */
   state?: string
+  /** Count of DEGRADED (reachable-but-failing) hosts among `vms`, for detail display. */
+  degradedSlotCount?: number
+  /**
+   * Server-derived placement status of a ready slice: "available" | "in_use" |
+   * "idle" | "degraded". Empty for non-ready slices.
+   */
+  capacityStatus?: string
 }
 
 export interface ScaleGroupConfig {

@@ -13,6 +13,7 @@ pass through as the anonymous admin user.
 """
 
 import contextlib
+import ipaddress
 import logging
 import time
 from contextvars import ContextVar
@@ -38,6 +39,13 @@ class VerifiedIdentity:
 
     user_id: str
     role: str
+
+
+# Identity granted to any tokenless caller on a genuine loopback connection.
+# Mirrors the null-auth default: reaching the loopback interface (SSH tunnel /
+# on-host) already implies host-level trust, so the caller is the admin user.
+# Jobs are still attributed per-user via the job name's owner segment.
+LOOPBACK_IDENTITY = VerifiedIdentity(user_id="anonymous", role="admin")
 
 
 def _extract_cookie(cookie_header: str, name: str) -> str | None:
@@ -230,21 +238,64 @@ class CompositeTokenVerifier:
         raise ValueError(f"All verifiers failed: {'; '.join(errors)}")
 
 
+def is_trusted_loopback(client_address: str | None, headers: dict) -> bool:
+    """Return True if the request arrived over a genuine loopback connection.
+
+    A connection is trusted-loopback iff its transport peer is a loopback
+    address (127.0.0.0/8 or ::1) on a nonzero port *and* it carries no
+    ``X-Forwarded-For`` header.
+
+    The two conditions are individually sufficient and kept together as
+    defence in depth. The controller runs uvicorn with
+    ``forwarded_allow_ips="*"``, so when the client is derived from a forwarded
+    header uvicorn rewrites ``scope["client"]`` to the attacker-controllable
+    leftmost ``X-Forwarded-For`` entry and zeroes the port (it cannot recover
+    the forwarded client's port). A public request spoofing
+    ``X-Forwarded-For: 127.0.0.1`` therefore presents as ``("127.0.0.1", 0)``
+    with the header present — rejected on both counts. Only a direct transport
+    peer on the loopback interface (SSH tunnel / on-host) passes. See
+    ``docs/auth-loopback-transition.md``.
+    """
+    if not client_address:
+        return False
+    if headers.get("x-forwarded-for"):
+        return False
+    host, _, port = client_address.rpartition(":")
+    if not host or not port:
+        return False
+    try:
+        if int(port) == 0:
+            return False
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def resolve_auth(
     token: str | None,
     verifier: TokenVerifier,
     optional: bool,
+    *,
+    client_address: str | None = None,
+    headers: dict | None = None,
 ) -> VerifiedIdentity | None:
     """Shared auth policy for gRPC interceptors and HTTP middleware.
 
     Returns VerifiedIdentity on success, None for anonymous passthrough.
     Raises ValueError on rejected tokens (invalid token, or missing when required).
+
+    A present token always wins. A tokenless request over a genuine loopback
+    connection is always trusted as the admin user (see ``is_trusted_loopback``
+    and ``LOOPBACK_IDENTITY``) — the SSH-tunnel transition path. Otherwise a
+    missing token is allowed only when ``optional`` is set.
     """
-    if token is None:
-        if optional:
-            return None
-        raise ValueError("Missing authentication")
-    return verifier.verify(token)
+    if token is not None:
+        return verifier.verify(token)
+    if is_trusted_loopback(client_address, headers or {}):
+        return LOOPBACK_IDENTITY
+    if optional:
+        return None
+    raise ValueError("Missing authentication")
 
 
 class AuthInterceptor:
@@ -352,6 +403,18 @@ class AuthTokenInjector:
         if token:
             ctx.request_headers()["authorization"] = f"Bearer {token}"
         return call_next(request, ctx)
+
+
+def client_interceptors(token_provider: "TokenProvider | None") -> list:
+    """Build the client-side RPC interceptor chain.
+
+    With a token provider, attach the bearer token. Without one (the SSH-tunnel
+    case), send nothing: a loopback-trust controller authenticates the
+    connection by its transport peer, and job ownership comes from the job name.
+    """
+    if token_provider is not None:
+        return [AuthTokenInjector(token_provider)]
+    return []
 
 
 class TokenProvider(Protocol):

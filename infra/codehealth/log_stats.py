@@ -164,7 +164,7 @@ def _fill_defaults(event: dict) -> dict:
     from local git state. Existing values are never overwritten.
     """
     event.setdefault("invocation_id", str(uuid.uuid4()))
-    event.setdefault("ts", dt.datetime.now(dt.timezone.utc).isoformat())
+    event.setdefault("ts", dt.datetime.now(dt.UTC).isoformat())
     inv = event.setdefault("invocation", {})
     inv.setdefault("git_branch", _git(["rev-parse", "--abbrev-ref", "HEAD"]))
     inv.setdefault("head_sha", _git(["rev-parse", "HEAD"]))

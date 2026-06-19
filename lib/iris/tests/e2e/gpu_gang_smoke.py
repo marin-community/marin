@@ -224,7 +224,7 @@ class ControllerTarget:
             image=cfg.controller.image,
             port=port,
             node_selector=node_selector,
-            s3_env_vars=[],
+            task_env_secret=False,
             fresh=False,
         )
         if local_image:

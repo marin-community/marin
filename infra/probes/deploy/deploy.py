@@ -21,13 +21,14 @@ import subprocess
 from pathlib import Path
 
 import click
+from rigging.filesystem import REGION_TO_DATA_BUCKET
 
 logger = logging.getLogger("deploy")
 
 IMAGE_NAME = "infra-probes"
 # The probes daemon writes its JSONL roll-ups here; the SA needs object-create on
 # this bucket and the canary's GCS prefix lives under it (see infra_probes.py).
-RESULTS_BUCKET = "marin-us-central1"
+RESULTS_BUCKET = REGION_TO_DATA_BUCKET["us-central1"]
 RESULTS_HOST_PATH = "/var/lib/probes"
 # Build context / git repo root for `build`: this script lives in deploy/.
 PROBES_DIR = Path(__file__).resolve().parent.parent

@@ -15,6 +15,7 @@ from fray.client import Client, JobAlreadyExists, JobFailed, JobHandle, wait_all
 from fray.current_client import current_client, set_current_client
 from fray.local_backend import LocalActorHandle, LocalActorMethod, LocalClient, LocalJobHandle
 from fray.types import (
+    ANY_REGION,
     ActorConfig,
     BinaryEntrypoint,
     CallableEntrypoint,
@@ -36,6 +37,7 @@ from fray.types import (
 )
 
 __all__ = [
+    "ANY_REGION",
     "ActorConfig",
     "ActorContext",
     "ActorFuture",
