@@ -608,12 +608,13 @@ def _grouped_expert_muonh_updates(
                 direction = _scale_grouped_muonh_direction(direction)
 
             grouped_update = _grouped_muonh_hyperball_update(stacked_params, direction, learning_rate)
-            grouped_update = _restore_grouped_muonh_for_split_slice_first_gather(
-                grouped_update,
-                target,
-                valid_size,
-                entry_chunk[0][2],
-            )
+            with jax.named_scope("grouped_muonh/restore_grouped_fsdp_layout"):
+                grouped_update = _restore_grouped_muonh_for_split_target_layout(
+                    grouped_update,
+                    target,
+                    valid_size,
+                    entry_chunk[0][2],
+                )
             update_parts = [
                 jnp.squeeze(update_part, axis=0) for update_part in jnp.split(grouped_update, valid_size, axis=0)
             ]

@@ -14,6 +14,7 @@ from experiments.grug.moe.optimizer import (
     GrugMoeMuonHConfig,
     GrugMoeSgdConfig,
     _expert_momentum_sharding,
+    _restore_grouped_muonh_for_split_target_layout,
     _scale_invariant_hyperball_updates,
     scale_with_grouped_expert_muonh,
 )
@@ -265,7 +266,35 @@ def test_grouped_expert_muonh_optimizer_returns_fsdp_updates_before_apply():
     assert hlo.count("stablehlo.all_reduce") == 0
     assert hlo.count("stablehlo.reduce_scatter") == 0
     assert hlo.count("stablehlo.all_to_all") == 0
-    assert hlo.count("stablehlo.all_gather") == 6
+    assert hlo.count("stablehlo.all_gather") == 4
+
+
+def test_grouped_muonh_restore_can_reshard_grouped_stack_to_fsdp_layout():
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 8, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    param = jax.ShapeDtypeStruct(
+        (8, 16, 32),
+        jnp.bfloat16,
+        sharding=NamedSharding(mesh, P("expert", "data", "model")),
+    )
+    grouped_update = jax.ShapeDtypeStruct(
+        (4, 8, 16, 32),
+        jnp.bfloat16,
+        sharding=NamedSharding(mesh, P(("replica_dcn", "data"), "expert", None, None)),
+    )
+    target = grouped_update.sharding
+
+    def restore(update):
+        return _restore_grouped_muonh_for_split_target_layout(update, target, valid_size=4, sample_param=param)
+
+    with use_abstract_mesh(mesh):
+        restored = jax.eval_shape(restore, grouped_update)
+
+    assert restored.shape == grouped_update.shape
+    assert restored.sharding.spec == P(None, "expert", "data", "model")
 
 
 def test_expert_momentum_sharding_uses_replica_dcn_on_expert_stack_axis():
