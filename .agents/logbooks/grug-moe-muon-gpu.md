@@ -687,3 +687,22 @@ The run succeeded without the previous 57.84 GiB allocation. Compiled HLO report
   - The original failing smoke raised `ShardingTypeError`: slicing a group axis sharded over 4 mesh devices down to output size 1 is not implemented because the output dimension is not divisible by the mesh axis.
 - Interpretation: This is the realism caveat for grouped-bank integration. Keeping params/updates/results grouped is fast, but a conventional sequential transformer block cannot simply index one layer out of a `replica_dcn,data`-sharded grouped bank. That access pattern necessarily needs a communication boundary, a different grouped/scan-like model consumer that keeps the group axis alive, or a lower-level custom gather/broadcast path. The existing all-at-once grouped-bank gate is a lower bound, not proof that the ordinary block loop can consume the grouped bank directly.
 - Next action: Do not port grouped banks into the real block loop by calling `GroupedMoEExpertMlp.layer()` on a sharded group axis. The next viable model-facing design must either keep the layer group axis live through a grouped block/scan consumer, or make an explicit one-layer access boundary and measure/overlap it.
+
+### 2026-06-19 10:25 PDT - packed A2A grouped-to-FSDP boundary launched
+- Hypothesis: The previous explicit `shard_map` grouped-to-FSDP boundary was too granular: it restored each group and each expert weight name separately. Packing all groups for one expert weight name before the explicit `all_gather(replica_dcn)` + `all_to_all(data)` boundary should reduce the intended communication from 14 AG/A2A pairs to 2 AG/A2A pairs for L26/G4.
+- Command:
+  - Code change: added `expert_fsdp_grouped_packed_a2a_apply_boundary` to `experiments/grug/moe/muon_update_bench.py`, with a comparison test in `experiments/grug/moe/test_muon_update_bench.py`. Commit `9b20b0f0f` pushed to `codex/research-grug-moe-d2560-mfu`.
+  - Validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -q` -> 53 passed; `./infra/pre-commit.py --changed-files --fix` -> OK.
+  - Local forced-CPU lower-only smoke:
+    `XLA_FLAGS=--xla_force_host_platform_device_count=32 uv run python experiments/grug/moe/muon_update_bench.py --layers 26 --ns4d-group-size 4 --ns4d-group-axis replica_dcn,data --hidden-dim 2560 --intermediate-dim 1280 --num-experts 256 --replica-axis 2 --data-axis 2 --expert-axis 8 --model-axis 1 --bench-kinds expert_fsdp_grouped_explicit_a2a_apply_boundary,expert_fsdp_grouped_packed_a2a_apply_boundary --mode lower --warmup 0 --iters 1 --disable-abstract-mesh --output /tmp/muon_packed_a2a_l26_lower.json`.
+  - CoreWeave validation launched: parent `/dlwh/iris-run-job-20260619-172133`.
+- Config: 4 H100 nodes, `replica_axis=2`, `data_axis=2`, `expert_axis=8`, `model_axis=1`, `layers=26`, `hidden_dim=2560`, `intermediate_dim=1280`, `num_experts=256`, bf16, `ns4d_group_size=4`, `ns4d_group_axis=replica_dcn,data`, `bench_kinds=expert_fsdp_grouped_explicit_a2a_apply_boundary,expert_fsdp_grouped_packed_a2a_apply_boundary`, `backend_steps=1`, `max_grouped_stack_size=256`, mode `both`, output prefix under `s3://marin-na/tmp/ttl=7d`.
+- Local lower-only result:
+
+| boundary | lowered AG | lowered A2A | lowered AR/RS | note |
+| --- | ---: | ---: | --- | --- |
+| explicit per-group A2A | 14 | 14 | 0/0 | one restore per group per weight name |
+| packed A2A | 2 | 2 | 0/0 | one restore per weight name |
+
+- Interpretation: The packed form fixes the StableHLO-level granularity problem. The live CoreWeave run is the real test: if compiled HLO still explodes the 2 logical A2As into hundreds of NCCL calls or stays near 1s, the FSDP-master boundary still needs custom communication or a grouped model consumer. If compiled counts stay close to 2 and timing drops materially, the FSDP-master plus packed restore path becomes viable again.
+- Next action: Babysit `/dlwh/iris-run-job-20260619-172133`, extract summary JSON, and compare compiled AG/A2A counts plus median timing against the previous explicit A2A baseline (`AG=112`, `A2A=392`, about 1.07s apply).
