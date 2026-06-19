@@ -174,6 +174,10 @@ search goals. Schedule for total throughput, not rigid rules:
   relocate/migrate batch cells, and do **NOT** treat no-progress as failure — only resubmit
   a batch cell when its parent **actually FAILS**. Reserve `interactive` for critical /
   near-end-of-wave cells (or ones needed fast), where fairness + budget buy reliability.
+- **Favor `v5p-64` for new batch launches (user pref ~2026-06-19).** It has the top `wts`
+  by a wide margin (~246k over the since-Mon window; ~323k in the clean E8 probe — ~4× v6e-8).
+  Prefer it for new/relocated batch cells, *especially when few v5p-64 runs are live* (it's
+  scarce, so spread a few more onto it). Next-best risk-adjusted: `v5p-32`. Still AVOID `v6e-32`.
 - **Check a run's CURRENT band via iris, not budgets.** `iris --cluster marin query
   "SELECT priority_band FROM tasks WHERE job_id LIKE '<child>%'"` → **2=interactive,
   3=batch** (the **child** task; it does NOT inherit the parent driver's band, and band can
