@@ -163,8 +163,8 @@ nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
 # https://github.com/marin-community/vllm/compare/7b98f498cdf0bf9cf0ecc37b5c0c994cb94513c3...43e648985619749e7d1b232fbe408c7f5995d2d6
 vllm = { git = "https://github.com/marin-community/vllm.git", rev = "43e648985619749e7d1b232fbe408c7f5995d2d6" }
-# https://github.com/marin-community/tpu-inference/compare/4c38590e29d33451f2b4375a78ad8f70cacd7b98...59fb9e60b77bda3fc8f0868f69fc5f75dfc6ef21
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "59fb9e60b77bda3fc8f0868f69fc5f75dfc6ef21" }
+# https://github.com/marin-community/tpu-inference/compare/4c38590e29d33451f2b4375a78ad8f70cacd7b98...871f9ba84a6682348a306b5acd903fb723cd2675
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "871f9ba84a6682348a306b5acd903fb723cd2675" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
