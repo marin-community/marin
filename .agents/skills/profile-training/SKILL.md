@@ -61,6 +61,23 @@ uv run ... \
 Keep the profiler window short when enabling HLO protobuf collection — it
 enlarges artifacts and can increase profile upload/finalization time.
 
+Known-good TensorBoard scope recipe from CoreWeave Grug MoE profiling:
+`trainer.profiler.enabled=true`, `trainer.profiler.start_step=3`,
+`trainer.profiler.num_steps=2`, `trainer.profiler.perfetto_link=false`,
+`trainer.profiler.profile_options.host_tracer_level=1`,
+`trainer.profiler.profile_options.python_tracer_level=0`, and
+`trainer.profiler.profile_options.enable_hlo_proto=true` preserved useful
+`jax.named_scope` / `named_call` regions in TensorBoard for
+`GM2560-MAY-120S4096-W2048-B8-R1-E8M1-FA4PROFILE-S3B-N1-cw-20260617-2353`.
+Leave `device_tracer_level` unset unless device timelines are specifically
+needed; this profile still had useful hierarchical host/XLA metadata.
+
+On GPU, command buffers can collapse or suppress the visible name stack in
+TensorBoard/Perfetto. For profile-readability runs, add
+`--xla_gpu_enable_command_buffer=''` to `XLA_FLAGS`. This hurts performance, so
+use it only when the goal is semantic trace attribution; leave it out of
+throughput comparisons unless command-buffer behavior is the axis being tested.
+
 For better profile readability, use `haliax.jax_utils.named_call` and
 `jax.named_scope` liberally in model code; these names flow into trace
 annotations and make region-level summaries far more actionable.
@@ -157,6 +174,20 @@ XPlane summaries expose hierarchical named-scope regions, pre-op gaps, gap
 region context, process/thread/timeline event metadata, step timing (when step
 markers or xprof overview rows exist), xprof bottleneck statements, kernel
 stats, collective breakdowns, and optimization candidates.
+
+When TensorBoard or direct XPlane parsing collapses GPU kernels to generic
+regions such as `XlaModule` or bare NVJet/CUTLASS names, preserve the xprof
+tables with `--xplane-output-dir` and inspect:
+
+- `kernel_stats.json`: `kernel_name`, `op_name`, occurrence count, and kernel
+  duration. This is often the only place where an NVJet kernel is joined back
+  to `jit(train_step)/.../dot_general`.
+- `framework_op_stats.json`: framework op paths and self-time grouped by JAX
+  name scope. Use this to bucket time by model component when Perfetto is too
+  flat.
+
+Prefer the xprof-attributed rows over direct timeline aggregates when both use
+the same kernel name; the direct row often only says `XlaModule`.
 
 Summary version tag: `profile_summary.v1`
 

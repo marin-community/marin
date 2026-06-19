@@ -571,6 +571,29 @@ def test_h100_d2560_pallas_gpu_block_sizes_fit_nvidia_tile_budget(batch: int, mo
     )
 
 
+def test_h100_d2560_model_sharded_vocab_block_sizes_fit_nvidia_tile_budget(monkeypatch: pytest.MonkeyPatch):
+    block_sizes, has_tuned_match = tuned_block_sizes.infer_block_sizes_with_tuned_match(
+        16_384,
+        2560,
+        64_128,
+        dtype=jnp.float32,
+        x_dtype=jnp.bfloat16,
+        w_dtype=jnp.bfloat16,
+        device_kind="NVIDIA H100",
+    )
+
+    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
+
+    assert not has_tuned_match
+    assert block_sizes == fused_api.BlockSizes(b_block_size=1024, h_block_size=64, v_block_size=256)
+    pallas_gpu._validate_launch_feasibility(
+        w_dtype=jnp.bfloat16,
+        h_block_size=block_sizes.h_block_size,
+        v_block_size=block_sizes.v_block_size,
+        num_h_blocks=2560 // block_sizes.h_block_size,
+    )
+
+
 def test_pallas_tpu_backward_uses_pallas_by_default(monkeypatch):
     monkeypatch.delenv("LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH", raising=False)
     captured: dict[str, bool] = {}

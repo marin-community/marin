@@ -275,7 +275,7 @@ def _semantic_families_for_summary(summary: ProfileSummary) -> list[SemanticFami
     aggregate: dict[str, dict[str, float | int | str | None]] = {}
     total_duration = summary.time_breakdown.total_duration
     for op in summary.hot_ops:
-        family = classify_semantic_family(op.name)
+        family = classify_semantic_family(op.name, op.tf_op_path)
         bucket = aggregate.setdefault(
             family,
             {

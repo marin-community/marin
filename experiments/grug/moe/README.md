@@ -172,7 +172,9 @@ The first command is a dry run. The second submits the smoke configuration:
 Use `--full --submit` only when you intend to launch the full 32-node recipe.
 The script passes R2 credentials to Iris as `AWS_ACCESS_KEY_ID`,
 `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL`, and `AWS_ENDPOINT_URL_S3`, with
-`MARIN_PREFIX=s3://marin-na/marin/` by default.
+`MARIN_PREFIX=s3://marin-na/tmp/ttl=7d` by default. CoreWeave Grug MoE
+executor outputs are namespaced under `experiments/grug-moe-cw/` below that
+prefix, so disposable runs inherit the R2 lifecycle rule.
 
 For the May Recipe d=2560 architecture from issue #6044, launch the dedicated
 CoreWeave wrapper instead:

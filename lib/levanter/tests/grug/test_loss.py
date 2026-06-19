@@ -142,4 +142,19 @@ def test_lm_head_spec_tracks_effective_default_xla_backend(monkeypatch: pytest.M
     assert grug_loss._lm_head_spec_for_xla_ce(lm_head, mesh, None) == P(None, "model")
 
     monkeypatch.setattr(grug_loss, "default_implementations", lambda: ("pallas_gpu", "xla"))
+    assert grug_loss._lm_head_spec_for_xla_ce(lm_head, mesh, None) == P(None, "model")
+
+
+def test_lm_head_spec_does_not_vocab_shard_when_model_axis_is_one(monkeypatch: pytest.MonkeyPatch):
+    class FakeMesh:
+        empty = False
+        shape = {"model": 1}
+
+    lm_head = jnp.zeros((2560, 128_256), dtype=jnp.bfloat16)
+    mesh = cast(jax.sharding.AbstractMesh, FakeMesh())
+
+    assert grug_loss._lm_head_spec_for_xla_ce(lm_head, mesh, "xla") == P(None, None)
+    assert grug_loss._lm_head_spec_for_xla_ce(lm_head, mesh, "pallas_gpu") == P(None, None)
+
+    monkeypatch.setattr(grug_loss, "default_implementations", lambda: ("pallas_gpu", "xla"))
     assert grug_loss._lm_head_spec_for_xla_ce(lm_head, mesh, None) == P(None, None)

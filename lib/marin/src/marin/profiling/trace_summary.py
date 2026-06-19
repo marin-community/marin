@@ -23,6 +23,7 @@ from typing import Any, cast
 
 from marin.profiling.schema import (
     CommunicationOp,
+    DeviceOpRegionAggregate,
     DurationStats,
     GapBeforeOp,
     GapRegionContext,
@@ -90,6 +91,7 @@ _HIERARCHY_SEGMENT_BLACKLIST_EXACT = {
     "pallas_call",
     "shard_map",
     "call",
+    "command_buffer",
     "execute",
     "launch",
     "tpu_launch",
@@ -163,6 +165,15 @@ class _PreOpGapStats:
     marker_counts: Counter[str] = field(default_factory=Counter)
 
 
+@dataclass(frozen=True)
+class _RegionWindow:
+    start: float
+    end: float
+    path: str
+    depth: int
+    duration: float
+
+
 def summarize_complete_events(
     parsed_events: list[CompleteTraceEvent],
     *,
@@ -209,6 +220,11 @@ def summarize_complete_events(
         parsed_events,
         limit=max(hot_op_limit, 500),
     )
+    device_op_region_aggregates = _summarize_device_op_region_aggregates(
+        parsed_events,
+        exclusive_durations,
+        limit=max(hot_op_limit, 500),
+    )
 
     summary = ProfileSummary.create(
         source_format=source_format,
@@ -224,6 +240,7 @@ def summarize_complete_events(
         gap_before_ops=gap_before_ops,
         hierarchical_regions=hierarchical_regions,
         gap_region_contexts=gap_region_contexts,
+        device_op_region_aggregates=device_op_region_aggregates,
         optimization_candidates=[],
     )
 
@@ -244,6 +261,7 @@ def summarize_complete_events(
         gap_before_ops=summary.gap_before_ops,
         hierarchical_regions=summary.hierarchical_regions,
         gap_region_contexts=summary.gap_region_contexts,
+        device_op_region_aggregates=summary.device_op_region_aggregates,
         optimization_candidates=candidates,
     )
 
@@ -713,7 +731,7 @@ def summarize_semantic_families(
 
     aggregate: dict[str, dict[str, float | int | Counter[str] | str]] = {}
     for op in hot_ops:
-        family = classify_semantic_family(op.name)
+        family = classify_semantic_family(op.name, op.tf_op_path)
         bucket = aggregate.setdefault(
             family,
             {
@@ -982,6 +1000,120 @@ def _summarize_gap_region_contexts(events: list[CompleteTraceEvent], *, limit: i
             )
         )
     return result
+
+
+def _summarize_device_op_region_aggregates(
+    events: list[CompleteTraceEvent],
+    exclusive: list[float],
+    *,
+    limit: int,
+) -> list[DeviceOpRegionAggregate]:
+    region_windows = _semantic_region_windows(events)
+    if not region_windows:
+        return []
+
+    device_indices = [index for index, event in enumerate(events) if _is_device_op_event(event)]
+    points: list[tuple[float, int, int]] = []
+    for index, region in enumerate(region_windows):
+        points.append((region.start, 0, index))
+        points.append((region.end, 2, index))
+    for index in device_indices:
+        event = events[index]
+        midpoint = event.ts + event.dur / 2
+        points.append((midpoint, 1, index))
+    points.sort(key=lambda item: (item[0], item[1], item[2]))
+
+    active_regions: set[int] = set()
+    aggregate: dict[tuple[str, str], dict[str, float | int | str | Counter[str]]] = {}
+    for _, kind, index in points:
+        if kind == 0:
+            active_regions.add(index)
+            continue
+        if kind == 2:
+            active_regions.discard(index)
+            continue
+        if not active_regions:
+            continue
+
+        best_region = _best_active_region(active_regions, region_windows)
+        event = events[index]
+        key = (best_region.path, event.name)
+        bucket = aggregate.setdefault(
+            key,
+            {
+                "region_path": best_region.path,
+                "op_name": event.name,
+                "canonical_name": event.canonical_name,
+                "category": op_category(event.name),
+                "count": 0,
+                "total_duration": 0.0,
+                "exclusive_duration": 0.0,
+                "shape_counts": Counter(),
+            },
+        )
+        bucket["count"] = int(bucket["count"]) + 1
+        bucket["total_duration"] = float(bucket["total_duration"]) + event.dur
+        bucket["exclusive_duration"] = float(bucket["exclusive_duration"]) + exclusive[index]
+        shape_signature = extract_shape_signature(event.long_name)
+        if shape_signature:
+            cast(Counter[str], bucket["shape_counts"])[shape_signature] += 1
+
+    ranked = sorted(
+        aggregate.values(),
+        key=lambda item: (
+            -float(item["exclusive_duration"]),
+            -float(item["total_duration"]),
+            str(item["region_path"]),
+            str(item["op_name"]),
+        ),
+    )
+
+    result: list[DeviceOpRegionAggregate] = []
+    for item in ranked[:limit]:
+        count = int(item["count"])
+        total_duration = float(item["total_duration"])
+        shape_counts = cast(Counter[str], item["shape_counts"])
+        result.append(
+            DeviceOpRegionAggregate(
+                region_path=str(item["region_path"]),
+                op_name=str(item["op_name"]),
+                canonical_name=str(item["canonical_name"]),
+                category=str(item["category"]),
+                count=count,
+                total_duration=total_duration,
+                exclusive_duration=float(item["exclusive_duration"]),
+                avg_duration=(total_duration / count) if count else 0.0,
+                shape_signature=shape_counts.most_common(1)[0][0] if shape_counts else None,
+            )
+        )
+    return result
+
+
+def _semantic_region_windows(events: list[CompleteTraceEvent]) -> list[_RegionWindow]:
+    windows: list[_RegionWindow] = []
+    for event in events:
+        if _is_device_op_event(event):
+            continue
+        parts = _hierarchical_parts(event)
+        if not parts or _is_fallback_parts_for_event(parts, event):
+            continue
+        windows.append(
+            _RegionWindow(
+                start=event.ts,
+                end=event.ts + event.dur,
+                path="=>".join(parts),
+                depth=len(parts),
+                duration=event.dur,
+            )
+        )
+    return windows
+
+
+def _best_active_region(active_regions: set[int], region_windows: list[_RegionWindow]) -> _RegionWindow:
+    return max(
+        (region_windows[index] for index in active_regions),
+        key=lambda region: (region.depth, -region.duration, region.path),
+    )
 
 
 def _resolve_gap_payload_event(

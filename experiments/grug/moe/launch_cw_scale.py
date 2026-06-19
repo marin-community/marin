@@ -67,6 +67,7 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
+from experiments.grug.moe.cw_storage import set_default_cw_grug_moe_prefix
 from experiments.grug.moe.launch import (
     GrugMoeLaunchConfig,
     env_bool,
@@ -74,12 +75,15 @@ from experiments.grug.moe.launch import (
     run_grug_moe_trial,
     slimpajama_6b_data,
     synthetic_grug_data,
+    trainer_mesh_expert_axis_size,
     validate_local_expert_model_axes,
     validate_ring_expert_model_axes,
 )
 from experiments.grug.moe.model import VALID_REMAT_MODES, CrossEntropyImplementation, GrugModelConfig, RematMode
 from experiments.grug.moe.train import GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
+
+set_default_cw_grug_moe_prefix()
 
 # head_dim is fixed at 128; hidden_dim must be a multiple of it.
 HEAD_DIM = 128
@@ -203,11 +207,13 @@ def build_scale_step() -> ExecutorStep:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by SCALE_EXPERT_AXIS={expert_axis}")
     if model.num_heads % model_axis != 0:
         raise ValueError(f"num_heads={model.num_heads} must be divisible by SCALE_MODEL_AXIS={model_axis}")
+    allow_cross_node_expert_axis = env_bool("SCALE_ALLOW_CROSS_NODE_EXPERT_AXIS", False)
     validate_local_expert_model_axes(
         expert_axis=expert_axis,
         model_axis=model_axis,
         local_device_count=GPUS_PER_NODE,
         env_prefix="SCALE",
+        allow_cross_node_expert_axis=allow_cross_node_expert_axis,
     )
     validate_ring_expert_model_axes(
         expert_axis=expert_axis,
@@ -279,6 +285,14 @@ def build_scale_step() -> ExecutorStep:
             tracker=tracker,
             optimizer=versioned(SCALE_OPTIMIZER),
             grug_trainer=versioned(grug_trainer),
+            trainer_mesh_expert_axis_size=versioned(
+                trainer_mesh_expert_axis_size(
+                    expert_axis=expert_axis,
+                    model_axis=model_axis,
+                    local_device_count=GPUS_PER_NODE,
+                    allow_cross_node_expert_axis=allow_cross_node_expert_axis,
+                )
+            ),
             eval=None,
             profiler=profiler,
             watch=WatchConfig(interval=env_int("SCALE_WATCH_INTERVAL", 0)),

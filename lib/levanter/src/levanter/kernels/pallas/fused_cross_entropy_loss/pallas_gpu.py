@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from functools import partial
+import os
 from typing import Optional
 
 import jax
@@ -29,6 +30,7 @@ _GB10_XLA_STREAMING_V_BLOCK_BATCH_8K = 3072
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K = 6144
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS = 7168
 _GPU_MIN_B_BLOCK_SIZE = 128
+_CUSTOM_BWD_V_BLOCK_SIZE_ENV = "LEVANTER_PALLAS_GPU_CUSTOM_BWD_V_BLOCK_SIZE"
 
 
 def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
@@ -431,6 +433,11 @@ def _custom_backward_v_block_size(
     w: Float[Array, "H V"],
     block_sizes: BlockSizes | None,
 ) -> int:
+    if raw_override := os.environ.get(_CUSTOM_BWD_V_BLOCK_SIZE_ENV):
+        override = int(raw_override)
+        if override <= 0:
+            raise ValueError(f"{_CUSTOM_BWD_V_BLOCK_SIZE_ENV} must be positive, got {override}.")
+        return override
     gb10_tuned = _gb10_custom_backward_v_block_size(x, w)
     if gb10_tuned is not None:
         return gb10_tuned

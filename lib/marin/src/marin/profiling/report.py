@@ -106,14 +106,26 @@ def build_markdown_report(summary: ProfileSummary, *, top_k: int = 10) -> str:
         )
     lines.append("")
     lines.append("## Top Ops")
-    lines.append("| Op | Canonical | Category | Count | Exclusive | Avg | Shape Signature |")
-    lines.append("|---|---|---|---:|---:|---:|---|")
+    lines.append("| Op | Canonical | Category | Count | Exclusive | Avg | Shape Signature | HLO/TF Path |")
+    lines.append("|---|---|---|---:|---:|---:|---|---|")
     for op in summary.hot_ops[:top_k]:
         lines.append(
             f"| {_md_code(op.name)} | {_md_code(op.canonical_name)} | {op.category} | {op.count} | "
-            f"{_fmt(op.exclusive_duration)} | {_fmt(op.avg_duration)} | {_md_code(op.shape_signature or 'n/a')} |"
+            f"{_fmt(op.exclusive_duration)} | {_fmt(op.avg_duration)} | {_md_code(op.shape_signature or 'n/a')} | "
+            f"{_md_code(op.tf_op_path or 'n/a')} |"
         )
     lines.append("")
+    if summary.device_op_region_aggregates:
+        lines.append("## Device Ops by Semantic Region")
+        lines.append("| Region Path | Op | Category | Count | Exclusive | Avg | Shape Signature |")
+        lines.append("|---|---|---|---:|---:|---:|---|")
+        for op in summary.device_op_region_aggregates[:top_k]:
+            lines.append(
+                f"| {_md_code(op.region_path)} | {_md_code(op.op_name)} | {op.category} | {op.count} | "
+                f"{_fmt(op.exclusive_duration)} | {_fmt(op.avg_duration)} | "
+                f"{_md_code(op.shape_signature or 'n/a')} |"
+            )
+        lines.append("")
     lines.append("## Semantic Families")
     lines.append("_Note: FLOP proxy metrics are relative scaling heuristics from trace shapes, not hardware MFU._")
     lines.append(

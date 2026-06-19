@@ -16,15 +16,10 @@ import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
 from einops import rearrange
-from haliax.jax_utils import named_call
-from jax import random
+from haliax.jax_utils import named_call, tree_checkpoint_name
+from jax import random, shard_map
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
-
-try:
-    from jax.shard_map import shard_map
-except ModuleNotFoundError:
-    from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.grug.attention import (
     AttentionMask,
@@ -36,6 +31,7 @@ from levanter.grug.attention import (
     with_fa4_cute_metadata,
 )
 from levanter.grug.grug_moe import (
+    DEEPEP_REMAT_SAVE_NAMES,
     MOE_REMAT_SAVE_NAMES,
     MoeActivation,
     MoEExpertMlp,
@@ -50,6 +46,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
 _CROSS_ENTROPY_IMPLEMENTATIONS = ("pallas_gpu", "pallas_tpu", "xla", "reference")
+_CHECKPOINT_BLOCK_ATTENTION_OUTPUT = "grug_block_attention_output"
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -80,6 +77,22 @@ def _batch_spec() -> P:
 
 def _token_spec() -> P:
     return P(_BATCH_AXES, None)
+
+
+def _attention_head_spec() -> P:
+    return P(_BATCH_AXES, None, "model", None)
+
+
+def _attention_kv_head_spec() -> P:
+    return P(_BATCH_AXES, None, None, None)
+
+
+def _attention_feature_spec() -> P:
+    return P(_BATCH_AXES, None, "model")
+
+
+def _attention_kv_feature_spec() -> P:
+    return P(_BATCH_AXES, None, None)
 
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
@@ -187,13 +200,11 @@ class GrugModelConfig:
             raise ValueError(f"remat_mode must be one of {VALID_REMAT_MODES}, got {self.remat_mode!r}")
         if self.output_proj_sharding not in VALID_OUTPUT_PROJ_SHARDINGS:
             raise ValueError(
-                f"output_proj_sharding must be one of {VALID_OUTPUT_PROJ_SHARDINGS}, "
-                f"got {self.output_proj_sharding!r}"
+                f"output_proj_sharding must be one of {VALID_OUTPUT_PROJ_SHARDINGS}, got {self.output_proj_sharding!r}"
             )
         if self.input_embed_sharding not in VALID_INPUT_EMBED_SHARDINGS:
             raise ValueError(
-                f"input_embed_sharding must be one of {VALID_INPUT_EMBED_SHARDINGS}, "
-                f"got {self.input_embed_sharding!r}"
+                f"input_embed_sharding must be one of {VALID_INPUT_EMBED_SHARDINGS}, got {self.input_embed_sharding!r}"
             )
         if self.num_experts <= 0:
             raise ValueError("num_experts must be positive")
@@ -280,17 +291,24 @@ class CausalSelfAttention(eqx.Module):
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
-        q_features = self.cfg.num_heads * head_dim
-        kv_features = self.cfg.num_kv_heads * head_dim
-        qkv_weight = unshard(jnp.concatenate([self.w_q, self.w_k, self.w_v], axis=1))
-        q_raw, k_raw, v_raw = jnp.split(
-            jnp.einsum("bsh,hd->bsd", x, qkv_weight, out_sharding=batch_spec),
-            [q_features, q_features + kv_features],
-            axis=-1,
+        q_raw = jnp.einsum("bsh,hd->bsd", x, self.w_q, out_sharding=_attention_feature_spec())
+        k_raw = jnp.einsum("bsh,hd->bsd", x, unshard(self.w_k), out_sharding=_attention_kv_feature_spec())
+        v_raw = jnp.einsum("bsh,hd->bsd", x, unshard(self.w_v), out_sharding=_attention_kv_feature_spec())
+        q = jax.lax.reshape(
+            q_raw,
+            (*q_raw.shape[:-1], self.cfg.num_heads, head_dim),
+            out_sharding=_attention_head_spec(),
         )
-        q = rearrange(q_raw, "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(k_raw, "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(v_raw, "... (m d) -> ... m d", d=head_dim)
+        k = jax.lax.reshape(
+            k_raw,
+            (*k_raw.shape[:-1], self.cfg.num_kv_heads, head_dim),
+            out_sharding=_attention_kv_head_spec(),
+        )
+        v = jax.lax.reshape(
+            v_raw,
+            (*v_raw.shape[:-1], self.cfg.num_kv_heads, head_dim),
+            out_sharding=_attention_kv_head_spec(),
+        )
         if use_pko:
             half = head_dim // 2
             k_stationary = k[..., half:]
@@ -319,7 +337,7 @@ class CausalSelfAttention(eqx.Module):
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        aligned_v = reshard(aligned_v, P(_BATCH_AXES, None, "model", None))
+        aligned_v = reshard(aligned_v, _attention_head_spec())
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
@@ -329,8 +347,12 @@ class CausalSelfAttention(eqx.Module):
         gate_logits = jnp.einsum("bsd,dn->bsn", x, self.attn_gate, out_sharding=_token_spec())
         gate = 2 * jax.nn.sigmoid(gate_logits)[..., None]
         attn_out = gate * attn_out
-        attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        return jnp.einsum("bsh,hd->bsd", attn_out, unshard(self.w_o), out_sharding=batch_spec)
+        attn_out = jax.lax.reshape(
+            attn_out,
+            (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
+            out_sharding=_attention_feature_spec(),
+        )
+        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
 
 class RMSNorm(eqx.Module):
@@ -406,13 +428,13 @@ class DenseMLP(eqx.Module):
         b, s, _ = x.shape
         token_spec = _token_spec()
         x_flat = _token_reshard(rearrange(x, "b s d -> (b s) d"))
-        gate = jnp.einsum("td,dm->tm", x_flat, unshard(self.w_gate), out_sharding=token_spec)
-        up = jnp.einsum("td,dm->tm", x_flat, unshard(self.w_up), out_sharding=token_spec)
+        gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate, out_sharding=token_spec)
+        up = jnp.einsum("td,dm->tm", x_flat, self.w_up, out_sharding=token_spec)
         activated = _token_reshard(activation_fn(gate) * up)
         out_flat = jnp.einsum(
             "tm,md->td",
             activated,
-            unshard(self.w_down),
+            self.w_down,
             out_sharding=token_spec,
         )
         # Reshard after the reshape so the shared-expert output carries the same
@@ -634,7 +656,10 @@ class Block(eqx.Module):
         pko_doc_starts: Bool[Array, "B S"] | None,
     ) -> Float[Array, "B S D"]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        return _batch_reshard(x + self.attn(attn_in, mask, use_pko=use_pko, pko_doc_starts=pko_doc_starts))
+        return tree_checkpoint_name(
+            _batch_reshard(x + self.attn(attn_in, mask, use_pko=use_pko, pko_doc_starts=pko_doc_starts)),
+            _CHECKPOINT_BLOCK_ATTENTION_OUTPUT,
+        )
 
     @named_call
     def _mlp_update(self, x: Float[Array, "B S D"]) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
@@ -654,24 +679,6 @@ class Block(eqx.Module):
         pko_doc_starts: Bool[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         x = self._attention_update(x, mask, use_pko=use_pko, pko_doc_starts=pko_doc_starts)
-        return self._mlp_update(x)
-
-    @named_call
-    def call_with_transport_safe_remat(
-        self,
-        x: Float[Array, "B S D"],
-        mask: AttentionMask | jax.Array,
-        *,
-        remat_policy,
-        use_pko: bool = False,
-        pko_doc_starts: Bool[Array, "B S"] | None = None,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        x = eqx.filter_checkpoint(self._attention_update, policy=remat_policy)(
-            x,
-            mask,
-            use_pko=use_pko,
-            pko_doc_starts=pko_doc_starts,
-        )
         return self._mlp_update(x)
 
 
@@ -734,11 +741,23 @@ class Transformer(eqx.Module):
             batch_size, seq_len = hidden.shape[:2]
             pko_doc_starts = _segment_start_mask(mask, batch_size=batch_size, seq_len=seq_len)
 
+        uses_effectful_moe = resolve_moe_implementation(cfg.moe_implementation) == "deepep"
         if cfg.remat_mode == "save_moe":
-            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+            remat_save_names = MOE_REMAT_SAVE_NAMES
+            if uses_effectful_moe:
+                remat_save_names = (
+                    _CHECKPOINT_BLOCK_ATTENTION_OUTPUT,
+                    *DEEPEP_REMAT_SAVE_NAMES,
+                    *MOE_REMAT_SAVE_NAMES,
+                )
+            remat_policy = jax.checkpoint_policies.save_only_these_names(*remat_save_names)
+        elif uses_effectful_moe and cfg.remat_mode == "recompute_all":
+            remat_policy = jax.checkpoint_policies.save_only_these_names(
+                _CHECKPOINT_BLOCK_ATTENTION_OUTPUT,
+                *DEEPEP_REMAT_SAVE_NAMES,
+            )
         else:
             remat_policy = None
-        uses_effectful_moe = resolve_moe_implementation(cfg.moe_implementation) == "deepep"
 
         moe_router_stats: list[dict[str, jax.Array]] = []
         num_blocks = len(self.blocks)
@@ -749,13 +768,6 @@ class Transformer(eqx.Module):
             block_kwargs = {"use_pko": use_pko, "pko_doc_starts": pko_doc_starts if use_pko else None}
             if cfg.remat_mode == "none":
                 hidden, router_stats = block(hidden, layer_mask, **block_kwargs)
-            elif uses_effectful_moe:
-                hidden, router_stats = block.call_with_transport_safe_remat(
-                    hidden,
-                    layer_mask,
-                    remat_policy=remat_policy,
-                    **block_kwargs,
-                )
             else:
                 hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
                     hidden,

@@ -508,10 +508,33 @@ def test_xplane_summary_merges_timeline_regions_with_xprof_aggregates(tmp_path: 
     assert summary.time_breakdown.total_duration == 3_000.0
     assert any(op.name == "xprof_kernel" for op in summary.hot_ops)
     assert any(op.name == "dot.1" for op in summary.hot_ops)
+    families = {family.family: family for family in summary.semantic_families}
+    assert families["optimizer_muon"].exclusive_duration == 1_100.0
+    assert families["loss_xent"].exclusive_duration == 400.0
     assert summary.communication_ops[0].collective == "all-gather"
     assert summary.gap_before_ops[0].name == "dot.1"
     assert any(region.path == "train_step=>block_0=>matmul" for region in summary.hierarchical_regions)
     assert any("Step timing was augmented from xprof" in warning for warning in summary.trace_overview.quality_warnings)
+
+
+def test_xplane_merge_prefers_xprof_framework_paths_for_duplicate_kernel_names(tmp_path: Path, monkeypatch) -> None:
+    xplane_path = tmp_path / "profile.xplane.pb"
+    _write_xplane(xplane_path)
+    table_dir = tmp_path / "tables"
+    _write_xprof_tables(table_dir, kernel_name="dot.1")
+    table_summary = summarize_xplane_tables(
+        table_dir,
+        xplane_path=xplane_path,
+        warmup_steps=1,
+        hot_op_limit=10,
+    )
+    monkeypatch.setattr(xplane_module, "_try_summarize_xprof_tables", lambda *args, **kwargs: table_summary)
+
+    summary = summarize_xplane(xplane_path, warmup_steps=1, hot_op_limit=10)
+
+    dot_ops = [op for op in summary.hot_ops if op.name == "dot.1"]
+    assert len(dot_ops) == 1
+    assert dot_ops[0].tf_op_path == "jit(train_step)/optimizer_update/newton_schulz/dot_general:"
 
 
 def test_xplane_timeline_parser_separates_multiple_planes_with_reused_line_ids(tmp_path: Path, monkeypatch) -> None:
@@ -767,6 +790,108 @@ def test_xplane_table_summary_ignores_non_table_entries_and_handles_large_kernel
         ),
         encoding="utf-8",
     )
+    (output_dir / "framework_op_stats.json").write_text(
+        json.dumps(
+            {
+                "cols": [
+                    {"id": "rank"},
+                    {"id": "operation"},
+                    {"id": "occurrences"},
+                    {"id": "total_time"},
+                    {"id": "total_self_time"},
+                ],
+                "rows": [
+                    {
+                        "c": [
+                            {"v": 1},
+                            {"v": "jit(train_step)/optimizer_update/muonh/newton_schulz/dot_general"},
+                            {"v": 3},
+                            {"v": 1200.0},
+                            {"v": 1100.0},
+                        ]
+                    },
+                    {
+                        "c": [
+                            {"v": 2},
+                            {"v": "jit(train_step)/forward_backward/fused_linear_softmax_cross_entropy_loss"},
+                            {"v": 4},
+                            {"v": 400.0},
+                            {"v": 400.0},
+                        ]
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (output_dir / "framework_op_stats.json").write_text(
+        json.dumps(
+            {
+                "cols": [
+                    {"id": "rank"},
+                    {"id": "operation"},
+                    {"id": "occurrences"},
+                    {"id": "total_time"},
+                    {"id": "total_self_time"},
+                ],
+                "rows": [
+                    {
+                        "c": [
+                            {"v": 1},
+                            {"v": "jit(train_step)/optimizer_update/muonh/newton_schulz/dot_general"},
+                            {"v": 3},
+                            {"v": 1200.0},
+                            {"v": 1100.0},
+                        ]
+                    },
+                    {
+                        "c": [
+                            {"v": 2},
+                            {"v": "jit(train_step)/forward_backward/fused_linear_softmax_cross_entropy_loss"},
+                            {"v": 4},
+                            {"v": 400.0},
+                            {"v": 400.0},
+                        ]
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (output_dir / "framework_op_stats.json").write_text(
+        json.dumps(
+            {
+                "cols": [
+                    {"id": "rank"},
+                    {"id": "operation"},
+                    {"id": "occurrences"},
+                    {"id": "total_time"},
+                    {"id": "total_self_time"},
+                ],
+                "rows": [
+                    {
+                        "c": [
+                            {"v": 1},
+                            {"v": "jit(train_step)/optimizer_update/muonh/newton_schulz/dot_general"},
+                            {"v": 3},
+                            {"v": 1200.0},
+                            {"v": 1100.0},
+                        ]
+                    },
+                    {
+                        "c": [
+                            {"v": 2},
+                            {"v": "jit(train_step)/forward_backward/fused_linear_softmax_cross_entropy_loss"},
+                            {"v": 4},
+                            {"v": 400.0},
+                            {"v": 400.0},
+                        ]
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     summary = summarize_xplane_tables(
         output_dir,
@@ -904,7 +1029,7 @@ def _write_multi_plane_xplane(path: Path) -> None:
     path.write_bytes(xspace.SerializeToString())
 
 
-def _write_xprof_tables(output_dir: Path) -> None:
+def _write_xprof_tables(output_dir: Path, *, kernel_name: str = "xprof_kernel") -> None:
     output_dir.mkdir(parents=True)
     (output_dir / "overview_page.json").write_text(
         json.dumps(
@@ -931,12 +1056,59 @@ def _write_xprof_tables(output_dir: Path) -> None:
                 "cols": [
                     {"id": "rank"},
                     {"id": "kernel_name"},
+                    {"id": "op_name"},
                     {"id": "total_duration_us"},
                     {"id": "occurrences"},
                 ],
                 "rows": [
-                    {"c": [{"v": 1}, {"v": "xprof_kernel"}, {"v": 5_000.0}, {"v": 5}]},
-                    {"c": [{"v": 2}, {"v": "ncclAllGather"}, {"v": 800.0}, {"v": 2}]},
+                    {
+                        "c": [
+                            {"v": 1},
+                            {"v": kernel_name},
+                            {"v": "jit(train_step)/optimizer_update/newton_schulz/dot_general:"},
+                            {"v": 5_000.0},
+                            {"v": 5},
+                        ]
+                    },
+                    {"c": [{"v": 2}, {"v": "ncclAllGather"}, {"v": ""}, {"v": 800.0}, {"v": 2}]},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_framework_op_stats_fixture(output_dir)
+
+
+def _write_framework_op_stats_fixture(output_dir: Path) -> None:
+    (output_dir / "framework_op_stats.json").write_text(
+        json.dumps(
+            {
+                "cols": [
+                    {"id": "rank"},
+                    {"id": "operation"},
+                    {"id": "occurrences"},
+                    {"id": "total_time"},
+                    {"id": "total_self_time"},
+                ],
+                "rows": [
+                    {
+                        "c": [
+                            {"v": 1},
+                            {"v": "jit(train_step)/optimizer_update/muonh/newton_schulz/dot_general"},
+                            {"v": 3},
+                            {"v": 1200.0},
+                            {"v": 1100.0},
+                        ]
+                    },
+                    {
+                        "c": [
+                            {"v": 2},
+                            {"v": "jit(train_step)/forward_backward/fused_linear_softmax_cross_entropy_loss"},
+                            {"v": 4},
+                            {"v": 400.0},
+                            {"v": 400.0},
+                        ]
+                    },
                 ],
             }
         ),

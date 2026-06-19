@@ -6,8 +6,11 @@ from __future__ import annotations
 import dataclasses
 import functools
 import logging
+import os
+import statistics
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 import equinox as eqx
@@ -18,6 +21,7 @@ import levanter.callbacks as callbacks
 import levanter.tracker
 import optax
 from fray.cluster import ResourceConfig
+from fray.device_flops import device_flops_for_jax_device
 from haliax import Axis
 from haliax.partitioning import set_mesh
 from jax.sharding import Mesh, NamedSharding
@@ -232,6 +236,50 @@ def _compute_flops(
     }
 
     return flops_per_example, flops_summary
+
+
+def _make_direct_performance_logger(
+    *,
+    max_seq_len: int,
+    batch_schedule: BatchSchedule,
+    flops_per_example: float,
+    total_steps: int,
+):
+    """Log step performance directly from the custom loop."""
+    device_count = jax.device_count()
+    device = jax.devices()[0]
+    flops_per_device = device_flops_for_jax_device(device.device_kind)
+    theoretical_flops = flops_per_device * device_count if flops_per_device is not None else None
+    mfu_samples: list[float] = []
+
+    def log_direct_performance(*, step: int, loss: jax.Array, duration: float) -> None:
+        batch_size = batch_schedule.batch_size_at_step(step)
+        total_examples = batch_schedule.global_data_offset_by_step(step + 1)
+        metrics: dict[str, float | int | jax.Array] = {
+            "global_step": step,
+            "run_progress": step / total_steps,
+            "train/loss": loss,
+            "throughput/total_tokens": max_seq_len * total_examples,
+            "throughput/total_gflops": flops_per_example * total_examples / 1e9,
+        }
+
+        if duration != 0.0:
+            metrics["throughput/examples_per_second"] = float(batch_size) / duration
+            metrics["throughput/tokens_per_second"] = float(max_seq_len) * batch_size / duration
+            metrics["throughput/duration"] = duration
+            model_flops_instant = flops_per_example * batch_size / duration
+            metrics["throughput/gflops_per_second"] = model_flops_instant / 1e9
+
+            if theoretical_flops is not None:
+                mfu = model_flops_instant / theoretical_flops * 100.0
+                mfu_samples.append(mfu)
+                metrics["throughput/mfu"] = mfu
+                metrics["throughput/mean_mfu"] = statistics.mean(mfu_samples)
+                metrics["throughput/mfu_sample_count"] = len(mfu_samples)
+
+        levanter.tracker.log(metrics, step=step)
+
+    return log_direct_performance
 
 
 def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: BatchSchedule):
@@ -520,17 +568,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         profiler_enabled = profiler_cfg.is_enabled and profiler_num_steps > 0
 
         log_every = max(1, config.trainer.log_every)
-        iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(int(state.step)))
+        if trainer.load_checkpoint:
+            start_step = int(jax.device_get(state.step))
+        else:
+            start_step = 0
+        iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(start_step))
+        direct_performance_logger = _make_direct_performance_logger(
+            max_seq_len=config.model.max_seq_len,
+            batch_schedule=batch_schedule,
+            flops_per_example=flops_per_example,
+            total_steps=trainer.num_train_steps,
+        )
 
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
             eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
             opt_state_getter=lambda s: s.opt_state,
-        )
-        state_callbacks.add_hook(
-            callbacks.log_performance_stats(config.model.max_seq_len, batch_schedule, flops_per_example),
-            every=log_every,
         )
         state_callbacks.add_hook(callbacks.pbar_logger(total=trainer.num_train_steps), every=log_every)
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
@@ -567,7 +621,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         # Main optimization loop.
         try:
-            current_step = int(state.step)
+            current_step = start_step
             while current_step < trainer.num_train_steps:
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
@@ -576,40 +630,77 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
+                if current_step < 3:
+                    logger.info("Starting Grug train_step dispatch for step %s", current_step)
                 state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
                 step = current_step
+                if step < 3:
+                    logger.info("Finished Grug train_step dispatch for step %s; waiting for train/loss", step)
                 current_step += 1
 
                 jax.block_until_ready(metrics["train/loss"])
+                if step < 3:
+                    logger.info("Finished Grug train/loss block_until_ready for step %s", step)
 
                 if jnp.isnan(metrics["train/loss"]):
                     logger.error("NaN loss at step %s. Stopping training.", current_step)
                     break
                 duration = time.perf_counter() - step_start
+                if _should_log_loop_metrics(step=step, log_every=log_every):
+                    if step < 3:
+                        logger.info("Starting Grug direct performance tracker log for step %s", step)
+                    direct_performance_logger(step=step, loss=metrics["train/loss"], duration=duration)
+                    if step < 3:
+                        logger.info("Finished Grug direct performance tracker log for step %s", step)
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
+                    if step == 0:
+                        logger.info("Starting first Grug callback block")
                     state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
+                    if step == 0:
+                        logger.info("Finished first Grug state callbacks")
                     last_loss = metrics["train/loss"]
                     last_step_duration = duration
                     if _should_log_loop_metrics(step=step, log_every=log_every):
+                        if step == 0:
+                            logger.info("Starting first Grug hook_time tracker log")
                         levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
+                        if step == 0:
+                            logger.info("Finished first Grug hook_time tracker log; logging loading_time")
                         levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
+                        if step == 0:
+                            logger.info("Finished first Grug loading_time tracker log")
                         router_metrics = {
                             key: value
                             for key, value in metrics.items()
                             if (key.startswith("train/router/") or key.startswith("moe_bias/"))
                             and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
+                            and "routing_hist" not in key
                         }
                         if router_metrics:
+                            if step == 0:
+                                logger.info("Starting first Grug router_metrics tracker log")
                             levanter.tracker.log(router_metrics, step=step)
+                            if step == 0:
+                                logger.info("Finished first Grug router_metrics tracker log")
                         if "train/cross_entropy_loss" in metrics:
+                            if step == 0:
+                                logger.info("Starting first Grug cross_entropy_loss tracker log")
                             levanter.tracker.log(
                                 {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
                                 step=step,
                             )
+                            if step == 0:
+                                logger.info("Finished first Grug cross_entropy_loss tracker log")
 
                     if watch_stats is not None:
+                        if step == 0:
+                            logger.info("Starting first Grug watch_stats tracker log")
                         levanter.tracker.log(watch_stats, step=step)
+                        if step == 0:
+                            logger.info("Finished first Grug watch_stats tracker log")
+                    if step == 0:
+                        logger.info("Finished first Grug callback block")
 
                 if checkpointer is not None:
                     checkpointer.on_step(tree=state, step=current_step)
@@ -629,6 +720,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if checkpointer is not None:
                 checkpointer.on_step(tree=state, step=int(state.step), force=True)
                 checkpointer.wait_until_finished()
+
+    if os.environ.get("MAY_UPLOAD_PROFILER_ARTIFACT", "false").lower() == "true" and jax.process_index() == 0:
+        profile_dir = Path(trainer.log_dir) / run_id / "profiler"
+        if profile_dir.exists():
+            levanter.tracker.current_tracker().log_artifact(
+                str(profile_dir),
+                name=f"{run_id}-profiler",
+                type="jax_profile",
+            )
+        else:
+            logger.warning("Profiler upload requested, but profile directory does not exist: %s", profile_dir)
 
     levanter.tracker.current_tracker().finish()
 

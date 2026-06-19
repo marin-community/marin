@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from dataclasses import dataclass
 from typing import Literal
 
@@ -9,7 +10,12 @@ import jax
 import jax.numpy as jnp
 import optax
 from levanter.optim import OptimizerConfig
-from levanter.optim.grugmuon import _grug_scale_with_muon
+from levanter.optim.grugmuon import (
+    DEFAULT_MAX_GROUPED_STACK_SIZE,
+    ORTHOGONALIZATION_LAYOUTS,
+    STACK_BATCH_SHARDED,
+    _grug_scale_with_muon,
+)
 from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
@@ -18,8 +24,15 @@ from experiments.grug.moe.optimizer_sharding import assert_update_sharding_match
 
 Expert3DOptimizer = Literal["muonh", "adamh"]
 VALID_EXPERT_3D_OPTIMIZERS: tuple[Expert3DOptimizer, ...] = ("muonh", "adamh")
+MayOptimizer = Literal["muonh", "sgd"]
+VALID_MAY_OPTIMIZERS: tuple[MayOptimizer, ...] = ("muonh", "sgd")
 REPLICA_DCN_AXIS = "replica_dcn"
 EXPERT_AXIS = "expert"
+MATCH_OPTIMIZER_SHARDING_ENV = "MAY_MATCH_OPTIMIZER_SHARDING"
+
+
+def _match_optimizer_sharding_enabled() -> bool:
+    return os.environ.get(MATCH_OPTIMIZER_SHARDING_ENV, "true").lower() != "false"
 
 
 def _uses_adamh_baseline_adam_group(path_lower: str) -> bool:
@@ -74,6 +87,8 @@ def _match_named_update_sharding() -> optax.GradientTransformation:
     def update_fn(updates, state, params=None):
         if params is None:
             return updates, state
+        if not _match_optimizer_sharding_enabled():
+            return updates, state
 
         def match_sharding(update, param):
             if update is None:
@@ -89,7 +104,23 @@ def _match_named_update_sharding() -> optax.GradientTransformation:
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+def _with_named_update_scope(name: str, transform: optax.GradientTransformation) -> optax.GradientTransformation:
+    """Annotate an Optax transform update with a stable profiler region."""
+
+    def init_fn(params):
+        return transform.init(params)
+
+    def update_fn(updates, state, params=None):
+        with jax.named_scope(name):
+            return transform.update(updates, state, params)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 def _match_named_sharding_to_params(updates, params):
+    if not _match_optimizer_sharding_enabled():
+        return updates
+
     def match_sharding(update, param):
         if update is None:
             return None
@@ -102,6 +133,9 @@ def _match_named_sharding_to_params(updates, params):
 
 
 def _match_named_sharding_to_updates(params, updates):
+    if not _match_optimizer_sharding_enabled():
+        return params
+
     def match_sharding(param, update):
         if update is None or not hasattr(param, "shape"):
             return param
@@ -113,8 +147,16 @@ def _match_named_sharding_to_updates(params, updates):
     return jax.tree.map(match_sharding, params, updates, is_leaf=lambda x: x is None)
 
 
-def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float):
-    direction_updates = _match_named_sharding_to_params(direction_updates, params)
+def _scale_invariant_hyperball_updates(
+    params,
+    direction_updates,
+    learning_rate: float,
+    *,
+    label: str = "scale-invariant hyperball",
+):
+    with jax.named_scope("muonh/hyperball/match_direction_sharding"):
+        direction_updates = _match_named_sharding_to_params(direction_updates, params)
+    assert_update_sharding_matches_params(direction_updates, params, f"{label} direction_updates after sharding match")
 
     def scale_invariant_update(param, update):
         if update is None:
@@ -122,31 +164,38 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
         if not hasattr(param, "ndim"):
             return update
         if param.ndim == 2:
-            param_norm = jnp.linalg.norm(param)
-            update_norm = jnp.linalg.norm(update)
+            with jax.named_scope("muonh/hyperball/matrix_norms"):
+                param_norm = jnp.linalg.norm(param)
+                update_norm = jnp.linalg.norm(update)
+                step_scale = learning_rate * param_norm / jnp.maximum(update_norm, 1e-10)
+                dot = jnp.sum(param * update)
+            with jax.named_scope("muonh/hyperball/matrix_projection"):
+                new_param_norm_sq = param_norm**2 - 2 * step_scale * dot + step_scale**2 * update_norm**2
+                new_param_norm = jnp.sqrt(jnp.maximum(new_param_norm_sq, 1e-30))
+                rescale = param_norm / jnp.maximum(new_param_norm, 1e-10)
+                return (rescale - 1) * param - rescale * step_scale * update
+
+        axes = tuple(range(1, param.ndim))
+        with jax.named_scope("muonh/hyperball/expert_stack_norms"):
+            param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
+            update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
             step_scale = learning_rate * param_norm / jnp.maximum(update_norm, 1e-10)
-            dot = jnp.sum(param * update)
+            dot = jnp.sum(param * update, axis=axes, keepdims=True)
+        with jax.named_scope("muonh/hyperball/expert_stack_projection"):
             new_param_norm_sq = param_norm**2 - 2 * step_scale * dot + step_scale**2 * update_norm**2
             new_param_norm = jnp.sqrt(jnp.maximum(new_param_norm_sq, 1e-30))
             rescale = param_norm / jnp.maximum(new_param_norm, 1e-10)
             return (rescale - 1) * param - rescale * step_scale * update
 
-        axes = tuple(range(1, param.ndim))
-        param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
-        update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
-        step_scale = learning_rate * param_norm / jnp.maximum(update_norm, 1e-10)
-        dot = jnp.sum(param * update, axis=axes, keepdims=True)
-        new_param_norm_sq = param_norm**2 - 2 * step_scale * dot + step_scale**2 * update_norm**2
-        new_param_norm = jnp.sqrt(jnp.maximum(new_param_norm_sq, 1e-30))
-        rescale = param_norm / jnp.maximum(new_param_norm, 1e-10)
-        return (rescale - 1) * param - rescale * step_scale * update
-
-    return jax.tree.map(
-        scale_invariant_update,
-        params,
-        direction_updates,
-        is_leaf=lambda x: x is None,
-    )
+    with jax.named_scope("muonh/hyperball/project_updates"):
+        hyperball_updates = jax.tree.map(
+            scale_invariant_update,
+            params,
+            direction_updates,
+            is_leaf=lambda x: x is None,
+        )
+    assert_update_sharding_matches_params(hyperball_updates, params, f"{label} updates after hyperball")
+    return hyperball_updates
 
 
 def scale_with_grug_muonh(
@@ -157,6 +206,8 @@ def scale_with_grug_muonh(
     learning_rate: float = 0.02,
     coefficient_type: CoefficientType = "quintic",
     momentum_sharding_fn=None,
+    orthogonalization_layout: str = STACK_BATCH_SHARDED,
+    max_grouped_stack_size: int = DEFAULT_MAX_GROUPED_STACK_SIZE,
 ) -> optax.GradientTransformation:
     """MuonH transform for raw Grug arrays with matrix-shaped trailing dims."""
     muon_transform = _grug_scale_with_muon(
@@ -167,6 +218,8 @@ def scale_with_grug_muonh(
         use_kimi_scaling=False,
         coefficient_type=coefficient_type,
         momentum_sharding_fn=momentum_sharding_fn,
+        orthogonalization_layout=orthogonalization_layout,
+        max_grouped_stack_size=max_grouped_stack_size,
     )
 
     def init_fn(params):
@@ -176,9 +229,11 @@ def scale_with_grug_muonh(
         if params is None:
             raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
 
-        muon_updates, next_state = muon_transform.update(updates, state, params)
+        with jax.named_scope("muonh/direction_update"):
+            muon_updates, next_state = muon_transform.update(updates, state, params)
         assert_update_sharding_matches_params(muon_updates, params, "MuonH direction_updates before hyperball")
-        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
+        with jax.named_scope("muonh/hyperball"):
+            muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate, label="MuonH")
         assert_update_sharding_matches_params(muonh_updates, params, "MuonH updates after hyperball")
         return muonh_updates, next_state
 
@@ -237,9 +292,12 @@ class GrugMoeAdamHConfig(OptimizerConfig):
 
             return optax.multi_transform(
                 {
-                    "adamh": adamh_transform(),
-                    "adamh_expert": adamh_expert_transform(),
-                    "adam": adam_transform(),
+                    "adamh": _with_named_update_scope("optimizer/group/adamh", adamh_transform()),
+                    "adamh_expert": _with_named_update_scope(
+                        "optimizer/group/adamh_expert",
+                        adamh_expert_transform(),
+                    ),
+                    "adam": _with_named_update_scope("optimizer/group/adam", adam_transform()),
                 },
                 self.create_mask,
             )
@@ -288,11 +346,18 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
     expert_3d_optimizer: Expert3DOptimizer = "muonh"
+    orthogonalization_layout: str = STACK_BATCH_SHARDED
+    max_grouped_stack_size: int = DEFAULT_MAX_GROUPED_STACK_SIZE
 
     def build(self, num_train_steps):
         if self.expert_3d_optimizer not in VALID_EXPERT_3D_OPTIMIZERS:
             valid = ", ".join(VALID_EXPERT_3D_OPTIMIZERS)
             raise ValueError(f"expert_3d_optimizer={self.expert_3d_optimizer!r} must be one of {valid}")
+        if self.orthogonalization_layout not in ORTHOGONALIZATION_LAYOUTS:
+            valid = ", ".join(ORTHOGONALIZATION_LAYOUTS)
+            raise ValueError(f"orthogonalization_layout={self.orthogonalization_layout!r} must be one of {valid}")
+        if self.max_grouped_stack_size < 1:
+            raise ValueError(f"max_grouped_stack_size={self.max_grouped_stack_size} must be positive")
 
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
@@ -311,6 +376,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         learning_rate=learning_rate,
                         coefficient_type=self.coefficient_type,
                         momentum_sharding_fn=_expert_momentum_sharding,
+                        orthogonalization_layout=self.orthogonalization_layout,
+                        max_grouped_stack_size=self.max_grouped_stack_size,
                     )
                 )
                 components.append(_match_named_update_sharding())
@@ -335,9 +402,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
             return optax.multi_transform(
                 {
-                    "muonh": muonh_transform(),
-                    "adamh": adamh_transform_at(learning_rate),
-                    "adam": adam_transform_at(adam_lr),
+                    "muonh": _with_named_update_scope("optimizer/group/muonh", muonh_transform()),
+                    "adamh": _with_named_update_scope("optimizer/group/adamh", adamh_transform_at(learning_rate)),
+                    "adam": _with_named_update_scope("optimizer/group/adam", adam_transform_at(adam_lr)),
                 },
                 self.create_mask,
             )
@@ -373,10 +440,37 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
+@OptimizerConfig.register_subclass("grug_moe_sgd_v1")
+@dataclass(frozen=True)
+class GrugMoeSgdConfig(OptimizerConfig):
+    """Stateless SGD for Grug MoE throughput diagnostics."""
+
+    weight_decay: float = 0.0
+    max_grad_norm: float | None = None
+
+    def build(self, num_train_steps):
+        learning_rate_schedule = self.lr_scheduler(num_train_steps)
+
+        def optimizer(learning_rate):
+            components = []
+            if self.max_grad_norm:
+                components.append(optax.clip_by_global_norm(self.max_grad_norm))
+            if self.weight_decay > 0:
+                components.append(optax.add_decayed_weights(self.weight_decay, self.build_weight_decay_mask()))
+            components.append(optax.scale(-learning_rate))
+            components.append(_match_named_update_sharding())
+            return optax.chain(*components)
+
+        return optax.inject_hyperparams(optimizer)(learning_rate=learning_rate_schedule)
+
+
 __all__ = [
     "VALID_EXPERT_3D_OPTIMIZERS",
+    "VALID_MAY_OPTIMIZERS",
     "Expert3DOptimizer",
     "GrugMoeAdamHConfig",
     "GrugMoeMuonHConfig",
+    "GrugMoeSgdConfig",
+    "MayOptimizer",
     "scale_with_grug_muonh",
 ]

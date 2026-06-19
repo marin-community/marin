@@ -14,7 +14,7 @@ fi
 ENV_FILE="${MARIN_R2_ENV_FILE:-$DEFAULT_ENV_FILE}"
 ENV_FILE_EXPLICIT=false
 KUBECONFIG_PATH="${KUBECONFIG:-$HOME/.kube/coreweave-iris-gpu}"
-MARIN_PREFIX="s3://marin-na/marin/"
+MARIN_PREFIX="s3://marin-na/tmp/ttl=7d"
 RUN_ID=""
 SUBMIT=false
 TASK_IMAGE="${MAY_TASK_IMAGE:-}"
@@ -23,6 +23,7 @@ GPU_REPLICAS=32
 EXPERT_AXIS=8
 REPLICA_AXIS=1
 MODEL_AXIS=1
+ALLOW_CROSS_NODE_EXPERT_AXIS="${MAY_ALLOW_CROSS_NODE_EXPERT_AXIS:-false}"
 BATCH=256
 SEQ_LEN=4096
 SLIDING_WINDOW=2048
@@ -37,6 +38,12 @@ PKO_ON_LAST_LAYER="${MAY_PKO_ON_LAST_LAYER:-true}"
 BLOCK_CROSS_DOCUMENT_ATTENTION="${MAY_BLOCK_CROSS_DOCUMENT_ATTENTION:-true}"
 INPUT_EMBED_SHARDING="${MAY_INPUT_EMBED_SHARDING:-hidden_batch}"
 OUTPUT_PROJ_SHARDING="${MAY_OUTPUT_PROJ_SHARDING:-lm_head}"
+OPTIMIZER="${MAY_OPTIMIZER:-muonh}"
+MUON_BACKEND_STEPS="${MAY_MUON_BACKEND_STEPS:-5}"
+MUON_ORTHOGONALIZATION_LAYOUT="${MAY_MUON_ORTHOGONALIZATION_LAYOUT:-stack_batch_sharded}"
+MUON_MAX_GROUPED_STACK_SIZE="${MAY_MUON_MAX_GROUPED_STACK_SIZE:-256}"
+ASSERT_OPTIMIZER_SHARDING="${MAY_ASSERT_OPTIMIZER_SHARDING:-true}"
+MATCH_OPTIMIZER_SHARDING="${MAY_MATCH_OPTIMIZER_SHARDING:-true}"
 EXPERT_3D_OPTIMIZER="${MAY_EXPERT_3D_OPTIMIZER:-muonh}"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 LIVE_PARAM_MODE="param"
@@ -49,7 +56,12 @@ PROFILER_STEPS=8
 ENABLE_HLO_PROTO="${MAY_PROFILER_ENABLE_HLO_PROTO:-false}"
 HOST_TRACER_LEVEL="${MAY_PROFILER_HOST_TRACER_LEVEL:-1}"
 PYTHON_TRACER_LEVEL="${MAY_PROFILER_PYTHON_TRACER_LEVEL:-0}"
+DEVICE_TRACER_LEVEL="${MAY_PROFILER_DEVICE_TRACER_LEVEL:-}"
+UPLOAD_PROFILER_ARTIFACT="${MAY_UPLOAD_PROFILER_ARTIFACT:-false}"
 XLA_MEMORY_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.95}"
+PALLAS_CE_AUTOTUNE_ON_MISS="${LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS:-false}"
+NCCL_SOCKET_IFNAME_VALUE="${NCCL_SOCKET_IFNAME:-^ibs,ibp,lo,docker,veth,cilium,lxc}"
+NCCL_SOCKET_FAMILY_VALUE="${NCCL_SOCKET_FAMILY:-AF_INET}"
 WORKER_CPU=32
 WATCH_INTERVAL=0
 LOG_EVERY=1
@@ -67,7 +79,7 @@ Options:
   --submit                  Submit the Iris dispatcher job. Without this, print a dry-run summary.
   --run-id RUN_ID           Use a fixed run id instead of generating one.
   --env-file PATH           Load R2 credentials from PATH (default: $MARIN_R2_ENV_FILE or ~/.config/marin/marin-r2.env).
-  --prefix URI              MARIN_PREFIX for outputs (default: s3://marin-na/marin/).
+  --prefix URI              MARIN_PREFIX for outputs (default: s3://marin-na/tmp/ttl=7d).
   --cluster NAME            Iris cluster name (default: cw-us-east-02a).
   --kubeconfig PATH         Kubeconfig path (default: $KUBECONFIG or ~/.kube/coreweave-iris-gpu).
   --task-image IMAGE        Task image override for child GPU jobs (sets MAY_TASK_IMAGE).
@@ -76,6 +88,9 @@ Options:
   --expert-axis N           MAY_EXPERT_AXIS (default: 8).
   --replica-axis N          MAY_REPLICA_AXIS (default: 1).
   --model-axis N            MAY_MODEL_AXIS tensor/model-parallel axis size (default: 1).
+  --allow-cross-node-expert-axis BOOL
+                            MAY_ALLOW_CROSS_NODE_EXPERT_AXIS diagnostic toggle;
+                            allows expert-axis groups to span workers (default: false).
   --batch N                 MAY_BATCH (default: 256).
   --seq-len N               MAY_SEQ_LEN (default: 4096).
   --sliding-window N        MAY_SLIDING_WINDOW for short layers (default: 2048).
@@ -85,6 +100,11 @@ Options:
   --profiler-start N        MAY_PROFILER_START (default: 12).
   --profiler-steps N        MAY_PROFILER_STEPS (default: 8; set 0 to disable).
   --xla-memory-fraction F   XLA_PYTHON_CLIENT_MEM_FRACTION (default: 0.95).
+  --nccl-socket-ifname IFACE NCCL_SOCKET_IFNAME for bootstrap/OOB sockets
+                            (default: ^ibs,ibp,lo,docker,veth,cilium,lxc).
+  --nccl-socket-family FAMILY NCCL_SOCKET_FAMILY (default: AF_INET).
+  --pallas-ce-autotune-on-miss BOOL
+                            LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS (default: false).
   --tracker NAME            MAY_TRACKER: wandb or json_logger (default: wandb).
   --data NAME               MAY_DATA: slimpajama, nemotron, or synthetic (default: slimpajama).
   --checkpoints MODE        MAY_CHECKPOINTS: none, local, or s3 (default: none).
@@ -95,7 +115,17 @@ Options:
                             MAY_BLOCK_CROSS_DOCUMENT_ATTENTION for synthetic data (default: true).
   --input-embed-sharding MODE MAY_INPUT_EMBED_SHARDING: hidden_batch or replicated (default: hidden_batch).
   --output-proj-sharding MODE MAY_OUTPUT_PROJ_SHARDING: lm_head or replicated (default: lm_head).
-  --expert-3d-optimizer MODE MAY_EXPERT_3D_OPTIMIZER: muonh or adamh (default: muonh).
+  --optimizer MODE        MAY_OPTIMIZER: muonh or sgd (default: muonh).
+  --muon-backend-steps N  MAY_MUON_BACKEND_STEPS for MuonH (default: 5).
+  --muon-orthogonalization-layout MODE
+                            MAY_MUON_ORTHOGONALIZATION_LAYOUT: stack_batch_sharded or vmap_replicated (default: stack_batch_sharded).
+  --muon-max-grouped-stack-size N
+                            MAY_MUON_MAX_GROUPED_STACK_SIZE for grouped Muon (default: 256).
+  --assert-optimizer-sharding BOOL
+                            MAY_ASSERT_OPTIMIZER_SHARDING diagnostic toggle (default: true).
+  --match-optimizer-sharding BOOL
+                            MAY_MATCH_OPTIMIZER_SHARDING diagnostic toggle for explicit optimizer reshards (default: true).
+  --expert-3d-optimizer MODE MAY_EXPERT_3D_OPTIMIZER: muonh or adamh when --optimizer=muonh (default: muonh).
   --mp POLICY               MAY_MP policy string.
   --live-param-mode MODE    MAY_LIVE_PARAM_MODE: param or compute_with_master (default: param).
   --attention NAME          MAY_ATTENTION_IMPLEMENTATION (default: gpu_fa4_cute).
@@ -165,6 +195,10 @@ while [ "$#" -gt 0 ]; do
             MODEL_AXIS="$2"
             shift 2
             ;;
+        --allow-cross-node-expert-axis)
+            ALLOW_CROSS_NODE_EXPERT_AXIS="$2"
+            shift 2
+            ;;
         --batch)
             BATCH="$2"
             shift 2
@@ -201,6 +235,18 @@ while [ "$#" -gt 0 ]; do
             XLA_MEMORY_FRACTION="$2"
             shift 2
             ;;
+        --nccl-socket-ifname)
+            NCCL_SOCKET_IFNAME_VALUE="$2"
+            shift 2
+            ;;
+        --nccl-socket-family)
+            NCCL_SOCKET_FAMILY_VALUE="$2"
+            shift 2
+            ;;
+        --pallas-ce-autotune-on-miss)
+            PALLAS_CE_AUTOTUNE_ON_MISS="$2"
+            shift 2
+            ;;
         --tracker)
             TRACKER="$2"
             shift 2
@@ -235,6 +281,30 @@ while [ "$#" -gt 0 ]; do
             ;;
         --output-proj-sharding)
             OUTPUT_PROJ_SHARDING="$2"
+            shift 2
+            ;;
+        --optimizer)
+            OPTIMIZER="$2"
+            shift 2
+            ;;
+        --muon-backend-steps)
+            MUON_BACKEND_STEPS="$2"
+            shift 2
+            ;;
+        --muon-orthogonalization-layout)
+            MUON_ORTHOGONALIZATION_LAYOUT="$2"
+            shift 2
+            ;;
+        --muon-max-grouped-stack-size)
+            MUON_MAX_GROUPED_STACK_SIZE="$2"
+            shift 2
+            ;;
+        --assert-optimizer-sharding)
+            ASSERT_OPTIMIZER_SHARDING="$2"
+            shift 2
+            ;;
+        --match-optimizer-sharding)
+            MATCH_OPTIMIZER_SHARDING="$2"
             shift 2
             ;;
         --expert-3d-optimizer)
@@ -324,6 +394,24 @@ case "$OUTPUT_PROJ_SHARDING" in
         ;;
 esac
 
+case "$OPTIMIZER" in
+    muonh|sgd)
+        ;;
+    *)
+        echo "ERROR: --optimizer must be muonh or sgd, got: $OPTIMIZER" >&2
+        exit 1
+        ;;
+esac
+
+case "$MUON_ORTHOGONALIZATION_LAYOUT" in
+    stack_batch_sharded|stack_batch_4d_sharded|vmap_replicated)
+        ;;
+    *)
+        echo "ERROR: --muon-orthogonalization-layout must be stack_batch_sharded, stack_batch_4d_sharded, or vmap_replicated, got: $MUON_ORTHOGONALIZATION_LAYOUT" >&2
+        exit 1
+        ;;
+esac
+
 case "$EXPERT_3D_OPTIMIZER" in
     muonh|adamh)
         ;;
@@ -345,8 +433,13 @@ if [ -z "$RUN_ID" ]; then
     RUN_ID="cw-may-d2560-profile-$(date -u +%Y%m%d-%H%M%S)"
 fi
 
-if [ "$SAVE_XLA_DUMPS" = true ] && [ -z "$XLA_FLAGS_VALUE" ]; then
-    XLA_FLAGS_VALUE="--xla_dump_to=/tmp/xla_dumps/${RUN_ID} --xla_dump_hlo_as_text --xla_dump_hlo_pass_re=.*"
+if [ "$SAVE_XLA_DUMPS" = true ]; then
+    XLA_DUMP_FLAGS="--xla_dump_to=/tmp/xla_dumps/${RUN_ID} --xla_dump_hlo_as_text --xla_dump_hlo_pass_re=.*"
+    if [ -z "$XLA_FLAGS_VALUE" ]; then
+        XLA_FLAGS_VALUE="$XLA_DUMP_FLAGS"
+    elif [[ "$XLA_FLAGS_VALUE" != *"--xla_dump_to="* ]]; then
+        XLA_FLAGS_VALUE="$XLA_FLAGS_VALUE $XLA_DUMP_FLAGS"
+    fi
 fi
 
 RUN_TOKENS=$((BATCH * SEQ_LEN * STEPS))
@@ -364,6 +457,7 @@ ENV_ARGS=(
     -e MAY_EXPERT_AXIS "$EXPERT_AXIS"
     -e MAY_REPLICA_AXIS "$REPLICA_AXIS"
     -e MAY_MODEL_AXIS "$MODEL_AXIS"
+    -e MAY_ALLOW_CROSS_NODE_EXPERT_AXIS "$ALLOW_CROSS_NODE_EXPERT_AXIS"
     -e MAY_BATCH "$BATCH"
     -e MAY_SEQ_LEN "$SEQ_LEN"
     -e MAY_SLIDING_WINDOW "$SLIDING_WINDOW"
@@ -378,6 +472,12 @@ ENV_ARGS=(
     -e MAY_BLOCK_CROSS_DOCUMENT_ATTENTION "$BLOCK_CROSS_DOCUMENT_ATTENTION"
     -e MAY_INPUT_EMBED_SHARDING "$INPUT_EMBED_SHARDING"
     -e MAY_OUTPUT_PROJ_SHARDING "$OUTPUT_PROJ_SHARDING"
+    -e MAY_OPTIMIZER "$OPTIMIZER"
+    -e MAY_MUON_BACKEND_STEPS "$MUON_BACKEND_STEPS"
+    -e MAY_MUON_ORTHOGONALIZATION_LAYOUT "$MUON_ORTHOGONALIZATION_LAYOUT"
+    -e MAY_MUON_MAX_GROUPED_STACK_SIZE "$MUON_MAX_GROUPED_STACK_SIZE"
+    -e MAY_ASSERT_OPTIMIZER_SHARDING "$ASSERT_OPTIMIZER_SHARDING"
+    -e MAY_MATCH_OPTIMIZER_SHARDING "$MATCH_OPTIMIZER_SHARDING"
     -e MAY_EXPERT_3D_OPTIMIZER "$EXPERT_3D_OPTIMIZER"
     -e MAY_MP "$MP"
     -e MAY_LIVE_PARAM_MODE "$LIVE_PARAM_MODE"
@@ -390,19 +490,26 @@ ENV_ARGS=(
     -e MAY_PROFILER_ENABLE_HLO_PROTO "$ENABLE_HLO_PROTO"
     -e MAY_PROFILER_HOST_TRACER_LEVEL "$HOST_TRACER_LEVEL"
     -e MAY_PROFILER_PYTHON_TRACER_LEVEL "$PYTHON_TRACER_LEVEL"
+    -e MAY_UPLOAD_PROFILER_ARTIFACT "$UPLOAD_PROFILER_ARTIFACT"
     -e MAY_WATCH_INTERVAL "$WATCH_INTERVAL"
     -e MAY_LOG_EVERY "$LOG_EVERY"
     -e MAY_LOG_JAXPRS "$LOG_JAXPRS"
     -e MAY_LOG_XLA_HLO "$LOG_XLA_HLO"
     -e MAY_SAVE_XLA_DUMPS "$SAVE_XLA_DUMPS"
     -e XLA_PYTHON_CLIENT_MEM_FRACTION "$XLA_MEMORY_FRACTION"
+    -e LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS "$PALLAS_CE_AUTOTUNE_ON_MISS"
+    -e NCCL_SOCKET_IFNAME "$NCCL_SOCKET_IFNAME_VALUE"
+    -e NCCL_SOCKET_FAMILY "$NCCL_SOCKET_FAMILY_VALUE"
 )
 
 if [ -n "$XLA_FLAGS_VALUE" ]; then
     ENV_ARGS+=(-e XLA_FLAGS "$XLA_FLAGS_VALUE")
 fi
+if [ -n "$DEVICE_TRACER_LEVEL" ]; then
+    ENV_ARGS+=(-e MAY_PROFILER_DEVICE_TRACER_LEVEL "$DEVICE_TRACER_LEVEL")
+fi
 
-for maybe_env in WANDB_API_KEY WANDB_ENTITY WANDB_PROJECT MAY_WANDB_GROUP TF_GPU_ALLOCATOR; do
+for maybe_env in WANDB_API_KEY WANDB_ENTITY WANDB_PROJECT MAY_WANDB_GROUP TF_GPU_ALLOCATOR NCCL_DEBUG NCCL_DEBUG_SUBSYS NCCL_IB_DISABLE LEVANTER_PALLAS_GPU_CUSTOM_BWD_V_BLOCK_SIZE; do
     if [ -n "${!maybe_env:-}" ]; then
         ENV_ARGS+=(-e "$maybe_env" "${!maybe_env}")
     fi
@@ -436,9 +543,12 @@ steps: $STEPS
 run_tokens: $RUN_TOKENS
 total_tokens: $TOTAL_TOKENS
 tracker: $TRACKER
-profiler: start=$PROFILER_START steps=$PROFILER_STEPS hlo_proto=$ENABLE_HLO_PROTO
+profiler: start=$PROFILER_START steps=$PROFILER_STEPS hlo_proto=$ENABLE_HLO_PROTO device_tracer=$DEVICE_TRACER_LEVEL upload_artifact=$UPLOAD_PROFILER_ARTIFACT
 checkpoints: $CHECKPOINTS
 xla_memory_fraction: $XLA_MEMORY_FRACTION
+nccl_socket_ifname: $NCCL_SOCKET_IFNAME_VALUE
+nccl_socket_family: $NCCL_SOCKET_FAMILY_VALUE
+pallas_ce_autotune_on_miss: $PALLAS_CE_AUTOTUNE_ON_MISS
 mp: $MP
 live_param_mode: $LIVE_PARAM_MODE
 watch_interval: $WATCH_INTERVAL
@@ -452,6 +562,12 @@ pko_on_last_layer: $PKO_ON_LAST_LAYER
 block_cross_document_attention: $BLOCK_CROSS_DOCUMENT_ATTENTION
 input_embed_sharding: $INPUT_EMBED_SHARDING
 output_proj_sharding: $OUTPUT_PROJ_SHARDING
+optimizer: $OPTIMIZER
+muon_backend_steps: $MUON_BACKEND_STEPS
+muon_orthogonalization_layout: $MUON_ORTHOGONALIZATION_LAYOUT
+muon_max_grouped_stack_size: $MUON_MAX_GROUPED_STACK_SIZE
+assert_optimizer_sharding: $ASSERT_OPTIMIZER_SHARDING
+match_optimizer_sharding: $MATCH_OPTIMIZER_SHARDING
 expert_3d_optimizer: $EXPERT_3D_OPTIMIZER
 attention: $ATTENTION_IMPLEMENTATION
 ce_implementation: ${CE_IMPLEMENTATION:-default}

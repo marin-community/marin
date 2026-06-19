@@ -42,6 +42,19 @@ _CHECKPOINT_DISPATCH_INPUT = "grug_moe_dispatch_input"
 _CHECKPOINT_EXPERT_HIDDEN = "grug_moe_expert_hidden"
 _CHECKPOINT_DISPATCH_OUTPUT = "grug_moe_dispatch_output"
 _CHECKPOINT_MOE_OUTPUT = "grug_moe_output"
+_CHECKPOINT_DEEPEP_RECV_X = "grug_moe_deepep_recv_x"
+_CHECKPOINT_DEEPEP_RECV_TOPK_IDX = "grug_moe_deepep_recv_topk_idx"
+_CHECKPOINT_DEEPEP_RECV_TOPK_WEIGHTS = "grug_moe_deepep_recv_topk_weights"
+_CHECKPOINT_DEEPEP_RECV_SRC_IDX = "grug_moe_deepep_recv_src_idx"
+_CHECKPOINT_DEEPEP_RANK_PREFIX_MATRIX = "grug_moe_deepep_rank_prefix_matrix"
+_CHECKPOINT_DEEPEP_CHANNEL_PREFIX_MATRIX = "grug_moe_deepep_channel_prefix_matrix"
+_CHECKPOINT_DEEPEP_RECV_CHANNEL_PREFIX_MATRIX = "grug_moe_deepep_recv_channel_prefix_matrix"
+_CHECKPOINT_DEEPEP_SEND_HEAD = "grug_moe_deepep_send_head"
+_CHECKPOINT_DEEPEP_NUM_RECV_TOKENS = "grug_moe_deepep_num_recv_tokens"
+_CHECKPOINT_DEEPEP_IS_TOKEN_IN_RANK = "grug_moe_deepep_is_token_in_rank"
+_CHECKPOINT_DEEPEP_ASSIGNMENT_WEIGHTS = "grug_moe_deepep_assignment_weights"
+_CHECKPOINT_DEEPEP_RECV_TOKEN_INDICES = "grug_moe_deepep_recv_token_indices"
+_CHECKPOINT_DEEPEP_LOCAL_GROUP_SIZES = "grug_moe_deepep_local_group_sizes"
 
 # Checkpoint names every MoE backend tags on its dispatch tensors. A remat
 # policy of jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
@@ -52,6 +65,25 @@ MOE_REMAT_SAVE_NAMES = (
     _CHECKPOINT_EXPERT_HIDDEN,
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_MOE_OUTPUT,
+)
+
+# DeepEP's transport FFI calls are effectful and expensive. Saving these
+# residuals lets a normal block-level remat policy keep dispatch/combine handles
+# live without structurally moving DeepEP outside the block checkpoint.
+DEEPEP_REMAT_SAVE_NAMES = (
+    _CHECKPOINT_DEEPEP_RECV_X,
+    _CHECKPOINT_DEEPEP_RECV_TOPK_IDX,
+    _CHECKPOINT_DEEPEP_RECV_TOPK_WEIGHTS,
+    _CHECKPOINT_DEEPEP_RECV_SRC_IDX,
+    _CHECKPOINT_DEEPEP_RANK_PREFIX_MATRIX,
+    _CHECKPOINT_DEEPEP_CHANNEL_PREFIX_MATRIX,
+    _CHECKPOINT_DEEPEP_RECV_CHANNEL_PREFIX_MATRIX,
+    _CHECKPOINT_DEEPEP_SEND_HEAD,
+    _CHECKPOINT_DEEPEP_NUM_RECV_TOKENS,
+    _CHECKPOINT_DEEPEP_IS_TOKEN_IN_RANK,
+    _CHECKPOINT_DEEPEP_ASSIGNMENT_WEIGHTS,
+    _CHECKPOINT_DEEPEP_RECV_TOKEN_INDICES,
+    _CHECKPOINT_DEEPEP_LOCAL_GROUP_SIZES,
 )
 
 

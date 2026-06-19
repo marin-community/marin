@@ -1,20 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import jax
 import optax
 from levanter.utils.jax_utils import leaf_key_paths
 
 EXPERT_AXIS = "expert"
+ASSERT_OPTIMIZER_SHARDING_ENV = "MAY_ASSERT_OPTIMIZER_SHARDING"
 
 
 def target_named_sharding(array) -> jax.sharding.NamedSharding | None:
     if array is None or not hasattr(array, "shape"):
         return None
-    sharding = getattr(array, "sharding", None)
-    if sharding is None:
-        aval = jax.typeof(array)
+    if isinstance(array, jax.core.Tracer):
+        aval = getattr(array, "aval", None)
         sharding = getattr(aval, "sharding", None)
+    else:
+        sharding = getattr(array, "sharding", None)
     if isinstance(sharding, jax.sharding.NamedSharding):
         return sharding
     return None
@@ -35,6 +39,9 @@ def _path_str(path) -> str:
 
 
 def assert_update_sharding_matches_params(updates, params, label: str) -> None:
+    if os.environ.get(ASSERT_OPTIMIZER_SHARDING_ENV, "true").lower() == "false":
+        return
+
     paths = leaf_key_paths(params)
 
     def check(update, param, path):

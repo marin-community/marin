@@ -69,8 +69,12 @@ defaults:
       milliseconds: 2400000    # 40 min — covers cold bare-metal provisioning + Pod startup
   task_env:
     MARIN_PREFIX: s3://marin-na/marin
-    # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces.
-    NCCL_SOCKET_IFNAME: =enp157s0np0
+    # NCCL bootstrap/OOB socket: exclude IB/IPoIB and virtual interfaces so NCCL
+    # falls back to a routable ethernet interface. Exact ethernet names vary by
+    # CoreWeave node image/region, while the IB data NICs are still used for
+    # collectives themselves.
+    NCCL_SOCKET_IFNAME: "^ibs,ibp,lo,docker,veth,cilium,lxc"
+    NCCL_SOCKET_FAMILY: AF_INET
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001

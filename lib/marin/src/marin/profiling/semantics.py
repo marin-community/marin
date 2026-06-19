@@ -10,8 +10,15 @@ import re
 from collections.abc import Iterable
 
 _SEMANTIC_FAMILY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("optimizer_muon", re.compile(r"muon|newton_schulz|zeropower|orthogonalize", re.IGNORECASE)),
+    ("optimizer_adam", re.compile(r"adamh|adam|update_(?:first|second)_moment", re.IGNORECASE)),
+    ("optimizer_apply", re.compile(r"optimizer_update|apply_updates|apply_qb_betas", re.IGNORECASE)),
+    ("moe", re.compile(r"moe|ragged|expert", re.IGNORECASE)),
     ("attention_splash", re.compile(r"splash_mha|splash_attention", re.IGNORECASE)),
-    ("attention_flash", re.compile(r"flash_attention|fused_attention", re.IGNORECASE)),
+    ("attention_flash", re.compile(r"flash_attention|fused_attention|fa4_cute", re.IGNORECASE)),
+    ("attention_dense", re.compile(r"CausalSelfAttention|apply_rotary_embedding", re.IGNORECASE)),
+    ("dense_mlp", re.compile(r"DenseMLP", re.IGNORECASE)),
+    ("norm_gating", re.compile(r"RMSNorm|GatedNorm|jit\\(silu\\)", re.IGNORECASE)),
     ("loss_xent", re.compile(r"linear_softmax_cross_entropy_loss|softmax_cross_entropy|xent", re.IGNORECASE)),
     ("fusion", re.compile(r"(^|\b)(fusion\.|exponential_reduce_fusion)", re.IGNORECASE)),
     ("copy", re.compile(r"(^|\b)copy(\.|-|$)", re.IGNORECASE)),
@@ -36,9 +43,11 @@ def canonical_op_name(name: str) -> str:
     return re.sub(r"\.\d+$", "", name.strip().lstrip("%"))
 
 
-def classify_semantic_family(name: str) -> str:
-    """Classify a raw op name into a semantic family bucket."""
+def classify_semantic_family(name: str, attributed_path: str | None = None) -> str:
+    """Classify an op into a semantic family bucket."""
     canonical = canonical_op_name(name)
+    if attributed_path:
+        canonical = f"{canonical} {attributed_path}"
     for family, pattern in _SEMANTIC_FAMILY_PATTERNS:
         if pattern.search(canonical):
             return family

@@ -71,6 +71,13 @@ class GrugMoeLaunchConfig:
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     watch: WatchConfig = field(default_factory=WatchConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
+    trainer_mesh_expert_axis_size: int | None = None
+    """Expert axis size for TrainerConfig's auxiliary mesh validation.
+
+    Grug training builds its actual compact mesh from ``grug_trainer``. This
+    override is only for the Levanter TrainerConfig mesh initialized before the
+    raw Grug mesh exists.
+    """
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
     checkpointing_enabled: bool = True
     """False disables checkpoint restore, periodic saves, and final forced saves.
@@ -115,6 +122,7 @@ def validate_local_expert_model_axes(
     model_axis: int,
     local_device_count: int,
     env_prefix: str,
+    allow_cross_node_expert_axis: bool = False,
 ) -> None:
     """Validate that expert/model axes fit cleanly inside one worker."""
     if expert_axis <= 0:
@@ -125,12 +133,46 @@ def validate_local_expert_model_axes(
         raise ValueError(f"local_device_count must be positive, got {local_device_count}")
 
     local_axis_product = expert_axis * model_axis
+    if allow_cross_node_expert_axis:
+        return
     if local_device_count % local_axis_product != 0:
         raise ValueError(
             f"{env_prefix}_EXPERT_AXIS * {env_prefix}_MODEL_AXIS must divide the "
             f"{local_device_count} GPUs on each worker so expert/model groups stay local; "
             f"got {expert_axis} * {model_axis} = {local_axis_product}."
         )
+
+
+def trainer_mesh_expert_axis_size(
+    *,
+    expert_axis: int,
+    model_axis: int,
+    local_device_count: int,
+    allow_cross_node_expert_axis: bool = False,
+) -> int:
+    """Return the locally valid expert axis for TrainerConfig's auxiliary mesh."""
+    validate_local_expert_model_axes(
+        expert_axis=expert_axis,
+        model_axis=model_axis,
+        local_device_count=local_device_count,
+        env_prefix="trainer_mesh",
+        allow_cross_node_expert_axis=allow_cross_node_expert_axis,
+    )
+    if not allow_cross_node_expert_axis or expert_axis * model_axis <= local_device_count:
+        return expert_axis
+
+    if local_device_count % model_axis != 0:
+        raise ValueError(
+            f"model_axis ({model_axis}) must divide local_device_count ({local_device_count}) "
+            "when expert_axis spans nodes."
+        )
+    local_expert_axis = local_device_count // model_axis
+    if expert_axis % local_expert_axis != 0:
+        raise ValueError(
+            f"expert_axis ({expert_axis}) must be divisible by local expert axis "
+            f"({local_expert_axis}) when expert_axis spans nodes."
+        )
+    return local_expert_axis
 
 
 def validate_ring_expert_model_axes(
@@ -312,6 +354,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         checkpointer = DisabledCheckpointerConfig(base_path="/tmp/grug-disabled-checkpoints")
         load_checkpoint = False
 
+    trainer_mesh_expert_axis = config.trainer_mesh_expert_axis_size or config.grug_trainer.expert_axis_size
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
@@ -320,7 +363,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mesh=MeshConfig(
             axes={
                 "data": -1,
-                "expert": config.grug_trainer.expert_axis_size,
+                "expert": trainer_mesh_expert_axis,
                 "model": config.grug_trainer.model_axis_size,
             },
             dcn_axes={"replica_dcn": -1},

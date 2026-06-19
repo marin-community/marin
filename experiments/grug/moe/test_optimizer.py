@@ -11,6 +11,7 @@ from experiments.grug.moe.adamh import _scale_invariant_hyperball_update as _ada
 from experiments.grug.moe.optimizer import (
     GrugMoeAdamHConfig,
     GrugMoeMuonHConfig,
+    GrugMoeSgdConfig,
     _expert_momentum_sharding,
     _scale_invariant_hyperball_updates,
 )
@@ -118,6 +119,25 @@ def test_grug_moe_muonh_can_route_routed_expert_weights_to_adamh():
     assert block_mask["mlp"]["expert_mlp"]["w_gate_up"] == "adamh"
     assert block_mask["mlp"]["expert_mlp"]["w_down"] == "adamh"
     assert block_mask["shared"]["w_gate"] == "muonh"
+
+
+def test_grug_moe_sgd_update_is_stateless_and_matches_shapes():
+    params = {
+        "matrix": jnp.ones((4, 8), dtype=jnp.bfloat16),
+        "vector": jnp.ones((8,), dtype=jnp.bfloat16),
+    }
+    grads = jax.tree.map(lambda x: jnp.full_like(x, 0.25), params)
+    optimizer = GrugMoeSgdConfig(learning_rate=0.1, lr_schedule="constant").build(num_train_steps=8)
+
+    opt_state = optimizer.init(params)
+    updates, next_state = optimizer.update(grads, opt_state, params)
+
+    state_leaves = jax.tree.leaves((opt_state, next_state))
+    assert all(not hasattr(leaf, "shape") or leaf.shape == () for leaf in state_leaves)
+    assert updates["matrix"].shape == params["matrix"].shape
+    assert updates["vector"].shape == params["vector"].shape
+    assert jnp.allclose(updates["matrix"], -0.025).item()
+    assert jnp.allclose(updates["vector"], -0.025).item()
 
 
 def test_expert_momentum_sharding_uses_replica_dcn_on_expert_stack_axis():

@@ -14,7 +14,7 @@ fi
 ENV_FILE="${MARIN_R2_ENV_FILE:-$DEFAULT_ENV_FILE}"
 ENV_FILE_EXPLICIT=false
 KUBECONFIG_PATH="${KUBECONFIG:-$HOME/.kube/coreweave-iris-gpu}"
-MARIN_PREFIX="s3://marin-na/marin/"
+MARIN_PREFIX="s3://marin-na/tmp/ttl=7d"
 MODE="smoke"
 SUBMIT=false
 RUN_ID=""
@@ -40,7 +40,7 @@ Options:
   --full                32-node 90B-total run: launcher defaults, batch 256, 50 steps.
   --env-file PATH       Load credentials from PATH (default: $MARIN_R2_ENV_FILE or ~/.config/marin/marin-r2.env).
   --run-id RUN_ID       Use a fixed run id instead of generating one.
-  --prefix URI          MARIN_PREFIX for outputs (default: s3://marin-na/marin/).
+  --prefix URI          MARIN_PREFIX for outputs (default: s3://marin-na/tmp/ttl=7d).
   --cluster NAME        Iris cluster name (default: cw-us-east-02a).
   --kubeconfig PATH     Kubeconfig path (default: $KUBECONFIG or ~/.kube/coreweave-iris-gpu).
   --worker-cpu N        SCALE_CPU_PER_REPLICA for each H100 worker pod (default: 32).

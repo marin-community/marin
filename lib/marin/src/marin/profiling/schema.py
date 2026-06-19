@@ -201,6 +201,21 @@ class GapRegionContext:
 
 
 @dataclass(frozen=True)
+class DeviceOpRegionAggregate:
+    """Device-kernel time attributed to an overlapping semantic region."""
+
+    region_path: str
+    op_name: str
+    canonical_name: str
+    category: str
+    count: int
+    total_duration: float
+    exclusive_duration: float
+    avg_duration: float
+    shape_signature: str | None = None
+
+
+@dataclass(frozen=True)
 class SemanticFamilyAggregate:
     """Aggregate metrics for an op semantic family (attention/loss/copy/etc)."""
 
@@ -247,6 +262,7 @@ class ProfileSummary:
     gap_before_ops: list[GapBeforeOp]
     hierarchical_regions: list[RegionAggregate]
     gap_region_contexts: list[GapRegionContext]
+    device_op_region_aggregates: list[DeviceOpRegionAggregate]
     optimization_candidates: list[OptimizationCandidate]
 
     def to_dict(self) -> dict[str, Any]:
@@ -274,6 +290,7 @@ class ProfileSummary:
         gap_before_ops: list[GapBeforeOp],
         hierarchical_regions: list[RegionAggregate],
         gap_region_contexts: list[GapRegionContext],
+        device_op_region_aggregates: list[DeviceOpRegionAggregate],
         optimization_candidates: list[OptimizationCandidate],
     ) -> ProfileSummary:
         """Create a summary with default schema version and timestamp."""
@@ -294,6 +311,7 @@ class ProfileSummary:
             gap_before_ops=gap_before_ops,
             hierarchical_regions=hierarchical_regions,
             gap_region_contexts=gap_region_contexts,
+            device_op_region_aggregates=device_op_region_aggregates,
             optimization_candidates=optimization_candidates,
         )
 
@@ -336,6 +354,10 @@ def profile_summary_from_dict(data: Mapping[str, Any]) -> ProfileSummary:
         _parse_gap_region_context(cast(Mapping[str, Any], context))
         for context in cast(list[Mapping[str, Any]], data.get("gap_region_contexts", []))
     ]
+    device_op_region_aggregates = [
+        _parse_device_op_region_aggregate(cast(Mapping[str, Any], aggregate))
+        for aggregate in cast(list[Mapping[str, Any]], data.get("device_op_region_aggregates", []))
+    ]
     optimization_candidates = [
         _parse_optimization_candidate(cast(Mapping[str, Any], candidate))
         for candidate in cast(list[Mapping[str, Any]], data["optimization_candidates"])
@@ -357,6 +379,7 @@ def profile_summary_from_dict(data: Mapping[str, Any]) -> ProfileSummary:
         gap_before_ops=gap_before_ops,
         hierarchical_regions=hierarchical_regions,
         gap_region_contexts=gap_region_contexts,
+        device_op_region_aggregates=device_op_region_aggregates,
         optimization_candidates=optimization_candidates,
     )
 
@@ -531,6 +554,21 @@ def _parse_gap_region_context(data: Mapping[str, Any]) -> GapRegionContext:
         count=cast(int, data["count"]),
         total_gap_duration=cast(float, data["total_gap_duration"]),
         avg_gap_duration=cast(float, data["avg_gap_duration"]),
+    )
+
+
+def _parse_device_op_region_aggregate(data: Mapping[str, Any]) -> DeviceOpRegionAggregate:
+    op_name = cast(str, data["op_name"])
+    return DeviceOpRegionAggregate(
+        region_path=cast(str, data["region_path"]),
+        op_name=op_name,
+        canonical_name=cast(str, data.get("canonical_name") or _canonical_name(op_name)),
+        category=cast(str, data["category"]),
+        count=cast(int, data["count"]),
+        total_duration=cast(float, data["total_duration"]),
+        exclusive_duration=cast(float, data["exclusive_duration"]),
+        avg_duration=cast(float, data["avg_duration"]),
+        shape_signature=cast(str | None, data.get("shape_signature")),
     )
 
 

@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import tempfile
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from itertools import pairwise
@@ -156,8 +157,9 @@ def summarize_xplane(
         count_trace_events=count_trace_events,
     )
     if table_summary is None:
-        return timeline_summary
-    return _merge_timeline_and_xprof_summaries(timeline_summary, table_summary, hot_op_limit=hot_op_limit)
+        return _augment_summary_with_hlo_metadata(timeline_summary, xplane_path=xplane_path)
+    summary = _merge_timeline_and_xprof_summaries(timeline_summary, table_summary, hot_op_limit=hot_op_limit)
+    return _augment_summary_with_hlo_metadata(summary, xplane_path=xplane_path)
 
 
 def summarize_xplane_timeline(
@@ -170,7 +172,7 @@ def summarize_xplane_timeline(
 ) -> ProfileSummary:
     """Summarize directly parsed XPlane timeline events."""
     timeline = parse_xplane_timeline(xplane_path)
-    return summarize_complete_events(
+    summary = summarize_complete_events(
         timeline.events,
         source_format="xplane_pb",
         source_path=xplane_path,
@@ -185,6 +187,7 @@ def summarize_xplane_timeline(
         breakdown_mode=breakdown_mode,
         extra_quality_warnings=timeline.quality_warnings,
     )
+    return _augment_summary_with_hlo_metadata(summary, xplane_path=xplane_path)
 
 
 def parse_xplane_timeline(xplane_path: Path) -> XPlaneTimeline:
@@ -282,12 +285,14 @@ def summarize_xplane_tables(
     """Build a profile summary from xprof table JSON already exported from XPlane."""
     step_props, step_rows = _step_rows(table_dir)
     kernel_rows = _kernel_rows(table_dir)
-    hot_ops = _hot_ops_from_kernel_rows(kernel_rows, limit=hot_op_limit)
+    framework_rows = _framework_rows(table_dir)
+    hot_ops = _hot_ops_from_kernel_rows(kernel_rows, limit=max(hot_op_limit * 20, 500))
     communication_ops = _communication_ops_from_kernel_rows(kernel_rows)
     step_time = _step_time_from_xprof_rows(step_rows, warmup_steps=warmup_steps)
     time_breakdown = _time_breakdown_from_xprof_rows(step_rows, kernel_rows)
+    framework_hot_ops = _hot_ops_from_framework_rows(framework_rows)
     semantic_families = summarize_semantic_families(
-        hot_ops,
+        framework_hot_ops if framework_hot_ops else hot_ops,
         total_duration=time_breakdown.total_duration,
         limit=max(hot_op_limit, 50),
     )
@@ -313,6 +318,7 @@ def summarize_xplane_tables(
         gap_before_ops=[],
         hierarchical_regions=[],
         gap_region_contexts=[],
+        device_op_region_aggregates=[],
         optimization_candidates=[],
     )
     return replace(summary, optimization_candidates=derive_optimization_candidates(summary))
@@ -389,10 +395,14 @@ def _merge_timeline_and_xprof_summaries(
     communication_ops = (
         table_summary.communication_ops if table_summary.communication_ops else timeline_summary.communication_ops
     )
-    semantic_families = summarize_semantic_families(
-        hot_ops,
-        total_duration=time_breakdown.total_duration,
-        limit=max(hot_op_limit, 50),
+    semantic_families = (
+        table_summary.semantic_families
+        if table_summary.semantic_families
+        else summarize_semantic_families(
+            hot_ops,
+            total_duration=time_breakdown.total_duration,
+            limit=max(hot_op_limit, 50),
+        )
     )
 
     summary = ProfileSummary.create(
@@ -409,9 +419,115 @@ def _merge_timeline_and_xprof_summaries(
         gap_before_ops=timeline_summary.gap_before_ops,
         hierarchical_regions=timeline_summary.hierarchical_regions,
         gap_region_contexts=timeline_summary.gap_region_contexts,
+        device_op_region_aggregates=timeline_summary.device_op_region_aggregates,
         optimization_candidates=[],
     )
     return replace(summary, optimization_candidates=derive_optimization_candidates(summary))
+
+
+def _augment_summary_with_hlo_metadata(summary: ProfileSummary, *, xplane_path: Path) -> ProfileSummary:
+    op_paths = _hlo_op_paths_by_kernel_name(xplane_path.parent)
+    if not op_paths:
+        return summary
+
+    hot_ops = [
+        replace(op, tf_op_path=_more_specific_op_path(op.tf_op_path, op_paths.get(_hlo_kernel_lookup_name(op.name))))
+        for op in summary.hot_ops
+    ]
+    device_op_region_aggregates = [
+        replace(
+            op, region_path=_more_specific_region_path(op.region_path, op_paths.get(_hlo_kernel_lookup_name(op.op_name)))
+        )
+        for op in summary.device_op_region_aggregates
+    ]
+    return replace(
+        summary,
+        hot_ops=hot_ops,
+        device_op_region_aggregates=device_op_region_aggregates,
+        optimization_candidates=derive_optimization_candidates(replace(summary, hot_ops=hot_ops)),
+    )
+
+
+def _more_specific_region_path(region_path: str, hlo_path: str | None) -> str:
+    if hlo_path is None:
+        return region_path
+    if not _is_generic_profile_path(region_path):
+        return region_path
+    return hlo_path
+
+
+def _more_specific_op_path(op_path: str | None, hlo_path: str | None) -> str | None:
+    if hlo_path is None:
+        return op_path
+    if op_path is not None and not _is_generic_profile_path(op_path):
+        return op_path
+    return hlo_path
+
+
+def _is_generic_profile_path(path: str) -> bool:
+    if path in {"command_buffer", "XlaModule", "XlaModule:"}:
+        return True
+    if path.startswith("command_buffer=>"):
+        return True
+    if "GpuExecutable" in path:
+        return True
+    return False
+
+
+def _hlo_op_paths_by_kernel_name(profile_dir: Path) -> dict[str, str]:
+    hlo_paths = sorted(profile_dir.glob("jit_train_step*.hlo_proto.pb"))
+    if not hlo_paths:
+        hlo_paths = sorted(profile_dir.glob("*.hlo_proto.pb"))
+
+    counts: dict[str, Counter[str]] = {}
+    for hlo_path in hlo_paths:
+        strings = _printable_proto_strings(hlo_path)
+        for index, text in enumerate(strings):
+            path = _train_step_dot_general_path(text)
+            if path is None:
+                continue
+            for kernel_name in _nearby_hlo_kernel_names(strings, index):
+                bucket = counts.setdefault(kernel_name, Counter())
+                bucket[path] += 1
+
+    return {
+        kernel_name: sorted(path_counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        for kernel_name, path_counts in counts.items()
+    }
+
+
+def _printable_proto_strings(path: Path) -> list[str]:
+    data = path.read_bytes()
+    return [match.group(0).decode("utf-8", errors="ignore") for match in re.finditer(rb"[\x20-\x7e]{4,}", data)]
+
+
+def _train_step_dot_general_path(text: str) -> str | None:
+    start = text.find("jit(train_step)")
+    if start < 0:
+        return None
+    match = re.search(r"jit\(train_step\)/.*?dot_general", text[start:])
+    if match is None:
+        return None
+    return match.group(0)
+
+
+def _nearby_hlo_kernel_names(strings: list[str], index: int) -> list[str]:
+    kernel_names: set[str] = set()
+    for distance in range(1, 5):
+        for candidate_index in (index - distance, index + distance):
+            if candidate_index < 0 or candidate_index >= len(strings):
+                continue
+            kernel_name = _hlo_kernel_lookup_name(strings[candidate_index])
+            if kernel_name is not None:
+                kernel_names.add(kernel_name)
+    return sorted(kernel_names)
+
+
+def _hlo_kernel_lookup_name(name: str) -> str | None:
+    match = re.search(r"(gemm_fusion_dot(?:_general)?)[._](\d+)", name)
+    if match is None:
+        return None
+    return f"{match.group(1)}_{match.group(2)}"
 
 
 def _xprof_quality_warnings(summary: ProfileSummary) -> list[str]:
@@ -430,13 +546,26 @@ def _xprof_quality_warnings(summary: ProfileSummary) -> list[str]:
 
 
 def _merge_hot_ops(timeline_hot_ops: list[HotOp], table_hot_ops: list[HotOp], *, limit: int) -> list[HotOp]:
-    merged = list(timeline_hot_ops)
-    seen = {op.name for op in merged}
-    for op in table_hot_ops:
-        if op.name in seen:
+    if not table_hot_ops:
+        return sorted(
+            timeline_hot_ops,
+            key=lambda op: (-op.exclusive_duration, -op.total_duration, op.name),
+        )[:limit]
+
+    # xprof's kernel table can split one kernel name by framework op path. Prefer
+    # those attributed rows over the direct XPlane aggregate, which often only
+    # carries a generic XlaModule path.
+    table_names = {op.name for op in table_hot_ops}
+    merged = list(table_hot_ops)
+    seen = {(op.name, op.tf_op_path) for op in merged}
+    for op in timeline_hot_ops:
+        if op.name in table_names:
+            continue
+        key = (op.name, op.tf_op_path)
+        if key in seen:
             continue
         merged.append(op)
-        seen.add(op.name)
+        seen.add(key)
     return sorted(
         merged,
         key=lambda op: (-op.exclusive_duration, -op.total_duration, op.name),
@@ -776,6 +905,7 @@ def _hot_ops_from_kernel_rows(rows: list[dict[str, Any]], *, limit: int) -> list
     hot_ops: list[HotOp] = []
     for row in _ranked_kernel_rows(rows)[:limit]:
         name = str(row.get("kernel_name") or "unknown")
+        op_name = str(row.get("op_name") or "")
         total_duration = _float_value(row, "total_duration_us") or 0.0
         count = _int_value(row, "occurrences") or 0
         hot_ops.append(
@@ -787,6 +917,32 @@ def _hot_ops_from_kernel_rows(rows: list[dict[str, Any]], *, limit: int) -> list
                 total_duration=total_duration,
                 exclusive_duration=total_duration,
                 avg_duration=(total_duration / count) if count else 0.0,
+                tf_op_path=op_name or None,
+            )
+        )
+    return hot_ops
+
+
+def _hot_ops_from_framework_rows(rows: list[dict[str, Any]]) -> list[HotOp]:
+    hot_ops: list[HotOp] = []
+    for row in rows:
+        name = str(row.get("operation") or "")
+        if not name:
+            continue
+        total_self_time = _float_value(row, "total_self_time") or 0.0
+        if total_self_time <= 0:
+            continue
+        count = _int_value(row, "occurrences") or 0
+        hot_ops.append(
+            HotOp(
+                name=name,
+                canonical_name=canonical_op_name(name),
+                category=op_category(name),
+                count=count,
+                total_duration=_float_value(row, "total_time") or total_self_time,
+                exclusive_duration=total_self_time,
+                avg_duration=(total_self_time / count) if count else 0.0,
+                tf_op_path=name,
             )
         )
     return hot_ops
@@ -878,6 +1034,16 @@ def _kernel_rows(output_dir: Path) -> list[dict[str, Any]]:
         return []
     _cols, rows, _props = tables[0]
     return rows
+
+
+def _framework_rows(output_dir: Path) -> list[dict[str, Any]]:
+    tables = _load_tables(output_dir / "framework_op_stats.json")
+    if not tables:
+        return []
+    for cols, rows, _props in tables:
+        if "operation" in cols and "total_self_time" in cols:
+            return rows
+    return []
 
 
 def _ranked_kernel_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:

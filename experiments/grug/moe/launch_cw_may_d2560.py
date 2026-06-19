@@ -30,7 +30,11 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_BLOCK_CROSS_DOCUMENT_ATTENTION=true  synthetic data segment-id diagnostic
     MAY_INPUT_EMBED_SHARDING=hidden_batch  hidden_batch | replicated diagnostic
     MAY_OUTPUT_PROJ_SHARDING=lm_head  lm_head | replicated diagnostic
-    MAY_EXPERT_3D_OPTIMIZER=muonh  muonh | adamh diagnostic for routed expert weights
+    MAY_OPTIMIZER=muonh     muonh | sgd diagnostic for optimizer overhead
+    MAY_MUON_BACKEND_STEPS=5  Newton-Schulz steps for MuonH when MAY_OPTIMIZER=muonh
+    MAY_MUON_ORTHOGONALIZATION_LAYOUT=stack_batch_sharded  stack_batch_sharded | vmap_replicated
+    MAY_MUON_MAX_GROUPED_STACK_SIZE=256  Maximum grouped Muon stack size
+    MAY_EXPERT_3D_OPTIMIZER=muonh  muonh | adamh diagnostic for routed expert weights when MAY_OPTIMIZER=muonh
 
 The default parameter policy keeps one sharded fp32 parameter tree plus sharded
 optimizer state. Set ``MAY_LIVE_PARAM_MODE=compute_with_master`` to keep a
@@ -47,11 +51,13 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.optim import OptimizerConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
+from experiments.grug.moe.cw_storage import set_default_cw_grug_moe_prefix
 from experiments.grug.moe.heuristic import MoeAdamHHeuristic
 from experiments.grug.moe.launch import (
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
@@ -60,6 +66,7 @@ from experiments.grug.moe.launch import (
     run_grug_moe_trial,
     slimpajama_6b_data,
     synthetic_grug_data,
+    trainer_mesh_expert_axis_size,
     validate_local_expert_model_axes,
     validate_ring_expert_model_axes,
 )
@@ -73,7 +80,14 @@ from experiments.grug.moe.model import (
     OutputProjSharding,
     RematMode,
 )
-from experiments.grug.moe.optimizer import VALID_EXPERT_3D_OPTIMIZERS, Expert3DOptimizer, GrugMoeMuonHConfig
+from experiments.grug.moe.optimizer import (
+    VALID_EXPERT_3D_OPTIMIZERS,
+    VALID_MAY_OPTIMIZERS,
+    Expert3DOptimizer,
+    GrugMoeMuonHConfig,
+    GrugMoeSgdConfig,
+    MayOptimizer,
+)
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig, LiveParamMode
 
 GPUS_PER_NODE = 8
@@ -84,6 +98,12 @@ DEFAULT_BATCH = 256
 DEFAULT_STEPS = 50
 DEFAULT_TOTAL_TOKENS = 1.0e13
 DEFAULT_WARMUP_FRACTION = 0.01
+
+# Subdirectory of MARIN_PREFIX these May d=2560 runs write their per-run output
+# dirs into, so they stay grouped instead of cluttering the prefix root.
+OUTPUT_SUBDIR = "experiments/grug-moe-cw"
+
+set_default_cw_grug_moe_prefix()
 
 MAY_HEURISTIC = MoeAdamHHeuristic(
     lr_coeff=0.06602,
@@ -153,14 +173,26 @@ def build_may_model() -> GrugModelConfig:
     )
 
 
-def build_may_optimizer(*, batch_size: int, seq_len: int) -> GrugMoeMuonHConfig:
+def build_may_optimizer(*, batch_size: int, seq_len: int) -> OptimizerConfig:
     total_tokens = env_float("MAY_TOTAL_TOKENS", DEFAULT_TOTAL_TOKENS)
     hidden_dim = env_int("MAY_HIDDEN_DIM", DEFAULT_HIDDEN_DIM)
+    optimizer = os.environ.get("MAY_OPTIMIZER", "muonh")
+    if optimizer not in VALID_MAY_OPTIMIZERS:
+        valid = ", ".join(VALID_MAY_OPTIMIZERS)
+        raise ValueError(f"MAY_OPTIMIZER={optimizer!r} must be one of {valid}")
     expert_3d_optimizer = os.environ.get("MAY_EXPERT_3D_OPTIMIZER", "muonh")
     if expert_3d_optimizer not in VALID_EXPERT_3D_OPTIMIZERS:
         valid = ", ".join(VALID_EXPERT_3D_OPTIMIZERS)
         raise ValueError(f"MAY_EXPERT_3D_OPTIMIZER={expert_3d_optimizer!r} must be one of {valid}")
     base_optimizer = MAY_HEURISTIC.build_optimizer_config(batch_size, total_tokens, hidden_dim, seq_len=seq_len)
+    if cast(MayOptimizer, optimizer) == "sgd":
+        return GrugMoeSgdConfig(
+            learning_rate=base_optimizer.learning_rate,
+            min_lr_ratio=base_optimizer.min_lr_ratio,
+            warmup=env_float("MAY_WARMUP_FRACTION", DEFAULT_WARMUP_FRACTION),
+            lr_schedule=base_optimizer.lr_schedule,
+            decay=base_optimizer.decay,
+        )
     return GrugMoeMuonHConfig(
         learning_rate=base_optimizer.learning_rate,
         adam_lr=base_optimizer.adam_lr,
@@ -169,6 +201,11 @@ def build_may_optimizer(*, batch_size: int, seq_len: int) -> GrugMoeMuonHConfig:
         beta1=base_optimizer.beta1,
         beta2=base_optimizer.beta2,
         epsilon=base_optimizer.epsilon,
+        backend_steps=env_int("MAY_MUON_BACKEND_STEPS", GrugMoeMuonHConfig.backend_steps),
+        orthogonalization_layout=os.environ.get(
+            "MAY_MUON_ORTHOGONALIZATION_LAYOUT", GrugMoeMuonHConfig.orthogonalization_layout
+        ),
+        max_grouped_stack_size=env_int("MAY_MUON_MAX_GROUPED_STACK_SIZE", GrugMoeMuonHConfig.max_grouped_stack_size),
         max_grad_norm=None,
         lr_schedule=base_optimizer.lr_schedule,
         decay=base_optimizer.decay,
@@ -258,11 +295,13 @@ def build_may_step() -> ExecutorStep:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by MAY_EXPERT_AXIS={expert_axis}")
     if model.num_heads % model_axis != 0:
         raise ValueError(f"num_heads={model.num_heads} must be divisible by MAY_MODEL_AXIS={model_axis}")
+    allow_cross_node_expert_axis = env_bool("MAY_ALLOW_CROSS_NODE_EXPERT_AXIS", False)
     validate_local_expert_model_axes(
         expert_axis=expert_axis,
         model_axis=model_axis,
         local_device_count=GPUS_PER_NODE,
         env_prefix="MAY",
+        allow_cross_node_expert_axis=allow_cross_node_expert_axis,
     )
     validate_ring_expert_model_axes(
         expert_axis=expert_axis,
@@ -321,7 +360,7 @@ def build_may_step() -> ExecutorStep:
 
     name = f"grug-moe-cw-may-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}-cpu{worker_cpu}"
     return ExecutorStep(
-        name=f"{name}-{run_id}",
+        name=f"{OUTPUT_SUBDIR}/{name}-{run_id}",
         fn=run_grug_moe_trial,
         config=GrugMoeLaunchConfig(
             model=versioned(model),
@@ -336,6 +375,14 @@ def build_may_step() -> ExecutorStep:
             tracker=build_tracker(run_id),
             optimizer=versioned(build_may_optimizer(batch_size=batch_size, seq_len=model.max_seq_len)),
             grug_trainer=versioned(grug_trainer),
+            trainer_mesh_expert_axis_size=versioned(
+                trainer_mesh_expert_axis_size(
+                    expert_axis=expert_axis,
+                    model_axis=model_axis,
+                    local_device_count=GPUS_PER_NODE,
+                    allow_cross_node_expert_axis=allow_cross_node_expert_axis,
+                )
+            ),
             eval=versioned(eval_cfg) if eval_cfg is not None else None,
             profiler=profiler,
             watch=WatchConfig(interval=env_int("MAY_WATCH_INTERVAL", 0)),

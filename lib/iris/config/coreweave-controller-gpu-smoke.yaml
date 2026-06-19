@@ -46,6 +46,7 @@ defaults:
     # collective itself ("Using network IB"); only the out-of-band channel uses ethernet.
     # NCCL_DEBUG (scoped to INIT,NET,ENV) logs the interface selection for diagnosis.
     NCCL_SOCKET_IFNAME: "^ibs,ibp,lo,docker,veth,cilium,lxc"
+    NCCL_SOCKET_FAMILY: AF_INET
     NCCL_DEBUG: INFO
     NCCL_DEBUG_SUBSYS: INIT,NET,ENV
   worker:

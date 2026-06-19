@@ -205,8 +205,16 @@ def test_gpu_fa4_thd_supports_hopper_kernel_config(monkeypatch):
     assert config.num_threads == 384
 
 
-def test_gpu_fa4_cute_hopper_kernel_config_uses_small_backward_tile():
+def test_gpu_fa4_cute_hopper_head_dim_128_uses_single_node_tuned_tile():
     config = flash4_cute_kernel_config(128, arch=90)
+
+    assert config.forward_tile == (64, 64)
+    assert config.backward_tile == (64, 64)
+    assert config.num_threads == 128
+
+
+def test_gpu_fa4_cute_hopper_non_128_head_dim_keeps_default_forward_tile():
+    config = flash4_cute_kernel_config(96, arch=90)
 
     assert config.forward_tile == (128, 64)
     assert config.backward_tile == (64, 64)

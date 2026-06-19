@@ -15,9 +15,11 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_m
 
 from haliax.jax_utils import named_call
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
+    IMPLEMENTATIONS,
     default_implementations,
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
+from levanter.kernels.pallas.fused_cross_entropy_loss.tuned_block_sizes import infer_block_sizes_with_tuned_match
 from levanter.kernels.pallas.fused_cross_entropy_loss.xla import linear_softmax_cross_entropy_loss_xla
 
 
@@ -91,14 +93,82 @@ def _mesh_axis_size(mesh: Mesh | jax.sharding.AbstractMesh | None, axis_name: st
     return int(mesh.shape.get(axis_name, 1))
 
 
-def _uses_xla_ce(implementation: str | tuple[str, ...] | None) -> bool:
+def _first_ce_implementation(implementation: str | tuple[str, ...] | None) -> str | None:
     if implementation is None:
         implementation = default_implementations()
-    if implementation == "xla":
-        return True
+    if isinstance(implementation, str):
+        return implementation
     if isinstance(implementation, tuple):
-        return len(implementation) > 0 and implementation[0] == "xla"
-    return False
+        if len(implementation) == 0:
+            return None
+        return implementation[0]
+    return None
+
+
+def _uses_vocab_sharded_ce(implementation: str | tuple[str, ...] | None) -> bool:
+    return _first_ce_implementation(implementation) in ("xla", "pallas_gpu")
+
+
+def _local_linear_softmax_cross_entropy_loss(
+    flat_hidden: jax.Array,
+    safe_labels: jax.Array,
+    shard_lm_head: jax.Array,
+    *,
+    dtype: jnp.dtype,
+    precision: jax.lax.PrecisionLike,
+    implementation: str | tuple[str, ...] | None,
+) -> tuple[jax.Array, jax.Array]:
+    impl = _first_ce_implementation(implementation)
+    if impl == "pallas_gpu":
+        pallas_gpu_impl = IMPLEMENTATIONS.get("pallas_gpu")
+        if pallas_gpu_impl is None:
+            raise ValueError("pallas_gpu fused cross-entropy is not available")
+        block_sizes, _ = infer_block_sizes_with_tuned_match(
+            flat_hidden.shape[0],
+            flat_hidden.shape[1],
+            shard_lm_head.shape[1],
+            dtype=dtype,
+            x_dtype=flat_hidden.dtype,
+            w_dtype=shard_lm_head.dtype,
+        )
+        pallas_result = pallas_gpu_impl(
+            flat_hidden,
+            safe_labels,
+            shard_lm_head,
+            block_sizes=block_sizes,
+            dtype=dtype,
+            logit_soft_cap=None,
+            precision=precision,
+        )
+        local_loss = pallas_result[0]
+        local_lse = pallas_result[1]
+        return local_loss, local_lse
+
+    if impl == "xla":
+        return cast(
+            tuple[jax.Array, jax.Array],
+            linear_softmax_cross_entropy_loss_xla(
+                flat_hidden,
+                safe_labels,
+                shard_lm_head,
+                dtype=dtype,
+                logit_soft_cap=None,
+                precision=precision,
+            ),
+        )
+
+    raise ValueError(f"Vocab-sharded fused CE requires xla or pallas_gpu, got {impl!r}")
+
+
+def _lm_head_spec_for_ce(
+    lm_head: jax.Array,
+    mesh: Mesh | jax.sharding.AbstractMesh | None,
+    implementation: str | tuple[str, ...] | None,
+) -> P:
+    if _uses_vocab_sharded_ce(implementation) and lm_head.shape[1] % _mesh_axis_size(mesh, "model") == 0:
+        if _mesh_axis_size(mesh, "model") > 1:
+            return P(None, "model")
+    return P(None, None)
 
 
 def _lm_head_spec_for_xla_ce(
@@ -106,10 +176,7 @@ def _lm_head_spec_for_xla_ce(
     mesh: Mesh | jax.sharding.AbstractMesh | None,
     implementation: str | tuple[str, ...] | None,
 ) -> P:
-    if _uses_xla_ce(implementation) and lm_head.shape[1] % _mesh_axis_size(mesh, "model") == 0:
-        if _mesh_axis_size(mesh, "model") > 1:
-            return P(None, "model")
-    return P(None, None)
+    return _lm_head_spec_for_ce(lm_head, mesh, implementation)
 
 
 def _vocab_axis_for_lm_head_spec(lm_head_spec: P) -> str | None:
@@ -202,16 +269,13 @@ def fused_linear_softmax_cross_entropy_loss(
             local_labels = flat_labels - vocab_start
             in_vocab_shard = (0 <= local_labels) & (local_labels < local_vocab_size)
             safe_labels = jnp.clip(local_labels, 0, local_vocab_size - 1)
-            local_loss, local_lse = cast(
-                tuple[jax.Array, jax.Array],
-                linear_softmax_cross_entropy_loss_xla(
-                    flat_hidden,
-                    safe_labels,
-                    shard_lm_head,
-                    dtype=dtype,
-                    logit_soft_cap=None,
-                    precision=precision,
-                ),
+            local_loss, local_lse = _local_linear_softmax_cross_entropy_loss(
+                flat_hidden,
+                safe_labels,
+                shard_lm_head,
+                dtype=dtype,
+                precision=precision,
+                implementation=implementation,
             )
             local_label_logit = local_lse - local_loss
             vocab_axis_names = (vocab_axis,)

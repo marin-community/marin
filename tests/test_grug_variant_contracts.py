@@ -111,6 +111,46 @@ def test_grug_coreweave_axes_reject_cross_node_expert_model_product():
         )
 
 
+def test_grug_coreweave_axes_allow_explicit_cross_node_expert_axis():
+    launch_module = importlib.import_module("experiments.grug.moe.launch")
+
+    launch_module.validate_local_expert_model_axes(
+        expert_axis=16,
+        model_axis=1,
+        local_device_count=8,
+        env_prefix="SCALE",
+        allow_cross_node_expert_axis=True,
+    )
+
+
+def test_grug_coreweave_cross_node_expert_uses_local_trainer_mesh_axis():
+    launch_module = importlib.import_module("experiments.grug.moe.launch")
+
+    assert (
+        launch_module.trainer_mesh_expert_axis_size(
+            expert_axis=16,
+            model_axis=1,
+            local_device_count=8,
+            allow_cross_node_expert_axis=True,
+        )
+        == 8
+    )
+
+
+def test_grug_coreweave_local_expert_keeps_trainer_mesh_axis():
+    launch_module = importlib.import_module("experiments.grug.moe.launch")
+
+    assert (
+        launch_module.trainer_mesh_expert_axis_size(
+            expert_axis=8,
+            model_axis=1,
+            local_device_count=8,
+            allow_cross_node_expert_axis=False,
+        )
+        == 8
+    )
+
+
 def test_grug_coreweave_ring_ep_rejects_simultaneous_expert_and_model_axes():
     launch_module = importlib.import_module("experiments.grug.moe.launch")
 
