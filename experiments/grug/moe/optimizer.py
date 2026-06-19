@@ -232,10 +232,18 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muon_epsilon: float = 1e-8
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
+    schedule_num_train_steps_override: int | None = None
+    """When set, the LR scheduler (warmup + decay span + min_lr_ratio anchor)
+    is parameterized by this value instead of the trainer's ``num_train_steps``.
+    Used for partial-schedule resumes where you want to stop training early
+    (trainer's num_train_steps) while still following the original full
+    schedule's LR trajectory up to the stop step. ``None`` preserves the
+    default behavior (schedule tracks trainer)."""
 
     def build(self, num_train_steps):
-        learning_rate_schedule = self.lr_scheduler(num_train_steps)
-        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        n = self.schedule_num_train_steps_override or num_train_steps
+        learning_rate_schedule = self.lr_scheduler(n)
+        adam_lr_schedule = self.lr_scheduler(n, override_lr=self.adam_lr)
 
         def optimizer(learning_rate, adam_lr):
             def muonh_transform():
