@@ -266,7 +266,7 @@ def test_grouped_expert_muonh_optimizer_returns_fsdp_updates_before_apply():
     assert hlo.count("stablehlo.all_reduce") == 0
     assert hlo.count("stablehlo.reduce_scatter") == 0
     assert hlo.count("stablehlo.all_to_all") == 0
-    assert hlo.count("stablehlo.all_gather") == 4
+    assert hlo.count("stablehlo.all_gather") == 6
 
 
 def test_grouped_muonh_restore_can_reshard_grouped_stack_to_fsdp_layout():
