@@ -4,7 +4,7 @@
 import jax
 import jax.numpy as jnp
 import pytest
-from jax.sharding import AbstractMesh, AxisType, NamedSharding
+from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
 from experiments.grug.moe.adamh import _scale_invariant_hyperball_update as _adamh_hyperball_update
@@ -121,6 +121,31 @@ def test_grug_moe_muonh_can_route_routed_expert_weights_to_adamh():
     assert block_mask["shared"]["w_gate"] == "muonh"
 
 
+def test_grug_moe_muonh_can_route_routed_expert_weights_to_grouped_muonh():
+    params = {
+        "blocks": {
+            "0": {
+                "mlp": {
+                    "expert_mlp": {
+                        "w_gate_up": jnp.ones((4, 8, 16), dtype=jnp.float32),
+                        "w_down": jnp.ones((4, 16, 8), dtype=jnp.float32),
+                    },
+                },
+                "shared": {
+                    "w_gate": jnp.ones((8, 16), dtype=jnp.float32),
+                },
+            },
+        },
+    }
+
+    mask = GrugMoeMuonHConfig(expert_3d_optimizer="grouped_muonh").create_mask(params)
+
+    block_mask = mask["blocks"]["0"]
+    assert block_mask["mlp"]["expert_mlp"]["w_gate_up"] == "grouped_muonh"
+    assert block_mask["mlp"]["expert_mlp"]["w_down"] == "grouped_muonh"
+    assert block_mask["shared"]["w_gate"] == "muonh"
+
+
 def test_grug_moe_sgd_update_is_stateless_and_matches_shapes():
     params = {
         "matrix": jnp.ones((4, 8), dtype=jnp.bfloat16),
@@ -138,6 +163,55 @@ def test_grug_moe_sgd_update_is_stateless_and_matches_shapes():
     assert updates["vector"].shape == params["vector"].shape
     assert jnp.allclose(updates["matrix"], -0.025).item()
     assert jnp.allclose(updates["vector"], -0.025).item()
+
+
+def test_grouped_expert_muonh_optimizer_returns_fsdp_updates_before_apply():
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 8, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    gate_sharding = NamedSharding(mesh, P("expert", "data", "model"))
+    down_sharding = NamedSharding(mesh, P("expert", "model", "data"))
+
+    def block_specs():
+        return {
+            "mlp": {
+                "expert_mlp": {
+                    "w_gate_up": jax.ShapeDtypeStruct((8, 16, 32), jnp.bfloat16, sharding=gate_sharding),
+                    "w_down": jax.ShapeDtypeStruct((8, 32, 16), jnp.bfloat16, sharding=down_sharding),
+                },
+            },
+        }
+
+    params = {"blocks": tuple(block_specs() for _ in range(4))}
+    grads = jax.tree.map(lambda param: jax.ShapeDtypeStruct(param.shape, param.dtype, sharding=param.sharding), params)
+    optimizer = GrugMoeMuonHConfig(
+        learning_rate=0.02,
+        lr_schedule="constant",
+        backend_steps=1,
+        expert_3d_optimizer="grouped_muonh",
+        expert_grouped_muonh_group_size=4,
+        max_grouped_stack_size=8,
+        max_grad_norm=None,
+    ).build(num_train_steps=8)
+
+    def update_step(params, grads):
+        opt_state = optimizer.init(params)
+        updates, _ = optimizer.update(grads, opt_state, params)
+        return updates
+
+    with use_abstract_mesh(mesh):
+        updates = jax.eval_shape(update_step, params, grads)
+        update_step_jit = jax.jit(update_step)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step_jit.trace(params, grads).lower(lowering_platforms=(platform,))
+
+    assert_update_sharding_matches_params(updates, params, "grouped MuonH production updates")
+    hlo = str(lowered.compiler_ir(dialect="stablehlo"))
+    assert hlo.count("stablehlo.all_reduce") == 0
+    assert hlo.count("stablehlo.reduce_scatter") == 0
+    assert hlo.count("stablehlo.all_gather") <= 4
 
 
 def test_expert_momentum_sharding_uses_replica_dcn_on_expert_stack_axis():

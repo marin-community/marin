@@ -14,7 +14,14 @@ from levanter.optim.grugmuon import (
     DEFAULT_MAX_GROUPED_STACK_SIZE,
     ORTHOGONALIZATION_LAYOUTS,
     STACK_BATCH_SHARDED,
+    _cast_for_ns_compute,
+    _grouped_4d_stack_target,
     _grug_scale_with_muon,
+    _restore_ns_compute_dtype,
+    _target_sharding,
+    _target_spec,
+    _with_target_spec,
+    _zeropower_via_newtonschulz_grouped_4d_sharded,
 )
 from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
@@ -22,13 +29,14 @@ from levanter.utils.jax_utils import leaf_key_paths
 from experiments.grug.moe.adamh import scale_by_adamh
 from experiments.grug.moe.optimizer_sharding import assert_update_sharding_matches_params, target_named_sharding
 
-Expert3DOptimizer = Literal["muonh", "adamh"]
-VALID_EXPERT_3D_OPTIMIZERS: tuple[Expert3DOptimizer, ...] = ("muonh", "adamh")
+Expert3DOptimizer = Literal["muonh", "adamh", "grouped_muonh"]
+VALID_EXPERT_3D_OPTIMIZERS: tuple[Expert3DOptimizer, ...] = ("muonh", "adamh", "grouped_muonh")
 MayOptimizer = Literal["muonh", "sgd"]
 VALID_MAY_OPTIMIZERS: tuple[MayOptimizer, ...] = ("muonh", "sgd")
 REPLICA_DCN_AXIS = "replica_dcn"
 EXPERT_AXIS = "expert"
 MATCH_OPTIMIZER_SHARDING_ENV = "MAY_MATCH_OPTIMIZER_SHARDING"
+GROUPED_MUONH_EXPERT_PATH = ".mlp.expert_mlp.w_"
 
 
 def _match_optimizer_sharding_enabled() -> bool:
@@ -198,6 +206,241 @@ def _scale_invariant_hyperball_updates(
     return hyperball_updates
 
 
+def _grouped_muonh_leaf_name(path) -> str:
+    path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+    return path_str.rsplit(".", maxsplit=1)[-1]
+
+
+def _is_grouped_muonh_expert_leaf(path, leaf) -> bool:
+    if not hasattr(leaf, "ndim") or leaf.ndim != 3:
+        return False
+    path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+    return GROUPED_MUONH_EXPERT_PATH in path_str.lower()
+
+
+def _grouped_muonh_stack_axis_size(sample_param) -> int:
+    sharding = _target_sharding(sample_param)
+    if isinstance(sharding, jax.sharding.NamedSharding):
+        mesh_shape = sharding.mesh.shape
+    else:
+        mesh = jax.sharding.get_abstract_mesh()
+        if mesh.empty:
+            return 1
+        mesh_shape = mesh.shape
+
+    candidate_axes = tuple(axis for axis in (REPLICA_DCN_AXIS, "data") if int(mesh_shape.get(axis, 1)) > 1)
+    if not candidate_axes:
+        return 1
+    return math.prod(int(mesh_shape[axis]) for axis in candidate_axes)
+
+
+def _grouped_muonh_shape_dtype_struct(shape, dtype, sample_param):
+    sharding = _target_sharding(sample_param)
+    if isinstance(sharding, jax.sharding.NamedSharding) and len(sharding.spec) == 3:
+        stack_sharding = jax.sharding.NamedSharding(
+            sharding.mesh,
+            jax.sharding.PartitionSpec(None, *sharding.spec),
+        )
+        return jax.ShapeDtypeStruct(shape, dtype, sharding=stack_sharding)
+    return jax.ShapeDtypeStruct(shape, dtype)
+
+
+def _grouped_muonh_chunk_size(sample_param, requested_group_size: int | None, max_grouped_stack_size: int) -> int:
+    stack_axis_size = _grouped_muonh_stack_axis_size(sample_param)
+    if requested_group_size is None:
+        requested_group_size = stack_axis_size if stack_axis_size > 1 else max_grouped_stack_size
+    if requested_group_size < 1:
+        raise ValueError(f"expert_grouped_muonh_group_size={requested_group_size} must be positive")
+    return max(1, min(requested_group_size, max_grouped_stack_size))
+
+
+def _pad_grouped_muonh_stack(stacked, padded_size: int):
+    if padded_size == stacked.shape[0]:
+        return stacked
+    pad_width = ((0, padded_size - stacked.shape[0]), (0, 0), (0, 0), (0, 0))
+    return jnp.pad(stacked, pad_width)
+
+
+def _restore_grouped_muonh_for_split(grouped_update, target, valid_size: int):
+    target_spec = _target_spec(target)
+    if target_spec is not None and target_spec[0] is not None:
+        grouped_update = jax.sharding.reshard(
+            grouped_update,
+            _with_target_spec(target, jax.sharding.PartitionSpec(None, target_spec[1], None, None)),
+        )
+    if grouped_update.shape[0] != valid_size:
+        grouped_update = grouped_update[:valid_size]
+    return grouped_update
+
+
+def _restore_param_sharding(update, param):
+    target_sharding = _target_named_sharding(param)
+    if target_sharding is None:
+        return update
+    return jax.sharding.reshard(update, target_sharding)
+
+
+def _scale_grouped_muonh_direction(direction):
+    fan_in, fan_out = direction.shape[-2:]
+    scale = jnp.sqrt(jnp.maximum(1, fan_out / fan_in))
+    return direction * scale
+
+
+def _grouped_muonh_hyperball_update(stacked_params, direction, learning_rate):
+    axes = (-2, -1)
+    with jax.named_scope("grouped_muonh/hyperball/norms"):
+        param_norm = jnp.sqrt(jnp.sum(jnp.square(stacked_params), axis=axes, keepdims=True))
+        update_norm = jnp.sqrt(jnp.sum(jnp.square(direction), axis=axes, keepdims=True))
+        step_scale = learning_rate * param_norm / jnp.maximum(update_norm, 1e-10)
+        dot = jnp.sum(stacked_params * direction, axis=axes, keepdims=True)
+    with jax.named_scope("grouped_muonh/hyperball/project"):
+        new_param_norm_sq = param_norm**2 - 2 * step_scale * dot + step_scale**2 * update_norm**2
+        new_param_norm = jnp.sqrt(jnp.maximum(new_param_norm_sq, 1e-30))
+        rescale = param_norm / jnp.maximum(new_param_norm, 1e-10)
+        return (rescale - 1) * stacked_params - rescale * step_scale * direction
+
+
+def _grouped_expert_muonh_updates(
+    params,
+    updates,
+    learning_rate: float,
+    *,
+    steps: int,
+    muon_eps: float,
+    coefficient_type: CoefficientType,
+    max_grouped_stack_size: int,
+    ns_compute_dtype: str,
+    expert_grouped_muonh_group_size: int | None,
+):
+    update_leaves, treedef = jax.tree.flatten(updates, is_leaf=lambda x: x is None)
+    param_leaves, param_treedef = jax.tree.flatten(params, is_leaf=lambda x: x is None)
+    path_leaves, path_treedef = jax.tree.flatten(leaf_key_paths(params), is_leaf=lambda x: x is None)
+    if treedef != param_treedef or treedef != path_treedef:
+        raise ValueError("Grouped MuonH requires updates, params, and paths to have matching tree structure")
+
+    output_leaves = [None] * len(update_leaves)
+    groups: dict[tuple[str, tuple[int, ...], str], list[tuple[int, object, object]]] = {}
+    for index, (update, param, path) in enumerate(zip(update_leaves, param_leaves, path_leaves, strict=True)):
+        if update is None:
+            output_leaves[index] = None
+            continue
+        if _is_grouped_muonh_expert_leaf(path, param):
+            key = (_grouped_muonh_leaf_name(path), tuple(param.shape), str(param.dtype))
+            groups.setdefault(key, []).append((index, update, param))
+            continue
+        output_leaves[index] = update
+
+    for entries in groups.values():
+        chunk_size = _grouped_muonh_chunk_size(
+            entries[0][2],
+            expert_grouped_muonh_group_size,
+            max_grouped_stack_size,
+        )
+        for chunk_start in range(0, len(entries), chunk_size):
+            entry_chunk = entries[chunk_start : chunk_start + chunk_size]
+            valid_size = len(entry_chunk)
+            stack_axis_size = _grouped_muonh_stack_axis_size(entry_chunk[0][2])
+            padded_size = math.ceil(valid_size / stack_axis_size) * stack_axis_size
+
+            with jax.named_scope("grouped_muonh/stack_expert_updates"):
+                stacked_updates = jnp.stack([update for _, update, _ in entry_chunk], axis=0)
+                stacked_params = jnp.stack([param for _, _, param in entry_chunk], axis=0)
+                stacked_updates = _pad_grouped_muonh_stack(stacked_updates, padded_size)
+                stacked_params = _pad_grouped_muonh_stack(stacked_params, padded_size)
+
+            target = _grouped_4d_stack_target(
+                _grouped_muonh_shape_dtype_struct(stacked_updates.shape, stacked_updates.dtype, entry_chunk[0][2])
+            )
+            if target is not None:
+                with jax.named_scope("grouped_muonh/reshard_grouped_stack"):
+                    stacked_updates = jax.sharding.reshard(stacked_updates, target)
+                    stacked_params = jax.sharding.reshard(stacked_params, target)
+
+            with jax.named_scope("grouped_muonh/newton_schulz"):
+                stacked_updates, original_dtype = _cast_for_ns_compute(stacked_updates, ns_compute_dtype)
+                direction = _zeropower_via_newtonschulz_grouped_4d_sharded(
+                    stacked_updates,
+                    steps,
+                    muon_eps,
+                    coefficient_type,
+                    target,
+                )
+                direction = _restore_ns_compute_dtype(direction, original_dtype)
+                direction = _scale_grouped_muonh_direction(direction)
+
+            grouped_update = _grouped_muonh_hyperball_update(stacked_params, direction, learning_rate)
+            grouped_update = _restore_grouped_muonh_for_split(grouped_update, target, valid_size)
+            update_parts = [
+                jnp.squeeze(update_part, axis=0) for update_part in jnp.split(grouped_update, valid_size, axis=0)
+            ]
+
+            for (index, _, param), update_part in zip(entry_chunk, update_parts, strict=True):
+                output_leaves[index] = _restore_param_sharding(update_part, param)
+
+    return jax.tree.unflatten(treedef, output_leaves)
+
+
+def scale_with_grouped_expert_muonh(
+    momentum: float = 0.95,
+    nesterov: bool = True,
+    steps: int = 5,
+    muon_eps: float = 1e-8,
+    learning_rate: float = 0.02,
+    coefficient_type: CoefficientType = "quintic",
+    max_grouped_stack_size: int = DEFAULT_MAX_GROUPED_STACK_SIZE,
+    ns_compute_dtype: str = "input",
+    expert_grouped_muonh_group_size: int | None = None,
+) -> optax.GradientTransformation:
+    """Expert-only MuonH transform that computes NS on grouped 4D stacks and returns FSDP updates."""
+
+    if max_grouped_stack_size < 1:
+        raise ValueError(f"max_grouped_stack_size={max_grouped_stack_size} must be positive")
+    if expert_grouped_muonh_group_size is not None and expert_grouped_muonh_group_size < 1:
+        raise ValueError(f"expert_grouped_muonh_group_size={expert_grouped_muonh_group_size} must be positive")
+
+    def init_fn(params):
+        return optax.TraceState(trace=jax.tree.map(jnp.zeros_like, params))
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_with_grouped_expert_muonh requires params")
+
+        with jax.named_scope("grouped_muonh/update_momentum_buffer"):
+            trace = jax.tree.map(
+                lambda trace_leaf, update: None if update is None else momentum * trace_leaf + update,
+                state.trace,
+                updates,
+                is_leaf=lambda x: x is None,
+            )
+        if nesterov:
+            with jax.named_scope("grouped_muonh/nesterov_update"):
+                direction_inputs = jax.tree.map(
+                    lambda trace_leaf, update: None if update is None else momentum * trace_leaf + update,
+                    trace,
+                    updates,
+                    is_leaf=lambda x: x is None,
+                )
+        else:
+            direction_inputs = trace
+
+        with jax.named_scope("grouped_muonh/transform_updates"):
+            muonh_updates = _grouped_expert_muonh_updates(
+                params,
+                direction_inputs,
+                learning_rate,
+                steps=steps,
+                muon_eps=muon_eps,
+                coefficient_type=coefficient_type,
+                max_grouped_stack_size=max_grouped_stack_size,
+                ns_compute_dtype=ns_compute_dtype,
+                expert_grouped_muonh_group_size=expert_grouped_muonh_group_size,
+            )
+        assert_update_sharding_matches_params(muonh_updates, params, "Grouped MuonH updates")
+        return muonh_updates, optax.TraceState(trace=trace)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 def scale_with_grug_muonh(
     momentum: float = 0.95,
     nesterov: bool = True,
@@ -351,6 +594,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     orthogonalization_layout: str = STACK_BATCH_SHARDED
     max_grouped_stack_size: int = DEFAULT_MAX_GROUPED_STACK_SIZE
     ns_compute_dtype: str = "input"
+    expert_grouped_muonh_group_size: int | None = None
 
     def build(self, num_train_steps):
         if self.expert_3d_optimizer not in VALID_EXPERT_3D_OPTIMIZERS:
@@ -361,6 +605,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError(f"orthogonalization_layout={self.orthogonalization_layout!r} must be one of {valid}")
         if self.max_grouped_stack_size < 1:
             raise ValueError(f"max_grouped_stack_size={self.max_grouped_stack_size} must be positive")
+        if self.expert_grouped_muonh_group_size is not None and self.expert_grouped_muonh_group_size < 1:
+            raise ValueError(f"expert_grouped_muonh_group_size={self.expert_grouped_muonh_group_size} must be positive")
 
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
@@ -387,6 +633,26 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components.append(_match_named_update_sharding())
                 return optax.chain(*components)
 
+            def grouped_muonh_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(
+                    scale_with_grouped_expert_muonh(
+                        momentum=self.momentum,
+                        nesterov=self.nesterov,
+                        steps=self.backend_steps,
+                        muon_eps=self.muon_epsilon,
+                        learning_rate=learning_rate,
+                        coefficient_type=self.coefficient_type,
+                        max_grouped_stack_size=self.max_grouped_stack_size,
+                        ns_compute_dtype=self.ns_compute_dtype,
+                        expert_grouped_muonh_group_size=self.expert_grouped_muonh_group_size,
+                    )
+                )
+                components.append(_match_named_update_sharding())
+                return optax.chain(*components)
+
             def adamh_transform_at(lr):
                 components = []
                 if self.max_grad_norm:
@@ -407,6 +673,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             return optax.multi_transform(
                 {
                     "muonh": _with_named_update_scope("optimizer/group/muonh", muonh_transform()),
+                    "grouped_muonh": _with_named_update_scope(
+                        "optimizer/group/grouped_muonh",
+                        grouped_muonh_transform(),
+                    ),
                     "adamh": _with_named_update_scope("optimizer/group/adamh", adamh_transform_at(learning_rate)),
                     "adam": _with_named_update_scope("optimizer/group/adam", adam_transform_at(adam_lr)),
                 },
@@ -476,5 +746,6 @@ __all__ = [
     "GrugMoeMuonHConfig",
     "GrugMoeSgdConfig",
     "MayOptimizer",
+    "scale_with_grouped_expert_muonh",
     "scale_with_grug_muonh",
 ]

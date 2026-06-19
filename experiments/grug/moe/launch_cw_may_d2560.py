@@ -34,7 +34,8 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_MUON_BACKEND_STEPS=5  Newton-Schulz steps for MuonH when MAY_OPTIMIZER=muonh
     MAY_MUON_ORTHOGONALIZATION_LAYOUT=stack_batch_sharded  stack_batch_sharded | vmap_replicated
     MAY_MUON_MAX_GROUPED_STACK_SIZE=256  Maximum grouped Muon stack size
-    MAY_EXPERT_3D_OPTIMIZER=muonh  muonh | adamh diagnostic for routed expert weights when MAY_OPTIMIZER=muonh
+    MAY_EXPERT_3D_OPTIMIZER=muonh  muonh | adamh | grouped_muonh for routed expert weights
+    MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE=  optional grouped_muonh stack group size
 
 The default parameter policy keeps one sharded fp32 parameter tree plus sharded
 optimizer state. Set ``MAY_LIVE_PARAM_MODE=compute_with_master`` to keep a
@@ -206,6 +207,7 @@ def build_may_optimizer(*, batch_size: int, seq_len: int) -> OptimizerConfig:
             "MAY_MUON_ORTHOGONALIZATION_LAYOUT", GrugMoeMuonHConfig.orthogonalization_layout
         ),
         max_grouped_stack_size=env_int("MAY_MUON_MAX_GROUPED_STACK_SIZE", GrugMoeMuonHConfig.max_grouped_stack_size),
+        expert_grouped_muonh_group_size=env_optional_int("MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE"),
         max_grad_norm=None,
         lr_schedule=base_optimizer.lr_schedule,
         decay=base_optimizer.decay,

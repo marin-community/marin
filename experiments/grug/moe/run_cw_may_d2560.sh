@@ -45,6 +45,7 @@ MUON_MAX_GROUPED_STACK_SIZE="${MAY_MUON_MAX_GROUPED_STACK_SIZE:-256}"
 ASSERT_OPTIMIZER_SHARDING="${MAY_ASSERT_OPTIMIZER_SHARDING:-true}"
 MATCH_OPTIMIZER_SHARDING="${MAY_MATCH_OPTIMIZER_SHARDING:-true}"
 EXPERT_3D_OPTIMIZER="${MAY_EXPERT_3D_OPTIMIZER:-muonh}"
+EXPERT_GROUPED_MUONH_GROUP_SIZE="${MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE:-}"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 LIVE_PARAM_MODE="param"
 ATTENTION_IMPLEMENTATION="gpu_fa4_cute"
@@ -125,7 +126,9 @@ Options:
                             MAY_ASSERT_OPTIMIZER_SHARDING diagnostic toggle (default: true).
   --match-optimizer-sharding BOOL
                             MAY_MATCH_OPTIMIZER_SHARDING diagnostic toggle for explicit optimizer reshards (default: true).
-  --expert-3d-optimizer MODE MAY_EXPERT_3D_OPTIMIZER: muonh or adamh when --optimizer=muonh (default: muonh).
+  --expert-3d-optimizer MODE MAY_EXPERT_3D_OPTIMIZER: muonh, adamh, or grouped_muonh (default: muonh).
+  --expert-grouped-muonh-group-size N
+                            MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE for grouped_muonh; empty chooses replica_dcn*data.
   --mp POLICY               MAY_MP policy string.
   --live-param-mode MODE    MAY_LIVE_PARAM_MODE: param or compute_with_master (default: param).
   --attention NAME          MAY_ATTENTION_IMPLEMENTATION (default: gpu_fa4_cute).
@@ -311,6 +314,10 @@ while [ "$#" -gt 0 ]; do
             EXPERT_3D_OPTIMIZER="$2"
             shift 2
             ;;
+        --expert-grouped-muonh-group-size)
+            EXPERT_GROUPED_MUONH_GROUP_SIZE="$2"
+            shift 2
+            ;;
         --mp)
             MP="$2"
             shift 2
@@ -413,10 +420,10 @@ case "$MUON_ORTHOGONALIZATION_LAYOUT" in
 esac
 
 case "$EXPERT_3D_OPTIMIZER" in
-    muonh|adamh)
+    muonh|adamh|grouped_muonh)
         ;;
     *)
-        echo "ERROR: --expert-3d-optimizer must be muonh or adamh, got: $EXPERT_3D_OPTIMIZER" >&2
+        echo "ERROR: --expert-3d-optimizer must be muonh, adamh, or grouped_muonh, got: $EXPERT_3D_OPTIMIZER" >&2
         exit 1
         ;;
 esac
@@ -479,6 +486,7 @@ ENV_ARGS=(
     -e MAY_ASSERT_OPTIMIZER_SHARDING "$ASSERT_OPTIMIZER_SHARDING"
     -e MAY_MATCH_OPTIMIZER_SHARDING "$MATCH_OPTIMIZER_SHARDING"
     -e MAY_EXPERT_3D_OPTIMIZER "$EXPERT_3D_OPTIMIZER"
+    -e MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE "$EXPERT_GROUPED_MUONH_GROUP_SIZE"
     -e MAY_MP "$MP"
     -e MAY_LIVE_PARAM_MODE "$LIVE_PARAM_MODE"
     -e MAY_ATTENTION_IMPLEMENTATION "$ATTENTION_IMPLEMENTATION"
@@ -569,6 +577,7 @@ muon_max_grouped_stack_size: $MUON_MAX_GROUPED_STACK_SIZE
 assert_optimizer_sharding: $ASSERT_OPTIMIZER_SHARDING
 match_optimizer_sharding: $MATCH_OPTIMIZER_SHARDING
 expert_3d_optimizer: $EXPERT_3D_OPTIMIZER
+expert_grouped_muonh_group_size: ${EXPERT_GROUPED_MUONH_GROUP_SIZE:-auto}
 attention: $ATTENTION_IMPLEMENTATION
 ce_implementation: ${CE_IMPLEMENTATION:-default}
 moe_implementation: $MOE_IMPLEMENTATION
