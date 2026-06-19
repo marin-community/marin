@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import optax
 from levanter.optim import OptimizerConfig
 from levanter.optim.grugmuon import (
+    DEFAULT_GROUPED_4D_GROUP_SIZE,
     DEFAULT_MAX_GROUPED_STACK_SIZE,
     ORTHOGONALIZATION_LAYOUTS,
     STACK_BATCH_SHARDED,
@@ -248,7 +249,7 @@ def _grouped_muonh_shape_dtype_struct(shape, dtype, sample_param):
 def _grouped_muonh_chunk_size(sample_param, requested_group_size: int | None, max_grouped_stack_size: int) -> int:
     stack_axis_size = _grouped_muonh_stack_axis_size(sample_param)
     if requested_group_size is None:
-        requested_group_size = stack_axis_size if stack_axis_size > 1 else max_grouped_stack_size
+        requested_group_size = stack_axis_size if stack_axis_size > 1 else DEFAULT_GROUPED_4D_GROUP_SIZE
     if requested_group_size < 1:
         raise ValueError(f"expert_grouped_muonh_group_size={requested_group_size} must be positive")
     return max(1, min(requested_group_size, max_grouped_stack_size))
