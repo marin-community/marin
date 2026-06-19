@@ -27,8 +27,9 @@ A job's region requirement has three distinct states:
 - ANY (``region EXISTS`` via ``any_region_constraint``): "run anywhere; do NOT inherit
   the parent's region." Because the marker carries the region key, it suppresses the
   parent-region injection in IrisClient.submit and clears an inherited pin in
-  ``merge_constraints``, yet matches every worker (all workers have a region attribute)
-  so it imposes no routing restriction.
+  ``merge_constraints``. Having served that opt-out, IrisClient.submit strips it before
+  the job reaches the controller, so it never acts as a scheduling/routing filter (a hard
+  ``region EXISTS`` would otherwise exclude workers/groups that advertise no region).
 """
 
 from __future__ import annotations
@@ -546,23 +547,6 @@ def _extract_preemptible(constraints: list[Constraint]) -> bool | None:
     return next(iter(values)) if values else None
 
 
-def _extract_regions(constraints: list[Constraint]) -> frozenset[str] | None:
-    """Extract required regions, treating a region-EXISTS (ANY) marker as no requirement.
-
-    A bare ``region EXISTS`` constraint is the ANY marker — "run anywhere; do not inherit
-    the parent's region" — and produces no routing requirement (returns None). Mixing ANY
-    with a pinned region (EQ/IN) is contradictory (you cannot be both anywhere and pinned)
-    and raises. Otherwise this delegates to the shared string-set extractor.
-    """
-    has_any = any(c.op == ConstraintOp.EXISTS for c in constraints)
-    pinned = [c for c in constraints if c.op != ConstraintOp.EXISTS]
-    if has_any and pinned:
-        raise ValueError("conflicting region constraints: cannot combine ANY (region EXISTS) with a pinned region")
-    if has_any:
-        return None
-    return _extract_string_set(pinned, WellKnownAttribute.REGION)
-
-
 def _extract_device_type(constraints: list[Constraint]) -> DeviceType | None:
     values = _extract_string_set(
         constraints,
@@ -597,7 +581,10 @@ def extract_placement_requirements(constraints: Sequence[Constraint]) -> Placeme
             WellKnownAttribute.DEVICE_VARIANT,
         ),
         preemptible=_extract_preemptible(by_key.get(WellKnownAttribute.PREEMPTIBLE, [])),
-        required_regions=_extract_regions(by_key.get(WellKnownAttribute.REGION, [])),
+        required_regions=_extract_string_set(
+            by_key.get(WellKnownAttribute.REGION, []),
+            WellKnownAttribute.REGION,
+        ),
         required_zones=_extract_string_set(
             by_key.get(WellKnownAttribute.ZONE, []),
             WellKnownAttribute.ZONE,
@@ -1029,6 +1016,11 @@ def is_cpu_device_type_constraint(c: Constraint) -> bool:
     before routing evaluation. Values are already normalized at ingestion.
     """
     return c.key == WellKnownAttribute.DEVICE_TYPE and c.op == ConstraintOp.EQ and c.values[0].value == "cpu"
+
+
+def is_any_region_marker(c: Constraint) -> bool:
+    """True if ``c`` is the ANY-region marker: a ``region EXISTS`` constraint."""
+    return c.key == WellKnownAttribute.REGION and c.op == ConstraintOp.EXISTS
 
 
 def routing_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:

@@ -20,7 +20,6 @@ from iris.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
-from iris.rpc import job_pb2
 
 
 def dummy_entrypoint():
@@ -205,7 +204,8 @@ def test_child_explicit_region_overrides_parent_worker_region(capturing_client, 
 
 
 def test_child_any_region_marker_suppresses_inherited_worker_region(capturing_client, parent_context):
-    """The ANY marker (region EXISTS) opts a child out of inheriting the parent worker's region."""
+    """The ANY marker opts a child out of inheriting the parent worker's region: no region
+    constraint is sent (the marker suppresses inheritance and is then stripped before the wire)."""
     client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
@@ -217,14 +217,12 @@ def test_child_any_region_marker_suppresses_inherited_worker_region(capturing_cl
         client.submit(entrypoint, "child-any-region", resources, constraints=[any_region_constraint()])
 
     region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
-    assert len(region_constraints) == 1
-    assert region_constraints[0].op == job_pb2.CONSTRAINT_OP_EXISTS
-    # No us-central2 pin was appended.
-    assert not any(c.value.string_value == "us-central2" for c in region_constraints)
+    assert region_constraints == []
 
 
 def test_child_any_region_marker_clears_inherited_region_constraint(capturing_client, parent_context):
-    """A child's ANY marker replaces a parent's pinned region via merge_constraints."""
+    """A child's ANY marker clears a parent's pinned region (via merge) and is then stripped,
+    so the child submits with no region constraint at all."""
     client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
@@ -240,5 +238,4 @@ def test_child_any_region_marker_clears_inherited_region_constraint(capturing_cl
         client.submit(entrypoint, "child-any-clears-pin", resources, constraints=[any_region_constraint()])
 
     region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
-    assert len(region_constraints) == 1
-    assert region_constraints[0].op == job_pb2.CONSTRAINT_OP_EXISTS
+    assert region_constraints == []
