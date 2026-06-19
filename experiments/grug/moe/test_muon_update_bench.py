@@ -15,6 +15,7 @@ from experiments.grug.moe.muon_update_bench import (
     EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
+    EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_APPLY_ONLY_BENCH,
     FULL_PRODUCTION_GROUPED_2D_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_GROUPED_2D_PERSISTENT_APPLY_BENCH,
@@ -353,6 +354,84 @@ def test_grouped_expert_muonh_optimizer_apply_can_shard_group_over_replica_and_d
     assert hlo_summary.all_gather == 0
     assert hlo_summary.all_reduce == 0
     assert hlo_summary.reduce_scatter == 0
+
+
+@pytest.mark.parametrize(
+    (
+        "replica_axis",
+        "data_axis",
+        "expert_axis",
+        "ns4d_group_axis",
+        "layers",
+        "expected_stack_size",
+        "expected_spec",
+    ),
+    [
+        (1, 1, 8, "none", 2, 2, P(None, "expert", None, None)),
+        (2, 2, 8, "replica_dcn,data", 4, 4, P(("replica_dcn", "data"), "expert", None, None)),
+        (2, 2, 8, "replica_dcn,data", 26, 28, P(("replica_dcn", "data"), "expert", None, None)),
+    ],
+)
+def test_expert_only_grouped_muonh_harness_preserves_expert_stack_without_collectives(
+    replica_axis,
+    data_axis,
+    expert_axis,
+    ns4d_group_axis,
+    layers,
+    expected_stack_size,
+    expected_spec,
+):
+    config = BenchConfig(
+        layers=layers,
+        ns4d_group_size=layers,
+        ns4d_group_axis=ns4d_group_axis,
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=replica_axis,
+        data_axis=data_axis,
+        expert_axis=expert_axis,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(replica_axis, data_axis, expert_axis, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    input_sharding = ns4d_input_sharding(mesh, config, EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH)
+    result_sharding = ns4d_result_sharding(mesh, config, EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH)
+    params = synthetic_grouped_expert_specs(mesh, config, EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH)
+    grads = synthetic_grouped_expert_specs(mesh, config, EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH)
+
+    assert input_sharding.spec == expected_spec
+    assert result_sharding is not None
+    assert result_sharding.spec == expected_spec
+    assert params["blocks"][0]["mlp"]["expert_mlp"]["w_gate_up"].shape[0] == expected_stack_size
+    assert_ns4d_sharding(params, expected_spec, "expert-only grouped params")
+    assert_ns4d_sharding(grads, expected_spec, "expert-only grouped grads")
+
+    optimizer = build_grouped_expert_productionish_optimizer(config, use_hyperball=True)
+    update_step = jax.jit(grouped_expert_optimizer_apply_step_factory(config, use_hyperball=True))
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        state = jax.eval_shape(optimizer.init, params)
+        result, _next_state, updates = jax.eval_shape(update_step, params, grads, state)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(params, grads, state).lower(lowering_platforms=(platform,))
+
+    assert_ns4d_sharding(updates, expected_spec, "expert-only grouped MuonH updates")
+    assert_ns4d_sharding(result, expected_spec, "expert-only grouped MuonH result")
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.two_batch_axis_dot_general == 6
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+    assert estimated_matrix_count(config, EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH) == expected_stack_size * 16
 
 
 def test_full_production_muonh_optimizer_apply_covers_2d_and_grouped_expert_leaves():

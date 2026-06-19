@@ -81,6 +81,7 @@ TWO_BATCH_AXIS_DOT_RE = re.compile(r"batching_dims = \[0, 1\] x \[0, 1\]")
 ALL_GATHER_RE = re.compile(r"\ball-gather\b|stablehlo\.all_gather|mhlo\.all_gather")
 ALL_REDUCE_RE = re.compile(r"\ball-reduce\b|stablehlo\.all_reduce|mhlo\.all_reduce")
 REDUCE_SCATTER_RE = re.compile(r"\breduce-scatter\b|stablehlo\.reduce_scatter|mhlo\.reduce_scatter")
+ALL_TO_ALL_RE = re.compile(r"\ball-to-all\b|stablehlo\.all_to_all|mhlo\.all_to_all")
 COLLECTIVE_PERMUTE_RE = re.compile(r"\bcollective-permute\b|stablehlo\.collective_permute|mhlo\.collective_permute")
 MUONH_UPDATE_BENCH = "muonh_update"
 MUON_DIRECTION_BENCH = "muon_direction"
@@ -91,6 +92,7 @@ NS4D_DATA_GROUP_APPLY_BENCH = "ns4d_data_group_apply"
 EXPERT_GROUPED_APPLY_BOUNDARY_BENCH = "expert_grouped_apply_boundary"
 EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH = "expert_grouped_optimizer_apply"
 EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH = "expert_grouped_muonh_optimizer_apply"
+EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH = "expert_only_grouped_muonh_optimizer_apply"
 FULL_PRODUCTION_MUONH_OPTIMIZER_APPLY_BENCH = "full_production_muonh_optimizer_apply"
 FULL_PRODUCTION_GROUPED_2D_MUONH_OPTIMIZER_APPLY_BENCH = "full_production_grouped_2d_muonh_optimizer_apply"
 FULL_PRODUCTION_GROUPED_2D_DIRECT_APPLY_BENCH = "full_production_grouped_2d_direct_apply"
@@ -119,6 +121,7 @@ BENCH_KINDS = (
     EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+    EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_GROUPED_2D_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_GROUPED_2D_DIRECT_APPLY_BENCH,
@@ -144,6 +147,7 @@ NS4D_DATA_SHARDED_BENCHES = (
     EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+    EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_GROUPED_2D_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_GROUPED_2D_DIRECT_APPLY_BENCH,
@@ -161,6 +165,7 @@ GROUPED_APPLY_BOUNDARY_BENCHES = (
     EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+    EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_GROUPED_2D_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_GROUPED_2D_DIRECT_APPLY_BENCH,
@@ -280,6 +285,7 @@ class HloSummary:
     all_gather: int
     all_reduce: int
     reduce_scatter: int
+    all_to_all: int
     collective_permute: int
     grouped_scope_mentions: int
     stack_sharded_scope_mentions: int
@@ -447,6 +453,11 @@ def ns4d_axis_size(config: BenchConfig) -> int:
 
 def padded_ns4d_group_size(config: BenchConfig, bench_kind: str) -> int:
     group_size = ns4d_group_size(config)
+    if bench_kind == EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH:
+        axis_size = ns4d_axis_size(config)
+        if axis_size <= 1:
+            return group_size
+        return math.ceil(group_size / axis_size) * axis_size
     if bench_kind not in NS4D_PADDED_BENCHES:
         return group_size
     axis_size = ns4d_axis_size(config)
@@ -456,7 +467,12 @@ def padded_ns4d_group_size(config: BenchConfig, bench_kind: str) -> int:
 
 
 def ns4d_compute_sharding(mesh: Mesh, config: BenchConfig, bench_kind: str) -> NamedSharding:
-    return ns4d_compute_sharding_for_group_size(mesh, config, bench_kind, ns4d_group_size(config))
+    group_size = (
+        padded_ns4d_group_size(config, bench_kind)
+        if bench_kind == EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH
+        else ns4d_group_size(config)
+    )
+    return ns4d_compute_sharding_for_group_size(mesh, config, bench_kind, group_size)
 
 
 def ns4d_compute_sharding_for_group_size(
@@ -562,6 +578,16 @@ def grouped_expert_group_sizes(config: BenchConfig) -> tuple[int, ...]:
     return tuple(sizes)
 
 
+def grouped_expert_group_sizes_for_bench(config: BenchConfig, bench_kind: str) -> tuple[int, ...]:
+    sizes = grouped_expert_group_sizes(config)
+    if bench_kind != EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH:
+        return sizes
+    axis_size = ns4d_axis_size(config)
+    if axis_size <= 1:
+        return sizes
+    return tuple(math.ceil(size / axis_size) * axis_size for size in sizes)
+
+
 def synthetic_grouped_expert_specs(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Any:
     dtype = dtype_from_name(config.dtype)
     shapes = synthetic_shapes(config)
@@ -579,7 +605,7 @@ def synthetic_grouped_expert_specs(mesh: Mesh, config: BenchConfig, bench_kind: 
                     }
                 }
             }
-            for group_size in grouped_expert_group_sizes(config)
+            for group_size in grouped_expert_group_sizes_for_bench(config, bench_kind)
         )
     }
 
@@ -915,7 +941,7 @@ def make_grouped_expert_array_tree(mesh: Mesh, config: BenchConfig, bench_kind: 
                     }
                 }
             }
-            for group_index, group_size in enumerate(grouped_expert_group_sizes(config))
+            for group_index, group_size in enumerate(grouped_expert_group_sizes_for_bench(config, bench_kind))
         )
     }
 
@@ -1100,7 +1126,7 @@ def assert_grouped_expert_sharding(tree: Any, mesh: Mesh, config: BenchConfig, b
     if not isinstance(tree, dict) or "blocks" not in tree:
         raise AssertionError(f"{label} expected a grouped expert tree with a blocks field.")
     for group_index, (block, group_size) in enumerate(
-        zip(tree["blocks"], grouped_expert_group_sizes(config), strict=True)
+        zip(tree["blocks"], grouped_expert_group_sizes_for_bench(config, bench_kind), strict=True)
     ):
         expected_spec = grouped_expert_group_sharding(mesh, config, bench_kind, group_size).spec
         assert_ns4d_sharding(block, expected_spec, f"{label} block {group_index}")
@@ -1525,6 +1551,7 @@ def ns4d_bench_returns_4d_updates(bench_kind: str) -> bool:
         EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
         EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
         EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+        EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
         FULL_PRODUCTION_MUONH_OPTIMIZER_APPLY_BENCH,
         FULL_PRODUCTION_GROUPED_2D_MUONH_OPTIMIZER_APPLY_BENCH,
         NS4D_DOTONLY_EINSUM_BENCH,
@@ -1562,6 +1589,8 @@ def ns4d_boundary_status(config: BenchConfig, bench_kind: str) -> str | None:
         return "grouped_blocks_expert_direction_optimizer_updates_apply"
     if bench_kind == EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH:
         return "grouped_blocks_expert_muonh_optimizer_updates_apply"
+    if bench_kind == EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH:
+        return "expert_only_grouped_blocks_muonh_optimizer_updates_apply"
     if is_full_production_muonh_bench(bench_kind):
         if bench_kind == FULL_PRODUCTION_GROUPED_2D_DIRECT_APPLY_BENCH:
             return "full_production_grouped_2d_direct_apply"
@@ -1589,8 +1618,13 @@ def grouped_apply_boundary_collectives(hlo_summary: HloSummary) -> dict[str, int
         "all_gather": hlo_summary.all_gather,
         "reduce_scatter": hlo_summary.reduce_scatter,
         "all_reduce": hlo_summary.all_reduce,
+        "all_to_all": hlo_summary.all_to_all,
     }
     return {name: count for name, count in collective_counts.items() if count}
+
+
+def is_expert_only_grouped_muonh_bench(bench_kind: str) -> bool:
+    return bench_kind == EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH
 
 
 def scale_ns4d_update(update: jax.Array, config: BenchConfig) -> jax.Array:
@@ -2143,6 +2177,7 @@ def summarize_hlo(hlo_text: str) -> HloSummary:
         all_gather=len(ALL_GATHER_RE.findall(hlo_text)),
         all_reduce=len(ALL_REDUCE_RE.findall(hlo_text)),
         reduce_scatter=len(REDUCE_SCATTER_RE.findall(hlo_text)),
+        all_to_all=len(ALL_TO_ALL_RE.findall(hlo_text)),
         collective_permute=len(COLLECTIVE_PERMUTE_RE.findall(hlo_text)),
         grouped_scope_mentions=hlo_text.count("orthogonalize_3d_grouped_stack"),
         stack_sharded_scope_mentions=hlo_text.count("orthogonalize_3d_stack_sharded"),
@@ -2241,6 +2276,12 @@ def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
         return estimated_ordinary_2d_muonh_ns_dot_flops(config)
     if is_full_production_muonh_bench(bench_kind):
         return estimated_full_production_muonh_ns_dot_flops(config)
+    if bench_kind == EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH:
+        return sum(
+            ns_dot_flops_for_shape(shape, group_size, config.backend_steps)
+            for group_size in grouped_expert_group_sizes_for_bench(config, bench_kind)
+            for shape in synthetic_shapes(config).values()
+        )
     if is_tree_update_bench(bench_kind):
         group_size = config.layers
     elif bench_kind in GROUPED_APPLY_BOUNDARY_BENCHES:
@@ -2272,6 +2313,10 @@ def estimated_matrix_count(config: BenchConfig, bench_kind: str) -> int:
         per_layer_2d = len(production_muonh_2d_shapes(config))
         per_layer_expert = sum(shape[0] for shape in synthetic_shapes(config).values())
         return config.layers * (per_layer_2d + per_layer_expert)
+    if bench_kind == EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH:
+        return sum(grouped_expert_group_sizes_for_bench(config, bench_kind)) * sum(
+            shape[0] for shape in synthetic_shapes(config).values()
+        )
     if is_tree_update_bench(bench_kind) or bench_kind in GROUPED_APPLY_BOUNDARY_BENCHES:
         group_size = config.layers
     else:
@@ -2352,6 +2397,8 @@ def lower_ns4d(
 ) -> HloSummary:
     if is_full_production_muonh_bench(bench_kind):
         specs = synthetic_full_production_muonh_specs(mesh, config, bench_kind)
+    elif is_expert_only_grouped_muonh_bench(bench_kind):
+        specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
     elif bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES:
         specs = synthetic_productionish_grouped_expert_specs(mesh, config, bench_kind)
     elif bench_kind == EXPERT_GROUPED_APPLY_BOUNDARY_BENCH:
@@ -2384,6 +2431,15 @@ def lower_ns4d(
             assert_grouped_expert_sharding(
                 update_specs, mesh, config, bench_kind, "full production grouped expert updates"
             )
+            lower_args = None
+        elif is_expert_only_grouped_muonh_bench(bench_kind):
+            optimizer = build_grouped_expert_productionish_optimizer(config, use_hyperball=True)
+            update_step = jax.jit(grouped_expert_optimizer_apply_step_factory(config, use_hyperball=True))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                state_specs = jax.eval_shape(optimizer.init, specs)
+                result_specs, _next_state_specs, update_specs = jax.eval_shape(update_step, specs, specs, state_specs)
+                lowered = update_step.lower(specs, specs, state_specs)
+            assert_grouped_expert_sharding(update_specs, mesh, config, bench_kind, "expert-only grouped MuonH updates")
             lower_args = None
         elif bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES:
             use_hyperball = bench_kind == EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH
@@ -2595,6 +2651,8 @@ def time_ns4d(
         optimizer_state = None
         if is_full_production_muonh_bench(bench_kind):
             updates = make_full_production_muonh_array_tree(mesh, config, bench_kind, seed=1)
+        elif is_expert_only_grouped_muonh_bench(bench_kind):
+            updates = make_grouped_expert_array_tree(mesh, config, bench_kind, seed=1)
         elif bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES:
             updates = make_productionish_grouped_expert_array_tree(mesh, config, bench_kind, seed=1)
         elif bench_kind == EXPERT_GROUPED_APPLY_BOUNDARY_BENCH:
@@ -2624,6 +2682,15 @@ def time_ns4d(
                         donate_argnums=(0, 2),
                     )
                 optimizer_state = optimizer.init(params)
+                lower_args = (params, updates, optimizer_state)
+            elif is_expert_only_grouped_muonh_bench(bench_kind):
+                params = make_grouped_expert_array_tree(mesh, config, bench_kind, seed=0)
+                optimizer = build_grouped_expert_productionish_optimizer(config, use_hyperball=True)
+                optimizer_state = optimizer.init(params)
+                update_step = jax.jit(
+                    grouped_expert_optimizer_apply_timing_step_factory(config, use_hyperball=True),
+                    donate_argnums=(0, 2),
+                )
                 lower_args = (params, updates, optimizer_state)
             elif bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES:
                 params = make_productionish_grouped_expert_array_tree(mesh, config, bench_kind, seed=0)
@@ -2664,7 +2731,7 @@ def time_ns4d(
             if params is None:
                 next_updates = compiled(updates)
                 block_until_ready_tree(next_updates)
-            elif bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES:
+            elif is_expert_only_grouped_muonh_bench(bench_kind) or bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES:
                 params, optimizer_state = compiled(params, updates, optimizer_state)
                 block_until_ready_tree((params, optimizer_state))
                 if result_sharding is not None:
@@ -2703,7 +2770,7 @@ def time_ns4d(
             if params is None:
                 next_updates = compiled(updates)
                 block_until_ready_tree(next_updates)
-            elif bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES:
+            elif is_expert_only_grouped_muonh_bench(bench_kind) or bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES:
                 params, optimizer_state = compiled(params, updates, optimizer_state)
                 block_until_ready_tree((params, optimizer_state))
                 if result_sharding is not None:
@@ -3059,6 +3126,7 @@ def run_config(
                 EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
                 EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
                 EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+                EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
                 FULL_PRODUCTION_MUONH_OPTIMIZER_APPLY_BENCH,
                 FULL_PRODUCTION_GROUPED_2D_MUONH_OPTIMIZER_APPLY_BENCH,
                 FULL_PRODUCTION_GROUPED_2D_DIRECT_APPLY_BENCH,
@@ -3100,6 +3168,7 @@ def run_config(
                 EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
                 EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
                 EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+                EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
                 FULL_PRODUCTION_MUONH_OPTIMIZER_APPLY_BENCH,
                 FULL_PRODUCTION_GROUPED_2D_MUONH_OPTIMIZER_APPLY_BENCH,
                 FULL_PRODUCTION_GROUPED_2D_PERSISTENT_APPLY_BENCH,
@@ -3234,6 +3303,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                 "all_gather": result["lowered"]["hlo"]["all_gather"],
                 "all_reduce": result["lowered"]["hlo"]["all_reduce"],
                 "reduce_scatter": result["lowered"]["hlo"]["reduce_scatter"],
+                "all_to_all": result["lowered"]["hlo"]["all_to_all"],
                 "collective_permute": result["lowered"]["hlo"]["collective_permute"],
                 "lower_seconds": result["lowered"]["lower_seconds"],
             }
@@ -3253,6 +3323,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                 "compiled_hlo_all_gather": compiled_hlo["all_gather"] if compiled_hlo else None,
                 "compiled_hlo_all_reduce": compiled_hlo["all_reduce"] if compiled_hlo else None,
                 "compiled_hlo_reduce_scatter": compiled_hlo["reduce_scatter"] if compiled_hlo else None,
+                "compiled_hlo_all_to_all": compiled_hlo["all_to_all"] if compiled_hlo else None,
                 "compiled_hlo_collective_permute": compiled_hlo["collective_permute"] if compiled_hlo else None,
                 "median_seconds": timing["median_seconds"],
                 "mean_seconds": timing["mean_seconds"],
