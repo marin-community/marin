@@ -810,3 +810,22 @@ Restore-only is only about 4.4 ms faster by median runtime. Both paths compile t
 
 - Interpretation: Packing succeeds at the StableHLO level, but compiled XLA GPU/NCCL lowering gets worse: A2A expands to 159 calls and runtime regresses by about 54% versus the un-packed ppermute path. This mirrors the earlier packed A2A result and confirms that reducing logical collective count is not enough; the large packed data-axis A2A lowers poorly.
 - Next action: Treat the JAX-level grouped-to-FSDP restore space as exhausted for now: plain `reshard` OOMs, explicit per-group A2A is best but still costly, packed A2A is worse, ppermute is worse, and packed ppermute is worst. The next FSDP-master attempt needs a lower-level custom communication boundary, or we should return to a grouped-bank/model-facing representation that avoids this restore boundary.
+
+### 2026-06-19 12:35 PDT - production data-first restore integration still compiles to many collectives
+- Hypothesis: Integrating the best measured data-first grouped-to-FSDP restore into the production grouped MuonH optimizer helper might materially improve the real update/apply path versus the earlier gather-first production path.
+- Command:
+  - Code change: changed `_restore_grouped_muonh_for_split_explicit_a2a` in `experiments/grug/moe/optimizer.py` to perform the data-axis `all_to_all` before the `replica_dcn` all-gather. Commit `2a6c26dc3` pushed to `codex/research-grug-moe-d2560-mfu`.
+  - Validation before launch: `uv run pytest experiments/grug/moe/test_optimizer.py experiments/grug/moe/test_muon_update_bench.py -q` -> 73 passed; `./infra/pre-commit.py --changed-files --fix` -> OK.
+  - CoreWeave run: parent `/dlwh/iris-run-job-20260619-182442`; child `/dlwh/iris-run-job-20260619-182442/grug-train-MUON-BENCH-D2560-L26-R2D2E8-REALGROUPEDMUONH-DATAFIRST-H3-G4-CAP256-N4-cw-20260619-182440`.
+  - Output: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D2E8-REALGROUPEDMUONH-DATAFIRST-H3-G4-CAP256-N4-cw-20260619-182440-804cbc/summary.json`.
+- Config: 4 H100 nodes, `replica_axis=2`, `data_axis=2`, `expert_axis=8`, `model_axis=1`, `layers=26`, `hidden_dim=2560`, `intermediate_dim=1280`, `num_experts=256`, `ns4d_group_size=4`, `ns4d_group_axis=replica_dcn,data`, `max_grouped_stack_size=256`, `ns_compute_dtype=bf16`, `backend_steps=3`.
+- Result:
+
+| path | lowered AG/A2A/AR/RS | compiled AG/A2A/AR/RS | compiled GEMMs | median | mean |
+| --- | --- | --- | ---: | ---: | ---: |
+| production grouped MuonH update, data-first restore | 14/14/0/0 | 150/392/0/0 | 308 | 0.933573s | 0.934062s |
+| production grouped MuonH apply, data-first restore | 14/14/0/0 | 150/392/0/0 | 308 | 0.888601s | 0.888825s |
+
+Earlier gather-first production path (`/dlwh/iris-run-job-20260619-165623`) was about 1.127s for update and 1.073-1.077s for apply with compiled `AG=112`, `A2A=392`. The data-first production integration is therefore a real improvement, but the compiled all-to-all count is unchanged and the path is still far from the speed target.
+- Interpretation: Data-first ordering helps in the real optimizer path, but it does not solve the production blocker. The production update/apply path still combines grouped NS work with a grouped-to-FSDP restore that XLA GPU expands into hundreds of compiled collectives (`A2A=392`). The boundary-only data-first microbench remains much cheaper (~0.214-0.218s), so the real path still has substantial NS plus restore interaction cost.
+- Next action: Keep `2a6c26dc3` as the best current FSDP-master production checkpoint, but do not call the objective solved. The next attempt should force a more direct grouped-to-FSDP permutation with a lower-level/custom communication boundary, or avoid the hot restore by changing the model-facing grouped expert representation.
