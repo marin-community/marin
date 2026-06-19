@@ -334,14 +334,6 @@ def _restore_grouped_muonh_for_split_target_layout(grouped_update, target, valid
     return grouped_update
 
 
-def _reorder_data_major_group_axis(grouped_update, replica_axis_size: int, data_axis_size: int):
-    group_axis_size = grouped_update.shape[0]
-    shard_group_size = group_axis_size // (replica_axis_size * data_axis_size)
-    reshaped = grouped_update.reshape((data_axis_size, replica_axis_size, shard_group_size, *grouped_update.shape[1:]))
-    transposed = jnp.transpose(reshaped, (1, 0, 2, *range(3, reshaped.ndim)))
-    return transposed.reshape(grouped_update.shape)
-
-
 def _restore_grouped_muonh_for_split_explicit_a2a(grouped_update, target, valid_size: int, sample_param):
     target_spec = _target_spec(target)
     param_sharding = _target_named_sharding(sample_param)
@@ -379,15 +371,14 @@ def _restore_grouped_muonh_for_split_explicit_a2a(grouped_update, target, valid_
     output_spec = jax.sharding.PartitionSpec(None, *param_sharding.spec)
 
     def restore_group(local_update):
-        gathered = lax.all_gather(local_update, axis_name=REPLICA_DCN_AXIS, axis=0, tiled=True)
-        restored = lax.all_to_all(
-            gathered,
+        data_restored = lax.all_to_all(
+            local_update,
             axis_name="data",
             split_axis=data_axis,
             concat_axis=0,
             tiled=True,
         )
-        return _reorder_data_major_group_axis(restored, replica_axis_size, data_axis_size)
+        return lax.all_gather(data_restored, axis_name=REPLICA_DCN_AXIS, axis=0, tiled=True)
 
     grouped_update = shard_map(
         restore_group,
