@@ -1161,3 +1161,44 @@ Post-compile steps were stable around 0.65-0.66s:
 
 - Interpretation: The current pragmatic FSDP-master path is not blocked by ordinary `optax.apply_updates`. Applying already-restored updates costs only about `0.228s - 0.223s ~= 5ms`. The dominant boundary is grouped-to-FSDP restore at about 0.22s, and the inbound FSDP/unreduced-gradient/momentum to grouped layout costs roughly `0.496s - 0.303s ~= 0.19s`. The grouped-updates path reaches about 50% H100 bf16 peak, so the NS/hyperball compute is no longer the primary issue on this shape. The real full-train Muon tax from May198 vs May202 is about 0.40s/step, which is almost exactly explained by inbound grouping plus outbound restore.
 - Next action: Treat the representation boundary as the remaining MuonH target. Do not optimize ordinary `apply_updates` first. The next viable implementation paths are either (1) keep grouped expert banks/updates live long enough that the model or optimizer consumes them without paying a full grouped-to-FSDP restore every step, or (2) replace the explicit slice-first gather boundary with a lower-level/custom grouped-to-FSDP permutation that avoids 26 high-cost all-gathers or overlaps them with useful work.
+
+### 2026-06-19 16:45 PDT - persistent grouped expert bank lower-bound
+- Hypothesis: If expert params and updates remain in the grouped NS-friendly layout across the MuonH apply boundary, the optimizer can avoid the compiled grouped-to-FSDP all-gathers and expose the real lower bound for a production representation that does not immediately restore ordinary FSDP leaves.
+- Code snapshot:
+  - Commit: `d0a5ec1e6 Add persistent grouped MuonH bench`.
+  - Added harness bench kind: `expert_fsdp_grouped_persistent_muonh_apply`.
+  - Scope: benchmark-only path in `experiments/grug/moe/muon_update_bench.py`; no production optimizer semantics changed.
+- Command:
+  - Launch: `RUN_ID=MUON-BENCH-D2560-L26-R2D1E8-PERSISTENTGROUPEDMUONH-H3-G2-CAP512-N2-cw-20260619-234047 ... MUON_BENCH_KINDS=expert_fsdp_grouped_updates_muonh_apply,expert_fsdp_grouped_persistent_muonh_apply ... bash scratch/muon_update_bench_fast_loop.sh iris fullprod-r4e8-l26-h3`.
+  - Parent Iris job: `/dlwh/iris-run-job-20260619-234050`.
+  - Child Iris job: `/dlwh/iris-run-job-20260619-234050/grug-train-MUON-BENCH-D2560-L26-R2D1E8-PERSISTENTGROUPEDMUONH-H3-G2-CAP512-N2-cw-20260619-234047`.
+  - Output prefix: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D1E8-PERSISTENTGROUPEDMUONH-H3-G2-CAP512-N2-cw-20260619-234047-df1c6e`.
+- Config: Exact R2D1 expert optimizer shape: 2 H100 nodes, 16 devices, `replica_dcn=2`, `data=1`, `expert=8`, `model=1`, layers 26, hidden 2560, intermediate 1280, 256 experts, group size 2, group axis `replica_dcn,data`, bf16 params/updates, bf16 NS compute, MuonH3, cap512, warmup 1, iters 5. The run compared the current grouped-updates restore/apply boundary against a persistent grouped params+updates apply that returns grouped next params.
+- Result: Parent and child reached `JOB_STATE_SUCCEEDED` with zero failures/preemptions.
+
+| bench | compiled AG/A2A/AR/RS/CP | compiled GEMM custom calls | median | mean | H100 bf16 peak |
+| --- | --- | ---: | ---: | ---: | ---: |
+| grouped-updates MuonH restore+apply | 26/0/0/0/0 | 533 | 0.3047s | 0.3050s | 50.4% |
+| persistent grouped MuonH apply | 0/0/0/0/0 | 572 | 0.2540s | 0.2541s | 60.4% |
+
+- Interpretation: This confirms the representation-boundary diagnosis. When the benchmark keeps expert params and updates in grouped layout, compiled all-gathers disappear and the isolated expert MuonH3 path improves by about 50 ms versus the current grouped-updates restore/apply path. The persistent grouped lower bound is still not free, but it reaches about 60% nominal H100 bf16 peak and removes the current 26 compiled all-gather boundary. A production fix should now target grouped expert-bank persistence or a model-consumable grouped representation, not ordinary `apply_updates`.
+- Next action: Prototype the smallest production-facing representation boundary: either carry grouped expert banks through the optimizer state and only materialize ordinary leaves where the model truly needs them, or add a manual grouped-to-FSDP conversion that avoids the current compiled all-gather pattern. Keep the FSDP-master plan as the conservative correctness target until the grouped-bank representation can be made model-consumable.
+
+### 2026-06-19 16:57 PDT - direct target-FSDP reshard bridge negative result
+- Hypothesis: The grouped NS-friendly expert update layout can be converted directly to the desired FSDP/model layout with a target reshard, `P(('replica_dcn', 'data'), 'expert', None, None) -> P(None, 'expert', 'data', None)`, avoiding the explicit slice-first all-gather boundary while still returning ordinary FSDP leaves for `optax.apply_updates`.
+- Command:
+  - Local focused check: `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_target_apply_chunked_fsdp_boundary_returns_fsdp_layout_without_collectives`.
+  - Launch: `RUN_ID=MUON-BENCH-D2560-L26-R2D1E8-TARGETFSDP-H0-CAP512-N2-cw-$(date -u +%Y%m%d-%H%M%S) MUON_BENCH_KINDS=expert_fsdp_grouped_target_apply_chunked_fsdp_boundary,expert_fsdp_grouped_explicit_slice_first_gather_apply_boundary MUON_BENCH_LAYERS=26 MUON_BENCH_NS4D_GROUP_SIZE=2 MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn,data MUON_BENCH_REPLICA_AXIS=2 MUON_BENCH_DATA_AXIS=1 MUON_BENCH_EXPERT_AXIS=8 MUON_BENCH_MODEL_AXIS=1 MUON_BENCH_GPU_REPLICAS=2 MUON_BENCH_SWEEP_BACKEND_STEPS=1 MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 MUON_BENCH_NS_COMPUTE_DTYPE=bf16 MUON_BENCH_WARMUP=1 MUON_BENCH_ITERS=3 MUON_BENCH_MODE=both MUON_BENCH_DISABLE_ABSTRACT_MESH=true MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES=true MUON_BENCH_WORKER_CPU=8 MUON_BENCH_WORKER_RAM=256g bash scratch/muon_update_bench_fast_loop.sh iris fullprod-r4e8-l26-h3`.
+  - Parent Iris job: `/dlwh/iris-run-job-20260619-235217`.
+  - Child Iris job: `/dlwh/iris-run-job-20260619-235217/grug-train-MUON-BENCH-D2560-L26-R2D1E8-TARGETFSDP-H0-CAP512-N2-cw-20260619-235215`.
+  - Output prefix: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D1E8-TARGETFSDP-H0-CAP512-N2-cw-20260619-235215-c54af4`.
+- Config: 2 H100 nodes, 16 devices, `replica_dcn=2`, `data=1`, `expert=8`, `model=1`, layers 26, hidden 2560, intermediate 1280, 256 experts, group size 2, group axis `replica_dcn,data`, bf16 params/updates, bf16 NS compute, MuonH3, cap512, warmup 1, iters 3, compiled HLO output enabled, and boundary collectives allowed.
+- Result: Parent and child reached `JOB_STATE_SUCCEEDED` with zero failures/preemptions. The local lowering-only test passed, but compiled H100 behavior did not preserve the no-collective property.
+
+| bench | lowered AG/A2A/AR/RS/CP | compiled AG/A2A/AR/RS/CP | median | mean |
+| --- | --- | --- | ---: | ---: |
+| target-FSDP chunked restore+apply | 0/0/0/0/0 | 26/0/0/0/0 | 0.2384s | 0.2383s |
+| explicit slice-first gather restore+apply | 26/0/0/0/0 | 26/0/0/0/0 | 0.2282s | 0.2280s |
+
+- Interpretation: Negative result for the plain target reshard bridge. The direct `reshard(..., P(None, 'expert', 'data', None))` shape looks clean in lowered StableHLO, but XLA GPU rewrites it back into the same 26 per-layer all-gathers in compiled HLO. It is also about 10 ms slower than the explicit slice-first gather baseline on this short bench. This means ordinary target-layout resharding is not enough to avoid the representation-boundary collective explosion.
+- Next action: Do not switch production to the target-layout helper. The remaining viable paths are (1) persistent grouped expert-bank representation through the model/optimizer boundary, or (2) a manual grouped-to-FSDP conversion via `shard_map` first, then Pallas/Triton if needed, so the compiler cannot rediscover the conversion as 26 independent all-gathers.
