@@ -26,6 +26,7 @@ from experiments.grug.moe.muon_update_bench import (
     EXPERT_GROUPED_BANK_CONSUMER_BENCH,
     EXPERT_GROUPED_LAYER_SLICE_BENCH,
     EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
+    EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH,
@@ -81,6 +82,7 @@ from experiments.grug.moe.muon_update_bench import (
     grouped_expert_apply_boundary_step_factory,
     grouped_expert_bank_consumer_flops,
     grouped_expert_bank_consumer_step_factory,
+    grouped_expert_muonh_bank_consumer_step_factory,
     grouped_expert_optimizer_apply_step_factory,
     grouped_moe_consumer_chunk_tokens,
     grouped_moe_mlp_consumer_step_factory,
@@ -656,6 +658,69 @@ def test_grouped_moe_mlp_consumer_preserves_grouped_bank_and_routed_activation_s
     assert hlo_summary.all_gather > 0
     assert hlo_summary.reduce_scatter > 0
     assert grouped_expert_bank_consumer_flops(config) == 4 * 8 * 3 * (2 * 16 * 16 + 2 * 8 * 16)
+
+
+def test_grouped_muonh_bank_consumer_updates_then_consumes_grouped_bank():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    expected_spec = P(("replica_dcn", "data"), "expert", None, None)
+    params = synthetic_grouped_expert_specs(mesh, config, EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH)
+    grads = synthetic_grouped_expert_specs(mesh, config, EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH)
+    activations = synthetic_grouped_expert_consumer_input_specs(
+        mesh,
+        config,
+        EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+    )
+    optimizer = build_grouped_expert_productionish_optimizer(config, use_hyperball=True)
+    update_step = jax.jit(grouped_expert_muonh_bank_consumer_step_factory(config))
+
+    assert_ns4d_sharding(params, expected_spec, "grouped MuonH bank params")
+    assert_ns4d_sharding(grads, expected_spec, "grouped MuonH bank grads")
+    assert_ns4d_sharding(activations, expected_spec, "grouped MuonH bank consumer inputs")
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        state = jax.eval_shape(optimizer.init, params)
+        next_params, _next_state, outputs = jax.eval_shape(update_step, params, grads, state, activations)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(params, grads, state, activations).lower(lowering_platforms=(platform,))
+
+    assert_grouped_expert_sharding(
+        next_params,
+        mesh,
+        config,
+        EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+        "updated grouped MuonH bank params",
+    )
+    assert_ns4d_sharding(outputs, expected_spec, "grouped MuonH bank consumer outputs")
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+    assert estimated_ns_dot_flops(config, EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH) > grouped_expert_bank_consumer_flops(
+        config
+    )
 
 
 def test_grouped_moe_mlp_consumer_can_chunk_routed_tokens():
