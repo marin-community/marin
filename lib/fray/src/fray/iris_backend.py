@@ -29,6 +29,7 @@ from iris.client.client import get_iris_ctx, iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import (
     Constraint,
+    any_region_constraint,
     device_variant_constraint,
     preemptible_constraint,
     region_constraint,
@@ -49,6 +50,7 @@ from fray.actor import (
 )
 from fray.client import JobAlreadyExists as FrayJobAlreadyExists
 from fray.types import (
+    ANY_REGION,
     ActorConfig,
     CpuConfig,
     DeviceConfig,
@@ -116,8 +118,15 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     constraints: list[Constraint] = []
     if not resources.preemptible:
         constraints.append(preemptible_constraint(False))
-    if resources.regions:
-        constraints.append(region_constraint(resources.regions))
+    regions = resources.regions
+    if regions and ANY_REGION in regions:
+        if len(regions) > 1:
+            raise ValueError(f"ANY_REGION cannot be combined with specific regions; got {list(regions)}")
+        # ANY: run anywhere, do not inherit the parent's region. Emitted as a region-EXISTS
+        # marker that matches every worker yet suppresses parent-region inheritance.
+        constraints.append(any_region_constraint())
+    elif regions:
+        constraints.append(region_constraint(list(regions)))
     if resources.zone:
         constraints.append(zone_constraint(resources.zone))
     if resources.device_alternatives:
