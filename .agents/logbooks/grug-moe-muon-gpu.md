@@ -558,3 +558,20 @@ All rows had compiled all-reduce/reduce-scatter/all-to-all/dot-general counts of
 - Result: The grouped helper preserves a `[group, ...]` API and numerically matches a loop over ordinary `moe_mlp` calls on the local/no-EP path. The `GroupedMoEExpertMlp.layer()` view matches the grouped call for a selected layer and exists only as an incremental migration/correctness tool. The same helper lowers under an abstract expert-parallel mesh for both `ring` and `ragged_all_to_all`.
 - Interpretation: This is not the full train integration yet, but it gives the real MoE module surface an explicit grouped-bank consumer API and shows that nested group-axis mapping does not immediately block EP lowering.
 - Next action: Replace the harness's hand-written grouped expert consumer with the public helper or add a new bench kind that uses it, then port grouped expert banks into the experiment model if the helper-backed gate stays collective-clean.
+
+### 2026-06-19 06:45 PDT - fresh expert-only Muon NS dtype A/B
+- Hypothesis: For fp32-input expert grouped MuonH, forcing only the Newton-Schulz body to bf16 should materially improve runtime while preserving the zero-collective invariant; for bf16-input grouped-bank paths the default `ns_compute_dtype=input` already means bf16 NS.
+- Command:
+  - Local smoke confirmed the knob is active on a tiny expert grouped path: `uv run python experiments/grug/moe/muon_update_bench.py --layers 1 --ns4d-group-size 1 --ns4d-group-axis none --hidden-dim 16 --intermediate-dim 8 --num-experts 2 --replica-axis 1 --data-axis 1 --expert-axis 1 --model-axis 1 --dtype fp32 --ns-compute-dtype input --bench-kinds expert_grouped_muonh_optimizer_apply --backend-steps 3 --max-grouped-stack-size 4 --mode both --warmup 0 --iters 1 --disable-abstract-mesh`, then the same command with `--ns-compute-dtype bf16`.
+  - One-node CoreWeave L26 attempts: `/dlwh/iris-run-job-20260619-103733` (`input`) and `/dlwh/iris-run-job-20260619-103755` (`bf16`), both `bench_kinds=expert_only_grouped_muonh_optimizer_apply`, `dtype=fp32`, `backend_steps=3`, `expert_axis=8`, `model_axis=1`.
+  - One-node CoreWeave bounded L4 fallback: `/dlwh/iris-run-job-20260619-104146` (`input`) and `/dlwh/iris-run-job-20260619-104149` (`bf16`) with the same config except `layers=4`.
+- Result:
+
+| run | NS dtype | median | mean | peak % | compiled custom calls | compiled GEMM calls | compiled AG/AR/RS/A2A |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| L4 `/dlwh/iris-run-job-20260619-104146` | `input` = fp32 | 0.162604s | 0.162580s | 29.04 | 90 | 40 | 0/0/0/0 |
+| L4 `/dlwh/iris-run-job-20260619-104149` | bf16 | 0.082889s | 0.082890s | 56.98 | 90 | 41 | 0/0/0/0 |
+
+The bf16-NS row is 1.96x faster by median runtime. The L26 one-node attempts both failed during timing with `RESOURCE_EXHAUSTED` on a 1.56 GiB allocation after successful lowering, so the failure is harness materialization pressure rather than a dtype-specific correctness failure.
+- Interpretation: bf16 Newton-Schulz remains worth pursuing for fp32-input expert MuonH. It roughly halves isolated expert-only grouped MuonH runtime on the bounded one-node gate and keeps compiled collectives at zero. For the current bf16 grouped-bank consumer priorities, no extra action is needed: `ns_compute_dtype=input` already runs NS in bf16 whenever the harness input dtype is bf16. For fp32 master/update experiments, set `MUON_BENCH_NS_COMPUTE_DTYPE=bf16` explicitly when measuring throughput, and reserve `input` only for fp32-NS numerics/perf controls.
+- Next action: Do not spend more time on the dtype axis unless a numerical stability gate disagrees. The main remaining work is representation/integration: keep grouped expert-bank consumption collective-clean and avoid the grouped-to-FSDP hot boundary.
