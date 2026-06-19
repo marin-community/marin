@@ -121,7 +121,7 @@ class OPDSampledTokenReverseKLLoss(RLLossModule):
         if self.clip_epsilon_high is not None and self.clip_epsilon_high < 0.0:
             raise ValueError("clip_epsilon_high must be non-negative")
 
-    def build(self, reference_model: eqx.Module) -> eqx.Module:
+    def build(self, reference_model: eqx.Module) -> RLLossModule:
         """Initialize learned components."""
         return self
 
@@ -242,7 +242,6 @@ def hybrid_rloo_sampled_token_reverse_kl_opd_loss(
         loss_masks=loss_masks,
         clip_epsilon_low=clip_epsilon_low,
         clip_epsilon_high=clip_epsilon_high,
-        max_output_tokens=batch.max_output_tokens,
         trainer_inference_importance_sampling_ratio=trainer_inference_importance_sampling_ratio,
         response_truncated_array=batch.truncated if do_overlong_filtering else None,
     )
@@ -357,7 +356,7 @@ class HybridRLOOOPDSampledTokenReverseKLLoss(RLLossModule):
         if self.tis_importance_sampling_ratio_max <= 0.0:
             raise ValueError("tis_importance_sampling_ratio_max must be positive")
 
-    def build(self, reference_model: eqx.Module) -> eqx.Module:
+    def build(self, reference_model: eqx.Module) -> RLLossModule:
         """Initialize learned components."""
         return self
 
