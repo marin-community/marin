@@ -46,6 +46,7 @@ MUON_NS_COMPUTE_DTYPE="${MAY_MUON_NS_COMPUTE_DTYPE:-input}"
 ASSERT_OPTIMIZER_SHARDING="${MAY_ASSERT_OPTIMIZER_SHARDING:-true}"
 MATCH_OPTIMIZER_SHARDING="${MAY_MATCH_OPTIMIZER_SHARDING:-true}"
 EXPERT_3D_OPTIMIZER="${MAY_EXPERT_3D_OPTIMIZER:-muonh}"
+ORDINARY_2D_OPTIMIZER="${MAY_ORDINARY_2D_OPTIMIZER:-muonh}"
 EXPERT_GROUPED_MUONH_GROUP_SIZE="${MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE:-}"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 LIVE_PARAM_MODE="param"
@@ -130,6 +131,8 @@ Options:
   --match-optimizer-sharding BOOL
                             MAY_MATCH_OPTIMIZER_SHARDING diagnostic toggle for explicit optimizer reshards (default: true).
   --expert-3d-optimizer MODE MAY_EXPERT_3D_OPTIMIZER: muonh, adamh, or grouped_muonh (default: muonh).
+  --ordinary-2d-optimizer MODE
+                            MAY_ORDINARY_2D_OPTIMIZER: muonh, adamh, or adam for ordinary non-expert 2D weights (default: muonh).
   --expert-grouped-muonh-group-size N
                             MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE for grouped_muonh; empty chooses replica_dcn*data.
   --mp POLICY               MAY_MP policy string.
@@ -321,6 +324,10 @@ while [ "$#" -gt 0 ]; do
             EXPERT_3D_OPTIMIZER="$2"
             shift 2
             ;;
+        --ordinary-2d-optimizer)
+            ORDINARY_2D_OPTIMIZER="$2"
+            shift 2
+            ;;
         --expert-grouped-muonh-group-size)
             EXPERT_GROUPED_MUONH_GROUP_SIZE="$2"
             shift 2
@@ -444,6 +451,15 @@ case "$EXPERT_3D_OPTIMIZER" in
         ;;
 esac
 
+case "$ORDINARY_2D_OPTIMIZER" in
+    muonh|adamh|adam)
+        ;;
+    *)
+        echo "ERROR: --ordinary-2d-optimizer must be muonh, adamh, or adam, got: $ORDINARY_2D_OPTIMIZER" >&2
+        exit 1
+        ;;
+esac
+
 if [ -f "$ENV_FILE" ] || [ "$ENV_FILE_EXPLICIT" = true ]; then
     R2_EXPORTS="$("${REPO_ROOT}/scripts/iris/cloudflare_r2_env.sh" "$ENV_FILE")"
 else
@@ -503,6 +519,7 @@ ENV_ARGS=(
     -e MAY_ASSERT_OPTIMIZER_SHARDING "$ASSERT_OPTIMIZER_SHARDING"
     -e MAY_MATCH_OPTIMIZER_SHARDING "$MATCH_OPTIMIZER_SHARDING"
     -e MAY_EXPERT_3D_OPTIMIZER "$EXPERT_3D_OPTIMIZER"
+    -e MAY_ORDINARY_2D_OPTIMIZER "$ORDINARY_2D_OPTIMIZER"
     -e MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE "$EXPERT_GROUPED_MUONH_GROUP_SIZE"
     -e MAY_MP "$MP"
     -e MAY_LIVE_PARAM_MODE "$LIVE_PARAM_MODE"
@@ -595,6 +612,7 @@ muon_ns_compute_dtype: $MUON_NS_COMPUTE_DTYPE
 assert_optimizer_sharding: $ASSERT_OPTIMIZER_SHARDING
 match_optimizer_sharding: $MATCH_OPTIMIZER_SHARDING
 expert_3d_optimizer: $EXPERT_3D_OPTIMIZER
+ordinary_2d_optimizer: $ORDINARY_2D_OPTIMIZER
 expert_grouped_muonh_group_size: ${EXPERT_GROUPED_MUONH_GROUP_SIZE:-auto}
 attention: $ATTENTION_IMPLEMENTATION
 ce_implementation: ${CE_IMPLEMENTATION:-default}

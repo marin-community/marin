@@ -36,6 +36,7 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_MUON_MAX_GROUPED_STACK_SIZE=256  Maximum grouped Muon stack size
     MAY_MUON_NS_COMPUTE_DTYPE=input  input | bf16 | fp32 | fp16 Newton-Schulz compute dtype
     MAY_EXPERT_3D_OPTIMIZER=muonh  muonh | adamh | grouped_muonh for routed expert weights
+    MAY_ORDINARY_2D_OPTIMIZER=muonh  muonh | adamh | adam for ordinary non-expert 2D weights
     MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE=  optional grouped_muonh stack group size
 
 The default parameter policy keeps one sharded fp32 parameter tree plus sharded
@@ -85,10 +86,12 @@ from experiments.grug.moe.model import (
 from experiments.grug.moe.optimizer import (
     VALID_EXPERT_3D_OPTIMIZERS,
     VALID_MAY_OPTIMIZERS,
+    VALID_ORDINARY_2D_OPTIMIZERS,
     Expert3DOptimizer,
     GrugMoeMuonHConfig,
     GrugMoeSgdConfig,
     MayOptimizer,
+    Ordinary2DOptimizer,
 )
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig, LiveParamMode
 
@@ -186,6 +189,10 @@ def build_may_optimizer(*, batch_size: int, seq_len: int) -> OptimizerConfig:
     if expert_3d_optimizer not in VALID_EXPERT_3D_OPTIMIZERS:
         valid = ", ".join(VALID_EXPERT_3D_OPTIMIZERS)
         raise ValueError(f"MAY_EXPERT_3D_OPTIMIZER={expert_3d_optimizer!r} must be one of {valid}")
+    ordinary_2d_optimizer = os.environ.get("MAY_ORDINARY_2D_OPTIMIZER", "muonh")
+    if ordinary_2d_optimizer not in VALID_ORDINARY_2D_OPTIMIZERS:
+        valid = ", ".join(VALID_ORDINARY_2D_OPTIMIZERS)
+        raise ValueError(f"MAY_ORDINARY_2D_OPTIMIZER={ordinary_2d_optimizer!r} must be one of {valid}")
     base_optimizer = MAY_HEURISTIC.build_optimizer_config(batch_size, total_tokens, hidden_dim, seq_len=seq_len)
     if cast(MayOptimizer, optimizer) == "sgd":
         return GrugMoeSgdConfig(
@@ -214,6 +221,7 @@ def build_may_optimizer(*, batch_size: int, seq_len: int) -> OptimizerConfig:
         lr_schedule=base_optimizer.lr_schedule,
         decay=base_optimizer.decay,
         expert_3d_optimizer=cast(Expert3DOptimizer, expert_3d_optimizer),
+        ordinary_2d_optimizer=cast(Ordinary2DOptimizer, ordinary_2d_optimizer),
     )
 
 

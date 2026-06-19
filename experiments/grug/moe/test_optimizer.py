@@ -147,6 +147,42 @@ def test_grug_moe_muonh_can_route_routed_expert_weights_to_grouped_muonh():
     assert block_mask["shared"]["w_gate"] == "muonh"
 
 
+def test_grug_moe_muonh_can_route_ordinary_2d_weights_away_from_muonh():
+    params = {
+        "blocks": {
+            "0": {
+                "attn": {
+                    "w_q": jnp.ones((8, 8), dtype=jnp.float32),
+                },
+                "attn_gated_norm": {
+                    "w_down": jnp.ones((8, 8), dtype=jnp.float32),
+                },
+                "mlp": {
+                    "expert_mlp": {
+                        "w_gate_up": jnp.ones((4, 8, 16), dtype=jnp.float32),
+                        "w_down": jnp.ones((4, 16, 8), dtype=jnp.float32),
+                    },
+                },
+                "shared": {
+                    "w_gate": jnp.ones((8, 16), dtype=jnp.float32),
+                },
+            },
+        },
+    }
+
+    mask = GrugMoeMuonHConfig(
+        expert_3d_optimizer="grouped_muonh",
+        ordinary_2d_optimizer="adamh",
+    ).create_mask(params)
+
+    block_mask = mask["blocks"]["0"]
+    assert block_mask["attn"]["w_q"] == "adamh"
+    assert block_mask["attn_gated_norm"]["w_down"] == "adamh"
+    assert block_mask["mlp"]["expert_mlp"]["w_gate_up"] == "grouped_muonh"
+    assert block_mask["mlp"]["expert_mlp"]["w_down"] == "grouped_muonh"
+    assert block_mask["shared"]["w_gate"] == "adamh"
+
+
 def test_grouped_expert_muonh_rejects_unknown_ns_compute_dtype():
     with pytest.raises(ValueError, match="ns_compute_dtype"):
         scale_with_grouped_expert_muonh(ns_compute_dtype="int8")

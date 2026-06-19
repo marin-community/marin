@@ -33,6 +33,8 @@ from experiments.grug.moe.optimizer_sharding import assert_update_sharding_match
 
 Expert3DOptimizer = Literal["muonh", "adamh", "grouped_muonh"]
 VALID_EXPERT_3D_OPTIMIZERS: tuple[Expert3DOptimizer, ...] = ("muonh", "adamh", "grouped_muonh")
+Ordinary2DOptimizer = Literal["muonh", "adamh", "adam"]
+VALID_ORDINARY_2D_OPTIMIZERS: tuple[Ordinary2DOptimizer, ...] = ("muonh", "adamh", "adam")
 MayOptimizer = Literal["muonh", "sgd"]
 VALID_MAY_OPTIMIZERS: tuple[MayOptimizer, ...] = ("muonh", "sgd")
 REPLICA_DCN_AXIS = "replica_dcn"
@@ -594,6 +596,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
     expert_3d_optimizer: Expert3DOptimizer = "muonh"
+    ordinary_2d_optimizer: Ordinary2DOptimizer = "muonh"
     orthogonalization_layout: str = STACK_BATCH_SHARDED
     max_grouped_stack_size: int = DEFAULT_MAX_GROUPED_STACK_SIZE
     ns_compute_dtype: str = "input"
@@ -603,6 +606,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         if self.expert_3d_optimizer not in VALID_EXPERT_3D_OPTIMIZERS:
             valid = ", ".join(VALID_EXPERT_3D_OPTIMIZERS)
             raise ValueError(f"expert_3d_optimizer={self.expert_3d_optimizer!r} must be one of {valid}")
+        if self.ordinary_2d_optimizer not in VALID_ORDINARY_2D_OPTIMIZERS:
+            valid = ", ".join(VALID_ORDINARY_2D_OPTIMIZERS)
+            raise ValueError(f"ordinary_2d_optimizer={self.ordinary_2d_optimizer!r} must be one of {valid}")
         if self.orthogonalization_layout not in ORTHOGONALIZATION_LAYOUTS:
             valid = ", ".join(ORTHOGONALIZATION_LAYOUTS)
             raise ValueError(f"orthogonalization_layout={self.orthogonalization_layout!r} must be one of {valid}")
@@ -696,9 +702,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         if self.expert_3d_optimizer not in VALID_EXPERT_3D_OPTIMIZERS:
             valid = ", ".join(VALID_EXPERT_3D_OPTIMIZERS)
             raise ValueError(f"expert_3d_optimizer={self.expert_3d_optimizer!r} must be one of {valid}")
+        if self.ordinary_2d_optimizer not in VALID_ORDINARY_2D_OPTIMIZERS:
+            valid = ", ".join(VALID_ORDINARY_2D_OPTIMIZERS)
+            raise ValueError(f"ordinary_2d_optimizer={self.ordinary_2d_optimizer!r} must be one of {valid}")
 
         paths = leaf_key_paths(params)
         expert_3d_optimizer = self.expert_3d_optimizer
+        ordinary_2d_optimizer = self.ordinary_2d_optimizer
 
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
@@ -707,11 +717,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
-            if "gated_norm" in path_lower:
-                return "muonh"
             if ".mlp.expert_mlp.w_" in path_lower and hasattr(param, "ndim") and param.ndim == 3:
                 return expert_3d_optimizer
-            if hasattr(param, "ndim") and param.ndim in (2, 3):
+            if hasattr(param, "ndim") and param.ndim == 2:
+                return ordinary_2d_optimizer
+            if hasattr(param, "ndim") and param.ndim == 3:
                 return "muonh"
             return "adam"
 
