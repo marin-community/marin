@@ -9,6 +9,7 @@ from typing import Literal
 import jax
 import jax.numpy as jnp
 import optax
+from jax import lax, shard_map
 from levanter.optim import OptimizerConfig
 from levanter.optim.grugmuon import (
     DEFAULT_GROUPED_4D_GROUP_SIZE,
@@ -238,6 +239,29 @@ def _grouped_muonh_stack_axis_size(sample_param) -> int:
     return math.prod(int(mesh_shape[axis]) for axis in candidate_axes)
 
 
+def _mesh_axis_size(mesh, axis_name: str) -> int:
+    return int(mesh.shape.get(axis_name, 1))
+
+
+def _live_group_axis(mesh, group_axis):
+    if isinstance(group_axis, tuple):
+        live_axes = tuple(axis for axis in group_axis if _mesh_axis_size(mesh, axis) > 1)
+        if len(live_axes) > 1:
+            return live_axes
+        if live_axes:
+            return live_axes[0]
+        return None
+    if group_axis is not None and _mesh_axis_size(mesh, group_axis) > 1:
+        return group_axis
+    return None
+
+
+def _axis_spec_contains(axis_spec, axis_name: str) -> bool:
+    if isinstance(axis_spec, tuple):
+        return axis_name in axis_spec
+    return axis_spec == axis_name
+
+
 def _grouped_muonh_shape_dtype_struct(shape, dtype, sample_param):
     sharding = _target_sharding(sample_param)
     if isinstance(sharding, jax.sharding.NamedSharding) and len(sharding.spec) == 3:
@@ -272,6 +296,56 @@ def _restore_grouped_muonh_for_split(grouped_update, target, valid_size: int):
             grouped_update,
             _with_target_spec(target, jax.sharding.PartitionSpec(None, target_spec[1], None, None)),
         )
+    if grouped_update.shape[0] != valid_size:
+        grouped_update = grouped_update[:valid_size]
+    return grouped_update
+
+
+def _restore_grouped_muonh_for_split_explicit(grouped_update, target, valid_size: int, sample_param):
+    target_spec = _target_spec(target)
+    param_sharding = _target_named_sharding(sample_param)
+    if (
+        grouped_update.ndim != 4
+        or target_spec is None
+        or target_spec[0] is None
+        or not isinstance(param_sharding, jax.sharding.NamedSharding)
+        or len(param_sharding.spec) != 3
+    ):
+        return _restore_grouped_muonh_for_split(grouped_update, target, valid_size)
+
+    mesh = param_sharding.mesh
+    group_axis = _live_group_axis(mesh, target_spec[0])
+    input_spec = jax.sharding.PartitionSpec(group_axis, target_spec[1], None, None)
+    output_spec = jax.sharding.PartitionSpec(None, *param_sharding.spec)
+    data_axis = None
+    for axis_index, axis_spec in enumerate(param_sharding.spec, start=1):
+        if _axis_spec_contains(axis_spec, "data"):
+            data_axis = axis_index
+            break
+
+    data_axis_size = _mesh_axis_size(mesh, "data")
+    if data_axis is not None and grouped_update.shape[data_axis] % data_axis_size != 0:
+        return _restore_grouped_muonh_for_split(grouped_update, target, valid_size)
+
+    def restore_group(local_update):
+        if group_axis is None:
+            gathered = local_update
+        else:
+            gathered = lax.all_gather(local_update, axis_name=group_axis, axis=0, tiled=True)
+        if data_axis is None or data_axis_size <= 1:
+            return gathered
+        data_index = lax.axis_index("data")
+        local_axis_size = gathered.shape[data_axis] // data_axis_size
+        start = data_index * local_axis_size
+        return lax.dynamic_slice_in_dim(gathered, start, local_axis_size, axis=data_axis)
+
+    grouped_update = shard_map(
+        restore_group,
+        mesh=mesh,
+        in_specs=input_spec,
+        out_specs=output_spec,
+        check_vma=False,
+    )(grouped_update)
     if grouped_update.shape[0] != valid_size:
         grouped_update = grouped_update[:valid_size]
     return grouped_update
@@ -373,7 +447,12 @@ def _grouped_expert_muonh_updates(
                 direction = _scale_grouped_muonh_direction(direction)
 
             grouped_update = _grouped_muonh_hyperball_update(stacked_params, direction, learning_rate)
-            grouped_update = _restore_grouped_muonh_for_split(grouped_update, target, valid_size)
+            grouped_update = _restore_grouped_muonh_for_split_explicit(
+                grouped_update,
+                target,
+                valid_size,
+                entry_chunk[0][2],
+            )
             update_parts = [
                 jnp.squeeze(update_part, axis=0) for update_part in jnp.split(grouped_update, valid_size, axis=0)
             ]
