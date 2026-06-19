@@ -37,7 +37,13 @@ from iris.cluster.client import (
     get_job_info,
     resolve_job_user,
 )
-from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
+from iris.cluster.constraints import (
+    Constraint,
+    WellKnownAttribute,
+    is_any_region_marker,
+    merge_constraints,
+    region_constraint,
+)
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -687,9 +693,22 @@ class IrisClient:
             # passes constraints=[] to clear other inherited constraints —
             # region pinning keeps a child co-located with the worker that
             # launched it (where its in-region data and resources live).
+            #
+            # An explicit region constraint (any op carrying the region key) opts out:
+            # a PINNED region (region_constraint) or the ANY marker (any_region_constraint,
+            # a region-EXISTS constraint meaning "run anywhere; don't inherit") both satisfy
+            # this guard, so neither gets the parent's region appended.
             if job_info and job_info.worker_region and not any(c.key == WellKnownAttribute.REGION for c in constraints):
                 inherited_region = region_constraint([job_info.worker_region])
                 constraints = [*constraints, inherited_region]
+
+        # The ANY-region marker's only job is the inheritance opt-out above (and clearing
+        # any inherited pin via merge_constraints). Once that decision is made it carries no
+        # requirement, so drop it before the wire: as a hard region-EXISTS constraint it
+        # would otherwise exclude every worker/scaling group that advertises no region
+        # attribute. Stripping here keeps the controller's matching paths unaware of it.
+        if constraints:
+            constraints = [c for c in constraints if not is_any_region_marker(c)]
 
         # Convert to wire format
         resources_proto = resources.to_proto()

@@ -311,6 +311,13 @@ class TpuConfig:
 DeviceConfig = CpuConfig | GpuConfig | TpuConfig
 
 
+# Sentinel region value meaning ANY: run anywhere; do NOT inherit the parent job's region.
+# Distinct from ``None`` (UNSET — inherit) and a concrete region list (PINNED). Pass it as the
+# sole element of ``ResourceConfig.regions`` (``regions=[ANY_REGION]``). Not a real region, so
+# it never collides with a GCP region name.
+ANY_REGION = "*"
+
+
 @dataclass
 class ResourceConfig:
     """Resource requirements for a single task/replica.
@@ -332,6 +339,9 @@ class ResourceConfig:
     disk: str = "16g"
     device: DeviceConfig = field(default_factory=CpuConfig)
     preemptible: bool = True
+    # Region state: UNSET (None, default) inherits the parent job's region; PINNED (a
+    # region list) restricts to those regions; ANY ([ANY_REGION]) runs anywhere without
+    # inheriting.
     regions: Sequence[str] | None = None
     zone: str | None = None
     replicas: int = 1
