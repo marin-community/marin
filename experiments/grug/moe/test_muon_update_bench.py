@@ -29,6 +29,7 @@ from experiments.grug.moe.muon_update_bench import (
     EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
@@ -97,6 +98,7 @@ from experiments.grug.moe.muon_update_bench import (
     expert_fsdp_grouped_packed_a2a_apply_boundary_step_factory,
     expert_fsdp_grouped_packed_data_first_ppermute_apply_boundary_step_factory,
     expert_fsdp_grouped_packed_data_ppermute_apply_boundary_step_factory,
+    expert_fsdp_grouped_persistent_muonh_apply_step_factory,
     expert_fsdp_grouped_restore_boundary_step_factory,
     expert_fsdp_grouped_target_apply_boundary_step_factory,
     expert_fsdp_grouped_target_apply_chunked_boundary_step_factory,
@@ -2260,6 +2262,72 @@ def test_expert_fsdp_grouped_updates_muonh_restores_ordinary_expert_updates_befo
     assert hlo_summary.all_reduce == 0
     assert hlo_summary.reduce_scatter == 0
     assert estimated_matrix_count(config, EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH) == config.layers * 16
+
+
+def test_expert_fsdp_grouped_persistent_muonh_keeps_grouped_layout_without_boundary_collectives():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    grouped_params = synthetic_grouped_expert_specs(mesh, config, EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH)
+    grouped_updates = synthetic_grouped_expert_specs(mesh, config, EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH)
+    update_step = jax.jit(expert_fsdp_grouped_persistent_muonh_apply_step_factory(config))
+
+    assert ns4d_compute_sharding(mesh, config, EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH).spec == (
+        P(("replica_dcn", "data"), "expert", None, None)
+    )
+    assert_grouped_expert_sharding(
+        grouped_params,
+        mesh,
+        config,
+        EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH,
+        "persistent grouped params",
+    )
+    assert_grouped_expert_sharding(
+        grouped_updates,
+        mesh,
+        config,
+        EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH,
+        "persistent grouped updates",
+    )
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        result = jax.eval_shape(update_step, grouped_params, grouped_updates)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(grouped_params, grouped_updates).lower(lowering_platforms=(platform,))
+
+    assert_grouped_expert_sharding(
+        result,
+        mesh,
+        config,
+        EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH,
+        "persistent grouped MuonH result",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.two_batch_axis_dot_general == 6
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_to_all == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert estimated_matrix_count(config, EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH) == config.layers * 16
+    assert estimated_ns_dot_flops(config, EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH) > 0
 
 
 @pytest.mark.parametrize(
