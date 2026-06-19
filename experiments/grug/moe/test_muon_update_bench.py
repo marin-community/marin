@@ -18,6 +18,7 @@ from experiments.grug.moe.muon_update_bench import (
     EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_A2A_RESTORE_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_PPERMUTE_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
@@ -78,6 +79,7 @@ from experiments.grug.moe.muon_update_bench import (
     expert_fsdp_grouped_explicit_apply_boundary_step_factory,
     expert_fsdp_grouped_explicit_data_first_a2a_apply_boundary_step_factory,
     expert_fsdp_grouped_explicit_data_first_a2a_restore_boundary_step_factory,
+    expert_fsdp_grouped_explicit_data_first_ppermute_restore_boundary_step_factory,
     expert_fsdp_grouped_explicit_restore_boundary_step_factory,
     expert_fsdp_grouped_muonh_optimizer_apply_step_factory,
     expert_fsdp_grouped_packed_a2a_apply_boundary_step_factory,
@@ -1702,6 +1704,54 @@ def test_expert_fsdp_grouped_explicit_data_first_a2a_restore_boundary_returns_fs
     assert hlo_summary.all_reduce == 0
     assert hlo_summary.reduce_scatter == 0
     assert estimated_ns_dot_flops(config, EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_A2A_RESTORE_BOUNDARY_BENCH) == 0
+
+
+def test_expert_fsdp_grouped_explicit_data_first_ppermute_restore_boundary_returns_fsdp_updates():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = synthetic_fsdp_expert_specs(mesh, config)
+    grouped_updates = synthetic_grouped_expert_specs(
+        mesh,
+        config,
+        EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_PPERMUTE_RESTORE_BOUNDARY_BENCH,
+    )
+    update_step = jax.jit(expert_fsdp_grouped_explicit_data_first_ppermute_restore_boundary_step_factory(mesh, config))
+
+    assert_expert_fsdp_sharding(params, "expert FSDP params")
+    assert_ns4d_sharding(grouped_updates, P(("replica_dcn", "data"), "expert", None, None), "grouped updates")
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        result = jax.eval_shape(update_step, params, grouped_updates)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(params, grouped_updates).lower(lowering_platforms=(platform,))
+
+    assert_expert_fsdp_sharding(result, "explicit data-first ppermute restore FSDP updates")
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general == 0
+    assert hlo_summary.all_to_all > 0
+    assert hlo_summary.collective_permute > 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert estimated_ns_dot_flops(config, EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_PPERMUTE_RESTORE_BOUNDARY_BENCH) == 0
 
 
 def test_expert_fsdp_grouped_packed_a2a_apply_boundary_packs_group_restores():
