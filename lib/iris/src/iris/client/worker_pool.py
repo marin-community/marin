@@ -410,10 +410,6 @@ class WorkerPool:
         return sum(1 for w in self._workers.values() if w.status in (WorkerStatus.IDLE, WorkerStatus.BUSY))
 
     @property
-    def idle_count(self) -> int:
-        return sum(1 for w in self._workers.values() if w.status == WorkerStatus.IDLE)
-
-    @property
     def job_id(self) -> JobName | None:
         return self._job.job_id if self._job else None
 
