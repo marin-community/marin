@@ -135,6 +135,7 @@ EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH = "expert_fsdp_grouped_packe
 EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH = (
     "expert_fsdp_grouped_packed_data_first_ppermute_apply_boundary"
 )
+EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH = "expert_fsdp_grouped_packed_data_ppermute_apply_boundary"
 EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH = "expert_fsdp_grouped_updates_muonh_updates"
 EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH = "expert_fsdp_grouped_updates_muonh_apply"
 EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH = "expert_fsdp_grouped_updates_muonh_explicit_apply"
@@ -195,6 +196,7 @@ BENCH_KINDS = (
     EXPERT_FSDP_GROUPED_EXPLICIT_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
@@ -252,6 +254,7 @@ NS4D_DATA_SHARDED_BENCHES = (
     EXPERT_FSDP_GROUPED_EXPLICIT_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
@@ -294,6 +297,7 @@ GROUPED_APPLY_BOUNDARY_BENCHES = (
     EXPERT_FSDP_GROUPED_EXPLICIT_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
@@ -798,6 +802,7 @@ def ns4d_result_sharding(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Na
         EXPERT_FSDP_GROUPED_EXPLICIT_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
@@ -912,6 +917,7 @@ def grouped_expert_group_sizes_for_bench(config: BenchConfig, bench_kind: str) -
         EXPERT_FSDP_GROUPED_EXPLICIT_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
@@ -2960,6 +2966,44 @@ def expert_fsdp_grouped_packed_data_first_ppermute_apply_outputs(
     return {"layers": tuple(output_layers)}
 
 
+def expert_fsdp_grouped_packed_data_ppermute_apply_outputs(
+    mesh: Mesh,
+    config: BenchConfig,
+    params,
+    grouped_updates,
+):
+    """Apply grouped expert updates after one packed data-ppermute restore per expert weight name."""
+    output_layers = [
+        {"mlp": {"expert_mlp": {name: None for name in synthetic_shapes(config)}}} for _ in range(config.layers)
+    ]
+    for name in synthetic_shapes(config):
+        packed_updates, packed_group_size = _packed_grouped_updates_for_name(config, grouped_updates, name)
+        with jax.named_scope(f"muon_update_bench/expert_fsdp_grouped_packed_data_ppermute/{name}/restore_packed_groups"):
+            restored_updates = _explicit_grouped_update_to_fsdp_group_data_ppermute(
+                mesh,
+                config,
+                name,
+                packed_updates,
+            )
+        packed_offset = 0
+        layer_offset = 0
+        for valid_group_size in grouped_expert_group_sizes(config):
+            with jax.named_scope(f"muon_update_bench/expert_fsdp_grouped_packed_data_ppermute/{name}/slice_valid_group"):
+                valid_updates = restored_updates[packed_offset : packed_offset + valid_group_size]
+            with jax.named_scope(f"muon_update_bench/expert_fsdp_grouped_packed_data_ppermute/{name}/split_apply"):
+                update_parts = [
+                    jnp.squeeze(update_part, axis=0)
+                    for update_part in jnp.split(valid_updates, valid_group_size, axis=0)
+                ]
+                for local_index, update_part in enumerate(update_parts):
+                    layer_index = layer_offset + local_index
+                    param = params["layers"][layer_index]["mlp"]["expert_mlp"][name]
+                    output_layers[layer_index]["mlp"]["expert_mlp"][name] = optax.apply_updates(param, update_part)
+            packed_offset += packed_group_size
+            layer_offset += valid_group_size
+    return {"layers": tuple(output_layers)}
+
+
 def expert_fsdp_grouped_packed_a2a_apply_boundary_step_factory(mesh: Mesh, config: BenchConfig):
     def update_step(params, grouped_updates):
         with jax.named_scope("muon_update_bench/expert_fsdp_grouped_packed_a2a_apply_boundary_step"):
@@ -2993,6 +3037,25 @@ def expert_fsdp_grouped_packed_data_first_ppermute_apply_boundary_timing_step_fa
             "muon_update_bench/expert_fsdp_grouped_packed_data_first_ppermute_apply_boundary_timing_step"
         ):
             return expert_fsdp_grouped_packed_data_first_ppermute_apply_outputs(mesh, config, params, grouped_updates)
+
+    return update_step
+
+
+def expert_fsdp_grouped_packed_data_ppermute_apply_boundary_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(params, grouped_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_grouped_packed_data_ppermute_apply_boundary_step"):
+            return expert_fsdp_grouped_packed_data_ppermute_apply_outputs(mesh, config, params, grouped_updates)
+
+    return update_step
+
+
+def expert_fsdp_grouped_packed_data_ppermute_apply_boundary_timing_step_factory(
+    mesh: Mesh,
+    config: BenchConfig,
+):
+    def update_step(params, grouped_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_grouped_packed_data_ppermute_apply_boundary_timing_step"):
+            return expert_fsdp_grouped_packed_data_ppermute_apply_outputs(mesh, config, params, grouped_updates)
 
     return update_step
 
@@ -3959,6 +4022,8 @@ def ns4d_boundary_status(config: BenchConfig, bench_kind: str) -> str | None:
         return "expert_fsdp_params_grouped_updates_packed_a2a_apply"
     if bench_kind == EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH:
         return "expert_fsdp_params_grouped_updates_packed_data_first_ppermute_apply"
+    if bench_kind == EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH:
+        return "expert_fsdp_params_grouped_updates_packed_data_ppermute_apply"
     if bench_kind == EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH:
         return "expert_fsdp_params_grouped_updates_muonh_restore_only"
     if bench_kind == EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH:
@@ -4048,6 +4113,7 @@ def is_expert_fsdp_grouped_boundary_bench(bench_kind: str) -> bool:
         EXPERT_FSDP_GROUPED_EXPLICIT_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     )
 
 
@@ -4070,6 +4136,7 @@ def is_expert_fsdp_grouped_bench(bench_kind: str) -> bool:
         EXPERT_FSDP_GROUPED_EXPLICIT_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
@@ -4771,6 +4838,7 @@ def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
         EXPERT_FSDP_GROUPED_EXPLICIT_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     ):
         return 0
     if bench_kind == FULL_PRODUCTION_GROUPED_2D_PERSISTENT_APPLY_BENCH:
@@ -5338,6 +5406,21 @@ def lower_ns4d(
             )
             assert_expert_fsdp_sharding(result_specs, "expert FSDP packed data-first ppermute apply result")
             lower_args = None
+        elif bench_kind == EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH:
+            grouped_specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_fsdp_grouped_packed_data_ppermute_apply_boundary_step_factory(mesh, config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(update_step, specs, grouped_specs)
+                lowered = update_step.lower(specs, grouped_specs)
+            assert_grouped_expert_sharding(
+                grouped_specs,
+                mesh,
+                config,
+                bench_kind,
+                "expert FSDP packed data-ppermute apply grouped updates",
+            )
+            assert_expert_fsdp_sharding(result_specs, "expert FSDP packed data-ppermute apply result")
+            lower_args = None
         elif bench_kind == EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH:
             grouped_specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
             update_step = jax.jit(expert_fsdp_grouped_updates_muonh_updates_step_factory(mesh, config))
@@ -5856,6 +5939,13 @@ def time_ns4d(
                 params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
                 update_step = jax.jit(
                     expert_fsdp_grouped_packed_data_first_ppermute_apply_boundary_timing_step_factory(mesh, config),
+                    donate_argnums=(0,),
+                )
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH:
+                params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
+                update_step = jax.jit(
+                    expert_fsdp_grouped_packed_data_ppermute_apply_boundary_timing_step_factory(mesh, config),
                     donate_argnums=(0,),
                 )
                 lower_args = (params, updates)
