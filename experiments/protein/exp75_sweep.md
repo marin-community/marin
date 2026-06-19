@@ -474,7 +474,7 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   | wd \ lr | 5e-4 | 7e-4 | 1e-3 |
   |---|---|---|---|
   | **0.05** | | | |
-  | **0.1**  | 2.989 | | **2.822** |
+  | **0.1**  | 2.989 | 2.950 | **2.822** |
   | **0.2**  | | | |
   | **0.3**  | | | |
   | **0.4**  | | | |
