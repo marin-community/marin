@@ -9,9 +9,10 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any, Protocol
 
+import jax
 import numpy as np
 from marin.rl.decoding import DecodingConfig
-from marin.rl.environments.base import MarinEnv, extract_seed
+from marin.rl.environments.base import MarinEnv
 from marin.rl.environments.inference_ctx import BaseInferenceContext, ToolSpec
 from marin.rl.integrations.openreward.client import load_openreward_client
 from marin.rl.integrations.openreward.manifest import load_openreward_task_manifest
@@ -159,6 +160,12 @@ def _resolve_optional_secrets(secret_env_vars: list[str] | None) -> dict[str, st
     return resolve_required_env_vars(secret_env_vars)
 
 
+def _seed_from_prng_key(prng_key) -> int:
+    if isinstance(prng_key, int):
+        return prng_key
+    return jax.random.randint(prng_key, (), 0, 1_000_000).item()
+
+
 class OpenRewardEnv(MarinEnv):
     """Manifest-backed single-turn OpenReward environment adapter."""
 
@@ -202,7 +209,7 @@ class OpenRewardEnv(MarinEnv):
         tool_decoding = _decoding_with_tool_call_stop(decoding, self.tool_call_stop)
 
         n_to_sample = min(n_examples, len(manifest.tasks))
-        rng = np.random.default_rng(extract_seed(prng_key))
+        rng = np.random.default_rng(_seed_from_prng_key(prng_key))
         sampled_indices = rng.choice(len(manifest.tasks), size=n_to_sample, replace=False)
         sampled_entries = [manifest.tasks[int(index)] for index in sampled_indices]
 
