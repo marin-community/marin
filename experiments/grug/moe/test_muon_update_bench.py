@@ -25,6 +25,7 @@ from experiments.grug.moe.muon_update_bench import (
     EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
     EXPERT_GROUPED_BANK_CONSUMER_BENCH,
     EXPERT_GROUPED_LAYER_SLICE_BENCH,
+    EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH,
@@ -43,8 +44,11 @@ from experiments.grug.moe.muon_update_bench import (
     _stacked_2d_target,
     assert_expert_ep_sharding,
     assert_expert_fsdp_sharding,
+    assert_grouped_expert_sharding,
     assert_grouped_expert_target_fsdp_sharding,
+    assert_grouped_moe_consumer_sharding,
     assert_ns4d_sharding,
+    bench_skip_reason,
     build_full_production_muonh_optimizer,
     build_grouped_expert_productionish_optimizer,
     build_ordinary_2d_muonh_optimizer,
@@ -78,6 +82,7 @@ from experiments.grug.moe.muon_update_bench import (
     grouped_expert_bank_consumer_flops,
     grouped_expert_bank_consumer_step_factory,
     grouped_expert_optimizer_apply_step_factory,
+    grouped_moe_mlp_consumer_step_factory,
     ns4d_compute_sharding,
     ns4d_grouped_apply_step_factory,
     ns4d_input_sharding,
@@ -92,6 +97,7 @@ from experiments.grug.moe.muon_update_bench import (
     synthetic_full_production_muonh_specs,
     synthetic_grouped_expert_consumer_input_specs,
     synthetic_grouped_expert_specs,
+    synthetic_grouped_moe_mlp_consumer_input_specs,
     synthetic_ns4d_specs,
     synthetic_ordinary_2d_grouped_persistent_specs,
     synthetic_ordinary_2d_muonh_specs,
@@ -595,6 +601,82 @@ def test_grouped_expert_bank_consumer_preserves_grouped_bank_without_collectives
     assert hlo_summary.reduce_scatter == 0
     assert hlo_summary.all_to_all == 0
     assert grouped_expert_bank_consumer_flops(config) == 4 * 8 * 3 * (2 * 16 * 16 + 2 * 8 * 16)
+
+
+def test_grouped_moe_mlp_consumer_preserves_grouped_bank_and_routed_activation_sharding():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = synthetic_grouped_expert_specs(mesh, config, EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH)
+    routed_inputs = synthetic_grouped_moe_mlp_consumer_input_specs(
+        mesh,
+        config,
+        EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
+    )
+    update_step = jax.jit(grouped_moe_mlp_consumer_step_factory(config))
+
+    assert_grouped_expert_sharding(params, mesh, config, EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH, "params")
+    assert_grouped_moe_consumer_sharding(
+        routed_inputs,
+        mesh,
+        config,
+        EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
+        "routed inputs",
+    )
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        result = jax.eval_shape(update_step, params, routed_inputs)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(params, routed_inputs).lower(lowering_platforms=(platform,))
+
+    assert_grouped_moe_consumer_sharding(result, mesh, config, EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH, "result")
+    assert result["blocks"][0]["x"].shape == (4, 24, 16)
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general == 2
+    assert hlo_summary.all_gather > 0
+    assert hlo_summary.reduce_scatter > 0
+    assert grouped_expert_bank_consumer_flops(config) == 4 * 8 * 3 * (2 * 16 * 16 + 2 * 8 * 16)
+
+
+def test_grouped_moe_mlp_consumer_skips_without_expert_parallel_axis():
+    config = BenchConfig(
+        layers=1,
+        ns4d_group_size=1,
+        ns4d_group_axis="none",
+        hidden_dim=4,
+        intermediate_dim=2,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+
+    assert bench_skip_reason(config, EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH) is not None
 
 
 def test_hlo_summary_counts_gpu_custom_calls():

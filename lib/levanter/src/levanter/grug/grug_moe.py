@@ -226,6 +226,81 @@ def grouped_moe_mlp(
     if valid_group_size < 1 or valid_group_size > group_size:
         raise ValueError(f"valid_group_size must be in [1, {group_size}], got {valid_group_size}")
 
+    resolved_implementation = resolve_moe_implementation(implementation)
+    resolved_remat_mode = resolve_moe_remat_mode(remat_mode)
+    if mesh is None:
+        mesh = _current_mesh()
+
+    if isinstance(activation, ActivationFunctionEnum):
+        activation_fn: Callable[[jax.Array], jax.Array] = activation.to_jax_fn()
+    else:
+        activation_fn = activation
+
+    has_expert_axis = _mesh_has_axis(mesh, "expert")
+    expert_axis_size = _mesh_axis_size(mesh, "expert")
+    if mesh is not None and not mesh.empty and has_expert_axis and expert_axis_size > 1:
+        if resolved_implementation not in _EP_MOE_IMPLEMENTATIONS:
+            raise ValueError(
+                "Grouped MoE with an expert-parallel mesh requires an expert-parallel implementation; "
+                f"got implementation={resolved_implementation!r} with expert axis size={expert_axis_size}"
+            )
+        num_experts = int(w_up_gate.shape[1])
+        if num_experts % expert_axis_size != 0:
+            raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
+
+        if resolved_implementation == "ring":
+            shard_local_fn = _moe_mlp_ep_ring_local
+        elif resolved_implementation == "ragged_all_to_all":
+            shard_local_fn = _moe_mlp_ep_ragged_a2a_local
+        elif resolved_implementation == "deepep":
+            shard_local_fn = _moe_mlp_ep_deepep_local
+        else:
+            raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
+
+        x_spec = _value_spec_or_default(x, P(None, None, None))
+        selected_experts_spec = _value_spec_or_default(selected_experts, x_spec)
+        combine_weights_spec = _value_spec_or_default(combine_weights, x_spec)
+        w_up_gate_spec = _value_spec_or_default(w_up_gate, P(None, "expert", None, None))
+        w_down_spec = _value_spec_or_default(w_down, P(None, "expert", None, None))
+
+        x = _reshard_for_shard_map(x, mesh, x_spec)
+        selected_experts = _reshard_for_shard_map(selected_experts, mesh, selected_experts_spec)
+        combine_weights = _reshard_for_shard_map(combine_weights, mesh, combine_weights_spec)
+        w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
+        w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
+
+        def run_grouped_shard(x_local, selected_local, combine_local, w_up_gate_local, w_down_local):
+            def run_one(x_one, selected_one, combine_one, w_up_gate_one, w_down_one):
+                return shard_local_fn(
+                    x_one,
+                    selected_one,
+                    combine_one,
+                    w_up_gate_one,
+                    w_down_one,
+                    activation_fn=activation_fn,
+                    num_experts=num_experts,
+                    capacity_factor=capacity_factor,
+                    remat_mode=resolved_remat_mode,
+                )
+
+            out, dropped = jax.vmap(run_one)(x_local, selected_local, combine_local, w_up_gate_local, w_down_local)
+            if valid_group_size != group_size:
+                valid = jnp.arange(group_size) < valid_group_size
+                out = jnp.where(valid[:, None, None], out, jnp.zeros_like(out))
+                dropped = jnp.where(valid, dropped, jnp.zeros_like(dropped))
+            if report_capacity_overflow:
+                return out, dropped
+            return out
+
+        grouped_shard_fn = shard_map(
+            run_grouped_shard,
+            mesh=mesh,
+            in_specs=(x_spec, selected_experts_spec, combine_weights_spec, w_up_gate_spec, w_down_spec),
+            out_specs=(x_spec, P(x_spec[0])) if report_capacity_overflow else x_spec,
+            check_vma=False,
+        )
+        return grouped_shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+
     def run_one(x_one, selected_one, combine_one, w_up_gate_one, w_down_one):
         return moe_mlp(
             x_one,
