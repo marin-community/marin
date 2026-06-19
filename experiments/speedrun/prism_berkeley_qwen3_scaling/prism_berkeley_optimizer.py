@@ -352,7 +352,7 @@ def _prism_berkeley_approx_polar(
     # PRISM Newton-Schulz step
     working = working.astype(jnp.bfloat16)
     identity = identity.astype(jnp.bfloat16)
-    for _ in range(2):
+    for _ in range(steps):
         residual = identity - working.T @ working
         working = working + 0.5 * working @ residual + 1.45 * working @ (residual @ residual)
 
