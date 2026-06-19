@@ -1017,10 +1017,10 @@ def test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs()
     update_hlo_summary = summarize_hlo(str(lowered_update.compiler_ir(dialect="stablehlo")))
     assert hlo_summary.two_batch_axis_dot_general == 6
     assert update_hlo_summary.two_batch_axis_dot_general == 6
-    assert hlo_summary.all_gather == 0
-    assert update_hlo_summary.all_gather == 0
-    assert hlo_summary.all_to_all == 0
-    assert update_hlo_summary.all_to_all == 0
+    assert hlo_summary.all_gather == 2
+    assert update_hlo_summary.all_gather == 2
+    assert hlo_summary.all_to_all == 2
+    assert update_hlo_summary.all_to_all == 2
     assert hlo_summary.all_reduce == 0
     assert update_hlo_summary.all_reduce == 0
     assert hlo_summary.reduce_scatter == 0

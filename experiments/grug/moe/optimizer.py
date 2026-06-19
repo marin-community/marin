@@ -334,6 +334,73 @@ def _restore_grouped_muonh_for_split_target_layout(grouped_update, target, valid
     return grouped_update
 
 
+def _reorder_data_major_group_axis(grouped_update, replica_axis_size: int, data_axis_size: int):
+    group_axis_size = grouped_update.shape[0]
+    shard_group_size = group_axis_size // (replica_axis_size * data_axis_size)
+    reshaped = grouped_update.reshape((data_axis_size, replica_axis_size, shard_group_size, *grouped_update.shape[1:]))
+    transposed = jnp.transpose(reshaped, (1, 0, 2, *range(3, reshaped.ndim)))
+    return transposed.reshape(grouped_update.shape)
+
+
+def _restore_grouped_muonh_for_split_explicit_a2a(grouped_update, target, valid_size: int, sample_param):
+    target_spec = _target_spec(target)
+    param_sharding = _target_named_sharding(sample_param)
+    if (
+        grouped_update.ndim != 4
+        or target_spec is None
+        or target_spec[0] is None
+        or not isinstance(param_sharding, jax.sharding.NamedSharding)
+        or len(param_sharding.spec) != 3
+    ):
+        return _restore_grouped_muonh_for_split(grouped_update, target, valid_size)
+
+    mesh = param_sharding.mesh
+    group_axis = _live_group_axis(mesh, target_spec[0])
+    if group_axis != (REPLICA_DCN_AXIS, "data"):
+        return _restore_grouped_muonh_for_split_explicit(grouped_update, target, valid_size, sample_param)
+
+    data_axis = None
+    for axis_index, axis_spec in enumerate(param_sharding.spec, start=1):
+        if _axis_spec_contains(axis_spec, "data"):
+            data_axis = axis_index
+            break
+    if data_axis is None:
+        return _restore_grouped_muonh_for_split_explicit(grouped_update, target, valid_size, sample_param)
+
+    replica_axis_size = _mesh_axis_size(mesh, REPLICA_DCN_AXIS)
+    data_axis_size = _mesh_axis_size(mesh, "data")
+    group_axis_size = grouped_update.shape[0]
+    if group_axis_size % (replica_axis_size * data_axis_size) != 0:
+        return _restore_grouped_muonh_for_split_explicit(grouped_update, target, valid_size, sample_param)
+    if grouped_update.shape[data_axis] % data_axis_size != 0:
+        return _restore_grouped_muonh_for_split_explicit(grouped_update, target, valid_size, sample_param)
+
+    input_spec = jax.sharding.PartitionSpec(group_axis, target_spec[1], None, None)
+    output_spec = jax.sharding.PartitionSpec(None, *param_sharding.spec)
+
+    def restore_group(local_update):
+        gathered = lax.all_gather(local_update, axis_name=REPLICA_DCN_AXIS, axis=0, tiled=True)
+        restored = lax.all_to_all(
+            gathered,
+            axis_name="data",
+            split_axis=data_axis,
+            concat_axis=0,
+            tiled=True,
+        )
+        return _reorder_data_major_group_axis(restored, replica_axis_size, data_axis_size)
+
+    grouped_update = shard_map(
+        restore_group,
+        mesh=mesh,
+        in_specs=input_spec,
+        out_specs=output_spec,
+        check_vma=False,
+    )(grouped_update)
+    if grouped_update.shape[0] != valid_size:
+        grouped_update = grouped_update[:valid_size]
+    return grouped_update
+
+
 def _restore_grouped_muonh_for_split_explicit(grouped_update, target, valid_size: int, sample_param):
     target_spec = _target_spec(target)
     param_sharding = _target_named_sharding(sample_param)
@@ -480,7 +547,7 @@ def _grouped_expert_muonh_updates(
                 direction = _scale_grouped_muonh_direction(direction)
 
             grouped_update = _grouped_muonh_hyperball_update(stacked_params, direction, learning_rate)
-            grouped_update = _restore_grouped_muonh_for_split_target_layout(
+            grouped_update = _restore_grouped_muonh_for_split_explicit_a2a(
                 grouped_update,
                 target,
                 valid_size,
