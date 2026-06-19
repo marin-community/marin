@@ -36,7 +36,7 @@ from marin.training.training import resolve_training_env
 
 from experiments.defaults import _run_training_on_worker, prepare_lm_train
 from experiments.evals.task_configs import CORE_TASKS
-from experiments.launch import LaunchConfig, override_resources, run_launch
+from experiments.launch import LaunchConfig, launch, override_resources
 from experiments.llama import llama_30m
 from experiments.pretraining_datasets.simple import tokenized
 from experiments.simple_train_config import SimpleTrainConfig
@@ -148,7 +148,7 @@ def _launch_sweep(resources: ResourceConfig) -> None:
 @draccus.wrap()
 def main(config: LaunchConfig):
     resources = override_resources(ResourceConfig.with_tpu(DEFAULT_TPU_TYPE), config)
-    run_launch(config, _launch_sweep, resources)
+    launch(config, _launch_sweep, resources)
 
 
 if __name__ == "__main__":

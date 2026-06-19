@@ -31,30 +31,26 @@ Variant-specific guidance (including modular-opt notes) lives in `experiments/gr
 
 ## Quickstart launch
 
-`base/launch.py` is self-running: it hoists the Iris client itself, so you run
-it directly and pass `--cluster`. No `uv run iris job run` wrapper, and no
-launcher job to mis-size or mis-place.
-
-Local executor run (no cluster — uses the in-process LocalClient):
+Run `base/launch.py` in-process (no cluster — uses the `LocalClient`):
 
 ```bash
 uv run python experiments/grug/base/launch.py
 ```
 
-Iris cluster run (from a dev box, on the `marin` prod cluster):
+Or on the `marin` prod cluster, from a dev box:
 
 ```bash
 WANDB_API_KEY="$WANDB_API_KEY" \
   uv run python experiments/grug/base/launch.py --cluster=marin
 ```
 
-Submitting ships the executor to a lightweight CPU **coordinator** job on the
+`--cluster` ships the executor to a lightweight CPU **coordinator** job on the
 cluster, which submits the TPU training job via Fray; your terminal only streams
 logs, so the run survives a disconnect (reconnect with `iris job logs -f <id>`,
-or pass `--detach` to return right after submit). `--tpu_type=v4-8` /
-`--region=...` override the template's resources. Outputs and checkpoints land in
-the regional bucket inferred on the worker, so there is no `MARIN_PREFIX` to set.
-See [`lib/iris/OPS.md`](../../lib/iris/OPS.md) for the Iris CLI reference and
+or `--detach` to return right after submit). `--tpu_type=v4-8` / `--region=...`
+override the template's resources. Outputs and checkpoints land in the regional
+bucket inferred on the worker, so there is no `MARIN_PREFIX` to set. See
+[`lib/iris/OPS.md`](../../lib/iris/OPS.md) for the Iris CLI reference and
 troubleshooting.
 
 ## Visual diff for template variants

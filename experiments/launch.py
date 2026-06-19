@@ -3,28 +3,18 @@
 
 """Self-running launcher for experiment scripts.
 
-Marin example scripts (``experiments/grug/*``, ``experiments/tutorials/*``) used
-to be started with a two-hop incantation::
+Run an experiment script directly, choosing where it executes::
 
-    uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \\
-      -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.base.launch
+    uv run python experiments/grug/base/launch.py --cluster=marin   # on the cluster
+    uv run python experiments/grug/base/launch.py --local           # in this process
 
-``iris job run`` submitted a CPU *launcher* job that ran the script on a worker,
-and the script — now inside an Iris task — auto-detected the cluster and
-submitted the real training job. The cluster/region/launcher-resources lived in
-the hand-typed command line, which is where mistakes accumulated (forgotten or
-over-sized launcher resources, wrong region).
-
-This module lets a script run directly from a dev box::
-
-    uv run python experiments/grug/base/launch.py --cluster=marin
-
-:func:`run_launch` runs the script's body — locally for ``--local`` / dry runs,
-otherwise as a small CPU *coordinator* job on the cluster that drives the
-executor/DAG (or direct submits) and spawns training as its children. The
-coordinator outlives this process, so closing the laptop doesn't strand the run
-(its ``.success`` markers are written on the cluster). :func:`override_resources`
-applies ``--region`` / ``--tpu_type`` to a script's :class:`ResourceConfig`.
+:func:`launch` runs the script's body in-process (``--local``, a dry run, or no
+``--cluster``), otherwise it ships the body to a small CPU *coordinator* job that
+drives the executor DAG (or direct submits) and spawns training as its children.
+The coordinator outlives this process, so closing the laptop never strands a run
+— its ``.success`` markers are written on the cluster. :func:`launch_executor` is
+the executor-step form of :func:`launch`; :func:`override_resources` applies
+``--region`` / ``--tpu_type`` to a script's :class:`ResourceConfig`.
 """
 
 from __future__ import annotations
@@ -105,26 +95,22 @@ def _repo_root() -> Path:
     return root
 
 
-def run_launch(config: LaunchConfig, body: Callable[..., None], *args, **kwargs) -> None:
-    """Run a script's body locally, or as a coordinator job on the cluster.
+def launch(config: LaunchConfig, body: Callable[..., None], *args, **kwargs) -> None:
+    """Run a script's ``body`` in-process, or as a coordinator job on the cluster.
 
-    ``body`` is the script's actual work — typically ``train`` / ``train_grug`` /
+    ``body`` is the script's actual work — ``train`` / ``train_grug`` /
     ``executor_main`` / a submit loop — invoked as ``body(*args, **kwargs)``.
 
-    - **Already on the cluster** (inside the coordinator we submitted, or the
-      legacy ``iris job run`` two-hop) or **staying local** (``--local``, a dry
-      run, or no ``--cluster``): run ``body`` here.
-    - **Laptop + ``--cluster``**: ship ``body`` to a small CPU *coordinator* job
-      that runs it on the cluster and spawns training as its children, then
-      stream its logs and exit with its status. ``body`` never runs on the
-      laptop, so the executor/DAG and its ``.success`` markers live on the
-      cluster and survive the laptop disconnecting. ``--detach`` returns right
-      after submit instead of streaming.
+    It runs in-process when staying local (``--local``, a dry run, or no
+    ``--cluster``) or when already inside the coordinator we submitted. Otherwise
+    it ships ``body`` to a small CPU *coordinator* job that runs it on the cluster
+    and spawns training as its children, then streams that job's logs and exits
+    with its status (``--detach`` returns right after submit). Because ``body``
+    runs on the cluster, the executor DAG and its ``.success`` markers survive the
+    laptop disconnecting.
 
-    For ``body`` to be shipped it must be importable on the worker (a top-level
-    function, like every other Iris entrypoint), and its ``args``/``kwargs`` must
-    be cloudpickle-able (the configs already are — they are shipped to training
-    workers today).
+    To be shipped, ``body`` must be importable on the worker (a top-level
+    function) and its ``args``/``kwargs`` cloudpickle-able.
     """
     if get_job_info() is not None or config.local or config.cluster is None or config.executor.dry_run:
         body(*args, **kwargs)
@@ -139,16 +125,14 @@ def _coordinator_job_name(body: Callable[..., None]) -> str:
 
 
 def _coordinator_constraints(config: LaunchConfig) -> list[Constraint] | None:
-    """Pin the coordinator to ``--region`` / ``--zone`` when the user specifies one.
+    """Pin the coordinator to ``--region`` / ``--zone`` when one is given.
 
     The coordinator resolves ``marin_prefix()`` in its own region and bakes every
-    executor output path from it, so for the executor (``default_train`` +
-    ``executor_main``) path it must land in the same region the run's accelerators
-    do. ``--region`` already constrains the training steps
-    (:func:`override_resources`); pinning the coordinator with the same constraint
-    that ``iris job run`` uses keeps the baked paths in that region. When unset,
-    the scheduler places the coordinator and the executor's own per-step region
-    inference keeps each accelerator with the bucket it baked.
+    executor output path from it, so on the executor path it must land in the same
+    region the run's accelerators do (``--region`` already constrains the training
+    steps via :func:`override_resources`). When unset, the scheduler places the
+    coordinator and the executor's per-step region inference keeps each accelerator
+    with the bucket it baked.
     """
     constraints: list[Constraint] = []
     if config.region is not None:
@@ -161,11 +145,10 @@ def _coordinator_constraints(config: LaunchConfig) -> list[Constraint] | None:
 def _submit_coordinator_job(config: LaunchConfig, body: Callable[..., None], args: tuple, kwargs: dict) -> int:
     """Submit a CPU coordinator job that runs ``body`` on the cluster.
 
-    ``body`` and its args are cloudpickled via :meth:`Entrypoint.from_callable`
-    — the same mechanism every other "run this on a worker" site uses — so the
-    coordinator runs the executor/DAG (or direct submits) in-cluster and spawns
-    training as its children. This laptop process only streams its logs
-    (disconnect-safe). Returns the coordinator's exit code.
+    ``body`` and its args are cloudpickled via :meth:`Entrypoint.from_callable`,
+    so the coordinator runs the executor DAG (or direct submits) in-cluster and
+    spawns training as its children while this process only streams its logs.
+    Returns the coordinator's exit code.
     """
     assert config.cluster is not None
     env_vars = add_standard_env_vars(load_env_vars(None))
@@ -263,15 +246,13 @@ def _apply_overrides_to_step(step: ExecutorStep, config: LaunchConfig) -> Execut
 
 
 def launch_executor(config: LaunchConfig, steps: list[ExecutorStep], description: str | None = None) -> None:
-    """Convenience for executor-based examples: run ``executor_main`` via :func:`run_launch`.
+    """Run executor ``steps`` via :func:`launch` — the executor-step entry point.
 
     Applies any ``--tpu_type`` / ``--region`` / ``--zone`` overrides to each
-    step's resources, then runs ``executor_main`` through :func:`run_launch` —
-    locally for ``--local`` / dry runs, otherwise on the cluster coordinator
-    (this process only bootstraps it). Passing ``config.executor`` explicitly
-    bypasses ``executor_main``'s own draccus parse (the CLI was already parsed
-    into ``LaunchConfig``).
+    step's resources, then runs ``executor_main`` through :func:`launch`. Passing
+    ``config.executor`` explicitly bypasses ``executor_main``'s own draccus parse
+    (the CLI was already parsed into ``LaunchConfig``).
     """
     if config.tpu_type is not None or config.region is not None or config.zone is not None:
         steps = [_apply_overrides_to_step(step, config) for step in steps]
-    run_launch(config, executor_main, config.executor, steps=steps, description=description)
+    launch(config, executor_main, config.executor, steps=steps, description=description)

@@ -16,7 +16,7 @@ from levanter.data.text import TextLmDatasetFormat
 from marin.execution.types import versioned
 
 from experiments.defaults import train
-from experiments.launch import LaunchConfig, override_resources, run_launch
+from experiments.launch import LaunchConfig, launch, override_resources
 from experiments.llama import llama_30m
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
@@ -58,12 +58,10 @@ small_train_config = SimpleTrainConfig(
 
 @draccus.wrap()
 def main(config: LaunchConfig):
-    # 4. Submit the training job. `train` resolves the output path, bakes it
-    # into the trainer config, and blocks until the Iris job completes — a
-    # single call. `run_launch` runs it on the `--cluster` coordinator (or
-    # locally for `--local`), so it survives this process disconnecting.
+    # 4. `launch` runs `train` on the `--cluster` coordinator (or in-process for
+    # `--local`); `train` resolves the output path and blocks until the job ends.
     train_config = dataclasses.replace(small_train_config, resources=override_resources(RESOURCES, config))
-    run_launch(
+    launch(
         config,
         train,
         name="marin-tinystories-30m",

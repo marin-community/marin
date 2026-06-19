@@ -35,7 +35,7 @@ from experiments.grug.base.train import (
     GrugTrainerConfig,
     _run_grug_local,
 )
-from experiments.launch import LaunchConfig, override_resources, run_launch
+from experiments.launch import LaunchConfig, launch, override_resources
 from experiments.pretraining_datasets import nemotron_mix
 
 
@@ -252,11 +252,11 @@ grug_base_launch = GrugBaseLaunchConfig(
 
 @draccus.wrap()
 def main(config: LaunchConfig):
-    launch = dataclasses.replace(
+    grug_launch = dataclasses.replace(
         grug_base_launch,
         resources=versioned(override_resources(_GRUG_BASE_RESOURCES, config)),
     )
-    run_launch(config, train_grug, name="grug/base-trial", launch=launch)
+    launch(config, train_grug, name="grug/base-trial", launch=grug_launch)
 
 
 if __name__ == "__main__":

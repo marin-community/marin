@@ -122,9 +122,8 @@ model = default_train(
     eval_harness_tasks = [EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"), EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")],  # Evaluation Tasks to run on the checkpoint
 )
 
-# Set up the experiment execution. `launch_executor` (from experiments.launch)
-# makes the script self-running: it connects to the cluster named by `--cluster`
-# and runs `executor_main` for you.
+# `launch_executor` connects to the cluster named by `--cluster` and runs the
+# executor; `@draccus.wrap()` parses the CLI flags into `LaunchConfig`.
 @draccus.wrap()
 def main(config: LaunchConfig):
     launch_executor(
@@ -152,26 +151,26 @@ The `default_train` function creates a training pipeline that:
 
 ## Launching the Training Job
 
-Because the script wraps its entrypoint in `launch_executor`, it is
-*self-running*: run it directly from a dev box and pass `--cluster`. Submitting
-ships the executor to a lightweight CPU **coordinator** job on the cluster, which
-drives the DAG and spawns the TPU/GPU sub-tasks via Fray; your terminal only
-streams logs, so the run survives a disconnect (reconnect with `iris job logs -f
-<id>`, or pass `--detach` to return right after submit). The coordinator bakes
-each step's output path from the marin prefix in *its own* region and pins the
-sub-tasks to that region, so checkpoints and outputs land in the coordinator's
-regional bucket — no `MARIN_PREFIX` to set, and `--region` places the whole run:
+Run the script and pass `--cluster`:
 
 ```bash
 WANDB_API_KEY="$WANDB_API_KEY" \
   uv run python experiments/${YOUR_EXPERIMENT_SCRIPT}.py --cluster=marin
 ```
 
-`--tpu_type=...` overrides the script's accelerator and `--region=...` pins the
-coordinator and training to a region; `--executor.dry_run=True` plans the run
-without submitting. See
+This ships the executor to a lightweight CPU **coordinator** job on the cluster,
+which drives the DAG and spawns the TPU/GPU sub-tasks via Fray; your terminal
+only streams logs, so the run survives a disconnect (reconnect with `iris job
+logs -f <id>`, or `--detach` to return right after submit). The coordinator bakes
+each step's output path under the marin prefix in its own region and pins the
+sub-tasks there, so checkpoints land in that regional bucket — no `MARIN_PREFIX`
+to set.
+
+Useful flags: `--tpu_type=v4-8` overrides the accelerator, `--region=...` places
+the whole run in a region, `--local` runs in-process, and
+`--executor.dry_run=True` plans without submitting. See
 [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
-for the Iris CLI reference (including `iris job logs -f` for streaming).
+for the Iris CLI reference.
 
 Following Marin's guidelines, name your experiment script `experiments/exp{GITHUB_ISSUE_NUMBER}_{DESCRIPTOR}.py`, where `GITHUB_ISSUE_NUMBER` is the issue number for your experiment and `DESCRIPTOR` is a brief description.
 
