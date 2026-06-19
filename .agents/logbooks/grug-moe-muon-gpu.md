@@ -617,3 +617,22 @@ The successful T64 run reported `grouped_expert_consumer_tokens_per_expert=64`, 
 - Config: 4 H100 nodes, `replica_axis=2`, `data_axis=2`, `expert_axis=8`, `model_axis=1`, 26 layers, `ns4d_group_size=4`, `ns4d_group_axis=replica_dcn,data`, `bench_kinds=expert_grouped_moe_mlp_consumer`, bf16, `grouped_expert_consumer_tokens_per_expert=128`, `grouped_expert_consumer_chunk_tokens=64`, `allow_boundary_collectives=true`, output prefix `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D2E8-GROUPEDMOEMLP-T128C64-G4-N4-cw-20260619-111502-36c60f`.
 - Current state: As of the 04:20 PDT bounded poll, all four child tasks were still running with no new log rows after metadata. A heartbeat `watch-muon-grouped-moe-chunked-t128` is monitoring terminal success/failure.
 - Next action: If T128C64 succeeds, compare compiled AG/RS and runtime against T64 unchunked and decide whether to try T1024C64 or move directly to a model-facing chunked expert path. If it OOMs or stalls, inspect the exact allocation/root cause before launching another load.
+
+### 2026-06-19 04:35 PDT - public grouped MoE consumer chunking negative result
+- Hypothesis: The public grouped MoE helper's T128 memory wall might be controlled by chunking routed tokens per expert, allowing us to validate a model-facing grouped expert path before touching the real training representation.
+- Command:
+  - Stopped the accidental absolute-chunk launch `/dlwh/iris-run-job-20260619-111504` after realizing `grouped_expert_consumer_chunk_tokens=64` meant 64 total routed tokens, not 64 tokens per expert. With 256 experts and `tokens_per_expert=128`, that would have generated 512 chunks per group and an unhelpfully huge lowering.
+  - Added `grouped_expert_consumer_chunk_tokens_per_expert` to the harness, CoreWeave launcher, and shell wrappers. The effective absolute chunk is now `num_experts * chunk_tokens_per_expert`; the summary row reports both the requested per-expert value and `grouped_expert_consumer_effective_chunk_tokens`.
+  - Validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -q` passed 43 tests; `./infra/pre-commit.py --changed-files --fix` passed; a tiny forced-CPU lower-only smoke reported `grouped_expert_consumer_chunk_tokens_per_expert=1` and `grouped_expert_consumer_effective_chunk_tokens=8`.
+  - CoreWeave C64PE: parent `/dlwh/iris-run-job-20260619-112646`; child `/dlwh/iris-run-job-20260619-112646/grug-train-MUON-BENCH-D2560-L26-R2D2E8-GROUPEDMOEMLP-T128C64PE-G4-N4-cw-20260619-112644`.
+  - CoreWeave C32PE: parent `/dlwh/iris-run-job-20260619-113139`; child `/dlwh/iris-run-job-20260619-113139/grug-train-MUON-BENCH-D2560-L26-R2D2E8-GROUPEDMOEMLP-T128C32PE-G4-N4-cw-20260619-113137`.
+- Config: Both corrected runs used 4 H100 nodes, `replica_axis=2`, `data_axis=2`, `expert_axis=8`, `model_axis=1`, `layers=26`, `ns4d_group_size=4`, `ns4d_group_axis=replica_dcn,data`, `bench_kinds=expert_grouped_moe_mlp_consumer`, bf16, `tokens_per_expert=128`, `max_grouped_stack_size=256`, and `allow_boundary_collectives=true`.
+- Result:
+
+| run | intended chunks/group | lowered AG/RS/AR/A2A | lowered GPU GEMM custom calls | outcome |
+| --- | ---: | --- | ---: | --- |
+| T128C64PE | 2 | 42/14/0/0 | 140 | OOM during timing, 57.84 GiB allocation |
+| T128C32PE | 4 | 84/28/0/0 | 280 | OOM during timing, 57.84 GiB allocation |
+
+- Interpretation: The per-expert chunk knob works and changes the lowered graph exactly as expected, but it does not change the dominant runtime allocation. C32PE doubled the number of chunks/collectives/GEMMs relative to C64PE and still failed on the same 57.84 GiB allocation. This rules out "just slice routed tokens smaller" for the public grouped MoE helper path. The likely problem is a full-scale helper intermediate or compiled buffer outside the apparent chunked body, so continuing to shrink this knob would add launch/collective overhead without addressing the memory wall.
+- Next action: Stop spending CoreWeave runs on this public-helper chunking axis. Keep the per-expert knob for bounded diagnostics, but prioritize a real grouped expert-bank consumer/integration path that avoids the public helper's full routed-token materialization, or inspect XLA buffer assignment if we need to prove exactly which intermediate owns the invariant 57.84 GiB allocation.

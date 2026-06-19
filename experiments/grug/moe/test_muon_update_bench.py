@@ -82,6 +82,7 @@ from experiments.grug.moe.muon_update_bench import (
     grouped_expert_bank_consumer_flops,
     grouped_expert_bank_consumer_step_factory,
     grouped_expert_optimizer_apply_step_factory,
+    grouped_moe_consumer_chunk_tokens,
     grouped_moe_mlp_consumer_step_factory,
     ns4d_compute_sharding,
     ns4d_grouped_apply_step_factory,
@@ -675,7 +676,7 @@ def test_grouped_moe_mlp_consumer_can_chunk_routed_tokens():
         model_axis=1,
         learning_rate=0.02,
         grouped_expert_consumer_tokens_per_expert=3,
-        grouped_expert_consumer_chunk_tokens=8,
+        grouped_expert_consumer_chunk_tokens_per_expert=1,
     )
     mesh = AbstractMesh(
         axis_sizes=(2, 2, 2, 1),
@@ -690,6 +691,7 @@ def test_grouped_moe_mlp_consumer_can_chunk_routed_tokens():
     )
     update_step = jax.jit(grouped_moe_mlp_consumer_step_factory(mesh, config))
 
+    assert grouped_moe_consumer_chunk_tokens(config) == 8
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
         result = jax.eval_shape(update_step, params, routed_inputs)
         platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
