@@ -633,7 +633,7 @@ def test_grouped_moe_mlp_consumer_preserves_grouped_bank_and_routed_activation_s
         config,
         EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
     )
-    update_step = jax.jit(grouped_moe_mlp_consumer_step_factory(config))
+    update_step = jax.jit(grouped_moe_mlp_consumer_step_factory(mesh, config))
 
     assert_grouped_expert_sharding(params, mesh, config, EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH, "params")
     assert_grouped_moe_consumer_sharding(

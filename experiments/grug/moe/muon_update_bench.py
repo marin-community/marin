@@ -1775,7 +1775,7 @@ def grouped_expert_bank_consumer_step_factory(config: BenchConfig):
     return update_step
 
 
-def grouped_moe_mlp_consumer_outputs(config: BenchConfig, grouped_params, routed_inputs):
+def grouped_moe_mlp_consumer_outputs(mesh: Mesh, config: BenchConfig, grouped_params, routed_inputs):
     """Run the public grouped MoE helper over grouped expert-bank weights."""
     output_blocks = []
     implementation = "ring" if config.expert_axis > 1 else "scatter"
@@ -1793,16 +1793,17 @@ def grouped_moe_mlp_consumer_outputs(config: BenchConfig, grouped_params, routed
                         expert_mlp["w_down"],
                         valid_group_size=valid_group_size,
                         implementation=implementation,
+                        mesh=mesh,
                     )
                 }
             )
     return {"blocks": tuple(output_blocks)}
 
 
-def grouped_moe_mlp_consumer_step_factory(config: BenchConfig):
+def grouped_moe_mlp_consumer_step_factory(mesh: Mesh, config: BenchConfig):
     def update_step(grouped_params, routed_inputs):
         with jax.named_scope("muon_update_bench/expert_grouped_moe_mlp_consumer_step"):
-            return grouped_moe_mlp_consumer_outputs(config, grouped_params, routed_inputs)
+            return grouped_moe_mlp_consumer_outputs(mesh, config, grouped_params, routed_inputs)
 
     return update_step
 
@@ -3699,7 +3700,7 @@ def lower_ns4d(
         if bench_kind == EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH:
             grouped_specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
             activation_specs = synthetic_grouped_moe_mlp_consumer_input_specs(mesh, config, bench_kind)
-            update_step = jax.jit(grouped_moe_mlp_consumer_step_factory(config))
+            update_step = jax.jit(grouped_moe_mlp_consumer_step_factory(mesh, config))
             with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
                 result_specs = jax.eval_shape(update_step, grouped_specs, activation_specs)
                 lowered = update_step.lower(grouped_specs, activation_specs)
@@ -4177,7 +4178,7 @@ def time_ns4d(
         if ns4d_bench_uses_grouped_params(bench_kind):
             if bench_kind == EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH:
                 params = make_grouped_expert_array_tree(mesh, config, bench_kind, seed=0)
-                update_step = jax.jit(grouped_moe_mlp_consumer_step_factory(config))
+                update_step = jax.jit(grouped_moe_mlp_consumer_step_factory(mesh, config))
                 lower_args = (params, updates)
             elif bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH:
                 params = make_grouped_expert_array_tree(mesh, config, bench_kind, seed=0)
