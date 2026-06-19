@@ -204,8 +204,8 @@ def test_child_explicit_region_overrides_parent_worker_region(capturing_client, 
 
 
 def test_child_any_region_marker_suppresses_inherited_worker_region(capturing_client, parent_context):
-    """The ANY marker opts a child out of inheriting the parent worker's region: no region
-    constraint is sent (the marker suppresses inheritance and is then stripped before the wire)."""
+    """A child carrying the ANY marker submits with no region constraint, even when the
+    parent worker has a region to inherit."""
     client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
@@ -221,8 +221,8 @@ def test_child_any_region_marker_suppresses_inherited_worker_region(capturing_cl
 
 
 def test_child_any_region_marker_clears_inherited_region_constraint(capturing_client, parent_context):
-    """A child's ANY marker clears a parent's pinned region (via merge) and is then stripped,
-    so the child submits with no region constraint at all."""
+    """A child carrying the ANY marker submits with no region constraint, even when the
+    parent job is pinned to a region."""
     client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")

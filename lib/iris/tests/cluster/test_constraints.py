@@ -139,11 +139,8 @@ def test_merge_non_canonical_key_appends():
 
 
 def test_merge_child_any_region_clears_parent_pin():
-    """A child's ANY marker replaces a parent's pinned region (canonical-key override).
-
-    This is the mechanism by which an ANY child clears an inherited region pin in
-    IrisClient.submit before the marker itself is stripped.
-    """
+    """Merging a child's ANY marker over a parent's pinned region yields a single
+    region-EXISTS constraint (canonical-key override)."""
     parent = [region_constraint(["us-central1"])]
     child = [any_region_constraint()]
     merged = merge_constraints(parent, child)
