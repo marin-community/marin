@@ -488,7 +488,7 @@ class ControllerDashboard:
         # transparently because self._log_service is a LogServiceProxy whose
         # push_logs() calls the remote LogService over RPC.
         # Cap concurrent FetchLogs RPCs to avoid evicting the page cache with
-        # parallel DuckDB scans. See duckdb_store.py for working-set caps.
+        # parallel log-segment scans against the finelog store.
         log_interceptors = [auth_interceptor, log_timing, ConcurrencyLimitInterceptor({"FetchLogs": 4})]
         log_app = LogServiceASGIApplication(
             service=self._log_service, interceptors=log_interceptors, compressions=IRIS_RPC_COMPRESSIONS
