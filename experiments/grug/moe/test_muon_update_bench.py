@@ -45,6 +45,7 @@ from experiments.grug.moe.muon_update_bench import (
     ORDINARY_2D_GROUPED_RESTORE_SPLIT_BENCH,
     ORDINARY_2D_GROUPED_STACK_NS_BENCH,
     ORDINARY_2D_MUONH_OPTIMIZER_APPLY_BENCH,
+    REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     BenchConfig,
     _stacked_2d_target,
     assert_expert_ep_sharding,
@@ -57,6 +58,7 @@ from experiments.grug.moe.muon_update_bench import (
     build_full_production_muonh_optimizer,
     build_grouped_expert_productionish_optimizer,
     build_ordinary_2d_muonh_optimizer,
+    build_real_expert_fsdp_grouped_muonh_optimizer,
     create_mesh,
     estimate_grouped_2d_muonh,
     estimate_grouping,
@@ -101,6 +103,7 @@ from experiments.grug.moe.muon_update_bench import (
     ordinary_2d_grouped_persistent_apply_timing_step_factory,
     ordinary_2d_muonh_optimizer_apply_step_factory,
     persistent_grouped_2d_metadata_from_specs,
+    real_expert_fsdp_grouped_muonh_optimizer_apply_step_factory,
     summarize_hlo,
     summary_row,
     synthetic_fsdp_expert_specs,
@@ -944,6 +947,55 @@ def test_expert_fsdp_grouped_muonh_restores_ordinary_expert_updates_before_apply
     assert hlo_summary.all_to_all == 0
     assert hlo_summary.all_gather + hlo_summary.reduce_scatter <= 8
     assert estimated_matrix_count(config, EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH) == layers * 16
+
+
+def test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = synthetic_fsdp_expert_specs(mesh, config)
+    grads = synthetic_fsdp_expert_specs(mesh, config)
+    optimizer = build_real_expert_fsdp_grouped_muonh_optimizer(config)
+    update_step = jax.jit(real_expert_fsdp_grouped_muonh_optimizer_apply_step_factory(config))
+
+    assert ns4d_compute_sharding(mesh, config, REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH).spec == P(
+        ("replica_dcn", "data"),
+        "expert",
+        None,
+        None,
+    )
+    assert_expert_fsdp_sharding(params, "real grouped MuonH expert FSDP params")
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        state = jax.eval_shape(optimizer.init, params)
+        result, _next_state = jax.eval_shape(update_step, params, grads, state)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(params, grads, state).lower(lowering_platforms=(platform,))
+
+    assert_expert_fsdp_sharding(result, "real grouped MuonH expert FSDP apply result")
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.two_batch_axis_dot_general == 6
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert estimated_matrix_count(config, REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH) == 4 * 16
 
 
 def test_expert_fsdp_grouped_apply_boundary_restores_ordinary_expert_updates_before_apply():
