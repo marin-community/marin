@@ -98,7 +98,7 @@ import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
 from fray.current_client import current_client
 from fray.iris_backend import FrayIrisClient
-from fray.types import TpuConfig
+from fray.types import ANY_REGION, TpuConfig
 from iris.cluster.constraints import WellKnownAttribute
 from iris.rpc import config_pb2
 from rigging.filesystem import (
@@ -581,7 +581,14 @@ def _maybe_attach_inferred_region_constraint(
         return remote_fn
 
     if allowed_regions is None:
-        return remote_fn
+        # No GCS region to infer and no DAG-forced region: the step has no
+        # data-locality reason to run in any particular region. Mark it ANY so it
+        # runs region-flexibly instead of silently inheriting the coordinator (or
+        # parent job's) incidental region via Iris worker-region propagation.
+        return dataclasses.replace(
+            remote_fn,
+            resources=dataclasses.replace(remote_fn.resources, regions=[ANY_REGION]),
+        )
 
     logger.info(
         "Inferred Iris region constraints %s for executor step %s from GCS path dependencies",

@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from fray import ResourceConfig
+from fray import ANY_REGION, ResourceConfig
 from levanter.adaptor import LoraAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import DatasetComponent, PreferenceChatLmDatasetFormat, PreferenceLmDataConfig
@@ -26,6 +26,7 @@ from marin.training.training import (
     temporary_checkpoint_base_path,
 )
 
+import experiments.defaults as defaults
 from experiments.defaults import default_dpo
 from experiments.llama import llama_8b
 from experiments.simple_dpo_config import SimpleDPOConfig
@@ -372,3 +373,55 @@ def test_default_dpo_attaches_lm_validation_sets():
     assert lm_validation_data.train_weights is not None
     assert all(weight == 0.0 for weight in lm_validation_data.train_weights.values())
     assert step.config.train_config.lm_validation_prefix == "lm_eval"
+
+
+class _CaptureClient:
+    """Fray client stub that records the submitted JobRequest."""
+
+    def __init__(self):
+        self.request = None
+
+    def submit(self, request):
+        self.request = request
+        return _CaptureHandle()
+
+
+class _CaptureHandle:
+    def wait(self, **kwargs):
+        return None
+
+
+def test_submit_train_job_defaults_regions_to_any():
+    # Direct-submit training bakes its paths on the worker (resolve_lm_train_config),
+    # so it must be region-flexible. With no region set, it submits ANY rather than
+    # inheriting the coordinator's region.
+    client = _CaptureClient()
+    with (
+        patch("experiments.defaults.current_client", return_value=client),
+        patch("experiments.defaults.resolve_training_env", return_value={}),
+    ):
+        defaults._submit_train_job(
+            name="train/x",
+            entrypoint_callable=lambda: None,
+            args=[],
+            resources=ResourceConfig.with_tpu("v5p-8"),
+            env_vars=None,
+        )
+    assert client.request.resources.regions == [ANY_REGION]
+
+
+def test_submit_train_job_keeps_explicit_region_pin():
+    # An explicit pin (e.g. from --region) must survive: it is not replaced by ANY.
+    client = _CaptureClient()
+    with (
+        patch("experiments.defaults.current_client", return_value=client),
+        patch("experiments.defaults.resolve_training_env", return_value={}),
+    ):
+        defaults._submit_train_job(
+            name="train/x",
+            entrypoint_callable=lambda: None,
+            args=[],
+            resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central2"]),
+            env_vars=None,
+        )
+    assert client.request.resources.regions == ["us-central2"]

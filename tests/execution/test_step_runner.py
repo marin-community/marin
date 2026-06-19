@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 from fray.current_client import current_client, set_current_client
-from fray.types import ResourceConfig
+from fray.types import ANY_REGION, ResourceConfig
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact, PathMetadata
@@ -1038,6 +1038,23 @@ def test_resolve_executor_step_uses_dag_tpu_regions_without_gcs_inputs(iris_acti
     assert resolved.fn.resources.regions == ["us-central2", "us-west4"]
 
 
+def test_resolve_executor_step_marks_any_without_inferable_region(iris_active, remote_step):
+    """A region-unpinned step with no inferable region runs ANY, not the parent's region.
+
+    With no GCS region to infer (local-only paths) and no TPU-DAG region, leaving the
+    step region-unset would let Iris pin it to the coordinator/parent job's incidental
+    region. The executor instead marks it ANY so it runs region-flexibly.
+    """
+    resolved = resolve_executor_step(
+        remote_step,
+        config={"local_only": "/tmp/foo"},
+        output_path="/out/test-abc",
+    )
+
+    assert isinstance(resolved.fn, RemoteCallable)
+    assert resolved.fn.resources.regions == [ANY_REGION]
+
+
 def test_resolve_executor_step_intersects_gcs_and_dag_tpu_regions(iris_active, remote_step):
     resolved = resolve_executor_step(
         remote_step,
@@ -1089,8 +1106,10 @@ def test_resolve_executor_step_skips_bucket_location_permission_failures(iris_ac
             output_path="/out/test-abc",
         )
 
+    # The bucket's region is unreadable, so none is inferred — the step runs ANY
+    # rather than inheriting the parent's region.
     assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources.regions is None
+    assert resolved.fn.resources.regions == [ANY_REGION]
 
 
 def _make_executor_for_steps(

@@ -15,7 +15,7 @@ from typing import Any
 
 import jmp
 import levanter.main.train_lm as levanter_train_lm
-from fray import ResourceConfig, current_client
+from fray import ANY_REGION, ResourceConfig, current_client
 from fray.types import Entrypoint, JobRequest, create_environment
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
@@ -395,6 +395,13 @@ def _submit_train_job(
     """
     resolved_env_vars = dict(env_vars or {})
     env = resolve_training_env(resolved_env_vars, resources)
+
+    # Training bakes its output paths on the worker under the worker's own region
+    # (see resolve_lm_train_config), so it is region-flexible by design. Default to
+    # ANY so that, when launched from a coordinator job, it is not silently pinned to
+    # the coordinator's incidental region; an explicit pin (e.g. --region) is kept.
+    if resources.regions is None:
+        resources = dataclasses.replace(resources, regions=[ANY_REGION])
 
     job_request = JobRequest(
         name=_sanitize_job_name(name),
