@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "lib/iris/**"
+      - "scripts/workflows/iris_monitor.py"
+      - ".github/workflows/iris-smoke-gcp.yaml"
   workflow_dispatch:
 
 permissions:
@@ -17,7 +19,11 @@ concurrency:
 
 jobs:
   cloud-smoke-test:
-    # Run on: PRs touching lib/iris/**, or manual dispatch
+    # Run on: same-repo PRs touching lib/iris/**, or manual dispatch.
+    # Fork PRs can't read secrets.IRIS_CI_GCP_SA_KEY, so skip them (mirrors iris-smoke-coreweave).
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
