@@ -130,6 +130,129 @@ class MoEExpertMlp(eqx.Module):
         )
 
 
+class GroupedMoEExpertMlp(eqx.Module):
+    """Grouped expert MLP weight bank for several adjacent MoE layers.
+
+    `layer()` exists for correctness checks and incremental migration. The hot
+    path should call the grouped module directly so the group axis can remain
+    visible to the compiler and optimizer.
+    """
+
+    w_gate_up: jax.Array
+    w_down: jax.Array
+    implementation: MoeImplementation = eqx.field(static=True)
+    activation: MoeActivation = eqx.field(static=True)
+    capacity_factor: float = eqx.field(static=True)
+    remat_mode: MoERematMode = eqx.field(static=True)
+    valid_group_size: int = eqx.field(static=True)
+
+    def layer(self, local_layer_index: int) -> MoEExpertMlp:
+        if local_layer_index < 0 or local_layer_index >= self.valid_group_size:
+            raise IndexError(f"local_layer_index={local_layer_index} must be in [0, {self.valid_group_size})")
+        return MoEExpertMlp(
+            w_gate_up=self.w_gate_up[local_layer_index],
+            w_down=self.w_down[local_layer_index],
+            implementation=self.implementation,
+            activation=self.activation,
+            capacity_factor=self.capacity_factor,
+            remat_mode=self.remat_mode,
+        )
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "G T D"],
+        selected_experts: Int[Array, "G T K"],
+        combine_weights: Float[Array, "G T K"],
+        *,
+        mesh: jax.sharding.AbstractMesh | None = None,
+        report_capacity_overflow: bool = False,
+    ) -> Float[Array, "G T D"] | tuple[Float[Array, "G T D"], Int[Array, "G"]]:
+        return grouped_moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            self.w_gate_up,
+            self.w_down,
+            valid_group_size=self.valid_group_size,
+            activation=self.activation,
+            implementation=self.implementation,
+            mesh=mesh,
+            capacity_factor=self.capacity_factor,
+            remat_mode=self.remat_mode,
+            report_capacity_overflow=report_capacity_overflow,
+        )
+
+
+@named_call
+def grouped_moe_mlp(
+    x: Float[Array, "G T D"],
+    selected_experts: Int[Array, "G T K"],
+    combine_weights: Float[Array, "G T K"],
+    w_up_gate: Float[Array, "G E D I2"],
+    w_down: Float[Array, "G E I D"],
+    *,
+    valid_group_size: int | None = None,
+    activation: MoeActivation = ActivationFunctionEnum.silu,
+    implementation: MoeImplementation | str | None = None,
+    mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+    remat_mode: MoERematMode | str = "none",
+    report_capacity_overflow: bool = False,
+) -> Float[Array, "G T D"] | tuple[Float[Array, "G T D"], Int[Array, "G"]]:
+    """Run routed MoE over a grouped bank of per-layer expert weights."""
+    if x.ndim != 3:
+        raise ValueError(f"x must be rank-3 [G, T, D], got shape={x.shape}")
+    if selected_experts.ndim != 3:
+        raise ValueError(f"selected_experts must be rank-3 [G, T, K], got shape={selected_experts.shape}")
+    if combine_weights.shape != selected_experts.shape:
+        raise ValueError(
+            "selected_experts and combine_weights must have identical [G, T, K] shapes; "
+            f"got {selected_experts.shape} vs {combine_weights.shape}"
+        )
+    if w_up_gate.ndim != 4:
+        raise ValueError(f"w_up_gate must be rank-4 [G, E, D, I2], got shape={w_up_gate.shape}")
+    if w_down.ndim != 4:
+        raise ValueError(f"w_down must be rank-4 [G, E, I, D], got shape={w_down.shape}")
+
+    group_size = x.shape[0]
+    if selected_experts.shape[0] != group_size or w_up_gate.shape[0] != group_size or w_down.shape[0] != group_size:
+        raise ValueError(
+            "x, selected_experts, w_up_gate, and w_down must share the same group dimension; "
+            f"got {x.shape[0]}, {selected_experts.shape[0]}, {w_up_gate.shape[0]}, {w_down.shape[0]}"
+        )
+    if valid_group_size is None:
+        valid_group_size = group_size
+    if valid_group_size < 1 or valid_group_size > group_size:
+        raise ValueError(f"valid_group_size must be in [1, {group_size}], got {valid_group_size}")
+
+    def run_one(x_one, selected_one, combine_one, w_up_gate_one, w_down_one):
+        return moe_mlp(
+            x_one,
+            selected_one,
+            combine_one,
+            w_up_gate_one,
+            w_down_one,
+            activation=activation,
+            implementation=implementation,
+            mesh=mesh,
+            capacity_factor=capacity_factor,
+            remat_mode=remat_mode,
+            report_capacity_overflow=report_capacity_overflow,
+        )
+
+    result = jax.vmap(run_one)(x, selected_experts, combine_weights, w_up_gate, w_down)
+    if valid_group_size == group_size:
+        return result
+
+    if report_capacity_overflow:
+        out, dropped = result
+        out = jnp.where(jnp.arange(group_size)[:, None, None] < valid_group_size, out, jnp.zeros_like(out))
+        dropped = jnp.where(jnp.arange(group_size) < valid_group_size, dropped, jnp.zeros_like(dropped))
+        return out, dropped
+    return jnp.where(jnp.arange(group_size)[:, None, None] < valid_group_size, result, jnp.zeros_like(result))
+
+
 @named_call
 def moe_mlp(
     x: Float[Array, "T D"],
@@ -299,11 +422,13 @@ def moe_mlp(
 
 
 __all__ = [
+    "GroupedMoEExpertMlp",
     "MoeActivation",
     "MoEExpertMlp",
     "MoEExpertMlpPspecs",
     "MoeImplementation",
     "PspecAxis",
+    "grouped_moe_mlp",
     "moe_mlp",
     "resolve_moe_implementation",
     "split_moe_w13_output",

@@ -17,12 +17,14 @@ from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispat
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
+    GroupedMoEExpertMlp,
     MoEExpertMlp,
     MoEExpertMlpPspecs,
     MoeImplementation,
     _compact_by_keep_mask,
     _expand_from_keep_mask,
     _shard_a2a_params,
+    grouped_moe_mlp,
     moe_mlp,
 )
 from levanter.utils.activation import ActivationFunctionEnum
@@ -170,6 +172,148 @@ def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
     y_default = moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down, mesh=None)
     y_ring = moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down, implementation="ring", mesh=None)
     np.testing.assert_allclose(np.asarray(y_default), np.asarray(y_ring), rtol=1e-5, atol=1e-5)
+
+
+def test_grouped_moe_mlp_matches_per_layer_moe_mlp_without_ep_axis():
+    group_size = 3
+    tokens = 12
+    hidden_dim = 16
+    intermediate_dim = 24
+    num_experts = 4
+    topk = 2
+    keys = jax.random.split(jax.random.key(81), group_size)
+    grouped_inputs = [
+        _make_inputs(
+            key=key,
+            tokens=tokens,
+            hidden_dim=hidden_dim,
+            intermediate_dim=intermediate_dim,
+            num_experts=num_experts,
+            topk=topk,
+        )
+        for key in keys
+    ]
+    x = jnp.stack([inputs[0] for inputs in grouped_inputs], axis=0)
+    selected_experts = jnp.stack([inputs[1] for inputs in grouped_inputs], axis=0)
+    combine_weights = jnp.stack([inputs[2] for inputs in grouped_inputs], axis=0)
+    w_up_gate = jnp.stack([inputs[3] for inputs in grouped_inputs], axis=0)
+    w_down = jnp.stack([inputs[4] for inputs in grouped_inputs], axis=0)
+
+    grouped_out = grouped_moe_mlp(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        activation=ActivationFunctionEnum.silu,
+        implementation="scatter",
+        mesh=None,
+    )
+    loop_out = jnp.stack(
+        [
+            moe_mlp(
+                x[i],
+                selected_experts[i],
+                combine_weights[i],
+                w_up_gate[i],
+                w_down[i],
+                activation=ActivationFunctionEnum.silu,
+                implementation="scatter",
+                mesh=None,
+            )
+            for i in range(group_size)
+        ],
+        axis=0,
+    )
+
+    np.testing.assert_allclose(np.asarray(grouped_out), np.asarray(loop_out), rtol=1e-5, atol=1e-5)
+
+
+def test_grouped_moe_expert_mlp_layer_view_matches_grouped_call():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(82),
+        tokens=10,
+        hidden_dim=16,
+        intermediate_dim=24,
+        num_experts=4,
+        topk=2,
+    )
+    grouped_mlp = GroupedMoEExpertMlp(
+        w_gate_up=jnp.stack([w_up_gate, w_up_gate * 1.5], axis=0),
+        w_down=jnp.stack([w_down, w_down * 0.5], axis=0),
+        implementation="scatter",
+        activation=ActivationFunctionEnum.silu,
+        capacity_factor=1.25,
+        remat_mode="none",
+        valid_group_size=2,
+    )
+    x_group = jnp.stack([x, x * 0.25], axis=0)
+    selected_group = jnp.stack([selected_experts, selected_experts], axis=0)
+    weights_group = jnp.stack([combine_weights, combine_weights], axis=0)
+
+    grouped_out = grouped_mlp(x_group, selected_group, weights_group, mesh=None)
+    layer_out = grouped_mlp.layer(1)(x_group[1], selected_group[1], weights_group[1], mesh=None)
+
+    np.testing.assert_allclose(np.asarray(grouped_out[1]), np.asarray(layer_out), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
+def test_grouped_moe_mlp_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
+    mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
+
+    group_size = 2
+    tokens = 16
+    hidden_dim = 32
+    intermediate_dim = 64
+    num_experts = 4
+    topk = 2
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        x = jax.ShapeDtypeStruct(
+            shape=(group_size, tokens, hidden_dim),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P(None, ("data", "expert"), None)),
+        )
+        selected_experts = jax.ShapeDtypeStruct(
+            shape=(group_size, tokens, topk),
+            dtype=jnp.int32,
+            sharding=NamedSharding(mesh, P(None, ("data", "expert"), None)),
+        )
+        combine_weights = jax.ShapeDtypeStruct(
+            shape=(group_size, tokens, topk),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P(None, ("data", "expert"), None)),
+        )
+        w_up_gate = jax.ShapeDtypeStruct(
+            shape=(group_size, num_experts, hidden_dim, 2 * intermediate_dim),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P(None, "expert", None, None)),
+        )
+        w_down = jax.ShapeDtypeStruct(
+            shape=(group_size, num_experts, intermediate_dim, hidden_dim),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P(None, "expert", None, None)),
+        )
+
+        def f(x, sel, cw, up_gate, down):
+            return grouped_moe_mlp(
+                x,
+                sel,
+                cw,
+                up_gate,
+                down,
+                activation=ActivationFunctionEnum.silu,
+                implementation=implementation,
+                mesh=mesh,
+            )
+
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = (
+            jax.jit(f)
+            .trace(x, selected_experts, combine_weights, w_up_gate, w_down)
+            .lower(lowering_platforms=(platform,))
+        )
+        assert lowered is not None
 
 
 def test_deepep_local_assignment_packing_uses_local_expert_ids():
