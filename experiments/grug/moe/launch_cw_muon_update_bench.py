@@ -68,6 +68,7 @@ class MuonUpdateBenchLaunchConfig:
     warmup: int = 1
     iters: int = 3
     grouped_expert_consumer_tokens_per_expert: int = 1
+    grouped_expert_consumer_chunk_tokens: int = 0
     bench_kinds: tuple[str, ...] = (MUONH_UPDATE_BENCH,)
     mode: str = "both"
     compile_only: bool = False
@@ -146,6 +147,7 @@ def _bench_configs(config: MuonUpdateBenchLaunchConfig) -> list[BenchConfig]:
             learning_rate=config.learning_rate,
             ns_compute_dtype=config.ns_compute_dtype,
             grouped_expert_consumer_tokens_per_expert=config.grouped_expert_consumer_tokens_per_expert,
+            grouped_expert_consumer_chunk_tokens=config.grouped_expert_consumer_chunk_tokens,
         )
         for backend_steps in config.sweep_backend_steps
         for max_grouped_stack_size in config.sweep_max_grouped_stack_sizes
@@ -279,6 +281,7 @@ def build_step() -> ExecutorStep:
         warmup=env_int("MUON_BENCH_WARMUP", 1),
         iters=env_int("MUON_BENCH_ITERS", 3),
         grouped_expert_consumer_tokens_per_expert=env_int("MUON_BENCH_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT", 1),
+        grouped_expert_consumer_chunk_tokens=env_int("MUON_BENCH_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS", 0),
         bench_kinds=env_str_csv("MUON_BENCH_KINDS", (MUONH_UPDATE_BENCH,)),
         mode=os.environ.get("MUON_BENCH_MODE", "both"),
         compile_only=env_bool("MUON_BENCH_COMPILE_ONLY", False),

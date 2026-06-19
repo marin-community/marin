@@ -259,6 +259,7 @@ GROUPED_EXPERT_PATHS = (
     "blocks[*].mlp.expert_mlp.w_down",
 )
 DEFAULT_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT = 1
+DEFAULT_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS = 0
 FULL_PRODUCTION_MUONH_PATHS = (
     "ordinary_blocks[*].attn.w_q",
     "ordinary_blocks[*].attn.w_k",
@@ -311,6 +312,7 @@ class BenchConfig:
     learning_rate: float
     ns_compute_dtype: str = "input"
     grouped_expert_consumer_tokens_per_expert: int = DEFAULT_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT
+    grouped_expert_consumer_chunk_tokens: int = DEFAULT_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS
 
 
 @dataclass(frozen=True)
@@ -1782,21 +1784,30 @@ def grouped_moe_mlp_consumer_outputs(mesh: Mesh, config: BenchConfig, grouped_pa
     for group_index, valid_group_size in enumerate(grouped_expert_group_sizes(config)):
         expert_mlp = grouped_params["blocks"][group_index]["mlp"]["expert_mlp"]
         block_inputs = routed_inputs["blocks"][group_index]
-        with jax.named_scope("muon_update_bench/expert_grouped_moe_mlp_consumer"):
-            output_blocks.append(
-                {
-                    "x": grouped_moe_mlp(
-                        block_inputs["x"],
-                        block_inputs["selected_experts"],
-                        block_inputs["combine_weights"],
+        total_tokens = block_inputs["x"].shape[1]
+        chunk_tokens = config.grouped_expert_consumer_chunk_tokens or total_tokens
+        if total_tokens % chunk_tokens != 0:
+            raise ValueError(
+                f"grouped_moe_mlp_consumer tokens={total_tokens} must be divisible by chunk_tokens={chunk_tokens}."
+            )
+        block_outputs = []
+        for chunk_start in range(0, total_tokens, chunk_tokens):
+            chunk_stop = chunk_start + chunk_tokens
+            with jax.named_scope("muon_update_bench/expert_grouped_moe_mlp_consumer/chunk"):
+                block_outputs.append(
+                    grouped_moe_mlp(
+                        block_inputs["x"][:, chunk_start:chunk_stop],
+                        block_inputs["selected_experts"][:, chunk_start:chunk_stop],
+                        block_inputs["combine_weights"][:, chunk_start:chunk_stop],
                         expert_mlp["w_gate_up"],
                         expert_mlp["w_down"],
                         valid_group_size=valid_group_size,
                         implementation=implementation,
                         mesh=mesh,
                     )
-                }
-            )
+                )
+        with jax.named_scope("muon_update_bench/expert_grouped_moe_mlp_consumer/concat_chunks"):
+            output_blocks.append({"x": jnp.concatenate(block_outputs, axis=1)})
     return {"blocks": tuple(output_blocks)}
 
 
@@ -4711,8 +4722,17 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT,
         help=(
-            "Synthetic routed-token load for expert_grouped_bank_consumer. "
-            "This controls the [group, expert, token, hidden] activation shape."
+            "Synthetic routed-token load for grouped expert consumer benches. "
+            "For expert_grouped_moe_mlp_consumer this produces num_experts * tokens_per_expert routed tokens."
+        ),
+    )
+    parser.add_argument(
+        "--grouped-expert-consumer-chunk-tokens",
+        type=int,
+        default=DEFAULT_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS,
+        help=(
+            "Token-axis chunk size for expert_grouped_moe_mlp_consumer. "
+            "Use 0 to consume all routed tokens in one call."
         ),
     )
     parser.add_argument(
@@ -4767,6 +4787,8 @@ def config_from_args(args: argparse.Namespace) -> BenchConfig:
     input_dtype = dtype_from_name(args.dtype)
     if args.grouped_expert_consumer_tokens_per_expert < 1:
         raise ValueError("--grouped-expert-consumer-tokens-per-expert must be >= 1.")
+    if args.grouped_expert_consumer_chunk_tokens < 0:
+        raise ValueError("--grouped-expert-consumer-chunk-tokens must be >= 0.")
     return BenchConfig(
         layers=args.layers,
         ns4d_group_size=args.ns4d_group_size,
@@ -4785,6 +4807,7 @@ def config_from_args(args: argparse.Namespace) -> BenchConfig:
         learning_rate=args.learning_rate,
         ns_compute_dtype=ns_compute_dtype_name(args.ns_compute_dtype, input_dtype),
         grouped_expert_consumer_tokens_per_expert=args.grouped_expert_consumer_tokens_per_expert,
+        grouped_expert_consumer_chunk_tokens=args.grouped_expert_consumer_chunk_tokens,
     )
 
 
@@ -5042,6 +5065,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "backend_steps": config["backend_steps"],
         "max_grouped_stack_size": config["max_grouped_stack_size"],
         "grouped_expert_consumer_tokens_per_expert": config["grouped_expert_consumer_tokens_per_expert"],
+        "grouped_expert_consumer_chunk_tokens": config["grouped_expert_consumer_chunk_tokens"],
         "ns4d_group_size": result["metadata"]["ns4d_group_size"],
         "ns4d_padded_group_size": result["metadata"]["ns4d_padded_group_size"],
         "ns4d_input_sharding_spec": result["metadata"]["ns4d_input_sharding_spec"],
