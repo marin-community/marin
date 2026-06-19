@@ -829,3 +829,25 @@ Restore-only is only about 4.4 ms faster by median runtime. Both paths compile t
 Earlier gather-first production path (`/dlwh/iris-run-job-20260619-165623`) was about 1.127s for update and 1.073-1.077s for apply with compiled `AG=112`, `A2A=392`. The data-first production integration is therefore a real improvement, but the compiled all-to-all count is unchanged and the path is still far from the speed target.
 - Interpretation: Data-first ordering helps in the real optimizer path, but it does not solve the production blocker. The production update/apply path still combines grouped NS work with a grouped-to-FSDP restore that XLA GPU expands into hundreds of compiled collectives (`A2A=392`). The boundary-only data-first microbench remains much cheaper (~0.214-0.218s), so the real path still has substantial NS plus restore interaction cost.
 - Next action: Keep `2a6c26dc3` as the best current FSDP-master production checkpoint, but do not call the objective solved. The next attempt should force a more direct grouped-to-FSDP permutation with a lower-level/custom communication boundary, or avoid the hot restore by changing the model-facing grouped expert representation.
+
+### 2026-06-19 12:45 PDT - data-axis ppermute bridge removes A2A but only slightly improves timing
+- Hypothesis: The remaining expensive collective in the data-first grouped-to-FSDP bridge is the data-axis all-to-all. For the R2/D2 probe, replacing that data all-to-all with an explicit point-to-point exchange over `data` should produce the same logical target `P(('replica_dcn', 'data'), 'expert', None, None) -> P(None, 'expert', 'data', None)` while avoiding compiled all-to-all decomposition.
+- Command:
+  - Code change: added `expert_fsdp_grouped_explicit_data_ppermute_restore_boundary` and `expert_fsdp_grouped_explicit_data_ppermute_apply_boundary` to `experiments/grug/moe/muon_update_bench.py`, plus focused tests in `experiments/grug/moe/test_muon_update_bench.py`. Commit `7e79e96b0` pushed to `codex/research-grug-moe-d2560-mfu`.
+  - Validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -q` -> 61 passed; `./infra/pre-commit.py --files experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py .agents/logbooks/grug-moe-muon-gpu.md --fix` -> OK.
+  - Local forced-CPU lower-only comparison:
+    `XLA_FLAGS=--xla_force_host_platform_device_count=32 uv run python experiments/grug/moe/muon_update_bench.py --layers 26 --ns4d-group-size 4 --ns4d-group-axis replica_dcn,data --hidden-dim 2560 --intermediate-dim 1280 --num-experts 256 --replica-axis 2 --data-axis 2 --expert-axis 8 --model-axis 1 --bench-kinds expert_fsdp_grouped_explicit_data_first_a2a_restore_boundary,expert_fsdp_grouped_explicit_data_ppermute_restore_boundary,expert_fsdp_grouped_explicit_data_ppermute_apply_boundary --mode lower --warmup 0 --iters 1 --disable-abstract-mesh --output /tmp/muon_data_ppermute_l26_lower.json`.
+  - CoreWeave run: parent `/dlwh/iris-run-job-20260619-183654`; child `/dlwh/iris-run-job-20260619-183654/grug-train-MUON-BENCH-D2560-L26-R2D2E8-DATAPPERM-H1-G4-N4-cw-20260619-183652`.
+  - Output: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D2E8-DATAPPERM-H1-G4-N4-cw-20260619-183652-fb6579/summary.json`.
+- Result:
+
+| boundary | lowered AG/A2A/CP | compiled AG/A2A/CP | compiled GEMMs | median | mean |
+| --- | --- | --- | ---: | ---: | ---: |
+| data-first A2A restore-only | 14/14/0 | 150/98/0 | 14 | 0.213894s | 0.213827s |
+| data-first A2A restore-plus-apply | 14/14/0 | 150/98/0 | 14 | 0.218617s | 0.218668s |
+| data-ppermute restore-only | 14/0/14 | 150/0/112 | 0 | 0.210878s | 0.217079s |
+| data-ppermute restore-plus-apply | 14/0/14 | 150/0/112 | 0 | 0.213311s | 0.212720s |
+
+The ppermute bridge removes compiled all-to-alls entirely and also eliminates the GEMM custom calls introduced by the A2A bridge. Median timing improves only slightly: restore-only is 1.014x faster and restore-plus-apply is 1.025x faster than data-first A2A.
+- Interpretation: The ppermute bridge confirms that the semantic target is expressible and that the data-axis A2A can be replaced by explicit point-to-point exchange. It is not enough for the production objective: the all-to-all disappears, but XLA GPU still compiles 112 collective permutes plus 150 all-gathers, so runtime barely moves. This points away from another JAX-level bridge tweak and toward either a lower-level fused/custom grouped-to-FSDP permutation or avoiding the grouped-to-FSDP hot boundary entirely.
+- Next action: Do not integrate the data-ppermute bridge into production yet. The next useful experiment should test a genuinely custom grouped-to-FSDP transfer that preserves the packed/grouped representation and avoids both compiled A2A and hundreds of CP/AG calls, or resume the grouped-bank model-facing representation path.
