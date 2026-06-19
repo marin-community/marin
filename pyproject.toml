@@ -188,10 +188,10 @@ line-length = 121
 target-version = "py312"
 
 # Note :: Grow more strict over time!
-# Most of `scripts/**` is excluded until cleaned up, but `scripts/workflows/**`
-# is CI infrastructure and stays under ruff.
+# Most of `scripts/**` is excluded until cleaned up, but `scripts/ci/**` holds
+# the scripts invoked directly by `.github/workflows` and stays under ruff.
 extend-exclude = ["scripts/"]
-extend-include = ["scripts/workflows/**/*.py"]
+extend-include = ["scripts/ci/**/*.py"]
 
 [tool.ruff.lint]
 # A,B,E,F,I,NPY,RUF,UP,W are the established families. The individually-listed
@@ -262,7 +262,7 @@ project-includes = [
     "lib/iris/scripts/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
-    "scripts/workflows",
+    "scripts/ci",
 ]
 
 # Explicitly tell Pyrefly where our editable packages live so it resolves imports
@@ -346,19 +346,13 @@ ignore-missing-imports = [
 # Exclude non-production code from type checking
 project-excludes = [
     "experiments/**",
-    "scripts/canary/**",
     "scripts/datakit/**",
     "scripts/debug/**",
     "scripts/ferries/**",
-    "scripts/gcs-reorganization/**",
-    "scripts/gpu_eval/**",
     "scripts/iris/**",
-    "scripts/migrations/**",
     "scripts/ops/**",
     "scripts/pm/**",
-    "scripts/ray/**",
     "scripts/speedrun/**",
-    "scripts/storage/**",
     "scripts/training/**",
     "scripts/*.py",
     "tests/**",

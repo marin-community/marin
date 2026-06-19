@@ -116,7 +116,7 @@ jobs:
         timeout-minutes: 300
         shell: bash -l {0}
         run: |
-          uv run python scripts/workflows/iris_monitor.py wait \
+          uv run python scripts/ci/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --poll-interval 30 \
@@ -139,7 +139,7 @@ jobs:
         # scans all marin-* regions, and us-central1 keeps the hit rate high.
         env:
           MARIN_PREFIX: gs://marin-us-central1
-        run: .venv/bin/python scripts/canary/validate_canary_metrics.py
+        run: .venv/bin/python scripts/ci/validate_canary_metrics.py
 
       - name: Summarize TPU canary profile
         continue-on-error: true
@@ -161,7 +161,7 @@ jobs:
           DIAG_DIR: ${{ github.workspace }}/canary-diagnostics
         run: |
           mkdir -p "$DIAG_DIR"
-          uv run python scripts/workflows/iris_monitor.py collect \
+          uv run python scripts/ci/iris_monitor.py collect \
             --job-id "$JOB_ID" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --provider gcp \
