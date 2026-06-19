@@ -23,10 +23,10 @@ def test_auxiliary_candidate_inventory_is_stable() -> None:
     assert len(aux.COMPONENTS) == 168
     assert aux.AUXILIARY_INDEX_START == len(aux._PRODUCTION_SWARM_CANDIDATES)
     assert aux.AUXILIARY_INDEX_START == 840
-    assert len(candidates) == 302
+    assert len(candidates) == 312
     assert candidates[0].index == 840
-    assert candidates[-1].index == 1141
-    assert [c.index for c in candidates] == list(range(840, 1142))
+    assert candidates[-1].index == 1151
+    assert [c.index for c in candidates] == list(range(840, 1152))
     assert len({c.candidate_name for c in candidates}) == len(candidates)
 
     assert Counter(c.candidate_type for c in candidates) == {
@@ -36,9 +36,28 @@ def test_auxiliary_candidate_inventory_is_stable() -> None:
         "partition_ablation": 168,
         "projected_controllability_plus": 64,
         "projected_controllability_minus": 64,
+        "proportional_noise": 10,
     }
+    assert aux.PROPORTIONAL_NOISE_REPEAT_COUNT == 10
     assert aux.MAX_CONCURRENT_AUXILIARY_STEPS == 240
     assert aux.MAX_CONCURRENT_AUXILIARY_STEPS <= aux.AUXILIARY_INDEX_START
+
+
+def test_proportional_noise_candidates_repeat_baseline_with_distinct_seeds() -> None:
+    baseline = aux.AUXILIARY_CANDIDATES[0]
+    noise = [candidate for candidate in aux.AUXILIARY_CANDIDATES if candidate.candidate_type == "proportional_noise"]
+
+    assert baseline.candidate_name == "baseline_proportional"
+    assert baseline.seed == 0
+    assert [candidate.index for candidate in noise] == list(range(1142, 1152))
+    assert [candidate.seed for candidate in noise] == list(range(1, 11))
+    assert [candidate.candidate_name for candidate in noise] == [f"prop_noise_seed_{seed:02d}" for seed in range(1, 11)]
+    assert len({candidate.seed for candidate in [*noise, baseline]}) == len(noise) + 1
+
+    for candidate in noise:
+        assert candidate.phase_0 == baseline.phase_0
+        assert candidate.phase_1 == baseline.phase_1
+        assert candidate.phase_0 == candidate.phase_1
 
 
 def test_auxiliary_weights_are_lattice_simplex_vectors() -> None:
@@ -131,6 +150,7 @@ def test_executor_steps_preserve_live_swarm_naming_and_region() -> None:
         assert step.config.run_id == f"swarm_fisher_dsp_{slug}"
         assert step.config.resources.value.device.variant == "v4-8"
         assert step.config.resources.value.zone == "us-central2-b"
+        assert step.config.seed.value == candidate.seed
         assert step.config.tracker.project == "marin_moe"
         assert step.config.tracker.group == "swarm_fisher_dsp_tau20_lam0p25_uscentral2"
         assert "auxiliary_perturbation" in step.config.tracker.tags

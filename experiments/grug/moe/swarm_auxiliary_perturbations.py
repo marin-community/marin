@@ -11,7 +11,8 @@ v4-8 resources:
 * proportional, uniform, and UniMax baselines;
 * one delete-and-renormalize ablation per live mixture bucket;
 * paired random central logit tilts around proportional for projected
-  controllability estimates.
+  controllability estimates;
+* repeated proportional rows with distinct seeds for the auxiliary noise floor.
 
 Rows are quantized to the same 1/65536 lattice used by the production-swarm
 mixture CSV. The training loader still uses ``_SWARM_BLOCK_SIZE=32768`` from
@@ -21,8 +22,8 @@ weights auditable while preserving the live executor semantics.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 
 import numpy as np
 from fray.cluster import ResourceConfig
@@ -33,12 +34,11 @@ from marin.execution.types import this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
 from experiments.defaults import default_validation_sets
-from experiments.grug.moe.datakit_moe_mix import COMPONENTS, PROPORTIONAL_WEIGHTS, TARGET_BUDGET, _TOKEN_COUNTS
+from experiments.grug.moe.datakit_moe_mix import _TOKEN_COUNTS, COMPONENTS, PROPORTIONAL_WEIGHTS, TARGET_BUDGET
 from experiments.grug.moe.grug_moe_mix import run_grug_moe_mix
+from experiments.grug.moe.launch import GrugMoeLaunchConfig
 from experiments.grug.moe.swarm_fisher_dsp import (
     _BATCH,
-    _BUDGET,
-    _CANDIDATES as _PRODUCTION_SWARM_CANDIDATES,
     _EXPERIMENT_BUDGET,
     _HIDDEN_DIM,
     _MODEL,
@@ -47,8 +47,10 @@ from experiments.grug.moe.swarm_fisher_dsp import (
     _STEPS,
     _SWARM_BLOCK_SIZE,
 )
+from experiments.grug.moe.swarm_fisher_dsp import (
+    _CANDIDATES as _PRODUCTION_SWARM_CANDIDATES,
+)
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
-from experiments.grug.moe.launch import GrugMoeLaunchConfig
 from experiments.marin_models import marin_tokenizer
 
 AUXILIARY_INDEX_START = len(_PRODUCTION_SWARM_CANDIDATES)
@@ -56,6 +58,8 @@ MIXTURE_QUANTUM_DENOMINATOR = 65536
 RANDOM_DIRECTION_COUNT = 64
 RANDOM_DIRECTION_SEED = 44
 LOGIT_TILT_ALPHA = 0.10
+PROPORTIONAL_NOISE_REPEAT_COUNT = 10
+PROPORTIONAL_NOISE_SEED_START = 1
 UNIMAX_EPOCH_CAPS: tuple[float, ...] = (1.0, 4.0, 8.0, 16.0)
 PHASE0_FRACTION = 0.8
 PHASE1_FRACTION = 0.2
@@ -74,6 +78,7 @@ class AuxiliaryCandidate:
     candidate_type: str
     phase_0: dict[str, float]
     phase_1: dict[str, float]
+    seed: int = 0
 
 
 def _integer_simplex_counts(probabilities: np.ndarray, denominator: int) -> np.ndarray:
@@ -190,51 +195,65 @@ def build_auxiliary_candidates() -> list[AuxiliaryCandidate]:
     proportional = np.asarray([PROPORTIONAL_WEIGHTS[bucket] for bucket in buckets], dtype=float)
     proportional = proportional / proportional.sum()
 
-    candidates: list[tuple[str, str, np.ndarray, np.ndarray]] = []
+    candidates: list[tuple[str, str, np.ndarray, np.ndarray, int]] = []
+
+    def add_candidate(
+        candidate_name: str,
+        candidate_type: str,
+        phase0_counts: np.ndarray,
+        phase1_counts: np.ndarray,
+        *,
+        seed: int = 0,
+    ) -> None:
+        candidates.append((candidate_name, candidate_type, phase0_counts, phase1_counts, seed))
+
     proportional_counts = _integer_simplex_counts(proportional, MIXTURE_QUANTUM_DENOMINATOR)
     uniform_counts = _integer_simplex_counts(np.ones(len(buckets), dtype=float), MIXTURE_QUANTUM_DENOMINATOR)
-    candidates.append(("baseline_proportional", "baseline_proportional", proportional_counts, proportional_counts))
-    candidates.append(("baseline_uniform", "baseline_uniform", uniform_counts, uniform_counts))
+    add_candidate("baseline_proportional", "baseline_proportional", proportional_counts, proportional_counts)
+    add_candidate("baseline_uniform", "baseline_uniform", uniform_counts, uniform_counts)
 
     for epoch_cap in UNIMAX_EPOCH_CAPS:
         w0 = _unimax_weights(tokens, phase_budget=TARGET_BUDGET * PHASE0_FRACTION, epoch_cap=epoch_cap)
         w1 = _unimax_weights(tokens, phase_budget=TARGET_BUDGET * PHASE1_FRACTION, epoch_cap=epoch_cap)
-        candidates.append(
-            (
-                f"baseline_unimax_epoch_cap_{int(epoch_cap):g}",
-                "baseline_unimax",
-                _integer_simplex_counts(w0, MIXTURE_QUANTUM_DENOMINATOR),
-                _integer_simplex_counts(w1, MIXTURE_QUANTUM_DENOMINATOR),
-            )
+        add_candidate(
+            f"baseline_unimax_epoch_cap_{int(epoch_cap):g}",
+            "baseline_unimax",
+            _integer_simplex_counts(w0, MIXTURE_QUANTUM_DENOMINATOR),
+            _integer_simplex_counts(w1, MIXTURE_QUANTUM_DENOMINATOR),
         )
 
     for bucket_idx, bucket in enumerate(buckets):
         counts = _delete_and_renormalize_counts(proportional, bucket_idx)
-        candidates.append((f"abl_del_{bucket}", "partition_ablation", counts, counts))
+        add_candidate(f"abl_del_{bucket}", "partition_ablation", counts, counts)
 
     directions = _sample_centered_fisher_directions(proportional)
     for direction_idx, direction in enumerate(directions):
         plus_counts = _central_logit_tilt_counts(proportional, direction, sign=1)
         minus_counts = _central_logit_tilt_counts(proportional, direction, sign=-1)
-        candidates.append(
-            (
-                f"pcdir_{direction_idx:03d}_plus",
-                "projected_controllability_plus",
-                plus_counts,
-                plus_counts,
-            )
+        add_candidate(
+            f"pcdir_{direction_idx:03d}_plus",
+            "projected_controllability_plus",
+            plus_counts,
+            plus_counts,
         )
-        candidates.append(
-            (
-                f"pcdir_{direction_idx:03d}_minus",
-                "projected_controllability_minus",
-                minus_counts,
-                minus_counts,
-            )
+        add_candidate(
+            f"pcdir_{direction_idx:03d}_minus",
+            "projected_controllability_minus",
+            minus_counts,
+            minus_counts,
+        )
+
+    for seed in range(PROPORTIONAL_NOISE_SEED_START, PROPORTIONAL_NOISE_SEED_START + PROPORTIONAL_NOISE_REPEAT_COUNT):
+        add_candidate(
+            f"prop_noise_seed_{seed:02d}",
+            "proportional_noise",
+            proportional_counts,
+            proportional_counts,
+            seed=seed,
         )
 
     out: list[AuxiliaryCandidate] = []
-    for offset, (candidate_name, candidate_type, phase0_counts, phase1_counts) in enumerate(candidates):
+    for offset, (candidate_name, candidate_type, phase0_counts, phase1_counts, seed) in enumerate(candidates):
         out.append(
             AuxiliaryCandidate(
                 index=AUXILIARY_INDEX_START + offset,
@@ -242,6 +261,7 @@ def build_auxiliary_candidates() -> list[AuxiliaryCandidate]:
                 candidate_type=candidate_type,
                 phase_0=_weights_from_counts(buckets, phase0_counts),
                 phase_1=_weights_from_counts(buckets, phase1_counts),
+                seed=seed,
             )
         )
     return out
@@ -277,7 +297,7 @@ def _build_step(candidate: AuxiliaryCandidate) -> ExecutorStep:
             resources=versioned(ResourceConfig.with_tpu("v4-8", zone="us-central2-b", preemptible=False)),
             steps=versioned(_STEPS),
             batch_size=versioned(_BATCH),
-            seed=versioned(0),
+            seed=versioned(candidate.seed),
             mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
             tracker=WandbConfig(
                 project="marin_moe",
@@ -338,7 +358,10 @@ def _selected_steps_from_env() -> list[ExecutorStep]:
         return swarm_auxiliary_perturbation_steps
 
     requested = _parse_candidate_indices(selected)
-    by_index = {candidate.index: step for candidate, step in zip(AUXILIARY_CANDIDATES, swarm_auxiliary_perturbation_steps)}
+    by_index = {
+        candidate.index: step
+        for candidate, step in zip(AUXILIARY_CANDIDATES, swarm_auxiliary_perturbation_steps, strict=True)
+    }
     missing = sorted(requested.difference(by_index))
     if missing:
         raise ValueError(f"Unknown auxiliary candidate indices in {CANDIDATE_INDICES_ENV}: {missing}")
