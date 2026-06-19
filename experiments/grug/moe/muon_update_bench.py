@@ -90,6 +90,7 @@ NS4D_REPLICATED_GROUP_BENCH = "ns4d_replicated_group"
 NS4D_DATA_GROUP_BENCH = "ns4d_data_group"
 NS4D_DATA_GROUP_APPLY_BENCH = "ns4d_data_group_apply"
 EXPERT_GROUPED_APPLY_BOUNDARY_BENCH = "expert_grouped_apply_boundary"
+EXPERT_GROUPED_LAYER_SLICE_BENCH = "expert_grouped_layer_slice_boundary"
 EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH = "expert_grouped_optimizer_apply"
 EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH = "expert_grouped_muonh_optimizer_apply"
 EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH = "expert_only_grouped_muonh_optimizer_apply"
@@ -125,6 +126,7 @@ BENCH_KINDS = (
     NS4D_DATA_GROUP_BENCH,
     NS4D_DATA_GROUP_APPLY_BENCH,
     EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
+    EXPERT_GROUPED_LAYER_SLICE_BENCH,
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
@@ -157,6 +159,7 @@ NS4D_DATA_SHARDED_BENCHES = (
     NS4D_DATA_GROUP_BENCH,
     NS4D_DATA_GROUP_APPLY_BENCH,
     EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
+    EXPERT_GROUPED_LAYER_SLICE_BENCH,
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
@@ -195,6 +198,7 @@ GROUPED_APPLY_BOUNDARY_BENCHES = (
     FULL_PRODUCTION_GROUPED_2D_DIRECT_APPLY_BENCH,
     FULL_PRODUCTION_APPLY_ONLY_BENCH,
 )
+GROUPED_PARAM_INPUT_BENCHES = (EXPERT_GROUPED_LAYER_SLICE_BENCH,)
 GROUPED_OPTIMIZER_APPLY_BENCHES = (
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
@@ -271,6 +275,7 @@ class BenchConfig:
     expert_axis: int
     model_axis: int
     learning_rate: float
+    ns_compute_dtype: str = "input"
 
 
 @dataclass(frozen=True)
@@ -356,6 +361,68 @@ def numpy_dtype_from_name(name: str) -> np.dtype:
     if normalized in ("fp16", "float16"):
         return np.dtype(np.float16)
     raise ValueError(f"Unsupported dtype={name!r}")
+
+
+def ns_compute_dtype_from_name(name: str, input_dtype: jnp.dtype) -> jnp.dtype:
+    if name == "input":
+        return jnp.dtype(input_dtype)
+    return dtype_from_name(name)
+
+
+def ns_compute_dtype_name(name: str, input_dtype: jnp.dtype) -> str:
+    if name == "input":
+        return "input"
+    return dtype_name(ns_compute_dtype_from_name(name, input_dtype))
+
+
+def cast_for_ns_compute(x: jax.Array, config: BenchConfig) -> tuple[jax.Array, jnp.dtype]:
+    original_dtype = jnp.dtype(x.dtype)
+    compute_dtype = ns_compute_dtype_from_name(config.ns_compute_dtype, original_dtype)
+    if compute_dtype == original_dtype:
+        return x, original_dtype
+    with jax.named_scope("muon_update_bench/ns_compute_dtype/cast_input"):
+        return x.astype(compute_dtype), original_dtype
+
+
+def restore_ns_compute_dtype(x: jax.Array, original_dtype: jnp.dtype) -> jax.Array:
+    if jnp.dtype(x.dtype) == original_dtype:
+        return x
+    with jax.named_scope("muon_update_bench/ns_compute_dtype/cast_output"):
+        return x.astype(original_dtype)
+
+
+def zeropower_via_newtonschulz_4d_for_config(update: jax.Array, config: BenchConfig) -> jax.Array:
+    update, original_dtype = cast_for_ns_compute(update, config)
+    update = zeropower_via_newtonschulz_4d(update, config.backend_steps, MAY_MUON_EPSILON)
+    return restore_ns_compute_dtype(update, original_dtype)
+
+
+def zeropower_via_newtonschulz_3d_stack_for_config(
+    update: jax.Array,
+    config: BenchConfig,
+    target_pspec: NamedSharding | P | None,
+) -> jax.Array:
+    update, original_dtype = cast_for_ns_compute(update, config)
+    update = _zeropower_via_newtonschulz_batched_stack_sharded(
+        update,
+        config.backend_steps,
+        MAY_MUON_EPSILON,
+        target_pspec=target_pspec,
+    )
+    return restore_ns_compute_dtype(update, original_dtype)
+
+
+def newtonschulz_4d_dotonly_for_config(update: jax.Array, config: BenchConfig, implementation: str) -> jax.Array:
+    update, original_dtype = cast_for_ns_compute(update, config)
+    if implementation == "einsum":
+        update = newtonschulz_4d_dotonly_einsum(update, config.backend_steps)
+    elif implementation == "matmul":
+        update = newtonschulz_4d_dotonly_matmul(update, config.backend_steps)
+    elif implementation == "lax_dot_general":
+        update = newtonschulz_4d_dotonly_lax_dot_general(update, config.backend_steps)
+    else:
+        raise ValueError(f"Unknown dot-only Newton-Schulz implementation {implementation!r}.")
+    return restore_ns_compute_dtype(update, original_dtype)
 
 
 def create_mesh(replica_axis: int, data_axis: int, expert_axis: int, model_axis: int) -> Mesh:
@@ -662,6 +729,7 @@ def grouped_expert_group_sizes(config: BenchConfig) -> tuple[int, ...]:
 def grouped_expert_group_sizes_for_bench(config: BenchConfig, bench_kind: str) -> tuple[int, ...]:
     sizes = grouped_expert_group_sizes(config)
     if bench_kind not in (
+        EXPERT_GROUPED_LAYER_SLICE_BENCH,
         EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
@@ -1201,6 +1269,18 @@ def assert_expert_fsdp_sharding(tree: Any, label: str) -> None:
             raise AssertionError(f"{label} at {path} lost expert-axis stack sharding: got {sharding.spec}.")
 
 
+def assert_expert_ep_sharding(tree: Any, label: str) -> None:
+    expected_spec = P("expert", None, None)
+    for path, leaf in leaf_items(tree):
+        if not hasattr(leaf, "ndim") or leaf.ndim != 3:
+            continue
+        sharding = getattr(leaf, "sharding", None)
+        if not isinstance(sharding, NamedSharding):
+            raise AssertionError(f"{label} at {path} lost NamedSharding: got {sharding!r}.")
+        if sharding.spec != expected_spec:
+            raise AssertionError(f"{label} at {path} expected {expected_spec}, got {sharding.spec}.")
+
+
 def assert_expert_stack_sharding_if_present(tree: Any, expected_spec: P, label: str) -> None:
     for path, leaf in leaf_items(tree):
         if not hasattr(leaf, "ndim") or leaf.ndim != 3:
@@ -1338,22 +1418,22 @@ def ns4d_step_factory(mesh: Mesh, config: BenchConfig, bench_kind: str):
                 )
             elif bench_kind == NS4D_DOTONLY_EINSUM_BENCH:
                 next_updates = jax.tree.map(
-                    lambda update: newtonschulz_4d_dotonly_einsum(update, config.backend_steps),
+                    lambda update: newtonschulz_4d_dotonly_for_config(update, config, "einsum"),
                     updates,
                 )
             elif bench_kind == NS4D_DOTONLY_MATMUL_BENCH:
                 next_updates = jax.tree.map(
-                    lambda update: newtonschulz_4d_dotonly_matmul(update, config.backend_steps),
+                    lambda update: newtonschulz_4d_dotonly_for_config(update, config, "matmul"),
                     updates,
                 )
             elif bench_kind == NS4D_DOTONLY_LAX_DOT_GENERAL_BENCH:
                 next_updates = jax.tree.map(
-                    lambda update: newtonschulz_4d_dotonly_lax_dot_general(update, config.backend_steps),
+                    lambda update: newtonschulz_4d_dotonly_for_config(update, config, "lax_dot_general"),
                     updates,
                 )
             else:
                 next_updates = jax.tree.map(
-                    lambda update: zeropower_via_newtonschulz_4d(update, config.backend_steps, MAY_MUON_EPSILON),
+                    lambda update: zeropower_via_newtonschulz_4d_for_config(update, config),
                     updates,
                 )
             if bench_kind == NS4D_DATA_RESHARD_RESTORE_BENCH:
@@ -1369,7 +1449,7 @@ def ns4d_grouped_apply_step_factory(config: BenchConfig):
     def update_step(params, updates):
         with jax.named_scope("muon_update_bench/ns4d_grouped_apply_step"):
             next_updates = jax.tree.map(
-                lambda update: zeropower_via_newtonschulz_4d(update, config.backend_steps, MAY_MUON_EPSILON),
+                lambda update: zeropower_via_newtonschulz_4d_for_config(update, config),
                 updates,
             )
             next_updates = jax.tree.map(lambda update: scale_ns4d_update(update, config), next_updates)
@@ -1382,12 +1462,54 @@ def grouped_expert_apply_boundary_step_factory(config: BenchConfig):
     def update_step(params, updates):
         with jax.named_scope("muon_update_bench/expert_grouped_apply_boundary_step"):
             next_updates = jax.tree.map(
-                lambda update: zeropower_via_newtonschulz_4d(update, config.backend_steps, MAY_MUON_EPSILON),
+                lambda update: zeropower_via_newtonschulz_4d_for_config(update, config),
                 updates,
             )
             next_updates = jax.tree.map(lambda update: scale_ns4d_update(update, config), next_updates)
             with jax.named_scope("muon_update_bench/expert_grouped_apply_boundary/optax_apply_updates"):
                 return optax.apply_updates(params, next_updates)
+
+    return update_step
+
+
+def expert_grouped_layer_slices(mesh: Mesh, config: BenchConfig, grouped_params):
+    """Slice persistent grouped expert banks into per-layer EP-consumable leaves."""
+    output_layers = [
+        {"mlp": {"expert_mlp": {name: None for name in synthetic_shapes(config)}}} for _ in range(config.layers)
+    ]
+    ep_sharding = NamedSharding(mesh, P("expert", None, None))
+    layer_offset = 0
+    for group_index, valid_group_size in enumerate(grouped_expert_group_sizes(config)):
+        padded_group_size = grouped_expert_group_sizes_for_bench(config, EXPERT_GROUPED_LAYER_SLICE_BENCH)[group_index]
+        compute_sharding = grouped_expert_group_sharding(
+            mesh,
+            config,
+            EXPERT_GROUPED_LAYER_SLICE_BENCH,
+            padded_group_size,
+        )
+        for name in synthetic_shapes(config):
+            grouped_param = grouped_params["blocks"][group_index]["mlp"]["expert_mlp"][name]
+            grouped_param = _restore_grouped_expert_update_for_split(
+                mesh,
+                grouped_param,
+                valid_group_size,
+                compute_sharding,
+            )
+            with jax.named_scope(f"muon_update_bench/expert_grouped_layer_slice/{name}/split_to_ep_leaves"):
+                param_parts = [
+                    jnp.squeeze(param_part, axis=0) for param_part in jnp.split(grouped_param, valid_group_size, axis=0)
+                ]
+            for local_index, param_part in enumerate(param_parts):
+                layer_index = layer_offset + local_index
+                output_layers[layer_index]["mlp"]["expert_mlp"][name] = reshard(param_part, ep_sharding)
+        layer_offset += valid_group_size
+    return {"layers": tuple(output_layers)}
+
+
+def expert_grouped_layer_slice_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(grouped_params):
+        with jax.named_scope("muon_update_bench/expert_grouped_layer_slice_step"):
+            return expert_grouped_layer_slices(mesh, config, grouped_params)
 
     return update_step
 
@@ -1407,7 +1529,7 @@ def scale_with_grouped_4d_muon(config: BenchConfig, *, use_hyperball: bool) -> o
             if update is None or not hasattr(update, "ndim") or update.ndim != 4:
                 return update
             with jax.named_scope("muon_update_bench/expert_grouped_optimizer/muon_4d_update"):
-                update = zeropower_via_newtonschulz_4d(update, config.backend_steps, MAY_MUON_EPSILON)
+                update = zeropower_via_newtonschulz_4d_for_config(update, config)
                 direction = scale_ns4d_direction(update)
                 if use_hyperball:
                     return grouped_4d_hyperball_update(param, direction, config)
@@ -1581,11 +1703,7 @@ def expert_fsdp_grouped_muonh_updates(mesh: Mesh, config: BenchConfig, params, u
             with jax.named_scope(f"muon_update_bench/expert_fsdp_grouped_muonh/{name}/reshard_grouped_compute"):
                 stacked_updates = reshard(stacked_updates, compute_sharding)
             with jax.named_scope(f"muon_update_bench/expert_fsdp_grouped_muonh/{name}/grouped_ns_direction"):
-                direction = zeropower_via_newtonschulz_4d(
-                    stacked_updates,
-                    config.backend_steps,
-                    MAY_MUON_EPSILON,
-                )
+                direction = zeropower_via_newtonschulz_4d_for_config(stacked_updates, config)
                 direction = scale_ns4d_direction(direction)
             direction = _restore_grouped_expert_update_for_split(
                 mesh,
@@ -1766,11 +1884,7 @@ def expert_fsdp_grouped_updates_muonh_updates(mesh: Mesh, config: BenchConfig, p
             with jax.named_scope(f"muon_update_bench/expert_fsdp_grouped_updates_muonh/{name}/reshard_params_grouped"):
                 stacked_params = reshard(stacked_params, compute_sharding)
             with jax.named_scope(f"muon_update_bench/expert_fsdp_grouped_updates_muonh/{name}/grouped_ns_hyperball"):
-                direction = zeropower_via_newtonschulz_4d(
-                    update,
-                    config.backend_steps,
-                    MAY_MUON_EPSILON,
-                )
+                direction = zeropower_via_newtonschulz_4d_for_config(update, config)
                 direction = scale_ns4d_direction(direction)
                 update = grouped_4d_hyperball_update(stacked_params, direction, config)
             update = _restore_grouped_expert_update_for_split(
@@ -1986,7 +2100,7 @@ def full_production_apply_only_step_factory(config: BenchConfig):
 
 
 def ns4d_bench_uses_grouped_params(bench_kind: str) -> bool:
-    return bench_kind in GROUPED_APPLY_BOUNDARY_BENCHES
+    return bench_kind in GROUPED_APPLY_BOUNDARY_BENCHES or bench_kind in GROUPED_PARAM_INPUT_BENCHES
 
 
 def ns4d_bench_returns_4d_updates(bench_kind: str) -> bool:
@@ -2031,6 +2145,8 @@ def ns4d_boundary_status(config: BenchConfig, bench_kind: str) -> str | None:
         return "grouped_params_updates_apply"
     if bench_kind == EXPERT_GROUPED_APPLY_BOUNDARY_BENCH:
         return "grouped_blocks_expert_params_updates_apply"
+    if bench_kind == EXPERT_GROUPED_LAYER_SLICE_BENCH:
+        return "grouped_blocks_expert_params_slice_to_ep_leaves"
     if bench_kind == EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH:
         return "grouped_blocks_expert_direction_optimizer_updates_apply"
     if bench_kind == EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH:
@@ -2240,12 +2356,7 @@ def grouped_2d_stack_ns_outputs(params, updates, config: BenchConfig):
         target_pspec = _stacked_2d_target(stack_shape, sample_update)
         with jax.named_scope("muon_update_bench/grouped_2d_decompose/stack_ns"):
             stacked_updates = jnp.stack([update for _, update, _ in entry_chunk], axis=0)
-            directions = _zeropower_via_newtonschulz_batched_stack_sharded(
-                stacked_updates,
-                config.backend_steps,
-                MAY_MUON_EPSILON,
-                target_pspec=target_pspec,
-            )
+            directions = zeropower_via_newtonschulz_3d_stack_for_config(stacked_updates, config, target_pspec)
             outputs.append(scale_ns4d_direction(directions))
     return tuple(outputs)
 
@@ -2283,12 +2394,7 @@ def _apply_grouped_2d_direct_chunks(
             stacked_params = jnp.stack([param for _, _, param in entry_chunk], axis=0)
             if target_pspec is not None:
                 stacked_params = reshard(stacked_params, target_pspec)
-            directions = _zeropower_via_newtonschulz_batched_stack_sharded(
-                stacked_updates,
-                config.backend_steps,
-                MAY_MUON_EPSILON,
-                target_pspec=target_pspec,
-            )
+            directions = zeropower_via_newtonschulz_3d_stack_for_config(stacked_updates, config, target_pspec)
             directions = scale_ns4d_direction(directions)
             stacked_updates = grouped_3d_hyperball_update(stacked_params, directions, config)
             next_stacked_params = stacked_params + stacked_updates
@@ -2341,7 +2447,7 @@ def full_production_grouped_2d_direct_apply_outputs(params, updates, config: Ben
             continue
         if mask == "grouped_muonh" and hasattr(update, "ndim") and update.ndim == 4:
             with jax.named_scope("muon_update_bench/full_production_direct_apply/grouped_4d_expert"):
-                direction = zeropower_via_newtonschulz_4d(update, config.backend_steps, MAY_MUON_EPSILON)
+                direction = zeropower_via_newtonschulz_4d_for_config(update, config)
                 direction = scale_ns4d_direction(direction)
                 output_leaves[index] = param + grouped_4d_hyperball_update(param, direction, config)
             continue
@@ -2368,12 +2474,7 @@ def grouped_2d_persistent_apply_outputs(params, updates, config: BenchConfig):
         with jax.named_scope("muon_update_bench/grouped_2d_persistent_apply/grouped_hyperball_apply"):
             if target_pspec is not None:
                 param = reshard(param, target_pspec)
-            direction = _zeropower_via_newtonschulz_batched_stack_sharded(
-                update,
-                config.backend_steps,
-                MAY_MUON_EPSILON,
-                target_pspec=target_pspec,
-            )
+            direction = zeropower_via_newtonschulz_3d_stack_for_config(update, config, target_pspec)
             direction = scale_ns4d_direction(direction)
             return param + grouped_3d_hyperball_update(param, direction, config)
 
@@ -2390,7 +2491,7 @@ def full_production_grouped_persistent_apply_outputs(params, updates, config: Be
             return param - config.learning_rate * update
         if update.ndim == 4:
             with jax.named_scope("muon_update_bench/full_production_persistent_apply/grouped_4d_expert"):
-                direction = zeropower_via_newtonschulz_4d(update, config.backend_steps, MAY_MUON_EPSILON)
+                direction = zeropower_via_newtonschulz_4d_for_config(update, config)
                 direction = scale_ns4d_direction(direction)
                 return param + grouped_4d_hyperball_update(param, direction, config)
         if update.ndim == 3:
@@ -2398,12 +2499,7 @@ def full_production_grouped_persistent_apply_outputs(params, updates, config: Be
             with jax.named_scope("muon_update_bench/full_production_persistent_apply/grouped_2d"):
                 if target_pspec is not None:
                     param = reshard(param, target_pspec)
-                direction = _zeropower_via_newtonschulz_batched_stack_sharded(
-                    update,
-                    config.backend_steps,
-                    MAY_MUON_EPSILON,
-                    target_pspec=target_pspec,
-                )
+                direction = zeropower_via_newtonschulz_3d_stack_for_config(update, config, target_pspec)
                 direction = scale_ns4d_direction(direction)
                 return param + grouped_3d_hyperball_update(param, direction, config)
         return param - config.learning_rate * update
@@ -2431,12 +2527,7 @@ def scale_with_grouped_2d_muonh(config: BenchConfig) -> optax.GradientTransforma
             with jax.named_scope("muon_update_bench/grouped_2d_muonh/orthogonalize_stack"):
                 stacked_updates = jnp.stack([update for _, update, _ in entry_chunk], axis=0)
                 stacked_params = jnp.stack([param for _, _, param in entry_chunk], axis=0)
-                directions = _zeropower_via_newtonschulz_batched_stack_sharded(
-                    stacked_updates,
-                    config.backend_steps,
-                    MAY_MUON_EPSILON,
-                    target_pspec=target_pspec,
-                )
+                directions = zeropower_via_newtonschulz_3d_stack_for_config(stacked_updates, config, target_pspec)
                 directions = scale_ns4d_direction(directions)
                 stacked_updates = grouped_3d_hyperball_update(stacked_params, directions, config)
                 stacked_updates = _restore_stacked_2d_for_split(stacked_updates, target_pspec)
@@ -2470,9 +2561,9 @@ def padded_ns4d_update(
         update = reshard(update, compute_sharding)
 
     if bench_kind == NS4D_DOTONLY_MATMUL_PADDED_BENCH:
-        update = newtonschulz_4d_dotonly_matmul(update, config.backend_steps)
+        update = newtonschulz_4d_dotonly_for_config(update, config, "matmul")
     elif bench_kind == NS4D_PADDED_GROUP_BENCH:
-        update = zeropower_via_newtonschulz_4d(update, config.backend_steps, MAY_MUON_EPSILON)
+        update = zeropower_via_newtonschulz_4d_for_config(update, config)
     else:
         raise ValueError(f"Unsupported padded NS4D bench kind: {bench_kind!r}")
 
@@ -2907,7 +2998,7 @@ def lower_ns4d(
         specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
     elif bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES:
         specs = synthetic_productionish_grouped_expert_specs(mesh, config, bench_kind)
-    elif bench_kind == EXPERT_GROUPED_APPLY_BOUNDARY_BENCH:
+    elif bench_kind in (EXPERT_GROUPED_APPLY_BOUNDARY_BENCH, EXPERT_GROUPED_LAYER_SLICE_BENCH):
         specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
     else:
         specs = synthetic_ns4d_specs(mesh, config, bench_kind)
@@ -2918,7 +3009,16 @@ def lower_ns4d(
     else:
         assert_grouped_or_uniform_ns4d_sharding(specs, mesh, config, bench_kind, input_spec, "NS4D input specs")
     if ns4d_bench_uses_grouped_params(bench_kind):
-        if bench_kind == EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH:
+        if bench_kind == EXPERT_GROUPED_LAYER_SLICE_BENCH:
+            grouped_specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_grouped_layer_slice_step_factory(mesh, config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(update_step, grouped_specs)
+                lowered = update_step.lower(grouped_specs)
+            assert_grouped_expert_sharding(grouped_specs, mesh, config, bench_kind, "grouped expert bank params")
+            assert_expert_ep_sharding(result_specs, "grouped expert layer slices")
+            lower_args = None
+        elif bench_kind == EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH:
             grouped_specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
             update_step = jax.jit(expert_fsdp_grouped_apply_boundary_step_factory(mesh, config))
             with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
@@ -3052,6 +3152,8 @@ def lower_ns4d(
             lowered = update_step.lower(*lower_args)
     if is_expert_fsdp_grouped_bench(bench_kind):
         assert_expert_fsdp_sharding(result_specs, "expert FSDP grouped MuonH result specs")
+    elif bench_kind == EXPERT_GROUPED_LAYER_SLICE_BENCH:
+        assert_expert_ep_sharding(result_specs, "grouped expert layer slice result specs")
     elif result_sharding is not None and ns4d_bench_returns_4d_updates(bench_kind):
         assert_grouped_or_uniform_ns4d_sharding(
             result_specs, mesh, config, bench_kind, result_sharding.spec, "NS4D result specs"
@@ -3249,7 +3351,7 @@ def time_ns4d(
             updates = make_grouped_expert_array_tree(mesh, config, bench_kind, seed=1)
         elif bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES:
             updates = make_productionish_grouped_expert_array_tree(mesh, config, bench_kind, seed=1)
-        elif bench_kind == EXPERT_GROUPED_APPLY_BOUNDARY_BENCH:
+        elif bench_kind in (EXPERT_GROUPED_APPLY_BOUNDARY_BENCH, EXPERT_GROUPED_LAYER_SLICE_BENCH):
             updates = make_grouped_expert_array_tree(mesh, config, bench_kind, seed=1)
         else:
             updates = make_ns4d_array_tree(mesh, config, bench_kind, seed=1)
@@ -3262,7 +3364,10 @@ def time_ns4d(
         else:
             assert_grouped_or_uniform_ns4d_sharding(updates, mesh, config, bench_kind, input_spec, "NS4D updates")
         if ns4d_bench_uses_grouped_params(bench_kind):
-            if bench_kind == EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH:
+            if bench_kind == EXPERT_GROUPED_LAYER_SLICE_BENCH:
+                update_step = jax.jit(expert_grouped_layer_slice_step_factory(mesh, config))
+                lower_args = (updates,)
+            elif bench_kind == EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH:
                 params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
                 update_step = jax.jit(
                     expert_fsdp_grouped_apply_boundary_timing_step_factory(mesh, config),
@@ -3355,6 +3460,8 @@ def time_ns4d(
                 lower_args = (params, updates)
             if is_expert_fsdp_grouped_bench(bench_kind):
                 assert_expert_fsdp_sharding(params, "expert FSDP params")
+            elif bench_kind == EXPERT_GROUPED_LAYER_SLICE_BENCH:
+                assert_grouped_expert_sharding(updates, mesh, config, bench_kind, "grouped expert bank params")
             else:
                 assert_grouped_or_uniform_ns4d_sharding(params, mesh, config, bench_kind, input_spec, "NS4D params")
             block_until_ready_tree((params, updates, optimizer_state))
@@ -3385,8 +3492,12 @@ def time_ns4d(
                 is_expert_fsdp_grouped_bench(bench_kind)
                 or is_expert_only_grouped_muonh_bench(bench_kind)
                 or bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES
+                or bench_kind == EXPERT_GROUPED_LAYER_SLICE_BENCH
             ):
-                if is_expert_fsdp_grouped_boundary_bench(bench_kind) or is_expert_fsdp_grouped_updates_muonh_bench(
+                if bench_kind == EXPERT_GROUPED_LAYER_SLICE_BENCH:
+                    params = compiled(updates)
+                    block_until_ready_tree(params)
+                elif is_expert_fsdp_grouped_boundary_bench(bench_kind) or is_expert_fsdp_grouped_updates_muonh_bench(
                     bench_kind
                 ):
                     params = compiled(params, updates)
@@ -3400,6 +3511,8 @@ def time_ns4d(
                         "warmup expert FSDP grouped params",
                         config,
                     )
+                elif bench_kind == EXPERT_GROUPED_LAYER_SLICE_BENCH:
+                    assert_expert_ep_sharding(params, "warmup grouped expert layer slices")
                 elif result_sharding is not None:
                     assert_grouped_or_uniform_ns4d_sharding(
                         params,
@@ -3440,8 +3553,12 @@ def time_ns4d(
                 is_expert_fsdp_grouped_bench(bench_kind)
                 or is_expert_only_grouped_muonh_bench(bench_kind)
                 or bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES
+                or bench_kind == EXPERT_GROUPED_LAYER_SLICE_BENCH
             ):
-                if is_expert_fsdp_grouped_boundary_bench(bench_kind) or is_expert_fsdp_grouped_updates_muonh_bench(
+                if bench_kind == EXPERT_GROUPED_LAYER_SLICE_BENCH:
+                    params = compiled(updates)
+                    block_until_ready_tree(params)
+                elif is_expert_fsdp_grouped_boundary_bench(bench_kind) or is_expert_fsdp_grouped_updates_muonh_bench(
                     bench_kind
                 ):
                     params = compiled(params, updates)
@@ -3455,6 +3572,8 @@ def time_ns4d(
                         "expert FSDP grouped params",
                         config,
                     )
+                elif bench_kind == EXPERT_GROUPED_LAYER_SLICE_BENCH:
+                    assert_expert_ep_sharding(params, "grouped expert layer slices")
                 elif result_sharding is not None:
                     assert_grouped_or_uniform_ns4d_sharding(
                         params,
@@ -3647,6 +3766,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--intermediate-dim", type=int, default=MAY_INTERMEDIATE_DIM)
     parser.add_argument("--num-experts", type=int, default=MAY_NUM_EXPERTS)
     parser.add_argument("--dtype", default="bf16", choices=("bf16", "bfloat16", "fp32", "float32", "fp16", "float16"))
+    parser.add_argument(
+        "--ns-compute-dtype",
+        default="input",
+        choices=("input", "bf16", "bfloat16", "fp32", "float32", "fp16", "float16"),
+        help="Harness-only Newton-Schulz compute dtype; casts NS inputs and restores the original output dtype.",
+    )
     parser.add_argument("--backend-steps", type=int, default=MAY_BACKEND_STEPS)
     parser.add_argument("--sweep-backend-steps", help="Comma-separated backend step counts, e.g. 1,5.")
     parser.add_argument("--orthogonalization-layout", default=STACK_BATCH_SHARDED)
@@ -3701,6 +3826,7 @@ def parse_str_csv(raw: str) -> tuple[str, ...]:
 
 
 def config_from_args(args: argparse.Namespace) -> BenchConfig:
+    input_dtype = dtype_from_name(args.dtype)
     return BenchConfig(
         layers=args.layers,
         ns4d_group_size=args.ns4d_group_size,
@@ -3708,7 +3834,7 @@ def config_from_args(args: argparse.Namespace) -> BenchConfig:
         hidden_dim=args.hidden_dim,
         intermediate_dim=args.intermediate_dim,
         num_experts=args.num_experts,
-        dtype=dtype_name(dtype_from_name(args.dtype)),
+        dtype=dtype_name(input_dtype),
         backend_steps=args.backend_steps,
         orthogonalization_layout=args.orthogonalization_layout,
         max_grouped_stack_size=args.max_grouped_stack_size,
@@ -3717,6 +3843,7 @@ def config_from_args(args: argparse.Namespace) -> BenchConfig:
         expert_axis=args.expert_axis,
         model_axis=args.model_axis,
         learning_rate=args.learning_rate,
+        ns_compute_dtype=ns_compute_dtype_name(args.ns_compute_dtype, input_dtype),
     )
 
 

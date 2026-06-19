@@ -19,6 +19,7 @@ from experiments.grug.moe.muon_update_bench import (
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
     EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
+    EXPERT_GROUPED_LAYER_SLICE_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
     EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
@@ -34,6 +35,7 @@ from experiments.grug.moe.muon_update_bench import (
     ORDINARY_2D_MUONH_OPTIMIZER_APPLY_BENCH,
     BenchConfig,
     _stacked_2d_target,
+    assert_expert_ep_sharding,
     assert_expert_fsdp_sharding,
     assert_ns4d_sharding,
     build_full_production_muonh_optimizer,
@@ -50,6 +52,7 @@ from experiments.grug.moe.muon_update_bench import (
     expert_fsdp_grouped_target_restore_boundary_step_factory,
     expert_fsdp_grouped_updates_muonh_apply_step_factory,
     expert_fsdp_grouped_updates_muonh_updates_step_factory,
+    expert_grouped_layer_slice_step_factory,
     full_production_grouped_2d_persistent_apply_timing_step_factory,
     full_production_muonh_mask,
     full_production_muonh_optimizer_apply_step_factory,
@@ -76,6 +79,7 @@ from experiments.grug.moe.muon_update_bench import (
     synthetic_ordinary_2d_grouped_persistent_specs,
     synthetic_ordinary_2d_muonh_specs,
     synthetic_productionish_grouped_expert_specs,
+    zeropower_via_newtonschulz_4d_for_config,
 )
 
 
@@ -446,6 +450,45 @@ def test_expert_only_grouped_muonh_harness_preserves_expert_stack_without_collec
     assert hlo_summary.reduce_scatter == 0
     assert hlo_summary.all_to_all == 0
     assert estimated_matrix_count(config, EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH) == expected_stack_size * 16
+
+
+def test_grouped_expert_layer_slice_boundary_returns_ep_consumable_leaves():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = synthetic_grouped_expert_specs(mesh, config, EXPERT_GROUPED_LAYER_SLICE_BENCH)
+    update_step = jax.jit(expert_grouped_layer_slice_step_factory(mesh, config))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        result = jax.eval_shape(update_step, params)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(params).lower(lowering_platforms=(platform,))
+
+    assert params["blocks"][0]["mlp"]["expert_mlp"]["w_gate_up"].shape == (4, 8, 16, 16)
+    assert_expert_ep_sharding(result, "grouped expert layer slices")
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
 
 
 @pytest.mark.parametrize(
@@ -1114,6 +1157,37 @@ def test_grouped_2d_stack_target_shards_stack_axis_over_replica_and_data():
 
     assert isinstance(target, NamedSharding)
     assert target.spec == P(("replica_dcn", "data"), None, None)
+
+
+def test_ns_compute_dtype_can_cast_fp32_inputs_to_bf16_for_harness_ns():
+    config = BenchConfig(
+        layers=1,
+        ns4d_group_size=1,
+        ns4d_group_axis="none",
+        hidden_dim=4,
+        intermediate_dim=2,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+        ns_compute_dtype=str(jnp.dtype(jnp.bfloat16)),
+    )
+    x = jnp.ones((1, 2, 3, 4), dtype=jnp.float32)
+    step = jax.jit(lambda update: zeropower_via_newtonschulz_4d_for_config(update, config))
+
+    result = step(x)
+    lowered = step.lower(x)
+    hlo = str(lowered.compiler_ir(dialect="stablehlo"))
+
+    assert result.dtype == jnp.float32
+    assert "tensor<1x2x3x4xbf16>" in hlo
+    assert "stablehlo.dot_general" in hlo
 
 
 def test_summary_row_reports_matrix_count_and_stack_estimates():

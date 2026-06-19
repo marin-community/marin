@@ -56,6 +56,7 @@ class MuonUpdateBenchLaunchConfig:
     intermediate_dim: int = 1280
     num_experts: int = 256
     dtype: str = "bf16"
+    ns_compute_dtype: str = "input"
     sweep_backend_steps: tuple[int, ...] = (1, 5)
     sweep_max_grouped_stack_sizes: tuple[int, ...] = (256, 512)
     orthogonalization_layout: str = STACK_BATCH_SHARDED
@@ -142,6 +143,7 @@ def _bench_configs(config: MuonUpdateBenchLaunchConfig) -> list[BenchConfig]:
             expert_axis=config.expert_axis,
             model_axis=config.model_axis,
             learning_rate=config.learning_rate,
+            ns_compute_dtype=config.ns_compute_dtype,
         )
         for backend_steps in config.sweep_backend_steps
         for max_grouped_stack_size in config.sweep_max_grouped_stack_sizes
@@ -261,6 +263,7 @@ def build_step() -> ExecutorStep:
         intermediate_dim=env_int("MUON_BENCH_INTERMEDIATE_DIM", 1280),
         num_experts=env_int("MUON_BENCH_NUM_EXPERTS", 256),
         dtype=os.environ.get("MUON_BENCH_DTYPE", "bf16"),
+        ns_compute_dtype=os.environ.get("MUON_BENCH_NS_COMPUTE_DTYPE", "input"),
         sweep_backend_steps=env_int_csv("MUON_BENCH_SWEEP_BACKEND_STEPS", (1, 5)),
         sweep_max_grouped_stack_sizes=env_int_csv(
             "MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES", (DEFAULT_MAX_GROUPED_STACK_SIZE, 512)
