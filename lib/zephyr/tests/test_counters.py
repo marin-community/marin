@@ -23,12 +23,6 @@ class FakeWorker:
     def get_shared(self, name: str):
         raise NotImplementedError
 
-    def increment_counter(self, name: str, value: int = 1, stage: str | None = None) -> None:
-        if name in self._counters:
-            self._counters[name].value += value
-        else:
-            self._counters[name] = CounterEntry(value, stage=stage)
-
     def set_counter(self, name: str, value: int | float, stage: str | None = None) -> None:
         if name in self._counters:
             entry = self._counters[name]
