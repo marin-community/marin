@@ -89,6 +89,10 @@ def _versions(default: str = "orig,norm") -> tuple[str, ...]:
 GAINS: tuple[float, ...] = _floats("GAINS", "1,4,8,16,32,64,256")
 LR_MULTIPLIERS: tuple[float, ...] = _floats("LR_MULTS", "0.5,1.0,2.0")
 VERSIONS: tuple[str, ...] = _versions()
+# ε in ψ_ε(σ)=√(σ²+ε²)−ε (finite-gain HJB generalization). 0 = original gate.
+# Calibrated on 130m σ (Frobenius-normalized, σ∈~[0,0.09]): ε=0.01 nudges, ε=0.03
+# reshapes ~40% of σ, ε≥0.1 suppresses all. Swept jointly with g.
+PSI_EPSILONS: tuple[float, ...] = _floats("PSI_EPS", "0.0")
 
 
 @dataclass(frozen=True)
@@ -157,7 +161,12 @@ def _override_tracker(step: ExecutorStep) -> ExecutorStep:
     return dataclasses.replace(step, config=pod)
 
 
-def _build_step(version: str, gain: float, multiplier: float) -> ExecutorStep:
+def _eps_label(psi_eps: float) -> str:
+    # only tag when ε>0 so the ε=0 runs keep the original names (cache/wandb reuse)
+    return "" if psi_eps == 0 else f"_e{f'{psi_eps:g}'.replace('.', '_')}"
+
+
+def _build_step(version: str, gain: float, multiplier: float, psi_eps: float) -> ExecutorStep:
     matrix_lr = SIZE.muon_lr * multiplier
     adam_lr = SIZE.adam_lr * multiplier
     normalize_fro = version == "norm"
@@ -166,6 +175,7 @@ def _build_step(version: str, gain: float, multiplier: float) -> ExecutorStep:
         gain=gain,
         rho=1.0,  # folded into the learning rate
         normalize_fro=normalize_fro,
+        psi_eps=psi_eps,
         lr=matrix_lr,
         learning_rate=matrix_lr,  # lr_scheduler reads `learning_rate`
         adam_lr=adam_lr,
@@ -194,13 +204,13 @@ def _build_step(version: str, gain: float, multiplier: float) -> ExecutorStep:
         optimizer_config=optimizer,
     )
 
-    run_id = f"qwen3_{SIZE.label}_gain_gated_{version}_{_g_label(gain)}_{SEQ_LEN}_{_lr_label(multiplier)}"
+    run_id = f"qwen3_{SIZE.label}_gain_gated_{version}_{_g_label(gain)}{_eps_label(psi_eps)}_{SEQ_LEN}_{_lr_label(multiplier)}"
     step = default_train(
         name=run_id,
         tokenized=fineweb_edu_subcache_10B,
         model_config=_to_qwen3_from_llama(SIZE.llama_cfg),
         train_config=train,
-        tags=["speedrun", "gain_gated", f"version_{version}", _g_label(gain), f"qwen3_{SIZE.label}"],
+        tags=["speedrun", "gain_gated", f"version_{version}", _g_label(gain), f"eps{psi_eps:g}", f"qwen3_{SIZE.label}"],
         use_default_validation=True,
         eval_harness_tasks=(),
         wandb_name=run_id,
@@ -215,15 +225,19 @@ def main() -> None:
         return
 
     steps = [
-        _build_step(version, gain, multiplier)
+        _build_step(version, gain, multiplier, psi_eps)
         for version in VERSIONS
         for gain in GAINS
         for multiplier in LR_MULTIPLIERS
+        for psi_eps in PSI_EPSILONS
     ]
-    logger.info("Gain-gated 130m sweep: %d runs (versions=%s gains=%s lr_mults=%s)", len(steps), VERSIONS, GAINS, LR_MULTIPLIERS)
+    logger.info(
+        "Gain-gated 130m sweep: %d runs (versions=%s gains=%s lr_mults=%s psi_eps=%s)",
+        len(steps), VERSIONS, GAINS, LR_MULTIPLIERS, PSI_EPSILONS,
+    )
     executor_main(
         steps=steps,
-        description="Qwen3-130m gain-gated Muon sweep (Ali idea 2): gain g x LR x {orig,norm}.",
+        description="Qwen3-130m gain-gated Muon sweep (Ali idea 2): gain g x ε x LR x {orig,norm}.",
     )
 
 

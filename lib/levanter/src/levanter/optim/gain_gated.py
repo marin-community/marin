@@ -61,6 +61,7 @@ class GainGatedConfig(OptimizerConfig):
     gain: float = 1.0  # control-effort weight g; large g → Muon, small g → square-root
     rho: float = 1.0  # spectral cap ρ; folded into the learning rate, keep at 1.0
     normalize_fro: bool = False  # True → rescale the update to ‖U‖_F = √(min(d1,d2)) (Muon's norm)
+    psi_eps: float = 0.0  # ε in ψ_ε(σ)=√(σ²+ε²)−ε (finite-gain HJB); 0 = original gate, >0 suppresses small σ
 
     # --- Muon-shared knobs ---
     lr: float = 0.02
@@ -89,6 +90,7 @@ class GainGatedConfig(OptimizerConfig):
                         self.gain,
                         self.rho,
                         self.normalize_fro,
+                        self.psi_eps,
                         self.svd_epsilon,
                         self.use_kimi_scaling,
                     )
@@ -140,12 +142,19 @@ class ScaleByGainGatedState(NamedTuple):
     momentum_buffer: optax.Updates
 
 
-def _gain_gated_matrix(array, *, gain, rho, normalize_fro, eps, use_kimi_scaling):
-    """U = P diag(min(ρ, √(2 g σᵢ))) Qᵀ from the SVD of the Frobenius-normalized matrix.
+def _gain_gated_matrix(array, *, gain, rho, normalize_fro, psi_eps, eps, use_kimi_scaling):
+    """Finite-gain HJB Muon: U = P diag(min(ρ, √(2 g ψ_ε(σᵢ)))) Qᵀ from the SVD.
+
+    ψ_ε(s) = √(s² + ε²) − ε is a smoothed (Huber-like) version of the singular value
+    that enters the nuclear-norm cost. ``psi_eps`` (ε) generalizes the gate:
+      * ε = 0  ⟹  ψ_0(s) = s  ⟹  the original gain-gated update (a = min(ρ, √(2gσ))).
+      * ε > 0  suppresses small singular values quadratically — for σ ≪ ε,
+        ψ_ε(σ) ≈ σ²/(2ε), so √(2g ψ_ε(σ)) ≈ σ√(g/ε) scales ∝σ (linear) instead of ∝√σ,
+        down-weighting the rare directions; for σ ≫ ε, ψ_ε(σ) ≈ σ (unchanged).
 
     Frobenius-normalizing first (so Σσᵢ²=1, matching Muon's NS normalization) makes
-    ``gain`` transferable across layers/steps. Computed in float32 for SVD stability,
-    cast back to the input dtype.
+    ``gain`` and ``psi_eps`` transferable across layers/steps. Computed in float32 for
+    SVD stability, cast back to the input dtype.
     """
     orig_dtype = array.dtype
     x = array.astype(jnp.float32)
@@ -153,7 +162,9 @@ def _gain_gated_matrix(array, *, gain, rho, normalize_fro, eps, use_kimi_scaling
 
     # full_matrices=False → p:(m,k), s:(k,), qt:(k,n) with k = min(m, n)
     p, s, qt = jnp.linalg.svd(x, full_matrices=False)
-    a = jnp.minimum(rho, jnp.sqrt(2.0 * gain * s))
+    # ψ_ε(σ) = √(σ²+ε²) − ε  (= σ when psi_eps=0, since σ ≥ 0)
+    s_eff = jnp.sqrt(s * s + psi_eps * psi_eps) - psi_eps
+    a = jnp.minimum(rho, jnp.sqrt(2.0 * gain * s_eff))
     u = (p * a[None, :]) @ qt
 
     if normalize_fro:
@@ -171,10 +182,11 @@ def _gain_gated_matrix(array, *, gain, rho, normalize_fro, eps, use_kimi_scaling
 
 
 def scale_with_gain_gated(
-    momentum=0.95, nesterov=True, gain=1.0, rho=1.0, normalize_fro=False, eps=1e-7, use_kimi_scaling=False
+    momentum=0.95, nesterov=True, gain=1.0, rho=1.0, normalize_fro=False, psi_eps=0.0, eps=1e-7, use_kimi_scaling=False
 ):
     gain = float(gain)
     rho = float(rho)
+    psi_eps = float(psi_eps)
 
     def init_fn(params):
         return ScaleByGainGatedState(momentum_buffer=otu.tree_zeros_like(params))
@@ -203,6 +215,7 @@ def scale_with_gain_gated(
                 gain=gain,
                 rho=rho,
                 normalize_fro=normalize_fro,
+                psi_eps=psi_eps,
                 eps=eps,
                 use_kimi_scaling=use_kimi_scaling,
             )
