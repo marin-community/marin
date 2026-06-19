@@ -301,6 +301,39 @@ def _restore_grouped_muonh_for_split(grouped_update, target, valid_size: int):
     return grouped_update
 
 
+def _restore_grouped_muonh_for_split_target_layout(grouped_update, target, valid_size: int, sample_param):
+    """Restore a grouped MuonH update directly into grouped FSDP layout.
+
+    The grouped Newton-Schulz layout uses the leading stack axis for work
+    distribution, typically `P(('replica_dcn', 'data'), 'expert', None, None)`.
+    Before returning ordinary per-layer updates, move that grouped 4D array to
+    `P(None, *param_spec)` so slicing the group axis yields leaves that already
+    match the FSDP parameter sharding.
+    """
+
+    target_spec = _target_spec(target)
+    param_sharding = _target_named_sharding(sample_param)
+    if (
+        grouped_update.ndim != 4
+        or target_spec is None
+        or target_spec[0] is None
+        or not isinstance(param_sharding, jax.sharding.NamedSharding)
+        or len(param_sharding.spec) != 3
+    ):
+        return _restore_grouped_muonh_for_split(grouped_update, target, valid_size)
+
+    grouped_update = jax.sharding.reshard(
+        grouped_update,
+        jax.sharding.NamedSharding(
+            param_sharding.mesh,
+            jax.sharding.PartitionSpec(None, *param_sharding.spec),
+        ),
+    )
+    if grouped_update.shape[0] != valid_size:
+        grouped_update = grouped_update[:valid_size]
+    return grouped_update
+
+
 def _restore_grouped_muonh_for_split_explicit(grouped_update, target, valid_size: int, sample_param):
     target_spec = _target_spec(target)
     param_sharding = _target_named_sharding(sample_param)
@@ -447,7 +480,7 @@ def _grouped_expert_muonh_updates(
                 direction = _scale_grouped_muonh_direction(direction)
 
             grouped_update = _grouped_muonh_hyperball_update(stacked_params, direction, learning_rate)
-            grouped_update = _restore_grouped_muonh_for_split_explicit(
+            grouped_update = _restore_grouped_muonh_for_split_target_layout(
                 grouped_update,
                 target,
                 valid_size,
