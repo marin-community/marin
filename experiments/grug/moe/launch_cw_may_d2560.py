@@ -36,7 +36,7 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_MUON_MAX_GROUPED_STACK_SIZE=256  Maximum grouped Muon stack size
     MAY_MUON_NS_COMPUTE_DTYPE=input  input | bf16 | fp32 | fp16 Newton-Schulz compute dtype
     MAY_EXPERT_3D_OPTIMIZER=muonh  muonh | adamh | grouped_muonh for routed expert weights
-    MAY_ORDINARY_2D_OPTIMIZER=muonh  muonh | adamh | adam for ordinary non-expert 2D weights
+    MAY_ORDINARY_2D_OPTIMIZER=muonh  muonh | adamh | adam | sgd for ordinary non-expert 2D weights
     MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE=  optional grouped_muonh stack group size
 
 The default parameter policy keeps one sharded fp32 parameter tree plus sharded

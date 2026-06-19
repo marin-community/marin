@@ -33,8 +33,8 @@ from experiments.grug.moe.optimizer_sharding import assert_update_sharding_match
 
 Expert3DOptimizer = Literal["muonh", "adamh", "grouped_muonh"]
 VALID_EXPERT_3D_OPTIMIZERS: tuple[Expert3DOptimizer, ...] = ("muonh", "adamh", "grouped_muonh")
-Ordinary2DOptimizer = Literal["muonh", "adamh", "adam"]
-VALID_ORDINARY_2D_OPTIMIZERS: tuple[Ordinary2DOptimizer, ...] = ("muonh", "adamh", "adam")
+Ordinary2DOptimizer = Literal["muonh", "adamh", "adam", "sgd"]
+VALID_ORDINARY_2D_OPTIMIZERS: tuple[Ordinary2DOptimizer, ...] = ("muonh", "adamh", "adam", "sgd")
 MayOptimizer = Literal["muonh", "sgd"]
 VALID_MAY_OPTIMIZERS: tuple[MayOptimizer, ...] = ("muonh", "sgd")
 REPLICA_DCN_AXIS = "replica_dcn"
@@ -680,6 +680,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components.append(_match_named_update_sharding())
                 return optax.chain(*components)
 
+            def sgd_transform_at(lr):
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale(-lr))
+                components.append(_match_named_update_sharding())
+                return optax.chain(*components)
+
             return optax.multi_transform(
                 {
                     "muonh": _with_named_update_scope("optimizer/group/muonh", muonh_transform()),
@@ -689,6 +697,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     ),
                     "adamh": _with_named_update_scope("optimizer/group/adamh", adamh_transform_at(learning_rate)),
                     "adam": _with_named_update_scope("optimizer/group/adam", adam_transform_at(adam_lr)),
+                    "sgd": _with_named_update_scope("optimizer/group/sgd", sgd_transform_at(learning_rate)),
                 },
                 self.create_mask,
             )

@@ -172,15 +172,15 @@ def test_grug_moe_muonh_can_route_ordinary_2d_weights_away_from_muonh():
 
     mask = GrugMoeMuonHConfig(
         expert_3d_optimizer="grouped_muonh",
-        ordinary_2d_optimizer="adamh",
+        ordinary_2d_optimizer="sgd",
     ).create_mask(params)
 
     block_mask = mask["blocks"]["0"]
-    assert block_mask["attn"]["w_q"] == "adamh"
-    assert block_mask["attn_gated_norm"]["w_down"] == "adamh"
+    assert block_mask["attn"]["w_q"] == "sgd"
+    assert block_mask["attn_gated_norm"]["w_down"] == "sgd"
     assert block_mask["mlp"]["expert_mlp"]["w_gate_up"] == "grouped_muonh"
     assert block_mask["mlp"]["expert_mlp"]["w_down"] == "grouped_muonh"
-    assert block_mask["shared"]["w_gate"] == "adamh"
+    assert block_mask["shared"]["w_gate"] == "sgd"
 
 
 def test_grouped_expert_muonh_rejects_unknown_ns_compute_dtype():

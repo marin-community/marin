@@ -132,7 +132,7 @@ Options:
                             MAY_MATCH_OPTIMIZER_SHARDING diagnostic toggle for explicit optimizer reshards (default: true).
   --expert-3d-optimizer MODE MAY_EXPERT_3D_OPTIMIZER: muonh, adamh, or grouped_muonh (default: muonh).
   --ordinary-2d-optimizer MODE
-                            MAY_ORDINARY_2D_OPTIMIZER: muonh, adamh, or adam for ordinary non-expert 2D weights (default: muonh).
+                            MAY_ORDINARY_2D_OPTIMIZER: muonh, adamh, adam, or sgd for ordinary non-expert 2D weights (default: muonh).
   --expert-grouped-muonh-group-size N
                             MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE for grouped_muonh; empty chooses replica_dcn*data.
   --mp POLICY               MAY_MP policy string.
@@ -452,10 +452,10 @@ case "$EXPERT_3D_OPTIMIZER" in
 esac
 
 case "$ORDINARY_2D_OPTIMIZER" in
-    muonh|adamh|adam)
+    muonh|adamh|adam|sgd)
         ;;
     *)
-        echo "ERROR: --ordinary-2d-optimizer must be muonh, adamh, or adam, got: $ORDINARY_2D_OPTIMIZER" >&2
+        echo "ERROR: --ordinary-2d-optimizer must be muonh, adamh, adam, or sgd, got: $ORDINARY_2D_OPTIMIZER" >&2
         exit 1
         ;;
 esac
