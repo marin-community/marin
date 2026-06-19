@@ -5,7 +5,6 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TypeAlias
 
 from marin.rl.kl_regularization import KLConfig
 
@@ -46,7 +45,7 @@ class NoRewardSignalConfig:
     name: str = "none"
 
 
-SignalConfig: TypeAlias = RLOOSignalConfig | NoRewardSignalConfig
+type SignalConfig = RLOOSignalConfig | NoRewardSignalConfig
 
 
 @dataclass(frozen=True)
@@ -68,7 +67,7 @@ class ReferenceKLTermConfig:
     kl: KLConfig
 
 
-LossTermConfig: TypeAlias = PolicyGradientTermConfig | ReferenceKLTermConfig
+type LossTermConfig = PolicyGradientTermConfig | ReferenceKLTermConfig
 
 
 @dataclass(frozen=True)

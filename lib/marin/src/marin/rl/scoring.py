@@ -4,7 +4,7 @@
 """Shared scoring runtime for RL/post-training objectives."""
 
 from dataclasses import dataclass
-from typing import Protocol, TypeAlias
+from typing import Protocol
 
 import haliax as hax
 import jax
@@ -16,7 +16,7 @@ from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
 
 from .types import BatchInfo, SequenceBatch, TrainingBatch
 
-ScoredBatch: TypeAlias = SequenceBatch | TrainingBatch
+type ScoredBatch = SequenceBatch | TrainingBatch
 
 
 @dataclass(frozen=True)
