@@ -311,19 +311,11 @@ class TpuConfig:
 DeviceConfig = CpuConfig | GpuConfig | TpuConfig
 
 
-class _AnyRegion:
-    """Sentinel type for ``ResourceConfig.regions`` meaning ANY region.
-
-    Distinct from ``None`` (UNSET — inherit the parent job's region) and from a concrete
-    region list (PINNED). ANY means "run anywhere; do NOT inherit the parent's region."
-    Use the module-level ``ANY_REGION`` singleton; compare with ``is``.
-    """
-
-    def __repr__(self) -> str:
-        return "ANY_REGION"
-
-
-ANY_REGION = _AnyRegion()
+# Sentinel region value meaning ANY: run anywhere; do NOT inherit the parent job's region.
+# Distinct from ``None`` (UNSET — inherit) and a concrete region list (PINNED). Pass it as the
+# sole element of ``ResourceConfig.regions`` (``regions=[ANY_REGION]``). Not a real region, so
+# it never collides with a GCP region name.
+ANY_REGION = "*"
 
 
 @dataclass
@@ -348,8 +340,8 @@ class ResourceConfig:
     device: DeviceConfig = field(default_factory=CpuConfig)
     preemptible: bool = True
     # Region state: UNSET (None, default) inherits the parent job's region; PINNED (a
-    # region list) restricts to those regions; ANY (the ANY_REGION sentinel) runs
-    # anywhere without inheriting. ANY_REGION is accepted at runtime via identity check.
+    # region list) restricts to those regions; ANY ([ANY_REGION]) runs anywhere without
+    # inheriting.
     regions: Sequence[str] | None = None
     zone: str | None = None
     replicas: int = 1

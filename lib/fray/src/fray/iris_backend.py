@@ -118,12 +118,15 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     constraints: list[Constraint] = []
     if not resources.preemptible:
         constraints.append(preemptible_constraint(False))
-    if resources.regions is ANY_REGION:
+    regions = resources.regions
+    if regions and ANY_REGION in regions:
+        if len(regions) > 1:
+            raise ValueError(f"ANY_REGION cannot be combined with specific regions; got {list(regions)}")
         # ANY: run anywhere, do not inherit the parent's region. Emitted as a region-EXISTS
         # marker that matches every worker yet suppresses parent-region inheritance.
         constraints.append(any_region_constraint())
-    elif resources.regions:
-        constraints.append(region_constraint(list(resources.regions)))
+    elif regions:
+        constraints.append(region_constraint(list(regions)))
     if resources.zone:
         constraints.append(zone_constraint(resources.zone))
     if resources.device_alternatives:
