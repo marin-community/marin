@@ -655,3 +655,35 @@ The successful T64 run reported `grouped_expert_consumer_tokens_per_expert=64`, 
 The run succeeded without the previous 57.84 GiB allocation. Compiled HLO reported `custom_call=700`, `gpu_gemm_custom_call=336`, and no collectives. The summary kept `ns4d_input_sharding_spec`, `ns4d_compute_sharding_spec`, and `ns4d_result_sharding_spec` all at `P(('replica_dcn', 'data'), 'expert', None, None)`.
 - Interpretation: This is the first strong evidence that the pragmatic representation can work: grouped MuonH, grouped `optax.apply_updates`, and grouped expert-bank consumption can stay collective-clean and fast at the R2/D2/E8 L26/T1024 gate. It also confirms the public grouped-MoE helper OOM was not an inherent cost of the grouped expert-bank representation; it was specific to that routed-token helper path.
 - Next action: Treat this as the preferred production integration direction. Wire the real model to consume grouped expert banks directly, or introduce a grouped-bank expert module API, rather than restoring grouped params to FSDP before `apply_updates` or using the public helper's all-at-once routed-token materialization. Keep a small numerical/correctness gate around grouped `apply_updates` before replacing the current production optimizer path.
+
+### 2026-06-19 10:05 PDT - direct grouped-to-FSDP restore validation
+- Hypothesis: The pragmatic FSDP-master path might still be viable if grouped MuonH updates are converted directly from `P(('replica_dcn', 'data'), 'expert', None, None)` to grouped FSDP target layout `P(None, 'expert', 'data', None)` before splitting into ordinary per-layer leaves.
+- Command:
+  - Commit `a045028d8` changed production grouped MuonH restore to use a direct target-layout `jax.sharding.reshard`.
+  - CoreWeave run: parent `/dlwh/iris-run-job-20260619-164947`; child `/dlwh/iris-run-job-20260619-164947/grug-train-MUON-BENCH-D2560-L26-R2D2E8-REALGROUPEDMUONH-TARGETRESTORE-H3-G4-CAP256-N4-cw-20260619-164945`.
+  - Commit `5cdf79012` then changed the restore to an explicit `shard_map` boundary for the R2/D2 case: `all_gather` over `replica_dcn`, `all_to_all` over `data`, then reorder the grouped layer axis.
+  - CoreWeave run: parent `/dlwh/iris-run-job-20260619-165623`; child `/dlwh/iris-run-job-20260619-165623/grug-train-MUON-BENCH-D2560-L26-R2D2E8-REALGROUPEDMUONH-EXPLICITA2A-H3-G4-CAP256-N4-cw-20260619-165621`.
+- Config: 4 H100 nodes, `replica_axis=2`, `data_axis=2`, `expert_axis=8`, `model_axis=1`, `layers=26`, `hidden_dim=2560`, `intermediate_dim=1280`, `num_experts=256`, fp32 params/optimizer state, bf16 Newton-Schulz compute, `expert_grouped_muonh_group_size=4`, `max_grouped_stack_size=256`, backend steps H3.
+- Result:
+
+| boundary | outcome | lowered collectives | compiled collectives | timing |
+| --- | --- | --- | --- | --- |
+| direct `reshard` to `P(None, 'expert', 'data', None)` | failed | local/tiny lowering looked clean | GPU SPMD warned it would replicate then partition | OOM on a 26.17GiB allocation |
+| explicit replica gather + data all-to-all | succeeded | update/apply both `AG=14`, `A2A=14`, `AR=0`, `RS=0` | update/apply both `AG=112`, `A2A=392`, `AR=0`, `RS=0` | update median about 1.127s; apply median about 1.073-1.077s |
+
+- Interpretation: The layout movement is mathematically right but not viable through current XLA GPU lowering. The plain `reshard` chooses a replicate-then-partition path and OOMs. The explicit `shard_map` avoids the OOM, but the compiled graph explodes the intended grouped boundary into many collectives and is no faster than the previous bad boundary class. This rules out the current FSDP-master hot-path conversion as the production route.
+- Next action: Stop iterating on generic `reshard`/`shard_map` grouped-to-FSDP restore variants unless the new proposal avoids the required materialization or uses a lower-level custom communication path. Prefer the grouped-bank representation that already passed the R2/D2/E8 L26/T1024 collective-clean gate.
+
+### 2026-06-19 10:35 PDT - sequential grouped-bank consumer gate
+- Hypothesis: The successful grouped-bank consumer gate may be too optimistic because it consumes all layers in a group at once. A more model-like sequential consumer should try to read one layer at a time from persistent grouped expert banks.
+- Command:
+  - Added harness bench kind `expert_grouped_sequential_bank_consumer`.
+  - Validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -q` -> 52 passed.
+  - CLI smoke with unsharded group axis: `XLA_FLAGS=--xla_force_host_platform_device_count=8 uv run python experiments/grug/moe/muon_update_bench.py --layers 4 --ns4d-group-size 4 --ns4d-group-axis none --hidden-dim 16 --intermediate-dim 8 --num-experts 8 --replica-axis 2 --data-axis 2 --expert-axis 2 --model-axis 1 --bench-kinds expert_grouped_sequential_bank_consumer --mode lower --warmup 0 --iters 1 --disable-abstract-mesh --output /tmp/muon_seq_bank_smoke.json`.
+  - CLI smoke with target sharded group axis: same command but `--ns4d-group-axis replica_dcn,data`.
+- Result:
+  - Unsharded group axis lowers and returns rank-3 expert-local outputs. StableHLO summary: `dot_general=8`, `all_gather=0`, `all_to_all=0`, `all_reduce=0`, `reduce_scatter=0`.
+  - Sharded group axis is now a structured skip before lowering: `expert_grouped_sequential_bank_consumer consumes one layer at a time and cannot directly slice a grouped layer axis sharded over ('replica_dcn', 'data')`.
+  - The original failing smoke raised `ShardingTypeError`: slicing a group axis sharded over 4 mesh devices down to output size 1 is not implemented because the output dimension is not divisible by the mesh axis.
+- Interpretation: This is the realism caveat for grouped-bank integration. Keeping params/updates/results grouped is fast, but a conventional sequential transformer block cannot simply index one layer out of a `replica_dcn,data`-sharded grouped bank. That access pattern necessarily needs a communication boundary, a different grouped/scan-like model consumer that keeps the group axis alive, or a lower-level custom gather/broadcast path. The existing all-at-once grouped-bank gate is a lower bound, not proof that the ordinary block loop can consume the grouped bank directly.
+- Next action: Do not port grouped banks into the real block loop by calling `GroupedMoEExpertMlp.layer()` on a sharded group axis. The next viable model-facing design must either keep the layer group axis live through a grouped block/scan consumer, or make an explicit one-layer access boundary and measure/overlap it.
