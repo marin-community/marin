@@ -61,7 +61,7 @@ override-dependencies = [
     "antlr4-python3-runtime==4.11",
     "python-multipart>=0.0.27",
     "wheel>=0.46.2",
-    "datasets>=4.0.0,<5.0.0",
+    "datasets>=4.7.0,<5.0.0",
     "equinox>=0.11.10",  # Override vizier's pin for modern JAX compatibility
     "authlib>=1.7.2",
     "cbor2>=6.0.1",
