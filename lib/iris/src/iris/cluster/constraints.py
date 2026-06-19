@@ -14,6 +14,22 @@ This module is the canonical home for all constraint-related types:
 
 All production code should reference WellKnownAttribute enum members instead of
 raw string literals so that typos are caught at import time.
+
+Region states
+-------------
+A job's region requirement has three distinct states:
+
+- UNSET (no region constraint): "I don't care — inherit the parent worker's region."
+  This is the data-locality-friendly default; IrisClient.submit injects the parent's
+  region so a child co-locates with the worker that launched it.
+- PINNED (``region EQ X`` / ``region IN [...]`` via ``region_constraint``): exactly
+  these regions.
+- ANY (``region EXISTS`` via ``any_region_constraint``): "run anywhere; do NOT inherit
+  the parent's region." Because the marker carries the region key, it suppresses the
+  parent-region injection in IrisClient.submit and clears an inherited pin in
+  ``merge_constraints``. Having served that opt-out, IrisClient.submit strips it before
+  the job reaches the controller, so it never acts as a scheduling/routing filter (a hard
+  ``region EXISTS`` would otherwise exclude workers/groups that advertise no region).
 """
 
 from __future__ import annotations
@@ -404,6 +420,14 @@ def region_constraint(regions: list[str]) -> Constraint:
     return Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=regions)
 
 
+def any_region_constraint() -> Constraint:
+    """Region constraint meaning ANY: run anywhere, do not inherit the parent's region.
+
+    See the module-level "region states" note for how ANY relates to UNSET and PINNED.
+    """
+    return Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EXISTS)
+
+
 def device_variant_constraint(variants: Sequence[str]) -> Constraint:
     """Constraint requiring scheduling on workers with one of the given device variants.
 
@@ -624,6 +648,8 @@ class ConstraintDescriptor:
 
 
 _EQ_IN = frozenset({job_pb2.CONSTRAINT_OP_EQ, job_pb2.CONSTRAINT_OP_IN})
+# Region additionally allows EXISTS as the explicit ANY-region marker (any_region_constraint).
+_EQ_IN_EXISTS = _EQ_IN | frozenset({job_pb2.CONSTRAINT_OP_EXISTS})
 _EQ_ONLY = frozenset({job_pb2.CONSTRAINT_OP_EQ})
 _ALL_OPS = frozenset(
     {
@@ -665,7 +691,7 @@ _register(
 )
 _register(
     ConstraintDescriptor(
-        key="region", kind=ConstraintKind.TAG, python_type=str, allowed_ops=_EQ_IN, canonical=True, routing=True
+        key="region", kind=ConstraintKind.TAG, python_type=str, allowed_ops=_EQ_IN_EXISTS, canonical=True, routing=True
     )
 )
 _register(
@@ -990,6 +1016,11 @@ def is_cpu_device_type_constraint(c: Constraint) -> bool:
     before routing evaluation. Values are already normalized at ingestion.
     """
     return c.key == WellKnownAttribute.DEVICE_TYPE and c.op == ConstraintOp.EQ and c.values[0].value == "cpu"
+
+
+def is_any_region_marker(c: Constraint) -> bool:
+    """True if ``c`` is the ANY-region marker: a ``region EXISTS`` constraint."""
+    return c.key == WellKnownAttribute.REGION and c.op == ConstraintOp.EXISTS
 
 
 def routing_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:

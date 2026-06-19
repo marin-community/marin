@@ -4,6 +4,7 @@
 """fray.cluster re-exports resource/job types for back-compat."""
 
 from fray.types import (
+    ANY_REGION,
     CpuConfig,
     DeviceConfig,
     DeviceKind,
@@ -22,6 +23,7 @@ from fray.types import (
 )
 
 __all__ = [
+    "ANY_REGION",
     "CpuConfig",
     "DeviceConfig",
     "DeviceKind",
