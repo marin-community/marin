@@ -53,8 +53,6 @@ test = [
     "pytest-asyncio",
     "pytest-xdist",
     "pytest-timeout",
-    # need this for integration tests
-    "pip",
     # for scaling law plotting tests
     "plotly",
 ]
