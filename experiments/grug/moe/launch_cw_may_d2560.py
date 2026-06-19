@@ -35,6 +35,7 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_MUON_ORTHOGONALIZATION_LAYOUT=stack_batch_sharded  stack_batch_sharded | vmap_replicated
     MAY_MUON_MAX_GROUPED_STACK_SIZE=256  Maximum grouped Muon stack size
     MAY_MUON_NS_COMPUTE_DTYPE=input  input | bf16 | fp32 | fp16 Newton-Schulz compute dtype
+    MAY_MUON_NESTEROV=true  true | false Muon momentum update mode
     MAY_EXPERT_3D_OPTIMIZER=muonh  muonh | adamh | grouped_muonh for routed expert weights
     MAY_ORDINARY_2D_OPTIMIZER=muonh  muonh | adamh | adam | sgd for ordinary non-expert 2D weights
     MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE=  optional grouped_muonh stack group size
@@ -216,6 +217,7 @@ def build_may_optimizer(*, batch_size: int, seq_len: int) -> OptimizerConfig:
         ),
         max_grouped_stack_size=env_int("MAY_MUON_MAX_GROUPED_STACK_SIZE", GrugMoeMuonHConfig.max_grouped_stack_size),
         ns_compute_dtype=os.environ.get("MAY_MUON_NS_COMPUTE_DTYPE", GrugMoeMuonHConfig.ns_compute_dtype),
+        nesterov=env_bool("MAY_MUON_NESTEROV", GrugMoeMuonHConfig.nesterov),
         expert_grouped_muonh_group_size=env_optional_int("MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE"),
         max_grad_norm=None,
         lr_schedule=base_optimizer.lr_schedule,

@@ -8,6 +8,7 @@ from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mes
 from jax.sharding import PartitionSpec as P
 
 from experiments.grug.moe.adamh import _scale_invariant_hyperball_update as _adamh_hyperball_update
+from experiments.grug.moe.launch_cw_may_d2560 import build_may_optimizer
 from experiments.grug.moe.optimizer import (
     GrugMoeAdamHConfig,
     GrugMoeMuonHConfig,
@@ -186,6 +187,16 @@ def test_grug_moe_muonh_can_route_ordinary_2d_weights_away_from_muonh():
 def test_grouped_expert_muonh_rejects_unknown_ns_compute_dtype():
     with pytest.raises(ValueError, match="ns_compute_dtype"):
         scale_with_grouped_expert_muonh(ns_compute_dtype="int8")
+
+
+def test_may_optimizer_reads_muon_nesterov_env(monkeypatch):
+    monkeypatch.setenv("MAY_OPTIMIZER", "muonh")
+    monkeypatch.setenv("MAY_MUON_NESTEROV", "false")
+
+    optimizer = build_may_optimizer(batch_size=8, seq_len=4096)
+
+    assert isinstance(optimizer, GrugMoeMuonHConfig)
+    assert optimizer.nesterov is False
 
 
 def test_grug_moe_sgd_update_is_stateless_and_matches_shapes():

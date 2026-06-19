@@ -43,6 +43,7 @@ MUON_BACKEND_STEPS="${MAY_MUON_BACKEND_STEPS:-5}"
 MUON_ORTHOGONALIZATION_LAYOUT="${MAY_MUON_ORTHOGONALIZATION_LAYOUT:-stack_batch_sharded}"
 MUON_MAX_GROUPED_STACK_SIZE="${MAY_MUON_MAX_GROUPED_STACK_SIZE:-256}"
 MUON_NS_COMPUTE_DTYPE="${MAY_MUON_NS_COMPUTE_DTYPE:-input}"
+MUON_NESTEROV="${MAY_MUON_NESTEROV:-true}"
 ASSERT_OPTIMIZER_SHARDING="${MAY_ASSERT_OPTIMIZER_SHARDING:-true}"
 MATCH_OPTIMIZER_SHARDING="${MAY_MATCH_OPTIMIZER_SHARDING:-true}"
 EXPERT_3D_OPTIMIZER="${MAY_EXPERT_3D_OPTIMIZER:-muonh}"
@@ -126,6 +127,7 @@ Options:
                             MAY_MUON_MAX_GROUPED_STACK_SIZE for grouped Muon (default: 256).
   --muon-ns-compute-dtype DTYPE
                             MAY_MUON_NS_COMPUTE_DTYPE: input, bf16, bfloat16, fp32, float32, fp16, or float16 (default: input).
+  --muon-nesterov BOOL      MAY_MUON_NESTEROV: true or false (default: true).
   --assert-optimizer-sharding BOOL
                             MAY_ASSERT_OPTIMIZER_SHARDING diagnostic toggle (default: true).
   --match-optimizer-sharding BOOL
@@ -310,6 +312,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --muon-ns-compute-dtype)
             MUON_NS_COMPUTE_DTYPE="$2"
+            shift 2
+            ;;
+        --muon-nesterov)
+            MUON_NESTEROV="$2"
             shift 2
             ;;
         --assert-optimizer-sharding)
@@ -516,6 +522,7 @@ ENV_ARGS=(
     -e MAY_MUON_ORTHOGONALIZATION_LAYOUT "$MUON_ORTHOGONALIZATION_LAYOUT"
     -e MAY_MUON_MAX_GROUPED_STACK_SIZE "$MUON_MAX_GROUPED_STACK_SIZE"
     -e MAY_MUON_NS_COMPUTE_DTYPE "$MUON_NS_COMPUTE_DTYPE"
+    -e MAY_MUON_NESTEROV "$MUON_NESTEROV"
     -e MAY_ASSERT_OPTIMIZER_SHARDING "$ASSERT_OPTIMIZER_SHARDING"
     -e MAY_MATCH_OPTIMIZER_SHARDING "$MATCH_OPTIMIZER_SHARDING"
     -e MAY_EXPERT_3D_OPTIMIZER "$EXPERT_3D_OPTIMIZER"
@@ -609,6 +616,7 @@ muon_backend_steps: $MUON_BACKEND_STEPS
 muon_orthogonalization_layout: $MUON_ORTHOGONALIZATION_LAYOUT
 muon_max_grouped_stack_size: $MUON_MAX_GROUPED_STACK_SIZE
 muon_ns_compute_dtype: $MUON_NS_COMPUTE_DTYPE
+muon_nesterov: $MUON_NESTEROV
 assert_optimizer_sharding: $ASSERT_OPTIMIZER_SHARDING
 match_optimizer_sharding: $MATCH_OPTIMIZER_SHARDING
 expert_3d_optimizer: $EXPERT_3D_OPTIMIZER
