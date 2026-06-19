@@ -11,6 +11,7 @@ from jax._src import config as jax_config
 from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
+from experiments.grug.moe.launch_cw_muon_update_bench import build_step
 from experiments.grug.moe.muon_update_bench import (
     EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
@@ -131,6 +132,15 @@ class _reset_abstract_mesh:
     def __exit__(self, exc_type, exc, tb):
         jax_config.abstract_mesh_context_manager.set_local(self._prev)
         return False
+
+
+def test_cw_muon_update_bench_launcher_reads_nesterov_env(monkeypatch):
+    monkeypatch.setenv("RUN_ID", "muon-update-bench-test")
+    monkeypatch.setenv("MUON_BENCH_NESTEROV", "false")
+
+    step = build_step()
+
+    assert step.config.nesterov is False
 
 
 def test_ns4d_grouped_apply_preserves_data_expert_sharding_through_apply_boundary():
