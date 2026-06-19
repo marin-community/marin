@@ -735,3 +735,23 @@ The run succeeded without the previous 57.84 GiB allocation. Compiled HLO report
   - The unsharded scan control still lowers and returns expert-local rank-3 outputs with no AG/AR/RS/A2A, so the failure is specifically the sharded scan axis, not the MLP computation.
 - Interpretation: A normal `lax.scan` does not rescue the grouped model-facing representation. If the grouped layer axis is actually sharded across `replica_dcn,data`, sequential block consumption needs either a communication boundary to move the activation carry between layer-bank shards, a different lower-level implementation, or a layout that does not shard the layer axis for model consumption.
 - Next action: Do not port grouped expert banks into the real block loop via `lax.scan` over a sharded grouped layer axis. The two remaining viable directions are a custom grouped-to-FSDP permutation boundary, or a custom/pipelined grouped consumer that explicitly handles activation carry movement across the group-axis devices.
+
+### 2026-06-19 11:25 PDT - data-first explicit A2A grouped-to-FSDP boundary
+- Hypothesis: The explicit grouped-to-FSDP boundary may be cheaper if the `data` all-to-all is performed before the `replica_dcn` gather, matching the desired logical movement from `P(('replica_dcn', 'data'), 'expert', None, None)` to `P(None, 'expert', 'data', None)` more directly.
+- Command:
+  - Code change: added `expert_fsdp_grouped_explicit_data_first_a2a_apply_boundary` to `experiments/grug/moe/muon_update_bench.py`, with focused coverage in `experiments/grug/moe/test_muon_update_bench.py`. Commit `24c6e7e50` pushed to `codex/research-grug-moe-d2560-mfu`.
+  - Validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -q` -> 56 passed; `./infra/pre-commit.py --changed-files --fix` -> OK.
+  - Local forced-CPU lower-only comparison:
+    `XLA_FLAGS=--xla_force_host_platform_device_count=32 uv run python experiments/grug/moe/muon_update_bench.py --layers 26 --ns4d-group-size 4 --ns4d-group-axis replica_dcn,data --hidden-dim 2560 --intermediate-dim 1280 --num-experts 256 --replica-axis 2 --data-axis 2 --expert-axis 8 --model-axis 1 --bench-kinds expert_fsdp_grouped_explicit_a2a_apply_boundary,expert_fsdp_grouped_explicit_data_first_a2a_apply_boundary,expert_fsdp_grouped_packed_a2a_apply_boundary --mode lower --warmup 0 --iters 1 --disable-abstract-mesh --output /tmp/muon_data_first_a2a_l26_lower.json`.
+  - CoreWeave run: parent `/dlwh/iris-run-job-20260619-174425`; child `/dlwh/iris-run-job-20260619-174425/grug-train-MUON-BENCH-D2560-L26-R2D2E8-DATAFIRSTA2A-H1-G4-N4-cw-20260619-174422`.
+  - Output: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D2E8-DATAFIRSTA2A-H1-G4-N4-cw-20260619-174422-eb8a42/summary.json`.
+- Result:
+
+| boundary | lowered AG/A2A | compiled AG/A2A | compiled GEMMs | median | mean |
+| --- | --- | --- | ---: | ---: | ---: |
+| gather-first explicit A2A | 14/14 | 112/98 | 7 | 0.304565s | 0.305158s |
+| data-first explicit A2A | 14/14 | 150/98 | 14 | 0.220179s | 0.219504s |
+
+The data-first variant is about 1.38x faster than the gather-first explicit boundary, despite compiling to more all-gathers and more GEMM custom calls. Both variants still compile the intended 14 logical AG/A2A pairs into many more collectives.
+- Interpretation: The direct logical target `P(('replica_dcn', 'data'), 'expert', None, None) -> P(None, 'expert', 'data', None)` is the right communication shape, and ordering the data-axis movement first materially helps. It still does not prove the FSDP-master hot boundary is production-viable: compiled collectives remain high (`AG=150`, `A2A=98`) and the boundary is still slower than the collective-clean grouped MuonH bank-consumer gate at about 0.145s for MuonH plus grouped apply plus grouped consumer.
+- Next action: Keep the data-first boundary as the best measured FSDP-master explicit-communication checkpoint, but do not integrate it into production yet. The next FSDP-master attempt needs a lower-level/custom grouped-to-FSDP permutation or a `shard_map` structure that prevents compiled collective decomposition; otherwise prefer grouped-bank model consumption.
