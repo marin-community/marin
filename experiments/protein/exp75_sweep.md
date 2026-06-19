@@ -433,11 +433,14 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
 
   | wd \ lr | 5e-4 | 7e-4 | 1e-3 |
   |---|---|---|---|
-  | **0.05** | | | |
-  | **0.1**  | | | |
+  | **0.05** | 2.962 | 2.949 | |
+  | **0.1**  | | | **2.942** |
   | **0.2**  | | | |
 
-- Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐
+- Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ — first 3 cells in
+  (~12:xxZ): 7e-4/0.05=2.949, 5e-4/0.05=2.962, **1e-3/0.1=2.942 (current best)**. Early hint
+  that E4 likes HIGHER LR than E1/E2 (1e-3 best here vs 1e-3 worst at E1/E2) — watch the LR
+  axis as more land; don't conclude yet (6/9 still running).
 - Notes:
 
 ### epochs = 8
