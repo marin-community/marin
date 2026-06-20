@@ -2228,3 +2228,97 @@ Post-compile steps were stable around 0.65-0.66s:
     transport that gets closer to the two logical grouped<->FSDP movements.
   - Use chunk-local as a production-safe fallback/benchmark point, not as the
     final answer.
+
+### 2026-06-20 06:40 PDT - N1 packed-bank boundary primitives
+- Hypothesis: Before debugging multi-node grouped-MuonH boundary traffic, the
+  two primitive halves should be clean on one node: FSDP grads -> grouped bank,
+  and grouped updates -> FSDP apply layout. On N1 these should need no
+  collectives and should expose the baseline local materialization cost.
+- Runs:
+  - `/dlwh/iris-run-job-20260620-133408`:
+    `MUON-BENCH-D2560-L26-R1D1E8-N1-G1-GRADSPACKBANK-cw-20260620-133405`.
+  - `/dlwh/iris-run-job-20260620-133655`:
+    `MUON-BENCH-D2560-L26-R1D1E8-N1-G8-GRADSPACKBANK-cw-20260620-133653`.
+  - `/dlwh/iris-run-job-20260620-133420`:
+    `MUON-BENCH-D2560-L26-R1D1E8-N1-G8-H3-APPLYROUTES-cw-20260620-133418`.
+- Config:
+  - Single H100 node, `replica_axis=1`, `data_axis=1`, `expert_axis=8`,
+    `model_axis=1`, 26 layers, bf16, backend steps 3, W&B enabled, compiled HLO
+    enabled.
+  - Grads primitive kind: `expert_fsdp_grads_to_explicit_packed_grouped_bank`.
+  - Apply route kinds:
+    `expert_fsdp_packed_bank_a2a_apply_boundary` and
+    `expert_fsdp_packed_bank_direct_apply_boundary`.
+- Results:
+
+| Run | Primitive | Group size | Mean seconds | Median seconds | Compiled collectives | Estimated global bytes | Estimated peak/device |
+|---|---|---:|---:|---:|---|---:|---:|
+| N1 G1 grads | FSDP grads -> packed grouped bank | 1 | `0.015834641` | `0.015726442` | AG/AR/RS/A2A=`0/0/0/0` | `121.875 GiB` | `15.234375 GiB` |
+| N1 G8 grads | FSDP grads -> packed grouped bank | 8 | `0.015797431` | `0.015665859` | AG/AR/RS/A2A=`0/0/0/0` | `121.875 GiB` | `15.234375 GiB` |
+| N1 G8 Route A | packed grouped updates -> FSDP update tree -> `optax.apply_updates` | 8 | `0.017000123` | `0.016983062` | AG/AR/RS/A2A=`0/0/0/0` | `121.875 GiB` | `15.234375 GiB` |
+| N1 G8 Route B | packed grouped updates + FSDP params -> updated FSDP params directly | 8 | `0.017276616` | `0.017034352` | AG/AR/RS/A2A=`0/0/0/0` | `121.875 GiB` | `15.234375 GiB` |
+
+- Correctness:
+  - All full-size N1 correctness checks were skipped by the harness because the
+    estimated global expert update size is `130862284800` bytes, above the
+    current 1 GiB correctness cap.
+  - The harness still reports the exact skip reason in the summary rows.
+- Interpretation:
+  - The primitive halves are clean on one node: no compiled all-gather,
+    all-reduce, reduce-scatter, or all-to-all.
+  - `G8` does not materially change N1 local materialization time relative to
+    `G1`, so the single-node baseline is roughly `16-17 ms` per boundary half
+    for this expert bank shape.
+  - Route A and Route B are equivalent on N1 within noise. The decision between
+    them should be based on R1D2/R1D4 communication shape and eventual training
+    integration simplicity, not N1 timing.
+- Active follow-up:
+  - R1D2/FSDP-data runs are active:
+    `/dlwh/iris-run-job-20260620-133929` for G8 grads-to-bank and
+    `/dlwh/iris-run-job-20260620-133945` for G8 apply routes.
+  - R1D4/FSDP-data runs are active:
+    `/dlwh/iris-run-job-20260620-134339` for G8 grads-to-bank and
+    `/dlwh/iris-run-job-20260620-134355` for G8 apply routes.
+  - Aquinas (`019ee53d-a3c8-7b21-a9ee-5b2b04dcf38e`) and heartbeat
+    `watch-muon-lower-bridge-subagent` are babysitting the R1D4 results.
+
+### 2026-06-20 06:43 PDT - R1D2 packed-bank boundary primitives
+- Hypothesis: If the packed-bank boundary primitive is viable, R1D2 should
+  lower to a small number of coarse collectives rather than per-leaf collective
+  explosion.
+- Runs:
+  - `/dlwh/iris-run-job-20260620-133929`:
+    `MUON-BENCH-D2560-L26-R1D2E8-N2-G8-GRADSPACKBANK-cw-20260620-133927`.
+  - `/dlwh/iris-run-job-20260620-133945`:
+    `MUON-BENCH-D2560-L26-R1D2E8-N2-G8-H3-APPLYROUTES-cw-20260620-133943`.
+- Config:
+  - Two H100 nodes, `replica_axis=1`, `data_axis=2`, `expert_axis=8`,
+    `model_axis=1`, `ns4d_group_axis=data`, group size 8, 26 layers, bf16,
+    backend steps 3.
+- Results:
+
+| Primitive | Mean seconds | Median seconds | Compiled collectives | Estimated global bytes | Estimated grouped/FSDP per-device | Estimated peak/device | Effective global GB/s |
+|---|---:|---:|---|---:|---:|---:|---:|
+| FSDP grads -> packed grouped bank | `0.172119` | `0.172207` | AG/AR/RS/A2A=`0/0/0/2` | `121.875 GiB` | `7.6171875 GiB` | `15.234375 GiB` | `~760` |
+| packed grouped updates -> FSDP update tree -> `optax.apply_updates` | `0.18468` | `0.18511` | AG/AR/RS/A2A=`0/0/0/2` | `121.875 GiB` | `7.6171875 GiB` | `15.234375 GiB` | `~708` |
+| packed grouped updates + FSDP params -> updated FSDP params directly | `0.18389` | `0.18360` | AG/AR/RS/A2A=`0/0/0/2` | `121.875 GiB` | `7.6171875 GiB` | `15.234375 GiB` | `~712` |
+
+- Correctness:
+  - Full-size correctness was skipped by the 1 GiB cap for all three rows.
+- Interpretation:
+  - The boundary primitive does avoid per-leaf collective explosion at R1D2:
+    each logical boundary compiles to exactly two all-to-alls and no all-gather,
+    all-reduce, or reduce-scatter.
+  - The problem is performance, not collective count. R1D2 spends roughly
+    `0.17-0.185s` per boundary half versus `0.016-0.017s` on N1, with effective
+    global throughput only `~0.7-0.76 TB/s` for the full 121.875 GiB logical
+    expert update.
+  - Route A and Route B remain indistinguishable at this scale. Direct apply is
+    not buying a clear boundary-speed win yet; ordinary `optax.apply_updates`
+    remains viable if it is easier to integrate.
+- Next action:
+  - Let the active R1D4 runs establish whether the data-axis all-to-all gets
+    worse with four hosts.
+  - If R1D4 stays around the same per-boundary latency, the primitive is
+    probably bounded by cross-host all-to-all latency/bandwidth and may need a
+    lower-level packed transport or overlap rather than more XLA reshaping.
