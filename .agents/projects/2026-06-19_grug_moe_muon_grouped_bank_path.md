@@ -45,6 +45,7 @@ The FSDP-master grouped-boundary path has not met the bar:
 | direct restore-and-apply at FSDP leaves | R2/E8, L26, 2 H100 nodes | compiled to the same 8 all-gathers as restore-then-`optax.apply_updates` |
 | persistent grouped expert params/apply | R2/E8, L26, 2 H100 nodes | compiled with zero AG/A2A/AR/RS/CP |
 | grouped MuonH plus grouped expert-bank consumer | R2/E8, L26, 2 H100 nodes | compiled with zero AG/A2A/AR/RS/CP and 175 GPU GEMM custom calls |
+| grouped MuonH plus public grouped-MoE consumer | R2/E8, L26, 2 H100 nodes | compiled with same AG/RS/A2A as standalone grouped-MoE consumer: 11/1/0 |
 
 Conclusion: preserving grouped params/updates/results is fast; converting
 grouped updates back to ordinary per-layer FSDP leaves in the hot path is not.
@@ -63,6 +64,12 @@ The two latest H100 compile-only checks tighten this conclusion:
   collectives, which is the first authoritative evidence that the persistent
   grouped-bank representation can survive both MuonH and an expert-like
   consumer.
+- A grouped MuonH plus public `grouped_moe_mlp` consumer gate is the closer
+  model-path proxy. On 2 H100 nodes, MuonH+grouped-MoE compiled with the same
+  communication counts as standalone grouped-MoE (`AG/RS/A2A = 11/1/0`) while
+  adding the expected NS/GEMM custom calls. The legitimate EP collectives mean
+  this gate cannot use the global zero-collective strict check; compare against
+  the standalone grouped-MoE baseline instead.
 
 The harness now reports boundary byte estimates for these rows. For the
 R2/D2/E8 May shape, the FSDP output shard is already 2x the grouped input shard
@@ -128,12 +135,14 @@ banks with grouped
 `[group, expert, token, hidden]` activations and runs the gate/up and down
 expert MLP matmuls without restoring per-layer FSDP leaves.
 
-The synthetic `expert_grouped_muonh_bank_consumer` compile-only gate has now
-passed the strict H100 gate on 2 nodes for R2/E8/L26 with
+The synthetic `expert_grouped_muonh_bank_consumer` compile-only gate has passed
+the strict H100 gate on 2 nodes for R2/E8/L26 with
 `boundary_collectives_required_absent=true` and zero compiled AG/A2A/AR/RS/CP.
-The remaining integration work is to make the real `MoEExpertMlp`/`MoEMLP` path
-consume this representation, or to add an explicit coarse transport if we keep
-ordinary FSDP leaves.
+The closer `expert_grouped_muonh_moe_mlp_consumer` gate has also passed on 2
+H100 nodes with no additional compiled collectives beyond standalone
+`grouped_moe_mlp`. The remaining integration work is to make the real
+`MoEExpertMlp`/`MoEMLP` path consume this representation, or to add an explicit
+coarse transport if we keep ordinary FSDP leaves.
 
 Build the real model-consumer path that keeps expert weights grouped through the
 consumer boundary:

@@ -118,6 +118,7 @@ EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH = "expert_grouped_moe_mlp_consumer"
 EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH = "expert_grouped_optimizer_apply"
 EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH = "expert_grouped_muonh_optimizer_apply"
 EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH = "expert_grouped_muonh_bank_consumer"
+EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH = "expert_grouped_muonh_moe_mlp_consumer"
 EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH = "expert_only_grouped_muonh_optimizer_apply"
 EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH = "expert_fsdp_grouped_apply_boundary"
 EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH = "expert_fsdp_grouped_restore_boundary"
@@ -211,6 +212,7 @@ BENCH_KINDS = (
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+    EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
     EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
@@ -277,6 +279,7 @@ NS4D_DATA_SHARDED_BENCHES = (
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+    EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
     EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
@@ -375,6 +378,7 @@ GROUPED_PARAM_INPUT_BENCHES = (
     EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH,
     EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
     EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+    EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
 )
 GROUPED_OPTIMIZER_APPLY_BENCHES = (
     EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
@@ -844,6 +848,7 @@ def ns4d_result_sharding(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Na
         EXPERT_GROUPED_SEQUENTIAL_BANK_CONSUMER_BENCH,
         EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH,
         EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
+        EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
     ):
         return None
     if bench_kind == NS4D_DATA_RESHARD_RESTORE_BENCH:
@@ -971,6 +976,7 @@ def grouped_expert_group_sizes_for_bench(config: BenchConfig, bench_kind: str) -
         EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH,
         EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
         EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+        EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
         EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
@@ -2141,6 +2147,22 @@ def grouped_expert_muonh_bank_consumer_step_factory(config: BenchConfig):
                 next_params = optax.apply_updates(grouped_params, next_updates)
             with jax.named_scope("muon_update_bench/expert_grouped_muonh_bank_consumer/consume_grouped_bank"):
                 outputs = grouped_expert_bank_consumer_outputs(config, next_params, activations)
+            return next_params, next_state, outputs
+
+    return update_step
+
+
+def grouped_expert_muonh_moe_mlp_consumer_step_factory(mesh: Mesh, config: BenchConfig):
+    """Apply grouped MuonH and consume the updated banks through the public grouped MoE helper."""
+    optimizer = build_grouped_expert_productionish_optimizer(config, use_hyperball=True)
+
+    def update_step(grouped_params, grouped_grads, state, routed_inputs):
+        with jax.named_scope("muon_update_bench/expert_grouped_muonh_moe_mlp_consumer_step"):
+            next_updates, next_state = optimizer.update(grouped_grads, state, grouped_params)
+            with jax.named_scope("muon_update_bench/expert_grouped_muonh_moe_mlp_consumer/optax_apply_updates"):
+                next_params = optax.apply_updates(grouped_params, next_updates)
+            with jax.named_scope("muon_update_bench/expert_grouped_muonh_moe_mlp_consumer/consume_grouped_moe"):
+                outputs = grouped_moe_mlp_consumer_outputs(mesh, config, next_params, routed_inputs)
             return next_params, next_state, outputs
 
     return update_step
@@ -4716,6 +4738,8 @@ def ns4d_boundary_status(config: BenchConfig, bench_kind: str) -> str | None:
         return "grouped_blocks_public_moe_mlp_consumer"
     if bench_kind == EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH:
         return "grouped_blocks_expert_muonh_apply_then_bank_consumer"
+    if bench_kind == EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH:
+        return "grouped_blocks_expert_muonh_apply_then_public_moe_mlp_consumer"
     if bench_kind == EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH:
         return "grouped_blocks_expert_direction_optimizer_updates_apply"
     if bench_kind == EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH:
@@ -5489,7 +5513,14 @@ def is_ordinary_2d_decomposition_bench(bench_kind: str) -> bool:
 
 
 def bench_skip_reason(config: BenchConfig, bench_kind: str) -> str | None:
-    if bench_kind == EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH and config.expert_axis <= 1:
+    if (
+        bench_kind
+        in (
+            EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
+            EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
+        )
+        and config.expert_axis <= 1
+    ):
         return (
             f"{bench_kind} validates the expert-parallel grouped MoE path and requires expert_axis > 1; "
             "use expert_grouped_bank_consumer for the no-EP dense grouped-bank proxy."
@@ -5602,7 +5633,10 @@ def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
         EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
     ):
         return grouped_expert_bank_consumer_flops(config)
-    if bench_kind == EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH:
+    if bench_kind in (
+        EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+        EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
+    ):
         ns_flops = sum(
             ns_dot_flops_for_shape(shape, group_size, config.backend_steps)
             for group_size in grouped_expert_group_sizes_for_bench(config, bench_kind)
@@ -5680,7 +5714,10 @@ def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
 def estimated_matrix_count(config: BenchConfig, bench_kind: str) -> int:
     if bench_kind in (EXPERT_GROUPED_BANK_CONSUMER_BENCH, EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH):
         return config.layers * 2 * config.num_experts
-    if bench_kind == EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH:
+    if bench_kind in (
+        EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+        EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
+    ):
         ns_matrices = sum(grouped_expert_group_sizes_for_bench(config, bench_kind)) * sum(
             shape[0] for shape in synthetic_shapes(config).values()
         )
@@ -5871,6 +5908,7 @@ def lower_ns4d(
         EXPERT_GROUPED_SEQUENTIAL_BANK_CONSUMER_BENCH,
         EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
         EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+        EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
         EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH,
     ):
         specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
@@ -5962,6 +6000,38 @@ def lower_ns4d(
             assert_ns4d_sharding(activation_specs, input_spec, "grouped expert bank consumer inputs")
             if result_sharding is not None:
                 assert_ns4d_sharding(output_specs, result_sharding.spec, "grouped expert bank consumer outputs")
+            lower_args = None
+        elif bench_kind == EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH:
+            grouped_specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
+            activation_specs = synthetic_grouped_moe_mlp_consumer_input_specs(mesh, config, bench_kind)
+            optimizer = build_grouped_expert_productionish_optimizer(config, use_hyperball=True)
+            update_step = jax.jit(grouped_expert_muonh_moe_mlp_consumer_step_factory(mesh, config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                state_specs = jax.eval_shape(optimizer.init, grouped_specs)
+                result_specs, _next_state_specs, output_specs = jax.eval_shape(
+                    update_step,
+                    grouped_specs,
+                    grouped_specs,
+                    state_specs,
+                    activation_specs,
+                )
+                lowered = update_step.lower(grouped_specs, grouped_specs, state_specs, activation_specs)
+            assert_grouped_expert_sharding(grouped_specs, mesh, config, bench_kind, "grouped expert MoE params")
+            assert_grouped_expert_sharding(result_specs, mesh, config, bench_kind, "updated grouped expert MoE params")
+            assert_grouped_moe_consumer_sharding(
+                activation_specs,
+                mesh,
+                config,
+                bench_kind,
+                "grouped MuonH MoE consumer inputs",
+            )
+            assert_grouped_moe_consumer_sharding(
+                output_specs,
+                mesh,
+                config,
+                bench_kind,
+                "grouped MuonH MoE consumer outputs",
+            )
             lower_args = None
         elif bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
             grouped_specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
@@ -6775,7 +6845,10 @@ def time_ns4d(
             updates = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=1)
         elif is_expert_only_grouped_muonh_bench(bench_kind):
             updates = make_grouped_expert_array_tree(mesh, config, bench_kind, seed=1)
-        elif bench_kind == EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH:
+        elif bench_kind in (
+            EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+            EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
+        ):
             updates = make_grouped_expert_array_tree(mesh, config, bench_kind, seed=1)
         elif bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES:
             updates = make_productionish_grouped_expert_array_tree(mesh, config, bench_kind, seed=1)
@@ -6809,7 +6882,10 @@ def time_ns4d(
             assert_expert_fsdp_sharding(updates, "real expert FSDP grouped MuonH updates")
         elif is_expert_fsdp_grouped_muonh_bench(bench_kind):
             assert_expert_fsdp_sharding(updates, "expert FSDP updates")
-        elif bench_kind == EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH:
+        elif bench_kind in (
+            EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+            EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
+        ):
             assert_grouped_expert_sharding(updates, mesh, config, bench_kind, "grouped expert bank grads")
         elif bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH:
             assert_ns4d_sharding(updates, input_spec, "grouped expert bank consumer inputs")
@@ -7116,6 +7192,16 @@ def time_ns4d(
                     donate_argnums=(0, 2),
                 )
                 lower_args = (params, updates, optimizer_state, activations)
+            elif bench_kind == EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH:
+                params = make_grouped_expert_array_tree(mesh, config, bench_kind, seed=0)
+                activations = make_grouped_moe_mlp_consumer_input_tree(mesh, config, bench_kind, seed=2)
+                optimizer = build_grouped_expert_productionish_optimizer(config, use_hyperball=True)
+                optimizer_state = optimizer.init(params)
+                update_step = jax.jit(
+                    grouped_expert_muonh_moe_mlp_consumer_step_factory(mesh, config),
+                    donate_argnums=(0, 2),
+                )
+                lower_args = (params, updates, optimizer_state, activations)
             elif bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES:
                 params = make_productionish_grouped_expert_array_tree(mesh, config, bench_kind, seed=0)
                 use_hyperball = bench_kind == EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH
@@ -7155,6 +7241,15 @@ def time_ns4d(
             elif bench_kind == EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH:
                 assert_grouped_expert_sharding(params, mesh, config, bench_kind, "grouped expert bank params")
                 assert_ns4d_sharding(activations, input_spec, "grouped expert bank consumer inputs")
+            elif bench_kind == EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH:
+                assert_grouped_expert_sharding(params, mesh, config, bench_kind, "grouped expert MoE params")
+                assert_grouped_moe_consumer_sharding(
+                    activations,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "grouped MuonH MoE consumer inputs",
+                )
             elif bench_kind == EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH:
                 assert_grouped_expert_sharding(params, mesh, config, bench_kind, "persistent grouped MuonH params")
             elif bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
@@ -7169,7 +7264,10 @@ def time_ns4d(
                 EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_PPERMUTE_RESTORE_BOUNDARY_BENCH,
             ):
                 block_until_ready_tree(updates)
-            elif bench_kind == EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH:
+            elif bench_kind in (
+                EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+                EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
+            ):
                 block_until_ready_tree((params, updates, optimizer_state, activations))
             else:
                 block_until_ready_tree((params, updates, optimizer_state))
@@ -7209,6 +7307,7 @@ def time_ns4d(
                     EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH,
                     EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
                     EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+                    EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
                 )
             ):
                 if bench_kind == EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH:
@@ -7227,6 +7326,9 @@ def time_ns4d(
                     params = compiled(updates)
                     block_until_ready_tree(params)
                 elif bench_kind == EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH:
+                    params, optimizer_state, consumer_outputs = compiled(params, updates, optimizer_state, activations)
+                    block_until_ready_tree((params, optimizer_state, consumer_outputs))
+                elif bench_kind == EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH:
                     params, optimizer_state, consumer_outputs = compiled(params, updates, optimizer_state, activations)
                     block_until_ready_tree((params, optimizer_state, consumer_outputs))
                 elif bench_kind in (
@@ -7326,6 +7428,21 @@ def time_ns4d(
                         bench_kind,
                         "warmup grouped MoE consumer outputs",
                     )
+                elif bench_kind == EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH:
+                    assert_grouped_expert_sharding(
+                        params,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup updated grouped expert MoE params",
+                    )
+                    assert_grouped_moe_consumer_sharding(
+                        consumer_outputs,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup grouped MuonH MoE consumer outputs",
+                    )
                 elif result_sharding is not None:
                     assert_grouped_or_uniform_ns4d_sharding(
                         params,
@@ -7378,6 +7495,7 @@ def time_ns4d(
                         EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH,
                         EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
                         EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+                        EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
                     )
                 ):
                     if bench_kind == EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH:
@@ -7396,6 +7514,11 @@ def time_ns4d(
                         params = compiled(updates)
                         block_until_ready_tree(params)
                     elif bench_kind == EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH:
+                        params, optimizer_state, consumer_outputs = compiled(
+                            params, updates, optimizer_state, activations
+                        )
+                        block_until_ready_tree((params, optimizer_state, consumer_outputs))
+                    elif bench_kind == EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH:
                         params, optimizer_state, consumer_outputs = compiled(
                             params, updates, optimizer_state, activations
                         )
@@ -7496,6 +7619,21 @@ def time_ns4d(
                             config,
                             bench_kind,
                             "grouped MoE consumer outputs",
+                        )
+                    elif bench_kind == EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH:
+                        assert_grouped_expert_sharding(
+                            params,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "updated grouped expert MoE params",
+                        )
+                        assert_grouped_moe_consumer_sharding(
+                            consumer_outputs,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "grouped MuonH MoE consumer outputs",
                         )
                     elif result_sharding is not None:
                         assert_grouped_or_uniform_ns4d_sharding(

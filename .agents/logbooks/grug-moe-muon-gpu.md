@@ -1552,3 +1552,30 @@ Post-compile steps were stable around 0.65-0.66s:
   - Compile time was about `0.62s` on task 0 and `0.49s` on task 1.
 - Interpretation: This closes the previous caveat. The strict no-boundary-collectives gate passes on H100 for the synthetic grouped MuonH bank-consumer path. This is now the authoritative evidence for the grouped-bank direction.
 - Next action: Port the grouped expert-bank consumer into the real model path, preserving grouped bank sharding through expert MLP consumption. Keep using this strict gate for every production-candidate bridge.
+
+### 2026-06-19 22:31 PDT - H100 grouped MuonH plus public grouped-MoE consumer gate
+- Hypothesis: The simple bank-consumer strict gate proves that MuonH can keep grouped expert banks through a dense proxy consumer, but the next closer gate should consume the updated grouped banks through the public `grouped_moe_mlp` helper. This path should have the same EP communication pattern as standalone `grouped_moe_mlp_consumer`; MuonH should add NS GEMMs, not grouped-to-FSDP restore collectives.
+- Code snapshot:
+  - Added benchmark kind `expert_grouped_muonh_moe_mlp_consumer`.
+  - The step applies grouped MuonH, applies grouped updates to grouped expert-bank params, then calls `grouped_moe_mlp_consumer_outputs` over the updated banks.
+  - This gate intentionally does not use `--require-no-boundary-collectives`, because the public grouped MoE helper has legitimate EP collectives. The comparison is against the standalone grouped MoE consumer's collective counts.
+- Local validation:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'grouped_muonh_moe_mlp_consumer or grouped_muonh_bank_consumer or grouped_moe_mlp_consumer_preserves'` passed with `3 passed`.
+  - Forced-host compile-only comparison passed:
+    - `XLA_FLAGS=--xla_force_host_platform_device_count=8 uv run python experiments/grug/moe/muon_update_bench.py --layers 4 --ns4d-group-size 4 --ns4d-group-axis replica_dcn,data --hidden-dim 16 --intermediate-dim 8 --num-experts 8 --backend-steps 1 --replica-axis 2 --data-axis 2 --expert-axis 2 --model-axis 1 --max-grouped-stack-size 8 --grouped-expert-consumer-tokens-per-expert 3 --bench-kinds expert_grouped_moe_mlp_consumer,expert_grouped_muonh_moe_mlp_consumer --mode both --warmup 0 --iters 0 --compile-only --disable-abstract-mesh --allow-boundary-collectives --output /tmp/muon_grouped_muonh_moe_mlp_consumer.json`
+    - Standalone grouped MoE lowered `AG/RS/A2A = 3/1/0`; MuonH+grouped MoE lowered `AG/RS/A2A = 3/1/0` and added the expected NS dots.
+- H100 command:
+  - `RUN_ID="MUON-BENCH-D2560-L26-R2E8-MUONHMOEMLP-COMPILE-G8-N2-cw-$(date -u +%Y%m%d-%H%M%S)" MARIN_PREFIX=s3://marin-na/tmp/ttl=7d KUBECONFIG=$HOME/.kube/coreweave-iris-gpu MUON_BENCH_GPU_REPLICAS=2 MUON_BENCH_LAYERS=26 MUON_BENCH_REPLICA_AXIS=2 MUON_BENCH_DATA_AXIS=1 MUON_BENCH_EXPERT_AXIS=8 MUON_BENCH_MODEL_AXIS=1 MUON_BENCH_NS4D_GROUP_SIZE=8 MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn,data MUON_BENCH_KINDS=expert_grouped_moe_mlp_consumer,expert_grouped_muonh_moe_mlp_consumer MUON_BENCH_SWEEP_BACKEND_STEPS=3 MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 MUON_BENCH_DTYPE=bf16 MUON_BENCH_NS_COMPUTE_DTYPE=bf16 MUON_BENCH_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT=1 MUON_BENCH_WARMUP=0 MUON_BENCH_ITERS=0 MUON_BENCH_MODE=both MUON_BENCH_COMPILE_ONLY=true MUON_BENCH_TRACKER=json MUON_BENCH_ENABLE_JAX_PROFILE=false MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES=true MUON_BENCH_DISABLE_ABSTRACT_MESH=true MUON_BENCH_WRITE_COMPILED_HLO=true MUON_BENCH_WORKER_CPU=8 MUON_BENCH_WORKER_RAM=256g XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 bash scratch/muon_update_bench_fast_loop.sh iris fullprod-r4e8-l26-h3`
+- H100 result:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-052817`.
+  - Child Iris job: `/dlwh/iris-run-job-20260620-052817/grug-train-MUON-BENCH-D2560-L26-R2E8-MUONHMOEMLP-COMPILE-G8-N2-cw-20260620-052815`.
+  - Output prefix: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2E8-MUONHMOEMLP-COMPILE-G8-N2-cw-20260620-052815-db4677`.
+  - Iris parent succeeded with exit 0, failures 0, duration about 2m48s.
+
+| bench | lowered AG/RS/A2A | compiled AG/RS/A2A | compiled custom_call | compiled GPU GEMM custom_call | compile seconds |
+| --- | --- | --- | ---: | ---: | ---: |
+| `expert_grouped_moe_mlp_consumer` | 12/4/0 | 11/1/0 | 16 | 47 | 4.32-4.87 |
+| `expert_grouped_muonh_moe_mlp_consumer` | 12/4/0 | 11/1/0 | 376 | 202 | 9.90-9.98 |
+
+- Interpretation: This is the closest H100 gate so far to the real model expert path. MuonH did not add any extra compiled all-gather/reduce-scatter/all-to-all beyond the public grouped MoE consumer baseline; it added the expected NS/GEMM custom calls. The remaining work is not a low-level communication mystery in this synthetic path, but a state/model integration problem: make real `MoEExpertMlp`/`MoEMLP` consume grouped expert banks.
+- Next action: Port grouped expert-bank representation into the production Grug MoE module boundary. The first production-facing test should compare a group of real blocks against per-layer blocks for outputs/sharding, then compile a short training step or expert-only block step and check that the grouped expert path preserves the same communication pattern as this gate.
