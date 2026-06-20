@@ -463,6 +463,18 @@ def _packed_grouped_muonh_entry_bank(
 
 
 def _grouped_muonh_packed_entry_banks(chunks):
+    bank_records, chunk_info = _grouped_muonh_packed_entry_bank_records(chunks)
+    banks = {}
+    for key, entries, padded_size in bank_records:
+        with jax.named_scope("grouped_muonh/packed_entry/updates"):
+            update_bank = _packed_grouped_muonh_entry_bank(entries, value_index=1, padded_size=padded_size)
+        with jax.named_scope("grouped_muonh/packed_entry/params"):
+            param_bank = _packed_grouped_muonh_entry_bank(entries, value_index=2, padded_size=padded_size)
+        banks[key] = (update_bank, param_bank)
+    return banks, chunk_info
+
+
+def _grouped_muonh_packed_entry_bank_records(chunks):
     records_by_key: dict[tuple[tuple[int, ...], str, str], list[tuple[int, list[Any], int, int]]] = {}
     for chunk_index, entry_chunk in enumerate(chunks):
         key = _grouped_muonh_entry_key(entry_chunk)
@@ -470,21 +482,17 @@ def _grouped_muonh_packed_entry_banks(chunks):
         padded_size = _grouped_muonh_chunk_padded_size(entry_chunk)
         records_by_key.setdefault(key, []).append((chunk_index, entry_chunk, valid_size, padded_size))
 
-    banks = {}
+    bank_records = []
     chunk_info = {}
     for key, records in records_by_key.items():
         entries = tuple(entry for _, entry_chunk, _, _ in records for entry in entry_chunk)
         padded_size = sum(record[3] for record in records)
-        with jax.named_scope("grouped_muonh/packed_entry/updates"):
-            update_bank = _packed_grouped_muonh_entry_bank(entries, value_index=1, padded_size=padded_size)
-        with jax.named_scope("grouped_muonh/packed_entry/params"):
-            param_bank = _packed_grouped_muonh_entry_bank(entries, value_index=2, padded_size=padded_size)
-        banks[key] = (update_bank, param_bank)
+        bank_records.append((key, entries, padded_size))
         offset = 0
         for chunk_index, entry_chunk, valid_size, chunk_padded_size in records:
             chunk_info[chunk_index] = (key, offset, valid_size, chunk_padded_size, entry_chunk)
             offset += chunk_padded_size
-    return banks, chunk_info
+    return tuple(bank_records), chunk_info
 
 
 def _init_grouped_muonh_trace_groups(
@@ -492,6 +500,9 @@ def _init_grouped_muonh_trace_groups(
     *,
     expert_grouped_muonh_group_size: int | None,
     max_grouped_stack_size: int,
+    packed_entry_boundary: bool,
+    packed_bank_compute: bool,
+    chunk_local_boundaries: bool,
 ):
     zero_updates = jax.tree.map(lambda param: None if param is None else jnp.zeros_like(param), params)
     _, _, chunks = _grouped_muonh_entry_chunks(
@@ -500,6 +511,14 @@ def _init_grouped_muonh_trace_groups(
         expert_grouped_muonh_group_size=expert_grouped_muonh_group_size,
         max_grouped_stack_size=max_grouped_stack_size,
     )
+    if packed_entry_boundary and packed_bank_compute and not chunk_local_boundaries:
+        trace_banks = []
+        bank_records, _ = _grouped_muonh_packed_entry_bank_records(chunks)
+        for _, entries, padded_size in bank_records:
+            with jax.named_scope("grouped_muonh/init_grouped_trace_bank"):
+                trace_banks.append(_packed_grouped_muonh_entry_bank(entries, value_index=1, padded_size=padded_size))
+        return tuple(trace_banks)
+
     trace_groups = []
     for entry_chunk in chunks:
         with jax.named_scope("grouped_muonh/init_grouped_trace"):
@@ -856,6 +875,7 @@ def _grouped_expert_muonh_updates_with_grouped_trace(
     ns_compute_dtype: str,
     expert_grouped_muonh_group_size: int | None,
     packed_entry_boundary: bool,
+    packed_bank_compute: bool,
     chunk_local_boundaries: bool,
 ):
     treedef, output_leaves, chunks = _grouped_muonh_entry_chunks(
@@ -864,6 +884,20 @@ def _grouped_expert_muonh_updates_with_grouped_trace(
         expert_grouped_muonh_group_size=expert_grouped_muonh_group_size,
         max_grouped_stack_size=max_grouped_stack_size,
     )
+    if packed_entry_boundary and packed_bank_compute and not chunk_local_boundaries:
+        return _grouped_expert_muonh_updates_with_packed_banks(
+            treedef,
+            output_leaves,
+            chunks,
+            trace_groups,
+            learning_rate,
+            momentum=momentum,
+            nesterov=nesterov,
+            steps=steps,
+            muon_eps=muon_eps,
+            coefficient_type=coefficient_type,
+            ns_compute_dtype=ns_compute_dtype,
+        )
     if len(trace_groups) != len(chunks):
         raise ValueError(f"Grouped MuonH trace has {len(trace_groups)} groups but params require {len(chunks)} groups")
 
@@ -976,6 +1010,71 @@ def _grouped_expert_muonh_updates_with_grouped_trace(
     return jax.tree.unflatten(treedef, output_leaves), GroupedMuonHState(trace_groups=tuple(next_trace_groups))
 
 
+def _grouped_expert_muonh_updates_with_packed_banks(
+    treedef,
+    output_leaves,
+    chunks,
+    trace_banks,
+    learning_rate: float,
+    *,
+    momentum: float,
+    nesterov: bool,
+    steps: int,
+    muon_eps: float,
+    coefficient_type: CoefficientType,
+    ns_compute_dtype: str,
+):
+    bank_records, _ = _grouped_muonh_packed_entry_bank_records(chunks)
+    if len(trace_banks) != len(bank_records):
+        raise ValueError(
+            f"Grouped MuonH has {len(trace_banks)} trace banks but params require {len(bank_records)} banks"
+        )
+
+    next_trace_banks = []
+    for trace_bank, (_, entries, padded_size) in zip(trace_banks, bank_records, strict=True):
+        with jax.named_scope("grouped_muonh/packed_bank_compute/entry_updates"):
+            update_bank = _packed_grouped_muonh_entry_bank(entries, value_index=1, padded_size=padded_size)
+        with jax.named_scope("grouped_muonh/packed_bank_compute/entry_params"):
+            param_bank = _packed_grouped_muonh_entry_bank(entries, value_index=2, padded_size=padded_size)
+        target = _grouped_4d_stack_target(
+            _grouped_muonh_shape_dtype_struct(update_bank.shape, update_bank.dtype, entries[0][2])
+        )
+
+        with jax.named_scope("grouped_muonh/packed_bank_compute/update_grouped_momentum_buffer"):
+            next_trace_bank = momentum * trace_bank + update_bank
+        if nesterov:
+            with jax.named_scope("grouped_muonh/packed_bank_compute/grouped_nesterov_update"):
+                direction_input = momentum * next_trace_bank + update_bank
+        else:
+            direction_input = next_trace_bank
+
+        with jax.named_scope("grouped_muonh/packed_bank_compute/newton_schulz"):
+            direction_input, original_dtype = _cast_for_ns_compute(direction_input, ns_compute_dtype)
+            direction = _zeropower_via_newtonschulz_grouped_4d_sharded(
+                direction_input,
+                steps,
+                muon_eps,
+                coefficient_type,
+                target,
+            )
+            direction = _restore_ns_compute_dtype(direction, original_dtype)
+            direction = _scale_grouped_muonh_direction(direction)
+
+        with jax.named_scope("grouped_muonh/packed_bank_compute/hyperball"):
+            grouped_update = _grouped_muonh_hyperball_update(param_bank, direction, learning_rate)
+        with jax.named_scope("grouped_muonh/packed_bank_compute/packed_restore"):
+            update_parts = _packed_grouped_muonh_updates_to_fsdp_leaves(
+                (grouped_update,),
+                (len(entries),),
+                entries[0][2],
+            )
+        for (index, _, param), update_part in zip(entries, update_parts, strict=True):
+            output_leaves[index] = _restore_param_sharding(update_part, param)
+        next_trace_banks.append(next_trace_bank)
+
+    return jax.tree.unflatten(treedef, output_leaves), GroupedMuonHState(trace_groups=tuple(next_trace_banks))
+
+
 def scale_with_grouped_expert_muonh(
     momentum: float = 0.95,
     nesterov: bool = True,
@@ -987,6 +1086,7 @@ def scale_with_grouped_expert_muonh(
     ns_compute_dtype: str = "input",
     expert_grouped_muonh_group_size: int | None = None,
     packed_entry_boundary: bool = False,
+    packed_bank_compute: bool = False,
     chunk_local_boundaries: bool = False,
 ) -> optax.GradientTransformation:
     """Expert-only MuonH transform that computes NS on grouped 4D stacks and returns FSDP updates."""
@@ -1003,6 +1103,9 @@ def scale_with_grouped_expert_muonh(
                 params,
                 expert_grouped_muonh_group_size=expert_grouped_muonh_group_size,
                 max_grouped_stack_size=max_grouped_stack_size,
+                packed_entry_boundary=packed_entry_boundary,
+                packed_bank_compute=packed_bank_compute,
+                chunk_local_boundaries=chunk_local_boundaries,
             )
         )
 
@@ -1025,6 +1128,7 @@ def scale_with_grouped_expert_muonh(
                 ns_compute_dtype=ns_compute_dtype,
                 expert_grouped_muonh_group_size=expert_grouped_muonh_group_size,
                 packed_entry_boundary=packed_entry_boundary,
+                packed_bank_compute=packed_bank_compute,
                 chunk_local_boundaries=chunk_local_boundaries,
             )
         assert_update_sharding_matches_params(muonh_updates, params, "Grouped MuonH updates")
@@ -1189,6 +1293,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     ns_compute_dtype: str = "input"
     expert_grouped_muonh_group_size: int | None = None
     expert_grouped_muonh_packed_entry: bool = True
+    expert_grouped_muonh_packed_bank_compute: bool = False
     expert_grouped_muonh_chunk_local_boundaries: bool = False
 
     def build(self, num_train_steps):
@@ -1248,6 +1353,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         ns_compute_dtype=self.ns_compute_dtype,
                         expert_grouped_muonh_group_size=self.expert_grouped_muonh_group_size,
                         packed_entry_boundary=self.expert_grouped_muonh_packed_entry,
+                        packed_bank_compute=self.expert_grouped_muonh_packed_bank_compute,
                         chunk_local_boundaries=self.expert_grouped_muonh_chunk_local_boundaries,
                     )
                 )

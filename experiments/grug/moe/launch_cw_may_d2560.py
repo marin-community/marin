@@ -40,6 +40,7 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_ORDINARY_2D_OPTIMIZER=muonh  muonh | adamh | adam | sgd for ordinary non-expert 2D weights
     MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE=  optional grouped_muonh stack group size
     MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY=false  use packed boundary entry for grouped_muonh
+    MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE=false  keep packed banks through grouped_muonh compute
 
 The default parameter policy keeps one sharded fp32 parameter tree plus sharded
 optimizer state. Set ``MAY_LIVE_PARAM_MODE=compute_with_master`` to keep a
@@ -223,6 +224,10 @@ def build_may_optimizer(*, batch_size: int, seq_len: int) -> OptimizerConfig:
         expert_grouped_muonh_packed_entry=env_bool(
             "MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY",
             GrugMoeMuonHConfig.expert_grouped_muonh_packed_entry,
+        ),
+        expert_grouped_muonh_packed_bank_compute=env_bool(
+            "MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE",
+            GrugMoeMuonHConfig.expert_grouped_muonh_packed_bank_compute,
         ),
         expert_grouped_muonh_chunk_local_boundaries=env_bool(
             "MAY_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES",

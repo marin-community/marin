@@ -206,6 +206,7 @@ def test_may_optimizer_reads_grouped_muonh_packed_entry_env(monkeypatch):
     monkeypatch.setenv("MAY_EXPERT_3D_OPTIMIZER", "grouped_muonh")
     monkeypatch.setenv("MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE", "4")
     monkeypatch.setenv("MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY", "true")
+    monkeypatch.setenv("MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE", "true")
     monkeypatch.setenv("MAY_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES", "true")
 
     optimizer = build_may_optimizer(batch_size=8, seq_len=4096)
@@ -214,6 +215,7 @@ def test_may_optimizer_reads_grouped_muonh_packed_entry_env(monkeypatch):
     assert optimizer.expert_3d_optimizer == "grouped_muonh"
     assert optimizer.expert_grouped_muonh_group_size == 4
     assert optimizer.expert_grouped_muonh_packed_entry is True
+    assert optimizer.expert_grouped_muonh_packed_bank_compute is True
     assert optimizer.expert_grouped_muonh_chunk_local_boundaries is True
 
 
@@ -534,6 +536,63 @@ def test_grouped_expert_muonh_packed_entry_r2_boundary_does_not_duplicate_replic
     assert hlo.count("stablehlo.reduce_scatter") == 0
     assert hlo.count("stablehlo.all_to_all") == 0
     assert hlo.count("stablehlo.all_gather") == 2
+
+
+def test_grouped_expert_muonh_packed_bank_compute_avoids_chunk_slice_boundaries():
+    mesh = AbstractMesh(
+        axis_sizes=(2, 1, 8, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    gate_sharding = NamedSharding(mesh, P("expert", "data", "model"))
+    down_sharding = NamedSharding(mesh, P("expert", "model", "data"))
+
+    def block_specs():
+        return {
+            "mlp": {
+                "expert_mlp": {
+                    "w_gate_up": jax.ShapeDtypeStruct((8, 16, 32), jnp.bfloat16, sharding=gate_sharding),
+                    "w_down": jax.ShapeDtypeStruct((8, 32, 16), jnp.bfloat16, sharding=down_sharding),
+                },
+            },
+        }
+
+    params = {"blocks": tuple(block_specs() for _ in range(6))}
+    grads = jax.tree.map(lambda param: jax.ShapeDtypeStruct(param.shape, param.dtype, sharding=param.sharding), params)
+    optimizer = GrugMoeMuonHConfig(
+        learning_rate=0.02,
+        lr_schedule="constant",
+        backend_steps=1,
+        expert_3d_optimizer="grouped_muonh",
+        expert_grouped_muonh_group_size=2,
+        expert_grouped_muonh_packed_entry=True,
+        expert_grouped_muonh_packed_bank_compute=True,
+        max_grouped_stack_size=8,
+        max_grad_norm=None,
+    ).build(num_train_steps=8)
+
+    def update_step(params, grads, opt_state):
+        updates, next_state = optimizer.update(grads, opt_state, params)
+        return updates, next_state
+
+    with use_abstract_mesh(mesh):
+        opt_state = jax.eval_shape(optimizer.init, params)
+        updates, next_state = jax.eval_shape(update_step, params, grads, opt_state)
+        update_step_jit = jax.jit(update_step)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step_jit.trace(params, grads, opt_state).lower(lowering_platforms=(platform,))
+
+    grouped_state = opt_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
+    next_grouped_state = next_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
+    assert isinstance(grouped_state, GroupedMuonHState)
+    assert len(grouped_state.trace_groups) == 2
+    assert isinstance(next_grouped_state, GroupedMuonHState)
+    assert len(next_grouped_state.trace_groups) == 2
+    assert_update_sharding_matches_params(updates, params, "packed-bank grouped MuonH production updates")
+    hlo = str(lowered.compiler_ir(dialect="stablehlo"))
+    assert "slice_update_chunk" not in hlo
+    assert "slice_param_chunk" not in hlo
+    assert "concat_chunks" not in hlo
 
 
 def test_grouped_expert_muonh_chunk_local_boundary_is_explicit():

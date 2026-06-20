@@ -50,6 +50,7 @@ EXPERT_3D_OPTIMIZER="${MAY_EXPERT_3D_OPTIMIZER:-muonh}"
 ORDINARY_2D_OPTIMIZER="${MAY_ORDINARY_2D_OPTIMIZER:-muonh}"
 EXPERT_GROUPED_MUONH_GROUP_SIZE="${MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE:-}"
 EXPERT_GROUPED_MUONH_PACKED_ENTRY="${MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY:-true}"
+EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE="${MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE:-false}"
 EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES="${MAY_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES:-false}"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 LIVE_PARAM_MODE="param"
@@ -141,6 +142,8 @@ Options:
                             MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE for grouped_muonh; empty chooses replica_dcn*data.
   --expert-grouped-muonh-packed-entry BOOL
                             MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY for grouped_muonh (default: true).
+  --expert-grouped-muonh-packed-bank-compute BOOL
+                            MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE keeps packed banks through grouped_muonh compute (default: false).
   --expert-grouped-muonh-chunk-local-boundaries BOOL
                             MAY_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES experimental grouped_muonh boundary mode (default: false).
   --mp POLICY               MAY_MP policy string.
@@ -348,6 +351,10 @@ while [ "$#" -gt 0 ]; do
             EXPERT_GROUPED_MUONH_PACKED_ENTRY="$2"
             shift 2
             ;;
+        --expert-grouped-muonh-packed-bank-compute)
+            EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE="$2"
+            shift 2
+            ;;
         --expert-grouped-muonh-chunk-local-boundaries)
             EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES="$2"
             shift 2
@@ -543,6 +550,7 @@ ENV_ARGS=(
     -e MAY_ORDINARY_2D_OPTIMIZER "$ORDINARY_2D_OPTIMIZER"
     -e MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE "$EXPERT_GROUPED_MUONH_GROUP_SIZE"
     -e MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY "$EXPERT_GROUPED_MUONH_PACKED_ENTRY"
+    -e MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE "$EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE"
     -e MAY_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES "$EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES"
     -e MAY_MP "$MP"
     -e MAY_LIVE_PARAM_MODE "$LIVE_PARAM_MODE"
@@ -639,6 +647,7 @@ expert_3d_optimizer: $EXPERT_3D_OPTIMIZER
 ordinary_2d_optimizer: $ORDINARY_2D_OPTIMIZER
 expert_grouped_muonh_group_size: ${EXPERT_GROUPED_MUONH_GROUP_SIZE:-auto}
 expert_grouped_muonh_packed_entry: $EXPERT_GROUPED_MUONH_PACKED_ENTRY
+expert_grouped_muonh_packed_bank_compute: $EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE
 expert_grouped_muonh_chunk_local_boundaries: $EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES
 attention: $ATTENTION_IMPLEMENTATION
 ce_implementation: ${CE_IMPLEMENTATION:-default}
