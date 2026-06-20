@@ -3755,8 +3755,8 @@ def _packed_bank_update_to_fsdp_leaf_tuple_a2a(
     )(packed_update)
 
 
-def expert_fsdp_packed_bank_a2a_apply_outputs(mesh: Mesh, config: BenchConfig, params, packed_updates):
-    """Apply packed grouped expert updates directly to normal FSDP params."""
+def expert_fsdp_packed_bank_updates_to_fsdp_tree(mesh: Mesh, config: BenchConfig, packed_updates):
+    """Restore packed grouped expert updates to a normal FSDP update tree."""
 
     output_layers = [
         {"mlp": {"expert_mlp": {name: None for name in synthetic_shapes(config)}}} for _ in range(config.layers)
@@ -3768,11 +3768,33 @@ def expert_fsdp_packed_bank_a2a_apply_outputs(mesh: Mesh, config: BenchConfig, p
             name,
             packed_updates["packed"][name],
         )
-        with jax.named_scope(f"muon_update_bench/expert_fsdp_packed_bank_a2a_apply/{name}/apply_leaves"):
+        with jax.named_scope(f"muon_update_bench/expert_fsdp_packed_bank_a2a_apply/{name}/restore_leaves"):
             for layer_index, update_part in enumerate(update_parts):
-                param = params["layers"][layer_index]["mlp"]["expert_mlp"][name]
-                output_layers[layer_index]["mlp"]["expert_mlp"][name] = optax.apply_updates(param, update_part)
+                output_layers[layer_index]["mlp"]["expert_mlp"][name] = update_part
     return {"layers": tuple(output_layers)}
+
+
+def expert_fsdp_packed_bank_a2a_apply_outputs(mesh: Mesh, config: BenchConfig, params, packed_updates):
+    """Restore packed grouped expert updates, then apply with ordinary Optax."""
+
+    next_updates = expert_fsdp_packed_bank_updates_to_fsdp_tree(mesh, config, packed_updates)
+    with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_a2a_apply/optax_apply_updates"):
+        return optax.apply_updates(params, next_updates)
+
+
+def expert_fsdp_packed_bank_muonh_updates_outputs(mesh: Mesh, config: BenchConfig, params, grads):
+    """Run MuonH over whole packed grouped banks and return FSDP updates."""
+
+    packed_updates = expert_fsdp_packed_bank_muonh_update_only_outputs(mesh, config, params, grads)
+    return expert_fsdp_packed_bank_updates_to_fsdp_tree(mesh, config, packed_updates)
+
+
+def expert_fsdp_packed_bank_muonh_updates_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(params, grads):
+        with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_muonh_updates_step"):
+            return expert_fsdp_packed_bank_muonh_updates_outputs(mesh, config, params, grads)
+
+    return update_step
 
 
 def expert_fsdp_packed_bank_muonh_apply_outputs(mesh: Mesh, config: BenchConfig, params, grads):
@@ -3786,20 +3808,9 @@ def expert_fsdp_packed_bank_muonh_apply_outputs(mesh: Mesh, config: BenchConfig,
     collective-permute explosion.
     """
 
-    packed_grads = fsdp_grads_to_explicit_packed_grouped_bank(mesh, config, grads)
-    packed_params = fsdp_grads_to_explicit_packed_grouped_bank(mesh, config, params)
-    packed_updates = {"packed": {}}
-    for name in synthetic_shapes(config):
-        with jax.named_scope(f"muon_update_bench/expert_fsdp_packed_bank_muonh/{name}/newton_schulz"):
-            direction = zeropower_via_newtonschulz_4d_for_config(packed_grads["packed"][name], config)
-            direction = scale_ns4d_direction(direction)
-        with jax.named_scope(f"muon_update_bench/expert_fsdp_packed_bank_muonh/{name}/hyperball"):
-            packed_updates["packed"][name] = grouped_4d_hyperball_update(
-                packed_params["packed"][name],
-                direction,
-                config,
-            )
-    return expert_fsdp_packed_bank_a2a_apply_outputs(mesh, config, params, packed_updates)
+    next_updates = expert_fsdp_packed_bank_muonh_updates_outputs(mesh, config, params, grads)
+    with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_muonh/optax_apply_updates"):
+        return optax.apply_updates(params, next_updates)
 
 
 def expert_fsdp_packed_bank_muonh_update_only_outputs(mesh: Mesh, config: BenchConfig, params, grads):
