@@ -17,6 +17,7 @@ from typing import Any
 import fsspec
 import jax
 import numpy as np
+import wandb
 from fray.cluster import ResourceConfig
 from levanter.distributed import DistributedConfig
 from levanter.optim.grugmuon import DEFAULT_MAX_GROUPED_STACK_SIZE, STACK_BATCH_SHARDED
@@ -80,6 +81,9 @@ class MuonUpdateBenchLaunchConfig:
     allow_boundary_collectives: bool = False
     write_compiled_hlo: bool = False
     profile: bool = False
+    wandb: bool = False
+    wandb_project: str = "marin_moe"
+    wandb_group: str = "grug-moe-cw-muon-update-bench"
 
 
 def env_int(key: str, default: int) -> int:
@@ -210,6 +214,50 @@ def _upload_directory(local_dir: Path, remote_dir: str) -> list[str]:
     return uploaded
 
 
+def _wandb_metric_row(row: dict[str, Any], row_index: int) -> dict[str, int | float | str | bool]:
+    metrics: dict[str, int | float | str | bool] = {"bench/row_index": row_index}
+    for key, value in row.items():
+        if isinstance(value, bool | int | float | str):
+            metrics[f"bench/{key}"] = value
+    return metrics
+
+
+def _log_summary_to_wandb(config: MuonUpdateBenchLaunchConfig, payload: dict[str, Any]) -> None:
+    if not config.wandb or jax.process_index() != 0:
+        return
+    if not os.environ.get("WANDB_API_KEY"):
+        emit_jsonl({"event": "wandb_skipped", "reason": "WANDB_API_KEY is not set"})
+        return
+
+    run = wandb.init(
+        entity=os.environ.get("WANDB_ENTITY", "marin-community"),
+        project=config.wandb_project,
+        name=config.run_id,
+        group=config.wandb_group or None,
+        tags=["grug", "moe", "muonh", "cw", "h100", "benchmark"],
+        config=_json_safe(asdict(config)),
+    )
+
+    try:
+        run.summary["output_path"] = payload["output_path"]
+        run.summary["profile_output_path"] = payload.get("profile_output_path")
+        summary_rows = payload["summary_table"]
+        best_row = max(
+            summary_rows,
+            key=lambda row: row.get("median_h100_bf16_peak_pct") or float("-inf"),
+            default=None,
+        )
+        if best_row is not None:
+            for key, value in _wandb_metric_row(best_row, 0).items():
+                if key.startswith("bench/"):
+                    run.summary[f"topline/{key.removeprefix('bench/')}"] = value
+        for row_index, row in enumerate(summary_rows):
+            run.log(_wandb_metric_row(row, row_index), step=row_index)
+        emit_jsonl({"event": "wandb_logged", "entity": run.entity, "project": run.project, "name": run.name})
+    finally:
+        run.finish()
+
+
 def _run_muon_update_bench_local(config: MuonUpdateBenchLaunchConfig) -> None:
     DistributedConfig().initialize()
     configs = _bench_configs(config)
@@ -276,6 +324,7 @@ def _run_muon_update_bench_local(config: MuonUpdateBenchLaunchConfig) -> None:
             }
         )
     _write_json(f"{config.output_path}/summary.json", payload)
+    _log_summary_to_wandb(config, payload)
 
 
 def run_muon_update_bench(config: MuonUpdateBenchLaunchConfig) -> None:
@@ -339,6 +388,9 @@ def build_step() -> ExecutorStep:
         allow_boundary_collectives=env_bool("MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES", False),
         write_compiled_hlo=env_bool("MUON_BENCH_WRITE_COMPILED_HLO", False),
         profile=env_bool("MUON_BENCH_ENABLE_JAX_PROFILE", False),
+        wandb=env_bool("MUON_BENCH_WANDB", False) or os.environ.get("MUON_BENCH_TRACKER", "").lower() == "wandb",
+        wandb_project=os.environ.get("MUON_BENCH_WANDB_PROJECT") or os.environ.get("WANDB_PROJECT", "marin_moe"),
+        wandb_group=os.environ.get("MUON_BENCH_WANDB_GROUP", "grug-moe-cw-muon-update-bench"),
     )
     return ExecutorStep(
         name=f"{DEFAULT_OUTPUT_SUBDIR}/{run_id}",

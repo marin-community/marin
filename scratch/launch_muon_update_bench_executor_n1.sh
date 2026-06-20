@@ -31,6 +31,11 @@ fi
 if [ -n "${TF_GPU_ALLOCATOR:-}" ]; then
     OPTIONAL_ENV_ARGS+=(-e TF_GPU_ALLOCATOR "$TF_GPU_ALLOCATOR")
 fi
+for maybe_env in WANDB_API_KEY WANDB_ENTITY WANDB_PROJECT WANDB_MODE MUON_BENCH_WANDB_PROJECT MUON_BENCH_WANDB_GROUP; do
+    if [ -n "${!maybe_env:-}" ]; then
+        OPTIONAL_ENV_ARGS+=(-e "$maybe_env" "${!maybe_env}")
+    fi
+done
 
 exec uv run --package marin-iris --extra controller iris --cluster="$CLUSTER" \
     job run --no-wait \
@@ -62,6 +67,8 @@ exec uv run --package marin-iris --extra controller iris --cluster="$CLUSTER" \
     -e MUON_BENCH_ITERS "${MUON_BENCH_ITERS:-3}" \
     -e MUON_BENCH_MODE "${MUON_BENCH_MODE:-both}" \
     -e MUON_BENCH_COMPILE_ONLY "${MUON_BENCH_COMPILE_ONLY:-false}" \
+    -e MUON_BENCH_TRACKER "${MUON_BENCH_TRACKER:-json}" \
+    -e MUON_BENCH_WANDB "${MUON_BENCH_WANDB:-false}" \
     -e MUON_BENCH_WRITE_COMPILED_HLO "${MUON_BENCH_WRITE_COMPILED_HLO:-false}" \
     -e MUON_BENCH_ENABLE_JAX_PROFILE "${MUON_BENCH_ENABLE_JAX_PROFILE:-false}" \
     -e MUON_BENCH_DISABLE_ABSTRACT_MESH "${MUON_BENCH_DISABLE_ABSTRACT_MESH:-true}" \

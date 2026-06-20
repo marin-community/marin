@@ -11,7 +11,7 @@ from jax._src import config as jax_config
 from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
-from experiments.grug.moe.launch_cw_muon_update_bench import build_step
+from experiments.grug.moe.launch_cw_muon_update_bench import _wandb_metric_row, build_step
 from experiments.grug.moe.muon_update_bench import (
     EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
@@ -185,6 +185,38 @@ def test_cw_muon_update_bench_launcher_can_write_compiled_hlo(monkeypatch):
     step = build_step()
 
     assert step.config.write_compiled_hlo is True
+
+
+def test_cw_muon_update_bench_launcher_reads_wandb_env(monkeypatch):
+    monkeypatch.setenv("RUN_ID", "muon-update-bench-test")
+    monkeypatch.setenv("MUON_BENCH_TRACKER", "wandb")
+    monkeypatch.setenv("MUON_BENCH_WANDB_PROJECT", "marin_moe_test")
+    monkeypatch.setenv("MUON_BENCH_WANDB_GROUP", "muon-test-group")
+
+    step = build_step()
+
+    assert step.config.wandb is True
+    assert step.config.wandb_project == "marin_moe_test"
+    assert step.config.wandb_group == "muon-test-group"
+
+
+def test_wandb_metric_row_keeps_scalar_topline_fields():
+    row = {
+        "label": "candidate",
+        "median_seconds": 0.3,
+        "median_h100_bf16_peak_pct": 50.0,
+        "compiled_hlo_all_gather": 26,
+        "chunks": [[26]],
+    }
+
+    metrics = _wandb_metric_row(row, 7)
+
+    assert metrics["bench/row_index"] == 7
+    assert metrics["bench/label"] == "candidate"
+    assert metrics["bench/median_seconds"] == 0.3
+    assert metrics["bench/median_h100_bf16_peak_pct"] == 50.0
+    assert metrics["bench/compiled_hlo_all_gather"] == 26
+    assert "bench/chunks" not in metrics
 
 
 def test_output_path_for_config_preserves_remote_uri():
