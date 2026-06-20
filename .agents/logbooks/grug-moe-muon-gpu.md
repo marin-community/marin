@@ -1805,3 +1805,35 @@ Post-compile steps were stable around 0.65-0.66s:
   - The update-only timing OOM is a harness-output materialization problem, not a compile-shape failure. If that timing matters later, add a checksum/reduction output variant instead of returning the full packed update bank.
   - Comparing direction-apply (`~0.530s`) to full packed-bank R2 (`~0.638s`) suggests params-pack + hyperball/scale overhead is roughly `0.11s` on this shape, so the dominant remaining target is still the boundary/NS path, not Python tree apply or a surprise extra collective.
 - Next action: Keep `expert_fsdp_packed_bank_muonh_apply` as the current conservative FSDP-master baseline. The next useful implementation work is either a lower-level bridge that collapses the three two-A2A phases or a representation decision that makes one packed param/update bank persistent without violating the FSDP-master contract.
+
+### 2026-06-20 02:51 PDT - update-only checksum timing
+- Hypothesis: The update-only packed-bank diagnostic failed only because the harness materialized the full packed update bank on output. Returning a scalar checksum from the timing factory should preserve the computation while avoiding the 35.55 GiB output allocation.
+- Change:
+  - Commit `14cfd9d3c` changes only the timing factory for `expert_fsdp_packed_bank_muonh_update_only` to compute the normal packed-bank MuonH update and return a scalar checksum. The ordinary step factory still returns the packed update bank and is still covered by output-sharding tests.
+  - Added focused test coverage for the scalar timing output.
+- Validation:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'packed_bank_muonh_update_only or packed_bank_direction_apply' -q` -> 3 passed.
+  - `uv run python experiments/grug/moe/muon_update_bench.py --bench-kinds expert_fsdp_packed_bank_muonh_update_only,expert_fsdp_packed_bank_direction_apply --layers 2 --hidden-dim 8 --intermediate-dim 4 --num-experts 2 --ns4d-group-size 2 --ns4d-group-axis none --backend-steps 1 --dtype float32 --replica-axis 1 --data-axis 1 --expert-axis 1 --model-axis 1 --iters 1 --warmup 0 --mode both --disable-abstract-mesh --compiled-hlo-output scratch/muon_update_bench_checksum_diag_compiled_hlo.txt --hlo-output scratch/muon_update_bench_checksum_diag.stablehlo --output scratch/muon_update_bench_checksum_diag_smoke.json` passed.
+  - `./infra/pre-commit.py --files experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix` passed, and commit hooks including Pyrefly passed.
+- CoreWeave command:
+  - `RUN_ID=MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKUPDATECHECKSUM-N2-cw-20260620-094724 MARIN_PREFIX=s3://marin-na/tmp/ttl=7d MUON_BENCH_KINDS=expert_fsdp_packed_bank_muonh_update_only MUON_BENCH_MODE=both MUON_BENCH_WARMUP=1 MUON_BENCH_ITERS=3 MUON_BENCH_SWEEP_BACKEND_STEPS=3 MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 MUON_BENCH_WRITE_COMPILED_HLO=true MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES=true MUON_BENCH_ENABLE_JAX_PROFILE=false MUON_BENCH_TRACKER=wandb MUON_BENCH_WANDB_PROJECT=marin_moe MUON_BENCH_WANDB_GROUP=grug-moe-cw-muon-packed-bank XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 bash scratch/launch_muon_grouped_reference_2node_wandb.sh`.
+- Config:
+  - Iris parent `/dlwh/iris-run-job-20260620-094726`; child `/dlwh/iris-run-job-20260620-094726/grug-train-MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKUPDATECHECKSUM-N2-cw-20260620-094724`.
+  - W&B `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKUPDATECHECKSUM-N2-cw-20260620-094724`.
+  - Output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKUPDATECHECKSUM-N2-cw-20260620-094724-965194`.
+  - R1D2E8, 16 H100s, L26, group size 8, H3, bf16 params/NS compute, `max_grouped_stack_size=512`.
+- Result:
+  - Job succeeded with `failure_count=0` and no `RESOURCE_EXHAUSTED`.
+  - Lowered HLO: `0 all_gather`, `4 all_to_all`, `0 collective_permute`, `0 reduce_scatter`, `18 dot_general`.
+  - Compiled HLO: `0 all_gather`, `4 all_to_all`, `0 collective_permute`, `0 reduce_scatter`, `39 gpu_gemm_custom_call`, `90 custom_call`.
+  - Rank 0 timing: mean `0.455426s`, median `0.455002s`, min `0.452986s`, stdev `0.002678s`.
+  - Rank 1 timing: mean `0.455440s`, median `0.454919s`, min `0.453069s`, stdev `0.002669s`.
+  - Summary row estimates: `2.428804005888e15` NS dot FLOPs, median `5338-5339 TFLOP/s`, about `33.73-33.74%` nominal H100 bf16 peak, global boundary bandwidth estimate `~287.6 GB/s`, boundary peak per device `16.36 GB`.
+- Interpretation:
+  - The OOM was a harness-output materialization artifact. The update-only computation itself runs at full May shape on R1D2E8.
+  - The phase table is now timed:
+    - update-only (grads entry + params entry + NS + hyperball, no FSDP apply): `~0.455s`, `4 A2A`.
+    - direction-apply (grads entry + NS direction + FSDP apply, no params entry/hyperball): `~0.530s`, `4 A2A`.
+    - full packed-bank apply (grads entry + params entry + NS + hyperball + FSDP apply): `~0.638s`, `6 A2A`.
+  - This makes the full-path decomposition internally consistent: no hidden per-leaf explosion remains, but the three bulk boundary phases still cost enough that collapsing or avoiding one phase is the next optimization target.
+- Next action: keep Socrates focused on a lower-level bridge or custom primitive that can collapse the three two-A2A phases, while the main path treats `expert_fsdp_packed_bank_muonh_apply` as the conservative FSDP-master baseline.
