@@ -743,11 +743,6 @@ def _packed_grouped_muonh_updates_to_fsdp_leaves(
     first_update = grouped_updates[0]
     target_sharding = _target_named_sharding(first_update)
     target_spec = target_sharding.spec if isinstance(target_sharding, jax.sharding.NamedSharding) else None
-    target = (
-        jax.ShapeDtypeStruct(first_update.shape, first_update.dtype, sharding=target_sharding)
-        if isinstance(target_sharding, jax.sharding.NamedSharding)
-        else first_update
-    )
     if (
         not isinstance(param_sharding, jax.sharding.NamedSharding)
         or not isinstance(target_sharding, jax.sharding.NamedSharding)
@@ -760,7 +755,7 @@ def _packed_grouped_muonh_updates_to_fsdp_leaves(
         for grouped_update, valid_size in zip(grouped_updates, valid_sizes, strict=True):
             restored_update = _restore_grouped_muonh_for_split_slice_first_gather(
                 grouped_update,
-                target,
+                target_sharding,
                 valid_size,
                 sample_param,
             )
@@ -783,7 +778,7 @@ def _packed_grouped_muonh_updates_to_fsdp_leaves(
         for grouped_update, valid_size in zip(grouped_updates, valid_sizes, strict=True):
             restored_update = _restore_grouped_muonh_for_split_explicit(
                 grouped_update,
-                target,
+                target_sharding,
                 valid_size,
                 sample_param,
             )
