@@ -6781,6 +6781,12 @@ def effective_gbps(bytes_count: float | None, seconds: float | None) -> float | 
     return bytes_count / seconds / 1e9
 
 
+def bytes_to_gib(bytes_count: float | None) -> float | None:
+    if bytes_count is None:
+        return None
+    return bytes_count / (1024**3)
+
+
 def boundary_correctness_skipped_reason(
     config: BenchConfig,
     bench_kind: str,
@@ -9797,12 +9803,23 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "estimated_ns_dot_flops": flops,
         "estimated_matrix_count": estimated_matrix_count(bench_config, bench_kind),
         "estimated_boundary_global_update_bytes": boundary_bytes.get("global_update_bytes"),
+        "estimated_boundary_global_update_gib": bytes_to_gib(boundary_bytes.get("global_update_bytes")),
         "estimated_boundary_grouped_input_per_device_bytes": boundary_bytes.get("grouped_input_per_device_bytes"),
+        "estimated_boundary_grouped_input_per_device_gib": bytes_to_gib(
+            boundary_bytes.get("grouped_input_per_device_bytes")
+        ),
         "estimated_boundary_fsdp_output_per_device_bytes": boundary_bytes.get("fsdp_output_per_device_bytes"),
+        "estimated_boundary_fsdp_output_per_device_gib": bytes_to_gib(
+            boundary_bytes.get("fsdp_output_per_device_bytes")
+        ),
         "estimated_boundary_all_gather_slice_peak_per_device_bytes": boundary_bytes.get(
             "all_gather_slice_peak_per_device_bytes"
         ),
+        "estimated_boundary_all_gather_slice_peak_per_device_gib": bytes_to_gib(
+            boundary_bytes.get("all_gather_slice_peak_per_device_bytes")
+        ),
         "estimated_boundary_peak_per_device_bytes": boundary_bytes.get("estimated_peak_per_device_bytes"),
+        "estimated_boundary_peak_per_device_gib": bytes_to_gib(boundary_bytes.get("estimated_peak_per_device_bytes")),
         "estimated_boundary_fsdp_output_to_grouped_input_ratio": boundary_bytes.get(
             "fsdp_output_to_grouped_input_ratio"
         ),
@@ -9814,12 +9831,19 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "estimated_boundary_replica_fanout_min_extra_per_device_bytes": boundary_bytes.get(
             "replica_fanout_min_extra_per_device_bytes"
         ),
+        "estimated_boundary_replica_fanout_min_extra_per_device_gib": bytes_to_gib(
+            boundary_bytes.get("replica_fanout_min_extra_per_device_bytes")
+        ),
         "estimated_boundary_replica_fanout_min_total_receive_bytes": boundary_bytes.get(
             "replica_fanout_min_total_receive_bytes"
+        ),
+        "estimated_boundary_replica_fanout_min_total_receive_gib": bytes_to_gib(
+            boundary_bytes.get("replica_fanout_min_total_receive_bytes")
         ),
         "estimated_boundary_phases": boundary_phases,
         "estimated_boundary_phase_count": len(boundary_phases),
         "estimated_boundary_phase_global_bytes": boundary_phase_global_bytes if boundary_phases else None,
+        "estimated_boundary_phase_global_gib": bytes_to_gib(boundary_phase_global_bytes if boundary_phases else None),
         "estimated_boundary_phase_ideal_collective_count": (
             boundary_phase_ideal_collective_count if boundary_phases else None
         ),

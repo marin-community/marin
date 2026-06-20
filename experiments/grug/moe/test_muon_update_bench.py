@@ -97,6 +97,7 @@ from experiments.grug.moe.muon_update_bench import (
     build_grouped_expert_productionish_optimizer,
     build_ordinary_2d_muonh_optimizer,
     build_real_expert_fsdp_grouped_muonh_optimizer,
+    bytes_to_gib,
     create_mesh,
     estimate_grouped_2d_muonh,
     estimate_grouping,
@@ -239,6 +240,17 @@ def test_cw_muon_update_bench_launcher_reads_strict_boundary_gate_env(monkeypatc
     step = build_step()
 
     assert step.config.require_no_boundary_collectives is True
+
+
+def test_cw_muon_update_bench_launcher_reads_grouped_muonh_boundary_env(monkeypatch):
+    monkeypatch.setenv("RUN_ID", "muon-update-bench-test")
+    monkeypatch.setenv("MUON_BENCH_EXPERT_GROUPED_MUONH_PACKED_ENTRY", "true")
+    monkeypatch.setenv("MUON_BENCH_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES", "true")
+
+    step = build_step()
+
+    assert step.config.expert_grouped_muonh_packed_entry is True
+    assert step.config.expert_grouped_muonh_chunk_local_boundaries is True
 
 
 def test_cw_muon_update_bench_launcher_reads_wandb_env(monkeypatch):
@@ -1367,11 +1379,12 @@ def test_expert_fsdp_grouped_muonh_restores_ordinary_expert_updates_before_apply
 
 
 @pytest.mark.parametrize(
-    ("packed_entry", "expected_all_gather", "expected_all_to_all"),
-    [(False, 6, 0), (True, 2, 4)],
+    ("packed_entry", "chunk_local_boundaries", "expected_all_gather", "expected_all_to_all"),
+    [(False, False, 6, 0), (True, False, 2, 4), (False, True, 2, 4)],
 )
 def test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs(
     packed_entry: bool,
+    chunk_local_boundaries: bool,
     expected_all_gather: int,
     expected_all_to_all: int,
 ):
@@ -1392,6 +1405,7 @@ def test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs(
         model_axis=1,
         learning_rate=0.02,
         expert_grouped_muonh_packed_entry=packed_entry,
+        expert_grouped_muonh_chunk_local_boundaries=chunk_local_boundaries,
     )
     mesh = AbstractMesh(
         axis_sizes=(2, 2, 2, 1),
@@ -4290,13 +4304,24 @@ def test_summary_row_reports_boundary_byte_estimates():
 
     assert row["boundary_primitive"] == "grouped_updates_apply_direct"
     assert row["estimated_boundary_global_update_bytes"] == estimates["global_update_bytes"]
+    assert row["estimated_boundary_global_update_gib"] == bytes_to_gib(estimates["global_update_bytes"])
     assert row["estimated_boundary_grouped_input_per_device_bytes"] == estimates["grouped_input_per_device_bytes"]
+    assert row["estimated_boundary_grouped_input_per_device_gib"] == bytes_to_gib(
+        estimates["grouped_input_per_device_bytes"]
+    )
     assert row["estimated_boundary_fsdp_output_per_device_bytes"] == estimates["fsdp_output_per_device_bytes"]
+    assert row["estimated_boundary_fsdp_output_per_device_gib"] == bytes_to_gib(
+        estimates["fsdp_output_per_device_bytes"]
+    )
     assert (
         row["estimated_boundary_all_gather_slice_peak_per_device_bytes"]
         == estimates["all_gather_slice_peak_per_device_bytes"]
     )
+    assert row["estimated_boundary_all_gather_slice_peak_per_device_gib"] == bytes_to_gib(
+        estimates["all_gather_slice_peak_per_device_bytes"]
+    )
     assert row["estimated_boundary_peak_per_device_bytes"] == estimates["estimated_peak_per_device_bytes"]
+    assert row["estimated_boundary_peak_per_device_gib"] == bytes_to_gib(estimates["estimated_peak_per_device_bytes"])
     assert row["estimated_boundary_fsdp_output_to_grouped_input_ratio"] == 2.0
     assert row["estimated_boundary_all_gather_slice_peak_to_grouped_input_ratio"] == 4.0
     assert row["estimated_boundary_replica_fanout_factor"] == 2.0
@@ -4305,9 +4330,15 @@ def test_summary_row_reports_boundary_byte_estimates():
         row["estimated_boundary_replica_fanout_min_extra_per_device_bytes"]
         == estimates["replica_fanout_min_extra_per_device_bytes"]
     )
+    assert row["estimated_boundary_replica_fanout_min_extra_per_device_gib"] == bytes_to_gib(
+        estimates["replica_fanout_min_extra_per_device_bytes"]
+    )
     assert (
         row["estimated_boundary_replica_fanout_min_total_receive_bytes"]
         == estimates["replica_fanout_min_total_receive_bytes"]
+    )
+    assert row["estimated_boundary_replica_fanout_min_total_receive_gib"] == bytes_to_gib(
+        estimates["replica_fanout_min_total_receive_bytes"]
     )
 
     result["lowered"] = {
