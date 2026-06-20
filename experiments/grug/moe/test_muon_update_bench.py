@@ -1328,7 +1328,15 @@ def test_expert_fsdp_grouped_muonh_restores_ordinary_expert_updates_before_apply
     assert estimated_matrix_count(config, EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH) == layers * 16
 
 
-def test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs():
+@pytest.mark.parametrize(
+    ("packed_entry", "expected_all_gather", "expected_all_to_all"),
+    [(False, 6, 0), (True, 2, 4)],
+)
+def test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs(
+    packed_entry: bool,
+    expected_all_gather: int,
+    expected_all_to_all: int,
+):
     config = BenchConfig(
         layers=4,
         ns4d_group_size=4,
@@ -1345,6 +1353,7 @@ def test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs()
         expert_axis=2,
         model_axis=1,
         learning_rate=0.02,
+        expert_grouped_muonh_packed_entry=packed_entry,
     )
     mesh = AbstractMesh(
         axis_sizes=(2, 2, 2, 1),
@@ -1384,10 +1393,10 @@ def test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs()
     update_hlo_summary = summarize_hlo(str(lowered_update.compiler_ir(dialect="stablehlo")))
     assert hlo_summary.two_batch_axis_dot_general == 6
     assert update_hlo_summary.two_batch_axis_dot_general == 6
-    assert hlo_summary.all_gather == 2
-    assert update_hlo_summary.all_gather == 2
-    assert hlo_summary.all_to_all == 4
-    assert update_hlo_summary.all_to_all == 4
+    assert hlo_summary.all_gather == expected_all_gather
+    assert update_hlo_summary.all_gather == expected_all_gather
+    assert hlo_summary.all_to_all == expected_all_to_all
+    assert update_hlo_summary.all_to_all == expected_all_to_all
     assert hlo_summary.all_reduce == 0
     assert update_hlo_summary.all_reduce == 0
     assert hlo_summary.reduce_scatter == 0

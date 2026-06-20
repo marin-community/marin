@@ -478,6 +478,7 @@ class BenchConfig:
     learning_rate: float
     ns_compute_dtype: str = "input"
     nesterov: bool = True
+    expert_grouped_muonh_packed_entry: bool = False
     grouped_expert_consumer_tokens_per_expert: int = DEFAULT_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT
     grouped_expert_consumer_chunk_tokens: int = DEFAULT_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS
     grouped_expert_consumer_chunk_tokens_per_expert: int = DEFAULT_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS_PER_EXPERT
@@ -2385,6 +2386,7 @@ def build_real_expert_fsdp_grouped_muonh_optimizer(config: BenchConfig) -> optax
         max_grouped_stack_size=config.max_grouped_stack_size,
         ns_compute_dtype=config.ns_compute_dtype,
         expert_grouped_muonh_group_size=ns4d_group_size(config),
+        expert_grouped_muonh_packed_entry=config.expert_grouped_muonh_packed_entry,
     ).build(num_train_steps=8)
 
 

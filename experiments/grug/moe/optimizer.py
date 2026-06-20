@@ -838,6 +838,7 @@ def _grouped_expert_muonh_updates_with_grouped_trace(
     max_grouped_stack_size: int,
     ns_compute_dtype: str,
     expert_grouped_muonh_group_size: int | None,
+    packed_entry_boundary: bool,
 ):
     treedef, output_leaves, chunks = _grouped_muonh_entry_chunks(
         params,
@@ -852,17 +853,36 @@ def _grouped_expert_muonh_updates_with_grouped_trace(
     grouped_updates_by_key: dict[tuple[tuple[int, ...], str, str], list[Any]] = {}
     valid_sizes_by_key: dict[tuple[tuple[int, ...], str, str], list[int]] = {}
     entries_by_key: dict[tuple[tuple[int, ...], str, str], list[tuple[int, object, object]]] = {}
-    banks_by_key, chunk_info = _grouped_muonh_packed_entry_banks(chunks)
+    banks_by_key, chunk_info = _grouped_muonh_packed_entry_banks(chunks) if packed_entry_boundary else ({}, {})
     for chunk_index, (trace_group, entry_chunk) in enumerate(zip(trace_groups, chunks, strict=True)):
-        key, offset, valid_size, padded_size, entry_chunk = chunk_info[chunk_index]
-        update_bank, param_bank = banks_by_key[key]
-        with jax.named_scope("grouped_muonh/packed_entry/slice_update_chunk"):
-            stacked_updates = lax.dynamic_slice_in_dim(update_bank, offset, padded_size, axis=0)
-        with jax.named_scope("grouped_muonh/packed_entry/slice_param_chunk"):
-            stacked_params = lax.dynamic_slice_in_dim(param_bank, offset, padded_size, axis=0)
-        target = _grouped_4d_stack_target(
-            _grouped_muonh_shape_dtype_struct(stacked_updates.shape, stacked_updates.dtype, entry_chunk[0][2])
-        )
+        key = _grouped_muonh_entry_key(entry_chunk)
+        if packed_entry_boundary:
+            _, offset, valid_size, padded_size, entry_chunk = chunk_info[chunk_index]
+            update_bank, param_bank = banks_by_key[key]
+            with jax.named_scope("grouped_muonh/packed_entry/slice_update_chunk"):
+                stacked_updates = lax.dynamic_slice_in_dim(update_bank, offset, padded_size, axis=0)
+            with jax.named_scope("grouped_muonh/packed_entry/slice_param_chunk"):
+                stacked_params = lax.dynamic_slice_in_dim(param_bank, offset, padded_size, axis=0)
+            target = _grouped_4d_stack_target(
+                _grouped_muonh_shape_dtype_struct(stacked_updates.shape, stacked_updates.dtype, entry_chunk[0][2])
+            )
+        else:
+            with jax.named_scope("grouped_muonh/stack_expert_updates"):
+                stacked_updates, target, valid_size = _stack_grouped_muonh_chunk(entry_chunk, value_index=1)
+                stacked_params, _, _ = _stack_grouped_muonh_chunk(entry_chunk, value_index=2)
+
+            if target is not None:
+                with jax.named_scope("grouped_muonh/reshard_grouped_stack"):
+                    stacked_updates = _enter_grouped_muonh_ns_layout_slice_first_gather(
+                        stacked_updates,
+                        target,
+                        entry_chunk[0][2],
+                    )
+                    stacked_params = _enter_grouped_muonh_ns_layout_slice_first_gather(
+                        stacked_params,
+                        target,
+                        entry_chunk[0][2],
+                    )
 
         with jax.named_scope("grouped_muonh/update_grouped_momentum_buffer"):
             next_trace_group = momentum * trace_group + stacked_updates
@@ -914,6 +934,7 @@ def scale_with_grouped_expert_muonh(
     max_grouped_stack_size: int = DEFAULT_MAX_GROUPED_STACK_SIZE,
     ns_compute_dtype: str = "input",
     expert_grouped_muonh_group_size: int | None = None,
+    packed_entry_boundary: bool = False,
 ) -> optax.GradientTransformation:
     """Expert-only MuonH transform that computes NS on grouped 4D stacks and returns FSDP updates."""
 
@@ -950,6 +971,7 @@ def scale_with_grouped_expert_muonh(
                 max_grouped_stack_size=max_grouped_stack_size,
                 ns_compute_dtype=ns_compute_dtype,
                 expert_grouped_muonh_group_size=expert_grouped_muonh_group_size,
+                packed_entry_boundary=packed_entry_boundary,
             )
         assert_update_sharding_matches_params(muonh_updates, params, "Grouped MuonH updates")
         return muonh_updates, next_state
@@ -1112,6 +1134,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     max_grouped_stack_size: int = DEFAULT_MAX_GROUPED_STACK_SIZE
     ns_compute_dtype: str = "input"
     expert_grouped_muonh_group_size: int | None = None
+    expert_grouped_muonh_packed_entry: bool = False
 
     def build(self, num_train_steps):
         if self.expert_3d_optimizer not in VALID_EXPERT_3D_OPTIMIZERS:
@@ -1169,6 +1192,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         max_grouped_stack_size=self.max_grouped_stack_size,
                         ns_compute_dtype=self.ns_compute_dtype,
                         expert_grouped_muonh_group_size=self.expert_grouped_muonh_group_size,
+                        packed_entry_boundary=self.expert_grouped_muonh_packed_entry,
                     )
                 )
                 components.append(_match_named_update_sharding())

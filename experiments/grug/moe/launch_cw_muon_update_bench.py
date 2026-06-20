@@ -69,6 +69,7 @@ class MuonUpdateBenchLaunchConfig:
     model_axis: int = 1
     learning_rate: float = 0.02
     nesterov: bool = True
+    expert_grouped_muonh_packed_entry: bool = False
     warmup: int = 1
     iters: int = 3
     grouped_expert_consumer_tokens_per_expert: int = 1
@@ -158,6 +159,7 @@ def _bench_configs(config: MuonUpdateBenchLaunchConfig) -> list[BenchConfig]:
             learning_rate=config.learning_rate,
             nesterov=config.nesterov,
             ns_compute_dtype=config.ns_compute_dtype,
+            expert_grouped_muonh_packed_entry=config.expert_grouped_muonh_packed_entry,
             grouped_expert_consumer_tokens_per_expert=config.grouped_expert_consumer_tokens_per_expert,
             grouped_expert_consumer_chunk_tokens=config.grouped_expert_consumer_chunk_tokens,
             grouped_expert_consumer_chunk_tokens_per_expert=config.grouped_expert_consumer_chunk_tokens_per_expert,
@@ -389,6 +391,7 @@ def build_step() -> ExecutorStep:
         model_axis=env_int("MUON_BENCH_MODEL_AXIS", 1),
         learning_rate=env_float("MUON_BENCH_LEARNING_RATE", 0.02),
         nesterov=env_bool("MUON_BENCH_NESTEROV", True),
+        expert_grouped_muonh_packed_entry=env_bool("MUON_BENCH_EXPERT_GROUPED_MUONH_PACKED_ENTRY", False),
         warmup=env_int("MUON_BENCH_WARMUP", 1),
         iters=env_int("MUON_BENCH_ITERS", 3),
         grouped_expert_consumer_tokens_per_expert=env_int("MUON_BENCH_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT", 1),
