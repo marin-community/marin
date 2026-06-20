@@ -1687,3 +1687,15 @@ Post-compile steps were stable around 0.65-0.66s:
   - Replica fanout: factor `1.0`, `requires_replica_fanout=false`.
 - Interpretation: The `R1D2E8` shape fixes the replicated-state OOM and gives a runnable 2-node reference, but it does not satisfy the retargeted boundary goal. The main failure mode remains collective fragmentation: XLA compiled the expert boundary as 24 serialized all-gathers instead of a small number of coarse transports.
 - Next action: Implement a focused expert-weight `fsdp_grads_to_grouped_chunks` benchmark and a focused `grouped_updates_to_fsdp_apply` benchmark with correctness max-error and peak-HBM fields. The lower-level bridge must beat this R1D2E8 baseline in compiled HLO, not only lowered StableHLO.
+
+### 2026-06-20 00:53 PDT - boundary correctness reporting
+- Hypothesis: The boundary harness needs value-equivalence reporting before any new transport variant can be trusted; shape/sharding checks alone do not prove `grouped_updates_to_fsdp_apply` is correct.
+- Change:
+  - Added a tiny reference path for grouped expert updates -> FSDP update tree and grouped expert updates -> FSDP params through `optax.apply_updates`.
+  - Added `boundary_correctness_max_error` to `TimingSummary` and summary rows for explicit expert grouped-to-FSDP restore/apply candidate benches.
+  - Added `estimated_boundary_peak_per_device_bytes` as an estimated HBM pressure row, currently the max of grouped input, FSDP output, and all-gather slice peak bytes per device.
+- Validation:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'boundary_correctness_max_error or summary_row_reports_boundary_byte_estimates' -q` passed with `2 passed, 77 deselected`.
+  - `./infra/pre-commit.py --changed-files --fix` passed.
+- Interpretation: This still does not prove the two final primitives, but future focused boundary rows can now carry a correctness max-error and an explicit estimated peak-memory field. The current correctness coverage is intentionally limited to grouped-updates-to-FSDP restore/apply paths; the real optimizer-update pipeline needs a separate reference contract because it also includes trace/MuonH.
+- Next action: Run a focused H100 boundary candidate with the new fields, then add the missing `fsdp_grads_to_grouped_chunks`-specific reference and reporting.
