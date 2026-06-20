@@ -1649,3 +1649,16 @@ Post-compile steps were stable around 0.65-0.66s:
 - Next action: Preserve the conservative FSDP-master goal, but evaluate new work against two explicit paths:
   1. FSDP-master path: grouped NS bank update -> one coarse transport per expert projection -> FSDP bucket slices -> ordinary `optax.apply_updates`.
   2. Representation-pivot path: persistent grouped expert banks consumed directly by grouped MoE/model code, avoiding the grouped-to-FSDP update boundary.
+
+### 2026-06-20 00:05 PDT - production grouped MoEMLP adapter
+- Hypothesis: The grouped-bank path needs a production-facing module boundary, not only benchmark helpers. A grouped `MoEMLP` adapter should stack adjacent production `MoEMLP` layers, run the real router path with a leading group axis, and call `GroupedMoEExpertMlp` directly without materializing `GroupedMoEExpertMlp.layer()` in the hot path.
+- Change:
+  - Added `GroupedMoEMLP` in `experiments/grug/moe/model.py`.
+  - `GroupedMoEMLP.from_layers(layers)` stacks router weights, router bias, and `GroupedMoEExpertMlp.from_layers(...)` from ordinary production `MoEMLP` layers.
+  - `GroupedMoEMLP.__call__` accepts `[G, B, S, D]`, computes the same QB router/top-k/sigmoid combine weights per group, computes grouped QB beta with the group axis replicated, calls the grouped expert bank once, and returns grouped routed outputs plus per-group router stats.
+- Validation:
+  - `uv run pytest experiments/grug/moe/test_model.py -q` passed with `5 passed`.
+  - `uv run pytest lib/levanter/tests/grug/test_grugformer_moe.py -k 'grouped_moe_mlp or grouped_moe_expert_mlp' -q` passed with `4 passed`.
+  - The new production test constructs ordinary `MoEMLP` layers, converts them with `GroupedMoEMLP.from_layers`, and verifies the grouped path lowers under a small explicit abstract mesh while preserving grouped output and router-stat shapes.
+- Interpretation: This is a concrete integration step for the representation-pivot path. It does not yet replace the full transformer block loop or prove full-train performance, but it moves grouped expert banks from benchmark-only code into the production model module boundary with a real router + grouped expert consumer.
+- Next action: Add a grouped block/transformer execution mode that batches adjacent `Block.mlp` calls through `GroupedMoEMLP` while leaving attention and non-expert parameters per-layer. Then compile a short production block/train-step gate and compare communication against the synthetic grouped MoE consumer H100 gate.

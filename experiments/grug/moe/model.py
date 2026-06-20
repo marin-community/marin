@@ -8,7 +8,9 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Literal
 
 import equinox as eqx
@@ -33,6 +35,7 @@ from levanter.grug.attention import (
 from levanter.grug.grug_moe import (
     DEEPEP_REMAT_SAVE_NAMES,
     MOE_REMAT_SAVE_NAMES,
+    GroupedMoEExpertMlp,
     MoeActivation,
     MoEExpertMlp,
     MoeImplementation,
@@ -73,6 +76,10 @@ VALID_INPUT_EMBED_SHARDINGS: tuple[InputEmbedSharding, ...] = ("hidden_batch", "
 
 def _batch_spec() -> P:
     return P(_BATCH_AXES)
+
+
+def _grouped_batch_spec() -> P:
+    return P(None, _BATCH_AXES)
 
 
 def _token_spec() -> P:
@@ -616,6 +623,119 @@ class MoEMLP(eqx.Module):
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
+        return routed, router_stats
+
+
+class GroupedMoEMLP(eqx.Module):
+    """Production MoE MLP group that keeps adjacent expert weights in one bank."""
+
+    router: jax.Array
+    router_bias: jax.Array
+    expert_mlp: GroupedMoEExpertMlp
+    cfg: GrugModelConfig = eqx.field(static=True)
+    valid_group_size: int = eqx.field(static=True)
+
+    @staticmethod
+    def from_layers(layers: Sequence[MoEMLP]) -> "GroupedMoEMLP":
+        """Stack ordinary per-layer MoE MLPs into one grouped-router/expert bank."""
+        if not layers:
+            raise ValueError("layers must contain at least one MoEMLP")
+
+        first = layers[0]
+        for i, layer in enumerate(layers[1:], start=1):
+            if layer.cfg != first.cfg:
+                raise ValueError("GroupedMoEMLP layers must share the same GrugModelConfig")
+            if layer.router.shape != first.router.shape:
+                raise ValueError(
+                    "GroupedMoEMLP routers must have identical shapes; "
+                    f"layer 0 has {first.router.shape}, layer {i} has {layer.router.shape}"
+                )
+            if layer.router_bias.shape != first.router_bias.shape:
+                raise ValueError(
+                    "GroupedMoEMLP router_bias values must have identical shapes; "
+                    f"layer 0 has {first.router_bias.shape}, layer {i} has {layer.router_bias.shape}"
+                )
+
+        return GroupedMoEMLP(
+            router=jnp.stack([layer.router for layer in layers], axis=0),
+            router_bias=jnp.stack([layer.router_bias for layer in layers], axis=0),
+            expert_mlp=GroupedMoEExpertMlp.from_layers([layer.expert_mlp for layer in layers]),
+            cfg=first.cfg,
+            valid_group_size=len(layers),
+        )
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "G B S D"],
+    ) -> tuple[Float[Array, "G B S D"], dict[str, jax.Array]]:
+        group_size, b, s, _ = x.shape
+        if group_size != self.router.shape[0] or group_size != self.expert_mlp.w_gate_up.shape[0]:
+            raise ValueError(
+                "GroupedMoEMLP input and parameters must share the same group dimension; "
+                f"got x={group_size}, router={self.router.shape[0]}, expert={self.expert_mlp.w_gate_up.shape[0]}"
+            )
+        if self.valid_group_size < 1 or self.valid_group_size > group_size:
+            raise ValueError(f"valid_group_size must be in [1, {group_size}], got {self.valid_group_size}")
+
+        x_flat = rearrange(x, "g b s d -> g (b s) d")
+        router = reshard(self.router, P(None, None, None))
+        router_logits = jnp.einsum("gtd,gde->gte", x_flat, router).astype(jnp.float32)
+        biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias[:, None, :])
+        router_probs = jax.nn.softmax(router_logits, axis=-1)
+        _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
+        qb_alpha = _topk_logits[:, :, -1:]
+        selected_experts = selected_experts[:, :, :-1]
+        unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
+        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+        if self.cfg.routing_renorm_sum is not None:
+            denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+            combine_weights_f = combine_weights_f * (self.cfg.routing_renorm_sum / (denom + 1e-9))
+        combine_weights = combine_weights_f.astype(x.dtype)
+
+        router_stats = jax.vmap(
+            partial(
+                _routing_stats,
+                num_experts=self.cfg.num_experts,
+                num_experts_per_token=self.cfg.num_experts_per_token,
+            )
+        )(selected_experts, router_probs, router_logits)
+
+        mesh = get_abstract_mesh()
+        s_minus_alpha = reshard(router_logits - qb_alpha, P(None, _BATCH_AXES, None))
+        num_devices = 1
+        for axis_name in _BATCH_AXES:
+            num_devices *= mesh.shape[axis_name]
+        local_tokens = s_minus_alpha.shape[1] // num_devices
+        qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
+
+        def _local_qb_beta(s_ma):
+            topk_vals, _ = jax.lax.top_k(jnp.swapaxes(s_ma, 1, 2), qb_count)
+            beta = topk_vals[:, :, -1]
+            return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+
+        router_stats["qb_beta"] = shard_map(
+            _local_qb_beta,
+            mesh=mesh,
+            in_specs=(P(None, _BATCH_AXES, None),),
+            out_specs=P(None, None),
+        )(s_minus_alpha)
+
+        routed_flat = self.expert_mlp(
+            x_flat,
+            selected_experts.astype(jnp.int32),
+            combine_weights,
+            mesh=mesh,
+        )
+        routed = rearrange(routed_flat, "g (b s) d -> g b s d", b=b, s=s)
+        routed = reshard(routed, _grouped_batch_spec())
+
+        valid = jnp.arange(group_size) < self.valid_group_size
+        routed = jnp.where(valid[:, None, None, None], routed, jnp.zeros_like(routed))
+        router_stats = {
+            name: jnp.where(valid.reshape((group_size,) + (1,) * (value.ndim - 1)), value, jnp.zeros_like(value))
+            for name, value in router_stats.items()
+        }
         return routed, router_stats
 
 
