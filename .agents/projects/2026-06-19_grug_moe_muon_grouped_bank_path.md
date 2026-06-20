@@ -1,6 +1,6 @@
 # Grug MoE MuonH Grouped-Bank Path
 
-Status: 2026-06-19.
+Status: 2026-06-20.
 
 ## Goal
 
@@ -41,9 +41,21 @@ The FSDP-master grouped-boundary path has not met the bar:
 | explicit all-gather fused restore+apply | R2/D2/E8, L26 | fits, but about 0.611 s and 112 compiled all-gathers |
 | grouped chunk 8/16 fused restore+apply | R2/D2/E8, L26 | all-gather count drops, runtime stays about 0.614 s |
 | explicit replica all-gather + data all-to-all apply | R2/D2/E8, L26 | about 0.619 s, compiled 112 all-gathers plus 98 all-to-alls |
+| `jax.custom_partitioning` restore stub | R2/E8, L26, 2 H100 nodes | lowered as 26 custom calls, but compiled GPU HLO inlined back to 26 all-gathers |
+| direct restore-and-apply at FSDP leaves | R2/E8, L26, 2 H100 nodes | compiled to the same 8 all-gathers as restore-then-`optax.apply_updates` |
+| persistent grouped expert params/apply | R2/E8, L26, 2 H100 nodes | compiled with zero AG/A2A/AR/RS/CP |
 
 Conclusion: preserving grouped params/updates/results is fast; converting
 grouped updates back to ordinary per-layer FSDP leaves in the hot path is not.
+The two latest H100 compile-only checks tighten this conclusion:
+
+- `jax.custom_partitioning` is only a lowered-HLO insertion point here. XLA GPU
+  still inlines the body and emits the same all-gathers as an explicit tuple
+  restore.
+- Leaf-local direct `apply_updates` compiles faster than restore-then-apply,
+  but it does not reduce the grouped-to-FSDP collective count. It should stay a
+  diagnostic path unless a runtime profile shows a separate overlap/memory
+  benefit.
 
 The harness now reports boundary byte estimates for these rows. For the
 R2/D2/E8 May shape, the FSDP output shard is already 2x the grouped input shard
@@ -56,6 +68,31 @@ boundary, but the measured result stayed flat/slightly worse, so packed or
 reshaped versions of the same grouped-to-FSDP conversion are unlikely to be
 enough unless they also reduce the required FSDP output materialization or
 overlap it with useful work.
+
+## OSS Implementation Clues
+
+Public Muon implementations mostly avoid this hot per-leaf conversion rather
+than solving it with a generic optimizer-tree restore:
+
+- Megatron layer-wise Muon is the closest conceptual model. It separates
+  model-visible parameter layout from optimizer ownership: whole Muon-managed
+  matrices are owned/updated by selected ranks and then synchronized back to a
+  model-consumable parameter/bucket layout.
+- Dion/Axolotl is the closest FSDP2 transport analogue. It batches compatible
+  DTensor parameters, all-to-alls shards so each rank owns complete matrices for
+  Newton-Schulz, then all-to-alls back. This validates coarse grouped transport,
+  but copied per leaf it would reproduce the XLA collective-explosion problem.
+- KellerJordan/modded-nanogpt uses architecture-specific parameter banks and
+  bank-level reduce-scatter/all-gather around batched Newton-Schulz. This is a
+  useful grouping clue if Grug expert banks become first-class model objects.
+- NeMo's Emerging Optimizers are useful for batched Newton-Schulz and
+  MuonHyperball API shape, but do not directly solve the FSDP ownership
+  boundary.
+
+Design rule from these implementations: Muon ownership is allowed to be a
+different representation from model consumption, but the synchronization
+boundary must be explicit and coarse. Avoid per-leaf gather/scatter or per-leaf
+all-to-all even if PyTorch/FSDP2 examples tolerate it.
 
 ## Why The Boundary Is Bad
 
@@ -101,6 +138,11 @@ the consumer boundary:
 4. Only after the synthetic gate passes, port the representation into the real
    `MoEExpertMlp`/`MoEMLP` path.
 
+The gate should explicitly fail any production-candidate path whose compiled
+HLO contains grouped boundary collectives. Use the harness
+`--require-no-boundary-collectives` flag for candidate rows and reserve
+`--allow-boundary-collectives` only for attribution/decomposition runs.
+
 ## Implementation Sketch
 
 The likely code shape is a separate grouped expert module rather than changing
@@ -136,8 +178,9 @@ weights to FSDP leaves before apply.
 ## Stop Criteria
 
 Continue the FSDP-master path only if a new boundary reduces the R2/D2/E8 L26
-explicit apply cost far below 0.61 s. The current all-gather, group-size, and
-all-to-all variants do not.
+explicit apply cost far below 0.61 s or removes the H100 compiled boundary
+collectives entirely. The current all-gather, group-size, all-to-all,
+custom-partition, and direct-apply variants do not.
 
 Otherwise, focus on grouped-bank consumers. The first success criterion is a
 compiled synthetic gate with the grouped expert bank preserved and no compiled
