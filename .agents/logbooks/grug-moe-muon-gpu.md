@@ -2594,3 +2594,34 @@ Post-compile steps were stable around 0.65-0.66s:
     `slice_update_chunk` / `slice_param_chunk` SendRecv and reduce or overlap
     packed-restore all-gather/fanout while keeping FSDP master params and
     ordinary apply semantics.
+
+### 2026-06-20 11:33 PDT - May208 chunk-local production profile launched
+- Hypothesis: The chunk-local boundary mode that improved the standalone
+  `real_expert_fsdp_grouped_muonh_optimizer_update` harness should remove the
+  May202 packed-entry whole-bank dynamic-slice traffic in the full Grug train
+  step. This is not expected to be the final primitive, but it is the closest
+  production-safe fallback to validate before a lower-level bridge.
+- Command:
+  - `bash scratch/launch_may208_fa4_2node_b16_grouped_muonh3_chunklocal_readable_profile.sh`
+- Run:
+  - Initial parent Iris job `/dlwh/iris-run-job-20260620-180813` failed before
+    training because W&B rejected the long run name: `128 limit exceeded for
+    Name`.
+  - Relaunched parent Iris job: `/dlwh/iris-run-job-20260620-181104`.
+  - Replacement run id:
+    `GM2560-MAY208-B16-R2D1E8-GMUONH3-CHUNKLOCAL-PROF-N2-cw-20260620-1811`.
+- Config:
+  - Same May202-style two-node readable profile shape: 2 H100 nodes, B16,
+    sequence length 4096, sliding window 2048, `replica_axis=2`,
+    `data_axis=1`, `expert_axis=8`, `model_axis=1`, `gpu_fa4_cute`
+    attention, Pallas CE, ring MoE, save-MoE remat, bf16
+    params/compute/output, MuonH3 with bf16 NS compute, profiler HLO proto
+    enabled, command buffers disabled for readable names.
+  - Boundary change versus May202: `expert_grouped_muonh_packed_entry=false`
+    and `expert_grouped_muonh_chunk_local_boundaries=true`.
+- Next check:
+  - Compare profile summary against `scratch/profiles/may202_summary.json`.
+    The important signal is whether `grouped_muonh/packed_entry/slice_*_chunk`
+    and `grouped_muonh/packed_restore/concat_chunks` disappear or shrink, and
+    whether the replacement explicit per-chunk collectives are faster in the
+    full train step.
