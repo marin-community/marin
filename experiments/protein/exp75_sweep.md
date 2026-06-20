@@ -403,6 +403,14 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   0.05/0.1/0.2/0.3/0.4/0.6/0.8. Descent has flattened (only −0.005 over 0.4→0.8). Per
   methodology F, edge still open → **extended to `7e-4/wd1.0` + `7e-4/wd1.2`** (batch
   v5p-64) to bracket the turn-up; accept once a higher WD lands worse than 2.942._
+  _~05:35Z: **`7e-4/wd0.6` FINISHED at 2.957** — *worse* than BOTH neighbors (wd0.4=2.947,
+  wd0.8=2.942). So the WD response is **non-monotonic / flat**: 2.947 / 2.957 / 2.942 across
+  0.4 / 0.6 / 0.8 all sit within ~0.015 run-to-run noise. The "descending edge" is really a
+  **broad shallow basin ~wd0.4–0.8**; wd0.8=2.942 is only nominally best. The v5p-64 gang for
+  wd1.0/wd1.2 wouldn't schedule (pending ~2h) → **relocated both to v6e-8 interactive** (wd1.2
+  now training, wd1.0 scheduling). Decision rule: if wd1.0/wd1.2 land ≥~2.942 (flat/worse),
+  accept the E2 WD optimum as the flat basin (call it wd0.8=2.942) and stop extending; only
+  keep going if a higher WD clearly improves past noise._
   _~05:43Z: budget hit 82.9k (>78k) and the over-cap downgrade was preempting the critical
   E4 7e-4 column + w2s. Shed ~16.5k by **killing the two speculative wd0.2 corners
   `5e-4/0.2` & `1e-3/0.2`** (w2t) — only `7e-4/0.2` (w2s) is needed to confirm the
