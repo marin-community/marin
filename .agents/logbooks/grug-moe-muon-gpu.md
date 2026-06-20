@@ -1920,3 +1920,19 @@ Post-compile steps were stable around 0.65-0.66s:
   - Move W&B logging into a spawned child process with a `120s` timeout. The main JAX process waits for the child, emits `wandb_timeout` or `wandb_failed` on tracker trouble, then continues through the after-W&B barrier so all distributed ranks exit together. Summary JSON remains the authoritative result even if W&B cleanup misbehaves.
   - Focused validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'sync_global_devices_if_multihost or wandb_metric_row or launcher_reads_wandb_env' -q` -> 4 passed; `uv run python -m py_compile experiments/grug/moe/launch_cw_muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed; `./infra/pre-commit.py --files experiments/grug/moe/launch_cw_muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix` passed.
 - Next action: rerun the one-iteration phase-report validation once more. The pass condition is terminal Iris success after W&B logging, not just metric emission.
+
+### 2026-06-20 03:38 PDT - W&B child process switched from multiprocessing to subprocess
+- Hypothesis: Moving W&B into a child process should protect the distributed JAX process from W&B finalization, but Python multiprocessing `spawn` may not work under Iris' `_callable_runner.py` because the benchmark module is loaded as `__main__`.
+- Run:
+  - Iris parent `/dlwh/iris-run-job-20260620-102956`; child `/dlwh/iris-run-job-20260620-102956/grug-train-MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PHASEREPORTCHILDWANDB-N2-cw-20260620-102954`.
+  - W&B target `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PHASEREPORTCHILDWANDB-N2-cw-20260620-102954`.
+  - Output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PHASEREPORTCHILDWANDB-N2-cw-20260620-102954-dc38ed`.
+- Result:
+  - Metrics emitted successfully before tracker handoff: compiled `0 AG / 6 A2A / 0 CP / 0 RS`, median `0.65806-0.65809s`, median H100 bf16 peak about `23.32%`, and the same three two-A2A phase rows with compiled/lowered ratios `1.0`.
+  - Rank 0 then failed in `multiprocessing.spawn` before W&B logging: `_pickle.PicklingError: Can't pickle <function _log_summary_to_wandb_process ...>: attribute lookup _log_summary_to_wandb_process on __main__ failed`.
+  - The validation job was manually stopped after the failure because the useful benchmark metrics were already present.
+- Follow-up fix:
+  - Replace multiprocessing with `subprocess.run([sys.executable, "-m", "experiments.grug.moe.launch_cw_muon_update_bench"])` plus a local JSON payload file and sentinel env var `MUON_BENCH_WANDB_PAYLOAD`.
+  - Make `main()` build the executor step lazily so subprocess payload mode can import the module without calling `this_output_path()`.
+  - Focused validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'sync_global_devices_if_multihost or wandb_metric_row or launcher_reads_wandb_env' -q` -> 4 passed; `uv run python -m py_compile experiments/grug/moe/launch_cw_muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed; `./infra/pre-commit.py --files experiments/grug/moe/launch_cw_muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix` passed.
+- Next action: rerun phase-report validation once more. This time the W&B subprocess should avoid both the `spawn` pickling failure and the in-process `wandb.finish()` hang.

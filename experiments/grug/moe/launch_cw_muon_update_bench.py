@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import datetime
 import json
-import multiprocessing
 import os
 import shutil
+import subprocess
+import sys
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -46,6 +48,7 @@ from experiments.grug.moe.muon_update_bench import (
 GPUS_PER_NODE = 8
 DEFAULT_OUTPUT_SUBDIR = "experiments/grug-moe-cw/muon-update-bench"
 WANDB_LOG_TIMEOUT = 120
+WANDB_PAYLOAD_ENV = "MUON_BENCH_WANDB_PAYLOAD"
 
 set_default_cw_grug_moe_prefix()
 
@@ -293,27 +296,50 @@ def _log_summary_to_wandb(config: MuonUpdateBenchLaunchConfig, payload: dict[str
     if not config.wandb or jax.process_index() != 0:
         return
 
-    ctx = multiprocessing.get_context("spawn")
-    process = ctx.Process(
-        target=_log_summary_to_wandb_process,
-        args=(
-            config.run_id,
-            config.wandb_project,
-            config.wandb_group,
-            _json_safe(asdict(config)),
-            payload,
-        ),
-        name="muon-update-bench-wandb-logger",
-    )
-    process.start()
-    process.join(WANDB_LOG_TIMEOUT)
-    if process.is_alive():
-        process.terminate()
-        process.join(10)
+    payload_file = None
+    try:
+        with tempfile.NamedTemporaryFile("w", prefix="muon-update-bench-wandb-", suffix=".json", delete=False) as fp:
+            payload_file = Path(fp.name)
+            json.dump(
+                {
+                    "run_id": config.run_id,
+                    "wandb_project": config.wandb_project,
+                    "wandb_group": config.wandb_group,
+                    "launch_config": _json_safe(asdict(config)),
+                    "payload": payload,
+                },
+                fp,
+            )
+            fp.write("\n")
+
+        env = os.environ.copy()
+        env[WANDB_PAYLOAD_ENV] = str(payload_file)
+        result = subprocess.run(
+            [sys.executable, "-m", "experiments.grug.moe.launch_cw_muon_update_bench"],
+            env=env,
+            timeout=WANDB_LOG_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
         emit_jsonl({"event": "wandb_timeout", "timeout_seconds": WANDB_LOG_TIMEOUT})
         return
-    if process.exitcode != 0:
-        emit_jsonl({"event": "wandb_failed", "exit_code": process.exitcode})
+    finally:
+        if payload_file is not None:
+            payload_file.unlink(missing_ok=True)
+
+    if result.returncode != 0:
+        emit_jsonl({"event": "wandb_failed", "exit_code": result.returncode})
+
+
+def _log_summary_to_wandb_from_payload_file(path: str) -> None:
+    with Path(path).open() as fp:
+        payload = json.load(fp)
+    _log_summary_to_wandb_process(
+        payload["run_id"],
+        payload["wandb_project"],
+        payload["wandb_group"],
+        payload["launch_config"],
+        payload["payload"],
+    )
 
 
 def _run_muon_update_bench_local(config: MuonUpdateBenchLaunchConfig) -> None:
@@ -461,11 +487,12 @@ def build_step() -> ExecutorStep:
     )
 
 
-muon_update_bench_step = build_step()
-
-
 def main() -> None:
-    executor_main(steps=[muon_update_bench_step])
+    if payload_path := os.environ.get(WANDB_PAYLOAD_ENV):
+        _log_summary_to_wandb_from_payload_file(payload_path)
+        return
+
+    executor_main(steps=[build_step()])
 
 
 if __name__ == "__main__":
