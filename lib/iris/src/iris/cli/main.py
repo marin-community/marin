@@ -25,7 +25,13 @@ from iris.cluster.backends.k8s.controller import configure_client_s3
 from iris.cluster.config import IrisConfig
 from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token, store_token
 from iris.rpc import config_pb2, controller_pb2, job_pb2
-from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider, run_iap_desktop_login
+from iris.rpc.auth import (
+    ClientCredentials,
+    GcpAccessTokenProvider,
+    StaticTokenProvider,
+    TokenProvider,
+    run_iap_desktop_login,
+)
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
 logger = logging.getLogger(__name__)
@@ -154,14 +160,15 @@ def iris(
         name = resolve_cluster_name(iris_config.proto, controller_url, cluster_name)
         ctx.obj["cluster_name"] = name
 
+        token_provider = None
         if iris_config.proto.HasField("auth"):
-            ctx.obj["token_provider"] = create_client_token_provider(iris_config.proto.auth, cluster_name=name)
+            token_provider = create_client_token_provider(iris_config.proto.auth, cluster_name=name)
 
         # For an IAP-fronted cluster, also attach the IAP ID-token provider so
         # every RPC carries the Proxy-Authorization header IAP requires.
         iap = iap_config(iris_config.proto)
-        if iap is not None:
-            ctx.obj["iap_provider"] = build_iap_provider(iap, name)
+        iap_provider = build_iap_provider(iap, name) if iap is not None else None
+        ctx.obj["credentials"] = ClientCredentials(token_provider=token_provider, iap_provider=iap_provider)
     else:
         name = resolve_cluster_name(None, controller_url, cluster_name)
         ctx.obj["cluster_name"] = name
@@ -171,7 +178,7 @@ def iris(
         if credential is None:
             credential = load_any_token()
         if credential is not None:
-            ctx.obj["token_provider"] = StaticTokenProvider(credential.token)
+            ctx.obj["credentials"] = ClientCredentials(token_provider=StaticTokenProvider(credential.token))
 
     # Store direct controller URL; tunnel from config is established lazily
     # in require_controller_url() so commands like ``cluster start`` don't block.
@@ -194,7 +201,7 @@ def _login_iap(controller_url: str, iap: config_pb2.IapAuthConfig, cluster_name:
     except Exception as e:
         raise click.ClickException(f"IAP authentication failed: {e}") from e
 
-    with rpc_client(controller_url, iap_provider=StaticTokenProvider(id_token)) as client:
+    with rpc_client(controller_url, ClientCredentials(iap_provider=StaticTokenProvider(id_token))) as client:
         try:
             response = client.login(job_pb2.LoginRequest(identity_token=id_token))
         except Exception as e:

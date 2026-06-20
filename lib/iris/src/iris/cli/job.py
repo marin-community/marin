@@ -51,7 +51,7 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.rpc import job_pb2
-from iris.rpc.auth import TokenProvider
+from iris.rpc.auth import ClientCredentials
 from iris.rpc.proto_display import (
     PRIORITY_BAND_NAMES,
     job_state_friendly,
@@ -75,13 +75,12 @@ _STATE_MAP: dict[str, job_pb2.JobState] = {
 
 
 def _remote_client(ctx: click.Context) -> IrisClient:
-    """Build an IrisClient for the current cluster, threading both auth tokens
+    """Build an IrisClient for the current cluster, threading the auth credentials
     (the Iris JWT and, for IAP-fronted clusters, the IAP ID token) from context."""
     return IrisClient.remote(
         require_controller_url(ctx),
         workspace=Path.cwd(),
-        token_provider=ctx.obj.get("token_provider"),
-        iap_provider=ctx.obj.get("iap_provider"),
+        credentials=ctx.obj.get("credentials"),
     )
 
 
@@ -562,8 +561,7 @@ def run_iris_job(
     priority: str | None = None,
     preemptible: bool | None = None,
     task_image: str | None = None,
-    token_provider: TokenProvider | None = None,
-    iap_provider: TokenProvider | None = None,
+    credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
 ) -> int:
@@ -662,8 +660,7 @@ def run_iris_job(
         coscheduling=coscheduling,
         user=user,
         priority_band=priority_band,
-        token_provider=token_provider,
-        iap_provider=iap_provider,
+        credentials=credentials,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
         task_image=task_image,
@@ -686,8 +683,7 @@ def _submit_and_wait_job(
     coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
-    token_provider: TokenProvider | None = None,
-    iap_provider: TokenProvider | None = None,
+    credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
     task_image: str | None = None,
@@ -697,9 +693,7 @@ def _submit_and_wait_job(
     Only KeyboardInterrupt terminates the remote job; connection failures
     are logged and re-raised without killing the job.
     """
-    client = IrisClient.remote(
-        controller_url, workspace=Path.cwd(), token_provider=token_provider, iap_provider=iap_provider
-    )
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), credentials=credentials)
     entrypoint = Entrypoint.from_command(*command)
 
     job = client.submit(
@@ -947,8 +941,7 @@ def run(
             priority=priority,
             preemptible=preemptible,
             task_image=task_image,
-            token_provider=ctx.obj.get("token_provider"),
-            iap_provider=ctx.obj.get("iap_provider"),
+            credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,
         )
@@ -1266,7 +1259,7 @@ def bug_report(ctx, job_id: str, file_issue: bool, repo: str | None, tail: int, 
     """Generate a diagnostic bug report for a job."""
     controller_url = require_controller_url(ctx)
     report = gather_bug_report(
-        controller_url, JobName.from_wire(job_id), tail=tail, token_provider=ctx.obj.get("token_provider")
+        controller_url, JobName.from_wire(job_id), tail=tail, credentials=ctx.obj.get("credentials")
     )
     markdown = format_bug_report(report)
 

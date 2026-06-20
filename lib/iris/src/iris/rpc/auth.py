@@ -632,6 +632,25 @@ def client_interceptors(
     return interceptors
 
 
+@dataclass(frozen=True)
+class ClientCredentials:
+    """Auth material for outgoing controller RPCs.
+
+    Bundles the Iris JWT provider (attached on ``Authorization``) and, for an
+    IAP-fronted cluster, the IAP OIDC ID-token provider (``Proxy-Authorization``).
+    Passing both as one value keeps call sites from attaching one and forgetting
+    the other — the failure mode where a command works on a tunneled cluster but
+    is rejected by IAP because it never sent the IAP token.
+    """
+
+    token_provider: "TokenProvider | None" = None
+    iap_provider: "TokenProvider | None" = None
+
+    def interceptors(self) -> list:
+        """Build the client-side RPC interceptor chain for these credentials."""
+        return client_interceptors(self.token_provider, self.iap_provider)
+
+
 class TokenProvider(Protocol):
     """Provides a bearer token for outgoing requests."""
 

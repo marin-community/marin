@@ -19,7 +19,7 @@ from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import IrisConfig
 from iris.cluster.token_store import load_token
 from iris.rpc import config_pb2
-from iris.rpc.auth import IapUserIdTokenProvider, TokenProvider, client_interceptors
+from iris.rpc.auth import ClientCredentials, IapUserIdTokenProvider
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
@@ -68,17 +68,15 @@ IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
 
 def rpc_client(
     address: str,
-    token_provider: TokenProvider | None = None,
-    iap_provider: TokenProvider | None = None,
+    credentials: ClientCredentials | None = None,
     timeout_ms: int = 30_000,
 ) -> ControllerServiceClientSync:
     """Create an RPC client with optional auth. Use as a context manager: ``with rpc_client(url) as c:``.
 
-    ``token_provider`` supplies the Iris JWT (``Authorization``); ``iap_provider``
-    supplies the IAP OIDC ID token (``Proxy-Authorization``) for IAP-fronted
-    clusters.
+    ``credentials`` carries the Iris JWT (``Authorization``) and, for an
+    IAP-fronted cluster, the IAP OIDC ID token (``Proxy-Authorization``).
     """
-    interceptors = client_interceptors(token_provider, iap_provider)
+    interceptors = credentials.interceptors() if credentials is not None else []
     return ControllerServiceClientSync(
         address,
         timeout_ms=timeout_ms,
@@ -97,18 +95,13 @@ def rpc_client_for_ctx(
     """Build an RPC client from the CLI context, threading both auth tokens.
 
     Resolves the controller URL (establishing a tunnel if needed, unless ``url``
-    is given) and attaches the Iris JWT and IAP token providers stashed on the
-    context by the ``iris`` group. Prefer this over ``rpc_client`` in subcommands
-    so IAP-fronted clusters work uniformly.
+    is given) and attaches the ``ClientCredentials`` stashed on the context by the
+    ``iris`` group. Prefer this over ``rpc_client`` in subcommands so IAP-fronted
+    clusters work uniformly.
     """
     controller_url = url or require_controller_url(ctx)
     obj = ctx.obj or {}
-    return rpc_client(
-        controller_url,
-        obj.get("token_provider"),
-        obj.get("iap_provider"),
-        timeout_ms=timeout_ms,
-    )
+    return rpc_client(controller_url, obj.get("credentials"), timeout_ms=timeout_ms)
 
 
 def iap_config(config: config_pb2.IrisClusterConfig | None) -> config_pb2.IapAuthConfig | None:
