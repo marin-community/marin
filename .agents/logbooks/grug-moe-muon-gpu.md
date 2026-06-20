@@ -1315,3 +1315,25 @@ Post-compile steps were stable around 0.65-0.66s:
 - Interpretation: More headroom plus `cuda_async` proves the full-tree ordinary apply path can execute, but not in a useful performance regime. The previous failure was at least partly allocator/headroom-sensitive, but the viable path is still to avoid materializing or applying the whole FSDP update tree this way. `cuda_async` is diagnostic, not a solution.
 - Issue update: https://github.com/marin-community/marin/issues/6493#issuecomment-4756144861
 - Next action: Keep the low-level grouped-to-FSDP bridge work as the main path. If we need an apply sanity check in the future, use `cuda_async` only as a diagnostic fallback and compare against update-only/persistent-grouped baselines, not as a throughput candidate.
+
+### 2026-06-19 20:47 PDT - lazy grouped MuonH launcher and group-size fit checks
+- Hypothesis: The editable reference launcher should default to a group size that actually runs on 2xH100 nodes, logs a W&B topline, and reduces the grouped-to-FSDP restore collective count without relying on the profiler-only command-buffer flag.
+- Code snapshot:
+  - Commit `a367068d3` changed `scratch/launch_muon_grouped_reference_2node_wandb.sh` to default to `MUON_BENCH_NS4D_GROUP_SIZE=8`, include the group size in `RUN_ID`, keep normal XLA command-buffer behavior by default, and reserve `--xla_gpu_enable_command_buffer=` for `MUON_BENCH_READABLE_PROFILE=true`.
+  - Commit `6b037fa6f` bounded W&B finalization in `experiments/grug/moe/launch_cw_muon_update_bench.py` with quiet/no-console settings, disabled W&B stats/meta collection, and 30s service/network timeouts.
+- Commands:
+  - G26 default attempt from the earlier lazy script: `bash scratch/launch_muon_grouped_reference_2node_wandb.sh`.
+  - G13 retry: `MUON_BENCH_NS4D_GROUP_SIZE=13 bash scratch/launch_muon_grouped_reference_2node_wandb.sh`.
+  - G8 validation: `bash scratch/launch_muon_grouped_reference_2node_wandb.sh`.
+  - G4 fit check: `MUON_BENCH_NS4D_GROUP_SIZE=4 bash scratch/launch_muon_grouped_reference_2node_wandb.sh`.
+- Result:
+
+| group size | parent job | lowered AG/A2A/AR/RS/CP | compiled AG/A2A/AR/RS/CP | median | H100 bf16 peak | W&B | outcome |
+| ---: | --- | --- | --- | ---: | ---: | --- | --- |
+| 26 | `/dlwh/iris-run-job-20260620-032518` | 2/0/0/0/0 | n/a | n/a | n/a | n/a | OOM, 10.16 GiB allocation |
+| 13 | `/dlwh/iris-run-job-20260620-032938` | 4/0/0/0/0 | n/a | n/a | n/a | n/a | OOM, 19.14 GiB allocation |
+| 8 | `/dlwh/iris-run-job-20260620-033329` | 8/0/0/0/0 | 8/0/0/0/0 | 0.3326s | 46.15% | https://wandb.ai/marin-community/marin_moe/runs/cu3yg0xm | Metrics logged; old pre-timeout W&B finalization hung, then job was killed after capture |
+| 4 | `/dlwh/iris-run-job-20260620-034328` | 14/0/0/0/0 | n/a | n/a | n/a | n/a | OOM, 16.41 GiB allocation |
+
+- Interpretation: The lazy command now points at the only packed group size in this sweep that both ran and reduced compiled all-gathers. G8 is not strictly faster than the earlier update-only G2 profile (`~0.302s` with 26 AG), but it does cut the restore count to 8 while preserving a usable ~46% nominal-peak update-only timing. The OOM pattern is not monotonic in group size: G4, G13, and G26 all fail, so peak memory is driven by XLA's live materialization schedule rather than only max grouped-stack size. The W&B timeout patch was added after the G8 run because the metrics had uploaded but the job stayed RUNNING in finalization.
+- Next action: Treat G8 as the current lazy reference command, not as the final production bridge. The production path still needs either a streaming/chunked restore+apply that avoids the full FSDP update tree, or persistent grouped expert banks. If another fit/perf sweep is needed, use the same launcher with explicit `MUON_BENCH_NS4D_GROUP_SIZE` overrides and require both terminal job exit and W&B summary freshness as validation.
