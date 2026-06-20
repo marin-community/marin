@@ -3180,3 +3180,41 @@ Post-compile steps were stable around 0.65-0.66s:
 - Next action:
   - Wait for compiled HLO counts and timing rows, then compare against the
     expected packed-bank compute boundary contract.
+
+### 2026-06-20 12:40 PDT - Corrected R2 packed-bank-compute report run succeeded
+- Hypothesis:
+  - The bounded packed-bank compute path should avoid the previous whole-bank
+    OOM and report explicit `packed_bank_compute` boundary metrics.
+- Result:
+  - Child job succeeded:
+    `/dlwh/iris-run-job-20260620-193222/grug-train-MUON-BENCH-D2560-L26-R2D1E8-G2-H3-PACKEDBANKCOMPUTE-REPORT-N2-cw-20260620-193220`.
+  - W&B logged:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R2D1E8-G2-H3-PACKEDBANKCOMPUTE-REPORT-N2-cw-20260620-193220`.
+  - Both summary rows report
+    `expert_grouped_muonh_boundary_mode=packed_bank_compute`,
+    `expert_grouped_muonh_packed_bank_compute=true`.
+- Metrics:
+  - `real_expert_fsdp_grouped_muonh_optimizer_update_h3`:
+    - median/mean: `0.296850s` / `0.297247s`
+    - compiled AG/A2A/AR/RS/CP: `26/0/0/0/0`
+    - compiled excess collectives: `0`; matches ideal: `true`
+    - HBM peak/temp: `63.477 GiB` / `10.155 GiB`
+    - median estimated throughput: `8181.9 TFLOP/s`, `51.71%` H100 bf16 peak
+    - median estimated boundary global bandwidth: `440.84 GB/s`
+  - `real_expert_fsdp_grouped_muonh_optimizer_apply_h3`:
+    - median/mean: `0.300428s` / `0.300895s`
+    - compiled AG/A2A/AR/RS/CP: `26/0/0/0/0`
+    - compiled excess collectives: `0`; matches ideal: `true`
+    - HBM peak/temp: `54.492 GiB` / `16.406 GiB`
+    - median estimated throughput: `8084.5 TFLOP/s`, `51.09%` H100 bf16 peak
+    - median estimated boundary global bandwidth: `435.59 GB/s`
+- Interpretation:
+  - The corrected run proves the R2 full-size integrated packed-bank compute
+    harness can run without OOM and without per-leaf collective explosion in
+    compiled HLO for these two benchmark kinds.
+  - It still has one all-gather per packed bank/chunk group (`26` total), which
+    matches the current phase contract but remains a possible optimization
+    target if we want fewer larger transfers.
+- Next action:
+  - Post issue update, then use this as the R2 integrated packed-bank-compute
+    reference while continuing lower-level bridge work.
