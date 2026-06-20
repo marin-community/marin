@@ -2820,3 +2820,16 @@ Post-compile steps were stable around 0.65-0.66s:
 - Result:
   - All three dry-runs produced the expected axes, group axis, run names, W&B
     project, and TTL output prefix.
+
+### 2026-06-20 11:48 PDT - Boundary rows report process count
+- Hypothesis:
+  - The boundary goal asks for nodes/`replica_dcn`; total devices and mesh axes
+    are useful but still force readers to infer node count. The harness should
+    report JAX process count and local device count directly.
+- Change:
+  - Added `local_devices` and `process_count` to benchmark metadata and
+    summary rows.
+- Command:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_packed_bank_boundary_phase_estimates experiments/grug/moe/test_muon_update_bench.py::test_real_grouped_muonh_summary_row_reports_boundary_phase_estimates experiments/grug/moe/test_muon_update_bench.py::test_summary_row_flags_boundary_collective_type_excess -q`
+- Result:
+  - Pytest: `5 passed in 4.65s`.

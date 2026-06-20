@@ -4628,6 +4628,8 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
             "boundary_collectives_required_absent": False,
             "grouped_expert_group_count": None,
             "group_estimates": group_estimates,
+            "local_devices": 8,
+            "process_count": 2,
         },
         "lowered": {
             "hlo": {
@@ -4671,6 +4673,8 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
     row = summary_row(result)
 
     assert row["devices"] == 16
+    assert row["local_devices"] == 8
+    assert row["process_count"] == 2
     assert row["replica_axis"] == 1
     assert row["data_axis"] == 2
     assert row["expert_axis"] == 2
