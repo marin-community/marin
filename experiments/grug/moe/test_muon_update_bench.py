@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import jax
 import jax.numpy as jnp
@@ -94,6 +94,7 @@ from experiments.grug.moe.muon_update_bench import (
     estimate_grouped_2d_muonh,
     estimate_grouping,
     estimated_boundary_byte_estimates,
+    estimated_boundary_phase_estimates,
     estimated_full_production_muonh_ns_dot_flops,
     estimated_matrix_count,
     estimated_ns_dot_flops,
@@ -4304,6 +4305,121 @@ def test_summary_row_reports_boundary_byte_estimates():
         row["mean_estimated_boundary_grouped_input_per_device_gbps"] == estimates["grouped_input_per_device_bytes"] / 1e9
     )
     assert row["mean_estimated_boundary_fsdp_output_per_device_gbps"] == estimates["fsdp_output_per_device_bytes"] / 1e9
+
+
+def test_summary_row_reports_packed_bank_boundary_phase_estimates():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    estimates = estimated_boundary_byte_estimates(config, EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH)
+    phases = estimated_boundary_phase_estimates(config, EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH)
+
+    assert estimates is not None
+    assert [phase["name"] for phase in phases] == [
+        "fsdp_grads_to_packed_grouped_bank",
+        "fsdp_params_to_packed_grouped_bank",
+        "packed_grouped_updates_to_fsdp_apply",
+    ]
+    assert [phase["expected_collective_type"] for phase in phases] == ["all_to_all"] * 3
+    assert sum(phase["ideal_collective_count"] for phase in phases) == 6.0
+    assert sum(phase["global_bytes"] for phase in phases) == 3 * estimates["global_update_bytes"]
+
+    group_estimates = [asdict(estimate) for estimate in estimate_grouping(config)]
+    result = {
+        "metadata": {
+            "label": "expert_fsdp_packed_bank_muonh_apply_h1",
+            "bench_kind": EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+            "config": asdict(config),
+            "devices": 16,
+            "ns4d_group_size": 4,
+            "ns4d_padded_group_size": 4,
+            "ns4d_input_sharding_spec": "P(('replica_dcn', 'data'), 'expert', None, None)",
+            "ns4d_compute_sharding_spec": "P(('replica_dcn', 'data'), 'expert', None, None)",
+            "ns4d_result_sharding_spec": "P(('replica_dcn', 'data'), 'expert', None, None)",
+            "ns4d_boundary_status": "packed_bank_muonh_apply",
+            "boundary_collectives_allowed": True,
+            "boundary_collectives_required_absent": False,
+            "grouped_expert_group_count": None,
+            "group_estimates": group_estimates,
+        },
+        "lowered": {
+            "hlo": {
+                "dot_general": 18,
+                "batched_stack_dot_general": 0,
+                "two_batch_axis_dot_general": 18,
+                "custom_call": 0,
+                "gpu_gemm_custom_call": 0,
+                "all_gather": 0,
+                "all_reduce": 0,
+                "reduce_scatter": 0,
+                "all_to_all": 6,
+                "collective_permute": 0,
+            },
+            "lower_seconds": 1.0,
+        },
+        "timing": {
+            "timing": {
+                "compile_seconds": 1.0,
+                "compiled_hlo": {
+                    "dot_general": 0,
+                    "batched_stack_dot_general": 0,
+                    "two_batch_axis_dot_general": 0,
+                    "custom_call": 90,
+                    "gpu_gemm_custom_call": 41,
+                    "all_gather": 0,
+                    "all_reduce": 0,
+                    "reduce_scatter": 0,
+                    "all_to_all": 6,
+                    "collective_permute": 0,
+                },
+                "median_seconds": 2.0,
+                "mean_seconds": 2.0,
+                "min_seconds": 2.0,
+                "correctness_max_error": None,
+            }
+        },
+    }
+
+    row = summary_row(result)
+
+    assert row["estimated_boundary_phases"] == phases
+    assert row["estimated_boundary_phase_count"] == 3
+    assert row["estimated_boundary_phase_global_bytes"] == 3 * estimates["global_update_bytes"]
+    assert row["estimated_boundary_phase_ideal_collective_count"] == 6.0
+    assert row["estimated_boundary_lowered_collective_to_phase_ideal_ratio"] == 1.0
+    assert row["estimated_boundary_compiled_collective_to_phase_ideal_ratio"] == 1.0
+    assert row["mean_estimated_boundary_phase_global_gbps"] == 3 * estimates["global_update_bytes"] / 2.0 / 1e9
+    assert row["median_estimated_boundary_phase_global_gbps"] == 3 * estimates["global_update_bytes"] / 2.0 / 1e9
+
+    direction_phases = estimated_boundary_phase_estimates(config, EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH)
+    assert [phase["name"] for phase in direction_phases] == [
+        "fsdp_grads_to_packed_grouped_bank",
+        "packed_grouped_updates_to_fsdp_apply",
+    ]
+    update_only_phases = estimated_boundary_phase_estimates(config, EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH)
+    assert [phase["name"] for phase in update_only_phases] == [
+        "fsdp_grads_to_packed_grouped_bank",
+        "fsdp_params_to_packed_grouped_bank",
+    ]
+    n1_config = replace(config, data_axis=1, ns4d_group_axis="none", ns4d_group_size=1)
+    n1_phases = estimated_boundary_phase_estimates(n1_config, EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH)
+    assert n1_phases
+    assert {phase["expected_collective_type"] for phase in n1_phases} == {"none"}
+    assert sum(phase["ideal_collective_count"] for phase in n1_phases) == 0.0
 
 
 def test_strict_boundary_gate_includes_expert_fsdp_and_collective_permute():

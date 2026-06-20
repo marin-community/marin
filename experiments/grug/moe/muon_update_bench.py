@@ -6439,6 +6439,63 @@ def estimated_boundary_byte_estimates(config: BenchConfig, bench_kind: str) -> d
     }
 
 
+def _packed_bank_phase_collective_count_per_weight(config: BenchConfig) -> int:
+    if config.data_axis > 1:
+        return 1
+    if config.replica_axis > 1 and "replica_dcn" in config.ns4d_group_axis:
+        return 1
+    return 0
+
+
+def estimated_boundary_phase_estimates(config: BenchConfig, bench_kind: str) -> list[dict[str, Any]]:
+    boundary_bytes = estimated_boundary_byte_estimates(config, bench_kind)
+    if boundary_bytes is None:
+        return []
+    if bench_kind not in (
+        EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
+    ):
+        return []
+
+    collective_count_per_weight = _packed_bank_phase_collective_count_per_weight(config)
+    collective_type = "all_to_all" if config.data_axis > 1 else "all_gather" if collective_count_per_weight else "none"
+    ideal_collective_count = len(synthetic_shapes(config)) * collective_count_per_weight
+    phase_templates = {
+        "fsdp_grads_to_packed_grouped_bank": "FSDP grads -> packed grouped bank",
+        "fsdp_params_to_packed_grouped_bank": "FSDP params -> packed grouped bank",
+        "packed_grouped_updates_to_fsdp_apply": "packed grouped updates -> FSDP apply layout",
+    }
+    if bench_kind == EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH:
+        phase_names = ("packed_grouped_updates_to_fsdp_apply",)
+    elif bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH:
+        phase_names = ("fsdp_grads_to_packed_grouped_bank", "packed_grouped_updates_to_fsdp_apply")
+    elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH:
+        phase_names = ("fsdp_grads_to_packed_grouped_bank", "fsdp_params_to_packed_grouped_bank")
+    elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
+        phase_names = (
+            "fsdp_grads_to_packed_grouped_bank",
+            "fsdp_params_to_packed_grouped_bank",
+            "packed_grouped_updates_to_fsdp_apply",
+        )
+    else:
+        phase_names = ()
+
+    return [
+        {
+            "name": phase_name,
+            "description": phase_templates[phase_name],
+            "expected_collective_type": collective_type,
+            "ideal_collective_count": float(ideal_collective_count),
+            "global_bytes": boundary_bytes["global_update_bytes"],
+            "grouped_input_per_device_bytes": boundary_bytes["grouped_input_per_device_bytes"],
+            "fsdp_output_per_device_bytes": boundary_bytes["fsdp_output_per_device_bytes"],
+        }
+        for phase_name in phase_names
+    ]
+
+
 def boundary_primitive_name(bench_kind: str) -> str | None:
     if bench_kind == EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH:
         return "fsdp_grads_to_grouped_chunks"
@@ -9491,6 +9548,9 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
     bench_config = BenchConfig(**config)
     flops = estimated_ns_dot_flops(bench_config, bench_kind)
     boundary_bytes = estimated_boundary_byte_estimates(bench_config, bench_kind) or {}
+    boundary_phases = estimated_boundary_phase_estimates(bench_config, bench_kind)
+    boundary_phase_global_bytes = sum(phase["global_bytes"] for phase in boundary_phases)
+    boundary_phase_ideal_collective_count = sum(phase["ideal_collective_count"] for phase in boundary_phases)
     row = {
         "label": result["metadata"]["label"],
         "bench_kind": bench_kind,
@@ -9532,6 +9592,10 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "estimated_boundary_replica_fanout_min_total_receive_bytes": boundary_bytes.get(
             "replica_fanout_min_total_receive_bytes"
         ),
+        "estimated_boundary_phases": boundary_phases,
+        "estimated_boundary_phase_count": len(boundary_phases),
+        "estimated_boundary_phase_global_bytes": boundary_phase_global_bytes or None,
+        "estimated_boundary_phase_ideal_collective_count": boundary_phase_ideal_collective_count or None,
         "grouped_expert_group_count": result["metadata"]["grouped_expert_group_count"],
         "grouped_chunks": sum(estimate["grouped_chunks"] for estimate in estimates),
         "chunks": [estimate["chunks"] for estimate in estimates],
@@ -9571,6 +9635,11 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                 "estimated_boundary_lowered_collective_count": lowered_fragmentation["collective_count"],
                 "estimated_boundary_lowered_ideal_collective_count": lowered_fragmentation["ideal_collective_count"],
                 "estimated_boundary_lowered_fragmentation_factor": lowered_fragmentation["fragmentation_factor"],
+                "estimated_boundary_lowered_collective_to_phase_ideal_ratio": (
+                    lowered_fragmentation["collective_count"] / boundary_phase_ideal_collective_count
+                    if lowered_fragmentation["collective_count"] is not None and boundary_phase_ideal_collective_count
+                    else None
+                ),
                 "lower_seconds": result["lowered"]["lower_seconds"],
             }
         )
@@ -9610,6 +9679,11 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                 "estimated_boundary_compiled_collective_count": compiled_fragmentation["collective_count"],
                 "estimated_boundary_compiled_ideal_collective_count": compiled_fragmentation["ideal_collective_count"],
                 "estimated_boundary_compiled_fragmentation_factor": compiled_fragmentation["fragmentation_factor"],
+                "estimated_boundary_compiled_collective_to_phase_ideal_ratio": (
+                    compiled_fragmentation["collective_count"] / boundary_phase_ideal_collective_count
+                    if compiled_fragmentation["collective_count"] is not None and boundary_phase_ideal_collective_count
+                    else None
+                ),
                 "median_seconds": timing["median_seconds"],
                 "mean_seconds": timing["mean_seconds"],
                 "min_seconds": timing["min_seconds"],
@@ -9630,6 +9704,14 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                 "mean_estimated_boundary_fsdp_output_per_device_gbps": effective_gbps(
                     boundary_fsdp_output_bytes,
                     timing["mean_seconds"],
+                ),
+                "mean_estimated_boundary_phase_global_gbps": effective_gbps(
+                    boundary_phase_global_bytes,
+                    timing["mean_seconds"],
+                ),
+                "median_estimated_boundary_phase_global_gbps": effective_gbps(
+                    boundary_phase_global_bytes,
+                    timing["median_seconds"],
                 ),
             }
         )
