@@ -143,6 +143,7 @@ from experiments.grug.moe.muon_update_bench import (
     grouped_expert_apply_boundary_step_factory,
     grouped_expert_bank_consumer_flops,
     grouped_expert_bank_consumer_step_factory,
+    grouped_expert_group_sizes_for_bench,
     grouped_expert_muonh_bank_consumer_step_factory,
     grouped_expert_muonh_moe_mlp_consumer_step_factory,
     grouped_expert_optimizer_apply_step_factory,
@@ -2005,6 +2006,57 @@ def test_fsdp_grads_to_explicit_packed_grouped_bank_returns_packed_bank():
     assert estimated_ns_dot_flops(config, EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH) == 0
 
 
+def test_fsdp_grads_to_explicit_packed_grouped_bank_pads_for_r2d2_group_axis():
+    config = BenchConfig(
+        layers=5,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    grads = synthetic_fsdp_expert_specs(mesh, config)
+    update_step = jax.jit(fsdp_grads_to_explicit_packed_grouped_bank_step_factory(mesh, config))
+
+    assert grouped_expert_group_sizes_for_bench(
+        config,
+        EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
+    ) == (4, 4)
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        result = jax.eval_shape(update_step, grads)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(grads).lower(lowering_platforms=(platform,))
+
+    assert result["packed"]["w_gate_up"].shape[0] == 8
+    assert_packed_grouped_expert_bank_sharding(
+        result,
+        mesh,
+        config,
+        EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
+        "explicit packed FSDP grads-to-grouped bank R2D2 result",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general == 0
+    assert hlo_summary.all_to_all > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.collective_permute == 0
+    assert hlo_summary.reduce_scatter == 0
+
+
 def test_expert_fsdp_grouped_boundary_correctness_max_error_is_zero_for_reference_apply():
     config = BenchConfig(
         layers=2,
@@ -2261,6 +2313,64 @@ def test_expert_fsdp_packed_bank_a2a_apply_boundary_returns_fsdp_params():
     assert hlo_summary.all_reduce == 0
     assert hlo_summary.reduce_scatter == 0
     assert estimated_ns_dot_flops(config, EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH) == 0
+
+
+def test_expert_fsdp_packed_bank_a2a_apply_boundary_pads_for_r2d2_group_axis():
+    config = BenchConfig(
+        layers=5,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = synthetic_fsdp_expert_specs(mesh, config)
+    packed_updates = synthetic_packed_grouped_expert_bank_specs(
+        mesh,
+        config,
+        EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+    )
+    update_step = jax.jit(expert_fsdp_packed_bank_a2a_apply_boundary_step_factory(mesh, config))
+
+    assert grouped_expert_group_sizes_for_bench(
+        config,
+        EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+    ) == (4, 4)
+    assert packed_updates["packed"]["w_gate_up"].shape[0] == 8
+    assert_packed_grouped_expert_bank_sharding(
+        packed_updates,
+        mesh,
+        config,
+        EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+        "packed grouped R2D2 updates",
+    )
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        result = jax.eval_shape(update_step, params, packed_updates)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(params, packed_updates).lower(lowering_platforms=(platform,))
+
+    assert_expert_fsdp_sharding(result, "packed-bank R2D2 a2a apply FSDP params")
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general == 0
+    assert hlo_summary.all_to_all > 0
+    assert hlo_summary.all_gather > 0
+    assert hlo_summary.collective_permute == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
 
 
 def test_expert_fsdp_grouped_explicit_a2a_apply_boundary_returns_fsdp_params():
