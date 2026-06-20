@@ -397,24 +397,6 @@ class IapAssertionVerifier:
         return VerifiedIdentity(user_id=email, role=self._role_resolver(email))
 
 
-class CompositeTokenVerifier:
-    """Tries multiple verifiers in order, returning the first successful result."""
-
-    def __init__(self, verifiers: list[TokenVerifier]):
-        if not verifiers:
-            raise ValueError("CompositeTokenVerifier requires at least one verifier")
-        self._verifiers = verifiers
-
-    def verify(self, token: str) -> VerifiedIdentity:
-        errors = []
-        for verifier in self._verifiers:
-            try:
-                return verifier.verify(token)
-            except ValueError as exc:
-                errors.append(str(exc))
-        raise ValueError(f"All verifiers failed: {'; '.join(errors)}")
-
-
 def is_trusted_loopback(client_address: str | None, headers: dict) -> bool:
     """Return True if the request arrived over a genuine loopback connection.
 

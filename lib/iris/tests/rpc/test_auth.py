@@ -21,7 +21,6 @@ from iris.rpc.auth import (
     AuthRequest,
     AuthTokenInjector,
     AuthzAction,
-    CompositeTokenVerifier,
     GcpAccessTokenProvider,
     GcpAccessTokenVerifier,
     IapAssertionVerifier,
@@ -539,30 +538,6 @@ def test_gcp_access_token_provider_refreshes_credentials():
 
     assert token == "fresh-access-token"
     mock_creds.refresh.assert_called_once()
-
-
-def test_composite_verifier_first_match():
-    v1 = StaticTokenVerifier({"tok-a": "alice"})
-    v2 = StaticTokenVerifier({"tok-b": "bob"})
-    composite = CompositeTokenVerifier([v1, v2])
-    result = composite.verify("tok-a")
-    assert result.user_id == "alice"
-
-
-def test_composite_verifier_second_match():
-    v1 = StaticTokenVerifier({"tok-a": "alice"})
-    v2 = StaticTokenVerifier({"tok-b": "bob"})
-    composite = CompositeTokenVerifier([v1, v2])
-    result = composite.verify("tok-b")
-    assert result.user_id == "bob"
-
-
-def test_composite_verifier_all_fail():
-    v1 = StaticTokenVerifier({"tok-a": "alice"})
-    v2 = StaticTokenVerifier({"tok-b": "bob"})
-    composite = CompositeTokenVerifier([v1, v2])
-    with pytest.raises(ValueError, match="All verifiers failed"):
-        composite.verify("unknown-token")
 
 
 # ---------------------------------------------------------------------------
