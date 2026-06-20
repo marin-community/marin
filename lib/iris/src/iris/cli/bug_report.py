@@ -17,7 +17,7 @@ from finelog.rpc import logging_pb2
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import TokenProvider, client_interceptors
+from iris.rpc.auth import ClientCredentials
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_display import format_resources, job_state_friendly, task_state_friendly
@@ -116,10 +116,10 @@ def gather_bug_report(
     job_id: JobName,
     *,
     tail: int = 50,
-    token_provider: TokenProvider | None = None,
+    credentials: ClientCredentials | None = None,
 ) -> BugReport:
     """Gather all diagnostic data for a job into a BugReport."""
-    interceptors = client_interceptors(token_provider)
+    interceptors = credentials.interceptors() if credentials is not None else []
     client = ControllerServiceClientSync(
         controller_url,
         timeout_ms=30000,

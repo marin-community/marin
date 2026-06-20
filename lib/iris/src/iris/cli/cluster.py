@@ -30,7 +30,7 @@ from iris.cli.build import (
     find_marin_root,
     get_git_sha,
 )
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
+from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
 from iris.cluster.backends.gcp.bootstrap import build_worker_bootstrap_script
 from iris.cluster.backends.gcp.workers import GcpWorkerProvider
 from iris.cluster.backends.local.cluster import LocalCluster
@@ -115,14 +115,16 @@ def _format_status_table(status: vm_pb2.AutoscalerStatus) -> str:
     return "\n".join(lines)
 
 
-def _get_autoscaler_status(controller_url: str) -> vm_pb2.AutoscalerStatus:
-    with rpc_client(controller_url) as client:
+def _get_autoscaler_status(ctx: click.Context, controller_url: str) -> vm_pb2.AutoscalerStatus:
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
         request = controller_pb2.Controller.GetAutoscalerStatusRequest()
         return client.get_autoscaler_status(request).status
 
 
-def _get_worker_status(controller_url: str, worker_id: str) -> controller_pb2.Controller.GetWorkerStatusResponse:
-    with rpc_client(controller_url) as client:
+def _get_worker_status(
+    ctx: click.Context, controller_url: str, worker_id: str
+) -> controller_pb2.Controller.GetWorkerStatusResponse:
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
         request = controller_pb2.Controller.GetWorkerStatusRequest(id=worker_id)
         return client.get_worker_status(request)
 
@@ -371,7 +373,7 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
         with bundle.controller.tunnel(address) as url:
             click.echo(f"Tunnel ready: {url}")
 
-            with rpc_client(url) as client:
+            with rpc_client_for_ctx(ctx, url=url) as client:
                 deadline = time.monotonic() + worker_timeout
                 healthy_count = 0
                 while time.monotonic() < deadline:
@@ -634,7 +636,7 @@ def cluster_status_cmd(ctx):
     controller_url = require_controller_url(ctx)
     click.echo("Checking controller status...")
     try:
-        with rpc_client(controller_url) as client:
+        with rpc_client_for_ctx(ctx, url=controller_url) as client:
             proc = client.get_process_status(job_pb2.GetProcessStatusRequest()).process_info
             workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
             as_status = client.get_autoscaler_status(controller_pb2.Controller.GetAutoscalerStatusRequest()).status
@@ -736,7 +738,7 @@ def vm_status(ctx, scale_group):
     """Show VM and slice status from the controller."""
     controller_url = require_controller_url(ctx)
     try:
-        as_status = _get_autoscaler_status(controller_url)
+        as_status = _get_autoscaler_status(ctx, controller_url)
     except Exception as e:
         click.echo(f"Error connecting to controller: {e}", err=True)
         raise SystemExit(1) from None
@@ -788,7 +790,7 @@ def vm_logs(ctx, vm_id):
     """Show VM initialization logs."""
     controller_url = require_controller_url(ctx)
     try:
-        resp = _get_worker_status(controller_url, vm_id)
+        resp = _get_worker_status(ctx, controller_url, vm_id)
     except ConnectError as e:
         if e.code == Code.NOT_FOUND:
             click.echo(f"Worker not found: {vm_id}", err=True)
@@ -896,7 +898,7 @@ def controller_checkpoint(ctx, stop: bool):
     briefly and writes a consistent checkpoint DB copy.
     """
     controller_url = require_controller_url(ctx)
-    with rpc_client(controller_url) as client:
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
         try:
             resp = client.begin_checkpoint(controller_pb2.Controller.BeginCheckpointRequest(), timeout_ms=60_000)
         except Exception as e:
@@ -983,7 +985,7 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
         click.echo("Skipping pre-restart checkpoint.")
     else:
         click.echo(f"Taking checkpoint (timeout {checkpoint_timeout}s)...")
-        with rpc_client(controller_url) as client:
+        with rpc_client_for_ctx(ctx, url=controller_url) as client:
             try:
                 resp = client.begin_checkpoint(
                     controller_pb2.Controller.BeginCheckpointRequest(),
@@ -1111,7 +1113,7 @@ def worker_restart(
 
     scale_groups = dict(config.scale_groups)
 
-    with rpc_client(controller_url) as client:
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
         workers_resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
         all_workers = workers_resp.workers
 

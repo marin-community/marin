@@ -16,21 +16,31 @@ import contextlib
 import ipaddress
 import logging
 import time
+from collections.abc import Callable, Iterable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
 from http.cookies import SimpleCookie
-from typing import Protocol
+from typing import Protocol, cast
 
 import google.auth
 import google.auth.transport.requests
+import google.oauth2.credentials
+import google.oauth2.id_token
 import requests
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from google.auth.exceptions import GoogleAuthError
 
 logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "iris_session"
+
+# Read-only role granted to an IAP-authenticated caller whose email is not
+# provisioned in the user store (see the controller's IAP role resolver). It may
+# only call the read RPCs in DASHBOARD_READABLE_RPCS; see authorize_method. A
+# provisioned admin/user behind IAP resolves to their real role instead.
+DASHBOARD_ROLE = "dashboard"
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +128,59 @@ POLICY: dict[AuthzAction, frozenset[str]] = {
     AuthzAction.MANAGE_OTHER_KEYS: frozenset(),  # admin only
     AuthzAction.MANAGE_BUDGETS: frozenset(),  # admin only
 }
+
+
+# RPC methods the read-only `dashboard` role may call. A default-deny allowlist:
+# a dashboard caller (an IAP-authenticated browser whose email is not provisioned
+# in the user store) may invoke only these read methods; everything else — job
+# submit/terminate, worker registration, key/budget management, exec, profiling,
+# raw queries — is denied. A newly added RPC is therefore denied to the dashboard
+# role until it is explicitly listed here, which is the safe direction for a
+# read-only tier.
+DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
+    {
+        # Jobs and tasks
+        "GetJobStatus",
+        "GetJobState",
+        "ListJobs",
+        "GetTaskStatus",
+        "ListTasks",
+        "GetProcessStatus",
+        # Workers, endpoints, scheduler, autoscaler
+        "ListWorkers",
+        "GetWorkerStatus",
+        "ListEndpoints",
+        "GetAutoscalerStatus",
+        "GetSchedulerState",
+        "GetKubernetesClusterStatus",
+        # Identity, users, budgets (read)
+        "GetAuthInfo",
+        "GetCurrentUser",
+        "ListApiKeys",
+        "ListUsers",
+        "GetUserBudget",
+        "ListUserBudgets",
+        # RPC stats panel
+        "GetRpcStats",
+    }
+)
+
+
+def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
+    """Enforce per-method access for restricted roles before dispatch.
+
+    The ``dashboard`` role is read-only: it may call only the methods in
+    ``DASHBOARD_READABLE_RPCS``. Other roles are unrestricted here — their
+    mutating actions remain gated inside the handlers by ``authorize`` /
+    ``authorize_resource_owner``. Raises ``PERMISSION_DENIED`` for a dashboard
+    caller invoking a non-readable method.
+    """
+    if identity.role == DASHBOARD_ROLE and method_name not in DASHBOARD_READABLE_RPCS:
+        raise ConnectError(
+            Code.PERMISSION_DENIED,
+            f"Read-only dashboard access cannot call {method_name}; "
+            "this identity is not provisioned for write access",
+        )
 
 
 def require_identity() -> VerifiedIdentity:
@@ -220,22 +283,118 @@ class GcpAccessTokenVerifier:
         return VerifiedIdentity(user_id=email, role="user")
 
 
-class CompositeTokenVerifier:
-    """Tries multiple verifiers in order, returning the first successful result."""
+class IapIdTokenVerifier:
+    """Verifies a Google OIDC ID token and returns the caller's identity.
 
-    def __init__(self, verifiers: list[TokenVerifier]):
-        if not verifiers:
-            raise ValueError("CompositeTokenVerifier requires at least one verifier")
-        self._verifiers = verifiers
+    Raises ValueError unless the token's signature and issuer are valid and its
+    ``aud`` claim is one of ``audiences`` (the email is taken from the verified
+    claims). Used as the login identity proof for an IAP-fronted controller;
+    IAP's own IAM is the access gate, so no further project check is done here.
+    """
+
+    def __init__(self, audiences: Iterable[str]):
+        self._audiences = frozenset(audiences)
+        if not self._audiences:
+            raise ValueError("IapIdTokenVerifier requires at least one audience")
+        self._request = google.auth.transport.requests.Request()
 
     def verify(self, token: str) -> VerifiedIdentity:
-        errors = []
-        for verifier in self._verifiers:
-            try:
-                return verifier.verify(token)
-            except ValueError as exc:
-                errors.append(str(exc))
-        raise ValueError(f"All verifiers failed: {'; '.join(errors)}")
+        try:
+            # audience=None: verify signature/issuer/expiry here, then check the
+            # aud claim against our allow-set so multiple audiences are supported.
+            payload = google.oauth2.id_token.verify_oauth2_token(token, self._request)
+        except (ValueError, GoogleAuthError) as exc:
+            raise ValueError(f"IAP ID token verification failed: {exc}") from exc
+
+        aud = payload.get("aud")
+        if aud not in self._audiences:
+            raise ValueError(f"ID token audience {aud!r} is not an accepted IAP audience")
+        email = payload.get("email")
+        if not email:
+            raise ValueError("ID token has no email claim (request the 'email' scope)")
+        if payload.get("email_verified") is False:
+            raise ValueError(f"ID token email {email} is not verified")
+        return VerifiedIdentity(user_id=email, role="user")
+
+
+# IAP injects this signed JWT on every request it admits; its `aud` is the
+# backend-service resource path and it is signed with IAP's own (ES256) keys,
+# published at the URL below.
+IAP_ASSERTION_HEADER = "x-goog-iap-jwt-assertion"
+_IAP_PUBLIC_KEYS_URL = "https://www.gstatic.com/iap/verify/public_key"
+_IAP_CERTS_CACHE_TTL_SECONDS = 3600.0
+
+
+class _CachingCertsRequest:
+    """Wraps a google-auth transport ``Request`` to cache cert-endpoint GETs.
+
+    ``google.oauth2.id_token.verify_token`` re-fetches the signing certs on every
+    call. On the per-RPC assertion path that would be an HTTP round-trip per
+    request; IAP's public keys rotate slowly, so the cert response is cached for
+    a TTL. Only GETs are cached (the verify path issues nothing else).
+    """
+
+    def __init__(self, inner, cache_ttl_seconds: float = _IAP_CERTS_CACHE_TTL_SECONDS):
+        self._inner = inner
+        self._ttl = cache_ttl_seconds
+        self._cache: dict[str, tuple[float, object]] = {}
+
+    def __call__(self, url, method="GET", **kwargs):
+        if method != "GET":
+            return self._inner(url, method=method, **kwargs)
+        cached = self._cache.get(url)
+        if cached is not None and time.monotonic() < cached[0]:
+            return cached[1]
+        response = self._inner(url, method=method, **kwargs)
+        self._cache[url] = (time.monotonic() + self._ttl, response)
+        return response
+
+
+class IapAssertionVerifier:
+    """Verifies IAP's signed ``X-Goog-IAP-JWT-Assertion`` request header.
+
+    IAP signs a JWT asserting the authenticated identity and attaches it to every
+    request it forwards. Verifying its signature and ``aud`` proves the request
+    genuinely passed through IAP for *this* backend, so the asserted email can be
+    trusted without an Iris JWT — an internal caller that bypasses the load
+    balancer cannot forge it.
+
+    The verified email is mapped to an Iris role by ``role_resolver``. The default
+    grants the read-only ``dashboard`` role; the controller injects a resolver
+    backed by the user store so a provisioned admin or user behind IAP gets their
+    real role without running ``iris login`` (an unprovisioned email stays
+    read-only ``dashboard``).
+    """
+
+    def __init__(self, audience: str, role_resolver: Callable[[str], str] | None = None):
+        if not audience:
+            raise ValueError("IapAssertionVerifier requires a signed-header audience")
+        self._audience = audience
+        self._role_resolver = role_resolver if role_resolver is not None else lambda _email: DASHBOARD_ROLE
+        self._request = _CachingCertsRequest(google.auth.transport.requests.Request())
+
+    def identity_from_headers(self, headers: dict) -> VerifiedIdentity | None:
+        """Return the asserted identity, or None when no assertion header is present.
+
+        Raises ValueError if the header is present but fails verification (a
+        forged, stale, or wrong-audience assertion) so the caller rejects it.
+        """
+        assertion = headers.get(IAP_ASSERTION_HEADER)
+        if not assertion:
+            return None
+        try:
+            payload = google.oauth2.id_token.verify_token(
+                assertion,
+                self._request,
+                audience=self._audience,
+                certs_url=_IAP_PUBLIC_KEYS_URL,
+            )
+        except (ValueError, GoogleAuthError) as exc:
+            raise ValueError(f"IAP assertion verification failed: {exc}") from exc
+        email = payload.get("email")
+        if not email:
+            raise ValueError("IAP assertion has no email claim")
+        return VerifiedIdentity(user_id=email, role=self._role_resolver(email))
 
 
 def is_trusted_loopback(client_address: str | None, headers: dict) -> bool:
@@ -271,31 +430,206 @@ def is_trusted_loopback(client_address: str | None, headers: dict) -> bool:
         return False
 
 
-def resolve_auth(
-    token: str | None,
-    verifier: TokenVerifier,
-    optional: bool,
-    *,
-    client_address: str | None = None,
-    headers: dict | None = None,
-) -> VerifiedIdentity | None:
-    """Shared auth policy for gRPC interceptors and HTTP middleware.
+@dataclass(frozen=True, slots=True)
+class AuthRequest:
+    """Facts passed to each :class:`RequestAuthenticator`.
 
-    Returns VerifiedIdentity on success, None for anonymous passthrough.
-    Raises ValueError on rejected tokens (invalid token, or missing when required).
-
-    A present token always wins. A tokenless request over a genuine loopback
-    connection is always trusted as the admin user (see ``is_trusted_loopback``
-    and ``LOOPBACK_IDENTITY``) — the SSH-tunnel transition path. Otherwise a
-    missing token is allowed only when ``optional`` is set.
+    ``token``: bearer token from ``Authorization`` / session cookie.
+    ``headers``: raw request headers (IAP assertion verifier reads the signed header).
+    ``client_address``: transport peer (loopback authenticator reads this).
     """
-    if token is not None:
-        return verifier.verify(token)
-    if is_trusted_loopback(client_address, headers or {}):
-        return LOOPBACK_IDENTITY
+
+    token: str | None
+    headers: dict
+    client_address: str | None = None
+
+
+class AuthDecision(StrEnum):
+    """Outcome of a single authenticator over a request."""
+
+    AUTHENTICATED = "authenticated"  # this authenticator owns the request
+    ABSENT = "absent"  # its credential is not present — try the next authenticator
+    REJECTED = "rejected"  # credential present but invalid — stop and reject the request
+
+
+@dataclass(frozen=True, slots=True)
+class AuthOutcome:
+    decision: AuthDecision
+    identity: VerifiedIdentity | None = None
+    reason: str = ""
+
+
+def _authenticated(identity: VerifiedIdentity) -> AuthOutcome:
+    return AuthOutcome(AuthDecision.AUTHENTICATED, identity=identity)
+
+
+_ABSENT = AuthOutcome(AuthDecision.ABSENT)
+
+
+def _rejected(reason: str) -> AuthOutcome:
+    return AuthOutcome(AuthDecision.REJECTED, reason=reason)
+
+
+class RequestAuthenticator(Protocol):
+    """Decides whether a request is authenticated by one identity source.
+
+    Returns ``AUTHENTICATED`` (this source owns the request), ``ABSENT`` (its
+    credential is not present — fall through to the next), or ``REJECTED`` (a
+    credential is present but invalid — the request must be rejected, never
+    downgraded to a weaker source).
+    """
+
+    def authenticate(self, request: AuthRequest) -> AuthOutcome: ...
+
+
+@dataclass(frozen=True)
+class JwtAuthenticator:
+    """Authenticates a request bearing an ``Authorization`` token via a verifier.
+
+    A present-but-invalid token is ``REJECTED`` (never falls through), preserving
+    the rule that a bad credential cannot be downgraded to ambient trust.
+    """
+
+    verifier: TokenVerifier
+
+    def authenticate(self, request: AuthRequest) -> AuthOutcome:
+        if request.token is None:
+            return _ABSENT
+        try:
+            return _authenticated(self.verifier.verify(request.token))
+        except ValueError as exc:
+            return _rejected(str(exc))
+
+
+@dataclass(frozen=True)
+class IapAssertionAuthenticator:
+    """Authenticates a tokenless request via IAP's signed-header assertion.
+
+    Absent assertion → ``ABSENT``; a present-but-forged assertion → ``REJECTED``.
+    """
+
+    verifier: "IapAssertionVerifier"
+
+    def authenticate(self, request: AuthRequest) -> AuthOutcome:
+        try:
+            identity = self.verifier.identity_from_headers(request.headers)
+        except ValueError as exc:
+            return _rejected(str(exc))
+        return _authenticated(identity) if identity is not None else _ABSENT
+
+
+class LoopbackAuthenticator:
+    """Trusts a genuine loopback connection (SSH tunnel / on-host) as admin.
+
+    A tokenless/assertionless fallback only — see :func:`is_trusted_loopback`.
+    """
+
+    def authenticate(self, request: AuthRequest) -> AuthOutcome:
+        if is_trusted_loopback(request.client_address, request.headers):
+            return _authenticated(LOOPBACK_IDENTITY)
+        return _ABSENT
+
+
+def build_request_authenticators(
+    verifier: TokenVerifier,
+    iap_assertion_verifier: "IapAssertionVerifier | None" = None,
+) -> tuple[RequestAuthenticator, ...]:
+    """Return the controller's standard request-auth stack, highest-trust first.
+
+    ``[Jwt, (IapAssertion?), Loopback]``: a presented Iris JWT wins; otherwise an
+    IAP signed-header assertion (when IAP fronts the controller); otherwise a
+    trusted loopback peer. ``iap_assertion_verifier`` is omitted from the stack
+    when IAP is not configured.
+    """
+    authenticators: list[RequestAuthenticator] = [JwtAuthenticator(verifier)]
+    if iap_assertion_verifier is not None:
+        authenticators.append(IapAssertionAuthenticator(iap_assertion_verifier))
+    authenticators.append(LoopbackAuthenticator())
+    return tuple(authenticators)
+
+
+def resolve_auth(
+    request: AuthRequest,
+    authenticators: Sequence[RequestAuthenticator],
+    optional: bool,
+) -> VerifiedIdentity | None:
+    """Walk ``authenticators`` in order and resolve the request's identity.
+
+    The first authenticator to return ``AUTHENTICATED`` wins; the first to return
+    ``REJECTED`` stops the walk and raises (a present-but-invalid credential is
+    never downgraded to a weaker source). When every authenticator is ``ABSENT``,
+    a tokenless request is allowed as anonymous only when ``optional`` is set.
+
+    Returns the identity, ``None`` for an allowed anonymous request, and raises
+    ``ValueError`` on a rejected credential or a missing-but-required one.
+    """
+    for authenticator in authenticators:
+        outcome = authenticator.authenticate(request)
+        if outcome.decision is AuthDecision.AUTHENTICATED:
+            return outcome.identity
+        if outcome.decision is AuthDecision.REJECTED:
+            raise ValueError(outcome.reason or "Authentication failed")
     if optional:
         return None
     raise ValueError("Missing authentication")
+
+
+@dataclass(frozen=True)
+class ControllerAuthPolicy:
+    """Server-side auth policy for the controller's HTTP middleware and RPC interceptor.
+
+    ``authenticators`` is the ordered stack walked by :func:`resolve_auth`; a
+    non-empty stack means request auth is enforced (:attr:`request_auth_enabled`).
+
+    ``verifier`` has a narrower role: ``NullAuthInterceptor`` uses it to validate
+    worker tokens in null-auth mode. In auth-enabled mode it also backs the
+    ``JwtAuthenticator`` at the head of the stack.
+    """
+
+    authenticators: tuple[RequestAuthenticator, ...] = ()
+    optional: bool = False
+    verifier: "TokenVerifier | None" = None
+
+    @classmethod
+    def from_verifiers(
+        cls,
+        *,
+        verifier: "TokenVerifier | None" = None,
+        optional: bool = False,
+        iap_assertion_verifier: "IapAssertionVerifier | None" = None,
+    ) -> "ControllerAuthPolicy":
+        """Build the standard controller policy from its verifiers.
+
+        With a ``verifier`` set, the stack is ``[Jwt, (IapAssertion?), Loopback]``.
+        Without one (null-auth, no DB) the stack is empty and request auth is off.
+        """
+        authenticators = build_request_authenticators(verifier, iap_assertion_verifier) if verifier is not None else ()
+        return cls(authenticators=authenticators, optional=optional, verifier=verifier)
+
+    @property
+    def request_auth_enabled(self) -> bool:
+        """Whether per-request auth is enforced (the stack is non-empty)."""
+        return bool(self.authenticators)
+
+    def resolve(
+        self,
+        token: str | None,
+        *,
+        client_address: str | None = None,
+        headers: dict | None = None,
+    ) -> VerifiedIdentity | None:
+        """Resolve a request's identity under this policy (see :func:`resolve_auth`).
+
+        Only invoked on auth-enabled surfaces, where the stack is non-empty (the
+        controller mounts these middlewares/interceptors only when auth is
+        configured; null-auth uses ``NullAuthInterceptor`` instead).
+        """
+        assert self.authenticators, "ControllerAuthPolicy.resolve requires a non-empty authenticator stack"
+        return resolve_auth(
+            AuthRequest(token=token, headers=headers or {}, client_address=client_address),
+            self.authenticators,
+            self.optional,
+        )
 
 
 class AuthInterceptor:
@@ -405,16 +739,62 @@ class AuthTokenInjector:
         return call_next(request, ctx)
 
 
-def client_interceptors(token_provider: "TokenProvider | None") -> list:
+class ProxyAuthTokenInjector:
+    """Client-side interceptor that attaches the IAP OIDC ID token.
+
+    The token is set on ``Proxy-Authorization`` (not ``Authorization``), which
+    IAP consumes at the ingress, leaving ``Authorization`` free for the Iris JWT.
+    """
+
+    def __init__(self, provider: "TokenProvider"):
+        self._provider = provider
+
+    def intercept_unary_sync(self, call_next, request, ctx):
+        token = self._provider.get_token()
+        if token:
+            ctx.request_headers()["proxy-authorization"] = f"Bearer {token}"
+        return call_next(request, ctx)
+
+
+def client_interceptors(
+    token_provider: "TokenProvider | None",
+    iap_provider: "TokenProvider | None" = None,
+) -> list:
     """Build the client-side RPC interceptor chain.
 
-    With a token provider, attach the bearer token. Without one (the SSH-tunnel
-    case), send nothing: a loopback-trust controller authenticates the
-    connection by its transport peer, and job ownership comes from the job name.
+    With a token provider, attach the Iris bearer token (``Authorization``).
+    Without one (the SSH-tunnel case), send nothing: a loopback-trust controller
+    authenticates the connection by its transport peer, and job ownership comes
+    from the job name.
+
+    With an ``iap_provider`` (an IAP-fronted cluster), additionally attach the
+    OIDC ID token in ``Proxy-Authorization`` so the request passes IAP.
     """
+    interceptors: list = []
     if token_provider is not None:
-        return [AuthTokenInjector(token_provider)]
-    return []
+        interceptors.append(AuthTokenInjector(token_provider))
+    if iap_provider is not None:
+        interceptors.append(ProxyAuthTokenInjector(iap_provider))
+    return interceptors
+
+
+@dataclass(frozen=True)
+class ClientCredentials:
+    """Auth material for outgoing controller RPCs.
+
+    Bundles the Iris JWT provider (attached on ``Authorization``) and, for an
+    IAP-fronted cluster, the IAP OIDC ID-token provider (``Proxy-Authorization``).
+    Passing both as one value keeps call sites from attaching one and forgetting
+    the other — the failure mode where a command works on a tunneled cluster but
+    is rejected by IAP because it never sent the IAP token.
+    """
+
+    token_provider: "TokenProvider | None" = None
+    iap_provider: "TokenProvider | None" = None
+
+    def interceptors(self) -> list:
+        """Build the client-side RPC interceptor chain for these credentials."""
+        return client_interceptors(self.token_provider, self.iap_provider)
 
 
 class TokenProvider(Protocol):
@@ -466,3 +846,71 @@ class GcpAccessTokenProvider:
             self._expires_at = now_mono + self._REFRESH_MARGIN_SECONDS
 
         return self._cached_token
+
+
+# OAuth scopes for the IAP login flow. "openid" is what makes the token endpoint
+# return an OIDC ID token (the credential IAP requires); "email" puts the user's
+# address in the token so the controller can attribute the identity.
+IAP_LOGIN_SCOPES = ["openid", "email"]
+_GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
+_GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
+
+
+class IapUserIdTokenProvider:
+    """Returns a fresh OIDC ID token for IAP from a cached desktop-OAuth refresh token.
+
+    IAP requires an ID token (not an access token); this re-mints it from the
+    user's long-lived refresh token with no browser prompt. Obtain the initial
+    refresh token once via :func:`run_iap_desktop_login`.
+    """
+
+    def __init__(self, client_id: str, client_secret: str, refresh_token: str):
+        self._creds = google.oauth2.credentials.Credentials(
+            token=None,
+            refresh_token=refresh_token,
+            client_id=client_id,
+            client_secret=client_secret,
+            token_uri=_GOOGLE_TOKEN_URI,
+            scopes=IAP_LOGIN_SCOPES,
+        )
+
+    def get_token(self) -> str | None:
+        # creds.valid is False until the first refresh and once the access token
+        # (minted alongside the ID token) expires; refreshing repopulates both.
+        if self._creds.id_token is None or not self._creds.valid:
+            self._creds.refresh(google.auth.transport.requests.Request())
+        return self._creds.id_token
+
+
+def run_iap_desktop_login(client_id: str, client_secret: str, *, port: int = 0) -> tuple[str, str]:
+    """Run the installed-app OAuth flow in a browser and return (id_token, refresh_token).
+
+    Opens the system browser for Google sign-in/consent and catches the redirect
+    on a localhost port. Returns the freshly minted OIDC ID token and the
+    long-lived refresh token to cache for silent re-minting.
+    """
+    # Lazy import: google-auth-oauthlib pulls in requests-oauthlib and is only
+    # needed for the interactive login path, never by the controller or workers.
+    try:
+        from google_auth_oauthlib.flow import InstalledAppFlow  # noqa: PLC0415  # optional dep: iris[iap]
+    except ImportError as exc:
+        raise RuntimeError(
+            "IAP login requires google-auth-oauthlib; install it with `pip install marin-iris[iap]`"
+        ) from exc
+
+    client_config = {
+        "installed": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": _GOOGLE_AUTH_URI,
+            "token_uri": _GOOGLE_TOKEN_URI,
+        }
+    }
+    flow = InstalledAppFlow.from_client_config(client_config, scopes=IAP_LOGIN_SCOPES)
+    creds = flow.run_local_server(port=port, open_browser=True)
+    if not creds.id_token:
+        raise RuntimeError("OAuth flow returned no ID token (the 'openid' scope must be granted)")
+    if not creds.refresh_token:
+        raise RuntimeError("OAuth flow returned no refresh token (request offline access)")
+    # google-auth types these as object; the guards above prove they are non-empty strings.
+    return cast(str, creds.id_token), cast(str, creds.refresh_token)
