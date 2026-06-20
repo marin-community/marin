@@ -4548,6 +4548,13 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
         "fsdp_grads_to_packed_grouped_bank",
         "packed_grouped_updates_to_fsdp_apply",
     ]
+    grads_to_bank_phases = estimated_boundary_phase_estimates(
+        config,
+        EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
+    )
+    assert [phase["name"] for phase in grads_to_bank_phases] == ["fsdp_grads_to_packed_grouped_bank"]
+    assert [phase["expected_collective_type"] for phase in grads_to_bank_phases] == ["all_to_all"]
+    assert sum(phase["ideal_collective_count"] for phase in grads_to_bank_phases) == 2.0
     direct_apply_phases = estimated_boundary_phase_estimates(
         config,
         EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
@@ -4563,6 +4570,19 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
     assert n1_phases
     assert {phase["expected_collective_type"] for phase in n1_phases} == {"none"}
     assert sum(phase["ideal_collective_count"] for phase in n1_phases) == 0.0
+    r4_config = replace(config, replica_axis=4, data_axis=1, ns4d_group_axis="replica_dcn", ns4d_group_size=4)
+    r4_direction_phases = estimated_boundary_phase_estimates(
+        r4_config,
+        EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
+    )
+    assert [phase["expected_collective_type"] for phase in r4_direction_phases] == ["none", "all_gather"]
+    assert [phase["ideal_collective_count"] for phase in r4_direction_phases] == [0.0, 2.0]
+    r4_grads_to_bank_phases = estimated_boundary_phase_estimates(
+        r4_config,
+        EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
+    )
+    assert [phase["expected_collective_type"] for phase in r4_grads_to_bank_phases] == ["none"]
+    assert sum(phase["ideal_collective_count"] for phase in r4_grads_to_bank_phases) == 0.0
 
 
 def test_strict_boundary_gate_includes_expert_fsdp_and_collective_permute():

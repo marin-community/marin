@@ -6554,12 +6554,18 @@ def estimated_boundary_byte_estimates(config: BenchConfig, bench_kind: str) -> d
     }
 
 
-def _packed_bank_phase_collective_count_per_weight(config: BenchConfig) -> int:
-    if config.data_axis > 1:
-        return 1
-    if config.replica_axis > 1 and "replica_dcn" in config.ns4d_group_axis:
-        return 1
-    return 0
+def _packed_bank_phase_collective_info(config: BenchConfig, phase_name: str) -> tuple[str, int]:
+    if phase_name in ("fsdp_grads_to_packed_grouped_bank", "fsdp_params_to_packed_grouped_bank"):
+        if config.data_axis > 1:
+            return "all_to_all", 1
+        return "none", 0
+    if phase_name == "packed_grouped_updates_to_fsdp_apply":
+        if config.data_axis > 1:
+            return "all_to_all", 1
+        if config.replica_axis > 1 and "replica_dcn" in config.ns4d_group_axis:
+            return "all_gather", 1
+        return "none", 0
+    raise ValueError(f"Unknown packed-bank boundary phase {phase_name!r}.")
 
 
 def estimated_boundary_phase_estimates(config: BenchConfig, bench_kind: str) -> list[dict[str, Any]]:
@@ -6567,6 +6573,7 @@ def estimated_boundary_phase_estimates(config: BenchConfig, bench_kind: str) -> 
     if boundary_bytes is None:
         return []
     if bench_kind not in (
+        EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
@@ -6575,15 +6582,14 @@ def estimated_boundary_phase_estimates(config: BenchConfig, bench_kind: str) -> 
     ):
         return []
 
-    collective_count_per_weight = _packed_bank_phase_collective_count_per_weight(config)
-    collective_type = "all_to_all" if config.data_axis > 1 else "all_gather" if collective_count_per_weight else "none"
-    ideal_collective_count = len(synthetic_shapes(config)) * collective_count_per_weight
     phase_templates = {
         "fsdp_grads_to_packed_grouped_bank": "FSDP grads -> packed grouped bank",
         "fsdp_params_to_packed_grouped_bank": "FSDP params -> packed grouped bank",
         "packed_grouped_updates_to_fsdp_apply": "packed grouped updates -> FSDP apply layout",
     }
-    if bench_kind in (
+    if bench_kind == EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH:
+        phase_names = ("fsdp_grads_to_packed_grouped_bank",)
+    elif bench_kind in (
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
     ):
@@ -6601,18 +6607,21 @@ def estimated_boundary_phase_estimates(config: BenchConfig, bench_kind: str) -> 
     else:
         phase_names = ()
 
-    return [
-        {
-            "name": phase_name,
-            "description": phase_templates[phase_name],
-            "expected_collective_type": collective_type,
-            "ideal_collective_count": float(ideal_collective_count),
-            "global_bytes": boundary_bytes["global_update_bytes"],
-            "grouped_input_per_device_bytes": boundary_bytes["grouped_input_per_device_bytes"],
-            "fsdp_output_per_device_bytes": boundary_bytes["fsdp_output_per_device_bytes"],
-        }
-        for phase_name in phase_names
-    ]
+    phases = []
+    for phase_name in phase_names:
+        collective_type, collective_count_per_weight = _packed_bank_phase_collective_info(config, phase_name)
+        phases.append(
+            {
+                "name": phase_name,
+                "description": phase_templates[phase_name],
+                "expected_collective_type": collective_type,
+                "ideal_collective_count": float(len(synthetic_shapes(config)) * collective_count_per_weight),
+                "global_bytes": boundary_bytes["global_update_bytes"],
+                "grouped_input_per_device_bytes": boundary_bytes["grouped_input_per_device_bytes"],
+                "fsdp_output_per_device_bytes": boundary_bytes["fsdp_output_per_device_bytes"],
+            }
+        )
+    return phases
 
 
 def boundary_primitive_name(bench_kind: str) -> str | None:
