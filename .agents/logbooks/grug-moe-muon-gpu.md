@@ -1837,3 +1837,34 @@ Post-compile steps were stable around 0.65-0.66s:
     - full packed-bank apply (grads entry + params entry + NS + hyperball + FSDP apply): `~0.638s`, `6 A2A`.
   - This makes the full-path decomposition internally consistent: no hidden per-leaf explosion remains, but the three bulk boundary phases still cost enough that collapsing or avoiding one phase is the next optimization target.
 - Next action: keep Socrates focused on a lower-level bridge or custom primitive that can collapse the three two-A2A phases, while the main path treats `expert_fsdp_packed_bank_muonh_apply` as the conservative FSDP-master baseline.
+
+### 2026-06-20 03:00 PDT - restore packed-bank MuonH updates before ordinary Optax apply
+- Hypothesis: The conservative FSDP-master path can keep the model/train state in ordinary FSDP form if the packed grouped MuonH update is restored into a normal FSDP update tree before calling ordinary `optax.apply_updates`. This should preserve compatibility even if it does not reduce the remaining boundary transport.
+- Change:
+  - Commit `ff3779cb2` changes the full `expert_fsdp_packed_bank_muonh_apply` path to restore packed-bank MuonH updates into a normal FSDP update tree before ordinary `optax.apply_updates`.
+  - Added `expert_fsdp_packed_bank_updates_to_fsdp_tree`, `expert_fsdp_packed_bank_muonh_updates_outputs`, and `expert_fsdp_packed_bank_muonh_updates_step_factory`.
+  - Updated the packed A2A apply helper to use the same restore-tree-then-Optax boundary.
+  - Added focused coverage in `test_expert_fsdp_packed_bank_muonh_restores_fsdp_updates_before_apply`.
+- Validation:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'packed_bank_muonh_apply or packed_bank_muonh_update_only or packed_bank_direction_apply or packed_bank_a2a_apply_boundary' -q` -> 7 passed.
+  - Tiny local smoke for `expert_fsdp_packed_bank_muonh_apply` passed.
+  - `./infra/pre-commit.py --files experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix` passed, and commit hooks including Pyrefly passed.
+- CoreWeave command:
+  - `RUN_ID=MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKRESTOREAPPLY-N2-cw-20260620-095713 MARIN_PREFIX=s3://marin-na/tmp/ttl=7d MUON_BENCH_KINDS=expert_fsdp_packed_bank_muonh_apply MUON_BENCH_MODE=both MUON_BENCH_WARMUP=1 MUON_BENCH_ITERS=3 MUON_BENCH_SWEEP_BACKEND_STEPS=3 MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 MUON_BENCH_WRITE_COMPILED_HLO=true MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES=true MUON_BENCH_ENABLE_JAX_PROFILE=false MUON_BENCH_TRACKER=wandb MUON_BENCH_WANDB_PROJECT=marin_moe MUON_BENCH_WANDB_GROUP=grug-moe-cw-muon-packed-bank XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 bash scratch/launch_muon_grouped_reference_2node_wandb.sh`.
+- Config:
+  - Iris parent `/dlwh/iris-run-job-20260620-095716`; child `/dlwh/iris-run-job-20260620-095716/grug-train-MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKRESTOREAPPLY-N2-cw-20260620-095713`.
+  - W&B `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKRESTOREAPPLY-N2-cw-20260620-095713`.
+  - Output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKRESTOREAPPLY-N2-cw-20260620-095713-4be659`.
+  - R1D2E8, 16 H100s, L26, group size 8, H3, bf16 params/NS compute, `max_grouped_stack_size=512`.
+- Result:
+  - Job succeeded on both tasks with no OOM or traceback.
+  - Lowered HLO: `0 all_gather`, `6 all_to_all`, `0 collective_permute`, `0 reduce_scatter`, `18 dot_general`.
+  - Compiled HLO: `0 all_gather`, `6 all_to_all`, `0 collective_permute`, `0 reduce_scatter`, `41 gpu_gemm_custom_call`, `90 custom_call`.
+  - Rank 0 timing: mean `0.660683s`, median `0.659915s`, min `0.659113s`.
+  - Rank 1 timing: mean `0.659931s`, median `0.659877s`, min `0.659066s`.
+  - Summary row estimates: `2.428804005888e15` NS dot FLOPs, median `~3680 TFLOP/s`, about `23.26%` nominal H100 bf16 peak, global boundary bandwidth estimate `~198 GB/s`, boundary peak per device `16.36 GB`.
+- Interpretation:
+  - This validates the pragmatic compatibility boundary: train-state/master params can remain FSDP, packed grouped MuonH can compute updates, and the updates can be restored to an FSDP tree before ordinary `optax.apply_updates`.
+  - It is not a performance win over the previous direct packed-bank apply (`~0.638s` median); restoring the update tree and using ordinary Optax costs roughly `20 ms` on R1D2E8 and leaves the same compiled `6 A2A` transport.
+  - The remaining target is still the boundary primitive, not semantic compatibility. The path is usable as a conservative FSDP-master baseline while Socrates/lower-level work attempts to collapse or avoid the three two-A2A phases.
+- Next action: keep the restore-before-Optax path as the compatibility reference, but optimize against the faster direct packed-bank baseline and the ideal of two expert-projection transports. Continue lower-level bridge work; no more JAX wrapper variants unless they change compiled HLO and timing.
