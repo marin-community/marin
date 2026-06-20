@@ -128,6 +128,34 @@ explicitly.
 
 ## Next Integration Gate
 
+## FSDP-Master Objective Audit
+
+The conservative objective is still:
+
+1. keep train-state/master expert params in ordinary FSDP/model layout;
+2. compute MuonH in an NS-friendly grouped optimizer layout;
+3. convert grouped updates back to FSDP leaves before ordinary
+   `optax.apply_updates`;
+4. prove the bridge avoids the per-leaf collective explosion and preserves
+   performance on the target CoreWeave shapes.
+
+Current evidence does **not** prove this objective complete.
+
+| Requirement | Current evidence | Status |
+| --- | --- | --- |
+| FSDP params at the API boundary | `real_expert_fsdp_grouped_muonh_optimizer_*` and `expert_fsdp_grouped_trace_muonh_apply` keep input params in FSDP-shaped leaves. | partial |
+| Grouped NS-friendly MuonH compute | Grouped-update and grouped-trace harnesses compute MuonH in `P(("replica_dcn", "data"), "expert", None, None)` or the R2/D1 specialization and reach about 50% nominal peak in update-only runs. | achieved in harness |
+| Convert grouped updates back before ordinary `apply_updates` | Explicit slice-first restore/apply, target-layout reshard, tuple-returning `shard_map`, direct restore/apply, and grouped-trace restore/apply all produce ordinary FSDP-shaped results before apply. | achieved semantically |
+| Avoid per-leaf collective explosion | Not achieved. H100 compiled HLO reintroduces grouped-to-FSDP all-gathers for every JAX-level bridge tested so far. Direct target-layout reshard lowered cleanly but compiled back to the same 26 all-gathers on the R2/D1 gate; packed variants reduced lowered all-gathers but introduced worse compiled A2A/CP patterns or OOMs. | failed so far |
+| Preserve end-to-end performance | Not achieved for the FSDP-master bridge. Best update-only grouped-trace/FSDP-master path is a useful partial win, but still pays the compiled all-gather boundary. Persistent grouped-bank consumers remove that boundary, but they are a different representation contract until the model consumes grouped banks. | incomplete |
+
+This means the FSDP-master path has a clear remaining blocker, not a missing
+bookkeeping step: the grouped-to-FSDP bridge must be lower-level than current
+JAX reshards/`shard_map`, or the hot path must avoid restoring ordinary FSDP
+leaves. A lower-level bridge should be judged against the current explicit
+slice-first baseline: fewer compiled all-gathers, no new all-to-all/collective
+permute explosion, and comparable or better H100 runtime.
+
 Do not launch another full training profile from this path until this gate is
 ported into the real model path. The harness now has an initial
 `expert_grouped_bank_consumer` bench for this purpose: it consumes grouped expert
