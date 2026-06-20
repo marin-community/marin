@@ -131,6 +131,7 @@ from experiments.grug.moe.muon_update_bench import (
     expert_fsdp_packed_bank_direction_apply_step_factory,
     expert_fsdp_packed_bank_muonh_apply_step_factory,
     expert_fsdp_packed_bank_muonh_update_only_step_factory,
+    expert_fsdp_packed_bank_muonh_update_only_timing_step_factory,
     expert_grouped_layer_slice_step_factory,
     expert_grouped_single_layer_slice_step_factory,
     fsdp_grads_to_explicit_packed_grouped_bank_step_factory,
@@ -2474,6 +2475,40 @@ def test_expert_fsdp_packed_bank_muonh_update_only_returns_packed_bank():
     assert hlo_summary.dot_general > 0
     assert hlo_summary.all_to_all > 0
     assert estimated_ns_dot_flops(config, EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH) > 0
+
+
+def test_expert_fsdp_packed_bank_muonh_update_only_timing_returns_scalar_checksum():
+    config = BenchConfig(
+        layers=2,
+        ns4d_group_size=2,
+        ns4d_group_axis="data",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=4,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=4,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 1, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = synthetic_fsdp_expert_specs(mesh, config)
+    grads = synthetic_fsdp_expert_specs(mesh, config)
+    update_step = jax.jit(expert_fsdp_packed_bank_muonh_update_only_timing_step_factory(mesh, config))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        result = jax.eval_shape(update_step, params, grads)
+
+    assert result.shape == ()
+    assert result.dtype == jnp.float32
 
 
 def test_expert_fsdp_packed_bank_direction_apply_returns_fsdp_params():

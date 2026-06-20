@@ -3871,7 +3871,9 @@ def expert_fsdp_packed_bank_muonh_update_only_step_factory(mesh: Mesh, config: B
 def expert_fsdp_packed_bank_muonh_update_only_timing_step_factory(mesh: Mesh, config: BenchConfig):
     def update_step(params, grads):
         with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_muonh_update_only_timing_step"):
-            return expert_fsdp_packed_bank_muonh_update_only_outputs(mesh, config, params, grads)
+            packed_updates = expert_fsdp_packed_bank_muonh_update_only_outputs(mesh, config, params, grads)
+            with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_muonh_update_only_timing_checksum"):
+                return scalar_tree_checksum(packed_updates)
 
     return update_step
 
@@ -6708,6 +6710,17 @@ def max_abs_tree_error(actual: Any, expected: Any) -> float:
     return float(jax.device_get(jnp.max(jnp.asarray(error_leaves))))
 
 
+def scalar_tree_checksum(tree: Any) -> jax.Array:
+    leaves = jax.tree.leaves(tree)
+    if not leaves:
+        return jnp.asarray(0.0, dtype=jnp.float32)
+    checksums = [jnp.sum(leaf.astype(jnp.float32)) for leaf in leaves]
+    checksum = checksums[0]
+    for leaf_checksum in checksums[1:]:
+        checksum = checksum + leaf_checksum
+    return checksum
+
+
 def fsdp_grouped_boundary_correctness_max_error(
     mesh: Mesh,
     config: BenchConfig,
@@ -8535,13 +8548,11 @@ def time_ns4d(
                 elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
                     assert_expert_fsdp_sharding(params, "warmup expert FSDP packed-bank MuonH params")
                 elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH:
-                    assert_packed_grouped_expert_bank_sharding(
-                        next_updates,
-                        mesh,
-                        config,
-                        bench_kind,
-                        "warmup expert FSDP packed-bank MuonH updates",
-                    )
+                    if next_updates.shape != ():
+                        raise ValueError(
+                            "Timing-only packed-bank MuonH update-only step should return a scalar checksum; "
+                            f"got shape {next_updates.shape}."
+                        )
                 elif bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH:
                     assert_expert_fsdp_sharding(params, "warmup expert FSDP packed-bank direction-apply params")
                 elif is_expert_fsdp_grouped_bench(bench_kind):
@@ -8764,13 +8775,11 @@ def time_ns4d(
                     elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
                         assert_expert_fsdp_sharding(params, "expert FSDP packed-bank MuonH params")
                     elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH:
-                        assert_packed_grouped_expert_bank_sharding(
-                            next_updates,
-                            mesh,
-                            config,
-                            bench_kind,
-                            "expert FSDP packed-bank MuonH updates",
-                        )
+                        if next_updates.shape != ():
+                            raise ValueError(
+                                "Timing-only packed-bank MuonH update-only step should return a scalar checksum; "
+                                f"got shape {next_updates.shape}."
+                            )
                     elif bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH:
                         assert_expert_fsdp_sharding(params, "expert FSDP packed-bank direction-apply params")
                     elif is_expert_fsdp_grouped_bench(bench_kind):
