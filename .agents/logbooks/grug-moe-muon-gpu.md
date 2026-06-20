@@ -2127,3 +2127,40 @@ Post-compile steps were stable around 0.65-0.66s:
   - This reinforces that the next evidence should be a semantic profile of the production packed-entry path, not another scale-up rung.
 - Next action:
   - Launch a short R2/group-size-8 profile with HLO proto and command buffers disabled for trace readability. Use it to attribute the warm-step time across grouped entry, Newton-Schulz, packed restore, ordinary apply, and surrounding optimizer/tree work.
+
+### 2026-06-20 06:08 PDT - May200 production grouped-MuonH profile attribution
+- Hypothesis: The May199 group-size-8 throughput result is still slow because either the grouped Newton-Schulz body is not actually fast in the full train step, or the FSDP<->grouped boundary conversions are dominating once integrated into production.
+- Run:
+  - Iris parent `/dlwh/iris-run-job-20260620-123557`; child `/dlwh/iris-run-job-20260620-123557/grug-train-GM2560-MAY-200S4096-W2048-B16-R2-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-G8-PROFILE-N2-cw-20260620-1235`.
+  - W&B run `marin-community/marin_moe/GM2560-MAY-200S4096-W2048-B16-R2-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-G8-PROFILE-N2-cw-20260620-1235`; profiler artifact `...-profiler:v0`.
+  - Config matches May199 except it profiles steps 3-4, enables HLO proto/profile metadata, and sets `XLA_FLAGS=--xla_gpu_enable_command_buffer=''` for readable trace names. This run is for attribution only; command-buffer disable hurts performance and should not be used as a throughput comparison.
+- Artifact/result:
+  - W&B finish raised `HandleAbandonedError`, so the run state is `crashed` and W&B has only partial scalar summary keys. The profiler artifact did upload successfully: `jax_profile`, size `266552592` bytes.
+  - Parsed artifact with `lib/marin/tools/profile_summary.py` into `scratch/profile_reports/profile_summary_may200_grouped_muonh_r2_g8.json` and `scratch/profile_reports/profile_report_may200_grouped_muonh_r2_g8.md`.
+  - Direct XPlane summary reported no trace truncation, but most top device ops still collapse to `XlaModule` without shapes. Raw Perfetto event args retain the useful JAX scopes, so the phase table below is from direct trace parsing over device events for the one profiled host's 8 GPUs.
+- Phase table (mean per GPU, divided by two profiled steps):
+
+| Phase | Approx per-step mean per GPU | Device event count over profile | Notes |
+|---|---:|---:|---|
+| grouped packed entry | `638.5 ms` | 256 | `ncclDevKernel_SendRecv` under `grouped_muonh/packed_entry/*` |
+| grouped packed restore | `602.7 ms` | 256 | `SendRecv` plus `AllGather` under `grouped_muonh/packed_restore/*` |
+| grouped Newton-Schulz | `194.8 ms` | 1376 | `newton_schulz_grouped_4d` NVJet/dot kernels |
+| dense 2D replicated Newton-Schulz | `79.5 ms` | 42624 | ordinary non-expert 2D MuonH leaves still use replicated NS |
+| grouped hyperball | `0.6 ms` | 32 | negligible in this profile |
+
+- Grouped-scope collective split:
+
+| Scope | Kernel | Approx per-step mean per GPU | Count over profile |
+|---|---|---:|---:|
+| packed entry | `ncclDevKernel_SendRecv` | `638.5 ms` | 256 |
+| packed restore | `ncclDevKernel_SendRecv` | `363.2 ms` | 160 |
+| packed restore | `ncclDevKernel_AllGather_RING_LL` | `227.6 ms` | 32 |
+
+- Interpretation:
+  - This profile does not show the old per-leaf all-gather explosion. The direct profile summary counted only `64` total all-gather events and raw grouped scopes show a small number of coarse packed boundary collectives.
+  - The grouped Newton-Schulz compute body is not the main integrated bottleneck here: it is roughly `0.195s/step/GPU`, while the two FSDP<->grouped boundaries together are roughly `1.24s/step/GPU`.
+  - The full production path is therefore slow because the conservative FSDP-master bridge is paying expensive packed entry/restore communication in the train step. Group-size tuning only helped May199 by about `5%` because it mainly affects chunking/NS work, not the boundary fanout.
+  - The remaining useful work is lower-level boundary replacement/overlap: reduce or replace the packed-entry SendRecv and packed-restore SendRecv/AllGather phases while preserving FSDP master params and ordinary apply semantics, or explicitly pivot to a grouped-bank model-side consumer if this bridge cannot be made competitive.
+- Next action:
+  - Give Socrates the May200 phase table and focus the lower-level bridge investigation on the production packed boundary collectives, not generic Newton-Schulz speed.
+  - Do not launch R4 production until the R2 boundary cost has a concrete fix or a reasoned lower-level primitive design.
