@@ -140,7 +140,7 @@ Options:
   --expert-grouped-muonh-group-size N
                             MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE for grouped_muonh; empty chooses replica_dcn*data.
   --expert-grouped-muonh-packed-entry BOOL
-                            MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY for grouped_muonh (default: false).
+                            MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY for grouped_muonh (default: true).
   --expert-grouped-muonh-chunk-local-boundaries BOOL
                             MAY_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES experimental grouped_muonh boundary mode (default: false).
   --mp POLICY               MAY_MP policy string.
