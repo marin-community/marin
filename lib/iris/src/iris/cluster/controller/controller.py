@@ -32,6 +32,7 @@ from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
+from iris.cluster.controller.autoscaler.provisioning import PROVISIONING_NAMESPACE, IrisProvisioning
 from iris.cluster.controller.backend import (
     AutoscaleResult,
     BackendCapability,
@@ -359,6 +360,14 @@ class Controller:
             self._log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
             self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile),
         )
+
+        # The autoscaler emits slice provisioning outcomes to iris.provisioning;
+        # wire its sink now that the log client is up (no-op backends have none).
+        # TODO(#6520): thread the log client through the constructor and drop this
+        # delayed-sink wiring.
+        autoscaler = self._task_backend.autoscaler
+        if autoscaler is not None:
+            autoscaler.set_provisioning_sink(self._log_client.get_table(PROVISIONING_NAMESPACE, IrisProvisioning))
 
         self._log_handler = RemoteLogHandler(self._log_client, key=CONTROLLER_LOG_KEY)
 
