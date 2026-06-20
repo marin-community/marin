@@ -48,7 +48,8 @@ from experiments.grug.moe.muon_update_bench import (
 
 GPUS_PER_NODE = 8
 DEFAULT_OUTPUT_SUBDIR = "experiments/grug-moe-cw/muon-update-bench"
-WANDB_LOG_TIMEOUT = 120
+WANDB_LOG_TIMEOUT = 300
+WANDB_INIT_TIMEOUT = 120
 WANDB_PAYLOAD_ENV = "MUON_BENCH_WANDB_PAYLOAD"
 
 set_default_cw_grug_moe_prefix()
@@ -265,17 +266,17 @@ def _log_summary_to_wandb_process(
         config=launch_config,
         settings=wandb.Settings(
             console="off",
-            init_timeout=30,
-            login_timeout=30,
+            init_timeout=WANDB_INIT_TIMEOUT,
+            login_timeout=WANDB_INIT_TIMEOUT,
             quiet=True,
             silent=True,
-            summary_timeout=30,
+            summary_timeout=WANDB_INIT_TIMEOUT,
             x_disable_meta=True,
             x_disable_stats=True,
-            x_file_stream_timeout_seconds=30,
-            x_file_transfer_timeout_seconds=30,
-            x_graphql_timeout_seconds=30,
-            x_service_wait=30,
+            x_file_stream_timeout_seconds=WANDB_INIT_TIMEOUT,
+            x_file_transfer_timeout_seconds=WANDB_INIT_TIMEOUT,
+            x_graphql_timeout_seconds=WANDB_INIT_TIMEOUT,
+            x_service_wait=WANDB_INIT_TIMEOUT,
         ),
     )
 
