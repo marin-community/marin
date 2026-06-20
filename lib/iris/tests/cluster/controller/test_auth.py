@@ -39,9 +39,11 @@ from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.rpc.auth import (
     DASHBOARD_ROLE,
     SESSION_COOKIE,
+    AuthRequest,
     ControllerAuthPolicy,
     StaticTokenVerifier,
     VerifiedIdentity,
+    build_request_authenticators,
     get_verified_identity,
     resolve_auth,
 )
@@ -107,7 +109,10 @@ def verifier():
 @pytest.fixture
 def authed_client(service, log_service, verifier):
     dashboard = ControllerDashboard(
-        service, log_service=log_service, auth_provider="gcp", auth_policy=ControllerAuthPolicy(verifier=verifier)
+        service,
+        log_service=log_service,
+        auth_provider="gcp",
+        auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier),
     )
     return TestClient(dashboard.app)
 
@@ -374,7 +379,7 @@ def optional_auth_client(service, log_service, verifier):
         service,
         log_service=log_service,
         auth_provider="static",
-        auth_policy=ControllerAuthPolicy(verifier=verifier, optional=True),
+        auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier, optional=True),
     )
     return TestClient(dashboard.app)
 
@@ -454,7 +459,7 @@ def test_auth_config_reports_not_optional(authed_client):
 def test_resolve_auth_policy(verifier, token, optional, should_succeed):
     """resolve_auth encodes the single auth policy used by both gRPC and HTTP."""
     if should_succeed:
-        identity = resolve_auth(token, verifier, optional)
+        identity = resolve_auth(AuthRequest(token=token, headers={}), build_request_authenticators(verifier), optional)
         if token == _TEST_TOKEN:
             assert identity is not None
             assert identity.user_id == _TEST_USER
@@ -462,7 +467,7 @@ def test_resolve_auth_policy(verifier, token, optional, should_succeed):
             assert identity is None
     else:
         with pytest.raises(ValueError):
-            resolve_auth(token, verifier, optional)
+            resolve_auth(AuthRequest(token=token, headers={}), build_request_authenticators(verifier), optional)
 
 
 @pytest.mark.parametrize(
@@ -499,7 +504,7 @@ def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier,
         service,
         log_service=log_service,
         auth_provider="static",
-        auth_policy=ControllerAuthPolicy(verifier=verifier, optional=optional),
+        auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier, optional=optional),
     )
     # Inject a @requires_auth route. The app is wrapped in
     # _SubdomainProxyMiddleware → _LegacyFetchLogsRedirect → _RouteAuthMiddleware
@@ -554,7 +559,7 @@ def _assertion_ctx(method_name: str):
 
 def test_dashboard_interceptor_allows_read_for_iap_browser():
     interceptor = _DashboardAuthInterceptor(
-        ControllerAuthPolicy(
+        ControllerAuthPolicy.from_verifiers(
             verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
         )
     )
@@ -571,7 +576,7 @@ def test_dashboard_interceptor_allows_read_for_iap_browser():
 
 def test_dashboard_interceptor_denies_mutation_for_iap_browser():
     interceptor = _DashboardAuthInterceptor(
-        ControllerAuthPolicy(
+        ControllerAuthPolicy.from_verifiers(
             verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
         )
     )
@@ -608,7 +613,7 @@ def test_dashboard_interceptor_allows_mutation_for_provisioned_iap_admin():
     # admin behind IAP (no Iris JWT) resolves to the admin role and so reaches a
     # gated mutation that the read-only dashboard role would be denied.
     interceptor = _DashboardAuthInterceptor(
-        ControllerAuthPolicy(
+        ControllerAuthPolicy.from_verifiers(
             verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_RoleAssertionVerifier("admin")
         )
     )
@@ -629,7 +634,7 @@ def test_dashboard_interceptor_login_reachable_for_unprovisioned_iap_browser():
     # Login handler — `iris login` is never blocked by the dashboard gate. Guards
     # against accidentally moving the role check ahead of that exemption.
     interceptor = _DashboardAuthInterceptor(
-        ControllerAuthPolicy(
+        ControllerAuthPolicy.from_verifiers(
             verifier=StaticTokenVerifier({}),
             optional=False,
             iap_assertion_verifier=_RoleAssertionVerifier(DASHBOARD_ROLE),

@@ -18,6 +18,7 @@ from iris.rpc.auth import (
     DASHBOARD_ROLE,
     LOOPBACK_IDENTITY,
     AuthInterceptor,
+    AuthRequest,
     AuthTokenInjector,
     AuthzAction,
     CompositeTokenVerifier,
@@ -35,6 +36,7 @@ from iris.rpc.auth import (
     authorize,
     authorize_method,
     authorize_resource_owner,
+    build_request_authenticators,
     client_interceptors,
     get_verified_identity,
     get_verified_user,
@@ -372,11 +374,9 @@ class _FakeAssertionVerifier:
 
 def test_resolve_auth_iap_assertion_grants_dashboard_when_tokenless():
     identity = resolve_auth(
-        None,
-        StaticTokenVerifier({}),
+        AuthRequest(token=None, headers={"x-goog-iap-jwt-assertion": "valid"}),
+        build_request_authenticators(StaticTokenVerifier({}), _FakeAssertionVerifier()),
         optional=False,
-        headers={"x-goog-iap-jwt-assertion": "valid"},
-        iap_assertion_verifier=_FakeAssertionVerifier(),
     )
     assert identity == VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)
 
@@ -385,11 +385,9 @@ def test_resolve_auth_iris_jwt_wins_over_iap_assertion():
     # A present Iris JWT outranks the implicit IAP path: a logged-in user keeps
     # their real role even though IAP also injected an assertion.
     identity = resolve_auth(
-        "valid-token-alice",
-        StaticTokenVerifier({"valid-token-alice": "alice"}),
+        AuthRequest(token="valid-token-alice", headers={"x-goog-iap-jwt-assertion": "valid"}),
+        build_request_authenticators(StaticTokenVerifier({"valid-token-alice": "alice"}), _FakeAssertionVerifier()),
         optional=False,
-        headers={"x-goog-iap-jwt-assertion": "valid"},
-        iap_assertion_verifier=_FakeAssertionVerifier(),
     )
     assert identity == VerifiedIdentity(user_id="alice", role="user")
 
@@ -399,22 +397,18 @@ def test_resolve_auth_rejects_tokenless_without_assertion():
     # assertion (i.e. did not pass IAP) is rejected — never anonymous-admin.
     with pytest.raises(ValueError, match="Missing authentication"):
         resolve_auth(
-            None,
-            StaticTokenVerifier({}),
+            AuthRequest(token=None, headers={}),
+            build_request_authenticators(StaticTokenVerifier({}), _FakeAssertionVerifier()),
             optional=False,
-            headers={},
-            iap_assertion_verifier=_FakeAssertionVerifier(),
         )
 
 
 def test_resolve_auth_rejects_forged_assertion():
     with pytest.raises(ValueError, match="IAP assertion verification failed"):
         resolve_auth(
-            None,
-            StaticTokenVerifier({}),
+            AuthRequest(token=None, headers={"x-goog-iap-jwt-assertion": "forged"}),
+            build_request_authenticators(StaticTokenVerifier({}), _FakeAssertionVerifier()),
             optional=False,
-            headers={"x-goog-iap-jwt-assertion": "forged"},
-            iap_assertion_verifier=_FakeAssertionVerifier(),
         )
 
 
@@ -422,12 +416,9 @@ def test_resolve_auth_loopback_admin_when_no_assertion():
     # A genuine loopback peer (SSH tunnel) with no assertion still resolves to
     # the admin identity even when the assertion verifier is configured.
     identity = resolve_auth(
-        None,
-        StaticTokenVerifier({}),
+        AuthRequest(token=None, headers={}, client_address="127.0.0.1:54321"),
+        build_request_authenticators(StaticTokenVerifier({}), _FakeAssertionVerifier()),
         optional=False,
-        client_address="127.0.0.1:54321",
-        headers={},
-        iap_assertion_verifier=_FakeAssertionVerifier(),
     )
     assert identity == LOOPBACK_IDENTITY
 

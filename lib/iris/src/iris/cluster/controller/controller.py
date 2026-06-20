@@ -398,7 +398,7 @@ class Controller:
             port=config.port,
             auth_provider=config.auth_provider,
             finelog_stats_service=self._remote_stats_service,
-            auth_policy=ControllerAuthPolicy(
+            auth_policy=ControllerAuthPolicy.from_verifiers(
                 verifier=config.auth_verifier,
                 optional=config.auth.optional if config.auth else False,
                 iap_assertion_verifier=config.auth.iap_assertion_verifier if config.auth else None,

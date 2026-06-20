@@ -228,10 +228,11 @@ def _set_session_cookie(response: Response, token: str, request: Request) -> Non
 
 
 class _DashboardAuthInterceptor:
-    """RPC auth interceptor that uses resolve_auth() — same policy as HTTP middleware.
+    """RPC auth interceptor that uses the policy's authenticator stack — same
+    policy as the HTTP middleware.
 
     Login and GetAuthInfo RPCs are always unauthenticated. All other RPCs go
-    through resolve_auth(token, verifier, optional) which:
+    through ``policy.resolve`` (the ``[Jwt, IapAssertion?, Loopback]`` stack):
     - token present + valid → authenticated identity
     - token present + invalid → rejected
     - no token + loopback peer → anonymous/admin (loopback trust)
@@ -320,9 +321,8 @@ class _SubdomainProxyMiddleware:
     Subdomain requests don't match any Starlette route on the inner app,
     so :class:`_RouteAuthMiddleware`'s default-allow-on-no-route would
     leave them unauthenticated. This middleware therefore enforces auth
-    itself — running ``resolve_auth(token, verifier, optional)`` with the
-    same policy as the route-level ``@requires_auth`` annotations before
-    dispatching to the proxy.
+    itself — running ``policy.resolve`` (the same authenticator stack as the
+    route-level ``@requires_auth`` annotations) before dispatching to the proxy.
 
     Hosts without a ``proxy`` label pass through to the wrapped app
     unchanged.
@@ -354,7 +354,7 @@ class _SubdomainProxyMiddleware:
             await self._app(scope, receive, send)
             return
 
-        if self._auth_policy.verifier is not None:
+        if self._auth_policy.request_auth_enabled:
             if not await _enforce_http_auth(scope, receive, send, self._auth_policy):
                 return
 
@@ -448,7 +448,7 @@ class ControllerDashboard:
         include_tb = bool(os.environ.get("IRIS_DEBUG"))
         controller_timing = RequestTimingInterceptor(include_traceback=include_tb, collector=self._stats_collector)
         log_timing = RequestTimingInterceptor(include_traceback=include_tb)
-        if self._auth_provider is not None and self._auth_policy.verifier is not None:
+        if self._auth_provider is not None and self._auth_policy.request_auth_enabled:
             auth_interceptor = _DashboardAuthInterceptor(self._auth_policy)
         else:
             # Null-auth mode: no provider configured. Verify worker tokens
@@ -575,7 +575,7 @@ class ControllerDashboard:
         # kwarg, so we flip it after construction.
         app.router.redirect_slashes = False
         wrapped: ASGIApp = app
-        if self._auth_policy.verifier is not None and self._auth_provider is not None:
+        if self._auth_policy.request_auth_enabled and self._auth_provider is not None:
             wrapped = _RouteAuthMiddleware(app, self._auth_policy)
         # Wrap auth so the legacy FetchLogs rewrite happens before route
         # matching: auth and routing both see the canonical path.

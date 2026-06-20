@@ -16,7 +16,7 @@ import contextlib
 import ipaddress
 import logging
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
@@ -448,39 +448,146 @@ def is_trusted_loopback(client_address: str | None, headers: dict) -> bool:
         return False
 
 
-def resolve_auth(
-    token: str | None,
-    verifier: TokenVerifier,
-    optional: bool,
-    *,
-    client_address: str | None = None,
-    headers: dict | None = None,
-    iap_assertion_verifier: "IapAssertionVerifier | None" = None,
-) -> VerifiedIdentity | None:
-    """Shared auth policy for gRPC interceptors and HTTP middleware.
+@dataclass(frozen=True, slots=True)
+class AuthRequest:
+    """The request facts a :class:`RequestAuthenticator` may inspect.
 
-    Returns VerifiedIdentity on success, None for anonymous passthrough.
-    Raises ValueError on rejected tokens (invalid token, or missing when required).
-
-    Precedence for a tokenless request:
-
-    1. A present Iris JWT always wins (``verifier.verify``).
-    2. With ``iap_assertion_verifier`` set, a verified IAP signed-header
-       assertion grants the read-only ``dashboard`` identity — the implicit
-       access path for an IAP-authenticated browser that has not run
-       ``iris login``. A present-but-invalid assertion is rejected.
-    3. A genuine loopback connection is trusted as the admin user (see
-       ``is_trusted_loopback`` / ``LOOPBACK_IDENTITY``) — the SSH-tunnel path.
-    4. Otherwise a missing token is allowed only when ``optional`` is set.
+    Bundles the bearer ``token`` (from ``Authorization`` / session cookie), the
+    raw request ``headers`` (an IAP authenticator reads its signed-header
+    assertion), and the transport ``client_address`` (the loopback authenticator
+    reads the peer). Authenticators decide on this, not on a token string alone.
     """
-    if token is not None:
-        return verifier.verify(token)
+
+    token: str | None
+    headers: dict
+    client_address: str | None = None
+
+
+class AuthDecision(StrEnum):
+    """Outcome of a single authenticator over a request."""
+
+    AUTHENTICATED = "authenticated"  # this authenticator owns the request
+    ABSENT = "absent"  # its credential is not present — try the next authenticator
+    REJECTED = "rejected"  # credential present but invalid — stop and reject the request
+
+
+@dataclass(frozen=True, slots=True)
+class AuthOutcome:
+    decision: AuthDecision
+    identity: VerifiedIdentity | None = None
+    reason: str = ""
+
+
+def _authenticated(identity: VerifiedIdentity) -> AuthOutcome:
+    return AuthOutcome(AuthDecision.AUTHENTICATED, identity=identity)
+
+
+_ABSENT = AuthOutcome(AuthDecision.ABSENT)
+
+
+def _rejected(reason: str) -> AuthOutcome:
+    return AuthOutcome(AuthDecision.REJECTED, reason=reason)
+
+
+class RequestAuthenticator(Protocol):
+    """Decides whether a request is authenticated by one identity source.
+
+    Returns ``AUTHENTICATED`` (this source owns the request), ``ABSENT`` (its
+    credential is not present — fall through to the next), or ``REJECTED`` (a
+    credential is present but invalid — the request must be rejected, never
+    downgraded to a weaker source).
+    """
+
+    def authenticate(self, request: AuthRequest) -> AuthOutcome: ...
+
+
+@dataclass(frozen=True)
+class JwtAuthenticator:
+    """Authenticates a request bearing an ``Authorization`` token via a verifier.
+
+    A present-but-invalid token is ``REJECTED`` (never falls through), preserving
+    the rule that a bad credential cannot be downgraded to ambient trust.
+    """
+
+    verifier: TokenVerifier
+
+    def authenticate(self, request: AuthRequest) -> AuthOutcome:
+        if request.token is None:
+            return _ABSENT
+        try:
+            return _authenticated(self.verifier.verify(request.token))
+        except ValueError as exc:
+            return _rejected(str(exc))
+
+
+@dataclass(frozen=True)
+class IapAssertionAuthenticator:
+    """Authenticates a tokenless request via IAP's signed-header assertion.
+
+    Absent assertion → ``ABSENT``; a present-but-forged assertion → ``REJECTED``.
+    """
+
+    verifier: "IapAssertionVerifier"
+
+    def authenticate(self, request: AuthRequest) -> AuthOutcome:
+        try:
+            identity = self.verifier.identity_from_headers(request.headers)
+        except ValueError as exc:
+            return _rejected(str(exc))
+        return _authenticated(identity) if identity is not None else _ABSENT
+
+
+class LoopbackAuthenticator:
+    """Trusts a genuine loopback connection (SSH tunnel / on-host) as admin.
+
+    A tokenless/assertionless fallback only — see :func:`is_trusted_loopback`.
+    """
+
+    def authenticate(self, request: AuthRequest) -> AuthOutcome:
+        if is_trusted_loopback(request.client_address, request.headers):
+            return _authenticated(LOOPBACK_IDENTITY)
+        return _ABSENT
+
+
+def build_request_authenticators(
+    verifier: TokenVerifier,
+    iap_assertion_verifier: "IapAssertionVerifier | None" = None,
+) -> tuple[RequestAuthenticator, ...]:
+    """The controller's standard request-auth stack, highest-trust source first.
+
+    ``[Jwt, (IapAssertion?), Loopback]``: a presented Iris JWT wins; otherwise an
+    IAP signed-header assertion (when IAP fronts the controller); otherwise a
+    trusted loopback peer. This ordering is the single source of truth for
+    request-auth precedence — :func:`resolve_auth` just walks it.
+    """
+    authenticators: list[RequestAuthenticator] = [JwtAuthenticator(verifier)]
     if iap_assertion_verifier is not None:
-        iap_identity = iap_assertion_verifier.identity_from_headers(headers or {})
-        if iap_identity is not None:
-            return iap_identity
-    if is_trusted_loopback(client_address, headers or {}):
-        return LOOPBACK_IDENTITY
+        authenticators.append(IapAssertionAuthenticator(iap_assertion_verifier))
+    authenticators.append(LoopbackAuthenticator())
+    return tuple(authenticators)
+
+
+def resolve_auth(
+    request: AuthRequest,
+    authenticators: Sequence[RequestAuthenticator],
+    optional: bool,
+) -> VerifiedIdentity | None:
+    """Walk ``authenticators`` in order and resolve the request's identity.
+
+    The first authenticator to return ``AUTHENTICATED`` wins; the first to return
+    ``REJECTED`` stops the walk and raises (a present-but-invalid credential is
+    never downgraded to a weaker source). When every authenticator is ``ABSENT``,
+    a tokenless request is allowed as anonymous only when ``optional`` is set.
+
+    Returns the identity, ``None`` for an allowed anonymous request, and raises
+    ``ValueError`` on a rejected credential or a missing-but-required one.
+    """
+    for authenticator in authenticators:
+        outcome = authenticator.authenticate(request)
+        if outcome.decision is AuthDecision.AUTHENTICATED:
+            return outcome.identity
+        if outcome.decision is AuthDecision.REJECTED:
+            raise ValueError(outcome.reason or "Authentication failed")
     if optional:
         return None
     raise ValueError("Missing authentication")
@@ -490,16 +597,42 @@ def resolve_auth(
 class ControllerAuthPolicy:
     """Server-side auth policy for the controller's HTTP middleware and RPC interceptor.
 
-    Bundles the three inputs ``resolve_auth`` needs — the bearer-token
-    ``verifier``, whether tokenless requests are allowed (``optional``), and the
-    optional IAP signed-header assertion verifier — so they are threaded as one
-    value instead of as a recurring parameter trio. The server-side mirror of the
-    client-side :class:`ClientCredentials`.
+    The per-request decision is the ordered ``authenticators`` stack (built by
+    :func:`build_request_authenticators`), walked by :func:`resolve_auth`. The
+    server-side mirror of the client-side :class:`ClientCredentials`.
+
+    ``verifier`` is retained alongside the stack with a narrower role: it is the
+    JWT/bearer verifier used by ``NullAuthInterceptor`` to validate worker tokens
+    when request auth is *disabled* (null-auth mode). In auth-enabled mode it also
+    backs the ``JwtAuthenticator`` at the head of the stack. Whether request auth
+    is enforced is :attr:`request_auth_enabled` (a non-empty stack), not the
+    presence of ``verifier``.
     """
 
-    verifier: "TokenVerifier | None" = None
+    authenticators: tuple[RequestAuthenticator, ...] = ()
     optional: bool = False
-    iap_assertion_verifier: "IapAssertionVerifier | None" = None
+    verifier: "TokenVerifier | None" = None
+
+    @classmethod
+    def from_verifiers(
+        cls,
+        *,
+        verifier: "TokenVerifier | None" = None,
+        optional: bool = False,
+        iap_assertion_verifier: "IapAssertionVerifier | None" = None,
+    ) -> "ControllerAuthPolicy":
+        """Build the standard controller policy from its verifiers.
+
+        With a ``verifier`` set, the stack is ``[Jwt, (IapAssertion?), Loopback]``.
+        Without one (null-auth, no DB) the stack is empty and request auth is off.
+        """
+        authenticators = build_request_authenticators(verifier, iap_assertion_verifier) if verifier is not None else ()
+        return cls(authenticators=authenticators, optional=optional, verifier=verifier)
+
+    @property
+    def request_auth_enabled(self) -> bool:
+        """Whether per-request auth is enforced (the stack is non-empty)."""
+        return bool(self.authenticators)
 
     def resolve(
         self,
@@ -510,18 +643,15 @@ class ControllerAuthPolicy:
     ) -> VerifiedIdentity | None:
         """Resolve a request's identity under this policy (see :func:`resolve_auth`).
 
-        Only invoked on auth-enabled surfaces, where ``verifier`` is always set
-        (the controller mounts these middlewares/interceptors only when auth is
+        Only invoked on auth-enabled surfaces, where the stack is non-empty (the
+        controller mounts these middlewares/interceptors only when auth is
         configured; null-auth uses ``NullAuthInterceptor`` instead).
         """
-        assert self.verifier is not None, "ControllerAuthPolicy.resolve requires a verifier"
+        assert self.authenticators, "ControllerAuthPolicy.resolve requires a non-empty authenticator stack"
         return resolve_auth(
-            token,
-            self.verifier,
+            AuthRequest(token=token, headers=headers or {}, client_address=client_address),
+            self.authenticators,
             self.optional,
-            client_address=client_address,
-            headers=headers,
-            iap_assertion_verifier=self.iap_assertion_verifier,
         )
 
 

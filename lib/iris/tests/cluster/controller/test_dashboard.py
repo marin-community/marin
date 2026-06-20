@@ -1376,7 +1376,10 @@ def test_auth_config_returns_enabled_when_verifier_set(service, log_service):
     """Auth config endpoint reports auth enabled with provider name."""
     verifier = StaticTokenVerifier({"test-token": "test-user"})
     dashboard = ControllerDashboard(
-        service, log_service=log_service, auth_provider="gcp", auth_policy=ControllerAuthPolicy(verifier=verifier)
+        service,
+        log_service=log_service,
+        auth_provider="gcp",
+        auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier),
     )
     authed_client = TestClient(dashboard.app)
 
