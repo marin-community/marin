@@ -1731,3 +1731,49 @@ Post-compile steps were stable around 0.65-0.66s:
 - Result: The compile-only packed gate `/dlwh/iris-run-job-20260620-071206` succeeded. All four packed variants lowered to the ideal `2 all_gather` and zero A2A/CP, but GPU compilation expanded every variant to `all_gather=2`, `all_to_all=10`, `collective_permute=2`, for `14 / 2 = 7.0x` ideal fragmentation. The timed packed slice-first run `/dlwh/iris-run-job-20260620-071648/grug-train-MUON-BENCH-D2560-L26-R1D2E8-G8-PACKED-SLICE-TIMED-N2-cw-20260620-071644` also succeeded with the same compiled collectives, but was slow: `2.460837s` on process 0 and `2.688172s` on process 1, estimated global boundary throughput only `53.18` to `48.68 GB/s`.
 - Interpretation: Existing JAX-level packing is a negative result. It slightly reduces compiled collective count versus Route B (`14` vs `16`), but it introduces extra A2A/CP traffic and is much slower than direct apply (`~2.5-2.7s` versus Route B's `~0.5-1.2s`). This reinforces that lowered HLO is not predictive enough for this boundary; the pass/fail signal must be compiled HLO plus timing. The next FSDP-master candidate should be a lower-level/custom transport or a fundamentally different layout, not this packed wrapper.
 - Next action: Do not promote the packed JAX-level apply variants. Keep Route B as the best current semantic baseline for apply-side runtime, and use the packed result as evidence for Socrates/the lower-level bridge: a successful bridge must beat compiled `8 AG + 8 A2A` and wall time `0.5-1.2s`, not just reduce lowered HLO to 2 collectives.
+
+### 2026-06-20 02:10 PDT - whole packed-bank MuonH apply R2 result
+- Hypothesis: If the grouped expert bank stays packed through Newton-Schulz and hyperball update, and only converts back to FSDP at the final apply boundary, XLA may avoid the packed-entry `slice_group/slice` collective-permute explosion.
+- Change:
+  - Added bench kind `expert_fsdp_packed_bank_muonh_apply`.
+  - The bench composes FSDP expert grads -> explicit packed grouped banks, whole packed-bank MuonH update, then packed bank -> FSDP params apply.
+  - Commit `7e2e68e66` added the harness path; commit `9384724a6` fixed the timing runner so this bench is invoked as `(params, updates) -> params`.
+- Command:
+  - `RUN_ID=MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKMUON-N2-cw-20260620-090801 MUON_BENCH_KINDS=expert_fsdp_packed_bank_muonh_apply MUON_BENCH_MODE=both MUON_BENCH_WARMUP=1 MUON_BENCH_ITERS=3 MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES=true MUON_BENCH_DISABLE_ABSTRACT_MESH=true MUON_BENCH_WRITE_COMPILED_HLO=true MUON_BENCH_TRACKER=wandb MUON_BENCH_WANDB_PROJECT=marin_moe MUON_BENCH_WANDB_GROUP=grug-moe-cw-muon-packed-bank bash scratch/launch_muon_grouped_reference_2node_wandb.sh`
+- Config:
+  - 2 H100 nodes, `replica_axis=1`, `data_axis=2`, `expert_axis=8`, `model_axis=1`, `layers=26`, `ns4d_group_size=8`, `ns4d_group_axis=replica_dcn,data`, H3, bf16 params/NS compute.
+  - Iris parent `/dlwh/iris-run-job-20260620-090804`; child `/dlwh/iris-run-job-20260620-090804/grug-train-MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKMUON-N2-cw-20260620-090801`; output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKMUON-N2-cw-20260620-090801-a160fa`; W&B `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKMUON-N2-cw-20260620-090801`.
+- Result:
+  - Run succeeded and got past the previous timing-wrapper TypeError.
+  - Lowered HLO: `0 all_gather`, `6 all_to_all`, `0 collective_permute`, `0 reduce_scatter`, `18 dot_general`.
+  - Compiled HLO: `0 all_gather`, `6 all_to_all`, `0 collective_permute`, `0 reduce_scatter`, `41 gpu_gemm_custom_call`.
+  - Timing: mean `0.63868s`, median `0.63820s`, min `0.63518s`.
+  - Estimated compute: `2.4288e15` NS dot FLOPs, mean `3802.9 TFLOP/s`, about `24.0%` nominal H100 bf16 peak.
+  - Boundary estimates: global update bytes `130,862,284,800`, grouped input per device `8,178,892,800`, FSDP output per device `8,178,892,800`; compiled collective count `6`, ideal `2`, fragmentation `3.0x`.
+- Interpretation: This is the first conservative FSDP-master candidate that avoids both the old per-leaf all-gather explosion and the packed-entry collective-permute explosion. It is much better than the packed-entry route (`2 AG + 14 A2A + 16 CP`, roughly `1.99s` update / `1.51s` apply), but it still misses the target boundary shape: 6 all-to-alls is 3x the ideal two expert-projection transports, and throughput is only about 24% of nominal peak for the whole packed-bank update/apply harness.
+- Issue update: https://github.com/marin-community/marin/issues/6493#issuecomment-4757113152
+- Next action: Validate the same packed-bank path on N1 and R4 using `data_axis` for additional nodes (`R1D4E8`, not `R4D1E8`). Then use the scale/fragmentation table to decide whether the next main-thread optimization is reducing XLA's 6-A2A fragmentation or handing the boundary to Socrates' lower-level bridge.
+
+### 2026-06-20 02:18 PDT - whole packed-bank MuonH N1/R2/R4 scale table
+- Hypothesis: The whole packed-bank path should preserve the no-AG/no-CP property across single-node and data-sharded multi-node layouts. Scaling behavior should show whether the remaining `6 all_to_all` boundary fragmentation is a serious limiter.
+- Commands:
+  - N1: `RUN_ID=MUON-BENCH-D2560-L26-R1D1E8-G8-H3-PACKEDBANKMUON-N1-cw-20260620-091338 MARIN_PREFIX=s3://marin-na/tmp/ttl=7d MUON_BENCH_GPU_REPLICAS=1 MUON_BENCH_REPLICA_AXIS=1 MUON_BENCH_DATA_AXIS=1 MUON_BENCH_EXPERT_AXIS=8 MUON_BENCH_MODEL_AXIS=1 MUON_BENCH_NS4D_GROUP_SIZE=8 MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn,data MUON_BENCH_KINDS=expert_fsdp_packed_bank_muonh_apply MUON_BENCH_MODE=both MUON_BENCH_WARMUP=1 MUON_BENCH_ITERS=3 MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES=true MUON_BENCH_DISABLE_ABSTRACT_MESH=true MUON_BENCH_WRITE_COMPILED_HLO=true MUON_BENCH_TRACKER=wandb MUON_BENCH_WANDB_PROJECT=marin_moe MUON_BENCH_WANDB_GROUP=grug-moe-cw-muon-packed-bank XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 bash scratch/launch_muon_grouped_reference_2node_wandb.sh`
+  - R4: same command with `RUN_ID=MUON-BENCH-D2560-L26-R1D4E8-G8-H3-PACKEDBANKMUON-N4-cw-20260620-091400`, `MUON_BENCH_GPU_REPLICAS=4`, `MUON_BENCH_DATA_AXIS=4`.
+- Config:
+  - N1: 8 H100s, `R1D1E8`, output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D1E8-G8-H3-PACKEDBANKMUON-N1-cw-20260620-091338-3aa668`, W&B `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D1E8-G8-H3-PACKEDBANKMUON-N1-cw-20260620-091338`.
+  - R2: 16 H100s, `R1D2E8`, output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKMUON-N2-cw-20260620-090801-a160fa`, W&B `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKMUON-N2-cw-20260620-090801`.
+  - R4: 32 H100s, `R1D4E8`, output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D4E8-G8-H3-PACKEDBANKMUON-N4-cw-20260620-091400-4b5ff8`, W&B `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D4E8-G8-H3-PACKEDBANKMUON-N4-cw-20260620-091400`.
+- Result:
+
+| layout | GPUs | compiled AG/A2A/CP/RS | median seconds | mean seconds | median TFLOP/s | nominal peak % | boundary fragmentation |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| `R1D1E8` | 8 | `0/0/0/0` | 0.59984 | 0.59984 | 4049.1 | 51.18 | 0.0x |
+| `R1D2E8` | 16 | `0/6/0/0` | 0.63820 | 0.63868 | 3805.7 | 24.05 | 3.0x |
+| `R1D4E8` | 32 | `0/6/0/0` | 0.29488 | 0.29509 | 8236.7 | 26.03 | 3.0x |
+
+- Interpretation:
+  - The packed-bank path is stable across N1/R2/R4 and avoids per-leaf all-gather and collective-permute explosion in all three layouts.
+  - N1 is a clean compute baseline: no boundary collectives and about 51% nominal peak.
+  - R2 is slower than N1 despite twice the GPUs because the two-node boundary/communication cost and reduced local work dominate.
+  - R4 recovers useful scaling: about `2.03x` faster than N1 and `2.16x` faster than R2, but still only about 26% nominal peak because the compiled boundary remains `6 all_to_all`, 3x the ideal two expert-projection transports.
+- Next action: Treat the whole packed-bank path as the current conservative FSDP-master baseline. The remaining main-thread optimization is to collapse `6 A2A -> 2 A2A` or prove via Socrates' lower-level bridge that a custom/bucketed transport can do it. If that fails, the representation-pivot path with persistent grouped expert banks remains the cleaner way to avoid this boundary entirely.
