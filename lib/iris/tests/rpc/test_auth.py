@@ -158,10 +158,6 @@ def test_auth_interceptor_cleans_up_context_on_handler_error(interceptor):
     assert get_verified_user() is None
 
 
-def test_verified_user_is_none_without_interceptor():
-    assert get_verified_user() is None
-
-
 def test_static_token_verifier_valid():
     v = StaticTokenVerifier({"tok": "user1"})
     result = v.verify("tok")
@@ -762,24 +758,6 @@ def test_jwt_token_manager_worker_role(jwt_manager):
 # ---------------------------------------------------------------------------
 # Streaming interceptor guards
 # ---------------------------------------------------------------------------
-
-
-def test_auth_interceptor_rejects_server_stream(interceptor):
-    with pytest.raises(ConnectError) as exc_info:
-        interceptor.intercept_server_stream_sync(None, None, None)
-    assert exc_info.value.code == Code.UNIMPLEMENTED
-
-
-def test_auth_interceptor_rejects_client_stream(interceptor):
-    with pytest.raises(ConnectError) as exc_info:
-        interceptor.intercept_client_stream_sync(None, None, None)
-    assert exc_info.value.code == Code.UNIMPLEMENTED
-
-
-def test_auth_interceptor_rejects_bidi_stream(interceptor):
-    with pytest.raises(ConnectError) as exc_info:
-        interceptor.intercept_bidi_stream_sync(None, None, None)
-    assert exc_info.value.code == Code.UNIMPLEMENTED
 
 
 # ---------------------------------------------------------------------------

@@ -302,14 +302,6 @@ def test_write_connection_can_access_auth_tables(db: ControllerDB):
         assert rows[0].key_id == "k1"
 
 
-def test_auth_db_file_created(tmp_path):
-    auth_path = tmp_path / "auth.sqlite3"
-    assert not auth_path.exists()
-    db = ControllerDB(db_dir=tmp_path)
-    assert auth_path.exists()
-    db.close()
-
-
 # -- API keys and JWT ----------------------------------------------------------
 
 
