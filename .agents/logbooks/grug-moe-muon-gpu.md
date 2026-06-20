@@ -2551,3 +2551,46 @@ Post-compile steps were stable around 0.65-0.66s:
 - Result:
   - Pytest: `5 passed in 7.25s`.
   - Pre-commit: OK.
+
+### 2026-06-20 11:22 PDT - May202 Route A profile says production is comm-bound
+- Hypothesis: The readable May202 Route A profile should explain the gap
+  between the compact boundary harness and the slow production training loop.
+- Artifact:
+  - Local profile: `scratch/profiles/may202`.
+  - Structured summary: `scratch/profiles/may202_summary.json`.
+  - Markdown report: `scratch/profiles/may202_report.md`.
+  - xprof tables: `scratch/profiles/may202_xprof_tables`.
+- Command:
+  - `uv run --with xprof --with protobuf python lib/marin/tools/profile_summary.py summarize --profile-dir scratch/profiles/may202 --xplane-output-dir scratch/profiles/may202_xprof_tables --xplane-count-trace-events --breakdown-mode exclusive_global --output scratch/profiles/may202_summary.json`
+  - `uv run python lib/marin/tools/profile_summary.py report --summary scratch/profiles/may202_summary.json --output scratch/profiles/may202_report.md`
+- Result:
+  - The summary parsed `884,773` complete events and did not flag trace
+    truncation.
+  - xprof cost-analysis emitted warnings about a newer GEMM backend config
+    field (`scale_mode`), but kernel/op attribution was still exported and
+    merged into the summary.
+  - Time breakdown: communication `74.2%`, compute `25.8%`.
+  - Top communication aggregates:
+    - packed-restore `replica_gather_to_fsdp/all_gather`: `32` calls,
+      `7.81s` aggregate.
+    - packed-restore `concat_chunks/concatenate` SendRecv: `448` calls,
+      `6.41s` aggregate.
+    - MoE backward `psum` all-reduce: `832` calls, `5.99s` aggregate.
+    - packed-entry `slice_update_chunk/dynamic_slice` SendRecv: `384` calls,
+      `5.07s` aggregate.
+    - packed-entry `slice_param_chunk/dynamic_slice` SendRecv: `384` calls,
+      `5.07s` aggregate.
+    - packed-restore shard-map all-gather: `32` calls, `3.69s` aggregate.
+  - Semantic families:
+    - `optimizer_muon`: `73.6%` of profiled duration.
+    - `moe`: `18.3%`.
+    - `attention_flash`: `1.7%`.
+- Interpretation:
+  - The production Route A path is communication-bound, not NS-GEMM-bound.
+  - The main gap versus the compact boundary harness is not ordinary
+    `optax.apply_updates`; it is packed-entry chunk slicing and packed-restore
+    fanout in the production transform.
+  - The next bridge target is therefore specific: eliminate or replace
+    `slice_update_chunk` / `slice_param_chunk` SendRecv and reduce or overlap
+    packed-restore all-gather/fanout while keeping FSDP master params and
+    ordinary apply semantics.
