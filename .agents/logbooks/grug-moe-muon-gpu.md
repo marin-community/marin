@@ -3218,3 +3218,66 @@ Post-compile steps were stable around 0.65-0.66s:
 - Next action:
   - Post issue update, then use this as the R2 integrated packed-bank-compute
     reference while continuing lower-level bridge work.
+
+### 2026-06-20 12:50 PDT - R4 packed-bank-compute validation succeeded
+- Hypothesis:
+  - Scaling the integrated packed-bank-compute path to R4 should preserve the
+    bounded boundary contract: no OOM and no per-leaf collective explosion, with
+    one all-gather per packed bank/chunk group.
+- Command:
+  - Launched through `scratch/muon_update_bench_fast_loop.sh iris
+    fullprod-r4e8-l26-h3` with env overrides:
+    `MUON_BENCH_GPU_REPLICAS=4`, `MUON_BENCH_REPLICA_AXIS=4`,
+    `MUON_BENCH_DATA_AXIS=1`, `MUON_BENCH_EXPERT_AXIS=8`,
+    `MUON_BENCH_MODEL_AXIS=1`, `MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn`,
+    `MUON_BENCH_NS4D_GROUP_SIZE=4`,
+    `MUON_BENCH_KINDS=real_expert_fsdp_grouped_muonh_optimizer_update,real_expert_fsdp_grouped_muonh_optimizer_apply`,
+    `MUON_BENCH_SWEEP_BACKEND_STEPS=3`,
+    `MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512`,
+    `MUON_BENCH_EXPERT_GROUPED_MUONH_PACKED_ENTRY=true`,
+    `MUON_BENCH_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE=true`,
+    `MUON_BENCH_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES=false`,
+    `MUON_BENCH_TRACKER=wandb`, and TTL prefix.
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-194238`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-194238/grug-train-MUON-BENCH-D2560-L26-R4D1E8-G4-H3-PACKEDBANKCOMPUTE-REPORT-N4-cw-20260620-194236`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/ma59ghvz`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4D1E8-G4-H3-PACKEDBANKCOMPUTE-REPORT-N4-cw-20260620-194236-c26657`.
+- Result:
+  - Child job succeeded with all 4 tasks succeeded.
+  - Launch metadata confirmed `expert_grouped_muonh_packed_entry=true` and
+    `expert_grouped_muonh_packed_bank_compute=true`.
+  - Both summary rows report
+    `expert_grouped_muonh_boundary_mode=packed_bank_compute`.
+- Metrics:
+  - `real_expert_fsdp_grouped_muonh_optimizer_update_h3`:
+    - median/mean: `0.321612s` / `0.321480s`
+    - compiled AG/A2A/AR/RS/CP: `14/0/0/0/0`
+    - compiled excess collectives: `0`; matches ideal: `true`
+    - HBM peak/temp: `66.211 GiB` / `16.406 GiB`
+    - median estimated throughput: `7552.0 TFLOP/s`, `23.86%` H100 bf16 peak
+    - median estimated boundary global bandwidth: `406.89 GB/s`
+  - `real_expert_fsdp_grouped_muonh_optimizer_apply_h3`:
+    - median/mean: `0.325949s` / `0.325794s`
+    - compiled AG/A2A/AR/RS/CP: `14/0/0/0/0`
+    - compiled excess collectives: `0`; matches ideal: `true`
+    - HBM peak/temp: `51.367 GiB` / `16.797 GiB`
+    - median estimated throughput: `8024.7 TFLOP/s`, `25.36%` H100 bf16 peak
+    - median estimated boundary global bandwidth: `401.48 GB/s`
+- Interpretation:
+  - This proves the integrated packed-bank-compute path preserves the current
+    ideal collective count at R4 and avoids the previous OOM/per-leaf collective
+    failure mode.
+  - Scaling quality is weak: R4 is slightly slower than R2 (`0.322s` vs
+    `0.297s` update; `0.326s` vs `0.300s` apply) despite fewer compiled
+    all-gathers (`14` vs `26`). The next bottleneck is the replica fanout/all-
+    gather boundary and scaling efficiency, not correctness or collective
+    explosion.
+- Next action:
+  - Keep this as the R4 validation reference for the packed-bank-compute path.
+    Next experiments should either use `replica_dcn,data` to exercise both FSDP
+    axes or test a lower-level grouped-to-FSDP bridge that reduces or avoids
+    the current all-gather fanout.
