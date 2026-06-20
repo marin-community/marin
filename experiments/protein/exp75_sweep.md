@@ -453,14 +453,19 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
 
   | wd \ lr | 5e-4 | 7e-4 | 1e-3 |
   |---|---|---|---|
-  | **0.05** | 2.962 | 2.949 | |
-  | **0.1**  | 2.958 | | 2.942 |
-  | **0.2**  | | **2.938** | |
+  | **0.05** | 2.962 | 2.949 | _running_ |
+  | **0.1**  | 2.958 | **2.937** | 2.942 |
+  | **0.2**  | _running_ | 2.938 | _running_ |
 
-- Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ — first 3 cells in
-  (~12:xxZ): 7e-4/0.05=2.949, 5e-4/0.05=2.962, **1e-3/0.1=2.942 (current best)**. Early hint
-  that E4 likes HIGHER LR than E1/E2 (1e-3 best here vs 1e-3 worst at E1/E2) — watch the LR
-  axis as more land; don't conclude yet (6/9 still running).
+- Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ — **6/9 in. Center
+  `7e-4/0.1` FINISHED at 2.937 (~10:15Z) — now the best recorded cell** (edges 7e-4/0.2=2.938
+  and 1e-3/0.1=2.942). For the center to be the interior optimum it must beat all 4 axis
+  neighbors: 5e-4/0.1=2.958 ✓, 1e-3/0.1=2.942 ✓, 7e-4/0.05=2.949 ✓, **7e-4/0.2=2.938 — only
+  0.001 worse (within noise)**. So 7e-4/0.1 vs 7e-4/0.2 is a near-tie; the WD axis is flat
+  here too (cf. E2). Still running: 1e-3/0.05 (mid-eval trending **2.933**, could top it),
+  5e-4/0.2 (mid 2.960), 1e-3/0.2 (mid 3.018). **Don't conclude yet** — 1e-3/0.05's final
+  could move the optimum to higher LR, mirroring the E1→E2→E4 upward-LR drift. Early hint
+  still holds: E4 likes higher LR than E1/E2.
 - Notes:
 
 ### epochs = 8
