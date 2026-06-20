@@ -6672,6 +6672,21 @@ def estimated_boundary_phase_estimates(config: BenchConfig, bench_kind: str) -> 
     return phases
 
 
+def boundary_phase_type_totals(boundary_phases: list[dict[str, Any]]) -> dict[str, float | None]:
+    totals: dict[str, float | None] = {}
+    for collective_type in ("all_gather", "all_reduce", "reduce_scatter", "all_to_all", "collective_permute", "none"):
+        matching_phases = [
+            phase for phase in boundary_phases if phase.get("expected_collective_type") == collective_type
+        ]
+        totals[f"{collective_type}_global_bytes"] = (
+            sum(float(phase["global_bytes"]) for phase in matching_phases) if matching_phases else None
+        )
+        totals[f"{collective_type}_ideal_collective_count"] = (
+            sum(float(phase["ideal_collective_count"]) for phase in matching_phases) if matching_phases else None
+        )
+    return totals
+
+
 def boundary_primitive_name(bench_kind: str) -> str | None:
     if bench_kind == EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH:
         return "fsdp_grads_to_grouped_chunks"
@@ -9834,6 +9849,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
     flops = estimated_ns_dot_flops(bench_config, bench_kind)
     boundary_bytes = estimated_boundary_byte_estimates(bench_config, bench_kind) or {}
     boundary_phases = estimated_boundary_phase_estimates(bench_config, bench_kind)
+    boundary_phase_totals = boundary_phase_type_totals(boundary_phases)
     boundary_phase_global_bytes = sum(phase["global_bytes"] for phase in boundary_phases)
     boundary_phase_ideal_collective_count = sum(phase["ideal_collective_count"] for phase in boundary_phases)
     row = {
@@ -9898,6 +9914,40 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "estimated_boundary_phase_count": len(boundary_phases),
         "estimated_boundary_phase_global_bytes": boundary_phase_global_bytes if boundary_phases else None,
         "estimated_boundary_phase_global_gib": bytes_to_gib(boundary_phase_global_bytes if boundary_phases else None),
+        "estimated_boundary_phase_all_gather_global_bytes": boundary_phase_totals["all_gather_global_bytes"],
+        "estimated_boundary_phase_all_gather_global_gib": bytes_to_gib(boundary_phase_totals["all_gather_global_bytes"]),
+        "estimated_boundary_phase_all_gather_ideal_collective_count": boundary_phase_totals[
+            "all_gather_ideal_collective_count"
+        ],
+        "estimated_boundary_phase_all_reduce_global_bytes": boundary_phase_totals["all_reduce_global_bytes"],
+        "estimated_boundary_phase_all_reduce_global_gib": bytes_to_gib(boundary_phase_totals["all_reduce_global_bytes"]),
+        "estimated_boundary_phase_all_reduce_ideal_collective_count": boundary_phase_totals[
+            "all_reduce_ideal_collective_count"
+        ],
+        "estimated_boundary_phase_reduce_scatter_global_bytes": boundary_phase_totals["reduce_scatter_global_bytes"],
+        "estimated_boundary_phase_reduce_scatter_global_gib": bytes_to_gib(
+            boundary_phase_totals["reduce_scatter_global_bytes"]
+        ),
+        "estimated_boundary_phase_reduce_scatter_ideal_collective_count": boundary_phase_totals[
+            "reduce_scatter_ideal_collective_count"
+        ],
+        "estimated_boundary_phase_all_to_all_global_bytes": boundary_phase_totals["all_to_all_global_bytes"],
+        "estimated_boundary_phase_all_to_all_global_gib": bytes_to_gib(boundary_phase_totals["all_to_all_global_bytes"]),
+        "estimated_boundary_phase_all_to_all_ideal_collective_count": boundary_phase_totals[
+            "all_to_all_ideal_collective_count"
+        ],
+        "estimated_boundary_phase_collective_permute_global_bytes": boundary_phase_totals[
+            "collective_permute_global_bytes"
+        ],
+        "estimated_boundary_phase_collective_permute_global_gib": bytes_to_gib(
+            boundary_phase_totals["collective_permute_global_bytes"]
+        ),
+        "estimated_boundary_phase_collective_permute_ideal_collective_count": boundary_phase_totals[
+            "collective_permute_ideal_collective_count"
+        ],
+        "estimated_boundary_phase_none_global_bytes": boundary_phase_totals["none_global_bytes"],
+        "estimated_boundary_phase_none_global_gib": bytes_to_gib(boundary_phase_totals["none_global_bytes"]),
+        "estimated_boundary_phase_none_ideal_collective_count": boundary_phase_totals["none_ideal_collective_count"],
         "estimated_boundary_phase_ideal_collective_count": (
             boundary_phase_ideal_collective_count if boundary_phases else None
         ),

@@ -4674,6 +4674,13 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
     assert row["estimated_boundary_phase_count"] == 3
     assert row["estimated_boundary_phase_global_bytes"] == 3 * estimates["global_update_bytes"]
     assert row["estimated_boundary_phase_ideal_collective_count"] == 6.0
+    assert row["estimated_boundary_phase_all_gather_global_bytes"] is None
+    assert row["estimated_boundary_phase_all_gather_ideal_collective_count"] is None
+    assert row["estimated_boundary_phase_all_to_all_global_bytes"] == 3 * estimates["global_update_bytes"]
+    assert row["estimated_boundary_phase_all_to_all_global_gib"] == bytes_to_gib(3 * estimates["global_update_bytes"])
+    assert row["estimated_boundary_phase_all_to_all_ideal_collective_count"] == 6.0
+    assert row["estimated_boundary_phase_none_global_bytes"] is None
+    assert row["estimated_boundary_phase_none_ideal_collective_count"] is None
     assert row["estimated_boundary_lowered_collective_to_phase_ideal_ratio"] == 1.0
     assert row["estimated_boundary_compiled_collective_to_phase_ideal_ratio"] == 1.0
     assert row["boundary_correctness_skipped_reason"] == "estimated global bytes 2 exceed correctness cap 1"
@@ -4714,6 +4721,11 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
     result["timing"]["timing"]["compiled_hlo"]["all_to_all"] = 0
     n1_row = summary_row(result)
     assert n1_row["estimated_boundary_phase_ideal_collective_count"] == 0.0
+    assert n1_row["estimated_boundary_phase_all_to_all_global_bytes"] is None
+    assert n1_row["estimated_boundary_phase_all_to_all_ideal_collective_count"] is None
+    assert n1_row["estimated_boundary_phase_none_global_bytes"] == estimates["global_update_bytes"]
+    assert n1_row["estimated_boundary_phase_none_global_gib"] == bytes_to_gib(estimates["global_update_bytes"])
+    assert n1_row["estimated_boundary_phase_none_ideal_collective_count"] == 0.0
     assert n1_row["estimated_boundary_lowered_ideal_collective_count"] == 0.0
     assert n1_row["estimated_boundary_compiled_ideal_collective_count"] == 0.0
     r4_config = replace(config, replica_axis=4, data_axis=1, ns4d_group_axis="replica_dcn", ns4d_group_size=4)
