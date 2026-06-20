@@ -2644,3 +2644,25 @@ Post-compile steps were stable around 0.65-0.66s:
 - Result:
   - Pytest: `5 passed in 4.95s`.
   - Pre-commit: OK.
+
+### 2026-06-20 11:48 PDT - Integrated grouped MuonH reports boundary phase estimates
+- Hypothesis: The integrated `real_expert_fsdp_grouped_muonh_*` bench rows
+  need the same phase-level boundary estimates as the lower-level packed-bank
+  primitive rows. Without those fields, May202/May208 summaries can say the
+  mode but cannot say whether the compiled collectives match the intended
+  logical boundary phases.
+- Change:
+  - Extended `estimated_boundary_phase_estimates` to cover real grouped MuonH
+    optimizer benches.
+  - Reports separate logical phases for FSDP grads -> grouped chunks, FSDP
+    params -> grouped chunks, and grouped updates -> FSDP update tree.
+  - Splits mixed `all_to_all+all_gather` phases into separate summary rows so
+    compiled HLO collective counts can be compared by collective type.
+  - Added parametrized coverage for `per_chunk_reshard`, `packed_entry`, and
+    `chunk_local` boundary modes.
+- Command:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_real_grouped_muonh_summary_row_reports_boundary_phase_estimates experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_grouped_muonh_boundary_mode experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_packed_bank_boundary_phase_estimates -q`
+  - `./infra/pre-commit.py --files experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix`
+- Result:
+  - Pytest: `8 passed in 3.64s`.
+  - Pre-commit: OK.

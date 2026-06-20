@@ -6616,24 +6616,71 @@ def _packed_bank_phase_collective_info(config: BenchConfig, phase_name: str) -> 
     raise ValueError(f"Unknown packed-bank boundary phase {phase_name!r}.")
 
 
+def _real_grouped_muonh_phase_collective_info(
+    config: BenchConfig,
+    phase_name: str,
+    *,
+    group_count: int,
+) -> tuple[str, int]:
+    names = len(synthetic_shapes(config))
+    group_axis_names = tuple(axis for axis in config.ns4d_group_axis.split(",") if axis and axis != "none")
+    group_axis_needs_gather = bool(group_axis_names)
+    data_axis_needs_a2a = config.data_axis > 1 and "data" in group_axis_names
+    chunked_count = names * group_count
+    packed_count = names
+    mode = grouped_muonh_boundary_mode(config)
+
+    if mode == "chunk_local":
+        if phase_name in ("fsdp_grads_to_grouped_chunks", "fsdp_params_to_grouped_chunks"):
+            return ("all_to_all", chunked_count) if data_axis_needs_a2a else ("none", 0)
+        if phase_name == "grouped_updates_to_fsdp_update_tree":
+            return ("all_gather", chunked_count) if group_axis_needs_gather else ("none", 0)
+    elif mode == "packed_entry":
+        if phase_name in ("fsdp_grads_to_grouped_chunks", "fsdp_params_to_grouped_chunks"):
+            return ("all_to_all", packed_count) if data_axis_needs_a2a else ("none", 0)
+        if phase_name == "grouped_updates_to_fsdp_update_tree":
+            if data_axis_needs_a2a and group_axis_needs_gather:
+                return ("all_to_all+all_gather", packed_count)
+            if data_axis_needs_a2a:
+                return ("all_to_all", packed_count)
+            if group_axis_needs_gather:
+                return ("all_gather", packed_count)
+            return "none", 0
+    elif mode == "per_chunk_reshard":
+        if phase_name in ("fsdp_grads_to_grouped_chunks", "fsdp_params_to_grouped_chunks"):
+            if data_axis_needs_a2a:
+                return "all_to_all+all_gather", chunked_count
+            if group_axis_needs_gather:
+                return "all_gather", chunked_count
+            return "none", 0
+        if phase_name == "grouped_updates_to_fsdp_update_tree":
+            return ("all_gather", chunked_count) if group_axis_needs_gather else ("none", 0)
+    raise ValueError(f"Unknown real grouped MuonH boundary phase {phase_name!r} for mode {mode!r}.")
+
+
 def estimated_boundary_phase_estimates(config: BenchConfig, bench_kind: str) -> list[dict[str, Any]]:
     boundary_bytes = estimated_boundary_byte_estimates(config, bench_kind)
     if boundary_bytes is None:
         return []
-    if bench_kind not in (
+    real_grouped_muonh = is_real_expert_fsdp_grouped_muonh_bench(bench_kind)
+    packed_bank_bench = bench_kind in (
         EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
         EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
-    ):
+    )
+    if not (packed_bank_bench or real_grouped_muonh):
         return []
 
     phase_templates = {
         "fsdp_grads_to_packed_grouped_bank": "FSDP grads -> packed grouped bank",
         "fsdp_params_to_packed_grouped_bank": "FSDP params -> packed grouped bank",
         "packed_grouped_updates_to_fsdp_apply": "packed grouped updates -> FSDP apply layout",
+        "fsdp_grads_to_grouped_chunks": "FSDP grads -> grouped MuonH chunks",
+        "fsdp_params_to_grouped_chunks": "FSDP params -> grouped MuonH chunks",
+        "grouped_updates_to_fsdp_update_tree": "grouped MuonH updates -> FSDP update tree",
     }
     if bench_kind == EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH:
         phase_names = ("fsdp_grads_to_packed_grouped_bank",)
@@ -6652,23 +6699,41 @@ def estimated_boundary_phase_estimates(config: BenchConfig, bench_kind: str) -> 
             "fsdp_params_to_packed_grouped_bank",
             "packed_grouped_updates_to_fsdp_apply",
         )
+    elif real_grouped_muonh:
+        phase_names = (
+            "fsdp_grads_to_grouped_chunks",
+            "fsdp_params_to_grouped_chunks",
+            "grouped_updates_to_fsdp_update_tree",
+        )
     else:
         phase_names = ()
 
     phases = []
+    group_count = grouped_expert_group_count(config)
     for phase_name in phase_names:
-        collective_type, collective_count_per_weight = _packed_bank_phase_collective_info(config, phase_name)
-        phases.append(
-            {
-                "name": phase_name,
-                "description": phase_templates[phase_name],
-                "expected_collective_type": collective_type,
-                "ideal_collective_count": float(len(synthetic_shapes(config)) * collective_count_per_weight),
-                "global_bytes": boundary_bytes["global_update_bytes"],
-                "grouped_input_per_device_bytes": boundary_bytes["grouped_input_per_device_bytes"],
-                "fsdp_output_per_device_bytes": boundary_bytes["fsdp_output_per_device_bytes"],
-            }
-        )
+        if real_grouped_muonh:
+            collective_type, ideal_collective_count = _real_grouped_muonh_phase_collective_info(
+                config,
+                phase_name,
+                group_count=group_count,
+            )
+        else:
+            collective_type, collective_count_per_weight = _packed_bank_phase_collective_info(config, phase_name)
+            ideal_collective_count = len(synthetic_shapes(config)) * collective_count_per_weight
+        common = {
+            "name": phase_name,
+            "description": phase_templates[phase_name],
+            "expected_collective_type": collective_type,
+            "ideal_collective_count": float(ideal_collective_count),
+            "global_bytes": boundary_bytes["global_update_bytes"],
+            "grouped_input_per_device_bytes": boundary_bytes["grouped_input_per_device_bytes"],
+            "fsdp_output_per_device_bytes": boundary_bytes["fsdp_output_per_device_bytes"],
+        }
+        if collective_type == "all_to_all+all_gather":
+            for split_collective_type in ("all_to_all", "all_gather"):
+                phases.append({**common, "expected_collective_type": split_collective_type})
+        else:
+            phases.append(common)
     return phases
 
 

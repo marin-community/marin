@@ -4802,6 +4802,117 @@ def test_summary_row_reports_grouped_muonh_boundary_mode(
     assert row["expert_grouped_muonh_chunk_local_boundaries"] is chunk_local_boundaries
 
 
+@pytest.mark.parametrize(
+    (
+        "packed_entry",
+        "chunk_local_boundaries",
+        "expected_all_gather_count",
+        "expected_all_to_all_count",
+        "expected_all_gather_bytes_multiplier",
+        "expected_all_to_all_bytes_multiplier",
+        "expected_phase_count",
+    ),
+    [
+        (False, False, 6.0, 4.0, 3, 2, 5),
+        (True, False, 2.0, 6.0, 1, 3, 4),
+        (False, True, 2.0, 4.0, 1, 2, 3),
+    ],
+)
+def test_real_grouped_muonh_summary_row_reports_boundary_phase_estimates(
+    packed_entry: bool,
+    chunk_local_boundaries: bool,
+    expected_all_gather_count: float,
+    expected_all_to_all_count: float,
+    expected_all_gather_bytes_multiplier: int,
+    expected_all_to_all_bytes_multiplier: int,
+    expected_phase_count: int,
+):
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        expert_grouped_muonh_packed_entry=packed_entry,
+        expert_grouped_muonh_chunk_local_boundaries=chunk_local_boundaries,
+    )
+    estimates = estimated_boundary_byte_estimates(config, REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH)
+    result = {
+        "metadata": {
+            "label": "real_expert_fsdp_grouped_muonh_optimizer_update_h3",
+            "bench_kind": REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH,
+            "config": asdict(config),
+            "devices": 16,
+            "ns4d_group_size": 4,
+            "ns4d_padded_group_size": 4,
+            "ns4d_input_sharding_spec": "P('expert', 'data', 'model')",
+            "ns4d_compute_sharding_spec": "P(('replica_dcn', 'data'), 'expert', None, None)",
+            "ns4d_result_sharding_spec": "P('expert', 'data', 'model')",
+            "ns4d_boundary_status": "real_expert_fsdp_grouped_muonh_optimizer_update",
+            "boundary_collectives_allowed": True,
+            "boundary_collectives_required_absent": False,
+            "grouped_expert_group_count": None,
+            "group_estimates": [asdict(estimate) for estimate in estimate_grouping(config)],
+        },
+        "timing": {
+            "timing": {
+                "compile_seconds": 1.0,
+                "compiled_hlo": {
+                    "dot_general": 0,
+                    "batched_stack_dot_general": 0,
+                    "two_batch_axis_dot_general": 0,
+                    "custom_call": 0,
+                    "gpu_gemm_custom_call": 0,
+                    "all_gather": int(expected_all_gather_count),
+                    "all_reduce": 0,
+                    "reduce_scatter": 0,
+                    "all_to_all": int(expected_all_to_all_count),
+                    "collective_permute": 0,
+                },
+                "compiled_memory": {},
+                "median_seconds": 2.0,
+                "mean_seconds": 2.0,
+                "min_seconds": 2.0,
+                "correctness_max_error": 0.0,
+                "correctness_skipped_reason": None,
+            }
+        },
+    }
+
+    row = summary_row(result)
+
+    assert estimates is not None
+    assert row["estimated_boundary_phase_count"] == expected_phase_count
+    assert row["estimated_boundary_phase_all_gather_ideal_collective_count"] == expected_all_gather_count
+    assert row["estimated_boundary_phase_all_to_all_ideal_collective_count"] == expected_all_to_all_count
+    assert (
+        row["estimated_boundary_phase_all_gather_global_bytes"]
+        == expected_all_gather_bytes_multiplier * estimates["global_update_bytes"]
+    )
+    assert (
+        row["estimated_boundary_phase_all_to_all_global_bytes"]
+        == expected_all_to_all_bytes_multiplier * estimates["global_update_bytes"]
+    )
+    assert row["estimated_boundary_compiled_collective_to_phase_ideal_ratio"] == 1.0
+    assert (
+        row["mean_estimated_boundary_phase_global_gbps"]
+        == (expected_all_gather_bytes_multiplier + expected_all_to_all_bytes_multiplier)
+        * estimates["global_update_bytes"]
+        / 2.0
+        / 1e9
+    )
+
+
 def test_strict_boundary_gate_includes_expert_fsdp_and_collective_permute():
     collective_summary = HloSummary(
         characters=0,
