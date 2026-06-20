@@ -349,6 +349,7 @@ project-excludes = [
     "scripts/datakit/**",
     "scripts/debug/**",
     "scripts/ferries/**",
+    "scripts/gpu_eval/**",
     "scripts/iris/**",
     "scripts/ops/**",
     "scripts/pm/**",
