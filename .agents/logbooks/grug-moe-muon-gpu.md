@@ -1617,3 +1617,35 @@ Post-compile steps were stable around 0.65-0.66s:
   - `./infra/pre-commit.py --changed-files --fix` passed.
 - Interpretation: Future boundary rows now separate inherent fanout (`replica_dcn` ownership -> FSDP replica copies) from avoidable compiler explosion (many per-layer all-gathers, A2A/CP insertion, OOM). This does not solve the bridge, but it makes the pass/fail criterion sharper for any custom transport.
 - Next action: Use these fields when comparing any lower-level grouped-to-FSDP bridge against the explicit slice-first baseline.
+
+### 2026-06-19 23:05 PDT - H100 boundary fragmentation row
+- Hypothesis: The new fanout/fragmentation fields should be validated on the real 2-node H100 compiler path, not only tiny CPU lowering, so future lower-level bridge candidates have a clear baseline.
+- Command:
+  - `RUN_ID="MUON-BENCH-D2560-L26-R2E8-FRAGFIELDS-COMPILE-G8-N2-cw-$(date -u +%Y%m%d-%H%M%S)" MARIN_PREFIX=s3://marin-na/tmp/ttl=7d KUBECONFIG="$HOME/.kube/coreweave-iris-gpu" MUON_BENCH_GPU_REPLICAS=2 MUON_BENCH_LAYERS=26 MUON_BENCH_REPLICA_AXIS=2 MUON_BENCH_DATA_AXIS=1 MUON_BENCH_EXPERT_AXIS=8 MUON_BENCH_MODEL_AXIS=1 MUON_BENCH_NS4D_GROUP_SIZE=8 MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn,data MUON_BENCH_KINDS=expert_fsdp_grouped_explicit_slice_first_gather_apply_boundary,expert_fsdp_grouped_target_apply_chunked_fsdp_boundary MUON_BENCH_SWEEP_BACKEND_STEPS=1 MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 MUON_BENCH_DTYPE=bf16 MUON_BENCH_NS_COMPUTE_DTYPE=bf16 MUON_BENCH_WARMUP=0 MUON_BENCH_ITERS=0 MUON_BENCH_MODE=both MUON_BENCH_COMPILE_ONLY=true MUON_BENCH_TRACKER=json MUON_BENCH_ENABLE_JAX_PROFILE=false MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES=true MUON_BENCH_DISABLE_ABSTRACT_MESH=true MUON_BENCH_WRITE_COMPILED_HLO=true MUON_BENCH_WORKER_CPU=8 MUON_BENCH_WORKER_RAM=256g XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 bash scratch/launch_muon_grouped_reference_2node_wandb.sh`
+- Result:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-060051`.
+  - Child Iris job: `/dlwh/iris-run-job-20260620-060051/grug-train-MUON-BENCH-D2560-L26-R2E8-FRAGFIELDS-COMPILE-G8-N2-cw-20260620-060049`.
+  - Output prefix: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2E8-FRAGFIELDS-COMPILE-G8-N2-cw-20260620-060049-704a21`.
+  - Iris parent and child both succeeded with exit 0. No OOM or rendezvous failure; the final PJRT `WatchTasksAsync` warnings were shutdown noise after task exit.
+
+| bench | lowered collectives | compiled collectives | compiled fragmentation | inherent fanout | min extra per-device fanout |
+| --- | --- | --- | ---: | ---: | ---: |
+| `expert_fsdp_grouped_explicit_slice_first_gather_apply_boundary` | 8 AG | 8 AG | 4.0x ideal | 2.0x | 8.18 GiB |
+| `expert_fsdp_grouped_target_apply_chunked_fsdp_boundary` | 0 | 26 AG + 24 CP | 25.0x ideal | 2.0x | 8.18 GiB |
+
+- Interpretation: The real H100 compiler confirms the split between unavoidable fanout and avoidable fragmentation. Both candidate bridges still require a 2x replica fanout because grouped ownership includes `replica_dcn` while FSDP expert leaves are replicated over it. The explicit slice-first path is the current conservative baseline at 8 all-gathers, 4x the ideal one transport per expert projection. The superficially cleaner target/chunked-FSDP path is worse after GPU compilation: it lowers with no collectives, but compilation expands it to 50 collectives, 25x ideal.
+- Next action: A lower-level bridge has to beat the explicit slice-first baseline in compiled HLO, not just in lowered StableHLO. For the FSDP-master objective, the pass criterion should be compiled fragmentation near 1x with the 2x fanout byte floor preserved. For the grouped-bank model-consumer pivot, keep requiring zero grouped-to-FSDP boundary collectives.
+
+### 2026-06-19 23:12 PDT - OSS Muon implementation survey
+- Hypothesis: Existing OSS Muon implementations may already contain a distributed layout trick that avoids Marin's grouped-to-FSDP per-leaf bridge problem.
+- Method: Spawned a read-only survey agent to inspect primary source code for KellerJordan Muon/modded-nanogpt, Megatron-LM layer-wise distributed Muon, NeMo Emerging-Optimizers, DeepSpeed Muon, MaxText/Optax Muon, PyTorch native Muon, and Flash-Muon. No repo edits or runs.
+- Result:
+  - No OSS implementation exactly solves `JAX FSDP train-state + temporary grouped MuonH optimizer banks + cheap grouped-to-FSDP update transport`.
+  - Megatron-LM is the closest conceptual match: its layer-wise distributed optimizer makes whole-matrix Muon ownership part of the parameter-buffer/bucket layout, then synchronizes updated params through the bucket infrastructure rather than per-leaf optimizer reshards.
+  - modded-nanogpt/NorMuon is strong evidence for persistent grouped banks: it reshapes explicit parameter banks so the leading bank dimension is divisible by world size, reduce-scatters bank gradients, updates local chunks, then all-gathers the bank. Its speed comes from changing representation, not from reconstructing temporary groups each step.
+  - DeepSpeed ZeRO-3 is a warning case: it gathers params/momentum per subgroup and forbids some reduce-scatter/all-to-all Muon combinations, which is close to the failure mode we are trying to avoid.
+  - NeMo/Optax/MaxText support the 3D/4D batched NS contract and explicit dimension metadata, but do not solve cross-layout transport.
+- Interpretation: The survey supports the same direction as the H100 gates. For a fast solution, Muon grouping should be a first-class parameter/bucket representation. If we keep canonical FSDP masters, the missing piece is a coarse bank-level transport bucket, not more per-leaf `with_sharding_constraint` wrappers. If we allow a representation pivot, grouped expert banks consumed by the model are the cleanest path.
+- Next action: Preserve the conservative FSDP-master goal, but evaluate new work against two explicit paths:
+  1. FSDP-master path: grouped NS bank update -> one coarse transport per expert projection -> FSDP bucket slices -> ordinary `optax.apply_updates`.
+  2. Representation-pivot path: persistent grouped expert banks consumed directly by grouped MoE/model code, avoiding the grouped-to-FSDP update boundary.

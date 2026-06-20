@@ -273,3 +273,44 @@ Otherwise, focus on grouped-bank consumers. The first success criterion is a
 compiled synthetic gate with the grouped expert bank preserved and no compiled
 boundary collectives. The second success criterion is a short single-node train
 profile that materially closes the gap to the SGD reference.
+
+## 2026-06-19 Update: Transport Baseline and OSS Clues
+
+The first H100 row with the new fanout/fragmentation fields succeeded on
+`/dlwh/iris-run-job-20260620-060051` for R2/D1/E8, L26, group size 8, compile
+only. It confirms that the bridge has two separate costs:
+
+1. **Inherent fanout**: grouped ownership includes `replica_dcn`, but FSDP
+   expert leaves are replicated over `replica_dcn`. Returning grouped updates to
+   ordinary FSDP leaves therefore has a 2x replica fanout floor. The row reports
+   `estimated_boundary_replica_fanout_factor=2.0` and about 8.18 GiB minimum
+   extra per-device receive bytes.
+2. **Avoidable fragmentation**: the compiler still lowers/compiles the bridge
+   into many collectives. The explicit slice-first gather path compiled to 8
+   all-gathers, 4x the ideal one transport per expert projection. The
+   target/chunked-FSDP path looked clean in lowered HLO but compiled to 26
+   all-gathers plus 24 collective-permutes, 25x ideal.
+
+This makes the next FSDP-master gate concrete: any lower-level Pallas/Triton/FFI
+or bucketed transport must beat 8 compiled all-gathers and should ideally reach
+compiled fragmentation near 1x while preserving the 2x fanout byte floor.
+
+The OSS Muon survey did not find an exact JAX/FSDP solution. It did find a
+consistent design lesson:
+
+- Megatron's layer-wise distributed Muon makes whole-matrix Muon ownership part
+  of the parameter-buffer layout and synchronizes through bucket infrastructure.
+- modded-nanogpt/NorMuon gets speed from persistent parameter banks whose
+  leading bank dimension is sharded/reduced/gathered directly.
+- DeepSpeed ZeRO-3's per-subgroup gather/scatter path is the pattern to avoid.
+- NeMo/Optax/MaxText validate batched 3D/4D NS and explicit Muon dimension
+  metadata, but do not address grouped-to-FSDP transport.
+
+So the pragmatic implementation remains a forked path:
+
+1. **FSDP-master path**: keep canonical FSDP train-state, but add a coarse
+   bank-level grouped update transport before `optax.apply_updates`; do not
+   generate per-leaf collectives.
+2. **Grouped-bank path**: make grouped expert banks model-consumable, following
+   the successful H100 grouped-bank consumer gates and avoiding the
+   grouped-to-FSDP bridge entirely.
