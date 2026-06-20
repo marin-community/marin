@@ -156,6 +156,17 @@ leaves. A lower-level bridge should be judged against the current explicit
 slice-first baseline: fewer compiled all-gathers, no new all-to-all/collective
 permute explosion, and comparable or better H100 runtime.
 
+New harness rows also report:
+
+- `estimated_boundary_replica_fanout_factor`
+- `estimated_boundary_requires_replica_fanout`
+
+These fields capture the inherent part of the bridge: grouped MuonH ownership
+over `replica_dcn` must fan out to FSDP leaves because expert FSDP params do not
+name `replica_dcn` in their sharding spec. They do not excuse the current
+compiled per-layer all-gather pattern; they separate the unavoidable fanout from
+avoidable compiler-induced fragmentation.
+
 Do not launch another full training profile from this path until this gate is
 ported into the real model path. The harness now has an initial
 `expert_grouped_bank_consumer` bench for this purpose: it consumes grouped expert

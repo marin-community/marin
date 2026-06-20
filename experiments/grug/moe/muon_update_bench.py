@@ -5770,16 +5770,18 @@ def estimated_expert_update_global_bytes(config: BenchConfig) -> int:
     return config.layers * elements_per_layer * bytes_per_element
 
 
-def estimated_boundary_byte_estimates(config: BenchConfig, bench_kind: str) -> dict[str, float] | None:
+def estimated_boundary_byte_estimates(config: BenchConfig, bench_kind: str) -> dict[str, Any] | None:
     if not is_expert_fsdp_grouped_bench(bench_kind):
         return None
     global_bytes = estimated_expert_update_global_bytes(config)
     expert_axis = max(1, config.expert_axis)
     data_axis = max(1, config.data_axis)
+    replica_axis = max(1, config.replica_axis)
     group_axis = max(1, ns4d_axis_size(config))
     grouped_input_per_device = global_bytes / (expert_axis * group_axis)
     fsdp_output_per_device = global_bytes / (expert_axis * data_axis)
     all_gather_slice_peak_per_device = global_bytes / expert_axis
+    replica_fanout = replica_axis if "replica_dcn" in config.ns4d_group_axis else 1
     return {
         "global_update_bytes": float(global_bytes),
         "grouped_input_per_device_bytes": float(grouped_input_per_device),
@@ -5789,11 +5791,13 @@ def estimated_boundary_byte_estimates(config: BenchConfig, bench_kind: str) -> d
         "all_gather_slice_peak_to_grouped_input_ratio": float(
             all_gather_slice_peak_per_device / grouped_input_per_device
         ),
+        "replica_fanout_factor": float(replica_fanout),
+        "requires_replica_fanout": bool(replica_fanout > 1),
     }
 
 
 def boundary_collective_payload_estimates(
-    boundary_bytes: dict[str, float],
+    boundary_bytes: dict[str, Any],
     hlo_summary: dict[str, Any] | None,
 ) -> dict[str, float | None]:
     if not boundary_bytes or not hlo_summary:
@@ -8292,6 +8296,8 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "estimated_boundary_all_gather_slice_peak_to_grouped_input_ratio": boundary_bytes.get(
             "all_gather_slice_peak_to_grouped_input_ratio"
         ),
+        "estimated_boundary_replica_fanout_factor": boundary_bytes.get("replica_fanout_factor"),
+        "estimated_boundary_requires_replica_fanout": boundary_bytes.get("requires_replica_fanout"),
         "grouped_expert_group_count": result["metadata"]["grouped_expert_group_count"],
         "grouped_chunks": sum(estimate["grouped_chunks"] for estimate in estimates),
         "chunks": [estimate["chunks"] for estimate in estimates],

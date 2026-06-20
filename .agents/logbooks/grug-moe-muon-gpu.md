@@ -1602,3 +1602,14 @@ Post-compile steps were stable around 0.65-0.66s:
 - Result: Updated `.agents/projects/2026-06-19_grug_moe_muon_grouped_bank_path.md` with an explicit requirement-by-requirement audit. Current status: FSDP params at the boundary, grouped MuonH compute, and semantic conversion to FSDP before apply are present in the harness; avoiding the per-leaf collective explosion and preserving performance are not proven.
 - Interpretation: The remaining FSDP-master blocker is specifically the compiled grouped-to-FSDP bridge. Another JAX-level `reshard`/`shard_map` wrapper is unlikely to satisfy the goal unless it materially changes compiled HLO. The remaining viable FSDP-master work is a lower-level/custom transport that beats the explicit slice-first baseline, while the grouped-bank model-consumer path remains the best zero-boundary alternative.
 - Next action: Keep the lower-level bridge subagent focused on a Pallas/Triton/FFI/custom-call proof point; mainline integration should continue with grouped expert-bank consumption only with the caveat that it is a representation pivot, not proof of the conservative FSDP-master objective.
+
+### 2026-06-19 22:47 PDT - boundary fanout estimator
+- Hypothesis: The harness should make the unavoidable part of the FSDP-master bridge visible: if grouped MuonH shards the leading group axis over `replica_dcn` but FSDP expert params are replicated over `replica_dcn`, returning ordinary FSDP leaves requires a replica fanout even before considering compiler pathologies.
+- Change:
+  - Added `replica_fanout_factor` and `requires_replica_fanout` to `estimated_boundary_byte_estimates`.
+  - Exposed these as `estimated_boundary_replica_fanout_factor` and `estimated_boundary_requires_replica_fanout` in summary rows.
+- Validation:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_boundary_byte_estimates` passed.
+  - `./infra/pre-commit.py --changed-files --fix` passed.
+- Interpretation: Future boundary rows now separate inherent fanout (`replica_dcn` ownership -> FSDP replica copies) from avoidable compiler explosion (many per-layer all-gathers, A2A/CP insertion, OOM). This does not solve the bridge, but it makes the pass/fail criterion sharper for any custom transport.
+- Next action: Use these fields when comparing any lower-level grouped-to-FSDP bridge against the explicit slice-first baseline.
