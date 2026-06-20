@@ -124,9 +124,10 @@ def gh_json(args: list[str], *, timeout: float = GH_TIMEOUT) -> object:
 
 def gh_pr_checks(pr: str, repo: str) -> list[dict]:
     """Return gh's check rows for the PR head (empty until any check registers)."""
-    # `gh pr checks --json` emits the rows and exits 0 regardless of pass/fail/pending,
-    # so we read stdout directly rather than through _gh (which raises on non-zero). An
-    # empty body means no checks have registered yet — treat that as "not done".
+    # `gh pr checks --json` prints the rows and exits 0 even while checks are pending.
+    # We read stdout directly instead of via gh_json because a PR with no checks
+    # registered yet returns an empty body — which means "nothing to judge yet, keep
+    # polling", but which gh_json would raise on (json.loads("") fails / non-zero exit).
     proc = subprocess.run(
         ["gh", "pr", "checks", pr, "--repo", repo, "--json", "name,bucket,state"],
         capture_output=True,
@@ -386,7 +387,7 @@ class BackoffConfig:
     jitter: float
 
 
-def _tail(text: str, *, max_lines: int = 20, max_chars: int = 2000) -> str:
+def _tail(text: str, *, max_lines: int = 40, max_chars: int = 4000) -> str:
     text = text.strip()
     if not text:
         return ""
