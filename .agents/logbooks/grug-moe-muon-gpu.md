@@ -2869,3 +2869,44 @@ Post-compile steps were stable around 0.65-0.66s:
     tied at this scale.
   - The remaining question is R4 scaling and whether the all-gather bandwidth
     stays acceptable or gets worse with `replica_dcn=4`.
+
+### 2026-06-20 11:58 PDT - R4 packed-bank boundary contract succeeds
+- Hypothesis:
+  - The packed-bank boundary contract should continue to avoid per-leaf
+    collective explosion at `replica_dcn=4`, with grouped-update egress still
+    compiling to the intended two all-gathers.
+- Command:
+  - `bash scratch/launch_muon_packed_bank_boundary_contract.sh r4`
+- Config:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-185137`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/q9ntnsmp`.
+  - Run id:
+    `MUON-BENCH-D2560-L26-R4D1E8-N4-G8-BOUNDARYCONTRACT-cw-20260620-185135`.
+  - 4 H100 nodes, `devices=32`, `local_devices=8`, `process_count=4`,
+    `replica_axis=4`, `data_axis=1`, `expert_axis=8`, `model_axis=1`,
+    `ns4d_group_axis=replica_dcn`, `ns4d_group_size=8`, bf16 params/NS
+    compute, 26 layers.
+- Result:
+  - Child job succeeded with all four tasks completed.
+  - `fsdp_grads_to_explicit_packed_grouped_bank`: compiled AG/A2A = `0/0`,
+    ideal collectives `0`, excess `0`, mean `0.00500s`, estimated phase
+    bandwidth `~26.2 TB/s`, compiled HBM peak `15.23 GiB`.
+  - Route A `packed_grouped_updates_to_fsdp_apply`: compiled AG/A2A = `2/0`,
+    ideal collectives `2`, excess `0`, mean `0.31373s`, estimated all-gather
+    phase bandwidth `~417 GB/s`, compiled HBM peak `35.74 GiB`.
+  - Route B `packed_grouped_updates_to_fsdp_direct_apply`: compiled AG/A2A =
+    `2/0`, ideal collectives `2`, excess `0`, mean `0.31423s`, estimated
+    all-gather phase bandwidth `~416 GB/s`, compiled HBM peak `35.74 GiB`.
+  - Full-size correctness was skipped by the existing global-byte cap:
+    `estimated global bytes 130862284800 exceed correctness cap 1073741824`.
+- Interpretation:
+  - R4 validates the same collective-count contract as R2: ingress remains
+    local, and both grouped-update egress routes compile to exactly two
+    all-gathers with zero excess collectives.
+  - R4 egress is slower than R2: `~0.314s` versus `~0.232s`, and estimated
+    all-gather phase bandwidth drops from `~563 GB/s` to `~416-417 GB/s`.
+  - Route A and Route B remain tied at this scale; the next useful question is
+    whether the packed egress can be overlapped or replaced by a lower-level
+    direct FSDP-boundary primitive, not whether `optax.apply_updates` itself is
+    the dominant difference between the two routes.
