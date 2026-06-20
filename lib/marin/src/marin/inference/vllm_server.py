@@ -7,6 +7,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Callable
@@ -23,6 +24,22 @@ _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
 )
+_PRELOAD_MODULES_ENV = "MARIN_VLLM_PRELOAD_MODULES"
+_VLLM_PRELOAD_CLI = """
+import importlib
+import os
+import sys
+
+for module_name in os.environ.get("MARIN_VLLM_PRELOAD_MODULES", "").split(","):
+    module_name = module_name.strip()
+    if module_name:
+        importlib.import_module(module_name)
+
+from vllm.entrypoints.cli.main import main
+
+sys.argv = ["vllm", *sys.argv[1:]]
+main()
+"""
 
 
 @dataclass(frozen=True)
@@ -338,6 +355,15 @@ def _vllm_env() -> dict[str, str]:
     return env
 
 
+def _vllm_native_command(serve_args: list[str], native_env: dict[str, str]) -> list[str]:
+    preload_modules = native_env.get(_PRELOAD_MODULES_ENV, "").strip()
+    if preload_modules:
+        return [sys.executable, "-c", _VLLM_PRELOAD_CLI, *serve_args]
+
+    vllm_bin = shutil.which("vllm") or "vllm"
+    return [vllm_bin, *serve_args]
+
+
 def _start_vllm_native_server(
     *,
     model_name_or_path: str,
@@ -350,9 +376,7 @@ def _start_vllm_native_server(
 
     resolved_port = port if port is not None else 8000
 
-    vllm_bin = shutil.which("vllm") or "vllm"
-    cmd: list[str] = [
-        vllm_bin,
+    serve_args: list[str] = [
         "serve",
         model_name_or_path,
         "--trust-remote-code",
@@ -371,6 +395,7 @@ def _start_vllm_native_server(
     stdout_f = open(stdout_path, "w")  # noqa: SIM115
     stderr_f = open(stderr_path, "w")  # noqa: SIM115
     native_env = _vllm_env()
+    cmd = _vllm_native_command(serve_args, native_env)
     logger.info(
         "Starting vLLM native server with "
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
