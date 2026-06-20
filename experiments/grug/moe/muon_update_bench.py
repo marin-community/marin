@@ -6760,6 +6760,14 @@ def boundary_primitive_name(bench_kind: str) -> str | None:
     return None
 
 
+def grouped_muonh_boundary_mode(config: BenchConfig) -> str:
+    if config.expert_grouped_muonh_chunk_local_boundaries:
+        return "chunk_local"
+    if config.expert_grouped_muonh_packed_entry:
+        return "packed_entry"
+    return "per_chunk_reshard"
+
+
 def boundary_collective_payload_estimates(
     boundary_bytes: dict[str, Any],
     hlo_summary: dict[str, Any] | None,
@@ -9868,6 +9876,9 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "ns4d_result_sharding_spec": result["metadata"]["ns4d_result_sharding_spec"],
         "ns4d_boundary_status": result["metadata"]["ns4d_boundary_status"],
         "boundary_primitive": boundary_primitive_name(bench_kind),
+        "expert_grouped_muonh_boundary_mode": grouped_muonh_boundary_mode(bench_config),
+        "expert_grouped_muonh_packed_entry": bench_config.expert_grouped_muonh_packed_entry,
+        "expert_grouped_muonh_chunk_local_boundaries": bench_config.expert_grouped_muonh_chunk_local_boundaries,
         "boundary_collectives_allowed": result["metadata"]["boundary_collectives_allowed"],
         "boundary_collectives_required_absent": result["metadata"]["boundary_collectives_required_absent"],
         "estimated_ns_dot_flops": flops,

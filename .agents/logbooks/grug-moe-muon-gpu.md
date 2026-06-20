@@ -2625,3 +2625,22 @@ Post-compile steps were stable around 0.65-0.66s:
     and `grouped_muonh/packed_restore/concat_chunks` disappear or shrink, and
     whether the replacement explicit per-chunk collectives are faster in the
     full train step.
+
+### 2026-06-20 11:36 PDT - Boundary mode is explicit in bench summaries
+- Hypothesis: W&B/summary rows for the integrated grouped MuonH optimizer need
+  to say which production boundary mode they used. Otherwise May202
+  packed-entry and May208 chunk-local results are too easy to conflate because
+  they share the same high-level bench kind.
+- Change:
+  - Added `expert_grouped_muonh_boundary_mode`,
+    `expert_grouped_muonh_packed_entry`, and
+    `expert_grouped_muonh_chunk_local_boundaries` to
+    `experiments/grug/moe/muon_update_bench.py::summary_row`.
+  - Boundary mode values are `per_chunk_reshard`, `packed_entry`, and
+    `chunk_local`; chunk-local wins if both booleans are true.
+- Command:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_grouped_muonh_boundary_mode experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_packed_bank_boundary_phase_estimates -q`
+  - `./infra/pre-commit.py --files experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix`
+- Result:
+  - Pytest: `5 passed in 4.95s`.
+  - Pre-commit: OK.

@@ -4743,6 +4743,65 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
     assert sum(phase["ideal_collective_count"] for phase in r4_grads_to_bank_phases) == 0.0
 
 
+@pytest.mark.parametrize(
+    ("packed_entry", "chunk_local_boundaries", "expected_mode"),
+    [
+        (False, False, "per_chunk_reshard"),
+        (True, False, "packed_entry"),
+        (False, True, "chunk_local"),
+        (True, True, "chunk_local"),
+    ],
+)
+def test_summary_row_reports_grouped_muonh_boundary_mode(
+    packed_entry: bool,
+    chunk_local_boundaries: bool,
+    expected_mode: str,
+):
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        expert_grouped_muonh_packed_entry=packed_entry,
+        expert_grouped_muonh_chunk_local_boundaries=chunk_local_boundaries,
+    )
+    result = {
+        "metadata": {
+            "label": "real_expert_fsdp_grouped_muonh_optimizer_update_h3",
+            "bench_kind": REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH,
+            "config": asdict(config),
+            "devices": 16,
+            "ns4d_group_size": 4,
+            "ns4d_padded_group_size": 4,
+            "ns4d_input_sharding_spec": "P('expert', 'data', 'model')",
+            "ns4d_compute_sharding_spec": "P(('replica_dcn', 'data'), 'expert', None, None)",
+            "ns4d_result_sharding_spec": "P('expert', 'data', 'model')",
+            "ns4d_boundary_status": "real_expert_fsdp_grouped_muonh_optimizer_update",
+            "boundary_collectives_allowed": True,
+            "boundary_collectives_required_absent": False,
+            "grouped_expert_group_count": None,
+            "group_estimates": [asdict(estimate) for estimate in estimate_grouping(config)],
+        },
+    }
+
+    row = summary_row(result)
+
+    assert row["expert_grouped_muonh_boundary_mode"] == expected_mode
+    assert row["expert_grouped_muonh_packed_entry"] is packed_entry
+    assert row["expert_grouped_muonh_chunk_local_boundaries"] is chunk_local_boundaries
+
+
 def test_strict_boundary_gate_includes_expert_fsdp_and_collective_permute():
     collective_summary = HloSummary(
         characters=0,
