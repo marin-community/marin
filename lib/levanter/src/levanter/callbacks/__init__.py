@@ -16,6 +16,7 @@ from tqdm_loggable.auto import tqdm
 
 import levanter.tracker
 from levanter.callbacks._core import Callback, CBInfo, JitCallback, LambdaCallback, StepInfo
+from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.callbacks._metrics import (
     _tqdm_logging_one_time_setup,
     log_performance_stats,
@@ -243,6 +244,7 @@ __all__ = [
     "LambdaCallback",
     "StepInfo",
     "log_performance_stats",
+    "iris_status_reporter",
     "log_step_info",
     "pbar_logger",
     "CallbackStateView",
