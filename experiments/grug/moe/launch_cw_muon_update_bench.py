@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,6 +51,7 @@ GPUS_PER_NODE = 8
 DEFAULT_OUTPUT_SUBDIR = "experiments/grug-moe-cw/muon-update-bench"
 WANDB_LOG_TIMEOUT = 300
 WANDB_INIT_TIMEOUT = 120
+WANDB_FINISH_TIMEOUT = 30
 WANDB_PAYLOAD_ENV = "MUON_BENCH_WANDB_PAYLOAD"
 
 set_default_cw_grug_moe_prefix()
@@ -246,6 +248,27 @@ def _wandb_metric_row(row: dict[str, Any], row_index: int) -> dict[str, int | fl
     return metrics
 
 
+def _finish_wandb_run(run: wandb.sdk.wandb_run.Run) -> None:
+    error: list[BaseException] = []
+
+    def finish() -> None:
+        try:
+            run.finish(quiet=True)
+        except BaseException as exc:
+            error.append(exc)
+
+    finish_thread = threading.Thread(target=finish, name="muon-bench-wandb-finish", daemon=True)
+    finish_thread.start()
+    finish_thread.join(WANDB_FINISH_TIMEOUT)
+    if finish_thread.is_alive():
+        emit_jsonl({"event": "wandb_finish_timeout", "timeout_seconds": WANDB_FINISH_TIMEOUT})
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
+    if error:
+        raise error[0]
+
+
 def _log_summary_to_wandb_process(
     run_id: str,
     wandb_project: str,
@@ -297,7 +320,7 @@ def _log_summary_to_wandb_process(
             run.log(_wandb_metric_row(row, row_index), step=row_index)
         emit_jsonl({"event": "wandb_logged", "entity": run.entity, "project": run.project, "name": run.name})
     finally:
-        run.finish(quiet=True)
+        _finish_wandb_run(run)
 
 
 def _log_summary_to_wandb(config: MuonUpdateBenchLaunchConfig, payload: dict[str, Any]) -> None:
