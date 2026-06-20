@@ -7,6 +7,10 @@ Covers the scatter write/read roundtrip, per-shard stats, and external sort —
 without spinning up a full coordinator.
 """
 
+import io
+import os
+
+import fsspec
 import pytest
 from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
 from zephyr.runners import _InProcessWorkerContext
@@ -350,3 +354,137 @@ def test_external_sort_merge_cleans_up(tmp_path):
     iters = [iter([i]) for i in range(EXTERNAL_SORT_FAN_IN + 1)]
     list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
     assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
+
+
+# ---------------------------------------------------------------------------
+# Upload-abort on failure (#6488): a failed/retried shard must not orphan its
+# in-flight multipart upload (R2) or leave a partial output file (local).
+# ---------------------------------------------------------------------------
+
+
+class _FakeUploadFile(io.BytesIO):
+    """In-memory object-store upload: commits on close(), aborts on discard().
+
+    Models the s3fs/R2 multipart contract — the object only becomes visible on a
+    clean close(); discard() aborts the upload (s3fs.S3File.discard).
+    """
+
+    def __init__(self, fs, path):
+        super().__init__()
+        self._fs = fs
+        self._path = path
+        fs.open_uploads.add(path)
+
+    def close(self):
+        if self.closed:
+            return
+        if self._path in self._fs.fail_close:
+            # fsspec marks the file closed in its finally block even when the
+            # commit (CompleteMultipartUpload) fails, leaving the MPU open.
+            super().close()
+            raise OSError("commit failed")
+        self._fs.store[self._path] = self.getvalue()
+        self._fs.open_uploads.discard(self._path)
+        super().close()
+
+    def discard(self):
+        self._fs.open_uploads.discard(self._path)
+        self._fs.aborted.add(self._path)
+        super().close()
+
+
+class _FakeObjectStore(fsspec.AbstractFileSystem):
+    """Minimal non-local fsspec backend with multipart-upload semantics."""
+
+    protocol = "fakempu"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.store: dict[str, bytes] = {}
+        self.open_uploads: set[str] = set()
+        self.aborted: set[str] = set()
+        self.fail_close: set[str] = set()  # paths whose commit (close) raises
+
+    def _open(self, path, mode="rb", **kwargs):
+        if "w" in mode:
+            return _FakeUploadFile(self, path)
+        return io.BytesIO(self.store[path])
+
+    def mkdirs(self, path, exist_ok=False):
+        pass
+
+    makedirs = mkdirs
+
+    def exists(self, path, **kwargs):
+        return path in self.store
+
+
+@pytest.fixture
+def fake_object_store():
+    fsspec.register_implementation("fakempu", _FakeObjectStore, clobber=True)
+    fs = fsspec.filesystem("fakempu")
+    fs.store.clear()
+    fs.open_uploads.clear()
+    fs.aborted.clear()
+    fs.fail_close.clear()
+    return fs
+
+
+def test_scatter_aborts_multipart_upload_on_write_failure(fake_object_store):
+    fs = fake_object_store
+    path = "fakempu://bucket/stage/shard-0000.shuffle"
+    stripped = fs._strip_protocol(path)
+
+    def failing_items():
+        yield {"k": "a"}
+        yield {"k": "b"}
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        _write_scatter(failing_items(), source_shard=0, data_path=path, key_fn=_key, num_output_shards=2)
+
+    assert stripped in fs.aborted, "multipart upload was not aborted on failure"
+    assert stripped not in fs.open_uploads, "in-flight upload left dangling"
+    assert stripped not in fs.store, "failed shard committed an output object"
+
+
+def test_scatter_aborts_multipart_upload_when_commit_fails(fake_object_store):
+    """A close() that fails while committing (dead R2 connection) must still
+    abort the upload, even though fsspec has already marked the file closed."""
+    fs = fake_object_store
+    path = "fakempu://bucket/stage/shard-0002.shuffle"
+    stripped = fs._strip_protocol(path)
+    fs.fail_close.add(stripped)
+
+    with pytest.raises(OSError, match="commit failed"):
+        _write_scatter(iter([{"k": "a"}, {"k": "b"}]), source_shard=0, data_path=path, key_fn=_key, num_output_shards=2)
+
+    assert stripped in fs.aborted, "upload not aborted after a failed commit"
+    assert stripped not in fs.open_uploads, "in-flight upload left dangling"
+    assert stripped not in fs.store, "failed commit left a committed object"
+
+
+def test_scatter_commits_multipart_upload_on_success(fake_object_store):
+    fs = fake_object_store
+    path = "fakempu://bucket/stage/shard-0001.shuffle"
+    stripped = fs._strip_protocol(path)
+
+    _write_scatter(iter([{"k": "a"}, {"k": "b"}]), source_shard=0, data_path=path, key_fn=_key, num_output_shards=2)
+
+    assert stripped in fs.store, "successful shard did not commit its output"
+    assert stripped not in fs.aborted
+    assert not fs.open_uploads, "upload left open after a successful write"
+
+
+def test_scatter_removes_partial_file_on_write_failure(tmp_path):
+    """A local shard whose item stream fails mid-write leaves no partial file."""
+    data_path = str(tmp_path / "shard-0000.shuffle")
+
+    def failing_items():
+        yield {"k": "a"}
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        _write_scatter(failing_items(), source_shard=0, data_path=data_path, key_fn=_key, num_output_shards=2)
+
+    assert not os.path.exists(data_path), "failed shard left a partial scatter file"
