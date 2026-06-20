@@ -229,8 +229,13 @@ class CausalSelfAttention(eqx.Module):
             d=hd,
         )
         # Rope-bearing K (shared across heads): (B, S, half) → broadcast to (B, S, NH, half).
+        # ``w_kr`` is sharded P("data", None) so its output lacks ``model`` on the heads
+        # dim; ``k_nr`` (from w_uk_nr sharded P(None, "model")) has ``model`` on heads.
+        # Reshard k_r to the canonical attention layout so the post-rope concat with
+        # k_nr sees matching shardings.
         k_r = jnp.einsum("bsh,hd->bsd", x, self.w_kr)
         k_r = jnp.broadcast_to(k_r[:, :, None, :], (k_r.shape[0], seq_len, nh, half))
+        k_r = reshard(k_r, P(_BATCH_AXES, None, "model", None))
 
         q = rms_norm(q)
         k_nr = rms_norm(k_nr)
@@ -239,7 +244,13 @@ class CausalSelfAttention(eqx.Module):
         # Half-RoPE on the rope-bearing half of Q and on the shared k_r.
         q_r, q_nr = q[..., :half], q[..., half:]
         q_r, k_r = apply_rotary_embedding(q_r, k_r, seq_len=seq_len, head_dim=half, rope=self.cfg.rope)
+        # The slice + rope + concat path can drop the ``model`` annotation off the
+        # heads dim. Force the canonical layout on both Q and K so the K concat below
+        # sees matching shardings on ``k_r`` and ``k_nr``.
         q = jnp.concatenate([q_r, q_nr], axis=-1)
+        q = reshard(q, P(_BATCH_AXES, None, "model", None))
+        k_r = reshard(k_r, P(_BATCH_AXES, None, "model", None))
+        k_nr = reshard(k_nr, P(_BATCH_AXES, None, "model", None))
         k = jnp.concatenate([k_r, k_nr], axis=-1)
 
         q = q * self.cfg.qk_mult
