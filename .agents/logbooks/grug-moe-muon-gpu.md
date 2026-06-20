@@ -2081,3 +2081,31 @@ Post-compile steps were stable around 0.65-0.66s:
   - Route B does not materially beat Route A. Direct apply avoids building an explicit FSDP update tree, but the measured cost is dominated by packed replica fanout rather than Optax tree application.
   - R4 is slower than R2 (`~0.314s` vs `~0.232s`) because each device starts with a smaller grouped shard but needs the same FSDP output slice, so the replica fanout receive grows. The packed all-gather path is the remaining expensive boundary.
 - Next action: keep the production path conservative: grouped MuonH compute, then Route A back to ordinary FSDP updates and `optax.apply_updates`. For material speedup beyond this harness result, Socrates should target a lower-level grouped-to-FSDP bridge or overlap strategy for the packed all-gather/fanout itself.
+
+### 2026-06-20 05:09 PDT - Production Grug MoE packed-entry validation at R2
+- Hypothesis: Now that the harness proves both FSDP/MuonH boundaries avoid per-leaf collective explosion, the conservative production path should at least run end-to-end with FSDP master params, grouped MuonH compute, grouped updates restored to FSDP-shaped updates, and ordinary `optax.apply_updates`.
+- Change:
+  - Commit `c9bfbaee2` wires `MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY` through `experiments/grug/moe/launch_cw_may_d2560.py` and `experiments/grug/moe/run_cw_may_d2560.sh`.
+  - The launch path now supports `--expert-grouped-muonh-packed-entry true`, which selects the packed-entry grouped MuonH production optimizer path.
+- Validation before launch:
+  - `uv run pytest experiments/grug/moe/test_optimizer.py -k 'packed_entry or grouped_expert_muonh_optimizer_returns_fsdp_updates_before_apply or packs_multi_chunk_restore_boundary' -q` -> 4 passed.
+  - Dry-run wrapper summary confirmed `expert_grouped_muonh_packed_entry: true`.
+  - `./infra/pre-commit.py --changed-files --fix` passed.
+- Run:
+  - Iris parent `/dlwh/iris-run-job-20260620-115017`; child `/dlwh/iris-run-job-20260620-115017/grug-train-GM2560-MAY-197S4096-W2048-B16-R2-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-CURRENT-THROUGHPUT-N2-cw-20260620-1150`.
+  - W&B `marin-community/marin_moe/GM2560-MAY-197S4096-W2048-B16-R2-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-CURRENT-THROUGHPUT-N2-cw-20260620-1150`.
+  - Config: 2 H100 nodes, `replica_axis=2`, `data_axis=1`, `expert_axis=8`, `model_axis=1`, batch 16, seq 4096, sliding window 2048, 8 train steps, Pallas CE, ring MoE, FA4 CuTe attention, bf16 params/compute/output, `optimizer=muonh`, `expert_3d_optimizer=grouped_muonh`, `expert_grouped_muonh_group_size=2`, `expert_grouped_muonh_packed_entry=true`, MuonH3 with bf16 NS compute.
+- Result:
+  - Parent and child jobs both succeeded with `failure_count=0`; both GPU tasks exited 0.
+  - W&B finished at `global_step=7`.
+  - Mesh log confirmed `{'replica_dcn': 2, 'data': 1, 'expert': 8, 'model': 1}; batch_shards=16`.
+  - Steps 0 and 1 were compile/autotune polluted: `~446.8s` and `~440.4s`.
+  - Warm steps 2-7 averaged `2.08290s`, `31466.6 tokens/s`, and `3.40268 MFU`. Final step 7 was `2.05934s`, `31823.8 tokens/s`, `3.44131 MFU`, `train/loss=3.10720`.
+  - Shutdown emitted `WatchTasksAsync` connection-refused/CANCELLED warnings after the final metrics, consistent with normal JAX distributed teardown; Iris still marked the child succeeded.
+- Interpretation:
+  - This is an important positive correctness/integration result: the packed-entry grouped MuonH path runs end-to-end in the production Grug MoE training loop with FSDP master params and ordinary apply semantics.
+  - It is also a negative performance result. The production path is far slower than the isolated boundary harness would predict, and much slower than the non-Muon R2/B16 reference lane. The harness shows no per-leaf collective explosion in the two explicit boundaries, so the production slowdown likely comes from an unoptimized interaction inside the full train step: repeated boundary use, synchronization placement, lost batching, poor overlap, or extra tree/materialization work around the optimizer path.
+  - The goal is therefore not complete. The next step should be to profile or instrument the production packed-entry path to find where the extra ~2s step cost is coming from, while Socrates continues lower-level bridge work for the grouped-to-FSDP fanout.
+- Next action:
+  - Record this result on #6493 as a successful integration / failed performance-preservation milestone.
+  - Do not move to R4 production until R2 production overhead is explained or a lower-level boundary primitive changes the expected cost.
