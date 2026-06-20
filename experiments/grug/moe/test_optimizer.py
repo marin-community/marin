@@ -201,6 +201,20 @@ def test_may_optimizer_reads_muon_nesterov_env(monkeypatch):
     assert optimizer.nesterov is False
 
 
+def test_may_optimizer_reads_grouped_muonh_packed_entry_env(monkeypatch):
+    monkeypatch.setenv("MAY_OPTIMIZER", "muonh")
+    monkeypatch.setenv("MAY_EXPERT_3D_OPTIMIZER", "grouped_muonh")
+    monkeypatch.setenv("MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE", "4")
+    monkeypatch.setenv("MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY", "true")
+
+    optimizer = build_may_optimizer(batch_size=8, seq_len=4096)
+
+    assert isinstance(optimizer, GrugMoeMuonHConfig)
+    assert optimizer.expert_3d_optimizer == "grouped_muonh"
+    assert optimizer.expert_grouped_muonh_group_size == 4
+    assert optimizer.expert_grouped_muonh_packed_entry is True
+
+
 def test_grug_moe_sgd_update_is_stateless_and_matches_shapes():
     params = {
         "matrix": jnp.ones((4, 8), dtype=jnp.bfloat16),

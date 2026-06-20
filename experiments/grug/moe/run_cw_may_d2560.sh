@@ -49,6 +49,7 @@ MATCH_OPTIMIZER_SHARDING="${MAY_MATCH_OPTIMIZER_SHARDING:-true}"
 EXPERT_3D_OPTIMIZER="${MAY_EXPERT_3D_OPTIMIZER:-muonh}"
 ORDINARY_2D_OPTIMIZER="${MAY_ORDINARY_2D_OPTIMIZER:-muonh}"
 EXPERT_GROUPED_MUONH_GROUP_SIZE="${MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE:-}"
+EXPERT_GROUPED_MUONH_PACKED_ENTRY="${MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY:-false}"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 LIVE_PARAM_MODE="param"
 ATTENTION_IMPLEMENTATION="gpu_fa4_cute"
@@ -137,6 +138,8 @@ Options:
                             MAY_ORDINARY_2D_OPTIMIZER: muonh, adamh, adam, or sgd for ordinary non-expert 2D weights (default: muonh).
   --expert-grouped-muonh-group-size N
                             MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE for grouped_muonh; empty chooses replica_dcn*data.
+  --expert-grouped-muonh-packed-entry BOOL
+                            MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY for grouped_muonh (default: false).
   --mp POLICY               MAY_MP policy string.
   --live-param-mode MODE    MAY_LIVE_PARAM_MODE: param or compute_with_master (default: param).
   --attention NAME          MAY_ATTENTION_IMPLEMENTATION (default: gpu_fa4_cute).
@@ -338,6 +341,10 @@ while [ "$#" -gt 0 ]; do
             EXPERT_GROUPED_MUONH_GROUP_SIZE="$2"
             shift 2
             ;;
+        --expert-grouped-muonh-packed-entry)
+            EXPERT_GROUPED_MUONH_PACKED_ENTRY="$2"
+            shift 2
+            ;;
         --mp)
             MP="$2"
             shift 2
@@ -528,6 +535,7 @@ ENV_ARGS=(
     -e MAY_EXPERT_3D_OPTIMIZER "$EXPERT_3D_OPTIMIZER"
     -e MAY_ORDINARY_2D_OPTIMIZER "$ORDINARY_2D_OPTIMIZER"
     -e MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE "$EXPERT_GROUPED_MUONH_GROUP_SIZE"
+    -e MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY "$EXPERT_GROUPED_MUONH_PACKED_ENTRY"
     -e MAY_MP "$MP"
     -e MAY_LIVE_PARAM_MODE "$LIVE_PARAM_MODE"
     -e MAY_ATTENTION_IMPLEMENTATION "$ATTENTION_IMPLEMENTATION"
@@ -622,6 +630,7 @@ match_optimizer_sharding: $MATCH_OPTIMIZER_SHARDING
 expert_3d_optimizer: $EXPERT_3D_OPTIMIZER
 ordinary_2d_optimizer: $ORDINARY_2D_OPTIMIZER
 expert_grouped_muonh_group_size: ${EXPERT_GROUPED_MUONH_GROUP_SIZE:-auto}
+expert_grouped_muonh_packed_entry: $EXPERT_GROUPED_MUONH_PACKED_ENTRY
 attention: $ATTENTION_IMPLEMENTATION
 ce_implementation: ${CE_IMPLEMENTATION:-default}
 moe_implementation: $MOE_IMPLEMENTATION
