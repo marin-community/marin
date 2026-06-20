@@ -169,6 +169,7 @@ EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH = (
 )
 EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH = "expert_fsdp_grouped_packed_data_ppermute_apply_boundary"
 EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH = "expert_fsdp_packed_bank_a2a_apply_boundary"
+EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH = "expert_fsdp_packed_bank_direct_apply_boundary"
 EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH = "expert_fsdp_grads_to_grouped_chunks"
 EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH = "expert_fsdp_grads_to_packed_grouped_chunks"
 EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH = "expert_fsdp_grads_to_explicit_packed_grouped_chunks"
@@ -247,6 +248,7 @@ BENCH_KINDS = (
     EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
@@ -322,6 +324,7 @@ NS4D_DATA_SHARDED_BENCHES = (
     EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
@@ -381,6 +384,7 @@ GROUPED_APPLY_BOUNDARY_BENCHES = (
     EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
     EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
@@ -916,6 +920,7 @@ def ns4d_result_sharding(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Na
         EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
@@ -1045,6 +1050,7 @@ def grouped_expert_group_sizes_for_bench(config: BenchConfig, bench_kind: str) -
         EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_DIRECT_APPLY_BENCH,
@@ -3755,6 +3761,71 @@ def _packed_bank_update_to_fsdp_leaf_tuple_a2a(
     )(packed_update)
 
 
+def _packed_bank_update_apply_to_fsdp_leaf_tuple_a2a(
+    mesh: Mesh,
+    config: BenchConfig,
+    name: str,
+    params: tuple[jax.Array, ...],
+    packed_update: jax.Array,
+) -> tuple[jax.Array, ...]:
+    """Convert a packed grouped update bank and apply it directly to FSDP leaves."""
+
+    require_model_axis_one(config)
+    group_axis = _live_group_axis(mesh, config)
+    group_axis_names = group_axis if isinstance(group_axis, tuple) else (group_axis,) if group_axis else ()
+    input_spec = P(group_axis, "expert", None, None)
+    output_spec, data_sharded_axis = _fsdp_leaf_output_spec_for_expert_name(name)
+    data_axis_size = mesh_axis_size(mesh, "data")
+    replica_axis_size = mesh_axis_size(mesh, "replica_dcn")
+    if data_axis_size > 1 and "data" not in group_axis_names:
+        raise ValueError(
+            f"{EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH} needs the live group axis to include data."
+        )
+    if packed_update.shape[data_sharded_axis] % data_axis_size != 0:
+        raise ValueError(
+            f"{name} axis {data_sharded_axis} has size {packed_update.shape[data_sharded_axis]}, "
+            f"which must be divisible by data_axis={data_axis_size}."
+        )
+
+    def restore_and_apply_bank(local_update, *local_params):
+        if data_axis_size > 1:
+            with jax.named_scope(
+                f"muon_update_bench/{EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH}/{name}/data_a2a_to_fsdp"
+            ):
+                local_update = lax.all_to_all(
+                    local_update,
+                    axis_name="data",
+                    split_axis=data_sharded_axis,
+                    concat_axis=0,
+                    tiled=True,
+                )
+        if replica_axis_size > 1 and "replica_dcn" in group_axis_names:
+            with jax.named_scope(
+                f"muon_update_bench/{EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH}/{name}/replica_gather"
+            ):
+                local_update = lax.all_gather(local_update, axis_name="replica_dcn", axis=0, tiled=True)
+        if local_update.shape[0] != config.layers:
+            with jax.named_scope(
+                f"muon_update_bench/{EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH}/{name}/slice_valid_layers"
+            ):
+                local_update = local_update[: config.layers]
+        update_parts = tuple(
+            jnp.squeeze(update_part, axis=0) for update_part in jnp.split(local_update, config.layers, axis=0)
+        )
+        return tuple(
+            optax.apply_updates(param, update_part)
+            for param, update_part in zip(local_params, update_parts, strict=True)
+        )
+
+    return shard_map(
+        restore_and_apply_bank,
+        mesh=mesh,
+        in_specs=(input_spec, *tuple(output_spec for _ in range(config.layers))),
+        out_specs=tuple(output_spec for _ in range(config.layers)),
+        check_vma=False,
+    )(packed_update, *params)
+
+
 def expert_fsdp_packed_bank_updates_to_fsdp_tree(mesh: Mesh, config: BenchConfig, packed_updates):
     """Restore packed grouped expert updates to a normal FSDP update tree."""
 
@@ -3780,6 +3851,29 @@ def expert_fsdp_packed_bank_a2a_apply_outputs(mesh: Mesh, config: BenchConfig, p
     next_updates = expert_fsdp_packed_bank_updates_to_fsdp_tree(mesh, config, packed_updates)
     with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_a2a_apply/optax_apply_updates"):
         return optax.apply_updates(params, next_updates)
+
+
+def expert_fsdp_packed_bank_direct_apply_outputs(mesh: Mesh, config: BenchConfig, params, packed_updates):
+    """Apply packed grouped expert updates directly while restoring them to FSDP leaves."""
+
+    output_layers = [
+        {"mlp": {"expert_mlp": {name: None for name in synthetic_shapes(config)}}} for _ in range(config.layers)
+    ]
+    for name in synthetic_shapes(config):
+        param_parts = tuple(
+            params["layers"][layer_index]["mlp"]["expert_mlp"][name] for layer_index in range(config.layers)
+        )
+        output_parts = _packed_bank_update_apply_to_fsdp_leaf_tuple_a2a(
+            mesh,
+            config,
+            name,
+            param_parts,
+            packed_updates["packed"][name],
+        )
+        with jax.named_scope(f"muon_update_bench/expert_fsdp_packed_bank_direct_apply/{name}/restore_applied_leaves"):
+            for layer_index, output_part in enumerate(output_parts):
+                output_layers[layer_index]["mlp"]["expert_mlp"][name] = output_part
+    return {"layers": tuple(output_layers)}
 
 
 def expert_fsdp_packed_bank_muonh_updates_outputs(mesh: Mesh, config: BenchConfig, params, grads):
@@ -3994,6 +4088,22 @@ def expert_fsdp_packed_bank_a2a_apply_boundary_timing_step_factory(mesh: Mesh, c
     def update_step(params, packed_updates):
         with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_a2a_apply_boundary_timing_step"):
             return expert_fsdp_packed_bank_a2a_apply_outputs(mesh, config, params, packed_updates)
+
+    return update_step
+
+
+def expert_fsdp_packed_bank_direct_apply_boundary_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(params, packed_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_direct_apply_boundary_step"):
+            return expert_fsdp_packed_bank_direct_apply_outputs(mesh, config, params, packed_updates)
+
+    return update_step
+
+
+def expert_fsdp_packed_bank_direct_apply_boundary_timing_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(params, packed_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_direct_apply_boundary_timing_step"):
+            return expert_fsdp_packed_bank_direct_apply_outputs(mesh, config, params, packed_updates)
 
     return update_step
 
@@ -5386,6 +5496,8 @@ def ns4d_boundary_status(config: BenchConfig, bench_kind: str) -> str | None:
         return "expert_fsdp_params_grouped_updates_packed_data_ppermute_apply"
     if bench_kind == EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH:
         return "expert_fsdp_packed_bank_updates_a2a_apply"
+    if bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH:
+        return "expert_fsdp_packed_bank_updates_direct_apply"
     if bench_kind == EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH:
         return "expert_fsdp_grads_to_grouped_chunks"
     if bench_kind == EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH:
@@ -5517,6 +5629,7 @@ def is_expert_fsdp_grouped_boundary_bench(bench_kind: str) -> bool:
         EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
     )
 
@@ -5560,6 +5673,7 @@ def is_expert_fsdp_grouped_bench(bench_kind: str) -> bool:
         EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
         EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
@@ -6298,6 +6412,7 @@ def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
         EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
         EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
         EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
@@ -6453,6 +6568,7 @@ def estimated_boundary_phase_estimates(config: BenchConfig, bench_kind: str) -> 
         return []
     if bench_kind not in (
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
         EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
@@ -6467,7 +6583,10 @@ def estimated_boundary_phase_estimates(config: BenchConfig, bench_kind: str) -> 
         "fsdp_params_to_packed_grouped_bank": "FSDP params -> packed grouped bank",
         "packed_grouped_updates_to_fsdp_apply": "packed grouped updates -> FSDP apply layout",
     }
-    if bench_kind == EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH:
+    if bench_kind in (
+        EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+    ):
         phase_names = ("packed_grouped_updates_to_fsdp_apply",)
     elif bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH:
         phase_names = ("fsdp_grads_to_packed_grouped_bank", "packed_grouped_updates_to_fsdp_apply")
@@ -6507,6 +6626,8 @@ def boundary_primitive_name(bench_kind: str) -> str | None:
         return "fsdp_grads_to_explicit_packed_grouped_bank"
     if bench_kind == EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH:
         return "packed_grouped_updates_to_fsdp_apply"
+    if bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH:
+        return "packed_grouped_updates_to_fsdp_direct_apply"
     if bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
         return "fsdp_grads_to_explicit_packed_grouped_bank+whole_bank_muon_update+packed_grouped_updates_to_fsdp_apply"
     if bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH:
@@ -6667,6 +6788,7 @@ FSDP_GROUPED_APPLY_CORRECTNESS_BENCHES = (
     EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
 )
 
 
@@ -6898,6 +7020,10 @@ def fsdp_grouped_boundary_correctness_max_error(
         expected = reference_grouped_updates_apply(config, params, grouped_updates)
     elif bench_kind == EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH:
         update_step = jax.jit(expert_fsdp_packed_bank_a2a_apply_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_packed_bank_updates_apply(config, params, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_packed_bank_direct_apply_boundary_step_factory(mesh, config))
         actual = update_step(params, grouped_updates)
         expected = reference_packed_bank_updates_apply(config, params, grouped_updates)
     else:
@@ -7530,6 +7656,21 @@ def lower_ns4d(
             )
             assert_expert_fsdp_sharding(result_specs, "expert FSDP packed-bank a2a apply result")
             lower_args = None
+        elif bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH:
+            packed_specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_fsdp_packed_bank_direct_apply_boundary_step_factory(mesh, config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(update_step, specs, packed_specs)
+                lowered = update_step.lower(specs, packed_specs)
+            assert_packed_grouped_expert_bank_sharding(
+                packed_specs,
+                mesh,
+                config,
+                bench_kind,
+                "expert FSDP packed-bank direct apply updates",
+            )
+            assert_expert_fsdp_sharding(result_specs, "expert FSDP packed-bank direct apply result")
+            lower_args = None
         elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
             update_step = jax.jit(expert_fsdp_packed_bank_muonh_apply_step_factory(mesh, config))
             with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
@@ -7989,7 +8130,10 @@ def time_ns4d(
             updates = make_full_production_muonh_array_tree(mesh, config, bench_kind, seed=1)
         elif is_expert_fsdp_grads_to_grouped_chunks_bench(bench_kind):
             updates = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=1)
-        elif bench_kind == EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH:
+        elif bench_kind in (
+            EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+            EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+        ):
             updates = make_packed_grouped_expert_bank_tree(mesh, config, bench_kind, seed=1)
         elif bench_kind in (
             EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
@@ -8038,7 +8182,10 @@ def time_ns4d(
         result_sharding = ns4d_result_sharding(mesh, config, bench_kind)
         if is_expert_fsdp_grads_to_grouped_chunks_bench(bench_kind):
             assert_expert_fsdp_sharding(updates, "expert FSDP grads")
-        elif bench_kind == EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH:
+        elif bench_kind in (
+            EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+            EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+        ):
             assert_packed_grouped_expert_bank_sharding(
                 updates,
                 mesh,
@@ -8259,6 +8406,13 @@ def time_ns4d(
                 params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
                 update_step = jax.jit(
                     expert_fsdp_packed_bank_a2a_apply_boundary_timing_step_factory(mesh, config),
+                    donate_argnums=(0,),
+                )
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH:
+                params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
+                update_step = jax.jit(
+                    expert_fsdp_packed_bank_direct_apply_boundary_timing_step_factory(mesh, config),
                     donate_argnums=(0,),
                 )
                 lower_args = (params, updates)
