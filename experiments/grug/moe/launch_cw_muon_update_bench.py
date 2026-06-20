@@ -79,6 +79,7 @@ class MuonUpdateBenchLaunchConfig:
     compile_only: bool = False
     disable_abstract_mesh: bool = False
     allow_boundary_collectives: bool = False
+    require_no_boundary_collectives: bool = False
     write_compiled_hlo: bool = False
     profile: bool = False
     wandb: bool = False
@@ -177,6 +178,7 @@ def _run_args(config: MuonUpdateBenchLaunchConfig, profile_dir: Path | None) -> 
         output=None,
         disable_abstract_mesh=config.disable_abstract_mesh,
         allow_boundary_collectives=config.allow_boundary_collectives,
+        require_no_boundary_collectives=config.require_no_boundary_collectives,
         profile_dir=profile_dir,
     )
 
@@ -400,6 +402,7 @@ def build_step() -> ExecutorStep:
         compile_only=env_bool("MUON_BENCH_COMPILE_ONLY", False),
         disable_abstract_mesh=env_bool("MUON_BENCH_DISABLE_ABSTRACT_MESH", False),
         allow_boundary_collectives=env_bool("MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES", False),
+        require_no_boundary_collectives=env_bool("MUON_BENCH_REQUIRE_NO_BOUNDARY_COLLECTIVES", False),
         write_compiled_hlo=env_bool("MUON_BENCH_WRITE_COMPILED_HLO", False),
         profile=env_bool("MUON_BENCH_ENABLE_JAX_PROFILE", False),
         wandb=env_bool("MUON_BENCH_WANDB", False) or os.environ.get("MUON_BENCH_TRACKER", "").lower() == "wandb",

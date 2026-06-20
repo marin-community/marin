@@ -194,6 +194,15 @@ def test_cw_muon_update_bench_launcher_can_write_compiled_hlo(monkeypatch):
     assert step.config.write_compiled_hlo is True
 
 
+def test_cw_muon_update_bench_launcher_reads_strict_boundary_gate_env(monkeypatch):
+    monkeypatch.setenv("RUN_ID", "muon-update-bench-test")
+    monkeypatch.setenv("MUON_BENCH_REQUIRE_NO_BOUNDARY_COLLECTIVES", "true")
+
+    step = build_step()
+
+    assert step.config.require_no_boundary_collectives is True
+
+
 def test_cw_muon_update_bench_launcher_reads_wandb_env(monkeypatch):
     monkeypatch.setenv("RUN_ID", "muon-update-bench-test")
     monkeypatch.setenv("MUON_BENCH_TRACKER", "wandb")
