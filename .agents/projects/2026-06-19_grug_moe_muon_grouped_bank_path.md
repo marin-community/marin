@@ -160,6 +160,8 @@ New harness rows also report:
 
 - `estimated_boundary_replica_fanout_factor`
 - `estimated_boundary_requires_replica_fanout`
+- `estimated_boundary_replica_fanout_min_extra_per_device_bytes`
+- `estimated_boundary_replica_fanout_min_total_receive_bytes`
 
 These fields capture the inherent part of the bridge: grouped MuonH ownership
 over `replica_dcn` must fan out to FSDP leaves because expert FSDP params do not

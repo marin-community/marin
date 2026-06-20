@@ -3285,6 +3285,11 @@ def test_summary_row_reports_boundary_byte_estimates():
     assert estimates["all_gather_slice_peak_to_grouped_input_ratio"] == 4.0
     assert estimates["replica_fanout_factor"] == 2.0
     assert estimates["requires_replica_fanout"] is True
+    assert (
+        estimates["replica_fanout_min_extra_per_device_bytes"]
+        == estimates["fsdp_output_per_device_bytes"] - estimates["grouped_input_per_device_bytes"]
+    )
+    assert estimates["replica_fanout_min_total_receive_bytes"] == estimates["global_update_bytes"]
 
     group_estimates = [asdict(estimate) for estimate in estimate_grouping(config)]
     result = {
@@ -3319,6 +3324,14 @@ def test_summary_row_reports_boundary_byte_estimates():
     assert row["estimated_boundary_all_gather_slice_peak_to_grouped_input_ratio"] == 4.0
     assert row["estimated_boundary_replica_fanout_factor"] == 2.0
     assert row["estimated_boundary_requires_replica_fanout"] is True
+    assert (
+        row["estimated_boundary_replica_fanout_min_extra_per_device_bytes"]
+        == estimates["replica_fanout_min_extra_per_device_bytes"]
+    )
+    assert (
+        row["estimated_boundary_replica_fanout_min_total_receive_bytes"]
+        == estimates["replica_fanout_min_total_receive_bytes"]
+    )
 
     result["lowered"] = {
         "hlo": {

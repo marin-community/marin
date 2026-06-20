@@ -5782,6 +5782,8 @@ def estimated_boundary_byte_estimates(config: BenchConfig, bench_kind: str) -> d
     fsdp_output_per_device = global_bytes / (expert_axis * data_axis)
     all_gather_slice_peak_per_device = global_bytes / expert_axis
     replica_fanout = replica_axis if "replica_dcn" in config.ns4d_group_axis else 1
+    replica_fanout_min_extra_per_device = max(0.0, fsdp_output_per_device - grouped_input_per_device)
+    replica_fanout_min_total_receive = global_bytes * max(0, replica_fanout - 1)
     return {
         "global_update_bytes": float(global_bytes),
         "grouped_input_per_device_bytes": float(grouped_input_per_device),
@@ -5793,6 +5795,8 @@ def estimated_boundary_byte_estimates(config: BenchConfig, bench_kind: str) -> d
         ),
         "replica_fanout_factor": float(replica_fanout),
         "requires_replica_fanout": bool(replica_fanout > 1),
+        "replica_fanout_min_extra_per_device_bytes": float(replica_fanout_min_extra_per_device),
+        "replica_fanout_min_total_receive_bytes": float(replica_fanout_min_total_receive),
     }
 
 
@@ -8298,6 +8302,12 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         ),
         "estimated_boundary_replica_fanout_factor": boundary_bytes.get("replica_fanout_factor"),
         "estimated_boundary_requires_replica_fanout": boundary_bytes.get("requires_replica_fanout"),
+        "estimated_boundary_replica_fanout_min_extra_per_device_bytes": boundary_bytes.get(
+            "replica_fanout_min_extra_per_device_bytes"
+        ),
+        "estimated_boundary_replica_fanout_min_total_receive_bytes": boundary_bytes.get(
+            "replica_fanout_min_total_receive_bytes"
+        ),
         "grouped_expert_group_count": result["metadata"]["grouped_expert_group_count"],
         "grouped_chunks": sum(estimate["grouped_chunks"] for estimate in estimates),
         "chunks": [estimate["chunks"] for estimate in estimates],
