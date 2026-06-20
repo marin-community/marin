@@ -111,6 +111,15 @@ class GrugModelConfig:
     placement preserves the matrix-absorption inference optimization that lets
     MLA cache only ``c_kv + k_r`` at decode -- ``rms_norm(k_nr)`` would force a
     per-token reconstruction step at decode."""
+    qk_rope_head_dim: int | None = None
+    """When None (default), use the legacy half-RoPE convention: per head
+    head_dim is shared between Q/K/V, rope is applied to the first head_dim//2
+    channels of Q and to the shared rope-bearing K (also head_dim//2 wide).
+    When set, switch to DeepSeek-V2 additive-rope: per head Q and K have
+    ``head_dim + qk_rope_head_dim`` channels total (no-rope = head_dim,
+    additional rope = qk_rope_head_dim shared across heads); V stays at
+    head_dim. Activating this flag also switches normalisation to the
+    DeepSeek-strict scheme: ``rms_norm(c_kv)`` only, no QK norm on q/k/v."""
     max_seq_len: int = 4096
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
@@ -126,8 +135,11 @@ class GrugModelConfig:
 
     def __post_init__(self) -> None:
         hd = self.inferred_head_dim
-        if hd % 2 != 0:
+        # Half-RoPE requires even head_dim; additive-rope just requires a positive rope dim.
+        if self.qk_rope_head_dim is None and hd % 2 != 0:
             raise ValueError(f"head_dim must be even for half-RoPE; got {hd}")
+        if self.qk_rope_head_dim is not None and self.qk_rope_head_dim <= 0:
+            raise ValueError(f"qk_rope_head_dim must be positive when set; got {self.qk_rope_head_dim}")
         if self.vocab_size <= 0:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
@@ -166,24 +178,30 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
 
 
 class CausalSelfAttention(eqx.Module):
-    """Multi-head Latent Attention (DeepSeek-V2 style) with half-RoPE.
+    """Multi-head Latent Attention (DeepSeek-V2 style).
 
-    Per-token KV state factorises as:
-      - ``c_kv = x @ w_dkv`` (compressed latent of size ``d_c``).
-      - ``k_r = x @ w_kr`` (rope-bearing key, ``half`` dims, shared across heads).
-    At inference these two tensors are what gets cached; this implementation just
-    computes them on-the-fly. K's no-rope half and V are up-projected from c_kv
-    per head:
-      - ``k_nr = c_kv @ w_uk_nr`` reshaped to ``(B, S, NH, half)``.
-      - ``v    = c_kv @ w_uv`` reshaped to ``(B, S, NH, HD)``.
-    Q is projected directly (no Q-side compression for now).
+    Two architectural paths depending on ``cfg.qk_rope_head_dim``:
+
+    Legacy half-RoPE (``qk_rope_head_dim is None``):
+      Per head: Q/K/V each have width ``head_dim``. RoPE rotates the first
+      ``head_dim // 2`` channels of Q and the shared ``k_r`` (``half`` wide).
+      ``k_nr = c_kv @ w_uk_nr`` is ``half`` wide per head. K concat: ``[k_r, k_nr]``.
+
+    Additive rope (``qk_rope_head_dim`` set; DeepSeek-V2):
+      Per head: V is ``head_dim`` wide; Q and K are ``head_dim + rope_dim`` wide
+      (no-rope = ``head_dim``, rope = ``rope_dim`` added on top, shared across heads).
+      ``k_nr = c_kv @ w_uk_nope`` is ``head_dim`` wide per head. K concat:
+      ``[k_nope, k_rope_shared]``. Normalisation is DeepSeek-strict: rms_norm on
+      ``c_kv`` only, no QK norm on q/k/v.
+
+    Per-token KV state factorises as ``c_kv (d_c)`` + ``k_r (rope width)``.
     """
 
-    w_q: jax.Array  # (D, NH * HD)
+    w_q: jax.Array  # legacy (D, NH*HD); additive (D, NH * (HD + rope))
     w_dkv: jax.Array  # (D, d_c)
-    w_uk_nr: jax.Array  # (d_c, NH * half)
+    w_uk_nr: jax.Array  # legacy (d_c, NH*half); additive (d_c, NH*HD)  -- no-rope K up-proj
     w_uv: jax.Array  # (d_c, NH * HD)
-    w_kr: jax.Array  # (D, half)   -- rope-bearing K, shared across heads
+    w_kr: jax.Array  # legacy (D, half); additive (D, rope)
     w_o: jax.Array  # (NH * HD, D)
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -193,14 +211,27 @@ class CausalSelfAttention(eqx.Module):
         d = cfg.hidden_dim
         n = cfg.num_heads
         hd = cfg.inferred_head_dim
-        half = hd // 2
         d_c = cfg.inferred_kv_compression_dim
+
+        if cfg.qk_rope_head_dim is None:
+            # Legacy half-RoPE: rope is the first half of head_dim, baked in.
+            half = hd // 2
+            w_q_cols = n * hd
+            w_uk_nr_cols = n * half
+            w_kr_cols = half
+        else:
+            # Additive rope: extra rope channels added on top of head_dim per head.
+            rope_dim = cfg.qk_rope_head_dim
+            w_q_cols = n * (hd + rope_dim)
+            w_uk_nr_cols = n * hd
+            w_kr_cols = rope_dim
+
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * hd), cfg.initializer_std), P("data", "model")),
+            w_q=reshard(_init_weight(k_q, (d, w_q_cols), cfg.initializer_std), P("data", "model")),
             w_dkv=reshard(_init_weight(k_dkv, (d, d_c), cfg.initializer_std), P("data", None)),
-            w_uk_nr=reshard(_init_weight(k_uk, (d_c, n * half), cfg.initializer_std), P(None, "model")),
+            w_uk_nr=reshard(_init_weight(k_uk, (d_c, w_uk_nr_cols), cfg.initializer_std), P(None, "model")),
             w_uv=reshard(_init_weight(k_uv, (d_c, n * hd), cfg.initializer_std), P(None, "model")),
-            w_kr=reshard(_init_weight(k_kr, (d, half), cfg.initializer_std), P("data", None)),
+            w_kr=reshard(_init_weight(k_kr, (d, w_kr_cols), cfg.initializer_std), P("data", None)),
             w_o=reshard(_init_weight(k_o, (n * hd, d), cfg.initializer_std), P("model", "data")),
             cfg=cfg,
         )
@@ -212,26 +243,30 @@ class CausalSelfAttention(eqx.Module):
         mask: AttentionMask | jax.Array,
     ) -> Float[Array, "B S D"]:
         hd = self.cfg.inferred_head_dim
-        half = hd // 2
         nh = self.cfg.num_heads
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
+        rope_dim = self.cfg.qk_rope_head_dim
+        is_additive = rope_dim is not None
 
-        # Q: full projection per head.
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=hd)
+        # Q projection. Legacy: per-head HD. Additive: per-head (HD + rope_dim).
+        q_per_head = hd + rope_dim if is_additive else hd
+        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=q_per_head)
 
         # Compressed KV latent.
         c_kv = jnp.einsum("bsh,hc->bsc", x, self.w_dkv)
         # DeepSeek-V2 places RMSNorm on c_kv (the cached tensor) so that decode
-        # absorption (q_nr @ w_uk_nr.T into a fixed per-head matrix) still works.
-        if self.cfg.mla_norm_compressed:
+        # absorption (q_nope @ w_uk_nope.T into a fixed per-head matrix) still works.
+        if self.cfg.mla_norm_compressed or is_additive:
             c_kv = rms_norm(c_kv)
 
         # K no-rope half (per head) up-projected from c_kv.
+        # Legacy: per-head half. Additive: per-head HD.
+        k_nr_per_head = hd if is_additive else hd // 2
         k_nr = rearrange(
             jnp.einsum("bsc,cd->bsd", c_kv, self.w_uk_nr),
             "... (n d) -> ... n d",
-            d=half,
+            d=k_nr_per_head,
         )
         # V (per head) up-projected from c_kv.
         v = rearrange(
@@ -239,35 +274,49 @@ class CausalSelfAttention(eqx.Module):
             "... (n d) -> ... n d",
             d=hd,
         )
-        # Rope-bearing K (shared across heads): (B, S, half) → broadcast to (B, S, NH, half).
-        # ``w_kr`` is sharded P("data", None) so its output lacks ``model`` on the heads
-        # dim; ``k_nr`` (from w_uk_nr sharded P(None, "model")) has ``model`` on heads.
-        # Reshard k_r to the canonical attention layout so the post-rope concat with
-        # k_nr sees matching shardings.
+        # Rope-bearing K (shared across heads): width is half (legacy) or rope_dim (additive).
+        # Broadcast to (B, S, NH, rope_width). w_kr is P("data", None) so its output lacks
+        # ``model`` on the heads dim; k_nr has ``model`` on heads -> reshard k_r to match
+        # before the post-rope concat with k_nr.
+        rope_width = rope_dim if is_additive else hd // 2
         k_r = jnp.einsum("bsh,hd->bsd", x, self.w_kr)
-        k_r = jnp.broadcast_to(k_r[:, :, None, :], (k_r.shape[0], seq_len, nh, half))
+        k_r = jnp.broadcast_to(k_r[:, :, None, :], (k_r.shape[0], seq_len, nh, rope_width))
         k_r = reshard(k_r, P(_BATCH_AXES, None, "model", None))
 
-        q = rms_norm(q)
-        # k_nr is normalized post-up-projection in the legacy path (default).
-        # When ``mla_norm_compressed=True`` (DeepSeek recipe), the norm already
-        # ran on c_kv above, and we skip the per-head norm here so the matrix-
-        # absorption inference optimization stays intact.
-        if not self.cfg.mla_norm_compressed:
-            k_nr = rms_norm(k_nr)
-        k_r = rms_norm(k_r)
+        # Normalisation:
+        #   - Additive (DeepSeek-strict): only c_kv was normed above. No QK norm.
+        #   - Legacy with mla_norm_compressed=True: rms_norm(c_kv) ran above; rms_norm
+        #     on q and k_r still apply, skip k_nr to preserve absorption.
+        #   - Legacy with mla_norm_compressed=False: full per-tensor norms on q/k_nr/k_r.
+        if not is_additive:
+            q = rms_norm(q)
+            if not self.cfg.mla_norm_compressed:
+                k_nr = rms_norm(k_nr)
+            k_r = rms_norm(k_r)
 
-        # Half-RoPE on the rope-bearing half of Q and on the shared k_r.
-        q_r, q_nr = q[..., :half], q[..., half:]
-        q_r, k_r = apply_rotary_embedding(q_r, k_r, seq_len=seq_len, head_dim=half, rope=self.cfg.rope)
-        # The slice + rope + concat path can drop the ``model`` annotation off the
-        # heads dim. Force the canonical layout on both Q and K so the K concat below
-        # sees matching shardings on ``k_r`` and ``k_nr``.
-        q = jnp.concatenate([q_r, q_nr], axis=-1)
-        q = reshard(q, P(_BATCH_AXES, None, "model", None))
-        k_r = reshard(k_r, P(_BATCH_AXES, None, "model", None))
-        k_nr = reshard(k_nr, P(_BATCH_AXES, None, "model", None))
-        k = jnp.concatenate([k_r, k_nr], axis=-1)
+        # Apply RoPE.
+        if is_additive:
+            # Split Q into nope (HD) and rope (rope_dim) halves.
+            q_nope, q_r = q[..., :hd], q[..., hd:]
+            q_r, k_r = apply_rotary_embedding(q_r, k_r, seq_len=seq_len, head_dim=rope_dim, rope=self.cfg.rope)
+            q = jnp.concatenate([q_nope, q_r], axis=-1)
+            q = reshard(q, P(_BATCH_AXES, None, "model", None))
+            k_r = reshard(k_r, P(_BATCH_AXES, None, "model", None))
+            k_nr = reshard(k_nr, P(_BATCH_AXES, None, "model", None))
+            k = jnp.concatenate([k_nr, k_r], axis=-1)
+        else:
+            # Half-RoPE on the first head_dim//2 channels of Q and on the shared k_r.
+            half = hd // 2
+            q_r, q_nr = q[..., :half], q[..., half:]
+            q_r, k_r = apply_rotary_embedding(q_r, k_r, seq_len=seq_len, head_dim=half, rope=self.cfg.rope)
+            # The slice + rope + concat path can drop the ``model`` annotation off the
+            # heads dim. Force the canonical layout on both Q and K so the K concat below
+            # sees matching shardings on ``k_r`` and ``k_nr``.
+            q = jnp.concatenate([q_r, q_nr], axis=-1)
+            q = reshard(q, P(_BATCH_AXES, None, "model", None))
+            k_r = reshard(k_r, P(_BATCH_AXES, None, "model", None))
+            k_nr = reshard(k_nr, P(_BATCH_AXES, None, "model", None))
+            k = jnp.concatenate([k_r, k_nr], axis=-1)
 
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
