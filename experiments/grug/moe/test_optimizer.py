@@ -217,6 +217,18 @@ def test_may_optimizer_reads_grouped_muonh_packed_entry_env(monkeypatch):
     assert optimizer.expert_grouped_muonh_chunk_local_boundaries is True
 
 
+def test_may_grouped_muonh_defaults_to_packed_entry(monkeypatch):
+    monkeypatch.setenv("MAY_OPTIMIZER", "muonh")
+    monkeypatch.setenv("MAY_EXPERT_3D_OPTIMIZER", "grouped_muonh")
+
+    optimizer = build_may_optimizer(batch_size=8, seq_len=4096)
+
+    assert isinstance(optimizer, GrugMoeMuonHConfig)
+    assert optimizer.expert_3d_optimizer == "grouped_muonh"
+    assert optimizer.expert_grouped_muonh_packed_entry is True
+    assert optimizer.expert_grouped_muonh_chunk_local_boundaries is False
+
+
 def test_grug_moe_sgd_update_is_stateless_and_matches_shapes():
     params = {
         "matrix": jnp.ones((4, 8), dtype=jnp.bfloat16),
@@ -296,6 +308,7 @@ def test_grouped_expert_muonh_optimizer_returns_fsdp_updates_before_apply():
         backend_steps=1,
         expert_3d_optimizer="grouped_muonh",
         expert_grouped_muonh_group_size=4,
+        expert_grouped_muonh_packed_entry=False,
         max_grouped_stack_size=8,
         max_grad_norm=None,
     ).build(num_train_steps=8)
@@ -315,7 +328,7 @@ def test_grouped_expert_muonh_optimizer_returns_fsdp_updates_before_apply():
     hlo = str(lowered.compiler_ir(dialect="stablehlo"))
     assert hlo.count("stablehlo.all_reduce") == 0
     assert hlo.count("stablehlo.reduce_scatter") == 0
-    assert hlo.count("stablehlo.all_to_all") == 0
+    assert hlo.count("stablehlo.all_to_all") == 2
     assert hlo.count("stablehlo.all_gather") == 6
 
 
@@ -346,6 +359,7 @@ def test_grouped_expert_muonh_packs_multi_chunk_restore_boundary():
         backend_steps=1,
         expert_3d_optimizer="grouped_muonh",
         expert_grouped_muonh_group_size=4,
+        expert_grouped_muonh_packed_entry=False,
         max_grouped_stack_size=8,
         max_grad_norm=None,
     ).build(num_train_steps=8)
@@ -365,13 +379,13 @@ def test_grouped_expert_muonh_packs_multi_chunk_restore_boundary():
     hlo = str(lowered.compiler_ir(dialect="stablehlo"))
     assert hlo.count("stablehlo.all_reduce") == 0
     assert hlo.count("stablehlo.reduce_scatter") == 0
-    assert hlo.count("stablehlo.all_to_all") == 0
+    assert hlo.count("stablehlo.all_to_all") == 2
     assert hlo.count("stablehlo.all_gather") == 10
 
 
 def test_grouped_expert_muonh_packed_entry_boundary_is_explicit():
     mesh = AbstractMesh(
-        axis_sizes=(2, 2, 8, 1),
+        axis_sizes=(1, 4, 8, 1),
         axis_names=("replica_dcn", "data", "expert", "model"),
         axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
     )
@@ -416,8 +430,8 @@ def test_grouped_expert_muonh_packed_entry_boundary_is_explicit():
     hlo = str(lowered.compiler_ir(dialect="stablehlo"))
     assert hlo.count("stablehlo.all_reduce") == 0
     assert hlo.count("stablehlo.reduce_scatter") == 0
-    assert hlo.count("stablehlo.all_to_all") == 4
-    assert hlo.count("stablehlo.all_gather") == 2
+    assert hlo.count("stablehlo.all_to_all") == 6
+    assert hlo.count("stablehlo.all_gather") == 0
 
 
 def test_grouped_expert_muonh_chunk_local_boundary_is_explicit():

@@ -2361,3 +2361,41 @@ Post-compile steps were stable around 0.65-0.66s:
   - The primitive is no longer blocked on collective explosion. The remaining
     risk is end-to-end training integration and making sure we do not reintroduce
     per-leaf materialization before or after the packed boundary.
+
+### 2026-06-20 07:30 PDT - Production grouped MuonH restore uses packed-bank data A2A
+- Hypothesis: The benchmark harness result only helps training if the
+  production grouped MuonH transform uses the same packed-bank restore pattern.
+  The existing `packed_entry` production path still lowered to all-gathers on
+  the R2D2 abstract test mesh, so data-axis FSDP runs could silently miss the
+  harness winner.
+- Change:
+  - Updated `_packed_grouped_muonh_updates_to_fsdp_leaves` in
+    `experiments/grug/moe/optimizer.py` so grouped updates use data-axis
+    `all_to_all(split_axis=<FSDP data-sharded matrix axis>, concat_axis=0)` when
+    the live grouped axis includes `data`.
+  - Left a replica gather fallback for layouts where `replica_dcn` is part of
+    the grouped axis.
+  - Made `expert_grouped_muonh_packed_entry=True` the default for
+    `GrugMoeMuonHConfig` and `experiments/grug/moe/run_cw_may_d2560.sh`. This
+    only affects runs that explicitly choose `MAY_EXPERT_3D_OPTIMIZER=grouped_muonh`;
+    default May runs still use the ordinary `muonh` expert path.
+- Validation:
+  - `uv run pytest experiments/grug/moe/test_optimizer.py -q`:
+    `20 passed`.
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'packed_bank or launcher_reads_grouped_muonh_boundary_env or summary_row_reports_boundary_byte_estimates or strict_boundary_gate' -q`:
+    `16 passed, 90 deselected`.
+- Lowering evidence:
+  - Production grouped MuonH with `packed_entry=True` on an abstract
+    `replica_dcn=1,data=4,expert=8,model=1` mesh now lowers as
+    AG/AR/RS/A2A=`0/0/0/6` for the optimizer update path. That is the expected
+    three packed phases across two expert weight names:
+    grads-to-bank, params-to-bank, and updates-to-FSDP.
+  - The legacy non-packed production path remains worse and is now explicit in
+    tests: it still has all-gathers plus the improved data A2A restore.
+- Interpretation:
+  - The harness winner is now integrated into the production grouped MuonH
+    optimizer path for data-axis FSDP layouts.
+  - The remaining completion gaps are distributed correctness evidence below
+    the full-size 1 GiB cap and an end-to-end Grug MoE training run using
+    `MAY_EXPERT_3D_OPTIMIZER=grouped_muonh` with the new default packed-entry
+    path.

@@ -750,6 +750,7 @@ def _packed_grouped_muonh_updates_to_fsdp_leaves(
 
     mesh = param_sharding.mesh
     group_axis = _live_group_axis(mesh, target_spec[0])
+    group_axis_names = group_axis if isinstance(group_axis, tuple) else (group_axis,) if group_axis else ()
     data_axis = None
     for axis_index, axis_spec in enumerate(param_sharding.spec, start=1):
         if _axis_spec_contains(axis_spec, "data"):
@@ -757,6 +758,7 @@ def _packed_grouped_muonh_updates_to_fsdp_leaves(
             break
 
     data_axis_size = _mesh_axis_size(mesh, "data")
+    replica_axis_size = _mesh_axis_size(mesh, REPLICA_DCN_AXIS)
     if data_axis is not None and any(update.shape[data_axis] % data_axis_size != 0 for update in grouped_updates):
         restored = []
         for grouped_update, valid_size in zip(grouped_updates, valid_sizes, strict=True):
@@ -777,13 +779,26 @@ def _packed_grouped_muonh_updates_to_fsdp_leaves(
     output_spec = param_sharding.spec
 
     def restore_bank(local_update):
-        if data_axis is not None and data_axis_size > 1:
-            data_index = lax.axis_index("data")
-            local_axis_size = local_update.shape[data_axis] // data_axis_size
-            start = data_index * local_axis_size
-            local_update = lax.dynamic_slice_in_dim(local_update, start, local_axis_size, axis=data_axis)
-        if group_axis is not None:
-            local_update = lax.all_gather(local_update, axis_name=group_axis, axis=0, tiled=True)
+        if data_axis is not None and data_axis_size > 1 and "data" in group_axis_names:
+            with jax.named_scope("grouped_muonh/packed_restore/data_a2a_to_fsdp"):
+                local_update = lax.all_to_all(
+                    local_update,
+                    axis_name="data",
+                    split_axis=data_axis,
+                    concat_axis=0,
+                    tiled=True,
+                )
+        else:
+            if data_axis is not None and data_axis_size > 1:
+                data_index = lax.axis_index("data")
+                local_axis_size = local_update.shape[data_axis] // data_axis_size
+                start = data_index * local_axis_size
+                local_update = lax.dynamic_slice_in_dim(local_update, start, local_axis_size, axis=data_axis)
+            if group_axis is not None:
+                local_update = lax.all_gather(local_update, axis_name=group_axis, axis=0, tiled=True)
+        if replica_axis_size > 1 and REPLICA_DCN_AXIS in group_axis_names:
+            with jax.named_scope("grouped_muonh/packed_restore/replica_gather_to_fsdp"):
+                local_update = lax.all_gather(local_update, axis_name=REPLICA_DCN_AXIS, axis=0, tiled=True)
         if local_update.shape[0] != valid_total:
             local_update = local_update[:valid_total]
         return tuple(jnp.squeeze(update_part, axis=0) for update_part in jnp.split(local_update, valid_total, axis=0))
@@ -1171,7 +1186,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     max_grouped_stack_size: int = DEFAULT_MAX_GROUPED_STACK_SIZE
     ns_compute_dtype: str = "input"
     expert_grouped_muonh_group_size: int | None = None
-    expert_grouped_muonh_packed_entry: bool = False
+    expert_grouped_muonh_packed_entry: bool = True
     expert_grouped_muonh_chunk_local_boundaries: bool = False
 
     def build(self, num_train_steps):
