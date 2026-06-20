@@ -401,7 +401,7 @@ def scale_with_approx_prism_berkeley(
         else:
             updates = momentum_buffer
 
-        def transform_linear_layer(layer: haliax.nn.Linear, sketch: jax.Array | None):
+        def transform_linear_layer(layer: haliax.nn.Linear):
             assert layer.weight.ndim == 2
             transformed_weight_array = _prism_berkeley_approx_polar(
                 layer.weight.array,
@@ -424,7 +424,7 @@ def scale_with_approx_prism_berkeley(
                 ),
             )
 
-        transformed_updates = map_flattened_linear_layers(transform_linear_layer, updates, state.sketch_cache)
+        transformed_updates = map_flattened_linear_layers(transform_linear_layer, updates)
         return transformed_updates, ScaleByApproxPrismBerkeleyState(
             momentum_buffer=momentum_buffer,
         )
@@ -504,7 +504,7 @@ class PrismBerkeleyConfig(OptimizerConfig):
                         self.muon_epsilon,
                         self.use_omega_scaling,
                         self.use_kimi_scaling,
-                    )
+                    ),
                     optax.add_decayed_weights(weight_decay, self.build_weight_decay_mask()),
                     optax.scale(-learning_rate),
                 ]
