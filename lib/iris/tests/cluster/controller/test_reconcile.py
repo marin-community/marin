@@ -1120,6 +1120,7 @@ class _ScriptedProvider:
     script: list[Any] = field(default_factory=list)
     calls: list[tuple[list[WorkerReconcilePlan], dict]] = field(default_factory=list)
     name: str = "worker"
+    autoscaler: Any = None
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
     )
@@ -1132,7 +1133,7 @@ class _ScriptedProvider:
         raise NotImplementedError
 
     def attach_autoscaler(self, autoscaler) -> None:
-        pass
+        self.autoscaler = autoscaler
 
     def set_log_sink(self, *_args, **_kwargs):
         pass
@@ -1273,6 +1274,7 @@ class _UnreachableProvider:
     siblings: dict[str, list[str]] = field(default_factory=dict)
     autoscale_calls: list[list[WorkerId]] = field(default_factory=list)
     name: str = "worker"
+    autoscaler: Any = None
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
     )
@@ -1318,7 +1320,7 @@ class _UnreachableProvider:
         return AutoscaleResult(removed_workers=removed)
 
     def attach_autoscaler(self, autoscaler) -> None:
-        pass
+        self.autoscaler = autoscaler
 
     def get_process_status(self, *_args, **_kwargs):
         raise NotImplementedError
