@@ -1502,3 +1502,30 @@ Post-compile steps were stable around 0.65-0.66s:
 - Next action: Frame the next implementation as either:
   1. Megatron-like grouped ownership: persistent grouped expert banks, local grouped NS, explicit bulk sync to model-consumable FSDP/EP layout, or
   2. Dion-like coarse transport: a single grouped same-layout transport primitive that converts grouped optimizer banks to model-consumable layout without spelling per-leaf JAX reshards.
+
+### 2026-06-19 22:14 PDT - H100 grouped MuonH bank-consumer compile gate
+- Hypothesis: If the model-side expert consumer can keep the grouped expert-bank representation, the MuonH update plus an expert-like MLP consumer can avoid the grouped-to-FSDP restore boundary entirely. This should compile on H100 with zero grouped boundary collectives.
+- Command:
+  - `RUN_ID="MUON-BENCH-D2560-L26-R2E8-MUONHBANKCONSUMER-COMPILE-G8-N2-cw-$(date -u +%Y%m%d-%H%M%S)" MARIN_PREFIX=s3://marin-na/tmp/ttl=7d KUBECONFIG=$HOME/.kube/coreweave-iris-gpu MUON_BENCH_GPU_REPLICAS=2 MUON_BENCH_LAYERS=26 MUON_BENCH_REPLICA_AXIS=2 MUON_BENCH_DATA_AXIS=1 MUON_BENCH_EXPERT_AXIS=8 MUON_BENCH_MODEL_AXIS=1 MUON_BENCH_NS4D_GROUP_SIZE=8 MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn,data MUON_BENCH_KINDS=expert_grouped_muonh_bank_consumer MUON_BENCH_SWEEP_BACKEND_STEPS=3 MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 MUON_BENCH_DTYPE=bf16 MUON_BENCH_NS_COMPUTE_DTYPE=bf16 MUON_BENCH_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT=1 MUON_BENCH_WARMUP=0 MUON_BENCH_ITERS=0 MUON_BENCH_MODE=both MUON_BENCH_COMPILE_ONLY=true MUON_BENCH_TRACKER=json MUON_BENCH_ENABLE_JAX_PROFILE=false MUON_BENCH_REQUIRE_NO_BOUNDARY_COLLECTIVES=true MUON_BENCH_DISABLE_ABSTRACT_MESH=true MUON_BENCH_WRITE_COMPILED_HLO=true MUON_BENCH_WORKER_CPU=8 MUON_BENCH_WORKER_RAM=256g XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 bash scratch/muon_update_bench_fast_loop.sh iris fullprod-r4e8-l26-h3`
+- Config:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-050828`.
+  - Child Iris job: `/dlwh/iris-run-job-20260620-050828/grug-train-MUON-BENCH-D2560-L26-R2E8-MUONHBANKCONSUMER-COMPILE-G8-N2-cw-20260620-050825`.
+  - Output prefix: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2E8-MUONHBANKCONSUMER-COMPILE-G8-N2-cw-20260620-050825-2345bf`.
+  - Shape: 2 H100 nodes, L26, R2/D1/E8/M1, `ns4d_group_size=8`, `ns4d_group_axis=replica_dcn,data`, grouped expert consumer tokens per expert = 1, bf16 params/NS compute, compile-only, concrete mesh.
+- Result:
+  - Iris parent succeeded with exit 0, failures 0, duration about 2m39s.
+  - The grouped expert-bank consumer row lowered with `AG/A2A/AR/RS/CP = 0/0/0/0/0` and compiled with `AG/A2A/AR/RS/CP = 0/0/0/0/0` on both H100 tasks.
+  - Compiled HLO had `custom_call = 360` and `gpu_gemm_custom_call = 175`.
+  - Compile time was about `6.55s` on task 1 and `7.49s` on task 0.
+  - Estimated NS dot flops were `2.4289348681728e15`; estimated matrix count was `26624`.
+  - With `data_axis=1`, the actual grouped sharding spec was `P('replica_dcn', 'expert', None, None)`. This is the expected R2/E8 specialization of the intended `P(('replica_dcn', 'data'), 'expert', None, None)` shape.
+- Caveat:
+  - The outer Iris executor wrapper did not pass `MUON_BENCH_REQUIRE_NO_BOUNDARY_COLLECTIVES`, so the H100 row reported `boundary_collectives_required_absent=false` even though the observed compiled collectives were zero and `allow_boundary_collectives=false`.
+  - Fixed in `scratch/launch_muon_update_bench_executor_n1.sh` by forwarding `MUON_BENCH_REQUIRE_NO_BOUNDARY_COLLECTIVES`.
+  - Local validation after the fix:
+    - `bash -n scratch/launch_muon_update_bench_executor_n1.sh scratch/muon_update_bench_fast_loop.sh` passed.
+    - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'launch_config_reads_env or grouped_muonh_bank_consumer'` passed with `1 passed`.
+    - Forced-host strict smoke passed with `boundary_collectives_required_absent=true` and lowered/compiled `AG/A2A/AR/RS/CP = 0/0/0/0/0`:
+      - `XLA_FLAGS=--xla_force_host_platform_device_count=8 uv run python experiments/grug/moe/muon_update_bench.py --layers 4 --ns4d-group-size 4 --ns4d-group-axis replica_dcn,data --hidden-dim 16 --intermediate-dim 8 --num-experts 8 --backend-steps 1 --replica-axis 2 --data-axis 2 --expert-axis 2 --model-axis 1 --max-grouped-stack-size 8 --grouped-expert-consumer-tokens-per-expert 3 --bench-kinds expert_grouped_muonh_bank_consumer --mode both --warmup 0 --iters 0 --compile-only --disable-abstract-mesh --require-no-boundary-collectives --output /tmp/muon_grouped_muonh_bank_consumer_strict.json`
+- Interpretation: This is the first H100 evidence that a persistent grouped expert-bank representation can survive both MuonH and an expert-like consumer without compiled boundary collectives. It does not prove the ordinary FSDP-master/`optax.apply_updates` bridge; it argues for porting the real expert MLP consumer to grouped banks or adding an explicit coarse transport boundary.
+- Next action: Treat the grouped bank consumer as the next production path. The real integration target is no longer another per-leaf grouped-to-FSDP restore variant; it is either a grouped expert-bank model consumer or a custom coarse transport that behaves like the grouped bank consumer rather than like per-leaf FSDP restore.

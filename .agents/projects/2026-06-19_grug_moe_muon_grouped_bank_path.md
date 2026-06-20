@@ -44,6 +44,7 @@ The FSDP-master grouped-boundary path has not met the bar:
 | `jax.custom_partitioning` restore stub | R2/E8, L26, 2 H100 nodes | lowered as 26 custom calls, but compiled GPU HLO inlined back to 26 all-gathers |
 | direct restore-and-apply at FSDP leaves | R2/E8, L26, 2 H100 nodes | compiled to the same 8 all-gathers as restore-then-`optax.apply_updates` |
 | persistent grouped expert params/apply | R2/E8, L26, 2 H100 nodes | compiled with zero AG/A2A/AR/RS/CP |
+| grouped MuonH plus grouped expert-bank consumer | R2/E8, L26, 2 H100 nodes | compiled with zero AG/A2A/AR/RS/CP and 175 GPU GEMM custom calls |
 
 Conclusion: preserving grouped params/updates/results is fast; converting
 grouped updates back to ordinary per-layer FSDP leaves in the hot path is not.
@@ -56,6 +57,10 @@ The two latest H100 compile-only checks tighten this conclusion:
   but it does not reduce the grouped-to-FSDP collective count. It should stay a
   diagnostic path unless a runtime profile shows a separate overlap/memory
   benefit.
+- A grouped expert-bank consumer avoids the grouped-to-FSDP restore entirely in
+  the synthetic gate. On 2 H100 nodes it compiled with zero boundary
+  collectives, which is the first evidence that the persistent grouped-bank
+  representation can survive both MuonH and an expert-like consumer.
 
 The harness now reports boundary byte estimates for these rows. For the
 R2/D2/E8 May shape, the FSDP output shard is already 2x the grouped input shard
@@ -114,14 +119,21 @@ explicitly.
 
 ## Next Integration Gate
 
-Do not launch another full training profile from this path until this gate
-passes. The harness now has an initial `expert_grouped_bank_consumer` bench for
-this purpose: it consumes grouped expert banks with grouped
+Do not launch another full training profile from this path until this gate is
+ported into the real model path. The harness now has an initial
+`expert_grouped_bank_consumer` bench for this purpose: it consumes grouped expert
+banks with grouped
 `[group, expert, token, hidden]` activations and runs the gate/up and down
 expert MLP matmuls without restoring per-layer FSDP leaves.
 
-Build a synthetic model-consumer gate that keeps expert weights grouped through
-the consumer boundary:
+The synthetic `expert_grouped_muonh_bank_consumer` compile-only gate has now
+passed on 2 H100 nodes for R2/E8/L26 with zero compiled AG/A2A/AR/RS/CP. The
+remaining integration work is to make the real `MoEExpertMlp`/`MoEMLP` path
+consume this representation, or to add an explicit coarse transport if we keep
+ordinary FSDP leaves.
+
+Build the real model-consumer path that keeps expert weights grouped through the
+consumer boundary:
 
 1. Represent routed expert weights as grouped banks:
    - `blocks[*].mlp.expert_mlp.w_gate_up`: `[group, E, D, I2]`
