@@ -3084,6 +3084,33 @@ def test_summary_row_reports_boundary_byte_estimates():
     assert row["estimated_boundary_fsdp_output_to_grouped_input_ratio"] == 2.0
     assert row["estimated_boundary_all_gather_slice_peak_to_grouped_input_ratio"] == 4.0
 
+    result["lowered"] = {
+        "hlo": {
+            "dot_general": 0,
+            "batched_stack_dot_general": 0,
+            "two_batch_axis_dot_general": 0,
+            "custom_call": 0,
+            "gpu_gemm_custom_call": 0,
+            "all_gather": 4,
+            "all_reduce": 0,
+            "reduce_scatter": 0,
+            "all_to_all": 2,
+            "collective_permute": 0,
+        },
+        "lower_seconds": 1.0,
+    }
+    row = summary_row(result)
+
+    assert (
+        row["estimated_boundary_lowered_all_gather_slice_peak_per_all_gather_bytes"]
+        == estimates["all_gather_slice_peak_per_device_bytes"] / 4
+    )
+    assert (
+        row["estimated_boundary_lowered_fsdp_output_per_all_to_all_bytes"]
+        == estimates["fsdp_output_per_device_bytes"] / 2
+    )
+    assert row["estimated_boundary_lowered_global_update_per_collective_bytes"] == estimates["global_update_bytes"] / 6
+
     real_grouped_estimates = estimated_boundary_byte_estimates(
         config,
         REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH,
@@ -3101,6 +3128,35 @@ def test_summary_row_reports_boundary_byte_estimates():
         row["estimated_boundary_all_gather_slice_peak_per_device_bytes"]
         == estimates["all_gather_slice_peak_per_device_bytes"]
     )
+
+    result["timing"] = {
+        "timing": {
+            "compile_seconds": 1.0,
+            "compiled_hlo": {
+                "dot_general": 0,
+                "batched_stack_dot_general": 0,
+                "two_batch_axis_dot_general": 0,
+                "custom_call": 0,
+                "gpu_gemm_custom_call": 0,
+                "all_gather": 8,
+                "all_reduce": 0,
+                "reduce_scatter": 0,
+                "all_to_all": 0,
+                "collective_permute": 0,
+            },
+            "median_seconds": 1.0,
+            "mean_seconds": 1.0,
+            "min_seconds": 1.0,
+        }
+    }
+    row = summary_row(result)
+
+    assert (
+        row["estimated_boundary_compiled_all_gather_slice_peak_per_all_gather_bytes"]
+        == estimates["all_gather_slice_peak_per_device_bytes"] / 8
+    )
+    assert row["estimated_boundary_compiled_fsdp_output_per_all_to_all_bytes"] is None
+    assert row["estimated_boundary_compiled_global_update_per_collective_bytes"] == estimates["global_update_bytes"] / 8
 
 
 def test_grouped_4d_hyperball_projects_each_group_expert_matrix_independently():

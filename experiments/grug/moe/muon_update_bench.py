@@ -5476,6 +5476,34 @@ def estimated_boundary_byte_estimates(config: BenchConfig, bench_kind: str) -> d
     }
 
 
+def boundary_collective_payload_estimates(
+    boundary_bytes: dict[str, float],
+    hlo_summary: dict[str, Any] | None,
+) -> dict[str, float | None]:
+    if not boundary_bytes or not hlo_summary:
+        return {
+            "all_gather_slice_peak_per_all_gather_bytes": None,
+            "fsdp_output_per_all_to_all_bytes": None,
+            "global_update_per_collective_bytes": None,
+        }
+
+    all_gather = hlo_summary.get("all_gather") or 0
+    all_to_all = hlo_summary.get("all_to_all") or 0
+    collective_count = all_gather + all_to_all
+    all_gather_slice_peak = boundary_bytes.get("all_gather_slice_peak_per_device_bytes")
+    fsdp_output = boundary_bytes.get("fsdp_output_per_device_bytes")
+    global_update = boundary_bytes.get("global_update_bytes")
+    return {
+        "all_gather_slice_peak_per_all_gather_bytes": (
+            all_gather_slice_peak / all_gather if all_gather and all_gather_slice_peak else None
+        ),
+        "fsdp_output_per_all_to_all_bytes": fsdp_output / all_to_all if all_to_all and fsdp_output else None,
+        "global_update_per_collective_bytes": (
+            global_update / collective_count if collective_count and global_update else None
+        ),
+    }
+
+
 def estimated_tflops(flops: int, seconds: float | None) -> float | None:
     if seconds is None or seconds <= 0:
         return None
@@ -7795,24 +7823,36 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         row.update({"skipped": True, "skip_reason": result["skipped"]["reason"]})
         return row
     if "lowered" in result:
+        lowered_hlo = result["lowered"]["hlo"]
+        lowered_boundary_payloads = boundary_collective_payload_estimates(boundary_bytes, lowered_hlo)
         row.update(
             {
-                "dot_general": result["lowered"]["hlo"]["dot_general"],
-                "batched_stack_dot_general": result["lowered"]["hlo"]["batched_stack_dot_general"],
-                "two_batch_axis_dot_general": result["lowered"]["hlo"]["two_batch_axis_dot_general"],
-                "custom_call": result["lowered"]["hlo"]["custom_call"],
-                "gpu_gemm_custom_call": result["lowered"]["hlo"]["gpu_gemm_custom_call"],
-                "all_gather": result["lowered"]["hlo"]["all_gather"],
-                "all_reduce": result["lowered"]["hlo"]["all_reduce"],
-                "reduce_scatter": result["lowered"]["hlo"]["reduce_scatter"],
-                "all_to_all": result["lowered"]["hlo"]["all_to_all"],
-                "collective_permute": result["lowered"]["hlo"]["collective_permute"],
+                "dot_general": lowered_hlo["dot_general"],
+                "batched_stack_dot_general": lowered_hlo["batched_stack_dot_general"],
+                "two_batch_axis_dot_general": lowered_hlo["two_batch_axis_dot_general"],
+                "custom_call": lowered_hlo["custom_call"],
+                "gpu_gemm_custom_call": lowered_hlo["gpu_gemm_custom_call"],
+                "all_gather": lowered_hlo["all_gather"],
+                "all_reduce": lowered_hlo["all_reduce"],
+                "reduce_scatter": lowered_hlo["reduce_scatter"],
+                "all_to_all": lowered_hlo["all_to_all"],
+                "collective_permute": lowered_hlo["collective_permute"],
+                "estimated_boundary_lowered_all_gather_slice_peak_per_all_gather_bytes": lowered_boundary_payloads[
+                    "all_gather_slice_peak_per_all_gather_bytes"
+                ],
+                "estimated_boundary_lowered_fsdp_output_per_all_to_all_bytes": lowered_boundary_payloads[
+                    "fsdp_output_per_all_to_all_bytes"
+                ],
+                "estimated_boundary_lowered_global_update_per_collective_bytes": lowered_boundary_payloads[
+                    "global_update_per_collective_bytes"
+                ],
                 "lower_seconds": result["lowered"]["lower_seconds"],
             }
         )
     if "timing" in result:
         timing = result["timing"]["timing"]
         compiled_hlo = timing["compiled_hlo"]
+        compiled_boundary_payloads = boundary_collective_payload_estimates(boundary_bytes, compiled_hlo)
         mean_tflops = estimated_tflops(flops, timing["mean_seconds"])
         median_tflops = estimated_tflops(flops, timing["median_seconds"])
         row.update(
@@ -7829,6 +7869,15 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                 "compiled_hlo_reduce_scatter": compiled_hlo["reduce_scatter"] if compiled_hlo else None,
                 "compiled_hlo_all_to_all": compiled_hlo["all_to_all"] if compiled_hlo else None,
                 "compiled_hlo_collective_permute": compiled_hlo["collective_permute"] if compiled_hlo else None,
+                "estimated_boundary_compiled_all_gather_slice_peak_per_all_gather_bytes": compiled_boundary_payloads[
+                    "all_gather_slice_peak_per_all_gather_bytes"
+                ],
+                "estimated_boundary_compiled_fsdp_output_per_all_to_all_bytes": compiled_boundary_payloads[
+                    "fsdp_output_per_all_to_all_bytes"
+                ],
+                "estimated_boundary_compiled_global_update_per_collective_bytes": compiled_boundary_payloads[
+                    "global_update_per_collective_bytes"
+                ],
                 "median_seconds": timing["median_seconds"],
                 "mean_seconds": timing["mean_seconds"],
                 "min_seconds": timing["min_seconds"],
