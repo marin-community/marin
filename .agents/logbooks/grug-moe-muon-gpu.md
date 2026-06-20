@@ -2322,3 +2322,42 @@ Post-compile steps were stable around 0.65-0.66s:
   - If R1D4 stays around the same per-boundary latency, the primitive is
     probably bounded by cross-host all-to-all latency/bandwidth and may need a
     lower-level packed transport or overlap rather than more XLA reshaping.
+
+### 2026-06-20 06:49 PDT - R1D4 packed-bank boundary primitives
+- Hypothesis: Increasing the FSDP `data` axis from 2 to 4 should keep the
+  packed-bank boundary lowering clean and should reduce per-device transfer
+  size. If the primitive is viable, it should still compile to a small constant
+  number of coarse collectives.
+- Runs:
+  - `/dlwh/iris-run-job-20260620-134339`:
+    `MUON-BENCH-D2560-L26-R1D4E8-N4-G8-GRADSPACKBANK-cw-20260620-134337`.
+  - `/dlwh/iris-run-job-20260620-134355`:
+    `MUON-BENCH-D2560-L26-R1D4E8-N4-G8-H3-APPLYROUTES-cw-20260620-134353`.
+- Config:
+  - Four H100 nodes, `replica_axis=1`, `data_axis=4`, `expert_axis=8`,
+    `model_axis=1`, `ns4d_group_axis=data`, group size 8, 26 layers, bf16,
+    backend steps 3.
+- Results:
+
+| Primitive | Mean seconds | Median seconds | Compiled collectives | Estimated global bytes | Estimated grouped/FSDP per-device | Estimated peak/device | Effective global GB/s |
+|---|---:|---:|---|---:|---:|---:|---:|
+| FSDP grads -> packed grouped bank | `0.08137` | `0.08134-0.08138` | AG/AR/RS/A2A=`0/0/0/2` | `121.875 GiB` | `3.80859375 GiB` | `15.234375 GiB` | `~1608` |
+| packed grouped updates -> FSDP update tree -> `optax.apply_updates` | `0.08417-0.08421` | `0.08414-0.08419` | AG/AR/RS/A2A=`0/0/0/2` | `121.875 GiB` | `3.80859375 GiB` | `15.234375 GiB` | `~1554` |
+| packed grouped updates + FSDP params -> updated FSDP params directly | `0.08533-0.08541` | `0.08419-0.08564` | AG/AR/RS/A2A=`0/0/0/2` | `121.875 GiB` | `3.80859375 GiB` | `15.234375 GiB` | `~1532-1534` |
+
+- Correctness:
+  - Full-size correctness was skipped by the 1 GiB cap for all three rows.
+- Interpretation:
+  - R1D4 preserves the desired structural property: no compiled all-gather,
+    all-reduce, or reduce-scatter, and exactly two all-to-alls for each logical
+    boundary.
+  - The R1D4 boundary halves are roughly 2x faster than R1D2 because the
+    per-device grouped/FSDP payload halves from `7.6171875 GiB` to
+    `3.80859375 GiB`.
+  - Route A remains at least as good as Route B. There is still no evidence
+    that direct apply is worth taking on integration complexity; the pragmatic
+    path is still grouped-bank transport back to an FSDP update tree followed
+    by normal `optax.apply_updates`.
+  - The primitive is no longer blocked on collective explosion. The remaining
+    risk is end-to-end training integration and making sure we do not reintroduce
+    per-leaf materialization before or after the packed boundary.
