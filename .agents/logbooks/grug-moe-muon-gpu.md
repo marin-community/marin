@@ -2109,3 +2109,21 @@ Post-compile steps were stable around 0.65-0.66s:
 - Next action:
   - Record this result on #6493 as a successful integration / failed performance-preservation milestone.
   - Do not move to R4 production until R2 production overhead is explained or a lower-level boundary primitive changes the expected cost.
+
+### 2026-06-20 05:33 PDT - Production grouped MuonH R2 group-size comparison
+- Hypothesis: The poor production packed-entry result might be caused by `expert_grouped_muonh_group_size=2`, which creates many small Newton-Schulz chunks. Increasing the group size to 8 should reduce chunk-loop overhead and improve production throughput if chunk fragmentation is the main cost.
+- Run:
+  - Iris parent `/dlwh/iris-run-job-20260620-121332`; child `/dlwh/iris-run-job-20260620-121332/grug-train-GM2560-MAY-199S4096-W2048-B16-R2-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-G8-THROUGHPUT-N2-cw-20260620-1213`.
+  - W&B `marin-community/marin_moe/GM2560-MAY-199S4096-W2048-B16-R2-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-G8-THROUGHPUT-N2-cw-20260620-1213`.
+  - Config matches the prior R2 production packed-entry validation except `expert_grouped_muonh_group_size=8` instead of 2. It uses 2 H100 nodes, `replica_axis=2`, `data_axis=1`, `expert_axis=8`, `model_axis=1`, batch 16, seq 4096, Pallas CE, ring MoE, FA4 CuTe attention, bf16 params/compute/output, grouped MuonH3 with bf16 NS compute, and packed entry enabled.
+- Result:
+  - Parent and child jobs both succeeded with `failure_count=0`; both GPU tasks exited 0.
+  - Steps 0 and 1 were compile/autotune polluted: `~438.5s` and `~421.8s`.
+  - Warm steps 2-7 averaged `1.97780s`, `33152.5 tokens/s`, and `3.58499 MFU`. Final step 7 was `1.93693s`, `33835.0 tokens/s`, `3.65879 MFU`, `train/loss=3.10861`.
+  - Compared with May197 group-size-2 warm steps (`2.08290s`, `31466.6 tokens/s`, `3.40268 MFU`), group size 8 improves throughput and MFU by `1.0536x` and reduces warm-step duration by about `5.05%`.
+- Interpretation:
+  - Larger NS chunks help, but only modestly. Chunk count/loop overhead is not the main reason the production path is around `~2s` per step.
+  - The harness apply boundary still predicts a much smaller packed fanout cost than the full train step pays. The remaining overhead is likely a full-optimizer interaction: extra materialization around the grouped optimizer tree, synchronization placement, lost fusion/batching around the NS/update path, or repeated work outside the two explicit boundary primitives.
+  - This reinforces that the next evidence should be a semantic profile of the production packed-entry path, not another scale-up rung.
+- Next action:
+  - Launch a short R2/group-size-8 profile with HLO proto and command buffers disabled for trace readability. Use it to attribute the warm-step time across grouped entry, Newton-Schulz, packed restore, ordinary apply, and surrounding optimizer/tree work.
