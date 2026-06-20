@@ -36,6 +36,7 @@ from experiments.grug.moe.muon_update_bench import (
     EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_FSDP_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
@@ -106,6 +107,7 @@ from experiments.grug.moe.muon_update_bench import (
     expert_fsdp_grouped_target_apply_chunked_boundary_step_factory,
     expert_fsdp_grouped_target_apply_chunked_fsdp_boundary_step_factory,
     expert_fsdp_grouped_target_restore_boundary_step_factory,
+    expert_fsdp_grouped_trace_muonh_apply_step_factory,
     expert_fsdp_grouped_updates_muonh_apply_step_factory,
     expert_fsdp_grouped_updates_muonh_explicit_a2a_apply_step_factory,
     expert_fsdp_grouped_updates_muonh_explicit_apply_step_factory,
@@ -1245,6 +1247,71 @@ def test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs()
     assert update_hlo_summary.reduce_scatter == 0
     assert estimated_matrix_count(config, REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH) == 4 * 16
     assert estimated_matrix_count(config, REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH) == 4 * 16
+
+
+def test_expert_fsdp_grouped_trace_muonh_keeps_trace_grouped_and_params_fsdp():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = synthetic_fsdp_expert_specs(mesh, config)
+    grouped_grads = synthetic_grouped_expert_specs(mesh, config, EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH)
+    grouped_trace = synthetic_grouped_expert_specs(mesh, config, EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH)
+    update_step = jax.jit(expert_fsdp_grouped_trace_muonh_apply_step_factory(mesh, config))
+
+    assert ns4d_compute_sharding(mesh, config, EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH).spec == P(
+        ("replica_dcn", "data"),
+        "expert",
+        None,
+        None,
+    )
+    assert_expert_fsdp_sharding(params, "grouped-trace MuonH FSDP params")
+    assert_grouped_expert_sharding(
+        grouped_trace,
+        mesh,
+        config,
+        EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH,
+        "grouped-trace MuonH trace",
+    )
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        result, next_trace, restored_updates = jax.eval_shape(update_step, params, grouped_grads, grouped_trace)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(params, grouped_grads, grouped_trace).lower(lowering_platforms=(platform,))
+
+    assert_expert_fsdp_sharding(restored_updates, "grouped-trace MuonH restored updates")
+    assert_expert_fsdp_sharding(result, "grouped-trace MuonH FSDP apply result")
+    assert_grouped_expert_sharding(
+        next_trace,
+        mesh,
+        config,
+        EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH,
+        "grouped-trace MuonH next trace",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.two_batch_axis_dot_general == 6
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_to_all == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert estimated_matrix_count(config, EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH) == 4 * 16
 
 
 def test_expert_fsdp_grouped_apply_boundary_restores_ordinary_expert_updates_before_apply():

@@ -1247,3 +1247,28 @@ Post-compile steps were stable around 0.65-0.66s:
 
 - Interpretation: Negative result. The FSDP-hyperball variant looks cleaner before compilation, but compiled GPU HLO still contains the same 26 all-gathers and runtime is effectively identical to the real production helper. Moving hyperball back to FSDP does not avoid the dominant boundary cost; the compiler still materializes the grouped direction in a way that pays the restore boundary, and the small GEMM-count reduction is not useful.
 - Next action: Do not port FSDP-hyperball into production. The viable directions remain (1) persistent grouped optimizer/model-facing expert banks to avoid the grouped-to-FSDP restore boundary, or (2) a truly lower-level custom transfer for the grouped-to-FSDP direction/update path. Generic JAX-level variants have now repeatedly failed to beat the current slice-first production helper.
+
+### 2026-06-19 17:38 PDT - grouped-trace FSDP-master MuonH benchmark
+- Hypothesis: A pragmatic FSDP-master design can keep train-state params in ordinary FSDP layout while keeping the MuonH trace/momentum state in the grouped NS-friendly layout. If grouped grads and grouped trace are both already in the NS layout, the optimizer should avoid the real helper's inbound FSDP/unreduced-gradient/momentum all-gathers, compute MuonH in grouped layout, restore grouped updates to FSDP, and then use ordinary `optax.apply_updates`.
+- Code snapshot:
+  - Added harness-only bench kind: `expert_fsdp_grouped_trace_muonh_apply`.
+  - Scope: `experiments/grug/moe/muon_update_bench.py` and focused tests only; no production optimizer path changed.
+- Local validation:
+  - Focused tests: `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_trace_muonh_keeps_trace_grouped_and_params_fsdp experiments/grug/moe/test_muon_update_bench.py::test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs -q` -> `2 passed`.
+  - Full-shape local lowering with `XLA_FLAGS=--xla_force_host_platform_device_count=16` showed the new grouped-trace path lowered as `AG/A2A/AR/RS/CP = 0/0/0/0/0` with 234 two-batch-axis `dot_general` ops.
+- Command:
+  - Launch: `RUN_ID=MUON-BENCH-D2560-L26-R2D1E8-GROUPEDTRACE-H3-G2-CAP512-N2-cw-20260620-003305 MUON_BENCH_KINDS=expert_fsdp_grouped_trace_muonh_apply,expert_fsdp_grouped_updates_muonh_apply,real_expert_fsdp_grouped_muonh_optimizer_apply MUON_BENCH_LAYERS=26 MUON_BENCH_NS4D_GROUP_SIZE=2 MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn,data MUON_BENCH_REPLICA_AXIS=2 MUON_BENCH_DATA_AXIS=1 MUON_BENCH_EXPERT_AXIS=8 MUON_BENCH_MODEL_AXIS=1 MUON_BENCH_GPU_REPLICAS=2 MUON_BENCH_SWEEP_BACKEND_STEPS=3 MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 MUON_BENCH_NS_COMPUTE_DTYPE=bf16 MUON_BENCH_WARMUP=1 MUON_BENCH_ITERS=3 MUON_BENCH_MODE=both MUON_BENCH_DISABLE_ABSTRACT_MESH=true MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES=true MUON_BENCH_WORKER_CPU=8 MUON_BENCH_WORKER_RAM=256g bash scratch/muon_update_bench_fast_loop.sh iris fullprod-r4e8-l26-h3`.
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-003309`.
+  - Child Iris job: `/dlwh/iris-run-job-20260620-003309/grug-train-MUON-BENCH-D2560-L26-R2D1E8-GROUPEDTRACE-H3-G2-CAP512-N2-cw-20260620-003305`.
+  - Output prefix: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D1E8-GROUPEDTRACE-H3-G2-CAP512-N2-cw-20260620-003305-bbc96c`.
+- Config: 2 H100 nodes, 16 devices, `replica_dcn=2`, `data=1`, `expert=8`, `model=1`, layers 26, hidden 2560, intermediate 1280, 256 experts, group size 2, group axis `replica_dcn,data`, max grouped stack size 512, backend steps 3, bf16 params/updates, bf16 NS compute, warmup 1, iters 3, boundary collectives allowed.
+- Result: Parent and child reached `JOB_STATE_SUCCEEDED` with zero failures/preemptions. The grouped-trace path preserved grouped trace and FSDP params at the harness API boundary, but XLA GPU compilation still introduced 26 all-gathers.
+
+| bench | lowered AG/A2A/AR/RS/CP | compiled AG/A2A/AR/RS/CP | compiled GEMMs | median | mean | H100 bf16 peak |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| grouped trace -> MuonH -> restore/apply | 0/0/0/0/0 | 26/0/0/0/0 | 520 | 0.3062s | 0.3062s | 50.1% |
+| grouped updates -> MuonH -> restore/apply | 0/0/0/0/0 | 26/0/0/0/0 | 533 | 0.3071s | 0.3066s | 50.1% |
+| real production grouped MuonH helper | 26/0/0/0/0 | 26/0/0/0/0 | 533 | 0.4782s | 0.4784s | 32.1% |
+
+- Interpretation: The grouped-trace/FSDP-master harness is a useful partial win but not the proof we need. It removes the real helper's extra overhead and improves the isolated expert MuonH apply path from about 0.478s to about 0.306s, reaching roughly 50% nominal H100 bf16 peak. However, the core representation-boundary problem remains: even when lowered HLO has no collectives, compiled GPU HLO rediscovered 26 all-gathers. Persisting grouped trace alone does not avoid the grouped-to-FSDP boundary; it only avoids some inbound/helper overhead.
+- Next action: Keep the grouped-trace harness as a pragmatic baseline, but do not claim the FSDP-master design has avoided per-layer collectives. The direct target reshard, packed restore, FSDP-hyperball, and tuple-returning `shard_map` bridge have all failed to remove the compiled grouped-to-FSDP all-gathers. Further work should either use a lower-level/custom communication path that moves exactly the final FSDP slices, or prefer grouped expert-bank persistence/model consumption so the hot step does not restore grouped updates to ordinary FSDP leaves.
