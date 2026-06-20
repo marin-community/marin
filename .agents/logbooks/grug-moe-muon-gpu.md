@@ -1368,3 +1368,24 @@ Post-compile steps were stable around 0.65-0.66s:
     - Runtime-compiled HLO for existing restore-then-apply had `AG/A2A/AR/RS = 0/2/0/0`, median `0.0313s`.
 - Interpretation: The harness is valid and gives us a direct measurement knob for "consume grouped updates near the FSDP leaf", but the tiny compiled evidence does not show a collective-count win. XLA still turns the grouped-to-FSDP restore boundary into two all-to-alls, same as the existing restore-then-apply path. Do not treat this as a proven throughput improvement until a GPU-sized compile/run contradicts the local result.
 - Next action: Prefer this as a diagnostic benchmark over an immediate expensive CoreWeave launch. If we launch it, compare against `expert_fsdp_grouped_updates_muonh_apply` and `expert_fsdp_grouped_persistent_muonh_apply` in the same job and require compiled-HLO collective counts plus timing, not just lowered HLO.
+
+### 2026-06-19 21:35 PDT - strict compiled-HLO boundary gate
+- Hypothesis: Lowered StableHLO has been too weak as a production-candidate gate. Candidate grouped/apply paths should be able to opt into a strict check that fails if either lowered or compiled HLO contains any grouped-to-FSDP boundary collective (`all_gather`, `all_to_all`, `all_reduce`, `reduce_scatter`, or `collective_permute`), including expert-FSDP grouped benches that are normally allowed for exploration.
+- Code snapshot:
+  - Added `--require-no-boundary-collectives` to `experiments/grug/moe/muon_update_bench.py`.
+  - The existing `--allow-boundary-collectives` remains for debug/decomposition profiles. The two flags are mutually exclusive.
+  - `grouped_apply_boundary_collectives` now includes `collective_permute`, so ppermute-style bridges cannot pass the strict gate by accident.
+  - Summary rows now include `boundary_collectives_required_absent`.
+- Local validation:
+  - Focused tests passed:
+    - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_updates_muonh_restores_ordinary_expert_updates_before_apply experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_updates_muonh_direct_apply_restores_slices_before_apply experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_updates_muonh_explicit_restore_then_apply_returns_fsdp_params experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_updates_muonh_can_return_updates_without_apply experiments/grug/moe/test_muon_update_bench.py::test_strict_boundary_gate_includes_expert_fsdp_and_collective_permute experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_boundary_byte_estimates -q`
+    - Result: `7 passed`.
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed.
+  - Tiny forced-host positive smoke:
+    - `XLA_FLAGS=--xla_force_host_platform_device_count=8 uv run python experiments/grug/moe/muon_update_bench.py --layers 1 --hidden-dim 4 --intermediate-dim 2 --num-experts 2 --backend-steps 1 --replica-axis 2 --data-axis 2 --expert-axis 2 --model-axis 1 --max-grouped-stack-size 8 --bench-kinds expert_fsdp_grouped_persistent_muonh_apply --mode run --warmup 0 --iters 0 --compile-only --disable-abstract-mesh --require-no-boundary-collectives --output /tmp/muon_gate_persistent.json`
+    - Result: passed; compiled `AG/A2A/AR/RS/CP = 0/0/0/0/0`.
+  - Tiny forced-host negative smoke:
+    - `XLA_FLAGS=--xla_force_host_platform_device_count=8 uv run python experiments/grug/moe/muon_update_bench.py --layers 1 --hidden-dim 4 --intermediate-dim 2 --num-experts 2 --backend-steps 1 --replica-axis 2 --data-axis 2 --expert-axis 2 --model-axis 1 --max-grouped-stack-size 8 --bench-kinds expert_fsdp_grouped_updates_muonh_direct_apply --mode run --warmup 0 --iters 0 --compile-only --disable-abstract-mesh --require-no-boundary-collectives --output /tmp/muon_gate_direct.json`
+    - Result: failed as intended with `compiled grouped boundary candidate forced grouped apply boundary collectives {'all_to_all': 2}`.
+- Interpretation: This gives us a cheap, explicit production-candidate gate. The persistent grouped apply lower bound passes; the direct restore/apply path is still a diagnostic/reference path, not a candidate, because compiled HLO reintroduces boundary routing even when lowered HLO looks clean.
+- Next action: Use `--require-no-boundary-collectives` on any future "this avoids per-leaf collective explosion" claim. Use `--allow-boundary-collectives` only when intentionally profiling or decomposing a known-boundary path.

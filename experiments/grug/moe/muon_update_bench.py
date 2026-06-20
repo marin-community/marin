@@ -4654,8 +4654,20 @@ def grouped_apply_boundary_collectives(hlo_summary: HloSummary) -> dict[str, int
         "reduce_scatter": hlo_summary.reduce_scatter,
         "all_reduce": hlo_summary.all_reduce,
         "all_to_all": hlo_summary.all_to_all,
+        "collective_permute": hlo_summary.collective_permute,
     }
     return {name: count for name, count in collective_counts.items() if count}
+
+
+def should_check_grouped_apply_boundary_collectives(
+    bench_kind: str,
+    require_no_boundary_collectives: bool,
+) -> bool:
+    if bench_kind in (EXPERT_GROUPED_BANK_CONSUMER_BENCH, EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH):
+        return True
+    if bench_kind not in GROUPED_APPLY_BOUNDARY_BENCHES:
+        return False
+    return require_no_boundary_collectives or not is_expert_fsdp_grouped_bench(bench_kind)
 
 
 def is_expert_only_grouped_muonh_bench(bench_kind: str) -> bool:
@@ -5676,6 +5688,7 @@ def lower_ns4d(
     hlo_output: Path | None,
     abstract_mesh_enabled: bool,
     allow_boundary_collectives: bool,
+    require_no_boundary_collectives: bool,
 ) -> HloSummary:
     if is_full_production_muonh_bench(bench_kind):
         specs = synthetic_full_production_muonh_specs(mesh, config, bench_kind)
@@ -6366,16 +6379,10 @@ def lower_ns4d(
     maybe_write_text(hlo_output, hlo_text)
     hlo_summary = summarize_hlo(hlo_text)
     if (
-        bench_kind in GROUPED_APPLY_BOUNDARY_BENCHES
-        and not is_expert_fsdp_grouped_bench(bench_kind)
+        should_check_grouped_apply_boundary_collectives(bench_kind, require_no_boundary_collectives)
         and not allow_boundary_collectives
     ):
-        assert_grouped_apply_has_no_boundary_collectives(hlo_summary, "lowered NS4D grouped apply")
-    if (
-        bench_kind in (EXPERT_GROUPED_BANK_CONSUMER_BENCH, EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH)
-        and not allow_boundary_collectives
-    ):
-        assert_grouped_apply_has_no_boundary_collectives(hlo_summary, "lowered grouped expert bank consumer")
+        assert_grouped_apply_has_no_boundary_collectives(hlo_summary, "lowered grouped boundary candidate")
     return hlo_summary
 
 
@@ -6563,6 +6570,7 @@ def time_ns4d(
     compiled_hlo_output: Path | None,
     abstract_mesh_enabled: bool,
     allow_boundary_collectives: bool,
+    require_no_boundary_collectives: bool,
     profile_dir: Path | None,
 ) -> TimingSummary:
     with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
@@ -6977,16 +6985,10 @@ def time_ns4d(
         compile_seconds = time.perf_counter() - compile_start
         compiled_hlo = summarize_compiled_hlo(compiled, compiled_hlo_output)
         if (
-            bench_kind in GROUPED_APPLY_BOUNDARY_BENCHES
-            and not is_expert_fsdp_grouped_bench(bench_kind)
+            should_check_grouped_apply_boundary_collectives(bench_kind, require_no_boundary_collectives)
             and not allow_boundary_collectives
         ):
-            assert_grouped_apply_has_no_boundary_collectives(compiled_hlo, "compiled NS4D grouped apply")
-        if (
-            bench_kind in (EXPERT_GROUPED_BANK_CONSUMER_BENCH, EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH)
-            and not allow_boundary_collectives
-        ):
-            assert_grouped_apply_has_no_boundary_collectives(compiled_hlo, "compiled grouped expert bank consumer")
+            assert_grouped_apply_has_no_boundary_collectives(compiled_hlo, "compiled grouped boundary candidate")
         if compile_only:
             return TimingSummary(compile_seconds, compiled_hlo, [], None, None, None, None)
 
@@ -7564,6 +7566,14 @@ def parse_args() -> argparse.Namespace:
             "Use only for decomposition/debug profiles; summary rows still report the counts."
         ),
     )
+    parser.add_argument(
+        "--require-no-boundary-collectives",
+        action="store_true",
+        help=(
+            "Fail any grouped/apply boundary candidate when lowered or compiled HLO contains AG/A2A/AR/RS/CP, "
+            "including expert-FSDP grouped candidates normally allowed for exploration."
+        ),
+    )
     parser.add_argument("--hlo-output", type=Path)
     parser.add_argument(
         "--compiled-hlo-output",
@@ -7596,6 +7606,8 @@ def parse_str_csv(raw: str) -> tuple[str, ...]:
 
 def config_from_args(args: argparse.Namespace) -> BenchConfig:
     input_dtype = dtype_from_name(args.dtype)
+    if args.allow_boundary_collectives and args.require_no_boundary_collectives:
+        raise ValueError("Use at most one of --allow-boundary-collectives and --require-no-boundary-collectives.")
     if args.grouped_expert_consumer_tokens_per_expert < 1:
         raise ValueError("--grouped-expert-consumer-tokens-per-expert must be >= 1.")
     if args.grouped_expert_consumer_chunk_tokens < 0:
@@ -7710,6 +7722,7 @@ def run_config(
         "config": asdict(config),
         "abstract_mesh_enabled": not args.disable_abstract_mesh,
         "boundary_collectives_allowed": args.allow_boundary_collectives,
+        "boundary_collectives_required_absent": args.require_no_boundary_collectives,
         "devices": int(np.asarray(jax.devices()).size),
         "device_kinds": sorted({getattr(device, "device_kind", "") for device in jax.devices()}),
         "synthetic_shapes": synthetic_shapes(config),
@@ -7842,6 +7855,7 @@ def run_config(
                 hlo_path,
                 not args.disable_abstract_mesh,
                 args.allow_boundary_collectives,
+                args.require_no_boundary_collectives,
             )
         lower_seconds = time.perf_counter() - start
         lower_payload = {
@@ -7889,6 +7903,7 @@ def run_config(
                 compiled_hlo_path,
                 not args.disable_abstract_mesh,
                 args.allow_boundary_collectives,
+                args.require_no_boundary_collectives,
                 profile_dir,
             )
         timing_payload = {"event": "timing", "label": label, "timing": asdict(timing)}
@@ -7923,6 +7938,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "ns4d_result_sharding_spec": result["metadata"]["ns4d_result_sharding_spec"],
         "ns4d_boundary_status": result["metadata"]["ns4d_boundary_status"],
         "boundary_collectives_allowed": result["metadata"]["boundary_collectives_allowed"],
+        "boundary_collectives_required_absent": result["metadata"]["boundary_collectives_required_absent"],
         "estimated_ns_dot_flops": flops,
         "estimated_matrix_count": estimated_matrix_count(bench_config, bench_kind),
         "estimated_boundary_global_update_bytes": boundary_bytes.get("global_update_bytes"),

@@ -66,6 +66,7 @@ from experiments.grug.moe.muon_update_bench import (
     REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH,
     BenchConfig,
+    HloSummary,
     _stacked_2d_target,
     assert_expert_ep_sharding,
     assert_expert_fsdp_sharding,
@@ -123,6 +124,7 @@ from experiments.grug.moe.muon_update_bench import (
     grouped_2d_stack_ns_step_factory,
     grouped_3d_hyperball_update,
     grouped_4d_hyperball_update,
+    grouped_apply_boundary_collectives,
     grouped_expert_apply_boundary_step_factory,
     grouped_expert_bank_consumer_flops,
     grouped_expert_bank_consumer_step_factory,
@@ -143,6 +145,7 @@ from experiments.grug.moe.muon_update_bench import (
     persistent_grouped_2d_metadata_from_specs,
     real_expert_fsdp_grouped_muonh_optimizer_apply_step_factory,
     real_expert_fsdp_grouped_muonh_optimizer_update_step_factory,
+    should_check_grouped_apply_boundary_collectives,
     summarize_hlo,
     summary_row,
     synthetic_fsdp_expert_specs,
@@ -1110,8 +1113,11 @@ def test_grouped_expert_layer_slice_boundary_times_compile_only():
         warmup=0,
         iters=0,
         compile_only=True,
+        compiled_hlo_output=None,
         abstract_mesh_enabled=False,
         allow_boundary_collectives=True,
+        require_no_boundary_collectives=False,
+        profile_dir=None,
     )
 
     assert timing.compiled_hlo.all_reduce == 0
@@ -1145,8 +1151,11 @@ def test_grouped_expert_single_layer_slice_boundary_times_compile_only():
         warmup=0,
         iters=0,
         compile_only=True,
+        compiled_hlo_output=None,
         abstract_mesh_enabled=False,
         allow_boundary_collectives=True,
+        require_no_boundary_collectives=False,
+        profile_dir=None,
     )
 
     assert timing.compiled_hlo.all_reduce == 0
@@ -3100,6 +3109,7 @@ def test_summary_row_reports_matrix_count_and_stack_estimates():
             "ns4d_result_sharding_spec": "PartitionSpec(None, 'expert', None, None)",
             "ns4d_boundary_status": "full_production_muonh_optimizer_updates_apply",
             "boundary_collectives_allowed": False,
+            "boundary_collectives_required_absent": False,
             "grouped_expert_group_count": 1,
             "group_estimates": group_estimates,
         }
@@ -3154,6 +3164,7 @@ def test_summary_row_reports_boundary_byte_estimates():
             "ns4d_result_sharding_spec": None,
             "ns4d_boundary_status": "expert_fsdp_params_grouped_updates_explicit_apply",
             "boundary_collectives_allowed": True,
+            "boundary_collectives_required_absent": False,
             "grouped_expert_group_count": None,
             "group_estimates": group_estimates,
         }
@@ -3244,6 +3255,40 @@ def test_summary_row_reports_boundary_byte_estimates():
     )
     assert row["estimated_boundary_compiled_fsdp_output_per_all_to_all_bytes"] is None
     assert row["estimated_boundary_compiled_global_update_per_collective_bytes"] == estimates["global_update_bytes"] / 8
+
+
+def test_strict_boundary_gate_includes_expert_fsdp_and_collective_permute():
+    collective_summary = HloSummary(
+        characters=0,
+        dot_general=0,
+        batched_stack_dot_general=0,
+        two_batch_axis_dot_general=0,
+        custom_call=0,
+        gpu_gemm_custom_call=0,
+        all_gather=0,
+        all_reduce=0,
+        reduce_scatter=0,
+        all_to_all=0,
+        collective_permute=1,
+        grouped_scope_mentions=0,
+        stack_sharded_scope_mentions=0,
+        pad_scope_mentions=0,
+        slice_scope_mentions=0,
+    )
+
+    assert grouped_apply_boundary_collectives(collective_summary) == {"collective_permute": 1}
+    assert not should_check_grouped_apply_boundary_collectives(
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_DIRECT_APPLY_BENCH,
+        require_no_boundary_collectives=False,
+    )
+    assert should_check_grouped_apply_boundary_collectives(
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_DIRECT_APPLY_BENCH,
+        require_no_boundary_collectives=True,
+    )
+    assert should_check_grouped_apply_boundary_collectives(
+        EXPERT_GROUPED_BANK_CONSUMER_BENCH,
+        require_no_boundary_collectives=False,
+    )
 
 
 def test_grouped_4d_hyperball_projects_each_group_expert_matrix_independently():
