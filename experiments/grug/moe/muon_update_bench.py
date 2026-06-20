@@ -494,6 +494,7 @@ class BenchConfig:
     ns_compute_dtype: str = "input"
     nesterov: bool = True
     expert_grouped_muonh_packed_entry: bool = False
+    expert_grouped_muonh_packed_bank_compute: bool = False
     expert_grouped_muonh_chunk_local_boundaries: bool = False
     grouped_expert_consumer_tokens_per_expert: int = DEFAULT_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT
     grouped_expert_consumer_chunk_tokens: int = DEFAULT_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS
@@ -2407,6 +2408,7 @@ def build_real_expert_fsdp_grouped_muonh_optimizer(config: BenchConfig) -> optax
         ns_compute_dtype=config.ns_compute_dtype,
         expert_grouped_muonh_group_size=ns4d_group_size(config),
         expert_grouped_muonh_packed_entry=config.expert_grouped_muonh_packed_entry,
+        expert_grouped_muonh_packed_bank_compute=config.expert_grouped_muonh_packed_bank_compute,
         expert_grouped_muonh_chunk_local_boundaries=config.expert_grouped_muonh_chunk_local_boundaries,
     ).build(num_train_steps=8)
 
@@ -6630,7 +6632,7 @@ def _real_grouped_muonh_phase_collective_info(
     packed_count = names
     mode = grouped_muonh_boundary_mode(config)
 
-    if mode == "chunk_local":
+    if mode in ("chunk_local", "packed_bank_compute"):
         if phase_name in ("fsdp_grads_to_grouped_chunks", "fsdp_params_to_grouped_chunks"):
             return ("all_to_all", chunked_count) if data_axis_needs_a2a else ("none", 0)
         if phase_name == "grouped_updates_to_fsdp_update_tree":
@@ -6838,6 +6840,8 @@ def boundary_primitive_name(bench_kind: str) -> str | None:
 def grouped_muonh_boundary_mode(config: BenchConfig) -> str:
     if config.expert_grouped_muonh_chunk_local_boundaries:
         return "chunk_local"
+    if config.expert_grouped_muonh_packed_entry and config.expert_grouped_muonh_packed_bank_compute:
+        return "packed_bank_compute"
     if config.expert_grouped_muonh_packed_entry:
         return "packed_entry"
     return "per_chunk_reshard"
@@ -9569,6 +9573,11 @@ def parse_args() -> argparse.Namespace:
         help="Use the whole-bank packed entry/restore boundary in the real grouped MuonH optimizer bench.",
     )
     parser.add_argument(
+        "--expert-grouped-muonh-packed-bank-compute",
+        action="store_true",
+        help="Keep grouped MuonH compute in bounded packed banks in the real grouped MuonH optimizer bench.",
+    )
+    parser.add_argument(
         "--expert-grouped-muonh-chunk-local-boundaries",
         action="store_true",
         help="Use per-chunk packed entry/restore boundaries in the real grouped MuonH optimizer bench.",
@@ -9676,6 +9685,7 @@ def config_from_args(args: argparse.Namespace) -> BenchConfig:
         ns_compute_dtype=ns_compute_dtype_name(args.ns_compute_dtype, input_dtype),
         nesterov=not args.no_nesterov,
         expert_grouped_muonh_packed_entry=args.expert_grouped_muonh_packed_entry,
+        expert_grouped_muonh_packed_bank_compute=args.expert_grouped_muonh_packed_bank_compute,
         expert_grouped_muonh_chunk_local_boundaries=args.expert_grouped_muonh_chunk_local_boundaries,
         grouped_expert_consumer_tokens_per_expert=args.grouped_expert_consumer_tokens_per_expert,
         grouped_expert_consumer_chunk_tokens=args.grouped_expert_consumer_chunk_tokens,
@@ -9997,6 +10007,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "boundary_primitive": boundary_primitive_name(bench_kind),
         "expert_grouped_muonh_boundary_mode": grouped_muonh_boundary_mode(bench_config),
         "expert_grouped_muonh_packed_entry": bench_config.expert_grouped_muonh_packed_entry,
+        "expert_grouped_muonh_packed_bank_compute": bench_config.expert_grouped_muonh_packed_bank_compute,
         "expert_grouped_muonh_chunk_local_boundaries": bench_config.expert_grouped_muonh_chunk_local_boundaries,
         "boundary_collectives_allowed": result["metadata"]["boundary_collectives_allowed"],
         "boundary_collectives_required_absent": result["metadata"]["boundary_collectives_required_absent"],

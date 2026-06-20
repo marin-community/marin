@@ -245,11 +245,13 @@ def test_cw_muon_update_bench_launcher_reads_strict_boundary_gate_env(monkeypatc
 def test_cw_muon_update_bench_launcher_reads_grouped_muonh_boundary_env(monkeypatch):
     monkeypatch.setenv("RUN_ID", "muon-update-bench-test")
     monkeypatch.setenv("MUON_BENCH_EXPERT_GROUPED_MUONH_PACKED_ENTRY", "true")
+    monkeypatch.setenv("MUON_BENCH_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE", "true")
     monkeypatch.setenv("MUON_BENCH_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES", "true")
 
     step = build_step()
 
     assert step.config.expert_grouped_muonh_packed_entry is True
+    assert step.config.expert_grouped_muonh_packed_bank_compute is True
     assert step.config.expert_grouped_muonh_chunk_local_boundaries is True
 
 
@@ -4780,16 +4782,18 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
 
 
 @pytest.mark.parametrize(
-    ("packed_entry", "chunk_local_boundaries", "expected_mode"),
+    ("packed_entry", "packed_bank_compute", "chunk_local_boundaries", "expected_mode"),
     [
-        (False, False, "per_chunk_reshard"),
-        (True, False, "packed_entry"),
-        (False, True, "chunk_local"),
-        (True, True, "chunk_local"),
+        (False, False, False, "per_chunk_reshard"),
+        (True, False, False, "packed_entry"),
+        (True, True, False, "packed_bank_compute"),
+        (False, False, True, "chunk_local"),
+        (True, True, True, "chunk_local"),
     ],
 )
 def test_summary_row_reports_grouped_muonh_boundary_mode(
     packed_entry: bool,
+    packed_bank_compute: bool,
     chunk_local_boundaries: bool,
     expected_mode: str,
 ):
@@ -4810,6 +4814,7 @@ def test_summary_row_reports_grouped_muonh_boundary_mode(
         model_axis=1,
         learning_rate=0.02,
         expert_grouped_muonh_packed_entry=packed_entry,
+        expert_grouped_muonh_packed_bank_compute=packed_bank_compute,
         expert_grouped_muonh_chunk_local_boundaries=chunk_local_boundaries,
     )
     result = {
@@ -4835,12 +4840,14 @@ def test_summary_row_reports_grouped_muonh_boundary_mode(
 
     assert row["expert_grouped_muonh_boundary_mode"] == expected_mode
     assert row["expert_grouped_muonh_packed_entry"] is packed_entry
+    assert row["expert_grouped_muonh_packed_bank_compute"] is packed_bank_compute
     assert row["expert_grouped_muonh_chunk_local_boundaries"] is chunk_local_boundaries
 
 
 @pytest.mark.parametrize(
     (
         "packed_entry",
+        "packed_bank_compute",
         "chunk_local_boundaries",
         "expected_all_gather_count",
         "expected_all_to_all_count",
@@ -4849,13 +4856,15 @@ def test_summary_row_reports_grouped_muonh_boundary_mode(
         "expected_phase_count",
     ),
     [
-        (False, False, 6.0, 4.0, 3, 2, 5),
-        (True, False, 2.0, 6.0, 1, 3, 4),
-        (False, True, 2.0, 4.0, 1, 2, 3),
+        (False, False, False, 6.0, 4.0, 3, 2, 5),
+        (True, False, False, 2.0, 6.0, 1, 3, 4),
+        (True, True, False, 2.0, 4.0, 1, 2, 3),
+        (False, False, True, 2.0, 4.0, 1, 2, 3),
     ],
 )
 def test_real_grouped_muonh_summary_row_reports_boundary_phase_estimates(
     packed_entry: bool,
+    packed_bank_compute: bool,
     chunk_local_boundaries: bool,
     expected_all_gather_count: float,
     expected_all_to_all_count: float,
@@ -4880,6 +4889,7 @@ def test_real_grouped_muonh_summary_row_reports_boundary_phase_estimates(
         model_axis=1,
         learning_rate=0.02,
         expert_grouped_muonh_packed_entry=packed_entry,
+        expert_grouped_muonh_packed_bank_compute=packed_bank_compute,
         expert_grouped_muonh_chunk_local_boundaries=chunk_local_boundaries,
     )
     estimates = estimated_boundary_byte_estimates(config, REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH)
