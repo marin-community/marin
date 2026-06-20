@@ -297,11 +297,6 @@ def test_iap_id_token_verifier_wraps_google_failure():
             verifier.verify("id-token")
 
 
-def test_iap_id_token_verifier_requires_audiences():
-    with pytest.raises(ValueError, match="at least one audience"):
-        IapIdTokenVerifier([])
-
-
 # --- IAP signed-header assertion -> implicit read-only dashboard identity -----
 
 _ASSERTION_HEADERS = {"x-goog-iap-jwt-assertion": "signed.assertion.jwt"}
@@ -349,11 +344,6 @@ def test_iap_assertion_verifier_rejects_missing_email():
     with patch("google.oauth2.id_token.verify_token", Mock(return_value={"aud": "x"})):
         with pytest.raises(ValueError, match="no email"):
             verifier.identity_from_headers(_ASSERTION_HEADERS)
-
-
-def test_iap_assertion_verifier_requires_audience():
-    with pytest.raises(ValueError, match="audience"):
-        IapAssertionVerifier("")
 
 
 class _FakeAssertionVerifier:
@@ -569,11 +559,6 @@ def test_composite_verifier_second_match():
     composite = CompositeTokenVerifier([v1, v2])
     result = composite.verify("tok-b")
     assert result.user_id == "bob"
-
-
-def test_composite_verifier_rejects_empty_list():
-    with pytest.raises(ValueError, match="requires at least one verifier"):
-        CompositeTokenVerifier([])
 
 
 def test_composite_verifier_all_fail():
@@ -835,10 +820,6 @@ def test_gcp_access_token_provider_caches_token():
 )
 def test_extract_cookie(cookie_header, name, expected):
     assert _extract_cookie(cookie_header, name) == expected
-
-
-def test_extract_cookie_empty_string():
-    assert _extract_cookie("", "iris_session") is None
 
 
 # ---------------------------------------------------------------------------

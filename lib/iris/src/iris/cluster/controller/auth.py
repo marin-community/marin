@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Auth setup for the controller — single source of truth for verifier creation.
+"""Auth setup for the controller — verifier creation and JWT key management.
 
 All tokens are JWTs signed with a persistent HMAC-SHA256 key stored in the
 controller_secrets table. Verification is a pure crypto check plus an
@@ -297,13 +297,11 @@ _IAP_ROLE_CACHE_TTL_SECONDS = 60.0
 
 
 def _make_iap_role_resolver(db: ControllerDB) -> Callable[[str], str]:
-    """Map a verified IAP email to its Iris role.
+    """Return a function that maps a verified IAP email to its Iris role.
 
-    Returns the email's provisioned role from the user store, or the read-only
-    ``dashboard`` role for an unprovisioned email. ``admin_users`` are seeded as
-    ``admin`` in the user store at startup, so an admin behind IAP resolves to
-    ``admin`` here without running ``iris login``. Results are cached with a
-    short TTL so polling dashboard clients don't hit the database on every RPC.
+    Looks up the role from the user store; falls back to ``dashboard`` for an
+    unprovisioned email. Results are cached for ``_IAP_ROLE_CACHE_TTL_SECONDS``
+    to keep the per-RPC assertion path off the database.
     """
     cache: dict[str, tuple[float, str]] = {}
 
@@ -325,11 +323,10 @@ def create_controller_auth(
     auth_config: config_pb2.AuthConfig,
     db: ControllerDB | None = None,
 ) -> ControllerAuth:
-    """Create auth verifier + worker token from config proto.
+    """Build a ``ControllerAuth`` from the config proto.
 
-    All tokens are JWTs signed with a persistent key stored in
-    controller_secrets. The api_keys table is retained for audit and
-    revocation tracking, but verification never hits the database.
+    Signs JWTs with a persistent key in ``controller_secrets``; ``api_keys``
+    rows exist for audit and revocation, but verification never hits the DB.
     """
     if not auth_config.HasField("provider"):
         if db:

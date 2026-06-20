@@ -450,12 +450,11 @@ def is_trusted_loopback(client_address: str | None, headers: dict) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class AuthRequest:
-    """The request facts a :class:`RequestAuthenticator` may inspect.
+    """Facts passed to each :class:`RequestAuthenticator`.
 
-    Bundles the bearer ``token`` (from ``Authorization`` / session cookie), the
-    raw request ``headers`` (an IAP authenticator reads its signed-header
-    assertion), and the transport ``client_address`` (the loopback authenticator
-    reads the peer). Authenticators decide on this, not on a token string alone.
+    ``token``: bearer token from ``Authorization`` / session cookie.
+    ``headers``: raw request headers (IAP assertion verifier reads the signed header).
+    ``client_address``: transport peer (loopback authenticator reads this).
     """
 
     token: str | None
@@ -597,16 +596,12 @@ def resolve_auth(
 class ControllerAuthPolicy:
     """Server-side auth policy for the controller's HTTP middleware and RPC interceptor.
 
-    The per-request decision is the ordered ``authenticators`` stack (built by
-    :func:`build_request_authenticators`), walked by :func:`resolve_auth`. The
-    server-side mirror of the client-side :class:`ClientCredentials`.
+    ``authenticators`` is the ordered stack walked by :func:`resolve_auth`; a
+    non-empty stack means request auth is enforced (:attr:`request_auth_enabled`).
 
-    ``verifier`` is retained alongside the stack with a narrower role: it is the
-    JWT/bearer verifier used by ``NullAuthInterceptor`` to validate worker tokens
-    when request auth is *disabled* (null-auth mode). In auth-enabled mode it also
-    backs the ``JwtAuthenticator`` at the head of the stack. Whether request auth
-    is enforced is :attr:`request_auth_enabled` (a non-empty stack), not the
-    presence of ``verifier``.
+    ``verifier`` has a narrower role: ``NullAuthInterceptor`` uses it to validate
+    worker tokens in null-auth mode. In auth-enabled mode it also backs the
+    ``JwtAuthenticator`` at the head of the stack.
     """
 
     authenticators: tuple[RequestAuthenticator, ...] = ()
