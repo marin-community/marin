@@ -3060,3 +3060,35 @@ Post-compile steps were stable around 0.65-0.66s:
     all-gathers on the apply routes. Use the full-size R2/R4 runs for
     compiled-collective evidence and the small-shape N1/R2/R4 runs for
     correctness evidence.
+
+### 2026-06-20 12:34 PDT - Harness reports packed-bank-compute production mode
+- Hypothesis:
+  - The integrated production path used by May206/May207 is distinct from the
+    ordinary `packed_entry` Route A path and should be represented directly in
+    benchmark config and summary rows. Otherwise the next production benchmark
+    can be misread as whole-bank packed-entry instead of bounded packed-bank
+    compute.
+- Change:
+  - Added `expert_grouped_muonh_packed_bank_compute` to
+    `experiments/grug/moe/muon_update_bench.py::BenchConfig`.
+  - Threaded `MUON_BENCH_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE` through the
+    CoreWeave Muon update bench launcher.
+  - Summary rows now report `expert_grouped_muonh_boundary_mode` as
+    `packed_bank_compute` when packed entry and packed-bank compute are both
+    enabled, and expose the boolean
+    `expert_grouped_muonh_packed_bank_compute`.
+  - Phase estimates for `packed_bank_compute` use chunk-count ingress/egress
+    expectations, matching the bounded per-bank production path rather than
+    the whole-bank packed-entry path.
+- Command:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_cw_muon_update_bench_launcher_reads_grouped_muonh_boundary_env experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_grouped_muonh_boundary_mode experiments/grug/moe/test_muon_update_bench.py::test_real_grouped_muonh_summary_row_reports_boundary_phase_estimates -q`
+  - `./infra/pre-commit.py --files experiments/grug/moe/muon_update_bench.py experiments/grug/moe/launch_cw_muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix`
+- Result:
+  - Focused pytest: `10 passed in 4.29s`.
+  - Pre-commit on touched files: OK.
+  - Commit: `e36c03910`.
+- Interpretation:
+  - This does not change training semantics. It closes a measurement/reporting
+    gap so the next integrated packed-bank-compute harness run can be judged
+    against the intended boundary contract instead of being conflated with
+    `packed_entry`.
