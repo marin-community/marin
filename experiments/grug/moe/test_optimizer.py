@@ -585,9 +585,11 @@ def test_grouped_expert_muonh_packed_bank_compute_avoids_chunk_slice_boundaries(
     grouped_state = opt_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
     next_grouped_state = next_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
     assert isinstance(grouped_state, GroupedMuonHState)
-    assert len(grouped_state.trace_groups) == 2
+    assert len(grouped_state.trace_groups) == 6
+    assert all(trace_group.shape[0] <= 2 for trace_group in grouped_state.trace_groups)
     assert isinstance(next_grouped_state, GroupedMuonHState)
-    assert len(next_grouped_state.trace_groups) == 2
+    assert len(next_grouped_state.trace_groups) == 6
+    assert all(trace_group.shape[0] <= 2 for trace_group in next_grouped_state.trace_groups)
     assert_update_sharding_matches_params(updates, params, "packed-bank grouped MuonH production updates")
     hlo = str(lowered.compiler_ir(dialect="stablehlo"))
     assert "slice_update_chunk" not in hlo
@@ -642,9 +644,11 @@ def test_grouped_expert_muonh_packed_bank_compute_handles_replicated_group_axis(
     grouped_state = opt_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
     next_grouped_state = next_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
     assert isinstance(grouped_state, GroupedMuonHState)
-    assert len(grouped_state.trace_groups) == 2
+    assert len(grouped_state.trace_groups) == 6
+    assert all(trace_group.shape[0] <= 2 for trace_group in grouped_state.trace_groups)
     assert isinstance(next_grouped_state, GroupedMuonHState)
-    assert len(next_grouped_state.trace_groups) == 2
+    assert len(next_grouped_state.trace_groups) == 6
+    assert all(trace_group.shape[0] <= 2 for trace_group in next_grouped_state.trace_groups)
     assert_update_sharding_matches_params(updates, params, "packed-bank grouped MuonH replicated-group updates")
     hlo = str(lowered.compiler_ir(dialect="stablehlo"))
     assert "ShapeDtypeStruct" not in hlo

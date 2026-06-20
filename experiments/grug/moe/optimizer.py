@@ -513,8 +513,9 @@ def _init_grouped_muonh_trace_groups(
     )
     if packed_entry_boundary and packed_bank_compute and not chunk_local_boundaries:
         trace_banks = []
-        bank_records, _ = _grouped_muonh_packed_entry_bank_records(chunks)
-        for _, entries, padded_size in bank_records:
+        for entry_chunk in chunks:
+            entries = tuple(entry_chunk)
+            padded_size = _grouped_muonh_chunk_padded_size(entry_chunk)
             with jax.named_scope("grouped_muonh/init_grouped_trace_bank"):
                 trace_banks.append(_packed_grouped_muonh_entry_bank(entries, value_index=1, padded_size=padded_size))
         return tuple(trace_banks)
@@ -1019,14 +1020,13 @@ def _grouped_expert_muonh_updates_with_packed_banks(
     coefficient_type: CoefficientType,
     ns_compute_dtype: str,
 ):
-    bank_records, _ = _grouped_muonh_packed_entry_bank_records(chunks)
-    if len(trace_banks) != len(bank_records):
-        raise ValueError(
-            f"Grouped MuonH has {len(trace_banks)} trace banks but params require {len(bank_records)} banks"
-        )
+    if len(trace_banks) != len(chunks):
+        raise ValueError(f"Grouped MuonH has {len(trace_banks)} trace banks but params require {len(chunks)} banks")
 
     next_trace_banks = []
-    for trace_bank, (_, entries, padded_size) in zip(trace_banks, bank_records, strict=True):
+    for trace_bank, entry_chunk in zip(trace_banks, chunks, strict=True):
+        entries = tuple(entry_chunk)
+        padded_size = _grouped_muonh_chunk_padded_size(entry_chunk)
         with jax.named_scope("grouped_muonh/packed_bank_compute/entry_updates"):
             update_bank = _packed_grouped_muonh_entry_bank(entries, value_index=1, padded_size=padded_size)
         with jax.named_scope("grouped_muonh/packed_bank_compute/entry_params"):
