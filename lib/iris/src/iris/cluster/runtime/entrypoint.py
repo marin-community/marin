@@ -56,7 +56,7 @@ def build_runtime_entrypoint(
 
     # Use the client's Python version to ensure pickle compatibility.
     # cloudpickle can fail when deserializing functions pickled in a different
-    # Python version (e.g., 3.11 -> 3.12 causes "TypeError: bad argument type
+    # Python version (e.g., 3.12 -> 3.13 causes "TypeError: bad argument type
     # for built-in operation").
     python_version = env_config.python_version
     python_flag = f"--python {python_version}" if python_version else ""

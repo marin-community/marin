@@ -31,9 +31,10 @@ from .helpers import TestJobs
 
 pytestmark = [pytest.mark.requires_cluster, pytest.mark.timeout(60)]
 
-# LocalCluster sets worker_unreachable_grace=10s and poll_interval defaults to
-# 1s, so a worker is torn down after this many consecutive failed reconcile
-# passes. Must equal round(grace / poll_interval).
+# Worker-death detection is time-based: LocalCluster sets
+# worker_unreachable_grace=10s, so a worker continuously unreachable for ~10s is
+# torn down. With the default 1s reconcile cadence that is roughly this many
+# failed passes; the chaos cases size their max_failures relative to it.
 RECONCILE_FAILURE_THRESHOLD = 10
 
 
@@ -205,10 +206,10 @@ def test_dispatch_permanent_failure(cluster):
 
 # ---------------------------------------------------------------------------
 # Reconcile-RPC threshold: a worker whose Reconcile RPCs keep failing accrues
-# UNREACHABLE health events and is torn down once consecutive failures reach
-# RECONCILE_FAILURE_THRESHOLD. The reconcile RPC outcome is the only liveness
-# signal (no ping loop), so worker-failure detection is chaos-tested via
-# "controller.reconcile".
+# UNREACHABLE health events and is torn down once it has been continuously
+# unreachable for the grace (~RECONCILE_FAILURE_THRESHOLD failed passes at the
+# 1s local cadence). The reconcile RPC outcome is the only liveness signal (no
+# ping loop), so worker-failure detection is chaos-tested via "controller.reconcile".
 # ---------------------------------------------------------------------------
 
 

@@ -18,7 +18,7 @@ import os
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -159,7 +159,7 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
         id=row_idx,
         source=source,
         messages=messages,
-        added=datetime.now(timezone.utc).isoformat(),
+        added=datetime.now(UTC).isoformat(),
         created="",  # Not available in the dataset
         metadata=metadata,
         **extra_columns,

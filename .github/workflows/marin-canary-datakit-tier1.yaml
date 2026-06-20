@@ -64,7 +64,7 @@ jobs:
           chmod 644 ~/.ssh/google_compute_engine.pub
 
       # If you change the iris flags below, also update the matching tier
-      # entry in scripts/datakit/submit_perf_run.py (TIERS["1"]) so the
+      # entry in scripts/ci/submit_perf_run.py (TIERS["1"]) so the
       # evaluate-zephyr-perf skill's treatment job stays comparable to this baseline.
       - name: Submit datakit smoke ferry
         id: submit
@@ -95,7 +95,7 @@ jobs:
       - name: Wait for datakit smoke ferry
         shell: bash -l {0}
         run: |
-          uv run python scripts/workflows/iris_monitor.py wait \
+          uv run python scripts/ci/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --poll-interval 30 \
@@ -126,7 +126,7 @@ jobs:
         if: success()
         shell: bash -l {0}
         run: |
-          uv run python scripts/datakit/collect_perf_metrics.py \
+          uv run python scripts/ci/collect_perf_metrics.py \
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --status "$FERRY_STATUS_PATH" \
@@ -150,7 +150,7 @@ jobs:
           DIAG_DIR: ${{ github.workspace }}/datakit-smoke-diagnostics
         run: |
           mkdir -p "$DIAG_DIR"
-          uv run python scripts/workflows/iris_monitor.py collect \
+          uv run python scripts/ci/iris_monitor.py collect \
             --job-id "$JOB_ID" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --provider gcp \
@@ -169,7 +169,8 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-      # The triage-canary skill handles both lanes; CANARY_LANE selects datakit-smoke vs tpu.
+      # lane id must be unique per canary: it flows into the [canary-{lane}] issue
+      # title, so a shared id would collide with another tier's triage dedup.
       - name: Claude triage
         id: claude_triage
         if: (failure() || cancelled()) && github.event_name == 'schedule'

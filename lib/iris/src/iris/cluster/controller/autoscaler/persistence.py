@@ -25,9 +25,11 @@ def persist_autoscaler_state(cur: Tx, state: AutoscalerState) -> None:
     """Sync the ``slices`` / ``scaling_groups`` tables to match ``state``.
 
     Upserts every group and slice row in ``state`` and deletes slice rows for
-    the covered scale groups that are no longer tracked. Deletion is scoped to
-    the groups present in ``state`` so an empty state (a backend with no
-    autoscaler) is a no-op rather than wiping every row.
+    the tracked groups whose slices are no longer present. Deletion is scoped to
+    the groups in ``state``: an empty state (a backend with no autoscaler) is a
+    no-op rather than wiping every row, and rows belonging to *abandoned* groups
+    — dropped from config with their VMs already gone, so never re-adopted here —
+    are left for the slice pruner to garbage-collect.
 
     Runs in the caller's write transaction (``cur``) so the control tick can
     fold this persistence into its single end-of-tick commit.
@@ -81,7 +83,8 @@ def persist_autoscaler_state(cur: Tx, state: AutoscalerState) -> None:
             )
         )
 
-    # Drop slice rows for the covered groups that are no longer tracked.
+    # Drop tracked-group slice rows that are no longer present. Scoped to
+    # group_names, so abandoned-group rows fall to the pruner, not here.
     cur.execute(
         delete(slices_table).where(
             slices_table.c.scale_group.in_(group_names),

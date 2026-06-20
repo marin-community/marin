@@ -1,7 +1,7 @@
 // Hono entrypoint for the Marin status page.
 //
 // Serves:
-//   GET /api/ferry           — GitHub Actions ferry status (60s cache, last 10 days)
+//   GET /api/ferry           — GitHub Actions ferry status (60s cache, last 14 runs per tier)
 //   GET /api/builds          — GitHub per-commit CI rollup on main (60s cache, last 100 commits)
 //   GET /api/iris            — iris controller reachability (15s cache)
 //   GET /api/control-plane/health — active env Iris + finelog health history
@@ -36,7 +36,7 @@ import {
 } from "./sources/serviceHealth.js";
 import { workerSnapshot, type WorkersSnapshot } from "./sources/workers.js";
 
-const FERRY_WINDOW_DAYS = 10;
+const FERRY_RUN_LIMIT = 14;
 const BUILD_HISTORY = 100;
 
 // Cache is keyed per tier workflow file so the three datakit tiers share
@@ -143,12 +143,12 @@ app.get("/api/ferry", async (c) => {
       name: group.name,
       tiers: await Promise.all(
         group.tiers.map((tier) =>
-          ferryCache.get(tier.file, () => fetchTierStatus(tier, FERRY_WINDOW_DAYS)),
+          ferryCache.get(tier.file, () => fetchTierStatus(tier, FERRY_RUN_LIMIT)),
         ),
       ),
     })),
   );
-  return c.json({ windowDays: FERRY_WINDOW_DAYS, groups });
+  return c.json({ runLimit: FERRY_RUN_LIMIT, groups });
 });
 
 app.get("/api/builds", async (c) => {

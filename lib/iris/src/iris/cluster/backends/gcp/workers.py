@@ -16,7 +16,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
@@ -84,6 +84,9 @@ def _spawn_bootstrap_thread(
                 )
             with handle._bootstrap_lock:
                 handle._bootstrap_state = CloudSliceState.FAILED
+                # Keep the reason (e.g. the create-LRO "no more capacity" stockout)
+                # so describe() can surface it and the autoscaler can classify it.
+                handle._bootstrap_error = str(e)
 
     threading.Thread(target=_run, name=f"bootstrap-{handle.slice_id}", daemon=True).start()
 
@@ -951,7 +954,7 @@ def _run_tpu_bootstrap(
 
 def _fetch_bootstrap_logs(gcp_service: GcpService, handle: GcpSliceHandle) -> None:
     """Fetch [iris-init] log entries from Cloud Logging for diagnostics."""
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+    cutoff = datetime.now(UTC) - timedelta(minutes=30)
     cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
     log_filter = (
         f'resource.type="gce_instance" '

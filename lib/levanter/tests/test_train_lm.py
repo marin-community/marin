@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import math
 import os
 import tempfile
 
@@ -19,8 +21,8 @@ from levanter.adaptor import LoraAdaptorConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text import DirectDatasetComponent, GrugLmExample, LmDataConfig
 from levanter.distributed import DistributedConfig
+from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer_state import trainables_only
-from levanter.tracker import NoopConfig
 from test_utils import arrays_only
 
 
@@ -28,101 +30,99 @@ def _array_leaves(tree):
     return jax.tree_util.tree_leaves(arrays_only(tree))
 
 
+def _assert_training_recorded(output_path: str) -> dict:
+    """Load the JsonFileTracker record and assert training produced finite metrics.
+
+    The smoke tests run ``train_lm.main`` end to end; the only stable observable
+    effect is the metrics persisted by the tracker on ``finish()``. Asserting on
+    them catches silent no-ops (no step ever logged) and NaN/inf loss blowups.
+    """
+    with open(os.path.join(output_path, "eval_results.json")) as f:
+        metrics = json.load(f)
+    assert metrics["parameter_count"] > 0
+    assert "train/loss" in metrics, "per-step logging hook never fired"
+    assert math.isfinite(metrics["train/loss"])
+    return metrics
+
+
 def test_train_lm():
-    # just testing if train_lm has a pulse
     with tempfile.TemporaryDirectory() as tmpdir:
         data_config, _ = tiny_test_corpus.construct_small_data_cache(tmpdir)
-        try:
-            config = train_lm.TrainLmConfig(
-                data=data_config,
-                model=train_lm.LlamaConfig(
-                    num_layers=2,
-                    num_heads=2,
-                    num_kv_heads=2,
-                    max_seq_len=64,
-                    hidden_dim=32,
-                    attn_backend=None,  # use default for platform
-                ),
-                trainer=train_lm.TrainerConfig(
-                    num_train_steps=2,
-                    train_batch_size=len(jax.devices()),
-                    max_eval_batches=1,
-                    tracker=NoopConfig(),
-                    require_accelerator=False,
-                    distributed=DistributedConfig(initialize_jax_distributed=False),
-                ),
-            )
-            train_lm.main(config)
-        finally:
-            try:
-                os.unlink("wandb")
-            except Exception:
-                pass
+        config = train_lm.TrainLmConfig(
+            data=data_config,
+            model=train_lm.LlamaConfig(
+                num_layers=2,
+                num_heads=2,
+                num_kv_heads=2,
+                max_seq_len=64,
+                hidden_dim=32,
+                attn_backend=None,  # use default for platform
+            ),
+            trainer=train_lm.TrainerConfig(
+                num_train_steps=2,
+                train_batch_size=len(jax.devices()),
+                max_eval_batches=1,
+                tracker=JsonFileTrackerConfig(output_path=tmpdir),
+                require_accelerator=False,
+                distributed=DistributedConfig(initialize_jax_distributed=False),
+            ),
+        )
+        train_lm.main(config)
+        _assert_training_recorded(tmpdir)
 
 
 def test_train_lm_fp8():
-    # just testing if train_lm has a pulse
     with tempfile.TemporaryDirectory() as tmpdir:
         data_config, _ = tiny_test_corpus.construct_small_data_cache(tmpdir)
-        try:
-            config = train_lm.TrainLmConfig(
-                data=data_config,
-                model=train_lm.LlamaConfig(
-                    num_layers=2,
-                    num_heads=2,
-                    num_kv_heads=2,
-                    max_seq_len=64,
-                    hidden_dim=32,
-                    attn_backend=None,  # use default for platform
-                ),
-                trainer=train_lm.TrainerConfig(
-                    quantization=QuantizationConfig(fp8=True),
-                    num_train_steps=2,
-                    train_batch_size=len(jax.devices()),
-                    max_eval_batches=1,
-                    tracker=NoopConfig(),
-                    require_accelerator=False,
-                    distributed=DistributedConfig(initialize_jax_distributed=False),
-                ),
-            )
-            train_lm.main(config)
-        finally:
-            try:
-                os.unlink("wandb")
-            except Exception:
-                pass
+        config = train_lm.TrainLmConfig(
+            data=data_config,
+            model=train_lm.LlamaConfig(
+                num_layers=2,
+                num_heads=2,
+                num_kv_heads=2,
+                max_seq_len=64,
+                hidden_dim=32,
+                attn_backend=None,  # use default for platform
+            ),
+            trainer=train_lm.TrainerConfig(
+                quantization=QuantizationConfig(fp8=True),
+                num_train_steps=2,
+                train_batch_size=len(jax.devices()),
+                max_eval_batches=1,
+                tracker=JsonFileTrackerConfig(output_path=tmpdir),
+                require_accelerator=False,
+                distributed=DistributedConfig(initialize_jax_distributed=False),
+            ),
+        )
+        train_lm.main(config)
+        _assert_training_recorded(tmpdir)
 
 
 def test_train_lm_with_lora_adapter():
     with tempfile.TemporaryDirectory() as tmpdir:
         data_config, _ = tiny_test_corpus.construct_small_data_cache(tmpdir)
-        try:
-            config = train_lm.TrainLmConfig(
-                data=data_config,
-                model=train_lm.LlamaConfig(
-                    num_layers=2,
-                    num_heads=2,
-                    num_kv_heads=2,
-                    max_seq_len=64,
-                    hidden_dim=32,
-                    attn_backend=None,
-                ),
-                trainer=train_lm.TrainerConfig(
-                    num_train_steps=2,
-                    train_batch_size=len(jax.devices()),
-                    max_eval_batches=1,
-                    tracker=NoopConfig(),
-                    require_accelerator=False,
-                    distributed=DistributedConfig(initialize_jax_distributed=False),
-                ),
-                adapter=LoraAdaptorConfig(r=4),
-            )
-            train_lm.main(config)
-        finally:
-            try:
-                os.unlink("wandb")
-            except Exception:
-                pass
+        config = train_lm.TrainLmConfig(
+            data=data_config,
+            model=train_lm.LlamaConfig(
+                num_layers=2,
+                num_heads=2,
+                num_kv_heads=2,
+                max_seq_len=64,
+                hidden_dim=32,
+                attn_backend=None,
+            ),
+            trainer=train_lm.TrainerConfig(
+                num_train_steps=2,
+                train_batch_size=len(jax.devices()),
+                max_eval_batches=1,
+                tracker=JsonFileTrackerConfig(output_path=tmpdir),
+                require_accelerator=False,
+                distributed=DistributedConfig(initialize_jax_distributed=False),
+            ),
+            adapter=LoraAdaptorConfig(r=4),
+        )
+        train_lm.main(config)
+        _assert_training_recorded(tmpdir)
 
 
 def test_restore_lm_model_from_partial_checkpoint_recovers_base_model():
@@ -155,43 +155,36 @@ def test_restore_lm_model_from_partial_checkpoint_recovers_base_model():
 
 
 def test_train_lm_direct_dataset():
-    with tempfile.TemporaryDirectory():
-        try:
-            vocab_size = 128
-            seq_len = 64
-            data = []
-            for i in range(8):
-                tokens = jnp.full((seq_len,), i % vocab_size, dtype=jnp.int32)
-                data.append(GrugLmExample.causal(tokens))
-            dataset = ListAsyncDataset(data)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        vocab_size = 128
+        seq_len = 64
+        data = []
+        for i in range(8):
+            tokens = jnp.full((seq_len,), i % vocab_size, dtype=jnp.int32)
+            data.append(GrugLmExample.causal(tokens))
+        dataset = ListAsyncDataset(data)
 
-            component = DirectDatasetComponent(datasets={"train": dataset})
-            data_config = LmDataConfig(
-                components={"direct": component}, vocab_size=vocab_size, tokenizer="passthrough"
-            )
+        component = DirectDatasetComponent(datasets={"train": dataset})
+        data_config = LmDataConfig(components={"direct": component}, vocab_size=vocab_size, tokenizer="passthrough")
 
-            config = train_lm.TrainLmConfig(
-                data=data_config,
-                model=train_lm.LlamaConfig(
-                    num_layers=2,
-                    num_heads=2,
-                    num_kv_heads=2,
-                    max_seq_len=seq_len,
-                    hidden_dim=32,
-                    attn_backend=None,
-                ),
-                trainer=train_lm.TrainerConfig(
-                    num_train_steps=2,
-                    train_batch_size=len(jax.devices()),
-                    max_eval_batches=1,
-                    tracker=NoopConfig(),
-                    require_accelerator=False,
-                    distributed=DistributedConfig(initialize_jax_distributed=False),
-                ),
-            )
-            train_lm.main(config)
-        finally:
-            try:
-                os.unlink("wandb")
-            except Exception:
-                pass
+        config = train_lm.TrainLmConfig(
+            data=data_config,
+            model=train_lm.LlamaConfig(
+                num_layers=2,
+                num_heads=2,
+                num_kv_heads=2,
+                max_seq_len=seq_len,
+                hidden_dim=32,
+                attn_backend=None,
+            ),
+            trainer=train_lm.TrainerConfig(
+                num_train_steps=2,
+                train_batch_size=len(jax.devices()),
+                max_eval_batches=1,
+                tracker=JsonFileTrackerConfig(output_path=tmpdir),
+                require_accelerator=False,
+                distributed=DistributedConfig(initialize_jax_distributed=False),
+            ),
+        )
+        train_lm.main(config)
+        _assert_training_recorded(tmpdir)

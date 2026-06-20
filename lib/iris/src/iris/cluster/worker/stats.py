@@ -19,7 +19,7 @@ CLI that never touches status text doesn't open a finelog connection.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import StrEnum
 from typing import ClassVar
 
@@ -50,7 +50,7 @@ def stats_timestamp() -> datetime:
     datetime column (stored as TIMESTAMP_MS by finelog). Built from rigging's
     ``Timestamp.now()`` so the time source stays consistent with the rest of iris.
     """
-    return datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
+    return Timestamp.now().as_naive_utc()
 
 
 class WorkerStatus(StrEnum):

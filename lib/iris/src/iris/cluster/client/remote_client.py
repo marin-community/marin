@@ -112,7 +112,7 @@ class RemoteClusterClient:
         # adds no RPC for CLI calls that never touch logs.
         self._log_client = LogClient.connect(
             LOG_SERVER_ENDPOINT_NAME,
-            resolver=self._resolve_endpoint,
+            resolver=self.resolve_endpoint,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
         )
@@ -402,7 +402,7 @@ class RemoteClusterClient:
 
         return call_with_retry("list_endpoints", _call)
 
-    def _resolve_endpoint(self, endpoint_name: str) -> str:
+    def resolve_endpoint(self, endpoint_name: str) -> str:
         """Resolve ``endpoint_name`` to a service address.
 
         When ``use_controller_proxy`` is set (external clients), returns the

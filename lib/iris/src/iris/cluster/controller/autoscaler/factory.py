@@ -85,9 +85,20 @@ def create_autoscaler(
             worker_attrs or "none",
         )
 
+    def make_draining_group(name: str) -> ScalingGroup:
+        """Build a scale-to-zero group: ``max_slices=0`` blocks scale-up; idle scaledown drains it."""
+        return ScalingGroup(
+            config=config_pb2.ScaleGroupConfig(name=name, max_slices=0),
+            platform=platform,
+            label_prefix=label_prefix,
+            idle_threshold=scale_down_delay,
+            scale_down_rate_limit=DEFAULT_SCALE_DOWN_RATE_LIMIT,
+        )
+
     return Autoscaler.from_config(
         scale_groups=scaling_groups,
         config=autoscaler_config,
         platform=platform,
         base_worker_config=base_worker_config,
+        make_draining_group=make_draining_group,
     )

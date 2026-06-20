@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
@@ -55,7 +55,7 @@ def _write_state(cfg: FinelogConfig, **updates: str | None) -> Path:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _running_repo_digest(cfg: FinelogConfig) -> str | None:

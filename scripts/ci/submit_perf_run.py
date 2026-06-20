@@ -7,7 +7,7 @@ Maps Gate N (1/2/3) to the iris CLI shape used by
 ``.github/workflows/marin-canary-datakit-tier<N>.yaml`` so the treatment job
 is structurally comparable to the latest scheduled tier-N baseline run. The
 treatment job id is printed to stdout as a single JSON line; pair with
-``scripts/datakit/collect_perf_metrics.py --job-id <id>`` to produce the
+``scripts/ci/collect_perf_metrics.py --job-id <id>`` to produce the
 treatment perf report.
 
 Caller is responsible for setting up the working directory at the right SHA
@@ -127,7 +127,7 @@ TIERS: dict[str, TierConfig] = {
 
 
 def _build_run_id(pr: int, gate: str) -> str:
-    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
     return f"zephyr-perf-pr{pr}-g{gate}-treatment-{ts}"
 
 

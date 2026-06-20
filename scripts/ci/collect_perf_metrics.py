@@ -487,7 +487,7 @@ def build_report(
     """
     report = PerfReport(
         iris_job_id=job_id,
-        collected_at_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        collected_at_utc=datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
         workflow_run_id=workflow_env.get("run_id"),
         workflow_run_attempt=workflow_env.get("run_attempt"),
         workflow_name=workflow_env.get("workflow"),
@@ -555,7 +555,7 @@ def build_report(
 
 def _utc_timestamp_compact() -> str:
     """Return a filesystem-safe UTC timestamp like ``20260506T071523Z``."""
-    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 def write_report_local(report: PerfReport, out_path: Path) -> None:

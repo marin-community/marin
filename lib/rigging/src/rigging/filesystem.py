@@ -82,6 +82,16 @@ _REGION_ALIASES: dict[str, str] = {
 # Cloudflare R2 data buckets (S3-compatible, ``s3://`` scheme).
 R2_DATA_BUCKETS: frozenset[str] = frozenset({"marin-na"})
 
+# Finite botocore timeouts/retries for every S3/R2 filesystem we build.
+# s3fs/aiobotocore default to *no* read or connect timeout, so a silently dead
+# R2 connection wedges ``upload_part`` forever (#6487): the blocked socket never
+# raises, the shard never completes, and the sequential stage barrier stalls the
+# whole job. With finite timeouts the wedge becomes a retryable error that fails
+# the shard, which the coordinator then re-queues.
+_S3_CONNECT_TIMEOUT = 30
+_S3_READ_TIMEOUT = 120
+_S3_RETRY_MAX_ATTEMPTS = 5
+
 # Allowed TTL-day values. Each value N corresponds to a lifecycle rule on every
 # ``marin-{region}`` bucket that deletes objects under ``tmp/ttl=Nd/`` after N
 # days. Keep in sync with ``infra/configure_buckets.py``.
@@ -793,12 +803,28 @@ class CrossRegionGuardedFS:
 # ---------------------------------------------------------------------------
 
 
+def _with_s3_timeout_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Inject finite botocore timeouts/retries into S3 filesystem kwargs.
+
+    Caller-supplied ``config_kwargs`` values win; we only fill in keys the
+    caller did not set. See :data:`_S3_READ_TIMEOUT` and #6487.
+    """
+    config_kwargs = dict(kwargs.get("config_kwargs") or {})
+    config_kwargs.setdefault("connect_timeout", _S3_CONNECT_TIMEOUT)
+    config_kwargs.setdefault("read_timeout", _S3_READ_TIMEOUT)
+    config_kwargs.setdefault("retries", {"max_attempts": _S3_RETRY_MAX_ATTEMPTS, "mode": "standard"})
+    return {**kwargs, "config_kwargs": config_kwargs}
+
+
 def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
     """Like ``fsspec.core.url_to_fs`` but wraps GCS filesystems in a cross-region guard.
 
     Returns ``(fs, path)``.  For non-GCS URLs the filesystem is returned
     unwrapped.  ``mirror://`` URLs are handled by :class:`MirrorFileSystem`.
+    S3/R2 URLs get finite timeouts injected (#6487).
     """
+    if url.startswith("s3://"):
+        kwargs = _with_s3_timeout_defaults(kwargs)
     fs, path = fsspec.core.url_to_fs(url, **kwargs)
     if _fs_is_gcs(fs):
         fs = CrossRegionGuardedFS(fs)
@@ -822,11 +848,17 @@ def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
         fs, path = fsspec.core.url_to_fs(url)
         guarded = CrossRegionGuardedFS(fs)
         guarded._guard_read(path)
+    if url.startswith("s3://"):
+        kwargs = _with_s3_timeout_defaults(kwargs)
     return cast(fsspec.core.OpenFile, fsspec.open(url, mode, **kwargs))
 
 
 def filesystem(protocol: str, **kwargs: Any) -> Any:
-    """Like ``fsspec.filesystem`` but wraps GCS filesystems in a cross-region guard."""
+    """Like ``fsspec.filesystem`` but wraps GCS filesystems in a cross-region guard.
+
+    S3/R2 filesystems get finite timeouts injected (#6487)."""
+    if protocol in ("s3", "s3a"):
+        kwargs = _with_s3_timeout_defaults(kwargs)
     fs = fsspec.filesystem(protocol, **kwargs)
     if _is_gcs_protocol(protocol):
         fs = CrossRegionGuardedFS(fs)

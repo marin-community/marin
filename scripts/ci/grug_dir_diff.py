@@ -11,7 +11,7 @@ import html
 import os
 import webbrowser
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 DEFAULT_EXTENSIONS: tuple[str, ...] = (".py", ".md")
@@ -152,7 +152,7 @@ def render_report_page(
         )
 
     extensions_label = "all files" if include_all_files else ", ".join(extensions)
-    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    now_utc = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%SZ")
 
     sections: list[str] = []
     for entry in rendered_entries:

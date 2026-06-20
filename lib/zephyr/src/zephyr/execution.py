@@ -26,7 +26,7 @@ from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import cloudpickle
@@ -63,7 +63,11 @@ from zephyr.stage_io import (
     _shared_data_path,
     _stage_throughput,
 )
-from zephyr.worker_context import CounterSnapshot
+from zephyr.stats import (
+    StatsWriter,
+    ZephyrWorkerStatStatus,
+)
+from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -93,7 +97,7 @@ class ShardFailureKind(enum.StrEnum):
 
 def _generate_execution_id() -> str:
     """Generate unique ID for this execution to avoid conflicts."""
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"{ts}-{uuid.uuid4().hex[:8]}"
 
 
@@ -294,6 +298,8 @@ class ZephyrCoordinator:
         # Set at each _start_stage so _log_status can show average throughput since stage start.
         self._stage_monotonic_start: float | None = None
 
+        self._stats_writer: StatsWriter = StatsWriter(None)
+
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
 
@@ -333,6 +339,8 @@ class ZephyrCoordinator:
         self._heartbeat_timeout = heartbeat_timeout
         self._max_shard_failures = max_shard_failures
         self._max_shard_infra_failures = max_shard_infra_failures
+
+        self._stats_writer = StatsWriter.connect()
 
         logger.info("Coordinator initialized")
 
@@ -483,7 +491,6 @@ class ZephyrCoordinator:
         alive = sum(1 for s in states if s in {WorkerState.READY, WorkerState.BUSY})
         dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
 
-        totals = self.get_counters()
         base_msg = "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead"
         base_args = (
             self._execution_id,
@@ -501,7 +508,7 @@ class ZephyrCoordinator:
         # populate these counters. Drop the items/bytes_processed segment for
         # those stages.
         elapsed = time.monotonic() - (self._stage_monotonic_start or time.monotonic())
-        throughput = _stage_throughput(totals, self._stage_name, elapsed)
+        throughput = _stage_throughput(self.get_counters(stage=self._stage_name), elapsed)
         if throughput is not None:
             logger.info(base_msg + "; %s", *base_args, throughput)
         else:
@@ -509,6 +516,18 @@ class ZephyrCoordinator:
         if retried:
             attempts_histogram = dict(sorted(Counter(retried.values()).items()))
             logger.warning("[%s] Shards retried (attempts: shard count): %s", self._execution_id, attempts_histogram)
+
+    def _emit_stage_stat(self, *, failed: bool = False) -> None:
+        """Emit one ZephyrStageStat row to finelog at stage completion or failure."""
+        with self._lock:
+            stage_name = self._stage_name
+            execution_id = self._execution_id
+            total = self._total_shards
+            stage_start = self._stage_monotonic_start
+            elapsed = time.monotonic() - stage_start if stage_start else 0.0
+        status = ZephyrWorkerStatStatus.FAILED if failed else ZephyrWorkerStatStatus.END
+        stage_counters = self.get_counters(stage=stage_name)
+        self._stats_writer.emit_stage_stat(stage_counters, stage_name, execution_id, elapsed, total, status)
 
     def _record_shard_failure(
         self,
@@ -761,25 +780,61 @@ class ZephyrCoordinator:
                 },
             )
 
-    def get_counters(self, worker_id: str | None = None) -> dict[str, int]:
-        """Return counter values, optionally filtered to a single worker.
+    def get_counters(self, worker_id: str | None = None, *, stage: str | None = None) -> dict[str, int | float]:
+        """Return counter values, optionally filtered to a single worker or stage.
 
         Args:
             worker_id: If provided, return the latest snapshot for this worker
                 only. If None, return totals derived from completed and
-                in-flight snapshots.
+                in-flight snapshots, applying per-key aggregation hints.
+            stage: If provided, only include entries with ``entry.stage == stage``.
+                If None (default), include all entries regardless of stage.
+
+        If snapshots disagree on a counter's aggregation (only possible for
+        user counters that reuse a name with different ``set_aggregation``
+        modes), the first-seen mode wins and a warning is logged — stats
+        collection never raises into the execution path.
         """
         with self._lock:
             if worker_id is not None:
                 snap = self._worker_counters.get(worker_id)
-                return dict(snap.counters) if snap is not None else {}
+                if snap is None:
+                    return {}
+                return {k: e.value for k, e in snap.counters.items() if stage is None or e.stage == stage}
 
-            totals: Counter[str] = Counter()
-            for snap in self._completed_counters:
-                totals.update(snap.counters)
-            for snap in self._worker_counters.values():
-                totals.update(snap.counters)
-            return dict(totals)
+            all_snaps = list(self._completed_counters) + list(self._worker_counters.values())
+
+        aggregations: dict[str, Aggregation] = {}
+        values: dict[str, list[int | float]] = {}
+        for snap in all_snaps:
+            for k, entry in snap.counters.items():
+                if stage is not None and entry.stage != stage:
+                    continue
+                if k in aggregations:
+                    if aggregations[k] != entry.aggregation:
+                        logger.warning(
+                            "Counter %r has conflicting aggregations: %r vs %r; keeping %r",
+                            k,
+                            aggregations[k],
+                            entry.aggregation,
+                            aggregations[k],
+                        )
+                else:
+                    aggregations[k] = entry.aggregation
+                values.setdefault(k, []).append(entry.value)
+
+        result: dict[str, int | float] = {}
+        for k, vals in values.items():
+            match aggregations.get(k, Aggregation.SUM):
+                case Aggregation.SUM:
+                    result[k] = sum(vals)
+                case Aggregation.AVERAGE:
+                    result[k] = sum(vals) / len(vals)
+                case Aggregation.MAX:
+                    result[k] = max(vals)
+                case Aggregation.MIN:
+                    result[k] = min(vals)
+        return result
 
     def get_fatal_error(self) -> str | None:
         with self._lock:
@@ -975,7 +1030,12 @@ class ZephyrCoordinator:
             "[%s] Starting stage %s (%s) with %d tasks", self._execution_id, stage_label, stage.stage_type, len(tasks)
         )
         self._start_stage(stage_label, stage_index_for_state, tasks, is_last_stage=is_last_stage)
-        self._wait_for_stage()
+        try:
+            self._wait_for_stage()
+        except Exception:
+            self._emit_stage_stat(failed=True)
+            raise
+        self._emit_stage_stat()
 
         self._mark_stage_complete()
 
@@ -1044,6 +1104,8 @@ class ZephyrCoordinator:
         if self._coordinator_thread is not None:
             self._coordinator_thread.join(timeout=5.0)
 
+        self._stats_writer.close()
+
         logger.info("Coordinator shutdown complete")
 
     def set_chunk_config(self, prefix: str, execution_id: str) -> None:
@@ -1102,7 +1164,7 @@ class ZephyrWorker:
         self._num_reduce_workers = reduce_workers_per_actor
         self._shutdown_event = threading.Event()
         self._counter_generation: int = 0
-        self._last_reported_counters: dict[str, int] = {}
+        self._last_reported_counters: dict[str, CounterEntry] = {}
         # Runners and sub-IDs for currently active slots — written by _stage_manager,
         # read (snapshotted) by heartbeat thread.
         self._active_runners: list[StageRunner] = []
@@ -1225,7 +1287,8 @@ class ZephyrWorker:
 
         def build_md() -> tuple[str, str]:
             stage = self._current_stage_name
-            throughput = _stage_throughput(self._last_reported_counters, stage, 1.0) if stage else None
+            stage_values = {k: e.value for k, e in self._last_reported_counters.items() if e.stage == stage}
+            throughput = _stage_throughput(stage_values, 1.0) if stage else None
             if throughput is not None:
                 logger.info("[%s] [%s] throughput: %s", self._worker_id, stage, throughput)
             return _format_worker_status_md(self._active_task_count, stage)
@@ -1233,16 +1296,28 @@ class ZephyrWorker:
         _push_iris_task_status(self._iris_status_limiter, build_md)
 
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
-        """Aggregate live counters from all active runners; return None if unchanged."""
+        """Aggregate live counters from all active runners; return None if unchanged.
+
+        When ``num_workers > 1``, multiple runners may be active simultaneously.
+        Each runner's counters are combined using the counter's own aggregation:
+        SUM adds values, MAX/MIN take the extremum, and AVERAGE uses a
+        count-weighted mean so the result is a single representative data point.
+        The coordinator's ``get_counters`` then combines this snapshot with
+        completed-shard snapshots using the same aggregation semantics.
+        """
         runners = list(self._active_runners)  # GIL-safe snapshot
-        current: Counter[str] = Counter()
+        current: dict[str, CounterEntry] = {}
         for r in runners:
-            current.update(r.live_counters())
+            for name, entry in r.live_counters().items():
+                if name not in current:
+                    current[name] = CounterEntry(entry.value, entry.aggregation, entry.stage, entry.count)
+                else:
+                    current[name].merge(entry)
         if current == self._last_reported_counters:
             return None
-        self._last_reported_counters = dict(current)
+        self._last_reported_counters = current
         self._counter_generation += 1
-        return CounterSnapshot(counters=dict(current), generation=self._counter_generation)
+        return CounterSnapshot(counters=current, generation=self._counter_generation)
 
     def _heartbeat_loop(
         self, coordinator: ActorHandle, interval: float = 5.0, max_consecutive_failures: int = 5
@@ -1390,7 +1465,7 @@ class ZephyrWorker:
 
     def _execute_shard(
         self, task: ShardTask, config: dict, stage_runner: StageRunner
-    ) -> tuple[TaskResult, dict[str, int]]:
+    ) -> tuple[TaskResult, dict[str, CounterEntry]]:
         chunk_prefix = config["chunk_prefix"]
         execution_id = config["execution_id"]
         logger.info(
@@ -1573,8 +1648,8 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
 
         try:
             results = coordinator.run_pipeline.submit(config.plan, config.execution_id).result()
-            counters = coordinator.get_counters.remote().result(timeout=10.0) or {}
-            payload = ZephyrExecutionResult(results=results, counters=counters)
+            raw_counters = coordinator.get_counters.remote().result(timeout=10.0) or {}
+            payload = ZephyrExecutionResult(results=results, counters={k: int(v) for k, v in raw_counters.items()})
 
             ensure_parent_dir(result_path)
             with open_url(result_path, "wb") as f:

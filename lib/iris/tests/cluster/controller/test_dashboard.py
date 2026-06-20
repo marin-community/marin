@@ -508,7 +508,7 @@ def test_get_job_status_returns_original_request(client, state):
         ),
         environment=job_pb2.EnvironmentConfig(
             pip_packages=["torch", "numpy"],
-            python_version="3.11",
+            python_version="3.12",
         ),
         replicas=2,
         constraints=[
@@ -537,7 +537,7 @@ def test_get_job_status_returns_original_request(client, state):
     # Verify environment
     env = returned_request.get("environment", {})
     assert env["pipPackages"] == ["torch", "numpy"]
-    assert env["pythonVersion"] == "3.11"
+    assert env["pythonVersion"] == "3.12"
     # Verify replicas
     assert returned_request["replicas"] == 2
     # Verify constraints

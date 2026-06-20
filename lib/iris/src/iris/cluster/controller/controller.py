@@ -32,6 +32,7 @@ from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
+from iris.cluster.controller.autoscaler.provisioning import PROVISIONING_NAMESPACE, IrisProvisioning
 from iris.cluster.controller.backend import (
     AutoscaleResult,
     BackendCapability,
@@ -181,11 +182,12 @@ class ControllerConfig:
 
     worker_unreachable_grace: Duration = field(default_factory=lambda: Duration.from_seconds(50.0))
     """How long a worker may be continuously unreachable (or self-report
-    unhealthy) before the controller fails and tears it down. Realized as a count
-    of consecutive failed reconcile passes — ``round(grace / poll_interval)`` —
-    so detection latency stays fixed regardless of the reconcile cadence. ~50s
-    tolerates brief network blips without reaping a multi-VM slice; tests shorten
-    it for fast deterministic teardown."""
+    unhealthy) before the controller fails and tears it down. Realized as
+    wall-clock elapsed since the worker's last successful reconcile (see
+    ``WorkerHealthTracker``), so detection latency is ~grace regardless of the
+    reconcile cadence or how long a failing pass takes. ~50s tolerates brief
+    network blips without reaping a multi-VM slice; tests shorten it for fast
+    deterministic teardown."""
 
     max_tasks_per_job_per_cycle: int = 4
     """Maximum tasks from a single non-coscheduled job to consider per scheduling
@@ -205,6 +207,13 @@ class ControllerConfig:
 
     worker_retention: Duration = field(default_factory=lambda: Duration.from_seconds(86400))
     """Delete inactive/unhealthy workers whose last heartbeat exceeds this (default: 24 hours)."""
+
+    slice_retention: Duration = field(default_factory=lambda: Duration.from_seconds(3600))
+    """Delete orphaned slices (no backing worker row) older than this (default: 1 hour).
+
+    Must comfortably exceed worst-case slice boot + worker-registration lag, so a
+    freshly-created slice whose VMs are still booting is never reaped before its
+    workers register."""
 
     local_state_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="iris_controller_state_")))
     """Local directory for controller DB, logs, bundle cache."""
@@ -312,13 +321,9 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
-        # Detection latency is fixed in wall-clock by worker_unreachable_grace and
-        # converted to a consecutive-failure count for the reconcile cadence, so it
-        # is unaffected by poll_interval.
-        reconcile_failure_threshold = max(
-            1, round(config.worker_unreachable_grace.to_seconds() / config.poll_interval.to_seconds())
-        )
-        self._health = WorkerHealthTracker(reconcile_failure_threshold=reconcile_failure_threshold)
+        # Worker-death detection is wall-clock, fixed at the grace regardless of
+        # the reconcile cadence (see WorkerHealthTracker).
+        self._health = WorkerHealthTracker(unreachable_grace=config.worker_unreachable_grace)
         self._endpoints = EndpointsProjection(self._db)
         self._worker_attrs = WorkerAttrsProjection(self._db)
         writes.validate()
@@ -355,6 +360,14 @@ class Controller:
             self._log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
             self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile),
         )
+
+        # The autoscaler emits slice provisioning outcomes to iris.provisioning;
+        # wire its sink now that the log client is up (no-op backends have none).
+        # TODO(#6520): thread the log client through the constructor and drop this
+        # delayed-sink wiring.
+        autoscaler = self._task_backend.autoscaler
+        if autoscaler is not None:
+            autoscaler.set_provisioning_sink(self._log_client.get_table(PROVISIONING_NAMESPACE, IrisProvisioning))
 
         self._log_handler = RemoteLogHandler(self._log_client, key=CONTROLLER_LOG_KEY)
 
@@ -674,6 +687,7 @@ class Controller:
                         self._worker_attrs,
                         job_retention=self._config.job_retention,
                         worker_retention=self._config.worker_retention,
+                        slice_retention=self._config.slice_retention,
                         stop_event=stop_event,
                     )
                 except Exception:

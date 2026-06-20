@@ -145,7 +145,7 @@ if ! command -v uv &> /dev/null; then
 fi
 
 log_header "Creating virtual environment"
-uv venv --python 3.11 --clear
+uv venv --python 3.12 --clear
 source .venv/bin/activate
 log_end
 

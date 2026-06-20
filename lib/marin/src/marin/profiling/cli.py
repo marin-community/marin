@@ -11,8 +11,7 @@ from pathlib import Path
 
 from marin.profiling.compare_bundle import run_profile_comparison_bundle
 from marin.profiling.ingest import (
-    DEFAULT_ARTIFACT_ALIAS,
-    download_latest_profile_artifact_for_run,
+    download_profile_dir_for_run,
     download_wandb_profile_artifact,
     summarize_profile_artifact,
     summarize_trace,
@@ -46,16 +45,11 @@ def parse_args() -> argparse.Namespace:
         "--run-target",
         help=(
             "Optional W&B run target (run id, entity/project/run_id, or run URL). "
-            "Downloads the selected jax_profile artifact for that run."
+            "Downloads the profiler directory for that run."
         ),
     )
     summarize.add_argument("--entity", help="W&B entity when --run-target is a bare run id.")
     summarize.add_argument("--project", help="W&B project when --run-target is a bare run id.")
-    summarize.add_argument(
-        "--alias",
-        default=DEFAULT_ARTIFACT_ALIAS,
-        help=f"Artifact alias preference when using --run-target. Defaults to '{DEFAULT_ARTIFACT_ALIAS}'.",
-    )
     summarize.add_argument("--download-root", type=Path, help="Optional root directory for downloaded artifacts.")
     summarize.add_argument("--profile-dir", type=Path, help="Path to a downloaded jax_profile artifact directory.")
     summarize.add_argument("--trace-file", type=Path, help="Path to an explicit trace JSON(.gz) file.")
@@ -159,11 +153,6 @@ def parse_args() -> argparse.Namespace:
     bundle.add_argument("--after-run-target", help="Optional candidate run target for auto summarization.")
     bundle.add_argument("--entity", help="W&B entity when run targets are bare run ids.")
     bundle.add_argument("--project", help="W&B project when run targets are bare run ids.")
-    bundle.add_argument(
-        "--alias",
-        default=DEFAULT_ARTIFACT_ALIAS,
-        help=f"Artifact alias preference when summarizing from run targets. Defaults to '{DEFAULT_ARTIFACT_ALIAS}'.",
-    )
     bundle.add_argument("--download-root", type=Path, help="Optional root directory for downloaded artifacts.")
     bundle.add_argument("--warmup-steps", type=int, default=5, help="Warmup steps ignored in summary generation.")
     bundle.add_argument("--hot-op-limit", type=int, default=25, help="Maximum hot ops in generated summaries.")
@@ -311,7 +300,6 @@ def main() -> None:
             run_target=args.before_run_target,
             entity=args.entity,
             project=args.project,
-            alias=args.alias,
             download_root=args.download_root,
             warmup_steps=args.warmup_steps,
             hot_op_limit=args.hot_op_limit,
@@ -322,7 +310,6 @@ def main() -> None:
             run_target=args.after_run_target,
             entity=args.entity,
             project=args.project,
-            alias=args.alias,
             download_root=args.download_root,
             warmup_steps=args.warmup_steps,
             hot_op_limit=args.hot_op_limit,
@@ -411,15 +398,14 @@ def _handle_summarize(args: argparse.Namespace):
         )
 
     if args.run_target:
-        downloaded = download_latest_profile_artifact_for_run(
+        downloaded = download_profile_dir_for_run(
             args.run_target,
             entity=args.entity,
             project=args.project,
-            alias=args.alias,
             download_root=args.download_root,
         )
         return summarize_profile_artifact(
-            downloaded.artifact_dir,
+            downloaded.profile_dir,
             run_metadata=downloaded.run_metadata,
             warmup_steps=args.warmup_steps,
             hot_op_limit=args.hot_op_limit,
@@ -450,7 +436,6 @@ def _resolve_bundle_summary(
     run_target: str | None,
     entity: str | None,
     project: str | None,
-    alias: str,
     download_root: Path | None,
     warmup_steps: int,
     hot_op_limit: int,
@@ -459,15 +444,14 @@ def _resolve_bundle_summary(
     if summary_path is not None:
         return _load_summary(summary_path)
     if run_target is not None:
-        downloaded = download_latest_profile_artifact_for_run(
+        downloaded = download_profile_dir_for_run(
             run_target,
             entity=entity,
             project=project,
-            alias=alias,
             download_root=download_root,
         )
         return summarize_profile_artifact(
-            downloaded.artifact_dir,
+            downloaded.profile_dir,
             run_metadata=downloaded.run_metadata,
             warmup_steps=warmup_steps,
             hot_op_limit=hot_op_limit,
