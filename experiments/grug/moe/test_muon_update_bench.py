@@ -92,6 +92,7 @@ from experiments.grug.moe.muon_update_bench import (
     assert_ns4d_sharding,
     assert_packed_grouped_expert_bank_sharding,
     bench_skip_reason,
+    boundary_correctness_skipped_reason,
     build_full_production_muonh_optimizer,
     build_grouped_expert_productionish_optimizer,
     build_ordinary_2d_muonh_optimizer,
@@ -2267,6 +2268,43 @@ def test_fsdp_grads_to_explicit_packed_grouped_bank_correctness_max_error_is_zer
     )
 
     assert max_error == 0.0
+
+
+def test_boundary_correctness_gate_reports_size_skip_reason():
+    config = BenchConfig(
+        layers=26,
+        ns4d_group_size=2,
+        ns4d_group_axis="data",
+        hidden_dim=2560,
+        intermediate_dim=1280,
+        num_experts=256,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=3,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=512,
+        replica_axis=1,
+        data_axis=2,
+        expert_axis=8,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+
+    skip_reason = boundary_correctness_skipped_reason(
+        config,
+        EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
+        max_global_bytes=1 << 30,
+        force=False,
+    )
+    forced_skip_reason = boundary_correctness_skipped_reason(
+        config,
+        EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
+        max_global_bytes=1 << 30,
+        force=True,
+    )
+
+    assert skip_reason is not None
+    assert "exceed correctness cap" in skip_reason
+    assert forced_skip_reason is None
 
 
 def test_fsdp_grads_to_explicit_packed_grouped_bank_timing_returns_scalar_checksum():
@@ -4562,6 +4600,7 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
                 "mean_seconds": 2.0,
                 "min_seconds": 2.0,
                 "correctness_max_error": None,
+                "correctness_skipped_reason": "estimated global bytes 2 exceed correctness cap 1",
             }
         },
     }
@@ -4574,6 +4613,7 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
     assert row["estimated_boundary_phase_ideal_collective_count"] == 6.0
     assert row["estimated_boundary_lowered_collective_to_phase_ideal_ratio"] == 1.0
     assert row["estimated_boundary_compiled_collective_to_phase_ideal_ratio"] == 1.0
+    assert row["boundary_correctness_skipped_reason"] == "estimated global bytes 2 exceed correctness cap 1"
     assert row["mean_estimated_boundary_phase_global_gbps"] == 3 * estimates["global_update_bytes"] / 2.0 / 1e9
     assert row["median_estimated_boundary_phase_global_gbps"] == 3 * estimates["global_update_bytes"] / 2.0 / 1e9
 

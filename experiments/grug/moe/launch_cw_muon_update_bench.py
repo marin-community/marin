@@ -32,6 +32,7 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.cw_storage import set_default_cw_grug_moe_prefix
 from experiments.grug.moe.muon_update_bench import (
     BENCH_KINDS,
+    BOUNDARY_CORRECTNESS_MAX_GLOBAL_BYTES,
     MUONH_UPDATE_BENCH,
     BenchConfig,
     create_mesh,
@@ -87,6 +88,8 @@ class MuonUpdateBenchLaunchConfig:
     disable_abstract_mesh: bool = False
     allow_boundary_collectives: bool = False
     require_no_boundary_collectives: bool = False
+    boundary_correctness_max_global_bytes: int = BOUNDARY_CORRECTNESS_MAX_GLOBAL_BYTES
+    force_boundary_correctness: bool = False
     write_compiled_hlo: bool = False
     profile: bool = False
     wandb: bool = False
@@ -187,6 +190,8 @@ def _run_args(config: MuonUpdateBenchLaunchConfig, profile_dir: Path | None) -> 
         disable_abstract_mesh=config.disable_abstract_mesh,
         allow_boundary_collectives=config.allow_boundary_collectives,
         require_no_boundary_collectives=config.require_no_boundary_collectives,
+        boundary_correctness_max_global_bytes=config.boundary_correctness_max_global_bytes,
+        force_boundary_correctness=config.force_boundary_correctness,
         profile_dir=profile_dir,
     )
 
@@ -474,6 +479,11 @@ def build_step() -> ExecutorStep:
         disable_abstract_mesh=env_bool("MUON_BENCH_DISABLE_ABSTRACT_MESH", False),
         allow_boundary_collectives=env_bool("MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES", False),
         require_no_boundary_collectives=env_bool("MUON_BENCH_REQUIRE_NO_BOUNDARY_COLLECTIVES", False),
+        boundary_correctness_max_global_bytes=env_int(
+            "MUON_BENCH_BOUNDARY_CORRECTNESS_MAX_GLOBAL_BYTES",
+            BOUNDARY_CORRECTNESS_MAX_GLOBAL_BYTES,
+        ),
+        force_boundary_correctness=env_bool("MUON_BENCH_FORCE_BOUNDARY_CORRECTNESS", False),
         write_compiled_hlo=env_bool("MUON_BENCH_WRITE_COMPILED_HLO", False),
         profile=env_bool("MUON_BENCH_ENABLE_JAX_PROFILE", False),
         wandb=env_bool("MUON_BENCH_WANDB", False) or os.environ.get("MUON_BENCH_TRACKER", "").lower() == "wandb",

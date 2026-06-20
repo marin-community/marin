@@ -556,6 +556,7 @@ class TimingSummary:
     stdev_seconds: float | None
     profile_dir: str | None = None
     correctness_max_error: float | None = None
+    correctness_skipped_reason: str | None = None
 
 
 def emit_jsonl(payload: dict[str, Any]) -> None:
@@ -6778,12 +6779,29 @@ def effective_gbps(bytes_count: float | None, seconds: float | None) -> float | 
     return bytes_count / seconds / 1e9
 
 
-def should_compute_boundary_correctness(config: BenchConfig, bench_kind: str) -> bool:
+def boundary_correctness_skipped_reason(
+    config: BenchConfig,
+    bench_kind: str,
+    max_global_bytes: int,
+    force: bool,
+) -> str | None:
     if bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
-        return False
+        return "packed-bank MuonH apply combines multiple phases; use primitive-specific apply benchmarks"
     if not is_expert_fsdp_grouped_boundary_primitive_bench(bench_kind):
-        return False
-    return estimated_expert_update_global_bytes(config) <= BOUNDARY_CORRECTNESS_MAX_GLOBAL_BYTES
+        return "not an expert-FSDP grouped boundary primitive"
+    global_bytes = estimated_expert_update_global_bytes(config)
+    if not force and global_bytes > max_global_bytes:
+        return f"estimated global bytes {global_bytes} exceed correctness cap {max_global_bytes}"
+    return None
+
+
+def should_compute_boundary_correctness(
+    config: BenchConfig,
+    bench_kind: str,
+    max_global_bytes: int,
+    force: bool,
+) -> bool:
+    return boundary_correctness_skipped_reason(config, bench_kind, max_global_bytes, force) is None
 
 
 FSDP_GROUPED_RESTORE_CORRECTNESS_BENCHES = (
@@ -8146,6 +8164,8 @@ def time_ns4d(
     allow_boundary_collectives: bool,
     require_no_boundary_collectives: bool,
     profile_dir: Path | None,
+    boundary_correctness_max_global_bytes: int,
+    force_boundary_correctness: bool,
 ) -> TimingSummary:
     with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
         optimizer_state = None
@@ -8664,7 +8684,15 @@ def time_ns4d(
             lower_args = (updates,)
 
         correctness_max_error = None
-        if not compile_only and should_compute_boundary_correctness(config, bench_kind):
+        correctness_skipped_reason = None
+        if not compile_only:
+            correctness_skipped_reason = boundary_correctness_skipped_reason(
+                config,
+                bench_kind,
+                boundary_correctness_max_global_bytes,
+                force_boundary_correctness,
+            )
+        if not compile_only and correctness_skipped_reason is None:
             correctness_max_error = fsdp_grouped_boundary_correctness_max_error(
                 mesh,
                 config,
@@ -8682,7 +8710,16 @@ def time_ns4d(
         ):
             assert_grouped_apply_has_no_boundary_collectives(compiled_hlo, "compiled grouped boundary candidate")
         if compile_only:
-            return TimingSummary(compile_seconds, compiled_hlo, [], None, None, None, None)
+            return TimingSummary(
+                compile_seconds,
+                compiled_hlo,
+                [],
+                None,
+                None,
+                None,
+                None,
+                correctness_skipped_reason=correctness_skipped_reason,
+            )
 
         for _ in range(warmup):
             if params is None:
@@ -9122,6 +9159,7 @@ def time_ns4d(
         stdev_seconds=statistics.stdev(times) if len(times) > 1 else None,
         profile_dir=str(profile_dir) if profile_dir is not None else None,
         correctness_max_error=correctness_max_error,
+        correctness_skipped_reason=correctness_skipped_reason,
     )
 
 
@@ -9354,6 +9392,20 @@ def parse_args() -> argparse.Namespace:
             "Fail any grouped/apply boundary candidate when lowered or compiled HLO contains AG/A2A/AR/RS/CP, "
             "including expert-FSDP grouped candidates normally allowed for exploration."
         ),
+    )
+    parser.add_argument(
+        "--boundary-correctness-max-global-bytes",
+        type=int,
+        default=BOUNDARY_CORRECTNESS_MAX_GLOBAL_BYTES,
+        help=(
+            "Only materialize boundary correctness references when estimated global update bytes are at or below "
+            "this cap. Increase deliberately for larger correctness checks."
+        ),
+    )
+    parser.add_argument(
+        "--force-boundary-correctness",
+        action="store_true",
+        help="Materialize boundary correctness references regardless of the global-byte cap.",
     )
     parser.add_argument("--hlo-output", type=Path)
     parser.add_argument(
@@ -9688,6 +9740,8 @@ def run_config(
                 args.allow_boundary_collectives,
                 args.require_no_boundary_collectives,
                 profile_dir,
+                args.boundary_correctness_max_global_bytes,
+                args.force_boundary_correctness,
             )
         timing_payload = {"event": "timing", "label": label, "timing": asdict(timing)}
         emit_jsonl(timing_payload)
@@ -9847,6 +9901,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                 "mean_seconds": timing["mean_seconds"],
                 "min_seconds": timing["min_seconds"],
                 "boundary_correctness_max_error": timing.get("correctness_max_error"),
+                "boundary_correctness_skipped_reason": timing.get("correctness_skipped_reason"),
                 "mean_estimated_tflops": mean_tflops,
                 "median_estimated_tflops": median_tflops,
                 "mean_h100_bf16_peak_pct": percent_h100_bf16_peak(mean_tflops, devices),

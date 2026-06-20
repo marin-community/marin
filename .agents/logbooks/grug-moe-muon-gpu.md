@@ -1982,3 +1982,25 @@ Post-compile steps were stable around 0.65-0.66s:
   - This suggests the grouped-to-FSDP apply boundary is already transport-bound at the JAX level; the apply-side tree work is not the dominant cost.
   - The conservative Route A remains the pragmatic FSDP-master path. To improve materially, the next primitive needs to reduce or overlap the packed-bank transport itself rather than only moving the apply call.
 - Next action: keep Socrates focused on lower-level bridge/custom primitive designs. Use the isolated apply-boundary target as `0 AG / 2 A2A`, `~0.183s`, `~130.9 GB global bytes` when judging future grouped-update-to-FSDP variants.
+
+### 2026-06-20 04:20 PDT - First boundary N1 and D2 packed-bank validation
+- Hypothesis: The first optimizer boundary (`FSDP grads -> packed grouped bank`) should avoid per-leaf collective explosion. For single-node it should be a local pack with no collectives; for data-axis D2 it should lower to one packed all-to-all per expert weight family, not hundreds of leaf-wise collectives.
+- Change:
+  - Commit `ba962fe89` added standalone phase reporting for `expert_fsdp_grads_to_explicit_packed_grouped_bank` and a lazy launch script at `scratch/launch_muon_grads_to_packed_bank_boundary.sh`.
+  - Commit `a56dd930c` changed the timing path for FSDP-grads-to-grouped benchmarks to return a scalar checksum, avoiding the previous full output materialization OOM.
+  - Follow-up local change adds explicit correctness-skip reporting and CLI/env controls (`--boundary-correctness-max-global-bytes`, `--force-boundary-correctness`) so full-shape runs no longer silently report `boundary_correctness_max_error=null`.
+- Validation:
+  - Focused tests after the skip-reporting patch: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'boundary_correctness_gate or packed_bank_boundary_phase_estimates or fsdp_grads_to_explicit_packed_grouped_bank_timing' -q` -> 3 passed.
+  - Pycompile: `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/launch_cw_muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed.
+  - Tiny local smoke with forced correctness reported `boundary_correctness_max_error=0.0`; same shape with an intentionally tiny cap reported `boundary_correctness_skipped_reason`.
+- Runs:
+  - N1: parent `/dlwh/iris-run-job-20260620-110821`; child `/dlwh/iris-run-job-20260620-110821/grug-train-MUON-BENCH-D2560-L26-R1D1E8-N1-G1-GRADSPACKBANK-cw-20260620-110819`; W&B `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D1E8-N1-G1-GRADSPACKBANK-cw-20260620-110819`; output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D1E8-N1-G1-GRADSPACKBANK-cw-20260620-110819-b34976`.
+  - D2: parent `/dlwh/iris-run-job-20260620-111142`; child `/dlwh/iris-run-job-20260620-111142/grug-train-MUON-BENCH-D2560-L26-R1D2E8-N2-G2-GRADSPACKBANK-cw-20260620-111140`; W&B `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D2E8-N2-G2-GRADSPACKBANK-cw-20260620-111140`; output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D2E8-N2-G2-GRADSPACKBANK-cw-20260620-111140-4b3b9d`.
+- Result:
+  - N1 lowered/compiled `0 AG / 0 A2A / 0 AR / 0 RS / 0 CP`, median `0.0156868s`. Phase report: one `none` phase, ideal collective count `0.0`, global bytes `130862284800`, estimated peak per-device bytes `16357785600`.
+  - D2 lowered/compiled `0 AG / 2 A2A / 0 AR / 0 RS / 0 CP`, median `0.174654s` on rank 0 and `0.174748s` on rank 1. Phase report: one all-to-all phase, ideal collective count `2.0`, compiled/lowered fragmentation factor `1.0`, global bytes `130862284800`, per-A2A global bytes `65431142400`, estimated peak per-device bytes `16357785600`, median phase/global bandwidth about `749 GB/s`.
+- Interpretation:
+  - The first boundary is behaving as the packed-bank design intended for N1 and D2: no all-gather, no reduce-scatter, no collective-permute, and no per-leaf collective explosion.
+  - D2 is still slower than an ideal roofline target, but the shape is now a compact two-A2A primitive rather than an XLA fragmentation bug. The remaining gap is transport bandwidth/latency for the packed A2A itself.
+  - Correctness for the full-size run remains intentionally skipped by byte cap to avoid reintroducing full-output materialization OOM; small-shape reference correctness is `0.0`, and future runs will report the skip reason explicitly.
+- Next action: commit the correctness-skip reporting patch, then launch the R2 first-boundary rung from the updated code so replica-dcn grouping is validated with the improved summary fields.
