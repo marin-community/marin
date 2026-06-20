@@ -1,0 +1,531 @@
+#!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Block until the first of several events fires — a ``select`` over shell
+predicates and GitHub PR state.
+
+Each event is ``<kind> <arg>``. The general kind is an arbitrary shell predicate;
+the ``github.*`` kinds are built-in conveniences so common PR waits need no shell:
+
+    poll <shell command>    fires when the command exits 0
+    github.ci <PR>          fires when CI on the PR head finishes (pass or fail)
+    github.pr_comment <PR>  fires on a new issue/review comment (not your own)
+    github.review <PR>      fires on a new submitted review
+
+`poll` is the escape hatch for anything without a built-in: compose the predicate
+with the shell (``| grep -q``, ``| jq -e``, ``test``). For example, wait for the
+PR to close with ``poll 'test "$(gh pr view 1234 --json state --jq .state)" != OPEN'``.
+Specs come from argv (one quoted token each) or stdin (one per line; ``#`` comments):
+
+    uv run scripts/ci/wait_for.py --timeout 12h \\
+      'poll loom session poll weaver/foo --quiet | grep -q done' \\
+      'github.ci 1234' 'github.pr_comment 1234'
+
+    uv run scripts/ci/wait_for.py --timeout 12h <<'HERE'
+    poll loom session poll weaver/foo --quiet | grep -q done
+    github.ci 1234
+    github.pr_comment 1234
+    HERE
+
+Prints one JSON object naming the arm that fired and its payload. Exit ``0`` an arm
+fired, ``2`` --timeout elapsed, ``1`` error. Exit ``0`` means an arm fired, not that
+CI passed — read ``result.conclusion``.
+"""
+
+import json
+import re
+import subprocess
+import sys
+import time
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import NamedTuple
+
+import click
+from rigging.timing import ExponentialBackoff
+
+# `gh` calls are quick metadata reads; bound them so a hung call cannot wedge the
+# select loop. `poll` commands get their own, larger budget (--poll-timeout).
+GH_TIMEOUT = 60.0
+# Give a flaky source several backoff rounds before declaring the wait unworkable.
+MAX_SOURCE_ERRORS = 5
+
+# `gh pr checks --json` reports one bucket per check, already deduped to the latest
+# run (the same view as the UI / `gh pr checks` exit code), so superseded reruns do
+# not leak through. We wait while anything is pending and fail on a fail/cancel.
+_CI_PENDING_BUCKET = "pending"
+_CI_FAILING_BUCKETS = {"fail", "cancel"}
+
+_DURATION_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([smhd]?)\s*$")
+_DURATION_UNITS = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}
+
+
+class GhError(RuntimeError):
+    """A `gh` invocation failed (non-zero exit or unparseable output)."""
+
+
+class EventKind(StrEnum):
+    GITHUB_CI = "github.ci"
+    GITHUB_PR_COMMENT = "github.pr_comment"
+    GITHUB_REVIEW = "github.review"
+    POLL = "poll"
+
+
+@dataclass(frozen=True)
+class EventSpec:
+    kind: EventKind
+    arg: str
+    raw: str
+
+
+def parse_duration(text: str) -> float:
+    """Parse a duration like ``90``, ``30m``, ``4h`` into seconds (bare number = seconds)."""
+    match = _DURATION_RE.match(text)
+    if not match:
+        raise click.BadParameter(f"invalid duration {text!r}; use e.g. 90, 30m, 4h")
+    return float(match.group(1)) * _DURATION_UNITS[match.group(2) or "s"]
+
+
+def parse_spec(line: str) -> EventSpec:
+    """Parse one ``<kind> <arg...>`` spec. The first token is the kind; the rest is the arg."""
+    text = line.strip()
+    kind_token, _, arg = text.partition(" ")
+    arg = arg.strip()
+    try:
+        kind = EventKind(kind_token)
+    except ValueError:
+        valid = ", ".join(k.value for k in EventKind)
+        raise click.BadParameter(f"unknown event kind {kind_token!r} in {line!r}; valid kinds: {valid}") from None
+    if not arg:
+        raise click.BadParameter(f"event {kind_token!r} requires an argument: {line!r}")
+    return EventSpec(kind=kind, arg=arg, raw=text)
+
+
+# --------------------------------------------------------------------------- IO
+
+
+def _gh(args: list[str], *, timeout: float = GH_TIMEOUT) -> str:
+    proc = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=timeout)
+    if proc.returncode != 0:
+        raise GhError(f"`gh {' '.join(args)}` failed (exit {proc.returncode}): {proc.stderr.strip()}")
+    return proc.stdout
+
+
+def gh_json(args: list[str], *, timeout: float = GH_TIMEOUT) -> object:
+    out = _gh(args, timeout=timeout)
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise GhError(f"`gh {' '.join(args)}` returned unparseable JSON: {exc}") from exc
+
+
+def gh_pr_checks(pr: str, repo: str) -> list[dict]:
+    """Return gh's check rows for the PR head (empty until any check registers)."""
+    # `gh pr checks --json` emits the rows and exits 0 regardless of pass/fail/pending,
+    # so we read stdout directly rather than through _gh (which raises on non-zero). An
+    # empty body means no checks have registered yet — treat that as "not done".
+    proc = subprocess.run(
+        ["gh", "pr", "checks", pr, "--repo", repo, "--json", "name,bucket,state"],
+        capture_output=True,
+        text=True,
+        timeout=GH_TIMEOUT,
+    )
+    out = proc.stdout.strip()
+    if not out:
+        return []
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise GhError(f"`gh pr checks {pr}` returned unparseable JSON: {exc}") from exc
+
+
+@dataclass(frozen=True)
+class GhRecord:
+    """A comment or review from the GitHub API — the fields the activity sources need."""
+
+    id: int
+    author: str
+    body: str
+    url: str
+    state: str | None
+    kind: str
+
+
+_RECORD_JQ = '.[]|{id:.id,author:(.user.login//""),body:(.body//""),url:(.html_url//""),state:(.state//null)}'
+
+
+def gh_api_list(repo: str, path: str, *, kind: str) -> list[GhRecord]:
+    """Return every record in a paginated GitHub collection, tagged with ``kind``."""
+    # `gh --paginate` with `--jq` applies the filter per page, so the output is one
+    # compact JSON object per element per line (JSONL) across all pages.
+    out = _gh(["api", "--paginate", f"repos/{repo}/{path}", "--jq", _RECORD_JQ])
+    return [GhRecord(**json.loads(line), kind=kind) for line in out.splitlines() if line.strip()]
+
+
+def resolve_repo(repo: str | None) -> str:
+    if repo:
+        return repo
+    data = gh_json(["repo", "view", "--json", "nameWithOwner"])
+    return data["nameWithOwner"]  # pyrefly: ignore  # gh JSON shape
+
+
+def authenticated_user() -> str:
+    return _gh(["api", "user", "--jq", ".login"]).strip()
+
+
+class PollResult(NamedTuple):
+    exit_code: int | None  # None on timeout
+    stdout: str
+    stderr: str
+
+
+def run_poll(command: str, *, timeout: float) -> PollResult:
+    """Run a shell predicate; ``exit_code`` is None on timeout."""
+    try:
+        proc = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return PollResult(None, "", "")
+    return PollResult(proc.returncode, proc.stdout, proc.stderr)
+
+
+# -------------------------------------------------------------------- pure logic
+
+
+@dataclass(frozen=True)
+class CiOutcome:
+    done: bool
+    observed: int
+    conclusion: str | None
+    failing: tuple[str, ...]
+    checks: tuple[dict, ...]
+
+
+def evaluate_ci(rows: Iterable[dict]) -> CiOutcome:
+    """Decide whether CI is finished from `gh pr checks` rows. Empty or any pending ⇒ not done."""
+    rows = list(rows)
+    if not rows or any(r["bucket"] == _CI_PENDING_BUCKET for r in rows):
+        return CiOutcome(done=False, observed=len(rows), conclusion=None, failing=(), checks=())
+    failing = tuple(r["name"] for r in rows if r["bucket"] in _CI_FAILING_BUCKETS)
+    checks = tuple({"name": r["name"], "bucket": r["bucket"]} for r in rows)
+    return CiOutcome(
+        done=True,
+        observed=len(rows),
+        conclusion="failure" if failing else "success",
+        failing=failing,
+        checks=checks,
+    )
+
+
+def select_new(records: list[GhRecord], baseline: set[int], ignore_authors: set[str]) -> list[GhRecord]:
+    """Records whose id is absent from the baseline snapshot and not from an ignored author."""
+    return [r for r in records if r.id not in baseline and r.author not in ignore_authors]
+
+
+# ----------------------------------------------------------------------- sources
+
+
+class Source:
+    """One arm of the select. Subclasses implement ``check`` (return a payload or None)."""
+
+    def __init__(self, spec: EventSpec):
+        self.kind = spec.kind.value
+        self.arg = spec.arg
+        self.label = spec.raw
+        self.last_status = "not yet checked"
+
+    def check(self) -> dict | None:
+        raise NotImplementedError
+
+
+def _parse_pr(arg: str) -> str:
+    try:
+        return str(int(arg))
+    except ValueError:
+        raise click.BadParameter(f"expected a PR number, got {arg!r}") from None
+
+
+class CiSource(Source):
+    """Fires when CI on the PR head finishes (pass or fail), via gh's deduped check view."""
+
+    def __init__(self, spec: EventSpec, repo: str):
+        super().__init__(spec)
+        self.repo = repo
+        self.pr = _parse_pr(spec.arg)
+
+    def check(self) -> dict | None:
+        outcome = evaluate_ci(gh_pr_checks(self.pr, self.repo))
+        if not outcome.done:
+            self.last_status = f"{outcome.observed} checks, not all done"
+            return None
+        self.last_status = f"done: {outcome.conclusion} ({outcome.observed} checks)"
+        return {
+            "conclusion": outcome.conclusion,
+            "failing": list(outcome.failing),
+            "observed_checks": outcome.observed,
+            "checks": list(outcome.checks),
+        }
+
+
+class PrActivitySource(Source):
+    """Fires on a new comment or review since launch, diffed against an id-set baseline.
+
+    Subclasses supply the fetch (which endpoints) and the fired payload; the
+    baseline-snapshot / diff / absorb scaffold is shared.
+    """
+
+    noun = "records"
+
+    def __init__(self, spec: EventSpec, repo: str, ignore_authors: set[str]):
+        super().__init__(spec)
+        self.repo = repo
+        self.pr = _parse_pr(spec.arg)
+        self.ignore_authors = ignore_authors
+        self.baseline: set[int] | None = None
+
+    def _fetch(self) -> list[GhRecord]:
+        raise NotImplementedError
+
+    def _payload(self, new: list[GhRecord]) -> dict:
+        raise NotImplementedError
+
+    def check(self) -> dict | None:
+        records = self._fetch()
+        ids = {r.id for r in records}
+        if self.baseline is None:
+            self.baseline = ids
+            self.last_status = f"baseline {len(ids)} {self.noun}"
+            return None
+        new = select_new(records, self.baseline, self.ignore_authors)
+        self.baseline |= ids  # absorb everything seen so ignored records never re-fire
+        self.last_status = f"{len(ids)} {self.noun}"
+        return self._payload(new) if new else None
+
+
+class CommentSource(PrActivitySource):
+    """Fires on a new issue-comment or review-comment."""
+
+    noun = "comments"
+    ENDPOINTS = (("issue_comment", "issues/{pr}/comments"), ("review_comment", "pulls/{pr}/comments"))
+
+    def _fetch(self) -> list[GhRecord]:
+        out: list[GhRecord] = []
+        for kind, path in self.ENDPOINTS:
+            out += gh_api_list(self.repo, path.format(pr=self.pr), kind=kind)
+        return out
+
+    def _payload(self, new: list[GhRecord]) -> dict:
+        return {"comments": [{"author": r.author, "body": r.body, "url": r.url, "kind": r.kind} for r in new]}
+
+
+class ReviewSource(PrActivitySource):
+    """Fires on a new submitted review (approve / changes-requested / commented)."""
+
+    noun = "reviews"
+
+    def _fetch(self) -> list[GhRecord]:
+        # PENDING reviews are unsubmitted drafts; they are not events.
+        return [r for r in gh_api_list(self.repo, f"pulls/{self.pr}/reviews", kind="review") if r.state != "PENDING"]
+
+    def _payload(self, new: list[GhRecord]) -> dict:
+        return {"reviews": [{"author": r.author, "state": r.state, "url": r.url} for r in new]}
+
+
+class PollSource(Source):
+    def __init__(self, spec: EventSpec, poll_timeout: float):
+        super().__init__(spec)
+        self.command = spec.arg
+        self.poll_timeout = poll_timeout
+
+    def check(self) -> dict | None:
+        poll = run_poll(self.command, timeout=self.poll_timeout)
+        if poll.exit_code is None:
+            self.last_status = f"timed out after {self.poll_timeout:g}s"
+            return None
+        self.last_status = f"exit {poll.exit_code}"
+        if poll.exit_code != 0:
+            return None
+        return {
+            "exit_code": 0,
+            "command": self.command,
+            "stdout_tail": _tail(poll.stdout),
+            "stderr_tail": _tail(poll.stderr),
+        }
+
+
+def build_source(spec: EventSpec, *, repo: str, ignore_authors: set[str], poll_timeout: float) -> Source:
+    if spec.kind is EventKind.GITHUB_CI:
+        return CiSource(spec, repo)
+    if spec.kind is EventKind.GITHUB_PR_COMMENT:
+        return CommentSource(spec, repo, ignore_authors)
+    if spec.kind is EventKind.GITHUB_REVIEW:
+        return ReviewSource(spec, repo, ignore_authors)
+    if spec.kind is EventKind.POLL:
+        return PollSource(spec, poll_timeout)
+    raise click.BadParameter(f"unsupported event kind {spec.kind!r}")  # pragma: no cover
+
+
+# --------------------------------------------------------------------- scheduler
+
+
+@dataclass
+class _Armed:
+    source: Source
+    backoff: ExponentialBackoff
+    due_at: float
+    errors: int = 0
+
+
+@dataclass(frozen=True)
+class BackoffConfig:
+    initial: float
+    maximum: float
+    factor: float
+    jitter: float
+
+
+def _tail(text: str, *, max_lines: int = 20, max_chars: int = 2000) -> str:
+    text = text.strip()
+    if not text:
+        return ""
+    return "\n".join(text.splitlines()[-max_lines:])[-max_chars:]
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _timeout_result(sources: list[Source]) -> dict:
+    return {
+        "event": None,
+        "status": "timeout",
+        "sources": [{"label": s.label, "last_status": s.last_status} for s in sources],
+    }
+
+
+def select_loop(sources: list[Source], *, deadline: float | None, backoff: BackoffConfig) -> dict:
+    """Poll each source on its own backoff; return the first fired event, or a timeout result."""
+    now = time.monotonic()
+    armed = [
+        _Armed(s, ExponentialBackoff(backoff.initial, backoff.maximum, backoff.factor, backoff.jitter), now)
+        for s in sources
+    ]
+    while True:
+        next_arm = min(armed, key=lambda a: a.due_at)
+        now = time.monotonic()
+        if deadline is not None and now >= deadline:
+            return _timeout_result(sources)
+        wait = next_arm.due_at - now
+        if deadline is not None:
+            wait = min(wait, deadline - now)
+        if wait > 0:
+            time.sleep(wait)
+            if deadline is not None and time.monotonic() >= deadline:
+                return _timeout_result(sources)
+        try:
+            result = next_arm.source.check()
+        except (GhError, OSError, subprocess.SubprocessError) as exc:
+            next_arm.errors += 1
+            click.echo(
+                f"[wait_for] {next_arm.source.label}: {exc} (error {next_arm.errors}/{MAX_SOURCE_ERRORS})", err=True
+            )
+            if next_arm.errors >= MAX_SOURCE_ERRORS:
+                raise
+            next_arm.due_at = time.monotonic() + next_arm.backoff.next_interval()
+            continue
+        next_arm.errors = 0
+        if result is not None:
+            return {
+                "event": next_arm.source.kind,
+                "arg": next_arm.source.arg,
+                "label": next_arm.source.label,
+                "fired_at": _now_iso(),
+                "result": result,
+            }
+        next_arm.due_at = time.monotonic() + next_arm.backoff.next_interval()
+
+
+# ----------------------------------------------------------------------- CLI glue
+
+
+def read_specs(argv_specs: tuple[str, ...], *, use_stdin: bool | None) -> list[EventSpec]:
+    raw = list(argv_specs)
+    # Explicit --stdin always merges stdin in; otherwise only auto-read it when no
+    # argv specs were given, so the argv form never blocks on or consumes stdin.
+    if use_stdin or (use_stdin is None and not raw and not sys.stdin.isatty()):
+        raw += [line for line in sys.stdin.read().splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    if not raw:
+        raise click.UsageError("no events given; pass specs as arguments or on stdin")
+    return [parse_spec(s) for s in raw]
+
+
+@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.argument("specs", nargs=-1)
+@click.option(
+    "--stdin/--no-stdin",
+    "use_stdin",
+    default=None,
+    help="Read specs from stdin (default: auto when no argv specs and stdin is not a TTY).",
+)
+@click.option("--timeout", default=None, help="Overall deadline, e.g. 90, 30m, 4h. Default: wait indefinitely.")
+@click.option("--poll-timeout", default="120", help="Per-attempt timeout for `poll` commands.")
+@click.option("--initial-interval", default="10", help="First backoff interval per source.")
+@click.option("--max-interval", default="120", help="Backoff ceiling per source.")
+@click.option("--factor", default=2.0, type=float, help="Backoff growth factor.")
+@click.option("--jitter", default=0.1, type=float, help="Backoff jitter fraction in [0, 1).")
+@click.option("--repo", default=None, help="OWNER/NAME (default: gh auto-detect from cwd).")
+@click.option("--ignore-author", "ignore_authors", multiple=True, help="Comment/review author to ignore (repeatable).")
+@click.option("--include-self", is_flag=True, help="Do not ignore the authenticated user's own comments.")
+@click.option("--quiet", is_flag=True, help="Print only the fired event kind, not the JSON payload.")
+def main(
+    specs: tuple[str, ...],
+    use_stdin: bool | None,
+    timeout: str | None,
+    poll_timeout: str,
+    initial_interval: str,
+    max_interval: str,
+    factor: float,
+    jitter: float,
+    repo: str | None,
+    ignore_authors: tuple[str, ...],
+    include_self: bool,
+    quiet: bool,
+) -> None:
+    """Block until the first armed event fires; print which one as JSON."""
+    parsed = read_specs(specs, use_stdin=use_stdin)
+    needs_github = any(s.kind is not EventKind.POLL for s in parsed)
+    needs_authors = any(s.kind in (EventKind.GITHUB_PR_COMMENT, EventKind.GITHUB_REVIEW) for s in parsed)
+
+    try:
+        resolved_repo = resolve_repo(repo) if needs_github else ""
+        ignored = set(ignore_authors)
+        if needs_authors and not include_self:
+            ignored.add(authenticated_user())
+        sources = [
+            build_source(s, repo=resolved_repo, ignore_authors=ignored, poll_timeout=parse_duration(poll_timeout))
+            for s in parsed
+        ]
+        deadline = None if timeout is None else time.monotonic() + parse_duration(timeout)
+        backoff = BackoffConfig(
+            initial=parse_duration(initial_interval),
+            maximum=parse_duration(max_interval),
+            factor=factor,
+            jitter=jitter,
+        )
+        result = select_loop(sources, deadline=deadline, backoff=backoff)
+    except GhError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except KeyboardInterrupt:
+        click.echo("[wait_for] interrupted", err=True)
+        raise SystemExit(130) from None
+
+    if result.get("status") == "timeout":
+        click.echo("timeout" if quiet else json.dumps(result))
+        raise SystemExit(2)
+    click.echo(result["event"] if quiet else json.dumps(result))
+
+
+if __name__ == "__main__":
+    main()
