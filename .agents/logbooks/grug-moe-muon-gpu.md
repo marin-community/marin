@@ -1609,9 +1609,11 @@ Post-compile steps were stable around 0.65-0.66s:
   - Added `replica_fanout_factor` and `requires_replica_fanout` to `estimated_boundary_byte_estimates`.
   - Exposed these as `estimated_boundary_replica_fanout_factor` and `estimated_boundary_requires_replica_fanout` in summary rows.
   - Added lower-bound byte fields: `estimated_boundary_replica_fanout_min_extra_per_device_bytes` and `estimated_boundary_replica_fanout_min_total_receive_bytes`.
+  - Added lowered/compiled collective fragmentation fields that compare `all_gather + all_to_all + collective_permute` against an ideal one grouped transport per expert weight name.
 - Validation:
   - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_boundary_byte_estimates` passed.
   - Tiny 8-device CPU compile-only smoke for `expert_fsdp_grouped_explicit_slice_first_gather_apply_boundary` wrote `/tmp/muon_boundary_fanout_fields.json` and reported `estimated_boundary_replica_fanout_factor=2.0`, `estimated_boundary_requires_replica_fanout=True`, `estimated_boundary_replica_fanout_min_extra_per_device_bytes=3072.0`, `estimated_boundary_replica_fanout_min_total_receive_bytes=24576.0`, `all_gather=2`, and `all_to_all=0`.
+  - Tiny 8-device CPU compile-only smoke for the same bench wrote `/tmp/muon_boundary_fragmentation_fields.json` and reported lowered fragmentation `2/2 = 1.0`. CPU compiled HLO optimized this tiny collective away, so H100 compiled rows remain the authoritative signal for compiled fragmentation.
   - `./infra/pre-commit.py --changed-files --fix` passed.
 - Interpretation: Future boundary rows now separate inherent fanout (`replica_dcn` ownership -> FSDP replica copies) from avoidable compiler explosion (many per-layer all-gathers, A2A/CP insertion, OOM). This does not solve the bridge, but it makes the pass/fail criterion sharper for any custom transport.
 - Next action: Use these fields when comparing any lower-level grouped-to-FSDP bridge against the explicit slice-first baseline.

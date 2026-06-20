@@ -5828,6 +5828,27 @@ def boundary_collective_payload_estimates(
     }
 
 
+def boundary_collective_fragmentation(
+    config: BenchConfig,
+    bench_kind: str,
+    hlo_summary: dict[str, Any] | None,
+) -> dict[str, float | None]:
+    if not is_expert_fsdp_grouped_bench(bench_kind) or not hlo_summary:
+        return {"collective_count": None, "ideal_collective_count": None, "fragmentation_factor": None}
+
+    collective_count = (
+        (hlo_summary.get("all_gather") or 0)
+        + (hlo_summary.get("all_to_all") or 0)
+        + (hlo_summary.get("collective_permute") or 0)
+    )
+    ideal_collective_count = len(synthetic_shapes(config))
+    return {
+        "collective_count": float(collective_count),
+        "ideal_collective_count": float(ideal_collective_count),
+        "fragmentation_factor": float(collective_count / ideal_collective_count) if ideal_collective_count else None,
+    }
+
+
 def estimated_tflops(flops: int, seconds: float | None) -> float | None:
     if seconds is None or seconds <= 0:
         return None
@@ -8322,6 +8343,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
     if "lowered" in result:
         lowered_hlo = result["lowered"]["hlo"]
         lowered_boundary_payloads = boundary_collective_payload_estimates(boundary_bytes, lowered_hlo)
+        lowered_fragmentation = boundary_collective_fragmentation(bench_config, bench_kind, lowered_hlo)
         row.update(
             {
                 "dot_general": lowered_hlo["dot_general"],
@@ -8343,6 +8365,9 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                 "estimated_boundary_lowered_global_update_per_collective_bytes": lowered_boundary_payloads[
                     "global_update_per_collective_bytes"
                 ],
+                "estimated_boundary_lowered_collective_count": lowered_fragmentation["collective_count"],
+                "estimated_boundary_lowered_ideal_collective_count": lowered_fragmentation["ideal_collective_count"],
+                "estimated_boundary_lowered_fragmentation_factor": lowered_fragmentation["fragmentation_factor"],
                 "lower_seconds": result["lowered"]["lower_seconds"],
             }
         )
@@ -8350,6 +8375,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         timing = result["timing"]["timing"]
         compiled_hlo = timing["compiled_hlo"]
         compiled_boundary_payloads = boundary_collective_payload_estimates(boundary_bytes, compiled_hlo)
+        compiled_fragmentation = boundary_collective_fragmentation(bench_config, bench_kind, compiled_hlo)
         mean_tflops = estimated_tflops(flops, timing["mean_seconds"])
         median_tflops = estimated_tflops(flops, timing["median_seconds"])
         row.update(
@@ -8375,6 +8401,9 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                 "estimated_boundary_compiled_global_update_per_collective_bytes": compiled_boundary_payloads[
                     "global_update_per_collective_bytes"
                 ],
+                "estimated_boundary_compiled_collective_count": compiled_fragmentation["collective_count"],
+                "estimated_boundary_compiled_ideal_collective_count": compiled_fragmentation["ideal_collective_count"],
+                "estimated_boundary_compiled_fragmentation_factor": compiled_fragmentation["fragmentation_factor"],
                 "median_seconds": timing["median_seconds"],
                 "mean_seconds": timing["mean_seconds"],
                 "min_seconds": timing["min_seconds"],

@@ -162,12 +162,19 @@ New harness rows also report:
 - `estimated_boundary_requires_replica_fanout`
 - `estimated_boundary_replica_fanout_min_extra_per_device_bytes`
 - `estimated_boundary_replica_fanout_min_total_receive_bytes`
+- `estimated_boundary_lowered_fragmentation_factor`
+- `estimated_boundary_compiled_fragmentation_factor`
 
 These fields capture the inherent part of the bridge: grouped MuonH ownership
 over `replica_dcn` must fan out to FSDP leaves because expert FSDP params do not
 name `replica_dcn` in their sharding spec. They do not excuse the current
 compiled per-layer all-gather pattern; they separate the unavoidable fanout from
 avoidable compiler-induced fragmentation.
+
+The fragmentation factors compare `all_gather + all_to_all +
+collective_permute` against an ideal one grouped transport per expert weight
+name. A successful lower-level FSDP bridge should push the compiled factor near
+1 while preserving the fanout byte floor.
 
 Do not launch another full training profile from this path until this gate is
 ported into the real model path. The harness now has an initial

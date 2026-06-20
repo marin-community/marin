@@ -3359,6 +3359,9 @@ def test_summary_row_reports_boundary_byte_estimates():
         == estimates["fsdp_output_per_device_bytes"] / 2
     )
     assert row["estimated_boundary_lowered_global_update_per_collective_bytes"] == estimates["global_update_bytes"] / 6
+    assert row["estimated_boundary_lowered_collective_count"] == 6.0
+    assert row["estimated_boundary_lowered_ideal_collective_count"] == 2.0
+    assert row["estimated_boundary_lowered_fragmentation_factor"] == 3.0
 
     real_grouped_estimates = estimated_boundary_byte_estimates(
         config,
@@ -3406,6 +3409,9 @@ def test_summary_row_reports_boundary_byte_estimates():
     )
     assert row["estimated_boundary_compiled_fsdp_output_per_all_to_all_bytes"] is None
     assert row["estimated_boundary_compiled_global_update_per_collective_bytes"] == estimates["global_update_bytes"] / 8
+    assert row["estimated_boundary_compiled_collective_count"] == 8.0
+    assert row["estimated_boundary_compiled_ideal_collective_count"] == 2.0
+    assert row["estimated_boundary_compiled_fragmentation_factor"] == 4.0
 
 
 def test_strict_boundary_gate_includes_expert_fsdp_and_collective_permute():
