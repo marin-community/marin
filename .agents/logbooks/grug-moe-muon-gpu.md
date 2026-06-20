@@ -2910,3 +2910,153 @@ Post-compile steps were stable around 0.65-0.66s:
     whether the packed egress can be overlapped or replaced by a lower-level
     direct FSDP-boundary primitive, not whether `optax.apply_updates` itself is
     the dominant difference between the two routes.
+
+### 2026-06-20 12:04 PDT - N1 packed-bank boundary contract succeeds
+- Hypothesis:
+  - The same packed-bank contract should be clean on a single 8xH100 node:
+    with `replica_dcn=1` there should be no cross-replica egress collective,
+    giving a local baseline for the R2/R4 all-gather costs.
+- Command:
+  - `bash scratch/launch_muon_packed_bank_boundary_contract.sh n1`
+- Config:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-185834`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/pzmc1hfm`.
+  - Run id:
+    `MUON-BENCH-D2560-L26-R1D1E8-N1-G8-BOUNDARYCONTRACT-cw-20260620-185831`.
+  - 1 H100 node, `devices=8`, `local_devices=8`, `process_count=1`,
+    `replica_axis=1`, `data_axis=1`, `expert_axis=8`, `model_axis=1`,
+    `ns4d_group_axis=none`, `ns4d_group_size=8`, bf16 params/NS compute,
+    26 layers.
+- Result:
+  - Child job succeeded.
+  - `fsdp_grads_to_explicit_packed_grouped_bank`: compiled AG/A2A = `0/0`,
+    ideal collectives `0`, excess `0`, mean `0.01589s`, estimated phase
+    bandwidth `~8.24 TB/s`, compiled HBM peak `15.24 GiB`.
+  - Route A `packed_grouped_updates_to_fsdp_apply`: compiled AG/A2A = `0/0`,
+    ideal collectives `0`, excess `0`, mean `0.01706s`, estimated phase
+    bandwidth `~7.67 TB/s`, compiled HBM peak `30.47 GiB`.
+  - Route B `packed_grouped_updates_to_fsdp_direct_apply`: compiled AG/A2A =
+    `0/0`, ideal collectives `0`, excess `0`, mean `0.01720s`, estimated
+    phase bandwidth `~7.61 TB/s`, compiled HBM peak `30.47 GiB`.
+  - Full-size correctness was skipped by the existing global-byte cap:
+    `estimated global bytes 130862284800 exceed correctness cap 1073741824`.
+- Interpretation:
+  - N1/R2/R4 now all show the same key contract property: no per-leaf
+    collective explosion. N1 has no egress collectives because `replica_dcn=1`;
+    R2 and R4 add exactly the two expected all-gathers.
+  - Route A and Route B are still tied at N1, matching the R2/R4 observation.
+
+### 2026-06-20 12:06 PDT - N1 small-shape boundary correctness succeeds
+- Hypothesis:
+  - Full-shape correctness references are too large to materialize under the
+    default cap, so a small CoreWeave run should prove the same primitive code
+    matches reference packing/apply while the full-shape runs carry the
+    performance and collective-count evidence.
+- Change:
+  - Added `scratch/launch_muon_packed_bank_boundary_correctness.sh`, a small
+    launch wrapper for the same three packed-bank boundary kinds.
+- Command:
+  - `bash scratch/launch_muon_packed_bank_boundary_correctness.sh n1`
+- Config:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-190220`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/kbo0smtj`.
+  - Run id:
+    `MUON-BENCH-CORRECTNESS-L4-H128-I64-E8-n1-G4-BOUNDARYCONTRACT-cw-20260620-190218`.
+  - 1 H100 node, `devices=8`, `local_devices=8`, `process_count=1`,
+    `replica_axis=1`, `data_axis=1`, `expert_axis=8`, `model_axis=1`,
+    `layers=4`, `hidden_dim=128`, `intermediate_dim=64`, `num_experts=8`,
+    `ns4d_group_axis=none`, `ns4d_group_size=4`, bf16 params/NS compute.
+- Result:
+  - Child and parent jobs succeeded.
+  - All three primitive rows reported `boundary_correctness_max_error=0.0`
+    and `boundary_correctness_skipped_reason=null`.
+  - All three rows compiled to AG/A2A/AR = `0/0/0`, with zero excess
+    collectives.
+  - Mean times were `0.000864s` for ingress, `0.000336s` for Route A, and
+    `0.000308s` for Route B. HBM peaks were `0.000185 GiB`, `0.000366 GiB`,
+    and `0.000366 GiB`.
+- Interpretation:
+  - This closes the single-node correctness gap for the exact packed-bank
+    boundary primitive implementations. The remaining correctness evidence
+    gap is the same small-shape check on R2/R4, where the grouped stack axis is
+    actually sharded over `replica_dcn`.
+
+### 2026-06-20 12:09 PDT - R2 small-shape boundary correctness succeeds
+- Hypothesis:
+  - The small-shape correctness run should continue to match the reference when
+    the grouped stack axis is sharded over `replica_dcn=2`.
+- Command:
+  - `bash scratch/launch_muon_packed_bank_boundary_correctness.sh r2`
+- Config:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-190602`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/40qz71rj`.
+  - Run id:
+    `MUON-BENCH-CORRECTNESS-L4-H128-I64-E8-r2-G4-BOUNDARYCONTRACT-cw-20260620-190600`.
+  - 2 H100 nodes, `devices=16`, `local_devices=8`, `process_count=2`,
+    `replica_axis=2`, `data_axis=1`, `expert_axis=8`, `model_axis=1`,
+    `layers=4`, `hidden_dim=128`, `intermediate_dim=64`, `num_experts=8`,
+    `ns4d_group_axis=replica_dcn`, `ns4d_group_size=4`, bf16 params/NS
+    compute.
+- Result:
+  - Parent and child jobs succeeded; W&B finished.
+  - All three primitive rows reported `boundary_correctness_max_error=0.0`
+    and `boundary_correctness_skipped_reason=null`.
+  - Ingress: compiled AG/A2A = `0/0`, lowered/compiled ideal `0`, excess `0`,
+    mean `0.001168s`, HBM peak `0.000184 GiB`.
+  - Route A `packed_grouped_updates_to_fsdp_apply`: lowered AG = `2` matching
+    ideal with zero lowered excess; compiled AG/A2A = `0/0`, compiled excess
+    `-2`, mean `0.000696s`, HBM peak `0.000459 GiB`.
+  - Route B `packed_grouped_updates_to_fsdp_direct_apply`: lowered AG = `2`
+    matching ideal with zero lowered excess; compiled AG/A2A = `0/0`,
+    compiled excess `-2`, mean `0.000534s`, HBM peak `0.000459 GiB`.
+- Interpretation:
+  - This closes the R2 reference-correctness check for the packed-bank
+    boundary primitive implementations.
+  - For this tiny shape, compiled HLO does not report the two expected
+    all-gathers on the apply routes even though lowered HLO does. Treat this
+    as correctness evidence, not as the compiled-collective-count evidence.
+    Full-size R2/R4 remain the authoritative compiled-collective-count runs.
+
+### 2026-06-20 12:12 PDT - R4 small-shape boundary correctness succeeds
+- Hypothesis:
+  - The small-shape correctness run should continue to match the reference when
+    the grouped stack axis is sharded over `replica_dcn=4`.
+- Command:
+  - `bash scratch/launch_muon_packed_bank_boundary_correctness.sh r4`
+- Config:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-190921`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/dvvlkl51`.
+  - Run id:
+    `MUON-BENCH-CORRECTNESS-L4-H128-I64-E8-r4-G4-BOUNDARYCONTRACT-cw-20260620-190919`.
+  - 4 H100 nodes, `devices=32`, `local_devices=8`, `process_count=4`,
+    `replica_axis=4`, `data_axis=1`, `expert_axis=8`, `model_axis=1`,
+    `layers=4`, `hidden_dim=128`, `intermediate_dim=64`, `num_experts=8`,
+    `ns4d_group_axis=replica_dcn`, `ns4d_group_size=4`, bf16 params/NS
+    compute.
+- Result:
+  - Child job succeeded.
+  - All three primitive rows reported `boundary_correctness_max_error=0.0`
+    and `boundary_correctness_skipped_reason=null`.
+  - Ingress: lowered/compiled AG/A2A/AR = `0/0/0`, ideal collectives `0`,
+    excess `0`, mean `0.001219s`, estimated phase bandwidth `1.29 GB/s`,
+    HBM peak `0.000183 GiB`.
+  - Route A `packed_grouped_updates_to_fsdp_apply`: lowered AG = `2` matching
+    ideal with zero lowered excess; compiled AG/A2A/AR = `0/0/0`, compiled
+    excess `-2`, mean `0.000517s`, estimated all-gather phase bandwidth
+    `3.04 GB/s`, HBM peak `0.000413 GiB`.
+  - Route B `packed_grouped_updates_to_fsdp_direct_apply`: lowered AG = `2`
+    matching ideal with zero lowered excess; compiled AG/A2A/AR = `0/0/0`,
+    compiled excess `-2`, mean `0.000571s`, estimated all-gather phase
+    bandwidth `2.76 GB/s`, HBM peak `0.000413 GiB`.
+- Interpretation:
+  - This closes the R4 reference-correctness check for the packed-bank
+    boundary primitive implementations.
+  - As with R2, this tiny shape is not authoritative for compiled collective
+    counting because compiled HLO hides or optimizes away the two expected
+    all-gathers on the apply routes. Use the full-size R2/R4 runs for
+    compiled-collective evidence and the small-shape N1/R2/R4 runs for
+    correctness evidence.
