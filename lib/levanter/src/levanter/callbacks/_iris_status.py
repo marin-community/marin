@@ -13,14 +13,13 @@ dashboard for the job. It is a no-op when not running inside an Iris job.
 import logging
 from datetime import timedelta
 
-import jax
-from fray.device_flops import device_flops_for_jax_device
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from rigging.timing import RateLimiter
 
 import levanter.tracker
 from levanter.callbacks._core import StepInfo
+from levanter.callbacks._metrics import aggregate_device_flops, compute_instant_throughput
 from levanter.schedule import BatchSchedule
 
 logger = logging.getLogger(__name__)
@@ -102,10 +101,7 @@ def iris_status_reporter(
         batch_schedule = BatchSchedule(batch_schedule)
 
     limiter = RateLimiter(interval_seconds=interval_seconds)
-
-    device_count = jax.device_count()
-    flops_per_device = device_flops_for_jax_device(jax.devices()[0].device_kind)
-    theoretical_flops = flops_per_device * device_count if flops_per_device is not None else None
+    theoretical_flops = aggregate_device_flops()
 
     def report(step_info: StepInfo, force: bool = False):
         ctx = get_iris_ctx()
@@ -118,23 +114,18 @@ def iris_status_reporter(
         step = step_info.step
         step_duration = step_info.step_duration
         batch_size = batch_schedule.batch_size_at_step(step)
-
-        tokens_per_second = examples_per_second = mfu = None
-        if step_duration > 0.0:
-            examples_per_second = batch_size / step_duration
-            tokens_per_second = tokens_per_example * examples_per_second
-            if flops_per_example is not None and theoretical_flops is not None:
-                model_flops_instant = flops_per_example / step_duration * batch_size
-                mfu = model_flops_instant / theoretical_flops * 100.0
+        throughput = compute_instant_throughput(
+            batch_size, step_duration, tokens_per_example, flops_per_example, theoretical_flops
+        )
 
         detail_md, summary_md = _format_status(
             step=step,
             total_steps=total_steps,
             loss=float(step_info.loss),
             step_duration=step_duration,
-            tokens_per_second=tokens_per_second,
-            examples_per_second=examples_per_second,
-            mfu=mfu,
+            tokens_per_second=throughput.tokens_per_second,
+            examples_per_second=throughput.examples_per_second,
+            mfu=throughput.mfu,
             wandb_url=_wandb_run_url(),
         )
 
