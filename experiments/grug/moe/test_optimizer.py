@@ -228,6 +228,7 @@ def test_may_grouped_muonh_defaults_to_packed_entry(monkeypatch):
     assert isinstance(optimizer, GrugMoeMuonHConfig)
     assert optimizer.expert_3d_optimizer == "grouped_muonh"
     assert optimizer.expert_grouped_muonh_packed_entry is True
+    assert optimizer.expert_grouped_muonh_packed_bank_compute is False
     assert optimizer.expert_grouped_muonh_chunk_local_boundaries is False
 
 

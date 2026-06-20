@@ -2534,3 +2534,20 @@ Post-compile steps were stable around 0.65-0.66s:
     grouped MuonH updates internally, FSDP-shaped updates/results out, no
     all-reduce/reduce-scatter in the tested optimizer boundary, and a bounded
     collective count rather than per-leaf explosion.
+
+### 2026-06-20 11:00 PDT - Route A default documented and guarded
+- Hypothesis: Launch defaults should point at the recommended production Route A
+  boundary and keep the slower packed-bank-compute experiment explicitly opt-in.
+- Change:
+  - Updated `experiments/grug/moe/launch_cw_may_d2560.py` docs to show
+    `MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY=true`.
+  - Kept `MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE=false` documented as
+    experimental.
+  - Added a default assertion that grouped MuonH enables packed entry but does
+    not enable packed-bank compute.
+- Command:
+  - `uv run pytest experiments/grug/moe/test_optimizer.py::test_may_grouped_muonh_defaults_to_packed_entry experiments/grug/moe/test_optimizer.py::test_may_optimizer_reads_grouped_muonh_packed_entry_env experiments/grug/moe/test_muon_update_bench.py::test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs`
+  - `./infra/pre-commit.py --changed-files --fix`
+- Result:
+  - Pytest: `5 passed in 7.25s`.
+  - Pre-commit: OK.
