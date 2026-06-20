@@ -120,6 +120,7 @@ from experiments.grug.moe.muon_update_bench import (
     expert_fsdp_grouped_updates_muonh_updates_step_factory,
     expert_grouped_layer_slice_step_factory,
     expert_grouped_single_layer_slice_step_factory,
+    fsdp_grouped_boundary_correctness_max_error,
     full_production_grouped_2d_persistent_apply_timing_step_factory,
     full_production_muonh_mask,
     full_production_muonh_optimizer_apply_step_factory,
@@ -139,6 +140,8 @@ from experiments.grug.moe.muon_update_bench import (
     grouped_moe_consumer_chunk_tokens,
     grouped_moe_mlp_consumer_step_factory,
     is_expert_fsdp_grouped_bench,
+    make_array_tree,
+    make_grouped_expert_array_tree,
     ns4d_compute_sharding,
     ns4d_grouped_apply_step_factory,
     ns4d_input_sharding,
@@ -152,6 +155,7 @@ from experiments.grug.moe.muon_update_bench import (
     should_check_grouped_apply_boundary_collectives,
     summarize_hlo,
     summary_row,
+    synthetic_fsdp_expert_shardings,
     synthetic_fsdp_expert_specs,
     synthetic_full_production_grouped_persistent_specs,
     synthetic_full_production_muonh_specs,
@@ -1812,6 +1816,44 @@ def test_expert_fsdp_grouped_explicit_apply_boundary_returns_fsdp_params():
     assert estimated_ns_dot_flops(config, EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH) == 0
 
 
+def test_expert_fsdp_grouped_boundary_correctness_max_error_is_zero_for_reference_apply():
+    config = BenchConfig(
+        layers=2,
+        ns4d_group_size=2,
+        ns4d_group_axis="none",
+        hidden_dim=4,
+        intermediate_dim=2,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=2,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
+    grouped_updates = make_grouped_expert_array_tree(
+        mesh,
+        config,
+        EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH,
+        seed=1,
+    )
+
+    max_error = fsdp_grouped_boundary_correctness_max_error(
+        mesh,
+        config,
+        EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH,
+        params,
+        grouped_updates,
+    )
+
+    assert max_error == 0.0
+
+
 def test_expert_fsdp_grouped_explicit_a2a_apply_boundary_returns_fsdp_params():
     config = BenchConfig(
         layers=4,
@@ -3321,6 +3363,7 @@ def test_summary_row_reports_boundary_byte_estimates():
         row["estimated_boundary_all_gather_slice_peak_per_device_bytes"]
         == estimates["all_gather_slice_peak_per_device_bytes"]
     )
+    assert row["estimated_boundary_peak_per_device_bytes"] == estimates["estimated_peak_per_device_bytes"]
     assert row["estimated_boundary_fsdp_output_to_grouped_input_ratio"] == 2.0
     assert row["estimated_boundary_all_gather_slice_peak_to_grouped_input_ratio"] == 4.0
     assert row["estimated_boundary_replica_fanout_factor"] == 2.0
@@ -3404,6 +3447,7 @@ def test_summary_row_reports_boundary_byte_estimates():
             "median_seconds": 1.0,
             "mean_seconds": 1.0,
             "min_seconds": 1.0,
+            "correctness_max_error": 0.0,
         }
     }
     row = summary_row(result)
@@ -3419,6 +3463,7 @@ def test_summary_row_reports_boundary_byte_estimates():
     assert row["estimated_boundary_compiled_fragmentation_factor"] == 4.0
     assert row["mean_estimated_boundary_global_gbps"] == estimates["global_update_bytes"] / 1e9
     assert row["median_estimated_boundary_global_gbps"] == estimates["global_update_bytes"] / 1e9
+    assert row["boundary_correctness_max_error"] == 0.0
     assert (
         row["mean_estimated_boundary_grouped_input_per_device_gbps"] == estimates["grouped_input_per_device_bytes"] / 1e9
     )

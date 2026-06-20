@@ -522,6 +522,7 @@ class TimingSummary:
     min_seconds: float | None
     stdev_seconds: float | None
     profile_dir: str | None = None
+    correctness_max_error: float | None = None
 
 
 def emit_jsonl(payload: dict[str, Any]) -> None:
@@ -5781,6 +5782,7 @@ def estimated_boundary_byte_estimates(config: BenchConfig, bench_kind: str) -> d
     grouped_input_per_device = global_bytes / (expert_axis * group_axis)
     fsdp_output_per_device = global_bytes / (expert_axis * data_axis)
     all_gather_slice_peak_per_device = global_bytes / expert_axis
+    estimated_peak_per_device = max(grouped_input_per_device, fsdp_output_per_device, all_gather_slice_peak_per_device)
     replica_fanout = replica_axis if "replica_dcn" in config.ns4d_group_axis else 1
     replica_fanout_min_extra_per_device = max(0.0, fsdp_output_per_device - grouped_input_per_device)
     replica_fanout_min_total_receive = global_bytes * max(0, replica_fanout - 1)
@@ -5789,6 +5791,7 @@ def estimated_boundary_byte_estimates(config: BenchConfig, bench_kind: str) -> d
         "grouped_input_per_device_bytes": float(grouped_input_per_device),
         "fsdp_output_per_device_bytes": float(fsdp_output_per_device),
         "all_gather_slice_peak_per_device_bytes": float(all_gather_slice_peak_per_device),
+        "estimated_peak_per_device_bytes": float(estimated_peak_per_device),
         "fsdp_output_to_grouped_input_ratio": float(fsdp_output_per_device / grouped_input_per_device),
         "all_gather_slice_peak_to_grouped_input_ratio": float(
             all_gather_slice_peak_per_device / grouped_input_per_device
@@ -5920,6 +5923,170 @@ def effective_gbps(bytes_count: float | None, seconds: float | None) -> float | 
     if bytes_count is None or seconds is None or seconds <= 0:
         return None
     return bytes_count / seconds / 1e9
+
+
+FSDP_GROUPED_RESTORE_CORRECTNESS_BENCHES = (
+    EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_A2A_RESTORE_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_PPERMUTE_RESTORE_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_EXPLICIT_DATA_PPERMUTE_RESTORE_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_EXPLICIT_TUPLE_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
+)
+
+FSDP_GROUPED_APPLY_CORRECTNESS_BENCHES = (
+    EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_A2A_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_EXPLICIT_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_PACKED_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
+)
+
+
+def reference_grouped_updates_to_fsdp_tree(config: BenchConfig, grouped_updates: Any) -> Any:
+    output_layers = [
+        {"mlp": {"expert_mlp": {name: None for name in synthetic_shapes(config)}}} for _ in range(config.layers)
+    ]
+    layer_offset = 0
+    for group_index, valid_group_size in enumerate(grouped_expert_group_sizes(config)):
+        for name in synthetic_shapes(config):
+            update = grouped_updates["blocks"][group_index]["mlp"]["expert_mlp"][name][:valid_group_size]
+            update_parts = [jnp.squeeze(update_part, axis=0) for update_part in jnp.split(update, valid_group_size)]
+            for local_index, update_part in enumerate(update_parts):
+                layer_index = layer_offset + local_index
+                output_layers[layer_index]["mlp"]["expert_mlp"][name] = update_part
+        layer_offset += valid_group_size
+    return {"layers": tuple(output_layers)}
+
+
+def reference_grouped_updates_apply(config: BenchConfig, params: Any, grouped_updates: Any) -> Any:
+    updates = reference_grouped_updates_to_fsdp_tree(config, grouped_updates)
+    return optax.apply_updates(params, updates)
+
+
+def max_abs_tree_error(actual: Any, expected: Any) -> float:
+    error_tree = jax.tree.map(
+        lambda actual_leaf, expected_leaf: jnp.max(jnp.abs(actual_leaf - expected_leaf)),
+        actual,
+        expected,
+    )
+    error_leaves = jax.tree.leaves(error_tree)
+    if not error_leaves:
+        return 0.0
+    return float(jax.device_get(jnp.max(jnp.asarray(error_leaves))))
+
+
+def fsdp_grouped_boundary_correctness_max_error(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+    params: Any,
+    grouped_updates: Any,
+) -> float | None:
+    if bench_kind not in (*FSDP_GROUPED_RESTORE_CORRECTNESS_BENCHES, *FSDP_GROUPED_APPLY_CORRECTNESS_BENCHES):
+        return None
+
+    if bench_kind == EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_restore_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_to_fsdp_tree(config, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_target_restore_boundary_step_factory(config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_to_fsdp_tree(config, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_explicit_restore_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_to_fsdp_tree(config, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_A2A_RESTORE_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_explicit_data_first_a2a_restore_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_to_fsdp_tree(config, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_PPERMUTE_RESTORE_BOUNDARY_BENCH:
+        update_step = jax.jit(
+            expert_fsdp_grouped_explicit_data_first_ppermute_restore_boundary_step_factory(mesh, config)
+        )
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_to_fsdp_tree(config, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_DATA_PPERMUTE_RESTORE_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_explicit_data_ppermute_restore_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_to_fsdp_tree(config, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH:
+        update_step = jax.jit(
+            expert_fsdp_grouped_explicit_slice_first_gather_restore_boundary_step_factory(mesh, config)
+        )
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_to_fsdp_tree(config, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_TUPLE_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH:
+        update_step = jax.jit(
+            expert_fsdp_grouped_explicit_tuple_slice_first_gather_restore_boundary_step_factory(mesh, config)
+        )
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_to_fsdp_tree(config, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH:
+        update_step = jax.jit(
+            expert_fsdp_grouped_custom_partition_slice_first_gather_restore_boundary_step_factory(mesh, config)
+        )
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_to_fsdp_tree(config, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_apply_boundary_step_factory(mesh, config))
+        actual, _actual_updates = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_apply(config, params, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_explicit_apply_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_apply(config, params, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_explicit_a2a_apply_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_apply(config, params, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_A2A_APPLY_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_explicit_data_first_a2a_apply_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_apply(config, params, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_explicit_data_first_ppermute_apply_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_apply(config, params, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_explicit_data_ppermute_apply_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_apply(config, params, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_explicit_slice_first_gather_apply_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_apply(config, params, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_packed_a2a_apply_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_apply(config, params, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_PACKED_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_packed_slice_first_gather_apply_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_apply(config, params, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_packed_data_first_ppermute_apply_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_apply(config, params, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_grouped_packed_data_ppermute_apply_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_grouped_updates_apply(config, params, grouped_updates)
+    else:
+        raise ValueError(f"Unsupported FSDP grouped boundary correctness bench kind: {bench_kind!r}")
+
+    return max_abs_tree_error(actual, expected)
 
 
 def lower_tree_update(
@@ -7367,6 +7534,15 @@ def time_ns4d(
             update_step = jax.jit(ns4d_step_factory(mesh, config, bench_kind))
             lower_args = (updates,)
 
+        correctness_max_error = None
+        if not compile_only:
+            correctness_max_error = fsdp_grouped_boundary_correctness_max_error(
+                mesh,
+                config,
+                bench_kind,
+                params,
+                updates,
+            )
         compile_start = time.perf_counter()
         compiled = update_step.lower(*lower_args).compile()
         compile_seconds = time.perf_counter() - compile_start
@@ -7768,6 +7944,7 @@ def time_ns4d(
         min_seconds=min(times) if times else None,
         stdev_seconds=statistics.stdev(times) if len(times) > 1 else None,
         profile_dir=str(profile_dir) if profile_dir is not None else None,
+        correctness_max_error=correctness_max_error,
     )
 
 
@@ -8377,6 +8554,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "estimated_boundary_all_gather_slice_peak_per_device_bytes": boundary_bytes.get(
             "all_gather_slice_peak_per_device_bytes"
         ),
+        "estimated_boundary_peak_per_device_bytes": boundary_bytes.get("estimated_peak_per_device_bytes"),
         "estimated_boundary_fsdp_output_to_grouped_input_ratio": boundary_bytes.get(
             "fsdp_output_to_grouped_input_ratio"
         ),
@@ -8472,6 +8650,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                 "median_seconds": timing["median_seconds"],
                 "mean_seconds": timing["mean_seconds"],
                 "min_seconds": timing["min_seconds"],
+                "boundary_correctness_max_error": timing.get("correctness_max_error"),
                 "mean_estimated_tflops": mean_tflops,
                 "median_estimated_tflops": median_tflops,
                 "mean_h100_bf16_peak_pct": percent_h100_bf16_peak(mean_tflops, devices),
