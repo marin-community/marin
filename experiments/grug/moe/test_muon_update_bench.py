@@ -47,6 +47,7 @@ from experiments.grug.moe.muon_update_bench import (
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
+    EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
     EXPERT_GROUPED_BANK_CONSUMER_BENCH,
     EXPERT_GROUPED_LAYER_SLICE_BENCH,
@@ -123,6 +124,7 @@ from experiments.grug.moe.muon_update_bench import (
     expert_fsdp_grouped_updates_muonh_explicit_a2a_apply_step_factory,
     expert_fsdp_grouped_updates_muonh_explicit_apply_step_factory,
     expert_fsdp_grouped_updates_muonh_updates_step_factory,
+    expert_fsdp_packed_bank_a2a_apply_boundary_step_factory,
     expert_grouped_layer_slice_step_factory,
     expert_grouped_single_layer_slice_step_factory,
     fsdp_grads_to_explicit_packed_grouped_bank_step_factory,
@@ -151,6 +153,7 @@ from experiments.grug.moe.muon_update_bench import (
     is_expert_fsdp_grouped_bench,
     make_array_tree,
     make_grouped_expert_array_tree,
+    make_packed_grouped_expert_bank_tree,
     ns4d_compute_sharding,
     ns4d_grouped_apply_step_factory,
     ns4d_input_sharding,
@@ -175,6 +178,7 @@ from experiments.grug.moe.muon_update_bench import (
     synthetic_ns4d_specs,
     synthetic_ordinary_2d_grouped_persistent_specs,
     synthetic_ordinary_2d_muonh_specs,
+    synthetic_packed_grouped_expert_bank_specs,
     synthetic_productionish_grouped_expert_specs,
     time_ns4d,
     zeropower_via_newtonschulz_4d_for_config,
@@ -2167,6 +2171,98 @@ def test_fsdp_grads_to_explicit_packed_grouped_bank_correctness_max_error_is_zer
     assert max_error == 0.0
 
 
+def test_expert_fsdp_packed_bank_a2a_apply_boundary_correctness_max_error_is_zero_for_reference():
+    config = BenchConfig(
+        layers=2,
+        ns4d_group_size=2,
+        ns4d_group_axis="none",
+        hidden_dim=4,
+        intermediate_dim=2,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=2,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
+    packed_updates = make_packed_grouped_expert_bank_tree(
+        mesh,
+        config,
+        EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+        seed=1,
+    )
+
+    max_error = fsdp_grouped_boundary_correctness_max_error(
+        mesh,
+        config,
+        EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+        params,
+        packed_updates,
+    )
+
+    assert max_error == 0.0
+
+
+def test_expert_fsdp_packed_bank_a2a_apply_boundary_returns_fsdp_params():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(1, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = synthetic_fsdp_expert_specs(mesh, config)
+    packed_updates = synthetic_packed_grouped_expert_bank_specs(
+        mesh,
+        config,
+        EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+    )
+    update_step = jax.jit(expert_fsdp_packed_bank_a2a_apply_boundary_step_factory(mesh, config))
+
+    assert_expert_fsdp_sharding(params, "expert FSDP params")
+    assert_packed_grouped_expert_bank_sharding(
+        packed_updates,
+        mesh,
+        config,
+        EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+        "packed grouped updates",
+    )
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        result = jax.eval_shape(update_step, params, packed_updates)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(params, packed_updates).lower(lowering_platforms=(platform,))
+
+    assert_expert_fsdp_sharding(result, "packed-bank a2a apply FSDP params")
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general == 0
+    assert hlo_summary.all_to_all > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert estimated_ns_dot_flops(config, EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH) == 0
+
+
 def test_expert_fsdp_grouped_explicit_a2a_apply_boundary_returns_fsdp_params():
     config = BenchConfig(
         layers=4,
@@ -3810,6 +3906,25 @@ def test_summary_row_reports_boundary_byte_estimates():
     row = summary_row(result)
 
     assert row["boundary_primitive"] == "fsdp_grads_to_explicit_packed_grouped_bank"
+    assert row["estimated_boundary_global_update_bytes"] == estimates["global_update_bytes"]
+    assert row["estimated_boundary_grouped_input_per_device_bytes"] == estimates["grouped_input_per_device_bytes"]
+    assert row["estimated_boundary_fsdp_output_per_device_bytes"] == estimates["fsdp_output_per_device_bytes"]
+    assert (
+        row["estimated_boundary_all_gather_slice_peak_per_device_bytes"]
+        == estimates["all_gather_slice_peak_per_device_bytes"]
+    )
+
+    packed_bank_apply_estimates = estimated_boundary_byte_estimates(
+        config,
+        EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
+    )
+    assert packed_bank_apply_estimates == estimates
+
+    result["metadata"]["label"] = "expert_fsdp_packed_bank_a2a_apply_boundary_h1"
+    result["metadata"]["bench_kind"] = EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH
+    row = summary_row(result)
+
+    assert row["boundary_primitive"] == "packed_grouped_updates_to_fsdp_apply"
     assert row["estimated_boundary_global_update_bytes"] == estimates["global_update_bytes"]
     assert row["estimated_boundary_grouped_input_per_device_bytes"] == estimates["grouped_input_per_device_bytes"]
     assert row["estimated_boundary_fsdp_output_per_device_bytes"] == estimates["fsdp_output_per_device_bytes"]
