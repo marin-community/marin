@@ -2164,3 +2164,67 @@ Post-compile steps were stable around 0.65-0.66s:
 - Next action:
   - Give Socrates the May200 phase table and focus the lower-level bridge investigation on the production packed boundary collectives, not generic Newton-Schulz speed.
   - Do not launch R4 production until the R2 boundary cost has a concrete fix or a reasoned lower-level primitive design.
+
+### 2026-06-20 06:24 PDT - Chunk-local grouped-MuonH boundary probe
+- Hypothesis: May200's `grouped_muonh/packed_entry/slice_*_chunk` and
+  `grouped_muonh/packed_restore/concat_chunks` SendRecv time may be caused by
+  building one global packed bank and then slicing/concatenating chunks across
+  the stack axis. A per-chunk boundary mode should avoid the whole-bank
+  dynamic-slice/concat traffic, at the cost of more explicit entry/restore
+  collectives.
+- Change:
+  - Commit `f58064e63` adds
+    `expert_grouped_muonh_chunk_local_boundaries` to the production grouped
+    MuonH optimizer, May launch wrapper, Muon update harness, and tests.
+  - Commit `e1ae179cd` fixes the CoreWeave Muon bench executor wrapper to
+    forward `MUON_BENCH_EXPERT_GROUPED_MUONH_PACKED_ENTRY` and
+    `MUON_BENCH_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES` to the remote
+    launcher.
+  - New lazy launcher:
+    `scratch/launch_muon_chunk_local_2node_wandb.sh`.
+- Validation:
+  - `uv run pytest experiments/grug/moe/test_optimizer.py -q` -> 19 passed.
+  - `./infra/pre-commit.py --changed-files --fix` -> passed.
+  - Abstract HLO test for chunk-local mode on R2D2E8 confirms updates still
+    match parameter shardings and lowers to `8` all-gathers, `16` all-to-alls,
+    no all-reduce, and no reduce-scatter.
+- Invalid first launch/control:
+  - `/dlwh/iris-run-job-20260620-131439` completed successfully, but metadata
+    showed `expert_grouped_muonh_chunk_local_boundaries=false` because the
+    remote executor wrapper did not forward the new env var.
+  - It is still a useful same-shape control: mean `0.8215s`, median `0.8202s`,
+    compiled HLO `18` all-gathers and `10` all-to-alls.
+- Valid chunk-local run:
+  - Iris parent `/dlwh/iris-run-job-20260620-131904`; child
+    `/dlwh/iris-run-job-20260620-131904/grug-train-MUON-BENCH-D2560-L26-R1D2E8-G8-H3-CHUNKLOCAL-N2-cw-20260620-131902`.
+  - Config metadata confirmed
+    `expert_grouped_muonh_chunk_local_boundaries=true`,
+    `expert_grouped_muonh_packed_entry=false`, 2 H100 nodes,
+    `replica_axis=1`, `data_axis=2`, `expert_axis=8`, `model_axis=1`,
+    26 layers, group size 8, bf16 params/NS compute, and
+    `real_expert_fsdp_grouped_muonh_optimizer_update`.
+  - Child succeeded with both tasks exit 0; profile uploaded under
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-CHUNKLOCAL-N2-cw-20260620-131902-0ce836/profiler/`.
+  - Timing: process 0 mean `0.5595s`, median `0.5555s`, min `0.5555s`;
+    process 1 mean `0.5572s`, median `0.5527s`, min `0.5518s`.
+  - Compiled HLO changed to `8` all-gathers and `16` all-to-alls, no
+    all-reduce/reduce-scatter. Estimated effective NS throughput from the
+    harness summary was `~27.4-27.5%` of nominal H100 bf16 peak.
+- Interpretation:
+  - Chunk-local boundaries are a real improvement over the comparable
+    accidentally-disabled/control harness run: roughly `1.47x` faster
+    (`0.8215s -> 0.5572s` mean on process 1).
+  - The profile summary is still communication dominated: direct XPlane summary
+    sees `128` SendRecv events and `64` AllGather events on process 0, with
+    communication accounting for most device time. This is not a compute-only
+    win.
+  - The lowered/compiled collective shape supports the May200 diagnosis:
+    changing how the grouped bank crosses the FSDP boundary materially changes
+    runtime. However, the result is still far from the ideal two-boundary
+    primitive; XLA still fragments the boundary into `24` compiled collectives
+    for only two logical data movements.
+- Next action:
+  - Keep Socrates focused on a lower-level boundary primitive or packed
+    transport that gets closer to the two logical grouped<->FSDP movements.
+  - Use chunk-local as a production-safe fallback/benchmark point, not as the
+    final answer.
