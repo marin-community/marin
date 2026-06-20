@@ -2666,3 +2666,21 @@ Post-compile steps were stable around 0.65-0.66s:
 - Result:
   - Pytest: `8 passed in 3.64s`.
   - Pre-commit: OK.
+
+### 2026-06-20 11:25 PDT - May208 chunk-local is live but already non-competitive
+- Observation:
+  - Iris still reports parent `/dlwh/iris-run-job-20260620-181104` and child
+    `/dlwh/iris-run-job-20260620-181104/grug-train-GM2560-MAY208-B16-R2D1E8-GMUONH3-CHUNKLOCAL-PROF-N2-cw-20260620-1811`
+    as running with both tasks alive.
+  - W&B now reports the run as `crashed`, with zero history rows.
+  - Bounded Iris logs show both ranks completed only step 0. Rank 0 duration
+    was `431.93s`, tokens/s `151.73`, MFU `0.0164`; rank 1 duration was
+    `432.93s`, tokens/s `151.38`, MFU `0.01637`.
+  - No step 1 metrics or traceback appeared in a 10-minute recent log window.
+- Interpretation:
+  - This is not a viable production fallback. Chunk-local avoids the
+    packed-entry shape in principle, but the integrated path is now orders of
+    magnitude slower than May202 and much worse than the grouped boundary
+    harnesses.
+  - Treat May208 as evidence that the fallback path is not sufficient; keep
+    waiting only if we want a profile artifact for diagnosis.
