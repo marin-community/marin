@@ -2685,6 +2685,38 @@ Post-compile steps were stable around 0.65-0.66s:
   - Treat May208 as evidence that the fallback path is not sufficient; keep
     waiting only if we want a profile artifact for diagnosis.
 
+### 2026-06-20 11:31 PDT - May208 chunk-local profile interpreted
+- Correction to the initial observation:
+  - May208 did not stay stuck after step 0/1. Steps 0 and 1 were pathological
+    at `~432s` and `~452s`, but steps 2-7 reached a steady-state-ish
+    `~1.04-1.11s` per step.
+  - Representative profiler-window rank-0 metrics:
+    step 3 `duration=1.1043s`, `tokens_per_second=59343.9`, `mfu=6.4172`;
+    step 4 `duration=1.1105s`, `tokens_per_second=59014.5`, `mfu=6.3816`.
+  - W&B still reports the run as `crashed` with zero history rows because the
+    artifact upload ended in `wandb.sdk.mailbox.mailbox_handle.HandleAbandonedError`.
+    The profiler artifact was nevertheless created as
+    `GM2560-MAY208-B16-R2D1E8-GMUONH3-CHUNKLOCAL-PROF-N2-cw-20260620-1811-profiler:v0`.
+- Artifacts:
+  - Summary: `scratch/profiles/may208_summary.json`.
+  - Report: `scratch/profiles/may208_report.md`.
+  - Command:
+    `uv run python lib/marin/tools/profile_summary.py summarize --artifact marin-community/marin_moe/GM2560-MAY208-B16-R2D1E8-GMUONH3-CHUNKLOCAL-PROF-N2-cw-20260620-1811-profiler:v0 --download-root scratch/profiles/may208 --breakdown-mode exclusive_global --output scratch/profiles/may208_summary.json`.
+- Profile result:
+  - May208 is still communication-bound: communication share `75.85%`, compute
+    share `20.0%`.
+  - Top collectives: all-reduce `2160` calls / `6.89s`, all-gather `2080`
+    calls / `5.09s`, reduce-scatter `832` calls / `0.482s`.
+  - Compared with May202, the previous huge packed-entry/packed-restore
+    SendRecv-looking hotspots disappear, but the chunk-local path introduces a
+    much larger number of all-gathers. It is a different bad boundary, not a
+    fix.
+- Interpretation:
+  - The production fallback is usable as a diagnostic but not a viable
+    boundary primitive. The lower-level packed-bank harness remains the better
+    direction: few large boundary collectives, not thousands of fragmented
+    train-step collectives.
+
 ### 2026-06-20 11:58 PDT - Per-type boundary collective efficiency reporting
 - Hypothesis: The boundary harness should make "avoids per-leaf collective
   explosion" directly visible in summary/W&B rows, not only by reading HLO logs
