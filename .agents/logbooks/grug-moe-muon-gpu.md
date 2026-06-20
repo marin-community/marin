@@ -1936,3 +1936,22 @@ Post-compile steps were stable around 0.65-0.66s:
   - Make `main()` build the executor step lazily so subprocess payload mode can import the module without calling `this_output_path()`.
   - Focused validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'sync_global_devices_if_multihost or wandb_metric_row or launcher_reads_wandb_env' -q` -> 4 passed; `uv run python -m py_compile experiments/grug/moe/launch_cw_muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed; `./infra/pre-commit.py --files experiments/grug/moe/launch_cw_muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix` passed.
 - Next action: rerun phase-report validation once more. This time the W&B subprocess should avoid both the `spawn` pickling failure and the in-process `wandb.finish()` hang.
+
+### 2026-06-20 03:42 PDT - phase-report validation succeeds with W&B subprocess
+- Hypothesis: The subprocess W&B path should preserve W&B metrics while allowing the distributed JAX benchmark to exit normally.
+- Run:
+  - Iris parent `/dlwh/iris-run-job-20260620-103539`; child `/dlwh/iris-run-job-20260620-103539/grug-train-MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PHASEREPORTSUBPROC-N2-cw-20260620-103536`.
+  - W&B `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PHASEREPORTSUBPROC-N2-cw-20260620-103536`.
+  - Output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PHASEREPORTSUBPROC-N2-cw-20260620-103536-3d74b5`.
+- Result:
+  - Parent and child both succeeded with `failure_count=0`; both GPU tasks exited 0.
+  - W&B subprocess emitted `wandb_logged` and the run reached terminal success. The JAX `WatchTasksAsync CANCELLED` warnings appeared during normal shutdown but did not mark the job failed.
+  - Lowered HLO: `0 all_gather`, `6 all_to_all`, `0 collective_permute`, `0 reduce_scatter`, `18 dot_general`.
+  - Compiled HLO: `0 all_gather`, `6 all_to_all`, `0 collective_permute`, `0 reduce_scatter`, `41 gpu_gemm_custom_call`, `90 custom_call`.
+  - Rank timings: `0.658006s` and `0.658088s`, about `23.32%` nominal H100 bf16 peak.
+  - Phase fields: three phases, each `130862284800` global bytes and two ideal all-to-alls; total phase bytes `392586854400`, total ideal collectives `6`, compiled/lowered-to-ideal ratios `1.0`, aggregate boundary bandwidth about `198.9 GB/s`, phase-normalized bandwidth about `596.6 GB/s`.
+- Interpretation:
+  - Phase-reporting is now usable as a regression check for grouped MuonH boundary primitives.
+  - The conservative FSDP-master packed-bank path remains semantically compatible and cleanly instrumented, but performance is still the same transport-bound baseline: three two-A2A phases plus NS/hyperball work.
+  - Future candidates should beat this by reducing phase bytes, reducing phases, overlapping transport with NS, or avoiding the grouped-to-FSDP apply boundary.
+- Next action: continue the boundary-primitive goal from this baseline. Socrates' lower-level bridge work should compare against `0 AG / 6 A2A`, `~0.658s`, and the three phase rows above.
