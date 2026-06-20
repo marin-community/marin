@@ -73,10 +73,10 @@ def test_stage_artifact_for_vllm_passes_local_artifact_through(tmp_path):
     artifact_dir = tmp_path / "artifact"
     artifact_dir.mkdir()
 
-    vllm_model_path, staging = stage_artifact_for_vllm(str(artifact_dir))
+    staged_artifact = stage_artifact_for_vllm(str(artifact_dir))
 
-    assert vllm_model_path == str(artifact_dir)
-    assert staging == {
+    assert staged_artifact.vllm_model_path == str(artifact_dir)
+    assert staged_artifact.staging == {
         "staged": False,
         "source_artifact_dir": str(artifact_dir),
         "vllm_model_path": str(artifact_dir),

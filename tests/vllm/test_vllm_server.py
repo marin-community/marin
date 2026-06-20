@@ -17,9 +17,9 @@ def test_vllm_native_command_uses_vllm_binary_without_preload(monkeypatch):
 def test_vllm_native_command_wraps_cli_when_preload_modules_are_set():
     command = vllm_server._vllm_native_command(
         ["serve", "model"],
-        {"MARIN_VLLM_PRELOAD_MODULES": "experiments.grug.moe.vllm_registry"},
+        {vllm_server._PRELOAD_MODULES_ENV: "experiments.grug.moe.vllm_registry"},
     )
 
     assert command[:3] == [sys.executable, "-c", vllm_server._VLLM_PRELOAD_CLI]
     assert command[3:] == ["serve", "model"]
-    assert "MARIN_VLLM_PRELOAD_MODULES" in command[2]
+    assert vllm_server._PRELOAD_MODULES_ENV in command[2]

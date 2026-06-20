@@ -25,12 +25,12 @@ _REMOVED_VLLM_MODE_MESSAGE = (
     "Unset MARIN_VLLM_MODE or set it to 'native'."
 )
 _PRELOAD_MODULES_ENV = "MARIN_VLLM_PRELOAD_MODULES"
-_VLLM_PRELOAD_CLI = """
+_VLLM_PRELOAD_CLI = f"""
 import importlib
 import os
 import sys
 
-for module_name in os.environ.get("MARIN_VLLM_PRELOAD_MODULES", "").split(","):
+for module_name in os.environ.get({_PRELOAD_MODULES_ENV!r}, "").split(","):
     module_name = module_name.strip()
     if module_name:
         importlib.import_module(module_name)

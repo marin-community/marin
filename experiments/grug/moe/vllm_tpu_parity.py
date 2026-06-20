@@ -57,6 +57,7 @@ from levanter.utils.jax_utils import is_inexact_arrayish
 from safetensors.numpy import load_file
 
 import experiments.grug.moe.model as grug_moe_model
+from experiments.grug.moe.artifact_metadata import directory_size_bytes
 from experiments.grug.moe.heuristic import DEFAULT_TARGET_STEPS, build_from_heuristic
 from experiments.grug.moe.model import GrugModelConfig, Transformer, canonical_grugmoe_tensor_names
 from experiments.grug.moe.train import initial_state
@@ -863,10 +864,6 @@ def _exported_tensor_names(artifact_dir: Path, *, expect_sharded: bool) -> froze
     return frozenset(weight_map)
 
 
-def _directory_size_bytes(path: Path) -> int:
-    return sum(file.stat().st_size for file in path.rglob("*") if file.is_file())
-
-
 def _shard_count(artifact_dir: Path) -> int:
     return len(list(artifact_dir.glob("model-*-of-*.safetensors")))
 
@@ -971,6 +968,7 @@ def _native_production_forward(
     *,
     block_size: int,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
+    # Production KV-cache support is only needed for this optional TPU runner check.
     from tpu_inference.runner.kv_cache import create_kv_caches  # noqa: PLC0415
 
     cfg = tpu_model.model.config
@@ -1241,7 +1239,7 @@ def check_large_sharded_artifact_smoke(tpu_grugmoe) -> None:
                 f"large artifact load report was not strict: missing={report.missing} unexpected={report.unexpected}"
             )
 
-        artifact_size = _directory_size_bytes(artifact_dir)
+        artifact_size = directory_size_bytes(artifact_dir)
         if not (1_000_000_000 <= artifact_size <= 5_000_000_000):
             raise AssertionError(f"large smoke artifact size {artifact_size} bytes is outside the 1-5GB target")
         shard_count = len(list(artifact_dir.glob("model-*-of-*.safetensors")))
@@ -1296,7 +1294,7 @@ def check_realistic_training_state_roundtrip(
         num_train_steps=num_train_steps,
         seed=23,
     )
-    checkpoint_size = _directory_size_bytes(checkpoint_dir)
+    checkpoint_size = directory_size_bytes(checkpoint_dir)
 
     expected_hidden, expected_expert_ids = jax.jit(_jax_full_forward)(lev_model, token_ids)
     expected_logits = _jax_logits(lev_model, expected_hidden)[0]
@@ -1416,7 +1414,7 @@ def check_realistic_training_state_roundtrip(
         expected_token_ids=expected_generation_token_ids,
     )
 
-    artifact_size = _directory_size_bytes(artifact_dir)
+    artifact_size = directory_size_bytes(artifact_dir)
     shard_count = _shard_count(artifact_dir)
     print(
         "realistic-roundtrip: sharded training-state export loaded in native tpu-inference and matched "

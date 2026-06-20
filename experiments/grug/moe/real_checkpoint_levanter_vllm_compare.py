@@ -650,6 +650,7 @@ def _require_reference_inputs(config: CompareConfig) -> None:
 
 
 def submit_compare(config: CompareConfig, *, tpu_type: str, region: str, ram: str, disk: str, job_name: str) -> None:
+    # Fray is only needed for remote submission; local compare phases should not import it.
     from fray import current_client  # noqa: PLC0415
     from fray.cluster import ResourceConfig  # noqa: PLC0415
     from fray.types import Entrypoint, JobRequest, create_environment  # noqa: PLC0415

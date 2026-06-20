@@ -45,6 +45,7 @@ from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.jax_utils import is_inexact_arrayish
+from marin.evaluation.evaluators.evaluator import ModelConfig
 
 from experiments.grug.moe.model import (
     GrugModelConfig,
@@ -104,6 +105,12 @@ class SmokeConfig:
     @property
     def result_path(self) -> str:
         return join_path(self.output_dir, "result.json")
+
+
+@dataclass(frozen=True)
+class StagedArtifact:
+    vllm_model_path: str
+    staging: dict[str, Any]
 
 
 def join_path(base: str, *parts: str) -> str:
@@ -201,30 +208,36 @@ def _copy_tree_to_local(source_dir: str, local_dir: str) -> int:
     return copied
 
 
-def stage_artifact_for_vllm(artifact_dir: str) -> tuple[str, dict[str, Any]]:
+def stage_artifact_for_vllm(artifact_dir: str) -> StagedArtifact:
     """Return a local vLLM model path, staging GCS artifacts when needed."""
     require_local_or_europe_west4("artifact_dir", artifact_dir)
     parsed = urlparse(artifact_dir)
     if parsed.scheme in {"", "file"}:
         local_path = _local_filesystem_path(artifact_dir)
-        return local_path, {
-            "staged": False,
-            "source_artifact_dir": artifact_dir,
-            "vllm_model_path": local_path,
-            "copied_files": None,
-        }
+        return StagedArtifact(
+            vllm_model_path=local_path,
+            staging={
+                "staged": False,
+                "source_artifact_dir": artifact_dir,
+                "vllm_model_path": local_path,
+                "copied_files": None,
+            },
+        )
 
     local_root = tempfile.mkdtemp(prefix="grugmoe-real-checkpoint-vllm-artifact-")
     local_path = os.path.join(local_root, "artifact")
     copied_files = _copy_tree_to_local(artifact_dir, local_path)
     _require_file("staged artifact config.json", join_path(local_path, "config.json"))
     _require_file("staged artifact tokenizer.json", join_path(local_path, "tokenizer.json"))
-    return local_path, {
-        "staged": True,
-        "source_artifact_dir": artifact_dir,
-        "vllm_model_path": local_path,
-        "copied_files": copied_files,
-    }
+    return StagedArtifact(
+        vllm_model_path=local_path,
+        staging={
+            "staged": True,
+            "source_artifact_dir": artifact_dir,
+            "vllm_model_path": local_path,
+            "copied_files": copied_files,
+        },
+    )
 
 
 def _direct_url(package: str) -> str:
@@ -505,16 +518,16 @@ def _completion_payload(env: Any, config: SmokeConfig) -> dict[str, Any]:
 
 
 def serve_artifact(config: SmokeConfig) -> dict[str, Any]:
-    from marin.evaluation.evaluators.evaluator import ModelConfig  # noqa: PLC0415
-    from marin.inference.vllm_server import VllmEnvironment  # noqa: PLC0415
-
     _require_file("artifact config.json", join_path(config.artifact_dir, "config.json"))
     configure_runtime_environment(config)
-    vllm_model_path, staging = stage_artifact_for_vllm(config.artifact_dir)
+    staged_artifact = stage_artifact_for_vllm(config.artifact_dir)
+
+    # VllmEnvironment is serving-phase local; load it after TPU/vLLM env setup.
+    from marin.inference.vllm_server import VllmEnvironment  # noqa: PLC0415
 
     model = ModelConfig(
         name="grugmoe-real-checkpoint-vllm-smoke",
-        path=vllm_model_path,
+        path=staged_artifact.vllm_model_path,
         engine_kwargs={
             "max_model_len": config.max_model_len,
             "max_num_batched_tokens": config.max_model_len,
@@ -539,8 +552,8 @@ def serve_artifact(config: SmokeConfig) -> dict[str, Any]:
     ) as env:
         print("vllm_server_initialized=True", flush=True)
         print("vllm_server_url=" + env.server_url, flush=True)
-        print("vllm_model_path=" + vllm_model_path, flush=True)
-        print("vllm_artifact_staging=" + json.dumps(staging, sort_keys=True), flush=True)
+        print("vllm_model_path=" + staged_artifact.vllm_model_path, flush=True)
+        print("vllm_artifact_staging=" + json.dumps(staged_artifact.staging, sort_keys=True), flush=True)
         print("vllm_server_log_dir=" + (env.vllm_server.log_dir if env.vllm_server else ""), flush=True)
         payload = _completion_payload(env, config)
         logs_tail = env.logs_tail(max_lines=120)
@@ -567,8 +580,8 @@ def serve_artifact(config: SmokeConfig) -> dict[str, Any]:
         "calibrated_expected_output": calibrated_expected,
         "calibration_mode": config.calibrate_output,
         "passed": config.calibrate_output or (expected is not None and completion == expected),
-        "vllm_model_path": vllm_model_path,
-        "artifact_staging": staging,
+        "vllm_model_path": staged_artifact.vllm_model_path,
+        "artifact_staging": staged_artifact.staging,
         "elapsed_seconds": elapsed,
         "raw_response": payload,
         "vllm_logs_tail": logs_tail,
@@ -648,6 +661,7 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
 
 
 def submit_smoke(config: SmokeConfig, *, tpu_type: str, region: str, ram: str, disk: str, job_name: str) -> None:
+    # Fray is only needed for remote submission; local smoke phases should not import it.
     from fray import current_client  # noqa: PLC0415
     from fray.cluster import ResourceConfig  # noqa: PLC0415
     from fray.types import Entrypoint, JobRequest, create_environment  # noqa: PLC0415

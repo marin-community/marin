@@ -19,7 +19,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import requests
+from marin.evaluation.evaluators.evaluator import ModelConfig
 
+from experiments.grug.moe.artifact_metadata import directory_size_bytes
 from experiments.grug.moe.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION, GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY
 
 _PROMPT_IDS = [1, 42, 128, 2048, 17, 3072, 5, 63]
@@ -82,10 +85,6 @@ def _artifact_config(artifact_dir: Path) -> dict[str, Any]:
             f"{GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY}={config.get(GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY)!r}"
         )
     return config
-
-
-def _directory_size_bytes(path: Path) -> int:
-    return sum(file.stat().st_size for file in path.rglob("*") if file.is_file())
 
 
 def _shard_count(path: Path) -> int:
@@ -159,6 +158,7 @@ def export_artifact(
     if os.environ.get("PYTHONPATH"):
         raise SystemExit(f"PYTHONPATH unexpectedly set: {os.environ['PYTHONPATH']}")
 
+    # These load TPU/JAX parity code; keep them phase-local after PYTHONPATH validation.
     import tpu_inference.models.jax.grugmoe as tpu_grugmoe  # noqa: PLC0415
 
     from experiments.grug.moe import vllm_tpu_parity as parity  # noqa: PLC0415
@@ -227,8 +227,7 @@ def serve_artifact(
         raise SystemExit(f"PYTHONPATH unexpectedly set: {os.environ['PYTHONPATH']}")
     _configure_vllm_env()
 
-    import requests  # noqa: PLC0415
-    from marin.evaluation.evaluators.evaluator import ModelConfig  # noqa: PLC0415
+    # VllmEnvironment is serving-phase local; load it after TPU/vLLM env setup.
     from marin.inference.vllm_server import VllmEnvironment  # noqa: PLC0415
 
     artifact_config = _artifact_config(artifact_dir)
@@ -454,7 +453,7 @@ def run(
         reference_path = _reference_path(output_dir)
         print("installed_artifact_dir=" + str(artifact_dir))
         print("installed_reference_json=" + str(reference_path))
-        print("installed_artifact_bytes=" + str(_directory_size_bytes(artifact_dir)))
+        print("installed_artifact_bytes=" + str(directory_size_bytes(artifact_dir)))
         print("installed_safetensors_file_count=" + str(_shard_count(artifact_dir)))
 
     _run_phase_subprocess(
