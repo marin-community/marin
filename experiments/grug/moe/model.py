@@ -1,10 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""MoE grug variant model.
+"""MoE grug variant model with Multi-head Latent Attention.
 
-Architecture: QB-routed MoE with GatedNorm, XSA, sigmoid combine weights.
-No load-balancing loss; router z-loss only. All layers are MoE (no dense layers).
+Architecture: QB-routed MoE with GatedNorm, sigmoid combine weights, Multi-head
+Latent Attention (MLA, DeepSeek-V2 style) on the attention path. No load-balancing
+loss; router z-loss only. All layers are MoE (no dense layers). All layers run
+identical full causal attention (no sliding window, no PKO, no long/short split).
+
+Simplifications vs the prior CausalSelfAttention:
+  - Multi-head latent attention with a single ``kv_compression_dim`` knob:
+    cache the compressed KV latent c_kv + a shared rope-bearing K (k_r broadcast
+    across heads). Half-RoPE convention preserved (first head_dim/2 rope-bearing,
+    rest no-rope).
+  - Removed: attention gate, XSA (exclusive self-attention v-parallel subtract),
+    PKO (partial key offset / doc-start zero), sliding window, GQA num_kv_heads,
+    disable_long_rope, all long/short layer branching.
 """
 
 import dataclasses
@@ -30,7 +41,6 @@ from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
     RotaryConfig,
-    align_kv_heads,
     apply_rotary_embedding,
     attention,
 )
@@ -75,15 +85,11 @@ def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
 
 
-def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
-    return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
-
-
 @dataclass(frozen=True)
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
 
-    Architecture choices (GatedNorm, XSA, QB routing) are hardcoded.
+    Architecture choices (GatedNorm, MLA, QB routing) are hardcoded.
     Only shape/size knobs live here. All layers are MoE.
     """
 
@@ -95,10 +101,10 @@ class GrugModelConfig:
     num_experts_per_token: int = 4
     num_layers: int = 6
     num_heads: int = 4
-    num_kv_heads: int = 1
     head_dim: int | None = None
+    kv_compression_dim: int | None = None
+    """MLA KV-latent dim ``d_c``. None defaults to ``hidden_dim // 4``."""
     max_seq_len: int = 4096
-    sliding_window: int = 2048
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
@@ -112,9 +118,9 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
-        _ = self.inferred_head_dim
-        if self.num_heads % self.num_kv_heads != 0:
-            raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
+        hd = self.inferred_head_dim
+        if hd % 2 != 0:
+            raise ValueError(f"head_dim must be even for half-RoPE; got {hd}")
         if self.vocab_size <= 0:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
@@ -127,7 +133,13 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.inferred_kv_compression_dim <= 0:
+            raise ValueError("kv_compression_dim must be positive")
         resolve_moe_implementation(self.moe_implementation)
+
+    @property
+    def inferred_kv_compression_dim(self) -> int:
+        return self.kv_compression_dim if self.kv_compression_dim is not None else max(1, self.hidden_dim // 4)
 
     @property
     def inferred_head_dim(self) -> int:
@@ -147,23 +159,42 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
 
 
 class CausalSelfAttention(eqx.Module):
-    w_q: Float[Array, "D NH"]
-    w_k: Float[Array, "D MH"]
-    w_v: Float[Array, "D MH"]
-    w_o: Float[Array, "NH D"]
-    attn_gate: Float[Array, "D N"]
+    """Multi-head Latent Attention (DeepSeek-V2 style) with half-RoPE.
+
+    Per-token KV state factorises as:
+      - ``c_kv = x @ w_dkv`` (compressed latent of size ``d_c``).
+      - ``k_r = x @ w_kr`` (rope-bearing key, ``half`` dims, shared across heads).
+    At inference these two tensors are what gets cached; this implementation just
+    computes them on-the-fly. K's no-rope half and V are up-projected from c_kv
+    per head:
+      - ``k_nr = c_kv @ w_uk_nr`` reshaped to ``(B, S, NH, half)``.
+      - ``v    = c_kv @ w_uv`` reshaped to ``(B, S, NH, HD)``.
+    Q is projected directly (no Q-side compression for now).
+    """
+
+    w_q: jax.Array  # (D, NH * HD)
+    w_dkv: jax.Array  # (D, d_c)
+    w_uk_nr: jax.Array  # (d_c, NH * half)
+    w_uv: jax.Array  # (d_c, NH * HD)
+    w_kr: jax.Array  # (D, half)   -- rope-bearing K, shared across heads
+    w_o: jax.Array  # (NH * HD, D)
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
-        k_q, k_k, k_v, k_o = random.split(key, 4)
-        d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        k_q, k_dkv, k_uk, k_uv, k_kr, k_o = random.split(key, 6)
+        d = cfg.hidden_dim
+        n = cfg.num_heads
+        hd = cfg.inferred_head_dim
+        half = hd // 2
+        d_c = cfg.inferred_kv_compression_dim
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
-            attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            w_q=reshard(_init_weight(k_q, (d, n * hd), cfg.initializer_std), P("data", "model")),
+            w_dkv=reshard(_init_weight(k_dkv, (d, d_c), cfg.initializer_std), P("data", None)),
+            w_uk_nr=reshard(_init_weight(k_uk, (d_c, n * half), cfg.initializer_std), P(None, "model")),
+            w_uv=reshard(_init_weight(k_uv, (d_c, n * hd), cfg.initializer_std), P(None, "model")),
+            w_kr=reshard(_init_weight(k_kr, (d, half), cfg.initializer_std), P("data", None)),
+            w_o=reshard(_init_weight(k_o, (n * hd, d), cfg.initializer_std), P("model", "data")),
             cfg=cfg,
         )
 
@@ -172,69 +203,50 @@ class CausalSelfAttention(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-        use_pko: bool = False,
     ) -> Float[Array, "B S D"]:
-        head_dim = self.cfg.inferred_head_dim
+        hd = self.cfg.inferred_head_dim
+        half = hd // 2
+        nh = self.cfg.num_heads
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        # Q: full projection per head.
+        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=hd)
 
-        # Shift the second half of K's head_dim back by one position so the
-        # query at position i sees K[i] on head_dim[:half] but K[i-1] on
-        # head_dim[half:]. Zero the shifted half at document starts so the
-        # cross-half look-back does not leak across docs. Runs before the
-        # rms_norm on Q/K below.
-        if use_pko:
-            half = head_dim // 2
-            k_stationary = k[..., half:]
-            k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
-            segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-            if segment_ids is None:
-                # No segment info (raw-mask or unsegmented eval path): only position 0 is a doc start.
-                is_doc_start_seq = jnp.zeros((seq_len,), dtype=bool).at[0].set(True)
-                is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
-            else:
-                q_seg = segment_ids[0]
-                if q_seg.ndim == 1:
-                    is_doc_start_seq = jnp.concatenate([jnp.ones((1,), dtype=bool), q_seg[1:] != q_seg[:-1]])
-                    is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
-                else:
-                    is_doc_start = jnp.concatenate(
-                        [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
-                        axis=1,
-                    )
-            k_shifted = jnp.where(is_doc_start[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
-            k = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
+        # Compressed KV latent.
+        c_kv = jnp.einsum("bsh,hc->bsc", x, self.w_dkv)
+
+        # K no-rope half (per head) up-projected from c_kv.
+        k_nr = rearrange(
+            jnp.einsum("bsc,cd->bsd", c_kv, self.w_uk_nr),
+            "... (n d) -> ... n d",
+            d=half,
+        )
+        # V (per head) up-projected from c_kv.
+        v = rearrange(
+            jnp.einsum("bsc,cd->bsd", c_kv, self.w_uv),
+            "... (n d) -> ... n d",
+            d=hd,
+        )
+        # Rope-bearing K (shared across heads): (B, S, half) → broadcast to (B, S, NH, half).
+        k_r = jnp.einsum("bsh,hd->bsd", x, self.w_kr)
+        k_r = jnp.broadcast_to(k_r[:, :, None, :], (k_r.shape[0], seq_len, nh, half))
 
         q = rms_norm(q)
-        k = rms_norm(k)
-        # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim.
-        # Second half is rope-free on every layer.
-        half = head_dim // 2
-        q_rot, k_rot = apply_rotary_embedding(
-            q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
-        )
-        q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-        k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+        k_nr = rms_norm(k_nr)
+        k_r = rms_norm(k_r)
+
+        # Half-RoPE on the rope-bearing half of Q and on the shared k_r.
+        q_r, q_nr = q[..., :half], q[..., half:]
+        q_r, k_r = apply_rotary_embedding(q_r, k_r, seq_len=seq_len, head_dim=half, rope=self.cfg.rope)
+        q = jnp.concatenate([q_r, q_nr], axis=-1)
+        k = jnp.concatenate([k_r, k_nr], axis=-1)
+
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
-        # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
-        # propagator with ``model`` annotated on ``head_dim`` rather than
-        # ``num_q_heads``; force the canonical TP layout so it matches ``aligned_v``.
+        # Half-RoPE's slice+concat can leave the propagator with ``model`` annotated on
+        # head_dim rather than num_q_heads; force the canonical TP layout.
         attn_out = reshard(attn_out, P(_BATCH_AXES, None, "model", None))
-        aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        aligned_v = reshard(aligned_v, P(_BATCH_AXES, None, "model", None))
-        # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
-        # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
-        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
-        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
-        attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
@@ -535,10 +547,9 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-        use_pko: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask, use_pko=use_pko)
+        x = x + self.attn(attn_in, mask)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -590,24 +601,19 @@ class Transformer(eqx.Module):
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
-        # Short layers: sliding window. Long layers (every 4th + last): full causal.
+        # All layers run identical full causal attention -- no sliding window, no
+        # long/short branching.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
-        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+        full_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
         else:
             remat_policy = None
 
-        num_blocks = len(self.blocks)
         moe_router_stats: list[dict[str, jax.Array]] = []
-        for i, block in enumerate(self.blocks):
-            is_last = i == num_blocks - 1
-            is_long = i % 4 == 3 or is_last
-            layer_mask = long_mask if is_long else short_mask
-            use_pko = is_long
-            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask, use_pko)
+        for block in self.blocks:
+            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, full_mask)
             moe_router_stats.append(router_stats)
 
         router_metrics = {

@@ -49,7 +49,8 @@ def compute_flops_per_token(cfg: GrugModelConfig) -> float:
         hidden_dim=cfg.hidden_dim,
         intermediate_dim=cfg.intermediate_dim,
         num_layers=cfg.num_layers,
-        num_kv_heads=cfg.num_kv_heads,
+        # MLA: V is per-head from c_kv, so attention dot-product FLOPs match MHA. Pass num_heads.
+        num_kv_heads=cfg.num_heads,
         num_heads=cfg.num_heads,
         seq_len=cfg.max_seq_len,
         vocab_size=cfg.vocab_size,
@@ -211,7 +212,8 @@ class MoeHeuristicV1:
             )
         num_layers = self._compute_num_layers(hidden_size)
         num_heads = max(1, hidden_size // self.hidden_head_ratio)
-        num_kv_heads = self._compute_kv_heads(num_heads, self.gqa_ratio)
+        # MLA: GQA num_kv_heads no longer exists on GrugModelConfig (KV is up-projected
+        # per-head from c_kv). gqa_ratio is kept on the heuristic but unused here.
 
         return GrugModelConfig(
             vocab_size=self.vocab_size,
@@ -223,9 +225,7 @@ class MoeHeuristicV1:
             num_experts_per_token=4,
             num_layers=num_layers,
             num_heads=num_heads,
-            num_kv_heads=num_kv_heads,
             max_seq_len=seq_len,
-            sliding_window=seq_len // 2,
             initializer_std=0.5 / math.sqrt(hidden_size),
             qk_mult=1.3,
         )
