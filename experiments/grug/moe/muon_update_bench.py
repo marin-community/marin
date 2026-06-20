@@ -171,6 +171,7 @@ EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH = "expert_fsdp_gro
 EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH = "expert_fsdp_grads_to_grouped_chunks"
 EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH = "expert_fsdp_grads_to_packed_grouped_chunks"
 EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH = "expert_fsdp_grads_to_explicit_packed_grouped_chunks"
+EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH = "expert_fsdp_grads_to_explicit_packed_grouped_bank"
 EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH = "expert_fsdp_grouped_updates_muonh_updates"
 EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH = "expert_fsdp_grouped_updates_muonh_apply"
 EXPERT_FSDP_GROUPED_UPDATES_MUONH_DIRECT_APPLY_BENCH = "expert_fsdp_grouped_updates_muonh_direct_apply"
@@ -244,6 +245,7 @@ BENCH_KINDS = (
     EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
+    EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_DIRECT_APPLY_BENCH,
@@ -314,6 +316,7 @@ NS4D_DATA_SHARDED_BENCHES = (
     EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
+    EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_DIRECT_APPLY_BENCH,
@@ -776,6 +779,7 @@ def padded_ns4d_group_size(config: BenchConfig, bench_kind: str) -> int:
         EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
         EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
         EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
+        EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
         REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH,
         REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     ):
@@ -807,6 +811,7 @@ def ns4d_compute_sharding(mesh: Mesh, config: BenchConfig, bench_kind: str) -> N
             EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
             EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
             EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
+            EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
             REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH,
             REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
         )
@@ -905,6 +910,7 @@ def ns4d_result_sharding(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Na
         EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
         EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
         EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
+        EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
         REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH,
         REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     ):
@@ -1032,6 +1038,7 @@ def grouped_expert_group_sizes_for_bench(config: BenchConfig, bench_kind: str) -
         EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
         EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
         EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
+        EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
         REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH,
         REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     ):
@@ -1778,6 +1785,20 @@ def assert_grouped_expert_sharding(tree: Any, mesh: Mesh, config: BenchConfig, b
     ):
         expected_spec = grouped_expert_group_sharding(mesh, config, bench_kind, group_size).spec
         assert_ns4d_sharding(block, expected_spec, f"{label} block {group_index}")
+
+
+def assert_packed_grouped_expert_bank_sharding(
+    tree: Any,
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+    label: str,
+) -> None:
+    if not isinstance(tree, dict) or "packed" not in tree:
+        raise AssertionError(f"{label} expected a packed grouped expert bank with a packed field.")
+    packed_group_size = sum(grouped_expert_group_sizes_for_bench(config, bench_kind))
+    expected_spec = grouped_expert_group_sharding(mesh, config, bench_kind, packed_group_size).spec
+    assert_ns4d_sharding(tree["packed"], expected_spec, label)
 
 
 def assert_grouped_moe_consumer_sharding(
@@ -2545,6 +2566,7 @@ def _fsdp_grad_leaf_spec_and_grouped_data_axis(name: str) -> tuple[P, int]:
 def _fsdp_grads_to_explicit_packed_grouped_chunks_for_name(
     mesh: Mesh,
     config: BenchConfig,
+    bench_kind: str,
     name: str,
     grad_leaves: tuple[jax.Array, ...],
 ) -> jax.Array:
@@ -2558,13 +2580,12 @@ def _fsdp_grads_to_explicit_packed_grouped_chunks_for_name(
     data_axis_size = mesh_axis_size(mesh, "data")
     if data_axis_size > 1 and "data" not in group_axis_names:
         raise ValueError(
-            f"{EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH} needs the live group axis to include "
-            "data when FSDP expert gradients are data-sharded."
+            f"{bench_kind} needs the live group axis to include data when FSDP expert gradients are data-sharded."
         )
 
     padded_group_sizes = grouped_expert_group_sizes_for_bench(
         config,
-        EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
+        bench_kind,
     )
     packed_group_size = sum(padded_group_sizes)
     live_group_axis_size = math.prod(mesh_axis_size(mesh, axis_name) for axis_name in group_axis_names)
@@ -2576,26 +2597,20 @@ def _fsdp_grads_to_explicit_packed_grouped_chunks_for_name(
         raise ValueError(f"Got {len(grad_leaves)} grad leaves, but packed group size is {packed_group_size}.")
 
     def pack_and_route(*local_grads):
-        stack_scope = f"muon_update_bench/fsdp_grads_to_explicit_packed_grouped_chunks/{name}/stack_all_layers"
+        stack_scope = f"muon_update_bench/{bench_kind}/{name}/stack_all_layers"
         with jax.named_scope(stack_scope):
             packed_grads = jnp.stack(local_grads, axis=0)
         if packed_group_size != len(local_grads):
-            with jax.named_scope(
-                f"muon_update_bench/fsdp_grads_to_explicit_packed_grouped_chunks/{name}/pad_packed_layers"
-            ):
+            with jax.named_scope(f"muon_update_bench/{bench_kind}/{name}/pad_packed_layers"):
                 pad_width = [(0, packed_group_size - len(local_grads)), *[(0, 0) for _ in packed_grads.shape[1:]]]
                 packed_grads = jnp.pad(packed_grads, pad_width)
         if replica_axis_size > 1 and "replica_dcn" in group_axis_names:
-            with jax.named_scope(
-                f"muon_update_bench/fsdp_grads_to_explicit_packed_grouped_chunks/{name}/slice_replica_group"
-            ):
+            with jax.named_scope(f"muon_update_bench/{bench_kind}/{name}/slice_replica_group"):
                 replica_group_size = packed_grads.shape[0] // replica_axis_size
                 replica_start = lax.axis_index("replica_dcn") * replica_group_size
                 packed_grads = lax.dynamic_slice_in_dim(packed_grads, replica_start, replica_group_size, axis=0)
         if data_axis_size > 1:
-            with jax.named_scope(
-                f"muon_update_bench/fsdp_grads_to_explicit_packed_grouped_chunks/{name}/data_a2a_to_group"
-            ):
+            with jax.named_scope(f"muon_update_bench/{bench_kind}/{name}/data_a2a_to_group"):
                 packed_grads = lax.all_to_all(
                     packed_grads,
                     axis_name="data",
@@ -2629,7 +2644,13 @@ def fsdp_grads_to_explicit_packed_grouped_chunks(mesh: Mesh, config: BenchConfig
         grad_leaves = tuple(
             grads["layers"][layer_index]["mlp"]["expert_mlp"][name] for layer_index in range(config.layers)
         )
-        packed_grads = _fsdp_grads_to_explicit_packed_grouped_chunks_for_name(mesh, config, name, grad_leaves)
+        packed_grads = _fsdp_grads_to_explicit_packed_grouped_chunks_for_name(
+            mesh,
+            config,
+            EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
+            name,
+            grad_leaves,
+        )
         packed_offset = 0
         for group_index, padded_group_size in enumerate(padded_group_sizes):
             slice_scope = f"muon_update_bench/fsdp_grads_to_explicit_packed_grouped_chunks/{name}/slice_group"
@@ -2649,7 +2670,35 @@ def fsdp_grads_to_explicit_packed_grouped_chunks_step_factory(mesh: Mesh, config
     return update_step
 
 
+def fsdp_grads_to_explicit_packed_grouped_bank(mesh: Mesh, config: BenchConfig, grads):
+    """Stack FSDP expert gradients into packed banks without slicing them into chunk outputs."""
+
+    packed = {}
+    for name in synthetic_shapes(config):
+        grad_leaves = tuple(
+            grads["layers"][layer_index]["mlp"]["expert_mlp"][name] for layer_index in range(config.layers)
+        )
+        packed[name] = _fsdp_grads_to_explicit_packed_grouped_chunks_for_name(
+            mesh,
+            config,
+            EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
+            name,
+            grad_leaves,
+        )
+    return {"packed": packed}
+
+
+def fsdp_grads_to_explicit_packed_grouped_bank_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(grads):
+        with jax.named_scope("muon_update_bench/fsdp_grads_to_explicit_packed_grouped_bank_step"):
+            return fsdp_grads_to_explicit_packed_grouped_bank(mesh, config, grads)
+
+    return update_step
+
+
 def fsdp_grads_to_grouped_chunks_step_factory_for_bench(mesh: Mesh, config: BenchConfig, bench_kind: str):
+    if bench_kind == EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH:
+        return fsdp_grads_to_explicit_packed_grouped_bank_step_factory(mesh, config)
     if bench_kind == EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH:
         return fsdp_grads_to_explicit_packed_grouped_chunks_step_factory(mesh, config)
     if bench_kind == EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH:
@@ -5059,6 +5108,8 @@ def ns4d_boundary_status(config: BenchConfig, bench_kind: str) -> str | None:
         return "expert_fsdp_grads_to_packed_grouped_chunks"
     if bench_kind == EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH:
         return "expert_fsdp_grads_to_explicit_packed_grouped_chunks"
+    if bench_kind == EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH:
+        return "expert_fsdp_grads_to_explicit_packed_grouped_bank"
     if bench_kind == EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH:
         return "expert_fsdp_params_grouped_updates_muonh_restore_only"
     if bench_kind == EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH:
@@ -5183,6 +5234,7 @@ def is_expert_fsdp_grads_to_grouped_chunks_bench(bench_kind: str) -> bool:
         EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
         EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
         EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
+        EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
     )
 
 
@@ -5952,6 +6004,7 @@ def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
         EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
         EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
         EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
+        EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
     ):
         return 0
     if bench_kind == FULL_PRODUCTION_GROUPED_2D_PERSISTENT_APPLY_BENCH:
@@ -6092,6 +6145,8 @@ def boundary_primitive_name(bench_kind: str) -> str | None:
         return "fsdp_grads_to_packed_grouped_chunks"
     if bench_kind == EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH:
         return "fsdp_grads_to_explicit_packed_grouped_chunks"
+    if bench_kind == EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH:
+        return "fsdp_grads_to_explicit_packed_grouped_bank"
     if bench_kind in (
         EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
@@ -6278,6 +6333,36 @@ def reference_fsdp_grads_to_grouped_chunks(
     return {"blocks": tuple(output_blocks)}
 
 
+def reference_fsdp_grads_to_explicit_packed_grouped_bank(config: BenchConfig, grads: Any) -> Any:
+    padded_group_sizes = grouped_expert_group_sizes_for_bench(
+        config,
+        EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
+    )
+    packed = {}
+    for name in synthetic_shapes(config):
+        packed_groups = []
+        layer_offset = 0
+        for valid_group_size, padded_group_size in zip(
+            grouped_expert_group_sizes(config),
+            padded_group_sizes,
+            strict=True,
+        ):
+            stacked = jnp.stack(
+                [
+                    grads["layers"][layer_index]["mlp"]["expert_mlp"][name]
+                    for layer_index in range(layer_offset, layer_offset + valid_group_size)
+                ],
+                axis=0,
+            )
+            if padded_group_size != valid_group_size:
+                pad_width = [(0, padded_group_size - valid_group_size), *[(0, 0) for _ in stacked.shape[1:]]]
+                stacked = jnp.pad(stacked, pad_width)
+            packed_groups.append(stacked)
+            layer_offset += valid_group_size
+        packed[name] = jnp.concatenate(packed_groups, axis=0)
+    return {"packed": packed}
+
+
 def reference_grouped_updates_to_fsdp_tree(config: BenchConfig, grouped_updates: Any) -> Any:
     output_layers = [
         {"mlp": {"expert_mlp": {name: None for name in synthetic_shapes(config)}}} for _ in range(config.layers)
@@ -6321,7 +6406,10 @@ def fsdp_grouped_boundary_correctness_max_error(
     if is_expert_fsdp_grads_to_grouped_chunks_bench(bench_kind):
         update_step = jax.jit(fsdp_grads_to_grouped_chunks_step_factory_for_bench(mesh, config, bench_kind))
         actual = update_step(grouped_updates)
-        expected = reference_fsdp_grads_to_grouped_chunks(config, grouped_updates, bench_kind)
+        if bench_kind == EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH:
+            expected = reference_fsdp_grads_to_explicit_packed_grouped_bank(config, grouped_updates)
+        else:
+            expected = reference_fsdp_grads_to_grouped_chunks(config, grouped_updates, bench_kind)
         return max_abs_tree_error(actual, expected)
 
     if bench_kind not in (*FSDP_GROUPED_RESTORE_CORRECTNESS_BENCHES, *FSDP_GROUPED_APPLY_CORRECTNESS_BENCHES):
@@ -6655,13 +6743,22 @@ def lower_ns4d(
             with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
                 result_specs = jax.eval_shape(update_step, specs)
                 lowered = update_step.lower(specs)
-            assert_grouped_expert_sharding(
-                result_specs,
-                mesh,
-                config,
-                bench_kind,
-                "expert FSDP grads-to-grouped chunks result",
-            )
+            if bench_kind == EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH:
+                assert_packed_grouped_expert_bank_sharding(
+                    result_specs,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "expert FSDP grads-to-grouped bank result",
+                )
+            else:
+                assert_grouped_expert_sharding(
+                    result_specs,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "expert FSDP grads-to-grouped chunks result",
+                )
             lower_args = None
         elif bench_kind == EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH:
             grouped_specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
@@ -7918,7 +8015,15 @@ def time_ns4d(
             if params is None:
                 next_updates = compiled(updates)
                 block_until_ready_tree(next_updates)
-                if bench_kind == EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH:
+                if bench_kind == EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH:
+                    assert_packed_grouped_expert_bank_sharding(
+                        next_updates,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup explicit packed FSDP grads-to-grouped bank result",
+                    )
+                elif is_expert_fsdp_grads_to_grouped_chunks_bench(bench_kind):
                     assert_grouped_expert_sharding(
                         next_updates,
                         mesh,
@@ -8114,7 +8219,15 @@ def time_ns4d(
                 if params is None:
                     next_updates = compiled(updates)
                     block_until_ready_tree(next_updates)
-                    if is_expert_fsdp_grads_to_grouped_chunks_bench(bench_kind):
+                    if bench_kind == EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH:
+                        assert_packed_grouped_expert_bank_sharding(
+                            next_updates,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "explicit packed FSDP grads-to-grouped bank result",
+                        )
+                    elif is_expert_fsdp_grads_to_grouped_chunks_bench(bench_kind):
                         assert_grouped_expert_sharding(
                             next_updates,
                             mesh,
