@@ -2429,3 +2429,53 @@ Post-compile steps were stable around 0.65-0.66s:
   - It does cover the reference/checking corner that previously made the
     reduced correctness run fail before measuring the packed-bank boundary
     primitives.
+
+### 2026-06-20 07:18 PDT - R1D2 packed-entry grouped MuonH e2e training succeeded
+- Hypothesis: The production grouped MuonH packed-entry integration should run
+  through real Grug MoE training on the non-replicating two-node FSDP-data
+  layout without OOM, sharding errors, or per-leaf collective failures.
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-135753`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-135753/grug-train-GM2560-MAY-199S4096-W2048-B16-R1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PACKEDA2A-E2E-N2-cw-20260620-1357`.
+  - W&B:
+    `marin-community/marin_moe/GM2560-MAY-199S4096-W2048-B16-R1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PACKEDA2A-E2E-N2-cw-20260620-1357`.
+  - Output path:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/grug-moe-cw-may-d2560-L26-e256-r2-cpu8-GM2560-MAY-199S4096-W2048-B16-R1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PACKEDA2A-E2E-N2-cw-20260620-1357-fcde75`.
+- Config:
+  - Two H100 nodes, `replica_dcn=1`, `data=2`, `expert=8`,
+    `model=1`, `batch_shards=16`.
+  - Batch 16, sequence length 4096, sliding window 2048, 5 steps,
+    synthetic data, no checkpoints.
+  - `MAY_EXPERT_3D_OPTIMIZER=grouped_muonh` with the new packed-entry default,
+    MuonH3, bf16 params/compute/output, Pallas cross entropy, ring MoE, FA4
+    attention.
+- Result:
+  - Parent and child both reached `JOB_STATE_SUCCEEDED`, exit code 0.
+  - W&B state is `finished`.
+  - The child ran two tasks and completed steps 0 through 4.
+  - Mesh logging confirmed `replica_dcn=1,data=2,expert=8,model=1` on both
+    tasks.
+  - No fatal traceback, OOM/HBM, sharding, rendezvous, or clique failure was
+    seen. The final `WatchTasksAsync` connection-refused warnings occurred
+    after training/W&B finish and Iris still reported success.
+- Metrics:
+  - Step 0 included compile time: duration about `459-462s`,
+    `~142 tokens/s`, MFU `~0.015`.
+  - Final W&B summary at global step 4:
+    `train/loss=4.88875675201416`,
+    `throughput/duration=2.6897398190340027`,
+    `throughput/tokens_per_second=24365.18191693972`,
+    `throughput/examples_per_second=5.948530741440361`,
+    `throughput/mfu=2.6347597139402783`,
+    `throughput/mean_mfu=1.5867107566699008`.
+  - Logs also showed steady post-compile steps 2-4 around `2.68-2.70s`.
+- Interpretation:
+  - This closes the production "does it run end-to-end on R1D2 FSDP-data?"
+    gap: the packed-bank grouped MuonH path is functionally integrated into
+    Grug MoE training.
+  - The performance is still poor relative to the non-Muon baseline and the
+    packed-bank harness boundary timings. The next problem is not correctness
+    or per-leaf collective explosion; it is explaining the extra production
+    train-step overhead and/or moving the boundary work into a lower-level
+    primitive/overlapped path.
