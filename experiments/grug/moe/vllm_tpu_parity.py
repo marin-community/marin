@@ -74,20 +74,6 @@ _REALISTIC_GENERATION_TOKENS = 3
 _TRAINING_MP_POLICY = "params=float32,compute=bfloat16,output=bfloat16"
 _CANARY_BUDGET = 1e18
 _CANARY_HIDDEN_DIM = 1024
-_ROUTING_DEBUG_VECTOR_LIMIT = 16
-_FORWARD_DEBUG_VALUE_NAMES = (
-    "input_ids",
-    "positions",
-    "query_start_loc",
-    "seq_lens",
-    "embedding_output",
-    "layer_attn_input",
-    "layer_attn_output",
-    "layer_post_attn_residual",
-    "layer_mlp_input",
-    "layer_output",
-    "final_hidden",
-)
 _GRUGMOE_ATTENTION_MODE_KEY = "grugmoe_attention_mode"
 _DENSE_ATTENTION_MODE = "dense"
 _PRODUCTION_ATTENTION_MODE = "production"
@@ -146,7 +132,7 @@ def _use_runtime_grug_mesh(*, for_init: bool):
     old_moe_mlp = levanter_grug_moe.moe_mlp
     grug_moe_model.get_abstract_mesh = lambda: grug_mesh
     grug_moe_model.reshard = lambda x, *args, **kwargs: x
-    grug_moe_model.shard_map = lambda fn, **kwargs: (lambda s_ma: jnp.zeros((s_ma.shape[1],), dtype=s_ma.dtype))
+    grug_moe_model.shard_map = lambda fn, **kwargs: lambda s_ma: jnp.zeros((s_ma.shape[1],), dtype=s_ma.dtype)
     levanter_grug_moe._reshard_for_init = lambda x, spec: x
     levanter_grug_moe._reshard_for_shard_map = lambda x, mesh, spec: x
     levanter_grug_moe._current_mesh = lambda: _EmptyMesh()
@@ -188,92 +174,6 @@ def _load_tpu_grugmoe(tpu_inference_root: Path):
 
 def _np(value: Any) -> np.ndarray:
     return np.array(jax.device_get(value), copy=True)
-
-
-def _array_debug_summary(value: Any, *, vector_limit: int) -> dict[str, Any]:
-    arr = np.asarray(value)
-    flat = arr.reshape(-1)
-    flat64 = flat.astype(np.float64, copy=False)
-    summary: dict[str, Any] = {
-        "shape": list(arr.shape),
-        "dtype": str(arr.dtype),
-        "size": int(flat.size),
-    }
-    if flat.size:
-        summary.update(
-            {
-                "first_values": flat64[:vector_limit].tolist(),
-                "l2": float(np.linalg.norm(flat64)),
-                "max": float(np.max(flat64)),
-                "mean": float(np.mean(flat64)),
-                "min": float(np.min(flat64)),
-            }
-        )
-        if flat.size <= vector_limit:
-            summary["values"] = flat64.tolist()
-    else:
-        summary["first_values"] = []
-    return summary
-
-
-def _routing_debug_payload(
-    *,
-    source: str,
-    layer: int,
-    token_position: int,
-    vector_limit: int,
-    router_input_hidden_state: Any,
-    router_logits: Any,
-    router_bias: Any,
-    biased_router_logits: Any,
-    topk_with_boundary_logits: Any,
-    topk_with_boundary_expert_ids: Any,
-    topk_expert_ids: Any,
-    combine_weights: Any,
-) -> dict[str, Any]:
-    topk_with_boundary_logits_np = np.asarray(topk_with_boundary_logits, dtype=np.float64)
-    topk_with_boundary_ids_np = np.asarray(topk_with_boundary_expert_ids, dtype=np.int64)
-    topk_expert_ids_np = np.asarray(topk_expert_ids, dtype=np.int64)
-    top_k = int(topk_expert_ids_np.shape[0])
-    payload = {
-        "source": source,
-        "layer": int(layer),
-        "token_position": int(token_position),
-        "router_input_hidden_state": _array_debug_summary(router_input_hidden_state, vector_limit=vector_limit),
-        "raw_router_logits": _array_debug_summary(router_logits, vector_limit=vector_limit),
-        "router_bias": _array_debug_summary(router_bias, vector_limit=vector_limit),
-        "biased_router_logits": _array_debug_summary(biased_router_logits, vector_limit=vector_limit),
-        "topk_expert_ids": topk_expert_ids_np.tolist(),
-        "topk_with_boundary_expert_ids": topk_with_boundary_ids_np.tolist(),
-        "topk_with_boundary_logits": topk_with_boundary_logits_np.tolist(),
-        "combine_weights": _array_debug_summary(combine_weights, vector_limit=vector_limit),
-    }
-    if topk_with_boundary_logits_np.shape[0] > top_k:
-        payload["boundary_expert_id"] = int(topk_with_boundary_ids_np[top_k])
-        payload["boundary_logit"] = float(topk_with_boundary_logits_np[top_k])
-        payload["router_margin"] = float(topk_with_boundary_logits_np[top_k - 1] - topk_with_boundary_logits_np[top_k])
-    return payload
-
-
-def _forward_debug_payload(
-    *,
-    source: str,
-    layer: int,
-    token_position: int,
-    vector_limit: int,
-    values: Sequence[Any],
-) -> dict[str, Any]:
-    if len(values) != len(_FORWARD_DEBUG_VALUE_NAMES):
-        raise ValueError(f"expected {len(_FORWARD_DEBUG_VALUE_NAMES)} forward-debug values, got {len(values)}")
-    return {
-        "source": source,
-        "layer": int(layer),
-        "token_position": int(token_position),
-        "values": {
-            name: _array_debug_summary(value, vector_limit=vector_limit)
-            for name, value in zip(_FORWARD_DEBUG_VALUE_NAMES, values, strict=True)
-        },
-    }
 
 
 def _copy_param(param: nnx.Param, value: Any, *, mesh: Mesh | None = None) -> None:
@@ -467,34 +367,6 @@ def _route_jax_with_margin(
     return selected.astype(jnp.int32), combine_weights, router_margin
 
 
-def _route_jax_with_margin_and_debug(
-    x: jax.Array,
-    router: jax.Array,
-    router_bias: jax.Array,
-    *,
-    num_experts_per_token: int,
-    token_position: int,
-) -> tuple[jax.Array, jax.Array, jax.Array, tuple[jax.Array, ...]]:
-    router_logits = jnp.einsum("td,de->te", x, router).astype(jnp.float32)
-    biased_logits = router_logits + router_bias.astype(jnp.float32)
-    topk_logits, selected_with_boundary = jax.lax.top_k(biased_logits, num_experts_per_token + 1)
-    router_margin = topk_logits[:, num_experts_per_token - 1] - topk_logits[:, num_experts_per_token]
-    selected = selected_with_boundary[:, :num_experts_per_token]
-    unbiased_topk = jnp.take_along_axis(router_logits, selected, axis=-1)
-    combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
-    routing_debug = (
-        x[token_position],
-        router_logits[token_position],
-        router_bias,
-        biased_logits[token_position],
-        topk_logits[token_position],
-        selected_with_boundary[token_position],
-        selected[token_position],
-        combine_weights[token_position],
-    )
-    return selected.astype(jnp.int32), combine_weights, router_margin, routing_debug
-
-
 def _jax_rms_norm(
     x: jax.Array,
     weight: jax.Array | None = None,
@@ -629,30 +501,6 @@ def _jax_moe_mlp_with_margin(mlp: Any, x: jax.Array) -> tuple[jax.Array, jax.Arr
     return out.reshape(bsz, seq_len, hidden_dim), selected, router_margin
 
 
-def _jax_moe_mlp_with_margin_and_debug(
-    mlp: Any, x: jax.Array, *, token_position: int
-) -> tuple[jax.Array, jax.Array, jax.Array, tuple[jax.Array, ...]]:
-    cfg = mlp.cfg
-    bsz, seq_len, hidden_dim = x.shape
-    x_flat = x.reshape(bsz * seq_len, hidden_dim)
-    selected, combine_weights, router_margin, routing_debug = _route_jax_with_margin_and_debug(
-        x_flat,
-        mlp.router,
-        mlp.router_bias,
-        num_experts_per_token=cfg.num_experts_per_token,
-        token_position=token_position,
-    )
-    out = _direct_moe_mlp(
-        x_flat,
-        selected,
-        combine_weights,
-        mlp.expert_mlp.w_gate_up,
-        mlp.expert_mlp.w_down,
-        activation=jax.nn.silu,
-    )
-    return out.reshape(bsz, seq_len, hidden_dim), selected, router_margin, routing_debug
-
-
 def _jax_full_forward(model: Transformer, token_ids: jax.Array) -> tuple[jax.Array, jax.Array]:
     cfg = model.config
     _bsz, seq_len = token_ids.shape
@@ -715,80 +563,6 @@ def _jax_full_forward_with_router_margins(
     return hidden, jnp.stack(expert_ids_by_layer, axis=0), jnp.stack(router_margins_by_layer, axis=0)
 
 
-def _jax_full_forward_with_router_debug(
-    model: Transformer,
-    token_ids: jax.Array,
-    *,
-    debug_token_position: int,
-    debug_layer: int,
-) -> tuple[jax.Array, jax.Array, jax.Array, tuple[jax.Array, ...], tuple[jax.Array, ...]]:
-    cfg = model.config
-    _bsz, seq_len = token_ids.shape
-    positions = jnp.broadcast_to(jnp.arange(seq_len, dtype=jnp.int32)[None, :], token_ids.shape)
-    hidden = model.token_embed[token_ids]
-    hidden = _jax_gated_norm(model.embed_gated_norm, _jax_rms_norm(hidden, model.embed_norm.weight, cfg.layer_norm_eps))
-    embedding_output = hidden[0, debug_token_position]
-
-    expert_ids_by_layer = []
-    router_margins_by_layer = []
-    routing_debug = None
-    forward_layer_debug = None
-    for i, block in enumerate(model.blocks):
-        layer_window = _layer_sliding_window(cfg, i)
-        attn_in = _jax_gated_norm(
-            block.attn_gated_norm,
-            _jax_rms_norm(hidden, block.rms_attn.weight, block.rms_attn.eps),
-        )
-        attn_out = _jax_attention(block.attn, attn_in, positions, layer_window)
-        post_attn = hidden + attn_out
-        hidden = post_attn
-        mlp_in = _jax_gated_norm(block.mlp_gated_norm, _jax_rms_norm(hidden, block.rms_mlp.weight, block.rms_mlp.eps))
-        if i == debug_layer:
-            mlp_out, expert_ids, router_margin, routing_debug = _jax_moe_mlp_with_margin_and_debug(
-                block.mlp, mlp_in, token_position=debug_token_position
-            )
-        else:
-            mlp_out, expert_ids, router_margin = _jax_moe_mlp_with_margin(block.mlp, mlp_in)
-        expert_ids_by_layer.append(expert_ids)
-        router_margins_by_layer.append(router_margin)
-        if block.shared is not None:
-            mlp_out = mlp_out + _jax_dense_mlp(block.shared, mlp_in)
-        hidden = hidden + mlp_out
-        if i == debug_layer:
-            forward_layer_debug = (
-                attn_in[0, debug_token_position],
-                attn_out[0, debug_token_position],
-                post_attn[0, debug_token_position],
-                mlp_in[0, debug_token_position],
-                hidden[0, debug_token_position],
-            )
-
-    hidden = _jax_gated_norm(
-        model.final_gated_norm,
-        _jax_rms_norm(hidden, model.final_norm.weight, model.final_norm.eps),
-    )
-    assert routing_debug is not None
-    assert forward_layer_debug is not None
-    query_start_loc = jnp.asarray([0, seq_len], dtype=jnp.int32)
-    seq_lens = jnp.asarray([seq_len], dtype=jnp.int32)
-    forward_debug = (
-        token_ids[0],
-        positions[0],
-        query_start_loc,
-        seq_lens,
-        embedding_output,
-        *forward_layer_debug,
-        hidden[0, debug_token_position],
-    )
-    return (
-        hidden,
-        jnp.stack(expert_ids_by_layer, axis=0),
-        jnp.stack(router_margins_by_layer, axis=0),
-        routing_debug,
-        forward_debug,
-    )
-
-
 def _jax_logits(model: Transformer, hidden: jax.Array) -> jax.Array:
     return jnp.einsum("bsh,hv->bsv", hidden, model.output_proj)
 
@@ -831,13 +605,6 @@ def _write_installed_vllm_reference(
     prompt_ids: jax.Array,
     continuation_ids: Sequence[int],
     output_path: Path,
-    *,
-    routing_debug_token_position: int | None = None,
-    routing_debug_layer: int | None = None,
-    routing_debug_vector_limit: int = _ROUTING_DEBUG_VECTOR_LIMIT,
-    forward_debug_token_position: int | None = None,
-    forward_debug_layer: int | None = None,
-    forward_debug_vector_limit: int = _ROUTING_DEBUG_VECTOR_LIMIT,
 ) -> None:
     if prompt_ids.shape[0] != 1:
         raise ValueError(f"installed-vLLM reference expects batch size 1, got {prompt_ids.shape[0]}")
@@ -846,82 +613,7 @@ def _write_installed_vllm_reference(
     if score_token_ids.shape[1] <= prompt_ids.shape[1]:
         raise ValueError("installed-vLLM reference needs at least one continuation token")
 
-    routing_debug_payload = None
-    forward_debug_payload = None
-    debug_token_position = None
-    debug_layer = None
-    if (
-        routing_debug_token_position is not None
-        or routing_debug_layer is not None
-        or forward_debug_token_position is not None
-        or forward_debug_layer is not None
-    ):
-        if routing_debug_token_position is not None or routing_debug_layer is not None:
-            if routing_debug_token_position is None or routing_debug_layer is None:
-                raise ValueError("routing debug requires both token position and layer")
-            debug_token_position = routing_debug_token_position
-            debug_layer = routing_debug_layer
-        if forward_debug_token_position is not None or forward_debug_layer is not None:
-            if forward_debug_token_position is None or forward_debug_layer is None:
-                raise ValueError("forward debug requires both token position and layer")
-            if debug_token_position is None:
-                debug_token_position = forward_debug_token_position
-                debug_layer = forward_debug_layer
-            elif debug_token_position != forward_debug_token_position or debug_layer != forward_debug_layer:
-                raise ValueError("routing and forward debug must target the same token/layer for one reference pass")
-        assert debug_token_position is not None
-        assert debug_layer is not None
-        if not (0 <= debug_token_position < int(score_token_ids.shape[1])):
-            raise ValueError(
-                f"debug token position {debug_token_position} is outside score length {score_token_ids.shape[1]}"
-            )
-        if not (0 <= debug_layer < int(lev_model.config.num_layers)):
-            raise ValueError(f"debug layer {debug_layer} is outside num_layers {lev_model.config.num_layers}")
-        debug_forward = jax.jit(
-            _jax_full_forward_with_router_debug,
-            static_argnames=("debug_token_position", "debug_layer"),
-        )
-        hidden, expert_ids, router_margins, routing_debug, forward_debug = debug_forward(
-            lev_model,
-            score_token_ids,
-            debug_token_position=debug_token_position,
-            debug_layer=debug_layer,
-        )
-        if routing_debug_token_position is not None:
-            (
-                router_input_hidden_state,
-                router_logits,
-                router_bias,
-                biased_router_logits,
-                topk_with_boundary_logits,
-                topk_with_boundary_expert_ids,
-                topk_expert_ids,
-                combine_weights,
-            ) = (_np(value) for value in routing_debug)
-            routing_debug_payload = _routing_debug_payload(
-                source="Levanter manual reference",
-                layer=debug_layer,
-                token_position=debug_token_position,
-                vector_limit=routing_debug_vector_limit,
-                router_input_hidden_state=router_input_hidden_state,
-                router_logits=router_logits,
-                router_bias=router_bias,
-                biased_router_logits=biased_router_logits,
-                topk_with_boundary_logits=topk_with_boundary_logits,
-                topk_with_boundary_expert_ids=topk_with_boundary_expert_ids,
-                topk_expert_ids=topk_expert_ids,
-                combine_weights=combine_weights,
-            )
-        if forward_debug_token_position is not None:
-            forward_debug_payload = _forward_debug_payload(
-                source="Levanter manual reference",
-                layer=debug_layer,
-                token_position=debug_token_position,
-                vector_limit=forward_debug_vector_limit,
-                values=tuple(_np(value) for value in forward_debug),
-            )
-    else:
-        hidden, expert_ids, router_margins = jax.jit(_jax_full_forward_with_router_margins)(lev_model, score_token_ids)
+    hidden, expert_ids, router_margins = jax.jit(_jax_full_forward_with_router_margins)(lev_model, score_token_ids)
     logits = _jax_logits(lev_model, hidden)[0]
     log_probs = jax.nn.log_softmax(logits[:-1].astype(jnp.float32), axis=-1)
     targets = score_token_ids[0, 1:]
@@ -952,20 +644,12 @@ def _write_installed_vllm_reference(
         "levanter_routed_experts": np.transpose(expert_ids_np, (1, 0, 2)).astype(np.int64).tolist(),
         "levanter_router_margin": np.transpose(router_margins_np, (1, 0)).astype(np.float64).tolist(),
     }
-    if routing_debug_payload is not None:
-        payload["levanter_routing_debug"] = routing_debug_payload
-    if forward_debug_payload is not None:
-        payload["levanter_forward_debug"] = forward_debug_payload
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w") as f:
         json.dump(payload, f, sort_keys=True)
     print(f"reference_json={output_path}")
     print(f"reference_score_token_ids={payload['score_token_ids']}")
     print(f"reference_continuation_logprobs={payload['levanter_continuation_logprobs']}")
-    if routing_debug_payload is not None:
-        print("levanter_routing_debug=" + json.dumps(routing_debug_payload, sort_keys=True))
-    if forward_debug_payload is not None:
-        print("levanter_forward_debug=" + json.dumps(forward_debug_payload, sort_keys=True))
 
 
 def _native_greedy_generation(
@@ -1577,12 +1261,6 @@ def check_realistic_training_state_roundtrip(
     max_shard_size: int,
     generation_tokens: int,
     reference_output_path: Path | None = None,
-    routing_debug_token_position: int | None = None,
-    routing_debug_layer: int | None = None,
-    routing_debug_vector_limit: int = _ROUTING_DEBUG_VECTOR_LIMIT,
-    forward_debug_token_position: int | None = None,
-    forward_debug_layer: int | None = None,
-    forward_debug_vector_limit: int = _ROUTING_DEBUG_VECTOR_LIMIT,
 ) -> None:
     attention_metadata_mod = importlib.import_module("tpu_inference.layers.common.attention_metadata")
     cfg, optimizer_config, num_train_steps, config_source = _realistic_cfg_optimizer_steps(config_name)
@@ -1676,12 +1354,6 @@ def check_realistic_training_state_roundtrip(
             token_ids,
             expected_generated_ids.tolist(),
             reference_output_path,
-            routing_debug_token_position=routing_debug_token_position,
-            routing_debug_layer=routing_debug_layer,
-            routing_debug_vector_limit=routing_debug_vector_limit,
-            forward_debug_token_position=forward_debug_token_position,
-            forward_debug_layer=forward_debug_layer,
-            forward_debug_vector_limit=forward_debug_vector_limit,
         )
 
     del manual_model
@@ -1817,42 +1489,6 @@ def main() -> None:
         default=_REALISTIC_GENERATION_TOKENS,
         help="Number of deterministic greedy full-forward tokens to generate in the realistic roundtrip.",
     )
-    parser.add_argument(
-        "--routing-debug-token-position",
-        type=int,
-        default=None,
-        help="When writing an installed-vLLM reference JSON, include routing math for this token position.",
-    )
-    parser.add_argument(
-        "--routing-debug-layer",
-        type=int,
-        default=None,
-        help="When writing an installed-vLLM reference JSON, include routing math for this decoder layer.",
-    )
-    parser.add_argument(
-        "--routing-debug-vector-limit",
-        type=int,
-        default=_ROUTING_DEBUG_VECTOR_LIMIT,
-        help="Maximum number of values to include inline for large routing-debug vectors.",
-    )
-    parser.add_argument(
-        "--forward-debug-token-position",
-        type=int,
-        default=None,
-        help="When writing an installed-vLLM reference JSON, include forward-pass stages for this token position.",
-    )
-    parser.add_argument(
-        "--forward-debug-layer",
-        type=int,
-        default=None,
-        help="When writing an installed-vLLM reference JSON, include forward-pass stages for this decoder layer.",
-    )
-    parser.add_argument(
-        "--forward-debug-vector-limit",
-        type=int,
-        default=_ROUTING_DEBUG_VECTOR_LIMIT,
-        help="Maximum number of values to include inline for large forward-debug vectors.",
-    )
     args = parser.parse_args()
 
     tpu_grugmoe = _load_tpu_grugmoe(args.tpu_inference_root.resolve())
@@ -1876,12 +1512,6 @@ def main() -> None:
             output_dir=args.realistic_output_dir,
             max_shard_size=realistic_max_shard_size,
             generation_tokens=args.realistic_generation_tokens,
-            routing_debug_token_position=args.routing_debug_token_position,
-            routing_debug_layer=args.routing_debug_layer,
-            routing_debug_vector_limit=args.routing_debug_vector_limit,
-            forward_debug_token_position=args.forward_debug_token_position,
-            forward_debug_layer=args.forward_debug_layer,
-            forward_debug_vector_limit=args.forward_debug_vector_limit,
         )
 
 
