@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -74,6 +76,50 @@ def test_store_preserves_other_clusters(store_path: Path):
 def test_load_token_missing_cluster(store_path: Path):
     store_token("a", "http://a:1", "ta", store_path=store_path)
     assert load_token("nonexistent", store_path=store_path) is None
+
+
+def test_store_and_load_iap_refresh_token(store_path: Path):
+    store_token("marin", "https://iris-marin.example.com", "jwt", iap_refresh_token="rt-123", store_path=store_path)
+
+    cred = load_token("marin", store_path=store_path)
+    assert cred == ClusterCredential(url="https://iris-marin.example.com", token="jwt", iap_refresh_token="rt-123")
+
+
+def test_non_iap_token_has_no_refresh_token(store_path: Path):
+    store_token("local", "http://127.0.0.1:9999", "secret", store_path=store_path)
+    cred = load_token("local", store_path=store_path)
+    assert cred is not None
+    assert cred.iap_refresh_token is None
+
+
+def test_jwt_refresh_preserves_cached_iap_refresh_token(store_path: Path):
+    """Re-minting the Iris JWT (no refresh token passed) must not wipe the
+    cached IAP refresh token."""
+    store_token("marin", "https://iris-marin.example.com", "jwt-1", iap_refresh_token="rt-123", store_path=store_path)
+    store_token("marin", "https://iris-marin.example.com", "jwt-2", store_path=store_path)
+
+    cred = load_token("marin", store_path=store_path)
+    assert cred is not None
+    assert cred.token == "jwt-2"
+    assert cred.iap_refresh_token == "rt-123"
+
+
+def test_migration_adds_iap_column_to_legacy_store(store_path: Path):
+    """A store created before IAP support (3-column schema) gains the column on
+    next open, and existing rows survive."""
+    store_path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(store_path)) as conn:
+        conn.execute("CREATE TABLE clusters (name TEXT PRIMARY KEY, url TEXT NOT NULL, token TEXT NOT NULL)")
+        conn.execute("INSERT INTO clusters (name, url, token) VALUES ('old', 'http://old:1', 'tok')")
+        conn.commit()
+
+    # Reading via the migrated connection backfills the column as NULL.
+    cred = load_token("old", store_path=store_path)
+    assert cred == ClusterCredential(url="http://old:1", token="tok", iap_refresh_token=None)
+
+    # And the upgraded store now accepts a refresh token.
+    store_token("old", "http://old:1", "tok2", iap_refresh_token="rt", store_path=store_path)
+    assert load_token("old", store_path=store_path).iap_refresh_token == "rt"
 
 
 def test_load_token_no_file(store_path: Path):

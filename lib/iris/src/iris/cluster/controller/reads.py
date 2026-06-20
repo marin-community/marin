@@ -188,13 +188,19 @@ def get_all_user_budget_limits(tx: Tx) -> dict[str, int]:
     return {str(row.user_id): int(row.budget_limit) for row in rows}
 
 
-def get_user_role(tx: Tx, user_id: str) -> str:
-    """Return the user's role, or ``USER_ROLE_DEFAULT`` if not found."""
+def get_user_role_or_none(tx: Tx, user_id: str) -> str | None:
+    """Return the user's stored role, or None if the user is not provisioned."""
     row = tx.execute(
         select(users_table.c.role).where(users_table.c.user_id == bindparam("user_id")),
         {"user_id": user_id},
     ).first()
-    return str(row.role) if row is not None else USER_ROLE_DEFAULT
+    return str(row.role) if row is not None else None
+
+
+def get_user_role(tx: Tx, user_id: str) -> str:
+    """Return the user's role, or ``USER_ROLE_DEFAULT`` if not found."""
+    role = get_user_role_or_none(tx, user_id)
+    return role if role is not None else USER_ROLE_DEFAULT
 
 
 # ---------------------------------------------------------------------------

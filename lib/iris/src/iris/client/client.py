@@ -57,7 +57,7 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import TokenProvider, client_interceptors
+from iris.rpc.auth import ClientCredentials
 from iris.rpc.proto_display import job_state_friendly
 from iris.time_proto import timestamp_from_proto
 
@@ -490,7 +490,7 @@ class IrisClient:
         workspace: Path | None = None,
         bundle_id: str | None = None,
         timeout_ms: int = 30000,
-        token_provider: TokenProvider | None = None,
+        credentials: ClientCredentials | None = None,
     ) -> "IrisClient":
         """Create an IrisClient for an external client (CLI, laptop, notebook).
 
@@ -506,7 +506,9 @@ class IrisClient:
             bundle_id: Workspace bundle identifier for sub-job inheritance.
                 When set, sub-jobs use this bundle ID instead of creating new bundles.
             timeout_ms: RPC timeout in milliseconds
-            token_provider: When set, attaches bearer tokens to all outgoing RPCs.
+            credentials: Auth material for outgoing RPCs — the Iris JWT and, for
+                an IAP-fronted cluster, the IAP OIDC ID token. None sends neither
+                (a loopback-trusted tunnel).
 
         Returns:
             IrisClient wrapping RemoteClusterClient
@@ -516,7 +518,7 @@ class IrisClient:
             workspace=workspace,
             bundle_id=bundle_id,
             timeout_ms=timeout_ms,
-            token_provider=token_provider,
+            credentials=credentials,
             use_controller_proxy=True,
         )
 
@@ -528,7 +530,7 @@ class IrisClient:
         workspace: Path | None = None,
         bundle_id: str | None = None,
         timeout_ms: int = 30000,
-        token_provider: TokenProvider | None = None,
+        credentials: ClientCredentials | None = None,
     ) -> "IrisClient":
         """Create an IrisClient for code running inside the cluster (in-task).
 
@@ -543,7 +545,7 @@ class IrisClient:
             workspace=workspace,
             bundle_id=bundle_id,
             timeout_ms=timeout_ms,
-            token_provider=token_provider,
+            credentials=credentials,
             use_controller_proxy=False,
         )
 
@@ -555,10 +557,10 @@ class IrisClient:
         workspace: Path | None,
         bundle_id: str | None,
         timeout_ms: int,
-        token_provider: TokenProvider | None,
         use_controller_proxy: bool,
+        credentials: ClientCredentials | None = None,
     ) -> "IrisClient":
-        interceptors = client_interceptors(token_provider)
+        interceptors = credentials.interceptors() if credentials is not None else []
 
         cluster = RemoteClusterClient(
             controller_address=controller_address,

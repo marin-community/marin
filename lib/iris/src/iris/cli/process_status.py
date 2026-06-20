@@ -19,7 +19,7 @@ from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from google.protobuf import json_format
 
-from iris.cli.connect import require_controller_url, rpc_client
+from iris.cli.connect import require_controller_url, rpc_client_for_ctx
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.rpc import job_pb2
 
@@ -65,7 +65,7 @@ def status(ctx, target: str | None, as_json: bool):
     """Show process status (host info, resource usage)."""
     url = require_controller_url(ctx)
     label = target or "Controller"
-    with rpc_client(url) as client:
+    with rpc_client_for_ctx(ctx, url=url) as client:
         # GetProcessStatus uses empty string for controller
         resp = client.get_process_status(job_pb2.GetProcessStatusRequest(max_log_lines=0, target=target or ""))
     if as_json:
@@ -161,7 +161,7 @@ def profile(
         raise click.ClickException(f"Unknown profiler type: {profiler}")
 
     click.echo(f"Profiling {label} ({profiler}, {duration}s)...")
-    with rpc_client(url) as client:
+    with rpc_client_for_ctx(ctx, url=url) as client:
         resp = client.profile_task(
             job_pb2.ProfileTaskRequest(
                 target=rpc_target,

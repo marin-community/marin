@@ -8,9 +8,11 @@ from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import (
+    AuthRequest,
     AuthTokenInjector,
     StaticTokenProvider,
     StaticTokenVerifier,
+    build_request_authenticators,
     is_trusted_loopback,
     resolve_auth,
 )
@@ -147,14 +149,22 @@ def test_is_trusted_loopback(client_address, headers, expected):
 def test_resolve_auth_token_wins_over_loopback():
     """A present token is verified even on a loopback connection."""
     verifier = StaticTokenVerifier({"tok": "alice"})
-    identity = resolve_auth("tok", verifier, optional=False, client_address="127.0.0.1:54321", headers={})
+    identity = resolve_auth(
+        AuthRequest(token="tok", headers={}, client_address="127.0.0.1:54321"),
+        build_request_authenticators(verifier),
+        optional=False,
+    )
     assert identity is not None
     assert identity.user_id == "alice"
 
 
 def test_resolve_auth_loopback_is_admin():
     """A tokenless loopback caller is always trusted as the anonymous admin."""
-    identity = resolve_auth(None, StaticTokenVerifier({}), optional=False, client_address="127.0.0.1:54321", headers={})
+    identity = resolve_auth(
+        AuthRequest(token=None, headers={}, client_address="127.0.0.1:54321"),
+        build_request_authenticators(StaticTokenVerifier({})),
+        optional=False,
+    )
     assert identity is not None
     assert identity.user_id == "anonymous"
     assert identity.role == "admin"
@@ -163,7 +173,11 @@ def test_resolve_auth_loopback_is_admin():
 def test_resolve_auth_public_tokenless_rejected():
     """A tokenless non-loopback (public) request is rejected when auth is required."""
     with pytest.raises(ValueError, match="Missing authentication"):
-        resolve_auth(None, StaticTokenVerifier({}), optional=False, client_address="203.0.113.7:443", headers={})
+        resolve_auth(
+            AuthRequest(token=None, headers={}, client_address="203.0.113.7:443"),
+            build_request_authenticators(StaticTokenVerifier({})),
+            optional=False,
+        )
 
 
 def test_resolve_auth_spoofed_loopback_rejected():
@@ -174,11 +188,9 @@ def test_resolve_auth_spoofed_loopback_rejected():
     """
     with pytest.raises(ValueError, match="Missing authentication"):
         resolve_auth(
-            None,
-            StaticTokenVerifier({}),
+            AuthRequest(token=None, headers={"x-forwarded-for": "127.0.0.1"}, client_address="127.0.0.1:0"),
+            build_request_authenticators(StaticTokenVerifier({})),
             optional=False,
-            client_address="127.0.0.1:0",
-            headers={"x-forwarded-for": "127.0.0.1"},
         )
 
 
