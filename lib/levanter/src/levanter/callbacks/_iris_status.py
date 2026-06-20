@@ -3,11 +3,10 @@
 
 """Push a human-readable training-status row to the running Iris task.
 
-Mirrors the technique Zephyr uses (``ZephyrCoordinator._report_task_stats``):
-periodically write a markdown ``(detail, summary)`` pair to the
-``iris.task_status`` namespace via ``Client.report_task_status_text`` so the
-current step, throughput, loss, and a link to the W&B run show up on the Iris
-dashboard for the job. It is a no-op when not running inside an Iris job.
+Periodically writes a markdown ``(detail, summary)`` pair via
+``Client.report_task_status_text`` so the current step, throughput, loss, and a
+link to the W&B run show up on the Iris dashboard for the job. It is a no-op when
+not running inside an Iris job.
 """
 
 import logging
@@ -24,8 +23,7 @@ from levanter.schedule import BatchSchedule
 
 logger = logging.getLogger(__name__)
 
-# The Iris task-status row is a single dashboard cell; keep it short. Matches the
-# cap Zephyr uses for the same namespace.
+# The Iris task-status row is a single dashboard cell; keep it short.
 MAX_STATUS_TEXT_LENGTH = 1000
 
 
@@ -87,11 +85,11 @@ def iris_status_reporter(
 
     The returned callback is a no-op unless the process is running inside an Iris
     job; inside one it reports at most once per ``interval_seconds`` (and always
-    on the final, ``force``-d step). It needs the same throughput inputs as
-    :func:`log_performance_stats` so it can report tokens/sec and MFU.
+    on the final, ``force``-d step).
 
     Args:
-        tokens_per_example: Tokens per training example (sequence length).
+        tokens_per_example: Tokens per training example (sequence length); used
+            to report tokens/sec.
         batch_schedule: Batch size schedule, or a fixed batch size.
         total_steps: Total planned steps, used for progress percent and ETA.
         flops_per_example: Model FLOPs per example; enables MFU reporting.
