@@ -1955,3 +1955,30 @@ Post-compile steps were stable around 0.65-0.66s:
   - The conservative FSDP-master packed-bank path remains semantically compatible and cleanly instrumented, but performance is still the same transport-bound baseline: three two-A2A phases plus NS/hyperball work.
   - Future candidates should beat this by reducing phase bytes, reducing phases, overlapping transport with NS, or avoiding the grouped-to-FSDP apply boundary.
 - Next action: continue the boundary-primitive goal from this baseline. Socrates' lower-level bridge work should compare against `0 AG / 6 A2A`, `~0.658s`, and the three phase rows above.
+
+### 2026-06-20 03:55 PDT - Route A/B apply-boundary comparison
+- Hypothesis: Applying packed grouped MuonH updates directly inside the packed-bank restore boundary might avoid enough per-leaf tree reconstruction or Optax overhead to beat the conservative Route A path (`grouped updates -> FSDP-shaped update pytree -> optax.apply_updates`).
+- Change:
+  - Commit `43b77ff5d` adds `expert_fsdp_packed_bank_direct_apply_boundary` as Route B.
+  - Route B uses the same packed-bank transport shape as Route A, then applies each restored update shard directly to the matching FSDP param shard inside the boundary helper.
+  - Added focused correctness and HLO tests for Route B plus `scratch/launch_muon_packed_bank_apply_routes_2node_wandb.sh`.
+- Validation:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'packed_bank_direct_apply or packed_bank_boundary_phase_estimates or boundary_byte_estimates' -q` -> 4 passed.
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'packed_bank or fsdp_grads_to_explicit_packed_grouped_bank or boundary_phase_estimates' -q` -> 14 passed.
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed.
+  - `./infra/pre-commit.py --changed-files --fix` passed, including Pyrefly.
+- Run:
+  - Iris parent `/dlwh/iris-run-job-20260620-105102`; child `/dlwh/iris-run-job-20260620-105102/grug-train-MUON-BENCH-D2560-L26-R1D2E8-G8-H3-APPLYROUTES-N2-cw-20260620-105059`.
+  - W&B target `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-APPLYROUTES-N2-cw-20260620-105059`; the job emitted `wandb_logged`, but local W&B API lookup did not find the run after `wandb_timeout`, so Iris logs are the source of truth.
+  - Output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-APPLYROUTES-N2-cw-20260620-105059-4256eb`.
+  - Config: R1D2E8, 16 H100s, L26, group size 8, H3, bf16 params/NS compute, `max_grouped_stack_size=512`.
+- Result:
+  - Parent and child both succeeded with `failure_count=0`; both GPU tasks exited 0.
+  - Route A (`packed_grouped_updates_to_fsdp_apply`): lowered/compiled `0 AG / 2 A2A / 0 AR / 0 RS / 0 CP`, median `0.183173s` on rank 0 and `0.183103s` on rank 1. Phase/global bandwidth about `714-715 GB/s`.
+  - Route B (`packed_grouped_updates_to_fsdp_direct_apply`): lowered/compiled `0 AG / 2 A2A / 0 AR / 0 RS / 0 CP`, median `0.184111s` on rank 0 and `0.184163s` on rank 1. Phase/global bandwidth about `710-711 GB/s`.
+  - Both routes report one phase, `130862284800` global bytes, two ideal all-to-alls, compiled/lowered-to-ideal ratio `1.0`, and no hidden collective explosion.
+- Interpretation:
+  - Route B is useful as a first-class harness primitive, but it is not faster. Direct apply is about `0.5-0.6%` slower than restoring an FSDP update tree and calling ordinary Optax in this isolated boundary benchmark.
+  - This suggests the grouped-to-FSDP apply boundary is already transport-bound at the JAX level; the apply-side tree work is not the dominant cost.
+  - The conservative Route A remains the pragmatic FSDP-master path. To improve materially, the next primitive needs to reduce or overlap the packed-bank transport itself rather than only moving the apply call.
+- Next action: keep Socrates focused on lower-level bridge/custom primitive designs. Use the isolated apply-boundary target as `0 AG / 2 A2A`, `~0.183s`, `~130.9 GB global bytes` when judging future grouped-update-to-FSDP variants.
