@@ -585,6 +585,93 @@ def _restore_grouped_muonh_for_split_explicit(grouped_update, target, valid_size
     return grouped_update
 
 
+def _packed_grouped_muonh_updates_to_fsdp_leaves(
+    grouped_updates: tuple[Any, ...],
+    valid_sizes: tuple[int, ...],
+    sample_param,
+):
+    """Restore grouped MuonH update chunks through one packed FSDP boundary."""
+
+    if not grouped_updates:
+        return ()
+
+    param_sharding = _target_named_sharding(sample_param)
+    first_update = grouped_updates[0]
+    target_sharding = _target_named_sharding(first_update)
+    target_spec = target_sharding.spec if isinstance(target_sharding, jax.sharding.NamedSharding) else None
+    target = (
+        jax.ShapeDtypeStruct(first_update.shape, first_update.dtype, sharding=target_sharding)
+        if isinstance(target_sharding, jax.sharding.NamedSharding)
+        else first_update
+    )
+    if (
+        not isinstance(param_sharding, jax.sharding.NamedSharding)
+        or not isinstance(target_sharding, jax.sharding.NamedSharding)
+        or len(param_sharding.spec) != 3
+        or target_spec is None
+        or target_spec[0] is None
+        or any(update.ndim != 4 for update in grouped_updates)
+    ):
+        restored = []
+        for grouped_update, valid_size in zip(grouped_updates, valid_sizes, strict=True):
+            restored_update = _restore_grouped_muonh_for_split_slice_first_gather(
+                grouped_update,
+                target,
+                valid_size,
+                sample_param,
+            )
+            restored.extend(jnp.squeeze(update_part, axis=0) for update_part in jnp.split(restored_update, valid_size))
+        return tuple(restored)
+
+    mesh = param_sharding.mesh
+    group_axis = _live_group_axis(mesh, target_spec[0])
+    data_axis = None
+    for axis_index, axis_spec in enumerate(param_sharding.spec, start=1):
+        if _axis_spec_contains(axis_spec, "data"):
+            data_axis = axis_index
+            break
+
+    data_axis_size = _mesh_axis_size(mesh, "data")
+    if data_axis is not None and any(update.shape[data_axis] % data_axis_size != 0 for update in grouped_updates):
+        restored = []
+        for grouped_update, valid_size in zip(grouped_updates, valid_sizes, strict=True):
+            restored_update = _restore_grouped_muonh_for_split_explicit(
+                grouped_update,
+                target,
+                valid_size,
+                sample_param,
+            )
+            restored.extend(jnp.squeeze(update_part, axis=0) for update_part in jnp.split(restored_update, valid_size))
+        return tuple(restored)
+
+    valid_total = sum(valid_sizes)
+    with jax.named_scope("grouped_muonh/packed_restore/concat_chunks"):
+        packed_update = jnp.concatenate(grouped_updates, axis=0)
+
+    input_spec = jax.sharding.PartitionSpec(group_axis, target_spec[1], None, None)
+    output_spec = param_sharding.spec
+
+    def restore_bank(local_update):
+        if data_axis is not None and data_axis_size > 1:
+            data_index = lax.axis_index("data")
+            local_axis_size = local_update.shape[data_axis] // data_axis_size
+            start = data_index * local_axis_size
+            local_update = lax.dynamic_slice_in_dim(local_update, start, local_axis_size, axis=data_axis)
+        if group_axis is not None:
+            local_update = lax.all_gather(local_update, axis_name=group_axis, axis=0, tiled=True)
+        if local_update.shape[0] != valid_total:
+            local_update = local_update[:valid_total]
+        return tuple(jnp.squeeze(update_part, axis=0) for update_part in jnp.split(local_update, valid_total, axis=0))
+
+    return shard_map(
+        restore_bank,
+        mesh=mesh,
+        in_specs=input_spec,
+        out_specs=tuple(output_spec for _ in range(valid_total)),
+        check_vma=False,
+    )(packed_update)
+
+
 def _restore_param_sharding(update, param):
     target_sharding = _target_named_sharding(param)
     if target_sharding is None:
@@ -637,6 +724,9 @@ def _grouped_expert_muonh_updates_with_grouped_trace(
         raise ValueError(f"Grouped MuonH trace has {len(trace_groups)} groups but params require {len(chunks)} groups")
 
     next_trace_groups = []
+    grouped_updates_by_key: dict[tuple[tuple[int, ...], str, str], list[Any]] = {}
+    valid_sizes_by_key: dict[tuple[tuple[int, ...], str, str], list[int]] = {}
+    entries_by_key: dict[tuple[tuple[int, ...], str, str], list[tuple[int, object, object]]] = {}
     for trace_group, entry_chunk in zip(trace_groups, chunks, strict=True):
         with jax.named_scope("grouped_muonh/stack_expert_updates"):
             stacked_updates, target, valid_size = _stack_grouped_muonh_chunk(entry_chunk, value_index=1)
@@ -676,19 +766,28 @@ def _grouped_expert_muonh_updates_with_grouped_trace(
             direction = _scale_grouped_muonh_direction(direction)
 
         grouped_update = _grouped_muonh_hyperball_update(stacked_params, direction, learning_rate)
-        grouped_update = _restore_grouped_muonh_for_split_slice_first_gather(
-            grouped_update,
-            target,
-            valid_size,
-            entry_chunk[0][2],
+        sample_param = entry_chunk[0][2]
+        sample_sharding = _target_named_sharding(sample_param)
+        key = (
+            tuple(sample_param.shape),
+            str(sample_param.dtype),
+            str(sample_sharding.spec) if isinstance(sample_sharding, jax.sharding.NamedSharding) else "",
         )
-        update_parts = [
-            jnp.squeeze(update_part, axis=0) for update_part in jnp.split(grouped_update, valid_size, axis=0)
-        ]
-
-        for (index, _, param), update_part in zip(entry_chunk, update_parts, strict=True):
-            output_leaves[index] = _restore_param_sharding(update_part, param)
+        grouped_updates_by_key.setdefault(key, []).append(grouped_update)
+        valid_sizes_by_key.setdefault(key, []).append(valid_size)
+        entries_by_key.setdefault(key, []).extend(entry_chunk)
         next_trace_groups.append(next_trace_group)
+
+    for key, grouped_updates in grouped_updates_by_key.items():
+        entries = entries_by_key[key]
+        with jax.named_scope("grouped_muonh/packed_restore"):
+            update_parts = _packed_grouped_muonh_updates_to_fsdp_leaves(
+                tuple(grouped_updates),
+                tuple(valid_sizes_by_key[key]),
+                entries[0][2],
+            )
+        for (index, _, param), update_part in zip(entries, update_parts, strict=True):
+            output_leaves[index] = _restore_param_sharding(update_part, param)
 
     return jax.tree.unflatten(treedef, output_leaves), GroupedMuonHState(trace_groups=tuple(next_trace_groups))
 
