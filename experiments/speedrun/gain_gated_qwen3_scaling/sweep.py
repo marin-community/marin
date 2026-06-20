@@ -166,6 +166,11 @@ def _eps_label(psi_eps: float) -> str:
     return "" if psi_eps == 0 else f"_e{f'{psi_eps:g}'.replace('.', '_')}"
 
 
+# Optional run-name suffix to force FRESH run_ids (avoid resuming a stale/poisoned
+# checkpoint or colliding with a prior run's wandb name on retry). Empty = off.
+RUN_TAG: str = os.environ.get("RUN_TAG", "")
+
+
 def _build_step(version: str, gain: float, multiplier: float, psi_eps: float) -> ExecutorStep:
     matrix_lr = SIZE.muon_lr * multiplier
     adam_lr = SIZE.adam_lr * multiplier
@@ -204,7 +209,8 @@ def _build_step(version: str, gain: float, multiplier: float, psi_eps: float) ->
         optimizer_config=optimizer,
     )
 
-    run_id = f"qwen3_{SIZE.label}_gain_gated_{version}_{_g_label(gain)}{_eps_label(psi_eps)}_{SEQ_LEN}_{_lr_label(multiplier)}"
+    tag = f"_{RUN_TAG}" if RUN_TAG else ""
+    run_id = f"qwen3_{SIZE.label}_gain_gated_{version}_{_g_label(gain)}{_eps_label(psi_eps)}{tag}_{SEQ_LEN}_{_lr_label(multiplier)}"
     step = default_train(
         name=run_id,
         tokenized=fineweb_edu_subcache_10B,
