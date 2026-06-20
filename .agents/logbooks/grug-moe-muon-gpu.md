@@ -2684,3 +2684,25 @@ Post-compile steps were stable around 0.65-0.66s:
     harnesses.
   - Treat May208 as evidence that the fallback path is not sufficient; keep
     waiting only if we want a profile artifact for diagnosis.
+
+### 2026-06-20 11:58 PDT - Per-type boundary collective efficiency reporting
+- Hypothesis: The boundary harness should make "avoids per-leaf collective
+  explosion" directly visible in summary/W&B rows, not only by reading HLO logs
+  or a coarse total fragmentation factor.
+- Change:
+  - Added per-collective-type actual/ideal/excess/ratio/match fields for
+    lowered and compiled HLO when a bench has explicit boundary phase
+    estimates.
+  - Example field names:
+    `estimated_boundary_compiled_all_to_all_excess_collective_count`,
+    `estimated_boundary_compiled_all_gather_matches_ideal_collective_count`,
+    and the corresponding `lowered` fields.
+  - Fields are only populated when explicit phase estimates exist, avoiding
+    misleading "excess" counts for older boundary probes that only have a
+    coarse fallback ideal.
+- Command:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_packed_bank_boundary_phase_estimates experiments/grug/moe/test_muon_update_bench.py::test_real_grouped_muonh_summary_row_reports_boundary_phase_estimates experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_boundary_byte_estimates -q`
+  - `./infra/pre-commit.py --files experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix`
+- Result:
+  - Pytest: `5 passed in 5.07s`.
+  - Pre-commit: OK.

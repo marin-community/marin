@@ -4683,6 +4683,21 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
     assert row["estimated_boundary_phase_none_ideal_collective_count"] is None
     assert row["estimated_boundary_lowered_collective_to_phase_ideal_ratio"] == 1.0
     assert row["estimated_boundary_compiled_collective_to_phase_ideal_ratio"] == 1.0
+    assert row["estimated_boundary_lowered_all_to_all_collective_count"] == 6.0
+    assert row["estimated_boundary_lowered_all_to_all_ideal_collective_count"] == 6.0
+    assert row["estimated_boundary_lowered_all_to_all_excess_collective_count"] == 0.0
+    assert row["estimated_boundary_lowered_all_to_all_collective_to_ideal_ratio"] == 1.0
+    assert row["estimated_boundary_lowered_all_to_all_matches_ideal_collective_count"] is True
+    assert row["estimated_boundary_lowered_all_gather_collective_count"] == 0.0
+    assert row["estimated_boundary_lowered_all_gather_ideal_collective_count"] == 0.0
+    assert row["estimated_boundary_lowered_all_gather_excess_collective_count"] == 0.0
+    assert row["estimated_boundary_lowered_all_gather_collective_to_ideal_ratio"] is None
+    assert row["estimated_boundary_lowered_all_gather_matches_ideal_collective_count"] is True
+    assert row["estimated_boundary_compiled_all_to_all_collective_count"] == 6.0
+    assert row["estimated_boundary_compiled_all_to_all_ideal_collective_count"] == 6.0
+    assert row["estimated_boundary_compiled_all_to_all_excess_collective_count"] == 0.0
+    assert row["estimated_boundary_compiled_all_to_all_collective_to_ideal_ratio"] == 1.0
+    assert row["estimated_boundary_compiled_all_to_all_matches_ideal_collective_count"] is True
     assert row["boundary_correctness_skipped_reason"] == "estimated global bytes 2 exceed correctness cap 1"
     assert row["mean_estimated_boundary_phase_global_gbps"] == 3 * estimates["global_update_bytes"] / 2.0 / 1e9
     assert row["median_estimated_boundary_phase_global_gbps"] == 3 * estimates["global_update_bytes"] / 2.0 / 1e9
@@ -4895,6 +4910,16 @@ def test_real_grouped_muonh_summary_row_reports_boundary_phase_estimates(
     assert row["estimated_boundary_phase_count"] == expected_phase_count
     assert row["estimated_boundary_phase_all_gather_ideal_collective_count"] == expected_all_gather_count
     assert row["estimated_boundary_phase_all_to_all_ideal_collective_count"] == expected_all_to_all_count
+    assert row["estimated_boundary_compiled_all_gather_collective_count"] == expected_all_gather_count
+    assert row["estimated_boundary_compiled_all_gather_ideal_collective_count"] == expected_all_gather_count
+    assert row["estimated_boundary_compiled_all_gather_excess_collective_count"] == 0.0
+    assert row["estimated_boundary_compiled_all_gather_collective_to_ideal_ratio"] == 1.0
+    assert row["estimated_boundary_compiled_all_gather_matches_ideal_collective_count"] is True
+    assert row["estimated_boundary_compiled_all_to_all_collective_count"] == expected_all_to_all_count
+    assert row["estimated_boundary_compiled_all_to_all_ideal_collective_count"] == expected_all_to_all_count
+    assert row["estimated_boundary_compiled_all_to_all_excess_collective_count"] == 0.0
+    assert row["estimated_boundary_compiled_all_to_all_collective_to_ideal_ratio"] == 1.0
+    assert row["estimated_boundary_compiled_all_to_all_matches_ideal_collective_count"] is True
     assert (
         row["estimated_boundary_phase_all_gather_global_bytes"]
         == expected_all_gather_bytes_multiplier * estimates["global_update_bytes"]

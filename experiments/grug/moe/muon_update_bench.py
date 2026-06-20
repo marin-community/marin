@@ -6886,6 +6886,33 @@ def boundary_collective_fragmentation(
     }
 
 
+BOUNDARY_COLLECTIVE_TYPES = ("all_gather", "all_reduce", "reduce_scatter", "all_to_all", "collective_permute")
+
+
+def boundary_collective_type_efficiency(
+    boundary_phase_totals: dict[str, float | None],
+    hlo_summary: dict[str, Any] | None,
+    *,
+    has_boundary_phases: bool,
+) -> dict[str, float | bool | None]:
+    metrics: dict[str, float | bool | None] = {}
+    for collective_type in BOUNDARY_COLLECTIVE_TYPES:
+        actual_count = float(hlo_summary.get(collective_type) or 0) if hlo_summary and has_boundary_phases else None
+        ideal_count = boundary_phase_totals.get(f"{collective_type}_ideal_collective_count")
+        ideal_count = float(ideal_count) if ideal_count is not None else (0.0 if has_boundary_phases else None)
+        excess_count = actual_count - ideal_count if actual_count is not None else None
+        metrics[f"{collective_type}_collective_count"] = actual_count
+        metrics[f"{collective_type}_ideal_collective_count"] = ideal_count
+        metrics[f"{collective_type}_excess_collective_count"] = excess_count
+        metrics[f"{collective_type}_collective_to_ideal_ratio"] = (
+            actual_count / ideal_count if actual_count is not None and ideal_count else None
+        )
+        metrics[f"{collective_type}_matches_ideal_collective_count"] = (
+            actual_count == ideal_count if actual_count is not None else None
+        )
+    return metrics
+
+
 def estimated_tflops(flops: int, seconds: float | None) -> float | None:
     if seconds is None or seconds <= 0:
         return None
@@ -10042,6 +10069,11 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         lowered_hlo = result["lowered"]["hlo"]
         lowered_boundary_payloads = boundary_collective_payload_estimates(boundary_bytes, lowered_hlo)
         lowered_fragmentation = boundary_collective_fragmentation(bench_config, bench_kind, lowered_hlo)
+        lowered_type_efficiency = boundary_collective_type_efficiency(
+            boundary_phase_totals,
+            lowered_hlo,
+            has_boundary_phases=bool(boundary_phases),
+        )
         row.update(
             {
                 "dot_general": lowered_hlo["dot_general"],
@@ -10073,6 +10105,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "lower_seconds": result["lowered"]["lower_seconds"],
             }
+            | {f"estimated_boundary_lowered_{key}": value for key, value in lowered_type_efficiency.items()}
         )
     if "timing" in result:
         timing = result["timing"]["timing"]
@@ -10080,6 +10113,11 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         compiled_memory = timing.get("compiled_memory") or {}
         compiled_boundary_payloads = boundary_collective_payload_estimates(boundary_bytes, compiled_hlo)
         compiled_fragmentation = boundary_collective_fragmentation(bench_config, bench_kind, compiled_hlo)
+        compiled_type_efficiency = boundary_collective_type_efficiency(
+            boundary_phase_totals,
+            compiled_hlo,
+            has_boundary_phases=bool(boundary_phases),
+        )
         mean_tflops = estimated_tflops(flops, timing["mean_seconds"])
         median_tflops = estimated_tflops(flops, timing["median_seconds"])
         boundary_global_bytes = boundary_bytes.get("global_update_bytes")
@@ -10167,6 +10205,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                     timing["median_seconds"],
                 ),
             }
+            | {f"estimated_boundary_compiled_{key}": value for key, value in compiled_type_efficiency.items()}
         )
     return row
 
