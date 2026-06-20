@@ -8349,6 +8349,9 @@ def time_ns4d(
                 elif bench_kind == EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH:
                     params, optimizer_state = compiled(params, updates, optimizer_state)
                     block_until_ready_tree((params, optimizer_state))
+                elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
+                    params = compiled(params, updates)
+                    block_until_ready_tree(params)
                 elif is_expert_fsdp_grouped_boundary_bench(bench_kind) or is_expert_fsdp_grouped_updates_muonh_bench(
                     bench_kind
                 ):
@@ -8381,6 +8384,8 @@ def time_ns4d(
                         bench_kind,
                         "warmup grouped-trace MuonH state",
                     )
+                elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
+                    assert_expert_fsdp_sharding(params, "warmup expert FSDP packed-bank MuonH params")
                 elif is_expert_fsdp_grouped_bench(bench_kind):
                     assert_runtime_expert_fsdp_sharding(
                         params,
@@ -8557,6 +8562,9 @@ def time_ns4d(
                     elif bench_kind == EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH:
                         params, optimizer_state = compiled(params, updates, optimizer_state)
                         block_until_ready_tree((params, optimizer_state))
+                    elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
+                        params = compiled(params, updates)
+                        block_until_ready_tree(params)
                     elif is_expert_fsdp_grouped_boundary_bench(bench_kind) or is_expert_fsdp_grouped_updates_muonh_bench(
                         bench_kind
                     ):
@@ -8589,6 +8597,8 @@ def time_ns4d(
                             bench_kind,
                             "grouped-trace MuonH state",
                         )
+                    elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
+                        assert_expert_fsdp_sharding(params, "expert FSDP packed-bank MuonH params")
                     elif is_expert_fsdp_grouped_bench(bench_kind):
                         assert_runtime_expert_fsdp_sharding(
                             params,
