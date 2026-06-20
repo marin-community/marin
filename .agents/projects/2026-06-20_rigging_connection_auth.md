@@ -650,10 +650,29 @@ for.
 - **D2 — no `iris://` in rigging.** rigging takes only generic transport URLs
   (`http`/`https`/`iap+https`/`ssh+gcp`/`k8s`). The cluster-name convenience is an
   iris-side *function* (`iris_connect`), not a URL scheme rigging parses.
-- **D3 — `disconnect` via the implicit `WeakKeyDictionary`.** `connect()` returns
-  the bare client; teardown is keyed on the client. No explicit handle.
+- **D3 — `disconnect` via an implicit, identity-keyed finalizer.** `connect()`
+  returns the bare client; teardown is a `weakref.finalize` keyed on `id(client)`
+  (not a `WeakKeyDictionary` — clients may be unhashable or compare equal, either
+  of which would corrupt a hash/eq-keyed map). No explicit handle.
 - **D4 — proxy strips end-user identity; accepted.** Proxied services are
   authorized at the controller, not downstream. A future opt-in
   identity-forwarding header is controller work, out of scope here.
 - **D5 — IAP vs plain HTTP is encoded in the scheme** (`iap+https` vs `https`);
   edge auth (IAP) is scheme-implied, app auth (JWT) is the `auth=` argument.
+
+## Implementation notes (refinements from the implementation codex pass)
+
+Two details landed differently from the prose above, both to fix real bugs the
+implementation-stage codex review caught:
+
+- **Auth injectors are Connect *metadata* interceptors, not unary interceptors.**
+  `AuthTokenInjector` / `ProxyAuthTokenInjector` implement `on_start` /
+  `on_start_sync` (the `MetadataInterceptor` protocol) rather than
+  `intercept_unary`. `connectrpc` then applies them to every RPC shape — unary
+  and all three streaming shapes — so a streaming call can't silently go out
+  unauthenticated.
+- **`connect` validates the appended path and the client.** The effective path
+  must be empty or a single-rooted `/…` segment (rejecting `proxy/a` and
+  `//proxy`), `parse_transport` rejects hostless URLs, and a client that can't be
+  weak-referenced raises rather than leaking its transport. Re-registering the
+  same live client object closes the prior transport instead of orphaning it.
