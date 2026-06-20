@@ -3084,6 +3084,24 @@ def test_summary_row_reports_boundary_byte_estimates():
     assert row["estimated_boundary_fsdp_output_to_grouped_input_ratio"] == 2.0
     assert row["estimated_boundary_all_gather_slice_peak_to_grouped_input_ratio"] == 4.0
 
+    real_grouped_estimates = estimated_boundary_byte_estimates(
+        config,
+        REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH,
+    )
+    assert real_grouped_estimates == estimates
+
+    result["metadata"]["label"] = "real_expert_fsdp_grouped_muonh_optimizer_update_h1"
+    result["metadata"]["bench_kind"] = REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH
+    row = summary_row(result)
+
+    assert row["estimated_boundary_global_update_bytes"] == estimates["global_update_bytes"]
+    assert row["estimated_boundary_grouped_input_per_device_bytes"] == estimates["grouped_input_per_device_bytes"]
+    assert row["estimated_boundary_fsdp_output_per_device_bytes"] == estimates["fsdp_output_per_device_bytes"]
+    assert (
+        row["estimated_boundary_all_gather_slice_peak_per_device_bytes"]
+        == estimates["all_gather_slice_peak_per_device_bytes"]
+    )
+
 
 def test_grouped_4d_hyperball_projects_each_group_expert_matrix_independently():
     config = BenchConfig(

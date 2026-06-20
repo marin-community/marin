@@ -506,6 +506,7 @@ class TimingSummary:
     mean_seconds: float | None
     min_seconds: float | None
     stdev_seconds: float | None
+    profile_dir: str | None = None
 
 
 def emit_jsonl(payload: dict[str, Any]) -> None:
@@ -5454,7 +5455,7 @@ def estimated_expert_update_global_bytes(config: BenchConfig) -> int:
 
 
 def estimated_boundary_byte_estimates(config: BenchConfig, bench_kind: str) -> dict[str, float] | None:
-    if not is_expert_fsdp_grouped_boundary_bench(bench_kind):
+    if not is_expert_fsdp_grouped_bench(bench_kind):
         return None
     global_bytes = estimated_expert_update_global_bytes(config)
     expert_axis = max(1, config.expert_axis)
@@ -6303,6 +6304,20 @@ def block_until_ready_tree(value: Any) -> None:
     jax.block_until_ready(value)
 
 
+def start_profile_trace(profile_dir: Path | None) -> bool:
+    if profile_dir is None:
+        return False
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    jax.profiler.start_trace(str(profile_dir), create_perfetto_link=False, create_perfetto_trace=False)
+    emit_jsonl({"event": "profile_start", "profile_dir": str(profile_dir)})
+    return True
+
+
+def stop_profile_trace(profile_dir: Path | None) -> None:
+    jax.profiler.stop_trace()
+    emit_jsonl({"event": "profile_stop", "profile_dir": str(profile_dir)})
+
+
 def time_tree_update(
     mesh: Mesh,
     config: BenchConfig,
@@ -6403,6 +6418,7 @@ def time_ns4d(
     compiled_hlo_output: Path | None,
     abstract_mesh_enabled: bool,
     allow_boundary_collectives: bool,
+    profile_dir: Path | None,
 ) -> TimingSummary:
     with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
         optimizer_state = None
@@ -6690,7 +6706,7 @@ def time_ns4d(
                 else:
                     update_step = jax.jit(
                         real_expert_fsdp_grouped_muonh_optimizer_apply_step_factory(config),
-                        donate_argnums=(0, 2),
+                        donate_argnums=(0, 1, 2),
                     )
                 lower_args = (params, updates, optimizer_state)
             elif is_expert_fsdp_grouped_muonh_bench(bench_kind):
@@ -6988,172 +7004,179 @@ def time_ns4d(
                 updates = next_updates
 
         times = []
-        for _ in range(iters):
+        for iteration in range(iters):
+            profiling = start_profile_trace(profile_dir) if iteration == 0 else False
             start = time.perf_counter()
-            if params is None:
-                next_updates = compiled(updates)
-                block_until_ready_tree(next_updates)
-            elif (
-                is_expert_fsdp_grouped_bench(bench_kind)
-                or is_expert_only_grouped_muonh_bench(bench_kind)
-                or is_real_expert_fsdp_grouped_muonh_bench(bench_kind)
-                or bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES
-                or bench_kind
-                in (
-                    EXPERT_GROUPED_LAYER_SLICE_BENCH,
-                    EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH,
-                    EXPERT_GROUPED_BANK_CONSUMER_BENCH,
-                    EXPERT_GROUPED_SEQUENTIAL_BANK_CONSUMER_BENCH,
-                    EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH,
-                    EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
-                    EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
-                )
-            ):
-                if bench_kind == EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH:
-                    consumer_outputs = compiled(params, updates)
-                    block_until_ready_tree(consumer_outputs)
-                elif bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH:
-                    consumer_outputs = compiled(params, updates)
-                    block_until_ready_tree(consumer_outputs)
-                elif bench_kind == EXPERT_GROUPED_SEQUENTIAL_BANK_CONSUMER_BENCH:
-                    consumer_outputs = compiled(params, updates)
-                    block_until_ready_tree(consumer_outputs)
-                elif bench_kind == EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH:
-                    consumer_outputs = compiled(params, updates)
-                    block_until_ready_tree(consumer_outputs)
-                elif bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
-                    params = compiled(updates)
-                    block_until_ready_tree(params)
-                elif bench_kind == EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH:
-                    params, optimizer_state, consumer_outputs = compiled(params, updates, optimizer_state, activations)
-                    block_until_ready_tree((params, optimizer_state, consumer_outputs))
-                elif bench_kind in (
-                    EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
-                    EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+            try:
+                if params is None:
+                    next_updates = compiled(updates)
+                    block_until_ready_tree(next_updates)
+                elif (
+                    is_expert_fsdp_grouped_bench(bench_kind)
+                    or is_expert_only_grouped_muonh_bench(bench_kind)
+                    or is_real_expert_fsdp_grouped_muonh_bench(bench_kind)
+                    or bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES
+                    or bench_kind
+                    in (
+                        EXPERT_GROUPED_LAYER_SLICE_BENCH,
+                        EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH,
+                        EXPERT_GROUPED_BANK_CONSUMER_BENCH,
+                        EXPERT_GROUPED_SEQUENTIAL_BANK_CONSUMER_BENCH,
+                        EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH,
+                        EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
+                        EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+                    )
                 ):
-                    grouped_target_params = compiled(params, updates)
-                    block_until_ready_tree(grouped_target_params)
-                elif bench_kind == EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH:
-                    params, optimizer_state = compiled(params, updates, optimizer_state)
-                    block_until_ready_tree((params, optimizer_state))
-                elif is_expert_fsdp_grouped_boundary_bench(bench_kind) or is_expert_fsdp_grouped_updates_muonh_bench(
-                    bench_kind
-                ):
-                    params = compiled(params, updates)
-                    block_until_ready_tree(params)
-                elif bench_kind == REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH:
-                    next_updates, optimizer_state = compiled(params, updates, optimizer_state)
-                    block_until_ready_tree((next_updates, optimizer_state))
-                else:
-                    params, optimizer_state = compiled(params, updates, optimizer_state)
-                    block_until_ready_tree((params, optimizer_state))
-                if bench_kind in (
-                    EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
-                    EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
-                ):
-                    assert_grouped_expert_target_fsdp_sharding(
-                        grouped_target_params,
-                        "expert FSDP target-apply grouped params",
-                    )
-                elif bench_kind == EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH:
-                    assert_runtime_expert_fsdp_sharding(
-                        params,
-                        "expert FSDP grouped-trace params",
-                        config,
-                    )
-                    assert_grouped_expert_sharding(
-                        optimizer_state,
-                        mesh,
-                        config,
-                        bench_kind,
-                        "grouped-trace MuonH state",
-                    )
-                elif is_expert_fsdp_grouped_bench(bench_kind):
-                    assert_runtime_expert_fsdp_sharding(
-                        params,
-                        "expert FSDP grouped params",
-                        config,
-                    )
-                elif bench_kind == REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH:
-                    assert_expert_fsdp_sharding(next_updates, "real expert FSDP grouped MuonH updates")
-                elif bench_kind == EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH:
-                    assert_grouped_expert_sharding(
-                        params,
-                        mesh,
-                        config,
-                        bench_kind,
-                        "persistent grouped MuonH params",
-                    )
-                elif bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
-                    assert_expert_ep_sharding(params, "grouped expert layer slices")
-                elif bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH and result_sharding is not None:
-                    assert_ns4d_sharding(
-                        consumer_outputs,
-                        result_sharding.spec,
-                        "grouped expert bank consumer outputs",
-                    )
-                elif bench_kind == EXPERT_GROUPED_SEQUENTIAL_BANK_CONSUMER_BENCH:
-                    assert_expert_ep_sharding(
-                        consumer_outputs,
-                        "sequential grouped expert bank consumer outputs",
-                    )
-                elif bench_kind == EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH:
-                    assert_expert_ep_sharding(
-                        consumer_outputs,
-                        "scan grouped expert bank consumer outputs",
-                    )
-                elif bench_kind == EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH:
-                    assert_grouped_expert_sharding(
-                        params,
-                        mesh,
-                        config,
-                        bench_kind,
-                        "updated grouped expert bank params",
-                    )
-                    if result_sharding is not None:
+                    if bench_kind == EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH:
+                        consumer_outputs = compiled(params, updates)
+                        block_until_ready_tree(consumer_outputs)
+                    elif bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH:
+                        consumer_outputs = compiled(params, updates)
+                        block_until_ready_tree(consumer_outputs)
+                    elif bench_kind == EXPERT_GROUPED_SEQUENTIAL_BANK_CONSUMER_BENCH:
+                        consumer_outputs = compiled(params, updates)
+                        block_until_ready_tree(consumer_outputs)
+                    elif bench_kind == EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH:
+                        consumer_outputs = compiled(params, updates)
+                        block_until_ready_tree(consumer_outputs)
+                    elif bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
+                        params = compiled(updates)
+                        block_until_ready_tree(params)
+                    elif bench_kind == EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH:
+                        params, optimizer_state, consumer_outputs = compiled(
+                            params, updates, optimizer_state, activations
+                        )
+                        block_until_ready_tree((params, optimizer_state, consumer_outputs))
+                    elif bench_kind in (
+                        EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
+                        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+                    ):
+                        grouped_target_params = compiled(params, updates)
+                        block_until_ready_tree(grouped_target_params)
+                    elif bench_kind == EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH:
+                        params, optimizer_state = compiled(params, updates, optimizer_state)
+                        block_until_ready_tree((params, optimizer_state))
+                    elif is_expert_fsdp_grouped_boundary_bench(bench_kind) or is_expert_fsdp_grouped_updates_muonh_bench(
+                        bench_kind
+                    ):
+                        params = compiled(params, updates)
+                        block_until_ready_tree(params)
+                    elif bench_kind == REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH:
+                        next_updates, optimizer_state = compiled(params, updates, optimizer_state)
+                        block_until_ready_tree((next_updates, optimizer_state))
+                    else:
+                        params, optimizer_state = compiled(params, updates, optimizer_state)
+                        block_until_ready_tree((params, optimizer_state))
+                    if bench_kind in (
+                        EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
+                        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+                    ):
+                        assert_grouped_expert_target_fsdp_sharding(
+                            grouped_target_params,
+                            "expert FSDP target-apply grouped params",
+                        )
+                    elif bench_kind == EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH:
+                        assert_runtime_expert_fsdp_sharding(
+                            params,
+                            "expert FSDP grouped-trace params",
+                            config,
+                        )
+                        assert_grouped_expert_sharding(
+                            optimizer_state,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "grouped-trace MuonH state",
+                        )
+                    elif is_expert_fsdp_grouped_bench(bench_kind):
+                        assert_runtime_expert_fsdp_sharding(
+                            params,
+                            "expert FSDP grouped params",
+                            config,
+                        )
+                    elif bench_kind == REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH:
+                        assert_expert_fsdp_sharding(next_updates, "real expert FSDP grouped MuonH updates")
+                    elif bench_kind == EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH:
+                        assert_grouped_expert_sharding(
+                            params,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "persistent grouped MuonH params",
+                        )
+                    elif bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
+                        assert_expert_ep_sharding(params, "grouped expert layer slices")
+                    elif bench_kind == EXPERT_GROUPED_BANK_CONSUMER_BENCH and result_sharding is not None:
                         assert_ns4d_sharding(
                             consumer_outputs,
                             result_sharding.spec,
                             "grouped expert bank consumer outputs",
                         )
-                elif bench_kind == EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH:
-                    assert_grouped_moe_consumer_sharding(
-                        consumer_outputs,
-                        mesh,
-                        config,
-                        bench_kind,
-                        "grouped MoE consumer outputs",
-                    )
-                elif result_sharding is not None:
-                    assert_grouped_or_uniform_ns4d_sharding(
-                        params,
-                        mesh,
-                        config,
-                        bench_kind,
-                        result_sharding.spec,
-                        "production-ish grouped params",
-                    )
-                next_updates = None
-            else:
-                params = compiled(params, updates)
-                block_until_ready_tree(params)
-                if result_sharding is not None:
-                    assert_grouped_or_uniform_ns4d_sharding(
-                        params,
-                        mesh,
-                        config,
-                        bench_kind,
-                        result_sharding.spec,
-                        "NS4D grouped apply result",
-                    )
-                next_updates = None
-            times.append(time.perf_counter() - start)
-            if next_updates is not None and ns4d_bench_returns_4d_updates(bench_kind):
-                if result_sharding is not None:
-                    assert_grouped_or_uniform_ns4d_sharding(
-                        next_updates, mesh, config, bench_kind, result_sharding.spec, "NS4D updates"
-                    )
-                updates = next_updates
+                    elif bench_kind == EXPERT_GROUPED_SEQUENTIAL_BANK_CONSUMER_BENCH:
+                        assert_expert_ep_sharding(
+                            consumer_outputs,
+                            "sequential grouped expert bank consumer outputs",
+                        )
+                    elif bench_kind == EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH:
+                        assert_expert_ep_sharding(
+                            consumer_outputs,
+                            "scan grouped expert bank consumer outputs",
+                        )
+                    elif bench_kind == EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH:
+                        assert_grouped_expert_sharding(
+                            params,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "updated grouped expert bank params",
+                        )
+                        if result_sharding is not None:
+                            assert_ns4d_sharding(
+                                consumer_outputs,
+                                result_sharding.spec,
+                                "grouped expert bank consumer outputs",
+                            )
+                    elif bench_kind == EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH:
+                        assert_grouped_moe_consumer_sharding(
+                            consumer_outputs,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "grouped MoE consumer outputs",
+                        )
+                    elif result_sharding is not None:
+                        assert_grouped_or_uniform_ns4d_sharding(
+                            params,
+                            mesh,
+                            config,
+                            bench_kind,
+                            result_sharding.spec,
+                            "production-ish grouped params",
+                        )
+                    next_updates = None
+                else:
+                    params = compiled(params, updates)
+                    block_until_ready_tree(params)
+                    if result_sharding is not None:
+                        assert_grouped_or_uniform_ns4d_sharding(
+                            params,
+                            mesh,
+                            config,
+                            bench_kind,
+                            result_sharding.spec,
+                            "NS4D grouped apply result",
+                        )
+                    next_updates = None
+                times.append(time.perf_counter() - start)
+                if next_updates is not None and ns4d_bench_returns_4d_updates(bench_kind):
+                    if result_sharding is not None:
+                        assert_grouped_or_uniform_ns4d_sharding(
+                            next_updates, mesh, config, bench_kind, result_sharding.spec, "NS4D updates"
+                        )
+                    updates = next_updates
+            finally:
+                if profiling:
+                    stop_profile_trace(profile_dir)
 
     return TimingSummary(
         compile_seconds=compile_seconds,
@@ -7163,6 +7186,7 @@ def time_ns4d(
         mean_seconds=statistics.mean(times) if times else None,
         min_seconds=min(times) if times else None,
         stdev_seconds=statistics.stdev(times) if len(times) > 1 else None,
+        profile_dir=str(profile_dir) if profile_dir is not None else None,
     )
 
 
@@ -7392,6 +7416,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--compiled-hlo-output",
         help="Write compiled XLA HLO text from timing runs. Uses per-label filenames for multi-config sweeps.",
+    )
+    parser.add_argument(
+        "--profile-dir",
+        type=Path,
+        help="Write a JAX profiler trace for the first timed iteration of timing benchmarks.",
     )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
@@ -7672,6 +7701,7 @@ def run_config(
 
     if args.mode in ("run", "both"):
         compiled_hlo_path = output_path_for_config(args.compiled_hlo_output, label, total_configs)
+        profile_dir = output_path_for_config(args.profile_dir, label, total_configs)
         if is_tree_update_bench(bench_kind):
             timing = time_tree_update(
                 mesh,
@@ -7705,6 +7735,7 @@ def run_config(
                 compiled_hlo_path,
                 not args.disable_abstract_mesh,
                 args.allow_boundary_collectives,
+                profile_dir,
             )
         timing_payload = {"event": "timing", "label": label, "timing": asdict(timing)}
         emit_jsonl(timing_payload)

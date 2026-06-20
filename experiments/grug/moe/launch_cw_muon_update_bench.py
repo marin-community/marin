@@ -8,7 +8,9 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import shutil
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -77,6 +79,7 @@ class MuonUpdateBenchLaunchConfig:
     disable_abstract_mesh: bool = False
     allow_boundary_collectives: bool = False
     write_compiled_hlo: bool = False
+    profile: bool = False
 
 
 def env_int(key: str, default: int) -> int:
@@ -159,7 +162,7 @@ def _bench_configs(config: MuonUpdateBenchLaunchConfig) -> list[BenchConfig]:
     ]
 
 
-def _run_args(config: MuonUpdateBenchLaunchConfig) -> SimpleNamespace:
+def _run_args(config: MuonUpdateBenchLaunchConfig, profile_dir: Path | None) -> SimpleNamespace:
     return SimpleNamespace(
         mode=config.mode,
         warmup=config.warmup,
@@ -170,6 +173,7 @@ def _run_args(config: MuonUpdateBenchLaunchConfig) -> SimpleNamespace:
         output=None,
         disable_abstract_mesh=config.disable_abstract_mesh,
         allow_boundary_collectives=config.allow_boundary_collectives,
+        profile_dir=profile_dir,
     )
 
 
@@ -188,6 +192,22 @@ def _json_safe(value: Any) -> Any:
 def _write_json(path: str, payload: dict[str, Any]) -> None:
     with fsspec.open(path, "w") as fp:
         fp.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def _upload_directory(local_dir: Path, remote_dir: str) -> list[str]:
+    if not local_dir.exists():
+        return []
+
+    uploaded = []
+    for path in sorted(local_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        relative_path = path.relative_to(local_dir).as_posix()
+        remote_path = f"{remote_dir.rstrip('/')}/{relative_path}"
+        with path.open("rb") as src, fsspec.open(remote_path, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        uploaded.append(remote_path)
+    return uploaded
 
 
 def _run_muon_update_bench_local(config: MuonUpdateBenchLaunchConfig) -> None:
@@ -214,7 +234,13 @@ def _run_muon_update_bench_local(config: MuonUpdateBenchLaunchConfig) -> None:
         }
     )
 
-    args = _run_args(config)
+    profile_dir = None
+    profile_output_path = None
+    if config.profile:
+        profile_dir = Path("/tmp/muon_update_bench_profiles") / config.run_id / f"process_{jax.process_index()}"
+        profile_output_path = f"{config.output_path}/profiler/process_{jax.process_index()}"
+
+    args = _run_args(config, profile_dir)
     total_variants = len(configs) * len(config.bench_kinds)
     results = [
         run_config(args, mesh, bench_config, bench_kind, total_variants)
@@ -222,9 +248,14 @@ def _run_muon_update_bench_local(config: MuonUpdateBenchLaunchConfig) -> None:
         for bench_kind in config.bench_kinds
     ]
     summary_rows = [summary_row(result) for result in results]
+    uploaded_profile_files = (
+        _upload_directory(profile_dir, profile_output_path) if profile_dir and profile_output_path else []
+    )
     payload = {
         "run_id": config.run_id,
         "output_path": config.output_path,
+        "profile_output_path": profile_output_path,
+        "uploaded_profile_files": uploaded_profile_files,
         "launch_config": _json_safe(asdict(config)),
         "synthetic_shapes": synthetic_shapes(first_config),
         "group_estimates": {
@@ -236,6 +267,14 @@ def _run_muon_update_bench_local(config: MuonUpdateBenchLaunchConfig) -> None:
         "summary_table": summary_rows,
     }
     emit_jsonl({"event": "summary_table", "rows": summary_rows})
+    if uploaded_profile_files:
+        emit_jsonl(
+            {
+                "event": "profile_uploaded",
+                "profile_output_path": profile_output_path,
+                "files": uploaded_profile_files,
+            }
+        )
     _write_json(f"{config.output_path}/summary.json", payload)
 
 
@@ -299,6 +338,7 @@ def build_step() -> ExecutorStep:
         disable_abstract_mesh=env_bool("MUON_BENCH_DISABLE_ABSTRACT_MESH", False),
         allow_boundary_collectives=env_bool("MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES", False),
         write_compiled_hlo=env_bool("MUON_BENCH_WRITE_COMPILED_HLO", False),
+        profile=env_bool("MUON_BENCH_ENABLE_JAX_PROFILE", False),
     )
     return ExecutorStep(
         name=f"{DEFAULT_OUTPUT_SUBDIR}/{run_id}",

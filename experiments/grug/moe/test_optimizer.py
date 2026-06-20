@@ -10,6 +10,7 @@ from jax.sharding import PartitionSpec as P
 from experiments.grug.moe.adamh import _scale_invariant_hyperball_update as _adamh_hyperball_update
 from experiments.grug.moe.launch_cw_may_d2560 import build_may_optimizer
 from experiments.grug.moe.optimizer import (
+    GroupedMuonHState,
     GrugMoeAdamHConfig,
     GrugMoeMuonHConfig,
     GrugMoeSgdConfig,
@@ -240,6 +241,39 @@ def test_grouped_expert_muonh_optimizer_returns_fsdp_updates_before_apply():
 
     params = {"blocks": tuple(block_specs() for _ in range(4))}
     grads = jax.tree.map(lambda param: jax.ShapeDtypeStruct(param.shape, param.dtype, sharding=param.sharding), params)
+    transform = scale_with_grouped_expert_muonh(
+        learning_rate=0.02,
+        steps=1,
+        expert_grouped_muonh_group_size=4,
+        max_grouped_stack_size=8,
+    )
+
+    def init_grouped_state(params):
+        return transform.init(params)
+
+    def transform_update_step(grads, state, params):
+        return transform.update(grads, state, params)
+
+    with use_abstract_mesh(mesh):
+        grouped_state = jax.eval_shape(init_grouped_state, params)
+
+    assert isinstance(grouped_state, GroupedMuonHState)
+    assert len(grouped_state.trace_groups) == 2
+    assert all(
+        trace_group.sharding.spec == P(("replica_dcn", "data"), "expert", None, None)
+        for trace_group in grouped_state.trace_groups
+    )
+
+    with use_abstract_mesh(mesh):
+        transform_updates, next_grouped_state = jax.eval_shape(transform_update_step, grads, grouped_state, params)
+
+    assert_update_sharding_matches_params(transform_updates, params, "grouped MuonH direct transform updates")
+    assert isinstance(next_grouped_state, GroupedMuonHState)
+    assert all(
+        trace_group.sharding.spec == P(("replica_dcn", "data"), "expert", None, None)
+        for trace_group in next_grouped_state.trace_groups
+    )
+
     optimizer = GrugMoeMuonHConfig(
         learning_rate=0.02,
         lr_schedule="constant",
@@ -250,16 +284,16 @@ def test_grouped_expert_muonh_optimizer_returns_fsdp_updates_before_apply():
         max_grad_norm=None,
     ).build(num_train_steps=8)
 
-    def update_step(params, grads):
-        opt_state = optimizer.init(params)
+    def update_step(params, grads, opt_state):
         updates, _ = optimizer.update(grads, opt_state, params)
         return updates
 
     with use_abstract_mesh(mesh):
-        updates = jax.eval_shape(update_step, params, grads)
+        opt_state = jax.eval_shape(optimizer.init, params)
+        updates = jax.eval_shape(update_step, params, grads, opt_state)
         update_step_jit = jax.jit(update_step)
         platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
-        lowered = update_step_jit.trace(params, grads).lower(lowering_platforms=(platform,))
+        lowered = update_step_jit.trace(params, grads, opt_state).lower(lowering_platforms=(platform,))
 
     assert_update_sharding_matches_params(updates, params, "grouped MuonH production updates")
     hlo = str(lowered.compiler_ir(dialect="stablehlo"))

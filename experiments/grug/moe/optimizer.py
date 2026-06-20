@@ -4,7 +4,7 @@
 import math
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -42,6 +42,12 @@ REPLICA_DCN_AXIS = "replica_dcn"
 EXPERT_AXIS = "expert"
 MATCH_OPTIMIZER_SHARDING_ENV = "MAY_MATCH_OPTIMIZER_SHARDING"
 GROUPED_MUONH_EXPERT_PATH = ".mlp.expert_mlp.w_"
+
+
+class GroupedMuonHState(NamedTuple):
+    """Grouped MuonH momentum buffers kept in the Newton-Schulz work layout."""
+
+    trace_groups: tuple[Any, ...]
 
 
 def _match_optimizer_sharding_enabled() -> bool:
@@ -308,6 +314,81 @@ def _pad_grouped_muonh_stack(stacked, padded_size: int):
     return jnp.pad(stacked, pad_width)
 
 
+def _grouped_muonh_entry_chunks(
+    params,
+    values,
+    *,
+    expert_grouped_muonh_group_size: int | None,
+    max_grouped_stack_size: int,
+):
+    value_leaves, value_treedef = jax.tree.flatten(values, is_leaf=lambda x: x is None)
+    param_leaves, param_treedef = jax.tree.flatten(params, is_leaf=lambda x: x is None)
+    path_leaves, path_treedef = jax.tree.flatten(leaf_key_paths(params), is_leaf=lambda x: x is None)
+    if value_treedef != param_treedef or value_treedef != path_treedef:
+        raise ValueError("Grouped MuonH requires values, params, and paths to have matching tree structure")
+
+    output_leaves = [None] * len(value_leaves)
+    groups: dict[tuple[str, tuple[int, ...], str], list[tuple[int, object, object]]] = {}
+    for index, (value, param, path) in enumerate(zip(value_leaves, param_leaves, path_leaves, strict=True)):
+        if value is None:
+            output_leaves[index] = None
+            continue
+        if _is_grouped_muonh_expert_leaf(path, param):
+            key = (_grouped_muonh_leaf_name(path), tuple(param.shape), str(param.dtype))
+            groups.setdefault(key, []).append((index, value, param))
+            continue
+        output_leaves[index] = value
+
+    chunks = []
+    for entries in groups.values():
+        chunk_size = _grouped_muonh_chunk_size(
+            entries[0][2],
+            expert_grouped_muonh_group_size,
+            max_grouped_stack_size,
+        )
+        for chunk_start in range(0, len(entries), chunk_size):
+            chunks.append(entries[chunk_start : chunk_start + chunk_size])
+    return value_treedef, output_leaves, chunks
+
+
+def _stack_grouped_muonh_chunk(entry_chunk, *, value_index: int):
+    valid_size = len(entry_chunk)
+    sample_param = entry_chunk[0][2]
+    stack_axis_size = _grouped_muonh_stack_axis_size(sample_param)
+    padded_size = math.ceil(valid_size / stack_axis_size) * stack_axis_size
+    stacked = jnp.stack([entry[value_index] for entry in entry_chunk], axis=0)
+    stacked = _pad_grouped_muonh_stack(stacked, padded_size)
+    target = _grouped_4d_stack_target(_grouped_muonh_shape_dtype_struct(stacked.shape, stacked.dtype, sample_param))
+    return stacked, target, valid_size
+
+
+def _init_grouped_muonh_trace_groups(
+    params,
+    *,
+    expert_grouped_muonh_group_size: int | None,
+    max_grouped_stack_size: int,
+):
+    zero_updates = jax.tree.map(lambda param: None if param is None else jnp.zeros_like(param), params)
+    _, _, chunks = _grouped_muonh_entry_chunks(
+        params,
+        zero_updates,
+        expert_grouped_muonh_group_size=expert_grouped_muonh_group_size,
+        max_grouped_stack_size=max_grouped_stack_size,
+    )
+    trace_groups = []
+    for entry_chunk in chunks:
+        with jax.named_scope("grouped_muonh/init_grouped_trace"):
+            trace_group, target, _ = _stack_grouped_muonh_chunk(entry_chunk, value_index=1)
+            if target is not None:
+                trace_group = _enter_grouped_muonh_ns_layout_slice_first_gather(
+                    trace_group,
+                    target,
+                    entry_chunk[0][2],
+                )
+        trace_groups.append(trace_group)
+    return tuple(trace_groups)
+
+
 def _enter_grouped_muonh_ns_layout_slice_first_gather(grouped_value, target, sample_param):
     target_spec = _target_spec(target)
     param_sharding = _target_named_sharding(sample_param)
@@ -531,11 +612,14 @@ def _grouped_muonh_hyperball_update(stacked_params, direction, learning_rate):
         return (rescale - 1) * stacked_params - rescale * step_scale * direction
 
 
-def _grouped_expert_muonh_updates(
+def _grouped_expert_muonh_updates_with_grouped_trace(
     params,
     updates,
+    trace_groups,
     learning_rate: float,
     *,
+    momentum: float,
+    nesterov: bool,
     steps: int,
     muon_eps: float,
     coefficient_type: CoefficientType,
@@ -543,85 +627,70 @@ def _grouped_expert_muonh_updates(
     ns_compute_dtype: str,
     expert_grouped_muonh_group_size: int | None,
 ):
-    update_leaves, treedef = jax.tree.flatten(updates, is_leaf=lambda x: x is None)
-    param_leaves, param_treedef = jax.tree.flatten(params, is_leaf=lambda x: x is None)
-    path_leaves, path_treedef = jax.tree.flatten(leaf_key_paths(params), is_leaf=lambda x: x is None)
-    if treedef != param_treedef or treedef != path_treedef:
-        raise ValueError("Grouped MuonH requires updates, params, and paths to have matching tree structure")
+    treedef, output_leaves, chunks = _grouped_muonh_entry_chunks(
+        params,
+        updates,
+        expert_grouped_muonh_group_size=expert_grouped_muonh_group_size,
+        max_grouped_stack_size=max_grouped_stack_size,
+    )
+    if len(trace_groups) != len(chunks):
+        raise ValueError(f"Grouped MuonH trace has {len(trace_groups)} groups but params require {len(chunks)} groups")
 
-    output_leaves = [None] * len(update_leaves)
-    groups: dict[tuple[str, tuple[int, ...], str], list[tuple[int, object, object]]] = {}
-    for index, (update, param, path) in enumerate(zip(update_leaves, param_leaves, path_leaves, strict=True)):
-        if update is None:
-            output_leaves[index] = None
-            continue
-        if _is_grouped_muonh_expert_leaf(path, param):
-            key = (_grouped_muonh_leaf_name(path), tuple(param.shape), str(param.dtype))
-            groups.setdefault(key, []).append((index, update, param))
-            continue
-        output_leaves[index] = update
+    next_trace_groups = []
+    for trace_group, entry_chunk in zip(trace_groups, chunks, strict=True):
+        with jax.named_scope("grouped_muonh/stack_expert_updates"):
+            stacked_updates, target, valid_size = _stack_grouped_muonh_chunk(entry_chunk, value_index=1)
+            stacked_params, _, _ = _stack_grouped_muonh_chunk(entry_chunk, value_index=2)
 
-    for entries in groups.values():
-        chunk_size = _grouped_muonh_chunk_size(
-            entries[0][2],
-            expert_grouped_muonh_group_size,
-            max_grouped_stack_size,
-        )
-        for chunk_start in range(0, len(entries), chunk_size):
-            entry_chunk = entries[chunk_start : chunk_start + chunk_size]
-            valid_size = len(entry_chunk)
-            stack_axis_size = _grouped_muonh_stack_axis_size(entry_chunk[0][2])
-            padded_size = math.ceil(valid_size / stack_axis_size) * stack_axis_size
-
-            with jax.named_scope("grouped_muonh/stack_expert_updates"):
-                stacked_updates = jnp.stack([update for _, update, _ in entry_chunk], axis=0)
-                stacked_params = jnp.stack([param for _, _, param in entry_chunk], axis=0)
-                stacked_updates = _pad_grouped_muonh_stack(stacked_updates, padded_size)
-                stacked_params = _pad_grouped_muonh_stack(stacked_params, padded_size)
-
-            target = _grouped_4d_stack_target(
-                _grouped_muonh_shape_dtype_struct(stacked_updates.shape, stacked_updates.dtype, entry_chunk[0][2])
-            )
-            if target is not None:
-                with jax.named_scope("grouped_muonh/reshard_grouped_stack"):
-                    stacked_updates = _enter_grouped_muonh_ns_layout_slice_first_gather(
-                        stacked_updates,
-                        target,
-                        entry_chunk[0][2],
-                    )
-                    stacked_params = _enter_grouped_muonh_ns_layout_slice_first_gather(
-                        stacked_params,
-                        target,
-                        entry_chunk[0][2],
-                    )
-
-            with jax.named_scope("grouped_muonh/newton_schulz"):
-                stacked_updates, original_dtype = _cast_for_ns_compute(stacked_updates, ns_compute_dtype)
-                direction = _zeropower_via_newtonschulz_grouped_4d_sharded(
+        if target is not None:
+            with jax.named_scope("grouped_muonh/reshard_grouped_stack"):
+                stacked_updates = _enter_grouped_muonh_ns_layout_slice_first_gather(
                     stacked_updates,
-                    steps,
-                    muon_eps,
-                    coefficient_type,
                     target,
+                    entry_chunk[0][2],
                 )
-                direction = _restore_ns_compute_dtype(direction, original_dtype)
-                direction = _scale_grouped_muonh_direction(direction)
+                stacked_params = _enter_grouped_muonh_ns_layout_slice_first_gather(
+                    stacked_params,
+                    target,
+                    entry_chunk[0][2],
+                )
 
-            grouped_update = _grouped_muonh_hyperball_update(stacked_params, direction, learning_rate)
-            grouped_update = _restore_grouped_muonh_for_split_slice_first_gather(
-                grouped_update,
+        with jax.named_scope("grouped_muonh/update_grouped_momentum_buffer"):
+            next_trace_group = momentum * trace_group + stacked_updates
+        if nesterov:
+            with jax.named_scope("grouped_muonh/grouped_nesterov_update"):
+                direction_input = momentum * next_trace_group + stacked_updates
+        else:
+            direction_input = next_trace_group
+
+        with jax.named_scope("grouped_muonh/newton_schulz"):
+            direction_input, original_dtype = _cast_for_ns_compute(direction_input, ns_compute_dtype)
+            direction = _zeropower_via_newtonschulz_grouped_4d_sharded(
+                direction_input,
+                steps,
+                muon_eps,
+                coefficient_type,
                 target,
-                valid_size,
-                entry_chunk[0][2],
             )
-            update_parts = [
-                jnp.squeeze(update_part, axis=0) for update_part in jnp.split(grouped_update, valid_size, axis=0)
-            ]
+            direction = _restore_ns_compute_dtype(direction, original_dtype)
+            direction = _scale_grouped_muonh_direction(direction)
 
-            for (index, _, param), update_part in zip(entry_chunk, update_parts, strict=True):
-                output_leaves[index] = _restore_param_sharding(update_part, param)
+        grouped_update = _grouped_muonh_hyperball_update(stacked_params, direction, learning_rate)
+        grouped_update = _restore_grouped_muonh_for_split_slice_first_gather(
+            grouped_update,
+            target,
+            valid_size,
+            entry_chunk[0][2],
+        )
+        update_parts = [
+            jnp.squeeze(update_part, axis=0) for update_part in jnp.split(grouped_update, valid_size, axis=0)
+        ]
 
-    return jax.tree.unflatten(treedef, output_leaves)
+        for (index, _, param), update_part in zip(entry_chunk, update_parts, strict=True):
+            output_leaves[index] = _restore_param_sharding(update_part, param)
+        next_trace_groups.append(next_trace_group)
+
+    return jax.tree.unflatten(treedef, output_leaves), GroupedMuonHState(trace_groups=tuple(next_trace_groups))
 
 
 def scale_with_grouped_expert_muonh(
@@ -644,35 +713,26 @@ def scale_with_grouped_expert_muonh(
         raise ValueError(f"expert_grouped_muonh_group_size={expert_grouped_muonh_group_size} must be positive")
 
     def init_fn(params):
-        return optax.TraceState(trace=jax.tree.map(jnp.zeros_like, params))
+        return GroupedMuonHState(
+            trace_groups=_init_grouped_muonh_trace_groups(
+                params,
+                expert_grouped_muonh_group_size=expert_grouped_muonh_group_size,
+                max_grouped_stack_size=max_grouped_stack_size,
+            )
+        )
 
     def update_fn(updates, state, params=None):
         if params is None:
             raise ValueError("scale_with_grouped_expert_muonh requires params")
 
-        with jax.named_scope("grouped_muonh/update_momentum_buffer"):
-            trace = jax.tree.map(
-                lambda trace_leaf, update: None if update is None else momentum * trace_leaf + update,
-                state.trace,
-                updates,
-                is_leaf=lambda x: x is None,
-            )
-        if nesterov:
-            with jax.named_scope("grouped_muonh/nesterov_update"):
-                direction_inputs = jax.tree.map(
-                    lambda trace_leaf, update: None if update is None else momentum * trace_leaf + update,
-                    trace,
-                    updates,
-                    is_leaf=lambda x: x is None,
-                )
-        else:
-            direction_inputs = trace
-
         with jax.named_scope("grouped_muonh/transform_updates"):
-            muonh_updates = _grouped_expert_muonh_updates(
+            muonh_updates, next_state = _grouped_expert_muonh_updates_with_grouped_trace(
                 params,
-                direction_inputs,
+                updates,
+                state.trace_groups,
                 learning_rate,
+                momentum=momentum,
+                nesterov=nesterov,
                 steps=steps,
                 muon_eps=muon_eps,
                 coefficient_type=coefficient_type,
@@ -681,7 +741,7 @@ def scale_with_grouped_expert_muonh(
                 expert_grouped_muonh_group_size=expert_grouped_muonh_group_size,
             )
         assert_update_sharding_matches_params(muonh_updates, params, "Grouped MuonH updates")
-        return muonh_updates, optax.TraceState(trace=trace)
+        return muonh_updates, next_state
 
     return optax.GradientTransformation(init_fn, update_fn)
 
@@ -1005,6 +1065,7 @@ __all__ = [
     "VALID_EXPERT_3D_OPTIMIZERS",
     "VALID_MAY_OPTIMIZERS",
     "Expert3DOptimizer",
+    "GroupedMuonHState",
     "GrugMoeAdamHConfig",
     "GrugMoeMuonHConfig",
     "GrugMoeSgdConfig",

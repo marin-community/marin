@@ -211,6 +211,7 @@ MUON_BENCH_WARMUP="${MUON_BENCH_WARMUP:-1}"
 MUON_BENCH_ITERS="${MUON_BENCH_ITERS:-3}"
 MUON_BENCH_MODE="${MUON_BENCH_MODE:-both}"
 MUON_BENCH_COMPILE_ONLY="${MUON_BENCH_COMPILE_ONLY:-false}"
+MUON_BENCH_ENABLE_JAX_PROFILE="${MUON_BENCH_ENABLE_JAX_PROFILE:-false}"
 MUON_BENCH_DISABLE_ABSTRACT_MESH="${MUON_BENCH_DISABLE_ABSTRACT_MESH:-true}"
 MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES="${MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES:-$DEFAULT_ALLOW_BOUNDARY_COLLECTIVES}"
 MUON_BENCH_WORKER_CPU="${MUON_BENCH_WORKER_CPU:-$DEFAULT_WORKER_CPU}"
@@ -236,6 +237,10 @@ case "$TARGET" in
         NESTEROV_ARGS=()
         if [[ "$MUON_BENCH_NESTEROV" == "0" || "$MUON_BENCH_NESTEROV" == "false" ]]; then
             NESTEROV_ARGS=(--no-nesterov)
+        fi
+        PROFILE_ARGS=()
+        if [[ "$MUON_BENCH_ENABLE_JAX_PROFILE" == "1" || "$MUON_BENCH_ENABLE_JAX_PROFILE" == "true" ]]; then
+            PROFILE_ARGS=(--profile-dir "scratch/profiles/${RUN_ID}")
         fi
         XLA_FLAGS="$LOCAL_XLA_FLAGS" \
             uv run python experiments/grug/moe/muon_update_bench.py \
@@ -265,7 +270,8 @@ case "$TARGET" in
                 "${DISABLE_ABSTRACT_MESH_ARGS[@]}" \
                 "${ALLOW_BOUNDARY_COLLECTIVES_ARGS[@]}" \
                 "${COMPILE_ONLY_ARGS[@]}" \
-                "${NESTEROV_ARGS[@]}"
+                "${NESTEROV_ARGS[@]}" \
+                "${PROFILE_ARGS[@]}"
         echo "Wrote ${OUTPUT}"
         ;;
     iris)
@@ -295,11 +301,16 @@ case "$TARGET" in
         export MUON_BENCH_ITERS
         export MUON_BENCH_MODE
         export MUON_BENCH_COMPILE_ONLY
+        export MUON_BENCH_ENABLE_JAX_PROFILE
         export MUON_BENCH_DISABLE_ABSTRACT_MESH
         export MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES
         export MUON_BENCH_GPU_REPLICAS
         export MUON_BENCH_WORKER_CPU
         export MUON_BENCH_WORKER_RAM
+        export XLA_FLAGS
+        export XLA_PYTHON_CLIENT_MEM_FRACTION
+        export XLA_PYTHON_CLIENT_ALLOCATOR
+        export TF_GPU_ALLOCATOR
         exec bash scratch/launch_muon_update_bench_executor_n1.sh
         ;;
     *)

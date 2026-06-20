@@ -24,6 +24,14 @@ export KUBECONFIG="$KUBECONFIG_PATH"
 
 cd "$REPO_ROOT"
 
+OPTIONAL_ENV_ARGS=()
+if [ -n "${XLA_PYTHON_CLIENT_ALLOCATOR:-}" ]; then
+    OPTIONAL_ENV_ARGS+=(-e XLA_PYTHON_CLIENT_ALLOCATOR "$XLA_PYTHON_CLIENT_ALLOCATOR")
+fi
+if [ -n "${TF_GPU_ALLOCATOR:-}" ]; then
+    OPTIONAL_ENV_ARGS+=(-e TF_GPU_ALLOCATOR "$TF_GPU_ALLOCATOR")
+fi
+
 exec uv run --package marin-iris --extra controller iris --cluster="$CLUSTER" \
     job run --no-wait \
     --memory=2G --disk=4G --cpu=1 --extra=cpu \
@@ -55,9 +63,13 @@ exec uv run --package marin-iris --extra controller iris --cluster="$CLUSTER" \
     -e MUON_BENCH_MODE "${MUON_BENCH_MODE:-both}" \
     -e MUON_BENCH_COMPILE_ONLY "${MUON_BENCH_COMPILE_ONLY:-false}" \
     -e MUON_BENCH_WRITE_COMPILED_HLO "${MUON_BENCH_WRITE_COMPILED_HLO:-false}" \
+    -e MUON_BENCH_ENABLE_JAX_PROFILE "${MUON_BENCH_ENABLE_JAX_PROFILE:-false}" \
     -e MUON_BENCH_DISABLE_ABSTRACT_MESH "${MUON_BENCH_DISABLE_ABSTRACT_MESH:-true}" \
     -e MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES "${MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES:-false}" \
     -e MUON_BENCH_GPU_REPLICAS "${MUON_BENCH_GPU_REPLICAS:-1}" \
     -e MUON_BENCH_WORKER_CPU "${MUON_BENCH_WORKER_CPU:-8}" \
+    -e MUON_BENCH_WORKER_RAM "${MUON_BENCH_WORKER_RAM:-256g}" \
+    -e XLA_FLAGS "${XLA_FLAGS:-}" \
     -e XLA_PYTHON_CLIENT_MEM_FRACTION "${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.90}" \
+    "${OPTIONAL_ENV_ARGS[@]}" \
     -- python -m experiments.grug.moe.launch_cw_muon_update_bench
