@@ -3092,3 +3092,35 @@ Post-compile steps were stable around 0.65-0.66s:
     gap so the next integrated packed-bank-compute harness run can be judged
     against the intended boundary contract instead of being conflated with
     `packed_entry`.
+
+### 2026-06-20 12:25 PDT - R2 packed-bank-compute reporting run launched
+- Hypothesis:
+  - With `expert_grouped_muonh_packed_bank_compute` now present in
+    `BenchConfig`, a May206-style integrated harness rerun should produce
+    summary rows that explicitly identify `packed_bank_compute` mode and
+    report the intended per-bank boundary phase contract.
+- Command:
+  - Launched through `scratch/muon_update_bench_fast_loop.sh iris
+    fullprod-r4e8-l26-h3` with env overrides:
+    `MUON_BENCH_GPU_REPLICAS=2`, `MUON_BENCH_REPLICA_AXIS=2`,
+    `MUON_BENCH_DATA_AXIS=1`, `MUON_BENCH_EXPERT_AXIS=8`,
+    `MUON_BENCH_MODEL_AXIS=1`, `MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn`,
+    `MUON_BENCH_NS4D_GROUP_SIZE=2`,
+    `MUON_BENCH_KINDS=real_expert_fsdp_grouped_muonh_optimizer_update,real_expert_fsdp_grouped_muonh_optimizer_apply`,
+    `MUON_BENCH_SWEEP_BACKEND_STEPS=3`,
+    `MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512`,
+    `MUON_BENCH_EXPERT_GROUPED_MUONH_PACKED_ENTRY=true`,
+    `MUON_BENCH_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE=true`,
+    `MUON_BENCH_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES=false`,
+    `MUON_BENCH_TRACKER=wandb`, and TTL prefix.
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-192454`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-192454/grug-train-MUON-BENCH-D2560-L26-R2D1E8-G2-H3-PACKEDBANKCOMPUTE-REPORT-N2-cw-20260620-192451`.
+  - Expected W&B:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R2D1E8-G2-H3-PACKEDBANKCOMPUTE-REPORT-N2-cw-20260620-192451`.
+  - Local state file:
+    `scratch/20260620-1924_muon_packed_bank_compute_report_r2_state.json`.
+- Current observation:
+  - Parent and child were running; child had `task_state_counts={"running": 2}`.
+  - Dalton (`019ee67f-d8ba-7101-a21d-e2953faae78e`) is babysitting the run.
