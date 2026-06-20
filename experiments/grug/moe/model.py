@@ -53,6 +53,8 @@ _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
+GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
+GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -238,6 +240,7 @@ class GrugModelConfig:
             "initializer_range": self.initializer_std,
             "qk_mult": self.qk_mult,
             "grugmoe_attention_mode": "production",
+            GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY: GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
             "rope_theta": self.rope.theta,
             "tie_word_embeddings": False,
         }
@@ -864,6 +867,8 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
 
 __all__ = [
     "GRUG_MOE_ARCHITECTURE",
+    "GRUG_MOE_ARTIFACT_SCHEMA_VERSION",
+    "GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY",
     "GRUG_MOE_MODEL_TYPE",
     "Block",
     "CausalSelfAttention",
