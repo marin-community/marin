@@ -83,32 +83,36 @@ class DirectTransport:
         return Endpoint(self._url)
 
 
-class SshTunnel:
+class _TunnelTransport:
+    """Backs a transport with a :func:`rigging.tunnel.open_tunnel` child process.
+
+    The tunnel kind is decided by the target type ``open_tunnel`` dispatches on,
+    so the only thing the concrete transports add is a typed constructor.
+    """
+
+    def __init__(self, target, *, spawn=None):
+        self._target = target
+        self._spawn = spawn
+
+    def open(self, stack: ExitStack, timeout: float) -> Endpoint:
+        url = stack.enter_context(
+            open_tunnel(self._target, timeout=timeout, **({"spawn": self._spawn} if self._spawn else {}))
+        )
+        return Endpoint(url)
+
+
+class SshTunnel(_TunnelTransport):
     """Opens an SSH ``-L`` port forward via :func:`rigging.tunnel.open_tunnel`."""
 
     def __init__(self, target: GcpSshForwardTarget, *, spawn=None):
-        self._target = target
-        self._spawn = spawn
-
-    def open(self, stack: ExitStack, timeout: float) -> Endpoint:
-        url = stack.enter_context(
-            open_tunnel(self._target, timeout=timeout, **({"spawn": self._spawn} if self._spawn else {}))
-        )
-        return Endpoint(url)
+        super().__init__(target, spawn=spawn)
 
 
-class K8sPortForward:
+class K8sPortForward(_TunnelTransport):
     """Opens a ``kubectl port-forward`` via :func:`rigging.tunnel.open_tunnel`."""
 
     def __init__(self, target: K8sPortForwardTarget, *, spawn=None):
-        self._target = target
-        self._spawn = spawn
-
-    def open(self, stack: ExitStack, timeout: float) -> Endpoint:
-        url = stack.enter_context(
-            open_tunnel(self._target, timeout=timeout, **({"spawn": self._spawn} if self._spawn else {}))
-        )
-        return Endpoint(url)
+        super().__init__(target, spawn=spawn)
 
 
 class Auth(Protocol):
@@ -293,6 +297,19 @@ def _register_finalizer(client: object, stack: ExitStack) -> None:
         raise TypeError(f"connect() requires a weak-referenceable client; {type(client).__name__} is not") from exc
 
 
+def _resolve_transport(transport: Transport | str) -> tuple[Transport, Auth, str]:
+    """Normalize a Transport-or-URL into ``(transport, scheme-implied auth, path)``.
+
+    The single place the ``str`` convenience surface is turned into a concrete
+    transport: a URL contributes its scheme-implied auth and path, a Transport
+    object contributes neither.
+    """
+    if isinstance(transport, str):
+        parsed = parse_transport(transport)
+        return parsed.transport, parsed.auth, parsed.path
+    return transport, NoAuth(), ""
+
+
 def connect(
     transport: Transport | str,
     factory: Callable[[Endpoint], T],
@@ -319,14 +336,10 @@ def connect(
             the effective path is malformed.
         TypeError: if the factory returns a client that cannot be weak-referenced.
     """
-    if isinstance(transport, str):
-        parsed = parse_transport(transport)
-        tp, scheme_auth, url_path = parsed.transport, parsed.auth, parsed.path
-        if path and url_path and path != url_path:
-            raise ValueError(f"path {path!r} conflicts with the URL path {url_path!r}")
-        effective_path = _normalize_path(path or url_path)
-    else:
-        tp, scheme_auth, effective_path = transport, NoAuth(), _normalize_path(path)
+    tp, scheme_auth, url_path = _resolve_transport(transport)
+    if path and url_path and path != url_path:
+        raise ValueError(f"path {path!r} conflicts with the URL path {url_path!r}")
+    effective_path = _normalize_path(path or url_path)
 
     final_auth = ChainedAuth(scheme_auth, auth)
 
@@ -368,9 +381,7 @@ def closing_connection(
         disconnect(client)
 
 
-def _transport_summary(transport: Transport | str) -> str:
-    if isinstance(transport, str):
-        transport = parse_transport(transport).transport
+def _transport_summary(transport: Transport) -> str:
     if isinstance(transport, DirectTransport):
         return f"DirectTransport(url={transport._url})"
     if isinstance(transport, SshTunnel):
@@ -389,16 +400,7 @@ def explain(transport: Transport | str, auth: Auth = NoAuth()) -> str:
     names, and the base URL, so "why SSH / why IAP / why no JWT" is answerable
     without leaking any token value.
     """
-    if isinstance(transport, str):
-        parsed = parse_transport(transport)
-        scheme_auth: Auth = parsed.auth
-        path = parsed.path
-        transport_obj: Transport = parsed.transport
-    else:
-        scheme_auth = NoAuth()
-        path = ""
-        transport_obj = transport
-
+    transport_obj, scheme_auth, path = _resolve_transport(transport)
     final_auth = ChainedAuth(scheme_auth, auth)
     injector_names = ", ".join(type(i).__name__ for i in final_auth.interceptors()) or "none"
 
