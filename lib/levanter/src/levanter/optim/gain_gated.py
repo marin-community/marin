@@ -48,7 +48,7 @@ from optax import tree_utils as otu
 import haliax
 
 from levanter.optim.config import OptimizerConfig
-from levanter.optim.util import label_linear_like_module, map_flattened_linear_layers
+from levanter.optim.util import label_linear_like_module, map_flattened_linear_layers, zeropower_via_newtonschulz5
 from levanter.utils.jax_utils import leaf_key_paths
 
 
@@ -160,12 +160,19 @@ def _gain_gated_matrix(array, *, gain, rho, normalize_fro, psi_eps, eps, use_kim
     x = array.astype(jnp.float32)
     x = x / (jnp.linalg.norm(x) + eps)
 
-    # full_matrices=False → p:(m,k), s:(k,), qt:(k,n) with k = min(m, n)
-    p, s, qt = jnp.linalg.svd(x, full_matrices=False)
-    # ψ_ε(σ) = √(σ²+ε²) − ε  (= σ when psi_eps=0, since σ ≥ 0)
-    s_eff = jnp.sqrt(s * s + psi_eps * psi_eps) - psi_eps
+    # Reconstruct U = P diag(a) Qᵀ WITHOUT jnp.linalg.svd. The orthogonal polar factor
+    # P Qᵀ comes from Newton-Schulz (robust on TPU, same primitive as Muon); the singular
+    # values + right vectors come from eigh of the Gram (XᵀX = Q diag(σ²) Qᵀ, stable).
+    # Then U = (P Qᵀ)·(Q diag(a) Qᵀ) = P diag(a) Qᵀ.  This avoids the iterative svd path,
+    # whose TPU implementation deterministically hangs on some inputs (the ε≥0.03 step
+    # buffers). Gating is unchanged: a = min(ρ, √(2 g ψ_ε(σ))), ψ_ε(σ)=√(σ²+ε²)−ε.
+    ortho = zeropower_via_newtonschulz5(x, steps=5, eps=eps, coefficient_type="quintic")
+    gram = x.T @ x  # (n, n) symmetric PSD
+    w, q = jnp.linalg.eigh(gram)  # w = σ² (ascending), q = right singular vectors
+    sigma = jnp.sqrt(jnp.maximum(w, 0.0))
+    s_eff = jnp.maximum(0.0, jnp.sqrt(sigma * sigma + psi_eps * psi_eps) - psi_eps)
     a = jnp.minimum(rho, jnp.sqrt(2.0 * gain * s_eff))
-    u = (p * a[None, :]) @ qt
+    u = ortho @ ((q * a[None, :]) @ q.T)
 
     if normalize_fro:
         k = min(x.shape[0], x.shape[1])
