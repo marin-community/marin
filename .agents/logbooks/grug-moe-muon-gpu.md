@@ -1353,3 +1353,18 @@ Post-compile steps were stable around 0.65-0.66s:
 - Next action: Write a narrow design artifact for the two viable paths:
   1. FSDP-reference streaming apply: grouped chunks restore to FSDP and are consumed immediately, proving or falsifying "ordinary apply without full update-tree materialization".
   2. Layer-wise/grouped-bank production path: grouped expert params/trace are optimizer-owned, model-facing code consumes grouped banks or synchronizes them through an explicit all-gather/all-gatherv-like boundary.
+
+### 2026-06-19 21:10 PDT - direct restore-and-apply harness
+- Hypothesis: A DeepSpeed-style boundary might avoid materializing a full FSDP-shaped update tree if grouped MuonH updates are restored to each FSDP leaf and consumed immediately by leaf-level `optax.apply_updates`.
+- Code snapshot:
+  - Added benchmark kind `expert_fsdp_grouped_updates_muonh_direct_apply` in `experiments/grug/moe/muon_update_bench.py`.
+  - The new path computes grouped NS/hyperball updates, restores each split update to its matching FSDP param sharding, and applies it immediately instead of returning `(next_params, next_updates)`.
+  - Added focused abstract-mesh coverage in `experiments/grug/moe/test_muon_update_bench.py`.
+- Local validation:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_updates_muonh_restores_ordinary_expert_updates_before_apply experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_updates_muonh_direct_apply_restores_slices_before_apply experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_updates_muonh_explicit_restore_then_apply_returns_fsdp_params experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_updates_muonh_can_return_updates_without_apply -q` passed.
+  - Tiny forced-host lower/run smoke used `R2D2E2M1`, L4, G4, H1, bf16:
+    - Lowered StableHLO for direct apply had `AG/A2A/AR/RS = 0/0/0/0` and 6 two-batch-axis dot-generals.
+    - Runtime-compiled HLO for direct apply had `AG/A2A/AR/RS = 0/2/0/0`, median `0.0340s`.
+    - Runtime-compiled HLO for existing restore-then-apply had `AG/A2A/AR/RS = 0/2/0/0`, median `0.0313s`.
+- Interpretation: The harness is valid and gives us a direct measurement knob for "consume grouped updates near the FSDP leaf", but the tiny compiled evidence does not show a collective-count win. XLA still turns the grouped-to-FSDP restore boundary into two all-to-alls, same as the existing restore-then-apply path. Do not treat this as a proven throughput improvement until a GPU-sized compile/run contradicts the local result.
+- Next action: Prefer this as a diagnostic benchmark over an immediate expensive CoreWeave launch. If we launch it, compare against `expert_fsdp_grouped_updates_muonh_apply` and `expert_fsdp_grouped_persistent_muonh_apply` in the same job and require compiled-HLO collective counts plus timing, not just lowered HLO.

@@ -28,3 +28,30 @@ hyperball helper after its input sharding match and after the hyperball update.
 
 - [ ] If a run trips one of these assertions, add a minimal reshard at the
       exact failing boundary rather than adding broader resharding.
+
+## Hypothesis 2
+
+Grouped MuonH updates can be restored to each FSDP leaf and immediately consumed
+by `optax.apply_updates`, avoiding a simultaneously live FSDP-shaped update tree
+and reducing grouped-to-FSDP boundary collectives.
+
+## Changes made
+
+Added `expert_fsdp_grouped_updates_muonh_direct_apply` to
+`experiments/grug/moe/muon_update_bench.py`. The benchmark computes grouped
+MuonH in the NS-friendly layout, restores each split update to the corresponding
+FSDP param sharding, and applies it directly. Added focused lowering coverage in
+`experiments/grug/moe/test_muon_update_bench.py`.
+
+## Results
+
+The focused grouped-MuonH tests passed. A tiny forced-host runtime compile for
+L4/G4/R2D2E2M1 showed direct apply and the existing restore-then-apply path both
+compiled to two all-to-alls. Direct apply was slightly slower on that tiny host
+case, so this harness is useful evidence but not yet a performance win.
+
+## Future work
+
+- [ ] If testing on CoreWeave, compare direct apply, restore-then-apply, and
+      persistent grouped apply in one job and require compiled HLO collective
+      counts plus timing before declaring the boundary improved.
