@@ -1,10 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""MoE grug variant model.
+"""MoE grug variant model with simplified GQA attention.
 
-Architecture: QB-routed MoE with GatedNorm, XSA, sigmoid combine weights.
-No load-balancing loss; router z-loss only. All layers are MoE (no dense layers).
+Architecture: QB-routed MoE with GatedNorm, GQA attention, sigmoid combine
+weights. No load-balancing loss; router z-loss only. All layers are MoE (no
+dense layers). Sliding-window + short/long layer split preserved (every 4th
+and last block runs the full-causal mask; short blocks use ``sliding_window``).
+
+Simplifications vs the prior CausalSelfAttention:
+  - Removed: attention gate, XSA (exclusive self-attention v-parallel subtract),
+    PKO (partial key offset / doc-start zero). Each layer's attention is just
+    plain MHA/GQA with half-RoPE.
 """
 
 import dataclasses
@@ -30,7 +37,6 @@ from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
     RotaryConfig,
-    align_kv_heads,
     apply_rotary_embedding,
     attention,
 )
@@ -83,7 +89,7 @@ def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
 
-    Architecture choices (GatedNorm, XSA, QB routing) are hardcoded.
+    Architecture choices (GatedNorm, GQA, QB routing) are hardcoded.
     Only shape/size knobs live here. All layers are MoE.
     """
 
@@ -147,11 +153,12 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
 
 
 class CausalSelfAttention(eqx.Module):
-    w_q: Float[Array, "D NH"]
-    w_k: Float[Array, "D MH"]
-    w_v: Float[Array, "D MH"]
-    w_o: Float[Array, "NH D"]
-    attn_gate: Float[Array, "D N"]
+    """Plain GQA attention with half-RoPE. No attention gate, no XSA, no PKO."""
+
+    w_q: jax.Array  # (D, NH * HD)
+    w_k: jax.Array  # (D, KV * HD)
+    w_v: jax.Array  # (D, KV * HD)
+    w_o: jax.Array  # (NH * HD, D)
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -163,7 +170,6 @@ class CausalSelfAttention(eqx.Module):
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
-            attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             cfg=cfg,
         )
 
@@ -172,9 +178,9 @@ class CausalSelfAttention(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-        use_pko: bool = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
+        half = head_dim // 2
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
@@ -182,38 +188,10 @@ class CausalSelfAttention(eqx.Module):
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
 
-        # Shift the second half of K's head_dim back by one position so the
-        # query at position i sees K[i] on head_dim[:half] but K[i-1] on
-        # head_dim[half:]. Zero the shifted half at document starts so the
-        # cross-half look-back does not leak across docs. Runs before the
-        # rms_norm on Q/K below.
-        if use_pko:
-            half = head_dim // 2
-            k_stationary = k[..., half:]
-            k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
-            segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-            if segment_ids is None:
-                # No segment info (raw-mask or unsegmented eval path): only position 0 is a doc start.
-                is_doc_start_seq = jnp.zeros((seq_len,), dtype=bool).at[0].set(True)
-                is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
-            else:
-                q_seg = segment_ids[0]
-                if q_seg.ndim == 1:
-                    is_doc_start_seq = jnp.concatenate([jnp.ones((1,), dtype=bool), q_seg[1:] != q_seg[:-1]])
-                    is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
-                else:
-                    is_doc_start = jnp.concatenate(
-                        [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
-                        axis=1,
-                    )
-            k_shifted = jnp.where(is_doc_start[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
-            k = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
-
         q = rms_norm(q)
         k = rms_norm(k)
         # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim.
         # Second half is rope-free on every layer.
-        half = head_dim // 2
         q_rot, k_rot = apply_rotary_embedding(
             q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
         )
@@ -222,19 +200,9 @@ class CausalSelfAttention(eqx.Module):
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
-        # propagator with ``model`` annotated on ``head_dim`` rather than
-        # ``num_q_heads``; force the canonical TP layout so it matches ``aligned_v``.
+        # propagator with ``model`` annotated on ``head_dim`` rather than ``num_q_heads``;
+        # force the canonical TP layout.
         attn_out = reshard(attn_out, P(_BATCH_AXES, None, "model", None))
-        aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        aligned_v = reshard(aligned_v, P(_BATCH_AXES, None, "model", None))
-        # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
-        # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
-        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
-        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
-        attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
@@ -535,10 +503,9 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-        use_pko: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask, use_pko=use_pko)
+        x = x + self.attn(attn_in, mask)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -606,8 +573,7 @@ class Transformer(eqx.Module):
             is_last = i == num_blocks - 1
             is_long = i % 4 == 3 or is_last
             layer_mask = long_mask if is_long else short_mask
-            use_pko = is_long
-            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask, use_pko)
+            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
