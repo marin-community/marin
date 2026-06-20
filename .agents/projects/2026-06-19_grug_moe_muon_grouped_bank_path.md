@@ -58,9 +58,11 @@ The two latest H100 compile-only checks tighten this conclusion:
   diagnostic path unless a runtime profile shows a separate overlap/memory
   benefit.
 - A grouped expert-bank consumer avoids the grouped-to-FSDP restore entirely in
-  the synthetic gate. On 2 H100 nodes it compiled with zero boundary
-  collectives, which is the first evidence that the persistent grouped-bank
-  representation can survive both MuonH and an expert-like consumer.
+  the synthetic gate. On 2 H100 nodes, the strict
+  `--require-no-boundary-collectives` gate compiled with zero boundary
+  collectives, which is the first authoritative evidence that the persistent
+  grouped-bank representation can survive both MuonH and an expert-like
+  consumer.
 
 The harness now reports boundary byte estimates for these rows. For the
 R2/D2/E8 May shape, the FSDP output shard is already 2x the grouped input shard
@@ -127,8 +129,9 @@ banks with grouped
 expert MLP matmuls without restoring per-layer FSDP leaves.
 
 The synthetic `expert_grouped_muonh_bank_consumer` compile-only gate has now
-passed on 2 H100 nodes for R2/E8/L26 with zero compiled AG/A2A/AR/RS/CP. The
-remaining integration work is to make the real `MoEExpertMlp`/`MoEMLP` path
+passed the strict H100 gate on 2 nodes for R2/E8/L26 with
+`boundary_collectives_required_absent=true` and zero compiled AG/A2A/AR/RS/CP.
+The remaining integration work is to make the real `MoEExpertMlp`/`MoEMLP` path
 consume this representation, or to add an explicit coarse transport if we keep
 ordinary FSDP leaves.
 

@@ -1494,9 +1494,15 @@ Post-compile steps were stable around 0.65-0.66s:
   - KellerJordan/modded-nanogpt uses architecture-specific parameter banks plus reduce-scatter/all-gather around batched NS. This is a useful grouping pattern, but it assumes the model layout was designed for that bank representation.
   - NeMo gives good batched-NS/MuonHyperball API shape and TP variants, but not a direct FSDP ownership answer.
   - The minimal FSDP2 Muon gathers each DTensor param to an owner rank, runs NS, and scatters shards back. This avoids full replication but is too per-parameter to copy directly into XLA GPU.
+- Follow-up source-level survey:
+  - Megatron `LayerWiseDistributedOptimizer` uses a `FullParamLayout` and layer-wise ownership so optimizer-managed 2D parameters are assigned whole to DP/expert-DP ranks, then synchronized through DDP parameter buffers or a legacy variable-size all-gather path. This reinforces the idea that optimizer ownership can drive a different buffer layout than ordinary parameter traversal.
+  - Megatron `TensorParallelMuon`/Emerging-Optimizers exposes the tradeoff between a duplicated mode that all-gathers shards to full matrices and a distributed mode that keeps shards but pays per-Newton-Schulz-step Gram all-reduces. This is relevant only if we decide to shard within matrices; for the current expert-bank path, whole-matrix/batched NS remains cleaner.
+  - Microsoft Dion's FSDP2/DTensor Muon is the best transport analogue: it groups parameters by `(shape, placements, dtype)`, builds mega-batch orthogonalization tasks, all-to-alls shards to assemble whole matrices, runs batched NS, then all-to-alls back. Axolotl's `DistMuon` carries the same idea into a training stack with simpler 1D FSDP2 assumptions.
+  - KellerJordan/Muon and modded-nanogpt intentionally use bf16 NS. The modded-nanogpt bank representation is especially relevant because the model-visible parameterization is already banked; it avoids the optimizer-tree restore problem by construction.
 - Design implications:
   - Steal Megatron's invariant: Muon ownership is a separate representation from model consumption; only Muon-suitable matrices take the special path.
   - Steal Dion/NanoGPT's grouping rule: group only exact-compatible shape/dtype/sharding/hyperparameter sets and batch NS over those groups.
+  - Treat the sync boundary as bulk grouped transport, not independent optax leaves. The source-level survey's highest-confidence recommendation is to copy Megatron/Dion's grouped sync boundary, not the original per-leaf Muon transport.
   - Avoid per-leaf gather/scatter/all-to-all even if PyTorch/FSDP2 examples tolerate it. Our H100 compile checks show XLA GPU will expose or reintroduce those boundaries.
   - Do not return from grouped 4D layout to per-layer leaves through an all-gathered group axis before the hot apply boundary.
 - Next action: Frame the next implementation as either:
@@ -1529,3 +1535,20 @@ Post-compile steps were stable around 0.65-0.66s:
       - `XLA_FLAGS=--xla_force_host_platform_device_count=8 uv run python experiments/grug/moe/muon_update_bench.py --layers 4 --ns4d-group-size 4 --ns4d-group-axis replica_dcn,data --hidden-dim 16 --intermediate-dim 8 --num-experts 8 --backend-steps 1 --replica-axis 2 --data-axis 2 --expert-axis 2 --model-axis 1 --max-grouped-stack-size 8 --grouped-expert-consumer-tokens-per-expert 3 --bench-kinds expert_grouped_muonh_bank_consumer --mode both --warmup 0 --iters 0 --compile-only --disable-abstract-mesh --require-no-boundary-collectives --output /tmp/muon_grouped_muonh_bank_consumer_strict.json`
 - Interpretation: This is the first H100 evidence that a persistent grouped expert-bank representation can survive both MuonH and an expert-like consumer without compiled boundary collectives. It does not prove the ordinary FSDP-master/`optax.apply_updates` bridge; it argues for porting the real expert MLP consumer to grouped banks or adding an explicit coarse transport boundary.
 - Next action: Treat the grouped bank consumer as the next production path. The real integration target is no longer another per-leaf grouped-to-FSDP restore variant; it is either a grouped expert-bank model consumer or a custom coarse transport that behaves like the grouped bank consumer rather than like per-leaf FSDP restore.
+
+### 2026-06-19 22:20 PDT - strict H100 grouped-bank gate after executor fix
+- Hypothesis: After forwarding `MUON_BENCH_REQUIRE_NO_BOUNDARY_COLLECTIVES` through the outer Iris executor wrapper, the same H100 grouped-bank consumer gate should pass with the strict flag visible in launch metadata and summary rows.
+- Command:
+  - `RUN_ID="MUON-BENCH-D2560-L26-R2E8-MUONHBANKCONSUMER-STRICT-G8-N2-cw-$(date -u +%Y%m%d-%H%M%S)" MARIN_PREFIX=s3://marin-na/tmp/ttl=7d KUBECONFIG=$HOME/.kube/coreweave-iris-gpu MUON_BENCH_GPU_REPLICAS=2 MUON_BENCH_LAYERS=26 MUON_BENCH_REPLICA_AXIS=2 MUON_BENCH_DATA_AXIS=1 MUON_BENCH_EXPERT_AXIS=8 MUON_BENCH_MODEL_AXIS=1 MUON_BENCH_NS4D_GROUP_SIZE=8 MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn,data MUON_BENCH_KINDS=expert_grouped_muonh_bank_consumer MUON_BENCH_SWEEP_BACKEND_STEPS=3 MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 MUON_BENCH_DTYPE=bf16 MUON_BENCH_NS_COMPUTE_DTYPE=bf16 MUON_BENCH_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT=1 MUON_BENCH_WARMUP=0 MUON_BENCH_ITERS=0 MUON_BENCH_MODE=both MUON_BENCH_COMPILE_ONLY=true MUON_BENCH_TRACKER=json MUON_BENCH_ENABLE_JAX_PROFILE=false MUON_BENCH_REQUIRE_NO_BOUNDARY_COLLECTIVES=true MUON_BENCH_DISABLE_ABSTRACT_MESH=true MUON_BENCH_WRITE_COMPILED_HLO=true MUON_BENCH_WORKER_CPU=8 MUON_BENCH_WORKER_RAM=256g XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 bash scratch/muon_update_bench_fast_loop.sh iris fullprod-r4e8-l26-h3`
+- Result:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-051750`.
+  - Child Iris job: `/dlwh/iris-run-job-20260620-051750/grug-train-MUON-BENCH-D2560-L26-R2E8-MUONHBANKCONSUMER-STRICT-G8-N2-cw-20260620-051748`.
+  - Output prefix: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2E8-MUONHBANKCONSUMER-STRICT-G8-N2-cw-20260620-051748-d84bd9`.
+  - Iris parent succeeded with exit 0, failures 0, duration about 2m08s.
+  - Launch metadata on both tasks reported `require_no_boundary_collectives=true`.
+  - Summary rows on both tasks reported `boundary_collectives_required_absent=true`.
+  - Lowered and compiled HLO both had `AG/A2A/AR/RS/CP = 0/0/0/0/0`.
+  - Compiled HLO had `custom_call = 360` and `gpu_gemm_custom_call = 175`.
+  - Compile time was about `0.62s` on task 0 and `0.49s` on task 1.
+- Interpretation: This closes the previous caveat. The strict no-boundary-collectives gate passes on H100 for the synthetic grouped MuonH bank-consumer path. This is now the authoritative evidence for the grouped-bank direction.
+- Next action: Port the grouped expert-bank consumer into the real model path, preserving grouped bank sharding through expert MLP consumption. Keep using this strict gate for every production-candidate bridge.
