@@ -104,6 +104,13 @@ class GrugModelConfig:
     head_dim: int | None = None
     kv_compression_dim: int | None = None
     """MLA KV-latent dim ``d_c``. None defaults to ``hidden_dim // 4``."""
+    mla_norm_compressed: bool = False
+    """When True, apply RMSNorm to the compressed KV latent ``c_kv`` (DeepSeek-V2
+    recipe) and skip the post-up-projection norm on ``k_nr``. When False, apply
+    RMSNorm to ``k_nr`` after up-projection (legacy code path). The compressed
+    placement preserves the matrix-absorption inference optimization that lets
+    MLA cache only ``c_kv + k_r`` at decode -- ``rms_norm(k_nr)`` would force a
+    per-token reconstruction step at decode."""
     max_seq_len: int = 4096
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
@@ -215,6 +222,10 @@ class CausalSelfAttention(eqx.Module):
 
         # Compressed KV latent.
         c_kv = jnp.einsum("bsh,hc->bsc", x, self.w_dkv)
+        # DeepSeek-V2 places RMSNorm on c_kv (the cached tensor) so that decode
+        # absorption (q_nr @ w_uk_nr.T into a fixed per-head matrix) still works.
+        if self.cfg.mla_norm_compressed:
+            c_kv = rms_norm(c_kv)
 
         # K no-rope half (per head) up-projected from c_kv.
         k_nr = rearrange(
@@ -238,7 +249,12 @@ class CausalSelfAttention(eqx.Module):
         k_r = reshard(k_r, P(_BATCH_AXES, None, "model", None))
 
         q = rms_norm(q)
-        k_nr = rms_norm(k_nr)
+        # k_nr is normalized post-up-projection in the legacy path (default).
+        # When ``mla_norm_compressed=True`` (DeepSeek recipe), the norm already
+        # ran on c_kv above, and we skip the per-head norm here so the matrix-
+        # absorption inference optimization stays intact.
+        if not self.cfg.mla_norm_compressed:
+            k_nr = rms_norm(k_nr)
         k_r = rms_norm(k_r)
 
         # Half-RoPE on the rope-bearing half of Q and on the shared k_r.
