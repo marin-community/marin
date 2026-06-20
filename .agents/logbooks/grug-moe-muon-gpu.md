@@ -1444,3 +1444,61 @@ Post-compile steps were stable around 0.65-0.66s:
 - Next action: Stop spending time on JAX-level custom-partition wrappers for this boundary. The next implementation should either:
   1. build an explicit coarse transport that batches same-layout matrices and performs the grouped-to-FSDP routing directly, or
   2. shift production toward grouped expert-bank ownership/model consumption and make the sync boundary explicit.
+
+### 2026-06-19 22:00 PDT - H100 direct restore-and-apply compile comparison
+- Hypothesis: Consuming grouped MuonH updates immediately at each FSDP leaf might avoid the full update-tree materialization and reduce the compiled grouped-to-FSDP boundary collectives versus restore-then-ordinary-apply.
+- Command:
+  - `RUN_ID="MUON-BENCH-D2560-L26-R2E8-DIRECTAPPLY-COMPILE-G8-N2-cw-$(date -u +%Y%m%d-%H%M%S)" MARIN_PREFIX=s3://marin-na/tmp/ttl=7d KUBECONFIG=$HOME/.kube/coreweave-iris-gpu MUON_BENCH_GPU_REPLICAS=2 MUON_BENCH_LAYERS=26 MUON_BENCH_REPLICA_AXIS=2 MUON_BENCH_DATA_AXIS=1 MUON_BENCH_EXPERT_AXIS=8 MUON_BENCH_MODEL_AXIS=1 MUON_BENCH_NS4D_GROUP_SIZE=8 MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn,data MUON_BENCH_KINDS=expert_fsdp_grouped_updates_muonh_apply,expert_fsdp_grouped_updates_muonh_direct_apply,expert_fsdp_grouped_persistent_muonh_apply MUON_BENCH_SWEEP_BACKEND_STEPS=3 MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 MUON_BENCH_DTYPE=bf16 MUON_BENCH_NS_COMPUTE_DTYPE=bf16 MUON_BENCH_WARMUP=0 MUON_BENCH_ITERS=0 MUON_BENCH_MODE=both MUON_BENCH_COMPILE_ONLY=true MUON_BENCH_TRACKER=json MUON_BENCH_ENABLE_JAX_PROFILE=false MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES=true MUON_BENCH_DISABLE_ABSTRACT_MESH=true MUON_BENCH_WRITE_COMPILED_HLO=true MUON_BENCH_WORKER_CPU=8 MUON_BENCH_WORKER_RAM=256g XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 bash scratch/muon_update_bench_fast_loop.sh iris fullprod-r4e8-l26-h3`
+- Config:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-045028`.
+  - Child Iris job: `/dlwh/iris-run-job-20260620-045028/grug-train-MUON-BENCH-D2560-L26-R2E8-DIRECTAPPLY-COMPILE-G8-N2-cw-20260620-045025`.
+  - Output prefix: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2E8-DIRECTAPPLY-COMPILE-G8-N2-cw-20260620-045025-f0666b`.
+  - Shape: 2 H100 nodes, L26, R2/D1/E8/M1, `ns4d_group_size=8`, `ns4d_group_axis=replica_dcn,data`, bf16 params/NS compute, compile-only, `--disable-abstract-mesh`, `--allow-boundary-collectives`, compiled-HLO writing enabled.
+- Result:
+  - Iris parent succeeded with exit 0, failures 0, duration about 4m30s.
+
+| bench | lowered AG/A2A/AR/RS/CP | compiled AG/A2A/AR/RS/CP | compiled custom_call | compiled GPU GEMM custom_call | compile seconds |
+| --- | --- | --- | ---: | ---: | ---: |
+| restore then `optax.apply_updates` | 0/0/0/0/0 | 8/0/0/0/0 | 360 | 176 | 7.26-7.53 |
+| direct restore-and-apply | 0/0/0/0/0 | 8/0/0/0/0 | 360 | 176 | 2.10-2.71 |
+| persistent grouped params/apply | 0/0/0/0/0 | 0/0/0/0/0 | 360 | 176 | 1.93-2.67 |
+
+- Interpretation: Direct restore-and-apply is not the grouped-to-FSDP fix. It compiles faster than restore-then-ordinary-apply in this compile-only comparison, but XLA GPU still inserts the same 8 compiled all-gathers at the boundary. The persistent grouped path remains the only tested H100 path with zero compiled grouped boundary collectives.
+- Next action: Stop treating leaf-local direct `apply_updates` as a production candidate unless a future runtime profile shows a memory/overlap benefit despite identical collective count. The two viable implementation paths remain:
+  1. an explicit coarse transport/custom-call/FFI/Axolotl-style all-to-all that owns the grouped-to-FSDP routing directly, or
+  2. a persistent grouped expert-bank representation that avoids the FSDP restore in the hot update path and synchronizes to model-consumable layout at an explicit boundary.
+
+### 2026-06-19 22:05 PDT - OSS Muon survey: ownership and transport clues
+- Question: Which public Muon implementations give the strongest design clue for grouped MuonH with FSDP-like model params and an NS-friendly optimizer layout?
+- Sources inspected:
+  - Megatron-LM layer-wise optimizer and Muon:
+    - `https://github.com/NVIDIA/Megatron-LM/blob/d1410e15e164923f23b8e1a3384bf22c29640fcc/megatron/core/optimizer/layer_wise_optimizer.py`
+    - `https://github.com/NVIDIA/Megatron-LM/blob/d1410e15e164923f23b8e1a3384bf22c29640fcc/megatron/core/optimizer/muon.py`
+  - KellerJordan/modded-nanogpt:
+    - `https://github.com/KellerJordan/modded-nanogpt/blob/3df8d388aae1d56d6d558654e6739b17e5cb72f3/train_gpt.py`
+    - `https://github.com/KellerJordan/modded-nanogpt/blob/3df8d388aae1d56d6d558654e6739b17e5cb72f3/train_gpt_medium.py`
+  - NeMo Emerging Optimizers:
+    - `https://github.com/NVIDIA-NeMo/Emerging-Optimizers/blob/06ff4c68cda0d41a7a40580644a47f61ea4a59b0/emerging_optimizers/orthogonalized_optimizers/muon.py`
+    - `https://github.com/NVIDIA-NeMo/Emerging-Optimizers/blob/06ff4c68cda0d41a7a40580644a47f61ea4a59b0/emerging_optimizers/orthogonalized_optimizers/muon_utils.py`
+    - `https://github.com/NVIDIA-NeMo/Emerging-Optimizers/blob/06ff4c68cda0d41a7a40580644a47f61ea4a59b0/emerging_optimizers/orthogonalized_optimizers/muon_hyperball.py`
+  - Dion/Axolotl FSDP-oriented Muon:
+    - `https://github.com/axolotl-ai-cloud/dion-optimizer/blob/c63808c120a0ad10ebf86095aa8d72e4c0ae7648/optimizers/muon.py`
+    - `https://github.com/axolotl-ai-cloud/dion-optimizer/blob/c63808c120a0ad10ebf86095aa8d72e4c0ae7648/optimizers/opt_utils.py`
+    - `https://github.com/axolotl-ai-cloud/axolotl/blob/e86163dd332f3aad2f29de8fe44b6cfd5f74b22d/src/axolotl/core/builders/base.py`
+    - `https://github.com/axolotl-ai-cloud/axolotl/blob/e86163dd332f3aad2f29de8fe44b6cfd5f74b22d/src/axolotl/utils/schemas/validation.py`
+  - Minimal FSDP2 Muon:
+    - `https://github.com/samsja/muon_fsdp_2/blob/9a505c1452c04838b4914ddadffed14ed4a3b8ab/src/muon/muon_fsdp2.py`
+- Findings:
+  - Megatron is the closest conceptual match. It separates model-visible parameters from optimizer ownership: Muon-managed matrices are routed to layer-wise owners, updated as whole matrices, then synchronized back through a model-consumable parameter/bucket path.
+  - Dion is the closest transport analogue for FSDP2. It batches compatible DTensor parameters, uses all-to-all to give devices whole matrices for NS, then all-to-all back. This validates a coarse grouped transport, but copied per leaf it would reproduce the XLA collective-explosion problem.
+  - KellerJordan/modded-nanogpt uses architecture-specific parameter banks plus reduce-scatter/all-gather around batched NS. This is a useful grouping pattern, but it assumes the model layout was designed for that bank representation.
+  - NeMo gives good batched-NS/MuonHyperball API shape and TP variants, but not a direct FSDP ownership answer.
+  - The minimal FSDP2 Muon gathers each DTensor param to an owner rank, runs NS, and scatters shards back. This avoids full replication but is too per-parameter to copy directly into XLA GPU.
+- Design implications:
+  - Steal Megatron's invariant: Muon ownership is a separate representation from model consumption; only Muon-suitable matrices take the special path.
+  - Steal Dion/NanoGPT's grouping rule: group only exact-compatible shape/dtype/sharding/hyperparameter sets and batch NS over those groups.
+  - Avoid per-leaf gather/scatter/all-to-all even if PyTorch/FSDP2 examples tolerate it. Our H100 compile checks show XLA GPU will expose or reintroduce those boundaries.
+  - Do not return from grouped 4D layout to per-layer leaves through an all-gathered group axis before the hot apply boundary.
+- Next action: Frame the next implementation as either:
+  1. Megatron-like grouped ownership: persistent grouped expert banks, local grouped NS, explicit bulk sync to model-consumable FSDP/EP layout, or
+  2. Dion-like coarse transport: a single grouped same-layout transport primitive that converts grouped optimizer banks to model-consumable layout without spelling per-leaf JAX reshards.
