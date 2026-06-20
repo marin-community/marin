@@ -46,7 +46,12 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.jax_utils import is_inexact_arrayish
 
-from experiments.grug.moe.model import GrugModelConfig, canonical_grugmoe_tensor_names
+from experiments.grug.moe.model import (
+    GrugModelConfig,
+    _linear_inference_tensor,
+    _with_state_dict_prefix,
+    canonical_grugmoe_tensor_names,
+)
 
 EUROPE_WEST4_GCS_PREFIX = "gs://marin-eu-west4/"
 REAL_CHECKPOINT_PATH = "gs://marin-eu-west4/grug/moe_may_compute_opt_d512_ep1-05c39b/checkpoints/step-10980"
@@ -71,6 +76,7 @@ _DEPENDENCY_GROUPS = ["eval", "tpu", "vllm"]
 _REAL_CHECKPOINT_HIDDEN_DIM = 512
 _VLLM_REGISTRY_PRELOAD_MODULE = "experiments.grug.moe.vllm_registry"
 _MARIN_GIT_SHA_ENV = "MARIN_GIT_SHA"
+_PRELOAD_MODULES_ENV = "MARIN_VLLM_PRELOAD_MODULES"
 
 
 @dataclass(frozen=True)
@@ -242,7 +248,7 @@ def _git_sha() -> str:
         return env_sha
     try:
         return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    except Exception as exc:
+    except (subprocess.CalledProcessError, OSError) as exc:
         return f"unavailable:{exc!r}"
 
 
@@ -304,7 +310,7 @@ class _LegacySplitMoEExpertMlp(eqx.Module):
     w_up: jax.Array
     w_down: jax.Array
     implementation: Any = eqx.field(static=True)
-    activation: Any = eqx.field(static=True)
+    activation: ActivationFunctionEnum = eqx.field(static=True)
     capacity_factor: float = eqx.field(static=True)
 
 
@@ -327,14 +333,6 @@ class _LegacySplitExpertExportModel(eqx.Module):
 
     def to_state_dict(self, prefix: str | None = None) -> dict[str, jax.Array]:
         return legacy_split_expert_inference_state_dict(self.model, self.config, prefix=prefix)
-
-
-def _with_state_dict_prefix(prefix: str | None, name: str) -> str:
-    return name if prefix is None else f"{prefix}.{name}"
-
-
-def _linear_inference_tensor(value: jax.Array) -> jax.Array:
-    return jnp.swapaxes(value, -1, -2)
 
 
 def _split_expert_gate_up(expert_mlp: Any, intermediate_dim: int) -> tuple[jax.Array, jax.Array]:
@@ -476,11 +474,11 @@ def configure_runtime_environment(config: SmokeConfig) -> None:
     os.environ.setdefault("VLLM_XLA_CACHE_PATH", config.cache_dir)
     os.environ.setdefault("PYTHONUNBUFFERED", "1")
     preload_modules = [
-        module.strip() for module in os.environ.get("MARIN_VLLM_PRELOAD_MODULES", "").split(",") if module.strip()
+        module.strip() for module in os.environ.get(_PRELOAD_MODULES_ENV, "").split(",") if module.strip()
     ]
     if _VLLM_REGISTRY_PRELOAD_MODULE not in preload_modules:
         preload_modules.append(_VLLM_REGISTRY_PRELOAD_MODULE)
-    os.environ["MARIN_VLLM_PRELOAD_MODULES"] = ",".join(preload_modules)
+    os.environ[_PRELOAD_MODULES_ENV] = ",".join(preload_modules)
 
 
 def _completion_payload(env: Any, config: SmokeConfig) -> dict[str, Any]:

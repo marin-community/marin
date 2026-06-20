@@ -171,7 +171,7 @@ def _load_tpu_grugmoe(tpu_inference_root: Path | None):
     return importlib.import_module("tpu_inference.models.jax.grugmoe")
 
 
-def _np(value: Any) -> np.ndarray:
+def _to_numpy(value: Any) -> np.ndarray:
     return np.array(jax.device_get(value), copy=True)
 
 
@@ -589,7 +589,7 @@ def _levanter_greedy_generation_reference(
         step_logits = last_logits(lev_model, token_ids)
         token_id = int(np.asarray(jnp.argmax(step_logits, axis=-1)))
         generated_ids.append(token_id)
-        next_token_logits.append(_np(step_logits))
+        next_token_logits.append(_to_numpy(step_logits))
         token_ids = _append_token(token_ids, token_id)
 
     return (
@@ -621,10 +621,10 @@ def _write_installed_vllm_reference(
     prompt_len = int(prompt_ids.shape[1])
     score_len = int(score_token_ids.shape[1])
     continuation_positions = list(range(prompt_len, score_len))
-    full_selected_logprobs_np = _np(selected_logprobs)
+    full_selected_logprobs_np = _to_numpy(selected_logprobs)
     continuation_logprobs_np = full_selected_logprobs_np[prompt_len - 1 :]
-    expert_ids_np = _np(expert_ids)
-    router_margins_np = _np(router_margins)
+    expert_ids_np = _to_numpy(expert_ids)
+    router_margins_np = _to_numpy(router_margins)
     if expert_ids_np.shape[1] != score_len:
         raise AssertionError(f"reference expert IDs have shape {expert_ids_np.shape}, expected sequence {score_len}")
     if router_margins_np.shape[1] != score_len:
@@ -665,7 +665,7 @@ def _native_greedy_generation(
         step_logits = logits[-1]
         token_id = int(np.asarray(jnp.argmax(step_logits, axis=-1)))
         generated_ids.append(token_id)
-        next_token_logits.append(_np(step_logits))
+        next_token_logits.append(_to_numpy(step_logits))
         token_ids = _append_token(token_ids, token_id)
 
     return (
@@ -687,7 +687,7 @@ def _assert_generation_matches_reference(
 ) -> None:
     np.testing.assert_array_equal(actual_generated_ids, expected_generated_ids)
     np.testing.assert_allclose(actual_logits, expected_logits, rtol=5e-4, atol=5e-4)
-    np.testing.assert_array_equal(_np(actual_token_ids), _np(expected_token_ids))
+    np.testing.assert_array_equal(_to_numpy(actual_token_ids), _to_numpy(expected_token_ids))
     print(
         f"realistic-generation: {name} full-forward greedy generation matched "
         f"Levanter reference for token IDs and logits across {len(expected_generated_ids)} steps"
@@ -727,8 +727,8 @@ def check_moe_component(tpu_grugmoe) -> None:
         mesh=None,
     )
     actual, actual_selected = native_mlp(jnp.asarray(x))
-    np.testing.assert_array_equal(_np(actual_selected), _np(selected))
-    np.testing.assert_allclose(_np(actual), _np(expected), rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(_to_numpy(actual_selected), _to_numpy(selected))
+    np.testing.assert_allclose(_to_numpy(actual), _to_numpy(expected), rtol=1e-5, atol=1e-5)
     print("component: native GrugMoeMLP matches Levanter moe_mlp")
 
 
@@ -1070,25 +1070,25 @@ def check_production_attention_against_dense(tpu_grugmoe) -> None:
 
     hidden_summary = _assert_delta_with_summary(
         label="production-attention hidden",
-        actual=_np(production_hidden),
-        expected=_np(dense_hidden),
+        actual=_to_numpy(production_hidden),
+        expected=_to_numpy(dense_hidden),
         tolerance=_PRODUCTION_ATTENTION_LOGITS_TOLERANCE,
     )
     logits_summary = _assert_delta_with_summary(
         label="production-attention logits",
-        actual=_np(production_logits),
-        expected=_np(dense_logits),
+        actual=_to_numpy(production_logits),
+        expected=_to_numpy(dense_logits),
         tolerance=_PRODUCTION_ATTENTION_LOGITS_TOLERANCE,
     )
     logprob_summary = _assert_delta_with_summary(
         label="production-attention selected next-token logprobs",
-        actual=_np(_selected_next_token_logprobs(production_logits, token_ids)),
-        expected=_np(_selected_next_token_logprobs(dense_logits, token_ids)),
+        actual=_to_numpy(_selected_next_token_logprobs(production_logits, token_ids)),
+        expected=_to_numpy(_selected_next_token_logprobs(dense_logits, token_ids)),
         tolerance=_PRODUCTION_ATTENTION_LOGPROB_TOLERANCE,
     )
     np.testing.assert_array_equal(
-        _np(production_expert_ids),
-        _np(dense_expert_ids),
+        _to_numpy(production_expert_ids),
+        _to_numpy(dense_expert_ids),
     )
     print(
         "production-attention-smoke: "
@@ -1117,9 +1117,9 @@ def check_full_forward(tpu_grugmoe) -> None:
     expected_hidden, expected_expert_ids = jax.jit(_jax_full_forward)(lev_model, token_ids)
     expected_logits = _jax_logits(lev_model, expected_hidden)[0]
 
-    np.testing.assert_allclose(_np(actual_hidden), _np(expected_hidden[0]), rtol=5e-4, atol=5e-4)
-    np.testing.assert_allclose(_np(actual_logits), _np(expected_logits), rtol=5e-4, atol=5e-4)
-    np.testing.assert_array_equal(_np(actual_expert_ids), _np(expected_expert_ids))
+    np.testing.assert_allclose(_to_numpy(actual_hidden), _to_numpy(expected_hidden[0]), rtol=5e-4, atol=5e-4)
+    np.testing.assert_allclose(_to_numpy(actual_logits), _to_numpy(expected_logits), rtol=5e-4, atol=5e-4)
+    np.testing.assert_array_equal(_to_numpy(actual_expert_ids), _to_numpy(expected_expert_ids))
     print("full: native GrugMoeModel hidden states, logits, and routed expert IDs match Levanter reference")
 
 
@@ -1184,9 +1184,9 @@ def _check_inference_artifact_roundtrip(
             attention_metadata_mod,
         )
 
-    np.testing.assert_allclose(_np(loaded_hidden), _np(manual_hidden), rtol=5e-4, atol=5e-4)
-    np.testing.assert_allclose(_np(loaded_logits), _np(manual_logits), rtol=5e-4, atol=5e-4)
-    np.testing.assert_array_equal(_np(loaded_expert_ids), _np(manual_expert_ids))
+    np.testing.assert_allclose(_to_numpy(loaded_hidden), _to_numpy(manual_hidden), rtol=5e-4, atol=5e-4)
+    np.testing.assert_allclose(_to_numpy(loaded_logits), _to_numpy(manual_logits), rtol=5e-4, atol=5e-4)
+    np.testing.assert_array_equal(_to_numpy(loaded_expert_ids), _to_numpy(manual_expert_ids))
     artifact_layout = "sharded" if expect_sharded else "single-file"
     print(
         f"artifact-{artifact_layout}: saved-checkpoint Levanter export matches manual-copy hidden states, "
@@ -1300,9 +1300,9 @@ def check_realistic_training_state_roundtrip(
 
     expected_hidden, expected_expert_ids = jax.jit(_jax_full_forward)(lev_model, token_ids)
     expected_logits = _jax_logits(lev_model, expected_hidden)[0]
-    expected_hidden_np = _np(expected_hidden[0])
-    expected_logits_np = _np(expected_logits)
-    expected_expert_ids_np = _np(expected_expert_ids)
+    expected_hidden_np = _to_numpy(expected_hidden[0])
+    expected_logits_np = _to_numpy(expected_logits)
+    expected_expert_ids_np = _to_numpy(expected_expert_ids)
 
     with _patch_tpu_single_rank(tpu_grugmoe), jax.set_mesh(_tpu_mesh()):
         manual_model = tpu_grugmoe.GrugMoeForCausalLM(
@@ -1316,9 +1316,9 @@ def check_realistic_training_state_roundtrip(
         token_ids,
         attention_metadata_mod,
     )
-    np.testing.assert_allclose(_np(manual_hidden), expected_hidden_np, rtol=5e-4, atol=5e-4)
-    np.testing.assert_allclose(_np(manual_logits), expected_logits_np, rtol=5e-4, atol=5e-4)
-    np.testing.assert_array_equal(_np(manual_expert_ids), expected_expert_ids_np)
+    np.testing.assert_allclose(_to_numpy(manual_hidden), expected_hidden_np, rtol=5e-4, atol=5e-4)
+    np.testing.assert_allclose(_to_numpy(manual_logits), expected_logits_np, rtol=5e-4, atol=5e-4)
+    np.testing.assert_array_equal(_to_numpy(manual_expert_ids), expected_expert_ids_np)
     print("realistic-roundtrip: manual-copy native reference matches Levanter hidden states, logits, and routed experts")
 
     (
@@ -1345,7 +1345,7 @@ def check_realistic_training_state_roundtrip(
         "realistic-generation: "
         f"prompt_ids={np.asarray(token_ids).tolist()[0]} "
         f"generated_ids={expected_generated_ids.tolist()} "
-        f"final_token_ids={_np(expected_generation_token_ids).tolist()[0]}"
+        f"final_token_ids={_to_numpy(expected_generation_token_ids).tolist()[0]}"
     )
     if reference_output_path is not None:
         _write_installed_vllm_reference(
@@ -1396,9 +1396,9 @@ def check_realistic_training_state_roundtrip(
         token_ids,
         attention_metadata_mod,
     )
-    np.testing.assert_allclose(_np(loaded_hidden), expected_hidden_np, rtol=5e-4, atol=5e-4)
-    np.testing.assert_allclose(_np(loaded_logits), expected_logits_np, rtol=5e-4, atol=5e-4)
-    np.testing.assert_array_equal(_np(loaded_expert_ids), expected_expert_ids_np)
+    np.testing.assert_allclose(_to_numpy(loaded_hidden), expected_hidden_np, rtol=5e-4, atol=5e-4)
+    np.testing.assert_allclose(_to_numpy(loaded_logits), expected_logits_np, rtol=5e-4, atol=5e-4)
+    np.testing.assert_array_equal(_to_numpy(loaded_expert_ids), expected_expert_ids_np)
 
     loaded_generated_ids, loaded_generation_logits, loaded_generation_token_ids = _native_greedy_generation(
         loaded_model,

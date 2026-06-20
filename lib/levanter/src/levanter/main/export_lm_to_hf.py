@@ -4,7 +4,7 @@
 import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional, Protocol, runtime_checkable
 
 import equinox as eqx
 import haliax
@@ -15,13 +15,18 @@ from haliax import Axis
 import levanter
 import levanter.utils.logging as logging_utils
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.compat.hf_checkpoints import DEFAULT_MAX_SHARD_SIZE, HFCompatConfig, RepoRef, load_tokenizer
+from levanter.compat.hf_checkpoints import DEFAULT_MAX_SHARD_SIZE, RepoRef, load_tokenizer
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import is_inexact_arrayish, local_cpu_mesh
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class _HFCheckpointConvertible(Protocol):
+    def hf_checkpoint_converter(self) -> Any: ...
 
 
 @dataclass
@@ -44,7 +49,7 @@ class ConvertLmConfig:
 
 def main(config: ConvertLmConfig):
     logging_utils.init_logging("logs", "export")
-    if not isinstance(config.model, HFCompatConfig) and not hasattr(config.model, "hf_checkpoint_converter"):
+    if not isinstance(config.model, _HFCheckpointConvertible):
         raise TypeError("model must provide hf_checkpoint_converter()")
     converter = config.model.hf_checkpoint_converter()
     tokenizer_spec = config.tokenizer

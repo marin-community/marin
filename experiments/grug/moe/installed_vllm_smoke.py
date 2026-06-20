@@ -20,6 +20,8 @@ from typing import Any
 
 import numpy as np
 
+from experiments.grug.moe.model import GRUG_MOE_ARTIFACT_SCHEMA_VERSION, GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY
+
 _PROMPT_IDS = [1, 42, 128, 2048, 17, 3072, 5, 63]
 _REFERENCE_JSON_NAME = "installed_vllm_reference.json"
 _DEFAULT_CONFIG_NAME = "small-diagnostic"
@@ -29,8 +31,6 @@ _DEFAULT_MAX_SHARD_SIZE_BYTES = 256 * 1024 * 1024
 _DEFAULT_MAX_LOGPROB_DELTA = 5.0
 _DEFAULT_VLLM_DTYPE = "bfloat16"
 _VLLM_DTYPE_CHOICES = ("bfloat16", "float32")
-_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
-_ARTIFACT_SCHEMA_VERSION = 1
 
 
 def _direct_url(package: str) -> str:
@@ -45,7 +45,7 @@ def _print_runtime_header() -> None:
     print("remote_cwd=" + os.getcwd())
     try:
         marin_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    except Exception as exc:  # pragma: no cover - diagnostic only
+    except (subprocess.CalledProcessError, OSError) as exc:  # pragma: no cover - diagnostic only
         marin_sha = f"unavailable:{exc!r}"
     print("marin_sha=" + marin_sha)
     for package in ("vllm", "tpu-inference"):
@@ -76,9 +76,10 @@ def _artifact_config(artifact_dir: Path) -> dict[str, Any]:
         config = json.load(f)
     if int(config.get("vocab_size", 0)) <= 0:
         raise AssertionError(f"invalid artifact vocab_size={config.get('vocab_size')!r}")
-    if config.get(_ARTIFACT_SCHEMA_VERSION_KEY) != _ARTIFACT_SCHEMA_VERSION:
+    if config.get(GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY) != GRUG_MOE_ARTIFACT_SCHEMA_VERSION:
         raise AssertionError(
-            f"invalid artifact {_ARTIFACT_SCHEMA_VERSION_KEY}={config.get(_ARTIFACT_SCHEMA_VERSION_KEY)!r}"
+            "invalid artifact "
+            f"{GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY}={config.get(GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY)!r}"
         )
     return config
 
