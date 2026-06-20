@@ -1579,3 +1579,14 @@ Post-compile steps were stable around 0.65-0.66s:
 
 - Interpretation: This is the closest H100 gate so far to the real model expert path. MuonH did not add any extra compiled all-gather/reduce-scatter/all-to-all beyond the public grouped MoE consumer baseline; it added the expected NS/GEMM custom calls. The remaining work is not a low-level communication mystery in this synthetic path, but a state/model integration problem: make real `MoEExpertMlp`/`MoEMLP` consume grouped expert banks.
 - Next action: Port grouped expert-bank representation into the production Grug MoE module boundary. The first production-facing test should compare a group of real blocks against per-layer blocks for outputs/sharding, then compile a short training step or expert-only block step and check that the grouped expert path preserves the same communication pattern as this gate.
+
+### 2026-06-19 22:39 PDT - production expert-bank adapter
+- Hypothesis: Before changing the full `Transformer.blocks` state layout, the real expert module should expose a strict adapter from ordinary per-layer `MoEExpertMlp` leaves to a `GroupedMoEExpertMlp` bank. This gives the production path the same grouped representation used by the successful harness gates without depending on benchmark-only helpers.
+- Change:
+  - Added `GroupedMoEExpertMlp.from_layers(layers)` in `lib/levanter/src/levanter/grug/grug_moe.py`.
+  - The adapter stacks `w_gate_up` and `w_down` along a leading group axis and validates that all grouped layers share `implementation`, `activation`, `capacity_factor`, and `remat_mode`.
+  - Added model-level tests in `experiments/grug/moe/test_model.py` comparing grouped execution against independent per-layer `MoEExpertMlp` calls and rejecting mixed backends.
+- Validation:
+  - `uv run pytest experiments/grug/moe/test_model.py experiments/grug/moe/test_muon_update_bench.py -k 'grouped_expert_mlp_from_layers or grouped_muonh_moe_mlp_consumer or grouped_moe_mlp_consumer_preserves'` passed with `4 passed`.
+- Interpretation: This is the first production-facing API step after the H100 grouped-MoE gate. It does not yet group the full `Block` or `Transformer` state, but it gives that integration a tested conversion point from existing per-layer experts into the persistent grouped-bank representation.
+- Next action: Add a real `MoEMLP`/block-level grouped expert consumer that builds grouped routed inputs from per-layer router outputs and calls `GroupedMoEExpertMlp` directly, avoiding `GroupedMoEExpertMlp.layer()` in the hot path.

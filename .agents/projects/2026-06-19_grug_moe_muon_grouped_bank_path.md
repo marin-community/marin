@@ -144,6 +144,14 @@ H100 nodes with no additional compiled collectives beyond standalone
 `MoEExpertMlp`/`MoEMLP` path consume this representation, or to add an explicit
 coarse transport if we keep ordinary FSDP leaves.
 
+The first production-facing adapter now exists:
+`GroupedMoEExpertMlp.from_layers(layers)` stacks ordinary per-layer
+`MoEExpertMlp` modules into a grouped expert bank and rejects mixed
+implementation/activation/capacity/remat settings. Its model-level regression
+test compares grouped execution against independent per-layer calls. This is a
+small but important invariant: a future grouped `MoEMLP` or grouped block can
+start from today's per-layer module state without using benchmark-only helpers.
+
 Build the real model-consumer path that keeps expert weights grouped through the
 consumer boundary:
 
@@ -161,6 +169,13 @@ consumer boundary:
      at `optax.apply_updates`.
 4. Only after the synthetic gate passes, port the representation into the real
    `MoEExpertMlp`/`MoEMLP` path.
+
+The immediate next patch should be a grouped `MoEMLP`/block consumer that:
+
+1. runs each layer's router normally to produce grouped routed inputs,
+2. calls `GroupedMoEExpertMlp` directly over those grouped routed inputs, and
+3. keeps `GroupedMoEExpertMlp.layer()` out of the hot path except for parity
+   tests.
 
 The gate should explicitly fail any production-candidate path whose compiled
 HLO contains grouped boundary collectives. Use the harness

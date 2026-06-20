@@ -14,7 +14,7 @@ Implementation overview:
   keeps the stable public API used by Grug model code and benchmarks.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import partial
 
 import equinox as eqx
@@ -145,6 +145,45 @@ class GroupedMoEExpertMlp(eqx.Module):
     capacity_factor: float = eqx.field(static=True)
     remat_mode: MoERematMode = eqx.field(static=True)
     valid_group_size: int = eqx.field(static=True)
+
+    @staticmethod
+    def from_layers(layers: Sequence[MoEExpertMlp]) -> "GroupedMoEExpertMlp":
+        """Stack ordinary per-layer expert modules into one grouped expert bank."""
+        if not layers:
+            raise ValueError("layers must contain at least one MoEExpertMlp")
+
+        first = layers[0]
+        for i, layer in enumerate(layers[1:], start=1):
+            if layer.implementation != first.implementation:
+                raise ValueError(
+                    "GroupedMoEExpertMlp layers must use the same implementation; "
+                    f"layer 0 has {first.implementation!r}, layer {i} has {layer.implementation!r}"
+                )
+            if layer.activation != first.activation:
+                raise ValueError(
+                    "GroupedMoEExpertMlp layers must use the same activation; "
+                    f"layer 0 has {first.activation!r}, layer {i} has {layer.activation!r}"
+                )
+            if layer.capacity_factor != first.capacity_factor:
+                raise ValueError(
+                    "GroupedMoEExpertMlp layers must use the same capacity_factor; "
+                    f"layer 0 has {first.capacity_factor!r}, layer {i} has {layer.capacity_factor!r}"
+                )
+            if layer.remat_mode != first.remat_mode:
+                raise ValueError(
+                    "GroupedMoEExpertMlp layers must use the same remat_mode; "
+                    f"layer 0 has {first.remat_mode!r}, layer {i} has {layer.remat_mode!r}"
+                )
+
+        return GroupedMoEExpertMlp(
+            w_gate_up=jnp.stack([layer.w_gate_up for layer in layers], axis=0),
+            w_down=jnp.stack([layer.w_down for layer in layers], axis=0),
+            implementation=first.implementation,
+            activation=first.activation,
+            capacity_factor=first.capacity_factor,
+            remat_mode=first.remat_mode,
+            valid_group_size=len(layers),
+        )
 
     def layer(self, local_layer_index: int) -> MoEExpertMlp:
         if local_layer_index < 0 or local_layer_index >= self.valid_group_size:
