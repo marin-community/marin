@@ -18,7 +18,7 @@ from fray.types import (
     create_environment,
 )
 from levanter.checkpoint import discover_latest_checkpoint
-from levanter.compat.hf_checkpoints import RepoRef
+from levanter.compat.hf_checkpoints import DEFAULT_MAX_SHARD_SIZE, RepoRef
 from levanter.main import export_lm_to_hf
 from levanter.main.export_lm_to_hf import ConvertLmConfig
 from levanter.models.lm_model import LmConfig
@@ -47,6 +47,8 @@ class ConvertCheckpointStepConfig:
     checkpoint_path: str | InputName | VersionedValue[str]
     trainer: TrainerConfig
     model: LmConfig
+    checkpoint_subpath: str = "model"
+    max_shard_size: int = DEFAULT_MAX_SHARD_SIZE
     resources: ResourceConfig = dataclasses.field(default_factory=_default_export_resources)
     output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore[arg-type]
     upload_to_hf: bool | str | RepoRef = False
@@ -79,6 +81,8 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
         checkpoint_path=checkpoint_path,  # type: ignore[arg-type]
         output_dir=config.output_path,
         upload_to_hf=config.upload_to_hf,
+        checkpoint_subpath=config.checkpoint_subpath,
+        max_shard_size=config.max_shard_size,
         model=config.model,
         save_tokenizer=config.save_tokenizer,
         tokenizer=config.tokenizer,
@@ -127,6 +131,8 @@ def convert_checkpoint_to_hf_step(
     tokenizer: str | None = None,
     override_vocab_size: int | None = None,
     config_overrides: dict[str, Any] | None = None,
+    checkpoint_subpath: str = "model",
+    max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
     save_tokenizer: bool = True,
     use_cpu: bool = False,
     override_output_path: str | None = None,
@@ -147,6 +153,9 @@ def convert_checkpoint_to_hf_step(
         tokenizer: Optional tokenizer override. Defaults to the tokenizer specified by ``model``.
         override_vocab_size: If provided, resizes the vocabulary before exporting.
         config_overrides: Optional dict merged into the HF config prior to saving.
+        checkpoint_subpath: Checkpoint subtree to load as the model parameters. Standard Levanter LM checkpoints use
+            ``model``; GrugMoE training-state checkpoints use ``params``.
+        max_shard_size: Maximum safetensors shard size, in bytes. Defaults to Levanter's standard HF export size.
         save_tokenizer: Whether to emit tokenizer files alongside the model weights.
         use_cpu: Force conversion to run on CPU instead of the configured device mesh. When False, CPU mode is enabled
             automatically if the provided resources do not expose an accelerator.
@@ -169,6 +178,8 @@ def convert_checkpoint_to_hf_step(
         tokenizer=tokenizer,
         override_vocab_size=override_vocab_size,
         config_overrides=config_overrides,
+        checkpoint_subpath=checkpoint_subpath,
+        max_shard_size=max_shard_size,
         save_tokenizer=save_tokenizer,
         use_cpu=use_cpu,
         discover_latest=discover_latest,
