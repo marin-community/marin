@@ -3124,3 +3124,31 @@ Post-compile steps were stable around 0.65-0.66s:
 - Current observation:
   - Parent and child were running; child had `task_state_counts={"running": 2}`.
   - Dalton (`019ee67f-d8ba-7101-a21d-e2953faae78e`) is babysitting the run.
+
+### 2026-06-20 12:31 PDT - R2 packed-bank-compute report launch plumbing fixed
+- Hypothesis:
+  - The R2 report run should exercise the bounded packed-bank compute path, but
+    launch metadata showed `expert_grouped_muonh_packed_bank_compute=false`.
+- Result:
+  - Run `/dlwh/iris-run-job-20260620-192454` failed before useful timing rows.
+  - Logs confirmed launch config and per-bench metadata had
+    `expert_grouped_muonh_packed_entry=true` but
+    `expert_grouped_muonh_packed_bank_compute=false`.
+  - The job then took the old whole-bank packed-entry path and OOMed trying to
+    allocate `17.00 GiB`.
+- Root cause:
+  - `scratch/muon_update_bench_fast_loop.sh` exported
+    `MUON_BENCH_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE`, but
+    `scratch/launch_muon_update_bench_executor_n1.sh` did not forward that env
+    var through the Iris parent `job run`.
+- Change:
+  - Added `-e MUON_BENCH_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE ...` to the
+    executor wrapper.
+- Verification:
+  - `bash -n scratch/launch_muon_update_bench_executor_n1.sh`
+  - `bash -n scratch/muon_update_bench_fast_loop.sh`
+  - `./infra/pre-commit.py --files scratch/launch_muon_update_bench_executor_n1.sh --fix`
+- Next action:
+  - Relaunch the R2 packed-bank-compute report run from the fixed wrapper and
+    verify launch metadata says `expert_grouped_muonh_packed_bank_compute=true`
+    before interpreting any timing rows.
