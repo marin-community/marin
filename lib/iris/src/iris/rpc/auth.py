@@ -16,7 +16,7 @@ import contextlib
 import ipaddress
 import logging
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
@@ -36,9 +36,10 @@ logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "iris_session"
 
-# Read-only role granted implicitly to an IAP-authenticated caller that has not
-# run `iris login` (no Iris JWT). It may only call the read RPCs in
-# DASHBOARD_READABLE_RPCS; see authorize_method.
+# Read-only role granted to an IAP-authenticated caller whose email is not
+# provisioned in the user store (see the controller's IAP role resolver). It may
+# only call the read RPCs in DASHBOARD_READABLE_RPCS; see authorize_method. A
+# provisioned admin/user behind IAP resolves to their real role instead.
 DASHBOARD_ROLE = "dashboard"
 
 
@@ -130,11 +131,12 @@ POLICY: dict[AuthzAction, frozenset[str]] = {
 
 
 # RPC methods the read-only `dashboard` role may call. A default-deny allowlist:
-# a dashboard caller (an IAP-authenticated browser that has not run `iris login`)
-# may invoke only these read methods; everything else — job submit/terminate,
-# worker registration, key/budget management, exec, profiling, raw queries — is
-# denied. A newly added RPC is therefore denied to the dashboard role until it is
-# explicitly listed here, which is the safe direction for a read-only tier.
+# a dashboard caller (an IAP-authenticated browser whose email is not provisioned
+# in the user store) may invoke only these read methods; everything else — job
+# submit/terminate, worker registration, key/budget management, exec, profiling,
+# raw queries — is denied. A newly added RPC is therefore denied to the dashboard
+# role until it is explicitly listed here, which is the safe direction for a
+# read-only tier.
 DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
     {
         # Jobs and tasks
@@ -176,7 +178,8 @@ def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
     if identity.role == DASHBOARD_ROLE and method_name not in DASHBOARD_READABLE_RPCS:
         raise ConnectError(
             Code.PERMISSION_DENIED,
-            f"Read-only dashboard access cannot call {method_name}; run `iris login` to authenticate",
+            f"Read-only dashboard access cannot call {method_name}; "
+            "this identity is not provisioned for write access",
         )
 
 
@@ -354,15 +357,20 @@ class IapAssertionVerifier:
     request it forwards. Verifying its signature and ``aud`` proves the request
     genuinely passed through IAP for *this* backend, so the asserted email can be
     trusted without an Iris JWT — an internal caller that bypasses the load
-    balancer cannot forge it. Verified callers are granted the read-only
-    ``dashboard`` role (the implicit-access path for browsers behind IAP).
+    balancer cannot forge it.
+
+    The verified email is mapped to an Iris role by ``role_resolver``. The default
+    grants the read-only ``dashboard`` role; the controller injects a resolver
+    backed by the user store so a provisioned admin or user behind IAP gets their
+    real role without running ``iris login`` (an unprovisioned email stays
+    read-only ``dashboard``).
     """
 
-    def __init__(self, audience: str, role: str = DASHBOARD_ROLE):
+    def __init__(self, audience: str, role_resolver: Callable[[str], str] | None = None):
         if not audience:
             raise ValueError("IapAssertionVerifier requires a signed-header audience")
         self._audience = audience
-        self._role = role
+        self._role_resolver = role_resolver if role_resolver is not None else lambda _email: DASHBOARD_ROLE
         self._request = _CachingCertsRequest(google.auth.transport.requests.Request())
 
     def identity_from_headers(self, headers: dict) -> VerifiedIdentity | None:
@@ -386,7 +394,7 @@ class IapAssertionVerifier:
         email = payload.get("email")
         if not email:
             raise ValueError("IAP assertion has no email claim")
-        return VerifiedIdentity(user_id=email, role=self._role)
+        return VerifiedIdentity(user_id=email, role=self._role_resolver(email))
 
 
 class CompositeTokenVerifier:

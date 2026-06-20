@@ -457,11 +457,14 @@ message IapAuthConfig {
   // "/projects/<PROJECT_NUMBER>/global/backendServices/<BACKEND_SERVICE_ID>".
   //
   // When set, the controller verifies that signed assertion (signature +
-  // audience) and grants tokenless callers — i.e. a browser that has not run
-  // `iris login` — the read-only `dashboard` role implicitly. Verifying the
-  // Google signature is what makes this safe: an internal caller that bypasses
-  // the load balancer cannot forge the header. Leave empty to disable implicit
-  // dashboard auth (tokenless public requests are then rejected as before).
+  // audience) and authenticates a tokenless caller as the asserted email,
+  // resolved to its provisioned role from the user store (admin/user), or the
+  // read-only `dashboard` role if the email is not provisioned. So an admin
+  // behind IAP gets full access without running `iris login`, while an
+  // unprovisioned browser gets read-only dashboard access. Verifying the Google
+  // signature is what makes this safe: an internal caller that bypasses the load
+  // balancer cannot forge the header. Leave empty to disable implicit IAP auth
+  // (tokenless public requests are then rejected as before).
   string signed_header_audience = 5;
 }
 

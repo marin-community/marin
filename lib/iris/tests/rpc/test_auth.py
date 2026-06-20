@@ -313,6 +313,21 @@ def test_iap_assertion_verifier_grants_dashboard_role():
     assert identity == VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)
 
 
+def test_iap_assertion_verifier_resolves_provisioned_role():
+    # With a role resolver injected (as the controller does), a provisioned email
+    # resolves to its real role instead of the read-only dashboard default — the
+    # path that lets an admin behind IAP act without running `iris login`.
+    roles = {"admin@example.com": "admin"}
+    verifier = IapAssertionVerifier(
+        "/projects/1/global/backendServices/2",
+        role_resolver=lambda email: roles.get(email, DASHBOARD_ROLE),
+    )
+    payload = {"aud": "/projects/1/global/backendServices/2", "email": "admin@example.com"}
+    with patch("google.oauth2.id_token.verify_token", Mock(return_value=payload)):
+        identity = verifier.identity_from_headers(_ASSERTION_HEADERS)
+    assert identity == VerifiedIdentity(user_id="admin@example.com", role="admin")
+
+
 def test_iap_assertion_verifier_returns_none_without_header():
     verifier = IapAssertionVerifier("/projects/1/global/backendServices/2")
     # No assertion header -> not an IAP request; the caller falls through to

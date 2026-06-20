@@ -12,18 +12,19 @@ import dataclasses
 import logging
 import secrets
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import jwt
 from rigging.timing import Timestamp
 from sqlalchemy import Row, delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from iris.cluster.controller import writes
+from iris.cluster.controller import reads, writes
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import auth_api_keys_table, auth_controller_secrets_table
 from iris.rpc import config_pb2
 from iris.rpc.auth import (
+    DASHBOARD_ROLE,
     GcpAccessTokenVerifier,
     IapAssertionVerifier,
     IapIdTokenVerifier,
@@ -283,9 +284,41 @@ class ControllerAuth:
     gcp_project_id: str | None = None
     jwt_manager: JwtTokenManager | None = None
     optional: bool = False
-    # Verifies IAP's signed-header assertion to grant tokenless browsers the
-    # read-only dashboard role (only when an IAP signed_header_audience is set).
+    # Verifies IAP's signed-header assertion to authenticate tokenless callers
+    # behind IAP (only when an IAP signed_header_audience is set).
     iap_assertion_verifier: IapAssertionVerifier | None = None
+
+
+# How long a resolved IAP email->role mapping is cached before re-reading the
+# user store. Roles change rarely (admin grants, new provisioning); a short TTL
+# keeps the per-RPC assertion path off the database without making grants slow
+# to take effect.
+_IAP_ROLE_CACHE_TTL_SECONDS = 60.0
+
+
+def _make_iap_role_resolver(db: ControllerDB) -> Callable[[str], str]:
+    """Map a verified IAP email to its Iris role.
+
+    Returns the email's provisioned role from the user store, or the read-only
+    ``dashboard`` role for an unprovisioned email. ``admin_users`` are seeded as
+    ``admin`` in the user store at startup, so an admin behind IAP resolves to
+    ``admin`` here without running ``iris login``. Results are cached with a
+    short TTL so polling dashboard clients don't hit the database on every RPC.
+    """
+    cache: dict[str, tuple[float, str]] = {}
+
+    def resolve(email: str) -> str:
+        cached = cache.get(email)
+        if cached is not None and time.monotonic() < cached[0]:
+            return cached[1]
+        with db.read_snapshot() as tx:
+            role = reads.get_user_role_or_none(tx, email)
+        resolved = role if role is not None else DASHBOARD_ROLE
+        # Atomic dict assignment; a benign race just recomputes the same value.
+        cache[email] = (time.monotonic() + _IAP_ROLE_CACHE_TTL_SECONDS, resolved)
+        return resolved
+
+    return resolve
 
 
 def create_controller_auth(
@@ -367,10 +400,13 @@ def create_controller_auth(
         login_verifier = IapIdTokenVerifier(audiences)
 
         # When the signed-header audience is configured, a tokenless request that
-        # carries a valid IAP assertion is granted the read-only dashboard role.
+        # carries a valid IAP assertion is authenticated as the asserted email,
+        # resolved to its provisioned role (or read-only dashboard if not
+        # provisioned). Without a DB the resolver defaults to dashboard.
         signed_header_audience = auth_config.iap.signed_header_audience
         if signed_header_audience:
-            iap_assertion_verifier = IapAssertionVerifier(signed_header_audience)
+            role_resolver = _make_iap_role_resolver(db) if db else None
+            iap_assertion_verifier = IapAssertionVerifier(signed_header_audience, role_resolver=role_resolver)
 
     optional = auth_config.optional
     logger.info(

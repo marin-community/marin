@@ -15,6 +15,7 @@ from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import (
     JwtTokenManager,
     _get_or_create_signing_key,
+    _make_iap_role_resolver,
     create_api_key,
     list_api_keys,
     lookup_api_key_by_id,
@@ -579,3 +580,64 @@ def test_dashboard_interceptor_denies_mutation_for_iap_browser():
         interceptor.intercept_unary_sync(handler, "req", _assertion_ctx("LaunchJob"))
     assert exc.value.code == Code.PERMISSION_DENIED
     assert ran == []  # the handler never runs for a denied mutation
+
+
+class _RoleAssertionVerifier:
+    """IapAssertionVerifier stand-in returning a fixed role for the asserted email.
+
+    Mirrors the controller's email->role resolution: a provisioned admin/user
+    resolves to their real role, an unprovisioned email to read-only dashboard.
+    """
+
+    def __init__(self, role):
+        self._role = role
+
+    def identity_from_headers(self, headers):
+        if headers.get("x-goog-iap-jwt-assertion"):
+            return VerifiedIdentity(user_id="admin@example.com", role=self._role)
+        return None
+
+
+def test_dashboard_interceptor_allows_mutation_for_provisioned_iap_admin():
+    # The point of resolving the IAP identity to its real role: a provisioned
+    # admin behind IAP (no Iris JWT) resolves to the admin role and so reaches a
+    # gated mutation that the read-only dashboard role would be denied.
+    interceptor = _DashboardAuthInterceptor(
+        StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_RoleAssertionVerifier("admin")
+    )
+    seen = []
+
+    def handler(_req, _ctx):
+        seen.append(get_verified_identity())
+        return "ok"
+
+    result = interceptor.intercept_unary_sync(handler, "req", _assertion_ctx("LaunchJob"))
+    assert result == "ok"
+    assert seen == [VerifiedIdentity(user_id="admin@example.com", role="admin")]
+
+
+def test_dashboard_interceptor_login_reachable_for_unprovisioned_iap_browser():
+    # `Login`/`GetAuthInfo` are exempt from auth (in _UNAUTHENTICATED_RPCS), so
+    # even an unprovisioned IAP caller (read-only dashboard role) reaches the
+    # Login handler — `iris login` is never blocked by the dashboard gate. Guards
+    # against accidentally moving the role check ahead of that exemption.
+    interceptor = _DashboardAuthInterceptor(
+        StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_RoleAssertionVerifier(DASHBOARD_ROLE)
+    )
+    result = interceptor.intercept_unary_sync(lambda _req, _ctx: "ok", "req", _assertion_ctx("Login"))
+    assert result == "ok"
+
+
+def test_iap_role_resolver_maps_provisioned_and_unknown_emails(db: ControllerDB):
+    # The resolver the controller injects into IapAssertionVerifier: a provisioned
+    # email gets its stored role; an unprovisioned email gets read-only dashboard.
+    now = Timestamp.now()
+    with db.transaction() as tx:
+        writes.ensure_user(tx, "admin@example.com", now, role="admin")
+        writes.set_user_role(tx, "admin@example.com", "admin")
+        writes.ensure_user(tx, "user@example.com", now, role="user")
+
+    resolve = _make_iap_role_resolver(db)
+    assert resolve("admin@example.com") == "admin"
+    assert resolve("user@example.com") == "user"
+    assert resolve("stranger@example.com") == DASHBOARD_ROLE
