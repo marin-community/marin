@@ -3152,3 +3152,31 @@ Post-compile steps were stable around 0.65-0.66s:
   - Relaunch the R2 packed-bank-compute report run from the fixed wrapper and
     verify launch metadata says `expert_grouped_muonh_packed_bank_compute=true`
     before interpreting any timing rows.
+
+### 2026-06-20 12:33 PDT - Corrected R2 packed-bank-compute report run verified
+- Hypothesis:
+  - After forwarding `MUON_BENCH_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE`
+    through the Iris parent wrapper, the same R2 report run should enter the
+    intended bounded packed-bank compute path instead of the whole-bank
+    packed-entry path that OOMed.
+- Command:
+  - `MARIN_PREFIX=s3://marin-na/tmp/ttl=7d KUBECONFIG=$HOME/.kube/coreweave-iris-gpu RUN_ID=MUON-BENCH-D2560-L26-R2D1E8-G2-H3-PACKEDBANKCOMPUTE-REPORT-N2-cw-20260620-193220 ... bash scratch/muon_update_bench_fast_loop.sh iris fullprod-r4e8-l26-h3`
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-193222`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-193222/grug-train-MUON-BENCH-D2560-L26-R2D1E8-G2-H3-PACKEDBANKCOMPUTE-REPORT-N2-cw-20260620-193220`.
+  - Expected W&B:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R2D1E8-G2-H3-PACKEDBANKCOMPUTE-REPORT-N2-cw-20260620-193220`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D1E8-G2-H3-PACKEDBANKCOMPUTE-REPORT-N2-cw-20260620-193220-d773c1`.
+- Current observation:
+  - Launch metadata now correctly reports
+    `expert_grouped_muonh_packed_entry=true` and
+    `expert_grouped_muonh_packed_bank_compute=true`.
+  - Initial lowered HLO for
+    `real_expert_fsdp_grouped_muonh_optimizer_update_h3`: AG/A2A/AR/RS =
+    `26/0/0/0`, `dot_general=234`.
+  - Dirac (`019ee686-7a97-7200-870e-3a50e42280b0`) is babysitting the run.
+- Next action:
+  - Wait for compiled HLO counts and timing rows, then compare against the
+    expected packed-bank compute boundary contract.
