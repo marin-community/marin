@@ -2004,3 +2004,43 @@ Post-compile steps were stable around 0.65-0.66s:
   - D2 is still slower than an ideal roofline target, but the shape is now a compact two-A2A primitive rather than an XLA fragmentation bug. The remaining gap is transport bandwidth/latency for the packed A2A itself.
   - Correctness for the full-size run remains intentionally skipped by byte cap to avoid reintroducing full-output materialization OOM; small-shape reference correctness is `0.0`, and future runs will report the skip reason explicitly.
 - Next action: commit the correctness-skip reporting patch, then launch the R2 first-boundary rung from the updated code so replica-dcn grouping is validated with the improved summary fields.
+
+### 2026-06-20 04:30 PDT - First boundary R2 replica-dcn validation
+- Hypothesis: For replica-dcn grouping, the first optimizer boundary (`FSDP grads -> packed grouped bank`) should be a local repack/fanout inside the replicated-weight axis, not a network collective. In particular, R2 should not introduce all-gather, all-to-all, all-reduce, reduce-scatter, or collective-permute in the lowered or compiled HLO.
+- Run:
+  - Iris parent `/dlwh/iris-run-job-20260620-112254`; child `/dlwh/iris-run-job-20260620-112254/grug-train-MUON-BENCH-D2560-L26-R2D1E8-N2-G2-GRADSPACKBANK-cw-20260620-112252`.
+  - W&B target `marin-community/marin_moe/MUON-BENCH-D2560-L26-R2D1E8-N2-G2-GRADSPACKBANK-cw-20260620-112252`.
+  - Output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D1E8-N2-G2-GRADSPACKBANK-cw-20260620-112252-4521de`.
+  - Config: R2D1E8, 16 H100s, `ns4d_group_axis=replica_dcn`, `ns4d_group_size=2`, L26, H3, bf16 params/NS compute, `max_grouped_stack_size=512`, correctness cap `1073741824` bytes.
+- Result:
+  - Parent and child both succeeded with `failure_count=0`; both GPU tasks exited 0 after emitting metadata, lowered HLO, timing rows, summary rows, and W&B logging.
+  - Lowered HLO on both ranks: `0 AG / 0 A2A / 0 AR / 0 RS / 0 CP`.
+  - Compiled HLO on both ranks: `0 AG / 0 A2A / 0 AR / 0 RS / 0 CP`, with one GPU GEMM custom call in the checksum-timing path.
+  - Rank 0 median `0.00611677s`; rank 1 median `0.00611917s`.
+  - Full-shape correctness was intentionally skipped with reason `estimated global bytes 130862284800 exceed correctness cap 1073741824`; small-shape forced correctness had already validated `0.0` max error.
+  - Phase report: one `none` phase, ideal collective count `0.0`, global logical bytes `130862284800`, grouped input per device `8178892800`, FSDP output per device `16357785600`, replica fanout factor `2.0`.
+- Interpretation:
+  - This validates the key replica-dcn first-boundary property for R2: XLA did not turn the packed-bank repack into a hidden AG/A2A/RS/AR sequence.
+  - The enormous reported GB/s is only a logical-byte/local-repack rate, not a network bandwidth claim. The real claim is the absence of collectives.
+  - R2 therefore supports the pragmatic design where FSDP gradients can enter the grouped MuonH bank over `replica_dcn` without the collective explosion that made the earlier full train-step integration unattractive.
+- Next action: run the same first-boundary check at R4. If R4 also preserves the no-collective property, the remaining risky boundary is grouped updates back to FSDP/apply, plus integration into the Grug MoE optimizer path.
+
+### 2026-06-20 04:35 PDT - First boundary R4 replica-dcn validation
+- Hypothesis: If the packed-bank first-boundary design is viable for the intended replicated-weight path, R4 should preserve the same no-collective property as R2: FSDP grads should repack into `P('replica_dcn', 'expert', None, None)` grouped banks without all-gather, all-to-all, all-reduce, reduce-scatter, or collective-permute.
+- Run:
+  - Iris parent `/dlwh/iris-run-job-20260620-112733`; child `/dlwh/iris-run-job-20260620-112733/grug-train-MUON-BENCH-D2560-L26-R4D1E8-N4-G4-GRADSPACKBANK-cw-20260620-112731`.
+  - W&B target `marin-community/marin_moe/MUON-BENCH-D2560-L26-R4D1E8-N4-G4-GRADSPACKBANK-cw-20260620-112731`.
+  - Output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4D1E8-N4-G4-GRADSPACKBANK-cw-20260620-112731-ddde49`.
+  - Config: R4D1E8, 32 H100s, `ns4d_group_axis=replica_dcn`, `ns4d_group_size=4`, L26, H3, bf16 params/NS compute, `max_grouped_stack_size=512`, correctness cap `1073741824` bytes.
+- Result:
+  - Parent and child both succeeded with `failure_count=0`; all four GPU tasks exited 0.
+  - Lowered HLO on all four ranks: `0 AG / 0 A2A / 0 AR / 0 RS / 0 CP`.
+  - Compiled HLO on all four ranks: `0 AG / 0 A2A / 0 AR / 0 RS / 0 CP`, with three GPU GEMM custom calls in the checksum-timing path.
+  - Rank medians: `0.00464850s`, `0.00459857s`, `0.00467783s`, `0.00469472s`.
+  - Full-shape correctness was intentionally skipped with reason `estimated global bytes 130862284800 exceed correctness cap 1073741824`; small-shape forced correctness had already validated `0.0` max error.
+  - Phase report: one `none` phase, ideal collective count `0.0`, global logical bytes `130862284800`, grouped input per device `4089446400`, FSDP output per device `16357785600`, replica fanout factor `4.0`.
+- Interpretation:
+  - R4 preserves the same key property as R2: no hidden network collectives in the first boundary. This makes `replica_dcn` a viable axis for the NS-friendly grouped bank at least through the FSDP-grads-to-grouped conversion.
+  - The timing is faster than R2 because the grouped input per device is halved again; as with R2, the logical GB/s number is not a network roofline claim because this phase compiles to local repacking.
+  - The remaining blocker for production integration is therefore not this first boundary. It is the grouped-update-to-FSDP/apply side and how to avoid paying the already-measured packed-bank transport cost too many times or too synchronously.
+- Next action: keep Socrates focused on lower-level grouped-to-FSDP bridge options. In the main harness, use R2/R4 first-boundary results as the “good” reference and optimize the apply boundary or end-to-end optimizer integration against it.
