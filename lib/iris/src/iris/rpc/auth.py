@@ -553,12 +553,12 @@ def build_request_authenticators(
     verifier: TokenVerifier,
     iap_assertion_verifier: "IapAssertionVerifier | None" = None,
 ) -> tuple[RequestAuthenticator, ...]:
-    """The controller's standard request-auth stack, highest-trust source first.
+    """Return the controller's standard request-auth stack, highest-trust first.
 
     ``[Jwt, (IapAssertion?), Loopback]``: a presented Iris JWT wins; otherwise an
     IAP signed-header assertion (when IAP fronts the controller); otherwise a
-    trusted loopback peer. This ordering is the single source of truth for
-    request-auth precedence — :func:`resolve_auth` just walks it.
+    trusted loopback peer. ``iap_assertion_verifier`` is omitted from the stack
+    when IAP is not configured.
     """
     authenticators: list[RequestAuthenticator] = [JwtAuthenticator(verifier)]
     if iap_assertion_verifier is not None:
