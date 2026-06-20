@@ -2798,3 +2798,25 @@ Post-compile steps were stable around 0.65-0.66s:
 - Result:
   - Pytest: `5 passed in 5.05s`.
   - Pre-commit: OK after formatter fix.
+
+### 2026-06-20 11:43 PDT - Packed-bank boundary contract launch wrapper
+- Hypothesis:
+  - The next N1/R2/R4 validation should launch the FSDP-grad ingress primitive
+    and both grouped-update egress routes in one job per topology. That keeps
+    the new summary-row fields directly comparable across Route A and Route B.
+- Change:
+  - Added `scratch/launch_muon_packed_bank_boundary_contract.sh`.
+  - The wrapper accepts `n1`, `r2`, `r4`, plus data-axis variants `d2`/`d4`.
+  - Default bench kinds:
+    `expert_fsdp_grads_to_explicit_packed_grouped_bank`,
+    `expert_fsdp_packed_bank_a2a_apply_boundary`, and
+    `expert_fsdp_packed_bank_direct_apply_boundary`.
+  - Defaults to TTL output prefix and W&B group
+    `grug-moe-cw-muon-boundary-contract`.
+- Command:
+  - `MUON_BENCH_DRY_RUN=true bash scratch/launch_muon_packed_bank_boundary_contract.sh n1`
+  - `MUON_BENCH_DRY_RUN=true bash scratch/launch_muon_packed_bank_boundary_contract.sh r2`
+  - `MUON_BENCH_DRY_RUN=true bash scratch/launch_muon_packed_bank_boundary_contract.sh r4`
+- Result:
+  - All three dry-runs produced the expected axes, group axis, run names, W&B
+    project, and TTL output prefix.

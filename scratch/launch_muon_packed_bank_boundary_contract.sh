@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+TOPOLOGY="${MUON_BENCH_TOPOLOGY:-${1:-r2}}"
+STAMP="$(date -u +%Y%m%d-%H%M%S)"
+
+case "$TOPOLOGY" in
+  n1)
+    TOPOLOGY_LABEL="R1D1E8-N1"
+    GPU_REPLICAS=1
+    REPLICA_AXIS=1
+    DATA_AXIS=1
+    GROUP_AXIS=none
+    ;;
+  d2|r1d2)
+    TOPOLOGY_LABEL="R1D2E8-N2"
+    GPU_REPLICAS=2
+    REPLICA_AXIS=1
+    DATA_AXIS=2
+    GROUP_AXIS=data
+    ;;
+  d4|r1d4)
+    TOPOLOGY_LABEL="R1D4E8-N4"
+    GPU_REPLICAS=4
+    REPLICA_AXIS=1
+    DATA_AXIS=4
+    GROUP_AXIS=data
+    ;;
+  r2|r2d1)
+    TOPOLOGY_LABEL="R2D1E8-N2"
+    GPU_REPLICAS=2
+    REPLICA_AXIS=2
+    DATA_AXIS=1
+    GROUP_AXIS=replica_dcn
+    ;;
+  r4|r4d1)
+    TOPOLOGY_LABEL="R4D1E8-N4"
+    GPU_REPLICAS=4
+    REPLICA_AXIS=4
+    DATA_AXIS=1
+    GROUP_AXIS=replica_dcn
+    ;;
+  *)
+    echo "Unknown MUON_BENCH_TOPOLOGY=${TOPOLOGY}; expected n1, d2, d4, r2, or r4." >&2
+    exit 2
+    ;;
+esac
+
+GROUP_SIZE="${MUON_BENCH_BOUNDARY_GROUP_SIZE:-8}"
+
+export RUN_ID="${RUN_ID:-MUON-BENCH-D2560-L26-${TOPOLOGY_LABEL}-G${GROUP_SIZE}-BOUNDARYCONTRACT-cw-${STAMP}}"
+export MARIN_PREFIX="${MARIN_PREFIX:-s3://marin-na/tmp/ttl=7d}"
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/coreweave-iris-gpu}"
+
+export MUON_BENCH_GPU_REPLICAS="${MUON_BENCH_GPU_REPLICAS:-$GPU_REPLICAS}"
+export MUON_BENCH_LAYERS="${MUON_BENCH_LAYERS:-26}"
+export MUON_BENCH_REPLICA_AXIS="${MUON_BENCH_REPLICA_AXIS:-$REPLICA_AXIS}"
+export MUON_BENCH_DATA_AXIS="${MUON_BENCH_DATA_AXIS:-$DATA_AXIS}"
+export MUON_BENCH_EXPERT_AXIS="${MUON_BENCH_EXPERT_AXIS:-8}"
+export MUON_BENCH_MODEL_AXIS="${MUON_BENCH_MODEL_AXIS:-1}"
+export MUON_BENCH_NS4D_GROUP_SIZE="${MUON_BENCH_NS4D_GROUP_SIZE:-$GROUP_SIZE}"
+export MUON_BENCH_NS4D_GROUP_AXIS="${MUON_BENCH_NS4D_GROUP_AXIS:-$GROUP_AXIS}"
+export MUON_BENCH_KINDS="${MUON_BENCH_KINDS:-expert_fsdp_grads_to_explicit_packed_grouped_bank,expert_fsdp_packed_bank_a2a_apply_boundary,expert_fsdp_packed_bank_direct_apply_boundary}"
+export MUON_BENCH_SWEEP_BACKEND_STEPS="${MUON_BENCH_SWEEP_BACKEND_STEPS:-3}"
+export MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES="${MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES:-512}"
+export MUON_BENCH_DTYPE="${MUON_BENCH_DTYPE:-bf16}"
+export MUON_BENCH_NS_COMPUTE_DTYPE="${MUON_BENCH_NS_COMPUTE_DTYPE:-bf16}"
+export MUON_BENCH_WARMUP="${MUON_BENCH_WARMUP:-1}"
+export MUON_BENCH_ITERS="${MUON_BENCH_ITERS:-3}"
+export MUON_BENCH_MODE="${MUON_BENCH_MODE:-both}"
+export MUON_BENCH_TRACKER="${MUON_BENCH_TRACKER:-wandb}"
+export MUON_BENCH_WANDB="${MUON_BENCH_WANDB:-true}"
+export MUON_BENCH_WANDB_PROJECT="${MUON_BENCH_WANDB_PROJECT:-${WANDB_PROJECT:-marin_moe}}"
+export MUON_BENCH_WANDB_GROUP="${MUON_BENCH_WANDB_GROUP:-grug-moe-cw-muon-boundary-contract}"
+export MUON_BENCH_ENABLE_JAX_PROFILE="${MUON_BENCH_ENABLE_JAX_PROFILE:-false}"
+export MUON_BENCH_WRITE_COMPILED_HLO="${MUON_BENCH_WRITE_COMPILED_HLO:-true}"
+export MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES="${MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES:-true}"
+export MUON_BENCH_DISABLE_ABSTRACT_MESH="${MUON_BENCH_DISABLE_ABSTRACT_MESH:-true}"
+export MUON_BENCH_WORKER_CPU="${MUON_BENCH_WORKER_CPU:-8}"
+export MUON_BENCH_WORKER_RAM="${MUON_BENCH_WORKER_RAM:-256g}"
+export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.90}"
+
+echo "Launching ${RUN_ID}"
+echo "Topology: ${TOPOLOGY_LABEL}; axes replica=${MUON_BENCH_REPLICA_AXIS} data=${MUON_BENCH_DATA_AXIS} expert=${MUON_BENCH_EXPERT_AXIS} model=${MUON_BENCH_MODEL_AXIS}"
+echo "Group axis: ${MUON_BENCH_NS4D_GROUP_AXIS}; layer group size: ${MUON_BENCH_NS4D_GROUP_SIZE}"
+echo "Kinds: ${MUON_BENCH_KINDS}"
+echo "W&B: ${WANDB_ENTITY:-marin-community}/${MUON_BENCH_WANDB_PROJECT}"
+echo "Output prefix: ${MARIN_PREFIX}/experiments/grug-moe-cw/muon-update-bench/${RUN_ID}-*"
+
+if [[ "${MUON_BENCH_DRY_RUN:-false}" == "true" ]]; then
+  echo "Dry run only; not launching Iris."
+  exit 0
+fi
+
+bash scratch/muon_update_bench_fast_loop.sh iris fullprod-e8-l26-h3
