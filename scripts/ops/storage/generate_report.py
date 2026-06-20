@@ -56,6 +56,7 @@ from iris.client import IrisClient
 from iris.cluster.config import IrisConfig
 from iris.cluster.constraints import Constraint, preemptible_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.rpc.auth import ClientCredentials
 from rigging.config_discovery import resolve_cluster_config
 from zephyr import Dataset, ZephyrContext
 
@@ -300,7 +301,9 @@ def _open_iris_client(cluster: str) -> tuple[IrisClient, object]:
 
     tunnel_cm = bundle.controller.tunnel(address=controller_address)
     tunnel_url = tunnel_cm.__enter__()
-    client = IrisClient.remote(tunnel_url, workspace=REPO_ROOT, token_provider=token_provider)
+    client = IrisClient.remote(
+        tunnel_url, workspace=REPO_ROOT, credentials=ClientCredentials(token_provider=token_provider)
+    )
     return client, tunnel_cm
 
 
