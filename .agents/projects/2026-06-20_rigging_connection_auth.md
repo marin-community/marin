@@ -1,6 +1,7 @@
 # `rigging.connect` — a composable connection & auth library
 
-> Status: design proposal for review (weaver #236). Revised after a `codex`
+> Status: **approved — implementing** (weaver #236; see [§Decisions](#decisions-locked-on-user-review)).
+> Revised after a `codex`
 > critical pass (see [§Codex review](#codex-review-and-how-the-design-changed))
 > and a round of user review. Two headline corrections from that review:
 > **(1) rigging knows nothing about iris** — it consumes generic transport URLs;
@@ -213,9 +214,13 @@ class Auth(Protocol):
 | `IapAuth(id_token_provider)` | `(ProxyAuthTokenInjector(id_token_provider),)` — IAP OIDC token in `Proxy-Authorization` (lands with PR #6466) |
 | `ChainedAuth(*auths)` | concatenation — IAP + JWT together, attached **as a unit** so a call site can't attach one and forget the other (the PR #6466 bug, fixed structurally) |
 
-Auth and transport are orthogonal: an IAP cluster is `DirectTransport("https://…")`
-+ `ChainedAuth(IapAuth(...), JwtAuth(...))`; an SSH cluster is `SshTunnel(...)` +
-`NoAuth()` (loopback-trusted) or `JwtAuth(...)`.
+**Edge auth vs app auth.** IAP is *edge* auth — you cannot reach the GCLB at all
+without the OIDC token — so it is tied to the transport and is selected by the
+**scheme** (`iap+https`, below). The Iris **JWT** is *app* auth (the controller
+verifies it), so it rides the `auth=` argument because its value is a secret. The
+two compose: a scheme that implies `IapAuth` plus an `auth=JwtAuth(...)` argument
+yields `ChainedAuth(IapAuth, JwtAuth)`, attached **as a unit** so a call site
+can't attach one and forget the other (the PR #6466 bug, fixed structurally).
 
 ### The "extra hop" is just a URL path — no resolver, no `ListEndpoints`
 
@@ -267,39 +272,47 @@ MAJOR-7).
 
 #### rigging's string grammar — generic transport URLs only
 
-rigging understands transport-scheme URLs and nothing cluster-specific. No
-chaining (codex MAJOR-8) — the path rides on the URL:
+rigging understands transport-scheme URLs and nothing cluster-specific (there is
+**no `iris://`** scheme — cluster names are not rigging's concern). The grammar is
+uniform: **scheme** = how to reach + edge-auth; **`host:port`** = what to connect
+to; **path** = appended after the transport resolves; **query** = transport
+parameters. No chaining (codex MAJOR-8) — the path rides on the URL.
 
-| URL rigging understands | Transport |
-|-------------------------|-----------|
-| `https://<host>[/path]` / `http://<host:port>[/path]` | `DirectTransport` (e.g. `https://iris-marin.oa.dev/proxy/system.log-server`) |
-| `ssh+gcp://[SA@]<project>/<zone>/<instance>:<port>[/path]` | `SshTunnel` (`?iap=true` → `--tunnel-through-iap`); the `/path` rides the forwarded localhost base |
-| `k8s://[<context>/]<namespace>/<service>:<port>[/path]` | `K8sPortForward` |
+| Scheme | Transport + edge auth | Example |
+|--------|-----------------------|---------|
+| `http` / `https` | `DirectTransport`, no edge auth | `https://finelog-1.example:7000` |
+| `iap+https` | `DirectTransport(https://…)` **+ `IapAuth`** (OIDC token via ambient google-auth in `Proxy-Authorization`; `?audience=` for the OAuth client id) | `iap+https://iris-dev.oa.dev/proxy/system.log-server` |
+| `ssh+gcp` | `SshTunnel(GcpSshForwardTarget)`; `?project=&zone=` required, `?sa=` → impersonation, `?iap=true` → `--tunnel-through-iap` | `ssh+gcp://iris-controller:10000/proxy/system.log-server?project=marin&zone=us-central1-a` |
+| `k8s` | `K8sPortForward`; `?namespace=` required, `?context=` optional | `k8s://iris-controller:10000/proxy/system.log-server?namespace=iris` |
 
-For the direct-HTTPS case the *entire* connection is one URL:
-`connect("https://iris-marin.oa.dev/proxy/system.log-server", make_log_client, auth=cluster_auth)`.
-A standalone finelog VM is `connect("ssh+gcp://logging@proj/us-central1-a/finelog-1:7000", make_log_client)`.
+Parsing is plain `urlsplit`: for `ssh+gcp://iris-controller:10000/proxy/system.log-server?project=marin&zone=us-central1-a`,
+`hostname=iris-controller`, `port=10000` (the SSH-forward target), `path=/proxy/system.log-server`
+(appended to the forwarded `http://127.0.0.1:<p>` base), `query` carries
+project/zone. So **`iap+https` vs `https` is the entire IAP-vs-plain distinction**,
+one token in the scheme; the app-level JWT, if any, is the separate `auth=` arg.
 
-#### `iris://<cluster>` is iris sugar — parsed in iris, never in rigging
+#### iris builds these URLs — as a function, not a string scheme
 
-The cluster-name shorthand lives in **iris**, where the config and token store
-are. It expands a name into the generic rigging call above:
+The cluster-name convenience lives in **iris** (where config + token store are)
+and is a plain function that *emits one of the generic URLs above* and the
+matching `auth=` — it does **not** introduce an `iris://` string into rigging:
 
 ```python
 # in lib/iris — NOT in rigging
 def iris_connect(cluster: str, factory, *, endpoint: str | None = None):
-    cfg   = load_cluster_config(cluster)                 # reads iris config proto
-    base  = cfg.controller_url_or_ssh_transport()        # "https://…"(IAP) | "ssh+gcp://…"
-    path  = rigging.proxy_path(endpoint) if endpoint else ""
-    auth  = build_auth(cfg, token_store_lookup(cluster)) # NoAuth | JwtAuth | ChainedAuth(Iap,Jwt)
+    cfg  = load_cluster_config(cluster)                  # reads iris config proto
+    base = cfg.transport_url()                           # "iap+https://…" | "ssh+gcp://…?project=&zone="
+    path = rigging.proxy_path(endpoint) if endpoint else ""   # "/proxy/system.log-server"
+    auth = build_app_auth(cfg, token_store_lookup(cluster))   # NoAuth | JwtAuth (edge IAP is in the scheme)
     return rigging.connect(base, factory, path=path, auth=auth)
 ```
 
-So `iris_connect("marin", make_log_client, endpoint="/system/log-server")` resolves
-— in iris — to `connect("https://iris-marin.oa.dev/proxy/system.log-server", …,
-auth=ChainedAuth(IapAuth, JwtAuth))`. The shorthand stays stable across the
-SSH→IAP migration because the transport/auth choice is made in iris from config,
-not baked into any string rigging sees. rigging remains a clean leaf.
+`iris_connect("marin", make_log_client, endpoint="/system/log-server")` thus
+resolves — in iris — to
+`connect("iap+https://iris-dev.oa.dev/proxy/system.log-server", make_log_client)`
+for an IAP cluster, or the `ssh+gcp://…` form for an SSH cluster. The function
+signature is stable across the SSH→IAP migration because iris picks the scheme
+from config; rigging only ever sees a fully written-out generic URL.
 
 ### `connect()` — returns the real client; the client is the lifetime anchor
 
@@ -328,10 +341,10 @@ def disconnect(client) -> None:
 
 ```python
 # The supported shape — a free-floating client you can pass around.
-# (Via the iris-side sugar; the bare rigging call is the commented line below.)
+# (Via the iris-side helper; the bare rigging call is the commented line below.)
 log = iris_connect("marin", make_log_client, endpoint="/system/log-server")
-# == connect("https://iris-marin.oa.dev/proxy/system.log-server",
-#            make_log_client, auth=ChainedAuth(IapAuth(...), JwtAuth(...)))
+# == connect("iap+https://iris-marin.oa.dev/proxy/system.log-server?audience=<client-id>",
+#            make_log_client)   # iap+https scheme attaches the IAP token
 self.log = log                       # store it, return it, share it — no `with` scope
 log.get_table(...).write([row])
 # tunnel dies when `log` becomes unreachable (GC), or:
@@ -387,11 +400,11 @@ finelog with `Authorization` stripped, on the controller's own behalf.
 
 ```python
 log = iris_connect("marin", make_log_client, endpoint="/system/log-server")
-# resolves (in iris) to:
-#   connect("https://iris-marin.oa.dev/proxy/system.log-server", make_log_client,
-#           auth=ChainedAuth(IapAuth(...), JwtAuth(...)))      # IAP cluster, or
-#   connect("ssh+gcp://marin/us-central1-a/iris-controller:10000/proxy/system.log-server",
-#           make_log_client, auth=NoAuth())                    # SSH cluster
+# resolves (in iris) to one of:
+#   connect("iap+https://iris-marin.oa.dev/proxy/system.log-server?audience=<id>",
+#           make_log_client)                                         # IAP cluster
+#   connect("ssh+gcp://iris-controller:10000/proxy/system.log-server?project=marin&zone=us-central1-a",
+#           make_log_client)                                         # SSH cluster
 log.get_table(TASK_STATUS_NAMESPACE, TaskStatusRow,
               storage_policy=TASK_STATUS_STORAGE_POLICY).write([TaskStatusRow(...)])
 ```
@@ -466,7 +479,7 @@ The `Auth` iris builds from cluster config, per mode:
 |----------------|----------------------------|--------|---------------------|
 | SSH tunnel, null-auth (today) | `ssh+gcp://…/proxy/system.log-server` | `NoAuth()` | none — loopback peer ⇒ admin |
 | SSH/manual, auth enabled | `ssh+gcp://…` / `http://…` | `JwtAuth(StaticTokenProvider(jwt))` | `Authorization` only |
-| Public, behind IAP (#6466) | `https://host/proxy/system.log-server` | `ChainedAuth(IapAuth, JwtAuth)` | `Proxy-Authorization` + `Authorization` |
+| Public, behind IAP (#6466) | `iap+https://host/proxy/system.log-server?audience=<id>` | `IapAuth` (in scheme) + optional `JwtAuth` (`auth=`) | `Proxy-Authorization` (+ `Authorization` if a JWT) |
 | In-cluster direct (iris-resolved) | `http://10.x.x.x:port` (no proxy path) | worker token / `NoAuth` | reached directly; never hits the IAP edge |
 
 `ChainedAuth` attaches the IAP token and the JWT **as a unit**, so a call site
@@ -630,28 +643,17 @@ new controller route, broad auth relocation). The result is closer to codex's
 "small" than to the first draft, while still being the library the user asked
 for.
 
-## Open questions for the user
+## Decisions (locked on user review)
 
-- **OQ1 — abstraction size.** This keeps a minimal `Transport`/`Auth`/`connect`
-  core. Codex argued for even less (one helper function). Do you want the
-  composable library now, or the helper first with the library extracted later
-  once a second consumer appears?
-- **OQ4 — `disconnect` ergonomics.** Lifetime is anchored on the client via a
-  module-level `WeakKeyDictionary[client → finalize]`, so `connect()` can return
-  the bare client and `disconnect(client)` still works. The alternative is the
-  two-value `client, handle = connect(...)` return (no global state, but every
-  call site carries the handle). Is the implicit `WeakKeyDictionary` acceptable,
-  or do you prefer the explicit handle?
-- **OQ2 — keep the `iris://` shorthand at all?** rigging doesn't need it (it
-  takes generic transport URLs); iris could expose only `iris_connect(cluster,
-  factory, endpoint=...)` as a function. Do you still want a `iris://marin/...`
-  *string* form for CLI flags / config fields (parsed in iris into the generic
-  call), or is the function enough?
-- **OQ3 — proxy strips end-user identity.** The generic `/proxy/<name>` route
-  strips `Authorization` upstream, so finelog (and any proxied service) sees the
-  request as coming from the *controller*, not the end user. That's fine for
-  finelog (it trusts the controller). But a proxied service that needs the
-  end-user's identity for its own authz couldn't get it today. Is "proxied
-  services are authorized at the controller, not downstream" an acceptable
-  invariant, or do we eventually need an opt-in identity-forwarding header
-  (controller work, out of scope here)?
+- **D1 — keep the composable library.** Build the minimal `Transport` + `Auth` +
+  `connect` core now (not just a one-off helper).
+- **D2 — no `iris://` in rigging.** rigging takes only generic transport URLs
+  (`http`/`https`/`iap+https`/`ssh+gcp`/`k8s`). The cluster-name convenience is an
+  iris-side *function* (`iris_connect`), not a URL scheme rigging parses.
+- **D3 — `disconnect` via the implicit `WeakKeyDictionary`.** `connect()` returns
+  the bare client; teardown is keyed on the client. No explicit handle.
+- **D4 — proxy strips end-user identity; accepted.** Proxied services are
+  authorized at the controller, not downstream. A future opt-in
+  identity-forwarding header is controller work, out of scope here.
+- **D5 — IAP vs plain HTTP is encoded in the scheme** (`iap+https` vs `https`);
+  edge auth (IAP) is scheme-implied, app auth (JWT) is the `auth=` argument.
