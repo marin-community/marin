@@ -395,6 +395,14 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   intermediate point. **Surprising: E2 wants high weight decay (≥0.4).** Extending further —
   **launched `7e-4/wd0.6` + `7e-4/wd0.8`** (E2, fast multi-host batch) to bracket the turn;
   accept the optimum once a higher WD lands worse than 2.947.
+  _~03:35Z (2026-06-20): **`7e-4/wd0.8` FINISHED at 2.942** — STILL better than wd0.4=2.947,
+  so the WD curve is **not** turned up yet; the new best is again on the high-WD edge.
+  (Caution learned: the mid-run eval at 91% read 2.976 — misleadingly high; only the
+  step-8919 final eval, 2.942, is trustworthy. Do NOT read mid-flight E2 WD evals.)
+  WD response now: 2.979→2.970→2.968→2.964→2.947→(wd0.6 TBD)→**2.942** at
+  0.05/0.1/0.2/0.3/0.4/0.6/0.8. Descent has flattened (only −0.005 over 0.4→0.8). Per
+  methodology F, edge still open → **extended to `7e-4/wd1.0` + `7e-4/wd1.2`** (batch
+  v5p-64) to bracket the turn-up; accept once a higher WD lands worse than 2.942._
   _~05:43Z: budget hit 82.9k (>78k) and the over-cap downgrade was preempting the critical
   E4 7e-4 column + w2s. Shed ~16.5k by **killing the two speculative wd0.2 corners
   `5e-4/0.2` & `1e-3/0.2`** (w2t) — only `7e-4/0.2` (w2s) is needed to confirm the
