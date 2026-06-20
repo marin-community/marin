@@ -378,6 +378,11 @@ class _FakeUploadFile(io.BytesIO):
     def close(self):
         if self.closed:
             return
+        if self._path in self._fs.fail_close:
+            # fsspec marks the file closed in its finally block even when the
+            # commit (CompleteMultipartUpload) fails, leaving the MPU open.
+            super().close()
+            raise OSError("commit failed")
         self._fs.store[self._path] = self.getvalue()
         self._fs.open_uploads.discard(self._path)
         super().close()
@@ -398,6 +403,7 @@ class _FakeObjectStore(fsspec.AbstractFileSystem):
         self.store: dict[str, bytes] = {}
         self.open_uploads: set[str] = set()
         self.aborted: set[str] = set()
+        self.fail_close: set[str] = set()  # paths whose commit (close) raises
 
     def _open(self, path, mode="rb", **kwargs):
         if "w" in mode:
@@ -420,6 +426,7 @@ def fake_object_store():
     fs.store.clear()
     fs.open_uploads.clear()
     fs.aborted.clear()
+    fs.fail_close.clear()
     return fs
 
 
@@ -439,6 +446,22 @@ def test_scatter_aborts_multipart_upload_on_write_failure(fake_object_store):
     assert stripped in fs.aborted, "multipart upload was not aborted on failure"
     assert stripped not in fs.open_uploads, "in-flight upload left dangling"
     assert stripped not in fs.store, "failed shard committed an output object"
+
+
+def test_scatter_aborts_multipart_upload_when_commit_fails(fake_object_store):
+    """A close() that fails while committing (dead R2 connection) must still
+    abort the upload, even though fsspec has already marked the file closed."""
+    fs = fake_object_store
+    path = "fakempu://bucket/stage/shard-0002.shuffle"
+    stripped = fs._strip_protocol(path)
+    fs.fail_close.add(stripped)
+
+    with pytest.raises(OSError, match="commit failed"):
+        _write_scatter(iter([{"k": "a"}, {"k": "b"}]), source_shard=0, data_path=path, key_fn=_key, num_output_shards=2)
+
+    assert stripped in fs.aborted, "upload not aborted after a failed commit"
+    assert stripped not in fs.open_uploads, "in-flight upload left dangling"
+    assert stripped not in fs.store, "failed commit left a committed object"
 
 
 def test_scatter_commits_multipart_upload_on_success(fake_object_store):
