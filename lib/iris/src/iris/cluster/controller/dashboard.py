@@ -60,13 +60,11 @@ from iris.cluster.dashboard_common import (
 from iris.rpc.async_adapter import AsyncServiceAdapter
 from iris.rpc.auth import (
     SESSION_COOKIE,
-    IapAssertionVerifier,
+    ControllerAuthPolicy,
     NullAuthInterceptor,
-    TokenVerifier,
     authorize_method,
     extract_bearer_token,
     identity_scope,
-    resolve_auth,
 )
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication
@@ -100,9 +98,7 @@ async def _enforce_http_auth(
     scope: Scope,
     receive: Receive,
     send: Send,
-    verifier: TokenVerifier,
-    optional: bool,
-    iap_assertion_verifier: IapAssertionVerifier | None = None,
+    policy: ControllerAuthPolicy,
 ) -> bool:
     """Resolve auth for an ASGI scope; on failure send a 401 and return False.
 
@@ -114,13 +110,10 @@ async def _enforce_http_auth(
     headers = _scope_headers(scope)
     token = extract_bearer_token(headers)
     try:
-        identity = resolve_auth(
+        identity = policy.resolve(
             token,
-            verifier,
-            optional,
             client_address=_scope_client_address(scope),
             headers=headers,
-            iap_assertion_verifier=iap_assertion_verifier,
         )
     except ValueError:
         response = JSONResponse({"error": "authentication required"}, status_code=401)
@@ -143,17 +136,9 @@ class _RouteAuthMiddleware:
     so HTTP and gRPC layers agree on allow/deny for every token state.
     """
 
-    def __init__(
-        self,
-        app: Starlette,
-        verifier: TokenVerifier,
-        optional: bool = False,
-        iap_assertion_verifier: IapAssertionVerifier | None = None,
-    ):
+    def __init__(self, app: Starlette, policy: ControllerAuthPolicy):
         self._app = app
-        self._verifier = verifier
-        self._optional = optional
-        self._iap_assertion_verifier = iap_assertion_verifier
+        self._policy = policy
         self._router = app.router
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -194,9 +179,7 @@ class _RouteAuthMiddleware:
         return "skip"
 
     async def _check_auth(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if not await _enforce_http_auth(
-            scope, receive, send, self._verifier, self._optional, self._iap_assertion_verifier
-        ):
+        if not await _enforce_http_auth(scope, receive, send, self._policy):
             return
         await self._app(scope, receive, send)
 
@@ -256,16 +239,9 @@ class _DashboardAuthInterceptor:
     - no token + required → rejected
     """
 
-    def __init__(
-        self,
-        verifier: TokenVerifier,
-        optional: bool = False,
-        iap_assertion_verifier: IapAssertionVerifier | None = None,
-    ):
-        self._verifier = verifier
-        self._optional = optional
-        self._iap_assertion_verifier = iap_assertion_verifier
-        self._null = NullAuthInterceptor(verifier=verifier)
+    def __init__(self, policy: ControllerAuthPolicy):
+        self._policy = policy
+        self._null = NullAuthInterceptor(verifier=policy.verifier)
 
     def _resolve_or_raise(self, ctx):
         """Returns (identity, fallback_to_null). Raises ConnectError on rejection."""
@@ -273,13 +249,10 @@ class _DashboardAuthInterceptor:
         headers = ctx.request_headers()
         token = extract_bearer_token(headers)
         try:
-            identity = resolve_auth(
+            identity = self._policy.resolve(
                 token,
-                self._verifier,
-                self._optional,
                 client_address=ctx.client_address(),
                 headers=headers,
-                iap_assertion_verifier=self._iap_assertion_verifier,
             )
         except ValueError as exc:
             if token is None:
@@ -365,15 +338,11 @@ class _SubdomainProxyMiddleware:
         app: ASGIApp,
         *,
         endpoint_proxy: EndpointProxy,
-        auth_verifier: TokenVerifier | None = None,
-        auth_optional: bool = False,
-        iap_assertion_verifier: IapAssertionVerifier | None = None,
+        auth_policy: ControllerAuthPolicy = ControllerAuthPolicy(),
     ):
         self._app = app
         self._endpoint_proxy = endpoint_proxy
-        self._auth_verifier = auth_verifier
-        self._auth_optional = auth_optional
-        self._iap_assertion_verifier = iap_assertion_verifier
+        self._auth_policy = auth_policy
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -385,10 +354,8 @@ class _SubdomainProxyMiddleware:
             await self._app(scope, receive, send)
             return
 
-        if self._auth_verifier is not None:
-            if not await _enforce_http_auth(
-                scope, receive, send, self._auth_verifier, self._auth_optional, self._iap_assertion_verifier
-            ):
+        if self._auth_policy.verifier is not None:
+            if not await _enforce_http_auth(scope, receive, send, self._auth_policy):
                 return
 
         request = Request(scope, receive=receive)
@@ -447,21 +414,17 @@ class ControllerDashboard:
         log_service: LogServiceProxy,
         host: str = "0.0.0.0",
         port: int = 8080,
-        auth_verifier: TokenVerifier | None = None,
         auth_provider: str | None = None,
-        auth_optional: bool = False,
         finelog_stats_service: StatsServiceProxy | None = None,
-        iap_assertion_verifier: IapAssertionVerifier | None = None,
+        auth_policy: ControllerAuthPolicy = ControllerAuthPolicy(),
     ):
         self._service = service
         self._log_service = log_service
         self._finelog_stats_service = finelog_stats_service
         self._host = host
         self._port = port
-        self._auth_verifier = auth_verifier
         self._auth_provider = auth_provider
-        self._auth_optional = auth_optional
-        self._iap_assertion_verifier = iap_assertion_verifier
+        self._auth_policy = auth_policy
         # In-process RPC statistics. Fed by RequestTimingInterceptor on the
         # ControllerService chain only; LogService's chatty FetchLogs traffic
         # would dominate the numbers if included.
@@ -485,16 +448,12 @@ class ControllerDashboard:
         include_tb = bool(os.environ.get("IRIS_DEBUG"))
         controller_timing = RequestTimingInterceptor(include_traceback=include_tb, collector=self._stats_collector)
         log_timing = RequestTimingInterceptor(include_traceback=include_tb)
-        if self._auth_provider is not None and self._auth_verifier is not None:
-            auth_interceptor = _DashboardAuthInterceptor(
-                self._auth_verifier,
-                optional=self._auth_optional,
-                iap_assertion_verifier=self._iap_assertion_verifier,
-            )
+        if self._auth_provider is not None and self._auth_policy.verifier is not None:
+            auth_interceptor = _DashboardAuthInterceptor(self._auth_policy)
         else:
             # Null-auth mode: no provider configured. Verify worker tokens
             # when present but treat everything as anonymous/admin.
-            auth_interceptor = NullAuthInterceptor(verifier=self._auth_verifier)
+            auth_interceptor = NullAuthInterceptor(verifier=self._auth_policy.verifier)
         controller_interceptors = [auth_interceptor, controller_timing]
         # @on_loop handlers run inline on the event loop; everything else
         # is dispatched to a thread by AsyncServiceAdapter.
@@ -616,13 +575,8 @@ class ControllerDashboard:
         # kwarg, so we flip it after construction.
         app.router.redirect_slashes = False
         wrapped: ASGIApp = app
-        if self._auth_verifier is not None and self._auth_provider is not None:
-            wrapped = _RouteAuthMiddleware(
-                app,
-                self._auth_verifier,
-                optional=self._auth_optional,
-                iap_assertion_verifier=self._iap_assertion_verifier,
-            )
+        if self._auth_policy.verifier is not None and self._auth_provider is not None:
+            wrapped = _RouteAuthMiddleware(app, self._auth_policy)
         # Wrap auth so the legacy FetchLogs rewrite happens before route
         # matching: auth and routing both see the canonical path.
         wrapped = _LegacyFetchLogsRedirect(wrapped)
@@ -632,9 +586,7 @@ class ControllerDashboard:
         wrapped = _SubdomainProxyMiddleware(
             wrapped,
             endpoint_proxy=self._endpoint_proxy,
-            auth_verifier=self._auth_verifier,
-            auth_optional=self._auth_optional,
-            iap_assertion_verifier=self._iap_assertion_verifier,
+            auth_policy=self._auth_policy,
         )
         return wrapped
 
@@ -647,10 +599,10 @@ class ControllerDashboard:
     def _session_bootstrap(self, request: Request) -> Response:
         """Accept token via query param, set cookie, redirect to dashboard."""
         token = request.query_params.get("token", "")
-        if not token or self._auth_verifier is None:
+        if not token or self._auth_policy.verifier is None:
             return RedirectResponse("/", status_code=302)
         try:
-            self._auth_verifier.verify(token)
+            self._auth_policy.verifier.verify(token)
         except ValueError:
             return JSONResponse({"error": "invalid token"}, status_code=401)
         response = RedirectResponse("/", status_code=302)
@@ -671,7 +623,7 @@ class ControllerDashboard:
                     "name": descriptor.name,
                     "capabilities": descriptor.capabilities,
                 },
-                "optional": self._auth_optional,
+                "optional": self._auth_policy.optional,
             }
         )
 
@@ -686,9 +638,9 @@ class ControllerDashboard:
         token = body.get("token", "").strip()
         if not token:
             return JSONResponse({"error": "token required"}, status_code=400)
-        if self._auth_verifier is not None:
+        if self._auth_policy.verifier is not None:
             try:
-                self._auth_verifier.verify(token)
+                self._auth_policy.verifier.verify(token)
             except ValueError:
                 return JSONResponse({"error": "invalid token"}, status_code=401)
         response = JSONResponse({"ok": True})

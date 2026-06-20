@@ -38,7 +38,7 @@ from iris.cluster.controller.schema import jobs_table, task_attempts_table, task
 from iris.cluster.controller.service import ControllerServiceImpl, _overlay_worker_usability
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, WorkerUsability
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
-from iris.rpc.auth import StaticTokenVerifier
+from iris.rpc.auth import ControllerAuthPolicy, StaticTokenVerifier
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
 from sqlalchemy import func, select
@@ -1375,7 +1375,9 @@ def test_auth_config_returns_disabled_by_default(client):
 def test_auth_config_returns_enabled_when_verifier_set(service, log_service):
     """Auth config endpoint reports auth enabled with provider name."""
     verifier = StaticTokenVerifier({"test-token": "test-user"})
-    dashboard = ControllerDashboard(service, log_service=log_service, auth_verifier=verifier, auth_provider="gcp")
+    dashboard = ControllerDashboard(
+        service, log_service=log_service, auth_provider="gcp", auth_policy=ControllerAuthPolicy(verifier=verifier)
+    )
     authed_client = TestClient(dashboard.app)
 
     resp = authed_client.get("/auth/config")

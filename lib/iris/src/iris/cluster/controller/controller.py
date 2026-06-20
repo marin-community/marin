@@ -88,7 +88,7 @@ from iris.cluster.types import (
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider, TokenVerifier
+from iris.rpc.auth import AuthTokenInjector, ControllerAuthPolicy, StaticTokenProvider, TokenVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -383,11 +383,13 @@ class Controller:
             log_service=self._remote_log_service,
             host=config.host,
             port=config.port,
-            auth_verifier=config.auth_verifier,
             auth_provider=config.auth_provider,
-            auth_optional=config.auth.optional if config.auth else False,
             finelog_stats_service=self._remote_stats_service,
-            iap_assertion_verifier=config.auth.iap_assertion_verifier if config.auth else None,
+            auth_policy=ControllerAuthPolicy(
+                verifier=config.auth_verifier,
+                optional=config.auth.optional if config.auth else False,
+                iap_assertion_verifier=config.auth.iap_assertion_verifier if config.auth else None,
+            ),
         )
 
         # Wakes the control-tick driver. A submit triggers a schedule-only

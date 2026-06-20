@@ -486,6 +486,45 @@ def resolve_auth(
     raise ValueError("Missing authentication")
 
 
+@dataclass(frozen=True)
+class ControllerAuthPolicy:
+    """Server-side auth policy for the controller's HTTP middleware and RPC interceptor.
+
+    Bundles the three inputs ``resolve_auth`` needs — the bearer-token
+    ``verifier``, whether tokenless requests are allowed (``optional``), and the
+    optional IAP signed-header assertion verifier — so they are threaded as one
+    value instead of as a recurring parameter trio. The server-side mirror of the
+    client-side :class:`ClientCredentials`.
+    """
+
+    verifier: "TokenVerifier | None" = None
+    optional: bool = False
+    iap_assertion_verifier: "IapAssertionVerifier | None" = None
+
+    def resolve(
+        self,
+        token: str | None,
+        *,
+        client_address: str | None = None,
+        headers: dict | None = None,
+    ) -> VerifiedIdentity | None:
+        """Resolve a request's identity under this policy (see :func:`resolve_auth`).
+
+        Only invoked on auth-enabled surfaces, where ``verifier`` is always set
+        (the controller mounts these middlewares/interceptors only when auth is
+        configured; null-auth uses ``NullAuthInterceptor`` instead).
+        """
+        assert self.verifier is not None, "ControllerAuthPolicy.resolve requires a verifier"
+        return resolve_auth(
+            token,
+            self.verifier,
+            self.optional,
+            client_address=client_address,
+            headers=headers,
+            iap_assertion_verifier=self.iap_assertion_verifier,
+        )
+
+
 class AuthInterceptor:
     """Server-side Connect RPC interceptor that enforces bearer token auth.
 

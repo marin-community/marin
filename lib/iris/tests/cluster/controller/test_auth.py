@@ -39,6 +39,7 @@ from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.rpc.auth import (
     DASHBOARD_ROLE,
     SESSION_COOKIE,
+    ControllerAuthPolicy,
     StaticTokenVerifier,
     VerifiedIdentity,
     get_verified_identity,
@@ -105,7 +106,9 @@ def verifier():
 
 @pytest.fixture
 def authed_client(service, log_service, verifier):
-    dashboard = ControllerDashboard(service, log_service=log_service, auth_verifier=verifier, auth_provider="gcp")
+    dashboard = ControllerDashboard(
+        service, log_service=log_service, auth_provider="gcp", auth_policy=ControllerAuthPolicy(verifier=verifier)
+    )
     return TestClient(dashboard.app)
 
 
@@ -370,9 +373,8 @@ def optional_auth_client(service, log_service, verifier):
     dashboard = ControllerDashboard(
         service,
         log_service=log_service,
-        auth_verifier=verifier,
         auth_provider="static",
-        auth_optional=True,
+        auth_policy=ControllerAuthPolicy(verifier=verifier, optional=True),
     )
     return TestClient(dashboard.app)
 
@@ -496,9 +498,8 @@ def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier,
     dashboard = ControllerDashboard(
         service,
         log_service=log_service,
-        auth_verifier=verifier,
         auth_provider="static",
-        auth_optional=optional,
+        auth_policy=ControllerAuthPolicy(verifier=verifier, optional=optional),
     )
     # Inject a @requires_auth route. The app is wrapped in
     # _SubdomainProxyMiddleware → _LegacyFetchLogsRedirect → _RouteAuthMiddleware
@@ -553,7 +554,9 @@ def _assertion_ctx(method_name: str):
 
 def test_dashboard_interceptor_allows_read_for_iap_browser():
     interceptor = _DashboardAuthInterceptor(
-        StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
+        ControllerAuthPolicy(
+            verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
+        )
     )
     seen = []
 
@@ -568,7 +571,9 @@ def test_dashboard_interceptor_allows_read_for_iap_browser():
 
 def test_dashboard_interceptor_denies_mutation_for_iap_browser():
     interceptor = _DashboardAuthInterceptor(
-        StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
+        ControllerAuthPolicy(
+            verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
+        )
     )
     ran = []
 
@@ -603,7 +608,9 @@ def test_dashboard_interceptor_allows_mutation_for_provisioned_iap_admin():
     # admin behind IAP (no Iris JWT) resolves to the admin role and so reaches a
     # gated mutation that the read-only dashboard role would be denied.
     interceptor = _DashboardAuthInterceptor(
-        StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_RoleAssertionVerifier("admin")
+        ControllerAuthPolicy(
+            verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_RoleAssertionVerifier("admin")
+        )
     )
     seen = []
 
@@ -622,7 +629,11 @@ def test_dashboard_interceptor_login_reachable_for_unprovisioned_iap_browser():
     # Login handler — `iris login` is never blocked by the dashboard gate. Guards
     # against accidentally moving the role check ahead of that exemption.
     interceptor = _DashboardAuthInterceptor(
-        StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_RoleAssertionVerifier(DASHBOARD_ROLE)
+        ControllerAuthPolicy(
+            verifier=StaticTokenVerifier({}),
+            optional=False,
+            iap_assertion_verifier=_RoleAssertionVerifier(DASHBOARD_ROLE),
+        )
     )
     result = interceptor.intercept_unary_sync(lambda _req, _ctx: "ok", "req", _assertion_ctx("Login"))
     assert result == "ok"
