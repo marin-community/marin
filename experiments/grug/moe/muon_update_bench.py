@@ -6752,6 +6752,16 @@ def boundary_phase_type_totals(boundary_phases: list[dict[str, Any]]) -> dict[st
     return totals
 
 
+def boundary_phase_type_gbps(
+    boundary_phase_totals: dict[str, float | None],
+    seconds: float | None,
+) -> dict[str, float | None]:
+    return {
+        collective_type: effective_gbps(boundary_phase_totals[f"{collective_type}_global_bytes"], seconds)
+        for collective_type in ("all_gather", "all_reduce", "reduce_scatter", "all_to_all", "collective_permute")
+    }
+
+
 def boundary_primitive_name(bench_kind: str) -> str | None:
     if bench_kind == EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH:
         return "fsdp_grads_to_grouped_chunks"
@@ -9963,6 +9973,11 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
     row = {
         "label": result["metadata"]["label"],
         "bench_kind": bench_kind,
+        "devices": result["metadata"]["devices"],
+        "replica_axis": config["replica_axis"],
+        "data_axis": config["data_axis"],
+        "expert_axis": config["expert_axis"],
+        "model_axis": config["model_axis"],
         "backend_steps": config["backend_steps"],
         "max_grouped_stack_size": config["max_grouped_stack_size"],
         "grouped_expert_consumer_tokens_per_expert": config["grouped_expert_consumer_tokens_per_expert"],
@@ -10126,6 +10141,8 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
             compiled_hlo,
             has_boundary_phases=bool(boundary_phases),
         )
+        mean_phase_type_gbps = boundary_phase_type_gbps(boundary_phase_totals, timing["mean_seconds"])
+        median_phase_type_gbps = boundary_phase_type_gbps(boundary_phase_totals, timing["median_seconds"])
         mean_tflops = estimated_tflops(flops, timing["mean_seconds"])
         median_tflops = estimated_tflops(flops, timing["median_seconds"])
         boundary_global_bytes = boundary_bytes.get("global_update_bytes")
@@ -10212,6 +10229,20 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                     boundary_phase_global_bytes,
                     timing["median_seconds"],
                 ),
+                "mean_estimated_boundary_phase_all_gather_global_gbps": mean_phase_type_gbps["all_gather"],
+                "median_estimated_boundary_phase_all_gather_global_gbps": median_phase_type_gbps["all_gather"],
+                "mean_estimated_boundary_phase_all_reduce_global_gbps": mean_phase_type_gbps["all_reduce"],
+                "median_estimated_boundary_phase_all_reduce_global_gbps": median_phase_type_gbps["all_reduce"],
+                "mean_estimated_boundary_phase_reduce_scatter_global_gbps": mean_phase_type_gbps["reduce_scatter"],
+                "median_estimated_boundary_phase_reduce_scatter_global_gbps": median_phase_type_gbps["reduce_scatter"],
+                "mean_estimated_boundary_phase_all_to_all_global_gbps": mean_phase_type_gbps["all_to_all"],
+                "median_estimated_boundary_phase_all_to_all_global_gbps": median_phase_type_gbps["all_to_all"],
+                "mean_estimated_boundary_phase_collective_permute_global_gbps": mean_phase_type_gbps[
+                    "collective_permute"
+                ],
+                "median_estimated_boundary_phase_collective_permute_global_gbps": median_phase_type_gbps[
+                    "collective_permute"
+                ],
             }
             | {f"estimated_boundary_compiled_{key}": value for key, value in compiled_type_efficiency.items()}
         )

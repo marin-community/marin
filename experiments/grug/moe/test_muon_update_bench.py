@@ -4670,6 +4670,11 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
 
     row = summary_row(result)
 
+    assert row["devices"] == 16
+    assert row["replica_axis"] == 1
+    assert row["data_axis"] == 2
+    assert row["expert_axis"] == 2
+    assert row["model_axis"] == 1
     assert row["estimated_boundary_phases"] == phases
     assert row["estimated_boundary_phase_count"] == 3
     assert row["estimated_boundary_phase_global_bytes"] == 3 * estimates["global_update_bytes"]
@@ -4705,6 +4710,14 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
     assert row["boundary_correctness_skipped_reason"] == "estimated global bytes 2 exceed correctness cap 1"
     assert row["mean_estimated_boundary_phase_global_gbps"] == 3 * estimates["global_update_bytes"] / 2.0 / 1e9
     assert row["median_estimated_boundary_phase_global_gbps"] == 3 * estimates["global_update_bytes"] / 2.0 / 1e9
+    assert row["mean_estimated_boundary_phase_all_to_all_global_gbps"] == (
+        3 * estimates["global_update_bytes"] / 2.0 / 1e9
+    )
+    assert row["median_estimated_boundary_phase_all_to_all_global_gbps"] == (
+        3 * estimates["global_update_bytes"] / 2.0 / 1e9
+    )
+    assert row["mean_estimated_boundary_phase_all_gather_global_gbps"] is None
+    assert row["median_estimated_boundary_phase_all_gather_global_gbps"] is None
 
     direction_phases = estimated_boundary_phase_estimates(config, EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH)
     assert [phase["name"] for phase in direction_phases] == [
@@ -4941,6 +4954,14 @@ def test_real_grouped_muonh_summary_row_reports_boundary_phase_estimates(
         * estimates["global_update_bytes"]
         / 2.0
         / 1e9
+    )
+    assert (
+        row["mean_estimated_boundary_phase_all_gather_global_gbps"]
+        == expected_all_gather_bytes_multiplier * estimates["global_update_bytes"] / 2.0 / 1e9
+    )
+    assert (
+        row["mean_estimated_boundary_phase_all_to_all_global_gbps"]
+        == expected_all_to_all_bytes_multiplier * estimates["global_update_bytes"] / 2.0 / 1e9
     )
 
 

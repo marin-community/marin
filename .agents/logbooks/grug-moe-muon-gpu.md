@@ -2777,3 +2777,24 @@ Post-compile steps were stable around 0.65-0.66s:
   - Treat the W&B crash as post-profile artifact handling, not as invalidating
     the May208 performance/profile evidence. The steady-state profile remains
     a valid negative result for the chunk-local fallback.
+
+### 2026-06-20 11:41 PDT - Boundary rows include axes and type bandwidth
+- Hypothesis:
+  - The boundary primitive goal needs a compact table that can be screened
+    without opening HLO or TensorBoard. The summary rows already reported
+    estimated bytes, peak HBM, total boundary GB/s, and per-type collective
+    count excess, but they did not directly report the mesh axes or
+    per-collective-type estimated bandwidth.
+- Change:
+  - Added `devices`, `replica_axis`, `data_axis`, `expert_axis`, and
+    `model_axis` to each `summary_row`.
+  - Added mean/median estimated boundary phase GB/s split by expected
+    collective type:
+    `all_gather`, `all_reduce`, `reduce_scatter`, `all_to_all`, and
+    `collective_permute`.
+- Command:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_packed_bank_boundary_phase_estimates experiments/grug/moe/test_muon_update_bench.py::test_real_grouped_muonh_summary_row_reports_boundary_phase_estimates experiments/grug/moe/test_muon_update_bench.py::test_summary_row_flags_boundary_collective_type_excess -q`
+  - `./infra/pre-commit.py --files experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix`
+- Result:
+  - Pytest: `5 passed in 5.05s`.
+  - Pre-commit: OK after formatter fix.
