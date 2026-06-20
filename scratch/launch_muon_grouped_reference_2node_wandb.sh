@@ -9,8 +9,10 @@ export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/coreweave-iris-gpu}"
 
 export MUON_BENCH_GPU_REPLICAS="${MUON_BENCH_GPU_REPLICAS:-2}"
 export MUON_BENCH_LAYERS="${MUON_BENCH_LAYERS:-26}"
-export MUON_BENCH_REPLICA_AXIS="${MUON_BENCH_REPLICA_AXIS:-2}"
-export MUON_BENCH_DATA_AXIS="${MUON_BENCH_DATA_AXIS:-1}"
+# Use the second node as data/FSDP by default. R2D1 replicates the full expert
+# params, grads, and grouped MuonH state across nodes and can OOM before timing.
+export MUON_BENCH_REPLICA_AXIS="${MUON_BENCH_REPLICA_AXIS:-1}"
+export MUON_BENCH_DATA_AXIS="${MUON_BENCH_DATA_AXIS:-2}"
 export MUON_BENCH_EXPERT_AXIS="${MUON_BENCH_EXPERT_AXIS:-8}"
 export MUON_BENCH_MODEL_AXIS="${MUON_BENCH_MODEL_AXIS:-1}"
 # Larger groups pack the grouped-to-FSDP restore into fewer collectives, but G26
@@ -48,7 +50,7 @@ export MUON_BENCH_TRACKER="${MUON_BENCH_TRACKER:-wandb}"
 export MUON_BENCH_WANDB_PROJECT="${MUON_BENCH_WANDB_PROJECT:-${WANDB_PROJECT:-marin_moe}}"
 export MUON_BENCH_WANDB_GROUP="${MUON_BENCH_WANDB_GROUP:-grug-moe-cw-muon-update-bench}"
 
-export RUN_ID="${RUN_ID:-MUON-BENCH-D2560-L26-R2D1E8-G${MUON_BENCH_NS4D_GROUP_SIZE}-H3-N2-cw-${STAMP}}"
+export RUN_ID="${RUN_ID:-MUON-BENCH-D2560-L26-R${MUON_BENCH_REPLICA_AXIS}D${MUON_BENCH_DATA_AXIS}E${MUON_BENCH_EXPERT_AXIS}-G${MUON_BENCH_NS4D_GROUP_SIZE}-H3-N2-cw-${STAMP}}"
 
 if [[ "${MUON_BENCH_READABLE_PROFILE:-false}" == "true" ]]; then
   export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_enable_command_buffer=}"

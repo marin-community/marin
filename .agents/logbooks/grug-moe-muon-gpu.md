@@ -1662,3 +1662,28 @@ Post-compile steps were stable around 0.65-0.66s:
   - The new production test constructs ordinary `MoEMLP` layers, converts them with `GroupedMoEMLP.from_layers`, and verifies the grouped path lowers under a small explicit abstract mesh while preserving grouped output and router-stat shapes.
 - Interpretation: This is a concrete integration step for the representation-pivot path. It does not yet replace the full transformer block loop or prove full-train performance, but it moves grouped expert banks from benchmark-only code into the production model module boundary with a real router + grouped expert consumer.
 - Next action: Add a grouped block/transformer execution mode that batches adjacent `Block.mlp` calls through `GroupedMoEMLP` while leaving attention and non-expert parameters per-layer. Then compile a short production block/train-step gate and compare communication against the synthetic grouped MoE consumer H100 gate.
+
+### 2026-06-20 00:42 PDT - retargeted FSDP boundary primitive baseline
+- Hypothesis: The conservative MuonH path should be judged as two explicit FSDP boundary primitives, not as generic grouped-Muon speed: `fsdp_grads_to_grouped_chunks` and `grouped_updates_to_fsdp_apply`, expert weights first.
+- Goal file: `/Users/dlwh/.codex/attachments/75b6836e-e804-41b6-9e08-04bdc3440f44/goal-objective.md`.
+- Change:
+  - Updated `scratch/launch_muon_grouped_reference_2node_wandb.sh` to default to `R1D2E8` instead of `R2D1E8`. The old lazy default used the second node as `replica_dcn`, which replicated the full expert params, grads, and grouped MuonH state across nodes and OOMed before timing with a 10.16 GiB allocation.
+  - Added `boundary_primitive` and effective GB/s summary fields to the Muon update bench rows.
+  - Labeled the real FSDP grouped optimizer-update harness as the full pipeline it currently is: `fsdp_grads_to_grouped_chunks+grouped_muon_update+grouped_updates_to_fsdp_update_tree`.
+- Run:
+  - Command: `bash scratch/launch_muon_grouped_reference_2node_wandb.sh`.
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-062333`.
+  - Child Iris job: `/dlwh/iris-run-job-20260620-062333/grug-train-MUON-BENCH-D2560-L26-R1D2E8-G8-H3-N2-cw-20260620-062330`.
+  - W&B: `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-N2-cw-20260620-062330`.
+  - Output prefix: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-N2-cw-20260620-062330-712698`.
+- Result:
+  - Iris parent and child both succeeded. No OOM or rendezvous failure.
+  - Lowered HLO: 24 all-gathers, 0 all-reduces, 0 all-to-alls, 0 reduce-scatters, 72 dot-generals, 72 two-batch-axis dot-generals, `lower_seconds ~= 0.52`.
+  - Timed compiled HLO: 24 all-gathers, 0 all-reduces, 0 all-to-alls, 0 reduce-scatters, 270 custom calls, 369 GPU GEMM custom calls.
+  - Timing: mean `0.4748943s`, median `0.4750389s`, min `0.4734679s`.
+  - Estimated compute: mean `5114.41 TFLOP/s`, about `32.32%` of nominal H100 bf16 peak across 16 GPUs.
+  - Boundary estimates: global update bytes `130,862,284,800`, grouped input per device `8,178,892,800`, FSDP output per device `8,178,892,800`, all-gather slice peak per device `16,357,785,600`.
+  - Fragmentation: compiled collective count `24`, ideal count `2`, fragmentation factor `12.0`.
+  - Replica fanout: factor `1.0`, `requires_replica_fanout=false`.
+- Interpretation: The `R1D2E8` shape fixes the replicated-state OOM and gives a runnable 2-node reference, but it does not satisfy the retargeted boundary goal. The main failure mode remains collective fragmentation: XLA compiled the expert boundary as 24 serialized all-gathers instead of a small number of coarse transports.
+- Next action: Implement a focused expert-weight `fsdp_grads_to_grouped_chunks` benchmark and a focused `grouped_updates_to_fsdp_apply` benchmark with correctness max-error and peak-HBM fields. The lower-level bridge must beat this R1D2E8 baseline in compiled HLO, not only lowered StableHLO.

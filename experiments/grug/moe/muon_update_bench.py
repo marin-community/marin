@@ -5800,6 +5800,61 @@ def estimated_boundary_byte_estimates(config: BenchConfig, bench_kind: str) -> d
     }
 
 
+def boundary_primitive_name(bench_kind: str) -> str | None:
+    if bench_kind in (
+        EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_EXPLICIT_RESTORE_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_A2A_RESTORE_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_PPERMUTE_RESTORE_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_EXPLICIT_DATA_PPERMUTE_RESTORE_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_EXPLICIT_TUPLE_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
+    ):
+        return "grouped_updates_to_fsdp_update_tree"
+    if bench_kind == REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH:
+        return "fsdp_grads_to_grouped_chunks+grouped_muon_update+grouped_updates_to_fsdp_update_tree"
+    if bench_kind in (
+        EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_EXPLICIT_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_A2A_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_EXPLICIT_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_PACKED_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_DIRECT_APPLY_BENCH,
+    ):
+        return "grouped_updates_apply_direct"
+    if bench_kind in (
+        EXPERT_FSDP_GROUPED_TARGET_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_TARGET_APPLY_CHUNKED_FSDP_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
+        EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+    ):
+        return "grouped_updates_to_fsdp_update_tree_then_optax_apply"
+    if bench_kind == REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH:
+        return "fsdp_grads_to_grouped_chunks+grouped_muon_update+grouped_updates_to_fsdp_update_tree_then_optax_apply"
+    if bench_kind in (
+        EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+        EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+        EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH,
+    ):
+        return "grouped_muon_update"
+    if is_expert_fsdp_grouped_bench(bench_kind):
+        return "grouped_boundary_candidate"
+    return None
+
+
 def boundary_collective_payload_estimates(
     boundary_bytes: dict[str, Any],
     hlo_summary: dict[str, Any] | None,
@@ -5859,6 +5914,12 @@ def percent_h100_bf16_peak(tflops: float | None, devices: int) -> float | None:
     if tflops is None:
         return None
     return 100 * tflops / (devices * NOMINAL_H100_BF16_DENSE_TFLOPS)
+
+
+def effective_gbps(bytes_count: float | None, seconds: float | None) -> float | None:
+    if bytes_count is None or seconds is None or seconds <= 0:
+        return None
+    return bytes_count / seconds / 1e9
 
 
 def lower_tree_update(
@@ -8305,6 +8366,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "ns4d_compute_sharding_spec": result["metadata"]["ns4d_compute_sharding_spec"],
         "ns4d_result_sharding_spec": result["metadata"]["ns4d_result_sharding_spec"],
         "ns4d_boundary_status": result["metadata"]["ns4d_boundary_status"],
+        "boundary_primitive": boundary_primitive_name(bench_kind),
         "boundary_collectives_allowed": result["metadata"]["boundary_collectives_allowed"],
         "boundary_collectives_required_absent": result["metadata"]["boundary_collectives_required_absent"],
         "estimated_ns_dot_flops": flops,
@@ -8378,6 +8440,9 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         compiled_fragmentation = boundary_collective_fragmentation(bench_config, bench_kind, compiled_hlo)
         mean_tflops = estimated_tflops(flops, timing["mean_seconds"])
         median_tflops = estimated_tflops(flops, timing["median_seconds"])
+        boundary_global_bytes = boundary_bytes.get("global_update_bytes")
+        boundary_grouped_input_bytes = boundary_bytes.get("grouped_input_per_device_bytes")
+        boundary_fsdp_output_bytes = boundary_bytes.get("fsdp_output_per_device_bytes")
         row.update(
             {
                 "compile_seconds": timing["compile_seconds"],
@@ -8411,6 +8476,19 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                 "median_estimated_tflops": median_tflops,
                 "mean_h100_bf16_peak_pct": percent_h100_bf16_peak(mean_tflops, devices),
                 "median_h100_bf16_peak_pct": percent_h100_bf16_peak(median_tflops, devices),
+                "mean_estimated_boundary_global_gbps": effective_gbps(boundary_global_bytes, timing["mean_seconds"]),
+                "median_estimated_boundary_global_gbps": effective_gbps(
+                    boundary_global_bytes,
+                    timing["median_seconds"],
+                ),
+                "mean_estimated_boundary_grouped_input_per_device_gbps": effective_gbps(
+                    boundary_grouped_input_bytes,
+                    timing["mean_seconds"],
+                ),
+                "mean_estimated_boundary_fsdp_output_per_device_gbps": effective_gbps(
+                    boundary_fsdp_output_bytes,
+                    timing["mean_seconds"],
+                ),
             }
         )
     return row

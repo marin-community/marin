@@ -3313,6 +3313,7 @@ def test_summary_row_reports_boundary_byte_estimates():
 
     row = summary_row(result)
 
+    assert row["boundary_primitive"] == "grouped_updates_apply_direct"
     assert row["estimated_boundary_global_update_bytes"] == estimates["global_update_bytes"]
     assert row["estimated_boundary_grouped_input_per_device_bytes"] == estimates["grouped_input_per_device_bytes"]
     assert row["estimated_boundary_fsdp_output_per_device_bytes"] == estimates["fsdp_output_per_device_bytes"]
@@ -3373,6 +3374,10 @@ def test_summary_row_reports_boundary_byte_estimates():
     result["metadata"]["bench_kind"] = REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH
     row = summary_row(result)
 
+    assert (
+        row["boundary_primitive"]
+        == "fsdp_grads_to_grouped_chunks+grouped_muon_update+grouped_updates_to_fsdp_update_tree"
+    )
     assert row["estimated_boundary_global_update_bytes"] == estimates["global_update_bytes"]
     assert row["estimated_boundary_grouped_input_per_device_bytes"] == estimates["grouped_input_per_device_bytes"]
     assert row["estimated_boundary_fsdp_output_per_device_bytes"] == estimates["fsdp_output_per_device_bytes"]
@@ -3412,6 +3417,12 @@ def test_summary_row_reports_boundary_byte_estimates():
     assert row["estimated_boundary_compiled_collective_count"] == 8.0
     assert row["estimated_boundary_compiled_ideal_collective_count"] == 2.0
     assert row["estimated_boundary_compiled_fragmentation_factor"] == 4.0
+    assert row["mean_estimated_boundary_global_gbps"] == estimates["global_update_bytes"] / 1e9
+    assert row["median_estimated_boundary_global_gbps"] == estimates["global_update_bytes"] / 1e9
+    assert (
+        row["mean_estimated_boundary_grouped_input_per_device_gbps"] == estimates["grouped_input_per_device_bytes"] / 1e9
+    )
+    assert row["mean_estimated_boundary_fsdp_output_per_device_gbps"] == estimates["fsdp_output_per_device_bytes"] / 1e9
 
 
 def test_strict_boundary_gate_includes_expert_fsdp_and_collective_permute():
