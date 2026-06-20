@@ -494,6 +494,7 @@ class BenchConfig:
     ns_compute_dtype: str = "input"
     nesterov: bool = True
     expert_grouped_muonh_packed_entry: bool = False
+    expert_grouped_muonh_chunk_local_boundaries: bool = False
     grouped_expert_consumer_tokens_per_expert: int = DEFAULT_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT
     grouped_expert_consumer_chunk_tokens: int = DEFAULT_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS
     grouped_expert_consumer_chunk_tokens_per_expert: int = DEFAULT_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS_PER_EXPERT
@@ -2405,6 +2406,7 @@ def build_real_expert_fsdp_grouped_muonh_optimizer(config: BenchConfig) -> optax
         ns_compute_dtype=config.ns_compute_dtype,
         expert_grouped_muonh_group_size=ns4d_group_size(config),
         expert_grouped_muonh_packed_entry=config.expert_grouped_muonh_packed_entry,
+        expert_grouped_muonh_chunk_local_boundaries=config.expert_grouped_muonh_chunk_local_boundaries,
     ).build(num_train_steps=8)
 
 
@@ -9368,6 +9370,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Harness-only diagnostic: disable Nesterov in benchmark optimizers that read BenchConfig.nesterov.",
     )
+    parser.add_argument(
+        "--expert-grouped-muonh-packed-entry",
+        action="store_true",
+        help="Use the whole-bank packed entry/restore boundary in the real grouped MuonH optimizer bench.",
+    )
+    parser.add_argument(
+        "--expert-grouped-muonh-chunk-local-boundaries",
+        action="store_true",
+        help="Use per-chunk packed entry/restore boundaries in the real grouped MuonH optimizer bench.",
+    )
     parser.add_argument("--mode", choices=("lower", "run", "both"), default="both")
     parser.add_argument(
         "--disable-abstract-mesh",
@@ -9470,6 +9482,8 @@ def config_from_args(args: argparse.Namespace) -> BenchConfig:
         learning_rate=args.learning_rate,
         ns_compute_dtype=ns_compute_dtype_name(args.ns_compute_dtype, input_dtype),
         nesterov=not args.no_nesterov,
+        expert_grouped_muonh_packed_entry=args.expert_grouped_muonh_packed_entry,
+        expert_grouped_muonh_chunk_local_boundaries=args.expert_grouped_muonh_chunk_local_boundaries,
         grouped_expert_consumer_tokens_per_expert=args.grouped_expert_consumer_tokens_per_expert,
         grouped_expert_consumer_chunk_tokens=args.grouped_expert_consumer_chunk_tokens,
         grouped_expert_consumer_chunk_tokens_per_expert=args.grouped_expert_consumer_chunk_tokens_per_expert,

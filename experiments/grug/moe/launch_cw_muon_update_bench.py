@@ -77,6 +77,7 @@ class MuonUpdateBenchLaunchConfig:
     learning_rate: float = 0.02
     nesterov: bool = True
     expert_grouped_muonh_packed_entry: bool = False
+    expert_grouped_muonh_chunk_local_boundaries: bool = False
     warmup: int = 1
     iters: int = 3
     grouped_expert_consumer_tokens_per_expert: int = 1
@@ -169,6 +170,7 @@ def _bench_configs(config: MuonUpdateBenchLaunchConfig) -> list[BenchConfig]:
             nesterov=config.nesterov,
             ns_compute_dtype=config.ns_compute_dtype,
             expert_grouped_muonh_packed_entry=config.expert_grouped_muonh_packed_entry,
+            expert_grouped_muonh_chunk_local_boundaries=config.expert_grouped_muonh_chunk_local_boundaries,
             grouped_expert_consumer_tokens_per_expert=config.grouped_expert_consumer_tokens_per_expert,
             grouped_expert_consumer_chunk_tokens=config.grouped_expert_consumer_chunk_tokens,
             grouped_expert_consumer_chunk_tokens_per_expert=config.grouped_expert_consumer_chunk_tokens_per_expert,
@@ -465,6 +467,10 @@ def build_step() -> ExecutorStep:
         learning_rate=env_float("MUON_BENCH_LEARNING_RATE", 0.02),
         nesterov=env_bool("MUON_BENCH_NESTEROV", True),
         expert_grouped_muonh_packed_entry=env_bool("MUON_BENCH_EXPERT_GROUPED_MUONH_PACKED_ENTRY", False),
+        expert_grouped_muonh_chunk_local_boundaries=env_bool(
+            "MUON_BENCH_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES",
+            False,
+        ),
         warmup=env_int("MUON_BENCH_WARMUP", 1),
         iters=env_int("MUON_BENCH_ITERS", 3),
         grouped_expert_consumer_tokens_per_expert=env_int("MUON_BENCH_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT", 1),

@@ -224,6 +224,10 @@ def build_may_optimizer(*, batch_size: int, seq_len: int) -> OptimizerConfig:
             "MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY",
             GrugMoeMuonHConfig.expert_grouped_muonh_packed_entry,
         ),
+        expert_grouped_muonh_chunk_local_boundaries=env_bool(
+            "MAY_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES",
+            GrugMoeMuonHConfig.expert_grouped_muonh_chunk_local_boundaries,
+        ),
         max_grad_norm=None,
         lr_schedule=base_optimizer.lr_schedule,
         decay=base_optimizer.decay,

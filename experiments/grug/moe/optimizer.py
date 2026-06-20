@@ -839,6 +839,7 @@ def _grouped_expert_muonh_updates_with_grouped_trace(
     ns_compute_dtype: str,
     expert_grouped_muonh_group_size: int | None,
     packed_entry_boundary: bool,
+    chunk_local_boundaries: bool,
 ):
     treedef, output_leaves, chunks = _grouped_muonh_entry_chunks(
         params,
@@ -853,10 +854,30 @@ def _grouped_expert_muonh_updates_with_grouped_trace(
     grouped_updates_by_key: dict[tuple[tuple[int, ...], str, str], list[Any]] = {}
     valid_sizes_by_key: dict[tuple[tuple[int, ...], str, str], list[int]] = {}
     entries_by_key: dict[tuple[tuple[int, ...], str, str], list[tuple[int, object, object]]] = {}
-    banks_by_key, chunk_info = _grouped_muonh_packed_entry_banks(chunks) if packed_entry_boundary else ({}, {})
+    banks_by_key, chunk_info = (
+        _grouped_muonh_packed_entry_banks(chunks) if packed_entry_boundary and not chunk_local_boundaries else ({}, {})
+    )
     for chunk_index, (trace_group, entry_chunk) in enumerate(zip(trace_groups, chunks, strict=True)):
         key = _grouped_muonh_entry_key(entry_chunk)
-        if packed_entry_boundary:
+        if chunk_local_boundaries:
+            valid_size = len(entry_chunk)
+            padded_size = _grouped_muonh_chunk_padded_size(entry_chunk)
+            with jax.named_scope("grouped_muonh/chunk_local_entry/updates"):
+                stacked_updates = _packed_grouped_muonh_entry_bank(
+                    tuple(entry_chunk),
+                    value_index=1,
+                    padded_size=padded_size,
+                )
+            with jax.named_scope("grouped_muonh/chunk_local_entry/params"):
+                stacked_params = _packed_grouped_muonh_entry_bank(
+                    tuple(entry_chunk),
+                    value_index=2,
+                    padded_size=padded_size,
+                )
+            target = _grouped_4d_stack_target(
+                _grouped_muonh_shape_dtype_struct(stacked_updates.shape, stacked_updates.dtype, entry_chunk[0][2])
+            )
+        elif packed_entry_boundary:
             _, offset, valid_size, padded_size, entry_chunk = chunk_info[chunk_index]
             update_bank, param_bank = banks_by_key[key]
             with jax.named_scope("grouped_muonh/packed_entry/slice_update_chunk"):
@@ -905,9 +926,23 @@ def _grouped_expert_muonh_updates_with_grouped_trace(
             direction = _scale_grouped_muonh_direction(direction)
 
         grouped_update = _grouped_muonh_hyperball_update(stacked_params, direction, learning_rate)
-        grouped_updates_by_key.setdefault(key, []).append(grouped_update)
-        valid_sizes_by_key.setdefault(key, []).append(valid_size)
-        entries_by_key.setdefault(key, []).extend(entry_chunk)
+        if chunk_local_boundaries:
+            with jax.named_scope("grouped_muonh/chunk_local_restore"):
+                restored_update = _restore_grouped_muonh_for_split_slice_first_gather(
+                    grouped_update,
+                    target,
+                    valid_size,
+                    entry_chunk[0][2],
+                )
+            update_parts = tuple(
+                jnp.squeeze(update_part, axis=0) for update_part in jnp.split(restored_update, valid_size, axis=0)
+            )
+            for (index, _, param), update_part in zip(entry_chunk, update_parts, strict=True):
+                output_leaves[index] = _restore_param_sharding(update_part, param)
+        else:
+            grouped_updates_by_key.setdefault(key, []).append(grouped_update)
+            valid_sizes_by_key.setdefault(key, []).append(valid_size)
+            entries_by_key.setdefault(key, []).extend(entry_chunk)
         next_trace_groups.append(next_trace_group)
 
     for key, grouped_updates in grouped_updates_by_key.items():
@@ -935,6 +970,7 @@ def scale_with_grouped_expert_muonh(
     ns_compute_dtype: str = "input",
     expert_grouped_muonh_group_size: int | None = None,
     packed_entry_boundary: bool = False,
+    chunk_local_boundaries: bool = False,
 ) -> optax.GradientTransformation:
     """Expert-only MuonH transform that computes NS on grouped 4D stacks and returns FSDP updates."""
 
@@ -972,6 +1008,7 @@ def scale_with_grouped_expert_muonh(
                 ns_compute_dtype=ns_compute_dtype,
                 expert_grouped_muonh_group_size=expert_grouped_muonh_group_size,
                 packed_entry_boundary=packed_entry_boundary,
+                chunk_local_boundaries=chunk_local_boundaries,
             )
         assert_update_sharding_matches_params(muonh_updates, params, "Grouped MuonH updates")
         return muonh_updates, next_state
@@ -1135,6 +1172,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     ns_compute_dtype: str = "input"
     expert_grouped_muonh_group_size: int | None = None
     expert_grouped_muonh_packed_entry: bool = False
+    expert_grouped_muonh_chunk_local_boundaries: bool = False
 
     def build(self, num_train_steps):
         if self.expert_3d_optimizer not in VALID_EXPERT_3D_OPTIMIZERS:
@@ -1193,6 +1231,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         ns_compute_dtype=self.ns_compute_dtype,
                         expert_grouped_muonh_group_size=self.expert_grouped_muonh_group_size,
                         packed_entry_boundary=self.expert_grouped_muonh_packed_entry,
+                        chunk_local_boundaries=self.expert_grouped_muonh_chunk_local_boundaries,
                     )
                 )
                 components.append(_match_named_update_sharding())
