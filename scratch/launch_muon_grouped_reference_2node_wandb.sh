@@ -4,7 +4,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 STAMP="$(date -u +%Y%m%d-%H%M%S)"
-export RUN_ID="${RUN_ID:-MUON-BENCH-D2560-L26-R2D1E8-G26-EDITED-H3-N2-cw-${STAMP}}"
 export MARIN_PREFIX="${MARIN_PREFIX:-s3://marin-na/tmp/ttl=7d}"
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/coreweave-iris-gpu}"
 
@@ -14,7 +13,10 @@ export MUON_BENCH_REPLICA_AXIS="${MUON_BENCH_REPLICA_AXIS:-2}"
 export MUON_BENCH_DATA_AXIS="${MUON_BENCH_DATA_AXIS:-1}"
 export MUON_BENCH_EXPERT_AXIS="${MUON_BENCH_EXPERT_AXIS:-8}"
 export MUON_BENCH_MODEL_AXIS="${MUON_BENCH_MODEL_AXIS:-1}"
-export MUON_BENCH_NS4D_GROUP_SIZE="${MUON_BENCH_NS4D_GROUP_SIZE:-26}"
+# Larger groups pack the grouped-to-FSDP restore into fewer collectives, but G26
+# and G13 OOM on the 2-node full-layer benchmark. G8 is the next packed
+# candidate; override this env var to continue the fit/perf sweep.
+export MUON_BENCH_NS4D_GROUP_SIZE="${MUON_BENCH_NS4D_GROUP_SIZE:-8}"
 export MUON_BENCH_NS4D_GROUP_AXIS="${MUON_BENCH_NS4D_GROUP_AXIS:-replica_dcn,data}"
 export MUON_BENCH_KINDS="${MUON_BENCH_KINDS:-real_expert_fsdp_grouped_muonh_optimizer_update}"
 export MUON_BENCH_SWEEP_BACKEND_STEPS="${MUON_BENCH_SWEEP_BACKEND_STEPS:-3}"
@@ -34,10 +36,17 @@ export MUON_BENCH_TRACKER="${MUON_BENCH_TRACKER:-wandb}"
 export MUON_BENCH_WANDB_PROJECT="${MUON_BENCH_WANDB_PROJECT:-${WANDB_PROJECT:-marin_moe}}"
 export MUON_BENCH_WANDB_GROUP="${MUON_BENCH_WANDB_GROUP:-grug-moe-cw-muon-update-bench}"
 
-export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_enable_command_buffer=}"
+export RUN_ID="${RUN_ID:-MUON-BENCH-D2560-L26-R2D1E8-G${MUON_BENCH_NS4D_GROUP_SIZE}-H3-N2-cw-${STAMP}}"
+
+if [[ "${MUON_BENCH_READABLE_PROFILE:-false}" == "true" ]]; then
+  export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_enable_command_buffer=}"
+else
+  export XLA_FLAGS="${XLA_FLAGS:-}"
+fi
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.90}"
 
 echo "Launching ${RUN_ID}"
+echo "Grouped MuonH group size: ${MUON_BENCH_NS4D_GROUP_SIZE}"
 echo "W&B: ${WANDB_ENTITY:-marin-community}/${MUON_BENCH_WANDB_PROJECT}"
 echo "Output prefix: ${MARIN_PREFIX}/experiments/grug-moe-cw/muon-update-bench/${RUN_ID}-*"
 
