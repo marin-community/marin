@@ -4522,6 +4522,18 @@ def test_summary_row_reports_boundary_byte_estimates():
                 "all_to_all": 0,
                 "collective_permute": 0,
             },
+            "compiled_memory": {
+                "argument_bytes": 100,
+                "output_bytes": 40,
+                "alias_bytes": 24,
+                "temp_bytes": 16,
+                "generated_code_bytes": 8,
+                "host_argument_bytes": 4,
+                "host_output_bytes": 2,
+                "host_alias_bytes": 1,
+                "host_temp_bytes": 3,
+                "hbm_peak_bytes": 132,
+            },
             "median_seconds": 1.0,
             "mean_seconds": 1.0,
             "min_seconds": 1.0,
@@ -4539,6 +4551,26 @@ def test_summary_row_reports_boundary_byte_estimates():
     assert row["estimated_boundary_compiled_collective_count"] == 8.0
     assert row["estimated_boundary_compiled_ideal_collective_count"] == 2.0
     assert row["estimated_boundary_compiled_fragmentation_factor"] == 4.0
+    assert row["compiled_memory_argument_bytes"] == 100
+    assert row["compiled_memory_argument_gib"] == bytes_to_gib(100)
+    assert row["compiled_memory_output_bytes"] == 40
+    assert row["compiled_memory_output_gib"] == bytes_to_gib(40)
+    assert row["compiled_memory_alias_bytes"] == 24
+    assert row["compiled_memory_alias_gib"] == bytes_to_gib(24)
+    assert row["compiled_memory_temp_bytes"] == 16
+    assert row["compiled_memory_temp_gib"] == bytes_to_gib(16)
+    assert row["compiled_memory_generated_code_bytes"] == 8
+    assert row["compiled_memory_generated_code_gib"] == bytes_to_gib(8)
+    assert row["compiled_memory_host_argument_bytes"] == 4
+    assert row["compiled_memory_host_argument_gib"] == bytes_to_gib(4)
+    assert row["compiled_memory_host_output_bytes"] == 2
+    assert row["compiled_memory_host_output_gib"] == bytes_to_gib(2)
+    assert row["compiled_memory_host_alias_bytes"] == 1
+    assert row["compiled_memory_host_alias_gib"] == bytes_to_gib(1)
+    assert row["compiled_memory_host_temp_bytes"] == 3
+    assert row["compiled_memory_host_temp_gib"] == bytes_to_gib(3)
+    assert row["compiled_memory_hbm_peak_bytes"] == 132
+    assert row["compiled_memory_hbm_peak_gib"] == bytes_to_gib(132)
     assert row["mean_estimated_boundary_global_gbps"] == estimates["global_update_bytes"] / 1e9
     assert row["median_estimated_boundary_global_gbps"] == estimates["global_update_bytes"] / 1e9
     assert row["boundary_correctness_max_error"] == 0.0

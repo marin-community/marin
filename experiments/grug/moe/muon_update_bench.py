@@ -550,6 +550,7 @@ class HloSummary:
 class TimingSummary:
     compile_seconds: float | None
     compiled_hlo: HloSummary | None
+    compiled_memory: dict[str, int | None] | None
     times: list[float]
     median_seconds: float | None
     mean_seconds: float | None
@@ -6258,6 +6259,40 @@ def summarize_compiled_hlo(compiled, output: Path | str | None) -> HloSummary:
     return summarize_hlo(hlo_text)
 
 
+def summarize_compiled_memory(compiled) -> dict[str, int | None] | None:
+    if not hasattr(compiled, "memory_analysis"):
+        return None
+    memory = compiled.memory_analysis()
+    if memory is None:
+        return None
+
+    def attr(name: str) -> int | None:
+        value = getattr(memory, name, None)
+        if value is None:
+            return None
+        return int(value)
+
+    argument_bytes = attr("argument_size_in_bytes")
+    output_bytes = attr("output_size_in_bytes")
+    alias_bytes = attr("alias_size_in_bytes")
+    temp_bytes = attr("temp_size_in_bytes")
+    hbm_peak_bytes = None
+    if argument_bytes is not None and output_bytes is not None and alias_bytes is not None and temp_bytes is not None:
+        hbm_peak_bytes = argument_bytes + output_bytes - alias_bytes + temp_bytes
+    return {
+        "argument_bytes": argument_bytes,
+        "output_bytes": output_bytes,
+        "alias_bytes": alias_bytes,
+        "temp_bytes": temp_bytes,
+        "generated_code_bytes": attr("generated_code_size_in_bytes"),
+        "host_argument_bytes": attr("host_argument_size_in_bytes"),
+        "host_output_bytes": attr("host_output_size_in_bytes"),
+        "host_alias_bytes": attr("host_alias_size_in_bytes"),
+        "host_temp_bytes": attr("host_temp_size_in_bytes"),
+        "hbm_peak_bytes": hbm_peak_bytes,
+    }
+
+
 def is_tree_update_bench(bench_kind: str) -> bool:
     return bench_kind in (MUONH_UPDATE_BENCH, MUON_DIRECTION_BENCH, HYPERBALL_ONLY_BENCH)
 
@@ -8127,8 +8162,9 @@ def time_tree_update(
             raise ValueError(f"Unsupported tree update benchmark kind: {bench_kind!r}")
         compile_seconds = time.perf_counter() - compile_start
         compiled_hlo = summarize_compiled_hlo(compiled, compiled_hlo_output)
+        compiled_memory = summarize_compiled_memory(compiled)
         if compile_only:
-            return TimingSummary(compile_seconds, compiled_hlo, [], None, None, None, None)
+            return TimingSummary(compile_seconds, compiled_hlo, compiled_memory, [], None, None, None, None)
 
         for _ in range(warmup):
             if bench_kind == HYPERBALL_ONLY_BENCH:
@@ -8164,6 +8200,7 @@ def time_tree_update(
     return TimingSummary(
         compile_seconds=compile_seconds,
         compiled_hlo=compiled_hlo,
+        compiled_memory=compiled_memory,
         times=times,
         median_seconds=statistics.median(times) if times else None,
         mean_seconds=statistics.mean(times) if times else None,
@@ -8724,6 +8761,7 @@ def time_ns4d(
         compiled = update_step.lower(*lower_args).compile()
         compile_seconds = time.perf_counter() - compile_start
         compiled_hlo = summarize_compiled_hlo(compiled, compiled_hlo_output)
+        compiled_memory = summarize_compiled_memory(compiled)
         if (
             should_check_grouped_apply_boundary_collectives(bench_kind, require_no_boundary_collectives)
             and not allow_boundary_collectives
@@ -8733,6 +8771,7 @@ def time_ns4d(
             return TimingSummary(
                 compile_seconds,
                 compiled_hlo,
+                compiled_memory,
                 [],
                 None,
                 None,
@@ -9172,6 +9211,7 @@ def time_ns4d(
     return TimingSummary(
         compile_seconds=compile_seconds,
         compiled_hlo=compiled_hlo,
+        compiled_memory=compiled_memory,
         times=times,
         median_seconds=statistics.median(times) if times else None,
         mean_seconds=statistics.mean(times) if times else None,
@@ -9265,8 +9305,9 @@ def time_ordinary_2d_decomposition(
         compiled = update_step.lower(*lower_args).compile()
         compile_seconds = time.perf_counter() - compile_start
         compiled_hlo = summarize_compiled_hlo(compiled, compiled_hlo_output)
+        compiled_memory = summarize_compiled_memory(compiled)
         if compile_only:
-            return TimingSummary(compile_seconds, compiled_hlo, [], None, None, None, None)
+            return TimingSummary(compile_seconds, compiled_hlo, compiled_memory, [], None, None, None, None)
 
         for _ in range(warmup):
             if bench_kind in (
@@ -9308,6 +9349,7 @@ def time_ordinary_2d_decomposition(
     return TimingSummary(
         compile_seconds=compile_seconds,
         compiled_hlo=compiled_hlo,
+        compiled_memory=compiled_memory,
         times=times,
         median_seconds=statistics.median(times) if times else None,
         mean_seconds=statistics.mean(times) if times else None,
@@ -9909,6 +9951,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
     if "timing" in result:
         timing = result["timing"]["timing"]
         compiled_hlo = timing["compiled_hlo"]
+        compiled_memory = timing.get("compiled_memory") or {}
         compiled_boundary_payloads = boundary_collective_payload_estimates(boundary_bytes, compiled_hlo)
         compiled_fragmentation = boundary_collective_fragmentation(bench_config, bench_kind, compiled_hlo)
         mean_tflops = estimated_tflops(flops, timing["mean_seconds"])
@@ -9930,6 +9973,26 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
                 "compiled_hlo_reduce_scatter": compiled_hlo["reduce_scatter"] if compiled_hlo else None,
                 "compiled_hlo_all_to_all": compiled_hlo["all_to_all"] if compiled_hlo else None,
                 "compiled_hlo_collective_permute": compiled_hlo["collective_permute"] if compiled_hlo else None,
+                "compiled_memory_argument_bytes": compiled_memory.get("argument_bytes"),
+                "compiled_memory_argument_gib": bytes_to_gib(compiled_memory.get("argument_bytes")),
+                "compiled_memory_output_bytes": compiled_memory.get("output_bytes"),
+                "compiled_memory_output_gib": bytes_to_gib(compiled_memory.get("output_bytes")),
+                "compiled_memory_alias_bytes": compiled_memory.get("alias_bytes"),
+                "compiled_memory_alias_gib": bytes_to_gib(compiled_memory.get("alias_bytes")),
+                "compiled_memory_temp_bytes": compiled_memory.get("temp_bytes"),
+                "compiled_memory_temp_gib": bytes_to_gib(compiled_memory.get("temp_bytes")),
+                "compiled_memory_generated_code_bytes": compiled_memory.get("generated_code_bytes"),
+                "compiled_memory_generated_code_gib": bytes_to_gib(compiled_memory.get("generated_code_bytes")),
+                "compiled_memory_host_argument_bytes": compiled_memory.get("host_argument_bytes"),
+                "compiled_memory_host_argument_gib": bytes_to_gib(compiled_memory.get("host_argument_bytes")),
+                "compiled_memory_host_output_bytes": compiled_memory.get("host_output_bytes"),
+                "compiled_memory_host_output_gib": bytes_to_gib(compiled_memory.get("host_output_bytes")),
+                "compiled_memory_host_alias_bytes": compiled_memory.get("host_alias_bytes"),
+                "compiled_memory_host_alias_gib": bytes_to_gib(compiled_memory.get("host_alias_bytes")),
+                "compiled_memory_host_temp_bytes": compiled_memory.get("host_temp_bytes"),
+                "compiled_memory_host_temp_gib": bytes_to_gib(compiled_memory.get("host_temp_bytes")),
+                "compiled_memory_hbm_peak_bytes": compiled_memory.get("hbm_peak_bytes"),
+                "compiled_memory_hbm_peak_gib": bytes_to_gib(compiled_memory.get("hbm_peak_bytes")),
                 "estimated_boundary_compiled_all_gather_slice_peak_per_all_gather_bytes": compiled_boundary_payloads[
                     "all_gather_slice_peak_per_all_gather_bytes"
                 ],
