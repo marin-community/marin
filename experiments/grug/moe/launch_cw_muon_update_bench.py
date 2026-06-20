@@ -236,6 +236,20 @@ def _log_summary_to_wandb(config: MuonUpdateBenchLaunchConfig, payload: dict[str
         group=config.wandb_group or None,
         tags=["grug", "moe", "muonh", "cw", "h100", "benchmark"],
         config=_json_safe(asdict(config)),
+        settings=wandb.Settings(
+            console="off",
+            init_timeout=30,
+            login_timeout=30,
+            quiet=True,
+            silent=True,
+            summary_timeout=30,
+            x_disable_meta=True,
+            x_disable_stats=True,
+            x_file_stream_timeout_seconds=30,
+            x_file_transfer_timeout_seconds=30,
+            x_graphql_timeout_seconds=30,
+            x_service_wait=30,
+        ),
     )
 
     try:
@@ -255,7 +269,7 @@ def _log_summary_to_wandb(config: MuonUpdateBenchLaunchConfig, payload: dict[str
             run.log(_wandb_metric_row(row, row_index), step=row_index)
         emit_jsonl({"event": "wandb_logged", "entity": run.entity, "project": run.project, "name": run.name})
     finally:
-        run.finish()
+        run.finish(quiet=True)
 
 
 def _run_muon_update_bench_local(config: MuonUpdateBenchLaunchConfig) -> None:
