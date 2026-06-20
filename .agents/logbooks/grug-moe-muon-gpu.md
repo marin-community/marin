@@ -2703,19 +2703,25 @@ Post-compile steps were stable around 0.65-0.66s:
   - Command:
     `uv run python lib/marin/tools/profile_summary.py summarize --artifact marin-community/marin_moe/GM2560-MAY208-B16-R2D1E8-GMUONH3-CHUNKLOCAL-PROF-N2-cw-20260620-1811-profiler:v0 --download-root scratch/profiles/may208 --breakdown-mode exclusive_global --output scratch/profiles/may208_summary.json`.
 - Profile result:
-  - May208 is still communication-bound: communication share `75.85%`, compute
-    share `20.0%`.
-  - Top collectives: all-reduce `2160` calls / `6.89s`, all-gather `2080`
-    calls / `5.09s`, reduce-scatter `832` calls / `0.482s`.
+  - The profile has two useful denominators:
+    - Device/global timeline view: communication share `75.85%`, compute share
+      `20.0%`.
+    - Full per-track summary view: communication `12.47s` / `23.82%`, compute
+      `10.78s` / `20.60%`, host `27.00s` / `51.60%`.
+  - Top device collectives: all-reduce `2160` calls / `6.89s`, all-gather
+    `2080` calls / `5.09s`, reduce-scatter `832` calls / `0.482s`.
   - Compared with May202, the previous huge packed-entry/packed-restore
-    SendRecv-looking hotspots disappear, but the chunk-local path introduces a
-    much larger number of all-gathers. It is a different bad boundary, not a
-    fix.
+    SendRecv-looking hotspots disappear and Muon communication drops from
+    `35.91s` to `12.47s` in the full per-track summary. However, the
+    chunk-local path introduces many all-gathers, whole-profile duration is not
+    cleanly better because host/upload/finalization dominates, and steady-state
+    MFU remains only `~6.4-6.8`.
 - Interpretation:
-  - The production fallback is usable as a diagnostic but not a viable
-    boundary primitive. The lower-level packed-bank harness remains the better
-    direction: few large boundary collectives, not thousands of fragmented
-    train-step collectives.
+  - Chunk-local is a useful negative/diagnostic result: it improves the targeted
+    Muon communication hotspots but does not produce a clean end-to-end
+    production-profile win. The lower-level packed-bank harness remains the
+    better direction: few large boundary collectives, not thousands of
+    fragmented train-step collectives.
 
 ### 2026-06-20 11:58 PDT - Per-type boundary collective efficiency reporting
 - Hypothesis: The boundary harness should make "avoids per-leaf collective
@@ -2738,3 +2744,36 @@ Post-compile steps were stable around 0.65-0.66s:
 - Result:
   - Pytest: `5 passed in 5.07s`.
   - Pre-commit: OK.
+
+### 2026-06-20 12:04 PDT - Boundary collective explosion gate
+- Hypothesis: A single pass/fail-style summary signal is useful for screening
+  candidate boundary primitives before opening profiles. The per-type fields
+  added above are detailed enough for diagnosis, but the harness should also
+  state whether lowered/compiled collectives exactly match the explicit phase
+  contract.
+- Change:
+  - Added `estimated_boundary_{lowered,compiled}_total_excess_collective_count`.
+  - Added `estimated_boundary_{lowered,compiled}_matches_ideal_collective_counts`.
+  - Added a negative regression test where the logical packed-bank MuonH apply
+    phase expects only six all-to-alls but compiled HLO has three extra
+    all-gathers; the row now reports excess `3.0` and
+    `matches_ideal_collective_counts=false`.
+- Command:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_packed_bank_boundary_phase_estimates experiments/grug/moe/test_muon_update_bench.py::test_real_grouped_muonh_summary_row_reports_boundary_phase_estimates experiments/grug/moe/test_muon_update_bench.py::test_summary_row_flags_boundary_collective_type_excess -q`
+  - `./infra/pre-commit.py --files experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix`
+- Result:
+  - Pytest: `5 passed in 4.14s`.
+  - Pre-commit: OK.
+
+### 2026-06-20 12:05 PDT - May208 terminal failure mode
+- Observation:
+  - After uploading the profiler artifact, May208 task 0 raised
+    `wandb.sdk.mailbox.mailbox_handle.HandleAbandonedError`.
+  - JAX distributed then hit `INTERNAL: Shutdown barrier has failed` and
+    terminated both tasks.
+  - Iris showed the child with `failures=1`; the run had already emitted the
+    useful profiler-window metrics and uploaded a usable profiler artifact.
+- Interpretation:
+  - Treat the W&B crash as post-profile artifact handling, not as invalidating
+    the May208 performance/profile evidence. The steady-state profile remains
+    a valid negative result for the chunk-local fallback.

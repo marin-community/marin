@@ -6896,11 +6896,17 @@ def boundary_collective_type_efficiency(
     has_boundary_phases: bool,
 ) -> dict[str, float | bool | None]:
     metrics: dict[str, float | bool | None] = {}
+    total_excess_count = 0.0 if hlo_summary and has_boundary_phases else None
+    matches_ideal_counts = True if hlo_summary and has_boundary_phases else None
     for collective_type in BOUNDARY_COLLECTIVE_TYPES:
         actual_count = float(hlo_summary.get(collective_type) or 0) if hlo_summary and has_boundary_phases else None
         ideal_count = boundary_phase_totals.get(f"{collective_type}_ideal_collective_count")
         ideal_count = float(ideal_count) if ideal_count is not None else (0.0 if has_boundary_phases else None)
         excess_count = actual_count - ideal_count if actual_count is not None else None
+        if excess_count is not None and total_excess_count is not None:
+            total_excess_count += excess_count
+        if actual_count != ideal_count and matches_ideal_counts is not None:
+            matches_ideal_counts = False
         metrics[f"{collective_type}_collective_count"] = actual_count
         metrics[f"{collective_type}_ideal_collective_count"] = ideal_count
         metrics[f"{collective_type}_excess_collective_count"] = excess_count
@@ -6910,6 +6916,8 @@ def boundary_collective_type_efficiency(
         metrics[f"{collective_type}_matches_ideal_collective_count"] = (
             actual_count == ideal_count if actual_count is not None else None
         )
+    metrics["total_excess_collective_count"] = total_excess_count
+    metrics["matches_ideal_collective_counts"] = matches_ideal_counts
     return metrics
 
 

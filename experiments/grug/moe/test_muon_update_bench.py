@@ -4693,11 +4693,15 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
     assert row["estimated_boundary_lowered_all_gather_excess_collective_count"] == 0.0
     assert row["estimated_boundary_lowered_all_gather_collective_to_ideal_ratio"] is None
     assert row["estimated_boundary_lowered_all_gather_matches_ideal_collective_count"] is True
+    assert row["estimated_boundary_lowered_total_excess_collective_count"] == 0.0
+    assert row["estimated_boundary_lowered_matches_ideal_collective_counts"] is True
     assert row["estimated_boundary_compiled_all_to_all_collective_count"] == 6.0
     assert row["estimated_boundary_compiled_all_to_all_ideal_collective_count"] == 6.0
     assert row["estimated_boundary_compiled_all_to_all_excess_collective_count"] == 0.0
     assert row["estimated_boundary_compiled_all_to_all_collective_to_ideal_ratio"] == 1.0
     assert row["estimated_boundary_compiled_all_to_all_matches_ideal_collective_count"] is True
+    assert row["estimated_boundary_compiled_total_excess_collective_count"] == 0.0
+    assert row["estimated_boundary_compiled_matches_ideal_collective_counts"] is True
     assert row["boundary_correctness_skipped_reason"] == "estimated global bytes 2 exceed correctness cap 1"
     assert row["mean_estimated_boundary_phase_global_gbps"] == 3 * estimates["global_update_bytes"] / 2.0 / 1e9
     assert row["median_estimated_boundary_phase_global_gbps"] == 3 * estimates["global_update_bytes"] / 2.0 / 1e9
@@ -4920,6 +4924,8 @@ def test_real_grouped_muonh_summary_row_reports_boundary_phase_estimates(
     assert row["estimated_boundary_compiled_all_to_all_excess_collective_count"] == 0.0
     assert row["estimated_boundary_compiled_all_to_all_collective_to_ideal_ratio"] == 1.0
     assert row["estimated_boundary_compiled_all_to_all_matches_ideal_collective_count"] is True
+    assert row["estimated_boundary_compiled_total_excess_collective_count"] == 0.0
+    assert row["estimated_boundary_compiled_matches_ideal_collective_counts"] is True
     assert (
         row["estimated_boundary_phase_all_gather_global_bytes"]
         == expected_all_gather_bytes_multiplier * estimates["global_update_bytes"]
@@ -4936,6 +4942,76 @@ def test_real_grouped_muonh_summary_row_reports_boundary_phase_estimates(
         / 2.0
         / 1e9
     )
+
+
+def test_summary_row_flags_boundary_collective_type_excess():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    result = {
+        "metadata": {
+            "label": "expert_fsdp_packed_bank_muonh_apply_h1",
+            "bench_kind": EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+            "config": asdict(config),
+            "devices": 16,
+            "ns4d_group_size": 4,
+            "ns4d_padded_group_size": 4,
+            "ns4d_input_sharding_spec": "P(('replica_dcn', 'data'), 'expert', None, None)",
+            "ns4d_compute_sharding_spec": "P(('replica_dcn', 'data'), 'expert', None, None)",
+            "ns4d_result_sharding_spec": "P(('replica_dcn', 'data'), 'expert', None, None)",
+            "ns4d_boundary_status": "packed_bank_muonh_apply",
+            "boundary_collectives_allowed": True,
+            "boundary_collectives_required_absent": False,
+            "grouped_expert_group_count": None,
+            "group_estimates": [asdict(estimate) for estimate in estimate_grouping(config)],
+        },
+        "timing": {
+            "timing": {
+                "compile_seconds": 1.0,
+                "compiled_hlo": {
+                    "dot_general": 0,
+                    "batched_stack_dot_general": 0,
+                    "two_batch_axis_dot_general": 0,
+                    "custom_call": 0,
+                    "gpu_gemm_custom_call": 0,
+                    "all_gather": 3,
+                    "all_reduce": 0,
+                    "reduce_scatter": 0,
+                    "all_to_all": 6,
+                    "collective_permute": 0,
+                },
+                "compiled_memory": {},
+                "median_seconds": 2.0,
+                "mean_seconds": 2.0,
+                "min_seconds": 2.0,
+                "correctness_max_error": None,
+                "correctness_skipped_reason": "estimated global bytes 2 exceed correctness cap 1",
+            }
+        },
+    }
+
+    row = summary_row(result)
+
+    assert row["estimated_boundary_phase_all_to_all_ideal_collective_count"] == 6.0
+    assert row["estimated_boundary_phase_all_gather_ideal_collective_count"] is None
+    assert row["estimated_boundary_compiled_all_to_all_excess_collective_count"] == 0.0
+    assert row["estimated_boundary_compiled_all_gather_excess_collective_count"] == 3.0
+    assert row["estimated_boundary_compiled_total_excess_collective_count"] == 3.0
+    assert row["estimated_boundary_compiled_matches_ideal_collective_counts"] is False
 
 
 def test_strict_boundary_gate_includes_expert_fsdp_and_collective_permute():
