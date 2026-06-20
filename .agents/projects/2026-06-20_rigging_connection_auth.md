@@ -89,9 +89,10 @@ name, pass around, and resolve once**, regardless of transport/auth:
    (interceptors), establish the transport once, and hand the caller's own
    `factory(endpoint) -> client` the resolved endpoint. The user owns what a
    "client" is (a Connect/RPC client, almost always).
-3. Keep tunnels alive for the connection's lifetime via a **context manager**,
-   with a GC finalizer only as a *subprocess-leak backstop* (not a correctness
-   mechanism — see [§Lifetime](#lifetime-no-magic)).
+3. Return the **real client** and bind the tunnel's lifetime to *that client's*
+   GC (the original brief's "kept alive via the GC"), with `disconnect(client)`
+   for deterministic teardown — no mandatory context manager, no wrapper object
+   (see [§Lifetime](#lifetime--anchor-on-the-client-not-a-wrapper)).
 4. Reuse the controller's existing `EndpointProxy` + endpoint registry for the
    "extra hop" — do **not** invent a new proxy.
 5. Live at the **bottom of the dependency graph** (`rigging` is a leaf), so
@@ -278,63 +279,179 @@ A standalone finelog VM is then
 `ssh+gcp://logging@marin-prod/us-central1-a/finelog-1:7000` — exactly the hop
 the finelog CLI builds today, now a string.
 
-### `connect()` and `Connection` — resolve once, deterministic teardown
+### `connect()` — returns the real client; the client is the lifetime anchor
+
+`connect()` returns **the client the factory built** — not a wrapper. An RPC
+client is a value you construct once and pass around (store on `self`, return
+from a factory, hand to other functions); a mandatory `with` block fights that.
+So the tunnel's lifetime is bound to **the client's GC lifetime**, exactly as the
+original brief asked ("kept alive via the GC and/or context managers").
 
 ```python
 ClientFactory = Callable[[Endpoint], ClientT]
 
 def connect(spec: ConnectionSpec | str, factory: ClientFactory[ClientT],
-            *, registry: "ClusterRegistry | None" = None) -> "Connection[ClientT]": ...
+            *, registry: "ClusterRegistry | None" = None) -> ClientT:
+    """Resolve `spec`, open its transport, build the Endpoint, and return
+    `factory(endpoint)`. The transport (e.g. an SSH tunnel subprocess) is torn
+    down when the returned client is garbage-collected, via `disconnect`, or at
+    interpreter exit — whichever comes first."""
+    ...
 
-class Connection(Generic[ClientT]):
-    """Owns the live tunnel(s) for one connection. Use as a context manager.
-
-    `.client` is valid for the lifetime of the Connection. `close()` closes the
-    client first (if it exposes close()/__exit__), then the tunnels — so a
-    client's background flush threads are drained before their transport
-    disappears.
-    """
-    client: ClientT
-    endpoint: Endpoint
-    def __enter__(self) -> ClientT: return self.client
-    def __exit__(self, *exc) -> None: self.close()
-    def close(self) -> None: ...          # idempotent: client teardown, then ExitStack
+def disconnect(client) -> None:
+    """Tear down `client`'s transport now (idempotent; no-op if already gone)."""
+    ...
 ```
-
-`connect` resolves the spec, `open`s the transport on an `ExitStack`, builds the
-final `Endpoint` (base URL/proxy-rewritten URL + transport-contributed +
-auth-contributed interceptors), calls `factory`, and returns a `Connection`.
-
-#### Lifetime — no magic
-
-The first draft made `Connection` a `__getattr__` transparent proxy with a
-weakref finalizer "so holding the client keeps the tunnel alive". **Removed**
-(codex MAJOR-4/5):
-
-- `__getattr__` does **not** forward dunders (`__enter__`, `__exit__`, `__iter__`,
-  truthiness) — they resolve on the class — so the proxy could not honestly
-  stand in for a context-managed client.
-- More dangerously, `LogClient.get_table()` returns `Table` objects with daemon
-  flush threads that call back into the client. A caller holding a `Table` but
-  dropping the `Connection` would have the finalizer kill the tunnel mid-write.
-
-So: **the context manager is the contract.** `close()` tears down the client
-before the tunnel. A `weakref.finalize(self, stack.close)` remains **only** as a
-last-ditch guard against orphaned tunnel *subprocesses* at interpreter exit — it
-is explicitly *not* a correctness mechanism, and the docstring says so. This
-honors the user's "kept alive via context managers, GC as backstop, leakiness
-accepted" — but reframes GC as preventing zombie `ssh` processes, not as
-substituting for deterministic ownership.
 
 ```python
-# Deterministic — the supported shape:
-with connect("iris://marin/system/log-server", log_factory) as log:
-    log.get_table(...).write([row])      # flushed and drained before the tunnel closes
-
-# Standalone service:
-with connect("ssh+gcp://logging@marin-prod/us-central1-a/finelog-1:7000", log_factory) as log:
-    print(log.query("select * from \"iris.task_status\" limit 10"))
+# The supported shape — a free-floating client you can pass around:
+log = connect("iris://marin/system/log-server", make_log_client)
+self.log = log                       # store it, return it, share it — no `with` scope
+log.get_table(...).write([row])
+# tunnel dies when `log` becomes unreachable (GC), or:
+disconnect(log)                      # optional, deterministic
 ```
+
+#### Lifetime — anchor on the client, not a wrapper
+
+The first draft made a `Connection` wrapper that `__getattr__`-proxied the client
+and held a finalizer. Codex killed it (MAJOR-4/5): `__getattr__` doesn't forward
+dunders, and — worse — `LogClient.get_table()` returns `Table`s whose background
+flush threads call back into the client, so dropping the *wrapper* while holding
+a *Table* would kill the tunnel mid-write.
+
+The fix is to **key teardown on the client itself**, via
+`weakref.finalize(client, stack.close)` stored in a module-level
+`WeakKeyDictionary[client → finalize]`:
+
+- A `Table` strong-references its `LogClient` (it must, to flush into it), so as
+  long as any derived object is alive the **client** is reachable, so the
+  **tunnel** is alive. The client outlives everything derived from it — the exact
+  invariant the Table-flush hazard needs. The codex bug only existed because
+  teardown was keyed on a *droppable wrapper*; keyed on the client, it cannot
+  fire early.
+- No wrapper, no `__getattr__`, no dunder-forwarding lie — `connect()` returns
+  the genuine client, so `isinstance`, context-manager use, and everything else
+  behave normally.
+- `disconnect(client)` looks the client up in the `WeakKeyDictionary` and runs
+  its finalizer for deterministic teardown; the dict holds only weak refs, so it
+  never keeps a client (or its tunnel) alive by itself.
+- GC/atexit is the backstop for orphaned `ssh`/`kubectl` subprocesses. Leaky for
+  a client that's never collected and never `disconnect`ed — accepted, as the
+  brief states.
+
+A scoped helper is available for callers who *do* want a `with` block (tests,
+short-lived scripts), built on the same primitive:
+
+```python
+with closing_connection("ssh+gcp://logging@proj/us-central1-a/finelog-1:7000",
+                        make_log_client) as log:
+    print(log.query('select * from "iris.task_status" limit 10'))
+```
+
+### Worked example — finelog behind a controller (the hard case)
+
+A laptop client writing a finelog row, where finelog sits behind cluster
+`marin`'s controller. The critical facts (verified against the controller):
+**there is only one client-side connection** — to the controller — and the
+controller forwards to finelog *in-process*; and **the user authenticates to the
+controller, never to finelog** (`dashboard.py:492` mounts finelog's `LogService`
+behind the controller's own `auth_interceptor`; `controller.py:349` forwards via
+`LogServiceProxy` using the *controller's* credentials, not the user's).
+
+```python
+log = connect("iris://marin/system/log-server", make_log_client)
+log.get_table(TASK_STATUS_NAMESPACE, TaskStatusRow,
+              storage_policy=TASK_STATUS_STORAGE_POLICY).write([TaskStatusRow(...)])
+```
+
+The **same string** works whether `marin` is reached by SSH tunnel or IAP — the
+transport and auth are resolved from `marin`'s config, not encoded in the string,
+so it survives the SSH→IAP cutover untouched.
+
+#### Physical topology — one client-side hop, not two
+
+```mermaid
+flowchart LR
+    subgraph laptop["user's laptop"]
+        C["LogClient<br/>targets 127.0.0.1:54321"]
+        T(["ssh -L 54321:localhost:10000<br/>(rigging.open_tunnel)"])
+    end
+    subgraph vm["controller VM (no public IP)"]
+        K["controller :10000<br/>LogService mount = LogServiceProxy<br/>behind auth_interceptor"]
+    end
+    F["finelog LogService :10001<br/>(VM or in-process)"]
+    C -->|"POST /finelog.logging.LogService/PushLogs"| T
+    T -->|"SSH forward"| K
+    K -->|"LogServiceProxy.push_logs()<br/>controller's own creds"| F
+```
+
+The IAP variant is the same picture with the tunnel replaced by the GCLB+IAP
+edge; still one client-side connection, controller still forwards in-process.
+
+#### When routing kicks in — stage 2 of 4, after transport+auth
+
+```mermaid
+flowchart TD
+    S0["Stage 0 — resolve spec<br/>parse iris://marin/system/log-server;<br/>registry reads marin config →<br/>transport=SSH|IAP, auth=NoAuth|Chained(IAP,JWT),<br/>target = /system/log-server"]
+    S1["Stage 1 — establish transport + auth<br/>SSH: open_tunnel → Endpoint(127.0.0.1:54321)<br/>IAP: Endpoint(https://iris-marin.oa.dev)<br/>+ attach auth interceptors"]
+    S2{"Stage 2 — ROUTING<br/>where does /system/log-server live<br/>relative to the base endpoint?"}
+    P["PROXY (external client)<br/>controller serves LogService at its<br/>canonical RPC path → service URL =<br/>base URL UNCHANGED (no rewrite, no 2nd tunnel)"]
+    D["DIRECT (in-cluster client)<br/>call ListEndpoints on the controller<br/>(needs the Stage-1 endpoint+auth!) →<br/>finelog direct addr 10.128.0.31:10001"]
+    S3["Stage 3 — factory<br/>make_log_client(Endpoint(url, interceptors))<br/>→ real LogClient; bind tunnel to its GC"]
+    S0 --> S1 --> S2
+    S2 -->|external| P --> S3
+    S2 -->|in-cluster| D --> S3
+```
+
+Routing is **stage 2**, between transport and the factory — and it is a
+*resolver*, not a transport hop, precisely because **DIRECT** mode must call
+`ListEndpoints` to resolve itself, which requires the authenticated stage-1
+connection (codex CRITICAL-1, now load-bearing):
+
+- **PROXY** (laptop case): a no-op on the URL. The controller mounts finelog's
+  `LogService` at the canonical RPC path, so the finelog endpoint URL *is* the
+  controller's tunnel URL. No second tunnel, no path rewrite, no extra RPC.
+- **DIRECT** (in-cluster): a live `ListEndpoints` call returns finelog's direct
+  address; connect straight to it, no proxy, no tunnel.
+
+#### Auth pattern — authenticate to the controller; finelog is the controller's job
+
+Because the request goes *through* the controller, the user's auth pattern for
+finelog **is** the cluster's auth pattern. The user's JWT is verified at the
+controller and is **not** forwarded to finelog — the controller forwards on its
+own behalf. The user never holds finelog credentials.
+
+```mermaid
+sequenceDiagram
+    participant U as LogClient (laptop)
+    participant LB as GCLB + IAP
+    participant K as controller (auth_interceptor)
+    participant F as finelog
+    Note over U: one-time: iris login --cluster=marin<br/>caches IAP refresh token + Iris JWT
+    U->>U: ChainedAuth attaches BOTH headers per request
+    U->>LB: POST .../LogService/PushLogs<br/>Proxy-Authorization: Bearer <IAP id_token><br/>Authorization: Bearer <Iris JWT>
+    LB->>LB: verify IAP token + IAM; STRIP Proxy-Authorization;<br/>inject signed X-Goog-IAP-JWT-Assertion
+    LB->>K: forward (Authorization JWT survives)
+    K->>K: auth_interceptor verifies Iris JWT → role
+    K->>F: LogServiceProxy.push_logs() with CONTROLLER's creds<br/>(user JWT NOT forwarded)
+    F-->>U: PushLogsResponse (streamed back)
+```
+
+The `Auth` the registry builds from cluster config, per mode:
+
+| Cluster config | Transport | `Auth` | Headers on the wire |
+|----------------|-----------|--------|---------------------|
+| SSH tunnel, null-auth (today) | `SshTunnel` | `NoAuth()` | none — loopback peer ⇒ admin |
+| SSH/manual, auth enabled | `SshTunnel`/`Direct` | `JwtAuth(StaticTokenProvider(jwt))` | `Authorization` only |
+| Public, behind IAP (#6466) | `DirectTransport(https)` | `ChainedAuth(IapAuth, JwtAuth)` | `Proxy-Authorization` + `Authorization` |
+| In-cluster (DIRECT routing) | `DirectTransport` → finelog | worker token / `NoAuth` | reached directly; never hits the IAP edge |
+
+`ChainedAuth` attaches the IAP token and the JWT **as a unit**, so a call site
+cannot attach one and forget the other — PR #6466's `cluster vm status` bug
+fixed structurally. The IAP token's audience is the backend-service resource, the
+same for controller RPCs and finelog-via-controller RPCs, so one token covers
+both. The user writes **no** auth code: `iris login` once, then `connect(...)`.
 
 ## Security — the proxy is a boundary, already
 
@@ -355,8 +472,8 @@ lost.
 
 - `rigging/connect.py`: `Endpoint`, `Transport` (+ `DirectTransport`,
   `SshTunnel`, `K8sPortForward` wrapping `rigging.tunnel`), `Auth`,
-  `Routing`/`EndpointResolver`, `ConnectionSpec` (parse/explain), `connect`,
-  `Connection`.
+  `Routing`/`EndpointResolver`, `ConnectionSpec` (parse/explain), `connect` /
+  `disconnect` / `closing_connection`, and the client→finalizer `WeakKeyDictionary`.
 - `rigging/auth.py`: **only transport-generic client pieces** — the
   `TokenProvider` protocol, `AuthTokenInjector`, `GcpAccessTokenProvider`, and
   (post-#6466) `IapUserIdTokenProvider` / `ProxyAuthTokenInjector`. These depend
@@ -372,8 +489,9 @@ lost.
   Auth)`. This keeps the Marin-specific config-shape reader in iris and rigging a
   clean leaf (resolves the first draft's open question Q2 conservatively).
 - `cli/connect.py::require_controller_url` → `connect(f"iris://{cluster}",
-  rpc_client_factory)`, stashing the `Connection` on the click context (replaces
-  the manual `tunnel_cm.__enter__()` / `ctx.call_on_close` dance).
+  rpc_client_factory)` and register `disconnect(client)` via `ctx.call_on_close`
+  (replaces the manual `tunnel_cm.__enter__()` dance; the click context naturally
+  scopes the client to the command).
 - `ControllerProvider.tunnel()` and the three `_gcp_tunnel` /
   `kubectl.port_forward` / `nullcontext` impls **collapse** into rigging
   transports: GCP → `SshTunnel`, k8s → `K8sPortForward`, manual/local →
@@ -391,10 +509,10 @@ lost.
 - **The payoff — a direct status-text path.** A standalone writer becomes:
 
   ```python
-  with connect("iris://marin/system/log-server",
-               lambda e: LogClient.connect(e.url, interceptors=e.interceptors)) as log:
-      log.get_table(TASK_STATUS_NAMESPACE, TaskStatusRow,
-                    storage_policy=TASK_STATUS_STORAGE_POLICY).write([TaskStatusRow(...)])
+  log = connect("iris://marin/system/log-server",
+                lambda e: LogClient.connect(e.url, interceptors=e.interceptors))
+  log.get_table(TASK_STATUS_NAMESPACE, TaskStatusRow,
+                storage_policy=TASK_STATUS_STORAGE_POLICY).write([TaskStatusRow(...)])
   ```
 
   No `IrisClient`. `report_task_status_text` becomes a thin finelog write over a
@@ -413,8 +531,8 @@ the abstraction, since standalone-finelog is already handled by `open_tunnel`:
    routing to the typed log-server mount — against a live cluster, before any
    abstraction is frozen.
 2. **Extract `rigging/connect.py`** from the spike: `Transport`, `Auth`,
-   `Endpoint`, `Connection`, `ConnectionSpec.parse/explain` — only the seams the
-   spike proved necessary. Unit-test with a fake `spawn` (the pattern
+   `Endpoint`, `connect`/`disconnect`, `ConnectionSpec.parse/explain` — only the
+   seams the spike proved necessary. Unit-test with a fake `spawn` (the pattern
    `tunnel.py` already uses) and a fake factory.
 3. **Relocate transport-generic auth** (`AuthTokenInjector`, `TokenProvider`,
    `GcpAccessTokenProvider`) into `rigging/auth.py`; iris imports from there. Pure
@@ -438,9 +556,11 @@ Follows `lib/rigging`'s conventions (`test_rpc.py`, `test_tunnel`) and root
 - `connect` with a fake `spawn` + fake factory: assert transport opens, auth
   interceptors accumulate (and `ChainedAuth` attaches IAP+JWT together), and the
   factory receives the final localhost `Endpoint`.
-- `Connection` teardown: `__exit__` closes the client before the ExitStack
-  (order asserted via a recording fake client); `close()` is idempotent; the
-  finalizer reaps an orphaned fake subprocess on `gc.collect()`.
+- Lifetime: `connect` returns the bare factory client; `disconnect(client)`
+  terminates a fake tunnel subprocess and is idempotent; dropping the client and
+  running `gc.collect()` reaps the subprocess via the finalizer; a fake "Table"
+  holding the client keeps the tunnel alive until *both* are dropped (the
+  Table-flush invariant codex flagged).
 - `Routing`: PROXY returns the base controller URL for the typed log-server
   mount and the `/proxy/<dot-name>` URL for a generic endpoint; DIRECT resolves
   via a fake registry; a missing endpoint name raises (not a silent no-op).
@@ -455,8 +575,8 @@ the concrete need fits a much smaller design."* Findings and responses:
 | 1 | CRIT | `ControllerProxyHop` can't be a pure hop — in-cluster resolution needs a `ListEndpoints` RPC (I/O + policy). | **Accepted.** Endpoint resolution is now an `EndpointResolver`/`Routing`, not a hop. Hops cover only transport+auth, which *do* compose linearly. |
 | 2 | CRIT | A generic proxy already exists (`/proxy/<dot-name>`); don't invent `/system/proxy`; typed mounts ≠ generic proxy. | **Accepted.** Design now consumes the existing `EndpointProxy` and the typed `LogService` mount; invents no route. |
 | 3 | CRIT | The generic proxy is a security boundary (network pivot, no size caps); needs an authz policy. | **Accepted, scoped out.** Documented as separate controller security work ([§Security](#security-the-proxy-is-a-boundary-already)); this client library doesn't widen it. |
-| 4 | MAJ | Transparent-proxy `Connection` + GC finalizer is unsafe — `LogClient` `Table`s have daemon flush threads that outlive a dropped `Connection`. | **Accepted.** Dropped the transparent proxy; `close()` drains the client before the tunnel; GC is only a subprocess-leak backstop, not correctness. |
-| 5 | MAJ | `__getattr__` doesn't forward dunders, so it can't honestly stand in for a context-managed client. | **Accepted.** No transparent substitution; `.client` is explicit, valid inside `with`. |
+| 4 | MAJ | Transparent-proxy `Connection` + GC finalizer is unsafe — `LogClient` `Table`s have daemon flush threads that outlive a dropped wrapper. | **Accepted, then revised again on user review.** No wrapper at all: `connect()` returns the real client and the finalizer is keyed on *the client*, which every derived `Table` strong-references — so the tunnel cannot be reaped while any `Table` is live. (Earlier "mandatory context manager" answer was dropped: an RPC client must be passable around.) |
+| 5 | MAJ | `__getattr__` doesn't forward dunders, so it can't stand in for a client. | **Accepted.** No proxy object; `connect()` returns the genuine client, so `isinstance`/context-manager/everything behaves normally. |
 | 6 | MAJ | Auth relocation over-reached (moving login UX, token store, roles into a leaf lib). | **Accepted.** Only transport-generic injectors/providers move to `rigging/auth.py`; minting/verification/roles/loopback-trust/token-store/login stay in iris. |
 | 7 | MAJ | Compact name hides operationally critical facts (SSH vs IAP, audience, token source). | **Accepted.** Added `ConnectionSpec.explain()`; kept hidden-transport for migration-stability but made it inspectable. |
 | 8 | MAJ | `::` chaining is ambiguous vs existing endpoint/proxy encoding and reverses fsspec. | **Accepted.** Removed chaining entirely — resolver-not-hop means there's no chain to write. Two forms: `iris://cluster[/endpoint]` and a single standalone transport URL. |
@@ -483,6 +603,12 @@ for.
   core. Codex argued for even less (one helper function). Do you want the
   composable library now, or the helper first with the library extracted later
   once a second consumer appears?
+- **OQ4 — `disconnect` ergonomics.** Lifetime is anchored on the client via a
+  module-level `WeakKeyDictionary[client → finalize]`, so `connect()` can return
+  the bare client and `disconnect(client)` still works. The alternative is the
+  two-value `client, handle = connect(...)` return (no global state, but every
+  call site carries the handle). Is the implicit registry acceptable, or do you
+  prefer the explicit handle?
 - **OQ2 — `iris://cluster/endpoint` path semantics.** The path is the literal
   endpoint wire name (`/system/log-server`). Acceptable, or do you prefer an
   explicit separator (`iris:marin:system.log-server`) to make the
