@@ -2479,3 +2479,38 @@ Post-compile steps were stable around 0.65-0.66s:
     or per-leaf collective explosion; it is explaining the extra production
     train-step overhead and/or moving the boundary work into a lower-level
     primitive/overlapped path.
+
+### 2026-06-20 07:42 PDT - May200 profile run exposed an SPMD activation reshard warning
+- Hypothesis: A short profiled repeat of the R1D2 packed-entry grouped MuonH
+  training run should show where the production overhead comes from. The run
+  disables GPU command buffers for trace readability, so its timings are only
+  diagnostic.
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-142240`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-142240/grug-train-GM2560-MAY-200S4096-W2048-B16-R1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PACKEDA2A-PROFILE-N2-cw-20260620-1422`.
+  - W&B:
+    `marin-community/marin_moe/GM2560-MAY-200S4096-W2048-B16-R1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PACKEDA2A-PROFILE-N2-cw-20260620-1422`.
+- Status at 07:42 PDT:
+  - Iris still reported the parent and child as running with two child tasks.
+  - W&B reported state `crashed` before metrics/artifacts, but Iris logs showed
+    step 0 completed and step 1 started, so Iris is currently the source of
+    truth for this run.
+  - No profiler artifact had uploaded yet.
+- Evidence:
+  - Step 0 completed after compile with loss `11.791757583618164`, duration
+    about `457-460s`, and compile-included MFU about `0.015`.
+  - During SPMD partitioning, both tasks emitted:
+    `Involuntary full rematerialization. The compiler cannot go from sharding
+    {devices=[16,1,1]<=[16]} to {devices=[1,1,2,8]<=[16]
+    last_tile_dim_replicate} efficiently` for `bf16[1,4096,2560]`.
+  - The metadata attached the warning to
+    `jit(train_step)/forward_backward/transpose(jvp(Transformer))/RMSNorm/convert_element_type`.
+  - The same warning repeated when step 1 started compiling/partitioning.
+- Interpretation:
+  - This warning is not the packed-bank MuonH boundary itself. It is an
+    activation-like tensor being replicated and repartitioned across the
+    `data,expert` layout in the production train graph.
+  - It is a plausible contributor to the gap between the clean packed-bank
+    harness timings and the poor production end-to-end step time, and it needs
+    profile/HLO follow-up once May200 either uploads a profile or terminates.
