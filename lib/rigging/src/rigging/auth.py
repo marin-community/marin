@@ -33,6 +33,20 @@ import google.oauth2.id_token
 _REFRESH_MARGIN_SECONDS = 300
 
 
+def _monotonic_expiry(expiry_wall: float | None) -> float:
+    """The ``time.monotonic`` deadline to cache a token until.
+
+    Converts a wall-clock expiry to a monotonic deadline and subtracts the
+    refresh margin, falling back to ``margin`` from now when the expiry is
+    unknown. Caching keys off ``monotonic`` so a wall-clock step can't extend a
+    token's lifetime.
+    """
+    now_mono = time.monotonic()
+    if expiry_wall is None:
+        return now_mono + _REFRESH_MARGIN_SECONDS
+    return now_mono + (expiry_wall - time.time()) - _REFRESH_MARGIN_SECONDS
+
+
 class TokenProvider(Protocol):
     """Provides a bearer token for outgoing requests."""
 
@@ -73,13 +87,9 @@ class GcpAccessTokenProvider:
             self._creds, _ = google.auth.default()
         self._creds.refresh(google.auth.transport.requests.Request())
 
+        expiry = self._creds.expiry.timestamp() if self._creds.expiry is not None else None
         self._cached_token = self._creds.token
-        now_mono = time.monotonic()
-        if self._creds.expiry is not None:
-            self._expires_at = now_mono + (self._creds.expiry.timestamp() - time.time()) - _REFRESH_MARGIN_SECONDS
-        else:
-            self._expires_at = now_mono + _REFRESH_MARGIN_SECONDS
-
+        self._expires_at = _monotonic_expiry(expiry)
         return self._cached_token
 
 
@@ -102,16 +112,10 @@ class IapUserIdTokenProvider:
             return self._cached_token
 
         token = google.oauth2.id_token.fetch_id_token(google.auth.transport.requests.Request(), self._audience)
+        claims = google.auth.jwt.decode(token, verify=False)
 
         self._cached_token = token
-        claims = google.auth.jwt.decode(token, verify=False)
-        now_mono = time.monotonic()
-        exp = claims.get("exp")
-        if exp is not None:
-            self._expires_at = now_mono + (float(exp) - time.time()) - _REFRESH_MARGIN_SECONDS
-        else:
-            self._expires_at = now_mono + _REFRESH_MARGIN_SECONDS
-
+        self._expires_at = _monotonic_expiry(claims.get("exp"))
         return self._cached_token
 
 
