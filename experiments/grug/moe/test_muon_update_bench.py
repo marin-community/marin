@@ -14,6 +14,7 @@ from jax.sharding import PartitionSpec as P
 from experiments.grug.moe.launch_cw_muon_update_bench import _wandb_metric_row, build_step
 from experiments.grug.moe.muon_update_bench import (
     EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
+    EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GROUPED_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_A2A_APPLY_BOUNDARY_BENCH,
@@ -122,6 +123,7 @@ from experiments.grug.moe.muon_update_bench import (
     expert_grouped_layer_slice_step_factory,
     expert_grouped_single_layer_slice_step_factory,
     fsdp_grads_to_grouped_chunks_step_factory,
+    fsdp_grads_to_packed_grouped_chunks_step_factory,
     fsdp_grouped_boundary_correctness_max_error,
     full_production_grouped_2d_persistent_apply_timing_step_factory,
     full_production_muonh_mask,
@@ -1862,6 +1864,50 @@ def test_fsdp_grads_to_grouped_chunks_returns_grouped_updates():
     assert estimated_ns_dot_flops(config, EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH) == 0
 
 
+def test_fsdp_grads_to_packed_grouped_chunks_returns_grouped_updates():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    grads = synthetic_fsdp_expert_specs(mesh, config)
+    update_step = jax.jit(fsdp_grads_to_packed_grouped_chunks_step_factory(mesh, config))
+
+    assert_expert_fsdp_sharding(grads, "expert FSDP grads")
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        result = jax.eval_shape(update_step, grads)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(grads).lower(lowering_platforms=(platform,))
+
+    assert_grouped_expert_sharding(
+        result,
+        mesh,
+        config,
+        EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
+        "packed FSDP grads-to-grouped chunks result",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general == 0
+    assert estimated_ns_dot_flops(config, EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH) == 0
+
+
 def test_expert_fsdp_grouped_boundary_correctness_max_error_is_zero_for_reference_apply():
     config = BenchConfig(
         layers=2,
@@ -1925,6 +1971,38 @@ def test_fsdp_grads_to_grouped_chunks_correctness_max_error_is_zero_for_referenc
         mesh,
         config,
         EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
+        None,
+        grads,
+    )
+
+    assert max_error == 0.0
+
+
+def test_fsdp_grads_to_packed_grouped_chunks_correctness_max_error_is_zero_for_reference():
+    config = BenchConfig(
+        layers=2,
+        ns4d_group_size=2,
+        ns4d_group_axis="none",
+        hidden_dim=4,
+        intermediate_dim=2,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=2,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    grads = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=1)
+
+    max_error = fsdp_grouped_boundary_correctness_max_error(
+        mesh,
+        config,
+        EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
         None,
         grads,
     )
@@ -3518,6 +3596,25 @@ def test_summary_row_reports_boundary_byte_estimates():
     row = summary_row(result)
 
     assert row["boundary_primitive"] == "fsdp_grads_to_grouped_chunks"
+    assert row["estimated_boundary_global_update_bytes"] == estimates["global_update_bytes"]
+    assert row["estimated_boundary_grouped_input_per_device_bytes"] == estimates["grouped_input_per_device_bytes"]
+    assert row["estimated_boundary_fsdp_output_per_device_bytes"] == estimates["fsdp_output_per_device_bytes"]
+    assert (
+        row["estimated_boundary_all_gather_slice_peak_per_device_bytes"]
+        == estimates["all_gather_slice_peak_per_device_bytes"]
+    )
+
+    packed_grads_to_grouped_estimates = estimated_boundary_byte_estimates(
+        config,
+        EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
+    )
+    assert packed_grads_to_grouped_estimates == estimates
+
+    result["metadata"]["label"] = "expert_fsdp_grads_to_packed_grouped_chunks_h1"
+    result["metadata"]["bench_kind"] = EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH
+    row = summary_row(result)
+
+    assert row["boundary_primitive"] == "fsdp_grads_to_packed_grouped_chunks"
     assert row["estimated_boundary_global_update_bytes"] == estimates["global_update_bytes"]
     assert row["estimated_boundary_grouped_input_per_device_bytes"] == estimates["grouped_input_per_device_bytes"]
     assert row["estimated_boundary_fsdp_output_per_device_bytes"] == estimates["fsdp_output_per_device_bytes"]
