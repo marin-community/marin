@@ -2399,3 +2399,33 @@ Post-compile steps were stable around 0.65-0.66s:
     the full-size 1 GiB cap and an end-to-end Grug MoE training run using
     `MAY_EXPERT_3D_OPTIMIZER=grouped_muonh` with the new default packed-entry
     path.
+
+### 2026-06-20 07:05 PDT - Local packed-bank boundary correctness regression
+- Hypothesis: The reduced local correctness case should compare actual and
+  reference packed-bank boundary outputs even when the two trees carry different
+  `NamedSharding` specs. This is needed because the local reduced case caught
+  reference/checking failures before it reached the intended zero-error proof.
+- Change:
+  - Updated `max_abs_tree_error` to reshard expected leaves to the actual
+    leaf sharding before subtraction.
+  - Updated `reference_packed_bank_updates_apply` to replicate the packed
+    reference stack axis before splitting per layer. This keeps the reference
+    path from attempting a local `jnp.split` over a sharded stack axis.
+  - Fixed `scratch/muon_update_bench_fast_loop.sh local` on Bash 3.2 by
+    temporarily disabling `set -u` around empty optional argument arrays.
+- Command:
+  - `RUN_ID=MUON-BENCH-CORRECTNESS-SMALL-R1D2E2-G2-local MUON_BENCH_LAYERS=2 MUON_BENCH_HIDDEN_DIM=16 MUON_BENCH_INTERMEDIATE_DIM=8 MUON_BENCH_NUM_EXPERTS=2 MUON_BENCH_REPLICA_AXIS=1 MUON_BENCH_DATA_AXIS=2 MUON_BENCH_EXPERT_AXIS=2 MUON_BENCH_MODEL_AXIS=1 MUON_BENCH_GPU_REPLICAS=1 MUON_BENCH_NS4D_GROUP_SIZE=2 MUON_BENCH_NS4D_GROUP_AXIS=data MUON_BENCH_KINDS=expert_fsdp_grads_to_explicit_packed_grouped_bank,expert_fsdp_packed_bank_a2a_apply_boundary MUON_BENCH_SWEEP_BACKEND_STEPS=1 MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=4 MUON_BENCH_WARMUP=1 MUON_BENCH_ITERS=1 MUON_BENCH_MODE=both MUON_BENCH_TRACKER=json MUON_BENCH_WANDB=false MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES=true MUON_BENCH_FORCE_BOUNDARY_CORRECTNESS=true MUON_BENCH_BOUNDARY_CORRECTNESS_MAX_GLOBAL_BYTES=1073741824 bash scratch/muon_update_bench_fast_loop.sh local grouped-d2e4`.
+- Result:
+  - Output: `scratch/MUON-BENCH-CORRECTNESS-SMALL-R1D2E2-G2-local.json`.
+  - `expert_fsdp_grads_to_explicit_packed_grouped_bank_h1`:
+    lowered AG/AR/RS/A2A=`0/0/0/2`, `correctness_max_error=0.0`.
+  - `expert_fsdp_packed_bank_a2a_apply_boundary_h1`:
+    lowered AG/AR/RS/A2A=`0/0/0/2`, `correctness_max_error=0.0`.
+  - Compiled local HLO includes two all-reduces from the correctness/checksum
+    timing path; that is not the boundary primitive shape being validated.
+- Interpretation:
+  - This is reduced local CPU/fake-device evidence, not a distributed
+    CoreWeave correctness proof.
+  - It does cover the reference/checking corner that previously made the
+    reduced correctness run fail before measuring the packed-bank boundary
+    primitives.

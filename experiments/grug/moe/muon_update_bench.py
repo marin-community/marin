@@ -6924,12 +6924,19 @@ def reference_grouped_updates_apply(config: BenchConfig, params: Any, grouped_up
     return optax.apply_updates(params, updates)
 
 
+def _replicate_reference_stack_axis(value: jax.Array) -> jax.Array:
+    sharding = _target_sharding(value)
+    if not isinstance(sharding, NamedSharding) or not sharding.spec or sharding.spec[0] is None:
+        return value
+    return reshard(value, NamedSharding(sharding.mesh, P(None, *sharding.spec[1:])))
+
+
 def reference_packed_bank_updates_apply(config: BenchConfig, params: Any, packed_updates: Any) -> Any:
     output_layers = [
         {"mlp": {"expert_mlp": {name: None for name in synthetic_shapes(config)}}} for _ in range(config.layers)
     ]
     for name in synthetic_shapes(config):
-        valid_updates = packed_updates["packed"][name][: config.layers]
+        valid_updates = _replicate_reference_stack_axis(packed_updates["packed"][name])[: config.layers]
         update_parts = [jnp.squeeze(update_part, axis=0) for update_part in jnp.split(valid_updates, config.layers)]
         for layer_index, update_part in enumerate(update_parts):
             param = params["layers"][layer_index]["mlp"]["expert_mlp"][name]
@@ -6938,8 +6945,13 @@ def reference_packed_bank_updates_apply(config: BenchConfig, params: Any, packed
 
 
 def max_abs_tree_error(actual: Any, expected: Any) -> float:
+    def leaf_error(actual_leaf, expected_leaf):
+        if hasattr(actual_leaf, "sharding") and hasattr(expected_leaf, "sharding"):
+            expected_leaf = reshard(expected_leaf, actual_leaf.sharding)
+        return jnp.max(jnp.abs(actual_leaf - expected_leaf))
+
     error_tree = jax.tree.map(
-        lambda actual_leaf, expected_leaf: jnp.max(jnp.abs(actual_leaf - expected_leaf)),
+        leaf_error,
         actual,
         expected,
     )

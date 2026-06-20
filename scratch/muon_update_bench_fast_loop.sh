@@ -261,6 +261,7 @@ case "$TARGET" in
         if [[ "$MUON_BENCH_ENABLE_JAX_PROFILE" == "1" || "$MUON_BENCH_ENABLE_JAX_PROFILE" == "true" ]]; then
             PROFILE_ARGS=(--profile-dir "scratch/profiles/${RUN_ID}")
         fi
+        set +u
         XLA_FLAGS="$LOCAL_XLA_FLAGS" \
             uv run python experiments/grug/moe/muon_update_bench.py \
                 --layers "$MUON_BENCH_LAYERS" \
@@ -295,6 +296,7 @@ case "$TARGET" in
                 "${EXPERT_GROUPED_MUONH_PACKED_ENTRY_ARGS[@]}" \
                 "${EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES_ARGS[@]}" \
                 "${PROFILE_ARGS[@]}"
+        set -u
         echo "Wrote ${OUTPUT}"
         ;;
     iris)
