@@ -20,6 +20,7 @@ import levanter.tracker
 from levanter.callbacks._core import StepInfo
 from levanter.callbacks._metrics import aggregate_device_flops, compute_instant_throughput
 from levanter.schedule import BatchSchedule
+from levanter.tracker.background import BackgroundTracker
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +29,19 @@ MAX_STATUS_TEXT_LENGTH = 1000
 
 
 def _wandb_run_url() -> str | None:
-    """Best-effort W&B run URL from the active tracker, or ``None`` if unavailable."""
+    """Best-effort W&B run URL from the active tracker, or ``None`` if unavailable.
+
+    On the primary process the W&B tracker is wrapped in a ``BackgroundTracker``
+    (which mirrors its name but not its ``run``), so unwrap it before reading the
+    URL.
+    """
     try:
-        return levanter.tracker.get_tracker("wandb").run.url
-    except (KeyError, RuntimeError, AttributeError):
+        tracker = levanter.tracker.get_tracker("wandb")
+    except (KeyError, RuntimeError):
         return None
+    if isinstance(tracker, BackgroundTracker):
+        tracker = tracker.wrapped
+    return getattr(tracker.run, "url", None)
 
 
 def _format_status(
