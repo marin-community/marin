@@ -11,7 +11,12 @@ from jax._src import config as jax_config
 from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
-from experiments.grug.moe.launch_cw_muon_update_bench import _wandb_metric_row, build_step
+from experiments.grug.moe import launch_cw_muon_update_bench as launcher
+from experiments.grug.moe.launch_cw_muon_update_bench import (
+    _sync_global_devices_if_multihost,
+    _wandb_metric_row,
+    build_step,
+)
 from experiments.grug.moe.muon_update_bench import (
     EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
     EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
@@ -262,6 +267,26 @@ def test_wandb_metric_row_keeps_scalar_topline_fields():
     assert metrics["bench/median_h100_bf16_peak_pct"] == 50.0
     assert metrics["bench/compiled_hlo_all_gather"] == 26
     assert "bench/chunks" not in metrics
+
+
+def test_sync_global_devices_if_multihost_skips_single_process(monkeypatch):
+    sync_calls = []
+    monkeypatch.setattr(launcher.jax, "process_count", lambda: 1)
+    monkeypatch.setattr(launcher, "sync_global_devices", sync_calls.append)
+
+    _sync_global_devices_if_multihost("before_wandb")
+
+    assert sync_calls == []
+
+
+def test_sync_global_devices_if_multihost_uses_stable_bench_prefix(monkeypatch):
+    sync_calls = []
+    monkeypatch.setattr(launcher.jax, "process_count", lambda: 2)
+    monkeypatch.setattr(launcher, "sync_global_devices", sync_calls.append)
+
+    _sync_global_devices_if_multihost("after_wandb")
+
+    assert sync_calls == ["muon_update_bench_after_wandb"]
 
 
 def test_output_path_for_config_preserves_remote_uri():

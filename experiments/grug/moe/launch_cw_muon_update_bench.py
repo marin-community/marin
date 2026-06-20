@@ -21,6 +21,7 @@ import wandb
 from fray.cluster import ResourceConfig
 from levanter.distributed import DistributedConfig
 from levanter.optim.grugmuon import DEFAULT_MAX_GROUPED_STACK_SIZE, STACK_BATCH_SHARDED
+from levanter.utils.jax_utils import sync_global_devices
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path
 
@@ -202,6 +203,12 @@ def _write_json(path: str, payload: dict[str, Any]) -> None:
         fp.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
+def _sync_global_devices_if_multihost(name: str) -> None:
+    if jax.process_count() <= 1:
+        return
+    sync_global_devices(f"muon_update_bench_{name}")
+
+
 def _upload_directory(local_dir: Path, remote_dir: str) -> list[str]:
     if not local_dir.exists():
         return []
@@ -342,7 +349,9 @@ def _run_muon_update_bench_local(config: MuonUpdateBenchLaunchConfig) -> None:
             }
         )
     _write_json(f"{config.output_path}/summary.json", payload)
+    _sync_global_devices_if_multihost("before_wandb")
     _log_summary_to_wandb(config, payload)
+    _sync_global_devices_if_multihost("after_wandb")
 
 
 def run_muon_update_bench(config: MuonUpdateBenchLaunchConfig) -> None:

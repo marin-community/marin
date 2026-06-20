@@ -1868,3 +1868,36 @@ Post-compile steps were stable around 0.65-0.66s:
   - It is not a performance win over the previous direct packed-bank apply (`~0.638s` median); restoring the update tree and using ordinary Optax costs roughly `20 ms` on R1D2E8 and leaves the same compiled `6 A2A` transport.
   - The remaining target is still the boundary primitive, not semantic compatibility. The path is usable as a conservative FSDP-master baseline while Socrates/lower-level work attempts to collapse or avoid the three two-A2A phases.
 - Next action: keep the restore-before-Optax path as the compatibility reference, but optimize against the faster direct packed-bank baseline and the ideal of two expert-projection transports. Continue lower-level bridge work; no more JAX wrapper variants unless they change compiled HLO and timing.
+
+### 2026-06-20 03:22 PDT - packed-bank boundary phase reporting
+- Hypothesis: The packed-bank compatibility path needs phase-level accounting in the summary rows so future variants can be judged by transport phases, ideal collective count, and implied bandwidth, not only raw compiled collective totals.
+- Change:
+  - Commit `b9dc64fe6` adds packed-bank boundary phase estimates to `summary_row`: phase names, expected primitive, global bytes per phase, ideal collective count, compiled/lowered-to-ideal ratios, and estimated phase/global GB/s.
+  - Added focused coverage for the packed-bank phase fields.
+- Validation:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'boundary_byte_estimates or boundary_phase_estimates or packed_bank_muonh' -q` -> 6 passed.
+  - `./infra/pre-commit.py --files experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix` passed, and commit hooks including Pyrefly passed.
+- CoreWeave command:
+  - `RUN_ID=MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PHASEREPORT-N2-cw-20260620-100652 MARIN_PREFIX=s3://marin-na/tmp/ttl=7d MUON_BENCH_KINDS=expert_fsdp_packed_bank_muonh_apply MUON_BENCH_MODE=both MUON_BENCH_WARMUP=1 MUON_BENCH_ITERS=1 MUON_BENCH_SWEEP_BACKEND_STEPS=3 MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 MUON_BENCH_WRITE_COMPILED_HLO=true MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES=true MUON_BENCH_ENABLE_JAX_PROFILE=false MUON_BENCH_TRACKER=wandb MUON_BENCH_WANDB_PROJECT=marin_moe MUON_BENCH_WANDB_GROUP=grug-moe-cw-muon-packed-bank XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 bash scratch/launch_muon_grouped_reference_2node_wandb.sh`.
+- Config:
+  - Iris parent `/dlwh/iris-run-job-20260620-100655`; child `/dlwh/iris-run-job-20260620-100655/grug-train-MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PHASEREPORT-N2-cw-20260620-100652`.
+  - W&B `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PHASEREPORT-N2-cw-20260620-100652`.
+  - Output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PHASEREPORT-N2-cw-20260620-100652-cc6155`.
+- Result:
+  - The benchmark emitted summary rows and W&B metrics, then failed during distributed shutdown about five minutes later. Task 0 exited 139 after `Shutdown barrier in coordination service has failed`; task 1 was marked coscheduled-failed because its sibling failed.
+  - Treat the timing and phase metrics as valid, but the terminal job state as a launcher cleanup failure. The failure happened after `summary_table`, `wandb_logged`, and summary upload.
+  - Lowered HLO: `0 all_gather`, `6 all_to_all`, `0 collective_permute`, `0 reduce_scatter`, `18 dot_general`.
+  - Compiled HLO: `0 all_gather`, `6 all_to_all`, `0 collective_permute`, `0 reduce_scatter`, `41 gpu_gemm_custom_call`.
+  - Rank 0 timing: `0.691390216s`; rank 1 timing: `0.691413651s`.
+  - Reported phases:
+    - `fsdp_grads_to_packed_grouped_bank`: expected `all_to_all`, global bytes `130862284800`, ideal collectives `2`.
+    - `fsdp_params_to_packed_grouped_bank`: expected `all_to_all`, global bytes `130862284800`, ideal collectives `2`.
+    - `packed_grouped_updates_to_fsdp_apply`: expected `all_to_all`, global bytes `130862284800`, ideal collectives `2`.
+  - Aggregate phase fields: `estimated_boundary_phase_count=3`, `estimated_boundary_phase_global_bytes=392586854400`, `estimated_boundary_phase_ideal_collective_count=6`, compiled/lowered-to-ideal ratios `1.0`, mean phase global bandwidth about `568 GB/s`, and mean aggregate boundary bandwidth about `189 GB/s`.
+- Interpretation:
+  - The packed-bank path now reports the intended phase model, and the compiled HLO exactly matches the phase ideal: six total all-to-alls for three two-A2A phases.
+  - The post-metrics failure is consistent with rank 0 spending extra time in W&B finalization while the other host exits and tears down distributed state.
+- Follow-up fix:
+  - Add multi-host `sync_global_devices` barriers before and after rank-0-only W&B logging in `launch_cw_muon_update_bench.py`, so nonzero ranks do not exit while rank 0 is still finishing the tracker.
+  - Focused validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'sync_global_devices_if_multihost or wandb_metric_row or launcher_reads_wandb_env' -q` -> 4 passed; `uv run python -m py_compile experiments/grug/moe/launch_cw_muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed; `./infra/pre-commit.py --files experiments/grug/moe/launch_cw_muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix` passed.
+- Next action: run a one-iteration R1D2E8 phase-report validation with the W&B barriers in place. If it exits cleanly, the phase-reporting path is a usable ongoing regression check.
