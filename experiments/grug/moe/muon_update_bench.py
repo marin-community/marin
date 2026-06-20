@@ -2771,6 +2771,16 @@ def fsdp_grads_to_grouped_chunks_step_factory_for_bench(mesh: Mesh, config: Benc
     raise ValueError(f"Unsupported FSDP grads-to-grouped bench kind: {bench_kind!r}.")
 
 
+def fsdp_grads_to_grouped_chunks_timing_step_factory_for_bench(mesh: Mesh, config: BenchConfig, bench_kind: str):
+    update_step = fsdp_grads_to_grouped_chunks_step_factory_for_bench(mesh, config, bench_kind)
+
+    def timing_step(grads):
+        with jax.named_scope("muon_update_bench/fsdp_grads_to_grouped_chunks_timing_step"):
+            return scalar_tree_checksum(update_step(grads))
+
+    return timing_step
+
+
 def expert_fsdp_grouped_boundary_updates(mesh: Mesh, config: BenchConfig, params, grouped_updates):
     """Restore grouped 4D expert updates to ordinary FSDP-shaped per-layer updates."""
     output_layers = [
@@ -6738,7 +6748,11 @@ def boundary_collective_fragmentation(
         + (hlo_summary.get("all_to_all") or 0)
         + (hlo_summary.get("collective_permute") or 0)
     )
-    ideal_collective_count = len(synthetic_shapes(config))
+    boundary_phases = estimated_boundary_phase_estimates(config, bench_kind)
+    if boundary_phases:
+        ideal_collective_count = sum(phase["ideal_collective_count"] for phase in boundary_phases)
+    else:
+        ideal_collective_count = len(synthetic_shapes(config))
     return {
         "collective_count": float(collective_count),
         "ideal_collective_count": float(ideal_collective_count),
@@ -8445,7 +8459,9 @@ def time_ns4d(
                 lower_args = (params, updates)
             elif is_expert_fsdp_grads_to_grouped_chunks_bench(bench_kind):
                 params = None
-                update_step = jax.jit(fsdp_grads_to_grouped_chunks_step_factory_for_bench(mesh, config, bench_kind))
+                update_step = jax.jit(
+                    fsdp_grads_to_grouped_chunks_timing_step_factory_for_bench(mesh, config, bench_kind)
+                )
                 lower_args = (updates,)
             elif bench_kind == EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH:
                 params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
@@ -8672,21 +8688,10 @@ def time_ns4d(
             if params is None:
                 next_updates = compiled(updates)
                 block_until_ready_tree(next_updates)
-                if bench_kind == EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH:
-                    assert_packed_grouped_expert_bank_sharding(
-                        next_updates,
-                        mesh,
-                        config,
-                        bench_kind,
-                        "warmup explicit packed FSDP grads-to-grouped bank result",
-                    )
-                elif is_expert_fsdp_grads_to_grouped_chunks_bench(bench_kind):
-                    assert_grouped_expert_sharding(
-                        next_updates,
-                        mesh,
-                        config,
-                        bench_kind,
-                        "warmup expert FSDP grads-to-grouped chunks result",
+                if is_expert_fsdp_grads_to_grouped_chunks_bench(bench_kind) and next_updates.shape != ():
+                    raise ValueError(
+                        "Timing-only FSDP grads-to-grouped step should return a scalar checksum; "
+                        f"got shape {next_updates.shape}."
                     )
             elif (
                 is_expert_fsdp_grouped_bench(bench_kind)
@@ -8895,21 +8900,10 @@ def time_ns4d(
                 if params is None:
                     next_updates = compiled(updates)
                     block_until_ready_tree(next_updates)
-                    if bench_kind == EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH:
-                        assert_packed_grouped_expert_bank_sharding(
-                            next_updates,
-                            mesh,
-                            config,
-                            bench_kind,
-                            "explicit packed FSDP grads-to-grouped bank result",
-                        )
-                    elif is_expert_fsdp_grads_to_grouped_chunks_bench(bench_kind):
-                        assert_grouped_expert_sharding(
-                            next_updates,
-                            mesh,
-                            config,
-                            bench_kind,
-                            "expert FSDP grads-to-grouped chunks result",
+                    if is_expert_fsdp_grads_to_grouped_chunks_bench(bench_kind) and next_updates.shape != ():
+                        raise ValueError(
+                            "Timing-only FSDP grads-to-grouped step should return a scalar checksum; "
+                            f"got shape {next_updates.shape}."
                         )
                 elif (
                     is_expert_fsdp_grouped_bench(bench_kind)
@@ -9757,8 +9751,10 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         ),
         "estimated_boundary_phases": boundary_phases,
         "estimated_boundary_phase_count": len(boundary_phases),
-        "estimated_boundary_phase_global_bytes": boundary_phase_global_bytes or None,
-        "estimated_boundary_phase_ideal_collective_count": boundary_phase_ideal_collective_count or None,
+        "estimated_boundary_phase_global_bytes": boundary_phase_global_bytes if boundary_phases else None,
+        "estimated_boundary_phase_ideal_collective_count": (
+            boundary_phase_ideal_collective_count if boundary_phases else None
+        ),
         "grouped_expert_group_count": result["metadata"]["grouped_expert_group_count"],
         "grouped_chunks": sum(estimate["grouped_chunks"] for estimate in estimates),
         "chunks": [estimate["chunks"] for estimate in estimates],

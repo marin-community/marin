@@ -146,6 +146,7 @@ from experiments.grug.moe.muon_update_bench import (
     fsdp_grads_to_explicit_packed_grouped_bank_step_factory,
     fsdp_grads_to_explicit_packed_grouped_chunks_step_factory,
     fsdp_grads_to_grouped_chunks_step_factory,
+    fsdp_grads_to_grouped_chunks_timing_step_factory_for_bench,
     fsdp_grads_to_packed_grouped_chunks_step_factory,
     fsdp_grouped_boundary_correctness_max_error,
     full_production_grouped_2d_persistent_apply_timing_step_factory,
@@ -2266,6 +2267,39 @@ def test_fsdp_grads_to_explicit_packed_grouped_bank_correctness_max_error_is_zer
     )
 
     assert max_error == 0.0
+
+
+def test_fsdp_grads_to_explicit_packed_grouped_bank_timing_returns_scalar_checksum():
+    config = BenchConfig(
+        layers=2,
+        ns4d_group_size=2,
+        ns4d_group_axis="none",
+        hidden_dim=4,
+        intermediate_dim=2,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=2,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    grads = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=1)
+    timing_step = jax.jit(
+        fsdp_grads_to_grouped_chunks_timing_step_factory_for_bench(
+            mesh,
+            config,
+            EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
+        )
+    )
+
+    checksum = timing_step(grads)
+
+    assert checksum.shape == ()
 
 
 def test_expert_fsdp_packed_bank_a2a_apply_boundary_correctness_max_error_is_zero_for_reference():
@@ -4570,6 +4604,15 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
     assert n1_phases
     assert {phase["expected_collective_type"] for phase in n1_phases} == {"none"}
     assert sum(phase["ideal_collective_count"] for phase in n1_phases) == 0.0
+    result["metadata"]["config"] = asdict(n1_config)
+    result["metadata"]["bench_kind"] = EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH
+    result["metadata"]["label"] = "expert_fsdp_grads_to_explicit_packed_grouped_bank_h1"
+    result["lowered"]["hlo"]["all_to_all"] = 0
+    result["timing"]["timing"]["compiled_hlo"]["all_to_all"] = 0
+    n1_row = summary_row(result)
+    assert n1_row["estimated_boundary_phase_ideal_collective_count"] == 0.0
+    assert n1_row["estimated_boundary_lowered_ideal_collective_count"] == 0.0
+    assert n1_row["estimated_boundary_compiled_ideal_collective_count"] == 0.0
     r4_config = replace(config, replica_axis=4, data_axis=1, ns4d_group_axis="replica_dcn", ns4d_group_size=4)
     r4_direction_phases = estimated_boundary_phase_estimates(
         r4_config,
