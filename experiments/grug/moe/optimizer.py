@@ -362,6 +362,131 @@ def _stack_grouped_muonh_chunk(entry_chunk, *, value_index: int):
     return stacked, target, valid_size
 
 
+def _grouped_muonh_entry_key(entry_chunk) -> tuple[tuple[int, ...], str, str]:
+    sample_param = entry_chunk[0][2]
+    sample_sharding = _target_named_sharding(sample_param)
+    return (
+        tuple(sample_param.shape),
+        str(sample_param.dtype),
+        str(sample_sharding.spec) if isinstance(sample_sharding, jax.sharding.NamedSharding) else "",
+    )
+
+
+def _grouped_muonh_chunk_padded_size(entry_chunk) -> int:
+    sample_param = entry_chunk[0][2]
+    stack_axis_size = _grouped_muonh_stack_axis_size(sample_param)
+    return math.ceil(len(entry_chunk) / stack_axis_size) * stack_axis_size
+
+
+def _packed_grouped_muonh_entry_bank(
+    entries: tuple[tuple[int, object, object], ...],
+    *,
+    value_index: int,
+    padded_size: int,
+):
+    """Pack FSDP leaves into one Newton-Schulz-sharded grouped bank."""
+
+    sample_param = entries[0][2]
+    param_sharding = _target_named_sharding(sample_param)
+    values = tuple(entry[value_index] for entry in entries)
+    if not isinstance(param_sharding, jax.sharding.NamedSharding) or len(param_sharding.spec) != 3:
+        stacked = jnp.stack(values, axis=0)
+        return _pad_grouped_muonh_stack(stacked, padded_size)
+
+    mesh = param_sharding.mesh
+    target_group_axes = tuple(axis for axis in (REPLICA_DCN_AXIS, "data") if _mesh_axis_size(mesh, axis) > 1)
+    if len(target_group_axes) > 1:
+        target_group_axis = target_group_axes
+    elif target_group_axes:
+        target_group_axis = target_group_axes[0]
+    else:
+        target_group_axis = None
+    target_spec = jax.sharding.PartitionSpec(target_group_axis, param_sharding.spec[0], None, None)
+    group_axis = _live_group_axis(mesh, target_spec[0])
+    group_axis_names = group_axis if isinstance(group_axis, tuple) else (group_axis,) if group_axis else ()
+    data_axis = None
+    for axis_index, axis_spec in enumerate(param_sharding.spec, start=1):
+        if _axis_spec_contains(axis_spec, "data"):
+            data_axis = axis_index
+            break
+
+    data_axis_size = _mesh_axis_size(mesh, "data")
+    replica_axis_size = _mesh_axis_size(mesh, REPLICA_DCN_AXIS)
+    group_axis_size = _live_group_axis_size(mesh, group_axis)
+    if group_axis_size > 1 and padded_size % group_axis_size != 0:
+        stacked = jnp.stack(values, axis=0)
+        target = _grouped_4d_stack_target(_grouped_muonh_shape_dtype_struct(stacked.shape, stacked.dtype, sample_param))
+        return _enter_grouped_muonh_ns_layout_slice_first_gather(
+            _pad_grouped_muonh_stack(stacked, padded_size),
+            target,
+            sample_param,
+        )
+    if data_axis is not None and data_axis_size > 1 and "data" not in group_axis_names:
+        stacked = jnp.stack(values, axis=0)
+        target = _grouped_4d_stack_target(_grouped_muonh_shape_dtype_struct(stacked.shape, stacked.dtype, sample_param))
+        return _enter_grouped_muonh_ns_layout_slice_first_gather(
+            _pad_grouped_muonh_stack(stacked, padded_size),
+            target,
+            sample_param,
+        )
+
+    def pack_and_route(*local_values):
+        with jax.named_scope("grouped_muonh/packed_entry/stack_leaves"):
+            packed_value = jnp.stack(local_values, axis=0)
+        if padded_size != len(local_values):
+            with jax.named_scope("grouped_muonh/packed_entry/pad_leaves"):
+                pad_width = [(0, padded_size - len(local_values)), *[(0, 0) for _ in packed_value.shape[1:]]]
+                packed_value = jnp.pad(packed_value, pad_width)
+        if replica_axis_size > 1 and REPLICA_DCN_AXIS in group_axis_names:
+            with jax.named_scope("grouped_muonh/packed_entry/slice_replica_group"):
+                replica_group_size = packed_value.shape[0] // replica_axis_size
+                replica_start = lax.axis_index(REPLICA_DCN_AXIS) * replica_group_size
+                packed_value = lax.dynamic_slice_in_dim(packed_value, replica_start, replica_group_size, axis=0)
+        if data_axis is not None and data_axis_size > 1:
+            with jax.named_scope("grouped_muonh/packed_entry/data_a2a_to_group"):
+                packed_value = lax.all_to_all(
+                    packed_value,
+                    axis_name="data",
+                    split_axis=0,
+                    concat_axis=data_axis,
+                    tiled=True,
+                )
+        return packed_value
+
+    return shard_map(
+        pack_and_route,
+        mesh=mesh,
+        in_specs=tuple(param_sharding.spec for _ in values),
+        out_specs=target_spec,
+        check_vma=False,
+    )(*values)
+
+
+def _grouped_muonh_packed_entry_banks(chunks):
+    records_by_key: dict[tuple[tuple[int, ...], str, str], list[tuple[int, list[Any], int, int]]] = {}
+    for chunk_index, entry_chunk in enumerate(chunks):
+        key = _grouped_muonh_entry_key(entry_chunk)
+        valid_size = len(entry_chunk)
+        padded_size = _grouped_muonh_chunk_padded_size(entry_chunk)
+        records_by_key.setdefault(key, []).append((chunk_index, entry_chunk, valid_size, padded_size))
+
+    banks = {}
+    chunk_info = {}
+    for key, records in records_by_key.items():
+        entries = tuple(entry for _, entry_chunk, _, _ in records for entry in entry_chunk)
+        padded_size = sum(record[3] for record in records)
+        with jax.named_scope("grouped_muonh/packed_entry/updates"):
+            update_bank = _packed_grouped_muonh_entry_bank(entries, value_index=1, padded_size=padded_size)
+        with jax.named_scope("grouped_muonh/packed_entry/params"):
+            param_bank = _packed_grouped_muonh_entry_bank(entries, value_index=2, padded_size=padded_size)
+        banks[key] = (update_bank, param_bank)
+        offset = 0
+        for chunk_index, entry_chunk, valid_size, chunk_padded_size in records:
+            chunk_info[chunk_index] = (key, offset, valid_size, chunk_padded_size, entry_chunk)
+            offset += chunk_padded_size
+    return banks, chunk_info
+
+
 def _init_grouped_muonh_trace_groups(
     params,
     *,
@@ -727,23 +852,17 @@ def _grouped_expert_muonh_updates_with_grouped_trace(
     grouped_updates_by_key: dict[tuple[tuple[int, ...], str, str], list[Any]] = {}
     valid_sizes_by_key: dict[tuple[tuple[int, ...], str, str], list[int]] = {}
     entries_by_key: dict[tuple[tuple[int, ...], str, str], list[tuple[int, object, object]]] = {}
-    for trace_group, entry_chunk in zip(trace_groups, chunks, strict=True):
-        with jax.named_scope("grouped_muonh/stack_expert_updates"):
-            stacked_updates, target, valid_size = _stack_grouped_muonh_chunk(entry_chunk, value_index=1)
-            stacked_params, _, _ = _stack_grouped_muonh_chunk(entry_chunk, value_index=2)
-
-        if target is not None:
-            with jax.named_scope("grouped_muonh/reshard_grouped_stack"):
-                stacked_updates = _enter_grouped_muonh_ns_layout_slice_first_gather(
-                    stacked_updates,
-                    target,
-                    entry_chunk[0][2],
-                )
-                stacked_params = _enter_grouped_muonh_ns_layout_slice_first_gather(
-                    stacked_params,
-                    target,
-                    entry_chunk[0][2],
-                )
+    banks_by_key, chunk_info = _grouped_muonh_packed_entry_banks(chunks)
+    for chunk_index, (trace_group, entry_chunk) in enumerate(zip(trace_groups, chunks, strict=True)):
+        key, offset, valid_size, padded_size, entry_chunk = chunk_info[chunk_index]
+        update_bank, param_bank = banks_by_key[key]
+        with jax.named_scope("grouped_muonh/packed_entry/slice_update_chunk"):
+            stacked_updates = lax.dynamic_slice_in_dim(update_bank, offset, padded_size, axis=0)
+        with jax.named_scope("grouped_muonh/packed_entry/slice_param_chunk"):
+            stacked_params = lax.dynamic_slice_in_dim(param_bank, offset, padded_size, axis=0)
+        target = _grouped_4d_stack_target(
+            _grouped_muonh_shape_dtype_struct(stacked_updates.shape, stacked_updates.dtype, entry_chunk[0][2])
+        )
 
         with jax.named_scope("grouped_muonh/update_grouped_momentum_buffer"):
             next_trace_group = momentum * trace_group + stacked_updates
@@ -766,13 +885,6 @@ def _grouped_expert_muonh_updates_with_grouped_trace(
             direction = _scale_grouped_muonh_direction(direction)
 
         grouped_update = _grouped_muonh_hyperball_update(stacked_params, direction, learning_rate)
-        sample_param = entry_chunk[0][2]
-        sample_sharding = _target_named_sharding(sample_param)
-        key = (
-            tuple(sample_param.shape),
-            str(sample_param.dtype),
-            str(sample_sharding.spec) if isinstance(sample_sharding, jax.sharding.NamedSharding) else "",
-        )
         grouped_updates_by_key.setdefault(key, []).append(grouped_update)
         valid_sizes_by_key.setdefault(key, []).append(valid_size)
         entries_by_key.setdefault(key, []).extend(entry_chunk)

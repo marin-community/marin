@@ -299,8 +299,8 @@ def test_grouped_expert_muonh_optimizer_returns_fsdp_updates_before_apply():
     hlo = str(lowered.compiler_ir(dialect="stablehlo"))
     assert hlo.count("stablehlo.all_reduce") == 0
     assert hlo.count("stablehlo.reduce_scatter") == 0
-    assert hlo.count("stablehlo.all_to_all") == 0
-    assert hlo.count("stablehlo.all_gather") == 6
+    assert hlo.count("stablehlo.all_to_all") == 4
+    assert hlo.count("stablehlo.all_gather") == 2
 
 
 def test_grouped_expert_muonh_packs_multi_chunk_restore_boundary():
@@ -349,8 +349,8 @@ def test_grouped_expert_muonh_packs_multi_chunk_restore_boundary():
     hlo = str(lowered.compiler_ir(dialect="stablehlo"))
     assert hlo.count("stablehlo.all_reduce") == 0
     assert hlo.count("stablehlo.reduce_scatter") == 0
-    assert hlo.count("stablehlo.all_to_all") == 0
-    assert hlo.count("stablehlo.all_gather") == 10
+    assert hlo.count("stablehlo.all_to_all") == 4
+    assert hlo.count("stablehlo.all_gather") == 2
 
 
 def test_grouped_muonh_restore_can_reshard_grouped_stack_to_fsdp_layout():
