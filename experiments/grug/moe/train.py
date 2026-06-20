@@ -201,7 +201,8 @@ def _compute_flops(
         intermediate_dim=model_config.intermediate_dim,
         shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
         num_layers=model_config.num_layers,
-        num_kv_heads=model_config.num_kv_heads,
+        # MLA: V is per-head from c_kv; attention dot-product FLOPs match MHA. Pass num_heads.
+        num_kv_heads=model_config.num_heads,
         num_heads=model_config.num_heads,
         seq_len=model_config.max_seq_len,
         vocab_size=model_config.vocab_size,
