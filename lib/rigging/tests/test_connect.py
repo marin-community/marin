@@ -82,14 +82,16 @@ def test_parse_ssh_gcp():
     assert target.tunnel_through_iap is True
 
 
-def test_parse_ssh_gcp_without_project_raises():
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ssh+gcp://iris-controller:10000/path?zone=us-central1-a",  # no project
+        "ssh+gcp://iris-controller:10000/path?project=marin",  # no zone
+    ],
+)
+def test_parse_ssh_gcp_missing_required_param_raises(url):
     with pytest.raises(ValueError, match="ssh\\+gcp"):
-        parse_transport("ssh+gcp://iris-controller:10000/path?zone=us-central1-a")
-
-
-def test_parse_ssh_gcp_without_zone_raises():
-    with pytest.raises(ValueError, match="ssh\\+gcp"):
-        parse_transport("ssh+gcp://iris-controller:10000/path?project=marin")
+        parse_transport(url)
 
 
 def test_parse_k8s():

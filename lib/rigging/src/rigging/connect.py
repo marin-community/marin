@@ -254,17 +254,16 @@ def _register_finalizer(client: object, stack: ExitStack) -> None:
         raise TypeError(f"connect() requires a weak-referenceable client; {type(client).__name__} is not") from exc
 
 
-def _resolve_transport(transport: Transport | str) -> tuple[Transport, Auth, str]:
-    """Normalize a Transport-or-URL into ``(transport, scheme-implied auth, path)``.
+def _resolve_transport(transport: Transport | str) -> ParsedTransport:
+    """Normalize a Transport-or-URL into a :class:`ParsedTransport`.
 
     The single place the ``str`` convenience surface is turned into a concrete
     transport: a URL contributes its scheme-implied auth and path, a Transport
     object contributes neither.
     """
     if isinstance(transport, str):
-        parsed = parse_transport(transport)
-        return parsed.transport, parsed.auth, parsed.path
-    return transport, NoAuth(), ""
+        return parse_transport(transport)
+    return ParsedTransport(transport, NoAuth(), "")
 
 
 def connect(
@@ -295,16 +294,16 @@ def connect(
             the effective path is malformed.
         TypeError: if the factory returns a client that cannot be weak-referenced.
     """
-    tp, scheme_auth, url_path = _resolve_transport(transport)
-    if path and url_path and path != url_path:
-        raise ValueError(f"path {path!r} conflicts with the URL path {url_path!r}")
-    effective_path = _normalize_path(path or url_path)
+    resolved = _resolve_transport(transport)
+    if path and resolved.path and path != resolved.path:
+        raise ValueError(f"path {path!r} conflicts with the URL path {resolved.path!r}")
+    effective_path = _normalize_path(path or resolved.path)
 
-    final_auth = ChainedAuth(scheme_auth, auth)
+    final_auth = ChainedAuth(resolved.auth, auth)
 
     stack = ExitStack()
     try:
-        base = tp.open(stack, connect_timeout)
+        base = resolved.transport.open(stack, connect_timeout)
         final_url = base.url.rstrip("/") + effective_path
         endpoint = Endpoint(final_url, tuple(base.interceptors) + final_auth.interceptors())
         client = factory(endpoint)
