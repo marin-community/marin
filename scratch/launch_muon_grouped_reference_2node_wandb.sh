@@ -14,8 +14,8 @@ export MUON_BENCH_DATA_AXIS="${MUON_BENCH_DATA_AXIS:-1}"
 export MUON_BENCH_EXPERT_AXIS="${MUON_BENCH_EXPERT_AXIS:-8}"
 export MUON_BENCH_MODEL_AXIS="${MUON_BENCH_MODEL_AXIS:-1}"
 # Larger groups pack the grouped-to-FSDP restore into fewer collectives, but G26
-# and G13 OOM on the 2-node full-layer benchmark. G8 is the next packed
-# candidate; override this env var to continue the fit/perf sweep.
+# and G13 OOM on the 2-node full-layer benchmark. G8 is the current lazy
+# reference because it is the only packed group size in this sweep that ran.
 export MUON_BENCH_NS4D_GROUP_SIZE="${MUON_BENCH_NS4D_GROUP_SIZE:-8}"
 export MUON_BENCH_NS4D_GROUP_AXIS="${MUON_BENCH_NS4D_GROUP_AXIS:-replica_dcn,data}"
 export MUON_BENCH_KINDS="${MUON_BENCH_KINDS:-real_expert_fsdp_grouped_muonh_optimizer_update}"
@@ -31,6 +31,18 @@ export MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES="${MUON_BENCH_ALLOW_BOUNDARY_COLLEC
 export MUON_BENCH_DISABLE_ABSTRACT_MESH="${MUON_BENCH_DISABLE_ABSTRACT_MESH:-true}"
 export MUON_BENCH_WORKER_CPU="${MUON_BENCH_WORKER_CPU:-8}"
 export MUON_BENCH_WORKER_RAM="${MUON_BENCH_WORKER_RAM:-256g}"
+
+case "${MUON_BENCH_NS4D_GROUP_SIZE}" in
+  8)
+    ;;
+  4|13|26)
+    if [[ "${MUON_BENCH_ALLOW_UNFIT_GROUP_SIZE:-false}" != "true" ]]; then
+      echo "MUON_BENCH_NS4D_GROUP_SIZE=${MUON_BENCH_NS4D_GROUP_SIZE} is a known-OOM 2-node setting." >&2
+      echo "Using known-fit reference group size 8. Set MUON_BENCH_ALLOW_UNFIT_GROUP_SIZE=true to override." >&2
+      export MUON_BENCH_NS4D_GROUP_SIZE=8
+    fi
+    ;;
+esac
 
 export MUON_BENCH_TRACKER="${MUON_BENCH_TRACKER:-wandb}"
 export MUON_BENCH_WANDB_PROJECT="${MUON_BENCH_WANDB_PROJECT:-${WANDB_PROJECT:-marin_moe}}"
@@ -49,5 +61,10 @@ echo "Launching ${RUN_ID}"
 echo "Grouped MuonH group size: ${MUON_BENCH_NS4D_GROUP_SIZE}"
 echo "W&B: ${WANDB_ENTITY:-marin-community}/${MUON_BENCH_WANDB_PROJECT}"
 echo "Output prefix: ${MARIN_PREFIX}/experiments/grug-moe-cw/muon-update-bench/${RUN_ID}-*"
+
+if [[ "${MUON_BENCH_DRY_RUN:-false}" == "true" ]]; then
+  echo "Dry run only; not launching Iris."
+  exit 0
+fi
 
 bash scratch/muon_update_bench_fast_loop.sh iris fullprod-r4e8-l26-h3
