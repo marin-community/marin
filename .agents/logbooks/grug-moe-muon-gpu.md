@@ -2044,3 +2044,40 @@ Post-compile steps were stable around 0.65-0.66s:
   - The timing is faster than R2 because the grouped input per device is halved again; as with R2, the logical GB/s number is not a network roofline claim because this phase compiles to local repacking.
   - The remaining blocker for production integration is therefore not this first boundary. It is the grouped-update-to-FSDP/apply side and how to avoid paying the already-measured packed-bank transport cost too many times or too synchronously.
 - Next action: keep Socrates focused on lower-level grouped-to-FSDP bridge options. In the main harness, use R2/R4 first-boundary results as the “good” reference and optimize the apply boundary or end-to-end optimizer integration against it.
+
+### 2026-06-20 04:45 PDT - Apply boundary R2/R4 replica-dcn validation
+- Hypothesis: The second optimizer boundary (`packed grouped updates -> FSDP apply layout`) should avoid per-leaf collective explosion. For replica-dcn grouping it cannot be free, because the grouped update bank holds only a replica shard while ordinary FSDP master weights need the full per-device FSDP update slice. The target is therefore a small number of packed collectives, not hundreds of leaf-wise reshard collectives. Route A restores the FSDP update tree and then calls ordinary `optax.apply_updates`; Route B directly applies while unpacking the packed bank.
+- Change:
+  - Generalized `scratch/launch_muon_packed_bank_apply_routes_2node_wandb.sh` from the original D2 launch into a topology-aware launcher supporting `n1`, `d2`, `d4`, `r2`, and `r4`.
+  - The default remains D2. Passing `r2` or `r4` now sets `replica_axis=2/4`, `data_axis=1`, `expert_axis=8`, `model_axis=1`, and `ns4d_group_axis=replica_dcn`.
+  - `MUON_BENCH_APPLY_GROUP_SIZE` controls the layer-stack grouping and defaults to 8.
+- Validation:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'packed_bank_a2a_apply_boundary or packed_bank_direct_apply_boundary or packed_bank_boundary_phase_estimates' -q` -> 6 passed.
+  - Dry runs passed for both `MUON_BENCH_DRY_RUN=true bash scratch/launch_muon_packed_bank_apply_routes_2node_wandb.sh r2` and `... r4`.
+- R2 run:
+  - Iris parent `/dlwh/iris-run-job-20260620-113457`; child `/dlwh/iris-run-job-20260620-113457/grug-train-MUON-BENCH-D2560-L26-R2D1E8-N2-G8-H3-APPLYROUTES-cw-20260620-113455`.
+  - W&B target `marin-community/marin_moe/MUON-BENCH-D2560-L26-R2D1E8-N2-G8-H3-APPLYROUTES-cw-20260620-113455`.
+  - Output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D1E8-N2-G8-H3-APPLYROUTES-cw-20260620-113455-851d57`.
+  - Config: R2D1E8, 16 H100s, `ns4d_group_axis=replica_dcn`, `ns4d_group_size=8`, L26, H3, bf16 params/NS compute, two route kinds.
+- R2 result:
+  - Parent and child both succeeded with `failure_count=0`; both GPU tasks exited 0.
+  - Route A lowered/compiled `2 AG / 0 A2A / 0 AR / 0 RS / 0 CP`; rank medians `0.2322367710s` and `0.2323536780s`.
+  - Route B lowered/compiled `2 AG / 0 A2A / 0 AR / 0 RS / 0 CP`; rank medians `0.2316506261s` and `0.2314961820s`.
+  - Both routes reported one packed all-gather phase with ideal collective count `2.0`, compiled/lowered fragmentation factor `1.0`, global logical update bytes `130862284800`, grouped input per device `8178892800`, FSDP output per device `16357785600`, and median phase/global bandwidth about `563-565 GB/s`.
+  - Full-shape correctness was intentionally skipped with reason `estimated global bytes 130862284800 exceed correctness cap 1073741824`; small-shape forced correctness is covered by tests.
+- R4 run:
+  - Iris parent `/dlwh/iris-run-job-20260620-113851`; child `/dlwh/iris-run-job-20260620-113851/grug-train-MUON-BENCH-D2560-L26-R4D1E8-N4-G8-H3-APPLYROUTES-cw-20260620-113849`.
+  - W&B target `marin-community/marin_moe/MUON-BENCH-D2560-L26-R4D1E8-N4-G8-H3-APPLYROUTES-cw-20260620-113849`.
+  - Output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4D1E8-N4-G8-H3-APPLYROUTES-cw-20260620-113849-1d06f2`.
+  - Config: R4D1E8, 32 H100s, `ns4d_group_axis=replica_dcn`, `ns4d_group_size=8`, L26, H3, bf16 params/NS compute, two route kinds.
+- R4 result:
+  - Parent and child both succeeded with `failure_count=0`; all four GPU tasks exited 0.
+  - Route A lowered/compiled `2 AG / 0 A2A / 0 AR / 0 RS / 0 CP`; observed rank medians around `0.3137-0.3139s`.
+  - Route B lowered/compiled `2 AG / 0 A2A / 0 AR / 0 RS / 0 CP`; observed rank medians around `0.31356s`.
+  - Both routes reported one packed all-gather phase with ideal collective count `2.0`, compiled/lowered fragmentation factor `1.0`, global logical update bytes `130862284800`, grouped input per device `4089446400`, FSDP output per device `16357785600`, replica fanout factor `4.0`, and median phase/global bandwidth about `417 GB/s`.
+  - Full-shape correctness was intentionally skipped with the same byte-cap reason.
+- Interpretation:
+  - The apply boundary is no longer a per-leaf collective explosion in the harness. Through R4, it is exactly two packed all-gathers, one per expert weight family, with no all-reduce, reduce-scatter, all-to-all, or collective-permute in lowered or compiled HLO.
+  - Route B does not materially beat Route A. Direct apply avoids building an explicit FSDP update tree, but the measured cost is dominated by packed replica fanout rather than Optax tree application.
+  - R4 is slower than R2 (`~0.314s` vs `~0.232s`) because each device starts with a smaller grouped shard but needs the same FSDP output slice, so the replica fanout receive grows. The packed all-gather path is the remaining expensive boundary.
+- Next action: keep the production path conservative: grouped MuonH compute, then Route A back to ordinary FSDP updates and `optax.apply_updates`. For material speedup beyond this harness result, Socrates should target a lower-level grouped-to-FSDP bridge or overlap strategy for the packed all-gather/fanout itself.
