@@ -1777,3 +1777,31 @@ Post-compile steps were stable around 0.65-0.66s:
   - R2 is slower than N1 despite twice the GPUs because the two-node boundary/communication cost and reduced local work dominate.
   - R4 recovers useful scaling: about `2.03x` faster than N1 and `2.16x` faster than R2, but still only about 26% nominal peak because the compiled boundary remains `6 all_to_all`, 3x the ideal two expert-projection transports.
 - Next action: Treat the whole packed-bank path as the current conservative FSDP-master baseline. The remaining main-thread optimization is to collapse `6 A2A -> 2 A2A` or prove via Socrates' lower-level bridge that a custom/bucketed transport can do it. If that fails, the representation-pivot path with persistent grouped expert banks remains the cleaner way to avoid this boundary entirely.
+
+### 2026-06-20 02:40 PDT - packed-bank MuonH phase diagnostics
+- Hypothesis: The full packed-bank `6 all_to_all` path decomposes into three expected two-transport phases: FSDP grads into packed grouped banks, FSDP params into packed grouped banks for hyperball/scale, and packed grouped updates back to FSDP apply layout. A narrower diagnostic should confirm there is no hidden all-gather/collective-permute explosion inside the whole-bank path.
+- Change:
+  - Added `expert_fsdp_packed_bank_muonh_update_only`, which packs params and grads into whole grouped banks, runs packed-bank MuonH/Hyperball, and returns packed grouped updates without restoring to FSDP.
+  - Added `expert_fsdp_packed_bank_direction_apply`, which packs grads only, runs Newton-Schulz direction/scale, and applies the packed direction back to FSDP params. This is not semantically full MuonH because it skips packed params and hyperball scaling, but it isolates the entry+apply boundary plus NS direction cost.
+  - Commit: `a282cfce7` (`Add packed-bank MuonH boundary diagnostics`).
+- Commands:
+  - Combined timing attempt: `RUN_ID=MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKDIAG-N2-cw-20260620-093043 ... MUON_BENCH_KINDS=expert_fsdp_packed_bank_muonh_update_only,expert_fsdp_packed_bank_direction_apply ... bash scratch/launch_muon_grouped_reference_2node_wandb.sh`.
+  - Compile-only split: `RUN_ID=MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKDIAGCOMPILE-N2-cw-20260620-093445 ... MUON_BENCH_COMPILE_ONLY=true ...`.
+  - Direction-apply timing: `RUN_ID=MUON-BENCH-D2560-L26-R1D2E8-G8-H3-DIRECTIONAPPLY-N2-cw-20260620-093453 ... MUON_BENCH_KINDS=expert_fsdp_packed_bank_direction_apply ...`.
+- Config:
+  - 2 H100 nodes, `replica_axis=1`, `data_axis=2`, `expert_axis=8`, `model_axis=1`, `layers=26`, `ns4d_group_size=8`, `ns4d_group_axis=replica_dcn,data`, H3, bf16 params/NS compute.
+  - Runs:
+    - `/dlwh/iris-run-job-20260620-093045`, W&B `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKDIAG-N2-cw-20260620-093043`.
+    - `/dlwh/iris-run-job-20260620-093447`, W&B `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PACKEDBANKDIAGCOMPILE-N2-cw-20260620-093445`.
+    - `/dlwh/iris-run-job-20260620-093456`, W&B `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-DIRECTIONAPPLY-N2-cw-20260620-093453`.
+- Result:
+  - Combined timing attempt failed while timing update-only with `RESOURCE_EXHAUSTED` on a 35.55 GiB allocation. It still emitted the key lowered evidence before failing: update-only lowered HLO had `0 all_gather`, `4 all_to_all`, `0 collective_permute`, `0 reduce_scatter`, and `18 dot_general`.
+  - Compile-only update-only row succeeded: lowered and compiled HLO both had `0 all_gather`, `4 all_to_all`, `0 collective_permute`, `0 reduce_scatter`; compiled HLO had `45 gpu_gemm_custom_call` and `90 custom_call`.
+  - Compile-only direction-apply row succeeded: lowered and compiled HLO both had `0 all_gather`, `4 all_to_all`, `0 collective_permute`, `0 reduce_scatter`; compiled HLO had `40 gpu_gemm_custom_call` and `90 custom_call`.
+  - Direction-apply timing succeeded with mean `0.52986-0.52990s`, median `0.52992-0.53004s`, min `0.52664-0.52685s`, estimated NS dot work `2.4288e15` FLOPs, mean `4583-4584 TFLOP/s`, about `28.97%` nominal H100 bf16 peak, and effective boundary global bandwidth about `246.97 GB/s`.
+- Interpretation:
+  - The decomposition is confirmed: update-only is `2 A2A` for grads entry plus `2 A2A` for params entry; direction-apply is `2 A2A` for grads entry plus `2 A2A` for FSDP apply; full packed-bank MuonH apply is the expected `2 + 2 + 2 = 6 A2A`.
+  - There is no hidden all-gather or collective-permute explosion in the whole-bank path. The remaining multi-node cost is real boundary transport plus NS/hyperball work, not a per-leaf compiler blow-up.
+  - The update-only timing OOM is a harness-output materialization problem, not a compile-shape failure. If that timing matters later, add a checksum/reduction output variant instead of returning the full packed update bank.
+  - Comparing direction-apply (`~0.530s`) to full packed-bank R2 (`~0.638s`) suggests params-pack + hyperball/scale overhead is roughly `0.11s` on this shape, so the dominant remaining target is still the boundary/NS path, not Python tree apply or a surprise extra collective.
+- Next action: Keep `expert_fsdp_packed_bank_muonh_apply` as the current conservative FSDP-master baseline. The next useful implementation work is either a lower-level bridge that collapses the three two-A2A phases or a representation decision that makes one packed param/update bank persistent without violating the FSDP-master contract.
