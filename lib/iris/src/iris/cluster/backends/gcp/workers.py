@@ -84,6 +84,9 @@ def _spawn_bootstrap_thread(
                 )
             with handle._bootstrap_lock:
                 handle._bootstrap_state = CloudSliceState.FAILED
+                # Keep the reason (e.g. the create-LRO "no more capacity" stockout)
+                # so describe() can surface it and the autoscaler can classify it.
+                handle._bootstrap_error = str(e)
 
     threading.Thread(target=_run, name=f"bootstrap-{handle.slice_id}", daemon=True).start()
 

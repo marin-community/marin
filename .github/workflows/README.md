@@ -1,6 +1,6 @@
 # GitHub Actions Workflows
 
-This directory contains thin trigger YAML around behavior implemented in `scripts/workflows/`. See the design at `.agents/projects/workflow_scripts/design.md` and contracts at `.agents/projects/workflow_scripts/spec.md`.
+This directory contains thin trigger YAML around behavior implemented in `scripts/ci/`. See the design at `.agents/projects/workflow_scripts/design.md` and contracts at `.agents/projects/workflow_scripts/spec.md`.
 
 ## Inventory
 
@@ -125,7 +125,8 @@ steps:
       BODY_FILE: pr_body.md
       COMMIT_MESSAGE: "Auto-update artifacts"
       DESIRED_LABELS: "agent-generated automated"
-    run: ./scripts/workflows/_open_pr.sh   # or inline the snippet
+    run: |
+      # inline the open-or-update-PR snippet from the section above
 ```
 
 The README is the source of truth — when fixing the recipe, fix it here. The spec.md copy is illustrative.

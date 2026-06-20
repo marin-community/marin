@@ -32,7 +32,9 @@ find-links = [
 ]
 
 [tool.hatch.build.targets.wheel]
-only-include = ["src/infra_probes.py", "src/result.py", "src/sinks.py"]
+# Ship the whole package; an explicit per-file list silently drops new modules
+# from the wheel, so `python -m infra_probes` ImportErrors at container start.
+only-include = ["src"]
 sources = ["src"]
 
 [tool.pytest.ini_options]

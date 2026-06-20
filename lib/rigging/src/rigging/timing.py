@@ -260,6 +260,10 @@ class Timestamp:
         dt = datetime.fromtimestamp(self.epoch_seconds(), tz=UTC)
         return dt.strftime("%H:%M:%S")
 
+    def as_naive_utc(self) -> datetime:
+        """tz-naive UTC ``datetime``, e.g. for finelog ``ts`` columns (TIMESTAMP_MS)."""
+        return datetime.fromtimestamp(self.epoch_seconds(), tz=UTC).replace(tzinfo=None)
+
     def age_ms(self) -> int:
         """Get age of this timestamp in milliseconds."""
         return _now_ms() - self._epoch_ms
