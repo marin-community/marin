@@ -660,19 +660,40 @@ for.
 - **D5 — IAP vs plain HTTP is encoded in the scheme** (`iap+https` vs `https`);
   edge auth (IAP) is scheme-implied, app auth (JWT) is the `auth=` argument.
 
-## Implementation notes (refinements from the implementation codex pass)
+## Implementation notes — what actually shipped
 
-Two details landed differently from the prose above, both to fix real bugs the
-implementation-stage codex review caught:
+This section is authoritative where it differs from the proposal prose above;
+the changes came out of the implementation-stage codex review and a slop pass on
+the diff. The shipped surface is deliberately smaller than the proposal.
+
+**Names that differ from the proposal:**
+
+- **One `TunnelTransport` instead of `SshTunnel` + `K8sPortForward`.** The tunnel
+  kind already follows from the target type `open_tunnel` dispatches on
+  (`GcpSshForwardTarget` vs `K8sPortForwardTarget`), so a single transport covers
+  both — no value in two near-identical classes or a private base.
+- **One `BearerTokenInjector(provider, header)` instead of `AuthTokenInjector` +
+  `ProxyAuthTokenInjector`.** They differed only by header name; the app-vs-edge
+  intent lives in `JwtAuth` (`authorization`) and `IapAuth`
+  (`proxy-authorization`), which is where it belongs.
+
+**Behavior that changed to fix real bugs:**
 
 - **Auth injectors are Connect *metadata* interceptors, not unary interceptors.**
-  `AuthTokenInjector` / `ProxyAuthTokenInjector` implement `on_start` /
-  `on_start_sync` (the `MetadataInterceptor` protocol) rather than
-  `intercept_unary`. `connectrpc` then applies them to every RPC shape — unary
-  and all three streaming shapes — so a streaming call can't silently go out
-  unauthenticated.
+  `BearerTokenInjector` implements `on_start` / `on_start_sync` (the
+  `MetadataInterceptor` protocol), so `connectrpc` applies it to every RPC shape
+  — unary and all three streaming shapes — and a streaming call can't silently go
+  out unauthenticated.
 - **`connect` validates the appended path and the client.** The effective path
   must be empty or a single-rooted `/…` segment (rejecting `proxy/a` and
   `//proxy`), `parse_transport` rejects hostless URLs, and a client that can't be
   weak-referenced raises rather than leaking its transport. Re-registering the
   same live client object closes the prior transport instead of orphaning it.
+- **Lifetime is an `id(client)`-keyed `weakref.finalize`** (see D3), not a
+  `WeakKeyDictionary`.
+
+**Speculative surface cut from the proposal (re-add when a caller needs it):**
+`explain()`, `Endpoint.socket_address()`, the `closing_connection()` context
+manager, and the `ConnectionOptions` object (now a plain `connect_timeout`
+keyword argument). `proxy_path()` stays — it is the one piece iris adoption must
+call.

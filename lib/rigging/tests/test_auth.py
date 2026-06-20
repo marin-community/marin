@@ -8,10 +8,9 @@ import pytest
 from connectrpc._interceptor_async import MetadataInterceptor
 from connectrpc._interceptor_sync import MetadataInterceptorSync
 from rigging.auth import (
-    AuthTokenInjector,
+    BearerTokenInjector,
     GcpAccessTokenProvider,
     IapUserIdTokenProvider,
-    ProxyAuthTokenInjector,
     StaticTokenProvider,
 )
 
@@ -38,54 +37,47 @@ def test_static_token_provider_returns_token():
     assert StaticTokenProvider("abc").get_token() == "abc"
 
 
-def test_auth_injector_sets_authorization_header_sync():
+def test_injector_sets_its_header_sync():
     ctx = FakeCtx()
-    AuthTokenInjector(FakeProvider("tok")).on_start_sync(ctx)
+    BearerTokenInjector(FakeProvider("tok"), "authorization").on_start_sync(ctx)
     assert ctx.request_headers()["authorization"] == "Bearer tok"
 
 
-def test_auth_injector_skips_header_when_no_token_sync():
+def test_injector_skips_header_when_no_token_sync():
     ctx = FakeCtx()
-    AuthTokenInjector(FakeProvider(None)).on_start_sync(ctx)
+    BearerTokenInjector(FakeProvider(None), "authorization").on_start_sync(ctx)
     assert "authorization" not in ctx.request_headers()
 
 
 @pytest.mark.asyncio
-async def test_auth_injector_sets_authorization_header_async():
+async def test_injector_sets_its_header_async():
     ctx = FakeCtx()
-    await AuthTokenInjector(FakeProvider("tok")).on_start(ctx)
+    await BearerTokenInjector(FakeProvider("tok"), "authorization").on_start(ctx)
     assert ctx.request_headers()["authorization"] == "Bearer tok"
 
 
 @pytest.mark.asyncio
-async def test_auth_injector_skips_header_when_no_token_async():
+async def test_injector_skips_header_when_no_token_async():
     ctx = FakeCtx()
-    await AuthTokenInjector(FakeProvider(None)).on_start(ctx)
+    await BearerTokenInjector(FakeProvider(None), "authorization").on_start(ctx)
     assert "authorization" not in ctx.request_headers()
 
 
-def test_proxy_auth_injector_uses_proxy_authorization_header_sync():
+def test_injector_uses_the_chosen_header():
     ctx = FakeCtx()
-    ProxyAuthTokenInjector(FakeProvider("edge")).on_start_sync(ctx)
+    BearerTokenInjector(FakeProvider("edge"), "proxy-authorization").on_start_sync(ctx)
     assert ctx.request_headers()["proxy-authorization"] == "Bearer edge"
     assert "authorization" not in ctx.request_headers()
 
 
-@pytest.mark.asyncio
-async def test_proxy_auth_injector_uses_proxy_authorization_header_async():
-    ctx = FakeCtx()
-    await ProxyAuthTokenInjector(FakeProvider("edge")).on_start(ctx)
-    assert ctx.request_headers()["proxy-authorization"] == "Bearer edge"
-
-
-def test_injectors_are_metadata_interceptors():
-    """connectrpc must classify the injectors as *metadata* interceptors so the
+def test_injector_is_a_metadata_interceptor():
+    """connectrpc must classify the injector as a *metadata* interceptor so the
     header is applied to every RPC shape (unary and streaming), not just unary.
 
     Reaches into connectrpc's interceptor module to assert the contract the
     public client wiring depends on; if the protocol moves, this fails loudly.
     """
-    injector = AuthTokenInjector(FakeProvider("tok"))
+    injector = BearerTokenInjector(FakeProvider("tok"), "authorization")
     assert isinstance(injector, MetadataInterceptorSync)
     assert isinstance(injector, MetadataInterceptor)
 

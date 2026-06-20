@@ -15,11 +15,11 @@ OIDC *ID* tokens for a fixed audience (the IAP OAuth client id). Both cache the
 token until shortly before expiry and only touch the network inside
 ``get_token``.
 
-The injectors attach the token to outgoing requests: ``AuthTokenInjector`` sets
-``Authorization`` (app auth) and ``ProxyAuthTokenInjector`` sets
-``proxy-authorization`` (IAP edge auth). Both are Connect *metadata*
-interceptors (the ``on_start`` hook), so the header rides on every RPC shape —
-unary and streaming alike — for both sync and async clients.
+A single ``BearerTokenInjector`` attaches the token to outgoing requests under a
+caller-chosen header — ``authorization`` for app auth, ``proxy-authorization``
+for the IAP edge token. It is a Connect *metadata* interceptor (the ``on_start``
+hook), so the header rides on every RPC shape — unary and streaming alike — for
+both sync and async clients.
 """
 
 import time
@@ -115,7 +115,7 @@ class IapUserIdTokenProvider:
         return self._cached_token
 
 
-class _BearerHeaderInjector:
+class BearerTokenInjector:
     """Metadata interceptor that attaches ``<header>: Bearer <token>``.
 
     Implemented against Connect's metadata interceptor protocol (``on_start`` /
@@ -123,17 +123,20 @@ class _BearerHeaderInjector:
     to every RPC shape — unary, client-stream, server-stream, and bidi — for
     both sync and async clients. No header is set when the provider returns None
     (the loopback / SSH-tunnel-trust case).
+
+    The header is the lever between app auth and edge auth: app tokens ride in
+    ``authorization``, the IAP edge token in ``proxy-authorization`` (so the
+    app-level header stays free for the service's own JWT).
     """
 
-    _HEADER: str
-
-    def __init__(self, provider: TokenProvider):
+    def __init__(self, provider: TokenProvider, header: str):
         self._provider = provider
+        self.header = header
 
     def _apply(self, ctx) -> None:
         token = self._provider.get_token()
         if token:
-            ctx.request_headers()[self._HEADER] = f"Bearer {token}"
+            ctx.request_headers()[self.header] = f"Bearer {token}"
 
     def on_start_sync(self, ctx):
         self._apply(ctx)
@@ -146,19 +149,3 @@ class _BearerHeaderInjector:
 
     async def on_end(self, token, ctx, error) -> None:
         return
-
-
-class AuthTokenInjector(_BearerHeaderInjector):
-    """Attaches app auth as ``Authorization: Bearer <token>``."""
-
-    _HEADER = "authorization"
-
-
-class ProxyAuthTokenInjector(_BearerHeaderInjector):
-    """Attaches the IAP edge token as ``proxy-authorization: Bearer <token>``.
-
-    The edge token rides in ``proxy-authorization`` so the app-level
-    ``Authorization`` header stays free for the service's own JWT.
-    """
-
-    _HEADER = "proxy-authorization"

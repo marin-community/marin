@@ -17,7 +17,6 @@ a controller is encoded entirely as the URL path ``/proxy/<name>``, resolved
 server-side; rigging never inspects it.
 """
 
-import contextlib
 import weakref
 from collections.abc import Callable
 from contextlib import ExitStack
@@ -25,12 +24,7 @@ from dataclasses import dataclass
 from typing import Protocol, TypeVar
 from urllib.parse import parse_qsl, urlsplit
 
-from rigging.auth import (
-    AuthTokenInjector,
-    IapUserIdTokenProvider,
-    ProxyAuthTokenInjector,
-    TokenProvider,
-)
+from rigging.auth import BearerTokenInjector, IapUserIdTokenProvider, TokenProvider
 from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, open_tunnel
 
 T = TypeVar("T")
@@ -42,24 +36,6 @@ class Endpoint:
 
     url: str
     interceptors: tuple = ()
-
-    def socket_address(self) -> tuple[str, int]:
-        """Return ``(host, port)`` for socket-level callers.
-
-        Valid only for a bare ``http``/``https`` origin URL — no path, query, or
-        fragment — and raises otherwise, so a proxy-prefixed or parameterized URL
-        is never silently truncated to host:port.
-        """
-        parts = urlsplit(self.url)
-        if (
-            parts.scheme not in ("http", "https")
-            or parts.path not in ("", "/")
-            or parts.query
-            or parts.fragment
-            or parts.hostname is None
-        ):
-            raise ValueError(f"endpoint {self.url!r} is not a bare host:port")
-        return parts.hostname, parts.port or (443 if parts.scheme == "https" else 80)
 
 
 class Transport(Protocol):
@@ -83,14 +59,16 @@ class DirectTransport:
         return Endpoint(self._url)
 
 
-class _TunnelTransport:
+class TunnelTransport:
     """Backs a transport with a :func:`rigging.tunnel.open_tunnel` child process.
 
-    The tunnel kind is decided by the target type ``open_tunnel`` dispatches on,
-    so the only thing the concrete transports add is a typed constructor.
+    The tunnel kind — SSH ``-L`` forward or ``kubectl port-forward`` — follows
+    from the target type ``open_tunnel`` dispatches on (a ``GcpSshForwardTarget``
+    or ``K8sPortForwardTarget``), so one transport covers both. ``spawn`` is
+    injectable for tests.
     """
 
-    def __init__(self, target, *, spawn=None):
+    def __init__(self, target: GcpSshForwardTarget | K8sPortForwardTarget, *, spawn=None):
         self._target = target
         self._spawn = spawn
 
@@ -99,20 +77,6 @@ class _TunnelTransport:
             open_tunnel(self._target, timeout=timeout, **({"spawn": self._spawn} if self._spawn else {}))
         )
         return Endpoint(url)
-
-
-class SshTunnel(_TunnelTransport):
-    """Opens an SSH ``-L`` port forward via :func:`rigging.tunnel.open_tunnel`."""
-
-    def __init__(self, target: GcpSshForwardTarget, *, spawn=None):
-        super().__init__(target, spawn=spawn)
-
-
-class K8sPortForward(_TunnelTransport):
-    """Opens a ``kubectl port-forward`` via :func:`rigging.tunnel.open_tunnel`."""
-
-    def __init__(self, target: K8sPortForwardTarget, *, spawn=None):
-        super().__init__(target, spawn=spawn)
 
 
 class Auth(Protocol):
@@ -135,7 +99,7 @@ class JwtAuth:
         self._provider = provider
 
     def interceptors(self) -> tuple:
-        return (AuthTokenInjector(self._provider),)
+        return (BearerTokenInjector(self._provider, "authorization"),)
 
 
 class IapAuth:
@@ -145,7 +109,7 @@ class IapAuth:
         self._provider = provider
 
     def interceptors(self) -> tuple:
-        return (ProxyAuthTokenInjector(self._provider),)
+        return (BearerTokenInjector(self._provider, "proxy-authorization"),)
 
 
 class ChainedAuth:
@@ -187,11 +151,11 @@ def parse_transport(url: str) -> ParsedTransport:
     - ``http`` / ``https``: a :class:`DirectTransport`, no edge auth.
     - ``iap+https``: a :class:`DirectTransport` over HTTPS plus :class:`IapAuth`;
       the IAP OAuth client id comes from the required ``audience`` query param.
-    - ``ssh+gcp``: an :class:`SshTunnel`; ``project`` and ``zone`` query params
-      and a port are required, ``sa`` selects impersonation, ``iap=true`` tunnels
-      SSH through IAP.
-    - ``k8s``: a :class:`K8sPortForward`; ``namespace`` query param and a port are
-      required, ``context`` is optional.
+    - ``ssh+gcp``: a :class:`TunnelTransport` over SSH; ``project`` and ``zone``
+      query params and a port are required, ``sa`` selects impersonation,
+      ``iap=true`` tunnels SSH through IAP.
+    - ``k8s``: a :class:`TunnelTransport` over ``kubectl port-forward``;
+      ``namespace`` query param and a port are required, ``context`` is optional.
 
     Raises:
         ValueError: on an unsupported scheme or a missing required parameter.
@@ -231,7 +195,7 @@ def parse_transport(url: str) -> ParsedTransport:
             impersonate_service_account=q.get("sa"),
             tunnel_through_iap=q.get("iap") == "true",
         )
-        return ParsedTransport(SshTunnel(target), NoAuth(), parts.path)
+        return ParsedTransport(TunnelTransport(target), NoAuth(), parts.path)
 
     if scheme == "k8s":
         namespace = q.get("namespace")
@@ -243,16 +207,9 @@ def parse_transport(url: str) -> ParsedTransport:
             port=parts.port,
             context=q.get("context"),
         )
-        return ParsedTransport(K8sPortForward(target), NoAuth(), parts.path)
+        return ParsedTransport(TunnelTransport(target), NoAuth(), parts.path)
 
     raise ValueError(f"unsupported transport scheme: {scheme!r}")
-
-
-@dataclass(frozen=True)
-class ConnectionOptions:
-    """Tunables for establishing a connection. The per-RPC deadline lives in the client."""
-
-    connect_timeout: float = 60.0
 
 
 # Keyed by id(client), not the client itself: clients are arbitrary caller
@@ -316,7 +273,7 @@ def connect(
     *,
     path: str = "",
     auth: Auth = NoAuth(),
-    options: ConnectionOptions = ConnectionOptions(),
+    connect_timeout: float = 60.0,
 ) -> T:
     """Open ``transport``, build an :class:`Endpoint`, and return ``factory(endpoint)``.
 
@@ -324,12 +281,14 @@ def connect(
     string (see :func:`parse_transport`). A URL may carry its own path; ``path``
     is the explicit override. Either way the effective path must be empty or a
     single-rooted ``/...`` segment. The scheme-implied auth and the ``auth``
-    argument are attached together as a :class:`ChainedAuth`.
+    argument are attached together as a :class:`ChainedAuth`. ``connect_timeout``
+    bounds establishing the transport (e.g. an SSH tunnel warm-up); the per-RPC
+    deadline lives in the client.
 
-    The transport (e.g. an SSH tunnel subprocess) is torn down when the returned
-    client is garbage-collected, via :func:`disconnect`, or at interpreter exit
-    — whichever comes first. The client is the lifetime anchor: anything derived
-    from it that strong-references it keeps the transport alive.
+    The transport is torn down when the returned client is garbage-collected, via
+    :func:`disconnect`, or at interpreter exit — whichever comes first. The client
+    is the lifetime anchor: anything derived from it that strong-references it
+    keeps the transport alive.
 
     Raises:
         ValueError: if both ``path`` and the URL path are set and disagree, or
@@ -345,7 +304,7 @@ def connect(
 
     stack = ExitStack()
     try:
-        base = tp.open(stack, options.connect_timeout)
+        base = tp.open(stack, connect_timeout)
         final_url = base.url.rstrip("/") + effective_path
         endpoint = Endpoint(final_url, tuple(base.interceptors) + final_auth.interceptors())
         client = factory(endpoint)
@@ -362,51 +321,3 @@ def disconnect(client) -> None:
     fin = _FINALIZERS.pop(id(client), None)
     if fin is not None:
         fin()
-
-
-@contextlib.contextmanager
-def closing_connection(
-    transport: Transport | str,
-    factory: Callable[[Endpoint], T],
-    *,
-    path: str = "",
-    auth: Auth = NoAuth(),
-    options: ConnectionOptions = ConnectionOptions(),
-):
-    """Scoped :func:`connect` that calls :func:`disconnect` on exit."""
-    client = connect(transport, factory, path=path, auth=auth, options=options)
-    try:
-        yield client
-    finally:
-        disconnect(client)
-
-
-def _transport_summary(transport: Transport) -> str:
-    if isinstance(transport, DirectTransport):
-        return f"DirectTransport(url={transport._url})"
-    if isinstance(transport, SshTunnel):
-        t = transport._target
-        return f"SshTunnel(host={t.instance}, project={t.project}, zone={t.zone}, port={t.port})"
-    if isinstance(transport, K8sPortForward):
-        t = transport._target
-        return f"K8sPortForward(service={t.service}, namespace={t.namespace}, port={t.port})"
-    return type(transport).__name__
-
-
-def explain(transport: Transport | str, auth: Auth = NoAuth()) -> str:
-    """Describe how a connection resolves — transport, auth, base URL — secret-free.
-
-    Reports the transport class and its target summary, the auth provider class
-    names, and the base URL, so "why SSH / why IAP / why no JWT" is answerable
-    without leaking any token value.
-    """
-    transport_obj, scheme_auth, path = _resolve_transport(transport)
-    final_auth = ChainedAuth(scheme_auth, auth)
-    injector_names = ", ".join(type(i).__name__ for i in final_auth.interceptors()) or "none"
-
-    base_url = transport_obj._url if isinstance(transport_obj, DirectTransport) else "<established at connect time>"
-    return (
-        f"transport: {_transport_summary(transport_obj)}\n"
-        f"auth interceptors: {injector_names}\n"
-        f"base url: {base_url}{path}"
-    )

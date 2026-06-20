@@ -7,19 +7,16 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 
 import pytest
-from rigging.auth import AuthTokenInjector, ProxyAuthTokenInjector, StaticTokenProvider
+from rigging.auth import StaticTokenProvider
 from rigging.connect import (
     ChainedAuth,
-    ConnectionOptions,
     DirectTransport,
     Endpoint,
     IapAuth,
     JwtAuth,
-    K8sPortForward,
     NoAuth,
-    SshTunnel,
     Transport,
-    closing_connection,
+    TunnelTransport,
     connect,
     disconnect,
     parse_transport,
@@ -60,7 +57,7 @@ def test_parse_iap_https_attaches_iap_auth():
     assert parsed.transport.open(ExitStack(), 1.0).url == "https://iris-dev.oa.dev"
     interceptors = parsed.auth.interceptors()
     assert len(interceptors) == 1
-    assert isinstance(interceptors[0], ProxyAuthTokenInjector)
+    assert interceptors[0].header == "proxy-authorization"
 
 
 def test_parse_iap_https_without_audience_raises():
@@ -72,7 +69,7 @@ def test_parse_ssh_gcp():
     parsed = parse_transport(
         "ssh+gcp://iris-controller:10000/proxy/system.log-server?project=marin&zone=us-central1-a&sa=svc@x&iap=true"
     )
-    assert isinstance(parsed.transport, SshTunnel)
+    assert isinstance(parsed.transport, TunnelTransport)
     assert isinstance(parsed.auth, NoAuth)
     assert parsed.path == "/proxy/system.log-server"
     target = parsed.transport._target
@@ -97,7 +94,7 @@ def test_parse_ssh_gcp_without_zone_raises():
 
 def test_parse_k8s():
     parsed = parse_transport("k8s://iris-controller:10000/proxy/system.log-server?namespace=iris&context=ctx")
-    assert isinstance(parsed.transport, K8sPortForward)
+    assert isinstance(parsed.transport, TunnelTransport)
     assert isinstance(parsed.auth, NoAuth)
     assert parsed.path == "/proxy/system.log-server"
     target = parsed.transport._target
@@ -124,20 +121,6 @@ def test_parse_unknown_scheme_raises():
 def test_proxy_path():
     assert proxy_path("/system/log-server") == "/proxy/system.log-server"
     assert proxy_path("system/log-server") == "/proxy/system.log-server"
-
-
-# --- socket_address --------------------------------------------------------
-
-
-def test_socket_address_bare_origin():
-    assert Endpoint("https://host:7000").socket_address() == ("host", 7000)
-    assert Endpoint("http://host").socket_address() == ("host", 80)
-    assert Endpoint("https://host").socket_address() == ("host", 443)
-
-
-def test_socket_address_rejects_path():
-    with pytest.raises(ValueError, match="not a bare host:port"):
-        Endpoint("https://host:7000/proxy/x").socket_address()
 
 
 # --- motivating example 1: SSH + proxy to finelog --------------------------
@@ -178,10 +161,9 @@ def test_connect_iap_proxy_to_finelog():
     )
 
     assert endpoint.url == "https://iris-dev.oa.dev/proxy/system.log-server"
-    # ChainedAuth(scheme_auth, auth): IAP (from the scheme) first, then the JWT.
-    assert len(endpoint.interceptors) == 2
-    assert isinstance(endpoint.interceptors[0], ProxyAuthTokenInjector)
-    assert isinstance(endpoint.interceptors[1], AuthTokenInjector)
+    # ChainedAuth(scheme_auth, auth): IAP edge header (from the scheme) first,
+    # then the JWT app header.
+    assert [i.header for i in endpoint.interceptors] == ["proxy-authorization", "authorization"]
 
 
 # --- lifetime --------------------------------------------------------------
@@ -199,7 +181,7 @@ class RecordingTransport:
 
 
 class Client:
-    """A plain object usable as a WeakKeyDictionary key and a finalize target."""
+    """A plain weak-referenceable object to stand in for a real RPC client."""
 
 
 def make_client(endpoint: Endpoint) -> Client:
@@ -263,14 +245,6 @@ def test_connect_error_path_tears_down_transport():
     assert cleanups == ["torn-down"]
 
 
-def test_closing_connection_disconnects_on_exit():
-    cleanups: list[str] = []
-    with closing_connection(RecordingTransport(cleanups), make_client) as client:
-        assert isinstance(client, Client)
-        assert cleanups == []
-    assert cleanups == ["torn-down"]
-
-
 # --- auth composition ------------------------------------------------------
 
 
@@ -279,16 +253,14 @@ def test_chained_auth_orders_injectors():
     p2 = StaticTokenProvider("jwt")
     interceptors = ChainedAuth(IapAuth(p1), JwtAuth(p2)).interceptors()
 
-    assert len(interceptors) == 2
-    assert isinstance(interceptors[0], ProxyAuthTokenInjector)
-    assert isinstance(interceptors[1], AuthTokenInjector)
+    assert [i.header for i in interceptors] == ["proxy-authorization", "authorization"]
 
 
 def test_chained_auth_flattens_noauth():
     interceptors = ChainedAuth(NoAuth(), JwtAuth(StaticTokenProvider("jwt")), NoAuth()).interceptors()
 
     assert len(interceptors) == 1
-    assert isinstance(interceptors[0], AuthTokenInjector)
+    assert interceptors[0].header == "authorization"
 
 
 def test_connect_with_explicit_transport_object_no_scheme_auth():
@@ -302,7 +274,7 @@ def test_connect_with_explicit_transport_object_no_scheme_auth():
 
     assert endpoint.url == "http://127.0.0.1:9/proxy/x"
     assert len(endpoint.interceptors) == 1
-    assert isinstance(endpoint.interceptors[0], AuthTokenInjector)
+    assert endpoint.interceptors[0].header == "authorization"
 
 
 def test_connect_conflicting_paths_raises():
@@ -314,7 +286,7 @@ def test_connect_conflicting_paths_raises():
         )
 
 
-def test_connect_options_threads_timeout():
+def test_connect_threads_connect_timeout_to_transport():
     seen = {}
 
     class TimeoutTransport(Transport):
@@ -322,7 +294,7 @@ def test_connect_options_threads_timeout():
             seen["timeout"] = timeout
             return Endpoint("http://x")
 
-    connect(TimeoutTransport(), record_factory, options=ConnectionOptions(connect_timeout=12.5))
+    connect(TimeoutTransport(), record_factory, connect_timeout=12.5)
     assert seen["timeout"] == 12.5
 
 
@@ -351,13 +323,6 @@ def test_connect_rejects_relative_path():
 def test_connect_rejects_double_slash_path():
     with pytest.raises(ValueError, match="'//'"):
         connect(DirectTransport("http://x"), record_factory, path="//proxy/a")
-
-
-def test_socket_address_rejects_query_and_fragment():
-    with pytest.raises(ValueError, match="not a bare host:port"):
-        Endpoint("https://host:7000?x=1").socket_address()
-    with pytest.raises(ValueError, match="not a bare host:port"):
-        Endpoint("https://host:7000#frag").socket_address()
 
 
 # --- client-keying invariants (id-keyed, not hash/eq-keyed) ----------------
