@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Auth setup for the controller — single source of truth for verifier creation.
+"""Auth setup for the controller — verifier creation and JWT key management.
 
 All tokens are JWTs signed with a persistent HMAC-SHA256 key stored in the
 controller_secrets table. Verification is a pure crypto check plus an
@@ -12,19 +12,22 @@ import dataclasses
 import logging
 import secrets
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import jwt
 from rigging.timing import Timestamp
 from sqlalchemy import Row, delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from iris.cluster.controller import writes
+from iris.cluster.controller import reads, writes
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import auth_api_keys_table, auth_controller_secrets_table
 from iris.rpc import config_pb2
 from iris.rpc.auth import (
+    DASHBOARD_ROLE,
     GcpAccessTokenVerifier,
+    IapAssertionVerifier,
+    IapIdTokenVerifier,
     StaticTokenVerifier,
     TokenVerifier,
     VerifiedIdentity,
@@ -281,17 +284,49 @@ class ControllerAuth:
     gcp_project_id: str | None = None
     jwt_manager: JwtTokenManager | None = None
     optional: bool = False
+    # Verifies IAP's signed-header assertion to authenticate tokenless callers
+    # behind IAP (only when an IAP signed_header_audience is set).
+    iap_assertion_verifier: IapAssertionVerifier | None = None
+
+
+# How long a resolved IAP email->role mapping is cached before re-reading the
+# user store. Roles change rarely (admin grants, new provisioning); a short TTL
+# keeps the per-RPC assertion path off the database without making grants slow
+# to take effect.
+_IAP_ROLE_CACHE_TTL_SECONDS = 60.0
+
+
+def _make_iap_role_resolver(db: ControllerDB) -> Callable[[str], str]:
+    """Return a function that maps a verified IAP email to its Iris role.
+
+    Looks up the role from the user store; falls back to ``dashboard`` for an
+    unprovisioned email. Results are cached for ``_IAP_ROLE_CACHE_TTL_SECONDS``
+    to keep the per-RPC assertion path off the database.
+    """
+    cache: dict[str, tuple[float, str]] = {}
+
+    def resolve(email: str) -> str:
+        cached = cache.get(email)
+        if cached is not None and time.monotonic() < cached[0]:
+            return cached[1]
+        with db.read_snapshot() as tx:
+            role = reads.get_user_role_or_none(tx, email)
+        resolved = role if role is not None else DASHBOARD_ROLE
+        # Atomic dict assignment; a benign race just recomputes the same value.
+        cache[email] = (time.monotonic() + _IAP_ROLE_CACHE_TTL_SECONDS, resolved)
+        return resolved
+
+    return resolve
 
 
 def create_controller_auth(
     auth_config: config_pb2.AuthConfig,
     db: ControllerDB | None = None,
 ) -> ControllerAuth:
-    """Create auth verifier + worker token from config proto.
+    """Build a ``ControllerAuth`` from the config proto.
 
-    All tokens are JWTs signed with a persistent key stored in
-    controller_secrets. The api_keys table is retained for audit and
-    revocation tracking, but verification never hits the database.
+    Signs JWTs with a persistent key in ``controller_secrets``; ``api_keys``
+    rows exist for audit and revocation, but verification never hits the DB.
     """
     if not auth_config.HasField("provider"):
         if db:
@@ -352,6 +387,24 @@ def create_controller_auth(
         static_tokens = dict(auth_config.static.tokens)
         login_verifier = StaticTokenVerifier(static_tokens)
 
+    # For IAP, `iris login` presents the OIDC ID token it obtained for the IAP
+    # ingress; the controller verifies it (audience + signature) and mints a JWT.
+    iap_assertion_verifier: IapAssertionVerifier | None = None
+    if provider == "iap":
+        audiences = list(auth_config.iap.audiences)
+        if not audiences:
+            raise ValueError("IAP auth config requires at least one audience")
+        login_verifier = IapIdTokenVerifier(audiences)
+
+        # When the signed-header audience is configured, a tokenless request that
+        # carries a valid IAP assertion is authenticated as the asserted email,
+        # resolved to its provisioned role (or read-only dashboard if not
+        # provisioned). Without a DB the resolver defaults to dashboard.
+        signed_header_audience = auth_config.iap.signed_header_audience
+        if signed_header_audience:
+            role_resolver = _make_iap_role_resolver(db) if db else None
+            iap_assertion_verifier = IapAssertionVerifier(signed_header_audience, role_resolver=role_resolver)
+
     optional = auth_config.optional
     logger.info(
         "Auth enabled: provider=%s, db=%s, jwt=%s, optional=%s (loopback always trusted as admin)",
@@ -368,6 +421,7 @@ def create_controller_auth(
         gcp_project_id=gcp_project_id,
         jwt_manager=jwt_mgr,
         optional=optional,
+        iap_assertion_verifier=iap_assertion_verifier,
     )
 
 
