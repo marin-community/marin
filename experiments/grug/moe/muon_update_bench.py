@@ -39,6 +39,7 @@ import ml_dtypes
 import numpy as np
 import optax
 from jax import lax, shard_map
+from jax.experimental.custom_partitioning import custom_partitioning
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, reshard, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 from levanter.grug.grug_moe import grouped_moe_mlp
@@ -154,6 +155,9 @@ EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH = (
 EXPERT_FSDP_GROUPED_EXPLICIT_TUPLE_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH = (
     "expert_fsdp_grouped_explicit_tuple_slice_first_gather_restore_boundary"
 )
+EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH = (
+    "expert_fsdp_grouped_custom_partition_slice_first_gather_restore_boundary"
+)
 EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH = "expert_fsdp_grouped_packed_a2a_apply_boundary"
 EXPERT_FSDP_GROUPED_PACKED_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH = (
     "expert_fsdp_grouped_packed_slice_first_gather_apply_boundary"
@@ -226,6 +230,7 @@ BENCH_KINDS = (
     EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_TUPLE_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
@@ -291,6 +296,7 @@ NS4D_DATA_SHARDED_BENCHES = (
     EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_TUPLE_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
@@ -341,6 +347,7 @@ GROUPED_APPLY_BOUNDARY_BENCHES = (
     EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_EXPLICIT_TUPLE_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
+    EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
@@ -860,6 +867,7 @@ def ns4d_result_sharding(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Na
         EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_TUPLE_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
@@ -982,6 +990,7 @@ def grouped_expert_group_sizes_for_bench(config: BenchConfig, bench_kind: str) -
         EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_TUPLE_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
@@ -3001,6 +3010,26 @@ def _fsdp_leaf_output_spec_for_expert_name(name: str) -> tuple[P, int]:
     raise ValueError(f"Unknown expert parameter name {name!r}.")
 
 
+def _slice_first_gather_to_fsdp_leaf_tuple(
+    local_update: jax.Array,
+    *,
+    group_axis: str | tuple[str, ...] | None,
+    data_axis_size: int,
+    data_sharded_axis: int,
+    valid_group_size: int,
+) -> tuple[jax.Array, ...]:
+    if data_axis_size > 1:
+        data_index = lax.axis_index("data")
+        local_axis_size = local_update.shape[data_sharded_axis] // data_axis_size
+        start = data_index * local_axis_size
+        local_update = lax.dynamic_slice_in_dim(local_update, start, local_axis_size, axis=data_sharded_axis)
+    if group_axis is not None:
+        local_update = lax.all_gather(local_update, axis_name=group_axis, axis=0, tiled=True)
+    if valid_group_size != local_update.shape[0]:
+        local_update = local_update[:valid_group_size]
+    return tuple(jnp.squeeze(update_part, axis=0) for update_part in jnp.split(local_update, valid_group_size, axis=0))
+
+
 def _explicit_grouped_update_to_fsdp_leaf_tuple_slice_first_gather(
     mesh: Mesh,
     config: BenchConfig,
@@ -3030,17 +3059,12 @@ def _explicit_grouped_update_to_fsdp_leaf_tuple_slice_first_gather(
         raise ValueError(f"valid_group_size={valid_group_size} must be in [1, {update.shape[0]}].")
 
     def restore_group(local_update):
-        if data_axis_size > 1:
-            data_index = lax.axis_index("data")
-            local_axis_size = local_update.shape[data_sharded_axis] // data_axis_size
-            start = data_index * local_axis_size
-            local_update = lax.dynamic_slice_in_dim(local_update, start, local_axis_size, axis=data_sharded_axis)
-        if group_axis is not None:
-            local_update = lax.all_gather(local_update, axis_name=group_axis, axis=0, tiled=True)
-        if valid_group_size != local_update.shape[0]:
-            local_update = local_update[:valid_group_size]
-        return tuple(
-            jnp.squeeze(update_part, axis=0) for update_part in jnp.split(local_update, valid_group_size, axis=0)
+        return _slice_first_gather_to_fsdp_leaf_tuple(
+            local_update,
+            group_axis=group_axis,
+            data_axis_size=data_axis_size,
+            data_sharded_axis=data_sharded_axis,
+            valid_group_size=valid_group_size,
         )
 
     return shard_map(
@@ -3050,6 +3074,73 @@ def _explicit_grouped_update_to_fsdp_leaf_tuple_slice_first_gather(
         out_specs=tuple(output_spec for _ in range(valid_group_size)),
         check_vma=False,
     )(update)
+
+
+def _custom_partition_grouped_update_to_fsdp_leaf_tuple_slice_first_gather(
+    mesh: Mesh,
+    config: BenchConfig,
+    name: str,
+    update: jax.Array,
+    valid_group_size: int,
+) -> tuple[jax.Array, ...]:
+    """Restore grouped updates as FSDP leaves through a custom-partitioning stub."""
+    require_model_axis_one(config)
+    group_axis = _live_group_axis(mesh, config)
+    input_spec = P(group_axis, "expert", None, None)
+    output_spec, data_sharded_axis = _fsdp_leaf_output_spec_for_expert_name(name)
+
+    data_axis_size = mesh_axis_size(mesh, "data")
+    if update.shape[data_sharded_axis] % data_axis_size != 0:
+        raise ValueError(
+            f"{name} axis {data_sharded_axis} has size {update.shape[data_sharded_axis]}, "
+            f"which must be divisible by data_axis={data_axis_size}."
+        )
+    if valid_group_size < 1 or valid_group_size > update.shape[0]:
+        raise ValueError(f"valid_group_size={valid_group_size} must be in [1, {update.shape[0]}].")
+
+    input_sharding = NamedSharding(mesh, input_spec)
+    output_shardings = tuple(NamedSharding(mesh, output_spec) for _ in range(valid_group_size))
+
+    @custom_partitioning
+    def restore_group(local_update):
+        return _explicit_grouped_update_to_fsdp_leaf_tuple_slice_first_gather(
+            mesh,
+            config,
+            name,
+            local_update,
+            valid_group_size,
+        )
+
+    def infer_sharding_from_operands(partition_mesh, arg_shapes, result_shape):
+        del partition_mesh, arg_shapes, result_shape
+        return output_shardings
+
+    def propagate_user_sharding(partition_mesh, user_shape):
+        del partition_mesh, user_shape
+        return output_shardings
+
+    def partition(partition_mesh, arg_shapes, result_shape):
+        del partition_mesh, arg_shapes, result_shape
+
+        def lower(local_update):
+            return _slice_first_gather_to_fsdp_leaf_tuple(
+                local_update,
+                group_axis=group_axis,
+                data_axis_size=data_axis_size,
+                data_sharded_axis=data_sharded_axis,
+                valid_group_size=valid_group_size,
+            )
+
+        return mesh, lower, output_shardings, (input_sharding,)
+
+    restore_group.def_partition(
+        partition=partition,
+        infer_sharding_from_operands=infer_sharding_from_operands,
+        propagate_user_sharding=propagate_user_sharding,
+        sharding_rule=f"group expert rows cols -> {','.join('expert rows cols' for _ in range(valid_group_size))}",
+        need_replication_factors=("group",),
+    )
+    return restore_group(update)
 
 
 def _packed_grouped_updates_for_name(config: BenchConfig, grouped_updates, name: str) -> tuple[jax.Array, int]:
@@ -3397,6 +3488,39 @@ def expert_fsdp_grouped_explicit_tuple_slice_first_gather_boundary_updates(
                 f"muon_update_bench/expert_fsdp_grouped_explicit_tuple_slice_first_gather_boundary/{name}/restore_group"
             ):
                 update_parts = _explicit_grouped_update_to_fsdp_leaf_tuple_slice_first_gather(
+                    mesh,
+                    config,
+                    name,
+                    update,
+                    valid_group_size,
+                )
+            for local_index, update_part in enumerate(update_parts):
+                layer_index = layer_offset + local_index
+                output_layers[layer_index]["mlp"]["expert_mlp"][name] = update_part
+        layer_offset += valid_group_size
+    return {"layers": tuple(output_layers)}
+
+
+def expert_fsdp_grouped_custom_partition_slice_first_gather_boundary_updates(
+    mesh: Mesh,
+    config: BenchConfig,
+    params,
+    grouped_updates,
+):
+    """Restore grouped expert updates as FSDP leaves through custom partitioning."""
+    del params
+    output_layers = [
+        {"mlp": {"expert_mlp": {name: None for name in synthetic_shapes(config)}}} for _ in range(config.layers)
+    ]
+    layer_offset = 0
+    for group_index, valid_group_size in enumerate(grouped_expert_group_sizes(config)):
+        for name in synthetic_shapes(config):
+            update = grouped_updates["blocks"][group_index]["mlp"]["expert_mlp"][name]
+            with jax.named_scope(
+                "muon_update_bench/"
+                f"expert_fsdp_grouped_custom_partition_slice_first_gather_boundary/{name}/restore_group"
+            ):
+                update_parts = _custom_partition_grouped_update_to_fsdp_leaf_tuple_slice_first_gather(
                     mesh,
                     config,
                     name,
@@ -3809,6 +3933,42 @@ def expert_fsdp_grouped_explicit_slice_first_gather_apply_boundary_timing_step_f
             "muon_update_bench/expert_fsdp_grouped_explicit_slice_first_gather_apply_boundary_timing_step"
         ):
             return expert_fsdp_grouped_explicit_slice_first_gather_apply_outputs(mesh, config, params, grouped_updates)
+
+    return update_step
+
+
+def expert_fsdp_grouped_custom_partition_slice_first_gather_restore_boundary_step_factory(
+    mesh: Mesh,
+    config: BenchConfig,
+):
+    def update_step(params, grouped_updates):
+        with jax.named_scope(
+            "muon_update_bench/expert_fsdp_grouped_custom_partition_slice_first_gather_restore_boundary_step"
+        ):
+            return expert_fsdp_grouped_custom_partition_slice_first_gather_boundary_updates(
+                mesh,
+                config,
+                params,
+                grouped_updates,
+            )
+
+    return update_step
+
+
+def expert_fsdp_grouped_custom_partition_slice_first_gather_restore_boundary_timing_step_factory(
+    mesh: Mesh,
+    config: BenchConfig,
+):
+    def update_step(grouped_updates):
+        with jax.named_scope(
+            "muon_update_bench/expert_fsdp_grouped_custom_partition_slice_first_gather_restore_boundary_timing_step"
+        ):
+            return expert_fsdp_grouped_custom_partition_slice_first_gather_boundary_updates(
+                mesh,
+                config,
+                None,
+                grouped_updates,
+            )
 
     return update_step
 
@@ -4598,6 +4758,8 @@ def ns4d_boundary_status(config: BenchConfig, bench_kind: str) -> str | None:
         return "expert_fsdp_params_grouped_updates_explicit_slice_first_gather_apply"
     if bench_kind == EXPERT_FSDP_GROUPED_EXPLICIT_TUPLE_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH:
         return "expert_fsdp_params_grouped_updates_explicit_tuple_slice_first_gather_restore_only"
+    if bench_kind == EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH:
+        return "expert_fsdp_params_grouped_updates_custom_partition_slice_first_gather_restore_only"
     if bench_kind == EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH:
         return "expert_fsdp_params_grouped_updates_packed_a2a_apply"
     if bench_kind == EXPERT_FSDP_GROUPED_PACKED_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH:
@@ -4717,6 +4879,7 @@ def is_expert_fsdp_grouped_boundary_bench(bench_kind: str) -> bool:
         EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_TUPLE_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
@@ -4744,6 +4907,7 @@ def is_expert_fsdp_grouped_bench(bench_kind: str) -> bool:
         EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_TUPLE_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
@@ -5466,6 +5630,7 @@ def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
         EXPERT_FSDP_GROUPED_EXPLICIT_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_EXPLICIT_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_SLICE_FIRST_GATHER_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH,
@@ -6090,6 +6255,31 @@ def lower_ns4d(
                 "expert FSDP explicit tuple slice-first gather restore grouped updates",
             )
             assert_expert_fsdp_sharding(result_specs, "expert FSDP explicit tuple slice-first gather restore updates")
+            lower_args = None
+        elif bench_kind == EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH:
+            if abstract_mesh_enabled:
+                raise ValueError(
+                    f"{bench_kind} uses jax.custom_partitioning and must be lowered with "
+                    "--disable-abstract-mesh so JAX has concrete devices for partitioning."
+                )
+            grouped_specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
+            update_step = jax.jit(
+                expert_fsdp_grouped_custom_partition_slice_first_gather_restore_boundary_step_factory(mesh, config)
+            )
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(update_step, specs, grouped_specs)
+                lowered = update_step.lower(specs, grouped_specs)
+            assert_grouped_expert_sharding(
+                grouped_specs,
+                mesh,
+                config,
+                bench_kind,
+                "expert FSDP custom-partition slice-first gather restore grouped updates",
+            )
+            assert_expert_fsdp_sharding(
+                result_specs,
+                "expert FSDP custom-partition slice-first gather restore updates",
+            )
             lower_args = None
         elif bench_kind == EXPERT_FSDP_GROUPED_PACKED_A2A_APPLY_BOUNDARY_BENCH:
             grouped_specs = synthetic_grouped_expert_specs(mesh, config, bench_kind)
@@ -6771,6 +6961,15 @@ def time_ns4d(
                 params = None
                 update_step = jax.jit(
                     expert_fsdp_grouped_explicit_tuple_slice_first_gather_restore_boundary_timing_step_factory(
+                        mesh,
+                        config,
+                    )
+                )
+                lower_args = (updates,)
+            elif bench_kind == EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH:
+                params = None
+                update_step = jax.jit(
+                    expert_fsdp_grouped_custom_partition_slice_first_gather_restore_boundary_timing_step_factory(
                         mesh,
                         config,
                     )
@@ -7748,6 +7947,7 @@ def run_config(
                 EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
                 EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
                 EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_A2A_APPLY_BOUNDARY_BENCH,
+                EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
                 EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
                 EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
                 EXPERT_FSDP_GROUPED_UPDATES_MUONH_DIRECT_APPLY_BENCH,
@@ -7805,6 +8005,7 @@ def run_config(
                 EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
                 EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
                 EXPERT_FSDP_GROUPED_EXPLICIT_DATA_FIRST_A2A_APPLY_BOUNDARY_BENCH,
+                EXPERT_FSDP_GROUPED_CUSTOM_PARTITION_SLICE_FIRST_GATHER_RESTORE_BOUNDARY_BENCH,
                 EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
                 EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
                 EXPERT_FSDP_GROUPED_UPDATES_MUONH_DIRECT_APPLY_BENCH,

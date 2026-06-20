@@ -1389,3 +1389,24 @@ Post-compile steps were stable around 0.65-0.66s:
     - Result: failed as intended with `compiled grouped boundary candidate forced grouped apply boundary collectives {'all_to_all': 2}`.
 - Interpretation: This gives us a cheap, explicit production-candidate gate. The persistent grouped apply lower bound passes; the direct restore/apply path is still a diagnostic/reference path, not a candidate, because compiled HLO reintroduces boundary routing even when lowered HLO looks clean.
 - Next action: Use `--require-no-boundary-collectives` on any future "this avoids per-leaf collective explosion" claim. Use `--allow-boundary-collectives` only when intentionally profiling or decomposing a known-boundary path.
+
+### 2026-06-19 21:35 PDT - custom-partition grouped-to-FSDP restore probe
+- Hypothesis: A `jax.custom_partitioning` boundary can give us a cleaner grouped-to-FSDP insertion point than ordinary `shard_map`/`reshard`: lowered HLO should expose an opaque custom-call-like boundary instead of spelling the restore as all-gathers/all-to-alls. This does not yet implement production transport, but it is the right harness shape for a future FFI/custom-call bridge.
+- Code snapshot:
+  - Added benchmark kind `expert_fsdp_grouped_custom_partition_slice_first_gather_restore_boundary` in `experiments/grug/moe/muon_update_bench.py`.
+  - The custom-partition path restores grouped expert updates into FSDP-shaped update leaves through a custom-partitioning stub.
+  - Added a focused sharding-contract test in `experiments/grug/moe/test_muon_update_bench.py`.
+  - Added an explicit guard requiring `--disable-abstract-mesh` for lowering this bench, because `jax.custom_partitioning` lowering needs concrete devices.
+- Local validation:
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed.
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_custom_partition_slice_first_gather_boundary_returns_fsdp_updates experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_explicit_tuple_slice_first_gather_boundary_returns_fsdp_updates_without_a2a experiments/grug/moe/test_muon_update_bench.py::test_strict_boundary_gate_includes_expert_fsdp_and_collective_permute -q` passed with `3 passed`.
+  - Forced-host comparison command:
+    - `XLA_FLAGS=--xla_force_host_platform_device_count=8 uv run python experiments/grug/moe/muon_update_bench.py --layers 4 --ns4d-group-size 4 --ns4d-group-axis replica_dcn,data --hidden-dim 16 --intermediate-dim 8 --num-experts 8 --replica-axis 2 --data-axis 2 --expert-axis 2 --model-axis 1 --bench-kinds expert_fsdp_grouped_explicit_tuple_slice_first_gather_restore_boundary,expert_fsdp_grouped_custom_partition_slice_first_gather_restore_boundary --mode both --warmup 0 --iters 0 --compile-only --disable-abstract-mesh --allow-boundary-collectives --output /tmp/muon_custom_partition_compare.json`
+    - Existing tuple restore lowered with `AG/A2A/AR/RS/CP = 2/0/0/0/0`.
+    - Custom-partition restore lowered with `AG/A2A/AR/RS/CP = 0/0/0/0/0` and `custom_call = 2`.
+    - Both compiled CPU HLOs had `AG/A2A/AR/RS/CP = 0/0/0/0/0`.
+  - Strict gate command:
+    - `XLA_FLAGS=--xla_force_host_platform_device_count=8 uv run python experiments/grug/moe/muon_update_bench.py --layers 4 --ns4d-group-size 4 --ns4d-group-axis replica_dcn,data --hidden-dim 16 --intermediate-dim 8 --num-experts 8 --replica-axis 2 --data-axis 2 --expert-axis 2 --model-axis 1 --bench-kinds expert_fsdp_grouped_custom_partition_slice_first_gather_restore_boundary --mode both --warmup 0 --iters 0 --compile-only --disable-abstract-mesh --require-no-boundary-collectives --output /tmp/muon_custom_partition_strict.json`
+    - Result: passed. Lowered HLO had `custom_call = 2` and zero AG/A2A/AR/RS/CP; compiled CPU HLO also had zero AG/A2A/AR/RS/CP.
+- Interpretation: This is promising as a lower-level bridge insertion point, not a production performance claim. The custom-partition stub hides the grouped-to-FSDP restore from lowered HLO and passes the strict boundary gate on forced-host CPU, but CPU compiled HLO is not authoritative for H100/NCCL behavior. The current lower function still uses JAX-local slice/gather logic; a real solution would replace that lowering with an FFI/custom-call transport that emits exactly the desired grouped-to-FSDP routing.
+- Next action: After commit/push, validate this bench on CoreWeave H100s in compile-only/timing mode against the explicit tuple restore baseline. Require compiled-HLO collective counts and, if it runs, timing. If the GPU compiler keeps the custom boundary opaque, this becomes the harness for a real transport implementation; if it reintroduces collectives or fails to lower, fall back to a custom-call/FFI transport design rather than another generic `reshard`.
