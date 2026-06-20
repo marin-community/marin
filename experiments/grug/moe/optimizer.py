@@ -779,6 +779,7 @@ def _packed_grouped_muonh_updates_to_fsdp_leaves(
     output_spec = param_sharding.spec
 
     def restore_bank(local_update):
+        gathered_group_axis = False
         if data_axis is not None and data_axis_size > 1 and "data" in group_axis_names:
             with jax.named_scope("grouped_muonh/packed_restore/data_a2a_to_fsdp"):
                 local_update = lax.all_to_all(
@@ -796,7 +797,8 @@ def _packed_grouped_muonh_updates_to_fsdp_leaves(
                 local_update = lax.dynamic_slice_in_dim(local_update, start, local_axis_size, axis=data_axis)
             if group_axis is not None:
                 local_update = lax.all_gather(local_update, axis_name=group_axis, axis=0, tiled=True)
-        if replica_axis_size > 1 and REPLICA_DCN_AXIS in group_axis_names:
+                gathered_group_axis = True
+        if not gathered_group_axis and replica_axis_size > 1 and REPLICA_DCN_AXIS in group_axis_names:
             with jax.named_scope("grouped_muonh/packed_restore/replica_gather_to_fsdp"):
                 local_update = lax.all_gather(local_update, axis_name=REPLICA_DCN_AXIS, axis=0, tiled=True)
         if local_update.shape[0] != valid_total:
