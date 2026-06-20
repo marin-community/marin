@@ -2833,3 +2833,39 @@ Post-compile steps were stable around 0.65-0.66s:
   - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_packed_bank_boundary_phase_estimates experiments/grug/moe/test_muon_update_bench.py::test_real_grouped_muonh_summary_row_reports_boundary_phase_estimates experiments/grug/moe/test_muon_update_bench.py::test_summary_row_flags_boundary_collective_type_excess -q`
 - Result:
   - Pytest: `5 passed in 4.65s`.
+
+### 2026-06-20 11:51 PDT - R2 packed-bank boundary contract succeeds
+- Hypothesis:
+  - The packed-bank primitives should avoid per-leaf collective explosion on
+    R2 by keeping FSDP-grad ingress local to the `replica_dcn` grouping and
+    doing grouped-update egress as two large all-gathers.
+- Command:
+  - `bash scratch/launch_muon_packed_bank_boundary_contract.sh r2`
+- Config:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-184515`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/ydgedtaw`.
+  - Run id:
+    `MUON-BENCH-D2560-L26-R2D1E8-N2-G8-BOUNDARYCONTRACT-cw-20260620-184512`.
+  - 2 H100 nodes, `replica_axis=2`, `data_axis=1`, `expert_axis=8`,
+    `model_axis=1`, `ns4d_group_axis=replica_dcn`, `ns4d_group_size=8`,
+    bf16 params/NS compute, 26 layers.
+- Result:
+  - Child job succeeded with both tasks completed.
+  - `fsdp_grads_to_explicit_packed_grouped_bank`: compiled AG/A2A = `0/0`,
+    ideal collectives `0`, excess `0`, mean `0.00654s`, estimated phase
+    bandwidth `~20.0 TB/s`, compiled HBM peak `15.24 GiB`.
+  - Route A `packed_grouped_updates_to_fsdp_apply`: compiled AG/A2A = `2/0`,
+    ideal collectives `2`, excess `0`, mean `0.23245s`, estimated all-gather
+    phase bandwidth `~563 GB/s`, compiled HBM peak `38.09 GiB`.
+  - Route B `packed_grouped_updates_to_fsdp_direct_apply`: compiled AG/A2A =
+    `2/0`, ideal collectives `2`, excess `0`, mean `0.23233s`, estimated
+    all-gather phase bandwidth `~563 GB/s`, compiled HBM peak `38.09 GiB`.
+  - Full-size correctness was skipped by the existing global-byte cap:
+    `estimated global bytes 130862284800 exceed correctness cap 1073741824`.
+- Interpretation:
+  - R2 validates the collective-count contract for both egress routes:
+    no per-leaf collective explosion, and Route A and Route B are effectively
+    tied at this scale.
+  - The remaining question is R4 scaling and whether the all-gather bandwidth
+    stays acceptable or gets worse with `replica_dcn=4`.
