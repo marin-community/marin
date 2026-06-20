@@ -1421,3 +1421,26 @@ Post-compile steps were stable around 0.65-0.66s:
   - DeepSpeed Muon: applies Muon while per-parameter gradient views still exist, before the flattened ZeRO partition loses matrix identity.
 - Interpretation: Axolotl/Dion is the closest direct clue for this harness. It validates the coarse-transport shape we have been converging on: batch same-layout matrices, perform one coarse all-to-all/gather into whole matrices for local NS, then one coarse communication boundary back. Megatron is the fallback design: give up on element-wise FSDP ownership in the hot Muon step and use whole-layer/matrix ownership plus a param sync boundary.
 - Next action: Prefer an Axolotl-style coarse grouped transport over further per-leaf `reshard` variants. The custom-partition probe should be treated as the harness insertion point for that transport. Continue avoiding flattened-before-Muon designs unless the Muon transform happens before flattening, as in DeepSpeed.
+
+### 2026-06-19 21:50 PDT - H100 custom-partition bridge validation
+- Hypothesis: The custom-partition grouped-to-FSDP restore probe may keep the restore opaque enough on H100 that compiled GPU HLO avoids the per-layer all-gathers seen in ordinary tuple restore.
+- Code snapshot:
+  - Commit `c29af7f41` includes the custom-partition bench plus launcher plumbing for the strict boundary flag.
+  - The first H100 attempt, parent `/dlwh/iris-run-job-20260620-043933`, failed before compile because the launcher-created `SimpleNamespace` omitted `require_no_boundary_collectives`. Commit `c29af7f41` fixed this and added a regression test.
+- Command:
+  - `RUN_ID="MUON-BENCH-D2560-L26-R2E8-CUSTOMPART-COMPILE-G2-N2-cw-$(date -u +%Y%m%d-%H%M%S)" MARIN_PREFIX=s3://marin-na/tmp/ttl=7d KUBECONFIG=$HOME/.kube/coreweave-iris-gpu MUON_BENCH_GPU_REPLICAS=2 MUON_BENCH_LAYERS=26 MUON_BENCH_REPLICA_AXIS=2 MUON_BENCH_DATA_AXIS=1 MUON_BENCH_EXPERT_AXIS=8 MUON_BENCH_MODEL_AXIS=1 MUON_BENCH_NS4D_GROUP_SIZE=2 MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn,data MUON_BENCH_KINDS=expert_fsdp_grouped_explicit_tuple_slice_first_gather_restore_boundary,expert_fsdp_grouped_custom_partition_slice_first_gather_restore_boundary MUON_BENCH_SWEEP_BACKEND_STEPS=3 MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 MUON_BENCH_DTYPE=bf16 MUON_BENCH_NS_COMPUTE_DTYPE=bf16 MUON_BENCH_WARMUP=0 MUON_BENCH_ITERS=0 MUON_BENCH_MODE=both MUON_BENCH_COMPILE_ONLY=true MUON_BENCH_TRACKER=json MUON_BENCH_ENABLE_JAX_PROFILE=false MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES=true MUON_BENCH_DISABLE_ABSTRACT_MESH=true MUON_BENCH_WRITE_COMPILED_HLO=true MUON_BENCH_WORKER_CPU=8 MUON_BENCH_WORKER_RAM=256g XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 bash scratch/muon_update_bench_fast_loop.sh iris fullprod-r4e8-l26-h3`
+- Result:
+  - Relaunch parent Iris job: `/dlwh/iris-run-job-20260620-044409`.
+  - Child Iris job: `/dlwh/iris-run-job-20260620-044409/grug-train-MUON-BENCH-D2560-L26-R2E8-CUSTOMPART-COMPILE-G2-N2-cw-20260620-044407`.
+  - Output prefix: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2E8-CUSTOMPART-COMPILE-G2-N2-cw-20260620-044407-8d2242`.
+  - Terminal state: succeeded.
+
+| bench | lowered AG/A2A/AR/RS/CP | lowered custom_call | compiled AG/A2A/AR/RS/CP | compiled custom_call | compile seconds |
+| --- | --- | ---: | --- | ---: | ---: |
+| explicit tuple slice-first restore | 26/0/0/0/0 | 0 | 26/0/0/0/0 | 0 | 0.856-0.857 |
+| custom-partition slice-first restore | 0/0/0/0/0 | 26 | 26/0/0/0/0 | 0 | 0.513-0.537 |
+
+- Interpretation: The custom-partition stub is useful only as a lowered-HLO insertion point. On H100, the compiled GPU HLO still inlines the lowering body and reintroduces the same 26 all-gathers as the explicit tuple restore. This falsifies the hope that `jax.custom_partitioning` alone can hide the grouped-to-FSDP bridge from XLA GPU. A production fix needs a real custom transport/custom-call/FFI or an Axolotl-style explicit coarse all-to-all primitive, not another JAX-level restore wrapper.
+- Next action: Stop spending time on JAX-level custom-partition wrappers for this boundary. The next implementation should either:
+  1. build an explicit coarse transport that batches same-layout matrices and performs the grouped-to-FSDP routing directly, or
+  2. shift production toward grouped expert-bank ownership/model consumption and make the sync boundary explicit.
