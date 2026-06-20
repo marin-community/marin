@@ -1202,3 +1202,29 @@ Post-compile steps were stable around 0.65-0.66s:
 
 - Interpretation: Negative result for the plain target reshard bridge. The direct `reshard(..., P(None, 'expert', 'data', None))` shape looks clean in lowered StableHLO, but XLA GPU rewrites it back into the same 26 per-layer all-gathers in compiled HLO. It is also about 10 ms slower than the explicit slice-first gather baseline on this short bench. This means ordinary target-layout resharding is not enough to avoid the representation-boundary collective explosion.
 - Next action: Do not switch production to the target-layout helper. The remaining viable paths are (1) persistent grouped expert-bank representation through the model/optimizer boundary, or (2) a manual grouped-to-FSDP conversion via `shard_map` first, then Pallas/Triton if needed, so the compiler cannot rediscover the conversion as 26 independent all-gathers.
+
+### 2026-06-19 17:10 PDT - packed slice-first gather bridge negative result
+- Hypothesis: Packing all grouped updates for one expert weight name before the slice-first grouped-to-FSDP restore should reduce the boundary from one all-gather per layer/group to one larger all-gather per expert weight name, while still returning ordinary FSDP leaves before `optax.apply_updates`.
+- Code snapshot:
+  - Added harness-only bench kind: `expert_fsdp_grouped_packed_slice_first_gather_apply_boundary`.
+  - Scope: `experiments/grug/moe/muon_update_bench.py` and focused tests only; no production optimizer path changed.
+- Local validation:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_packed_slice_first_gather_apply_boundary_packs_group_restores -q`
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_packed_slice_first_gather_apply_boundary_packs_group_restores experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_packed_a2a_apply_boundary_packs_group_restores experiments/grug/moe/test_muon_update_bench.py::test_expert_fsdp_grouped_explicit_slice_first_gather_apply_boundary_returns_fsdp_params_without_a2a -q`
+  - `./infra/pre-commit.py --files experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix`
+- Command:
+  - Local lower: `XLA_FLAGS=--xla_force_host_platform_device_count=16 uv run python experiments/grug/moe/muon_update_bench.py --layers 26 --ns4d-group-size 2 --ns4d-group-axis replica_dcn,data --hidden-dim 2560 --intermediate-dim 1280 --num-experts 256 --replica-axis 2 --data-axis 1 --expert-axis 8 --model-axis 1 --bench-kinds expert_fsdp_grouped_explicit_slice_first_gather_apply_boundary,expert_fsdp_grouped_packed_slice_first_gather_apply_boundary --mode lower --warmup 0 --iters 1 --disable-abstract-mesh --output /tmp/muon_packed_slice_r2d1_l26_lower.json`.
+  - Launch: `RUN_ID=MUON-BENCH-D2560-L26-R2D1E8-PACKEDSLICEFIRST-H0-CAP512-N2-cw-$(date -u +%Y%m%d-%H%M%S) MUON_BENCH_KINDS=expert_fsdp_grouped_explicit_slice_first_gather_apply_boundary,expert_fsdp_grouped_packed_slice_first_gather_apply_boundary MUON_BENCH_LAYERS=26 MUON_BENCH_NS4D_GROUP_SIZE=2 MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn,data MUON_BENCH_REPLICA_AXIS=2 MUON_BENCH_DATA_AXIS=1 MUON_BENCH_EXPERT_AXIS=8 MUON_BENCH_MODEL_AXIS=1 MUON_BENCH_GPU_REPLICAS=2 MUON_BENCH_SWEEP_BACKEND_STEPS=1 MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 MUON_BENCH_NS_COMPUTE_DTYPE=bf16 MUON_BENCH_WARMUP=1 MUON_BENCH_ITERS=3 MUON_BENCH_MODE=both MUON_BENCH_DISABLE_ABSTRACT_MESH=true MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES=true MUON_BENCH_WORKER_CPU=8 MUON_BENCH_WORKER_RAM=256g bash scratch/muon_update_bench_fast_loop.sh iris fullprod-r4e8-l26-h3`.
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-000715`.
+  - Child Iris job: `/dlwh/iris-run-job-20260620-000715/grug-train-MUON-BENCH-D2560-L26-R2D1E8-PACKEDSLICEFIRST-H0-CAP512-N2-cw-20260620-000713`.
+  - Output prefix: `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D1E8-PACKEDSLICEFIRST-H0-CAP512-N2-cw-20260620-000713-67247f`.
+- Config: 2 H100 nodes, 16 devices, `replica_dcn=2`, `data=1`, `expert=8`, `model=1`, layers 26, hidden 2560, intermediate 1280, 256 experts, group size 2, group axis `replica_dcn,data`, max grouped stack size 512, bf16 params/updates, bf16 NS compute, warmup 1, iters 3, boundary collectives allowed.
+- Result: Parent and child reached `JOB_STATE_SUCCEEDED` with zero failures/preemptions.
+
+| bench | lowered AG/A2A/AR/RS/CP | compiled AG/A2A/AR/RS/CP | median | mean |
+| --- | --- | --- | ---: | ---: |
+| explicit slice-first restore+apply | 26/0/0/0/0 | 26/0/0/0/0 | 0.2300s | 0.2299s |
+| packed slice-first restore+apply | 2/0/0/0/0 | 2/28/0/0/0 | 0.6011s | 0.6006s |
+
+- Interpretation: Negative result for the packed slice-first bridge. The local and lowered H100 IR showed the intended reduction from 26 all-gathers to 2 all-gathers, but XLA GPU compilation inserted 28 all-to-alls and made the path about 2.6x slower than the simple explicit slice-first baseline. This is a stronger warning than the target-FSDP result: even when the pre-compiled collective count looks better, GPU compilation can introduce a worse communication pattern.
+- Next action: Do not pursue packed slice-first restore as the production bridge. The remaining plausible bridge needs to force the exact data movement more directly than ordinary `reshard` or packed `shard_map`, likely with a narrower hand-written permutation or lower-level Pallas/Triton. Persistent grouped expert-bank remains the cleanest lower-bound direction.
