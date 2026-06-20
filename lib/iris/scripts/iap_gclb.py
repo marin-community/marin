@@ -7,7 +7,7 @@ fronts an Iris controller VM.
 
     client --HTTPS:443--> GCLB --(IAP)--> backend service --HTTP:10000--> controller VM
 
-This supersedes the Cloud Run proxy in ``../iris-iap-proxy/`` (retired as this
+This supersedes the Cloud Run proxy in ``infra/iris-iap-proxy/`` (retired as this
 rolls out): GCLB talks straight to the controller VM (no extra serverless hop
 and no Cloud Run 300s request cap that would truncate long-poll requests).
 
@@ -38,13 +38,13 @@ One stack per cluster: the cluster name is both the resource-name prefix
 the controller VM (``iris-<cluster>-controller``).
 
 Usage:
-    uv run infra/iris-iap-gclb/iap_gclb.py deploy marin \\
+    uv run lib/iris/scripts/iap_gclb.py deploy marin \\
         --domain iris-marin.example.com \\
         --web-client-secrets scratch/web.json \\
         --desktop-client-secrets scratch/desktop.json \\
         --member user:you@example.com
-    uv run infra/iris-iap-gclb/iap_gclb.py status marin
-    uv run infra/iris-iap-gclb/iap_gclb.py teardown marin
+    uv run lib/iris/scripts/iap_gclb.py status marin
+    uv run lib/iris/scripts/iap_gclb.py teardown marin
 """
 
 from __future__ import annotations
