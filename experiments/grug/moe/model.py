@@ -120,6 +120,15 @@ class GrugModelConfig:
     additional rope = qk_rope_head_dim shared across heads); V stays at
     head_dim. Activating this flag also switches normalisation to the
     DeepSeek-strict scheme: ``rms_norm(c_kv)`` only, no QK norm on q/k/v."""
+    attn_gate: bool = False
+    """When True, add a per-head sigmoid attention gate
+    ``gate = 2 * sigmoid(x @ w_attn_gate)`` with ``w_attn_gate: (D, NH)``,
+    applied as a scalar per (token, head) multiplier on the attention output
+    before the output projection. Zero-init means gate=1.0 at step 0 (matches
+    no-gate model); learns to gate down from pass-through. Absorption-friendly:
+    the gate depends only on the current query, so at decode it adds one
+    (D, NH) matmul per step plus a per-head scalar multiply on the absorbed
+    output -- no cache interaction."""
     max_seq_len: int = 4096
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
@@ -203,6 +212,7 @@ class CausalSelfAttention(eqx.Module):
     w_uv: jax.Array  # (d_c, NH * HD)
     w_kr: jax.Array  # legacy (D, half); additive (D, rope)
     w_o: jax.Array  # (NH * HD, D)
+    w_attn_gate: jax.Array | None  # (D, NH) when cfg.attn_gate else None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -226,6 +236,10 @@ class CausalSelfAttention(eqx.Module):
             w_uk_nr_cols = n * hd
             w_kr_cols = rope_dim
 
+        # Per-head sigmoid attention gate. Zero-init -> sigmoid(0)*2 = 1.0 pass-through
+        # at step 0, so the model is identical to the no-gate baseline before any training.
+        w_attn_gate = reshard(jnp.zeros((d, n)), P(None, None)) if cfg.attn_gate else None
+
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, w_q_cols), cfg.initializer_std), P("data", "model")),
             w_dkv=reshard(_init_weight(k_dkv, (d, d_c), cfg.initializer_std), P("data", None)),
@@ -233,6 +247,7 @@ class CausalSelfAttention(eqx.Module):
             w_uv=reshard(_init_weight(k_uv, (d_c, n * hd), cfg.initializer_std), P(None, "model")),
             w_kr=reshard(_init_weight(k_kr, (d, w_kr_cols), cfg.initializer_std), P("data", None)),
             w_o=reshard(_init_weight(k_o, (n * hd, d), cfg.initializer_std), P("model", "data")),
+            w_attn_gate=w_attn_gate,
             cfg=cfg,
         )
 
@@ -323,6 +338,11 @@ class CausalSelfAttention(eqx.Module):
         # Half-RoPE's slice+concat can leave the propagator with ``model`` annotated on
         # head_dim rather than num_q_heads; force the canonical TP layout.
         attn_out = reshard(attn_out, P(_BATCH_AXES, None, "model", None))
+        # Per-head sigmoid attention gate (optional). Scalar per (token, head),
+        # broadcast over head_dim. Zero-init -> gate=1.0 at step 0.
+        if self.w_attn_gate is not None:
+            gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.w_attn_gate))
+            attn_out = attn_out * gate[..., None]
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
