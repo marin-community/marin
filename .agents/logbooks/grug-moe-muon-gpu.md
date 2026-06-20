@@ -1901,3 +1901,22 @@ Post-compile steps were stable around 0.65-0.66s:
   - Add multi-host `sync_global_devices` barriers before and after rank-0-only W&B logging in `launch_cw_muon_update_bench.py`, so nonzero ranks do not exit while rank 0 is still finishing the tracker.
   - Focused validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'sync_global_devices_if_multihost or wandb_metric_row or launcher_reads_wandb_env' -q` -> 4 passed; `uv run python -m py_compile experiments/grug/moe/launch_cw_muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed; `./infra/pre-commit.py --files experiments/grug/moe/launch_cw_muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix` passed.
 - Next action: run a one-iteration R1D2E8 phase-report validation with the W&B barriers in place. If it exits cleanly, the phase-reporting path is a usable ongoing regression check.
+
+### 2026-06-20 03:30 PDT - W&B finalization hang isolated
+- Hypothesis: The previous shutdown crash was caused by rank 1 exiting while rank 0 was still finalizing W&B; adding barriers should turn it into a clean exit if W&B finalization returns.
+- Run:
+  - Iris parent `/dlwh/iris-run-job-20260620-102108`; child `/dlwh/iris-run-job-20260620-102108/grug-train-MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PHASEREPORTSYNC-N2-cw-20260620-102105`.
+  - W&B `marin-community/marin_moe/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PHASEREPORTSYNC-N2-cw-20260620-102105`.
+  - Output `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-PHASEREPORTSYNC-N2-cw-20260620-102105-0e72ff`.
+- Result:
+  - Metrics and W&B logging succeeded, but both GPU tasks remained running for several minutes after `wandb_logged`.
+  - Lowered and compiled HLO were unchanged: `0 AG / 6 A2A / 0 CP / 0 RS`, with `18` lowered dots and `41` compiled GPU GEMMs.
+  - Rank timings were `0.653619s` and `0.653597s`; median H100 bf16 peak about `23.48%`.
+  - Phase fields were present and correct: three phases, each `130862284800` global bytes and two ideal all-to-alls; total phase bytes `392586854400`, total ideal collectives `6`, compiled/lowered-to-ideal ratios `1.0`.
+  - The validation job was manually stopped after metrics landed because the remaining work was only stuck cleanup.
+- Interpretation:
+  - The barriers fixed the fatal distributed teardown race, but exposed a second issue: `wandb.finish()` itself can hang inside the JAX worker process.
+- Follow-up fix:
+  - Move W&B logging into a spawned child process with a `120s` timeout. The main JAX process waits for the child, emits `wandb_timeout` or `wandb_failed` on tracker trouble, then continues through the after-W&B barrier so all distributed ranks exit together. Summary JSON remains the authoritative result even if W&B cleanup misbehaves.
+  - Focused validation: `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'sync_global_devices_if_multihost or wandb_metric_row or launcher_reads_wandb_env' -q` -> 4 passed; `uv run python -m py_compile experiments/grug/moe/launch_cw_muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed; `./infra/pre-commit.py --files experiments/grug/moe/launch_cw_muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py --fix` passed.
+- Next action: rerun the one-iteration phase-report validation once more. The pass condition is terminal Iris success after W&B logging, not just metric emission.

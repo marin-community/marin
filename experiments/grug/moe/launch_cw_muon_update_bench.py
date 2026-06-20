@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import multiprocessing
 import os
 import shutil
 from dataclasses import asdict, dataclass
@@ -44,6 +45,7 @@ from experiments.grug.moe.muon_update_bench import (
 
 GPUS_PER_NODE = 8
 DEFAULT_OUTPUT_SUBDIR = "experiments/grug-moe-cw/muon-update-bench"
+WANDB_LOG_TIMEOUT = 120
 
 set_default_cw_grug_moe_prefix()
 
@@ -233,20 +235,24 @@ def _wandb_metric_row(row: dict[str, Any], row_index: int) -> dict[str, int | fl
     return metrics
 
 
-def _log_summary_to_wandb(config: MuonUpdateBenchLaunchConfig, payload: dict[str, Any]) -> None:
-    if not config.wandb or jax.process_index() != 0:
-        return
+def _log_summary_to_wandb_process(
+    run_id: str,
+    wandb_project: str,
+    wandb_group: str,
+    launch_config: dict[str, Any],
+    payload: dict[str, Any],
+) -> None:
     if not os.environ.get("WANDB_API_KEY"):
         emit_jsonl({"event": "wandb_skipped", "reason": "WANDB_API_KEY is not set"})
         return
 
     run = wandb.init(
         entity=os.environ.get("WANDB_ENTITY", "marin-community"),
-        project=config.wandb_project,
-        name=config.run_id,
-        group=config.wandb_group or None,
+        project=wandb_project,
+        name=run_id,
+        group=wandb_group or None,
         tags=["grug", "moe", "muonh", "cw", "h100", "benchmark"],
-        config=_json_safe(asdict(config)),
+        config=launch_config,
         settings=wandb.Settings(
             console="off",
             init_timeout=30,
@@ -281,6 +287,33 @@ def _log_summary_to_wandb(config: MuonUpdateBenchLaunchConfig, payload: dict[str
         emit_jsonl({"event": "wandb_logged", "entity": run.entity, "project": run.project, "name": run.name})
     finally:
         run.finish(quiet=True)
+
+
+def _log_summary_to_wandb(config: MuonUpdateBenchLaunchConfig, payload: dict[str, Any]) -> None:
+    if not config.wandb or jax.process_index() != 0:
+        return
+
+    ctx = multiprocessing.get_context("spawn")
+    process = ctx.Process(
+        target=_log_summary_to_wandb_process,
+        args=(
+            config.run_id,
+            config.wandb_project,
+            config.wandb_group,
+            _json_safe(asdict(config)),
+            payload,
+        ),
+        name="muon-update-bench-wandb-logger",
+    )
+    process.start()
+    process.join(WANDB_LOG_TIMEOUT)
+    if process.is_alive():
+        process.terminate()
+        process.join(10)
+        emit_jsonl({"event": "wandb_timeout", "timeout_seconds": WANDB_LOG_TIMEOUT})
+        return
+    if process.exitcode != 0:
+        emit_jsonl({"event": "wandb_failed", "exit_code": process.exitcode})
 
 
 def _run_muon_update_bench_local(config: MuonUpdateBenchLaunchConfig) -> None:
