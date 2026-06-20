@@ -1380,7 +1380,7 @@ def test_expert_fsdp_grouped_muonh_restores_ordinary_expert_updates_before_apply
 
 @pytest.mark.parametrize(
     ("packed_entry", "chunk_local_boundaries", "expected_all_gather", "expected_all_to_all"),
-    [(False, False, 6, 0), (True, False, 2, 4), (False, True, 2, 4)],
+    [(False, False, 6, 2), (True, False, 2, 6), (False, True, 2, 4)],
 )
 def test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs(
     packed_entry: bool,

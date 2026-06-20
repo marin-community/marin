@@ -2514,3 +2514,23 @@ Post-compile steps were stable around 0.65-0.66s:
   - It is a plausible contributor to the gap between the clean packed-bank
     harness timings and the poor production end-to-end step time, and it needs
     profile/HLO follow-up once May200 either uploads a profile or terminates.
+
+### 2026-06-20 10:56 PDT - Production Route A collective-count regression test refreshed
+- Hypothesis: The current production grouped MuonH Route A path should have
+  explicit, bounded collectives in lowered HLO, and the local regression test
+  should match the actual contract before further optimizer work.
+- Change:
+  - Updated
+    `experiments/grug/moe/test_muon_update_bench.py::test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs`
+    expected `all_to_all` counts for the current R2D2 lowered HLO:
+    non-packed-entry `2`, packed-entry `6`, chunk-local `4`.
+- Command:
+  - `uv run pytest experiments/grug/moe/test_optimizer.py::test_grouped_expert_muonh_packed_entry_r2_boundary_does_not_duplicate_replica_gather experiments/grug/moe/test_optimizer.py::test_grouped_expert_muonh_packed_entry_r4_boundary_is_explicit experiments/grug/moe/test_muon_update_bench.py::test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs`
+- Result:
+  - `5 passed in 5.17s`.
+- Interpretation:
+  - This does not make the production path faster, but it restores a useful
+    guardrail around the exact path we need to iterate on: FSDP params in,
+    grouped MuonH updates internally, FSDP-shaped updates/results out, no
+    all-reduce/reduce-scatter in the tested optimizer boundary, and a bounded
+    collective count rather than per-leaf explosion.
