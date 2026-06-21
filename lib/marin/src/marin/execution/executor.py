@@ -101,6 +101,7 @@ from fray.iris_backend import FrayIrisClient
 from fray.types import TpuConfig
 from iris.cluster.constraints import WellKnownAttribute
 from iris.rpc import config_pb2
+from rigging.cluster_config import StorageProfile, load_cluster_config
 from rigging.filesystem import (
     collect_gcs_paths,
     get_bucket_location,
@@ -116,6 +117,7 @@ from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
 )
+from marin.execution.identity import resolve_marin_user
 from marin.execution.remote import RemoteCallable
 from marin.execution.step_runner import StepRunner, worker_id
 from marin.execution.step_spec import StepSpec, _is_relative_path
@@ -124,6 +126,7 @@ from marin.execution.types import (
     ExecutorStep,
     InputName,
     OutputName,
+    OutputScope,
     T_co,
     VersionedValue,
     output_path_of,
@@ -1107,10 +1110,19 @@ class Executor:
         prefix: str,
         executor_info_base_path: str,
         description: str | None = None,
+        *,
+        default_scope: OutputScope = OutputScope.SHARED,
+        storage_profile: StorageProfile | None = None,
     ):
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
         self.description = description
+        self.default_scope = default_scope
+        self.storage_profile = storage_profile or load_cluster_config()
+        # Resolved lazily and cached the first time a USER-scoped step is seen, so
+        # SHARED-only runs never trigger identity resolution (and never risk its
+        # fail-closed ValueError on generic identities).
+        self._user: str | None = None
 
         self.configs: dict[ExecutorStep, Any] = {}
         self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
@@ -1131,6 +1143,17 @@ class Executor:
         # otherwise repeat the same warning thousands of times.
         self._warned_duplicate_versions: set[str] = set()
         self._warned_override_mismatches: set[tuple[str, str]] = set()
+
+    def _resolved_user(self) -> str:
+        """Resolve and cache the Marin user for USER-scoped output paths.
+
+        Calls ``resolve_marin_user(for_user_scope=True)`` exactly once. Invoked
+        only when a USER-scoped step is actually encountered, so SHARED-only runs
+        never resolve identity (and never hit its fail-closed ValueError).
+        """
+        if self._user is None:
+            self._user = resolve_marin_user(for_user_scope=True)
+        return self._user
 
     def run(
         self,
@@ -1298,6 +1321,31 @@ class Executor:
 
         return to_run
 
+    def _resolve_output_path(self, scope: OutputScope, name_hash: str) -> tuple[str, str]:
+        """Resolve the write prefix and effective output path for a scope.
+
+        Returns ``(write_prefix, output_path)``. ``write_prefix`` is where a run
+        would write for this scope (used to root relative ``override_output_path``
+        values). ``output_path`` is what gets baked into instantiated configs and
+        dependency stubs.
+
+        For ``SHARED`` this is ``self.prefix`` and ``{prefix}/{name_hash}`` with
+        no I/O. For ``USER`` the write prefix is the resolved user home; the
+        effective path is the first of ``[user_home, shared]`` whose
+        ``.executor_status`` is SUCCESS (probed here, before instantiation), or
+        the user-home write path if neither has completed.
+        """
+        if scope is OutputScope.SHARED:
+            return self.prefix, os.path.join(self.prefix, name_hash)
+
+        write_prefix = self.storage_profile.user_home(self._resolved_user(), base=self.prefix)
+        write_path = os.path.join(write_prefix, name_hash)
+        candidates = [write_path, os.path.join(self.prefix, name_hash)]
+        for candidate in candidates:
+            if StatusFile(candidate, worker_id="check").status == STATUS_SUCCESS:
+                return write_prefix, candidate
+        return write_prefix, write_path
+
     def compute_version(self, step: ExecutorStep, is_pseudo_dep: bool):
         if step in self.versions:
             if not is_pseudo_dep and self.is_pseudo_dep[step]:
@@ -1335,12 +1383,21 @@ class Executor:
         # Compute output path
         version_str = json.dumps(version, sort_keys=True, cls=CustomJsonEncoder)
         hashed_version = hashlib.md5(version_str.encode()).hexdigest()[:6]
-        output_path = os.path.join(self.prefix, step.name + "-" + hashed_version)
+        name_hash = step.name + "-" + hashed_version
+
+        # Resolve the write target and the effective output path for this step's
+        # scope. For SHARED this is byte-identical to the historical
+        # `os.path.join(self.prefix, name_hash)` with no I/O. For USER it writes
+        # under the user's home and falls back, at resolution time, to a
+        # SUCCESS-status shared/legacy path so downstream deps read the right
+        # location.
+        scope = step.output_scope or self.default_scope
+        write_prefix, output_path = self._resolve_output_path(scope, name_hash)
 
         # Override output path if specified
         override_path = step.override_output_path
         if override_path is not None:
-            override_path = _make_prefix_absolute_path(self.prefix, override_path)
+            override_path = _make_prefix_absolute_path(write_prefix, override_path)
 
             if output_path != override_path:
                 mismatch_key = (output_path, override_path)
@@ -1619,28 +1676,34 @@ def compute_output_path(
     *,
     override_output_path: str | None = None,
     prefix: str | None = None,
+    output_scope: OutputScope = OutputScope.SHARED,
 ) -> str:
     """Compute the concrete output path a step with this name+config will produce.
 
     Drives ``Executor.compute_version`` (which walks the config's dependency
-    graph and hashes versioned values — no GCS I/O, no job submission) far
-    enough to populate the resulting output path. Honors ``override_output_path``
-    if provided. Otherwise resolves ``prefix`` from ``marin_prefix()`` and
-    derives the path from ``name`` + a hash of the config's versioned values,
-    matching ``Executor``'s scheme so a step run via ``Executor.run`` and a
-    path computed here agree on the same value.
+    graph and hashes versioned values — no GCS I/O for SHARED scope, no job
+    submission) far enough to populate the resulting output path. Honors
+    ``override_output_path`` if provided. Otherwise resolves ``prefix`` from
+    ``marin_prefix()`` and derives the path from ``name`` + a hash of the
+    config's versioned values, matching ``Executor``'s scheme so a step run via
+    ``Executor.run`` and a path computed here agree on the same value.
+
+    ``output_scope`` defaults to ``SHARED`` so existing callers stay pure (no
+    identity resolution, no I/O).
     """
     resolved_prefix = prefix if prefix is not None else marin_prefix()
     executor_info_base_path = os.path.join(resolved_prefix, "experiments")
     executor = Executor(
         prefix=resolved_prefix,
         executor_info_base_path=executor_info_base_path,
+        default_scope=output_scope,
     )
     step = ExecutorStep(
         name=name,
         fn=_noop_step_fn,
         config=config,
         override_output_path=override_output_path,
+        output_scope=output_scope,
     )
     executor.compute_version(step, is_pseudo_dep=False)
     return executor.output_paths[step]

@@ -5225,6 +5225,7 @@ dependencies = [
     { name = "connect-python" },
     { name = "fsspec" },
     { name = "gcsfs" },
+    { name = "pyyaml" },
     { name = "s3fs" },
 ]
 
@@ -5240,6 +5241,7 @@ requires-dist = [
     { name = "connect-python", specifier = ">=0.9.0" },
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
 ]
 
