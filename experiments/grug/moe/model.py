@@ -120,6 +120,12 @@ class GrugModelConfig:
     additional rope = qk_rope_head_dim shared across heads); V stays at
     head_dim. Activating this flag also switches normalisation to the
     DeepSeek-strict scheme: ``rms_norm(c_kv)`` only, no QK norm on q/k/v."""
+    mla_norm_compressed_learnable: bool = False
+    """When True, the RMSNorm applied to ``c_kv`` uses a learnable per-channel
+    weight (DeepSeek-V2's ``kv_a_layernorm``) instead of the gainless
+    ``rms_norm()`` function. Only takes effect when c_kv is actually being
+    normalized (i.e., ``mla_norm_compressed=True`` or ``qk_rope_head_dim`` is
+    set). Adds ``(d_c,)`` learnable params per layer."""
     attn_gate: bool = False
     """When True, add a per-head sigmoid attention gate
     ``gate = 2 * sigmoid(x @ w_attn_gate)`` with ``w_attn_gate: (D, NH)``,
@@ -186,6 +192,24 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
+class RMSNorm(eqx.Module):
+    weight: jax.Array
+    eps: float = eqx.field(static=True)
+
+    @staticmethod
+    def init(dim: int, eps: float) -> "RMSNorm":
+        return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps)
+
+    @named_call
+    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+        weight = unshard(self.weight)
+        dtype = x.dtype
+        x = x.astype(jnp.float32)
+        variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
+        normed = x * jax.lax.rsqrt(variance + self.eps)
+        return (normed * weight).astype(dtype)
+
+
 class CausalSelfAttention(eqx.Module):
     """Multi-head Latent Attention (DeepSeek-V2 style).
 
@@ -213,6 +237,7 @@ class CausalSelfAttention(eqx.Module):
     w_kr: jax.Array  # legacy (D, half); additive (D, rope)
     w_o: jax.Array  # (NH * HD, D)
     w_attn_gate: jax.Array | None  # (D, NH) when cfg.attn_gate else None
+    c_kv_norm: RMSNorm | None  # learnable per-channel RMSNorm on c_kv (DeepSeek's kv_a_layernorm)
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -240,6 +265,15 @@ class CausalSelfAttention(eqx.Module):
         # at step 0, so the model is identical to the no-gate baseline before any training.
         w_attn_gate = reshard(jnp.zeros((d, n)), P(None, None)) if cfg.attn_gate else None
 
+        # Learnable RMSNorm on c_kv (DeepSeek's kv_a_layernorm). Only instantiate when
+        # c_kv is actually being normalized AND the learnable flag is on.
+        c_kv_will_be_normed = cfg.mla_norm_compressed or cfg.qk_rope_head_dim is not None
+        c_kv_norm = (
+            RMSNorm.init(d_c, cfg.layer_norm_eps)
+            if (c_kv_will_be_normed and cfg.mla_norm_compressed_learnable)
+            else None
+        )
+
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, w_q_cols), cfg.initializer_std), P("data", "model")),
             w_dkv=reshard(_init_weight(k_dkv, (d, d_c), cfg.initializer_std), P("data", None)),
@@ -248,6 +282,7 @@ class CausalSelfAttention(eqx.Module):
             w_kr=reshard(_init_weight(k_kr, (d, w_kr_cols), cfg.initializer_std), P("data", None)),
             w_o=reshard(_init_weight(k_o, (n * hd, d), cfg.initializer_std), P("model", "data")),
             w_attn_gate=w_attn_gate,
+            c_kv_norm=c_kv_norm,
             cfg=cfg,
         )
 
@@ -273,7 +308,11 @@ class CausalSelfAttention(eqx.Module):
         # DeepSeek-V2 places RMSNorm on c_kv (the cached tensor) so that decode
         # absorption (q_nope @ w_uk_nope.T into a fixed per-head matrix) still works.
         if self.cfg.mla_norm_compressed or is_additive:
-            c_kv = rms_norm(c_kv)
+            if self.c_kv_norm is not None:
+                # Learnable per-channel RMSNorm (DeepSeek's kv_a_layernorm).
+                c_kv = self.c_kv_norm(c_kv)
+            else:
+                c_kv = rms_norm(c_kv)
 
         # K no-rope half (per head) up-projected from c_kv.
         # Legacy: per-head half. Additive: per-head HD.
@@ -345,24 +384,6 @@ class CausalSelfAttention(eqx.Module):
             attn_out = attn_out * gate[..., None]
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
-
-
-class RMSNorm(eqx.Module):
-    weight: jax.Array
-    eps: float = eqx.field(static=True)
-
-    @staticmethod
-    def init(dim: int, eps: float) -> "RMSNorm":
-        return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps)
-
-    @named_call
-    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        weight = unshard(self.weight)
-        dtype = x.dtype
-        x = x.astype(jnp.float32)
-        variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
-        normed = x * jax.lax.rsqrt(variance + self.eps)
-        return (normed * weight).astype(dtype)
 
 
 class GatedNorm(eqx.Module):
