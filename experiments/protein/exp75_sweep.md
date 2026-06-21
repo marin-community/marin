@@ -419,6 +419,10 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   base grid). wd1.2 (97%, mid 2.980) finishing for final confirmation — expected ≥2.942.
   Cross-epoch WD drift now: E1 0.05 → E2 0.8 (high!) → E4 0.05 (low, at high LR) — WD optimum
   is strongly LR-coupled, not monotone in epochs._
+  _~06:00Z: **`7e-4/wd1.2` FINISHED at 2.946** — also worse than wd0.8=2.942 (and better than
+  wd1.0=2.958; curve is noisy but both wd≥1.0 points sit above wd0.8). **E2 WD edge CONFIRMED
+  closed both sides.** ✅ **E2 OPTIMUM CONFIRMED = `7e-4 / wd0.8` = 2.942** (broad flat basin
+  wd0.4–0.8 ≈ 2.942–2.947; wd≥1.0 worse; LR closed at 7e-4). E2 wave DONE._
   _~05:43Z: budget hit 82.9k (>78k) and the over-cap downgrade was preempting the critical
   E4 7e-4 column + w2s. Shed ~16.5k by **killing the two speculative wd0.2 corners
   `5e-4/0.2` & `1e-3/0.2`** (w2t) — only `7e-4/0.2` (w2s) is needed to confirm the
