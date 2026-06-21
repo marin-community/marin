@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "moe_zb"
+  ],
+  "base_sha": "792df2bcba18cb2c9ea07e4f185cadf68e99c08d",
+  "head_sha": "9d6a58d53458ac52a78dce219f7b7e0f3ea12242",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "modular_opt",
+      "distance_score": 2244,
+      "report_relpath": "moe_zb/index.html",
+      "status_counts": {
+        "added": 3,
+        "changed": 2,
+        "removed": 1,
+        "unchanged": 1
+      },
+      "variant": "moe_zb"
+    }
+  ]
+}
