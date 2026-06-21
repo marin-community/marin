@@ -362,7 +362,7 @@ def test_string_slicing_prompt_keeps_demonstrations_complete_and_query_completio
 
 
 def test_string_slicing_surfaces_are_used_in_local_samples(tmp_path):
-    write_local_sample(tmp_path, examples_per_config=10, seed=2027)
+    write_local_sample(tmp_path, seed=2027)
     sample_file = tmp_path / "string_byte_transforms_string_slicing.jsonl"
     rows = (json.loads(line) for line in sample_file.read_text(encoding="utf-8").splitlines())
 
