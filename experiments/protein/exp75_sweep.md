@@ -411,6 +411,14 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   now training, wd1.0 scheduling). Decision rule: if wd1.0/wd1.2 land ≥~2.942 (flat/worse),
   accept the E2 WD optimum as the flat basin (call it wd0.8=2.942) and stop extending; only
   keep going if a higher WD clearly improves past noise._
+  _~05:00Z (2026-06-21): **`7e-4/wd1.0` FINISHED at 2.958 — WORSE than wd0.8=2.942.** The WD
+  curve has finally TURNED UP. Full 7e-4 WD response: 2.979/2.970/2.968/2.964/2.947/2.957/
+  **2.942**/2.958 at 0.05/0.1/0.2/0.3/0.4/0.6/0.8/1.0. So **wd0.8=2.942 is now a bracketed
+  interior min** (wd0.6=2.957 and wd1.0=2.958 both worse) within a broad flat basin ~wd0.4–0.8.
+  **E2 WD edge CLOSED.** ⇒ **E2 optimum = 7e-4/wd0.8 = 2.942** (LR axis closed at 7e-4 in the
+  base grid). wd1.2 (97%, mid 2.980) finishing for final confirmation — expected ≥2.942.
+  Cross-epoch WD drift now: E1 0.05 → E2 0.8 (high!) → E4 0.05 (low, at high LR) — WD optimum
+  is strongly LR-coupled, not monotone in epochs._
   _~05:43Z: budget hit 82.9k (>78k) and the over-cap downgrade was preempting the critical
   E4 7e-4 column + w2s. Shed ~16.5k by **killing the two speculative wd0.2 corners
   `5e-4/0.2` & `1e-3/0.2`** (w2t) — only `7e-4/0.2` (w2s) is needed to confirm the
