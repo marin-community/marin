@@ -11,7 +11,6 @@ from unittest.mock import Mock
 
 import pytest
 from finelog.client.proxy import LogServiceProxy
-from finelog.rpc import logging_pb2
 from iris.cluster.backends.k8s.fake import InMemoryK8sService
 from iris.cluster.backends.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE, K8sTaskProvider
 from iris.cluster.backends.k8s.types import K8sResource
@@ -1190,37 +1189,6 @@ def test_fetch_logs_for_missing_task_returns_empty_entries(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data.get("entries", []) == []
-
-
-def test_fetch_logs_backward_compat_proxy(client):
-    """The old ControllerService/FetchLogs path proxies to LogService."""
-    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
-    resp = client.post(
-        "/iris.cluster.ControllerService/FetchLogs",
-        json={"source": f"{task_id}:", "match_scope": "MATCH_SCOPE_PREFIX"},
-        headers={"Content-Type": "application/json"},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data.get("entries", []) == []
-
-
-def test_fetch_logs_backward_compat_proxy_proto_binary(client):
-    """Old clients using default Connect proto encoding hit the compat endpoint."""
-    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
-    req = logging_pb2.FetchLogsRequest(
-        source=f"{task_id}:",
-        match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
-    )
-    resp = client.post(
-        "/iris.cluster.ControllerService/FetchLogs",
-        content=req.SerializeToString(),
-        headers={"Content-Type": "application/proto"},
-    )
-    assert resp.status_code == 200
-    parsed = logging_pb2.FetchLogsResponse()
-    parsed.ParseFromString(resp.content)
-    assert list(parsed.entries) == []
 
 
 def test_fetch_logs_legacy_iris_logging_path(client):

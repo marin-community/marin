@@ -26,7 +26,6 @@ from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.dashboard import (
     ControllerDashboard,
     _DashboardAuthInterceptor,
-    _LegacyFetchLogsRedirect,
     _RouteAuthMiddleware,
     _SubdomainProxyMiddleware,
     requires_auth,
@@ -498,12 +497,10 @@ def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier,
         auth_provider="static",
         auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier, optional=optional),
     )
-    # Inject a @requires_auth route. The app is wrapped in
-    # _SubdomainProxyMiddleware → _LegacyFetchLogsRedirect → _RouteAuthMiddleware
-    # → Starlette; walk down to the Starlette router so the new route
-    # participates in route matching.
+    # Inject a @requires_auth route. Walk down to the Starlette router so the
+    # new route participates in route matching.
     app = dashboard.app
-    while isinstance(app, _SubdomainProxyMiddleware | _LegacyFetchLogsRedirect | _RouteAuthMiddleware):
+    while isinstance(app, _SubdomainProxyMiddleware | _RouteAuthMiddleware):
         app = app._app
     app.router.routes.insert(0, Route("/test-protected", _protected))
 

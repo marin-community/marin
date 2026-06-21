@@ -379,24 +379,8 @@ class _SubdomainProxyMiddleware:
         return headers.get("x-forwarded-host") or headers.get("host", "")
 
 
-_LEGACY_FETCH_LOGS_PATH = "/iris.cluster.ControllerService/FetchLogs"
 _CANONICAL_FETCH_LOGS_PATH = "/finelog.logging.LogService/FetchLogs"
 _CANONICAL_PUSH_LOGS_PATH = "/finelog.logging.LogService/PushLogs"
-
-
-class _LegacyFetchLogsRedirect:
-    """Rewrites the legacy ControllerService/FetchLogs path to the canonical
-    LogService path so old workers reach the LogService mount, where the
-    full auth + timing + concurrency interceptor chain handles the request.
-    """
-
-    def __init__(self, app: ASGIApp):
-        self._app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope.get("type") == "http" and scope.get("path") == _LEGACY_FETCH_LOGS_PATH:
-            scope = {**scope, "path": _CANONICAL_FETCH_LOGS_PATH}
-        await self._app(scope, receive, send)
 
 
 class ControllerDashboard:
@@ -577,9 +561,6 @@ class ControllerDashboard:
         wrapped: ASGIApp = app
         if self._auth_policy.request_auth_enabled and self._auth_provider is not None:
             wrapped = _RouteAuthMiddleware(app, self._auth_policy)
-        # Wrap auth so the legacy FetchLogs rewrite happens before route
-        # matching: auth and routing both see the canonical path.
-        wrapped = _LegacyFetchLogsRedirect(wrapped)
         # Subdomain dispatch wraps everything: subdomain requests don't match
         # any Starlette route, so _RouteAuthMiddleware would default-allow
         # them. This middleware enforces auth itself before forwarding.
