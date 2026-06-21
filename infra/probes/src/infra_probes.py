@@ -23,13 +23,15 @@ from iris.cluster.constraints import zone_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.rpc import job_pb2
 from provisioning import collect_provisioning
-from rigging.filesystem import DEFAULT_DATA_CONFIG
+from rigging.filesystem import load_cluster_config
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration
 from runner import Collector, CollectorRunner, MetricSink, health_collector
 from sinks import FinelogTableSink, JsonlGcsSink
 
 logger = logging.getLogger(__name__)
+
+_MARIN_CONFIG = load_cluster_config("marin")
 
 # Iris advertises the finelog log-server under this logical name in its endpoint
 # registry; resolve it to a concrete address via list_endpoints (same name the
@@ -83,7 +85,7 @@ FINELOG_READBACK_POLL_INTERVAL = 0.25
 # the VM's /var/lib/probes host mount; finished daily files roll up to GCS in the
 # same region as the VM (no cross-region egress).
 PROBE_RESULTS_DIR = Path("/var/lib/probes")
-PROBE_RESULTS_GCS_PREFIX = f"gs://{DEFAULT_DATA_CONFIG.region_buckets['us-central1']}/infra/probes"
+PROBE_RESULTS_GCS_PREFIX = f"gs://{_MARIN_CONFIG.region_buckets['us-central1']}/infra/probes"
 PROBE_RESULTS_NAMESPACE = "infra.canary.metrics"
 
 

@@ -49,7 +49,7 @@ lint:
 	./infra/pre-commit.py --all-files
 
 # Apply the 30d cleanup policy to the marin repo across every canonical region.
-# The region list is sourced from rigging.filesystem.DEFAULT_DATA_CONFIG.region_buckets.
+# The region list is sourced from config/marin.yaml.
 configure_gcp_registry_all:
 	uv run infra/configure_gcp_registry.py marin --all-regions
 

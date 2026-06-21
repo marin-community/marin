@@ -2,13 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the cluster DataConfig: the active-config accessor, prefix
-resolution, per-user homes, and YAML cluster overrides."""
+resolution, per-user homes, and YAML cluster loading."""
 
 import pytest
 import rigging.filesystem as fs
 from rigging.config_discovery import find_project_root
 from rigging.filesystem import (
-    DEFAULT_DATA_CONFIG,
     DataConfig,
     data_config,
     load_cluster_config,
@@ -27,18 +26,38 @@ def _clear_caches():
     reset_data_config_cache()
 
 
-def test_data_config_defaults_to_marin(monkeypatch):
-    """With no override and no MARIN_CLUSTER, the active config is the marin default."""
+def test_default_is_marin_loaded_from_yaml(monkeypatch):
+    """With no override and no MARIN_CLUSTER, the active config is config/marin.yaml."""
     monkeypatch.delenv("MARIN_CLUSTER", raising=False)
-    assert data_config() is DEFAULT_DATA_CONFIG
+    # The default and the explicit "marin" load share a cache entry (same object).
+    assert data_config() is load_cluster_config("marin")
+    assert data_config().region_buckets["us-central1"] == "marin-us-central1"
+
+
+def test_marin_yaml_layout():
+    """config/marin.yaml carries the full region map and TTL policy (single source)."""
+    config = load_cluster_config("marin")
+    assert config.region_buckets == {
+        "us-central1": "marin-us-central1",
+        "us-central2": "marin-us-central2",
+        "us-east1": "marin-us-east1",
+        "us-east5": "marin-us-east5",
+        "us-west4": "marin-us-west4",
+        "europe-west4": "marin-eu-west4",
+    }
+    assert config.scheme == "gs"
+    assert config.user_segment == "users"
+    assert config.temp_path == "tmp"
+    assert config.ttl_days == (1, 2, 3, 4, 5, 6, 7, 14, 30)
 
 
 def test_use_data_config_overrides_then_restores():
     """use_data_config binds a config for the block, then restores the previous one."""
     override = DataConfig(region_buckets={}, scheme="s3", root="s3://other/data")
+    default = load_cluster_config("marin")
     with use_data_config(override):
         assert data_config() is override
-    assert data_config() is DEFAULT_DATA_CONFIG
+    assert data_config() is default
 
 
 def test_marin_prefix_routes_through_active_config():
@@ -66,33 +85,34 @@ def test_resolved_root_selects_region_local_bucket(monkeypatch):
     """A detected metadata region drives a region-local bucket selection."""
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
     monkeypatch.setattr(fs, "region_from_metadata", lambda: "us-east5")
-    assert DEFAULT_DATA_CONFIG.resolved_root() == "gs://marin-us-east5"
+    assert load_cluster_config("marin").resolved_root() == "gs://marin-us-east5"
 
 
 def test_resolved_root_constructs_default_for_unmapped_region(monkeypatch):
     """A detected-but-unmapped region constructs gs://marin-{region}."""
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
     monkeypatch.setattr(fs, "region_from_metadata", lambda: "antarctica-south1")
-    assert DEFAULT_DATA_CONFIG.resolved_root() == "gs://marin-antarctica-south1"
+    assert load_cluster_config("marin").resolved_root() == "gs://marin-antarctica-south1"
 
 
 def test_resolved_root_local_fallback(monkeypatch):
     """With no env and no detectable region, falls back to /tmp/marin."""
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
     monkeypatch.setattr(fs, "region_from_metadata", lambda: None)
-    assert DEFAULT_DATA_CONFIG.resolved_root() == "/tmp/marin"
+    assert load_cluster_config("marin").resolved_root() == "/tmp/marin"
 
 
 def test_user_home_joins_segment_and_user(monkeypatch):
     """user_home joins resolved_root / user_segment / user."""
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
     monkeypatch.setattr(fs, "region_from_metadata", lambda: "us-central1")
-    assert DEFAULT_DATA_CONFIG.user_home("alice") == "gs://marin-us-central1/users/alice"
+    assert load_cluster_config("marin").user_home("alice") == "gs://marin-us-central1/users/alice"
 
 
 def test_user_home_respects_explicit_base():
     """An explicit base overrides resolved_root() for user_home."""
-    assert DEFAULT_DATA_CONFIG.user_home("bob", base="gs://b") == "gs://b/users/bob"
+    config = DataConfig(region_buckets={})
+    assert config.user_home("bob", base="gs://b") == "gs://b/users/bob"
 
 
 def test_load_coreweave_config_parses_root_and_scheme():
@@ -110,11 +130,7 @@ def test_marin_cluster_env_selects_config(monkeypatch):
     assert data_config().root == "s3://marin-na/marin"
 
 
-def test_marin_yaml_matches_default_config():
-    """Drift guard: config/marin.yaml parses to the in-code marin default."""
-    config = load_cluster_config("marin")
-    assert config.region_buckets == DEFAULT_DATA_CONFIG.region_buckets
-    assert config.ttl_days == DEFAULT_DATA_CONFIG.ttl_days
-    assert config.scheme == DEFAULT_DATA_CONFIG.scheme
-    assert config.user_segment == DEFAULT_DATA_CONFIG.user_segment
-    assert config.temp_path == DEFAULT_DATA_CONFIG.temp_path
+def test_missing_named_cluster_raises():
+    """A missing non-default cluster raises FileNotFoundError."""
+    with pytest.raises(FileNotFoundError):
+        load_cluster_config("this-cluster-does-not-exist")

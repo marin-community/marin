@@ -8,7 +8,7 @@ A :class:`DataConfig` describes where a cluster's data lives: the
 region-to-bucket mirror set, the URL scheme, the per-user directory segment, and
 the temp TTL policy. :func:`data_config` returns the active config — the one
 bound by :func:`use_data_config`, else the cluster named by ``MARIN_CLUSTER``
-(default: the marin cluster, :data:`DEFAULT_DATA_CONFIG`). Every "where does
+(default ``marin``), loaded from ``config/<cluster>.yaml``. Every "where does
 data live" answer flows through it: :func:`marin_prefix` is
 ``data_config().resolved_root()``, and :func:`marin_temp_bucket`, the mirror
 filesystem, and the region helpers all read its fields. Lifecycle rules on the
@@ -118,19 +118,14 @@ class DataConfig:
         return os.path.join(base or self.resolved_root(), self.user_segment, user)
 
 
-# Canonical storage layout for the default (marin) cluster. The
-# ``europe-west4 -> marin-eu-west4`` entry is the one bucket that does not follow
-# the ``marin-{region}`` naming convention.
-DEFAULT_DATA_CONFIG: DataConfig = DataConfig(
-    region_buckets={
-        "us-central1": "marin-us-central1",
-        "us-central2": "marin-us-central2",
-        "us-east1": "marin-us-east1",
-        "us-east5": "marin-us-east5",
-        "us-west4": "marin-us-west4",
-        "europe-west4": "marin-eu-west4",
-    },
-)
+# The marin cluster's storage layout lives in ``config/marin.yaml`` (loaded as
+# the default below). This in-code config is only a degraded fallback for when
+# no config file is discoverable — e.g. an installed package running outside a
+# marin checkout. Such contexts set ``MARIN_PREFIX`` (which wins in
+# ``resolved_root``) or detect a region (constructing ``gs://marin-{region}``),
+# so an empty ``region_buckets`` is sufficient.
+_DEFAULT_CLUSTER = "marin"
+_FALLBACK_DATA_CONFIG: DataConfig = DataConfig(region_buckets={})
 
 _active_data_config: contextvars.ContextVar[DataConfig | None] = contextvars.ContextVar(
     "marin_data_config", default=None
@@ -141,8 +136,8 @@ def data_config() -> DataConfig:
     """Return the active :class:`DataConfig`.
 
     Resolution: the config bound by :func:`use_data_config` (a context-local
-    override), else the cluster named by ``MARIN_CLUSTER`` loaded from disk, else
-    :data:`DEFAULT_DATA_CONFIG`.
+    override), else the cluster named by ``MARIN_CLUSTER`` (default ``marin``)
+    loaded from its ``config/<cluster>.yaml``.
     """
     override = _active_data_config.get()
     if override is not None:
@@ -163,40 +158,48 @@ def use_data_config(config: DataConfig) -> Generator[DataConfig, None, None]:
 def load_cluster_config(cluster: str | None = None) -> DataConfig:
     """Load a cluster's :class:`DataConfig` from its ``config/<cluster>.yaml``.
 
-    The cluster is ``cluster`` arg > ``MARIN_CLUSTER`` env > ``None``. A parsed
-    ``data:`` block becomes the config; other keys (e.g. ``iris:``) are ignored.
-    With no cluster resolved, returns :data:`DEFAULT_DATA_CONFIG`. The result is
-    cached; call :func:`reset_data_config_cache` in tests after changing the
-    environment or config files.
+    The cluster name is ``cluster`` arg > ``MARIN_CLUSTER`` env > ``marin``. A
+    parsed ``data:`` block becomes the config; other keys (e.g. ``iris:``) are
+    ignored. When the default ``marin`` config cannot be found (e.g. an installed
+    package outside a checkout), returns :data:`_FALLBACK_DATA_CONFIG`; a missing
+    *named* cluster raises ``FileNotFoundError``. Cached; call
+    :func:`reset_data_config_cache` in tests after changing env or config files.
     """
-    resolved = cluster if cluster is not None else os.environ.get(_MARIN_CLUSTER_ENV) or None
-    return _load_cluster_config_cached(resolved)
+    name = cluster or os.environ.get(_MARIN_CLUSTER_ENV) or _DEFAULT_CLUSTER
+    return _load_cluster_config_cached(name)
 
 
 @functools.cache
-def _load_cluster_config_cached(cluster: str | None) -> DataConfig:
-    if cluster is None:
-        return DEFAULT_DATA_CONFIG
-    config_path = resolve_cluster_config(cluster, MARIN_CLUSTER_CONFIG_DIRS)
+def _load_cluster_config_cached(cluster: str) -> DataConfig:
+    try:
+        config_path = resolve_cluster_config(cluster, MARIN_CLUSTER_CONFIG_DIRS)
+    except FileNotFoundError:
+        if cluster == _DEFAULT_CLUSTER:
+            return _FALLBACK_DATA_CONFIG
+        raise
     with config_path.open("rb") as f:
         document = yaml.safe_load(f) or {}
     data = document.get("data")
     if not data:
-        return DEFAULT_DATA_CONFIG
+        return _FALLBACK_DATA_CONFIG
     return _parse_data_config(data)
 
 
 def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
-    """Build a :class:`DataConfig` from a parsed ``data:`` config block."""
+    """Build a :class:`DataConfig` from a parsed ``data:`` config block.
+
+    Keys absent from the block fall back to the :class:`DataConfig` field
+    defaults, so per-field defaults are defined once on the dataclass.
+    """
     temp = data.get("temp") or {}
     raw_ttl = temp.get("ttl_days")
     root = data.get("root")
     return DataConfig(
         region_buckets=dict(data.get("region_buckets") or {}),
-        scheme=str(data.get("scheme", "gs")),
-        user_segment=str(data.get("user_segment", "users")),
-        temp_path=str(temp.get("path", "tmp")),
-        ttl_days=tuple(raw_ttl) if raw_ttl is not None else DEFAULT_DATA_CONFIG.ttl_days,
+        scheme=str(data.get("scheme") or DataConfig.scheme),
+        user_segment=str(data.get("user_segment") or DataConfig.user_segment),
+        temp_path=str(temp.get("path") or DataConfig.temp_path),
+        ttl_days=tuple(raw_ttl) if raw_ttl is not None else DataConfig.ttl_days,
         root=str(root) if root is not None else None,
     )
 

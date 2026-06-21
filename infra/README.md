@@ -71,7 +71,7 @@ Jobs should still follow these principles for preemptible compute:
 To keep our Docker artifact registries tidy, we provide a script and Makefile target to automatically configure a cleanup policy for all our standard GCP regions. This policy deletes images older than 30 days from the registry,
 except we keep the most recent 16 tags.
 
-The canonical region list is sourced from `rigging.filesystem.DEFAULT_DATA_CONFIG.region_buckets`
+The canonical region list is sourced from `config/marin.yaml`
 (us-central1, us-central2, us-east1, us-east5, us-west4, europe-west4) — the same
 single source of truth used by `infra/configure_buckets.py`. Scripts read that map
 rather than hardcoding regions, so they never drift from the runtime view of the fleet.
@@ -87,7 +87,7 @@ rather than hardcoding regions, so they never drift from the runtime view of the
   ```
   - `repository-name`: Name of the Artifact Registry repository (usually `marin`).
   - `--region`: GCP region (e.g., `us-central2`). Mutually exclusive with `--all-regions`; exactly one is required.
-  - `--all-regions`: Apply to every region in `rigging.filesystem.DEFAULT_DATA_CONFIG.region_buckets`.
+  - `--all-regions`: Apply to every region in `config/marin.yaml`.
   - `--dry-run`: Print the gcloud command(s) that would run, per region, without executing.
   - `--project`: (Optional) GCP project ID. If omitted, uses the current gcloud project.
 
@@ -96,7 +96,7 @@ rather than hardcoding regions, so they never drift from the runtime view of the
   ```bash
   make configure_gcp_registry_all
   ```
-- This runs `uv run infra/configure_gcp_registry.py marin --all-regions`, iterating over the regions in `rigging.filesystem.DEFAULT_DATA_CONFIG.region_buckets`.
+- This runs `uv run infra/configure_gcp_registry.py marin --all-regions`, iterating over the regions in `config/marin.yaml`.
 - To target a single region, a different repository, or a specific project, call the script directly with `--region` / `--project`.
 
 **When to use:**
