@@ -111,6 +111,10 @@ class GrugModelConfig:
     """When True, drop the per-head sigmoid attention gate
     ``2 * sigmoid(x @ w_attn_gate)`` and its (D, NH) weight matrix entirely from
     the attention block."""
+    disable_sliding_window: bool = False
+    """When True, drop the short/long layer split: every layer runs full causal
+    attention with no sliding window. ``sliding_window`` is ignored. PKO also
+    becomes a no-op (it was gated on the long-layer flag)."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
@@ -602,6 +606,7 @@ class Transformer(eqx.Module):
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
         # Short layers: sliding window. Long layers (every 4th + last): full causal.
+        # When ``disable_sliding_window=True``, every layer runs the full causal mask.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
@@ -616,8 +621,12 @@ class Transformer(eqx.Module):
         for i, block in enumerate(self.blocks):
             is_last = i == num_blocks - 1
             is_long = i % 4 == 3 or is_last
-            layer_mask = long_mask if is_long else short_mask
-            use_pko = is_long and not cfg.disable_pko
+            if cfg.disable_sliding_window:
+                # No short/long split: every layer runs full causal attention.
+                layer_mask = long_mask
+            else:
+                layer_mask = long_mask if is_long else short_mask
+            use_pko = is_long and not cfg.disable_pko and not cfg.disable_sliding_window
             hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask, use_pko)
             moe_router_stats.append(router_stats)
 
