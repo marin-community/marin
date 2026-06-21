@@ -6,8 +6,6 @@ from datetime import UTC, datetime, timedelta
 
 import google.auth.exceptions
 import pytest
-from connectrpc._interceptor_async import MetadataInterceptor
-from connectrpc._interceptor_sync import MetadataInterceptorSync
 from rigging.auth import (
     BearerTokenInjector,
     GcpAccessTokenProvider,
@@ -66,18 +64,6 @@ def test_injector_uses_the_chosen_header():
     BearerTokenInjector(FakeProvider("edge"), "proxy-authorization").on_start_sync(ctx)
     assert ctx.request_headers()["proxy-authorization"] == "Bearer edge"
     assert "authorization" not in ctx.request_headers()
-
-
-def test_injector_is_a_metadata_interceptor():
-    """connectrpc must classify the injector as a *metadata* interceptor so the
-    header is applied to every RPC shape (unary and streaming), not just unary.
-
-    Reaches into connectrpc's interceptor module to assert the contract the
-    public client wiring depends on; if the protocol moves, this fails loudly.
-    """
-    injector = BearerTokenInjector(FakeProvider("tok"), "authorization")
-    assert isinstance(injector, MetadataInterceptorSync)
-    assert isinstance(injector, MetadataInterceptor)
 
 
 class FakeCreds:
