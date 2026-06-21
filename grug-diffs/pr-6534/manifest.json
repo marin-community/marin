@@ -3,12 +3,12 @@
     "moe_zb"
   ],
   "base_sha": "792df2bcba18cb2c9ea07e4f185cadf68e99c08d",
-  "head_sha": "ed525600a48aaf503862e76ae7cfff1fc516655f",
+  "head_sha": "b83e9ed173d0d51828f8719d53ac9f411f86a980",
   "report_count": 1,
   "reports": [
     {
       "closest_variant": "modular_opt",
-      "distance_score": 3010,
+      "distance_score": 3013,
       "report_relpath": "moe_zb/index.html",
       "status_counts": {
         "added": 8,
