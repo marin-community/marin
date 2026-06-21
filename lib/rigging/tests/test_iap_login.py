@@ -3,8 +3,10 @@
 
 import json
 import stat
+import webbrowser
 
 import pytest
+from rigging import iap_login_cli
 from rigging.iap_login import (
     IapCredentials,
     credentials_path,
@@ -39,7 +41,7 @@ def test_load_missing_returns_none(home):
 
 
 def test_provider_for_missing_raises(home):
-    with pytest.raises(FileNotFoundError, match="run the desktop login"):
+    with pytest.raises(FileNotFoundError, match="marin-login never-logged-in"):
         provider_for("never-logged-in")
 
 
@@ -85,3 +87,20 @@ def test_desktop_login_rejects_web_client_secret(home, tmp_path):
 
     with pytest.raises(ValueError, match="desktop"):
         desktop_login("marin", str(secret_file))
+
+
+def test_cli_threads_args_and_detects_headless(home, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "rigging.iap_login_cli.desktop_login",
+        lambda name, client_secrets, *, headless: captured.update(
+            name=name, client_secrets=client_secrets, headless=headless
+        ),
+    )
+    # No browser on the box -> the CLI should pick the headless paste flow.
+    monkeypatch.setattr("rigging.iap_login_cli.webbrowser.get", lambda *a: (_ for _ in ()).throw(webbrowser.Error()))
+
+    rc = iap_login_cli.main(["marin", "--client-secrets", "/tmp/desktop.json"])
+
+    assert rc == 0
+    assert captured == {"name": "marin", "client_secrets": "/tmp/desktop.json", "headless": True}

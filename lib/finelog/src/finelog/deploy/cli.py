@@ -18,7 +18,6 @@ import json
 import logging
 import re
 import sys
-import webbrowser
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
@@ -29,7 +28,7 @@ import duckdb
 import fsspec
 import pyarrow as pa
 from rigging.connect import IapAuth, connect, disconnect
-from rigging.iap_login import credentials_path, desktop_login, provider_for
+from rigging.iap_login import provider_for
 from rigging.log_setup import configure_logging
 from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget, open_tunnel
 
@@ -294,31 +293,6 @@ def query_cmd(name: str, sql: str, output_format: str, max_rows: int, tunnel_tim
     with _log_client(cfg, name, tunnel_timeout) as client:
         table = client.query(sql, max_rows=max_rows)
     _PRINTERS[OutputFormat(output_format)](table)
-
-
-@cli.command("login")
-@click.argument("name")
-@click.option(
-    "--client-secrets",
-    "client_secrets",
-    required=True,
-    type=click.Path(exists=True, dir_okay=False),
-    help="Path to the Google desktop OAuth client secret JSON.",
-)
-def login_cmd(name: str, client_secrets: str) -> None:
-    """Authenticate to the IAP-fronted finelog endpoint <name> and cache the refresh token.
-
-    Run this once per machine before `finelog query <name>` when the config sets
-    a client_url. Opens a browser if one is available; otherwise prints a URL to
-    paste back (works over SSH).
-    """
-    try:
-        webbrowser.get()
-        headless = False
-    except webbrowser.Error:
-        headless = True
-    desktop_login(name, client_secrets, headless=headless)
-    click.echo(f"Cached IAP credentials for '{name}' at {credentials_path(name)}")
 
 
 def _list_namespace_dirs(remote_log_dir: str, fs: fsspec.AbstractFileSystem) -> list[str]:

@@ -85,6 +85,7 @@ def provider_for(name: str) -> IapRefreshTokenProvider:
     credentials = load_iap_credentials(name)
     if credentials is None:
         raise FileNotFoundError(
-            f"no cached IAP credentials for {name!r} at {credentials_path(name)}; run the desktop login first"
+            f"no cached IAP credentials for {name!r} at {credentials_path(name)}; "
+            f"run `marin-login {name} --client-secrets <desktop.json>` first"
         )
     return IapRefreshTokenProvider(credentials.client_id, credentials.client_secret, credentials.refresh_token)

@@ -4731,11 +4731,6 @@ dependencies = [
     { name = "zstandard" },
 ]
 
-[package.optional-dependencies]
-iap = [
-    { name = "marin-rigging", extra = ["iap"] },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "marin-finelog-server" },
@@ -4752,13 +4747,11 @@ requires-dist = [
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "marin-rigging", editable = "lib/rigging" },
-    { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'", editable = "lib/rigging" },
     { name = "protobuf", specifier = ">=5.0" },
     { name = "pyarrow", specifier = ">=23.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "zstandard", specifier = ">=0.22" },
 ]
-provides-extras = ["iap"]
 
 [package.metadata.requires-dev]
 dev = [

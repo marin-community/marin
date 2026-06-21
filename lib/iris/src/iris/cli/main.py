@@ -167,7 +167,7 @@ def iris(
         # For an IAP-fronted cluster, also attach the IAP ID-token provider so
         # every RPC carries the Proxy-Authorization header IAP requires.
         iap = iap_config(iris_config.proto)
-        iap_provider = build_iap_provider(iap, name) if iap is not None else None
+        iap_provider = build_iap_provider(name) if iap is not None else None
         ctx.obj["credentials"] = ClientCredentials(token_provider=token_provider, iap_provider=iap_provider)
     else:
         name = resolve_cluster_name(None, controller_url, cluster_name)
