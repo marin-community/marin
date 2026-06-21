@@ -274,6 +274,7 @@ def _generate_string_slicing(
     stop = rng.randint(start + 1, len(text))
     step = rng.choice((1, 2))
     result = text[start:stop:step]
+    # Cycle deterministically so small samples cover every surface without advancing the task RNG.
     surface = _STRING_SLICING_SURFACES[row_index % len(_STRING_SLICING_SURFACES)]
     input_text = (
         _few_shot_block(
