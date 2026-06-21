@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Protocol, TypeVar
 from urllib.parse import parse_qsl, urlsplit
 
-from rigging.auth import BearerTokenInjector, IapUserIdTokenProvider, TokenProvider
+from rigging.auth import BearerTokenInjector, IapServiceAccountTokenProvider, TokenProvider
 from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, open_tunnel
 
 T = TypeVar("T")
@@ -149,8 +149,12 @@ def parse_transport(url: str) -> ParsedTransport:
     Dispatches on the URL scheme:
 
     - ``http`` / ``https``: a :class:`DirectTransport`, no edge auth.
-    - ``iap+https``: a :class:`DirectTransport` over HTTPS plus :class:`IapAuth`;
-      the IAP OAuth client id comes from the required ``audience`` query param.
+    - ``iap+https``: a :class:`DirectTransport` over HTTPS to an IAP-fronted
+      endpoint. With an ``audience`` query param the scheme self-provisions the
+      IAP token from service-account credentials (:class:`IapAuth` over
+      :class:`~rigging.auth.IapServiceAccountTokenProvider`); without one it
+      attaches no token and the caller must supply the IAP provider via
+      ``connect(..., auth=IapAuth(provider))`` (e.g. a human desktop-OAuth token).
     - ``ssh+gcp``: a :class:`TunnelTransport` over SSH; ``project`` and ``zone``
       query params and a port are required, ``sa`` selects impersonation,
       ``iap=true`` tunnels SSH through IAP.
@@ -173,14 +177,11 @@ def parse_transport(url: str) -> ParsedTransport:
     if scheme == "iap+https":
         if not host:
             raise ValueError(f"iap+https transport requires a host: {url!r}")
+        # With an audience, self-provision the IAP token from service-account
+        # creds; without one, leave edge auth to the caller's auth= provider.
         audience = q.get("audience")
-        if not audience:
-            raise ValueError(f"iap+https transport requires an 'audience' query param: {url!r}")
-        return ParsedTransport(
-            DirectTransport(f"https://{parts.netloc}"),
-            IapAuth(IapUserIdTokenProvider(audience)),
-            parts.path,
-        )
+        edge_auth: Auth = IapAuth(IapServiceAccountTokenProvider(audience)) if audience else NoAuth()
+        return ParsedTransport(DirectTransport(f"https://{parts.netloc}"), edge_auth, parts.path)
 
     if scheme == "ssh+gcp":
         project = q.get("project")

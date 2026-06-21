@@ -14,6 +14,11 @@ dependencies = [
     "s3fs>=2024.0.0",
 ]
 
+[project.optional-dependencies]
+# Interactive desktop-OAuth login for IAP (run_iap_desktop_login). Only the
+# human login path needs it; servers and workers never import it.
+iap = ["google-auth-oauthlib>=1.0.0"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.3.2",

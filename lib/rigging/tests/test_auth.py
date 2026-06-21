@@ -10,7 +10,8 @@ from connectrpc._interceptor_sync import MetadataInterceptorSync
 from rigging.auth import (
     BearerTokenInjector,
     GcpAccessTokenProvider,
-    IapUserIdTokenProvider,
+    IapRefreshTokenProvider,
+    IapServiceAccountTokenProvider,
     StaticTokenProvider,
 )
 
@@ -141,7 +142,7 @@ def test_iap_id_token_provider_caches_until_expiry(monkeypatch):
     monkeypatch.setattr("google.auth.transport.requests.Request", lambda: object())
     monkeypatch.setattr("google.auth.jwt.decode", lambda token, verify: {"exp": time.time() + 3600})
 
-    provider = IapUserIdTokenProvider("aud-123")
+    provider = IapServiceAccountTokenProvider("aud-123")
 
     assert provider.get_token() == "id-token"
     assert fetch_calls == 1
@@ -162,9 +163,42 @@ def test_iap_id_token_provider_refetches_after_expiry(monkeypatch):
     monkeypatch.setattr("google.auth.transport.requests.Request", lambda: object())
     monkeypatch.setattr("google.auth.jwt.decode", lambda token, verify: {"exp": time.time() + 60})
 
-    provider = IapUserIdTokenProvider("aud-123")
+    provider = IapServiceAccountTokenProvider("aud-123")
 
     assert provider.get_token() == "id-token"
     assert fetch_calls == 1
     assert provider.get_token() == "id-token"
     assert fetch_calls == 2
+
+
+class FakeRefreshCreds:
+    """Stand-in for google.oauth2.credentials.Credentials in the desktop flow."""
+
+    def __init__(self):
+        self.id_token = None
+        self.valid = False
+        self.refresh_calls = 0
+
+    def refresh(self, request):
+        self.refresh_calls += 1
+        self.id_token = "refreshed-id-token"
+        self.valid = True
+
+
+def test_iap_refresh_token_provider_remints_then_caches(monkeypatch):
+    creds = FakeRefreshCreds()
+    monkeypatch.setattr("google.oauth2.credentials.Credentials", lambda **kwargs: creds)
+    monkeypatch.setattr("google.auth.transport.requests.Request", lambda: object())
+
+    provider = IapRefreshTokenProvider("client-id", "secret", "refresh-tok")
+
+    # First call refreshes (no cached id_token); the second reuses it.
+    assert provider.get_token() == "refreshed-id-token"
+    assert creds.refresh_calls == 1
+    assert provider.get_token() == "refreshed-id-token"
+    assert creds.refresh_calls == 1
+
+    # When the access token expires (valid flips false), it re-mints.
+    creds.valid = False
+    assert provider.get_token() == "refreshed-id-token"
+    assert creds.refresh_calls == 2

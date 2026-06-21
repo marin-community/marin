@@ -22,6 +22,10 @@ dependencies = [
     "zstandard>=0.22",
 ]
 
+[project.optional-dependencies]
+# Interactive desktop-OAuth login for IAP-fronted endpoints (`finelog login`).
+iap = ["marin-rigging[iap]"]
+
 [project.scripts]
 finelog = "finelog.deploy.cli:cli"
 

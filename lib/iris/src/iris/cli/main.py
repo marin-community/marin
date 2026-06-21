@@ -10,6 +10,7 @@ import logging
 import sys
 
 import click
+from rigging.auth import run_iap_desktop_login
 from rigging.config_discovery import resolve_cluster_config
 from rigging.log_setup import configure_logging
 
@@ -30,7 +31,6 @@ from iris.rpc.auth import (
     GcpAccessTokenProvider,
     StaticTokenProvider,
     TokenProvider,
-    run_iap_desktop_login,
 )
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 

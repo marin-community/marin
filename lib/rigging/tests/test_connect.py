@@ -60,9 +60,14 @@ def test_parse_iap_https_attaches_iap_auth():
     assert interceptors[0].header == "proxy-authorization"
 
 
-def test_parse_iap_https_without_audience_raises():
-    with pytest.raises(ValueError, match="audience"):
-        parse_transport("iap+https://iris-dev.oa.dev/proxy/system.log-server")
+def test_parse_iap_https_without_audience_defers_edge_auth():
+    # No audience: HTTPS transport, but no auto IAP token — the caller supplies
+    # the provider via connect(..., auth=IapAuth(...)).
+    parsed = parse_transport("iap+https://iris-dev.oa.dev/proxy/system.log-server")
+    assert isinstance(parsed.transport, DirectTransport)
+    assert isinstance(parsed.auth, NoAuth)
+    assert parsed.path == "/proxy/system.log-server"
+    assert parsed.transport.open(ExitStack(), 1.0).url == "https://iris-dev.oa.dev"
 
 
 def test_parse_ssh_gcp():
@@ -166,6 +171,19 @@ def test_connect_iap_proxy_to_finelog():
     # ChainedAuth(scheme_auth, auth): IAP edge header (from the scheme) first,
     # then the JWT app header.
     assert [i.header for i in endpoint.interceptors] == ["proxy-authorization", "authorization"]
+
+
+def test_connect_iap_with_caller_supplied_provider():
+    # The human/desktop path: iap+https with no audience defers the IAP token to
+    # the caller, who supplies it as proxy-authorization via auth=IapAuth(...).
+    endpoint = connect(
+        "iap+https://iris-marin.oa.dev/proxy/system.log-server",
+        record_factory,
+        auth=IapAuth(StaticTokenProvider("desktop-id-token")),
+    )
+
+    assert endpoint.url == "https://iris-marin.oa.dev/proxy/system.log-server"
+    assert [i.header for i in endpoint.interceptors] == ["proxy-authorization"]
 
 
 # --- lifetime --------------------------------------------------------------

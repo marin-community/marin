@@ -4731,6 +4731,11 @@ dependencies = [
     { name = "zstandard" },
 ]
 
+[package.optional-dependencies]
+iap = [
+    { name = "marin-rigging", extra = ["iap"] },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "marin-finelog-server" },
@@ -4747,11 +4752,13 @@ requires-dist = [
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'", editable = "lib/rigging" },
     { name = "protobuf", specifier = ">=5.0" },
     { name = "pyarrow", specifier = ">=23.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "zstandard", specifier = ">=0.22" },
 ]
+provides-extras = ["iap"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -4917,7 +4924,7 @@ controller = [
     { name = "kubernetes" },
 ]
 iap = [
-    { name = "google-auth-oauthlib" },
+    { name = "marin-rigging", extra = ["iap"] },
 ]
 
 [package.dev-dependencies]
@@ -4950,7 +4957,6 @@ requires-dist = [
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "google-auth", specifier = ">=2.0" },
-    { name = "google-auth-oauthlib", marker = "extra == 'iap'", specifier = ">=1.0" },
     { name = "google-cloud-tpu", specifier = ">=1.18.0" },
     { name = "grpcio", specifier = ">=1.76.0" },
     { name = "httpx", specifier = ">=0.28.1" },
@@ -4959,6 +4965,7 @@ requires-dist = [
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-finelog-server", specifier = ">=0.2.10" },
     { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'", editable = "lib/rigging" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyjwt", specifier = ">=2.12.0" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -5229,6 +5236,11 @@ dependencies = [
     { name = "s3fs" },
 ]
 
+[package.optional-dependencies]
+iap = [
+    { name = "google-auth-oauthlib" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
@@ -5242,8 +5254,10 @@ requires-dist = [
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "google-auth", specifier = ">=2.0.0" },
+    { name = "google-auth-oauthlib", marker = "extra == 'iap'", specifier = ">=1.0.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
 ]
+provides-extras = ["iap"]
 
 [package.metadata.requires-dev]
 dev = [

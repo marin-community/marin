@@ -14,12 +14,13 @@ import logging
 from pathlib import Path
 
 import click
+from rigging.auth import IapRefreshTokenProvider
 
 from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import IrisConfig
 from iris.cluster.token_store import load_token
 from iris.rpc import config_pb2
-from iris.rpc.auth import ClientCredentials, IapUserIdTokenProvider
+from iris.rpc.auth import ClientCredentials
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
@@ -116,7 +117,7 @@ def iap_config(config: config_pb2.IrisClusterConfig | None) -> config_pb2.IapAut
 def build_iap_provider(
     iap: config_pb2.IapAuthConfig,
     cluster_name: str,
-) -> IapUserIdTokenProvider | None:
+) -> IapRefreshTokenProvider | None:
     """Build an IAP ID-token provider from the cached refresh token, or None.
 
     Returns None when no refresh token is cached yet (i.e. before ``iris login``),
@@ -126,7 +127,7 @@ def build_iap_provider(
     credential = load_token(cluster_name)
     if credential is None or not credential.iap_refresh_token:
         return None
-    return IapUserIdTokenProvider(
+    return IapRefreshTokenProvider(
         client_id=iap.oauth_client_id,
         client_secret=iap.oauth_client_secret,
         refresh_token=credential.iap_refresh_token,

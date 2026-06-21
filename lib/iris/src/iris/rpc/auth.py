@@ -21,11 +21,10 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
 from http.cookies import SimpleCookie
-from typing import Protocol, cast
+from typing import Protocol
 
 import google.auth
 import google.auth.transport.requests
-import google.oauth2.credentials
 import google.oauth2.id_token
 import requests
 from connectrpc.code import Code
@@ -846,71 +845,3 @@ class GcpAccessTokenProvider:
             self._expires_at = now_mono + self._REFRESH_MARGIN_SECONDS
 
         return self._cached_token
-
-
-# OAuth scopes for the IAP login flow. "openid" is what makes the token endpoint
-# return an OIDC ID token (the credential IAP requires); "email" puts the user's
-# address in the token so the controller can attribute the identity.
-IAP_LOGIN_SCOPES = ["openid", "email"]
-_GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
-_GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
-
-
-class IapUserIdTokenProvider:
-    """Returns a fresh OIDC ID token for IAP from a cached desktop-OAuth refresh token.
-
-    IAP requires an ID token (not an access token); this re-mints it from the
-    user's long-lived refresh token with no browser prompt. Obtain the initial
-    refresh token once via :func:`run_iap_desktop_login`.
-    """
-
-    def __init__(self, client_id: str, client_secret: str, refresh_token: str):
-        self._creds = google.oauth2.credentials.Credentials(
-            token=None,
-            refresh_token=refresh_token,
-            client_id=client_id,
-            client_secret=client_secret,
-            token_uri=_GOOGLE_TOKEN_URI,
-            scopes=IAP_LOGIN_SCOPES,
-        )
-
-    def get_token(self) -> str | None:
-        # creds.valid is False until the first refresh and once the access token
-        # (minted alongside the ID token) expires; refreshing repopulates both.
-        if self._creds.id_token is None or not self._creds.valid:
-            self._creds.refresh(google.auth.transport.requests.Request())
-        return self._creds.id_token
-
-
-def run_iap_desktop_login(client_id: str, client_secret: str, *, port: int = 0) -> tuple[str, str]:
-    """Run the installed-app OAuth flow in a browser and return (id_token, refresh_token).
-
-    Opens the system browser for Google sign-in/consent and catches the redirect
-    on a localhost port. Returns the freshly minted OIDC ID token and the
-    long-lived refresh token to cache for silent re-minting.
-    """
-    # Lazy import: google-auth-oauthlib pulls in requests-oauthlib and is only
-    # needed for the interactive login path, never by the controller or workers.
-    try:
-        from google_auth_oauthlib.flow import InstalledAppFlow  # noqa: PLC0415  # optional dep: iris[iap]
-    except ImportError as exc:
-        raise RuntimeError(
-            "IAP login requires google-auth-oauthlib; install it with `pip install marin-iris[iap]`"
-        ) from exc
-
-    client_config = {
-        "installed": {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "auth_uri": _GOOGLE_AUTH_URI,
-            "token_uri": _GOOGLE_TOKEN_URI,
-        }
-    }
-    flow = InstalledAppFlow.from_client_config(client_config, scopes=IAP_LOGIN_SCOPES)
-    creds = flow.run_local_server(port=port, open_browser=True)
-    if not creds.id_token:
-        raise RuntimeError("OAuth flow returned no ID token (the 'openid' scope must be granted)")
-    if not creds.refresh_token:
-        raise RuntimeError("OAuth flow returned no refresh token (request offline access)")
-    # google-auth types these as object; the guards above prove they are non-empty strings.
-    return cast(str, creds.id_token), cast(str, creds.refresh_token)
