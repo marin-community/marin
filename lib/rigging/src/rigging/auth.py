@@ -111,10 +111,9 @@ class IapServiceAccountTokenProvider:
 
     Uses ``fetch_id_token``, which works for service accounts, GCE metadata, and
     impersonated credentials (the in-cluster / CI path) but **not** end-user
-    ``gcloud`` credentials — for a human use :class:`IapRefreshTokenProvider`.
-    The audience is the OAuth client id of the IAP-protected resource. The token
-    is cached until five minutes before its ``exp`` claim; credential access
-    happens only inside ``get_token``.
+    ``gcloud`` credentials. The audience is the OAuth client id of the
+    IAP-protected resource. The token is cached until five minutes before its
+    ``exp`` claim; credential access happens only inside ``get_token``.
     """
 
     def __init__(self, audience: str):
@@ -138,10 +137,10 @@ class IapRefreshTokenProvider:
     """Re-mints an OIDC ID token for IAP from a cached desktop-OAuth refresh token.
 
     IAP requires an ID token (not an access token); this silently re-mints it
-    from the user's long-lived refresh token with no browser prompt — the human
-    counterpart to :class:`IapServiceAccountTokenProvider`. Obtain the initial
-    refresh token once via :func:`run_iap_desktop_login`. The token's ``aud`` is
-    the desktop client id, which must be on the cluster's IAP audience allowlist.
+    from the user's long-lived refresh token with no browser prompt. Obtain the
+    initial refresh token once via the desktop login flow. The token's ``aud``
+    is the desktop client id, which must be on the cluster's IAP audience
+    allowlist.
     """
 
     def __init__(self, client_id: str, client_secret: str, refresh_token: str):

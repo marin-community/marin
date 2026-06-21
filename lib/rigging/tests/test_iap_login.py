@@ -5,7 +5,6 @@ import json
 import stat
 
 import pytest
-from rigging.auth import IapRefreshTokenProvider
 from rigging.iap_login import (
     IapCredentials,
     credentials_path,
@@ -44,9 +43,20 @@ def test_provider_for_missing_raises(home):
         provider_for("never-logged-in")
 
 
-def test_provider_for_builds_from_cache(home):
+def test_provider_for_threads_cached_credentials(home, monkeypatch):
     save_iap_credentials("marin", IapCredentials("cid", "secret", "rtok"))
-    assert isinstance(provider_for("marin"), IapRefreshTokenProvider)
+
+    captured = {}
+    monkeypatch.setattr(
+        "rigging.iap_login.IapRefreshTokenProvider",
+        lambda client_id, client_secret, refresh_token: captured.update(
+            client_id=client_id, client_secret=client_secret, refresh_token=refresh_token
+        ),
+    )
+
+    provider_for("marin")
+
+    assert captured == {"client_id": "cid", "client_secret": "secret", "refresh_token": "rtok"}
 
 
 def test_desktop_login_caches_refresh_token(home, tmp_path, monkeypatch):
