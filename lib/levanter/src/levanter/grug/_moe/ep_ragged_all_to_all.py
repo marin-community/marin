@@ -52,12 +52,13 @@ def _moe_mlp_ep_ragged_a2a_local(
     local_capacity = max(local_experts, local_capacity)
     recv_capacity = local_capacity
 
-    with jax.named_scope("dispatch"):
+    with jax.named_scope("moe_ep_ragged_a2a/dispatch_permute_by_global_expert"):
         sorted_x, sorted_indices, group_sizes = _permute_by_global_expert(
             x_local,
             selected_experts_local,
             num_experts=num_experts,
         )
+    with jax.named_scope("moe_ep_ragged_a2a/dispatch_group_sizes"):
         all_group_sizes = jax.lax.all_gather(group_sizes.astype(jnp.int32), "expert")
         clipped_group_sizes = _clip_receiver_group_sizes(
             all_group_sizes,
@@ -65,6 +66,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             receiver_capacity=local_capacity,
         )
         sender_group_sizes = clipped_group_sizes[shard_id]
+    with jax.named_scope("moe_ep_ragged_a2a/dispatch_compact"):
         keep_mask = _expert_prefix_keep_mask(
             group_sizes.astype(jnp.int32),
             sender_group_sizes,
@@ -72,6 +74,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         )
         sorted_x = _compact_by_keep_mask(sorted_x, keep_mask)
 
+    with jax.named_scope("moe_ep_ragged_a2a/dispatch_transport"):
         all_shard_counts = jnp.sum(clipped_group_sizes.reshape(ep_size, ep_size, local_experts), axis=2)
         input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(all_shard_counts, shard_id)
         dispatch_out_shape = jnp.zeros((recv_capacity, x_local.shape[1]), dtype=x_local.dtype)
@@ -84,6 +87,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             recv_sizes,
             axis_name="expert",
         )
+    with jax.named_scope("moe_ep_ragged_a2a/local_permute"):
         x_dispatch, local_sorted_indices, local_group_sizes = _local_permute_from_counts(
             x_dispatched,
             clipped_group_sizes,
@@ -91,18 +95,23 @@ def _moe_mlp_ep_ragged_a2a_local(
             shard_index=shard_id,
         )
 
-    with jax.named_scope("moe_up_down"):
+    with jax.named_scope("moe_expert_mlp/w13_ragged_dot"):
         w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+    with jax.named_scope("moe_expert_mlp/split_gate_up"):
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+    with jax.named_scope("moe_expert_mlp/activation"):
+        hidden = activation_fn(gate) * up
+    with jax.named_scope("moe_expert_mlp/w2_ragged_dot"):
+        out_dispatch = ragged_dot(hidden, moe_w2_local, local_group_sizes)
 
-    with jax.named_scope("combine"):
+    with jax.named_scope("moe_ep_ragged_a2a/combine_local_unpermute"):
         local_output = _sort_activations(out_dispatch, jnp.argsort(local_sorted_indices))
         return_out_shape = jnp.zeros((assignments_per_shard, x_local.shape[1]), dtype=local_output.dtype)
         return_input_offsets, return_send_sizes, return_output_offsets, return_recv_sizes = _shard_a2a_params(
             all_shard_counts.T, shard_id
         )
+    with jax.named_scope("moe_ep_ragged_a2a/combine_transport"):
         returned = jax.lax.ragged_all_to_all(
             local_output,
             return_out_shape,
@@ -112,6 +121,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             return_recv_sizes,
             axis_name="expert",
         )
+    with jax.named_scope("moe_ep_ragged_a2a/combine_expand_and_weight"):
         returned = _expand_from_keep_mask(returned, keep_mask)
         out_local = _unpermute_from_global_expert(
             returned,
@@ -120,6 +130,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             tokens_per_shard=tokens_per_shard,
             topk=topk,
         ).astype(x_local.dtype)
+    with jax.named_scope("moe_ep_ragged_a2a/dropped_assignments"):
         dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(sender_group_sizes, dtype=jnp.int32)
         dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total

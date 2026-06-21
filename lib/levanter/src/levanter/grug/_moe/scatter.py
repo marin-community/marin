@@ -32,23 +32,28 @@ def _moe_mlp_local_scatter(
     num_experts: int,
 ) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Local fallback MoE path: sorted grouped GMM then scatter-add combine."""
-    x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
-        x,
-        selected_experts,
-        combine_weights,
-        num_experts=num_experts,
-    )
-    x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+    with jax.named_scope("moe_local_scatter/dispatch"):
+        x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
+            x,
+            selected_experts,
+            combine_weights,
+            num_experts=num_experts,
+        )
+        x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
 
-    with jax.named_scope("moe_up_down"):
+    with jax.named_scope("moe_expert_mlp/w13_ragged_dot"):
         w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+    with jax.named_scope("moe_expert_mlp/split_gate_up"):
         moe_dim = moe_w2.shape[1]
         gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
+    with jax.named_scope("moe_expert_mlp/activation"):
+        hidden = activation_fn(gate) * up
+    with jax.named_scope("moe_expert_mlp/w2_ragged_dot"):
         out_dispatch = tree_checkpoint_name(
-            ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes),
+            ragged_dot(hidden, moe_w2, group_sizes),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
-    with jax.named_scope("scatter"):
+    with jax.named_scope("moe_local_scatter/combine_scatter_add"):
         out = jnp.zeros_like(x).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
     return out, _zero_dropped_assignments()

@@ -11,7 +11,8 @@ from jaxtyping import Array, Bool, Int
 def _sort_activations(inputs: jax.Array, sort_indices: jax.Array) -> jax.Array:
     if inputs.shape[0] != sort_indices.shape[0]:
         raise ValueError(f"Expected matching leading dims, got {inputs.shape[0]} and {sort_indices.shape[0]}")
-    return _sort_activations_custom(inputs, sort_indices)
+    with jax.named_scope("moe_permute/sort_activations"):
+        return _sort_activations_custom(inputs, sort_indices)
 
 
 @jax.custom_vjp
@@ -47,12 +48,16 @@ def _permute_by_global_expert(
     *,
     num_experts: int,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    topk = selected_experts_local.shape[1]
-    flat_selected = selected_experts_local.reshape(-1)
-    sorted_indices = jnp.argsort(flat_selected)
-    repeated_x = jnp.repeat(x_local, topk, axis=0)
-    sorted_x = _sort_activations(repeated_x, sorted_indices)
-    group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)
+    with jax.named_scope("moe_permute/global_expert_indices"):
+        topk = selected_experts_local.shape[1]
+        flat_selected = selected_experts_local.reshape(-1)
+        sorted_indices = jnp.argsort(flat_selected)
+    with jax.named_scope("moe_permute/repeat_tokens"):
+        repeated_x = jnp.repeat(x_local, topk, axis=0)
+    with jax.named_scope("moe_permute/gather_by_expert"):
+        sorted_x = _sort_activations(repeated_x, sorted_indices)
+    with jax.named_scope("moe_permute/group_sizes"):
+        group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)
     return sorted_x, sorted_indices, group_sizes
 
 
@@ -64,11 +69,14 @@ def _unpermute_from_global_expert(
     tokens_per_shard: int,
     topk: int,
 ) -> jax.Array:
-    unsorted = _sort_activations(intermediate, jnp.argsort(sorted_indices))
-    reshaped = unsorted.reshape(tokens_per_shard, topk, -1)
-    return jnp.einsum(
-        "tkd,tk->td", reshaped, combine_weights_local.astype(reshaped.dtype), preferred_element_type=jnp.float32
-    )
+    with jax.named_scope("moe_unpermute/invert_expert_sort"):
+        unsorted = _sort_activations(intermediate, jnp.argsort(sorted_indices))
+    with jax.named_scope("moe_unpermute/reshape_topk"):
+        reshaped = unsorted.reshape(tokens_per_shard, topk, -1)
+    with jax.named_scope("moe_unpermute/weighted_combine"):
+        return jnp.einsum(
+            "tkd,tk->td", reshaped, combine_weights_local.astype(reshaped.dtype), preferred_element_type=jnp.float32
+        )
 
 
 def _shard_a2a_params(
@@ -96,23 +104,27 @@ def _local_permute_from_counts(
     local_expert_size: int,
     shard_index: jax.Array,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    all_shard_local_sizes = jax.lax.dynamic_slice_in_dim(
-        global_group_sizes,
-        start_index=shard_index * local_expert_size,
-        slice_size=local_expert_size,
-        axis=1,
-    )
-    local_group_sizes = jnp.sum(all_shard_local_sizes, axis=0)
-    local_sizes = all_shard_local_sizes.reshape(-1)
-    total_valid = jnp.sum(local_sizes, dtype=jnp.int32)
-    segment_ends = jnp.cumsum(local_sizes, dtype=jnp.int32)
-    positions = jnp.arange(inputs.shape[0], dtype=jnp.int32)
-    segment_index = jnp.searchsorted(segment_ends, positions, side="right")
-    local_expert_ids = jnp.where(positions < total_valid, segment_index % local_expert_size, local_expert_size)
-    sorted_indices = jnp.argsort(local_expert_ids)
-    sorted_inputs = _sort_activations(inputs, sorted_indices)
-    sorted_inputs = jnp.where((positions < total_valid)[:, None], sorted_inputs, 0)
-    group_sizes = local_group_sizes.at[-1].add(inputs.shape[0] - total_valid)
+    with jax.named_scope("moe_local_permute/counts_for_local_experts"):
+        all_shard_local_sizes = jax.lax.dynamic_slice_in_dim(
+            global_group_sizes,
+            start_index=shard_index * local_expert_size,
+            slice_size=local_expert_size,
+            axis=1,
+        )
+        local_group_sizes = jnp.sum(all_shard_local_sizes, axis=0)
+        local_sizes = all_shard_local_sizes.reshape(-1)
+        total_valid = jnp.sum(local_sizes, dtype=jnp.int32)
+    with jax.named_scope("moe_local_permute/sort_indices"):
+        segment_ends = jnp.cumsum(local_sizes, dtype=jnp.int32)
+        positions = jnp.arange(inputs.shape[0], dtype=jnp.int32)
+        segment_index = jnp.searchsorted(segment_ends, positions, side="right")
+        local_expert_ids = jnp.where(positions < total_valid, segment_index % local_expert_size, local_expert_size)
+        sorted_indices = jnp.argsort(local_expert_ids)
+    with jax.named_scope("moe_local_permute/gather_by_local_expert"):
+        sorted_inputs = _sort_activations(inputs, sorted_indices)
+        sorted_inputs = jnp.where((positions < total_valid)[:, None], sorted_inputs, 0)
+    with jax.named_scope("moe_local_permute/group_sizes"):
+        group_sizes = local_group_sizes.at[-1].add(inputs.shape[0] - total_valid)
     return sorted_inputs, sorted_indices, group_sizes
 
 

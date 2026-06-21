@@ -37,11 +37,12 @@ def _moe_mlp_ep_ring_local(
     del remat_mode
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
-    with jax.named_scope("gather"):
+    with jax.named_scope("moe_ep_ring/gather_inputs"):
         x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
         selected_experts_global = jax.lax.all_gather(selected_experts_local, "expert", tiled=True)
         combine_weights_global = jax.lax.all_gather(combine_weights_local, "expert", tiled=True)
 
+    with jax.named_scope("moe_ep_ring/route_local_experts"):
         tokens = x_global.shape[0]
         topk = selected_experts_global.shape[1]
         assignments = tokens * topk
@@ -63,6 +64,7 @@ def _moe_mlp_ep_ring_local(
         local_expert: jax.Array = expert_flat - expert_start
         local_mask = jnp.logical_and(local_expert >= 0, local_expert < local_experts)
 
+    with jax.named_scope("moe_ep_ring/count_local_assignments"):
         # Keep only the assignments this shard will execute, ordered by
         # (local expert id, original flat position). This avoids the global
         # argsort + fused takes over all assignments that dominated high-EP
@@ -82,12 +84,14 @@ def _moe_mlp_ep_ring_local(
         dropped_local = jnp.sum(counts, dtype=jnp.int32) - accepted_total
         valid = jnp.arange(local_capacity, dtype=jnp.int32) < accepted_total
 
+    with jax.named_scope("moe_ep_ring/select_local_assignments"):
         flat_pos = jnp.arange(assignments, dtype=jnp.int32)
         order_key = local_expert * assignments + flat_pos
         max_order_key = local_experts * assignments
         selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
         _, local_idx = jax.lax.top_k(selection_key, local_capacity)
 
+    with jax.named_scope("moe_ep_ring/dispatch_gather_tokens"):
         token_local = jnp.floor_divide(local_idx, topk)
         weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_local.dtype)
 
@@ -95,24 +99,32 @@ def _moe_mlp_ep_ring_local(
         x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
         x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
         weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
-    group_sizes = accepted_counts
-    # `local_idx` pads by appending invalid rows at the end; keep GMM segment
-    # boundaries aligned by attributing padding to the final expert segment.
-    group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
-    with jax.named_scope("moe_up_down"):
+    with jax.named_scope("moe_ep_ring/group_sizes"):
+        group_sizes = accepted_counts
+        # `local_idx` pads by appending invalid rows at the end; keep GMM segment
+        # boundaries aligned by attributing padding to the final expert segment.
+        group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
+
+    with jax.named_scope("moe_expert_mlp/w13_ragged_dot"):
         w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+    with jax.named_scope("moe_expert_mlp/split_gate_up"):
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+    with jax.named_scope("moe_expert_mlp/activation"):
+        hidden = activation_fn(gate) * up
+    with jax.named_scope("moe_expert_mlp/w2_ragged_dot"):
         out_dispatch = tree_checkpoint_name(
-            ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes),
+            ragged_dot(hidden, moe_w2_local, group_sizes),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
-    with jax.named_scope("scatter"):
+    with jax.named_scope("moe_ep_ring/combine_scatter_add"):
         out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
+    with jax.named_scope("moe_ep_ring/psum_scatter_output"):
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
         out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
+    with jax.named_scope("moe_ep_ring/psum_dropped_assignments"):
         dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total

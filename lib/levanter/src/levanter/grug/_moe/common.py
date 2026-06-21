@@ -152,16 +152,20 @@ def _prepare_moe_dispatch(
     """Flatten + argsort by expert into grouped layout for GMM."""
     # #2704: keep argsort-grouped dispatch as the canonical compact routing
     # strategy, matching the behavior carried forward from 89318a910.
-    tokens, topk = selected_experts.shape
-    expert_ids = selected_experts.reshape(tokens * topk)
-    dispatch_weights = combine_weights.reshape(tokens * topk)
+    with jax.named_scope("moe_dispatch/flatten_assignments"):
+        tokens, topk = selected_experts.shape
+        expert_ids = selected_experts.reshape(tokens * topk)
+        dispatch_weights = combine_weights.reshape(tokens * topk)
 
-    sort_idx = jnp.argsort(expert_ids, axis=0)
-    token_ids = jnp.arange(tokens * topk, dtype=jnp.int32) // topk
-    token_ids_sort = token_ids[sort_idx]
-    x_sort = x[token_ids_sort]
-    w_sort = dispatch_weights[sort_idx].astype(x.dtype)
-    group_sizes = jnp.bincount(expert_ids, length=num_experts).astype(jnp.int32)
+    with jax.named_scope("moe_dispatch/sort_by_expert"):
+        sort_idx = jnp.argsort(expert_ids, axis=0)
+        token_ids = jnp.arange(tokens * topk, dtype=jnp.int32) // topk
+        token_ids_sort = token_ids[sort_idx]
+    with jax.named_scope("moe_dispatch/gather_tokens"):
+        x_sort = x[token_ids_sort]
+        w_sort = dispatch_weights[sort_idx].astype(x.dtype)
+    with jax.named_scope("moe_dispatch/group_sizes"):
+        group_sizes = jnp.bincount(expert_ids, length=num_experts).astype(jnp.int32)
     return x_sort, w_sort, token_ids_sort, group_sizes
 
 
@@ -177,20 +181,24 @@ def _prepare_moe_dispatch_indices_with_assignment_ids(
     Int[Array, "TK"],
 ]:
     """Prepare expert-sorted token ids plus reverse positions without gathering x."""
-    tokens, topk = selected_experts.shape
-    assignments = tokens * topk
-    expert_ids = selected_experts.reshape(assignments)
+    with jax.named_scope("moe_dispatch_indices/flatten_assignments"):
+        tokens, topk = selected_experts.shape
+        assignments = tokens * topk
+        expert_ids = selected_experts.reshape(assignments)
 
-    sort_idx = jnp.argsort(expert_ids, axis=0)
-    assignment_ids = jnp.arange(assignments, dtype=jnp.int32)
-    sorted_assignment_ids = assignment_ids[sort_idx]
-    token_ids_sort = sorted_assignment_ids // topk
+    with jax.named_scope("moe_dispatch_indices/sort_by_expert"):
+        sort_idx = jnp.argsort(expert_ids, axis=0)
+        assignment_ids = jnp.arange(assignments, dtype=jnp.int32)
+        sorted_assignment_ids = assignment_ids[sort_idx]
+        token_ids_sort = sorted_assignment_ids // topk
 
-    sorted_positions = jnp.arange(assignments, dtype=jnp.int32)
-    dispatch_positions = jnp.zeros((assignments,), dtype=jnp.int32).at[sort_idx].set(sorted_positions)
-    dispatch_positions = dispatch_positions.reshape(tokens, topk)
+    with jax.named_scope("moe_dispatch_indices/invert_sort"):
+        sorted_positions = jnp.arange(assignments, dtype=jnp.int32)
+        dispatch_positions = jnp.zeros((assignments,), dtype=jnp.int32).at[sort_idx].set(sorted_positions)
+        dispatch_positions = dispatch_positions.reshape(tokens, topk)
 
-    group_sizes = jnp.bincount(expert_ids, length=num_experts).astype(jnp.int32)
+    with jax.named_scope("moe_dispatch_indices/group_sizes"):
+        group_sizes = jnp.bincount(expert_ids, length=num_experts).astype(jnp.int32)
     return token_ids_sort, dispatch_positions, group_sizes, sorted_assignment_ids
 
 

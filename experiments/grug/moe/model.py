@@ -570,59 +570,68 @@ class MoEMLP(eqx.Module):
         x: Float[Array, "B S D"],
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
-        # Keep the router path in fp32 before top-k, softmax, and QB statistics.
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
-        biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
-        router_probs = jax.nn.softmax(router_logits, axis=-1)
-        # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
-        _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
-        qb_alpha = _topk_logits[:, -1:]
-        selected_experts = selected_experts[:, :-1]
-        # Sigmoid combine weights on unbiased logits for selected experts.
-        unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
-        if self.cfg.routing_renorm_sum is not None:
-            denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
-            combine_weights_f = combine_weights_f * (self.cfg.routing_renorm_sum / (denom + 1e-9))
-        combine_weights = combine_weights_f.astype(x.dtype)
-        router_stats = _routing_stats(
-            selected_experts,
-            router_probs,
-            router_logits,
-            num_experts=self.cfg.num_experts,
-            num_experts_per_token=self.cfg.num_experts_per_token,
-        )
+        with jax.named_scope("moe_router/flatten_tokens"):
+            x_flat = rearrange(x, "b s d -> (b s) d")
+        with jax.named_scope("moe_router/logits"):
+            # Keep the router path in fp32 before top-k, softmax, and QB statistics.
+            router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+            biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
+        with jax.named_scope("moe_router/probabilities"):
+            router_probs = jax.nn.softmax(router_logits, axis=-1)
+        with jax.named_scope("moe_router/topk"):
+            # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
+            _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
+            qb_alpha = _topk_logits[:, -1:]
+            selected_experts = selected_experts[:, :-1]
+        with jax.named_scope("moe_router/combine_weights"):
+            # Sigmoid combine weights on unbiased logits for selected experts.
+            unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
+            combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+            if self.cfg.routing_renorm_sum is not None:
+                denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+                combine_weights_f = combine_weights_f * (self.cfg.routing_renorm_sum / (denom + 1e-9))
+            combine_weights = combine_weights_f.astype(x.dtype)
+        with jax.named_scope("moe_router/stats"):
+            router_stats = _routing_stats(
+                selected_experts,
+                router_probs,
+                router_logits,
+                num_experts=self.cfg.num_experts,
+                num_experts_per_token=self.cfg.num_experts_per_token,
+            )
         # Sharded QB: compute beta locally per device, then average.
         mesh = get_abstract_mesh()
-        s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
-        num_devices = 1
-        for a in _BATCH_AXES:
-            num_devices *= mesh.shape[a]
-        local_tokens = s_minus_alpha.shape[0] // num_devices
-        qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
+        with jax.named_scope("moe_router/qb_beta"):
+            s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
+            num_devices = 1
+            for a in _BATCH_AXES:
+                num_devices *= mesh.shape[a]
+            local_tokens = s_minus_alpha.shape[0] // num_devices
+            qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
 
-        def _local_qb_beta(s_ma):
-            topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
-            beta = topk_vals[:, -1]
-            return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+            def _local_qb_beta(s_ma):
+                topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
+                beta = topk_vals[:, -1]
+                return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
 
-        router_stats["qb_beta"] = shard_map(
-            _local_qb_beta,
-            mesh=mesh,
-            in_specs=(P(_BATCH_AXES, None),),
-            out_specs=P(),
-        )(s_minus_alpha)
+            router_stats["qb_beta"] = shard_map(
+                _local_qb_beta,
+                mesh=mesh,
+                in_specs=(P(_BATCH_AXES, None),),
+                out_specs=P(),
+            )(s_minus_alpha)
 
-        routed_flat = self.expert_mlp(
-            x_flat,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            mesh=get_abstract_mesh(),
-        )
+        with jax.named_scope("moe_experts"):
+            routed_flat = self.expert_mlp(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                mesh=get_abstract_mesh(),
+            )
 
-        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        routed = reshard(routed, _batch_spec())
+        with jax.named_scope("moe_output/restore_batch"):
+            routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
+            routed = reshard(routed, _batch_spec())
         return routed, router_stats
 
 
@@ -678,64 +687,74 @@ class GroupedMoEMLP(eqx.Module):
         if self.valid_group_size < 1 or self.valid_group_size > group_size:
             raise ValueError(f"valid_group_size must be in [1, {group_size}], got {self.valid_group_size}")
 
-        x_flat = rearrange(x, "g b s d -> g (b s) d")
-        router = reshard(self.router, P(None, None, None))
-        router_logits = jnp.einsum("gtd,gde->gte", x_flat, router).astype(jnp.float32)
-        biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias[:, None, :])
-        router_probs = jax.nn.softmax(router_logits, axis=-1)
-        _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
-        qb_alpha = _topk_logits[:, :, -1:]
-        selected_experts = selected_experts[:, :, :-1]
-        unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
-        if self.cfg.routing_renorm_sum is not None:
-            denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
-            combine_weights_f = combine_weights_f * (self.cfg.routing_renorm_sum / (denom + 1e-9))
-        combine_weights = combine_weights_f.astype(x.dtype)
+        with jax.named_scope("grouped_moe_router/flatten_tokens"):
+            x_flat = rearrange(x, "g b s d -> g (b s) d")
+        with jax.named_scope("grouped_moe_router/logits"):
+            router = reshard(self.router, P(None, None, None))
+            router_logits = jnp.einsum("gtd,gde->gte", x_flat, router).astype(jnp.float32)
+            biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias[:, None, :])
+        with jax.named_scope("grouped_moe_router/probabilities"):
+            router_probs = jax.nn.softmax(router_logits, axis=-1)
+        with jax.named_scope("grouped_moe_router/topk"):
+            _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
+            qb_alpha = _topk_logits[:, :, -1:]
+            selected_experts = selected_experts[:, :, :-1]
+        with jax.named_scope("grouped_moe_router/combine_weights"):
+            unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
+            combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+            if self.cfg.routing_renorm_sum is not None:
+                denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+                combine_weights_f = combine_weights_f * (self.cfg.routing_renorm_sum / (denom + 1e-9))
+            combine_weights = combine_weights_f.astype(x.dtype)
 
-        router_stats = jax.vmap(
-            partial(
-                _routing_stats,
-                num_experts=self.cfg.num_experts,
-                num_experts_per_token=self.cfg.num_experts_per_token,
-            )
-        )(selected_experts, router_probs, router_logits)
+        with jax.named_scope("grouped_moe_router/stats"):
+            router_stats = jax.vmap(
+                partial(
+                    _routing_stats,
+                    num_experts=self.cfg.num_experts,
+                    num_experts_per_token=self.cfg.num_experts_per_token,
+                )
+            )(selected_experts, router_probs, router_logits)
 
         mesh = get_abstract_mesh()
-        s_minus_alpha = reshard(router_logits - qb_alpha, P(None, _BATCH_AXES, None))
-        num_devices = 1
-        for axis_name in _BATCH_AXES:
-            num_devices *= mesh.shape[axis_name]
-        local_tokens = s_minus_alpha.shape[1] // num_devices
-        qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
+        with jax.named_scope("grouped_moe_router/qb_beta"):
+            s_minus_alpha = reshard(router_logits - qb_alpha, P(None, _BATCH_AXES, None))
+            num_devices = 1
+            for axis_name in _BATCH_AXES:
+                num_devices *= mesh.shape[axis_name]
+            local_tokens = s_minus_alpha.shape[1] // num_devices
+            qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
 
-        def _local_qb_beta(s_ma):
-            topk_vals, _ = jax.lax.top_k(jnp.swapaxes(s_ma, 1, 2), qb_count)
-            beta = topk_vals[:, :, -1]
-            return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+            def _local_qb_beta(s_ma):
+                topk_vals, _ = jax.lax.top_k(jnp.swapaxes(s_ma, 1, 2), qb_count)
+                beta = topk_vals[:, :, -1]
+                return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
 
-        router_stats["qb_beta"] = shard_map(
-            _local_qb_beta,
-            mesh=mesh,
-            in_specs=(P(None, _BATCH_AXES, None),),
-            out_specs=P(None, None),
-        )(s_minus_alpha)
+            router_stats["qb_beta"] = shard_map(
+                _local_qb_beta,
+                mesh=mesh,
+                in_specs=(P(None, _BATCH_AXES, None),),
+                out_specs=P(None, None),
+            )(s_minus_alpha)
 
-        routed_flat = self.expert_mlp(
-            x_flat,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            mesh=mesh,
-        )
-        routed = rearrange(routed_flat, "g (b s) d -> g b s d", b=b, s=s)
-        routed = reshard(routed, _grouped_batch_spec())
+        with jax.named_scope("grouped_moe_experts"):
+            routed_flat = self.expert_mlp(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                mesh=mesh,
+            )
+        with jax.named_scope("grouped_moe_output/restore_batch"):
+            routed = rearrange(routed_flat, "g (b s) d -> g b s d", b=b, s=s)
+            routed = reshard(routed, _grouped_batch_spec())
 
-        valid = jnp.arange(group_size) < self.valid_group_size
-        routed = jnp.where(valid[:, None, None, None], routed, jnp.zeros_like(routed))
-        router_stats = {
-            name: jnp.where(valid.reshape((group_size,) + (1,) * (value.ndim - 1)), value, jnp.zeros_like(value))
-            for name, value in router_stats.items()
-        }
+        with jax.named_scope("grouped_moe_output/mask_invalid_layers"):
+            valid = jnp.arange(group_size) < self.valid_group_size
+            routed = jnp.where(valid[:, None, None, None], routed, jnp.zeros_like(routed))
+            router_stats = {
+                name: jnp.where(valid.reshape((group_size,) + (1,) * (value.ndim - 1)), value, jnp.zeros_like(value))
+                for name, value in router_stats.items()
+            }
         return routed, router_stats
 
 

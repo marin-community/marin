@@ -63,14 +63,18 @@ def _deepep_moe_up_down(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> Float[Array, "TK D"]:
-    with jax.named_scope("moe_up_down"):
+    with jax.named_scope("moe_expert_mlp/w13_ragged_dot"):
         w13_out = tree_checkpoint_name(
             ragged_dot(x_dispatch, moe_w13_local, local_group_sizes), _CHECKPOINT_EXPERT_HIDDEN
         )
+    with jax.named_scope("moe_expert_mlp/split_gate_up"):
         moe_dim = moe_w2_local.shape[1]
         gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
+    with jax.named_scope("moe_expert_mlp/activation"):
+        hidden = activation_fn(gate) * up
+    with jax.named_scope("moe_expert_mlp/w2_ragged_dot"):
         return tree_checkpoint_name(
-            ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes),
+            ragged_dot(hidden, moe_w2_local, local_group_sizes),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
@@ -199,7 +203,7 @@ def _moe_mlp_ep_deepep_local(
     ep_size = num_experts // local_experts
     max_recv_tokens = x_local.shape[0] * ep_size
 
-    with jax.named_scope("dispatch"):
+    with jax.named_scope("moe_ep_deepep/dispatch"):
         with jax.named_scope("deepep_layout"):
             num_tokens_per_rank, num_tokens_per_expert, is_token_in_rank = deepep_get_dispatch_layout(
                 selected_experts_local,
@@ -260,7 +264,7 @@ def _moe_mlp_ep_deepep_local(
         remat_mode=remat_mode,
     )
 
-    with jax.named_scope("combine"):
+    with jax.named_scope("moe_ep_deepep/combine"):
         recv_out = _collapse_deepep_local_assignments(
             out_dispatch,
             local_assignments.assignment_weights,
