@@ -151,6 +151,7 @@ def _moe_mlp_ep_deepep_local(
                 is_token_in_rank,
                 num_experts=num_experts,
                 max_recv_tokens=max_recv_tokens,
+                assignment_capacity=local_capacity,
             )
         recv_x = tree_checkpoint_name(dispatch.recv_x, _CHECKPOINT_DEEPEP_RECV_X)
         recv_topk_weights = tree_checkpoint_name(dispatch.recv_topk_weights, _CHECKPOINT_DEEPEP_RECV_TOPK_WEIGHTS)
@@ -171,13 +172,13 @@ def _moe_mlp_ep_deepep_local(
         accepted_total = jnp.sum(local_group_sizes, dtype=jnp.int32)
         dropped_local = jnp.sum(dispatch.local_group_sizes, dtype=jnp.int32) - accepted_total
         local_group_sizes = tree_checkpoint_name(local_group_sizes, _CHECKPOINT_DEEPEP_LOCAL_GROUP_SIZES)
-        x_dispatch = tree_checkpoint_name(dispatch.x_dispatch[:local_capacity], _CHECKPOINT_DISPATCH_INPUT)
+        x_dispatch = tree_checkpoint_name(dispatch.x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
         assignment_weights = tree_checkpoint_name(
-            dispatch.assignment_weights[:local_capacity],
+            dispatch.assignment_weights,
             _CHECKPOINT_DEEPEP_ASSIGNMENT_WEIGHTS,
         )
         recv_token_indices = tree_checkpoint_name(
-            dispatch.recv_token_indices[:local_capacity],
+            dispatch.recv_token_indices,
             _CHECKPOINT_DEEPEP_RECV_TOKEN_INDICES,
         )
         assignment_destinations = dispatch.assignment_destinations

@@ -1861,7 +1861,44 @@ _dispatch_intranode_with_vjp.defvjp(
 )
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(6, 7, 8, 9))
+def _slice_assignment_dispatch_outputs(outputs, assignment_capacity: int | None):
+    if assignment_capacity is None:
+        return outputs
+    (
+        recv_x,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        channel_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        local_group_sizes,
+        num_recv_tokens,
+        x_dispatch,
+        assignment_weights,
+        recv_token_indices,
+        recv_assignment_indices,
+        assignment_destinations,
+    ) = outputs
+    return (
+        recv_x,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        channel_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        local_group_sizes,
+        num_recv_tokens,
+        x_dispatch[:assignment_capacity],
+        assignment_weights[:assignment_capacity],
+        recv_token_indices[:assignment_capacity],
+        recv_assignment_indices[:assignment_capacity],
+        assignment_destinations,
+    )
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(6, 7, 8, 9, 10))
 def _dispatch_intranode_with_assignments_with_vjp(
     x: jax.Array,
     topk_idx: jax.Array,
@@ -1873,6 +1910,7 @@ def _dispatch_intranode_with_assignments_with_vjp(
     dispatch_config: IntranodeConfig | None,
     combine_config: IntranodeConfig | None,
     max_recv_tokens: int | None,
+    assignment_capacity: int | None,
 ) -> tuple[
     jax.Array,
     jax.Array,
@@ -1889,17 +1927,20 @@ def _dispatch_intranode_with_assignments_with_vjp(
     jax.Array,
     jax.Array,
 ]:
-    return _dispatch_intranode_with_assignments_impl(
-        x,
-        topk_idx,
-        topk_weights,
-        num_tokens_per_rank,
-        num_tokens_per_expert,
-        is_token_in_rank,
-        num_experts=num_experts,
-        dispatch_config=dispatch_config,
-        combine_config=combine_config,
-        max_recv_tokens=max_recv_tokens,
+    return _slice_assignment_dispatch_outputs(
+        _dispatch_intranode_with_assignments_impl(
+            x,
+            topk_idx,
+            topk_weights,
+            num_tokens_per_rank,
+            num_tokens_per_expert,
+            is_token_in_rank,
+            num_experts=num_experts,
+            dispatch_config=dispatch_config,
+            combine_config=combine_config,
+            max_recv_tokens=max_recv_tokens,
+        ),
+        assignment_capacity,
     )
 
 
@@ -1914,18 +1955,22 @@ def _dispatch_intranode_with_assignments_with_vjp_fwd(
     dispatch_config: IntranodeConfig | None,
     combine_config: IntranodeConfig | None,
     max_recv_tokens: int | None,
+    assignment_capacity: int | None,
 ):
-    outputs = _dispatch_intranode_with_assignments_impl(
-        x,
-        topk_idx,
-        topk_weights,
-        num_tokens_per_rank,
-        num_tokens_per_expert,
-        is_token_in_rank,
-        num_experts=num_experts,
-        dispatch_config=dispatch_config,
-        combine_config=combine_config,
-        max_recv_tokens=max_recv_tokens,
+    outputs = _slice_assignment_dispatch_outputs(
+        _dispatch_intranode_with_assignments_impl(
+            x,
+            topk_idx,
+            topk_weights,
+            num_tokens_per_rank,
+            num_tokens_per_expert,
+            is_token_in_rank,
+            num_experts=num_experts,
+            dispatch_config=dispatch_config,
+            combine_config=combine_config,
+            max_recv_tokens=max_recv_tokens,
+        ),
+        assignment_capacity,
     )
     (
         recv_x,
@@ -1961,6 +2006,7 @@ def _dispatch_intranode_with_assignments_with_vjp_bwd(
     dispatch_config: IntranodeConfig | None,
     combine_config: IntranodeConfig | None,
     max_recv_tokens: int | None,
+    assignment_capacity: int | None,
     residuals,
     cotangents,
 ):
@@ -1975,6 +2021,7 @@ def _dispatch_intranode_with_assignments_with_vjp_bwd(
         num_recv_tokens,
         assignment_destinations,
     ) = residuals
+    grad_assignment_capacity = assignment_capacity or assignment_destinations.shape[0]
 
     grad_recv_x = _materialize_cotangent(cotangents[0], dtype=recv_x.dtype, reference=recv_x)
     grad_recv_topk_weights = _materialize_cotangent(
@@ -1986,12 +2033,12 @@ def _dispatch_intranode_with_assignments_with_vjp_bwd(
     grad_x_dispatch = _materialize_cotangent(
         cotangents[9],
         dtype=recv_x.dtype,
-        shape=(assignment_destinations.shape[0], recv_x.shape[1]),
+        shape=(grad_assignment_capacity, recv_x.shape[1]),
     )
     grad_assignment_weights = _materialize_cotangent(
         cotangents[10],
         dtype=jnp.float32,
-        shape=(assignment_destinations.shape[0],),
+        shape=(grad_assignment_capacity,),
     )
 
     grad_recv_x_from_assignments, grad_recv_topk_weights_from_assignments = _assignment_gradients_impl(
@@ -2163,6 +2210,7 @@ def deepep_dispatch_intranode_with_assignments(
     dispatch_config: IntranodeConfig | None = None,
     combine_config: IntranodeConfig | None = None,
     max_recv_tokens: int | None = None,
+    assignment_capacity: int | None = None,
 ) -> DeepEPDispatchWithAssignments:
     (
         recv_x,
@@ -2190,6 +2238,7 @@ def deepep_dispatch_intranode_with_assignments(
         dispatch_config,
         combine_config,
         max_recv_tokens,
+        assignment_capacity,
     )
     return DeepEPDispatchWithAssignments(
         recv_x=recv_x,
