@@ -9,7 +9,6 @@ import pytest
 import sqlalchemy.exc
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from finelog.client.proxy import LogServiceProxy
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import (
@@ -76,11 +75,6 @@ def state(db, tmp_path):
 
 
 @pytest.fixture
-def log_service(embedded_log_server) -> LogServiceProxy:
-    return LogServiceProxy(embedded_log_server.address)
-
-
-@pytest.fixture
 def service(state, tmp_path, log_client):
     controller_mock = Mock()
     controller_mock.wake = Mock()
@@ -106,10 +100,9 @@ def verifier():
 
 
 @pytest.fixture
-def authed_client(service, log_service, verifier):
+def authed_client(service, verifier):
     dashboard = ControllerDashboard(
         service,
-        log_service=log_service,
         auth_provider="gcp",
         auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier),
     )
@@ -117,8 +110,8 @@ def authed_client(service, log_service, verifier):
 
 
 @pytest.fixture
-def noauth_client(service, log_service):
-    dashboard = ControllerDashboard(service, log_service=log_service)
+def noauth_client(service):
+    dashboard = ControllerDashboard(service)
     return TestClient(dashboard.app)
 
 
@@ -364,11 +357,10 @@ def test_revoke_login_keys(db: ControllerDB):
 
 
 @pytest.fixture
-def optional_auth_client(service, log_service, verifier):
+def optional_auth_client(service, verifier):
     """Dashboard with auth configured but optional — tokens verified if present, anonymous fallback."""
     dashboard = ControllerDashboard(
         service,
-        log_service=log_service,
         auth_provider="static",
         auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier, optional=True),
     )
@@ -480,7 +472,7 @@ def test_resolve_auth_policy(verifier, token, optional, should_succeed):
         "invalid-optional",
     ],
 )
-def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier, token, optional, should_allow):
+def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optional, should_allow):
     """_RouteAuthMiddleware applies the same resolve_auth policy as the gRPC interceptor.
 
     We build a dashboard with a @requires_auth route injected and verify it
@@ -493,7 +485,6 @@ def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier,
 
     dashboard = ControllerDashboard(
         service,
-        log_service=log_service,
         auth_provider="static",
         auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier, optional=optional),
     )

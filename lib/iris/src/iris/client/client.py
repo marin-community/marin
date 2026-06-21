@@ -536,9 +536,9 @@ class IrisClient:
 
         Same as :meth:`remote`, except finelog logs/stats are written straight
         to the resolved finelog server instead of through the controller's
-        StatsServiceProxy — so high-frequency task-status pushes don't compete
-        for the controller's RPC thread pool. Only valid where the finelog
-        server's internal address is reachable (i.e. inside the cluster).
+        endpoint proxy — so high-frequency task-status pushes don't compete for
+        the controller's HTTP proxy. Only valid where the finelog server's
+        internal address is reachable (i.e. inside the cluster).
         """
         return cls._make(
             controller_address,
@@ -1108,7 +1108,7 @@ def get_iris_ctx() -> IrisContext | None:
     if job_info.controller_address:
         bundle_id = job_info.bundle_id
         # In-task code runs inside the cluster and can reach the finelog server
-        # directly, so task-status pushes bypass the controller's StatsServiceProxy.
+        # directly, so task-status pushes bypass the controller's endpoint proxy.
         client = IrisClient.in_cluster(
             controller_address=job_info.controller_address,
             bundle_id=bundle_id,
