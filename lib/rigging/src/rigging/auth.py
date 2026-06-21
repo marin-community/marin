@@ -31,6 +31,7 @@ import time
 from typing import Protocol, cast
 
 import google.auth
+import google.auth.exceptions
 import google.auth.jwt
 import google.auth.transport.requests
 import google.oauth2.credentials
@@ -58,6 +59,16 @@ def _monotonic_expiry(expiry_wall: float | None) -> float:
     if expiry_wall is None:
         return now_mono + _REFRESH_MARGIN_SECONDS
     return now_mono + (expiry_wall - time.time()) - _REFRESH_MARGIN_SECONDS
+
+
+class IapLoginRequired(RuntimeError):
+    """No usable IAP credentials are available for the human (desktop-OAuth) path.
+
+    Raised when nothing is cached yet, or when the cached refresh token has
+    expired or been revoked so the silent ID-token re-mint failed. The message is
+    self-contained — it includes the ``marin-login`` command to run — so a CLI can
+    surface ``str(exc)`` directly instead of synthesising its own remedy.
+    """
 
 
 class TokenProvider(Protocol):
@@ -143,7 +154,11 @@ class IapRefreshTokenProvider:
     allowlist.
     """
 
-    def __init__(self, client_id: str, client_secret: str, refresh_token: str):
+    def __init__(self, client_id: str, client_secret: str, refresh_token: str, *, login_hint: str | None = None):
+        # login_hint is appended to the IapLoginRequired raised when the refresh
+        # token is expired/revoked, so the caller's "log in again" remedy (which
+        # depends on the logical endpoint name) travels with the error.
+        self._login_hint = login_hint
         self._creds = google.oauth2.credentials.Credentials(
             token=None,
             refresh_token=refresh_token,
@@ -157,7 +172,13 @@ class IapRefreshTokenProvider:
         # creds.valid is False until the first refresh and once the access token
         # (minted alongside the ID token) expires; refreshing repopulates both.
         if self._creds.id_token is None or not self._creds.valid:
-            self._creds.refresh(google.auth.transport.requests.Request())
+            try:
+                self._creds.refresh(google.auth.transport.requests.Request())
+            except google.auth.exceptions.RefreshError as exc:
+                message = "cached IAP credentials are no longer valid (token refresh failed)"
+                if self._login_hint:
+                    message = f"{message}; {self._login_hint}"
+                raise IapLoginRequired(message) from exc
         return self._creds.id_token
 
 

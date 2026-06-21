@@ -9,26 +9,29 @@ available) for an IAP-fronted cluster and caches the refresh token so any tool â
 OIDC ID token IAP requires.
 """
 
-import argparse
-import sys
 import webbrowser
+
+import click
 
 from rigging.iap_login import credentials_path, desktop_login
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="marin-login",
-        description="Authenticate to an IAP-fronted Marin cluster and cache the refresh token.",
-    )
-    parser.add_argument("name", help="Logical cluster/endpoint name (e.g. 'marin') that tools look up.")
-    parser.add_argument(
-        "--client-secrets",
-        required=True,
-        help="Path to the Google desktop OAuth client secret JSON.",
-    )
-    args = parser.parse_args(argv)
+@click.command("marin-login")
+@click.argument("name")
+@click.option(
+    "--client-secrets",
+    "client_secrets",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to the Google desktop OAuth client secret JSON.",
+)
+def main(name: str, client_secrets: str) -> None:
+    """Authenticate to an IAP-fronted Marin cluster and cache the refresh token.
 
+    NAME is the logical cluster/endpoint that tools look up (e.g. 'marin').
+    Opens a browser if one is available; otherwise prints a URL to paste back
+    (works over SSH).
+    """
     # Open a browser when one is reachable; otherwise fall back to the URL-paste
     # flow so the login works over SSH / on a headless box.
     try:
@@ -37,10 +40,9 @@ def main(argv: list[str] | None = None) -> int:
     except webbrowser.Error:
         headless = True
 
-    desktop_login(args.name, args.client_secrets, headless=headless)
-    print(f"Cached IAP credentials for '{args.name}' at {credentials_path(args.name)}")
-    return 0
+    desktop_login(name, client_secrets, headless=headless)
+    click.echo(f"Cached IAP credentials for '{name}' at {credentials_path(name)}")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

@@ -27,6 +27,7 @@ import click
 import duckdb
 import fsspec
 import pyarrow as pa
+from rigging.auth import IapLoginRequired
 from rigging.connect import IapAuth, connect, disconnect
 from rigging.iap_login import provider_for
 from rigging.log_setup import configure_logging
@@ -290,8 +291,11 @@ def query_cmd(name: str, sql: str, output_format: str, max_rows: int, tunnel_tim
     """
     configure_logging(level=logging.INFO)
     cfg = load_finelog_config(name)
-    with _log_client(cfg, name, tunnel_timeout) as client:
-        table = client.query(sql, max_rows=max_rows)
+    try:
+        with _log_client(cfg, name, tunnel_timeout) as client:
+            table = client.query(sql, max_rows=max_rows)
+    except IapLoginRequired as exc:
+        raise click.ClickException(str(exc)) from exc
     _PRINTERS[OutputFormat(output_format)](table)
 
 

@@ -4,15 +4,16 @@
 import time
 from datetime import UTC, datetime, timedelta
 
+import google.auth.exceptions
 import pytest
 from connectrpc._interceptor_async import MetadataInterceptor
 from connectrpc._interceptor_sync import MetadataInterceptorSync
 from rigging.auth import (
     BearerTokenInjector,
     GcpAccessTokenProvider,
+    IapLoginRequired,
     IapRefreshTokenProvider,
     IapServiceAccountTokenProvider,
-    StaticTokenProvider,
 )
 
 
@@ -32,10 +33,6 @@ class FakeCtx:
 
     def request_headers(self) -> dict[str, str]:
         return self._headers
-
-
-def test_static_token_provider_returns_token():
-    assert StaticTokenProvider("abc").get_token() == "abc"
 
 
 def test_injector_sets_its_header_sync():
@@ -202,3 +199,24 @@ def test_iap_refresh_token_provider_remints_then_caches(monkeypatch):
     creds.valid = False
     assert provider.get_token() == "refreshed-id-token"
     assert creds.refresh_calls == 2
+
+
+def test_iap_refresh_token_provider_raises_login_required_when_refresh_fails(monkeypatch):
+    class FailingCreds:
+        id_token = None
+        valid = False
+
+        def refresh(self, request):
+            # An expired/revoked refresh token surfaces here as RefreshError.
+            raise google.auth.exceptions.RefreshError("invalid_grant")
+
+    monkeypatch.setattr("google.oauth2.credentials.Credentials", lambda **kwargs: FailingCreds())
+    monkeypatch.setattr("google.auth.transport.requests.Request", lambda: object())
+
+    provider = IapRefreshTokenProvider(
+        "client-id", "secret", "refresh-tok", login_hint="run `marin-login marin --client-secrets <desktop.json>`"
+    )
+
+    # The raw google-auth error becomes an actionable, self-contained IapLoginRequired.
+    with pytest.raises(IapLoginRequired, match="marin-login marin"):
+        provider.get_token()

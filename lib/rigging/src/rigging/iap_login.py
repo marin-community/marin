@@ -21,7 +21,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from rigging.auth import IapRefreshTokenProvider, run_iap_desktop_login
+from rigging.auth import IapLoginRequired, IapRefreshTokenProvider, run_iap_desktop_login
 
 
 @dataclass(frozen=True)
@@ -76,16 +76,25 @@ def desktop_login(name: str, client_secrets_path: str, *, headless: bool = False
     return credentials
 
 
+def _login_hint(name: str) -> str:
+    """The canonical 'run marin-login' remedy for endpoint ``name``."""
+    return f"run `marin-login {name} --client-secrets <desktop.json>` to authenticate"
+
+
 def provider_for(name: str) -> IapRefreshTokenProvider:
     """Build an :class:`~rigging.auth.IapRefreshTokenProvider` from cached credentials.
 
     Raises:
-        FileNotFoundError: if the user has not run the desktop login for ``name``.
+        IapLoginRequired: if the user has not run the desktop login for ``name``.
     """
     credentials = load_iap_credentials(name)
     if credentials is None:
-        raise FileNotFoundError(
-            f"no cached IAP credentials for {name!r} at {credentials_path(name)}; "
-            f"run `marin-login {name} --client-secrets <desktop.json>` first"
+        raise IapLoginRequired(
+            f"no cached IAP credentials for {name!r} at {credentials_path(name)}; {_login_hint(name)}"
         )
-    return IapRefreshTokenProvider(credentials.client_id, credentials.client_secret, credentials.refresh_token)
+    return IapRefreshTokenProvider(
+        credentials.client_id,
+        credentials.client_secret,
+        credentials.refresh_token,
+        login_hint=_login_hint(name),
+    )

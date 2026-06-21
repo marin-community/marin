@@ -6,7 +6,9 @@ import stat
 import webbrowser
 
 import pytest
+from click.testing import CliRunner
 from rigging import iap_login_cli
+from rigging.auth import IapLoginRequired
 from rigging.iap_login import (
     IapCredentials,
     credentials_path,
@@ -40,25 +42,29 @@ def test_load_missing_returns_none(home):
     assert load_iap_credentials("never-logged-in") is None
 
 
-def test_provider_for_missing_raises(home):
-    with pytest.raises(FileNotFoundError, match="marin-login never-logged-in"):
+def test_provider_for_missing_raises_with_login_hint(home):
+    with pytest.raises(IapLoginRequired, match="marin-login never-logged-in"):
         provider_for("never-logged-in")
 
 
-def test_provider_for_threads_cached_credentials(home, monkeypatch):
+def test_provider_for_threads_cached_credentials_and_login_hint(home, monkeypatch):
     save_iap_credentials("marin", IapCredentials("cid", "secret", "rtok"))
 
     captured = {}
     monkeypatch.setattr(
         "rigging.iap_login.IapRefreshTokenProvider",
-        lambda client_id, client_secret, refresh_token: captured.update(
-            client_id=client_id, client_secret=client_secret, refresh_token=refresh_token
+        lambda client_id, client_secret, refresh_token, *, login_hint: captured.update(
+            client_id=client_id, client_secret=client_secret, refresh_token=refresh_token, login_hint=login_hint
         ),
     )
 
     provider_for("marin")
 
-    assert captured == {"client_id": "cid", "client_secret": "secret", "refresh_token": "rtok"}
+    assert captured["client_id"] == "cid"
+    assert captured["client_secret"] == "secret"
+    assert captured["refresh_token"] == "rtok"
+    # The provider carries a name-specific remedy for the refresh-failure path.
+    assert "marin-login marin" in captured["login_hint"]
 
 
 def test_desktop_login_caches_refresh_token(home, tmp_path, monkeypatch):
@@ -89,7 +95,10 @@ def test_desktop_login_rejects_web_client_secret(home, tmp_path):
         desktop_login("marin", str(secret_file))
 
 
-def test_cli_threads_args_and_detects_headless(home, monkeypatch):
+def test_cli_threads_args_and_detects_headless(home, tmp_path, monkeypatch):
+    secret_file = tmp_path / "desktop.json"
+    secret_file.write_text("{}")
+
     captured = {}
     monkeypatch.setattr(
         "rigging.iap_login_cli.desktop_login",
@@ -100,7 +109,7 @@ def test_cli_threads_args_and_detects_headless(home, monkeypatch):
     # No browser on the box -> the CLI should pick the headless paste flow.
     monkeypatch.setattr("rigging.iap_login_cli.webbrowser.get", lambda *a: (_ for _ in ()).throw(webbrowser.Error()))
 
-    rc = iap_login_cli.main(["marin", "--client-secrets", "/tmp/desktop.json"])
+    result = CliRunner().invoke(iap_login_cli.main, ["marin", "--client-secrets", str(secret_file)])
 
-    assert rc == 0
-    assert captured == {"name": "marin", "client_secrets": "/tmp/desktop.json", "headless": True}
+    assert result.exit_code == 0, result.output
+    assert captured == {"name": "marin", "client_secrets": str(secret_file), "headless": True}
