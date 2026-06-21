@@ -42,68 +42,61 @@ def _make_iris_return(monkeypatch, name: str) -> None:
 def test_override_takes_precedence_over_env_and_getpass(monkeypatch):
     monkeypatch.setenv("MARIN_USER", "from_env")
     _force_getpass(monkeypatch, "from_getpass")
-    assert resolve_marin_user("alice", for_user_scope=True) == "alice"
+    assert resolve_marin_user("alice") == "alice"
 
 
 def test_override_is_stripped(monkeypatch):
     _force_getpass(monkeypatch, "from_getpass")
-    assert resolve_marin_user("  bob  ", for_user_scope=True) == "bob"
+    assert resolve_marin_user("  bob  ") == "bob"
 
 
 def test_blank_override_falls_through_to_env(monkeypatch):
     monkeypatch.setenv("MARIN_USER", "carol")
     _force_getpass(monkeypatch, "from_getpass")
-    assert resolve_marin_user("   ", for_user_scope=True) == "carol"
+    assert resolve_marin_user("   ") == "carol"
 
 
 def test_env_takes_precedence_over_iris_and_getpass(monkeypatch):
     monkeypatch.setenv("MARIN_USER", "dave")
     _make_iris_return(monkeypatch, "from_iris")
     _force_getpass(monkeypatch, "from_getpass")
-    assert resolve_marin_user(for_user_scope=True) == "dave"
+    assert resolve_marin_user() == "dave"
 
 
 def test_iris_used_when_importable_and_no_override_or_env(monkeypatch):
     _make_iris_return(monkeypatch, "erin")
     _force_getpass(monkeypatch, "from_getpass")
-    assert resolve_marin_user(for_user_scope=True) == "erin"
+    assert resolve_marin_user() == "erin"
 
 
 def test_getpass_fallback_when_iris_import_fails(monkeypatch):
     _make_iris_unimportable(monkeypatch)
     _force_getpass(monkeypatch, "power")
-    assert resolve_marin_user(for_user_scope=True) == "power"
+    assert resolve_marin_user() == "power"
 
 
 def test_accepts_normal_names(monkeypatch):
     _make_iris_unimportable(monkeypatch)
     _force_getpass(monkeypatch, "wmoss")
-    assert resolve_marin_user(for_user_scope=True) == "wmoss"
+    assert resolve_marin_user() == "wmoss"
 
 
 @pytest.mark.parametrize("bad", ["../shared", "alice/extra", "al\x00ice", "\x07bell"])
 def test_sanitizer_rejects_invalid_names(bad):
     with pytest.raises(ValueError):
-        resolve_marin_user(bad, for_user_scope=False)
+        resolve_marin_user(bad)
 
 
-def test_sanitizer_rejects_empty_resolved_name(monkeypatch):
+def test_sanitizer_returns_none_for_empty_resolved_name(monkeypatch):
     # A blank override/env falls through, so an empty name only reaches the
-    # sanitizer from a resolving source (here getpass).
+    # classifier from a resolving source (here getpass). Empty is treated as
+    # "no usable per-user owner", not malformed, so it returns None.
     _make_iris_unimportable(monkeypatch)
     _force_getpass(monkeypatch, "")
-    with pytest.raises(ValueError):
-        resolve_marin_user(for_user_scope=False)
-
-
-@pytest.mark.parametrize("generic", ["root", "runner", "nobody"])
-def test_generic_name_rejected_for_user_scope(monkeypatch, generic):
-    _make_iris_return(monkeypatch, generic)
-    with pytest.raises(ValueError):
-        resolve_marin_user(for_user_scope=True)
+    assert resolve_marin_user() is None
 
 
 @pytest.mark.parametrize("generic", ["root", "runner", "nobody", "user"])
-def test_generic_name_allowed_when_not_user_scope(monkeypatch, generic):
+def test_generic_name_returns_none(monkeypatch, generic):
     _make_iris_return(monkeypatch, generic)
-    assert resolve_marin_user(for_user_scope=False) == generic
+    assert resolve_marin_user() is None

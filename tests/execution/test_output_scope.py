@@ -227,8 +227,8 @@ def test_user_relative_override_joined_against_user_home(tmp_path, monkeypatch):
 def test_identity_resolution_is_lazy_for_shared_runs(tmp_path, monkeypatch):
     """A SHARED-only run with a generic OS user never resolves identity.
 
-    ``resolve_marin_user(for_user_scope=True)`` would raise on ``root``; a
-    SHARED run must not call it.
+    A SHARED step never calls ``_resolved_user``, so ``_user`` stays ``None``
+    even though ``getpass.getuser()`` is a generic identity (``root``).
     """
     monkeypatch.delenv("MARIN_USER", raising=False)
     monkeypatch.setattr("getpass.getuser", lambda: "root")
@@ -239,3 +239,82 @@ def test_identity_resolution_is_lazy_for_shared_runs(tmp_path, monkeypatch):
     executor.compute_version(step, is_pseudo_dep=False)
     assert executor._user is None
     assert executor.output_paths[step].startswith(prefix + "/train-")
+
+
+def test_mixed_scope_same_version_stays_distinct(tmp_path, monkeypatch):
+    """A SHARED and a USER instance of the same logical step are not merged.
+
+    Both have the same name+config (and thus the same ``version_str``, since
+    scope is intentionally excluded from the hash), but with no SUCCESS seeded
+    anywhere they resolve to DIFFERENT output paths. The dedup must keep both
+    steps scheduled, each producing the path its own downstream consumer reads.
+    """
+    monkeypatch.setenv("MARIN_USER", "alice")
+    prefix = str(tmp_path)
+
+    shared_upstream = ExecutorStep(
+        name="upstream",
+        fn=_noop,
+        config=StepConfig(output_path=this_output_path()),
+        output_scope=OutputScope.SHARED,
+    )
+    user_upstream = ExecutorStep(
+        name="upstream",
+        fn=_noop,
+        config=StepConfig(output_path=this_output_path()),
+        output_scope=OutputScope.USER,
+    )
+    shared_consumer = ExecutorStep(
+        name="shared-consumer",
+        fn=_noop,
+        config=StepConfig(output_path=this_output_path(), input_path=output_path_of(shared_upstream, "artifact")),
+        output_scope=OutputScope.SHARED,
+    )
+    user_consumer = ExecutorStep(
+        name="user-consumer",
+        fn=_noop,
+        config=StepConfig(output_path=this_output_path(), input_path=output_path_of(user_upstream, "artifact")),
+        output_scope=OutputScope.USER,
+    )
+
+    executor = _make_executor(prefix)
+    for step in (shared_consumer, user_consumer):
+        executor.compute_version(step, is_pseudo_dep=False)
+
+    shared_path = executor.output_paths[shared_upstream]
+    user_path = executor.output_paths[user_upstream]
+
+    # Same version hash, different scopes -> distinct resolved paths.
+    assert executor.version_strs[shared_upstream] == executor.version_strs[user_upstream]
+    assert shared_path != user_path
+    assert shared_path.startswith(prefix + "/upstream-")
+    assert user_path.startswith(os.path.join(prefix, "users", "alice") + "/upstream-")
+
+    # Both upstreams survive the dedup and stay scheduled (canonicalize to self).
+    assert shared_upstream in executor.steps
+    assert user_upstream in executor.steps
+    assert executor.canonicalize(shared_upstream) is shared_upstream
+    assert executor.canonicalize(user_upstream) is user_upstream
+
+    # Each downstream consumer reads its own upstream's resolved path.
+    assert executor.configs[shared_consumer].input_path == os.path.join(shared_path, "artifact")
+    assert executor.configs[user_consumer].input_path == os.path.join(user_path, "artifact")
+
+
+def test_identical_shared_steps_still_canonicalize_to_one(tmp_path):
+    """Two identical all-SHARED steps share a version AND a path -> one survives."""
+    prefix = str(tmp_path)
+    first = ExecutorStep(name="train", fn=_noop, config=StepConfig(output_path=this_output_path()))
+    second = ExecutorStep(name="train", fn=_noop, config=StepConfig(output_path=this_output_path()))
+
+    executor = _make_executor(prefix)
+    for step in (first, second):
+        executor.compute_version(step, is_pseudo_dep=False)
+
+    assert executor.version_strs[first] == executor.version_strs[second]
+    assert executor.output_paths[first] == executor.output_paths[second]
+    # Only one of the two identical steps is scheduled, and both canonicalize to it.
+    scheduled = [s for s in executor.steps if s in (first, second)]
+    assert len(scheduled) == 1
+    assert executor.canonicalize(first) is executor.canonicalize(second)
+    assert executor.canonicalize(first) is scheduled[0]

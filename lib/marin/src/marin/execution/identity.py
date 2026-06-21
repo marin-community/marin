@@ -13,44 +13,42 @@ USER_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 GENERIC_USER_NAMES = frozenset({"root", "runner", "nobody", "user", ""})
 
 
-def resolve_marin_user(override: str | None = None, *, for_user_scope: bool) -> str:
+def resolve_marin_user(override: str | None = None) -> str | None:
     """Resolve the Marin user used to scope output paths.
 
     Resolution order: ``override`` (if non-empty after strip) > ``MARIN_USER`` env
     (if set and non-empty) > iris ``resolve_job_user()`` (import-guarded) >
     ``getpass.getuser()``.
 
-    The resolved name is sanitized against ``^[A-Za-z0-9][A-Za-z0-9_-]*$``; any
-    value containing ``/``, ``..``, that is empty, or that is non-printable raises
-    ``ValueError``.
+    The resolved name is classified into three outcomes:
+
+    - MALFORMED (contains ``/`` or ``..``, is non-printable, or otherwise fails
+      ``^[A-Za-z0-9][A-Za-z0-9_-]*$``): raise ``ValueError``. A traversal-y or
+      otherwise illegal name is a security/misconfig signal, never silently
+      accepted.
+    - EMPTY or a generic/service identity (``root``, ``runner``, ``nobody``,
+      ``user``, empty): return ``None`` — there is no usable per-user owner.
+    - Otherwise: return the sanitized name.
 
     Args:
         override: Explicit user name; takes precedence over every other source.
-        for_user_scope: When True, a generic/service identity (``root``,
-            ``runner``, ``nobody``, ``user``, empty) is rejected with a
-            ``ValueError`` instructing the caller to set ``MARIN_USER`` or use a
-            shared output scope. When False, generic names pass the regex check
-            and are returned unchanged.
 
     Returns:
-        The sanitized user name.
+        The sanitized user name, or ``None`` when no usable per-user identity is
+        available.
 
     Raises:
-        ValueError: If the resolved name fails the pattern, or if it is a generic
-            identity while ``for_user_scope`` is True.
+        ValueError: If the resolved name is malformed.
     """
     resolved = _resolve_raw_user(override)
+
+    if resolved in GENERIC_USER_NAMES:
+        return None
 
     if not USER_NAME_PATTERN.match(resolved):
         raise ValueError(
             f"Invalid Marin user name {resolved!r}: must match {USER_NAME_PATTERN.pattern} "
             "(no '/', '..', empty, or non-printable characters)."
-        )
-
-    if for_user_scope and resolved in GENERIC_USER_NAMES:
-        raise ValueError(
-            f"Refusing to scope user outputs under generic identity {resolved!r}. "
-            "Set MARIN_USER to a real user name or pass output_scope=SHARED."
         )
 
     return resolved

@@ -101,9 +101,9 @@ from fray.iris_backend import FrayIrisClient
 from fray.types import TpuConfig
 from iris.cluster.constraints import WellKnownAttribute
 from iris.rpc import config_pb2
-from rigging.cluster_config import StorageProfile, load_cluster_config
 from rigging.filesystem import (
     collect_gcs_paths,
+    data_config,
     get_bucket_location,
     marin_prefix,
     mirror_budget,
@@ -1112,16 +1112,16 @@ class Executor:
         description: str | None = None,
         *,
         default_scope: OutputScope = OutputScope.SHARED,
-        storage_profile: StorageProfile | None = None,
     ):
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
         self.description = description
         self.default_scope = default_scope
-        self.storage_profile = storage_profile or load_cluster_config()
-        # Resolved lazily and cached the first time a USER-scoped step is seen, so
-        # SHARED-only runs never trigger identity resolution (and never risk its
-        # fail-closed ValueError on generic identities).
+        # The active cluster's data config (override per scope with use_data_config).
+        self.data_config = data_config()
+        # Resolved lazily and cached the first time a USER-scoped step is seen.
+        # This is a minor optimization: SHARED-only runs never call
+        # `_resolved_user`, so they never resolve identity at all.
         self._user: str | None = None
 
         self.configs: dict[ExecutorStep, Any] = {}
@@ -1131,7 +1131,11 @@ class Executor:
         # this dict contains is True for steps that are only used as pseudo-dependencies
         self.is_pseudo_dep: dict[ExecutorStep, bool] = {}
         self.version_strs: dict[ExecutorStep, str] = {}
-        self.version_str_to_step: dict[str, ExecutorStep] = {}
+        # Keyed by (version_str, output_path): two same-version steps that resolve
+        # to DIFFERENT output paths (e.g. a SHARED and a USER instance of the same
+        # logical step) must stay distinct so each scheduled step produces the path
+        # its downstream consumers read.
+        self.version_str_to_step: dict[tuple[str, str], ExecutorStep] = {}
         self.hashed_versions: dict[ExecutorStep, str] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
         self.steps: list[ExecutorStep] = []
@@ -1141,13 +1145,15 @@ class Executor:
         # Dedupe advisory warnings emitted from compute_version. Shared upstream
         # DAG chains (e.g. nemotron download/normalize reused across 100+ sources)
         # otherwise repeat the same warning thousands of times.
-        self._warned_duplicate_versions: set[str] = set()
+        self._warned_duplicate_versions: set[tuple[str, str]] = set()
         self._warned_override_mismatches: set[tuple[str, str]] = set()
 
     def _resolved_user(self) -> str:
         """Return the Marin user for USER-scoped paths, resolved once and cached."""
         if self._user is None:
-            self._user = resolve_marin_user(for_user_scope=True)
+            self._user = resolve_marin_user()
+        if self._user is None:
+            raise ValueError("USER output scope requires a real user; set MARIN_USER or use SHARED scope.")
         return self._user
 
     def run(
@@ -1333,7 +1339,7 @@ class Executor:
         if scope is OutputScope.SHARED:
             return self.prefix, os.path.join(self.prefix, name_hash)
 
-        write_prefix = self.storage_profile.user_home(self._resolved_user(), base=self.prefix)
+        write_prefix = self.data_config.user_home(self._resolved_user(), base=self.prefix)
         write_path = os.path.join(write_prefix, name_hash)
         candidates = [write_path, os.path.join(self.prefix, name_hash)]
         for candidate in candidates:
@@ -1408,12 +1414,16 @@ class Executor:
         # Multiple `ExecutorStep`s can have the same version, so only keep one
         # of them.  Note that some `ExecutorStep`s might have depenedencies that
         # are not part of `self.steps`, but there will be some step with the
-        # same version.
-        if version_str not in self.version_str_to_step:
+        # same version.  The dedup key is (version_str, output_path): scope is
+        # intentionally not part of the version hash, so a SHARED and a USER
+        # instance of the same logical step share a version_str but resolve to
+        # different paths; keying on the path keeps both scheduled.
+        dedup_key = (version_str, output_path)
+        if dedup_key not in self.version_str_to_step:
             self.steps.append(step)
-            self.version_str_to_step[version_str] = step
-        elif version_str not in self._warned_duplicate_versions:
-            self._warned_duplicate_versions.add(version_str)
+            self.version_str_to_step[dedup_key] = step
+        elif dedup_key not in self._warned_duplicate_versions:
+            self._warned_duplicate_versions.add(dedup_key)
             logger.warning(
                 f"Multiple `ExecutorStep`s (named {step.name}) have the same version; try to instantiate only once."
             )
@@ -1461,7 +1471,7 @@ class Executor:
 
     def canonicalize(self, step: ExecutorStep) -> ExecutorStep:
         """Multiple instances of `ExecutorStep` might have the same version."""
-        return self.version_str_to_step[self.version_strs[step]]
+        return self.version_str_to_step[(self.version_strs[step], self.output_paths[step])]
 
     def get_infos(self):
         """Calculates info files for each step and also entire execution"""

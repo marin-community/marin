@@ -5,7 +5,7 @@
 """Configure the 30d cleanup policy on a GCP Artifact Registry repository.
 
 A registry repo's "location" is the GCP region. The canonical region list is
-sourced from :data:`rigging.filesystem.REGION_TO_DATA_BUCKET` so this script
+sourced from :data:`rigging.filesystem.DEFAULT_DATA_CONFIG.region_buckets` so this script
 never drifts from the runtime view of the fleet (us-central1, us-central2,
 us-east1, us-east5, us-west4, europe-west4).
 
@@ -22,7 +22,7 @@ import subprocess
 import sys
 import tempfile
 
-from rigging.filesystem import REGION_TO_DATA_BUCKET
+from rigging.filesystem import DEFAULT_DATA_CONFIG
 
 CLEANUP_POLICY_30D = [
     {
@@ -94,7 +94,7 @@ def main():
     target.add_argument(
         "--all-regions",
         action="store_true",
-        help="Apply to every region in rigging.filesystem.REGION_TO_DATA_BUCKET.",
+        help="Apply to every region in rigging.filesystem.DEFAULT_DATA_CONFIG.region_buckets.",
     )
     parser.add_argument("--project", default=None, help="GCP project ID (default: current gcloud project)")
     parser.add_argument(
@@ -105,7 +105,7 @@ def main():
     args = parser.parse_args()
 
     if args.all_regions:
-        regions = list(REGION_TO_DATA_BUCKET.keys())
+        regions = list(DEFAULT_DATA_CONFIG.region_buckets.keys())
     elif args.region:
         regions = [args.region]
     else:
