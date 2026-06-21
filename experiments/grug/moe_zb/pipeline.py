@@ -132,7 +132,6 @@ def _forward_pipeline_loss(
         m_clip = jnp.clip(m, 0, M - 1)
 
         tok_m = jax.lax.dynamic_index_in_dim(tokens, m_clip, axis=0, keepdims=False)
-        # Embed is a cheap gather, so it stays compute-everywhere + masked.
         embedded = model.embed_fn(params.embed, tok_m)
         stage_in = jnp.where(is_first, embedded, buf)
 
@@ -142,9 +141,6 @@ def _forward_pipeline_loss(
         total_loss = total_loss + jnp.where(valid, stage_aux, 0.0)
 
         tgt_m = jax.lax.dynamic_index_in_dim(targets, m_clip, axis=0, keepdims=False)
-        # GPipe is the autodiff oracle: its backward would put the head-grad psum
-        # inside a divergent cond (deadlock), so the head stays compute-everywhere +
-        # masked here. The head-skip optimization lives in the zero-bubble backend.
         loss_m = model.head_loss_fn(params.head, stage_out, tgt_m)
         total_loss = total_loss + jnp.where(is_last & valid, loss_m, 0.0)
 
@@ -248,8 +244,6 @@ def _zero_bubble_body(
     stage_params = jax.tree_util.tree_map(lambda x: x[0], params.stage)
 
     # Forward sweep: keep per-timestep vjp closures + outputs (static-keyed by t).
-    # The head runs on only the last stage (lax.cond), so its vjp is recomputed
-    # under cond in the backward rather than stored on every stage.
     vjp_x_by_t: list[Any] = [None] * T
     vjp_p_by_t: list[Any] = [None] * T
     embed_vjp_by_t: list[Any] = [None] * T
@@ -267,8 +261,7 @@ def _zero_bubble_body(
         tgt_m = jax.lax.dynamic_index_in_dim(targets, m_clip, axis=0, keepdims=False)
 
         # Loop vars are bound as lambda defaults: jax.vjp traces each immediately,
-        # so the closures capture this iteration's tensors (B023-safe). Embed is a
-        # cheap gather, so it stays compute-everywhere + masked, with its vjp stored.
+        # so the closures capture this iteration's tensors (B023-safe).
         embedded, embed_vjp = jax.vjp(lambda e, _t=tok_m: model.embed_fn(e, _t), params.embed)
         stage_in = jnp.where(is_first, embedded, buf)
         # stage_fn returns (hidden, aux); vjp closures take a (d_hidden, d_aux) cotangent.
@@ -276,18 +269,8 @@ def _zero_bubble_body(
         _, vjp_p = jax.vjp(lambda p, _si=stage_in: model.stage_fn(p, _si), stage_params)
 
         total_loss = total_loss + jnp.where(valid, stage_aux, 0.0)
-        # Head ([D, V] projection) only on the last stage — the ~2x redundant op.
-        loss_m = jax.lax.cond(
-            is_last,
-            lambda out, tgt: model.head_loss_fn(params.head, out, tgt),
-            # A stage-varying zero (cheap reduction, no [D, V] matmul): the cond
-            # branches must share the same shard_map vma, and the head loss varies
-            # over `stage` through `out`, so the skip branch must too.
-            lambda out, tgt: jnp.sum(out) * 0.0,
-            stage_out,
-            tgt_m,
-        )
-        total_loss = total_loss + jnp.where(valid, loss_m, 0.0)
+        loss_m = model.head_loss_fn(params.head, stage_out, tgt_m)
+        total_loss = total_loss + jnp.where(is_last & valid, loss_m, 0.0)
 
         vjp_x_by_t[t] = vjp_x
         vjp_p_by_t[t] = vjp_p
@@ -305,47 +288,29 @@ def _zero_bubble_body(
     # slots each deferred W (weight-grad) into the next B's upstream-ppermute
     # stall. B and W of the same timestep stay ordered (W(t) follows B(t)), so the
     # gradients are identical to the two-phase backward; only execution interleaves.
-    zeros_embed = jax.tree_util.tree_map(jnp.zeros_like, params.embed)
-    # Stage-local view of the replicated head params (same value, vma={stage}): a
-    # vjp w.r.t. it yields a *stage-local* head grad with no in-cond all-reduce
-    # (that would deadlock — only the last stage enters the cond). The local grads
-    # are summed across stages by one unconditional psum after the backward loop.
-    sv_one = 1.0 + 0.0 * sid.astype(jnp.float32)
-    head_sv = jax.tree_util.tree_map(lambda h: h * sv_one, params.head)
-    zeros_head_sv = jax.tree_util.tree_map(lambda h: h * (sv_one * 0.0), params.head)
-    g_embed = zeros_embed
-    g_head_local = zeros_head_sv
+    g_embed = jax.tree_util.tree_map(jnp.zeros_like, params.embed)
+    g_head = jax.tree_util.tree_map(jnp.zeros_like, params.head)
     g_stage = jax.tree_util.tree_map(jnp.zeros_like, stage_params)
     dy_by_t: list[Any] = [None] * T
     dbuf = jnp.zeros(hidden_shape, hidden_dtype)
 
     def b_op(t: int, dbuf: jax.Array) -> jax.Array:
         valid = valid_by_t[t]
-        # Cotangent on this microbatch's loss is 1/M; invalid (warmup/cooldown)
-        # slots feed nothing. cond restricts the head vjp to the last stage, where
-        # the head actually runs — no S-fold redundant [D, V] backward.
-        loss_w = jnp.where(valid, 1.0 / M, 0.0)
-        # Head backward only on the last stage. The vjp is taken w.r.t. head_sv (the
-        # stage-local view), so both outputs are stage-local — no all-reduce inside
-        # the cond. dout is the cotangent w.r.t. the per-stage `out`; the skip branch
-        # returns stage-varying zeros so the cond branches share the same vma.
-        g_head_local_t, dout = jax.lax.cond(
-            is_last,
-            lambda out, tgt, w: jax.vjp(lambda h, o: model.head_loss_fn(h, o, tgt), head_sv, out)[1](w),
-            lambda out, tgt, w: (zeros_head_sv, out * 0.0),
-            out_by_t[t],
-            tgt_by_t[t],
-            loss_w,
-        )
+        # Cotangent on this microbatch's loss is 1/M, but only the last stage's
+        # valid slots actually feed the loss; everything else contributes nothing.
+        last_valid = is_last & valid
+        loss_w = jnp.where(last_valid, 1.0 / M, 0.0)
+        head_vjp = jax.vjp(lambda h, o, _tg=tgt_by_t[t]: model.head_loss_fn(h, o, _tg), params.head, out_by_t[t])[1]
+        g_head_t, dout = head_vjp(loss_w)
         dy = jnp.where(is_last, dout, dbuf)
         dy_by_t[t] = dy
-        nonlocal g_head_local, g_embed
-        g_head_local = _tree_add(g_head_local, g_head_local_t)
+        nonlocal g_head, g_embed
+        g_head = _tree_add(g_head, g_head_t)
 
         # Aux (stage-local) is part of the loss on every valid slot; cotangent 1/M.
         aux_cot = jnp.where(valid, 1.0 / M, 0.0)
         (dx,) = vjp_x_by_t[t]((dy, aux_cot))
-        # embed grad lives only on stage 0's valid slots (cheap masked vjp).
+        # embed grad lives only on stage 0's valid slots.
         first_valid = is_first & valid
         (g_embed_t,) = embed_vjp_by_t[t](jnp.where(first_valid, dx, jnp.zeros_like(dx)))
         g_embed = _tree_add(g_embed, g_embed_t)
@@ -367,12 +332,10 @@ def _zero_bubble_body(
         else:
             w_op(t)
 
-    # One unconditional all-reduce shares the last stage's (stage-local) head grad
-    # to all stages, matching the replicated head params — the collective the cond
-    # could not contain. embed is replicated too, so its in-loop vjp already psummed
-    # the cotangent across stage (no manual psum). stage params are sharded over
-    # `stage`, so each device keeps its own grad; re-add the leading shard axis.
-    g_head = jax.lax.psum(g_head_local, STAGE_AXIS)
+    # embed/head are replicated, so a vjp w.r.t. them inside shard_map already
+    # psums the cotangent across the stage axis: g_embed/g_head come back correct
+    # on every device, no manual psum. stage params are sharded over `stage`, so
+    # each device keeps its own stage grad; re-add the leading shard axis.
     g_stage = jax.tree_util.tree_map(lambda x: x[None], g_stage)
     return total_loss, PipelineParams(embed=g_embed, stage=g_stage, head=g_head)
 
