@@ -133,6 +133,10 @@ class GrugModelConfig:
     by construction (up-projected from c_kv via w_uv), so no align_kv_heads is
     needed. Cost is 3 small per-head ops; absorption-compatible at decode via
     a precomputed M[h] = w_uv[h].T @ w_uv[h] matrix."""
+    xsa_alternate_skip_first: bool = False
+    """When True (and ``xsa=True``), XSA fires only on odd-indexed layers
+    (i % 2 == 1) -- skipping layer 0, applying on layer 1, skipping layer 2, etc.
+    With an even ``num_layers`` this lands XSA on the final layer."""
     pko_last_layer: bool = False
     """When True, apply Partial Key Offset (PKO) on the final transformer layer
     only. PKO shifts the no-rope K signal back by one position (with doc-start
@@ -313,6 +317,7 @@ class CausalSelfAttention(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
+        use_xsa: bool = False,
     ) -> Float[Array, "B S D"]:
         hd = self.cfg.inferred_head_dim
         nh = self.cfg.num_heads
@@ -453,7 +458,7 @@ class CausalSelfAttention(eqx.Module):
         # Exclusive Self Attention: subtract the per-head component of attn_out
         # parallel to v at the same query position. MLA's v is already per-head,
         # so no align_kv_heads call is needed.
-        if self.cfg.xsa:
+        if use_xsa:
             v_aligned = reshard(v, P(_BATCH_AXES, None, "model", None))
             dot = jnp.sum(attn_out * v_aligned, axis=-1, keepdims=True)
             v_norm_sq = jnp.sum(v_aligned * v_aligned, axis=-1, keepdims=True)
@@ -746,9 +751,10 @@ class Block(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
+        use_xsa: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask, use_pko=use_pko)
+        x = x + self.attn(attn_in, mask, use_pko=use_pko, use_xsa=use_xsa)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -816,7 +822,14 @@ class Transformer(eqx.Module):
             # PKO on the final layer only when cfg.pko_last_layer is set.
             is_last = i == num_blocks - 1
             use_pko = cfg.pko_last_layer and is_last
-            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, full_mask, use_pko)
+            # XSA fires on every layer when cfg.xsa, OR only on odd-indexed
+            # layers when xsa_alternate_skip_first is also set (so layer 0 is
+            # skipped; with even num_layers this lands XSA on the last layer).
+            if cfg.xsa and cfg.xsa_alternate_skip_first:
+                use_xsa = i % 2 == 1
+            else:
+                use_xsa = cfg.xsa
+            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, full_mask, use_pko, use_xsa)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
