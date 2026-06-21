@@ -1145,12 +1145,7 @@ class Executor:
         self._warned_override_mismatches: set[tuple[str, str]] = set()
 
     def _resolved_user(self) -> str:
-        """Resolve and cache the Marin user for USER-scoped output paths.
-
-        Calls ``resolve_marin_user(for_user_scope=True)`` exactly once. Invoked
-        only when a USER-scoped step is actually encountered, so SHARED-only runs
-        never resolve identity (and never hit its fail-closed ValueError).
-        """
+        """Return the Marin user for USER-scoped paths, resolved once and cached."""
         if self._user is None:
             self._user = resolve_marin_user(for_user_scope=True)
         return self._user

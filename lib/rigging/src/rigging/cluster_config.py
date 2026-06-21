@@ -58,12 +58,9 @@ class StorageProfile:
         """Resolve the storage root for this profile.
 
         Precedence: ``MARIN_PREFIX`` env > ``self.root`` > region-local bucket
-        from ``region_buckets[marin_region()]`` > :func:`marin_prefix` fallback.
-
-        With ``root=None`` and no region-local match, this delegates to
-        :func:`marin_prefix`, so the default profile is byte-identical to the
-        historical prefix resolution (including the ``MARIN_PREFIX`` env rung,
-        the metadata-derived region bucket, and the ``/tmp/marin`` fallback).
+        from ``region_buckets[marin_region()]`` > :func:`marin_prefix`. With
+        ``root=None`` and no region match it returns :func:`marin_prefix`
+        unchanged.
         """
         env_prefix = os.environ.get(_MARIN_PREFIX_ENV)
         if env_prefix:
@@ -80,10 +77,6 @@ class StorageProfile:
     def user_home(self, user: str, *, base: str | None = None) -> str:
         """Return the per-user home directory under ``user_segment``."""
         return os.path.join(base or self.resolved_root(), self.user_segment, user)
-
-    def shared_root(self, *, base: str | None = None) -> str:
-        """Return the shared (non-user-scoped) storage root."""
-        return base or self.resolved_root()
 
 
 DEFAULT_STORAGE_PROFILE: StorageProfile = StorageProfile(

@@ -114,12 +114,3 @@ def test_user_home_joins_segment_and_user(monkeypatch):
 def test_user_home_respects_explicit_base():
     """An explicit base overrides resolved_root() for user_home."""
     assert DEFAULT_STORAGE_PROFILE.user_home("bob", base="gs://b") == "gs://b/users/bob"
-
-
-def test_shared_root_defaults_to_resolved_root(monkeypatch):
-    """shared_root() returns resolved_root() when no base is supplied."""
-    monkeypatch.delenv("MARIN_PREFIX", raising=False)
-    monkeypatch.setattr(cluster_config, "marin_region", lambda: "us-west4")
-
-    assert DEFAULT_STORAGE_PROFILE.shared_root() == "gs://marin-us-west4"
-    assert DEFAULT_STORAGE_PROFILE.shared_root(base="gs://explicit") == "gs://explicit"
