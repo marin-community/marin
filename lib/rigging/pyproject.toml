@@ -24,5 +24,13 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/rigging"]
 
+[tool.hatch.build.targets.wheel.force-include]
+# The repo-root config/ cluster YAMLs are configuration data, not package
+# source. force-include maps them into the wheel at rigging/clusters/ so that an
+# installed rigging (no checkout) can still resolve config/marin.yaml via the
+# bundled-dir probe in filesystem._bundled_cluster_config_dir(). Mirrors the
+# iris pattern (lib/iris/pyproject.toml -> iris/config).
+"../../config" = "rigging/clusters"
+
 [tool.pytest.ini_options]
 timeout = 10

@@ -61,10 +61,32 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
-# Cluster config search dirs, highest priority first: the repo-root ``config/``
-# directory, then a per-user override location. Resolved against the marin
-# workspace root by :func:`rigging.config_discovery.resolve_cluster_config`.
-MARIN_CLUSTER_CONFIG_DIRS: tuple[str, ...] = ("config", "~/.config/marin/clusters")
+
+def _bundled_cluster_config_dir() -> str | None:
+    """Bundled cluster-config dir for an installed (wheel) rigging.
+
+    Populated by the ``force-include`` in ``lib/rigging/pyproject.toml`` at
+    ``rigging/clusters``. Returns ``None`` for a source/editable checkout, where
+    the repo-root ``config/`` entry resolves against the marin workspace root.
+    Mirrors ``iris.cli.connect._bundled_iris_config_dir``.
+    """
+    bundled = pathlib.Path(__file__).resolve().parent / "clusters"
+    return str(bundled) if bundled.is_dir() else None
+
+
+# Cluster config search dirs, highest priority first: a per-user override, the
+# repo-root ``config/`` directory (in-tree checkout), then the bundled copy for
+# installed wheels. Relative paths resolve against the marin workspace root via
+# :func:`rigging.config_discovery.resolve_cluster_config`.
+MARIN_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
+    p
+    for p in (
+        "~/.config/marin/clusters",
+        "config",
+        _bundled_cluster_config_dir(),
+    )
+    if p is not None
+)
 
 _MARIN_PREFIX_ENV = "MARIN_PREFIX"
 _MARIN_CLUSTER_ENV = "MARIN_CLUSTER"
