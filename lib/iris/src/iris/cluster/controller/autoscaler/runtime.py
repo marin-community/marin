@@ -1029,14 +1029,13 @@ class Autoscaler:
         return result.sibling_worker_ids
 
     def drain_slices_for_workers(self, worker_ids: Sequence[str]) -> list[str]:
-        """Drain the unique slices containing the given workers for preemption.
+        """Drain the unique slices holding the given workers for preemption.
 
-        Like :meth:`terminate_slices_for_workers` but for an intentional, scheduler-
-        driven drain: it does NOT record a preemption/failure outcome (no churn
-        detector feed, no provisioning outcome) so the deliberate teardown never
-        poisons the pool's backoff/health signals. Stamps the drain cooldown for
-        each affected pool so the scheduler holds off re-preempting it while the
-        reprovision is in flight. Returns sibling worker IDs to fail immediately.
+        For a scheduler-driven cross-variant preemption: the teardown records no
+        failure or preemption outcome, so the pool's health and backoff signals
+        stay clean. Stamps each affected pool's drain cooldown so the scheduler
+        holds off re-preempting it while the replacement slice provisions. Returns
+        the drained slices' sibling worker ids, which the caller fails immediately.
         """
         timestamp = Timestamp.now()
         result = drain_slices_for_workers_operation(

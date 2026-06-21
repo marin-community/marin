@@ -1893,35 +1893,37 @@ v4-res:
             if n.startswith("tpu_v4-res_"):
                 assert g.reservation_chips == 0
 
-    def test_chips_without_fungible_flag_rejected(self, tmp_path: Path):
-        pool_yaml = self._reserved_pool(fungible="", chips="    reservation_chips: 1024\n")
-        p = tmp_path / "config.yaml"
-        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
-        with pytest.raises(ValueError, match="reservation_chips set without"):
-            load_config(p)
+    _FUNGIBLE = "    fungible_reservation: true\n"
 
-    def test_fungible_on_preemptible_rejected(self, tmp_path: Path):
-        pool_yaml = self._reserved_pool(
-            fungible="    fungible_reservation: true\n",
-            chips="    reservation_chips: 1024\n",
-            capacity="preemptible",
-        )
+    @pytest.mark.parametrize(
+        "fungible, chips, capacity, match",
+        [
+            pytest.param(
+                "", "    reservation_chips: 1024\n", "reserved", "reservation_chips set without", id="chips-without-flag"
+            ),
+            pytest.param(
+                _FUNGIBLE, "    reservation_chips: 1024\n", "preemptible", "capacity_type=reserved", id="on-preemptible"
+            ),
+            # Largest slice is v4-16 = 8 chips, so a 4-chip budget can never place it.
+            pytest.param(
+                _FUNGIBLE,
+                "    reservation_chips: 4\n",
+                "reserved",
+                "smaller than the largest slice",
+                id="budget-too-small",
+            ),
+            pytest.param(
+                _FUNGIBLE,
+                "    reservation_chips: 0\n",
+                "reserved",
+                "positive integer reservation_chips",
+                id="nonpositive-chips",
+            ),
+        ],
+    )
+    def test_invalid_reservation_rejected(self, tmp_path: Path, fungible: str, chips: str, capacity: str, match: str):
+        pool_yaml = self._reserved_pool(fungible=fungible, chips=chips, capacity=capacity)
         p = tmp_path / "config.yaml"
         p.write_text(self._BASE.format(pool_yaml=pool_yaml))
-        with pytest.raises(ValueError, match="capacity_type=reserved"):
-            load_config(p)
-
-    def test_budget_smaller_than_largest_slice_rejected(self, tmp_path: Path):
-        # Largest slice is v4-16 = 8 chips; a 4-chip budget can never place it.
-        pool_yaml = self._reserved_pool(fungible="    fungible_reservation: true\n", chips="    reservation_chips: 4\n")
-        p = tmp_path / "config.yaml"
-        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
-        with pytest.raises(ValueError, match="smaller than the largest slice"):
-            load_config(p)
-
-    def test_nonpositive_chips_rejected(self, tmp_path: Path):
-        pool_yaml = self._reserved_pool(fungible="    fungible_reservation: true\n", chips="    reservation_chips: 0\n")
-        p = tmp_path / "config.yaml"
-        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
-        with pytest.raises(ValueError, match="positive integer reservation_chips"):
+        with pytest.raises(ValueError, match=match):
             load_config(p)

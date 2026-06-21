@@ -66,12 +66,12 @@ def drain_slices_for_workers(
     log_action: Callable[..., vm_pb2.AutoscalerAction],
     timestamp: Timestamp,
 ) -> SliceTerminationResult:
-    """Detach slices for an intentional drain (cross-variant preemption).
+    """Detach the slices holding ``worker_ids`` for an intentional drain.
 
-    Unlike :func:`terminate_slices_for_workers`, this does NOT feed the group's
-    churn detector: the drain is a deliberate scheduling decision, not a slice
-    failure, so it must not poison the AIMD backoff/health signals that make the
-    pool look unhealthy and throttle reprovision.
+    For a deliberate scheduling decision (cross-variant preemption), not a slice
+    failure: the teardown leaves the group's health and backoff signals untouched
+    so a drained pool is not treated as unhealthy. Returns the detached slices'
+    sibling worker ids.
     """
     return _detach_slices_for_workers(
         groups=groups,
