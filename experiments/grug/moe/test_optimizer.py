@@ -219,7 +219,7 @@ def test_may_optimizer_reads_grouped_muonh_packed_entry_env(monkeypatch):
     assert optimizer.expert_grouped_muonh_chunk_local_boundaries is True
 
 
-def test_may_grouped_muonh_defaults_to_packed_entry(monkeypatch):
+def test_may_grouped_muonh_defaults_to_packed_bank_compute(monkeypatch):
     monkeypatch.setenv("MAY_OPTIMIZER", "muonh")
     monkeypatch.setenv("MAY_EXPERT_3D_OPTIMIZER", "grouped_muonh")
 
@@ -228,8 +228,37 @@ def test_may_grouped_muonh_defaults_to_packed_entry(monkeypatch):
     assert isinstance(optimizer, GrugMoeMuonHConfig)
     assert optimizer.expert_3d_optimizer == "grouped_muonh"
     assert optimizer.expert_grouped_muonh_packed_entry is True
+    assert optimizer.expert_grouped_muonh_packed_bank_compute is True
+    assert optimizer.expert_grouped_muonh_chunk_local_boundaries is False
+    assert optimizer.max_grouped_stack_size == 8
+
+
+def test_may_grouped_muonh_reads_max_grouped_stack_size_env(monkeypatch):
+    monkeypatch.setenv("MAY_OPTIMIZER", "muonh")
+    monkeypatch.setenv("MAY_EXPERT_3D_OPTIMIZER", "grouped_muonh")
+    monkeypatch.setenv("MAY_MUON_MAX_GROUPED_STACK_SIZE", "16")
+
+    optimizer = build_may_optimizer(batch_size=8, seq_len=4096)
+
+    assert isinstance(optimizer, GrugMoeMuonHConfig)
+    assert optimizer.expert_3d_optimizer == "grouped_muonh"
+    assert optimizer.expert_grouped_muonh_packed_bank_compute is True
+    assert optimizer.max_grouped_stack_size == 16
+
+
+def test_may_grouped_muonh_can_disable_packed_bank_compute(monkeypatch):
+    monkeypatch.setenv("MAY_OPTIMIZER", "muonh")
+    monkeypatch.setenv("MAY_EXPERT_3D_OPTIMIZER", "grouped_muonh")
+    monkeypatch.setenv("MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE", "false")
+
+    optimizer = build_may_optimizer(batch_size=8, seq_len=4096)
+
+    assert isinstance(optimizer, GrugMoeMuonHConfig)
+    assert optimizer.expert_3d_optimizer == "grouped_muonh"
+    assert optimizer.expert_grouped_muonh_packed_entry is True
     assert optimizer.expert_grouped_muonh_packed_bank_compute is False
     assert optimizer.expert_grouped_muonh_chunk_local_boundaries is False
+    assert optimizer.max_grouped_stack_size == GrugMoeMuonHConfig.max_grouped_stack_size
 
 
 def test_grug_moe_sgd_update_is_stateless_and_matches_shapes():
@@ -331,7 +360,7 @@ def test_grouped_expert_muonh_optimizer_returns_fsdp_updates_before_apply():
     hlo = str(lowered.compiler_ir(dialect="stablehlo"))
     assert hlo.count("stablehlo.all_reduce") == 0
     assert hlo.count("stablehlo.reduce_scatter") == 0
-    assert hlo.count("stablehlo.all_to_all") == 2
+    assert hlo.count("stablehlo.all_to_all") == 0
     assert hlo.count("stablehlo.all_gather") == 6
 
 
@@ -382,7 +411,7 @@ def test_grouped_expert_muonh_packs_multi_chunk_restore_boundary():
     hlo = str(lowered.compiler_ir(dialect="stablehlo"))
     assert hlo.count("stablehlo.all_reduce") == 0
     assert hlo.count("stablehlo.reduce_scatter") == 0
-    assert hlo.count("stablehlo.all_to_all") == 2
+    assert hlo.count("stablehlo.all_to_all") == 0
     assert hlo.count("stablehlo.all_gather") == 10
 
 
@@ -433,8 +462,8 @@ def test_grouped_expert_muonh_packed_entry_boundary_is_explicit():
     hlo = str(lowered.compiler_ir(dialect="stablehlo"))
     assert hlo.count("stablehlo.all_reduce") == 0
     assert hlo.count("stablehlo.reduce_scatter") == 0
-    assert hlo.count("stablehlo.all_to_all") == 6
-    assert hlo.count("stablehlo.all_gather") == 0
+    assert hlo.count("stablehlo.all_to_all") == 4
+    assert hlo.count("stablehlo.all_gather") == 2
 
 
 def test_grouped_expert_muonh_packed_entry_r4_boundary_is_explicit():
@@ -586,13 +615,17 @@ def test_grouped_expert_muonh_packed_bank_compute_avoids_chunk_slice_boundaries(
     grouped_state = opt_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
     next_grouped_state = next_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
     assert isinstance(grouped_state, GroupedMuonHState)
-    assert len(grouped_state.trace_groups) == 6
-    assert all(trace_group.shape[0] <= 2 for trace_group in grouped_state.trace_groups)
+    assert len(grouped_state.trace_groups) == 2
+    assert {trace_group.shape[0] for trace_group in grouped_state.trace_groups} == {6}
     assert isinstance(next_grouped_state, GroupedMuonHState)
-    assert len(next_grouped_state.trace_groups) == 6
-    assert all(trace_group.shape[0] <= 2 for trace_group in next_grouped_state.trace_groups)
+    assert len(next_grouped_state.trace_groups) == 2
+    assert {trace_group.shape[0] for trace_group in next_grouped_state.trace_groups} == {6}
     assert_update_sharding_matches_params(updates, params, "packed-bank grouped MuonH production updates")
     hlo = str(lowered.compiler_ir(dialect="stablehlo"))
+    assert hlo.count("stablehlo.all_reduce") == 0
+    assert hlo.count("stablehlo.reduce_scatter") == 0
+    assert hlo.count("stablehlo.all_to_all") == 0
+    assert hlo.count("stablehlo.all_gather") == 2
     assert "slice_update_chunk" not in hlo
     assert "slice_param_chunk" not in hlo
     assert "concat_chunks" not in hlo
@@ -645,14 +678,204 @@ def test_grouped_expert_muonh_packed_bank_compute_handles_replicated_group_axis(
     grouped_state = opt_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
     next_grouped_state = next_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
     assert isinstance(grouped_state, GroupedMuonHState)
-    assert len(grouped_state.trace_groups) == 6
-    assert all(trace_group.shape[0] <= 2 for trace_group in grouped_state.trace_groups)
+    assert len(grouped_state.trace_groups) == 2
+    assert {trace_group.shape[0] for trace_group in grouped_state.trace_groups} == {6}
     assert isinstance(next_grouped_state, GroupedMuonHState)
-    assert len(next_grouped_state.trace_groups) == 6
-    assert all(trace_group.shape[0] <= 2 for trace_group in next_grouped_state.trace_groups)
+    assert len(next_grouped_state.trace_groups) == 2
+    assert {trace_group.shape[0] for trace_group in next_grouped_state.trace_groups} == {6}
     assert_update_sharding_matches_params(updates, params, "packed-bank grouped MuonH replicated-group updates")
     hlo = str(lowered.compiler_ir(dialect="stablehlo"))
+    assert hlo.count("stablehlo.all_reduce") == 0
+    assert hlo.count("stablehlo.reduce_scatter") == 0
+    assert hlo.count("stablehlo.all_to_all") == 0
+    assert hlo.count("stablehlo.all_gather") == 0
     assert "ShapeDtypeStruct" not in hlo
+    assert "slice_update_chunk" not in hlo
+    assert "slice_param_chunk" not in hlo
+    assert "concat_chunks" not in hlo
+
+
+def test_grouped_expert_muonh_packed_bank_compute_pads_whole_bank_for_r4():
+    mesh = AbstractMesh(
+        axis_sizes=(4, 1, 8, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    gate_sharding = NamedSharding(mesh, P("expert", "data", "model"))
+    down_sharding = NamedSharding(mesh, P("expert", "model", "data"))
+
+    def block_specs():
+        return {
+            "mlp": {
+                "expert_mlp": {
+                    "w_gate_up": jax.ShapeDtypeStruct((8, 16, 32), jnp.bfloat16, sharding=gate_sharding),
+                    "w_down": jax.ShapeDtypeStruct((8, 32, 16), jnp.bfloat16, sharding=down_sharding),
+                },
+            },
+        }
+
+    params = {"blocks": tuple(block_specs() for _ in range(6))}
+    grads = jax.tree.map(lambda param: jax.ShapeDtypeStruct(param.shape, param.dtype, sharding=param.sharding), params)
+    optimizer = GrugMoeMuonHConfig(
+        learning_rate=0.02,
+        lr_schedule="constant",
+        backend_steps=1,
+        expert_3d_optimizer="grouped_muonh",
+        expert_grouped_muonh_group_size=2,
+        expert_grouped_muonh_packed_entry=True,
+        expert_grouped_muonh_packed_bank_compute=True,
+        max_grouped_stack_size=8,
+        max_grad_norm=None,
+    ).build(num_train_steps=8)
+
+    def update_step(params, grads, opt_state):
+        updates, next_state = optimizer.update(grads, opt_state, params)
+        return updates, next_state
+
+    with use_abstract_mesh(mesh):
+        opt_state = jax.eval_shape(optimizer.init, params)
+        updates, next_state = jax.eval_shape(update_step, params, grads, opt_state)
+        update_step_jit = jax.jit(update_step)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step_jit.trace(params, grads, opt_state).lower(lowering_platforms=(platform,))
+
+    grouped_state = opt_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
+    next_grouped_state = next_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
+    assert isinstance(grouped_state, GroupedMuonHState)
+    assert len(grouped_state.trace_groups) == 2
+    assert {trace_group.shape[0] for trace_group in grouped_state.trace_groups} == {8}
+    assert isinstance(next_grouped_state, GroupedMuonHState)
+    assert len(next_grouped_state.trace_groups) == 2
+    assert {trace_group.shape[0] for trace_group in next_grouped_state.trace_groups} == {8}
+    assert_update_sharding_matches_params(updates, params, "packed-bank grouped MuonH R4 production updates")
+    hlo = str(lowered.compiler_ir(dialect="stablehlo"))
+    assert hlo.count("stablehlo.all_reduce") == 0
+    assert hlo.count("stablehlo.reduce_scatter") == 0
+    assert hlo.count("stablehlo.all_to_all") == 0
+    assert hlo.count("stablehlo.all_gather") == 2
+    assert "slice_update_chunk" not in hlo
+    assert "slice_param_chunk" not in hlo
+    assert "concat_chunks" not in hlo
+
+
+def test_may_grouped_muonh_default_uses_packed_bank_compute_for_r4(monkeypatch):
+    monkeypatch.setenv("MAY_OPTIMIZER", "muonh")
+    monkeypatch.setenv("MAY_EXPERT_3D_OPTIMIZER", "grouped_muonh")
+    monkeypatch.setenv("MAY_MUON_BACKEND_STEPS", "1")
+    mesh = AbstractMesh(
+        axis_sizes=(4, 1, 8, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    gate_sharding = NamedSharding(mesh, P("expert", "data", "model"))
+    down_sharding = NamedSharding(mesh, P("expert", "model", "data"))
+
+    def block_specs():
+        return {
+            "mlp": {
+                "expert_mlp": {
+                    "w_gate_up": jax.ShapeDtypeStruct((8, 16, 32), jnp.bfloat16, sharding=gate_sharding),
+                    "w_down": jax.ShapeDtypeStruct((8, 32, 16), jnp.bfloat16, sharding=down_sharding),
+                },
+            },
+        }
+
+    params = {"blocks": tuple(block_specs() for _ in range(6))}
+    grads = jax.tree.map(lambda param: jax.ShapeDtypeStruct(param.shape, param.dtype, sharding=param.sharding), params)
+    optimizer_config = build_may_optimizer(batch_size=8, seq_len=4096)
+    assert isinstance(optimizer_config, GrugMoeMuonHConfig)
+    assert optimizer_config.expert_grouped_muonh_packed_entry is True
+    assert optimizer_config.expert_grouped_muonh_packed_bank_compute is True
+    optimizer = optimizer_config.build(num_train_steps=8)
+
+    def update_step(params, grads, opt_state):
+        updates, next_state = optimizer.update(grads, opt_state, params)
+        return updates, next_state
+
+    with use_abstract_mesh(mesh):
+        opt_state = jax.eval_shape(optimizer.init, params)
+        updates, next_state = jax.eval_shape(update_step, params, grads, opt_state)
+        update_step_jit = jax.jit(update_step)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step_jit.trace(params, grads, opt_state).lower(lowering_platforms=(platform,))
+
+    grouped_state = opt_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
+    next_grouped_state = next_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
+    assert isinstance(grouped_state, GroupedMuonHState)
+    assert len(grouped_state.trace_groups) == 2
+    assert {trace_group.shape[0] for trace_group in grouped_state.trace_groups} == {8}
+    assert isinstance(next_grouped_state, GroupedMuonHState)
+    assert len(next_grouped_state.trace_groups) == 2
+    assert {trace_group.shape[0] for trace_group in next_grouped_state.trace_groups} == {8}
+    assert_update_sharding_matches_params(updates, params, "May default packed-bank grouped MuonH R4 updates")
+    hlo = str(lowered.compiler_ir(dialect="stablehlo"))
+    assert hlo.count("stablehlo.all_reduce") == 0
+    assert hlo.count("stablehlo.reduce_scatter") == 0
+    assert hlo.count("stablehlo.all_to_all") == 0
+    assert hlo.count("stablehlo.all_gather") == 2
+    assert "slice_update_chunk" not in hlo
+    assert "slice_param_chunk" not in hlo
+    assert "concat_chunks" not in hlo
+
+
+def test_grouped_expert_muonh_packed_bank_compute_respects_max_stack_size():
+    mesh = AbstractMesh(
+        axis_sizes=(4, 1, 8, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    gate_sharding = NamedSharding(mesh, P("expert", "data", "model"))
+    down_sharding = NamedSharding(mesh, P("expert", "model", "data"))
+
+    def block_specs():
+        return {
+            "mlp": {
+                "expert_mlp": {
+                    "w_gate_up": jax.ShapeDtypeStruct((8, 16, 32), jnp.bfloat16, sharding=gate_sharding),
+                    "w_down": jax.ShapeDtypeStruct((8, 32, 16), jnp.bfloat16, sharding=down_sharding),
+                },
+            },
+        }
+
+    params = {"blocks": tuple(block_specs() for _ in range(6))}
+    grads = jax.tree.map(lambda param: jax.ShapeDtypeStruct(param.shape, param.dtype, sharding=param.sharding), params)
+    optimizer = GrugMoeMuonHConfig(
+        learning_rate=0.02,
+        lr_schedule="constant",
+        backend_steps=1,
+        expert_3d_optimizer="grouped_muonh",
+        expert_grouped_muonh_group_size=2,
+        expert_grouped_muonh_packed_entry=True,
+        expert_grouped_muonh_packed_bank_compute=True,
+        max_grouped_stack_size=4,
+        max_grad_norm=None,
+    ).build(num_train_steps=8)
+
+    def update_step(params, grads, opt_state):
+        updates, next_state = optimizer.update(grads, opt_state, params)
+        return updates, next_state
+
+    with use_abstract_mesh(mesh):
+        opt_state = jax.eval_shape(optimizer.init, params)
+        updates, next_state = jax.eval_shape(update_step, params, grads, opt_state)
+        update_step_jit = jax.jit(update_step)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step_jit.trace(params, grads, opt_state).lower(lowering_platforms=(platform,))
+
+    grouped_state = opt_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
+    next_grouped_state = next_state.inner_state.inner_states["grouped_muonh"].inner_state[0]
+    assert isinstance(grouped_state, GroupedMuonHState)
+    assert len(grouped_state.trace_groups) == 4
+    assert {trace_group.shape[0] for trace_group in grouped_state.trace_groups} == {4}
+    assert isinstance(next_grouped_state, GroupedMuonHState)
+    assert len(next_grouped_state.trace_groups) == 4
+    assert {trace_group.shape[0] for trace_group in next_grouped_state.trace_groups} == {4}
+    assert_update_sharding_matches_params(updates, params, "packed-bank capped grouped MuonH R4 production updates")
+    hlo = str(lowered.compiler_ir(dialect="stablehlo"))
+    assert hlo.count("stablehlo.all_reduce") == 0
+    assert hlo.count("stablehlo.reduce_scatter") == 0
+    assert hlo.count("stablehlo.all_to_all") == 0
+    assert hlo.count("stablehlo.all_gather") == 4
     assert "slice_update_chunk" not in hlo
     assert "slice_param_chunk" not in hlo
     assert "concat_chunks" not in hlo

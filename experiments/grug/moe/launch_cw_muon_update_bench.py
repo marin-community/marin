@@ -82,11 +82,13 @@ class MuonUpdateBenchLaunchConfig:
     expert_grouped_muonh_packed_entry: bool = False
     expert_grouped_muonh_packed_bank_compute: bool = False
     expert_grouped_muonh_chunk_local_boundaries: bool = False
+    unfused_expert_gate_up: bool = False
     warmup: int = 1
     iters: int = 3
     grouped_expert_consumer_tokens_per_expert: int = 1
     grouped_expert_consumer_chunk_tokens: int = 0
     grouped_expert_consumer_chunk_tokens_per_expert: int = 0
+    packed_master_layer_chunk_size: int = 0
     bench_kinds: tuple[str, ...] = (MUONH_UPDATE_BENCH,)
     mode: str = "both"
     compile_only: bool = False
@@ -176,9 +178,11 @@ def _bench_configs(config: MuonUpdateBenchLaunchConfig) -> list[BenchConfig]:
             expert_grouped_muonh_packed_entry=config.expert_grouped_muonh_packed_entry,
             expert_grouped_muonh_packed_bank_compute=config.expert_grouped_muonh_packed_bank_compute,
             expert_grouped_muonh_chunk_local_boundaries=config.expert_grouped_muonh_chunk_local_boundaries,
+            unfused_expert_gate_up=config.unfused_expert_gate_up,
             grouped_expert_consumer_tokens_per_expert=config.grouped_expert_consumer_tokens_per_expert,
             grouped_expert_consumer_chunk_tokens=config.grouped_expert_consumer_chunk_tokens,
             grouped_expert_consumer_chunk_tokens_per_expert=config.grouped_expert_consumer_chunk_tokens_per_expert,
+            packed_master_layer_chunk_size=config.packed_master_layer_chunk_size,
         )
         for backend_steps in config.sweep_backend_steps
         for max_grouped_stack_size in config.sweep_max_grouped_stack_sizes
@@ -501,6 +505,7 @@ def build_step() -> ExecutorStep:
             "MUON_BENCH_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES",
             False,
         ),
+        unfused_expert_gate_up=env_bool("MUON_BENCH_UNFUSED_EXPERT_GATE_UP", False),
         warmup=env_int("MUON_BENCH_WARMUP", 1),
         iters=env_int("MUON_BENCH_ITERS", 3),
         grouped_expert_consumer_tokens_per_expert=env_int("MUON_BENCH_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT", 1),
@@ -509,6 +514,7 @@ def build_step() -> ExecutorStep:
             "MUON_BENCH_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS_PER_EXPERT",
             0,
         ),
+        packed_master_layer_chunk_size=env_int("MUON_BENCH_PACKED_MASTER_LAYER_CHUNK_SIZE", 0),
         bench_kinds=env_str_csv("MUON_BENCH_KINDS", (MUONH_UPDATE_BENCH,)),
         mode=os.environ.get("MUON_BENCH_MODE", "both"),
         compile_only=env_bool("MUON_BENCH_COMPILE_ONLY", False),

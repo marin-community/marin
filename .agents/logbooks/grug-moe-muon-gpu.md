@@ -13,6 +13,14 @@
 - Issue: https://github.com/marin-community/marin/issues/6493
 
 ## Experiment Log
+### 2026-06-20 22:12 PDT - Packed-master MuonH plus bulk FSDP materialization R4
+- Hypothesis: Keeping fp32 master/momentum in the NS-friendly packed bank and only materializing the bf16 FSDP consumer view after the MuonH update may let the compiler batch the grouped-to-FSDP boundary as aggressively as the bulk-only materializer.
+- Command: `MARIN_PREFIX=s3://marin-na/tmp/ttl=7d KUBECONFIG=~/.kube/coreweave-iris-gpu MUON_BENCH_TRACKER=wandb MUON_BENCH_WANDB=true MUON_BENCH_WANDB_PROJECT=marin_moe MUON_BENCH_WANDB_GROUP=grug-moe-cw-packed-master MUON_BENCH_ENABLE_JAX_PROFILE=true MUON_BENCH_WRITE_COMPILED_HLO=true MUON_BENCH_WARMUP=1 MUON_BENCH_ITERS=3 XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 XLA_FLAGS='--xla_gpu_autotune_level=0' bash scratch/muon_update_bench_fast_loop.sh iris packed-master-muonh-fsdp-bulk-r4e8-l26`
+- Config: R4D1E8, 4 H100 nodes, `layers=26`, `group_size=8`, `backend_steps=3`, `dtype=bf16`, fp32 packed master/momentum, packed bf16 grad bank, bulk bf16 FSDP consumer materialization after MuonH update.
+- Result: Child `/dlwh/iris-run-job-20260621-050852/grug-train-MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-FSDPBULK-N4-cw-20260621-050849` succeeded. Output root `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-FSDPBULK-N4-cw-20260621-050849-173ceb`. Median `1.1190s`, mean `1.1270s`, min `1.1190s`, compile `5.07s`. Lowered and compiled collectives: `all_gather=2`, `all_to_all=0`, `all_reduce=0`, `reduce_scatter=0`. Compiled GPU GEMM custom calls: 150. Peak HBM estimate: `41.02 GiB` (`argument=20.51 GiB`, `output=16.41 GiB`, `temp=20.51 GiB`). Profile uploaded under the output prefix, e.g. `profiler/process_2`.
+- Interpretation: This validates the packed-master representation end to end in the harness: authoritative fp32 master/momentum stay packed through MuonH, and the bf16 FSDP view is materialized after the update. The compiler keeps the bulk boundary compact at 2 AGs, but the combined path is still far slower than summing the prior R4 update-only (~0.175s) plus bulk-only materialization (~0.309s), so the remaining issue is fusion/scheduling around NS plus materialization rather than a collective explosion.
+- Next action: inspect the uploaded profile/HLO for whether the 150 GEMM calls are serialized NS chunks and whether the two AGs sit after all NS compute. If the compiler will not overlap, prototype explicit chunked update+bulk-materialize slabs or a lower-level bridge.
+
 ### 2026-06-18 08:04 PDT - full-production H3 harness launch
 - Hypothesis: H3 may be the practical production Muon route if it clears the single-node speed-of-light target while avoiding the H5 step-duration penalty.
 - Command:
@@ -3281,3 +3289,4141 @@ Post-compile steps were stable around 0.65-0.66s:
     Next experiments should either use `replica_dcn,data` to exercise both FSDP
     axes or test a lower-level grouped-to-FSDP bridge that reduces or avoids
     the current all-gather fanout.
+
+### 2026-06-20 13:00 PDT - R2D2 combined-axis packed-bank-compute run logged a useful negative result
+- Hypothesis:
+  - Using `ns4d_group_axis=replica_dcn,data` with `replica_axis=2` and
+    `data_axis=2` should exercise the target combined-axis grouped MuonH
+    sharding `P(('replica_dcn', 'data'), 'expert', None, None)` while retaining
+    the bounded packed-bank compute contract.
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-195329`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-195329/grug-train-MUON-BENCH-D2560-L26-R2D2E8-G4-H3-PACKEDBANKCOMPUTE-REPORT-N4-cw-20260620-195326`.
+  - W&B:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R2D2E8-G4-H3-PACKEDBANKCOMPUTE-REPORT-N4-cw-20260620-195326`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D2E8-G4-H3-PACKEDBANKCOMPUTE-REPORT-N4-cw-20260620-195326-45ac06`.
+- Result:
+  - The run got past the earlier R2D1 OOM failure mode and logged W&B summary
+    rows.
+  - Metadata confirmed the intended combined-axis compute/input sharding:
+    `P(('replica_dcn', 'data'), 'expert', None, None)`.
+  - The compiled boundary contract regressed: both update and apply compiled
+    `14` all-gathers and `42` all-to-alls, with `14` excess all-to-alls over
+    the current phase ideal.
+- Metrics:
+  - `real_expert_fsdp_grouped_muonh_optimizer_update_h3`:
+    - median/mean: `0.469784s` / `0.470902s`
+    - compiled AG/A2A/AR/RS/CP: `14/42/0/0/0`
+    - compiled excess collectives: `14`; matches ideal: `false`
+    - HBM peak/temp: `35.352 GiB` / `8.398 GiB`
+    - median estimated throughput: `5170.0 TFLOP/s`, `16.34%` H100 bf16 peak
+    - median estimated boundary phase bandwidth: `835.68 GB/s`
+  - `real_expert_fsdp_grouped_muonh_optimizer_apply_h3`:
+    - median/mean: `0.473546s` / `0.473921s`
+    - compiled AG/A2A/AR/RS/CP: `14/42/0/0/0`
+    - compiled excess collectives: `14`; matches ideal: `false`
+    - HBM peak/temp: `31.446 GiB` / `12.111 GiB`
+    - median estimated throughput: `5523.5 TFLOP/s`, `17.45%` H100 bf16 peak
+    - median estimated boundary phase bandwidth: `829.04 GB/s`
+- Interpretation:
+  - This is not a correctness or capacity failure; it is evidence that the
+    current explicit combined `replica_dcn,data` bridge pays data-axis
+    all-to-alls in both directions.
+  - The R2D2 route is slower than R2 and R4 replica-only and does not satisfy
+    the intended lower-level primitive contract. The next useful work is a
+    custom/staged grouped-to-FSDP bridge that avoids this 42-A2A path rather
+    than further tuning this naive route.
+
+### 2026-06-20 13:14 PDT - Slice-first packed-bank apply removes the R2D2 A2A apply boundary
+- Hypothesis:
+  - The old packed-bank apply boundary was paying a data-axis all-to-all because
+    it restored the grouped bank to full FSDP leaves before slicing the local
+    data shard. Slicing the FSDP data shard first, then gathering the grouped
+    axis, should turn the apply side into a pure all-gather boundary.
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-201143`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-201143/grug-train-MUON-BENCH-D2560-L26-R2D2E8-G4-H3-PACKEDBANK-SLICEFIRST-BOUNDARY-N4-cw-20260620-201140`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/m2k7c93r`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D2E8-G4-H3-PACKEDBANK-SLICEFIRST-BOUNDARY-N4-cw-20260620-201140-512072`.
+- Config:
+  - `replica_axis=2`, `data_axis=2`, `expert_axis=8`, `model_axis=1`.
+  - `ns4d_group_axis=replica_dcn,data`, `ns4d_group_size=4`.
+  - `layers=26`, `backend_steps=3`, `dtype=bf16`, `ns_compute_dtype=bf16`.
+  - Bench kinds:
+    `expert_fsdp_packed_bank_slice_first_apply_boundary` and
+    `expert_fsdp_packed_bank_slice_first_direct_apply_boundary`.
+- Result:
+  - The live GPU lowered and compiled HLO both show `2` all-gathers and `0`
+    all-to-alls for both slice-first apply variants.
+  - `expert_fsdp_packed_bank_slice_first_apply_boundary_h3`:
+    - median/mean: `0.15797s` / `0.15831s`
+    - compiled AG/A2A/AR/RS/CP: `2/0/0/0/0`
+    - HBM peak/temp: `21.289 GiB` / `9.570 GiB`
+    - median estimated boundary bandwidth: `828.4 GB/s`
+  - `expert_fsdp_packed_bank_slice_first_direct_apply_boundary_h3`:
+    - median/mean: `0.15792s` / `0.15799s`
+    - compiled AG/A2A/AR/RS/CP: `2/0/0/0/0`
+    - HBM peak/temp: `21.289 GiB` / `9.570 GiB`
+    - median estimated boundary bandwidth: `828.7 GB/s`
+  - Correctness materialization was skipped because the estimated global bytes
+    were `130.86 GB`, above the correctness cap.
+- Comparison:
+  - Previous R2D2 packed-bank boundary-phase run:
+    - grads -> packed bank: `0.0944s`, compiled `0/2/0/0/0`
+    - old packed-bank A2A apply: `0.2195s`, compiled `2/2/0/0/0`
+    - old direct apply: `0.2221s`, compiled `2/2/0/0/0`
+  - Slice-first apply removes the data-axis all-to-all and improves the apply
+    boundary by about `28%` (`0.2195s -> 0.1580s`).
+- Interpretation:
+  - This validates the staged/slice-first boundary idea for the apply side:
+    the A2A was avoidable without a lower-level custom kernel.
+  - Direct apply is not materially faster than restore-then-`apply_updates`, so
+    keeping ordinary `optax.apply_updates` remains plausible at this boundary.
+  - The remaining full optimizer target is composing grads -> packed bank,
+    packed-bank MuonH compute, and slice-first apply into one production-shaped
+    update/apply path while preserving the `2 AG / 0 A2A` apply contract.
+
+### 2026-06-20 13:29 PDT - Full R2D2 packed-bank MuonH path uses slice-first apply and removes the 42-A2A explosion
+- Follow-up fix:
+  - The first full-path launch failed before metrics because
+    `expert_fsdp_packed_bank_muonh_update_only` still used the unpadded
+    non-grouped packed-bank metadata in `grouped_expert_group_sizes_for_bench`.
+    That made the lower-time assertion expect `P(None, 'expert', None, None)`
+    even though the packed-bank entry path intentionally produced
+    `P(('replica_dcn', 'data'), 'expert', None, None)`.
+  - The fix makes the three full packed-bank MuonH benches participate in the
+    same padded packed-bank group sizing as the standalone boundary benches.
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-202320`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-202320/grug-train-MUON-BENCH-D2560-L26-R2D2E8-G4-H3-PACKEDBANK-SLICEFIRST-FULLPATH-N4-cw-20260620-202318`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/3kxq9emz`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D2E8-G4-H3-PACKEDBANK-SLICEFIRST-FULLPATH-N4-cw-20260620-202318-cdc46c`.
+- Config:
+  - `replica_axis=2`, `data_axis=2`, `expert_axis=8`, `model_axis=1`.
+  - `ns4d_group_axis=replica_dcn,data`, `ns4d_group_size=4`.
+  - `layers=26`, `backend_steps=3`, `max_grouped_stack_size=512`.
+  - `dtype=bf16`, `ns_compute_dtype=bf16`.
+  - Bench kinds:
+    `expert_fsdp_packed_bank_muonh_update_only`,
+    `expert_fsdp_packed_bank_muonh_apply`, and
+    `expert_fsdp_packed_bank_direction_apply`.
+- Result:
+  - `expert_fsdp_packed_bank_muonh_update_only_h3`:
+    - median/mean: `0.266505s` / `0.266455s`
+    - compiled AG/A2A/AR/RS/CP: `0/4/0/0/0`
+    - HBM peak/temp: `39.844 GiB` / `24.609 GiB`
+    - median estimated throughput: `9821.4 TFLOP/s`, `31.03%` H100 bf16 peak
+    - median estimated boundary phase bandwidth: `982.75 GB/s`
+  - `expert_fsdp_packed_bank_muonh_apply_h3`:
+    - median/mean: `0.421639s` / `0.421493s`
+    - compiled AG/A2A/AR/RS/CP: `2/4/0/0/0`
+    - HBM peak/temp: `35.059 GiB` / `19.824 GiB`
+    - median estimated throughput: `6207.1 TFLOP/s`, `19.61%` H100 bf16 peak
+    - median estimated boundary phase bandwidth: `931.64 GB/s`
+  - `expert_fsdp_packed_bank_direction_apply_h3`:
+    - median/mean: `0.321309s` / `0.321998s`
+    - compiled AG/A2A/AR/RS/CP: `2/2/0/0/0`
+    - HBM peak/temp: `35.059 GiB` / `19.824 GiB`
+    - median estimated throughput: `8140.6 TFLOP/s`, `25.72%` H100 bf16 peak
+    - median estimated boundary phase bandwidth: `814.56 GB/s`
+  - Correctness materialization was skipped for the full-size R2D2 run because
+    estimated global bytes were `130.86 GB`, above the correctness cap. The
+    tiny forced-host smoke passed before launch.
+- Comparison:
+  - Previous R2D2 packed-bank-compute full path:
+    - update median `0.469784s`, apply median `0.473546s`
+    - compiled `14 AG + 42 A2A`
+    - HBM update/apply `35.352 GiB` / `31.446 GiB`
+  - Slice-first full path:
+    - update-only median `0.266505s`, full apply median `0.421639s`
+    - compiled `0 AG + 4 A2A` for update-only and `2 AG + 4 A2A` for full apply
+    - HBM update/apply `39.844 GiB` / `35.059 GiB`
+- Interpretation:
+  - The data-axis A2A explosion on the apply side is fixed for this harness
+    path. The full apply path now has only the expected entry-side all-to-alls
+    plus the slice-first apply all-gathers.
+  - The full `apply_updates`-compatible path is still slower than the
+    update-only lower bound by about `155 ms`, so the remaining overhead is the
+    grouped update fanout/apply boundary plus materializing the ordinary FSDP
+    update tree.
+  - This is the first R2D2 FSDP-master harness result that satisfies the
+    compiled collective-count part of the boundary contract. Next validation
+    should repeat at R4 and then decide whether the remaining ~0.42s is good
+    enough to wire into the production Grug MoE MuonH training path.
+
+### 2026-06-20 13:39 PDT - R4 slice-first full path validates the no-A2A apply contract
+- Hypothesis:
+  - With `replica_axis=4,data_axis=1`, the packed-bank entry side should be
+    local/no-collective, and the slice-first apply side should compile to one
+    all-gather per packed bank without any all-to-all.
+- Smoke:
+  - Tiny forced-host R4 smoke passed before launch with lowered contracts:
+    update-only `0 AG / 0 A2A`, full apply `2 AG / 0 A2A`, direction apply
+    `2 AG / 0 A2A`.
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-203056`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-203056/grug-train-MUON-BENCH-D2560-L26-R4D1E8-G4-H3-PACKEDBANK-SLICEFIRST-FULLPATH-N4-cw-20260620-203054`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/q3t7i66z`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4D1E8-G4-H3-PACKEDBANK-SLICEFIRST-FULLPATH-N4-cw-20260620-203054-baf603`.
+- Config:
+  - `replica_axis=4`, `data_axis=1`, `expert_axis=8`, `model_axis=1`.
+  - `ns4d_group_axis=replica_dcn`, `ns4d_group_size=4`.
+  - `layers=26`, `backend_steps=3`, `max_grouped_stack_size=512`.
+  - `dtype=bf16`, `ns_compute_dtype=bf16`.
+  - Bench kinds:
+    `expert_fsdp_packed_bank_muonh_update_only`,
+    `expert_fsdp_packed_bank_muonh_apply`, and
+    `expert_fsdp_packed_bank_direction_apply`.
+- Result:
+  - Child and parent jobs succeeded.
+  - `expert_fsdp_packed_bank_muonh_update_only_h3`:
+    - median/mean: `0.149473s` / `0.149307s`
+    - compiled AG/A2A/AR/RS/CP: `0/0/0/0/0`
+    - HBM peak/temp: `44.141 GiB` / `13.672 GiB`
+    - median estimated throughput: `17499.1 TFLOP/s`, `55.29%` H100 bf16 peak
+    - median estimated boundary phase bandwidth: `1750.98 GB/s`
+  - `expert_fsdp_packed_bank_muonh_apply_h3`:
+    - median/mean: `0.369224s` / `0.369396s`
+    - compiled AG/A2A/AR/RS/CP: `2/0/0/0/0`
+    - HBM peak/temp: `50.977 GiB` / `20.508 GiB`
+    - median estimated throughput: `7085.5 TFLOP/s`, `22.39%` H100 bf16 peak
+    - median estimated boundary phase bandwidth: `1063.48 GB/s`
+  - `expert_fsdp_packed_bank_direction_apply_h3`:
+    - median/mean: `0.355976s` / `0.357381s`
+    - compiled AG/A2A/AR/RS/CP: `2/0/0/0/0`
+    - HBM peak/temp: `50.977 GiB` / `20.508 GiB`
+    - median estimated throughput: `7347.8 TFLOP/s`, `23.22%` H100 bf16 peak
+    - median estimated boundary phase bandwidth: `735.23 GB/s`
+  - Correctness materialization was skipped for the full-size R4 run because
+    estimated global bytes were `130.86 GB`, above the correctness cap.
+- Comparison:
+  - R2D2 slice-first full path:
+    - update-only `0.266505s`, compiled `0/4/0/0/0`
+    - full apply `0.421639s`, compiled `2/4/0/0/0`
+    - direction apply `0.321309s`, compiled `2/2/0/0/0`
+  - R4 slice-first full path:
+    - update-only `0.149473s`, compiled `0/0/0/0/0`
+    - full apply `0.369224s`, compiled `2/0/0/0/0`
+    - direction apply `0.355976s`, compiled `2/0/0/0/0`
+  - Older R4 packed-bank-compute production-shaped reference:
+    - real update `0.321612s`, compiled `14/0/0/0/0`, HBM `66.211/16.406 GiB`
+    - real apply `0.325949s`, compiled `14/0/0/0/0`, HBM `51.367/16.797 GiB`
+- Interpretation:
+  - The R4 slice-first harness path satisfies the compiled collective contract:
+    no entry-side collectives and only `2` apply-side all-gathers, with no
+    all-to-all expansion.
+  - Update-only is now a strong lower bound at `0.149s` and ~`55%` nominal H100
+    bf16 peak. The full `apply_updates`-compatible path is still `0.220s`
+    slower than update-only, dominated by the apply/fanout/materialization side.
+  - Compared with the older production-shaped R4 path, the explicit harness
+    full apply has far fewer all-gathers (`2` vs `14`) but is slower
+    (`0.369s` vs `0.326s`), so the next decision is not collective-count
+    correctness; it is whether the simpler explicit path can be integrated
+    cheaply enough, or whether the production-shaped path remains faster despite
+    higher collective count.
+
+### 2026-06-20 13:47 PDT - N1 baseline completed; production packed restore now uses slice-first routing
+- N1 run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-203924`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-203924/grug-train-MUON-BENCH-D2560-L26-R1D1E8-G4-H3-PACKEDBANK-SLICEFIRST-FULLPATH-N1-cw-20260620-203921`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/l2c1allt`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D1E8-G4-H3-PACKEDBANK-SLICEFIRST-FULLPATH-N1-cw-20260620-203921-4828eb`.
+- Config:
+  - `replica_axis=1`, `data_axis=1`, `expert_axis=8`, `model_axis=1`.
+  - `ns4d_group_axis=none`, `ns4d_group_size=4`.
+  - `layers=26`, `backend_steps=3`, `max_grouped_stack_size=512`.
+  - `dtype=bf16`, `ns_compute_dtype=bf16`.
+- Result:
+  - Parent and child jobs succeeded. W&B logged but the API still showed
+    `running` after a `wandb_finish_timeout`; Iris/logs are authoritative.
+  - `expert_fsdp_packed_bank_muonh_update_only_h3`:
+    - median/mean: `0.593144s` / `0.593112s`
+    - compiled AG/A2A/AR/RS/CP: `0/0/0/0/0`
+    - HBM peak/temp: `71.094 GiB` / `40.625 GiB`
+    - median estimated throughput: `4094.8 TFLOP/s`, `51.75%` H100 bf16 peak
+    - median estimated boundary phase bandwidth: `220.63 GB/s`
+  - `expert_fsdp_packed_bank_muonh_apply_h3`:
+    - median/mean: `0.613937s` / `0.613837s`
+    - compiled AG/A2A/AR/RS/CP: `0/0/0/0/0`
+    - HBM peak/temp: `71.094 GiB` / `40.625 GiB`
+    - median estimated throughput: `3956.1 TFLOP/s`, `50.00%` H100 bf16 peak
+    - median estimated boundary phase bandwidth: `213.15 GB/s`
+  - `expert_fsdp_packed_bank_direction_apply_h3`:
+    - median/mean: `0.573226s` / `0.573255s`
+    - compiled AG/A2A/AR/RS/CP: `0/0/0/0/0`
+    - HBM peak/temp: `71.094 GiB` / `40.625 GiB`
+    - median estimated throughput: `4237.1 TFLOP/s`, `53.55%` H100 bf16 peak
+    - median estimated boundary phase bandwidth: `228.29 GB/s`
+  - Correctness materialization was skipped for full-size update/direction
+    variants because estimated global bytes were `130.86 GB`, above the cap.
+    Full apply correctness was skipped because it combines multiple phases.
+- N1/R2D2/R4 summary:
+  - N1 full apply: `0.613937s`, compiled `0/0/0/0/0`, HBM `71.094 GiB`.
+  - R2D2 full apply: `0.421639s`, compiled `2/4/0/0/0`, HBM `35.059 GiB`.
+  - R4 full apply: `0.369224s`, compiled `2/0/0/0/0`, HBM `50.977 GiB`.
+  - R4 update-only: `0.149473s`, compiled `0/0/0/0/0`, ~`55.29%` nominal
+    H100 bf16 peak.
+- Production integration step:
+  - Patched `experiments/grug/moe/optimizer.py` so
+    `_packed_grouped_muonh_updates_to_fsdp_leaves` uses the same slice-first
+    packed restore contract as the harness: slice the data-sharded FSDP axis
+    locally first, then all-gather the grouped stack axis, then split to FSDP
+    leaves.
+  - This removes the production restore branch that used `lax.all_to_all` when
+    the packed grouped live axis included `data`.
+  - Focused checks passed:
+    - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'packed_bank or slice_first or packed-bank or grouped_trace'`
+    - `uv run pytest experiments/grug/moe/test_optimizer.py`
+    - `uv run python -m py_compile experiments/grug/moe/optimizer.py experiments/grug/moe/muon_update_bench.py`
+    - `git diff --check -- experiments/grug/moe/optimizer.py experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py .agents/logbooks/grug-moe-muon-gpu.md`
+- Local production lowering proof:
+  - Non-packed grouped MuonH R2D2 restore now lowers to `0` all-to-alls and
+    only all-gathers for the restore side in the existing toy production tests:
+    `0 A2A / 6 AG` for four blocks and `0 A2A / 10 AG` for five blocks.
+  - Packed-entry data-axis grouped MuonH now lowers to `4 A2A / 2 AG` instead
+    of the previous `6 A2A / 0 AG`, matching the slice-first apply contract.
+  - Packed-bank compute R2 toy lowering is `0 A2A / 6 AG`.
+  - The full `experiments/grug/moe/test_optimizer.py` test file now asserts
+    these counts so the production path cannot silently regress back to the
+    all-to-all restore branch.
+- Interpretation:
+  - The boundary contract is now validated at N1, R2D2, and R4 in the harness.
+  - The production grouped MuonH transform still returns ordinary FSDP-shaped
+    updates and leaves the train loop's `optax.apply_updates` unchanged.
+  - The remaining proof is an actual Grug MoE training/profile run with
+    `expert_3d_optimizer=grouped_muonh`, packed entry, and packed-bank compute
+    enabled, confirming the production path inherits the reduced collective
+    count and does not regress end-to-end throughput.
+
+### 2026-06-20 14:05 PDT - May209 N1 production grouped-MuonH slice-first restore validated
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-204914`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-204914/grug-train-GM2560-MAY-209S4096-W2048-B8-R1D1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-SLICEFIRSTRESTORE-PROFILE-N1-cw-20260620-2049`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/GM2560-MAY-209S4096-W2048-B8-R1D1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-SLICEFIRSTRESTORE-PROFILE-N1-cw-20260620-2049`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/grug-moe-cw-may-d2560-L26-e256-r1-cpu8-GM2560-MAY-209S4096-W2048-B8-R1D1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-SLICEFIRSTRESTORE-PROFILE-N1-cw-20260620-2049-53afe5`.
+- Config:
+  - Single H100 node, `batch=8`, `seq_len=4096`, `sliding_window=2048`.
+  - Mesh logged as `{'replica_dcn': 1, 'data': 1, 'expert': 8, 'model': 1}`.
+  - `attention=gpu_fa4_cute`, `ce=pallas_gpu` with V block size 8192,
+    `moe=ring`, `remat=save_moe`, `live_param_mode=param`.
+  - `optimizer=muonh`, `ordinary_2d_optimizer=muonh`,
+    `expert_3d_optimizer=grouped_muonh`.
+  - Grouped MuonH knobs: `group_size=2`, `packed_entry=true`,
+    `packed_bank_compute=true`, `chunk_local_boundaries=false`,
+    `max_grouped_stack_size=512`, `ns_compute_dtype=bf16`.
+- Result:
+  - Training reached `5.00it/5.00it`; no OOM, HBM, NCCL, rendezvous, or
+    sharding failure was observed.
+  - First two steps were compile/cache dominated:
+    - step 0: `266.8588s`, `122.79 tokens/s`, `0.0266 MFU`, loss `11.7920`.
+    - step 1: `267.4742s`, `122.51 tokens/s`, `0.0265 MFU`, loss `10.9765`.
+  - Steady-state logged metrics:
+    - step 2: `1.0321s`, `31748.13 tokens/s`, `6.8662 MFU`, loss `10.5021`.
+    - step 3: `1.0355s`, `31645.88 tokens/s`, `6.8441 MFU`, loss `7.6070`.
+    - step 4: `1.0347s`, `31667.87 tokens/s`, `6.8489 MFU`, loss `7.7646`.
+  - Profiler ran from step 3 through step 5. JAX wrote
+    `perfetto_trace.json.gz`, and W&B API confirms a committed `jax_profile`
+    artifact:
+    `GM2560-MAY-209S4096-W2048-B8-R1D1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-SLICEFIRSTRESTORE-PROFILE-N1-cw-20260-9f28caf:v0`.
+- Caveat:
+  - W&B `finish()` hit a 120s background-tracker timeout after artifact upload
+    and raised `HandleAbandonedError`. Iris and W&B still reported the job/run
+    as `running` at the last check, so final summary metrics may not be
+    materialized through the W&B history API even though logs contain the
+    metrics and the profile artifact is committed.
+- Interpretation:
+  - This is the first production Grug MoE proof that the slice-first grouped
+    MuonH restore path compiles and runs end-to-end with the normal train-state
+    FSDP parameter representation and ordinary train-loop `optax.apply_updates`.
+  - The N1 steady-state result (`~1.03s`, `~6.85 MFU`) improves over the old
+    May140 MuonH5 production-like profile (`~1.49s`, `~4.75 MFU`) but remains
+    well below the May141 SGD reference (`~0.438s`, `~16.19 MFU`).
+  - The next required proof is scaled production behavior under a real data or
+    replica axis, because the harness already validated N1/R2D2/R4 boundary
+    primitives but production training had only been proven at N1.
+
+### 2026-06-20 14:04 PDT - May210 R1D2 production validation launched
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-210427`.
+  - Launcher:
+    `scratch/launch_may210_fa4_2node_b16_grouped_muonh3_slicefirst_restore_profile.sh`.
+- Config intent:
+  - Two H100 nodes, `batch=16`, `replica_axis=1`, `data_axis=2`,
+    `expert_axis=8`, `model_axis=1`.
+  - Same slice-first production grouped-MuonH path as May209:
+    `expert_3d_optimizer=grouped_muonh`, `packed_entry=true`,
+    `packed_bank_compute=true`, `chunk_local_boundaries=false`.
+  - Same profiler and TTL output policy as May209.
+- Purpose:
+  - Validate that the production path still runs and profiles when the FSDP
+    data axis is genuinely distributed across nodes.
+- 14:07 PDT update:
+  - The first May210 launch failed before model setup because the W&B run name
+    exceeded the 128-character bucket-name limit:
+    `invalid parameters: 128 limit exceeded for Name`.
+  - Stopped the failed Iris job `/dlwh/iris-run-job-20260620-210427`.
+  - Also stopped May209 after its profile artifact was committed because it was
+    only stuck in W&B `finish()` cleanup and still held a node.
+  - Patched May210/May211 launch scripts to use shorter W&B-safe run IDs before
+    relaunching scaled production validation.
+  - Relaunched May210 as parent Iris job `/dlwh/iris-run-job-20260620-210748`
+    with run ID prefix `GM2560-M210-B16-R1D2E8-FA4-GMH3-SFR-PROF-N2`.
+- Terminal result:
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-210748/grug-train-GM2560-M210-B16-R1D2E8-FA4-GMH3-SFR-PROF-N2-20260620-2107`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/GM2560-M210-B16-R1D2E8-FA4-GMH3-SFR-PROF-N2-20260620-2107`.
+  - Parent and child reached `JOB_STATE_SUCCEEDED`.
+  - Mesh confirmed on both tasks:
+    `{'replica_dcn': 1, 'data': 2, 'expert': 8, 'model': 1}`.
+  - W&B final state is `finished`; summary and profile artifact are committed.
+  - W&B `jax_profile` artifact:
+    `GM2560-M210-B16-R1D2E8-FA4-GMH3-SFR-PROF-N2-20260620-2107-profiler:v0`,
+    size `249496999` bytes.
+  - Steady-state logged metrics:
+    - step 2: `1.6904-1.6926s`, `38.72-38.77k tokens/s`,
+      `4.1870-4.1924 MFU`, loss `7.3127`.
+    - step 3: `1.6593-1.6638s`, `39.39-39.50k tokens/s`,
+      `4.2595-4.2710 MFU`, loss `5.3423`.
+    - step 4: `1.6561-1.6596s`, `39.49-39.57k tokens/s`,
+      `4.2701-4.2792 MFU`, loss `4.9081`.
+- Interpretation:
+  - The production slice-first grouped MuonH path is valid under a real
+    distributed FSDP data axis: it initializes W&B, confirms R1D2/E8/M1 mesh,
+    completes training, writes profile artifacts, and finishes cleanly.
+  - Performance is worse than the N1 May209 proof despite doubling global batch:
+    `~1.66s` at B16 vs `~1.03s` at B8. The total token throughput improves
+    only from `~31.7k` to `~39.6k tokens/s`, while MFU drops from `~6.85` to
+    `~4.28`.
+  - This points at the production data-axis boundary or gradient synchronization
+    path as a real scaled overhead. The harness already showed R4 update-only
+    is strong when the grouping lives on `replica_dcn`; the next production
+    proof should test R4D1 to separate data-axis cost from replica-axis grouping.
+
+### 2026-06-20 14:49 PDT - May211 R4D1 production validation completed
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-212955`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-212955/grug-train-GM2560-M211-B32-R4D1E8-FA4-GMH3-SFR-PROF-N4-20260620-2129`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/GM2560-M211-B32-R4D1E8-FA4-GMH3-SFR-PROF-N4-20260620-2129`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/grug-moe-cw-may-d2560-L26-e256-r4-cpu8-GM2560-M211-B32-R4D1E8-FA4-GMH3-SFR-PROF-N4-20260620-2129-f53d47`.
+- Config:
+  - Four H100 nodes, `batch=32`, `seq_len=4096`, `sliding_window=2048`.
+  - Mesh confirmed on all four tasks:
+    `{'replica_dcn': 4, 'data': 1, 'expert': 8, 'model': 1}`.
+  - Same production grouped-MuonH slice-first restore path as May209/May210:
+    normal FSDP train-state params, grouped MuonH packed-bank compute,
+    FSDP-shaped updates, ordinary train-loop `optax.apply_updates`.
+- Result:
+  - Child job reached `JOB_STATE_SUCCEEDED` with all four tasks succeeded.
+  - W&B state is `finished`; final summary and profile artifact are committed.
+  - W&B `jax_profile` artifact:
+    `GM2560-M211-B32-R4D1E8-FA4-GMH3-SFR-PROF-N4-20260620-2129-profiler:v0`,
+    size `241348084` bytes.
+  - First two steps were compile/cache dominated:
+    - step 0: `427-432s`, `~303-307 tokens/s`, `~0.0164 MFU`.
+    - step 1: `419.15-419.26s`, `~312.6-312.7 tokens/s`, `~0.0169 MFU`.
+  - Steady-state logged metrics:
+    - step 2: `1.5273-1.5399s`, `85.1-85.8k tokens/s`,
+      `4.6022-4.6401 MFU`, loss `4.1688`.
+    - step 3: `1.5292-1.5990s`, `82.0-85.7k tokens/s`,
+      `4.4321-4.6344 MFU`, loss `3.6328`.
+    - step 4: `1.5241-1.5267s`, `85.85-86.00k tokens/s`,
+      `4.6418-4.6498 MFU`, loss `1.9391`.
+- Interpretation:
+  - The production path is now validated at N1, R1D2, and R4D1.
+  - R4D1 avoids the R1D2 data-axis shape but still lands at only `~4.65 MFU`,
+    far below the harness expectation from R4 packed-bank update-only
+    (`~0.149s`, `~55%` nominal peak) and only modestly better than R1D2
+    (`~4.28 MFU`).
+  - The bad news is useful: the remaining production bottleneck is not just the
+    data-axis restore path. It likely sits in the broader production optimizer
+    boundary/apply path or in extra production-train work around the grouped
+    MuonH update that the harness does not include.
+  - Next useful analysis is to inspect May211's profile and/or add a narrower
+    production benchmark around grouped MuonH update + restore + apply inside
+    the real train-step transform to locate the extra production overhead.
+- Profile summary:
+  - Ingested May211 W&B profile artifact with
+    `lib/marin/tools/profile_summary.py` into
+    `scratch/profiles/may211_profile_summary.json`.
+  - Report: `scratch/profiles/may211_profile_report.md`.
+  - xprof cost-analysis emitted warnings about a newer XLA GPU backend-config
+    field (`scale_mode`), but kernel/collective tables were still available.
+  - The profile has no suspected truncation, but xprof did not identify step
+    timing markers. Use the logged train-step metrics above for step timing and
+    the xprof kernel tables for relative hotspot attribution.
+  - xprof kernel-duration breakdown:
+    - communication: `19.447s` aggregate, `64.62%`.
+    - compute: `10.649s` aggregate, `35.38%`.
+  - Top runtime op:
+    `ncclDevKernel_AllGather_RING_LL`, `416` kernels, `9.137s` aggregate,
+    attributed to
+    `jit(train_step)/optimizer_update/optimizer/group/grouped_muonh/.../packed_restore/gather_group_axis_to_fsdp/all_gather`.
+  - Second runtime op:
+    `ncclDevKernel_AllReduce_Sum_bf16_RING_LL`, `832` kernels, `8.367s`
+    aggregate, attributed to MoE MLP backward `shard_map/psum`.
+  - Total collective table:
+    - all-gather: `2080` kernels, `9.715s`.
+    - all-reduce: `2160` kernels, `9.216s`.
+    - reduce-scatter: `832` kernels, `0.515s`.
+- Updated interpretation:
+  - The production validation does not yet prove the desired performance
+    property. It proves correctness/viability, but the profile shows the
+    grouped-MuonH restore still materializes as hundreds of runtime NCCL
+    all-gather kernels across the profiled steps.
+  - The next target is specifically the production packed-restore transport:
+    reduce the number of grouped-MuonH restore AG kernels, or overlap them with
+    useful NS/MoE work. A narrower production-shaped benchmark should count
+    runtime NCCL kernels and bytes, not just HLO collective count, because the
+    runtime profile is where the remaining explosion is visible.
+
+### 2026-06-20 15:00 PDT - May212 bank-keyed packed-bank production rerun
+- Hypothesis:
+  - May211's `416` optimizer restore all-gather kernels came from the
+    production `packed_bank_compute` path still iterating over small
+    `expert_grouped_muonh_group_size=2` chunks for NS compute and restore.
+  - The actual May shape has only two packed-bank keys (`w_gate_up` and
+    `w_down`) across 26 layers. Computing/restoring one bank per key should
+    reduce optimizer restore callsites from chunk-granular to bank-granular.
+- Code change:
+  - `experiments/grug/moe/optimizer.py` now initializes and updates
+    `GroupedMuonHState.trace_groups` from `_grouped_muonh_packed_entry_bank_records`
+    when `packed_bank_compute=True`, rather than from the original chunk list.
+  - Whole-bank compute now pads by whole-bank size. For R4D1 with 26 layers,
+    each bank pads to `28` rows instead of preserving old per-chunk padding and
+    padding to `52`.
+  - The merge is still capped by `max_grouped_stack_size`; larger future shapes
+    split into multiple same-key compute banks instead of building one unbounded
+    bank.
+  - Focused tests now assert bank-keyed trace state and lowered collectives:
+    toy R2D1 packed-bank compute has `2` AG / `0` A2A, N1 has no collectives,
+    toy R4D1 pads six leaves to eight rows with `2` AG / `0` A2A, and a
+    cap-four R4D1 toy case splits each bank key into two banks.
+  - Harness metadata/reporting now records
+    `grouped_expert_packed_bank_count` separately from the small chunk count, so
+    packed-bank-compute phase estimates are keyed to the number of compute banks
+    rather than `expert_grouped_muonh_group_size` chunks.
+- Validation:
+  - `uv run pytest experiments/grug/moe/test_optimizer.py` -> 26 passed.
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'packed_bank or slice_first or packed-bank or grouped_trace'`
+    -> 19 passed.
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'packed_bank or slice_first or packed-bank or grouped_trace or boundary_phase_estimates or grouped_muonh_summary_row'`
+    -> 24 passed after adding the packed-bank-count estimator and summary
+    fallback for older fixtures.
+  - `uv run python -m py_compile experiments/grug/moe/optimizer.py experiments/grug/moe/muon_update_bench.py`
+    passed.
+  - `git diff --check -- experiments/grug/moe/optimizer.py experiments/grug/moe/test_optimizer.py experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py .agents/logbooks/grug-moe-muon-gpu.md`
+    passed.
+  - Shape-only production probe with 26 May layers:
+    - N1/R1D2/R4D1 all produce `26` small chunks but only `2` bank records.
+    - R4D1 old preserved-chunk bank padding was `52` rows per bank; new
+      whole-bank padding is `28`.
+- Run:
+  - Launcher:
+    `scratch/launch_may212_fa4_4node_b32_grouped_muonh3_bankkeyed_restore_profile.sh`.
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-215852`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-215852/grug-train-GM2560-M212-B32-R4D1E8-FA4-GMH3-BANKKEY-PROF-N4-20260620-2158`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/GM2560-M212-B32-R4D1E8-FA4-GMH3-BANKKEY-PROF-N4-20260620-2158`.
+  - Config matches May211 except for the bank-keyed packed-bank compute patch:
+    4 nodes, `batch=32`, `replica_axis=4`, `data_axis=1`, `expert_axis=8`,
+    `model_axis=1`, grouped MuonH expert optimizer, `packed_bank_compute=true`,
+    profiler HLO proto enabled.
+- Current status:
+  - Parent and child Iris jobs succeeded.
+  - W&B final step 4:
+    - `throughput/mfu=5.709078687049573`
+    - `throughput/mean_mfu=3.35844478312706`
+    - `throughput/tokens_per_second=105590.45673281405`
+    - `throughput/duration=1.2413243019836955`
+    - `train/loss=1.9384819269180298`
+  - Profile artifact:
+    `GM2560-M212-B32-R4D1E8-FA4-GMH3-BANKKEY-PROF-N4-20260620-2158-profiler:v0`.
+  - Local profile summaries:
+    - `scratch/profiles/may212_profile_summary.json`
+    - `scratch/profiles/may212_profile_report.md`
+- Profile comparison against May211:
+  - Topline improved but remained poor:
+    - May211: `4.6498` MFU, `85,998` tokens/s, `1.524s`.
+    - May212: `5.7091` MFU, `105,590` tokens/s, `1.241s`.
+  - Optimizer restore all-gather under
+    `grouped_muonh/packed_bank_compute/packed_restore/gather_group_axis_to_fsdp`
+    dropped from `416` kernels / `9.137s` to `32` kernels / `5.383s`.
+  - Total all-gather dropped from `2080` kernels / `9.715s` to `1696` kernels /
+    `5.958s`.
+  - Communication remained dominant:
+    - May211: `19.447s` comm, `64.62%`.
+    - May212: `16.234s` comm, `64.09%`.
+  - MoE MLP backward psum stayed essentially unchanged:
+    `832` all-reduce kernels and about `8.4s` in both profiles.
+- Interpretation:
+  - The bank-keyed patch worked: it removed the chunk-granular optimizer restore
+    kernel explosion.
+  - It did not prove the desired performance property. The remaining optimizer
+    restore collectives are much larger/fatter, so optimizer all-gather time
+    only fell by about `41%` despite the `13x` kernel-count reduction.
+  - The training step is now split between still-expensive grouped-MuonH restore
+    all-gathers and the unchanged MoE backward all-reduce. The next boundary
+    work should target reducing or replacing the remaining grouped-to-FSDP
+    restore transfer, not further reducing chunk count.
+
+### 2026-06-20 15:45 PDT - Boundary report rows now expose fat-collective payloads
+- Motivation:
+  - May212 showed that matching the ideal collective count is not enough.
+    The optimizer restore path dropped from `416` AG kernels to `32`, but those
+    `32` all-gathers still carried enough payload to cost `5.383s` aggregate.
+- Code change:
+  - `experiments/grug/moe/muon_update_bench.py` now annotates each estimated
+    boundary phase with:
+    - `global_bytes_per_ideal_collective`
+    - `grouped_input_per_device_bytes_per_ideal_collective`
+    - `fsdp_output_per_device_bytes_per_ideal_collective`
+  - `summary_row` now includes all-gather and all-to-all payload columns such
+    as `estimated_boundary_phase_all_gather_global_bytes_per_ideal_collective`
+    and `estimated_boundary_phase_all_to_all_global_bytes_per_ideal_collective`.
+- Validation:
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py`
+    passed.
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'packed_bank_boundary_phase_estimates or boundary_byte_estimates or boundary_phase_estimates'`
+    -> 6 passed.
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'packed_bank or slice_first or packed-bank or grouped_trace or boundary_phase_estimates or grouped_muonh_summary_row'`
+    -> 24 passed.
+  - `git diff --check -- .agents/logbooks/grug-moe-muon-gpu.md experiments/grug/moe/optimizer.py experiments/grug/moe/test_optimizer.py experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+- Next action:
+  - Future R2/R4 boundary runs should use these payload columns to distinguish
+    "too many collectives" from "few but too-large collectives" before deciding
+    whether to pursue a `shard_map` layout rewrite or a lower-level
+    Pallas/Triton/FFI bridge.
+
+### 2026-06-20 16:05 PDT - Slice-first Route A/Route B coverage tightened
+- Motivation:
+  - The active goal explicitly compares Route A
+    (`grouped updates -> FSDP-shaped update pytree -> optax.apply_updates`) and
+    Route B (`grouped updates + FSDP params -> updated FSDP params directly`).
+    The harness had both slice-first routes, but tests were still stronger for
+    the older A2A direct-apply path than for the current slice-first path.
+- Code change:
+  - Added correctness coverage for
+    `expert_fsdp_packed_bank_slice_first_direct_apply_boundary`.
+  - Added R4 abstract-lowering coverage for both slice-first packed-bank apply
+    variants:
+    - Route A: `expert_fsdp_packed_bank_slice_first_apply_boundary`
+    - Route B: `expert_fsdp_packed_bank_slice_first_direct_apply_boundary`
+  - The R4 test asserts FSDP output sharding, no dot work, `all_gather > 0`,
+    and no all-to-all/all-reduce/reduce-scatter.
+- Validation:
+  - `uv run python -m py_compile experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'slice_first_direct_apply_boundary_correctness or slice_first_apply_boundaries_return_fsdp_params_without_a2a'`
+    -> 3 passed.
+  - `uv run pytest experiments/grug/moe/test_optimizer.py experiments/grug/moe/test_muon_update_bench.py -k 'packed_bank or slice_first or packed-bank or grouped_trace or boundary_phase_estimates or grouped_muonh_summary_row'`
+    -> 31 passed.
+  - `git diff --check -- .agents/logbooks/grug-moe-muon-gpu.md experiments/grug/moe/optimizer.py experiments/grug/moe/test_optimizer.py experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+
+### 2026-06-20 16:35 PDT - Full packed-bank MuonH Route B bench added
+- Motivation:
+  - The harness had Route A and Route B for the isolated
+    `packed grouped updates -> FSDP apply` boundary, but the full packed-bank
+    MuonH benchmark still only measured Route A:
+    `NS -> FSDP update tree -> optax.apply_updates`.
+  - The next R2/R4 comparison needs an end-to-end Route B number with the same
+    packed-bank Newton-Schulz and hyperball compute but direct FSDP-param output.
+- Code change:
+  - Added `expert_fsdp_packed_bank_muonh_direct_apply`.
+  - The new path runs packed-bank MuonH update-only, then applies the packed
+    grouped updates directly through the slice-first FSDP boundary.
+  - Reporting treats it like full Route A for NS FLOPs, matrix count, and phase
+    estimates:
+    - `fsdp_grads_to_packed_grouped_bank`
+    - `fsdp_params_to_packed_grouped_bank`
+    - `packed_grouped_updates_to_fsdp_apply`
+  - Lowering/timing paths assert the result is normal FSDP params.
+- Validation:
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -k 'packed_bank_muonh_direct_apply or packed_bank_boundary_phase_estimates'`
+    -> 2 passed.
+  - `uv run pytest experiments/grug/moe/test_optimizer.py experiments/grug/moe/test_muon_update_bench.py -k 'packed_bank or slice_first or packed-bank or grouped_trace or boundary_phase_estimates or grouped_muonh_summary_row'`
+    -> 32 passed.
+  - `git diff --check -- .agents/logbooks/grug-moe-muon-gpu.md experiments/grug/moe/optimizer.py experiments/grug/moe/test_optimizer.py experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+
+### 2026-06-20 15:39 PDT - R1D2E8 full MuonH Route A/B comparison
+- Hypothesis:
+  - Full Route B (`packed-bank MuonH -> direct slice-first FSDP param apply`)
+    might avoid extra apply-tree overhead versus Route A
+    (`packed-bank MuonH -> FSDP update tree -> optax.apply_updates`) when the
+    boundary is measured end-to-end.
+- Command:
+  ```bash
+  MUON_BENCH_KINDS=expert_fsdp_packed_bank_muonh_apply,expert_fsdp_packed_bank_muonh_direct_apply \
+  MUON_BENCH_REPLICA_AXIS=1 \
+  MUON_BENCH_DATA_AXIS=2 \
+  MUON_BENCH_EXPERT_AXIS=8 \
+  MUON_BENCH_MODEL_AXIS=1 \
+  MUON_BENCH_GPU_REPLICAS=2 \
+  MUON_BENCH_NS4D_GROUP_SIZE=8 \
+  MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn,data \
+  MUON_BENCH_SWEEP_BACKEND_STEPS=3 \
+  MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 \
+  MUON_BENCH_DTYPE=bf16 \
+  MUON_BENCH_NS_COMPUTE_DTYPE=bf16 \
+  MUON_BENCH_TRACKER=wandb \
+  MUON_BENCH_WARMUP=1 \
+  MUON_BENCH_ITERS=3 \
+  bash scratch/launch_muon_grouped_reference_2node_wandb.sh
+  ```
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260620-223422`
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-223422/grug-train-MUON-BENCH-D2560-L26-R1D2E8-G8-H3-N2-cw-20260620-223419`
+  - W&B:
+    https://wandb.ai/marin-community/marin_moe/runs/kxg0op1s
+  - Uploaded output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R1D2E8-G8-H3-N2-cw-20260620-223419-fb9155`
+  - Local parsed log summary:
+    `scratch/muon_route_ab_r2_20260620_223419_summary_from_logs.json`
+- Result:
+  | Route | Median seconds | Mean seconds | Median peak | Compiled collectives | HBM peak |
+  |---|---:|---:|---:|---|---:|
+  | Route A `expert_fsdp_packed_bank_muonh_apply_h3` | `0.562811` | `0.563332` | `27.272%` | `AG=2`, `A2A=4`, `AR=0`, `RS=0` | `57.129 GiB` |
+  | Route B `expert_fsdp_packed_bank_muonh_direct_apply_h3` | `0.562768` | `0.563396` | `27.274%` | `AG=2`, `A2A=4`, `AR=0`, `RS=0` | `57.129 GiB` |
+- Phase estimates:
+  - Both routes match the ideal collective count: `6` compiled collectives for
+    `6` ideal collectives.
+  - Total estimated boundary phase traffic is unchanged:
+    `365.625 GiB` global traffic split as `243.75 GiB` all-to-all and
+    `121.875 GiB` all-gather.
+  - Each all-gather/all-to-all phase has `60.9375 GiB` global bytes per ideal
+    collective.
+- Interpretation:
+  - Route B does not materially improve runtime. It is `0.008%` faster by
+    median and `0.011%` slower by mean, which is noise.
+  - Direct apply does compile faster (`2.08s` vs `10.31s`), but runtime is still
+    dominated by the same packed-bank boundary transfer.
+  - This confirms that after the May212 bank-keyed fix the issue is no longer
+    per-leaf/per-chunk collective explosion in this harness path. It is the
+    remaining fat grouped-to-FSDP and FSDP-to-grouped transfers.
+- Next action:
+  - Do not spend more time on direct `apply_updates` avoidance alone.
+  - Next useful work is either:
+    - reduce/avoid the actual transfer with a lower-level grouped-to-FSDP
+      bridge, or
+    - validate the same boundary accounting under `replica_dcn > 1` with a
+      memory-fit R2/R4 setup to expose fanout behavior.
+
+### 2026-06-20 15:44 PDT - R2D1/R4D1 local lower-only fanout check
+- Hypothesis:
+  - Moving the scaled test from `R1D2E8` to `R2D1E8`/`R4D1E8` should make the
+    grouped bank axis use `replica_dcn` directly and avoid the R1D2 all-to-all
+    phases. The expected remaining boundary is replica fanout back to FSDP,
+    ideally as a small number of fat all-gathers rather than per-leaf
+    collectives.
+- Commands:
+  ```bash
+  RUN_ID=MUON-BENCH-LOCAL-R2D1E8-G8-H3-ROUTEAB-20260620-224053 \
+  MUON_BENCH_KINDS=expert_fsdp_packed_bank_muonh_apply,expert_fsdp_packed_bank_muonh_direct_apply \
+  MUON_BENCH_REPLICA_AXIS=2 \
+  MUON_BENCH_DATA_AXIS=1 \
+  MUON_BENCH_EXPERT_AXIS=8 \
+  MUON_BENCH_MODEL_AXIS=1 \
+  MUON_BENCH_LAYERS=26 \
+  MUON_BENCH_NS4D_GROUP_SIZE=8 \
+  MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn,data \
+  MUON_BENCH_SWEEP_BACKEND_STEPS=3 \
+  MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 \
+  MUON_BENCH_DTYPE=bf16 \
+  MUON_BENCH_NS_COMPUTE_DTYPE=bf16 \
+  MUON_BENCH_MODE=lower \
+  MUON_BENCH_DISABLE_ABSTRACT_MESH=true \
+  MUON_BENCH_ALLOW_BOUNDARY_COLLECTIVES=true \
+  bash scratch/muon_update_bench_fast_loop.sh local fullprod-e8-l26-h3
+
+  RUN_ID=MUON-BENCH-LOCAL-R4D1E8-G8-H3-ROUTEAB-20260620-224106 \
+  MUON_BENCH_REPLICA_AXIS=4 \
+  MUON_BENCH_DATA_AXIS=1 \
+  ...same remaining settings...
+  bash scratch/muon_update_bench_fast_loop.sh local fullprod-e8-l26-h3
+  ```
+- Artifacts:
+  - `scratch/MUON-BENCH-LOCAL-R2D1E8-G8-H3-ROUTEAB-20260620-224053.json`
+  - `scratch/MUON-BENCH-LOCAL-R4D1E8-G8-H3-ROUTEAB-20260620-224106.json`
+- Result:
+  | Layout | Route | Lowered collectives | Estimated global boundary traffic | AG traffic | A2A traffic | Grouped input/device | FSDP output/device | Peak/device estimate |
+  |---|---|---|---:|---:|---:|---:|---:|---:|
+  | `R2D1E8` | Route A | `AG=2`, `A2A=0`, `AR=0`, `RS=0` | `365.625 GiB` | `121.875 GiB` | `0 GiB` | `7.617 GiB` | `15.234 GiB` | `15.234 GiB` |
+  | `R2D1E8` | Route B | `AG=2`, `A2A=0`, `AR=0`, `RS=0` | `365.625 GiB` | `121.875 GiB` | `0 GiB` | `7.617 GiB` | `15.234 GiB` | `15.234 GiB` |
+  | `R4D1E8` | Route A | `AG=2`, `A2A=0`, `AR=0`, `RS=0` | `365.625 GiB` | `121.875 GiB` | `0 GiB` | `3.809 GiB` | `15.234 GiB` | `15.234 GiB` |
+  | `R4D1E8` | Route B | `AG=2`, `A2A=0`, `AR=0`, `RS=0` | `365.625 GiB` | `121.875 GiB` | `0 GiB` | `3.809 GiB` | `15.234 GiB` | `15.234 GiB` |
+- Caveat:
+  - This is a local virtual-device lowering check, not a CoreWeave timing run.
+    It proves the HLO collective structure for the current harness path but not
+    GPU HBM fit or runtime.
+  - The first abstract-mesh attempt failed because the abstract mesh context did
+    not match the concrete mesh object passed to `shard_map`; rerunning with
+    `MUON_BENCH_DISABLE_ABSTRACT_MESH=true` produced the evidence above.
+- Interpretation:
+  - `R2D1E8` and `R4D1E8` are more promising validation targets than the
+    completed `R1D2E8` run: they remove the all-to-all phases from lowering and
+    reduce grouped input bytes per device as `replica_dcn` increases.
+  - The remaining open question is whether the two fat all-gathers compile and
+    run on real H100s with acceptable HBM and bandwidth.
+- Next action:
+  - Run an H100 compile-only validation for `R4D1E8` first. If it fits and the
+    compiled collectives match the local lowering, run timing with `warmup=1`
+    and `iters=3`.
+
+### 2026-06-20 15:57 PDT - R4D1E8 CoreWeave compile and timing validation
+- Hypothesis:
+  - The `R4D1E8` layout should preserve the lower-only collective structure on
+    real H100s and make the full packed-bank MuonH boundary run without the
+    R1D2 all-to-all phases.
+- Compile-only command:
+  ```bash
+  RUN_ID=MUON-BENCH-D2560-L26-R4D1E8-G8-H3-ROUTEAB-COMPILE-cw-20260620-224557 \
+  MUON_BENCH_KINDS=expert_fsdp_packed_bank_muonh_apply,expert_fsdp_packed_bank_muonh_direct_apply \
+  MUON_BENCH_REPLICA_AXIS=4 \
+  MUON_BENCH_DATA_AXIS=1 \
+  MUON_BENCH_EXPERT_AXIS=8 \
+  MUON_BENCH_MODEL_AXIS=1 \
+  MUON_BENCH_GPU_REPLICAS=4 \
+  MUON_BENCH_NS4D_GROUP_SIZE=8 \
+  MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn,data \
+  MUON_BENCH_SWEEP_BACKEND_STEPS=3 \
+  MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 \
+  MUON_BENCH_DTYPE=bf16 \
+  MUON_BENCH_NS_COMPUTE_DTYPE=bf16 \
+  MUON_BENCH_MODE=run \
+  MUON_BENCH_COMPILE_ONLY=true \
+  MUON_BENCH_TRACKER=wandb \
+  MUON_BENCH_WARMUP=0 \
+  MUON_BENCH_ITERS=0 \
+  bash scratch/launch_muon_grouped_reference_2node_wandb.sh
+  ```
+- Timing command:
+  ```bash
+  RUN_ID=MUON-BENCH-D2560-L26-R4D1E8-G8-H3-ROUTEAB-TIMING-cw-20260620-225153 \
+  MUON_BENCH_KINDS=expert_fsdp_packed_bank_muonh_apply,expert_fsdp_packed_bank_muonh_direct_apply \
+  MUON_BENCH_REPLICA_AXIS=4 \
+  MUON_BENCH_DATA_AXIS=1 \
+  MUON_BENCH_EXPERT_AXIS=8 \
+  MUON_BENCH_MODEL_AXIS=1 \
+  MUON_BENCH_GPU_REPLICAS=4 \
+  MUON_BENCH_NS4D_GROUP_SIZE=8 \
+  MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn,data \
+  MUON_BENCH_SWEEP_BACKEND_STEPS=3 \
+  MUON_BENCH_SWEEP_MAX_GROUPED_STACK_SIZES=512 \
+  MUON_BENCH_DTYPE=bf16 \
+  MUON_BENCH_NS_COMPUTE_DTYPE=bf16 \
+  MUON_BENCH_MODE=run \
+  MUON_BENCH_COMPILE_ONLY=false \
+  MUON_BENCH_TRACKER=wandb \
+  MUON_BENCH_WARMUP=1 \
+  MUON_BENCH_ITERS=3 \
+  bash scratch/launch_muon_grouped_reference_2node_wandb.sh
+  ```
+- Runs:
+  - Compile-only parent:
+    `/dlwh/iris-run-job-20260620-224600`
+  - Timing parent:
+    `/dlwh/iris-run-job-20260620-225155`
+  - Both child jobs reached `JOB_STATE_SUCCEEDED`.
+  - Timing output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4D1E8-G8-H3-ROUTEAB-TIMING-cw-20260620-225153-ac406e`
+  - Local parsed summaries:
+    - `scratch/muon_route_ab_r4_compile_20260620_224557_summary_from_logs.json`
+    - `scratch/muon_route_ab_r4_timing_20260620_225153_summary_from_logs.json`
+- Result:
+  | Route | Median seconds | Mean seconds | Compiled collectives | HBM peak | Est. TFLOP/s | Est. nominal H100 peak |
+  |---|---:|---:|---|---:|---:|---:|
+  | Route A `expert_fsdp_packed_bank_muonh_apply_h3` | `0.369835` | `0.369957` | `AG=2`, `A2A=0`, `AR=0`, `RS=0` | `50.977 GiB` | `6567.3` | `20.75%` |
+  | Route B `expert_fsdp_packed_bank_muonh_direct_apply_h3` | `0.370656` | `0.371016` | `AG=2`, `A2A=0`, `AR=0`, `RS=0` | `50.977 GiB` | `6552.7` | `20.71%` |
+- Derived boundary rates:
+  - Using the existing phase estimator, total estimated boundary phase traffic is
+    `365.625 GiB`, with `121.875 GiB` of all-gather traffic and no all-to-all
+    traffic.
+  - Route A effective total phase rate: `988.6 GiB/s`; all-gather-only rate:
+    `329.5 GiB/s`.
+  - Route B effective total phase rate: `986.4 GiB/s`; all-gather-only rate:
+    `328.8 GiB/s`.
+- Interpretation:
+  - The key structural claim now holds on real H100s for `R4D1E8`: the packed
+    bank boundary compiles and runs with two fat all-gathers and no all-to-all,
+    all-reduce, or reduce-scatter.
+  - Route B still does not help runtime; it is `0.22%` slower by the
+    task-average median. Keeping ordinary `optax.apply_updates` is still the
+    pragmatic choice unless a future lower-level bridge changes the boundary
+    itself.
+  - Compared with the earlier `R1D2E8` timing (`~0.563s` with `AG=2,A2A=4`),
+    `R4D1E8` is about `1.52x` faster and uses less peak HBM
+    (`50.98 GiB` vs `57.13 GiB`), but it is still not close to the single-node
+    update-only compute roofline because the two fat all-gathers and remaining
+    materialization traffic dominate.
+- Next action:
+  - Treat `R4D1E8` as the current best harness layout for grouped MuonH +
+    FSDP-boundary validation.
+  - Next optimization target is no longer direct apply; it is reducing or
+    overlapping the two fat all-gathers / grouped-to-FSDP fanout itself.
+
+### 2026-06-20 16:08 PDT - Packed-bank compute promoted for May grouped MuonH
+- Motivation:
+  - The previous May launcher/default recommendation kept
+    `MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE=false` while the R4D1E8
+    harness evidence was still incomplete.
+  - The R4D1E8 CoreWeave run now shows the packed-bank compute path preserves
+    the desired FSDP contract, compiles/runs with `AG=2,A2A=0,AR=0,RS=0`, and
+    beats the earlier R1D2 all-to-all path.
+- Change:
+  - Changed `GrugMoeMuonHConfig.expert_grouped_muonh_packed_bank_compute` default
+    to `true`.
+  - Updated the May CoreWeave launcher docs to show
+    `MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE=true`.
+  - Kept the env var override, so `MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE=false`
+    can still explicitly select the older chunk-keyed path for A/B or rollback.
+- Validation:
+  - `uv run python -m py_compile experiments/grug/moe/optimizer.py experiments/grug/moe/launch_cw_may_d2560.py experiments/grug/moe/test_optimizer.py`
+  - `uv run pytest experiments/grug/moe/test_optimizer.py -k 'may_grouped_muonh or packed_bank_compute'`
+    -> `6 passed`.
+- Interpretation:
+  - This is the first production-facing integration step from the harness
+    evidence. It still keeps ordinary FSDP params and ordinary `apply_updates`;
+    only the internal grouped MuonH expert update path now defaults to the
+    bank-keyed boundary that avoided the R1D2 all-to-all phases.
+
+### 2026-06-20 16:07 PDT - May grouped MuonH wrapper default and production-profile launch
+- Motivation:
+  - `launch_cw_may_d2560.py` and `GrugMoeMuonHConfig` now default packed-bank
+    grouped MuonH compute to true, but the shell wrapper still forwarded
+    `MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE=false` when callers did not
+    explicitly override the flag.
+  - That would make future production launches accidentally test the old
+    chunk-keyed path even after the optimizer default was promoted.
+- Change:
+  - Updated `experiments/grug/moe/run_cw_may_d2560.sh` so
+    `--expert-grouped-muonh-packed-bank-compute` defaults to `true` and the help
+    text matches.
+- Validation:
+  - `uv run python -m py_compile experiments/grug/moe/optimizer.py experiments/grug/moe/launch_cw_may_d2560.py`
+  - Dry-run wrapper check:
+    `RUN_ID=DRYRUN-GROUPED-MUONH-DEFAULT-PACKEDBANK experiments/grug/moe/run_cw_may_d2560.sh ... --expert-3d-optimizer grouped_muonh ...`
+    printed `expert_grouped_muonh_packed_bank_compute: true` without passing the
+    packed-bank-compute flag.
+- Production-profile launch:
+  - Parent Iris job:
+    `/dlwh/iris-run-job-20260620-230626`
+  - Child job:
+    `/dlwh/iris-run-job-20260620-230626/grug-train-GM2560-MAY-213S4096-W2048-B8-R1D1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PACKEDBANKDEFAULT-PROFILE-N1-cw-20260620-2306`
+  - Output prefix from parent logs:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/grug-moe-cw-may-d2560-L26-e256-r1-cpu8-GM2560-MAY-213S4096-W2048-B8-R1D1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PACKEDBANKDEFAULT-PROFILE-N1-cw-20260620-2306-c165f2`
+  - Config:
+    single node, batch `8`, `R1D1E8M1`, synthetic data, no checkpoints, profiler
+    steps `3-4`, HLO proto profiler enabled, `expert_3d_optimizer=grouped_muonh`,
+    group size `2`, packed entry true, chunk-local false, packed-bank compute
+    inherited from the wrapper default, MuonH3, `ns_compute_dtype=bf16`,
+    `params=bfloat16,compute=bfloat16,output=bfloat16`.
+- Status:
+  - Immediate Iris check showed the parent running and the child created with
+    one task in `building`.
+- Next action:
+  - Use this run as the first full train-path validation of the packed-bank
+    grouped MuonH default. The required evidence is first metrics, profiler
+    artifact upload, and absence of traceback/OOM/sharding failures. Scaled
+    R4 train validation is still pending after this single-node smoke/profile.
+
+### 2026-06-20 16:18 PDT - May213 full-train OOM and cap-8 relaunch
+- Result:
+  - May213 activated the packed-bank production default, created W&B run
+    `https://wandb.ai/marin-community/marin_moe/runs/GM2560-MAY-213S4096-W2048-B8-R1D1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PACKEDBANKDEFAULT-PROFILE-N1-cw-20260620-2306`,
+    reached compact mesh `{'replica_dcn': 1, 'data': 1, 'expert': 8, 'model': 1}`,
+    and started `train_step` dispatch for step 0.
+  - Before any train metrics or profiler artifact, it entered a repeated GPU
+    BFC OOM loop trying to allocate `10.16GiB`.
+  - I stopped the parent and child with `iris job stop /dlwh/iris-run-job-20260620-230626`.
+- Interpretation:
+  - The integrated training graph confirmed the packed-bank default was active,
+    but the all-layer bank was too large when combined with normal training
+    activations/remat state.
+  - The `10.16GiB` allocation matches the full L26 bank for the large expert
+    matrix family, so this is a production integration pressure issue rather
+    than a harness correctness failure.
+- Change:
+  - Changed the May production default `MAY_MUON_MAX_GROUPED_STACK_SIZE` for
+    `expert_3d_optimizer=grouped_muonh` with packed-bank compute to `8`.
+  - Kept the global `GrugMoeMuonHConfig.max_grouped_stack_size` default and
+    explicit env override unchanged for harness sweeps and non-packed paths.
+  - Updated `run_cw_may_d2560.sh` so the wrapper also defaults to cap `8` for
+    grouped packed-bank compute and cap `256` otherwise.
+- Validation:
+  - `uv run python -m py_compile experiments/grug/moe/optimizer.py experiments/grug/moe/launch_cw_may_d2560.py experiments/grug/moe/test_optimizer.py`
+  - `uv run pytest experiments/grug/moe/test_optimizer.py -k 'may_grouped_muonh'`
+    -> `4 passed`.
+  - Wrapper dry-run printed `muon_max_grouped_stack_size: 8` and
+    `expert_grouped_muonh_packed_bank_compute: true` without passing either as
+    explicit launch flags.
+- Relaunch:
+  - Parent Iris job:
+    `/dlwh/iris-run-job-20260620-231801`
+  - Expected child/W&B:
+    `GM2560-MAY-214S4096-W2048-B8-R1D1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PACKEDBANKCAP8-PROFILE-N1-cw-20260620-2317`
+  - Output prefix from parent logs:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/grug-moe-cw-may-d2560-L26-e256-r1-cpu8-GM2560-MAY-214S4096-W2048-B8-R1D1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PACKEDBANKCAP8-PROFILE-N1-cw-20260620-2317-de7bc3`
+- Next action:
+  - Babysit May214 for first metrics/profile or a new OOM. If cap 8 succeeds,
+    use it as the first production-train validation point; if it fails, inspect
+    whether the failure moved from full-bank materialization to another
+    boundary or activation pressure source.
+
+### 2026-06-20 16:39 PDT - May214 cap-8 production profile succeeded, but is slow
+- Result:
+  - May214 child succeeded:
+    `/dlwh/iris-run-job-20260620-231801/grug-train-GM2560-MAY-214S4096-W2048-B8-R1D1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PACKEDBANKCAP8-PROFILE-N1-cw-20260620-2317`
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/GM2560-MAY-214S4096-W2048-B8-R1D1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PACKEDBANKCAP8-PROFILE-N1-cw-20260620-2317`
+  - Config mesh was correct for this single-node smoke/profile:
+    `{'replica_dcn': 1, 'data': 1, 'expert': 8, 'model': 1}`.
+  - The cap-8 packed-bank production path got past the May213 `10.16GiB`
+    allocation OOM and completed all 5 train steps.
+  - Profiler stopped successfully and W&B synced a profiler artifact, truncated
+    artifact name:
+    `GM2560-MAY-214S4096-W2048-B8-R1D1-E8M1-PALLASCEV8192-RING-SAVEMOE-FA4GROUPEDMUONH3-PACKEDBANKCAP8-PROFILE-N1-cw-20260620-52d1dcf`.
+- Metrics:
+  - Step 0 and step 1 were dominated by compile/first-use effects:
+    - step 0: `428.514s`, `76.47 tokens/s`, `0.0165 MFU`
+    - step 1: `407.066s`, `80.50 tokens/s`, `0.0174 MFU`
+  - Post-compile steps:
+    - step 2: `1.02065s`, `32105.0 tokens/s`, `6.9434 MFU`
+    - step 3: `1.03141s`, `31769.9 tokens/s`, `6.8710 MFU`
+    - step 4: `1.02250s`, `32046.9 tokens/s`, `6.9309 MFU`
+- Interpretation:
+  - The cap-8 production default is a necessary memory fix for integrated
+    training, but not sufficient for performance.
+  - Compared with the May141 single-node SGD reference (`0.4378s`,
+    `16.19 MFU`), grouped MuonH3 cap-8 is still about `2.34x` slower per
+    post-compile step.
+  - The next useful work is profile analysis of May214 plus the boundary
+    primitive path: either reduce grouped-to-FSDP transition overhead or make
+    the grouped Muon update/application path avoid per-bucket/per-leaf runtime
+    overhead without recreating the May213 full-bank HBM spike.
+- Next action:
+  - Download/serve the May214 profile if we need visual confirmation.
+  - Use this as the single-node integrated baseline before attempting R2/R4
+    train validation.
+
+### 2026-06-20 16:58 PDT - R2D1 packed-bank Route A/B boundary validation
+- Motivation:
+  - We had two useful grouped MuonH boundary points:
+    - R1D2E8: Route A/B worked but compiled `2` all-gathers plus `4`
+      all-to-alls and timed around `0.563s`.
+    - R4D1E8: Route A/B compiled to the desired `2` all-gathers, no
+      all-to-alls, and timed around `0.370s`.
+  - The missing point was R2D1E8, which is the smaller `replica_dcn` scale we
+    expect to use before a full R4/R8 train integration.
+- Compile-only validation:
+  - Parent Iris job:
+    `/dlwh/iris-run-job-20260620-234000`
+  - Run id:
+    `MUON-BENCH-D2560-L26-R2D1E8-G8-H3-ROUTEAB-COMPILE-cw-20260620-233957`
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D1E8-G8-H3-ROUTEAB-COMPILE-cw-20260620-233957-e8b4a5`
+  - Both Route A (`expert_fsdp_packed_bank_muonh_apply`) and Route B
+    (`expert_fsdp_packed_bank_muonh_direct_apply`) compiled with:
+    - `compiled_hlo_all_gather=2`
+    - `compiled_hlo_all_to_all=0`
+    - `compiled_hlo_all_reduce=0`
+    - `compiled_hlo_reduce_scatter=0`
+    - `compiled_hlo_collective_permute=0`
+    - `compiled_memory_hbm_peak_gib=58.3984`
+    - ideal collective match ratio `1.0`
+- Timing validation:
+  - Parent Iris job:
+    `/dlwh/iris-run-job-20260620-234548`
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-234548/grug-train-MUON-BENCH-D2560-L26-R2D1E8-G8-H3-ROUTEAB-TIMING-cw-20260620-234546`
+  - W&B/run id:
+    `MUON-BENCH-D2560-L26-R2D1E8-G8-H3-ROUTEAB-TIMING-cw-20260620-234546`
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D1E8-G8-H3-ROUTEAB-TIMING-cw-20260620-234546-becf5f`
+  - Route A, ordinary `optax.apply_updates` path:
+    - median `0.453737s`, mean `0.454035s`
+    - `compiled_hlo_all_gather=2`, `compiled_hlo_all_to_all=0`
+    - HBM peak `58.3984 GiB`
+    - estimated NS dot throughput `5352.9 TFLOP/s`
+    - `33.83%` of nominal H100 bf16 peak
+    - estimated boundary phase traffic `365.625 GiB` global
+    - estimated all-gather traffic `121.875 GiB` global
+  - Route B, direct apply path:
+    - median `0.454104s`, mean `0.454038s`
+    - same compiled collective counts and HBM peak
+    - estimated NS dot throughput `5348.6 TFLOP/s`
+    - `33.80%` of nominal H100 bf16 peak
+- Interpretation:
+  - R2D1 validates the desired packed-bank boundary shape: two fat all-gathers
+    and no per-leaf all-to-all/all-reduce/reduce-scatter explosion.
+  - R2D1 is about `19%` faster than R1D2 (`0.563s -> 0.454s`) because the four
+    all-to-alls disappear.
+  - R2D1 is still about `23%` slower than R4D1 (`0.454s -> 0.370s`) and uses
+    more HBM (`58.4 GiB` vs `51.0 GiB`), so R4D1 remains the better primitive
+    layout when available.
+  - Route B direct apply is not helping; ordinary `optax.apply_updates` remains
+    the pragmatic integration path after converting grouped updates back to an
+    FSDP update tree.
+- Next action:
+  - Treat R4D1 as the preferred boundary target and R2D1 as the smaller-scale
+    fallback.
+  - The remaining blocker is no longer per-leaf collective explosion in the
+    harness; it is integrating this boundary shape into production train steps
+    without the cap-8 fragmentation/overhead that made May214 slow.
+
+### 2026-06-20 17:06 PDT - R2D1/R4D1 grads-to-packed-bank boundary timing
+- Motivation:
+  - Route A/B validated the expensive direction, grouped packed-bank updates
+    back to FSDP-shaped updates for `optax.apply_updates`.
+  - The complementary direction is FSDP-shaped expert gradients into the
+    grouped Newton-Schulz bank. We wanted to know whether this side introduces
+    another collective or memory problem before committing to the boundary
+    design.
+- R4D1E8 result:
+  - Parent Iris job:
+    `/dlwh/iris-run-job-20260620-235603`
+  - Run id:
+    `MUON-BENCH-D2560-L26-R4D1E8-G8-GRADS2BANK-TIMING-cw-20260620-235600`
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4D1E8-G8-GRADS2BANK-TIMING-cw-20260620-235600-4eef98`
+  - Median `0.00501s`, mean `0.00497s`
+  - Compiled collectives:
+    - `all_gather=0`
+    - `all_to_all=0`
+    - `all_reduce=0`
+    - `reduce_scatter=0`
+    - `collective_permute=0`
+  - HBM peak `15.235 GiB`
+- R2D1E8 result:
+  - Parent Iris job:
+    `/dlwh/iris-run-job-20260620-235927`
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260620-235927/grug-train-MUON-BENCH-D2560-L26-R2D1E8-G8-GRADS2BANK-TIMING-cw-20260620-235925`
+  - Run id:
+    `MUON-BENCH-D2560-L26-R2D1E8-G8-GRADS2BANK-TIMING-cw-20260620-235925`
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2D1E8-G8-GRADS2BANK-TIMING-cw-20260620-235925-25e8b4`
+  - Median `0.00666s`, mean `0.00651s`
+  - Compiled collectives:
+    - `all_gather=0`
+    - `all_to_all=0`
+    - `all_reduce=0`
+    - `reduce_scatter=0`
+    - `collective_permute=0`
+  - HBM peak `15.235 GiB`
+  - Estimated local grouped-bank input per device `7.617 GiB`; estimated
+    FSDP-shaped output per device `15.234 GiB`.
+- Interpretation:
+  - The FSDP-grad to packed-bank direction is cheap in both R2D1 and R4D1.
+    It compiles to local slicing/packing with no NCCL collectives.
+  - R2D1 is only about `1.33x` slower than R4D1 here (`6.66 ms` vs
+    `5.01 ms`), and both are tiny relative to the Route A/B apply-side
+    boundary (`0.454s` for R2D1, `0.370s` for R4D1).
+  - This strongly points the next optimization target at the grouped-bank
+    restore/apply side and production integration overhead, not gradient
+    ingestion into the Newton-Schulz bank.
+
+### 2026-06-20 18:24 PDT - Harness-only unfused gate/up packed-bank MuonH path
+- Change:
+  - Added a harness-only `unfused_expert_gate_up` mode in
+    `experiments/grug/moe/muon_update_bench.py`.
+  - The mode replaces synthetic expert shapes from fused
+    `w_gate_up: [E, D, 2I]` plus `w_down: [E, I, D]` to unfused
+    `w_gate: [E, D, I]`, `w_up: [E, D, I]`, and `w_down: [E, I, D]`.
+  - FSDP sharding/restoration treats `w_gate` and `w_up` like the old
+    `w_gate_up` (`P("expert", "data", "model")`) and keeps `w_down` as
+    `P("expert", "model", "data")`.
+  - Added `ns_logical_matrix_shapes` metadata; at May D2560 all three unfused
+    leaves report logical NS shape `[1280, 2560]`.
+  - The CoreWeave launcher now accepts
+    `MUON_BENCH_UNFUSED_EXPERT_GATE_UP=true`.
+- Scope:
+  - Harness-only. The production model still stores fused `w_gate_up`, and
+    model-consumer benches that call the fused grouped MoE MLP are skipped under
+    `--unfused-expert-gate-up`.
+- FLOP estimate:
+  - Harness formula per matrix per NS step:
+    `2*r*c*r + 2*r*r*r + 2*r*r*c`, where `r=min(m,n)` and `c=max(m,n)`.
+  - May D2560, L=26, E=256, H3, no padding:
+    - fused: `26 * 256 * (NS(2560,2560) + NS(1280,2560))`
+      = `2,428,804,005,888,000` dot FLOPs (`2.429 PF`)
+    - unfused: `26 * 256 * 3 * NS(1280,2560)`
+      = `1,256,277,934,080,000` dot FLOPs (`1.256 PF`)
+    - ratio `15/29 = 0.5172`; reduction `14/29 = 48.28%`
+  - This is lower than the earlier rough `~1.61 PF` estimate; the discrepancy
+    is from applying the current harness dot-count formula directly.
+- Local validation:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py -q -k 'unfused_expert_gate_up'`
+    passed: `2 passed, 121 deselected`.
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py experiments/grug/moe/test_optimizer.py -q`
+    passed: `152 passed`.
+  - Local small compile-only CLI smoke:
+    `uv run python -m experiments.grug.moe.muon_update_bench --layers 4 --ns4d-group-size 4 --ns4d-group-axis none --hidden-dim 16 --intermediate-dim 8 --num-experts 8 --backend-steps 1 --max-grouped-stack-size 8 --replica-axis 1 --data-axis 1 --expert-axis 1 --model-axis 1 --dtype fp32 --bench-kinds expert_fsdp_packed_bank_muonh_update_only --unfused-expert-gate-up --mode both --compile-only --warmup 0 --iters 0 --disable-abstract-mesh`
+    passed; metadata showed three packed banks and logical NS shape `[8, 16]`
+    for `w_gate`, `w_up`, and `w_down`.
+  - Full May-shape abstract-mesh lower for
+    `expert_fsdp_packed_bank_muonh_update_only` passed with:
+    - packed shapes:
+      `w_gate=(26,256,2560,1280)`, `w_up=(26,256,2560,1280)`,
+      `w_down=(26,256,1280,2560)`
+    - HLO `dot_general=27`, `two_batch_axis_dot_general=27`
+    - HLO collectives: `all_gather=0`, `all_to_all=0`
+    - estimated matrix count `19,968`
+- Remote attempt:
+  - Attempted a bounded single-node CoreWeave compile-only run with
+    `MUON_BENCH_UNFUSED_EXPERT_GATE_UP=true`, May D2560, H3,
+    `model_axis=1`, and output under `s3://marin-na/tmp/ttl=7d`.
+  - No Iris parent/child job was created. The launcher failed while writing
+    executor metadata to S3 with
+    `botocore.exceptions.NoCredentialsError: Unable to locate credentials`.
+- Interpretation:
+  - The optimizer math and shape/orientation contract are validated in the
+    harness path.
+  - Route A remains the default apply strategy; this change only alters the
+    synthetic expert bank used by the update harness.
+  - Next step is to rerun the same compile-only CoreWeave command from an
+    environment with S3 credentials, then benchmark R4D1 and an 8-node target
+    only after the compile-only run is green.
+
+### 2026-06-20 21:23 PDT - Packed-master MuonH R2/R4 and shard-aligned JIT materialization
+- Change:
+  - Added packed-master MuonH harness paths where the authoritative expert
+    master and momentum live in fp32 packed NS layout.
+  - Added metadata that maps packed-bank slices back to logical expert leaves,
+    including target FSDP sharding strings.
+  - Added gradient tests showing the packed-master consumer returns packed
+    master-shaped grads matching the ordinary grouped-tree consumer.
+  - Changed the FSDP-layer materialization probe to slice a shard-aligned slab
+    before restoring the stack axis and resharding to FSDP. A length-1 slice is
+    illegal on a sharded stack axis, so the minimal legal unit is the live
+    stack-axis partition size.
+- Local validation:
+  - Focused packed-master tests passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_rebuild_tree_matches_packed_slices_numerically experiments/grug/moe/test_muon_update_bench.py::test_expert_packed_master_consumer_grad_matches_grouped_tree_grad_numerically experiments/grug/moe/test_muon_update_bench.py::test_expert_packed_master_muonh_consumer_keeps_packed_master_and_grouped_outputs experiments/grug/moe/test_muon_update_bench.py::test_expert_packed_master_consumer_grad_returns_packed_master_grads_without_collectives experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_layer_consumer_materializes_one_use_site_layer -q`
+    -> `5 passed`.
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py experiments/grug/moe/launch_cw_muon_update_bench.py`
+    passed.
+  - `git diff --check -- experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+- R2 packed-master update+consumer:
+  - Parent `/dlwh/iris-run-job-20260621-041253`.
+  - Child/run id
+    `MUON-BENCH-D2560-L26-R2E8-PACKEDMASTER-H3-N2-cw-20260621-041251`.
+  - Needed `--xla_gpu_autotune_level=0`; without it, Triton autotune OOMed on
+    an f32 `[416,2560,2560]` stack.
+  - Update+consumer median `~2.068s`.
+  - Compiled update+consumer collectives:
+    `all_gather=0`, `all_reduce=0`, `all_to_all=0`, `reduce_scatter=0`,
+    `collective_permute=8`.
+  - HBM peak `~68.6 GiB`.
+  - The original one-layer FSDP materialization path median was `~0.261s`,
+    compiled `all_gather=2`, `collective_permute=2`, HBM peak `~23.05 GiB`.
+- R4 packed-master update+consumer:
+  - Parent `/dlwh/iris-run-job-20260621-041616`.
+  - Child/run id
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-H3-N4-cw-20260621-041614`.
+  - Update+consumer median `~1.404s`.
+  - Compiled update+consumer collectives:
+    `all_gather=0`, `all_reduce=0`, `all_to_all=0`, `reduce_scatter=0`,
+    `collective_permute=20`.
+  - HBM peak `~38.87 GiB`.
+  - Unpatched one-layer FSDP materialization median `~0.418s`, compiled
+    `all_gather=2`, `collective_permute=6`, HBM peak `~21.88 GiB`.
+- Patched R4 FSDP-layer materialization-only:
+  - Parent `/dlwh/iris-run-job-20260621-042032`.
+  - Child/run id
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-H3-N4-cw-20260621-042030`.
+  - Materialization median `~0.185s`.
+  - Compiled collectives stayed `all_gather=2`, `collective_permute=6`, with
+    no all-reduce, all-to-all, or reduce-scatter.
+  - HBM peak fell to `~12.50 GiB`; temp fell to `~4.30 GiB`.
+  - Profile roots uploaded under
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-H3-N4-cw-20260621-042030-517f70/profiler/process_*`.
+- Interpretation:
+  - The packed-master update path preserves the NS-friendly authoritative
+    layout and compiles without AG/A2A/AR/RS. Scaling from R2 to R4 is only
+    `~1.47x` for `2x` more nodes, so compute efficiency/collective-permute
+    overhead remains a concern.
+  - JIT materialization cannot select a single layer directly from a sharded
+    stack axis; it must select a shard-aligned slab. Doing so is still much
+    better than restoring the full group before indexing: R4 materialization
+    improved from `~0.418s` to `~0.185s` and HBM dropped by `~9.4 GiB`.
+  - The FSDP use-site path still performs two all-gathers, so this proves
+    delayed/smaller materialization, not communication elimination.
+  - Remaining gap to the full goal is production integration: the real trainer
+    still needs the expert Muon leaves to live authoritatively in packed fp32
+    master/momentum banks and materialize bf16 leaves at layer use sites.
+
+### 2026-06-20 21:36 PDT - Packed-master sequential FSDP materialization R4
+- Change:
+  - Added `expert_packed_master_fsdp_sequential_consumer`, a harness bench that
+    loops over all 26 layers and materializes each packed-master expert layer at
+    its use site before a tiny FSDP-shaped expert consumer.
+  - Added a named fast-loop profile:
+    `packed-master-fsdp-seq-r4e8-l26`.
+- Local validation:
+  - Focused packed-master tests passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_rebuild_tree_matches_packed_slices_numerically experiments/grug/moe/test_muon_update_bench.py::test_expert_packed_master_consumer_grad_matches_grouped_tree_grad_numerically experiments/grug/moe/test_muon_update_bench.py::test_expert_packed_master_muonh_consumer_keeps_packed_master_and_grouped_outputs experiments/grug/moe/test_muon_update_bench.py::test_expert_packed_master_consumer_grad_returns_packed_master_grads_without_collectives experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_layer_consumer_materializes_one_use_site_layer experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_sequential_consumer_matches_layer_sum experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_sequential_consumer_lowers_without_reduction_collectives -q`
+    -> `7 passed`.
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py experiments/grug/moe/launch_cw_muon_update_bench.py`
+    passed.
+  - `git diff --check -- experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py experiments/grug/moe/launch_cw_muon_update_bench.py scratch/muon_update_bench_fast_loop.sh scratch/launch_muon_update_bench_executor_n1.sh`
+    passed.
+  - Local one-device compile-only smoke with the new profile passed and emitted
+    `ns4d_boundary_status=packed_master_materialize_sequential_fsdp_layer_consumer`.
+- R4 sequential materialization run:
+  - Parent `/dlwh/iris-run-job-20260621-043322`.
+  - Child/run id
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-FSDPSEQ-N4-cw-20260621-043320`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-FSDPSEQ-N4-cw-20260621-043320-18fc5e`.
+  - Profile roots uploaded under the output prefix at `profiler/process_*`.
+  - Median `~2.286s`; mean `~2.287s`; min `~2.284s`.
+  - Compiled collectives:
+    `all_gather=52`, `collective_permute=36`, `all_reduce=0`,
+    `all_to_all=0`, `reduce_scatter=0`.
+  - Lowered HLO showed `dot_general=52`; compiled HLO reported
+    `batched_stack_dot_general=52`.
+  - HBM peak `~70.90 GiB`; temp `~62.70 GiB`; argument bytes `~8.20 GiB`.
+- Interpretation:
+  - This is the first full-layer delayed materialization measurement for the
+    packed-master representation. It confirms the use-site idea is functionally
+    viable but not performant as a naive per-layer loop.
+  - The compiler did not discover a good packed transport pattern across the
+    26 materializations. It emitted `2 * L = 52` all-gathers plus 36
+    collective-permutes, and HBM climbed near the device limit.
+  - Compared with the patched one-layer materialization median of `~0.185s`,
+    the sequential result is not just a clean `26x` extrapolation of useful
+    compute; it is dominated by repeated serialized materialization/collective
+    overhead and large temporary buffers.
+  - The next useful harness target is explicit bucketed/slabbed materialization
+    for multiple layers at once, with a cap chosen to keep HBM below the danger
+    zone. If that still compiles to many independent all-gathers, the fallback
+    is an explicit lower-level grouped-to-FSDP transport primitive.
+
+### 2026-06-20 21:45 PDT - Packed-master slabbed FSDP materialization R4
+- Change:
+  - Added `expert_packed_master_fsdp_slab_consumer`, which materializes a
+    shard-aligned slab from the packed fp32 master bank once and consumes all
+    valid layers in that slab before moving on.
+  - Added a named fast-loop profile:
+    `packed-master-fsdp-slab-r4e8-l26`.
+- Local validation:
+  - Focused slab/sequential tests passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_sequential_consumer_matches_layer_sum experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_slab_consumer_matches_sequential_consumer experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_sequential_consumer_lowers_without_reduction_collectives experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_slab_consumer_lowers_without_reduction_collectives -q`
+    -> `4 passed`.
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+  - `git diff --check -- experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py scratch/muon_update_bench_fast_loop.sh`
+    passed.
+  - Local one-device compile-only smoke with the new profile passed and emitted
+    `ns4d_boundary_status=packed_master_materialize_slab_fsdp_layer_consumer`.
+- R4 slab materialization run:
+  - Parent `/dlwh/iris-run-job-20260621-044235`.
+  - Child/run id
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-FSDPSLAB-N4-cw-20260621-044233`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-FSDPSLAB-N4-cw-20260621-044233-00e2e4`.
+  - Profile roots uploaded under the output prefix at `profiler/process_*`.
+  - Median across tasks `~1.735-1.745s`; representative process-0 median
+    `1.7445s`, mean `1.7453s`, min `1.7350s`.
+  - Compiled collectives:
+    `all_gather=14`, `collective_permute=36`, `all_reduce=0`,
+    `all_to_all=0`, `reduce_scatter=0`.
+  - HBM peak `~47.66 GiB`; temp `~39.45 GiB`; argument bytes `~8.20 GiB`.
+- Comparison:
+  - Naive sequential R4: median `~2.286s`, `all_gather=52`,
+    `collective_permute=36`, HBM `~70.90 GiB`, temp `~62.70 GiB`.
+  - Slabbed R4: median `~1.74s`, `all_gather=14`,
+    `collective_permute=36`, HBM `~47.66 GiB`, temp `~39.45 GiB`.
+  - Slabbing gives `~1.31x` runtime speedup, `~3.7x` fewer all-gathers, and
+    `~23.2 GiB` lower HBM peak, but does not reduce the 36 collective-permutes.
+- Interpretation:
+  - Bucketed/slabbed use-site materialization is directionally right: it cuts
+    redundant all-gathers and memory pressure.
+  - It is still too slow for the production objective. The remaining cost is
+    not just all-gather count; the persistent 36 collective-permutes and the
+    large temporary footprint suggest XLA is still decomposing the grouped-to-
+    FSDP transition into many layout moves.
+  - Next choices:
+    1. Try a more explicit bulk packed-bank-to-FSDP transport that avoids the
+       per-leaf/per-slab collective-permute pattern.
+    2. If XLA continues to decompose it, move this boundary to a lower-level
+       grouped-to-FSDP primitive.
+
+### 2026-06-20 21:58 PDT - Packed-master bulk FSDP materialization R4
+- Change:
+  - Added `expert_packed_master_fsdp_bulk_consumer`, which casts each packed
+    fp32 master bank to bf16 once, runs the slice-first grouped-to-FSDP
+    materialization for the whole bank, then consumes the resulting per-layer
+    FSDP leaves.
+  - Also changed the layer/slab materialization helpers to cast the packed
+    master slice/slab to bf16 before the grouped-to-FSDP restore, matching the
+    intended forward-view dtype.
+  - Added the fast-loop profile:
+    `packed-master-fsdp-bulk-r4e8-l26`.
+- Local validation:
+  - Focused packed-master tests passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_rebuild_tree_matches_packed_slices_numerically experiments/grug/moe/test_muon_update_bench.py::test_expert_packed_master_consumer_grad_matches_grouped_tree_grad_numerically experiments/grug/moe/test_muon_update_bench.py::test_expert_packed_master_muonh_consumer_keeps_packed_master_and_grouped_outputs experiments/grug/moe/test_muon_update_bench.py::test_expert_packed_master_consumer_grad_returns_packed_master_grads_without_collectives experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_layer_consumer_materializes_one_use_site_layer experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_sequential_consumer_matches_layer_sum experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_slab_consumer_matches_sequential_consumer experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_bulk_consumer_matches_sequential_consumer experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_sequential_consumer_lowers_without_reduction_collectives experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_slab_consumer_lowers_without_reduction_collectives experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_bulk_consumer_lowers_without_reduction_collectives -q`
+    -> `11 passed`.
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+  - `git diff --check -- experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py scratch/muon_update_bench_fast_loop.sh`
+    passed.
+  - Local real lowering before laptop OOM already showed the desired HLO shape:
+    `all_gather=2`, `all_to_all=0`, `all_reduce=0`, `reduce_scatter=0`.
+- R4 bulk materialization run:
+  - Parent `/dlwh/iris-run-job-20260621-045404`.
+  - Child/run id
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-FSDPBULK-N4-cw-20260621-045401`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-FSDPBULK-N4-cw-20260621-045401-fffc01`.
+  - Profile roots uploaded under the output prefix at `profiler/process_*`.
+  - Median `0.3095s`; mean `0.3577s`; min `0.3065s`.
+  - Compile time `2.67s`.
+  - Lowered HLO: `all_gather=2`, `all_to_all=0`, `all_reduce=0`,
+    `reduce_scatter=0`, `dot_general=52`.
+  - Compiled HLO: `all_gather=2`, `all_to_all=0`, `all_reduce=0`,
+    `reduce_scatter=0`.
+  - HBM peak `25.98 GiB`; temp `17.78 GiB`; argument bytes `8.20 GiB`.
+- Comparison:
+  - Sequential R4: median `~2.286s`, `all_gather=52`,
+    `collective_permute=36`, HBM `~70.90 GiB`.
+  - Slabbed R4: median `~1.74s`, `all_gather=14`,
+    `collective_permute=36`, HBM `~47.66 GiB`.
+  - Bulk R4: median `0.3095s`, `all_gather=2`,
+    `collective_permute=0`, HBM `25.98 GiB`.
+  - Bulk is `~5.6x` faster than slab and `~7.4x` faster than sequential, with
+    much lower HBM. The compiler was friendly for this representation.
+- Interpretation:
+  - This is the first strong positive result for the packed-master/JIT
+    materialization thesis. Bulk bank transport lets XLA see two large bf16
+    all-gathers instead of many layer/slab materializations and removes the
+    collective-permute explosion.
+  - The harness still measures materialize+consumer loss only, not the full
+    trainer step. The next integration question is how to keep expert master
+    and momentum authoritative in the packed bank, produce packed grads, run
+    MuonH directly on that bank, and expose bf16 FSDP/model leaves through a
+    bulk or layer accessor without routing expert leaves through
+    `optax.apply_updates`.
+
+### 2026-06-20 22:31 PDT - Packed-master FSDP slab grad R4
+- Change:
+  - Added `expert_packed_master_fsdp_{sequential,slab,bulk}_grad`, which runs
+    `jax.grad` through the packed fp32 master -> bf16 FSDP consumer view.
+  - Added fast-loop profiles:
+    `packed-master-fsdp-grad-seq-r4e8-l26` and
+    `packed-master-fsdp-grad-slab-r4e8-l26`.
+  - This tests the retargeted goal's risky transpose path: can gradients flow
+    back into the NS-friendly packed master bank without first building a
+    permanent per-leaf update tree?
+- Local validation:
+  - Focused tests passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_matches_direct_consumer_grad experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_lowers_with_packed_grad_sharding experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_matches_separate_update_then_consume experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_lowers_with_packed_state_and_scalar_loss -q`
+    -> `12 passed`.
+  - Tiny local launcher smokes for grad slab and grad sequential both passed.
+  - At tiny shape, sequential/slab grad lowered and compiled with zero
+    collectives.
+- R4 slab-grad run:
+  - Parent `/dlwh/iris-run-job-20260621-052846`.
+  - Child/run id
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-FSDPGRADSLAB-N4-cw-20260621-052843`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-FSDPGRADSLAB-N4-cw-20260621-052843`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-FSDPGRADSLAB-N4-cw-20260621-052843-54fd61`.
+  - Profile roots uploaded under the output prefix at `profiler/process_*`.
+  - Median `1.8642s`; mean `1.8650s`; min `1.8641s`.
+  - Compile time `3.06s`.
+  - Lowered HLO: `all_gather=0`, `all_to_all=0`, `all_reduce=0`,
+    `reduce_scatter=0`, `collective_permute=0`, `dot_general=104`.
+  - Compiled HLO: `all_gather=28`, `collective_permute=36`,
+    `all_reduce=0`, `all_to_all=0`, `reduce_scatter=0`.
+  - HBM peak `43.36 GiB`; temp `26.95 GiB`; argument bytes `8.20 GiB`;
+    output bytes `8.20 GiB`.
+- Interpretation:
+  - Correctness/layout side: positive. The gradient output remains in the
+    packed grouped bank layout, so the authoritative master-bank representation
+    is viable at the JAX API level.
+  - Compiler side: negative. At full R4 shape, the compiler introduces 28
+    all-gathers and 36 collective-permutes even though the lowered StableHLO
+    summary has zero collectives. This is the same family of problem as the
+    earlier slab/boundary path: full-shape compiler lowering decomposes the
+    layout/transpose into many transfers.
+  - Compared with the bulk forward materialization result (`0.3095s`, 2 AG,
+    0 CP), slab-grad is much slower and has many more compiled collectives.
+  - Next action:
+    - Try bulk-grad or a full packed-master trainstep only if we want the
+      compiler-friendly bulk behavior, but this may move away from strict
+      layer-by-layer JIT materialization.
+    - If we need true use-site/layer materialization, expect to need a lower
+      level primitive or more explicit communication scheduling; the compiler is
+      not preserving the nice lowered form at full scale.
+
+### 2026-06-20 22:38 PDT - Packed-master FSDP bulk grad R4
+- Change:
+  - Added and launched `packed-master-fsdp-grad-bulk-r4e8-l26`, which runs
+    `jax.grad` through the packed fp32 master -> bulk bf16 FSDP consumer view.
+  - This checks whether the compiler-friendly bulk materialization path also
+    survives reverse-mode, so gradients can flow back into the authoritative
+    NS-friendly packed master bank.
+- Local validation:
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+  - Focused packed-master tests passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_matches_direct_consumer_grad experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_lowers_with_packed_grad_sharding experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_matches_separate_update_then_consume experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_lowers_with_packed_state_and_scalar_loss -q`
+    -> `12 passed`.
+  - Tiny local launcher smoke for `packed-master-fsdp-grad-bulk-r4e8-l26`
+    passed.
+- R4 bulk-grad run:
+  - Parent `/dlwh/iris-run-job-20260621-053514`.
+  - Child/run id
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-FSDPGRADBULK-N4-cw-20260621-053511`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-FSDPGRADBULK-N4-cw-20260621-053511`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-FSDPGRADBULK-N4-cw-20260621-053511-f5963c`.
+  - Profile roots uploaded under the output prefix at `profiler/process_*`.
+  - Median `0.5966s`; mean `0.5967s`; min `0.5958s`.
+  - Compile time `3.15s` on process 0.
+  - Lowered HLO: `all_gather=2`, `all_reduce=2`, `reduce_scatter=2`,
+    `all_to_all=0`, `collective_permute=0`, `dot_general=104`.
+  - Compiled HLO: `all_gather=2`, `all_reduce=0`, `reduce_scatter=0`,
+    `all_to_all=0`, `collective_permute=0`, `dot_general=0`.
+  - HBM peak `34.18 GiB`; temp `17.78 GiB`; argument bytes `8.20 GiB`;
+    output bytes `8.20 GiB`.
+- Interpretation:
+  - The packed-master gradient route is viable in bulk form. The gradient
+    output remains in the packed grouped-bank layout, and compiled HLO avoids
+    the slab-grad collective-permute explosion.
+  - This is not as good as the bulk forward/materialization-only path
+    (`0.3095s`, also 2 compiled AGs), but it is much better than slab-grad
+    (`1.864s`, 28 compiled AGs and 36 CPs).
+  - The compiler is our friend only for the bulk view. It is not preserving the
+    use-site/layer JIT materialization story at full shape.
+  - Next step is to compose bulk grad with direct packed-bank MuonH update:
+    `grad = jax.grad(bulk_loss)(master_bank)` followed by grouped MuonH update
+    on `(master_bank, grad, momentum_bank)`. If that compiles near
+    bulk-grad + update-only, the packed-master optimizer representation has a
+    plausible harness-level path. If it serializes badly, we need explicit
+    scheduling or a lower-level transport primitive.
+
+### 2026-06-20 22:49 PDT - Packed-master bulk grad + MuonH update R4
+- Change:
+  - Added and launched `packed-master-bulk-grad-muonh-r4e8-l26`, which composes
+    the compiler-friendly packed-master bulk grad path with a direct packed-bank
+    MuonH update:
+    `grad = jax.grad(bulk_loss)(master_bank)`, then
+    `expert_packed_master_muonh_update_outputs(master_bank, grad, momentum)`.
+  - Local tiny launcher smoke passed before launch. Focused packed-master tests
+    were still passing:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_matches_direct_consumer_grad experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_lowers_with_packed_grad_sharding experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_matches_separate_update_then_consume experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_lowers_with_packed_state_and_scalar_loss -q`
+    -> `12 passed`.
+- R4 composed run:
+  - Parent `/dlwh/iris-run-job-20260621-054651`.
+  - Child/run id
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-BULKGRAD-MUONH-N4-cw-20260621-054646`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-BULKGRAD-MUONH-N4-cw-20260621-054646`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-BULKGRAD-MUONH-N4-cw-20260621-054646-e99ea3`.
+  - Profiles uploaded under the output prefix at `profiler/process_*`.
+  - Median `~1.59s`; representative process medians `1.5913s` and
+    `1.5929s`.
+  - Mean `~1.59-1.60s`; min `~1.5866s`.
+  - Compile time `~4.75s`.
+  - Lowered HLO: `all_gather=2`, `all_reduce=2`, `reduce_scatter=2`,
+    `all_to_all=0`, `collective_permute=0`, `dot_general=122`.
+  - Compiled HLO: `all_gather=2`, `all_reduce=0`, `reduce_scatter=0`,
+    `all_to_all=0`, `collective_permute=0`, `gpu_gemm_custom_call=150`.
+  - HBM peak `38.28 GiB`; temp `21.88 GiB`; argument bytes `16.41 GiB`;
+    output bytes `16.41 GiB`.
+- Interpretation:
+  - Positive: the composed path did not regress to the slab/layer collective
+    explosion. Compiled HLO still has only two all-gathers and no
+    collective-permutes.
+  - Negative: runtime is much worse than the optimistic additive floor. Bulk
+    grad alone was `0.5966s`; update-only R4 was roughly `0.175-0.177s`, so a
+    friendly composition would have been closer to `0.8s` than `1.6s`.
+  - This shifts the next bottleneck from "can the compiler preserve bulk
+    transport?" to "can we keep grad + NS update from becoming a poorly
+    scheduled/fused monolith?" The profile should be inspected for whether the
+    extra time is additional materialization, poor GEMM scheduling, or lost
+    overlap between the gradient consumer and NS update.
+  - The packed-master representation remains promising as a correctness/layout
+    strategy, but the current single-JIT composition is not yet a performance
+    win.
+
+### 2026-06-20 22:59 PDT - Packed-master bulk grad + split MuonH update R4
+- Change:
+  - Added and launched `packed-master-bulk-grad-split-muonh-r4e8-l26`, which
+    keeps the same authoritative packed fp32 master/momentum representation as
+    the composed path, but forces an explicit compiled-call boundary:
+    `compiled_grad(master_bank, expert_inputs)` followed by
+    `compiled_muonh_update(master_bank, grad_bank, momentum_bank)`.
+  - Purpose: test whether the `~1.59s` composed single-JIT result was mainly a
+    bad scheduling/fusion artifact.
+- Local validation:
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+  - `git diff --check -- experiments/grug/moe/muon_update_bench.py scratch/muon_update_bench_fast_loop.sh`
+    passed.
+  - Tiny local launcher smoke for
+    `packed-master-bulk-grad-split-muonh-r4e8-l26` passed.
+  - Focused packed-master tests passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_matches_direct_consumer_grad experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_lowers_with_packed_grad_sharding experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_matches_separate_update_then_consume experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_lowers_with_packed_state_and_scalar_loss -q`
+    -> `12 passed`.
+- R4 split-call run:
+  - Parent `/dlwh/iris-run-job-20260621-055647`.
+  - Child/run id
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-BULKGRAD-SPLITMUONH-N4-cw-20260621-055644`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-BULKGRAD-SPLITMUONH-N4-cw-20260621-055644`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-BULKGRAD-SPLITMUONH-N4-cw-20260621-055644-e78b28`.
+  - Profiles uploaded under the output prefix at `profiler/process_*`.
+  - Median `~1.55s`; process samples `1.5464s`, `1.5467s`,
+    `1.5493s`, `1.5529s`.
+  - Mean `~1.57s`; min `~1.54s`.
+  - Compile time `~3.72-4.52s`.
+  - Lowered HLO: `all_gather=2`, `all_reduce=2`, `reduce_scatter=2`,
+    `all_to_all=0`, `collective_permute=0`, `dot_general=122`.
+  - Compiled HLO: `all_gather=2`, `all_reduce=0`, `reduce_scatter=0`,
+    `all_to_all=0`, `collective_permute=0`, `gpu_gemm_custom_call=150`.
+  - Combined sequential compiled-memory summary: HBM peak `41.02 GiB`;
+    temp `17.78 GiB`; argument bytes `24.61 GiB`; output bytes `16.41 GiB`.
+- Interpretation:
+  - Split-call is only a small improvement over composed single-JIT
+    (`~1.55s` vs `~1.59s`). Explicitly separating grad and MuonH update does
+    not recover the expected additive floor.
+  - The core positive remains: both composed and split keep the compiled
+    collective pattern clean (`2` AG, no CP/A2A/RS). The core negative is that
+    this packed-master bulk-grad + update path is still too slow.
+  - This rules out "single-JIT fusion/scheduling alone" as the main explanation.
+    Next diagnosis should inspect split profiles and compare the grad compiled
+    call versus MuonH compiled call separately; the gap may be from bulk-grad
+    recomputation/materialization cost, packed-bank update HBM pressure, or the
+    current benchmark doing more work than the standalone update-only baseline.
+
+### 2026-06-20 23:19 PDT - Packed-master MuonH update-only R4
+- Change:
+  - Added `packed-master-muonh-update-only-r4e8-l26`, an apples-to-apples
+    update-only profile for the same authoritative packed fp32 master/momentum
+    representation used by the composed and split packed-master paths.
+  - Purpose: determine whether the `~1.55s` split-call result was hiding a slow
+    packed-master update kernel/layout, versus the slowdown coming mostly from
+    the bulk-grad boundary.
+- Local validation:
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+  - `git diff --check -- experiments/grug/moe/muon_update_bench.py scratch/muon_update_bench_fast_loop.sh`
+    passed.
+  - Tiny local launcher smoke for
+    `packed-master-muonh-update-only-r4e8-l26` passed.
+  - Focused packed-master tests passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_matches_direct_consumer_grad experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_lowers_with_packed_grad_sharding experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_matches_separate_update_then_consume experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_lowers_with_packed_state_and_scalar_loss -q`
+    -> `12 passed`.
+- R4 update-only run:
+  - Parent `/dlwh/iris-run-job-20260621-060829`.
+  - Child/run id
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-UPDATEONLY-N4-cw-20260621-060826`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-UPDATEONLY-N4-cw-20260621-060826`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-UPDATEONLY-N4-cw-20260621-060826-1cb266`.
+  - Profiles uploaded under the output prefix at `profiler/process_*`.
+  - Process 0 median `0.9492s`; mean `0.9492s`; min `0.9488s`.
+    Other observed process medians were `~0.9486s` and `~0.9514s`.
+  - Compile time `4.52s` on process 0.
+  - Lowered HLO: `all_gather=0`, `all_reduce=0`, `reduce_scatter=0`,
+    `all_to_all=0`, `collective_permute=0`, `dot_general=18`.
+  - Compiled HLO: `all_gather=0`, `all_reduce=0`, `reduce_scatter=0`,
+    `all_to_all=0`, `collective_permute=0`, `gpu_gemm_custom_call=150`.
+  - HBM peak `36.91 GiB`; temp `16.41 GiB`; argument bytes `20.51 GiB`;
+    output bytes `16.41 GiB`.
+  - Estimated NS dot flops `2.616 PF`; median estimated throughput
+    `2755.7 TFLOP/s`, `8.71%` of total 32-H100 bf16 peak.
+- Interpretation:
+  - Positive: this path has no compiled collectives at all. The packed-master
+    authoritative layout itself is representable without communication for the
+    Muon update-only phase.
+  - Negative: it is much slower than the older isolated packed-bank update-only
+    baseline (`~0.175-0.177s` R4). That older baseline did not carry the same
+    packed-master argument/output structure, so the gap is likely from the
+    current packed-master update function/layout and HBM traffic, not from
+    boundary collectives.
+  - The split-call result now decomposes cleanly: `~0.5966s` bulk grad plus
+    `~0.949s` packed-master MuonH update-only gives the observed `~1.55s`.
+    That means the next optimization target is the packed-master update-only
+    implementation itself, not only the grad/update composition boundary.
+  - The main practical question is why the packed-master update-only version
+    emits 150 GEMM custom calls and runs at only `~8.7%` of full 32-H100 peak
+    while the prior packed-bank update-only harness reached roughly half peak.
+    Compare shapes/layouts/HLO between the two update-only paths before adding
+    more end-to-end trainer machinery.
+
+### 2026-06-20 23:27 PDT - Packed-master MuonH checksum-only R4
+- Change:
+  - Added `expert_packed_master_muonh_update_checksum`, which computes the same
+    packed-master MuonH update as the update-only benchmark but returns only a
+    scalar checksum of the next master and momentum banks.
+  - Purpose: isolate whether the `~0.949s` packed-master update-only result was
+    dominated by full output materialization of the next packed fp32
+    master/momentum state.
+- Local validation:
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+  - `git diff --check -- experiments/grug/moe/muon_update_bench.py scratch/muon_update_bench_fast_loop.sh`
+    passed.
+  - Tiny local launcher smoke for
+    `packed-master-muonh-checksum-r4e8-l26` passed.
+  - Focused packed-master tests passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_matches_direct_consumer_grad experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_lowers_with_packed_grad_sharding experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_matches_separate_update_then_consume experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_lowers_with_packed_state_and_scalar_loss -q`
+    -> `12 passed`.
+- R4 checksum run:
+  - Parent `/dlwh/iris-run-job-20260621-062607`.
+  - Child/run id
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-CHECKSUM-N4-cw-20260621-062605`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-CHECKSUM-N4-cw-20260621-062605`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-CHECKSUM-N4-cw-20260621-062605-98dad2`.
+  - Profiles uploaded under the output prefix at `profiler/process_*`.
+  - Process 0 median `0.9503s`; mean `0.9897s`; min `0.9488s`.
+    Other process medians were also `~0.9503s`.
+  - Compiled HLO: `all_gather=0`, `all_reduce=0`, `reduce_scatter=0`,
+    `all_to_all=0`, `collective_permute=0`, `gpu_gemm_custom_call=150`.
+  - HBM peak `45.12 GiB`; temp `24.61 GiB`; argument bytes `20.51 GiB`;
+    output bytes `4 bytes`.
+  - Estimated NS dot flops `2.616 PF`; median estimated throughput
+    `~2752 TFLOP/s`, `~8.7%` of total 32-H100 bf16 peak.
+- Interpretation:
+  - Positive: this path also has no compiled collectives. The authoritative
+    packed-master update can remain fully local during the Muon phase.
+  - Negative: checksum-only output is effectively the same speed as returning
+    the full packed master/momentum state (`~0.950s` vs `~0.949s`) and has
+    higher HBM/temp. Full output materialization is therefore not the slowdown.
+  - The packed-master update math/layout itself is the current bottleneck. The
+    next comparison should isolate why this semantically complete packed-master
+    path is much slower than the older packed-bank update-only harness; likely
+    candidates are momentum/Nesterov/master hyperball work, bank layout, or
+    GEMM batching/chunking choices rather than collectives.
+
+### 2026-06-20 23:40 PDT - Packed-master MuonH R4 decomposition
+- Change:
+  - Added decomposition benches for the packed-master MuonH update:
+    `expert_packed_master_momentum_checksum`,
+    `expert_packed_master_ns_checksum`,
+    `expert_packed_master_ns_hyperball_checksum`, and the existing full
+    `expert_packed_master_muonh_update_checksum`.
+  - Purpose: split the `~0.95s` packed-master update into momentum/Nesterov,
+    Newton-Schulz, hyperball/update, and full-composition phases without
+    materializing large outputs.
+- Validation:
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+  - `git diff --check -- experiments/grug/moe/muon_update_bench.py scratch/muon_update_bench_fast_loop.sh`
+    passed.
+  - Tiny local launcher smoke for
+    `packed-master-muonh-decomp-r4e8-l26` passed.
+  - Focused packed-master tests passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_matches_direct_consumer_grad experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_lowers_with_packed_grad_sharding experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_matches_separate_update_then_consume experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_lowers_with_packed_state_and_scalar_loss -q`
+    -> `12 passed`.
+- R4 decomposition run:
+  - Parent `/dlwh/iris-run-job-20260621-064023`.
+  - Child/run name
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-DECOMP-N4-cw-20260621-064021`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/7kzcd90h`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-DECOMP-N4-cw-20260621-064021-36fd69`.
+  - Job succeeded: 4/4 tasks succeeded, exit 0.
+- Process 0 timing rows:
+  - Momentum checksum: median `0.01294s`, mean `0.01604s`, min `0.00489s`;
+    compiled HLO `AG=0`, `AR=0`, `RS=0`, `A2A=0`, `CP=0`, `gpu_gemm=0`;
+    HBM peak `12.31 GiB`, temp `~0.001 GiB`, args `12.30 GiB`.
+  - NS checksum: median `0.48885s`, mean `0.49483s`, min `0.48777s`;
+    compiled HLO `AG=0`, `AR=0`, `RS=0`, `A2A=0`, `CP=0`,
+    `gpu_gemm=150`; HBM peak `16.41 GiB`, temp `12.30 GiB`, args
+    `4.10 GiB`.
+  - NS + hyperball checksum: median `0.49879s`, mean `0.49594s`, min
+    `0.48697s`; compiled HLO `AG=0`, `AR=0`, `RS=0`, `A2A=0`, `CP=0`,
+    `gpu_gemm=150`; HBM peak `24.61 GiB`, temp `12.30 GiB`, args
+    `12.30 GiB`.
+  - Full packed-master MuonH checksum: median `0.95122s`, mean `0.95079s`,
+    min `0.94936s`; compiled HLO `AG=0`, `AR=0`, `RS=0`, `A2A=0`,
+    `CP=0`, `gpu_gemm=150`; HBM peak `45.12 GiB`, temp `24.61 GiB`,
+    args `20.51 GiB`.
+- Interpretation:
+  - Positive: all four variants compile with zero collectives. The packed
+    authoritative state layout is not forcing transport inside the optimizer
+    update.
+  - Positive: the core NS work alone is about `0.49s` at R4D1E8, and adding
+    hyperball to the NS result barely changes runtime (`~0.50s`). Hyperball is
+    not the main slowdown.
+  - Positive: momentum/Nesterov by itself is small (`~5-16ms`) and has no GEMMs.
+  - Negative: the composed full update is still `~0.95s`, roughly `0.45s`
+    slower than NS+hyperball alone. Since checksum-only output did not help,
+    the missing time is likely from recomputation or duplicated state movement
+    introduced by composing momentum, NS, hyperball, and state return in one
+    function.
+  - Next target: inspect HLO/profile for the full checksum vs the NS+hyperball
+    checksum to see whether XLA is recomputing direction/NS work, retaining
+    extra fp32 buffers, or failing to alias/interleave the packed master and
+    momentum banks. A good next experiment is an explicitly staged scan/loop or
+    manual fused packed-bank update that guarantees the direction input is
+    produced once and consumed once.
+
+### 2026-06-20 23:53 PDT - Packed-master MuonH R4 apply/direction split
+- Change:
+  - Added two more packed-master scalar diagnostics to the R4 decomposition:
+    `expert_packed_master_ns_hyperball_apply_checksum` and
+    `expert_packed_master_direction_ns_hyperball_checksum`.
+  - Purpose:
+    - `ns_hyperball_apply`: measure whether applying the hyperball update to the
+      fp32 master accounts for the gap between `~0.50s` NS+hyperball and
+      `~0.95s` full update.
+    - `direction_ns_hyperball`: measure whether composing grad+momentum/Nesterov
+      with NS+hyperball accounts for that gap before master apply.
+- Validation:
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+  - `git diff --check -- experiments/grug/moe/muon_update_bench.py scratch/muon_update_bench_fast_loop.sh`
+    passed.
+  - Tiny local launcher smoke for
+    `packed-master-muonh-decomp-r4e8-l26` passed with the two new diagnostics.
+  - Focused packed-master tests passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_matches_direct_consumer_grad experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_lowers_with_packed_grad_sharding experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_matches_separate_update_then_consume experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_lowers_with_packed_state_and_scalar_loss -q`
+    -> `12 passed`.
+- R4 split run:
+  - Parent `/dlwh/iris-run-job-20260621-065332`.
+  - Child/run name
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-DECOMP-N4-cw-20260621-065329`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/1q63ejik`.
+  - State:
+    `scratch/20260620-2353_muon_packed_master_decomp_r4_state.json`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-DECOMP-N4-cw-20260621-065329-f5d008`.
+  - Job succeeded: 4/4 tasks succeeded, exit 0.
+- Process 0 timing rows:
+  - Momentum checksum: median `0.01602s`; compiled collectives all zero;
+    `gpu_gemm=0`; HBM peak `12.31 GiB`.
+  - NS checksum: median `0.49048s`; compiled collectives all zero;
+    `gpu_gemm=150`; HBM peak `16.41 GiB`; args `4.10 GiB`; temp
+    `12.30 GiB`.
+  - NS + hyperball checksum: median `0.49707s`; compiled collectives all zero;
+    `gpu_gemm=150`; HBM peak `24.61 GiB`; args `12.30 GiB`; temp
+    `12.30 GiB`.
+  - NS + hyperball + apply checksum: median `0.49961s`; compiled collectives
+    all zero; `gpu_gemm=150`; HBM peak `24.61 GiB`; args `12.30 GiB`; temp
+    `12.30 GiB`.
+  - Direction-from-grad/momentum + NS + hyperball checksum: median `0.95260s`;
+    compiled collectives all zero; `gpu_gemm=150`; HBM peak `45.12 GiB`;
+    args `20.51 GiB`; temp `24.61 GiB`.
+  - Full packed-master MuonH checksum: median `0.95228s`; compiled collectives
+    all zero; `gpu_gemm=150`; HBM peak `45.12 GiB`; args `20.51 GiB`; temp
+    `24.61 GiB`.
+- Interpretation:
+  - Positive: applying the hyperball update to master is not the gap. It is
+    essentially free on top of NS+hyperball in this checksum benchmark.
+  - Positive: all variants still have zero compiled collectives, so the
+    optimizer-local packed-master layout remains sharding-clean.
+  - Negative: as soon as the direction input is produced from fp32 momentum and
+    bf16 grad in the same compiled function, runtime jumps from `~0.50s` to
+    `~0.95s`, exactly matching the full update.
+  - Current root-cause hypothesis: the expensive local part is fp32
+    grad/momentum/Nesterov state traffic and temporaries feeding the NS graph,
+    not master apply and not boundary transport. The HBM numbers support this:
+    direction+NS+hyperball and full update both use `20.51 GiB` args,
+    `24.61 GiB` temp, and `45.12 GiB` peak, versus `12.30 GiB` args and
+    `12.30 GiB` temp for NS+hyperball.
+  - Next implementation target: produce direction input in a form that avoids
+    carrying both full fp32 momentum and grad-derived temporaries into the NS
+    graph. Candidates: store momentum in bf16 for the expert Muon path, fuse
+    momentum/Nesterov construction with the first NS normalization, or split the
+    update into an explicitly staged/donated direction bank if that lets XLA
+    release fp32 state before NS.
+
+### 2026-06-21 00:18 PDT - Packed-master full direction staging OOM
+- Change:
+  - Added a full-output staged diagnostic:
+    `expert_packed_master_momentum_direction`.
+  - It returns `(next_momentum, direction_inputs)` from the fp32 momentum +
+    bf16 grad/Nesterov path without running NS. This tests whether a two-call
+    plan can stage the direction bank, then run the already-fast
+    `NS + hyperball + apply` path separately.
+  - Added momentum-input donation for this bench so `next_momentum` can alias
+    the incoming momentum bank.
+- Validation:
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+  - `git diff --check -- experiments/grug/moe/muon_update_bench.py scratch/muon_update_bench_fast_loop.sh`
+    passed.
+  - Tiny local isolated smoke passed:
+    `MUON_BENCH_LAYERS=2 MUON_BENCH_NS4D_GROUP_SIZE=2 MUON_BENCH_REPLICA_AXIS=1 MUON_BENCH_DATA_AXIS=1 MUON_BENCH_EXPERT_AXIS=2 MUON_BENCH_GPU_REPLICAS=1 MUON_BENCH_HIDDEN_DIM=16 MUON_BENCH_INTERMEDIATE_DIM=8 MUON_BENCH_NUM_EXPERTS=4 MUON_BENCH_WARMUP=1 MUON_BENCH_ITERS=1 MUON_BENCH_TRACKER=none MUON_BENCH_KINDS=expert_packed_master_momentum_direction bash scratch/muon_update_bench_fast_loop.sh local packed-master-muonh-decomp-r4e8-l26`
+    -> compiled with `alias_bytes=6144`, no collectives, no GEMMs.
+- R4 decomp relaunch with the new row:
+  - Parent `/dlwh/iris-run-job-20260621-070729`.
+  - Child/run name
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-DECOMP-N4-cw-20260621-070726`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-DECOMP-N4-cw-20260621-070726-1659b4`.
+  - Result: failed during `expert_packed_master_momentum_direction`.
+  - Before failure, the first scalar row still succeeded:
+    `expert_packed_master_momentum_checksum` median `0.00643s` on process 0,
+    compiled collectives all zero, HBM peak `~12.31 GiB`.
+  - `expert_packed_master_momentum_direction` lowered with zero collectives and
+    zero GEMMs, then OOMed during execution while trying to allocate `5.47 GiB`.
+- Isolated R4 staged-direction relaunch:
+  - Parent `/dlwh/iris-run-job-20260621-071339`.
+  - Child/run name
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-DECOMP-N4-cw-20260621-071336`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-DECOMP-N4-cw-20260621-071336-8ed62c`.
+  - Config override: only `expert_packed_master_momentum_direction`, profile
+    disabled, HLO upload enabled, W&B enabled.
+  - Result: failed again before timing. Lowered HLO had `AG=0`, `AR=0`,
+    `A2A=0`, `RS=0`, `CP=0`, `gpu_gemm=0`; runtime OOMed trying to allocate
+    `5.47 GiB` on each GPU.
+- Interpretation:
+  - Negative: a full-bank staged direction boundary is not currently viable at
+    R4/E8, even isolated, profile-disabled, and with donated momentum input.
+  - This rules out the simple two-call plan of materializing both full
+    `next_momentum` and full fp32 `direction_inputs`, then feeding
+    `direction_inputs` into the `~0.50s` NS+hyperball+apply path.
+  - The key clue is the repeated `5.47 GiB` allocation after zero-collective
+    lowering. The issue is local bank materialization/temporary pressure, not
+    network communication.
+  - Next direction should avoid materializing a second full fp32 direction bank:
+    fuse direction construction into the first NS operation, store expert
+    momentum/direction in bf16 if acceptable, or process layer/chunk windows so
+    only a bounded slice of `(momentum, grad, direction)` is live at once.
+
+### 2026-06-21 00:29 PDT - Chunked direction+NS diagnostic launched
+- Change:
+  - Added `expert_packed_master_chunked_direction_ns_hyperball_checksum`.
+  - The bench slices each packed fp32 master/momentum/grad bank by the padded
+    grouped layer chunks, builds the Nesterov direction for that slice, runs
+    NS + hyperball immediately, and returns only a scalar checksum.
+  - This intentionally avoids returning a full `direction_inputs` bank. It is a
+    diagnostic for live-memory behavior, not yet a persistent update path.
+- Local validation:
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py`
+    passed.
+  - `git diff --check -- experiments/grug/moe/muon_update_bench.py scratch/muon_update_bench_fast_loop.sh`
+    passed.
+  - Focused packed-master harness tests passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_matches_direct_consumer_grad experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_lowers_with_packed_grad_sharding experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_matches_separate_update_then_consume experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_lowers_with_packed_state_and_scalar_loss -q`
+    -> `12 passed`.
+  - Tiny local smoke for the new bench passed with no lowered collectives.
+  - Full-shape local lower-only check for R4/E8/L26 passed:
+    lowered HLO `AG=0`, `A2A=0`, `AR=0`, `RS=0`, `CP=0`, `dot_general=72`.
+- R4 validation launch:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-072750`.
+  - Child/run name:
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-CHUNKED-N4-cw-20260621-072748`.
+  - Config: 4 H100 nodes, `replica_axis=4`, `data_axis=1`,
+    `expert_axis=8`, `model_axis=1`, L26, group axis `replica_dcn`,
+    `backend_steps=3`, profile disabled, compiled HLO enabled.
+- Next:
+  - R4 succeeded without the previous `5.47 GiB` OOM, but the result is a
+    negative performance point.
+  - Result: median `~2.514s`, mean `~2.513s`, min `~2.506s`;
+    `estimated_tflops=~297`, `h100_bf16_peak_pct=~0.94`.
+  - Compiled HLO: `AG=0`, `A2A=0`, `AR=0`, `RS=0`, but `collective_permute=60`,
+    `custom_call=360`, and `gpu_gemm=187`.
+  - Memory: args `20.51 GiB`, temp `48.44 GiB`, HBM peak `68.95 GiB`.
+- Interpretation:
+  - Chunking avoids the full-direction OOM, so bounded live direction slices are
+    viable from a capacity standpoint.
+  - This Python/JAX chunk loop is not a good performance shape: it serializes
+    the work into too many small chunked custom calls and increases temp memory
+    versus the prior full-update checksum (`~0.95s`, `45.12 GiB` peak).
+  - The next useful R4 test is the donated chunked update-only path, which
+    writes each chunk back into full packed master/momentum banks with
+    `dynamic_update_slice`. It is closer to the goal because it persists packed
+    master/momentum instead of returning only a scalar.
+- Follow-up launch:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-073303`.
+  - Expected run prefix:
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-CHUNKEDUPDATE-N4-cw-20260621-0733`.
+  - Bench kind: `expert_packed_master_chunked_muonh_update_only`.
+  - Local tiny smoke passed; full-shape lower-only had `AG=0`, `A2A=0`,
+    `AR=0`, `RS=0`, `CP=0`, and `dot_general=72`.
+
+### 2026-06-21 00:38 PDT - Chunked update-only still OOMs with monolithic packed leaves
+- R4 result:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-073303`.
+  - Child/run name:
+    `MUON-BENCH-D2560-L26-R4E8-PACKEDMASTER-MUONH-CHUNKEDUPDATE-N4-cw-20260621-073301`.
+  - Result: failed before W&B logging.
+  - Error: `RESOURCE_EXHAUSTED: Out of memory while trying to allocate 58.40GiB`.
+- Interpretation:
+  - The donated update-only path writes each bounded chunk back into a full
+    monolithic packed leaf via `dynamic_update_slice`.
+  - That does not preserve the intended bounded-memory behavior: XLA still
+    materializes a huge full-leaf output/temp, worse than the checksum-only
+    chunk path.
+  - This rules out a JAX-level `dynamic_update_slice` loop over one large packed
+    array per leaf name as the persistent update representation.
+- Next:
+  - Prototype a physically chunked packed-master bank: represent master and
+    momentum as a pytree of chunk arrays rather than one giant array per leaf.
+  - This should let the optimizer return updated chunk leaves directly, avoiding
+    full-leaf dynamic-update materialization while preserving NS-friendly local
+    chunk shapes.
+  - If the physically chunked bank still compiles into bad serialized kernels,
+    the remaining path is a lower-level primitive or a trainer representation
+    that stores/steps chunks independently.
+
+### 2026-06-21 00:50 PDT - Physically chunked packed-master update prototype
+- Change:
+  - Added `expert_chunked_packed_master_muonh_update_only`.
+  - Representation is now physically chunked:
+    `{"chunks": ({"packed": {name: chunk_array}}, ...)}` for master, momentum,
+    and grad banks.
+  - The update returns new chunk leaves directly. It no longer uses
+    `dynamic_update_slice` into one monolithic packed leaf, which was the source
+    of the previous `58.40GiB` allocation.
+  - Added fast-loop profile
+    `chunked-packed-master-muonh-update-r4e8-l26`.
+- Local validation:
+  - `uv run python -m py_compile experiments/grug/moe/muon_update_bench.py`
+    passed.
+  - `git diff --check -- experiments/grug/moe/muon_update_bench.py scratch/muon_update_bench_fast_loop.sh`
+    passed.
+  - Focused packed-master tests passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_matches_direct_consumer_grad experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_grad_lowers_with_packed_grad_sharding experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_matches_separate_update_then_consume experiments/grug/moe/test_muon_update_bench.py::test_packed_master_muonh_fsdp_consumer_lowers_with_packed_state_and_scalar_loss -q`
+    -> `12 passed`.
+  - Tiny local timing smoke passed for the new bench. Lowered HLO had
+    `AG=0`, `A2A=0`, `AR=0`, `RS=0`, and 18 two-batch-axis dots.
+  - Full-shape local lower-only R4/E8/L26 passed. Lowered HLO had `AG=0`,
+    `A2A=0`, `AR=0`, `RS=0`, `CP=0`, and 72 two-batch-axis dots.
+- Caveat:
+  - Full-shape local compile-only was killed by host RAM (`exit 137`) before
+    returning compiled-memory numbers. This is not yet evidence of a GPU-side
+    OOM; it means the full-shape compile/timing check needs to run on
+    CoreWeave.
+- Next:
+  - Launch the R4 CoreWeave timing run for
+    `chunked-packed-master-muonh-update-r4e8-l26`.
+  - If it compiles and avoids the monolithic-leaf OOM, compare against:
+    monolithic packed master update-only, chunked scalar checksum, and packed
+    master plus bulk FSDP materialization.
+
+### 2026-06-21 00:50 PDT - Physically chunked packed-master update R4 result
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-074651`.
+  - Child/run name:
+    `MUON-BENCH-D2560-L26-R4E8-CHUNKEDPACKEDMASTER-MUONH-UPDATE-N4-cw-20260621-074649`.
+  - W&B:
+    `https://wandb.ai/marin-community/marin_moe/runs/MUON-BENCH-D2560-L26-R4E8-CHUNKEDPACKEDMASTER-MUONH-UPDATE-N4-cw-20260621-074649`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-CHUNKEDPACKEDMASTER-MUONH-UPDATE-N4-cw-20260621-074649-9b7d72`.
+- Result:
+  - Parent and child jobs succeeded: 4/4 tasks completed, no failures or
+    preemptions.
+  - Median `0.28503s`, mean `0.28503s`, min `0.28501s`.
+  - Estimated throughput: `9176.7 TFLOP/s`, about `29.0%` H100 bf16 peak.
+  - Lowered HLO: `AG=0`, `A2A=0`, `AR=0`, `RS=0`, `CP=0`,
+    `dot_general=72`, `two_batch_axis_dot_general=72`.
+  - Compiled HLO: `AG=0`, `A2A=0`, `AR=0`, `RS=0`, `CP=0`,
+    `gpu_gemm_custom_call=163`, `custom_call=360`.
+  - Compiled memory: HBM peak `26.76 GiB`, args `20.51 GiB`, outputs
+    `16.41 GiB`, temp `6.25 GiB`, alias `16.41 GiB`.
+- Comparison:
+  - Previous monolithic chunked update-only used `dynamic_update_slice` into
+    full packed leaves and failed before W&B with a `58.40 GiB` allocation.
+  - Previous chunked scalar checksum succeeded but was slow: median `~2.514s`,
+    HBM peak `~68.95 GiB`, many small custom calls/collective permutes.
+  - Previous monolithic packed-master update-only was about `~0.949s` with
+    zero collectives and HBM peak `~36.91 GiB`.
+  - Older persistent grouped-2D update-only lower bound was `~0.175-0.177s` at
+    R4, but without the same authoritative packed-master state representation.
+- Interpretation:
+  - This is the first positive result for the physically chunked authoritative
+    packed-master representation: persistent fp32 master/momentum can be stored
+    as chunk leaves, updated directly, and returned without a full-leaf
+    `dynamic_update_slice` OOM.
+  - The result is not yet at the older grouped-2D lower bound, but it is a
+    large improvement over monolithic packed-master update-only and turns the
+    previous memory failure into a usable `0.285s` local MuonH update kernel
+    family.
+  - The remaining integration risk is no longer optimizer-local collectives or
+    update-only OOM; it is making the trainer/model consume a physically
+    chunked authoritative state without rebuilding a full per-leaf tree or
+    reintroducing an expensive grouped-to-FSDP boundary.
+- Next:
+  - Add a consumer/materialization harness for the physically chunked bank.
+    Start with one expert layer/chunk, then all expert layers, and verify
+    compiled collectives and memory stay bounded.
+  - If the chunked consumer remains clean, wire the representation toward the
+    production MuonH optimizer path. If materialization reintroduces large AGs
+    or full-leaf temps, the fallback is a lower-level chunk-to-consumer
+    transport primitive.
+
+### 2026-06-21 01:05 PDT - Chunked packed-master all-layer consumer R4
+- Hypothesis:
+  - A forward-like consumer that materializes expert layers from the physically
+    chunked authoritative packed master bank might keep materialization near use
+    sites, rather than doing a single optimizer-boundary grouped-to-FSDP
+    restore.
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-080100`.
+  - Child/run name:
+    `MUON-BENCH-D2560-L26-R4E8-CHUNKEDPACKEDMASTER-FSDPSEQ-N4-cw-20260621-080057`.
+  - Command:
+    `MUON_BENCH_TRACKER=wandb MUON_BENCH_WANDB=true MUON_BENCH_WRITE_COMPILED_HLO=true bash scratch/muon_update_bench_fast_loop.sh iris chunked-packed-master-fsdp-seq-r4e8-l26`.
+  - Config: R4/D1/E8/M1, L26, group size 8, cap 512,
+    `expert_chunked_packed_master_fsdp_sequential_consumer`.
+- Result:
+  - The child reached timing and emitted the summary row.
+  - Median `1.83124s`, mean `1.83153s`, min `1.82725s`.
+  - Compiled HLO reintroduced `52` all-gathers and `24` collective-permutes
+    (`all_reduce=0`, `all_to_all=0`, `reduce_scatter=0`).
+  - Compiled memory: HBM peak `67.38 GiB`, args `8.20 GiB`, temp
+    `59.18 GiB`.
+  - Lowered HLO still reported zero collectives before compile, so this is a
+    GPU SPMD/compile-time materialization problem rather than an obvious JAXPR
+    lowering issue.
+- Interpretation:
+  - Negative result for the naive "all expert layers in one compiled consumer"
+    harness. It defeats the packed-master benefit by materializing each layer
+    through per-layer/per-leaf all-gathers inside the same program.
+  - This does not disprove the just-in-time thesis, because the harness has no
+    intervening forward compute and asks one compiled function to consume all
+    expert layers. It does prove that "slice every layer from the bank and
+    trust XLA" is not enough.
+  - Next isolation check: run the one-layer consumer profile. If a one-layer
+    materialization is bounded, the production path likely needs a true
+    layer accessor/remat boundary or a lower-level packed chunk-to-consumer
+    primitive rather than a whole-model rebuild.
+
+### 2026-06-21 01:10 PDT - Chunked packed-master one-layer consumer R4
+- Hypothesis:
+  - Isolate a single expert-layer materialization from the physically chunked
+    authoritative packed master bank. If this is bounded, the all-layer result
+    is a whole-graph scheduling/materialization problem rather than a per-use
+    impossibility.
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-080414`.
+  - Child/run name:
+    `MUON-BENCH-D2560-L26-R4E8-CHUNKEDPACKEDMASTER-FSDPLAYER-N4-cw-20260621-080411`.
+  - Command:
+    `MUON_BENCH_TRACKER=wandb MUON_BENCH_WANDB=true MUON_BENCH_WRITE_COMPILED_HLO=true bash scratch/muon_update_bench_fast_loop.sh iris chunked-packed-master-fsdp-layer-r4e8-l26`.
+  - Config: R4/D1/E8/M1, L26, group size 8, cap 512,
+    `expert_chunked_packed_master_fsdp_layer_consumer`.
+- Result:
+  - The child reached timing and W&B logging.
+  - Median `0.19125s`, mean `0.19135s`, min `0.19120s`.
+  - Compiled HLO: `all_gather=2`, `collective_permute=4`,
+    `all_reduce=0`, `all_to_all=0`, `reduce_scatter=0`,
+    `gpu_gemm_custom_call=1`.
+  - Compiled memory: HBM peak `6.25 GiB`, args `2.34 GiB`, temp
+    `3.91 GiB`.
+- Interpretation:
+  - This is bounded, unlike the all-layer consumer, but each expert-layer
+    materialization still becomes two all-gathers plus four collective
+    permutes. The all-layer run's `52` all-gathers are exactly this per-layer
+    pattern repeated over 26 layers.
+  - The result supports a narrower conclusion: physically chunked packed master
+    state is a viable storage/update representation, but the naive
+    materialize-layer-by-reshard path still pays the FSDP gather. To make the
+    approach production-useful, the next design needs either overlap with real
+    layer compute/remat boundaries or a lower-level chunk-to-consumer primitive
+    that avoids this per-layer gather pattern.
+
+### 2026-06-21 01:22 PDT - Tokenized one-layer consumer T128 R4
+- Hypothesis:
+  - Add synthetic per-layer expert compute to the one-layer chunked
+    packed-master consumer by feeding 128 tokens per expert. If the
+    materialization collectives are mostly fixed overhead, this should improve
+    the balance relative to the T1 one-layer consumer.
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-081221`.
+  - Child/run name:
+    `MUON-BENCH-D2560-L26-R4E8-CHUNKEDPACKEDMASTER-FSDPLAYER-T128-N4-cw-20260621-081219`.
+  - Command:
+    `RUN_ID="MUON-BENCH-D2560-L26-R4E8-CHUNKEDPACKEDMASTER-FSDPLAYER-T128-N4-cw-$(date -u +%Y%m%d-%H%M%S)" MUON_BENCH_TRACKER=wandb MUON_BENCH_WANDB=true MUON_BENCH_WRITE_COMPILED_HLO=true MUON_BENCH_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT=128 bash scratch/muon_update_bench_fast_loop.sh iris chunked-packed-master-fsdp-layer-r4e8-l26`.
+  - Config: R4/D1/E8/M1, L26, group size 8, cap 512,
+    `expert_chunked_packed_master_fsdp_layer_consumer`,
+    `grouped_expert_consumer_tokens_per_expert=128`.
+- Result:
+  - The corrected child succeeded after fixing the sharding assertion for
+    tokenized 3D expert inputs.
+  - Median `0.18958s`, mean `0.19310s`, min `0.18879s`.
+  - Compiled HLO: `all_gather=2`, `collective_permute=4`,
+    `all_reduce=0`, `all_to_all=0`, `reduce_scatter=0`,
+    `gpu_gemm_custom_call=10`, `custom_call=5`.
+  - Compiled memory: HBM peak `6.27 GiB`, args `2.36 GiB`, temp
+    `3.91 GiB`.
+- Interpretation:
+  - Negative amortization result. T128 is essentially the same wall time and
+    memory footprint as the T1 one-layer consumer (`~0.191s`), and it retains
+    the same two all-gather plus four collective-permute materialization
+    pattern.
+  - The extra token compute is too small to move the result, so the measured
+    one-layer consumer remains dominated by materialization/transport rather
+    than the synthetic expert matmuls.
+  - This strengthens the conclusion that the naive JAX `reshard` consumer path
+    is not enough. The promising part remains the physically chunked packed
+    master update-only representation; the unresolved part is a lower-overhead
+    chunk-to-consumer transport or a production remat/access pattern that can
+    actually overlap the per-layer gathers with real forward/backward work.
+
+### 2026-06-21 01:29 PDT - Chunked packed-master one-layer grad harness
+- Hypothesis:
+  - The packed-master objective also needs the backward/transpose side: a loss
+    that consumes a just-in-time materialized layer from the physically chunked
+    master bank should produce gradients in the same chunked packed-bank
+    representation. If transpose immediately materializes a full FSDP tree or
+    emits collectives, the optimizer-state representation is not enough.
+- Change:
+  - Added `expert_chunked_packed_master_fsdp_layer_grad`, which differentiates
+    the tokenized one-layer consumer with respect to the physically chunked
+    packed master bank.
+  - Added a focused abstract-mesh test asserting the transposed gradient output
+    has chunked packed-bank sharding and no lowered StableHLO AG/A2A/AR/RS.
+- Local validation:
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_grad_returns_chunked_bank_grads_without_lowered_collectives -q`
+    passed.
+  - Local tiny run-mode smoke passed after fixing the concrete input generator.
+  - Full-shape local lower-only with T128 reported lowered
+    `AG/A2A/AR/RS/CP=0`, `dot_general=4`.
+- CoreWeave validation:
+  - First parent `/dlwh/iris-run-job-20260621-082544` failed before timing due
+    to a harness bug: the concrete run path generated a generic dict input and
+    then tried `updates.ndim`.
+  - Fixed the input-generation branch and relaunched parent
+    `/dlwh/iris-run-job-20260621-082749`.
+  - Live child:
+    `/dlwh/iris-run-job-20260621-082749/grug-train-MUON-BENCH-D2560-L26-R4E8-CHUNKEDPACKEDMASTER-FSDPLAYERGRAD-T128-N4-cw-20260621-082747`.
+  - Expected W&B:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R4E8-CHUNKEDPACKEDMASTER-FSDPLAYERGRAD-T128-N4-cw-20260621-082747`.
+- Next:
+  - Wait for GPU compiled HLO/timing. This is only a positive result if the
+    compiled HLO keeps collectives bounded and memory reasonable; prior
+    consumer benches looked clean at lowering but regressed at GPU compile.
+
+### 2026-06-21 01:36 PDT - Chunked packed-master one-layer grad R4 result
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-082749`.
+  - Child/run name:
+    `MUON-BENCH-D2560-L26-R4E8-CHUNKEDPACKEDMASTER-FSDPLAYERGRAD-T128-N4-cw-20260621-082747`.
+  - Config: R4/D1/E8/M1, L26, group size 8, cap 512,
+    `expert_chunked_packed_master_fsdp_layer_grad`,
+    `grouped_expert_consumer_tokens_per_expert=128`.
+- Result:
+  - Parent and child both succeeded.
+  - Median `0.23332s`, mean `0.23329s`, min `0.23288s`.
+  - Lowered HLO stayed abstract-clean: `AG/A2A/AR/RS/CP=0`,
+    `dot_general=4`.
+  - GPU compiled HLO had `all_gather=4`, `collective_permute=4`,
+    `all_reduce=0`, `all_to_all=0`, `reduce_scatter=0`,
+    `gpu_gemm_custom_call=18`.
+  - Compiled memory: HBM peak `12.91 GiB`, args `2.36 GiB`, output
+    `8.20 GiB`, temp `2.34 GiB`.
+- Interpretation:
+  - Positive: differentiating the one-layer consumer with respect to the
+    physically chunked packed master bank works and returns gradients in the
+    bank-shaped representation without a full-tree memory blowup.
+  - Negative: GPU compile still inserts materialization collectives. Compared
+    with the forward-only one-layer consumer (`2` all-gathers plus `4`
+    collective-permutes), transpose/backward doubles the all-gathers to `4`
+    while keeping the same `4` collective-permutes.
+  - This keeps the packed-master plan alive for optimizer-state storage and
+    local NS compute, but it also confirms the remaining bottleneck is the
+    just-in-time layer materialization/transport path rather than the bank
+    representation itself.
+
+### 2026-06-21 01:42 PDT - Chunked packed-master one-layer grad plus MuonH update R4
+- Hypothesis:
+  - Compose the two positive pieces in one harness step: differentiate a
+    one-layer FSDP use-site with respect to the physically chunked packed
+    master bank, then feed that bank-shaped gradient directly into the chunked
+    packed-master MuonH update. This should avoid creating an FSDP update tree
+    before optimizer state update.
+- Change:
+  - Added `expert_chunked_packed_master_fsdp_layer_grad_muonh_update`.
+  - The step takes `(master_bank, momentum_bank, expert_inputs)` and returns
+    `(next_master_bank, next_momentum_bank)`.
+  - Added a focused abstract-mesh test proving the composed step preserves
+    chunked packed-bank sharding and lowers without abstract AG/A2A/AR/RS.
+- Local validation:
+  - `python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed.
+  - `git diff --check -- experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed.
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_grad_muonh_update_preserves_chunked_banks experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_grad_returns_chunked_bank_grads_without_lowered_collectives experiments/grug/moe/test_muon_update_bench.py::test_packed_master_fsdp_layer_consumer_materializes_one_use_site_layer -q` passed.
+  - Full-shape local lower-only for R4/D1/E8/M1, T128 reported lowered
+    `AG/A2A/AR/RS/CP=0`, `dot_general=76`.
+  - Tiny concrete run-mode smoke passed.
+- CoreWeave validation:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-083841`.
+  - Child/run:
+    `MUON-BENCH-D2560-L26-R4E8-CHUNKEDPACKEDMASTER-LAYERGRADMUONH-T128-N4-cw-20260621-083839`.
+  - Config: R4/D1/E8/M1, L26, group size 8, cap 512,
+    `expert_chunked_packed_master_fsdp_layer_grad_muonh_update`,
+    `grouped_expert_consumer_tokens_per_expert=128`.
+  - Parent and child succeeded.
+  - Median `~0.388s`, mean `~0.388s`.
+  - Estimated work accounting reported `~6.75 PF/s`, `~21.3%` nominal H100
+    bf16 peak for the composed one-layer-grad plus full MuonH update harness.
+  - GPU compiled HLO: `all_gather=4`, `collective_permute=4`,
+    `all_reduce=0`, `all_to_all=0`, `reduce_scatter=0`,
+    `gpu_gemm_custom_call=191`.
+  - Compiled memory: HBM peak `34.79 GiB`, args `16.43 GiB`, output
+    `16.41 GiB`, temp `18.36 GiB`.
+- Interpretation:
+  - Positive: the packed-master objective now has a single harness step that
+    differentiates through a JIT-materialized layer and updates authoritative
+    fp32 master/momentum banks directly, with no `apply_updates` and no
+    full-tree expert update object.
+  - Negative: the same GPU materialization collectives remain (`4` AG + `4`
+    CP). This is not surprising because the composed path includes the same
+    one-layer grad consumer. The update itself does not add AR/RS/A2A.
+  - Compared with chunked update-only R4 (`~0.285s`) and one-layer grad R4
+    (`~0.233s`), the composed `~0.388s` suggests the compiler overlaps or
+    fuses some work rather than simply adding both times (`~0.518s`), but the
+    materialization transport remains the next real target.
+
+### 2026-06-21 02:07 PDT - Chunked packed-master accessor numerical validation
+- Hypothesis:
+  - The chunked packed-master FSDP layer accessor should materialize exactly
+    the logical expert layer stored at `(chunk_index, local_layer_index)`, not
+    merely produce arrays with plausible shapes and shardings.
+- Change:
+  - Added
+    `test_chunked_packed_master_fsdp_layer_matches_chunked_bank_slices_numerically`.
+  - The test uses a tiny `layers=5`, `group_size=2` setup and checks layers
+    `0`, `2`, and `4` so it crosses chunk boundaries and covers the final
+    short chunk.
+  - Added
+    `test_chunked_packed_master_fsdp_layer_grad_matches_direct_layer_grad_numerically`.
+    This strips one-device sharding from the tiny synthetic bank, differentiates
+    a local expert-MLP loss through a selected chunk/local-layer slot, and
+    checks the chunked-bank gradient matches the direct layer gradient at that
+    slot while all other bank slots are zero.
+- Validation:
+  - `python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed.
+  - `git diff --check -- experiments/grug/moe/test_muon_update_bench.py experiments/grug/moe/muon_update_bench.py` passed.
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_rebuild_tree_matches_packed_slices_numerically experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_matches_chunked_bank_slices_numerically experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_grad_matches_direct_layer_grad_numerically experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_grad_returns_chunked_bank_grads_without_lowered_collectives experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_grad_muonh_update_preserves_chunked_banks -q` passed.
+- Interpretation:
+  - Positive: the chunked packed bank accessor now has value-level coverage
+    across chunk boundaries. This strengthens the packed-master objective's
+    representation side: authoritative bank slices rebuild the same bf16
+    logical expert leaves consumed by the FSDP layer harness.
+  - Positive: bank-slice autodiff now has a tiny numerical check showing the
+    selected logical expert layer's gradient lands back in the selected packed
+    bank slot, with unconsumed chunks left at zero.
+  - This does not change the performance conclusion from the R4 run; the
+    remaining bottleneck is still the materialization transport path
+    (`all_gather`/`collective_permute`) on GPU.
+
+### 2026-06-21 02:18 PDT - Composed packed-master bench metadata cleanup
+- Change:
+  - Added a specific `ns4d_boundary_status` for
+    `expert_chunked_packed_master_fsdp_layer_grad_muonh_update`:
+    `chunked_packed_master_one_fsdp_layer_grad_then_muonh_update`.
+  - Added
+    `test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status`.
+- Validation:
+  - `python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed.
+  - `git diff --check -- experiments/grug/moe/test_muon_update_bench.py experiments/grug/moe/muon_update_bench.py .agents/logbooks/grug-moe-muon-gpu.md` passed.
+  - `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_packed_master_rebuild_tree_matches_packed_slices_numerically experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_matches_chunked_bank_slices_numerically experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_grad_matches_direct_layer_grad_numerically experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_grad_returns_chunked_bank_grads_without_lowered_collectives experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_grad_muonh_update_preserves_chunked_banks experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status -q` passed.
+- Interpretation:
+  - Future W&B/log rows for the composed packed-master step are now
+    self-describing. This avoids confusing the one-layer-grad-then-MuonH
+    prototype with update-only or materialization-only packed-master benches.
+
+### 2026-06-21 02:58 PDT - Composed packed-master local lower-only matrix
+- Hypothesis:
+  - Before launching another CoreWeave profile, verify the composed
+    `expert_chunked_packed_master_fsdp_layer_grad_muonh_update` bench lowers
+    cleanly under the intended N1/R2/R4 abstract meshes and reports the new
+    boundary status.
+- Harness fix:
+  - The first N1 local lower-only run failed because `create_abstract_mesh`
+    produced an `AbstractMesh` without device-kind metadata while the
+    `ShapeDtypeStruct` shardings came from a concrete CPU `Mesh` whose abstract
+    device was `cpu`. JAX rejected `dynamic_slice` because the context mesh and
+    aval mesh did not match.
+  - Patched `create_abstract_mesh` to return `Mesh(...).abstract_mesh` when the
+    current local device count matches the requested mesh shape. Added
+    `test_create_abstract_mesh_includes_current_device_kind_when_device_count_matches`.
+- Commands:
+  - N1:
+    `RUN_ID=MUON-BENCH-LOCAL-N1-CHUNKEDPACKEDMASTER-LAYERGRADMUONH-<stamp> MUON_BENCH_MODE=lower MUON_BENCH_TRACKER=none MUON_BENCH_DISABLE_ABSTRACT_MESH=false MUON_BENCH_KINDS=expert_chunked_packed_master_fsdp_layer_grad_muonh_update MUON_BENCH_LAYERS=26 MUON_BENCH_NS4D_GROUP_SIZE=8 MUON_BENCH_NS4D_GROUP_AXIS=none MUON_BENCH_REPLICA_AXIS=1 MUON_BENCH_DATA_AXIS=1 MUON_BENCH_EXPERT_AXIS=8 MUON_BENCH_GPU_REPLICAS=1 MUON_BENCH_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT=128 bash scratch/muon_update_bench_fast_loop.sh local chunked-packed-master-fsdp-layer-r4e8-l26`
+  - R2:
+    same command with `MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn`,
+    `MUON_BENCH_REPLICA_AXIS=2`, `MUON_BENCH_GPU_REPLICAS=2`.
+  - R4:
+    same command with `MUON_BENCH_NS4D_GROUP_AXIS=replica_dcn`,
+    `MUON_BENCH_REPLICA_AXIS=4`, `MUON_BENCH_GPU_REPLICAS=4`.
+- Result:
+  - N1 lower-only: `AG/A2A/AR/RS/CP=0/0/0/0/0`, `dot_general=76`,
+    `two_batch_axis_dot_general=72`, `batched_stack_dot_general=4`,
+    `estimated_matrix_count=14848`, `estimated_ns_dot_flops=2.4307367411712e15`.
+  - R2 lower-only: `AG/A2A/AR/RS/CP=0/0/0/0/0`, `dot_general=76`,
+    `two_batch_axis_dot_general=72`, `batched_stack_dot_general=4`,
+    `estimated_matrix_count=14848`, `estimated_ns_dot_flops=2.4307367411712e15`.
+  - R4 lower-only: `AG/A2A/AR/RS/CP=0/0/0/0/0`, `dot_general=76`,
+    `two_batch_axis_dot_general=72`, `batched_stack_dot_general=4`,
+    `estimated_matrix_count=15872`, `estimated_ns_dot_flops=2.6175678185472e15`.
+  - All rows reported
+    `ns4d_boundary_status=chunked_packed_master_one_fsdp_layer_grad_then_muonh_update`.
+  - Validation after the patch:
+    `python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed.
+    `git diff --check -- experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py .agents/logbooks/grug-moe-muon-gpu.md` passed.
+    Focused pytest with the abstract-mesh regression and packed-master tests
+    passed (`7 passed`).
+- Interpretation:
+  - The abstract/lowered contract is clean for N1/R2/R4: no lowered collectives
+    and stable composed-bench metadata.
+  - This does not contradict the CoreWeave R4 compiled result that inserted
+    `4` all-gathers and `4` collective-permutes. It says the source-level JAX
+    representation is clean; the remaining issue is GPU SPMD compilation of the
+    JIT materialization path.
+  - R4's estimated work is higher than N1/R2 because the final short group is
+    padded to the R4 shard-aligned group size; that is expected for this
+    chunked representation.
+
+### 2026-06-21 02:03 PDT - R4 composed packed-master profile succeeded
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-085842`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260621-085842/grug-train-MUON-BENCH-D2560-L26-R4E8-CHUNKEDPACKEDMASTER-LAYERGRADMUONH-PROFILE-T128-N4-cw-20260621-085839`.
+  - W&B:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R4E8-CHUNKEDPACKEDMASTER-LAYERGRADMUONH-PROFILE-T128-N4-cw-20260621-085839`.
+  - State file:
+    `scratch/20260621-085842_chunked_packed_master_layergradmuonh_profile_state.json`.
+- Result:
+  - Parent and child both reached `JOB_STATE_SUCCEEDED`; all 4 child tasks
+    succeeded.
+  - Median timing by process was roughly `1.133-1.137s`, but this run had JAX
+    profiling enabled and should be used for profile/timeline inspection rather
+    than throughput.
+  - Compiled HLO still showed `4` all-gathers and `4` collective-permutes,
+    with no all-reduces, all-to-alls, or reduce-scatters.
+  - Peak compiled HBM was about `35.18 GiB`; estimated NS dot work was
+    `2.6176 PF`.
+  - Profile artifacts uploaded under the run's TTL output prefix in
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/`.
+- Interpretation:
+  - Positive: the composed packed-master "one FSDP layer grad then MuonH
+    update" path now runs through R4 on CoreWeave and produces a profile.
+  - Positive: the source-level local lowers remain clean, while the real GPU
+    profile gives us the exact compiled transport shape to optimize.
+  - Throughput is not improved in this profile run because profiler overhead is
+    large; the non-profile R4 composed timing remains the perf reference
+    (`~0.388s` median, `~6.75 PF/s`, `~21.3%` nominal peak).
+
+### 2026-06-21 02:11 PDT - Sequential packed-master grad plus MuonH harness
+- Hypothesis:
+  - The previous chunked packed-master composed bench was still only "one
+    FSDP layer grad then whole-bank MuonH." Add an all-layer sequential
+    FSDP-use-site gradient variant so the harness better approximates the
+    requested train-step shape: authoritative packed master, bf16 materialized
+    at use sites, gradient back into bank layout, then MuonH directly on the
+    chunked packed state.
+- Change:
+  - Added bench kind
+    `expert_chunked_packed_master_fsdp_sequential_grad_muonh_update`.
+  - Added
+    `expert_chunked_packed_master_fsdp_sequential_grad_step_factory` and
+    `expert_chunked_packed_master_fsdp_sequential_grad_muonh_update_step_factory`.
+  - Wired the bench through lower/runtime paths via
+    `expert_chunked_packed_master_grad_muonh_update_step_factory_for_bench`.
+  - Added fast-loop profiles:
+    `chunked-packed-master-sequential-grad-muonh-n1-l26`,
+    `chunked-packed-master-sequential-grad-muonh-r2e8-l26`, and
+    `chunked-packed-master-sequential-grad-muonh-r4e8-l26`.
+- Validation:
+  - `python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed.
+  - `git diff --check -- experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py scratch/muon_update_bench_fast_loop.sh .agents/logbooks/grug-moe-muon-gpu.md` passed.
+  - Focused pytest passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_matches_chunked_bank_slices_numerically experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_grad_matches_direct_layer_grad_numerically experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_sequential_grad_reaches_all_layer_chunks_numerically experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_grad_muonh_update_preserves_chunked_banks experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_sequential_grad_muonh_update_preserves_chunked_banks experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status -q`
+    (`6 passed`).
+- Local lower-only matrix:
+  - N1 command:
+    `MUON_BENCH_MODE=lower MUON_BENCH_TRACKER=none MUON_BENCH_DISABLE_ABSTRACT_MESH=false MUON_BENCH_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT=128 bash scratch/muon_update_bench_fast_loop.sh local chunked-packed-master-sequential-grad-muonh-n1-l26`.
+  - R2 command:
+    same command with profile
+    `chunked-packed-master-sequential-grad-muonh-r2e8-l26`.
+  - R4 command:
+    same command with profile
+    `chunked-packed-master-sequential-grad-muonh-r4e8-l26`.
+  - N1 lower: `AG/A2A/AR/RS/CP=0/0/0/0/0`, `dot_general=176`,
+    `two_batch_axis_dot_general=72`, `batched_stack_dot_general=104`,
+    `estimated_matrix_count=53248`, `estimated_ns_dot_flops=2.4791 PF`.
+  - R2 lower: `AG/A2A/AR/RS/CP=0/0/0/0/0`, same dot counts as N1,
+    `estimated_matrix_count=53248`, `estimated_ns_dot_flops=2.4791 PF`.
+  - R4 lower: `AG/A2A/AR/RS/CP=0/0/0/0/0`, same dot counts as N1/R2,
+    `estimated_matrix_count=54272`, `estimated_ns_dot_flops=2.6659 PF`
+    because of shard-aligned padding.
+- Interpretation:
+  - Positive: the harness now has an all-layer sequential gradient path that
+    differentiates through chunked packed master state and updates chunked
+    packed master/momentum without constructing a per-leaf update tree.
+  - Positive: source-level abstract lowering remains clean for N1/R2/R4.
+  - Still unproven on CoreWeave GPU compile/runtime: based on the previous
+    one-layer composed profile, XLA GPU may still introduce materialization
+    all-gathers/collective-permutes when compiled for real devices.
+
+### 2026-06-21 02:48 PDT - Sequential checksum runtime isolates full-gradient-bank OOM
+- Hypothesis:
+  - The full-state sequential grad+MuonH runtime OOM may be due to returning
+    full `next_master` and `next_momentum`. Add a scalar checksum variant that
+    keeps the all-layer FSDP-use-site gradient and MuonH update math but avoids
+    returning the full packed banks.
+- Change:
+  - Added bench kind
+    `expert_chunked_packed_master_fsdp_sequential_grad_muonh_checksum`.
+  - Added scalar-output checksum step factory for sequential FSDP-use-site grad
+    plus chunked packed-master MuonH.
+  - Added fast-loop profiles:
+    `chunked-packed-master-sequential-grad-muonh-checksum-n1-l26`,
+    `chunked-packed-master-sequential-grad-muonh-checksum-r2e8-l26`, and
+    `chunked-packed-master-sequential-grad-muonh-checksum-r4e8-l26`.
+- Validation:
+  - Focused pytest passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_sequential_grad_muonh_checksum_is_scalar experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status -q`
+    (`2 passed`).
+  - Local lower-only N1/R2/R4 checksum profiles all had
+    `AG/A2A/AR/RS/CP=0/0/0/0/0`, `dot_general=176`,
+    `two_batch_axis_dot_general=72`, and `batched_stack_dot_general=104`.
+- CoreWeave runs:
+  - Cap 512 N1 checksum:
+    `/dlwh/iris-run-job-20260621-093707`, child
+    `/dlwh/iris-run-job-20260621-093707/grug-train-MUON-BENCH-D2560-L26-E8-CHUNKEDPACKEDMASTER-SEQUENTIALGRAD-MUONH-CHECKSUM-T128-N1-cw-20260621-093705`.
+    Real H100 lowering stayed clean with `AG/A2A/AR/RS/CP=0/0/0/0/0`, then
+    failed with `RESOURCE_EXHAUSTED` allocating `42.99 GiB`.
+  - Cap 128 N1 checksum:
+    `/dlwh/iris-run-job-20260621-094235`, child
+    `/dlwh/iris-run-job-20260621-094235/grug-train-MUON-BENCH-D2560-L26-E8-CHUNKEDPACKEDMASTER-SEQUENTIALGRAD-MUONH-CHECKSUM-T128-CAP128-N1-cw-20260621-094232`.
+    Real H100 lowering again stayed clean with `AG/A2A/AR/RS/CP=0/0/0/0/0`,
+    then failed with the same `42.99 GiB` allocation.
+- Interpretation:
+  - Positive: XLA GPU is not inserting materialization collectives for this
+    packed-master sequential path, even on real H100 lowering.
+  - Negative: avoiding full-state outputs is insufficient. The OOM is now
+    attributable to materializing the full all-layer gradient bank before MuonH.
+  - Next target: stream the gradient and MuonH update by layer/chunk, or use an
+    explicit transposed/linearized VJP path that never forms the full gradient
+    bank as one live value.
+
+### 2026-06-21 03:20 PDT - Replica-aligned streaming checksum R2 runtime
+- Hypothesis:
+  - The previous streaming checksum path still OOMed because it used large
+    chunks. One-layer chunks fixed the allocation shape on N1 but failed to
+    shard across `replica_dcn`: R2 compiled with the same `93.79 GiB` HBM peak
+    as N1. Align the chunk length to the replica axis so each packed fp32
+    master/momentum chunk can be sharded across `replica_dcn`.
+- Change:
+  - Added `expert_layer_chunked_packed_master_fsdp_streaming_grad_muonh_checksum`
+    and made it use replica-aligned chunk sizes:
+    - N1: 1 layer per chunk.
+    - R2: 2 layers per chunk.
+    - R4: 4 layers per chunk, with the final logical chunk padded for sharding.
+  - The bench streams layer/chunk gradients into MuonH checksum computation and
+    avoids returning full updated master/momentum banks.
+  - Added explicit metadata fields `grouped_expert_group_sizes` and
+    `grouped_expert_valid_group_sizes` so summaries report layer chunking
+    separately from packed stack-entry counts.
+- Validation:
+  - `python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed.
+  - Focused pytest passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_checksum_is_scalar experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status -q`
+    (`2 passed`).
+  - Local lower-only R2 still has `AG/A2A/AR/RS/CP=0/0/0/0/0`,
+    `dot_general=338`, `two_batch_axis_dot_general=234`, and
+    `batched_stack_dot_general=104`. Metadata now reports thirteen 2-layer
+    chunks and 26 packed-bank leaves across the two expert weight names.
+- CoreWeave result:
+  - Compile-only R2 parent:
+    `/dlwh/iris-run-job-20260621-101423`.
+  - Runtime R2 parent:
+    `/dlwh/iris-run-job-20260621-101750`, child
+    `/dlwh/iris-run-job-20260621-101750/grug-train-MUON-BENCH-D2560-L26-R2E8-REPLALIGNEDPACKEDMASTER-STREAMINGGRAD-MUONH-CHECKSUM-RUNTIME-T128-N2-cw-20260621-101748`.
+  - Runtime output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2E8-REPLALIGNEDPACKEDMASTER-STREAMINGGRAD-MUONH-CHECKSUM-RUNTIME-T128-N2-cw-20260621-101748-f4c5c2`.
+  - Result: succeeded on 2 H100 nodes. Median `2.2037s`, mean `2.2042s`,
+    min `2.2019s`.
+  - Compiled memory: HBM peak `54.32 GiB`, arguments `30.49 GiB`, temp
+    `23.83 GiB`. This is much better than the broken one-layer R2 compile
+    (`93.79 GiB`, args `60.96 GiB`, temp `32.84 GiB`) and gets past the
+    previous `42.99 GiB` runtime allocation OOM.
+  - Compiled HLO: `all_gather=52`, `all_reduce=0`, `all_to_all=0`,
+    `reduce_scatter=0`, `collective_permute=0`, `gpu_gemm_custom_call=2886`.
+  - Estimated math: `2.479 PF`, `~1.125 PF/s` across 16 H100s,
+    `~7.11%` nominal bf16 peak.
+- Interpretation:
+  - Positive: the packed fp32 master/momentum representation is memory-viable
+    on R2 when chunks are replica-aligned. Replica sharding now actually cuts
+    the argument footprint roughly in half.
+  - Negative: this streaming checksum variant is far too slow. GPU compile
+    still introduces 52 all-gathers and thousands of GEMM custom calls, so the
+    Python/JAX chunk streaming path is not yet a good production update path.
+  - Next target: run R4 with the same replica-aligned chunking to see whether
+    memory and compiled transport scale sensibly, but the main optimization
+    question remains avoiding/overlapping the compiled per-chunk materialization
+    and improving fusion of the many small NS/update kernels.
+
+### 2026-06-21 03:35 PDT - Replica-aligned streaming checksum R4 runtime
+- CoreWeave result:
+  - Runtime R4 parent:
+    `/dlwh/iris-run-job-20260621-102659`, child
+    `/dlwh/iris-run-job-20260621-102659/grug-train-MUON-BENCH-D2560-L26-R4E8-REPLALIGNEDPACKEDMASTER-STREAMINGGRAD-MUONH-CHECKSUM-RUNTIME-T128-N4-cw-20260621-102657`.
+  - Runtime output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-REPLALIGNEDPACKEDMASTER-STREAMINGGRAD-MUONH-CHECKSUM-RUNTIME-T128-N4-cw-20260621-102657-e36e6c`.
+  - Result: succeeded on 4 H100 nodes. Median `2.0588s`, mean `2.0575s`,
+    min `2.0543s`.
+  - Compiled memory: HBM peak `57.83 GiB`, arguments `16.43 GiB`, temp
+    `41.41 GiB`.
+  - Compiled HLO: `all_gather=52`, `all_reduce=0`, `all_to_all=0`,
+    `reduce_scatter=0`, `collective_permute=0`, `gpu_gemm_custom_call=1986`.
+  - Estimated math: `2.666 PF`, `~1.295 PF/s` across 32 H100s,
+    `~4.09%` nominal bf16 peak.
+- Interpretation:
+  - Positive: the replica-aligned packed fp32 master/momentum representation is
+    also memory-viable on R4. The argument footprint roughly halves again
+    relative to R2 (`30.49 GiB` -> `16.43 GiB`), and the run completes without
+    the earlier runtime OOMs.
+  - Negative: R4 is only about `6.6%` faster than R2 (`2.2037s` -> `2.0588s`)
+    despite twice the nodes. The compiled all-gather count remains `52`, temp
+    memory grows to `41.41 GiB`, and padded work increases the estimated NS
+    math. This path proves state layout feasibility, not an efficient production
+    update path yet.
+  - Next target: avoid producing this chunked JAX streaming shape as the final
+    route. Either move the packed master representation into the actual train
+    step with just-in-time leaf materialization and overlap opportunities, or
+    replace the grouped-master-to-FSDP boundary with a lower-level packed
+    transport/kernel path.
+
+### 2026-06-21 03:45 PDT - Packed-master next-loss N1 compile
+- Change:
+  - Added `expert_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss`,
+    which streams each packed fp32 master/momentum chunk through:
+    FSDP-use-site gradient -> chunk-local MuonH update -> immediate bf16 FSDP
+    materialization and next-forward chunk consumption.
+  - This is closer to the target packed-master train-step shape than the prior
+    checksum-only path because it proves the updated packed chunk feeds the next
+    FSDP use-site without returning a full updated tree.
+  - Added fast-loop profiles:
+    `layer-chunked-packed-master-streaming-grad-muonh-next-loss-n1-l26`,
+    `layer-chunked-packed-master-streaming-grad-muonh-next-loss-r2e8-l26`,
+    and `layer-chunked-packed-master-streaming-grad-muonh-next-loss-r4e8-l26`.
+- Validation:
+  - `python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py` passed.
+  - Focused pytest passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_updates_before_consume experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_lowers_as_scalar experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status -q`
+    (`3 passed`).
+- CoreWeave result:
+  - Compile-only N1 parent:
+    `/dlwh/iris-run-job-20260621-103849`, child
+    `/dlwh/iris-run-job-20260621-103849/grug-train-MUON-BENCH-D2560-L26-E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-COMPILE-N1-cw-20260621-103846`.
+  - Runtime output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-COMPILE-N1-cw-20260621-103846-9d82f2`.
+  - Lowered HLO stayed clean: `all_gather=0`, `all_reduce=0`,
+    `all_to_all=0`, `reduce_scatter=0`, `collective_permute=0`.
+  - Compiled HLO also had zero collectives, but `gpu_gemm_custom_call=6139`.
+  - Compiled memory: HBM peak `93.40 GiB`, arguments `60.96 GiB`, temp
+    `32.44 GiB`.
+- Interpretation:
+  - Positive: the intended sequencing compiles on H100 with no materialization
+    collectives in the compiled HLO: packed master -> chunk-local update ->
+    updated chunk consumed at FSDP use-sites.
+  - Negative: N1 is not memory viable because one-layer chunks leave the packed
+    master/momentum arguments replicated across the node. Next target is R2
+    compile-only, where replica-aligned 2-layer chunks should shard argument
+    memory.
+
+### 2026-06-21 03:50 PDT - Packed-master next-loss R2 compile
+- CoreWeave result:
+  - Compile-only R2 parent:
+    `/dlwh/iris-run-job-20260621-104256`, child
+    `/dlwh/iris-run-job-20260621-104256/grug-train-MUON-BENCH-D2560-L26-R2E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-COMPILE-N2-cw-20260621-104253`.
+  - Runtime output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-COMPILE-N2-cw-20260621-104253-9e8a5c`.
+  - Lowered HLO stayed clean on both tasks: `all_gather=0`,
+    `all_reduce=0`, `all_to_all=0`, `reduce_scatter=0`,
+    `collective_permute=0`.
+  - Compiled HLO: `all_gather=104`, `all_reduce=0`, `all_to_all=0`,
+    `reduce_scatter=0`, `collective_permute=0`, `gpu_gemm_custom_call=3302`.
+  - Compiled memory: HBM peak `63.69 GiB`, arguments `30.49 GiB`, temp
+    `33.20 GiB`.
+- Interpretation:
+  - Positive: R2 makes the next-loss path memory-viable. Argument memory halves
+    relative to N1 (`60.96 GiB` -> `30.49 GiB`), and HBM drops below the 80 GiB
+    device limit (`93.40 GiB` -> `63.69 GiB`).
+  - Negative: the compiler materializes `104` all-gathers, double the checksum
+    path's `52`, because the updated chunks are consumed at next-forward use
+    sites. The next question is runtime: does this become a tolerable overlapped
+    shape, or is it just another slow materialization pattern?
+
+### 2026-06-21 03:54 PDT - Packed-master next-loss R2 runtime and slab materialization patch
+- CoreWeave result:
+  - Runtime R2 parent:
+    `/dlwh/iris-run-job-20260621-104609`, child
+    `/dlwh/iris-run-job-20260621-104609/grug-train-MUON-BENCH-D2560-L26-R2E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-RUNTIME-N2-cw-20260621-104607`.
+  - Runtime output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-RUNTIME-N2-cw-20260621-104607-da8578`.
+  - Result: succeeded on 2 H100 nodes. Median `2.68025s`, mean
+    `2.68074s`, min `2.68016s`.
+  - Compiled memory: HBM peak `63.69 GiB`, arguments `30.49 GiB`, temp
+    `33.20 GiB`.
+  - Compiled HLO: `all_gather=104`, `all_reduce=0`, `all_to_all=0`,
+    `reduce_scatter=0`, `collective_permute=0`, `gpu_gemm_custom_call=3302`.
+  - Estimated math: `0.747 PF` of NS dot work in this scalar next-loss timing,
+    `~279 TFLOP/s` across 16 H100s, `~1.76%` nominal bf16 peak.
+- Interpretation:
+  - Positive: this is the strongest packed-master correctness proof so far. The
+    fp32 packed master/momentum are updated chunk-locally, and the updated chunk
+    is then consumed through bf16 FSDP use-site materialization without returning
+    a full per-leaf updated tree.
+  - Negative: the path is slower than the R2 checksum run (`2.680s` vs
+    `2.204s`). The compiler doubled the materialization all-gathers (`104` vs
+    `52`) because the chunk consumer restored the packed chunk separately for
+    each local layer.
+- Change:
+  - Added `chunked_packed_master_chunk_to_fsdp_expert_slab` and changed
+    `expert_chunked_packed_master_fsdp_chunk_consumer_loss` to materialize a
+    shard-aligned chunk slab once, then index valid layers from that slab.
+  - Validation passed:
+    `python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`.
+  - Focused pytest passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_updates_before_consume experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_lowers_as_scalar experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status -q`
+    (`3 passed`).
+- Follow-up:
+  - Launched compile-only R2 validation for the slab materialization patch:
+    `/dlwh/iris-run-job-20260621-105437`.
+  - Success signal: compiled `all_gather` should drop from the prior next-loss
+    value of `104` toward the checksum value of `52`, while retaining the same
+    R2 memory viability.
+
+### 2026-06-21 03:57 PDT - Packed-master next-loss slab R2 compile
+- CoreWeave result:
+  - Compile-only R2 parent:
+    `/dlwh/iris-run-job-20260621-105437`, child
+    `/dlwh/iris-run-job-20260621-105437/grug-train-MUON-BENCH-D2560-L26-R2E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-SLAB-COMPILE-N2-cw-20260621-105434`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-SLAB-COMPILE-N2-cw-20260621-105434-3abed8`.
+  - Result: child succeeded on 2 H100 nodes.
+  - Lowered HLO: `all_gather=0`, `all_reduce=0`, `all_to_all=0`,
+    `reduce_scatter=0`, `collective_permute=0`.
+  - Compiled HLO: `all_gather=52`, `all_reduce=0`, `all_to_all=0`,
+    `reduce_scatter=0`, `collective_permute=0`, `gpu_gemm_custom_call=572`.
+  - Compiled memory: HBM peak `51.95 GiB`, arguments `30.47 GiB`, temp
+    `21.48 GiB`.
+- Comparison:
+  - Previous R2 next-loss compile: `all_gather=104`,
+    `gpu_gemm_custom_call=3302`, HBM `63.69 GiB`, temp `33.20 GiB`.
+  - Slab materialization halves the compiled all-gather count and cuts temp HBM
+    by `~11.7 GiB`.
+- Interpretation:
+  - This confirms the immediate hypothesis: the extra all-gathers were from
+    restoring the same packed chunk once per local layer. Restoring a
+    shard-aligned chunk slab once brings the next-loss materialization count
+    back to the checksum path's `52` all-gathers while preserving the
+    packed-master -> update -> next-use-site flow.
+- Follow-up:
+  - Launched runtime R2 validation:
+    `/dlwh/iris-run-job-20260621-105749`.
+  - Success signal: wall time should improve materially from the prior R2
+    next-loss median `2.680s`; if it only matches the checksum `2.204s`, the
+    representation is cleaner but still not fast enough for production.
+
+### 2026-06-21 04:00 PDT - Packed-master next-loss slab R2 runtime
+- CoreWeave result:
+  - Runtime R2 parent:
+    `/dlwh/iris-run-job-20260621-105749`, child
+    `/dlwh/iris-run-job-20260621-105749/grug-train-MUON-BENCH-D2560-L26-R2E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-SLAB-RUNTIME-N2-cw-20260621-105747`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-SLAB-RUNTIME-N2-cw-20260621-105747-ec3390`.
+  - Result: child succeeded on 2 H100 nodes. Median `0.95999s`, mean
+    `0.96177s`, min `0.95998s`.
+  - Compiled HLO: `all_gather=52`, `all_reduce=0`, `all_to_all=0`,
+    `reduce_scatter=0`, `collective_permute=0`, `gpu_gemm_custom_call=572`.
+  - Compiled memory: HBM peak `51.95 GiB`, arguments `30.47 GiB`, temp
+    `21.48 GiB`.
+  - Estimated scalar-bench NS dot throughput: `~778 TFLOP/s`, `~4.92%` nominal
+    H100 bf16 peak.
+- Comparison:
+  - Previous R2 next-loss runtime: median `2.680s`, compiled `104` all-gathers,
+    HBM `63.69 GiB`, temp `33.20 GiB`.
+  - Slab R2 runtime: median `0.960s`, compiled `52` all-gathers, HBM
+    `51.95 GiB`, temp `21.48 GiB`.
+  - This is a `~2.79x` wall-clock speedup for the next-loss path.
+- Interpretation:
+  - The optimized materialization granularity is not just cleaner HLO; it is the
+    main performance fix for the current packed-master next-loss harness.
+  - The path is now faster than the prior checksum-only R2 run (`2.204s`) while
+    preserving the stronger proof that the updated packed chunk feeds the next
+    FSDP use site.
+- Validation:
+  - Added a focused concrete test that the optimized chunk-slab consumer matches
+    manual per-layer chunk materialization for the chunk's valid group.
+  - Focused pytest passed:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_chunk_consumer_matches_per_layer_materialization experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_updates_before_consume experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_lowers_as_scalar experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status -q`
+    (`4 passed`).
+- Next action:
+  - Launch R4 slab runtime to check whether this cleaner next-loss path scales
+    beyond R2 and whether HBM remains comfortable.
+
+### 2026-06-21 04:08 PDT - Packed-master next-loss slab R4 runtime
+- CoreWeave result:
+  - Runtime R4 parent:
+    `/dlwh/iris-run-job-20260621-110324`, child
+    `/dlwh/iris-run-job-20260621-110324/grug-train-MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-SLAB-RUNTIME-N4-cw-20260621-110321`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-SLAB-RUNTIME-N4-cw-20260621-110321-4656e2`.
+  - Result: parent and child succeeded on 4 H100 nodes. Median `0.71323s`,
+    mean `0.71339s`, min `0.71239s` on the representative task.
+  - Compiled HLO: `all_gather=28`, `all_reduce=0`, `all_to_all=0`,
+    `reduce_scatter=0`, `collective_permute=0`, `gpu_gemm_custom_call=294`.
+  - Compiled memory: HBM peak `37.50 GiB`, arguments `16.41 GiB`, temp
+    `21.09 GiB`.
+  - Estimated scalar-bench NS dot throughput: `~1048 TFLOP/s`, `~3.31%`
+    nominal H100 bf16 peak.
+- Comparison:
+  - R2 slab runtime: median `0.960s`, compiled `52` all-gathers, HBM
+    `51.95 GiB`, args `30.47 GiB`, temp `21.48 GiB`.
+  - R4 slab runtime: median `0.713s`, compiled `28` all-gathers, HBM
+    `37.50 GiB`, args `16.41 GiB`, temp `21.09 GiB`.
+  - Scaling from R2 to R4 is only `~1.35x`, but memory and collective count
+    improve as expected.
+  - Older R4 checksum runtime was median `2.059s`; the slab next-loss path is
+    `~2.89x` faster while proving the stronger updated-chunk-consumed-at-use-site
+    property.
+- Interpretation:
+  - Positive: packed fp32 master/momentum plus next-use-site bf16 FSDP
+    materialization is now validated at both R2 and R4 without the giant
+    grouped-update-to-FSDP restore. The R4 path is comfortably below 80 GiB HBM.
+  - Negative: scaling remains weak. The R4 run halves argument memory and cuts
+    compiled all-gathers, but wall time improves only modestly, so the remaining
+    bottleneck is likely serialized per-chunk scheduling, small GEMM/NS fusion,
+    or unoverlapped materialization rather than raw HBM capacity.
+- Validation:
+  - `python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed after this result.
+- Next action:
+  - Profile the best slab path or try a larger chunk/bulk composition that keeps
+    the next-use-site property while reducing per-chunk scheduling overhead.
+
+### 2026-06-21 04:12 PDT - Packed-master next-loss slab R4 profile
+- CoreWeave result:
+  - Profile R4 parent:
+    `/dlwh/iris-run-job-20260621-110844`, child
+    `/dlwh/iris-run-job-20260621-110844/grug-train-MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-SLAB-PROFILE-N4-cw-20260621-110841`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-SLAB-PROFILE-N4-cw-20260621-110841-b6c0e7`.
+  - Result: parent and child succeeded on 4 H100 nodes. Representative task
+    median `0.71343s`, mean `0.71710s`, min `0.71181s`.
+  - Profile artifacts uploaded, including:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-SLAB-PROFILE-N4-cw-20260621-110841-b6c0e7/profiler/process_0/plugins/profile/2026_06_21_11_10_29/g73b7ae.xplane.pb`
+    and matching trace JSON.
+  - Compiled HLO: `all_gather=28`, `all_reduce=0`, `all_to_all=0`,
+    `reduce_scatter=0`, `collective_permute=0`, `gpu_gemm_custom_call=294`.
+  - Compiled memory: HBM peak `37.50 GiB`, arguments `16.41 GiB`, temp
+    `21.09 GiB`.
+  - Estimated scalar-bench NS dot throughput: `~1048 TFLOP/s`, `~3.31%`
+    nominal H100 bf16 peak.
+- Interpretation:
+  - Positive: profiling did not materially perturb the R4 slab result; the
+    profile run is essentially identical to the non-profile R4 runtime
+    (`0.71323s` median). Use this trace for the next bottleneck analysis.
+  - The positive representation claim still holds: authoritative packed fp32
+    master/momentum state, chunk-local MuonH update, and bf16 FSDP use-site
+    consumption all execute at R4 without a full updated FSDP tree.
+  - Remaining blocker is performance: compiled materialization still has
+    `28` all-gathers and wall time scales only modestly from R2 to R4.
+
+### 2026-06-21 04:20 PDT - Packed-master checksum slab R4 runtime
+- Hypothesis:
+  - The R4 next-loss slab path is a correctness probe that pays twice for
+    FSDP-use-site materialization: once in the gradient/JVP loss and once when
+    consuming the updated packed chunk. A checksum-only run using the same slab
+    consumer should isolate the current-step packed-master grad + MuonH update
+    cost.
+- CoreWeave result:
+  - Parent:
+    `/dlwh/iris-run-job-20260621-111615`.
+  - Child:
+    `/dlwh/iris-run-job-20260621-111615/grug-train-MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-CHECKSUM-SLAB-RUNTIME-N4-cw-20260621-111612`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-CHECKSUM-SLAB-RUNTIME-N4-cw-20260621-111612-db97df`.
+  - W&B:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-CHECKSUM-SLAB-RUNTIME-N4-cw-20260621-111612`.
+  - Result: child succeeded on 4 H100 nodes. Representative task median
+    `0.44299s`, mean `0.44298s`, min `0.44211s`.
+  - Compiled HLO: `all_gather=14`, `all_reduce=0`, `all_to_all=0`,
+    `reduce_scatter=0`, `collective_permute=0`, `gpu_gemm_custom_call=350`.
+  - Compiled memory: HBM peak `27.74 GiB`, arguments `16.41 GiB`, temp
+    `11.33 GiB`.
+  - Estimated scalar-bench NS dot throughput: `~5905 TFLOP/s`, `~18.66%`
+    nominal H100 bf16 peak.
+- Comparison:
+  - Old R4 checksum path before slab materialization: median `2.0588s`,
+    `52` compiled all-gathers, HBM `57.83 GiB`.
+  - New R4 checksum slab path: median `0.4430s`, `14` compiled all-gathers,
+    HBM `27.74 GiB`.
+  - This is a `~4.65x` speedup over the old checksum path.
+  - R4 next-loss slab path was median `0.7132s`, `28` compiled all-gathers,
+    HBM `37.50 GiB`; the extra updated-chunk consume costs about `0.270s` in
+    this harness.
+- Interpretation:
+  - This is the strongest positive result for the current objective so far.
+    The current-step packed-master path now keeps authoritative fp32 packed
+    master/momentum, gets bank-shaped grads from the FSDP use-site, runs MuonH
+    directly on packed chunks, and avoids a full per-leaf updated FSDP tree.
+  - Remaining issue: still not free. The path has `14` compiled all-gathers,
+    corresponding to `7` replica-aligned layer chunks times `2` expert leaves.
+    The next optimization target is reducing or overlapping those per-chunk
+    materialization all-gathers, or moving from harness proof into the real
+    train-step where delayed gathers can overlap with layer compute.
+
+### 2026-06-21 04:26 PDT - Packed-master checksum slab R2 launch
+- Hypothesis:
+  - The R4 checksum slab result is the current best packed-master current-step
+    proxy. Running the same slab checksum path at R2 will separate the slab
+    optimization from replica-axis scale effects and show whether the remaining
+    per-chunk materialization all-gathers scale as expected.
+- Code change before launch:
+  - Extended packed-master metadata emission to the chunked streaming grad +
+    MuonH benches, and surfaced `muon_master_bank_master_dtype`,
+    `muon_master_bank_momentum_dtype`, and
+    `muon_master_bank_consumer_dtype` in `summary_row`.
+  - Focused validation:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_packed_master_bank_dtypes_for_chunked_streaming_bench experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_chunk_consumer_matches_per_layer_materialization experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_lowers_as_scalar -q`
+    passed, as did
+    `python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`.
+- Command:
+  ```bash
+  RUN_ID="MUON-BENCH-D2560-L26-R2E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-CHECKSUM-SLAB-RUNTIME-N2-cw-$(date -u +%Y%m%d-%H%M%S)" \
+    MUON_BENCH_TRACKER=wandb \
+    MUON_BENCH_WANDB=true \
+    MUON_BENCH_WRITE_COMPILED_HLO=true \
+    MUON_BENCH_MODE=both \
+    MUON_BENCH_NS_COMPUTE_DTYPE=bf16 \
+    bash scratch/muon_update_bench_fast_loop.sh iris layer-chunked-packed-master-streaming-grad-muonh-checksum-r2e8-l26
+  ```
+- Current state:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-112616`.
+  - Immediate status: parent running with one running task at `04:27 PDT`.
+  - Watcher: `watch-muon-r2-slab-checksum-runtime`.
+- Baselines for interpretation:
+  - R4 slab checksum: median `0.44299s`, compiled `all_gather=14`, HBM
+    `27.74 GiB`.
+  - Old pre-slab R2 checksum: median `2.2037s`, compiled `all_gather=52`, HBM
+    `54.32 GiB`.
+
+### 2026-06-21 04:30 PDT - Packed-master checksum slab R2 result
+- CoreWeave result:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-112616`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260621-112616/grug-train-MUON-BENCH-D2560-L26-R2E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-CHECKSUM-SLAB-RUNTIME-N2-cw-20260621-112614`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-CHECKSUM-SLAB-RUNTIME-N2-cw-20260621-112614-8ccf4c`.
+  - W&B:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R2E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-CHECKSUM-SLAB-RUNTIME-N2-cw-20260621-112614`.
+  - Result: child emitted a summary row and W&B logged successfully.
+    Representative task median `0.44820s`, mean `0.44822s`, min `0.44779s`.
+  - Compiled HLO: `all_gather=26`, `all_reduce=0`, `all_to_all=0`,
+    `reduce_scatter=0`, `collective_permute=0`, `gpu_gemm_custom_call=598`.
+  - Compiled memory: HBM peak `42.19 GiB`, arguments `30.47 GiB`, temp
+    `11.72 GiB`.
+  - Metadata now explicitly reports `muon_master_bank_master_dtype=float32`,
+    `muon_master_bank_momentum_dtype=float32`, and
+    `muon_master_bank_consumer_dtype=bfloat16`.
+- Comparison:
+  - Old R2 checksum before slab materialization: median `2.2037s`,
+    `52` compiled all-gathers, HBM `54.32 GiB`.
+  - New R2 checksum slab path: median `0.4482s`,
+    `26` compiled all-gathers, HBM `42.19 GiB`.
+  - This is a `~4.92x` R2 speedup over the old checksum path.
+  - R4 checksum slab path remains slightly better: median `0.4430s`,
+    `14` compiled all-gathers, HBM `27.74 GiB`.
+- Interpretation:
+  - The slab materialization rewrite fixed both R2 and R4. R2 wall time is now
+    essentially tied with R4, which suggests the remaining runtime is not
+    scaling strongly with replica count in this harness.
+  - R4 still has a cleaner compiled shape: about half the all-gathers and much
+    lower HBM. The next useful harness axis is reducing chunk count directly
+    with larger layer chunks/buckets, then checking whether fewer larger
+    materialization all-gathers beat the current axis-sized chunks.
+
+### 2026-06-21 04:33 PDT - Packed-master checksum R4 chunk-8 launch
+- Hypothesis:
+  - The remaining slab checksum overhead is driven by one materialization
+    all-gather per chunk per expert leaf. The default chunk size equals the
+    active replica axis, so R4 uses `7` chunks for `26` layers and compiles
+    `14` all-gathers. Setting `packed_master_layer_chunk_size=8` should reduce
+    this to `4` chunks and ideally `8` all-gathers, at the cost of larger
+    per-chunk slabs and possibly more HBM.
+- Code change before launch:
+  - Added `packed_master_layer_chunk_size` to the harness config, CLI, CW
+    launcher, shell wrapper, metadata, and summary row.
+  - Default remains unchanged: `0` means use the active replica/data sharding
+    axis size.
+  - Focused validation:
+    `uv run pytest experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_chunk_size_override_controls_group_count experiments/grug/moe/test_muon_update_bench.py::test_summary_row_reports_packed_master_bank_dtypes_for_chunked_streaming_bench experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_lowers_as_scalar -q`
+    passed, as did
+    `python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/launch_cw_muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`.
+- Command:
+  ```bash
+  RUN_ID="MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-CHECKSUM-CHUNK8-RUNTIME-N4-cw-$(date -u +%Y%m%d-%H%M%S)" \
+    MUON_BENCH_TRACKER=wandb \
+    MUON_BENCH_WANDB=true \
+    MUON_BENCH_WRITE_COMPILED_HLO=true \
+    MUON_BENCH_MODE=both \
+    MUON_BENCH_NS_COMPUTE_DTYPE=bf16 \
+    MUON_BENCH_PACKED_MASTER_LAYER_CHUNK_SIZE=8 \
+    bash scratch/muon_update_bench_fast_loop.sh iris layer-chunked-packed-master-streaming-grad-muonh-checksum-r4e8-l26
+  ```
+- Current state:
+  - First parent Iris job `/dlwh/iris-run-job-20260621-113324` was invalid:
+    child metadata showed `packed_master_layer_chunk_size=0`, so it duplicated
+    the axis-sized R4 run. Root cause was missing env propagation in
+    `scratch/launch_muon_update_bench_executor_n1.sh`.
+  - Invalid duplicate job was stopped to avoid burning four nodes.
+  - Fixed the executor wrapper to forward
+    `MUON_BENCH_PACKED_MASTER_LAYER_CHUNK_SIZE`.
+  - Corrected parent Iris job: `/dlwh/iris-run-job-20260621-113614`.
+  - Watcher: `watch-muon-r4-chunk8-checksum-runtime`.
+- Baselines for interpretation:
+  - R4 axis-sized slab checksum: median `0.44299s`, compiled `all_gather=14`,
+    HBM `27.74 GiB`.
+  - R2 axis-sized slab checksum: median `0.44820s`, compiled `all_gather=26`,
+    HBM `42.19 GiB`.
+
+### 2026-06-21 04:39 PDT - Packed-master checksum R4 chunk-8 result
+- Corrected chunk-8 R4 run completed successfully:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-113614`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260621-113614/grug-train-MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-CHECKSUM-CHUNK8-RUNTIME-N4-cw-20260621-113611`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-CHECKSUM-CHUNK8-RUNTIME-N4-cw-20260621-113611-fe8855`.
+  - W&B:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-CHECKSUM-CHUNK8-RUNTIME-N4-cw-20260621-113611`.
+- Result:
+  - `packed_master_layer_chunk_size=8` propagated correctly.
+  - Group sizes were `[8, 8, 8, 8]`; valid group sizes were `[8, 8, 8, 2]`.
+  - Median `1.58342s`, mean `1.58511s`, min `1.58065s`.
+  - Compiled HLO: `all_gather=28`, `all_reduce=0`, `all_to_all=0`,
+    `reduce_scatter=0`, `collective_permute=28`,
+    `gpu_gemm_custom_call=176`.
+  - Compiled memory: HBM peak `41.41 GiB`, arguments `18.75 GiB`, temp
+    `22.66 GiB`.
+- Comparison:
+  - Axis-sized R4 slab remains much better: median `0.44299s`,
+    `all_gather=14`, `collective_permute=0`, HBM `27.74 GiB`.
+  - Chunk-8 is `~3.57x` slower than axis-sized R4 and uses `~13.67 GiB` more
+    HBM.
+- Interpretation:
+  - Larger layer chunks did not reduce materialization overhead. XLA changed
+    the layout into a worse compiled plan with more all-gathers plus collective
+    permutes and much higher temp memory.
+  - Keep the default axis-sized chunking for this harness. The positive result
+    remains the slab materialization rewrite itself, not the larger chunk-size
+    knob.
+
+### 2026-06-21 05:05 PDT - State-returning packed-master streaming update harness
+- Goal:
+  - Move the harness one step closer to the packed-master objective by adding a
+    state-returning variant of the streaming grad path. The checksum path proves
+    timing; this path proves the functional state contract: authoritative fp32
+    packed master and momentum go in, FSDP use-site grads are computed from bf16
+    materialized leaves, MuonH runs chunk-local, and the output remains packed
+    fp32 master/momentum rather than an FSDP update tree.
+- Code changes:
+  - Added bench kind
+    `expert_layer_chunked_packed_master_fsdp_streaming_grad_muonh_update`.
+  - Added `expert_chunked_packed_master_fsdp_streaming_grad_muonh_update_outputs`
+    and step factory.
+  - Added lazy launcher aliases:
+    - `layer-chunked-packed-master-streaming-grad-muonh-update-n1-l26`
+    - `layer-chunked-packed-master-streaming-grad-muonh-update-r2e8-l26`
+    - `layer-chunked-packed-master-streaming-grad-muonh-update-r4e8-l26`
+  - Added boundary status
+    `replica_aligned_chunked_packed_master_streaming_fsdp_grad_then_muonh_update`.
+- Local validation:
+  - `python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py`
+    passed.
+  - `bash -n scratch/muon_update_bench_fast_loop.sh` passed.
+  - Focused tests passed:
+    ```bash
+    uv run pytest \
+      experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_update_preserves_packed_state \
+      experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_lowers_as_scalar \
+      experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status -q
+    ```
+    Result: `3 passed`.
+- Interpretation:
+  - This is not a throughput win yet and not trainer integration. It is a
+    harness contract milestone: the streaming path can now return packed
+    authoritative state, so a later trainer prototype can avoid
+    `optax.apply_updates` for expert Muon leaves instead of stopping at scalar
+    checksum evidence.
+
+### 2026-06-21 04:50 PDT - R4 state-returning packed-master streaming update launch
+- Goal:
+  - Validate the new state-returning streaming grad+MuonH path at the real
+    D2560/L26/R4E8 shape.
+  - This tests whether returning next fp32 packed master/momentum remains
+    viable, rather than only returning a scalar checksum.
+- Command:
+  ```bash
+  RUN_ID="MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-UPDATE-RUNTIME-N4-cw-$(date -u +%Y%m%d-%H%M%S)" \
+    MUON_BENCH_TRACKER=wandb \
+    MUON_BENCH_WANDB=true \
+    MUON_BENCH_WRITE_COMPILED_HLO=true \
+    MUON_BENCH_MODE=both \
+    MUON_BENCH_NS_COMPUTE_DTYPE=bf16 \
+    bash scratch/muon_update_bench_fast_loop.sh iris layer-chunked-packed-master-streaming-grad-muonh-update-r4e8-l26
+  ```
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-114855`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260621-114855/grug-train-MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-UPDATE-RUNTIME-N4-cw-20260621-114852`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-UPDATE-RUNTIME-N4-cw-20260621-114852-603378`.
+  - Watcher: `watch-muon-r4-state-returning-update`.
+- Early evidence:
+  - Metadata confirms bench kind
+    `expert_layer_chunked_packed_master_fsdp_streaming_grad_muonh_update`.
+  - Metadata confirms fp32 master/momentum, bf16 consumer, and packed sharding
+    `P('replica_dcn', 'expert', None, None)`.
+  - Lowered HLO from all tasks showed `all_gather=0`, `all_to_all=0`,
+    `all_reduce=0`, `reduce_scatter=0`, `collective_permute=0`.
+- Current state:
+  - Succeeded.
+  - Runtime timing:
+    - median `0.4363s`
+    - mean `0.4364s`
+    - min `0.4360s`
+  - Compiled HLO:
+    - `all_gather=14`
+    - `all_to_all=0`
+    - `all_reduce=0`
+    - `reduce_scatter=0`
+    - `collective_permute=0`
+    - `gpu_gemm_custom_call=308`
+  - Memory:
+    - HBM peak `35.16 GiB`
+    - argument `16.41 GiB`
+    - output `16.41 GiB`
+    - temp `18.76 GiB`
+  - W&B logged:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-UPDATE-RUNTIME-N4-cw-20260621-114852`.
+- Interpretation:
+  - This is positive for the packed-master direction: full-shape R4 can return
+    next fp32 packed master and momentum state without OOM, and it avoids the
+    old huge grouped-update-to-FSDP restore/apply wall.
+  - It is not as clean as the lowered HLO suggested: compiled HLO still has 14
+    all-gathers, likely one per packed bank/chunk family. The next target is
+    making those use-site materializations explicit and delayable rather than
+    bundled into the optimizer-state-returning step.
+
+### 2026-06-21 04:58 PDT - R4 layer-chunked packed-master FSDP use-site consumer launch
+- Goal:
+  - Isolate the next-forward materialization cost for the same replica-aligned
+    packed-master layout used by the state-returning MuonH update harness.
+  - This separates "optimizer returns packed state" from "forward consumes a
+    bf16/FSDP view" so the 14 compiled all-gathers from the previous R4 run can
+    be interpreted directly.
+- Code change:
+  - Added bench kind
+    `expert_layer_chunked_packed_master_fsdp_sequential_consumer`.
+  - Added `expert_layer_chunked_packed_master_fsdp_sequential_consumer_loss`
+    and step factory.
+  - Added lazy launcher alias:
+    `layer-chunked-packed-master-fsdp-seq-r4e8-l26`.
+  - Focused validation passed:
+    ```bash
+    python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py
+    bash -n scratch/muon_update_bench_fast_loop.sh
+    uv run pytest \
+      experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_sequential_consumer_lowers_as_scalar \
+      experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_update_preserves_packed_state \
+      experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status -q
+    ```
+    Result: `3 passed`.
+- Command:
+  ```bash
+  RUN_ID="MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-FSDPSEQ-RUNTIME-N4-cw-$(date -u +%Y%m%d-%H%M%S)" \
+    MUON_BENCH_TRACKER=wandb \
+    MUON_BENCH_WANDB=true \
+    MUON_BENCH_WRITE_COMPILED_HLO=true \
+    MUON_BENCH_MODE=both \
+    MUON_BENCH_NS_COMPUTE_DTYPE=bf16 \
+    bash scratch/muon_update_bench_fast_loop.sh iris layer-chunked-packed-master-fsdp-seq-r4e8-l26
+  ```
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-115824`.
+  - Watcher: `watch-muon-r4-layerchunked-consumer`.
+- Current state:
+  - Timing landed; parent was still finalizing at last check.
+- Result:
+  - Run id:
+    `MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-FSDPSEQ-RUNTIME-N4-cw-20260621-115821`.
+  - Median `0.3041s`, mean `0.3042s`, min `0.3041s`.
+  - Compiled HLO:
+    - `all_gather=14`
+    - `all_to_all=0`
+    - `all_reduce=0`
+    - `reduce_scatter=0`
+    - `collective_permute=0`
+    - `gpu_gemm_custom_call=26`
+  - Memory:
+    - HBM peak `24.81 GiB`
+    - argument `8.20 GiB`
+    - output scalar
+    - temp `16.60 GiB`
+  - W&B logged:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-FSDPSEQ-RUNTIME-N4-cw-20260621-115821`.
+- Interpretation:
+  - The prior R4 state-returning packed-master update median was `0.4363s`.
+    This isolated consumer says roughly `0.304s` of that is the next-forward
+    bf16/FSDP materialization plus synthetic expert use.
+  - The 14 all-gathers are reproducible in the materialization-only path, so
+    they are evidence for use-site materialization cost, not evidence that the
+    optimizer is still doing the old full grouped-update-to-FSDP restore.
+  - The remaining delta, about `0.132s`, is the packed-state grad/update/return
+    overhead in the combined state-returning path for this harness shape.
+
+### 2026-06-21 05:07 PDT - Chunked packed-master grouped-view rebuild helper
+- Goal:
+  - Fill in the missing chunked equivalent of
+    `packed_master_bank_to_grouped_expert_tree` for the actual R2/R4
+    layer-chunked representation.
+  - This is the non-FSDP model-view side of the objective: slice/reassemble a
+    bf16-castable grouped expert view from authoritative packed state without
+    changing sharding. FSDP/compute reshards remain explicit use-site work.
+- Code change:
+  - Added `chunked_packed_master_bank_to_grouped_expert_tree`.
+  - The helper returns `{"blocks": ...}` blocks from physical packed chunks,
+    trims padded final chunks to valid layers, and performs no FSDP reshard.
+  - Added numerical test
+    `test_chunked_packed_master_rebuild_tree_matches_valid_chunk_slices_numerically`.
+- Validation:
+  ```bash
+  python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py
+  uv run pytest \
+    experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_rebuild_tree_matches_valid_chunk_slices_numerically \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_sequential_consumer_lowers_as_scalar \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_update_preserves_packed_state -q
+  ```
+  Result: `3 passed`.
+- Interpretation:
+  - This does not prove trainer integration, but it closes a harness API gap:
+    the packed master state now has both a direct chunked grouped-view rebuild
+    path and a separate FSDP use-site materialization path.
+
+### 2026-06-21 05:18 PDT - Gradients through chunked packed-master grouped view
+- Goal:
+  - Prove the chunked `rebuild_tree(master_bank)` view is differentiable back
+    to the authoritative packed bank layout, before adding trainer integration.
+- Code change:
+  - Added `expert_chunked_packed_master_grouped_consumer_loss`.
+  - Added `expert_chunked_packed_master_grouped_consumer_grad_step_factory`.
+  - These rebuild a bf16 grouped view from chunked fp32 packed state, consume it
+    with the grouped expert-bank MLP harness, and return gradients in the same
+    chunked packed bank structure.
+- Validation:
+  ```bash
+  python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py
+  uv run pytest \
+    experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grouped_consumer_grad_matches_rebuilt_grouped_view \
+    experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grouped_consumer_grad_lowers_with_packed_sharding \
+    experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_rebuild_tree_matches_valid_chunk_slices_numerically -q
+  ```
+  Result: `3 passed`.
+- Evidence:
+  - The tiny numerical test matches gradients from the direct rebuilt grouped
+    view.
+  - The abstract R2D2-style lowering returns chunked packed-bank gradient
+    specs and lowered StableHLO has `dot_general > 0` with
+    `all_gather=0`, `all_reduce=0`, `reduce_scatter=0`, and `all_to_all=0`.
+- Interpretation:
+  - This closes the harness-level differentiability requirement for the
+    grouped-view path: slicing/packing remains visible to JAX and transposes
+    back into the packed bank structure without an FSDP update tree.
+
+### 2026-06-21 05:18 PDT - Grouped-view grad directly into packed MuonH update
+- Goal:
+  - Close the next harness gap: differentiate through the grouped view rebuilt
+    from the authoritative chunked fp32 packed master, then run MuonH directly
+    on the resulting packed-bank gradients.
+  - This intentionally avoids the older optimizer-boundary restore into a full
+    per-leaf FSDP update tree.
+- Code change:
+  - Added bench kind
+    `expert_layer_chunked_packed_master_grouped_grad_muonh_update`.
+  - Added `expert_chunked_packed_master_grouped_grad_muonh_update_outputs`
+    and step factory.
+  - The path computes `jax.grad` of the grouped expert-bank consumer loss and
+    passes that gradient bank to the existing chunked packed-master MuonH
+    update, returning next fp32 packed master and momentum banks.
+  - Added R2/R4 aliases to `scratch/muon_update_bench_fast_loop.sh`:
+    `layer-chunked-packed-master-grouped-grad-muonh-update-r2e8-l26` and
+    `layer-chunked-packed-master-grouped-grad-muonh-update-r4e8-l26`.
+- Validation:
+  ```bash
+  python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py
+  bash -n scratch/muon_update_bench_fast_loop.sh
+  uv run pytest \
+    experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grouped_consumer_grad_lowers_with_packed_sharding \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_grouped_grad_muonh_update_preserves_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status -q
+  ```
+  Result: `3 passed`.
+- Evidence:
+  - The new lowering returns fp32 chunked packed next-master and next-momentum
+    trees with the expected packed-bank sharding.
+  - Lowered StableHLO has `dot_general > 0` and
+    `all_gather=0`, `all_reduce=0`, `reduce_scatter=0`, and `all_to_all=0`
+    for the small abstract R2D2-style test.
+- Interpretation:
+  - This is a positive harness result for the core representation thesis:
+    grouped model-view gradients can feed MuonH while preserving packed
+    authoritative state.
+  - It is not yet a runtime R2/R4 performance result and does not prove full
+    trainer integration. The next useful check is a CW run of the new R2/R4
+    aliases to measure compile/runtime memory and whether the no-collective
+    small lowering survives at realistic D2560/L26 scale.
+### 2026-06-21 05:23 PDT - R2 grouped-view grad -> packed MuonH update succeeds at D2560/L26
+- Goal:
+  - Validate the new packed-master representation path at realistic shape: rebuild grouped bf16 expert view from authoritative chunked fp32 packed master, differentiate through that view, and run MuonH directly back into fp32 packed master/momentum.
+  - This path does not create a per-leaf FSDP update tree at optimizer time.
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-121959`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260621-121959/grug-train-MUON-BENCH-D2560-L26-R2E8-LAYERCHUNKEDPACKEDMASTER-GROUPEDGRAD-MUONH-UPDATE-N2-cw-20260621-121955`.
+  - W&B/run id:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R2E8-LAYERCHUNKEDPACKEDMASTER-GROUPEDGRAD-MUONH-UPDATE-N2-cw-20260621-121955`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R2E8-LAYERCHUNKEDPACKEDMASTER-GROUPEDGRAD-MUONH-UPDATE-N2-cw-20260621-121955-c24bd3`.
+- Config:
+  - `replica_axis=2`, `data_axis=1`, `expert_axis=8`, `model_axis=1`.
+  - `layers=26`, `group_axis=replica_dcn`, `group_size=8`, `backend_steps=3`.
+  - `dtype=bf16`, `ns_compute_dtype=input`, `grouped_expert_consumer_tokens_per_expert=1`.
+  - Bench kind: `expert_layer_chunked_packed_master_grouped_grad_muonh_update`.
+- Result:
+  - Child and parent jobs succeeded.
+  - Lowered HLO before compilation: `all_gather=0`, `all_to_all=0`, `all_reduce=0`, `reduce_scatter=0`, `dot_general=250`.
+  - Compiled HLO: `all_gather=0`, `all_to_all=0`, `all_reduce=0`, `reduce_scatter=0`, `collective_permute=0`, `gpu_gemm_custom_call=559`.
+  - Timing: median `0.522655s`, mean `0.522586s`, min `0.522418s`, compile `5.433s`.
+  - Peak HBM estimate: `33.595 GiB` (`argument=30.469 GiB`, `output=30.469 GiB`, `alias=30.469 GiB`, `temp=3.125 GiB`).
+  - Estimated throughput: median `4647.8 TFLOP/s`, `29.37%` H100 bf16 peak.
+- Interpretation:
+  - This is strong harness evidence for the packed-master representation thesis:
+    the realistic R2 D2560/L26 path differentiates through the grouped model view and returns fp32 packed master/momentum without compiled collectives.
+  - The remaining question is whether R4 preserves the same no-collective contract and how it compares to the older R4 update-only/full-apply harnesses.
+
+### 2026-06-21 05:32 PDT - R4 grouped-view grad -> packed MuonH update succeeds after padded-tail fix
+- Goal:
+  - Validate the same packed-master grouped-view-grad MuonH path at R4.
+  - This specifically tests whether replica-aligned padded chunks preserve the
+    no-collective contract when the final logical chunk has only two real layers.
+- Fix before relaunch:
+  - The first R4 launch
+    `/dlwh/iris-run-job-20260621-122426` failed during lowering with:
+    `dynamic_slice on sharded dims where out dim (2) is not divisible by mesh axes (4)`.
+  - Root cause: `chunked_packed_master_bank_to_grouped_expert_tree` rebuilt the
+    final grouped view using the valid logical chunk size `2` instead of the
+    physical padded chunk size `4`.
+  - Changed the rebuild helper to preserve physical padded chunk sizes, and
+    added an abstract R4 padded-tail regression test.
+- Validation:
+  ```bash
+  python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py
+  bash -n scratch/muon_update_bench_fast_loop.sh
+  uv run pytest \
+    experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grouped_consumer_grad_lowers_with_packed_sharding \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_grouped_grad_muonh_update_preserves_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_grouped_grad_muonh_update_allows_padded_r4_tail \
+    experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status -q
+  ```
+  Result: `4 passed`.
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-122847`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260621-122847/grug-train-MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-GROUPEDGRAD-MUONH-UPDATE-N4-cw-20260621-122844`.
+  - W&B/run id:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-GROUPEDGRAD-MUONH-UPDATE-N4-cw-20260621-122844`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-GROUPEDGRAD-MUONH-UPDATE-N4-cw-20260621-122844-0b05c1`.
+- Config:
+  - `replica_axis=4`, `data_axis=1`, `expert_axis=8`, `model_axis=1`.
+  - `layers=26`, physical grouped chunks `[4,4,4,4,4,4,4]`, valid logical
+    chunks `[4,4,4,4,4,4,2]`.
+  - `group_axis=replica_dcn`, `group_size=8`, `backend_steps=3`.
+  - `dtype=bf16`, `ns_compute_dtype=input`,
+    `grouped_expert_consumer_tokens_per_expert=1`.
+  - Bench kind: `expert_layer_chunked_packed_master_grouped_grad_muonh_update`.
+- Result:
+  - Child and parent jobs succeeded.
+  - Lowered HLO before compilation: `all_gather=0`, `all_to_all=0`,
+    `all_reduce=0`, `reduce_scatter=0`, `dot_general=142`.
+  - Compiled HLO: `all_gather=0`, `all_to_all=0`, `all_reduce=0`,
+    `reduce_scatter=0`, `collective_permute=0`, `gpu_gemm_custom_call=301`.
+  - Timing: median `0.281842s`, mean `0.281811s`, min `0.281664s`,
+    compile `4.754s`.
+  - Peak HBM estimate: `19.532 GiB` (`argument=16.407 GiB`,
+    `output=16.406 GiB`, `alias=16.406 GiB`, `temp=3.125 GiB`).
+  - Estimated throughput: median `9281.9 TFLOP/s`, `29.33%` H100 bf16 peak.
+- Comparison:
+  - R2 grouped-view grad -> packed MuonH: median `0.522655s`, HBM
+    `33.595 GiB`, compiled collectives `0/0/0/0`.
+  - R4 grouped-view grad -> packed MuonH: median `0.281842s`, HBM
+    `19.532 GiB`, compiled collectives `0/0/0/0`.
+  - R4 is `1.85x` faster than R2 for this harness path, with the same
+    no-collective compiled contract and substantially lower per-device HBM.
+- Interpretation:
+  - This is the strongest harness evidence so far for the retargeted
+    representation: fp32 master/momentum remain authoritative in packed
+    NS-friendly layout, the grouped bf16 model view is differentiable back into
+    the packed bank, and MuonH updates return packed fp32 state without a
+    grouped-update-to-FSDP restore.
+  - This still does not prove full trainer integration. The next gap is moving
+    this packed-master state behind the real Grug expert MLP access path and
+    proving the use-site materialization/reshard behavior inside a train-step
+    shaped harness.
+
+### 2026-06-21 05:42 PDT - R4 packed-master streaming update feeds next use-site, but materialization is still expensive
+- Goal:
+  - Validate the stronger packed-master thesis: after FSDP-shaped use-site
+    gradients update fp32 packed master/momentum, the next forward/loss consumes
+    bf16 leaves materialized from that updated packed state.
+  - This is closer to the desired trainer representation than the grouped-view
+    update-only path, because the harness includes the next use-site consume.
+- Validation before launch:
+  ```bash
+  uv run pytest \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_updates_before_consume \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_lowers_as_scalar \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_update_preserves_packed_state -q
+  bash -n scratch/muon_update_bench_fast_loop.sh
+  ```
+  Result: `3 passed`; shell syntax check passed.
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-123857`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260621-123857/grug-train-MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-RUNTIME-N4-cw-20260621-123854`.
+  - W&B/run id:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-RUNTIME-N4-cw-20260621-123854`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-RUNTIME-N4-cw-20260621-123854-894f5a`.
+- Command:
+  ```bash
+  RUN_ID="MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGGRAD-MUONH-NEXTLOSS-RUNTIME-N4-cw-$(date -u +%Y%m%d-%H%M%S)" \
+    MUON_BENCH_TARGET=iris \
+    MUON_BENCH_PROFILE=layer-chunked-packed-master-streaming-grad-muonh-next-loss-r4e8-l26 \
+    MUON_BENCH_TRACKER=wandb \
+    MUON_BENCH_WANDB=true \
+    MUON_BENCH_WRITE_COMPILED_HLO=true \
+    MUON_BENCH_MODE=both \
+    MUON_BENCH_NS_COMPUTE_DTYPE=bf16 \
+    bash scratch/muon_update_bench_fast_loop.sh
+  ```
+- Config:
+  - `replica_axis=4`, `data_axis=1`, `expert_axis=8`, `model_axis=1`.
+  - `layers=26`, physical grouped chunks `[4,4,4,4,4,4,4]`.
+  - `group_axis=replica_dcn`, `group_size=8`, `backend_steps=3`.
+  - `dtype=bf16`, `ns_compute_dtype=bf16`,
+    `grouped_expert_consumer_tokens_per_expert=1`.
+  - Bench kind:
+    `expert_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss`.
+- Result:
+  - Child and parent jobs succeeded.
+  - Lowered HLO before compilation: `all_gather=0`, `all_to_all=0`,
+    `all_reduce=0`, `reduce_scatter=0`, `dot_general=282`.
+  - Compiled HLO: `all_gather=28`, `all_to_all=0`, `all_reduce=0`,
+    `reduce_scatter=0`, `collective_permute=0`,
+    `gpu_gemm_custom_call=327`.
+  - Timing: median `0.682429s`, mean `0.682654s`, min `0.681626s`,
+    compile `11.672s`.
+  - Peak HBM estimate: `37.892 GiB` (`argument=16.406 GiB`,
+    `output≈0`, `alias=0`, `temp=21.485 GiB`).
+  - Estimated throughput: median `1095.1 TFLOP/s`,
+    `3.46%` H100 bf16 peak.
+- Comparison:
+  - R4 grouped-view grad -> packed MuonH update: median `0.281842s`,
+    compiled collectives `0/0/0/0`, HBM `19.532 GiB`.
+  - Prior R4 state-returning streaming update: median `0.4363s`, compiled
+    `all_gather=14`, HBM `35.16 GiB`.
+  - This next-loss path: median `0.682429s`, compiled `all_gather=28`,
+    HBM `37.892 GiB`.
+- Interpretation:
+  - Positive: the harness now demonstrates the end-to-end representation shape
+    we wanted at R4: fp32 packed master/momentum are authoritative, the update
+    returns packed state, and a subsequent bf16 use-site leaf can be consumed.
+  - Negative: use-site materialization currently doubles the compiled all-gather
+    count relative to the state-returning streaming update and is `2.42x` slower
+    than the zero-collective grouped-view update-only path. The remaining
+    bottleneck is not NS compute; it is the FSDP-shaped materialization/reshard
+    from packed master state into consumable leaves.
+
+### 2026-06-21 05:58 PDT - R4 packed-master value+grad path succeeds with train-step-shaped outputs
+- Goal:
+  - Remove the artificial "next loss" consume from the previous harness and
+    prove the more train-step-shaped boundary: return current loss plus next
+    fp32 packed master/momentum from one `value_and_grad`-style step.
+  - This should show whether the authoritative packed-master state can survive
+    an optimizer step without constructing a full per-leaf FSDP update tree at
+    the optimizer boundary.
+- Validation before launch:
+  ```bash
+  python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py
+  bash -n scratch/muon_update_bench_fast_loop.sh
+  uv run pytest \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_update_preserves_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_returns_current_loss \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_lowers_with_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_lowers_as_scalar -q
+  ```
+  Result: `4 passed`; compile and shell syntax checks passed.
+- First attempt:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-124856`.
+  - Failed before timing with `ValueError: too many values to unpack
+    (expected 2)` in the second timing loop.
+  - Root cause: the new value+grad bench returns `(loss, params,
+    optimizer_state)`, while one timing path still expected `(params,
+    optimizer_state)`.
+  - Fix: both timing loops now unpack the three-output value+grad bench.
+- Successful run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-125231`.
+  - Child Iris job:
+    `/dlwh/iris-run-job-20260621-125231/grug-train-MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGVALUEGRAD-MUONH-UPDATE-RUNTIME-N4-cw-20260621-125229`.
+  - W&B/run id:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGVALUEGRAD-MUONH-UPDATE-RUNTIME-N4-cw-20260621-125229`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGVALUEGRAD-MUONH-UPDATE-RUNTIME-N4-cw-20260621-125229-c87004`.
+- Command:
+  ```bash
+  RUN_ID="MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGVALUEGRAD-MUONH-UPDATE-RUNTIME-N4-cw-$(date -u +%Y%m%d-%H%M%S)" \
+    MUON_BENCH_TARGET=iris \
+    MUON_BENCH_PROFILE=layer-chunked-packed-master-streaming-value-grad-muonh-update-r4e8-l26 \
+    MUON_BENCH_TRACKER=wandb \
+    MUON_BENCH_WANDB=true \
+    MUON_BENCH_WRITE_COMPILED_HLO=true \
+    MUON_BENCH_MODE=both \
+    MUON_BENCH_NS_COMPUTE_DTYPE=bf16 \
+    bash scratch/muon_update_bench_fast_loop.sh
+  ```
+- Result:
+  - Child and parent jobs succeeded.
+  - Lowered HLO before compilation: `all_gather=0`, `all_to_all=0`,
+    `all_reduce=0`, `reduce_scatter=0`.
+  - Compiled HLO: `all_gather=14`, `all_to_all=0`, `all_reduce=0`,
+    `reduce_scatter=0`, `collective_permute=0`,
+    `gpu_gemm_custom_call=308`.
+  - Timing: median `0.441631s`, mean `0.441536s`, min `0.441034s`,
+    compile about `1.26s`.
+  - Peak HBM estimate: `40.239 GiB` (`argument=16.406 GiB`,
+    `output=16.406 GiB`, `alias=16.406 GiB`, `temp=23.833 GiB`).
+  - Estimated throughput: median `1692.2 TFLOP/s`,
+    `5.35%` H100 bf16 peak.
+- Comparison:
+  - R4 grouped-view grad -> packed MuonH update: median `0.281842s`,
+    compiled collectives `0/0/0/0`, HBM `19.532 GiB`.
+  - R4 state-returning streaming update: median about `0.4363s`, compiled
+    `all_gather=14`, HBM `35.16 GiB`.
+  - R4 next-loss proof: median `0.682429s`, compiled `all_gather=28`,
+    HBM `37.892 GiB`.
+  - This value+grad path: median `0.441631s`, compiled `all_gather=14`,
+    HBM `40.239 GiB`.
+- Interpretation:
+  - Positive: this is the best harness evidence so far for the active
+    representation goal. The packed fp32 master/momentum can be authoritative,
+    current forward/loss can consume bf16 JIT-materialized leaves, gradients
+    flow back into the packed master layout, and the optimizer returns packed
+    fp32 next state without a full grouped-update-to-FSDP restore at the
+    optimizer boundary.
+  - The previous next-loss harness was too pessimistic because it intentionally
+    consumed the updated weights immediately and therefore paid a second
+    materialization. The train-step-shaped value+grad harness avoids that
+    artificial second consume and falls back to the expected `14` compiled
+    all-gathers.
+  - Remaining gap: full trainer integration. We still need to put this
+    representation behind the real Grug expert MLP access path and decide
+    whether the `14` compiled all-gathers are acceptable, overlappable, or need
+    a lower-level packed transport/materialization primitive.
+
+### 2026-06-21 06:05 PDT - Packed master state is now an explicit PyTree object
+- Goal:
+  - Move from "dicts that happen to contain packed chunks" toward the optimizer
+    representation required by the active goal.
+  - Preserve current harness behavior while making packed master/momentum an
+    explicit object that can become real opt state.
+- Change:
+  - Added `MuonMasterBank`, a frozen JAX PyTree whose JAX-visible payload is
+    `chunks` and whose static auxiliary data is `MuonMasterBankMetadata`.
+  - `synthetic_chunked_packed_grouped_expert_master_bank_specs` and
+    `make_chunked_packed_grouped_expert_master_bank_tree` now construct
+    `MuonMasterBank` for fp32 master/momentum banks.
+  - Chunked packed-master update outputs now preserve `MuonMasterBank` instead
+    of returning anonymous `{"chunks": ...}` dicts when the input state is a
+    `MuonMasterBank`.
+  - Sharding assertions accept both legacy dict banks and the explicit
+    `MuonMasterBank` during the transition.
+- Validation:
+  ```bash
+  python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py
+  uv run pytest \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_update_preserves_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_returns_current_loss \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_lowers_with_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_lowers_as_scalar -q
+  ```
+  Result: `4 passed`.
+- Interpretation:
+  - Positive: the active harness now carries authoritative fp32 packed
+    master/momentum as an explicit state object through concrete JIT execution
+    and abstract lowering. Tests assert that next master/momentum preserve the
+    wrapper and metadata.
+  - This is still not trainer integration, but it removes a representation
+    ambiguity that would have made integration brittle: the packed bank is now a
+    candidate opt-state object, not just a convention over dict keys.
+
+### 2026-06-21 06:15 PDT - Explicit `MuonMasterBank` runtime validation
+- Goal:
+  - Validate the explicit `MuonMasterBank` representation on CoreWeave after
+    the wrapper refactor.
+  - Try N1 first for cheap signal, then R4 if N1 cannot fit.
+- N1 run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-130551`.
+  - W&B/run id:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGVALUEGRAD-MUONH-UPDATE-WRAPPED-N1-cw-20260621-130548`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGVALUEGRAD-MUONH-UPDATE-WRAPPED-N1-cw-20260621-130548-450d88`.
+  - Result: failed after clean lowering with
+    `RESOURCE_EXHAUSTED: Out of memory while trying to allocate 19.14GiB`.
+  - Lowered HLO before failure: `all_gather=0`, `all_to_all=0`,
+    `all_reduce=0`, `reduce_scatter=0`, `dot_general=598`.
+  - Interpretation: full L26 value+grad is too memory-heavy on one H100 node
+    without replica sharding. This does not appear to be a wrapper-specific
+    failure; it is the expected full-model materialization/gradient memory
+    pressure.
+- R4 run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-131035`.
+  - W&B/run id:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGVALUEGRAD-MUONH-UPDATE-WRAPPED-RUNTIME-N4-cw-20260621-131033`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGVALUEGRAD-MUONH-UPDATE-WRAPPED-RUNTIME-N4-cw-20260621-131033-f18535`.
+  - Result: succeeded.
+  - Lowered HLO before compilation: `all_gather=0`, `all_to_all=0`,
+    `all_reduce=0`, `reduce_scatter=0`.
+  - Compiled HLO: `all_gather=14`, `all_to_all=0`, `all_reduce=0`,
+    `reduce_scatter=0`, `gpu_gemm_custom_call=313`.
+  - Timing: median `0.442606s`, mean `0.442408s`, min `0.441429s`,
+    compile `13.884s`.
+  - Peak HBM estimate: `40.239 GiB` (`argument=16.406 GiB`,
+    `output=16.406 GiB`, `alias=16.406 GiB`, `temp=23.833 GiB`).
+  - Estimated throughput: median `1688.5 TFLOP/s`,
+    `5.34%` H100 bf16 peak.
+  - Metadata in the run confirms:
+    - `muon_master_bank_group_axis=replica_dcn`
+    - `muon_master_bank_group_sizes=[4,4,4,4,4,4,4]`
+    - `muon_master_bank_leaf_count=14`
+    - `muon_master_bank_master_dtype=float32`
+    - `muon_master_bank_momentum_dtype=float32`
+    - `muon_master_bank_consumer_dtype=bfloat16`
+- Interpretation:
+  - Positive: the current-code explicit `MuonMasterBank` R4 result matches the
+    pre-wrapper value+grad timing (`~0.442s`) and preserves the expected
+    compiled collective shape (`14` all-gathers, no A2A/AR/RS). The wrapper did
+    not perturb the benchmark behavior.
+  - Negative: N1 full L26 remains too large. Use N1 only for smaller/static
+    checks or compile/lowering probes; use R2/R4 for full-size runtime signal.
+
+### 2026-06-21 06:22 PDT - `MuonMasterBank` helper tests green
+- Change:
+  - Added/validated trainer-facing harness helper names for the current
+    representation:
+    - `rebuild_expert_tree_from_muon_master_bank(...)`
+    - `materialize_expert_layer_from_muon_master_bank(...)`
+  - Fixed the pure local gradient-equivalence test to strip concrete device
+    sharding from generated leaves while preserving the `MuonMasterBank`
+    wrapper. That test now checks numerical structure instead of accidentally
+    requiring abstract-mesh lowering.
+- Validation:
+  ```bash
+  python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py
+  uv run pytest \
+    experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_rebuild_tree_matches_physical_chunk_slices_numerically \
+    experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_matches_chunked_bank_slices_numerically \
+    experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_fsdp_layer_grad_matches_direct_layer_grad_numerically \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_returns_current_loss \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_lowers_with_packed_state -q
+  ```
+  Result: `5 passed`.
+  ```bash
+  bash -n scratch/muon_update_bench_fast_loop.sh
+  uv run pytest \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_update_preserves_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_returns_current_loss \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_lowers_with_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_lowers_as_scalar -q
+  ```
+  Result: `4 passed`.
+- Interpretation:
+  - The current harness now has explicit names for the two integration
+    boundaries we want the trainer to grow toward: rebuild a bf16 expert view
+    from authoritative packed fp32 state, and materialize one use-site layer
+    from that state.
+  - This is not yet the final trainer path, but it makes the representation
+    less ambiguous and keeps the numeric and wrapper-preservation tests green.
+
+### 2026-06-21 06:32 PDT - Per-layer JIT materialization is a clear negative on R4
+- Hypothesis:
+  - The previous R4 explicit `MuonMasterBank` value+grad path still materialized
+    shard-aligned chunks/slabs before looping over layers. A stricter
+    per-layer accessor might delay gathers to the actual layer use site and
+    improve the optimizer-boundary story, even if it increases the number of
+    potential use-site materializations.
+- Change:
+  - Added a separate harness mode:
+    `expert_layer_chunked_packed_master_fsdp_streaming_layerwise_value_grad_muonh_update`.
+  - This mode preserves the same authoritative packed fp32 master/momentum
+    state and value+grad MuonH update contract, but the chunk loss calls
+    `chunked_packed_master_chunk_to_fsdp_expert_layer(...)` for each valid
+    layer instead of materializing one shard-aligned slab and indexing layers
+    from it.
+  - Added launch aliases:
+    - `layer-chunked-packed-master-streaming-layerwise-value-grad-muonh-update-r2e8-l26`
+    - `layer-chunked-packed-master-streaming-layerwise-value-grad-muonh-update-r4e8-l26`
+- Local validation:
+  ```bash
+  bash -n scratch/muon_update_bench_fast_loop.sh
+  uv run pytest \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_returns_current_loss \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_lowers_with_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_layerwise_value_grad_muonh_update_lowers_with_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_update_preserves_packed_state -q
+  ```
+  Result: `4 passed`.
+- Run:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-132856`.
+  - Child/run id:
+    `MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGLAYERWISEVALUEGRAD-MUONH-UPDATE-N4-cw-20260621-132853`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGLAYERWISEVALUEGRAD-MUONH-UPDATE-N4-cw-20260621-132853-7075fc`.
+  - State file:
+    `scratch/20260621-0629_muon_layerwise_value_grad_r4_monitoring_state.json`.
+- Result:
+  - Parent succeeded.
+  - Lowered HLO: `all_gather=0`, `all_to_all=0`, `all_reduce=0`,
+    `reduce_scatter=0`, `dot_general=256`.
+  - Compiled HLO: `all_gather=52`, `all_to_all=0`, `all_reduce=0`,
+    `reduce_scatter=0`, `gpu_gemm_custom_call=1050`.
+  - Timing: median `1.948532s`, mean `1.949127s`, min `1.947635s`,
+    compile `13.604s`.
+  - Peak HBM estimate: `69.147 GiB`
+    (`argument=16.406 GiB`, `output=16.406 GiB`, `temp=52.740 GiB`).
+  - Estimated median throughput: `1342.56 TFLOP/s`,
+    `4.24%` H100 bf16 peak.
+- Comparison:
+  - Prior R4 explicit `MuonMasterBank` value+grad wrapper path:
+    - median `0.442606s`
+    - compiled `14` all-gathers
+    - peak HBM `40.239 GiB`
+  - New per-layer materialization path:
+    - median `1.948532s`
+    - compiled `52` all-gathers
+    - peak HBM `69.147 GiB`
+- Interpretation:
+  - The strict per-layer accessor is semantically closer to the intended
+    train-step use-site materialization, but the compiler does not batch the
+    resulting gathers. It emits one all-gather per layer/leaf, which is exactly
+    the fragmented behavior we were trying to avoid.
+  - This rules out naive per-layer materialization as the next path. The better
+    direction is to keep slab/chunk materialization, but expose it explicitly as
+    a prefetch/materialization unit that can be scheduled near the relevant
+    block group, rather than expecting XLA GPU to recover batching from many
+    independent layer accessors.
+
+### 2026-06-21 06:45 PDT - Added explicit block-group materialization interface
+- Motivation:
+  - The R4 per-layer materialization result showed that the compiler does not
+    batch many independent layer gathers. The viable representation is still
+    authoritative packed fp32 master/momentum, but the consumer side needs an
+    explicit schedulable materialization unit that is larger than one layer and
+    smaller than a full model restore.
+- Change:
+  - Added `materialize_expert_block_group_from_muon_master_bank(...)`.
+  - It takes authoritative `MuonMasterBank` state and returns a tuple of bf16
+    FSDP-sharded expert slabs for one logical block group. If a logical group
+    is larger than a stack shard, it returns multiple shard-aligned slabs rather
+    than silently materializing only the first one.
+  - This is the trainer-facing shape we want next: schedule one block-group
+    prefetch/materialization near the relevant block group, consume its layers,
+    and leave optimizer state packed.
+- Validation:
+  ```bash
+  python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py
+  uv run pytest \
+    experiments/grug/moe/test_muon_update_bench.py::test_muon_master_bank_block_group_materialization_matches_chunked_bank_slices_numerically \
+    experiments/grug/moe/test_muon_update_bench.py::test_muon_master_bank_block_group_materialization_lowers_with_fsdp_slab_sharding \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_lowers_with_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_layerwise_value_grad_muonh_update_lowers_with_packed_state -q
+  ```
+  Result: `4 passed`.
+  ```bash
+  bash -n scratch/muon_update_bench_fast_loop.sh
+  uv run pytest \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_update_preserves_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_returns_current_loss \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_lowers_with_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_lowers_as_scalar -q
+  ```
+  Result: `4 passed`.
+- Interpretation:
+  - This is not a new runtime result; it is the interface correction implied by
+    the runtime result. The harness now has three explicit consumer surfaces:
+    full rebuild, one-layer materialization, and block-group slab
+    materialization. The last one is the only one that currently looks
+    compatible with GPU compiler behavior.
+
+### 2026-06-21 06:55 PDT - Added block-group value+grad MuonMasterBank harness path
+- Hypothesis:
+  - The strict per-layer path failed because it gave XLA many independent
+    layer/leaf gathers. The right trainer-shaped boundary is block-group
+    materialization: forward asks for a schedulable bf16 FSDP slab group from
+    authoritative packed fp32 master state, consumes those layers, and MuonH
+    updates only the packed chunk for that group.
+- Change:
+  - Added bench kind
+    `expert_layer_chunked_packed_master_fsdp_streaming_block_group_value_grad_muonh_update`.
+  - Added
+    `expert_chunked_packed_master_fsdp_block_group_consumer_loss(...)`, which
+    consumes slabs produced by
+    `materialize_expert_block_group_from_muon_master_bank(...)`.
+  - Added a block-group value+grad MuonH update path that differentiates
+    through the `MuonMasterBank` block-group accessor, returns current loss,
+    and keeps next master/momentum in packed `MuonMasterBank` layout.
+  - Added launch aliases:
+    - `layer-chunked-packed-master-streaming-block-group-value-grad-muonh-update-r2e8-l26`
+    - `layer-chunked-packed-master-streaming-block-group-value-grad-muonh-update-r4e8-l26`
+- Validation:
+  ```bash
+  python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py
+  bash -n scratch/muon_update_bench_fast_loop.sh
+  uv run pytest \
+    experiments/grug/moe/test_muon_update_bench.py::test_muon_master_bank_block_group_consumer_matches_chunk_consumer_numerically \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_block_group_value_grad_muonh_update_lowers_with_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_lowers_with_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_layerwise_value_grad_muonh_update_lowers_with_packed_state -q
+  ```
+  Result: `5 passed`.
+- Note:
+  - `./infra/pre-commit.py --fix --files ...` still reports branch-existing
+    style debt in the large harness file, including old B023/line-length/Black
+    findings outside this change. I fixed the new closure binding issue it
+    surfaced and kept the focused proof green to avoid reformatting the whole
+    benchmark file mid-experiment.
+- Next action:
+  - Run the new R4 alias and compare against:
+    - current fast wrapper path: median `0.442606s`, compiled AG `14`, HBM
+      `40.239 GiB`;
+    - bad per-layer path: median `1.948532s`, compiled AG `52`, HBM
+      `69.147 GiB`.
+
+### 2026-06-21 06:58 PDT - R4 block-group value+grad is viable but still too slow
+- Hypothesis:
+  - Block-group value+grad should retain the good compiler batching properties
+    of the fast wrapper path while exposing a cleaner trainer-facing
+    `MuonMasterBank` materialization boundary.
+- Run:
+  ```bash
+  MARIN_PREFIX=s3://marin-na/tmp/ttl=7d \
+  KUBECONFIG=~/.kube/coreweave-iris-gpu \
+  MUON_BENCH_TRACKER=wandb \
+  MUON_BENCH_WANDB=true \
+  MUON_BENCH_WANDB_PROJECT=marin_moe \
+  MUON_BENCH_WANDB_GROUP=grug-moe-cw-packed-master \
+  MUON_BENCH_WRITE_COMPILED_HLO=true \
+  MUON_BENCH_ENABLE_JAX_PROFILE=false \
+  MUON_BENCH_WARMUP=1 \
+  MUON_BENCH_ITERS=3 \
+  XLA_PYTHON_CLIENT_MEM_FRACTION=0.90 \
+  XLA_FLAGS='--xla_gpu_autotune_level=0' \
+  bash scratch/muon_update_bench_fast_loop.sh iris \
+    layer-chunked-packed-master-streaming-block-group-value-grad-muonh-update-r4e8-l26
+  ```
+- Job:
+  - Parent Iris job: `/dlwh/iris-run-job-20260621-134559`.
+  - Child/run id:
+    `MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGBLOCKGROUPVALUEGRAD-MUONH-UPDATE-N4-cw-20260621-134556`.
+  - W&B:
+    https://wandb.ai/marin-community/marin_moe/runs/9bljhle8
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGBLOCKGROUPVALUEGRAD-MUONH-UPDATE-N4-cw-20260621-134556-f75249`.
+- Result:
+  - Parent and child succeeded; `4/4` tasks succeeded.
+  - Timing: median `1.206885554s`, mean `1.206582920s`,
+    min `1.205448080s`.
+  - Lowered HLO: `all_gather=0`, `all_to_all=0`, `all_reduce=0`,
+    `reduce_scatter=0`.
+  - Compiled HLO: `all_gather=14`, `all_to_all=0`, `all_reduce=0`,
+    `reduce_scatter=0`.
+  - Peak HBM: `41.803272810 GiB`.
+  - Estimated throughput: median `2167.585535696 TFLOP/s`,
+    `6.849044286%` H100 bf16 peak.
+- Comparison:
+  - Versus fast wrapper path: `1.2069s` is `2.73x` slower than `0.442606s`,
+    with the same compiled AG count (`14`) and `+1.56 GiB` HBM.
+  - Versus bad per-layer path: `1.2069s` is about `38%` faster than
+    `1.948532s`, with compiled AG down from `52` to `14` and HBM down by
+    `27.34 GiB`.
+- Interpretation:
+  - Positive: the block-group boundary fixes the catastrophic per-layer
+    materialization pattern. We are back to `14` compiled all-gathers and
+    manageable HBM.
+  - Negative: it still loses a large amount of time versus the fast wrapper,
+    despite matching AG count. The current block-group consumer is a cleaner
+    trainer boundary, but its value+grad formulation probably prevents the
+    compiler from matching the tighter chunk-local fast path.
+  - Next target: inspect the HLO/profile delta between fast wrapper and
+    block-group value+grad. If the extra time is mostly repeated consumer
+    materialization or tuple/reassembly overhead, the trainer-facing API needs
+    to hand a block-group slab directly to the chunk-local fast loss/update
+    rather than rebuilding a temporary bank inside each closure.
+
+### 2026-06-21 07:25 PDT - Corrected R4 block-group result: slow run was an XLA flag confound
+- Hypothesis:
+  - The previous block-group result may have been confounded by
+    `--xla_gpu_autotune_level=0`, since the historical fast value+grad runs did
+    not use that flag and did use bf16 NS compute.
+- Runs:
+  ```bash
+  RUN_ID="MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGVALUEGRAD-MUONH-UPDATE-EXACTRERUN-N4-cw-$(date -u +%Y%m%d-%H%M%S)" \
+    MUON_BENCH_TARGET=iris \
+    MUON_BENCH_PROFILE=layer-chunked-packed-master-streaming-value-grad-muonh-update-r4e8-l26 \
+    MUON_BENCH_TRACKER=wandb \
+    MUON_BENCH_WANDB=true \
+    MUON_BENCH_WRITE_COMPILED_HLO=true \
+    MUON_BENCH_MODE=both \
+    MUON_BENCH_NS_COMPUTE_DTYPE=bf16 \
+    bash scratch/muon_update_bench_fast_loop.sh
+  ```
+  ```bash
+  RUN_ID="MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGBLOCKGROUPVALUEGRAD-MUONH-UPDATE-EXACTRERUN-N4-cw-$(date -u +%Y%m%d-%H%M%S)" \
+    MUON_BENCH_TARGET=iris \
+    MUON_BENCH_PROFILE=layer-chunked-packed-master-streaming-block-group-value-grad-muonh-update-r4e8-l26 \
+    MUON_BENCH_TRACKER=wandb \
+    MUON_BENCH_WANDB=true \
+    MUON_BENCH_WRITE_COMPILED_HLO=true \
+    MUON_BENCH_MODE=both \
+    MUON_BENCH_NS_COMPUTE_DTYPE=bf16 \
+    bash scratch/muon_update_bench_fast_loop.sh
+  ```
+- Jobs:
+  - Value+grad exact parent: `/dlwh/iris-run-job-20260621-141852`.
+  - Value+grad exact run id:
+    `MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGVALUEGRAD-MUONH-UPDATE-EXACTRERUN-N4-cw-20260621-141850`.
+  - Value+grad output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGVALUEGRAD-MUONH-UPDATE-EXACTRERUN-N4-cw-20260621-141850-03b251`.
+  - Block-group exact parent: `/dlwh/iris-run-job-20260621-142143`.
+  - Block-group exact run id:
+    `MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGBLOCKGROUPVALUEGRAD-MUONH-UPDATE-EXACTRERUN-N4-cw-20260621-142141`.
+  - Block-group output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGBLOCKGROUPVALUEGRAD-MUONH-UPDATE-EXACTRERUN-N4-cw-20260621-142141-81b61e`.
+- Result:
+  - Value+grad exact: median `0.442303831s`, mean `0.443835038s`,
+    min `0.441775075s`.
+  - Block-group exact: median `0.445111896s`, mean `0.445126397s`,
+    min `0.443359180s`.
+  - Both paths compiled to `313` GPU GEMM custom calls and `14/0/0/0`
+    compiled `all_gather/all_to_all/all_reduce/reduce_scatter`.
+  - Both had peak HBM `40.239275541 GiB`.
+  - Block-group estimated throughput: median `5877.24 TFLOP/s`,
+    `18.57%` H100 bf16 peak.
+- Negative control:
+  - The same value+grad/block-group family under
+    `XLA_FLAGS='--xla_gpu_autotune_level=0'` compiled to `1050` GPU GEMM
+    custom calls and ran at about `1.17-1.21s`.
+- Interpretation:
+  - The trainer-facing block-group materialization boundary is viable. The
+    earlier `1.2069s` block-group result was not a structural failure; it was a
+    GPU XLA launch-flag artifact.
+  - For these MuonH harness measurements, avoid `--xla_gpu_autotune_level=0`.
+    It changes the compiled program shape enough to invalidate comparisons.
+  - The next real step is trainer-shaped integration: keep packed fp32
+    `MuonMasterBank` state authoritative, materialize bf16 FSDP block-group
+    views just in time, and avoid optimizer-time grouped-to-FSDP restore.
+- Script change:
+  - `scratch/muon_update_bench_fast_loop.sh` now defaults the packed-master
+    value+grad and block-group value+grad aliases to bf16 NS compute so lazy
+    launches do not accidentally use slow `input`/fp32 NS compute.
+
+### 2026-06-21 07:35 PDT - Dispatch-fixed true block-group run also matches fast path
+- Correction:
+  - After the corrected run above, I found the launcher dispatch was still
+    routing the block-group bench kind through the generic value+grad factory.
+    That meant the `/dlwh/iris-run-job-20260621-142143` result was a valid fast
+    chunked packed-master result, but not proof that the explicit block-group
+    step factory was selected.
+- Change:
+  - Added an explicit
+    `expert_chunked_packed_master_fsdp_streaming_block_group_value_grad_muonh_update_step_factory(...)`.
+  - Updated `expert_chunked_packed_master_grad_muonh_update_step_factory_for_bench(...)`
+    to select the block-group factory before the generic value+grad fallback.
+  - Updated the block-group lowering test to use the same dispatch factory as
+    the launcher, so this cannot silently regress back to the generic path.
+- Validation:
+  ```bash
+  python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py
+  uv run pytest \
+    experiments/grug/moe/test_muon_update_bench.py::test_muon_master_bank_block_group_consumer_matches_chunk_consumer_numerically \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_block_group_value_grad_muonh_update_lowers_with_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_lowers_with_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status -q
+  ```
+  Result: `4 passed`.
+- Run:
+  ```bash
+  unset XLA_FLAGS
+  RUN_ID="MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGBLOCKGROUPVALUEGRAD-MUONH-UPDATE-DISPATCHFIX-N4-cw-$(date -u +%Y%m%d-%H%M%S)" \
+    MUON_BENCH_TARGET=iris \
+    MUON_BENCH_PROFILE=layer-chunked-packed-master-streaming-block-group-value-grad-muonh-update-r4e8-l26 \
+    MUON_BENCH_TRACKER=wandb \
+    MUON_BENCH_WANDB=true \
+    MUON_BENCH_WRITE_COMPILED_HLO=true \
+    MUON_BENCH_MODE=both \
+    MUON_BENCH_NS_COMPUTE_DTYPE=bf16 \
+    bash scratch/muon_update_bench_fast_loop.sh
+  ```
+- Job:
+  - Parent: `/dlwh/iris-run-job-20260621-142948`.
+  - Child/run id:
+    `MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGBLOCKGROUPVALUEGRAD-MUONH-UPDATE-DISPATCHFIX-N4-cw-20260621-142945`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGBLOCKGROUPVALUEGRAD-MUONH-UPDATE-DISPATCHFIX-N4-cw-20260621-142945-86ef6a`.
+  - W&B:
+    `marin-community/marin_moe/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGBLOCKGROUPVALUEGRAD-MUONH-UPDATE-DISPATCHFIX-N4-cw-20260621-142945`.
+- Result:
+  - Parent and child succeeded; `4/4` child tasks succeeded.
+  - Timing: median `0.441686949s`, mean `0.441662444s`,
+    min `0.441160213s` on task 0; other tasks reported matching medians
+    around `0.4418-0.4419s`.
+  - Lowered HLO: `all_gather=0`, `all_to_all=0`, `all_reduce=0`,
+    `reduce_scatter=0`, `dot_general=256`.
+  - Compiled HLO: `all_gather=14`, `all_to_all=0`, `all_reduce=0`,
+    `reduce_scatter=0`, `gpu_gemm_custom_call=313`, `custom_call=630`.
+  - Peak HBM: `40.239275541 GiB`.
+  - Estimated throughput: median `5919.57 TFLOP/s`, `18.70%` H100 bf16 peak.
+- Interpretation:
+  - This confirms the positive conclusion after fixing the dispatch: the
+    explicit block-group trainer boundary is not slower than the fast chunk
+    wrapper under normal GPU XLA settings.
+  - The actual remaining gap is no longer the harness boundary. It is moving
+    this pattern into the trainer without accidentally rebuilding a full model
+    tree or adding an optimizer-time grouped-to-FSDP restore.
+
+### 2026-06-21 07:45 PDT - Added explicit MuonExpertState train-step harness boundary
+- Motivation:
+  - The working block-group harness still exposed `master_bank, momentum_bank`
+    as two loose arguments. That is easy to confuse with a normal
+    params-plus-opt-state path. The objective needs an optimizer-state-shaped
+    boundary where packed fp32 master and momentum are authoritative together.
+- Change:
+  - Added `MuonExpertState(master: MuonMasterBank, momentum: MuonMasterBank)`.
+  - Added `expert_muon_master_bank_block_group_train_step_factory(mesh, config)`.
+  - The returned step has the integration shape:
+    `loss, next_state = train_step(MuonExpertState, expert_inputs)`.
+  - Internally it calls the dispatch-fixed block-group value+grad path:
+    forward materializes bf16 FSDP block-group views, gradients flow back to the
+    packed master chunks, and MuonH updates packed fp32 master/momentum. It does
+    not produce an FSDP-shaped update tree.
+- Validation:
+  ```bash
+  python -m py_compile experiments/grug/moe/muon_update_bench.py experiments/grug/moe/test_muon_update_bench.py
+  uv run pytest \
+    experiments/grug/moe/test_muon_update_bench.py::test_muon_expert_state_block_group_train_step_keeps_authoritative_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_muon_master_bank_block_group_consumer_matches_chunk_consumer_numerically \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_block_group_value_grad_muonh_update_lowers_with_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_lowers_with_packed_state \
+    experiments/grug/moe/test_muon_update_bench.py::test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status -q
+  ```
+  Result: `5 passed`.
+- Interpretation:
+  - This is the cleanest current prototype boundary for trainer integration:
+    non-expert leaves can stay on the old optimizer path, while expert MuonH
+    state lives in `MuonExpertState` and is consumed through block-group
+    materialization at use sites.
+
+### 2026-06-21 10:08 PDT - Latency-hiding scheduler does not hide block-group materialization
+- Question:
+  - Can XLA GPU hide the remaining `14` compiled all-gathers in the
+    dispatch-fixed R4 block-group packed-master value+grad harness with only
+    `--xla_gpu_enable_latency_hiding_scheduler=true`?
+- Run:
+  ```bash
+  RUN_ID="MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGBLOCKGROUPVALUEGRAD-MUONH-UPDATE-LHS-N4-cw-$(date -u +%Y%m%d-%H%M%S)" \
+    MUON_BENCH_TARGET=iris \
+    MUON_BENCH_PROFILE=layer-chunked-packed-master-streaming-block-group-value-grad-muonh-update-r4e8-l26 \
+    MUON_BENCH_TRACKER=wandb \
+    MUON_BENCH_WANDB=true \
+    MUON_BENCH_WRITE_COMPILED_HLO=true \
+    MUON_BENCH_MODE=both \
+    MUON_BENCH_NS_COMPUTE_DTYPE=bf16 \
+    XLA_FLAGS='--xla_gpu_enable_latency_hiding_scheduler=true' \
+    bash scratch/muon_update_bench_fast_loop.sh
+  ```
+- Job:
+  - Parent: `/dlwh/iris-run-job-20260621-170510`.
+  - Child/run id:
+    `MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGBLOCKGROUPVALUEGRAD-MUONH-UPDATE-LHS-N4-cw-20260621-170507`.
+  - Output prefix:
+    `s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/muon-update-bench/MUON-BENCH-D2560-L26-R4E8-LAYERCHUNKEDPACKEDMASTER-STREAMINGBLOCKGROUPVALUEGRAD-MUONH-UPDATE-LHS-N4-cw-20260621-170507-e7ef55`.
+- Result:
+  - Parent and child succeeded.
+  - Timing: median `0.440192583s`, mean `0.440538783s`, min
+    `0.439885909s`.
+  - Lowered HLO: `all_gather=0`, `all_to_all=0`, `all_reduce=0`,
+    `reduce_scatter=0`, `dot_general=256`.
+  - Compiled HLO: `all_gather=14`, `all_to_all=0`, `all_reduce=0`,
+    `reduce_scatter=0`, `gpu_gemm_custom_call=334`, `custom_call=630`.
+  - Peak HBM: `40.239275541 GiB`.
+- Comparison:
+  - Baseline dispatch-fixed R4 block-group path without the flag: median
+    `0.441686949s`, compiled `all_gather=14`, HBM `40.239275541 GiB`.
+  - LHS changes runtime by only about `0.3%`, which is within noise for this
+    harness, and increases compiled GPU GEMM custom calls from `313` to `334`.
+- Interpretation:
+  - The remaining `~0.16s` gap versus the zero-collective grouped-view grad
+    path is not fixed by the latency-hiding scheduler in the current harness
+    schedule.
+  - The `14` all-gathers are the model-facing packed-master-to-FSDP
+    materialization: `7` padded layer chunks times `w_gate_up`/`w_down`.
+    Hiding them will require an explicit schedule/API change, such as
+    prefetching block-group slabs ahead of use in the real trainer, or avoiding
+    the FSDP view by making the expert MLP consume the grouped representation
+    directly.

@@ -41,7 +41,7 @@ OUTPUT_PROJ_SHARDING="${MAY_OUTPUT_PROJ_SHARDING:-lm_head}"
 OPTIMIZER="${MAY_OPTIMIZER:-muonh}"
 MUON_BACKEND_STEPS="${MAY_MUON_BACKEND_STEPS:-5}"
 MUON_ORTHOGONALIZATION_LAYOUT="${MAY_MUON_ORTHOGONALIZATION_LAYOUT:-stack_batch_sharded}"
-MUON_MAX_GROUPED_STACK_SIZE="${MAY_MUON_MAX_GROUPED_STACK_SIZE:-256}"
+MUON_MAX_GROUPED_STACK_SIZE="${MAY_MUON_MAX_GROUPED_STACK_SIZE:-}"
 MUON_NS_COMPUTE_DTYPE="${MAY_MUON_NS_COMPUTE_DTYPE:-input}"
 MUON_NESTEROV="${MAY_MUON_NESTEROV:-true}"
 ASSERT_OPTIMIZER_SHARDING="${MAY_ASSERT_OPTIMIZER_SHARDING:-true}"
@@ -50,7 +50,7 @@ EXPERT_3D_OPTIMIZER="${MAY_EXPERT_3D_OPTIMIZER:-muonh}"
 ORDINARY_2D_OPTIMIZER="${MAY_ORDINARY_2D_OPTIMIZER:-muonh}"
 EXPERT_GROUPED_MUONH_GROUP_SIZE="${MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE:-}"
 EXPERT_GROUPED_MUONH_PACKED_ENTRY="${MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY:-true}"
-EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE="${MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE:-false}"
+EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE="${MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE:-true}"
 EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES="${MAY_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES:-false}"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 LIVE_PARAM_MODE="param"
@@ -127,7 +127,8 @@ Options:
   --muon-orthogonalization-layout MODE
                             MAY_MUON_ORTHOGONALIZATION_LAYOUT: stack_batch_sharded or vmap_replicated (default: stack_batch_sharded).
   --muon-max-grouped-stack-size N
-                            MAY_MUON_MAX_GROUPED_STACK_SIZE for grouped Muon (default: 256).
+                            MAY_MUON_MAX_GROUPED_STACK_SIZE for grouped Muon
+                            (default: 8 for grouped_muonh packed-bank compute, otherwise 256).
   --muon-ns-compute-dtype DTYPE
                             MAY_MUON_NS_COMPUTE_DTYPE: input, bf16, bfloat16, fp32, float32, fp16, or float16 (default: input).
   --muon-nesterov BOOL      MAY_MUON_NESTEROV: true or false (default: true).
@@ -143,7 +144,7 @@ Options:
   --expert-grouped-muonh-packed-entry BOOL
                             MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY for grouped_muonh (default: true).
   --expert-grouped-muonh-packed-bank-compute BOOL
-                            MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE keeps packed banks through grouped_muonh compute (default: false).
+                            MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE keeps packed banks through grouped_muonh compute (default: true).
   --expert-grouped-muonh-chunk-local-boundaries BOOL
                             MAY_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES experimental grouped_muonh boundary mode (default: false).
   --mp POLICY               MAY_MP policy string.
@@ -486,6 +487,14 @@ case "$ORDINARY_2D_OPTIMIZER" in
         exit 1
         ;;
 esac
+
+if [ -z "$MUON_MAX_GROUPED_STACK_SIZE" ]; then
+    if [ "$EXPERT_3D_OPTIMIZER" = "grouped_muonh" ] && [ "$EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE" = true ]; then
+        MUON_MAX_GROUPED_STACK_SIZE=8
+    else
+        MUON_MAX_GROUPED_STACK_SIZE=256
+    fi
+fi
 
 if [ -f "$ENV_FILE" ] || [ "$ENV_FILE_EXPLICIT" = true ]; then
     R2_EXPORTS="$("${REPO_ROOT}/scripts/iris/cloudflare_r2_env.sh" "$ENV_FILE")"

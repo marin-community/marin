@@ -474,7 +474,7 @@ def _grouped_muonh_packed_entry_banks(chunks):
     return banks, chunk_info
 
 
-def _grouped_muonh_packed_entry_bank_records(chunks):
+def _grouped_muonh_packed_entry_bank_records(chunks, *, preserve_chunk_padding: bool = True):
     records_by_key: dict[tuple[tuple[int, ...], str, str], list[tuple[int, list[Any], int, int]]] = {}
     for chunk_index, entry_chunk in enumerate(chunks):
         key = _grouped_muonh_entry_key(entry_chunk)
@@ -486,13 +486,30 @@ def _grouped_muonh_packed_entry_bank_records(chunks):
     chunk_info = {}
     for key, records in records_by_key.items():
         entries = tuple(entry for _, entry_chunk, _, _ in records for entry in entry_chunk)
-        padded_size = sum(record[3] for record in records)
+        if preserve_chunk_padding:
+            padded_size = sum(record[3] for record in records)
+        else:
+            padded_size = _grouped_muonh_chunk_padded_size(entries)
         bank_records.append((key, entries, padded_size))
         offset = 0
         for chunk_index, entry_chunk, valid_size, chunk_padded_size in records:
             chunk_info[chunk_index] = (key, offset, valid_size, chunk_padded_size, entry_chunk)
             offset += chunk_padded_size
     return tuple(bank_records), chunk_info
+
+
+def _grouped_muonh_compute_bank_records(chunks, *, max_grouped_stack_size: int):
+    records_by_key: dict[tuple[tuple[int, ...], str, str], list[Any]] = {}
+    for entry_chunk in chunks:
+        key = _grouped_muonh_entry_key(entry_chunk)
+        records_by_key.setdefault(key, []).extend(entry_chunk)
+
+    bank_records = []
+    for key, entries in records_by_key.items():
+        for bank_start in range(0, len(entries), max_grouped_stack_size):
+            bank_entries = tuple(entries[bank_start : bank_start + max_grouped_stack_size])
+            bank_records.append((key, bank_entries, _grouped_muonh_chunk_padded_size(bank_entries)))
+    return tuple(bank_records)
 
 
 def _init_grouped_muonh_trace_groups(
@@ -513,9 +530,8 @@ def _init_grouped_muonh_trace_groups(
     )
     if packed_entry_boundary and packed_bank_compute and not chunk_local_boundaries:
         trace_banks = []
-        for entry_chunk in chunks:
-            entries = tuple(entry_chunk)
-            padded_size = _grouped_muonh_chunk_padded_size(entry_chunk)
+        bank_records = _grouped_muonh_compute_bank_records(chunks, max_grouped_stack_size=max_grouped_stack_size)
+        for _, entries, padded_size in bank_records:
             with jax.named_scope("grouped_muonh/init_grouped_trace_bank"):
                 trace_banks.append(_packed_grouped_muonh_entry_bank(entries, value_index=1, padded_size=padded_size))
         return tuple(trace_banks)
@@ -765,7 +781,6 @@ def _packed_grouped_muonh_updates_to_fsdp_leaves(
 
     mesh = param_sharding.mesh
     group_axis = _live_group_axis(mesh, target_spec[0])
-    group_axis_names = group_axis if isinstance(group_axis, tuple) else (group_axis,) if group_axis else ()
     data_axis = None
     for axis_index, axis_spec in enumerate(param_sharding.spec, start=1):
         if _axis_spec_contains(axis_spec, "data"):
@@ -773,7 +788,6 @@ def _packed_grouped_muonh_updates_to_fsdp_leaves(
             break
 
     data_axis_size = _mesh_axis_size(mesh, "data")
-    replica_axis_size = _mesh_axis_size(mesh, REPLICA_DCN_AXIS)
     if data_axis is not None and any(update.shape[data_axis] % data_axis_size != 0 for update in grouped_updates):
         restored = []
         for grouped_update, valid_size in zip(grouped_updates, valid_sizes, strict=True):
@@ -794,28 +808,15 @@ def _packed_grouped_muonh_updates_to_fsdp_leaves(
     output_spec = param_sharding.spec
 
     def restore_bank(local_update):
-        gathered_group_axis = False
-        if data_axis is not None and data_axis_size > 1 and "data" in group_axis_names:
-            with jax.named_scope("grouped_muonh/packed_restore/data_a2a_to_fsdp"):
-                local_update = lax.all_to_all(
-                    local_update,
-                    axis_name="data",
-                    split_axis=data_axis,
-                    concat_axis=0,
-                    tiled=True,
-                )
-        else:
-            if data_axis is not None and data_axis_size > 1:
+        if data_axis is not None and data_axis_size > 1:
+            with jax.named_scope("grouped_muonh/packed_restore/slice_data_axis_to_fsdp"):
                 data_index = lax.axis_index("data")
                 local_axis_size = local_update.shape[data_axis] // data_axis_size
                 start = data_index * local_axis_size
                 local_update = lax.dynamic_slice_in_dim(local_update, start, local_axis_size, axis=data_axis)
-            if group_axis is not None:
+        if group_axis is not None:
+            with jax.named_scope("grouped_muonh/packed_restore/gather_group_axis_to_fsdp"):
                 local_update = lax.all_gather(local_update, axis_name=group_axis, axis=0, tiled=True)
-                gathered_group_axis = True
-        if not gathered_group_axis and replica_axis_size > 1 and REPLICA_DCN_AXIS in group_axis_names:
-            with jax.named_scope("grouped_muonh/packed_restore/replica_gather_to_fsdp"):
-                local_update = lax.all_gather(local_update, axis_name=REPLICA_DCN_AXIS, axis=0, tiled=True)
         if local_update.shape[0] != valid_total:
             local_update = local_update[:valid_total]
         return tuple(jnp.squeeze(update_part, axis=0) for update_part in jnp.split(local_update, valid_total, axis=0))
@@ -892,6 +893,7 @@ def _grouped_expert_muonh_updates_with_grouped_trace(
             steps=steps,
             muon_eps=muon_eps,
             coefficient_type=coefficient_type,
+            max_grouped_stack_size=max_grouped_stack_size,
             ns_compute_dtype=ns_compute_dtype,
         )
     if len(trace_groups) != len(chunks):
@@ -1018,15 +1020,17 @@ def _grouped_expert_muonh_updates_with_packed_banks(
     steps: int,
     muon_eps: float,
     coefficient_type: CoefficientType,
+    max_grouped_stack_size: int,
     ns_compute_dtype: str,
 ):
-    if len(trace_banks) != len(chunks):
-        raise ValueError(f"Grouped MuonH has {len(trace_banks)} trace banks but params require {len(chunks)} banks")
+    bank_records = _grouped_muonh_compute_bank_records(chunks, max_grouped_stack_size=max_grouped_stack_size)
+    if len(trace_banks) != len(bank_records):
+        raise ValueError(
+            f"Grouped MuonH has {len(trace_banks)} trace banks " f"but params require {len(bank_records)} banks"
+        )
 
     next_trace_banks = []
-    for trace_bank, entry_chunk in zip(trace_banks, chunks, strict=True):
-        entries = tuple(entry_chunk)
-        padded_size = _grouped_muonh_chunk_padded_size(entry_chunk)
+    for trace_bank, (_, entries, padded_size) in zip(trace_banks, bank_records, strict=True):
         with jax.named_scope("grouped_muonh/packed_bank_compute/entry_updates"):
             update_bank = _packed_grouped_muonh_entry_bank(entries, value_index=1, padded_size=padded_size)
         with jax.named_scope("grouped_muonh/packed_bank_compute/entry_params"):
@@ -1288,7 +1292,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     ns_compute_dtype: str = "input"
     expert_grouped_muonh_group_size: int | None = None
     expert_grouped_muonh_packed_entry: bool = True
-    expert_grouped_muonh_packed_bank_compute: bool = False
+    expert_grouped_muonh_packed_bank_compute: bool = True
     expert_grouped_muonh_chunk_local_boundaries: bool = False
 
     def build(self, num_train_steps):

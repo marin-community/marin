@@ -170,12 +170,82 @@ EXPERT_FSDP_GROUPED_PACKED_DATA_FIRST_PPERMUTE_APPLY_BOUNDARY_BENCH = (
 EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH = "expert_fsdp_grouped_packed_data_ppermute_apply_boundary"
 EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH = "expert_fsdp_packed_bank_a2a_apply_boundary"
 EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH = "expert_fsdp_packed_bank_direct_apply_boundary"
+EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH = "expert_fsdp_packed_bank_slice_first_apply_boundary"
+EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH = (
+    "expert_fsdp_packed_bank_slice_first_direct_apply_boundary"
+)
 EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH = "expert_fsdp_grads_to_grouped_chunks"
 EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH = "expert_fsdp_grads_to_packed_grouped_chunks"
 EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH = "expert_fsdp_grads_to_explicit_packed_grouped_chunks"
 EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH = "expert_fsdp_grads_to_explicit_packed_grouped_bank"
 EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH = "expert_fsdp_packed_bank_muonh_apply"
+EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH = "expert_fsdp_packed_bank_muonh_direct_apply"
 EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH = "expert_fsdp_packed_bank_muonh_update_only"
+EXPERT_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH = "expert_packed_master_muonh_update_only"
+EXPERT_PACKED_MASTER_MUONH_UPDATE_CHECKSUM_BENCH = "expert_packed_master_muonh_update_checksum"
+EXPERT_PACKED_MASTER_MOMENTUM_DIRECTION_BENCH = "expert_packed_master_momentum_direction"
+EXPERT_PACKED_MASTER_MOMENTUM_CHECKSUM_BENCH = "expert_packed_master_momentum_checksum"
+EXPERT_PACKED_MASTER_NS_CHECKSUM_BENCH = "expert_packed_master_ns_checksum"
+EXPERT_PACKED_MASTER_NS_HYPERBALL_CHECKSUM_BENCH = "expert_packed_master_ns_hyperball_checksum"
+EXPERT_PACKED_MASTER_NS_HYPERBALL_APPLY_CHECKSUM_BENCH = "expert_packed_master_ns_hyperball_apply_checksum"
+EXPERT_PACKED_MASTER_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH = "expert_packed_master_direction_ns_hyperball_checksum"
+EXPERT_PACKED_MASTER_CHUNKED_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH = (
+    "expert_packed_master_chunked_direction_ns_hyperball_checksum"
+)
+EXPERT_PACKED_MASTER_CHUNKED_MUONH_UPDATE_ONLY_BENCH = "expert_packed_master_chunked_muonh_update_only"
+EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH = "expert_chunked_packed_master_muonh_update_only"
+EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH = "expert_packed_master_muonh_consumer"
+EXPERT_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH = "expert_packed_master_fsdp_layer_consumer"
+EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH = "expert_packed_master_fsdp_sequential_consumer"
+EXPERT_PACKED_MASTER_FSDP_SLAB_CONSUMER_BENCH = "expert_packed_master_fsdp_slab_consumer"
+EXPERT_PACKED_MASTER_FSDP_BULK_CONSUMER_BENCH = "expert_packed_master_fsdp_bulk_consumer"
+EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH = "expert_chunked_packed_master_fsdp_layer_consumer"
+EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH = "expert_chunked_packed_master_fsdp_sequential_consumer"
+EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH = (
+    "expert_layer_chunked_packed_master_fsdp_sequential_consumer"
+)
+EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_BENCH = "expert_chunked_packed_master_fsdp_layer_grad"
+EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH = (
+    "expert_chunked_packed_master_fsdp_layer_grad_muonh_update"
+)
+EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_UPDATE_BENCH = (
+    "expert_chunked_packed_master_fsdp_sequential_grad_muonh_update"
+)
+EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_CHECKSUM_BENCH = (
+    "expert_chunked_packed_master_fsdp_sequential_grad_muonh_checksum"
+)
+EXPERT_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH = (
+    "expert_chunked_packed_master_fsdp_streaming_grad_muonh_checksum"
+)
+EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH = (
+    "expert_layer_chunked_packed_master_fsdp_streaming_grad_muonh_checksum"
+)
+EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_UPDATE_BENCH = (
+    "expert_layer_chunked_packed_master_fsdp_streaming_grad_muonh_update"
+)
+EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_VALUE_GRAD_MUONH_UPDATE_BENCH = (
+    "expert_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update"
+)
+EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_LAYERWISE_VALUE_GRAD_MUONH_UPDATE_BENCH = (
+    "expert_layer_chunked_packed_master_fsdp_streaming_layerwise_value_grad_muonh_update"
+)
+EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH = (
+    "expert_layer_chunked_packed_master_fsdp_streaming_block_group_value_grad_muonh_update"
+)
+EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH = (
+    "expert_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss"
+)
+EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH = (
+    "expert_layer_chunked_packed_master_grouped_grad_muonh_update"
+)
+EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_BENCH = "expert_packed_master_fsdp_sequential_grad"
+EXPERT_PACKED_MASTER_FSDP_SLAB_GRAD_BENCH = "expert_packed_master_fsdp_slab_grad"
+EXPERT_PACKED_MASTER_FSDP_BULK_GRAD_BENCH = "expert_packed_master_fsdp_bulk_grad"
+EXPERT_PACKED_MASTER_BULK_GRAD_MUONH_UPDATE_BENCH = "expert_packed_master_bulk_grad_muonh_update"
+EXPERT_PACKED_MASTER_BULK_GRAD_SPLIT_MUONH_UPDATE_BENCH = "expert_packed_master_bulk_grad_split_muonh_update"
+EXPERT_PACKED_MASTER_MUONH_FSDP_SEQUENTIAL_CONSUMER_BENCH = "expert_packed_master_muonh_fsdp_sequential_consumer"
+EXPERT_PACKED_MASTER_MUONH_FSDP_SLAB_CONSUMER_BENCH = "expert_packed_master_muonh_fsdp_slab_consumer"
+EXPERT_PACKED_MASTER_MUONH_FSDP_BULK_CONSUMER_BENCH = "expert_packed_master_muonh_fsdp_bulk_consumer"
 EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH = "expert_fsdp_packed_bank_direction_apply"
 EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH = "expert_fsdp_grouped_updates_muonh_updates"
 EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH = "expert_fsdp_grouped_updates_muonh_apply"
@@ -249,12 +319,54 @@ BENCH_KINDS = (
     EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
     EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
     EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_UPDATE_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_MOMENTUM_DIRECTION_BENCH,
+    EXPERT_PACKED_MASTER_MOMENTUM_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_NS_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_NS_HYPERBALL_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_NS_HYPERBALL_APPLY_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_CHUNKED_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_CHUNKED_MUONH_UPDATE_ONLY_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_SLAB_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_BULK_CONSUMER_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_CHECKSUM_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_VALUE_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_LAYERWISE_VALUE_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_SLAB_GRAD_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_BULK_GRAD_BENCH,
+    EXPERT_PACKED_MASTER_BULK_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_PACKED_MASTER_BULK_GRAD_SPLIT_MUONH_UPDATE_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_FSDP_SLAB_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_FSDP_BULK_CONSUMER_BENCH,
     EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
@@ -325,12 +437,54 @@ NS4D_DATA_SHARDED_BENCHES = (
     EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
     EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
     EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_UPDATE_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_MOMENTUM_DIRECTION_BENCH,
+    EXPERT_PACKED_MASTER_MOMENTUM_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_NS_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_NS_HYPERBALL_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_NS_HYPERBALL_APPLY_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_CHUNKED_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_CHUNKED_MUONH_UPDATE_ONLY_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_SLAB_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_BULK_CONSUMER_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_CHECKSUM_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_VALUE_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_LAYERWISE_VALUE_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_SLAB_GRAD_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_BULK_GRAD_BENCH,
+    EXPERT_PACKED_MASTER_BULK_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_PACKED_MASTER_BULK_GRAD_SPLIT_MUONH_UPDATE_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_FSDP_SLAB_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_FSDP_BULK_CONSUMER_BENCH,
     EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
@@ -385,7 +539,10 @@ GROUPED_APPLY_BOUNDARY_BENCHES = (
     EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
     EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
     EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
@@ -438,9 +595,109 @@ GROUPED_EXPERT_PATHS = (
     "blocks[*].mlp.expert_mlp.w_gate_up",
     "blocks[*].mlp.expert_mlp.w_down",
 )
+UNFUSED_GROUPED_EXPERT_PATHS = (
+    "blocks[*].mlp.expert_mlp.w_gate",
+    "blocks[*].mlp.expert_mlp.w_up",
+    "blocks[*].mlp.expert_mlp.w_down",
+)
 DEFAULT_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT = 1
 DEFAULT_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS = 0
 DEFAULT_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS_PER_EXPERT = 0
+
+PACKED_MASTER_FSDP_CONSUMER_BENCHES = (
+    EXPERT_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_SLAB_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_BULK_CONSUMER_BENCH,
+)
+CHUNKED_PACKED_MASTER_FSDP_CONSUMER_BENCHES = (
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+)
+CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES = (EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_BENCH,)
+CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES = (
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_CHECKSUM_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_VALUE_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_LAYERWISE_VALUE_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH,
+)
+CHUNKED_PACKED_MASTER_GRAD_MUONH_SCALAR_BENCHES = (
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_CHECKSUM_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH,
+)
+
+
+def is_chunked_packed_master_streaming_value_grad_bench(bench_kind: str) -> bool:
+    return bench_kind in (
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_VALUE_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_LAYERWISE_VALUE_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH,
+    )
+
+
+PACKED_MASTER_FSDP_GRAD_BENCHES = (
+    EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_SLAB_GRAD_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_BULK_GRAD_BENCH,
+)
+PACKED_MASTER_GRAD_MUONH_BENCHES = (
+    EXPERT_PACKED_MASTER_BULK_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_PACKED_MASTER_BULK_GRAD_SPLIT_MUONH_UPDATE_BENCH,
+)
+PACKED_MASTER_MUONH_FSDP_CONSUMER_BENCHES = (
+    EXPERT_PACKED_MASTER_MUONH_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_FSDP_SLAB_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_FSDP_BULK_CONSUMER_BENCH,
+)
+PACKED_MASTER_MUONH_CONSUMER_BENCHES = (
+    EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+    *PACKED_MASTER_MUONH_FSDP_CONSUMER_BENCHES,
+)
+PACKED_MASTER_MUONH_UPDATE_ONLY_BENCHES = (
+    EXPERT_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_UPDATE_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_MOMENTUM_DIRECTION_BENCH,
+    EXPERT_PACKED_MASTER_MOMENTUM_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_NS_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_NS_HYPERBALL_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_NS_HYPERBALL_APPLY_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_CHUNKED_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_CHUNKED_MUONH_UPDATE_ONLY_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH,
+)
+PACKED_MASTER_MUONH_SCALAR_DIAGNOSTIC_BENCHES = (
+    EXPERT_PACKED_MASTER_MUONH_UPDATE_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_MOMENTUM_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_NS_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_NS_HYPERBALL_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_NS_HYPERBALL_APPLY_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH,
+    EXPERT_PACKED_MASTER_CHUNKED_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH,
+)
+PACKED_MASTER_MUONH_UPDATE_BENCHES = (
+    *PACKED_MASTER_MUONH_UPDATE_ONLY_BENCHES,
+    *PACKED_MASTER_MUONH_CONSUMER_BENCHES,
+    *PACKED_MASTER_GRAD_MUONH_BENCHES,
+    *CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES,
+)
+PACKED_MASTER_METADATA_BENCHES = (
+    *PACKED_MASTER_MUONH_UPDATE_BENCHES,
+    *PACKED_MASTER_FSDP_CONSUMER_BENCHES,
+    *CHUNKED_PACKED_MASTER_FSDP_CONSUMER_BENCHES,
+    *CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES,
+    *PACKED_MASTER_FSDP_GRAD_BENCHES,
+)
 FULL_PRODUCTION_MUONH_PATHS = (
     "ordinary_blocks[*].attn.w_q",
     "ordinary_blocks[*].attn.w_k",
@@ -496,9 +753,92 @@ class BenchConfig:
     expert_grouped_muonh_packed_entry: bool = False
     expert_grouped_muonh_packed_bank_compute: bool = False
     expert_grouped_muonh_chunk_local_boundaries: bool = False
+    unfused_expert_gate_up: bool = False
     grouped_expert_consumer_tokens_per_expert: int = DEFAULT_GROUPED_EXPERT_CONSUMER_TOKENS_PER_EXPERT
     grouped_expert_consumer_chunk_tokens: int = DEFAULT_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS
     grouped_expert_consumer_chunk_tokens_per_expert: int = DEFAULT_GROUPED_EXPERT_CONSUMER_CHUNK_TOKENS_PER_EXPERT
+    packed_master_layer_chunk_size: int = 0
+
+
+@dataclass(frozen=True)
+class MuonMasterBankLeafMetadata:
+    name: str
+    group_index: int
+    layer_start: int
+    layer_stop: int
+    packed_path: str
+    model_tree_path: str
+    leaf_shape: tuple[int, int, int]
+    packed_shape: tuple[int, int, int, int]
+    packed_sharding_spec: str | None
+    target_fsdp_sharding_spec: str | None
+
+
+@dataclass(frozen=True)
+class MuonMasterBankMetadata:
+    bench_kind: str
+    master_dtype: str
+    momentum_dtype: str
+    consumer_dtype: str
+    group_axis: str | None
+    group_sizes: tuple[int, ...]
+    leaves: tuple[MuonMasterBankLeafMetadata, ...]
+
+
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True)
+class MuonMasterBank:
+    """Authoritative packed MuonH state for expert weights.
+
+    `chunks` is the JAX-visible payload. Metadata is static PyTree auxiliary
+    data that describes how packed slices map back to logical expert leaves and
+    target FSDP use-site sharding.
+    """
+
+    chunks: tuple[Any, ...]
+    metadata: MuonMasterBankMetadata
+
+    def tree_flatten(self):
+        return (self.chunks,), self.metadata
+
+    @classmethod
+    def tree_unflatten(cls, metadata: MuonMasterBankMetadata, children):
+        (chunks,) = children
+        return cls(chunks=tuple(chunks), metadata=metadata)
+
+    def __getitem__(self, key: str) -> Any:
+        if key == "chunks":
+            return self.chunks
+        raise KeyError(key)
+
+
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True)
+class MuonExpertState:
+    """Authoritative MuonH optimizer state for expert weights."""
+
+    master: MuonMasterBank
+    momentum: MuonMasterBank
+
+    def tree_flatten(self):
+        return (self.master, self.momentum), None
+
+    @classmethod
+    def tree_unflatten(cls, _metadata, children):
+        master, momentum = children
+        return cls(master=master, momentum=momentum)
+
+
+def chunked_bank_chunks(bank: Any) -> tuple[Any, ...]:
+    if isinstance(bank, MuonMasterBank):
+        return bank.chunks
+    return bank["chunks"]
+
+
+def replace_chunked_bank(bank: Any, chunks: tuple[Any, ...]) -> Any:
+    if isinstance(bank, MuonMasterBank):
+        return MuonMasterBank(chunks=chunks, metadata=bank.metadata)
+    return {"chunks": chunks}
 
 
 @dataclass(frozen=True)
@@ -671,6 +1011,14 @@ def create_mesh(replica_axis: int, data_axis: int, expert_axis: int, model_axis:
 
 
 def create_abstract_mesh(config: BenchConfig) -> AbstractMesh:
+    expected_devices = config.replica_axis * config.data_axis * config.expert_axis * config.model_axis
+    devices = np.asarray(jax.devices())
+    if devices.size == expected_devices:
+        return Mesh(
+            devices.reshape((config.replica_axis, config.data_axis, config.expert_axis, config.model_axis)),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+        ).abstract_mesh
     return AbstractMesh(
         axis_sizes=(config.replica_axis, config.data_axis, config.expert_axis, config.model_axis),
         axis_names=("replica_dcn", "data", "expert", "model"),
@@ -690,10 +1038,19 @@ def expert_param_sharding(mesh: Mesh) -> NamedSharding:
 
 def expert_fsdp_param_sharding(mesh: Mesh, name: str) -> NamedSharding:
     """Production-like Grug MoE expert parameter sharding for model_axis=1."""
-    if name == "w_gate_up":
+    if expert_gate_up_like_name(name):
         return NamedSharding(mesh, P("expert", "data", "model"))
-    if name == "w_down":
+    if expert_down_name(name):
         return NamedSharding(mesh, P("expert", "model", "data"))
+    raise ValueError(f"Unknown expert parameter name {name!r}.")
+
+
+def expert_fsdp_slab_param_sharding(mesh: Mesh, name: str) -> NamedSharding:
+    """FSDP sharding for a stack of expert leaves with a replicated slab axis."""
+    if expert_gate_up_like_name(name):
+        return NamedSharding(mesh, P(None, "expert", "data", "model"))
+    if expert_down_name(name):
+        return NamedSharding(mesh, P(None, "expert", "model", "data"))
     raise ValueError(f"Unknown expert parameter name {name!r}.")
 
 
@@ -702,10 +1059,42 @@ def require_model_axis_one(config: BenchConfig) -> None:
         raise ValueError(f"Muon update benchmark is single-node/model_axis=1 only, got model_axis={config.model_axis}.")
 
 
+def expert_leaf_name(name: str) -> str:
+    return name.rsplit(".", 1)[-1]
+
+
+def expert_gate_up_like_name(name: str) -> bool:
+    return expert_leaf_name(name) in ("w_gate_up", "w_gate", "w_up")
+
+
+def expert_down_name(name: str) -> bool:
+    return expert_leaf_name(name) == "w_down"
+
+
+def grouped_expert_paths(config: BenchConfig) -> tuple[str, ...]:
+    return UNFUSED_GROUPED_EXPERT_PATHS if config.unfused_expert_gate_up else GROUPED_EXPERT_PATHS
+
+
+def full_production_muonh_paths(config: BenchConfig) -> tuple[str, ...]:
+    return (*FULL_PRODUCTION_MUONH_PATHS[: -len(GROUPED_EXPERT_PATHS)], *grouped_expert_paths(config))
+
+
 def synthetic_shapes(config: BenchConfig) -> dict[str, tuple[int, int, int]]:
+    if config.unfused_expert_gate_up:
+        return {
+            "w_gate": (config.num_experts, config.hidden_dim, config.intermediate_dim),
+            "w_up": (config.num_experts, config.hidden_dim, config.intermediate_dim),
+            "w_down": (config.num_experts, config.intermediate_dim, config.hidden_dim),
+        }
     return {
         "w_gate_up": (config.num_experts, config.hidden_dim, 2 * config.intermediate_dim),
         "w_down": (config.num_experts, config.intermediate_dim, config.hidden_dim),
+    }
+
+
+def ns_logical_matrix_shapes(config: BenchConfig) -> dict[str, tuple[int, int]]:
+    return {
+        name: (min(shape[-2], shape[-1]), max(shape[-2], shape[-1])) for name, shape in synthetic_shapes(config).items()
     }
 
 
@@ -895,6 +1284,10 @@ def ns4d_result_sharding(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Na
         EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH,
         EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
         EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
+        *PACKED_MASTER_MUONH_UPDATE_ONLY_BENCHES,
+        *PACKED_MASTER_MUONH_FSDP_CONSUMER_BENCHES,
+        *PACKED_MASTER_FSDP_CONSUMER_BENCHES,
+        *PACKED_MASTER_GRAD_MUONH_BENCHES,
     ):
         return None
     if bench_kind == NS4D_DATA_RESHARD_RESTORE_BENCH:
@@ -925,6 +1318,8 @@ def ns4d_result_sharding(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Na
         EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_TRACE_MUONH_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
@@ -1009,6 +1404,14 @@ def grouped_expert_group_count(config: BenchConfig) -> int:
     return len(grouped_expert_group_sizes(config))
 
 
+def grouped_expert_packed_bank_count_for_bench(config: BenchConfig, bench_kind: str) -> int:
+    return len(synthetic_shapes(config)) * len(grouped_expert_group_sizes_for_bench(config, bench_kind))
+
+
+def grouped_expert_packed_bank_count(config: BenchConfig) -> int:
+    return len(synthetic_shapes(config)) * len(grouped_expert_group_sizes(config))
+
+
 def grouped_expert_group_sizes(config: BenchConfig) -> tuple[int, ...]:
     group_size = ns4d_group_size(config)
     full_groups, remainder = divmod(config.layers, group_size)
@@ -1018,7 +1421,55 @@ def grouped_expert_group_sizes(config: BenchConfig) -> tuple[int, ...]:
     return tuple(sizes)
 
 
+def packed_master_layer_chunk_size(config: BenchConfig) -> int:
+    axis_size = max(1, ns4d_axis_size(config))
+    chunk_size = config.packed_master_layer_chunk_size or axis_size
+    if chunk_size < 1:
+        raise ValueError(f"packed_master_layer_chunk_size must be >= 1 or 0 for default; got {chunk_size}.")
+    if chunk_size % axis_size != 0:
+        raise ValueError(
+            "packed_master_layer_chunk_size must be divisible by the active NS sharding axis size; "
+            f"got chunk_size={chunk_size} and axis_size={axis_size}."
+        )
+    return chunk_size
+
+
+def chunked_packed_master_valid_group_sizes_for_bench(config: BenchConfig, bench_kind: str) -> tuple[int, ...]:
+    if bench_kind in (
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_VALUE_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_LAYERWISE_VALUE_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH,
+    ):
+        chunk_size = packed_master_layer_chunk_size(config)
+        full_chunks, remainder = divmod(config.layers, chunk_size)
+        sizes = [chunk_size] * full_chunks
+        if remainder:
+            sizes.append(remainder)
+        return tuple(sizes)
+    return grouped_expert_group_sizes(config)
+
+
 def grouped_expert_group_sizes_for_bench(config: BenchConfig, bench_kind: str) -> tuple[int, ...]:
+    if bench_kind in (
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_VALUE_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_LAYERWISE_VALUE_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH,
+    ):
+        chunk_size = packed_master_layer_chunk_size(config)
+        return tuple(
+            math.ceil(valid_size / chunk_size) * chunk_size
+            for valid_size in chunked_packed_master_valid_group_sizes_for_bench(config, bench_kind)
+        )
     sizes = grouped_expert_group_sizes(config)
     if bench_kind not in (
         EXPERT_GROUPED_LAYER_SLICE_BENCH,
@@ -1055,6 +1506,25 @@ def grouped_expert_group_sizes_for_bench(config: BenchConfig, bench_kind: str) -
         EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH,
+        *PACKED_MASTER_MUONH_UPDATE_ONLY_BENCHES,
+        *PACKED_MASTER_MUONH_CONSUMER_BENCHES,
+        EXPERT_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH,
+        EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+        EXPERT_PACKED_MASTER_FSDP_SLAB_CONSUMER_BENCH,
+        EXPERT_PACKED_MASTER_FSDP_BULK_CONSUMER_BENCH,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+        *CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES,
+        *CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES,
+        *PACKED_MASTER_FSDP_GRAD_BENCHES,
+        *PACKED_MASTER_GRAD_MUONH_BENCHES,
+        EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_DIRECT_APPLY_BENCH,
@@ -1075,6 +1545,53 @@ def grouped_expert_group_sizes_for_bench(config: BenchConfig, bench_kind: str) -
     if axis_size <= 1:
         return sizes
     return tuple(math.ceil(size / axis_size) * axis_size for size in sizes)
+
+
+def muon_master_bank_metadata(
+    config: BenchConfig,
+    bench_kind: str,
+    mesh: Mesh | AbstractMesh | None = None,
+) -> MuonMasterBankMetadata:
+    group_sizes = grouped_expert_group_sizes_for_bench(config, bench_kind)
+    shapes = synthetic_shapes(config)
+    packed_axis = sum(group_sizes)
+    packed_specs = (
+        synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind) if mesh is not None else None
+    )
+    leaves = []
+    layer_start = 0
+    for group_index, group_size in enumerate(group_sizes):
+        layer_stop = layer_start + group_size
+        for name, shape in shapes.items():
+            packed_sharding_spec = None
+            target_fsdp_sharding_spec = None
+            if mesh is not None:
+                packed_sharding_spec = sharding_spec_string(packed_specs["packed"][name].sharding)
+                target_fsdp_sharding_spec = sharding_spec_string(expert_fsdp_param_sharding(mesh, name))
+            leaves.append(
+                MuonMasterBankLeafMetadata(
+                    name=name,
+                    group_index=group_index,
+                    layer_start=layer_start,
+                    layer_stop=layer_stop,
+                    packed_path=f"packed.{name}[{layer_start}:{layer_stop}]",
+                    model_tree_path=f"blocks[{group_index}].mlp.expert_mlp.{name}",
+                    leaf_shape=shape,
+                    packed_shape=(packed_axis, *shape),
+                    packed_sharding_spec=packed_sharding_spec,
+                    target_fsdp_sharding_spec=target_fsdp_sharding_spec,
+                )
+            )
+        layer_start = layer_stop
+    return MuonMasterBankMetadata(
+        bench_kind=bench_kind,
+        master_dtype=str(jnp.dtype(jnp.float32)),
+        momentum_dtype=str(jnp.dtype(jnp.float32)),
+        consumer_dtype=config.dtype,
+        group_axis=ns4d_group_axis(config),
+        group_sizes=group_sizes,
+        leaves=tuple(leaves),
+    )
 
 
 def synthetic_grouped_expert_specs(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Any:
@@ -1099,8 +1616,12 @@ def synthetic_grouped_expert_specs(mesh: Mesh, config: BenchConfig, bench_kind: 
     }
 
 
-def synthetic_packed_grouped_expert_bank_specs(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Any:
-    dtype = dtype_from_name(config.dtype)
+def synthetic_packed_grouped_expert_bank_specs_for_dtype(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+    dtype: jnp.dtype,
+) -> Any:
     shapes = synthetic_shapes(config)
     packed_group_size = sum(grouped_expert_group_sizes_for_bench(config, bench_kind))
     sharding = grouped_expert_group_sharding(mesh, config, bench_kind, packed_group_size)
@@ -1114,6 +1635,59 @@ def synthetic_packed_grouped_expert_bank_specs(mesh: Mesh, config: BenchConfig, 
             for name, shape in shapes.items()
         }
     }
+
+
+def synthetic_packed_grouped_expert_bank_specs(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Any:
+    return synthetic_packed_grouped_expert_bank_specs_for_dtype(mesh, config, bench_kind, dtype_from_name(config.dtype))
+
+
+def synthetic_packed_grouped_expert_master_bank_specs(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Any:
+    return synthetic_packed_grouped_expert_bank_specs_for_dtype(mesh, config, bench_kind, jnp.float32)
+
+
+def synthetic_chunked_packed_grouped_expert_bank_specs_for_dtype(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+    dtype: jnp.dtype,
+) -> Any:
+    shapes = synthetic_shapes(config)
+    return {
+        "chunks": tuple(
+            {
+                "packed": {
+                    name: jax.ShapeDtypeStruct(
+                        (group_size, *shape),
+                        dtype,
+                        sharding=grouped_expert_group_sharding(mesh, config, bench_kind, group_size),
+                    )
+                    for name, shape in shapes.items()
+                }
+            }
+            for group_size in grouped_expert_group_sizes_for_bench(config, bench_kind)
+        )
+    }
+
+
+def synthetic_chunked_packed_grouped_expert_bank_specs(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Any:
+    return synthetic_chunked_packed_grouped_expert_bank_specs_for_dtype(
+        mesh,
+        config,
+        bench_kind,
+        dtype_from_name(config.dtype),
+    )
+
+
+def synthetic_chunked_packed_grouped_expert_master_bank_specs(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+) -> Any:
+    specs = synthetic_chunked_packed_grouped_expert_bank_specs_for_dtype(mesh, config, bench_kind, jnp.float32)
+    return MuonMasterBank(
+        chunks=specs["chunks"],
+        metadata=muon_master_bank_metadata(config, bench_kind, mesh),
+    )
 
 
 def synthetic_grouped_expert_consumer_input_specs(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Any:
@@ -1527,9 +2101,14 @@ def make_grouped_expert_array_tree(mesh: Mesh, config: BenchConfig, bench_kind: 
     }
 
 
-def make_packed_grouped_expert_bank_tree(mesh: Mesh, config: BenchConfig, bench_kind: str, seed: int) -> Any:
-    dtype = numpy_dtype_from_name(config.dtype)
-    specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+def make_packed_grouped_expert_bank_tree_for_dtype(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+    seed: int,
+    dtype: np.dtype,
+) -> Any:
+    specs = synthetic_packed_grouped_expert_bank_specs_for_dtype(mesh, config, bench_kind, jnp.dtype(dtype))
 
     def make_leaf(name: str, spec: jax.ShapeDtypeStruct) -> jax.Array:
         fill_value = np.asarray(((seed + 1) * (len(name) + 1)) % 17 + 1, dtype=np.float32)
@@ -1546,6 +2125,86 @@ def make_packed_grouped_expert_bank_tree(mesh: Mesh, config: BenchConfig, bench_
         return jax.make_array_from_callback(spec.shape, spec.sharding, callback)
 
     return {"packed": {name: make_leaf(name, spec) for name, spec in specs["packed"].items()}}
+
+
+def make_packed_grouped_expert_bank_tree(mesh: Mesh, config: BenchConfig, bench_kind: str, seed: int) -> Any:
+    return make_packed_grouped_expert_bank_tree_for_dtype(
+        mesh,
+        config,
+        bench_kind,
+        seed,
+        numpy_dtype_from_name(config.dtype),
+    )
+
+
+def make_packed_grouped_expert_master_bank_tree(mesh: Mesh, config: BenchConfig, bench_kind: str, seed: int) -> Any:
+    return make_packed_grouped_expert_bank_tree_for_dtype(
+        mesh,
+        config,
+        bench_kind,
+        seed,
+        np.dtype(np.float32),
+    )
+
+
+def make_chunked_packed_grouped_expert_bank_tree_for_dtype(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+    seed: int,
+    dtype: np.dtype,
+) -> Any:
+    specs = synthetic_chunked_packed_grouped_expert_bank_specs_for_dtype(mesh, config, bench_kind, jnp.dtype(dtype))
+
+    def make_leaf(chunk_index: int, name: str, spec: jax.ShapeDtypeStruct) -> jax.Array:
+        fill_value = np.asarray(((seed + 1) * (chunk_index + 1) * (len(name) + 1)) % 17 + 1, dtype=np.float32)
+        fill_value = fill_value / np.asarray(1000, dtype=np.float32)
+
+        def callback(index: tuple[slice, ...]) -> np.ndarray:
+            local_shape = []
+            for axis, axis_index in enumerate(index):
+                start = 0 if axis_index.start is None else axis_index.start
+                stop = spec.shape[axis] if axis_index.stop is None else axis_index.stop
+                local_shape.append(stop - start)
+            return np.full(local_shape, fill_value, dtype=dtype)
+
+        return jax.make_array_from_callback(spec.shape, spec.sharding, callback)
+
+    return {
+        "chunks": tuple(
+            {"packed": {name: make_leaf(chunk_index, name, spec) for name, spec in chunk["packed"].items()}}
+            for chunk_index, chunk in enumerate(specs["chunks"])
+        )
+    }
+
+
+def make_chunked_packed_grouped_expert_bank_tree(mesh: Mesh, config: BenchConfig, bench_kind: str, seed: int) -> Any:
+    return make_chunked_packed_grouped_expert_bank_tree_for_dtype(
+        mesh,
+        config,
+        bench_kind,
+        seed,
+        numpy_dtype_from_name(config.dtype),
+    )
+
+
+def make_chunked_packed_grouped_expert_master_bank_tree(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+    seed: int,
+) -> Any:
+    tree = make_chunked_packed_grouped_expert_bank_tree_for_dtype(
+        mesh,
+        config,
+        bench_kind,
+        seed,
+        np.dtype(np.float32),
+    )
+    return MuonMasterBank(
+        chunks=tree["chunks"],
+        metadata=muon_master_bank_metadata(config, bench_kind, mesh),
+    )
 
 
 def make_grouped_expert_consumer_input_tree(mesh: Mesh, config: BenchConfig, bench_kind: str, seed: int) -> Any:
@@ -1751,9 +2410,9 @@ def assert_expert_stack_sharding(tree: Any, expected_spec: P, label: str) -> Non
 
 
 def expected_expert_fsdp_spec(path: str) -> P:
-    if path == "w_gate_up" or path.endswith(".w_gate_up"):
+    if expert_gate_up_like_name(path):
         return P("expert", "data", "model")
-    if path == "w_down" or path.endswith(".w_down"):
+    if expert_down_name(path):
         return P("expert", "model", "data")
     raise AssertionError(f"Unknown expert FSDP leaf path {path!r}.")
 
@@ -1865,6 +2524,24 @@ def assert_packed_grouped_expert_bank_sharding(
     packed_group_size = sum(grouped_expert_group_sizes_for_bench(config, bench_kind))
     expected_spec = grouped_expert_group_sharding(mesh, config, bench_kind, packed_group_size).spec
     assert_ns4d_sharding(tree["packed"], expected_spec, label)
+
+
+def assert_chunked_packed_grouped_expert_bank_sharding(
+    tree: Any,
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+    label: str,
+) -> None:
+    if not isinstance(tree, MuonMasterBank) and (not isinstance(tree, dict) or "chunks" not in tree):
+        raise AssertionError(f"{label} expected a chunked packed grouped expert bank with a chunks field.")
+    for chunk_index, (chunk, group_size) in enumerate(
+        zip(chunked_bank_chunks(tree), grouped_expert_group_sizes_for_bench(config, bench_kind), strict=True)
+    ):
+        if not isinstance(chunk, dict) or "packed" not in chunk:
+            raise AssertionError(f"{label} chunk {chunk_index} expected a packed field.")
+        expected_spec = grouped_expert_group_sharding(mesh, config, bench_kind, group_size).spec
+        assert_ns4d_sharding(chunk["packed"], expected_spec, f"{label} chunk {chunk_index}")
 
 
 def assert_grouped_moe_consumer_sharding(
@@ -2246,6 +2923,2404 @@ def grouped_moe_mlp_consumer_step_factory(mesh: Mesh, config: BenchConfig):
     return update_step
 
 
+def packed_master_bank_to_grouped_expert_tree(config: BenchConfig, bench_kind: str, packed_bank):
+    """Rebuild grouped expert leaves from a packed master bank by slicing only.
+
+    This is the optimistic compiler-friendly stand-in for `rebuild_tree(master)`:
+    the authoritative fp32 master stays in packed NS layout, then forward sees a
+    bf16 grouped tree assembled from slices without an optimizer-boundary FSDP
+    restore.
+    """
+
+    metadata = muon_master_bank_metadata(config, bench_kind)
+    blocks = []
+    for group_index, group_size in enumerate(metadata.group_sizes):
+        expert_mlp = {}
+        for leaf_metadata in metadata.leaves:
+            if leaf_metadata.group_index != group_index:
+                continue
+            name = leaf_metadata.name
+            with jax.named_scope(f"muon_update_bench/packed_master/rebuild_tree/group_{group_index}/{name}/slice"):
+                expert_mlp[name] = lax.dynamic_slice_in_dim(
+                    packed_bank["packed"][name],
+                    leaf_metadata.layer_start,
+                    group_size,
+                    axis=0,
+                )
+        blocks.append({"mlp": {"expert_mlp": expert_mlp}})
+    return {"blocks": tuple(blocks)}
+
+
+def chunked_packed_master_bank_to_grouped_expert_tree(config: BenchConfig, bench_kind: str, chunked_bank):
+    """Rebuild grouped expert leaves from a physical chunked packed master bank.
+
+    This mirrors `packed_master_bank_to_grouped_expert_tree` for the
+    replica-aligned packed state used by the R2/R4 harnesses. It only slices the
+    packed chunks; FSDP/compute resharding remains a separate use-site concern.
+    """
+
+    physical_group_sizes = grouped_expert_group_sizes_for_bench(config, bench_kind)
+    blocks = []
+    for chunk_index, physical_group_size in enumerate(physical_group_sizes):
+        chunk = chunked_bank_chunks(chunked_bank)[chunk_index]
+        expert_mlp = {}
+        for name in synthetic_shapes(config):
+            with jax.named_scope(
+                f"muon_update_bench/chunked_packed_master/rebuild_tree/chunk_{chunk_index}/{name}/slice"
+            ):
+                expert_mlp[name] = lax.dynamic_slice_in_dim(
+                    chunk["packed"][name],
+                    0,
+                    physical_group_size,
+                    axis=0,
+                )
+        blocks.append({"mlp": {"expert_mlp": expert_mlp}})
+    return {"blocks": tuple(blocks)}
+
+
+def rebuild_expert_tree_from_muon_master_bank(
+    config: BenchConfig,
+    bench_kind: str,
+    master_bank: MuonMasterBank,
+    *,
+    consumer_dtype: jnp.dtype = jnp.bfloat16,
+) -> Any:
+    """Return a bf16 grouped expert tree view backed by a packed Muon master bank."""
+
+    with jax.named_scope("muon_update_bench/muon_master_bank/rebuild_expert_tree/cast_to_consumer_dtype"):
+        consumer_bank = jax.tree.map(lambda leaf: leaf.astype(consumer_dtype), master_bank)
+    with jax.named_scope("muon_update_bench/muon_master_bank/rebuild_expert_tree/slice_chunks"):
+        return chunked_packed_master_bank_to_grouped_expert_tree(config, bench_kind, consumer_bank)
+
+
+def expert_packed_master_muonh_update_outputs(config: BenchConfig, master_bank, grad_bank, momentum_bank):
+    """Update authoritative fp32 packed master and momentum banks in NS layout."""
+
+    next_master = {"packed": {}}
+    next_momentum = {"packed": {}}
+    for name in synthetic_shapes(config):
+        with jax.named_scope(f"muon_update_bench/packed_master_muonh/{name}/cast_grad_to_master"):
+            grad = grad_bank["packed"][name].astype(master_bank["packed"][name].dtype)
+        with jax.named_scope(f"muon_update_bench/packed_master_muonh/{name}/update_momentum"):
+            momentum = MAY_MOMENTUM * momentum_bank["packed"][name] + grad
+        if config.nesterov:
+            with jax.named_scope(f"muon_update_bench/packed_master_muonh/{name}/nesterov_direction_input"):
+                direction_input = MAY_MOMENTUM * momentum + grad
+        else:
+            direction_input = momentum
+        with jax.named_scope(f"muon_update_bench/packed_master_muonh/{name}/newton_schulz"):
+            direction = zeropower_via_newtonschulz_4d_for_config(direction_input, config)
+            direction = scale_ns4d_direction(direction)
+        with jax.named_scope(f"muon_update_bench/packed_master_muonh/{name}/hyperball_update_master"):
+            update = grouped_4d_hyperball_update(master_bank["packed"][name], direction, config)
+            next_master["packed"][name] = master_bank["packed"][name] + update
+            next_momentum["packed"][name] = momentum
+    return next_master, next_momentum
+
+
+def expert_packed_master_momentum_outputs(config: BenchConfig, grad_bank, momentum_bank):
+    """Update packed momentum and return the MuonH direction input before NS."""
+
+    next_momentum = {"packed": {}}
+    direction_inputs = {"packed": {}}
+    for name in synthetic_shapes(config):
+        with jax.named_scope(f"muon_update_bench/packed_master_momentum/{name}/cast_grad_to_momentum"):
+            grad = grad_bank["packed"][name].astype(momentum_bank["packed"][name].dtype)
+        with jax.named_scope(f"muon_update_bench/packed_master_momentum/{name}/update_momentum"):
+            momentum = MAY_MOMENTUM * momentum_bank["packed"][name] + grad
+        if config.nesterov:
+            with jax.named_scope(f"muon_update_bench/packed_master_momentum/{name}/nesterov_direction_input"):
+                direction_input = MAY_MOMENTUM * momentum + grad
+        else:
+            direction_input = momentum
+        next_momentum["packed"][name] = momentum
+        direction_inputs["packed"][name] = direction_input
+    return next_momentum, direction_inputs
+
+
+def expert_packed_master_ns_outputs(config: BenchConfig, direction_inputs):
+    """Run NS over an already-packed direction input bank."""
+
+    directions = {"packed": {}}
+    for name in synthetic_shapes(config):
+        with jax.named_scope(f"muon_update_bench/packed_master_ns/{name}/newton_schulz"):
+            direction = zeropower_via_newtonschulz_4d_for_config(direction_inputs["packed"][name], config)
+            directions["packed"][name] = scale_ns4d_direction(direction)
+    return directions
+
+
+def expert_packed_master_ns_hyperball_outputs(config: BenchConfig, master_bank, direction_inputs):
+    """Run packed NS plus hyperball update without momentum state maintenance."""
+
+    directions = expert_packed_master_ns_outputs(config, direction_inputs)
+    updates = {"packed": {}}
+    for name in synthetic_shapes(config):
+        with jax.named_scope(f"muon_update_bench/packed_master_ns_hyperball/{name}/hyperball"):
+            updates["packed"][name] = grouped_4d_hyperball_update(
+                master_bank["packed"][name],
+                directions["packed"][name],
+                config,
+            )
+    return updates
+
+
+def expert_packed_master_ns_hyperball_apply_outputs(config: BenchConfig, master_bank, direction_inputs):
+    """Run NS, hyperball, and apply to packed master without momentum maintenance."""
+
+    updates = expert_packed_master_ns_hyperball_outputs(config, master_bank, direction_inputs)
+    next_master = {"packed": {}}
+    for name in synthetic_shapes(config):
+        with jax.named_scope(f"muon_update_bench/packed_master_ns_hyperball_apply/{name}/apply_master"):
+            next_master["packed"][name] = master_bank["packed"][name] + updates["packed"][name]
+    return next_master
+
+
+def expert_packed_master_direction_ns_hyperball_outputs(config: BenchConfig, master_bank, grad_bank, momentum_bank):
+    """Build Muon direction from grad/momentum, then run NS+hyperball without applying to master."""
+
+    next_momentum, direction_inputs = expert_packed_master_momentum_outputs(config, grad_bank, momentum_bank)
+    updates = expert_packed_master_ns_hyperball_outputs(config, master_bank, direction_inputs)
+    return updates, next_momentum
+
+
+def expert_packed_master_chunked_direction_ns_hyperball_checksum(
+    config: BenchConfig,
+    master_bank,
+    grad_bank,
+    momentum_bank,
+) -> jax.Array:
+    """Run direction+NS+hyperball in packed-bank chunks without returning a full direction bank."""
+
+    checksum = jnp.asarray(0, dtype=jnp.float32)
+    chunk_start = 0
+    for chunk_index, chunk_size in enumerate(
+        grouped_expert_group_sizes_for_bench(
+            config,
+            EXPERT_PACKED_MASTER_CHUNKED_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH,
+        )
+    ):
+        for name in synthetic_shapes(config):
+            with jax.named_scope(
+                f"muon_update_bench/packed_master_chunked_direction_ns_hyperball/" f"chunk_{chunk_index}/{name}/slice"
+            ):
+                master = lax.dynamic_slice_in_dim(
+                    master_bank["packed"][name],
+                    chunk_start,
+                    chunk_size,
+                    axis=0,
+                )
+                momentum = lax.dynamic_slice_in_dim(
+                    momentum_bank["packed"][name],
+                    chunk_start,
+                    chunk_size,
+                    axis=0,
+                )
+                grad = lax.dynamic_slice_in_dim(
+                    grad_bank["packed"][name],
+                    chunk_start,
+                    chunk_size,
+                    axis=0,
+                ).astype(momentum.dtype)
+            with jax.named_scope(
+                f"muon_update_bench/packed_master_chunked_direction_ns_hyperball/"
+                f"chunk_{chunk_index}/{name}/update_momentum"
+            ):
+                next_momentum = MAY_MOMENTUM * momentum + grad
+            if config.nesterov:
+                with jax.named_scope(
+                    f"muon_update_bench/packed_master_chunked_direction_ns_hyperball/"
+                    f"chunk_{chunk_index}/{name}/nesterov_direction_input"
+                ):
+                    direction_input = MAY_MOMENTUM * next_momentum + grad
+            else:
+                direction_input = next_momentum
+            with jax.named_scope(
+                f"muon_update_bench/packed_master_chunked_direction_ns_hyperball/"
+                f"chunk_{chunk_index}/{name}/newton_schulz"
+            ):
+                direction = zeropower_via_newtonschulz_4d_for_config(direction_input, config)
+                direction = scale_ns4d_direction(direction)
+            with jax.named_scope(
+                f"muon_update_bench/packed_master_chunked_direction_ns_hyperball/"
+                f"chunk_{chunk_index}/{name}/hyperball"
+            ):
+                update = grouped_4d_hyperball_update(master, direction, config)
+            with jax.named_scope(
+                f"muon_update_bench/packed_master_chunked_direction_ns_hyperball/" f"chunk_{chunk_index}/{name}/checksum"
+            ):
+                checksum = checksum + jnp.sum((master + update).astype(jnp.float32))
+                checksum = checksum + jnp.sum(next_momentum.astype(jnp.float32))
+        chunk_start += chunk_size
+    return checksum
+
+
+def expert_packed_master_chunked_muonh_update_outputs(config: BenchConfig, master_bank, grad_bank, momentum_bank):
+    """Update packed fp32 master/momentum by consuming one grouped chunk at a time."""
+
+    next_master = {"packed": {}}
+    next_momentum = {"packed": {}}
+    group_sizes = grouped_expert_group_sizes_for_bench(
+        config,
+        EXPERT_PACKED_MASTER_CHUNKED_MUONH_UPDATE_ONLY_BENCH,
+    )
+    for name in synthetic_shapes(config):
+        next_master_leaf = master_bank["packed"][name]
+        next_momentum_leaf = momentum_bank["packed"][name]
+        chunk_start = 0
+        for chunk_index, chunk_size in enumerate(group_sizes):
+            with jax.named_scope(f"muon_update_bench/packed_master_chunked_muonh/" f"chunk_{chunk_index}/{name}/slice"):
+                master = lax.dynamic_slice_in_dim(
+                    master_bank["packed"][name],
+                    chunk_start,
+                    chunk_size,
+                    axis=0,
+                )
+                momentum = lax.dynamic_slice_in_dim(
+                    next_momentum_leaf,
+                    chunk_start,
+                    chunk_size,
+                    axis=0,
+                )
+                grad = lax.dynamic_slice_in_dim(
+                    grad_bank["packed"][name],
+                    chunk_start,
+                    chunk_size,
+                    axis=0,
+                ).astype(momentum.dtype)
+            with jax.named_scope(
+                f"muon_update_bench/packed_master_chunked_muonh/" f"chunk_{chunk_index}/{name}/update_momentum"
+            ):
+                momentum = MAY_MOMENTUM * momentum + grad
+            if config.nesterov:
+                with jax.named_scope(
+                    f"muon_update_bench/packed_master_chunked_muonh/"
+                    f"chunk_{chunk_index}/{name}/nesterov_direction_input"
+                ):
+                    direction_input = MAY_MOMENTUM * momentum + grad
+            else:
+                direction_input = momentum
+            with jax.named_scope(
+                f"muon_update_bench/packed_master_chunked_muonh/" f"chunk_{chunk_index}/{name}/newton_schulz"
+            ):
+                direction = zeropower_via_newtonschulz_4d_for_config(direction_input, config)
+                direction = scale_ns4d_direction(direction)
+            with jax.named_scope(
+                f"muon_update_bench/packed_master_chunked_muonh/" f"chunk_{chunk_index}/{name}/hyperball_update_master"
+            ):
+                update = grouped_4d_hyperball_update(master, direction, config)
+                master = master + update
+            with jax.named_scope(
+                f"muon_update_bench/packed_master_chunked_muonh/" f"chunk_{chunk_index}/{name}/write_chunk"
+            ):
+                next_master_leaf = lax.dynamic_update_slice_in_dim(
+                    next_master_leaf,
+                    master,
+                    chunk_start,
+                    axis=0,
+                )
+                next_momentum_leaf = lax.dynamic_update_slice_in_dim(
+                    next_momentum_leaf,
+                    momentum,
+                    chunk_start,
+                    axis=0,
+                )
+            chunk_start += chunk_size
+        next_master["packed"][name] = next_master_leaf
+        next_momentum["packed"][name] = next_momentum_leaf
+    return next_master, next_momentum
+
+
+def expert_chunked_packed_master_muonh_update_chunk_outputs(
+    config: BenchConfig,
+    master_chunk,
+    grad_chunk,
+    momentum_chunk,
+    *,
+    chunk_index: int,
+):
+    """Update one authoritative fp32 packed-master chunk in NS layout."""
+
+    next_master_packed = {}
+    next_momentum_packed = {}
+    for name in synthetic_shapes(config):
+        with jax.named_scope(f"muon_update_bench/chunked_packed_master_muonh/chunk_{chunk_index}/{name}/inputs"):
+            master = master_chunk["packed"][name]
+            grad = grad_chunk["packed"][name].astype(momentum_chunk["packed"][name].dtype)
+            old_momentum = momentum_chunk["packed"][name]
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_muonh/chunk_{chunk_index}/{name}/update_momentum"
+        ):
+            momentum = MAY_MOMENTUM * old_momentum + grad
+        if config.nesterov:
+            with jax.named_scope(
+                f"muon_update_bench/chunked_packed_master_muonh/chunk_{chunk_index}/{name}/" "nesterov_direction_input"
+            ):
+                direction_input = MAY_MOMENTUM * momentum + grad
+        else:
+            direction_input = momentum
+        with jax.named_scope(f"muon_update_bench/chunked_packed_master_muonh/chunk_{chunk_index}/{name}/newton_schulz"):
+            direction = zeropower_via_newtonschulz_4d_for_config(direction_input, config)
+            direction = scale_ns4d_direction(direction)
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_muonh/chunk_{chunk_index}/{name}/hyperball_update_master"
+        ):
+            update = grouped_4d_hyperball_update(master, direction, config)
+            next_master_packed[name] = master + update
+            next_momentum_packed[name] = momentum
+    return {"packed": next_master_packed}, {"packed": next_momentum_packed}
+
+
+def expert_chunked_packed_master_muonh_update_outputs(config: BenchConfig, master_bank, grad_bank, momentum_bank):
+    """Update authoritative fp32 master/momentum stored as physical grouped chunks."""
+
+    next_master_chunks = []
+    next_momentum_chunks = []
+    grad_chunks = chunked_bank_chunks(grad_bank)
+    momentum_chunks = chunked_bank_chunks(momentum_bank)
+    for chunk_index, master_chunk in enumerate(chunked_bank_chunks(master_bank)):
+        grad_chunk = grad_chunks[chunk_index]
+        momentum_chunk = momentum_chunks[chunk_index]
+        next_master_chunk, next_momentum_chunk = expert_chunked_packed_master_muonh_update_chunk_outputs(
+            config,
+            master_chunk,
+            grad_chunk,
+            momentum_chunk,
+            chunk_index=chunk_index,
+        )
+        next_master_chunks.append(next_master_chunk)
+        next_momentum_chunks.append(next_momentum_chunk)
+    return (
+        replace_chunked_bank(master_bank, tuple(next_master_chunks)),
+        replace_chunked_bank(momentum_bank, tuple(next_momentum_chunks)),
+    )
+
+
+def expert_chunked_packed_master_muonh_update_checksum(
+    config: BenchConfig,
+    master_bank,
+    grad_bank,
+    momentum_bank,
+) -> jax.Array:
+    """Run chunked packed MuonH update math and return a scalar checksum."""
+
+    checksum = jnp.asarray(0, dtype=jnp.float32)
+    grad_chunks = chunked_bank_chunks(grad_bank)
+    momentum_chunks = chunked_bank_chunks(momentum_bank)
+    for chunk_index, master_chunk in enumerate(chunked_bank_chunks(master_bank)):
+        grad_chunk = grad_chunks[chunk_index]
+        momentum_chunk = momentum_chunks[chunk_index]
+        for name in synthetic_shapes(config):
+            with jax.named_scope(
+                f"muon_update_bench/chunked_packed_master_muonh_checksum/chunk_{chunk_index}/{name}/inputs"
+            ):
+                master = master_chunk["packed"][name]
+                grad = grad_chunk["packed"][name].astype(momentum_chunk["packed"][name].dtype)
+                old_momentum = momentum_chunk["packed"][name]
+            with jax.named_scope(
+                f"muon_update_bench/chunked_packed_master_muonh_checksum/chunk_{chunk_index}/{name}/" "update_momentum"
+            ):
+                momentum = MAY_MOMENTUM * old_momentum + grad
+            if config.nesterov:
+                with jax.named_scope(
+                    f"muon_update_bench/chunked_packed_master_muonh_checksum/chunk_{chunk_index}/{name}/"
+                    "nesterov_direction_input"
+                ):
+                    direction_input = MAY_MOMENTUM * momentum + grad
+            else:
+                direction_input = momentum
+            with jax.named_scope(
+                f"muon_update_bench/chunked_packed_master_muonh_checksum/chunk_{chunk_index}/{name}/" "newton_schulz"
+            ):
+                direction = zeropower_via_newtonschulz_4d_for_config(direction_input, config)
+                direction = scale_ns4d_direction(direction)
+            with jax.named_scope(
+                f"muon_update_bench/chunked_packed_master_muonh_checksum/chunk_{chunk_index}/{name}/"
+                "hyperball_update_master"
+            ):
+                update = grouped_4d_hyperball_update(master, direction, config)
+            with jax.named_scope(
+                f"muon_update_bench/chunked_packed_master_muonh_checksum/chunk_{chunk_index}/{name}/checksum"
+            ):
+                checksum = checksum + jnp.sum(master.astype(jnp.float32))
+                checksum = checksum + jnp.sum(update.astype(jnp.float32))
+                checksum = checksum + jnp.sum(momentum.astype(jnp.float32))
+    return checksum
+
+
+def expert_chunked_packed_master_muonh_update_chunk_checksum(
+    config: BenchConfig,
+    master_chunk,
+    grad_chunk,
+    momentum_chunk,
+    *,
+    chunk_index: int,
+) -> jax.Array:
+    """Run one chunk of packed MuonH update math and return a scalar checksum."""
+
+    checksum = jnp.asarray(0, dtype=jnp.float32)
+    for name in synthetic_shapes(config):
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_muonh_chunk_checksum/chunk_{chunk_index}/{name}/inputs"
+        ):
+            master = master_chunk["packed"][name]
+            grad = grad_chunk["packed"][name].astype(momentum_chunk["packed"][name].dtype)
+            old_momentum = momentum_chunk["packed"][name]
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_muonh_chunk_checksum/chunk_{chunk_index}/{name}/" "update_momentum"
+        ):
+            momentum = MAY_MOMENTUM * old_momentum + grad
+        if config.nesterov:
+            with jax.named_scope(
+                f"muon_update_bench/chunked_packed_master_muonh_chunk_checksum/chunk_{chunk_index}/{name}/"
+                "nesterov_direction_input"
+            ):
+                direction_input = MAY_MOMENTUM * momentum + grad
+        else:
+            direction_input = momentum
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_muonh_chunk_checksum/chunk_{chunk_index}/{name}/" "newton_schulz"
+        ):
+            direction = zeropower_via_newtonschulz_4d_for_config(direction_input, config)
+            direction = scale_ns4d_direction(direction)
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_muonh_chunk_checksum/chunk_{chunk_index}/{name}/"
+            "hyperball_update_master"
+        ):
+            update = grouped_4d_hyperball_update(master, direction, config)
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_muonh_chunk_checksum/chunk_{chunk_index}/{name}/checksum"
+        ):
+            checksum = checksum + jnp.sum(master.astype(jnp.float32))
+            checksum = checksum + jnp.sum(update.astype(jnp.float32))
+            checksum = checksum + jnp.sum(momentum.astype(jnp.float32))
+    return checksum
+
+
+def expert_packed_master_muonh_consumer_outputs(config: BenchConfig, master_bank, grad_bank, momentum_bank, activations):
+    """Update packed fp32 master, rebuild a bf16 grouped view, and consume it."""
+
+    next_master, next_momentum = expert_packed_master_muonh_update_outputs(
+        config,
+        master_bank,
+        grad_bank,
+        momentum_bank,
+    )
+    with jax.named_scope("muon_update_bench/packed_master/rebuild_tree"):
+        bf16_master = jax.tree.map(lambda leaf: leaf.astype(jnp.bfloat16), next_master)
+        grouped_view = packed_master_bank_to_grouped_expert_tree(
+            config,
+            EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+            bf16_master,
+        )
+    with jax.named_scope("muon_update_bench/packed_master/consume_grouped_view"):
+        outputs = grouped_expert_bank_consumer_outputs(config, grouped_view, activations)
+    return next_master, next_momentum, outputs
+
+
+def expert_packed_master_muonh_consumer_step_factory(config: BenchConfig):
+    def update_step(master_bank, grad_bank, momentum_bank, activations):
+        with jax.named_scope("muon_update_bench/expert_packed_master_muonh_consumer_step"):
+            return expert_packed_master_muonh_consumer_outputs(
+                config, master_bank, grad_bank, momentum_bank, activations
+            )
+
+    return update_step
+
+
+def expert_packed_master_consumer_loss(config: BenchConfig, master_bank, activations) -> jax.Array:
+    """Consume a bf16 grouped view rebuilt from packed fp32 master and return a scalar loss."""
+
+    with jax.named_scope("muon_update_bench/packed_master_grad/rebuild_tree"):
+        bf16_master = jax.tree.map(lambda leaf: leaf.astype(jnp.bfloat16), master_bank)
+        grouped_view = packed_master_bank_to_grouped_expert_tree(
+            config,
+            EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+            bf16_master,
+        )
+    with jax.named_scope("muon_update_bench/packed_master_grad/consume_grouped_view"):
+        outputs = grouped_expert_bank_consumer_outputs(config, grouped_view, activations)
+    with jax.named_scope("muon_update_bench/packed_master_grad/loss"):
+        loss = jnp.asarray(0, dtype=jnp.float32)
+        for leaf in jax.tree.leaves(outputs):
+            loss = loss + jnp.sum(leaf.astype(jnp.float32))
+        return loss
+
+
+def expert_packed_master_consumer_grad_step_factory(config: BenchConfig):
+    def loss_for_grad(master_bank, activations):
+        return expert_packed_master_consumer_loss(config, master_bank, activations)
+
+    def grad_step(master_bank, activations):
+        with jax.named_scope("muon_update_bench/expert_packed_master_consumer_grad_step"):
+            return jax.grad(loss_for_grad)(master_bank, activations)
+
+    return grad_step
+
+
+def expert_chunked_packed_master_grouped_consumer_loss(
+    config: BenchConfig,
+    bench_kind: str,
+    chunked_bank,
+    activations,
+) -> jax.Array:
+    """Consume a bf16 grouped view rebuilt from a chunked packed master bank."""
+
+    with jax.named_scope("muon_update_bench/chunked_packed_master_grad/rebuild_tree"):
+        bf16_master = jax.tree.map(lambda leaf: leaf.astype(jnp.bfloat16), chunked_bank)
+        grouped_view = chunked_packed_master_bank_to_grouped_expert_tree(config, bench_kind, bf16_master)
+    with jax.named_scope("muon_update_bench/chunked_packed_master_grad/consume_grouped_view"):
+        outputs = grouped_expert_bank_consumer_outputs(config, grouped_view, activations)
+    with jax.named_scope("muon_update_bench/chunked_packed_master_grad/loss"):
+        loss = jnp.asarray(0, dtype=jnp.float32)
+        for leaf in jax.tree.leaves(outputs):
+            loss = loss + jnp.sum(leaf.astype(jnp.float32))
+        return loss
+
+
+def expert_chunked_packed_master_grouped_consumer_grad_step_factory(config: BenchConfig, bench_kind: str):
+    def loss_for_grad(chunked_bank, activations):
+        return expert_chunked_packed_master_grouped_consumer_loss(config, bench_kind, chunked_bank, activations)
+
+    def grad_step(chunked_bank, activations):
+        with jax.named_scope("muon_update_bench/expert_chunked_packed_master_grouped_consumer_grad_step"):
+            return jax.grad(loss_for_grad)(chunked_bank, activations)
+
+    return grad_step
+
+
+def expert_chunked_packed_master_grouped_grad_muonh_update_outputs(
+    config: BenchConfig,
+    bench_kind: str,
+    master_bank,
+    momentum_bank,
+    activations,
+):
+    """Differentiate through a grouped packed-master view and update packed MuonH state."""
+
+    def loss_for_grad(chunked_bank):
+        return expert_chunked_packed_master_grouped_consumer_loss(config, bench_kind, chunked_bank, activations)
+
+    with jax.named_scope("muon_update_bench/chunked_packed_master_grouped_grad_muonh/grad"):
+        grad_bank = jax.grad(loss_for_grad)(master_bank)
+    with jax.named_scope("muon_update_bench/chunked_packed_master_grouped_grad_muonh/update"):
+        return expert_chunked_packed_master_muonh_update_outputs(
+            config,
+            master_bank,
+            grad_bank,
+            momentum_bank,
+        )
+
+
+def expert_chunked_packed_master_grouped_grad_muonh_update_step_factory(
+    config: BenchConfig,
+    bench_kind: str,
+):
+    def update_step(master_bank, momentum_bank, activations):
+        with jax.named_scope("muon_update_bench/expert_chunked_packed_master_grouped_grad_muonh_update_step"):
+            return expert_chunked_packed_master_grouped_grad_muonh_update_outputs(
+                config,
+                bench_kind,
+                master_bank,
+                momentum_bank,
+                activations,
+            )
+
+    return update_step
+
+
+def packed_master_bank_to_fsdp_expert_layer(
+    mesh: Mesh,
+    config: BenchConfig,
+    packed_bank,
+    layer_index: int = 0,
+):
+    """Materialize one bf16 expert layer from packed master at the use site.
+
+    The packed master bank is authoritative in NS-friendly layout. Forward should
+    only pull the layer it is about to consume into the FSDP compute layout; do
+    not restore an entire grouped bank before indexing the layer.
+    """
+
+    if layer_index < 0 or layer_index >= config.layers:
+        raise ValueError(f"layer_index={layer_index} must be in [0, {config.layers}).")
+
+    layer_offset = 0
+    group_index = 0
+    local_layer_index = layer_index
+    for candidate_group_index, valid_group_size in enumerate(grouped_expert_group_sizes(config)):
+        if layer_index < layer_offset + valid_group_size:
+            group_index = candidate_group_index
+            local_layer_index = layer_index - layer_offset
+            break
+        layer_offset += valid_group_size
+    else:
+        raise AssertionError("layer_index bounds check should have selected a packed master group.")
+
+    padded_group_size = grouped_expert_group_sizes_for_bench(
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+    )[group_index]
+    padded_group_sharding = grouped_expert_group_sharding(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+        padded_group_size,
+    )
+    stack_shard_size = _sharding_axis_size(mesh, padded_group_sharding.spec[0])
+    slab_size = min(padded_group_size, stack_shard_size)
+    slab_local_start = (local_layer_index // slab_size) * slab_size
+    slab_start = layer_offset + slab_local_start
+    slab_sharding = grouped_expert_group_sharding(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+        slab_size,
+    )
+
+    expert_mlp = {}
+    for name in synthetic_shapes(config):
+        with jax.named_scope(f"muon_update_bench/packed_master_fsdp_layer/{name}/slice_shard_aligned_slab"):
+            slab = lax.dynamic_slice_in_dim(
+                packed_bank["packed"][name],
+                slab_start,
+                slab_size,
+                axis=0,
+            )
+        with jax.named_scope(f"muon_update_bench/packed_master_fsdp_layer/{name}/cast_to_consumer_dtype"):
+            slab = slab.astype(jnp.bfloat16)
+        with jax.named_scope(f"muon_update_bench/packed_master_fsdp_layer/{name}/replicate_slab_axis"):
+            slab = _restore_grouped_expert_update_for_split(mesh, slab, slab_size, slab_sharding)
+        with jax.named_scope(f"muon_update_bench/packed_master_fsdp_layer/{name}/index_layer"):
+            layer = slab[local_layer_index - slab_local_start]
+        fsdp_sharding = expert_fsdp_param_sharding(mesh, name)
+        with jax.named_scope(f"muon_update_bench/packed_master_fsdp_layer/{name}/reshard_to_fsdp"):
+            expert_mlp[name] = reshard(layer, fsdp_sharding)
+    return {"mlp": {"expert_mlp": expert_mlp}}
+
+
+def chunked_packed_master_bank_to_fsdp_expert_layer(
+    mesh: Mesh,
+    config: BenchConfig,
+    chunked_bank,
+    layer_index: int = 0,
+):
+    """Materialize one bf16 expert layer from a physically chunked packed master bank."""
+
+    if layer_index < 0 or layer_index >= config.layers:
+        raise ValueError(f"layer_index={layer_index} must be in [0, {config.layers}).")
+
+    layer_offset = 0
+    group_index = 0
+    local_layer_index = layer_index
+    valid_group_sizes = grouped_expert_group_sizes(config)
+    for candidate_group_index, valid_group_size in enumerate(valid_group_sizes):
+        if layer_index < layer_offset + valid_group_size:
+            group_index = candidate_group_index
+            local_layer_index = layer_index - layer_offset
+            break
+        layer_offset += valid_group_size
+    else:
+        raise AssertionError("layer_index bounds check should have selected a chunked packed master group.")
+
+    bench_kind = EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH
+    padded_group_size = grouped_expert_group_sizes_for_bench(config, bench_kind)[group_index]
+    padded_group_sharding = grouped_expert_group_sharding(mesh, config, bench_kind, padded_group_size)
+    stack_shard_size = _sharding_axis_size(mesh, padded_group_sharding.spec[0])
+    slab_size = min(padded_group_size, stack_shard_size)
+    slab_local_start = (local_layer_index // slab_size) * slab_size
+    slab_sharding = grouped_expert_group_sharding(mesh, config, bench_kind, slab_size)
+    chunk = chunked_bank_chunks(chunked_bank)[group_index]
+
+    expert_mlp = {}
+    for name in synthetic_shapes(config):
+        with jax.named_scope(f"muon_update_bench/chunked_packed_master_fsdp_layer/{name}/slice_shard_aligned_slab"):
+            slab = lax.dynamic_slice_in_dim(
+                chunk["packed"][name],
+                slab_local_start,
+                slab_size,
+                axis=0,
+            )
+        with jax.named_scope(f"muon_update_bench/chunked_packed_master_fsdp_layer/{name}/cast_to_consumer_dtype"):
+            slab = slab.astype(jnp.bfloat16)
+        with jax.named_scope(f"muon_update_bench/chunked_packed_master_fsdp_layer/{name}/replicate_slab_axis"):
+            slab = _restore_grouped_expert_update_for_split(mesh, slab, slab_size, slab_sharding)
+        with jax.named_scope(f"muon_update_bench/chunked_packed_master_fsdp_layer/{name}/index_layer"):
+            layer = slab[local_layer_index - slab_local_start]
+        with jax.named_scope(f"muon_update_bench/chunked_packed_master_fsdp_layer/{name}/reshard_to_fsdp"):
+            expert_mlp[name] = reshard(layer, expert_fsdp_param_sharding(mesh, name))
+    return {"mlp": {"expert_mlp": expert_mlp}}
+
+
+def chunked_packed_master_chunk_to_fsdp_expert_layer(
+    mesh: Mesh,
+    config: BenchConfig,
+    chunk,
+    *,
+    chunk_index: int,
+    local_layer_index: int,
+    bench_kind: str,
+):
+    """Materialize one bf16 expert layer from a single chunked packed-master shard."""
+
+    valid_group_size = chunked_packed_master_valid_group_sizes_for_bench(config, bench_kind)[chunk_index]
+    if local_layer_index < 0 or local_layer_index >= valid_group_size:
+        raise ValueError(f"local_layer_index={local_layer_index} must be in [0, {valid_group_size}).")
+
+    padded_group_size = grouped_expert_group_sizes_for_bench(config, bench_kind)[chunk_index]
+    padded_group_sharding = grouped_expert_group_sharding(mesh, config, bench_kind, padded_group_size)
+    stack_shard_size = _sharding_axis_size(mesh, padded_group_sharding.spec[0])
+    slab_size = min(padded_group_size, stack_shard_size)
+    slab_local_start = (local_layer_index // slab_size) * slab_size
+    slab_sharding = grouped_expert_group_sharding(mesh, config, bench_kind, slab_size)
+
+    expert_mlp = {}
+    for name in synthetic_shapes(config):
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_fsdp_chunk_layer/"
+            f"chunk_{chunk_index}/{name}/slice_shard_aligned_slab"
+        ):
+            slab = lax.dynamic_slice_in_dim(
+                chunk["packed"][name],
+                slab_local_start,
+                slab_size,
+                axis=0,
+            )
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_fsdp_chunk_layer/"
+            f"chunk_{chunk_index}/{name}/cast_to_consumer_dtype"
+        ):
+            slab = slab.astype(jnp.bfloat16)
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_fsdp_chunk_layer/"
+            f"chunk_{chunk_index}/{name}/replicate_slab_axis"
+        ):
+            slab = _restore_grouped_expert_update_for_split(mesh, slab, slab_size, slab_sharding)
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_fsdp_chunk_layer/" f"chunk_{chunk_index}/{name}/index_layer"
+        ):
+            layer = slab[local_layer_index - slab_local_start]
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_fsdp_chunk_layer/" f"chunk_{chunk_index}/{name}/reshard_to_fsdp"
+        ):
+            expert_mlp[name] = reshard(layer, expert_fsdp_param_sharding(mesh, name))
+    return {"mlp": {"expert_mlp": expert_mlp}}
+
+
+def materialize_expert_layer_from_muon_master_bank(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+    master_bank: MuonMasterBank,
+    *,
+    layer_index: int,
+) -> Any:
+    """Materialize one bf16 expert layer from authoritative packed Muon state.
+
+    This is the harness stand-in for a real model use-site accessor: the packed
+    fp32 master stays authoritative, and only the requested layer is cast and
+    reshared into FSDP/compute layout immediately before consumption.
+    """
+
+    if layer_index < 0 or layer_index >= config.layers:
+        raise ValueError(f"layer_index={layer_index} must be in [0, {config.layers}).")
+
+    layer_offset = 0
+    for chunk_index, valid_group_size in enumerate(
+        chunked_packed_master_valid_group_sizes_for_bench(config, bench_kind)
+    ):
+        if layer_index < layer_offset + valid_group_size:
+            with jax.named_scope(f"muon_update_bench/muon_master_bank/materialize_expert_layer/layer_{layer_index}"):
+                return chunked_packed_master_chunk_to_fsdp_expert_layer(
+                    mesh,
+                    config,
+                    master_bank.chunks[chunk_index],
+                    chunk_index=chunk_index,
+                    local_layer_index=layer_index - layer_offset,
+                    bench_kind=bench_kind,
+                )
+        layer_offset += valid_group_size
+    raise AssertionError("layer_index bounds check should have selected a Muon master bank chunk.")
+
+
+def materialize_expert_block_group_from_muon_master_bank(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+    master_bank: MuonMasterBank,
+    *,
+    group_index: int,
+) -> Any:
+    """Materialize one bf16 FSDP expert block group from packed Muon state.
+
+    This is the performant counterpart to `materialize_expert_layer_from_muon_master_bank`:
+    the authoritative fp32 master stays packed, but the consumer view is
+    materialized as shard-aligned slabs the compiler can batch well. A real
+    trainer can schedule these slabs immediately before the corresponding block
+    group instead of restoring a full per-leaf tree at optimizer time.
+    """
+
+    valid_group_sizes = chunked_packed_master_valid_group_sizes_for_bench(config, bench_kind)
+    if group_index < 0 or group_index >= len(valid_group_sizes):
+        raise ValueError(f"group_index={group_index} must be in [0, {len(valid_group_sizes)}).")
+
+    return materialize_expert_block_group_from_muon_master_chunk(
+        mesh,
+        config,
+        bench_kind,
+        master_bank.chunks[group_index],
+        group_index=group_index,
+    )
+
+
+def materialize_expert_block_group_from_muon_master_chunk(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+    master_chunk,
+    *,
+    group_index: int,
+) -> Any:
+    """Materialize one bf16 FSDP expert block group from one packed Muon chunk."""
+
+    valid_group_sizes = chunked_packed_master_valid_group_sizes_for_bench(config, bench_kind)
+    if group_index < 0 or group_index >= len(valid_group_sizes):
+        raise ValueError(f"group_index={group_index} must be in [0, {len(valid_group_sizes)}).")
+
+    valid_group_size = valid_group_sizes[group_index]
+    padded_group_size = grouped_expert_group_sizes_for_bench(config, bench_kind)[group_index]
+    padded_group_sharding = grouped_expert_group_sharding(mesh, config, bench_kind, padded_group_size)
+    stack_shard_size = _sharding_axis_size(mesh, padded_group_sharding.spec[0])
+    padded_slab_size = min(padded_group_size, stack_shard_size)
+    slabs = []
+    for slab_local_start in range(0, valid_group_size, padded_slab_size):
+        valid_slab_size = min(padded_slab_size, valid_group_size - slab_local_start)
+        with jax.named_scope(
+            f"muon_update_bench/muon_master_bank/materialize_expert_block_group/"
+            f"group_{group_index}/slab_{slab_local_start}"
+        ):
+            slabs.append(
+                chunked_packed_master_chunk_to_fsdp_expert_slab(
+                    mesh,
+                    config,
+                    master_chunk,
+                    chunk_index=group_index,
+                    slab_local_start=slab_local_start,
+                    valid_slab_size=valid_slab_size,
+                    padded_slab_size=padded_slab_size,
+                    bench_kind=bench_kind,
+                )
+            )
+    return tuple(slabs)
+
+
+def chunked_packed_master_chunk_to_fsdp_expert_slab(
+    mesh: Mesh,
+    config: BenchConfig,
+    chunk,
+    *,
+    chunk_index: int,
+    slab_local_start: int,
+    valid_slab_size: int,
+    padded_slab_size: int,
+    bench_kind: str,
+):
+    """Materialize one bf16 FSDP expert slab from a single packed-master chunk."""
+
+    valid_group_size = chunked_packed_master_valid_group_sizes_for_bench(config, bench_kind)[chunk_index]
+    if valid_slab_size <= 0 or valid_slab_size > padded_slab_size:
+        raise ValueError(
+            f"valid_slab_size must be in (0, padded_slab_size], got {valid_slab_size} and {padded_slab_size}."
+        )
+    if slab_local_start < 0 or slab_local_start + valid_slab_size > valid_group_size:
+        raise ValueError(
+            f"slab [{slab_local_start}, {slab_local_start + valid_slab_size}) must fit in valid chunk size "
+            f"{valid_group_size}."
+        )
+
+    slab_sharding = grouped_expert_group_sharding(mesh, config, bench_kind, padded_slab_size)
+    expert_mlp = {}
+    for name in synthetic_shapes(config):
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_fsdp_chunk_slab/"
+            f"chunk_{chunk_index}/{name}/slice_shard_aligned_slab"
+        ):
+            slab = lax.dynamic_slice_in_dim(
+                chunk["packed"][name],
+                slab_local_start,
+                padded_slab_size,
+                axis=0,
+            )
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_fsdp_chunk_slab/"
+            f"chunk_{chunk_index}/{name}/cast_to_consumer_dtype"
+        ):
+            slab = slab.astype(jnp.bfloat16)
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_fsdp_chunk_slab/" f"chunk_{chunk_index}/{name}/replicate_slab_axis"
+        ):
+            slab = _restore_grouped_expert_update_for_split(mesh, slab, valid_slab_size, slab_sharding)
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_fsdp_chunk_slab/"
+            f"chunk_{chunk_index}/{name}/reshard_to_fsdp_slab"
+        ):
+            expert_mlp[name] = reshard(slab, expert_fsdp_slab_param_sharding(mesh, name))
+    return {"mlp": {"expert_mlp": expert_mlp}}
+
+
+def packed_master_fsdp_slab_ranges(mesh: Mesh, config: BenchConfig) -> tuple[tuple[int, int, int, int], ...]:
+    """Return `(group_index, slab_start, valid_slab_size, padded_slab_size)` ranges."""
+
+    ranges = []
+    layer_offset = 0
+    valid_group_sizes = grouped_expert_group_sizes(config)
+    padded_group_sizes = grouped_expert_group_sizes_for_bench(
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+    )
+    for group_index, (valid_group_size, padded_group_size) in enumerate(
+        zip(valid_group_sizes, padded_group_sizes, strict=True)
+    ):
+        padded_group_sharding = grouped_expert_group_sharding(
+            mesh,
+            config,
+            EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+            padded_group_size,
+        )
+        padded_slab_size = min(padded_group_size, _sharding_axis_size(mesh, padded_group_sharding.spec[0]))
+        for slab_local_start in range(0, valid_group_size, padded_slab_size):
+            valid_slab_size = min(padded_slab_size, valid_group_size - slab_local_start)
+            ranges.append((group_index, layer_offset + slab_local_start, valid_slab_size, padded_slab_size))
+        layer_offset += valid_group_size
+    return tuple(ranges)
+
+
+def packed_master_bank_to_fsdp_expert_slab(
+    mesh: Mesh,
+    config: BenchConfig,
+    packed_bank,
+    *,
+    slab_start: int,
+    valid_slab_size: int,
+    padded_slab_size: int,
+):
+    """Materialize a bf16 FSDP expert slab once, then let callers index layers locally."""
+
+    if valid_slab_size <= 0 or valid_slab_size > padded_slab_size:
+        raise ValueError(
+            f"valid_slab_size must be in (0, padded_slab_size], got {valid_slab_size} and {padded_slab_size}."
+        )
+    slab_sharding = grouped_expert_group_sharding(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+        padded_slab_size,
+    )
+    expert_mlp = {}
+    for name in synthetic_shapes(config):
+        with jax.named_scope(f"muon_update_bench/packed_master_fsdp_slab/{name}/slice_shard_aligned_slab"):
+            slab = lax.dynamic_slice_in_dim(
+                packed_bank["packed"][name],
+                slab_start,
+                padded_slab_size,
+                axis=0,
+            )
+        with jax.named_scope(f"muon_update_bench/packed_master_fsdp_slab/{name}/cast_to_consumer_dtype"):
+            slab = slab.astype(jnp.bfloat16)
+        with jax.named_scope(f"muon_update_bench/packed_master_fsdp_slab/{name}/replicate_slab_axis"):
+            slab = _restore_grouped_expert_update_for_split(mesh, slab, valid_slab_size, slab_sharding)
+        with jax.named_scope(f"muon_update_bench/packed_master_fsdp_slab/{name}/reshard_to_fsdp_slab"):
+            expert_mlp[name] = reshard(slab, expert_fsdp_slab_param_sharding(mesh, name))
+    return {"mlp": {"expert_mlp": expert_mlp}}
+
+
+def expert_fsdp_layer_consumer_input_specs(mesh: Mesh, config: BenchConfig) -> jax.ShapeDtypeStruct:
+    if config.grouped_expert_consumer_tokens_per_expert > 1:
+        return jax.ShapeDtypeStruct(
+            (
+                config.num_experts,
+                config.grouped_expert_consumer_tokens_per_expert,
+                config.hidden_dim,
+            ),
+            dtype_from_name(config.dtype),
+            sharding=NamedSharding(mesh, P("expert", None, None)),
+        )
+    return jax.ShapeDtypeStruct(
+        (config.num_experts, config.hidden_dim),
+        dtype_from_name(config.dtype),
+        sharding=NamedSharding(mesh, P("expert", None)),
+    )
+
+
+def expert_fsdp_layer_consumer_loss(mesh: Mesh, config: BenchConfig, layer, expert_inputs) -> jax.Array:
+    expert_mlp = layer["mlp"]["expert_mlp"]
+    w_gate_up = expert_mlp["w_gate_up"]
+    w_down = expert_mlp["w_down"]
+    if expert_inputs.ndim == 2:
+        with jax.named_scope("muon_update_bench/packed_master_fsdp_layer/consume_gate_up"):
+            gate_up = jnp.einsum(
+                "ed,edi->ei",
+                expert_inputs,
+                w_gate_up,
+                out_sharding=NamedSharding(mesh, P("expert", "model")),
+            )
+        with jax.named_scope("muon_update_bench/packed_master_fsdp_layer/consume_down"):
+            hidden = gate_up[:, : config.intermediate_dim]
+            outputs = jnp.einsum(
+                "ei,eid->ed",
+                hidden,
+                w_down,
+                out_sharding=NamedSharding(mesh, P("expert", "data")),
+            )
+    elif expert_inputs.ndim == 3:
+        with jax.named_scope("muon_update_bench/packed_master_fsdp_layer/consume_gate_up"):
+            gate_up = jnp.einsum(
+                "etd,edi->eti",
+                expert_inputs,
+                w_gate_up,
+                out_sharding=NamedSharding(mesh, P("expert", None, "model")),
+            )
+        with jax.named_scope("muon_update_bench/packed_master_fsdp_layer/consume_down"):
+            hidden = gate_up[:, :, : config.intermediate_dim]
+            outputs = jnp.einsum(
+                "eti,eid->etd",
+                hidden,
+                w_down,
+                out_sharding=NamedSharding(mesh, P("expert", None, "data")),
+            )
+    else:
+        raise ValueError(
+            "expert_inputs must have shape [expert, hidden] or [expert, tokens_per_expert, hidden], "
+            f"got shape={expert_inputs.shape}."
+        )
+    return jnp.sum(outputs.astype(jnp.float32))
+
+
+def expert_packed_master_fsdp_layer_consumer_step_factory(mesh: Mesh, config: BenchConfig, layer_index: int = 0):
+    def update_step(master_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_packed_master_fsdp_layer_consumer_step"):
+            layer = packed_master_bank_to_fsdp_expert_layer(
+                mesh,
+                config,
+                master_bank,
+                layer_index=layer_index,
+            )
+            return expert_fsdp_layer_consumer_loss(mesh, config, layer, expert_inputs)
+
+    return update_step
+
+
+def expert_packed_master_fsdp_sequential_consumer_loss(mesh: Mesh, config: BenchConfig, master_bank, expert_inputs):
+    """Consume all packed-master expert layers by materializing each layer at its use site."""
+
+    loss = jnp.asarray(0, dtype=jnp.float32)
+    for layer_index in range(config.layers):
+        with jax.named_scope(f"muon_update_bench/packed_master_fsdp_sequential/layer_{layer_index}"):
+            layer = packed_master_bank_to_fsdp_expert_layer(
+                mesh,
+                config,
+                master_bank,
+                layer_index=layer_index,
+            )
+            loss = loss + expert_fsdp_layer_consumer_loss(mesh, config, layer, expert_inputs)
+    return loss
+
+
+def expert_packed_master_fsdp_sequential_consumer_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(master_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_packed_master_fsdp_sequential_consumer_step"):
+            return expert_packed_master_fsdp_sequential_consumer_loss(mesh, config, master_bank, expert_inputs)
+
+    return update_step
+
+
+def expert_chunked_packed_master_fsdp_layer_consumer_loss(
+    mesh: Mesh,
+    config: BenchConfig,
+    chunked_bank,
+    expert_inputs,
+) -> jax.Array:
+    with jax.named_scope("muon_update_bench/chunked_packed_master_fsdp_layer_consumer/layer_0"):
+        layer = chunked_packed_master_bank_to_fsdp_expert_layer(mesh, config, chunked_bank, layer_index=0)
+        return expert_fsdp_layer_consumer_loss(mesh, config, layer, expert_inputs)
+
+
+def expert_chunked_packed_master_fsdp_layer_consumer_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(chunked_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_chunked_packed_master_fsdp_layer_consumer_step"):
+            return expert_chunked_packed_master_fsdp_layer_consumer_loss(mesh, config, chunked_bank, expert_inputs)
+
+    return update_step
+
+
+def expert_chunked_packed_master_fsdp_layer_grad_step_factory(mesh: Mesh, config: BenchConfig):
+    def loss_for_grad(chunked_bank, expert_inputs):
+        return expert_chunked_packed_master_fsdp_layer_consumer_loss(mesh, config, chunked_bank, expert_inputs)
+
+    def grad_step(chunked_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_chunked_packed_master_fsdp_layer_grad_step"):
+            return jax.grad(loss_for_grad)(chunked_bank, expert_inputs)
+
+    return grad_step
+
+
+def expert_chunked_packed_master_fsdp_sequential_grad_step_factory(mesh: Mesh, config: BenchConfig):
+    def loss_for_grad(chunked_bank, expert_inputs):
+        return expert_chunked_packed_master_fsdp_sequential_consumer_loss(mesh, config, chunked_bank, expert_inputs)
+
+    def grad_step(chunked_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_chunked_packed_master_fsdp_sequential_grad_step"):
+            return jax.grad(loss_for_grad)(chunked_bank, expert_inputs)
+
+    return grad_step
+
+
+def expert_chunked_packed_master_fsdp_layer_grad_muonh_update_outputs(
+    mesh: Mesh,
+    config: BenchConfig,
+    master_bank,
+    momentum_bank,
+    expert_inputs,
+):
+    """Differentiate one FSDP use-site, then update packed master and momentum banks."""
+
+    with jax.named_scope("muon_update_bench/chunked_packed_master_layer_grad_muonh/grad"):
+        grad_bank = expert_chunked_packed_master_fsdp_layer_grad_step_factory(mesh, config)(
+            master_bank,
+            expert_inputs,
+        )
+    with jax.named_scope("muon_update_bench/chunked_packed_master_layer_grad_muonh/update"):
+        return expert_chunked_packed_master_muonh_update_outputs(config, master_bank, grad_bank, momentum_bank)
+
+
+def expert_chunked_packed_master_fsdp_layer_grad_muonh_update_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(master_bank, momentum_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_chunked_packed_master_fsdp_layer_grad_muonh_update_step"):
+            return expert_chunked_packed_master_fsdp_layer_grad_muonh_update_outputs(
+                mesh,
+                config,
+                master_bank,
+                momentum_bank,
+                expert_inputs,
+            )
+
+    return update_step
+
+
+def expert_chunked_packed_master_fsdp_sequential_grad_muonh_update_outputs(
+    mesh: Mesh,
+    config: BenchConfig,
+    master_bank,
+    momentum_bank,
+    expert_inputs,
+):
+    """Differentiate all FSDP use-sites, then update packed master and momentum banks."""
+
+    with jax.named_scope("muon_update_bench/chunked_packed_master_sequential_grad_muonh/grad"):
+        grad_bank = expert_chunked_packed_master_fsdp_sequential_grad_step_factory(mesh, config)(
+            master_bank,
+            expert_inputs,
+        )
+    with jax.named_scope("muon_update_bench/chunked_packed_master_sequential_grad_muonh/update"):
+        return expert_chunked_packed_master_muonh_update_outputs(config, master_bank, grad_bank, momentum_bank)
+
+
+def expert_chunked_packed_master_fsdp_sequential_grad_muonh_checksum(
+    mesh: Mesh,
+    config: BenchConfig,
+    master_bank,
+    momentum_bank,
+    expert_inputs,
+) -> jax.Array:
+    """Differentiate all FSDP use-sites, run MuonH, and return a scalar checksum."""
+
+    with jax.named_scope("muon_update_bench/chunked_packed_master_sequential_grad_muonh_checksum/grad"):
+        grad_bank = expert_chunked_packed_master_fsdp_sequential_grad_step_factory(mesh, config)(
+            master_bank,
+            expert_inputs,
+        )
+    with jax.named_scope("muon_update_bench/chunked_packed_master_sequential_grad_muonh_checksum/update"):
+        return expert_chunked_packed_master_muonh_update_checksum(config, master_bank, grad_bank, momentum_bank)
+
+
+def expert_chunked_packed_master_fsdp_sequential_grad_muonh_update_step_factory(
+    mesh: Mesh,
+    config: BenchConfig,
+):
+    def update_step(master_bank, momentum_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_chunked_packed_master_fsdp_sequential_grad_muonh_update_step"):
+            return expert_chunked_packed_master_fsdp_sequential_grad_muonh_update_outputs(
+                mesh,
+                config,
+                master_bank,
+                momentum_bank,
+                expert_inputs,
+            )
+
+    return update_step
+
+
+def expert_chunked_packed_master_fsdp_sequential_grad_muonh_checksum_step_factory(
+    mesh: Mesh,
+    config: BenchConfig,
+):
+    def update_step(master_bank, momentum_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_chunked_packed_master_fsdp_sequential_grad_muonh_checksum_step"):
+            return expert_chunked_packed_master_fsdp_sequential_grad_muonh_checksum(
+                mesh,
+                config,
+                master_bank,
+                momentum_bank,
+                expert_inputs,
+            )
+
+    return update_step
+
+
+def expert_chunked_packed_master_fsdp_streaming_grad_muonh_checksum(
+    mesh: Mesh,
+    config: BenchConfig,
+    master_bank,
+    momentum_bank,
+    expert_inputs,
+    *,
+    bench_kind: str,
+) -> jax.Array:
+    """Stream chunk-local FSDP-use-site grads into chunk-local MuonH checksum."""
+
+    checksum = jnp.asarray(0, dtype=jnp.float32)
+    momentum_chunks = chunked_bank_chunks(momentum_bank)
+    for chunk_index, master_chunk in enumerate(chunked_bank_chunks(master_bank)):
+        momentum_chunk = momentum_chunks[chunk_index]
+
+        def loss_for_chunk(chunk, *, chunk_index=chunk_index):
+            return expert_chunked_packed_master_fsdp_chunk_consumer_loss_for_bench(
+                mesh,
+                config,
+                chunk,
+                expert_inputs,
+                chunk_index=chunk_index,
+                bench_kind=bench_kind,
+            )
+
+        with jax.named_scope(f"muon_update_bench/chunked_packed_master_streaming_grad_muonh/chunk_{chunk_index}/grad"):
+            grad_chunk = jax.grad(loss_for_chunk)(master_chunk)
+        with jax.named_scope(f"muon_update_bench/chunked_packed_master_streaming_grad_muonh/chunk_{chunk_index}/update"):
+            checksum = checksum + expert_chunked_packed_master_muonh_update_chunk_checksum(
+                config,
+                master_chunk,
+                grad_chunk,
+                momentum_chunk,
+                chunk_index=chunk_index,
+            )
+    return checksum
+
+
+def expert_chunked_packed_master_fsdp_streaming_grad_muonh_update_outputs(
+    mesh: Mesh,
+    config: BenchConfig,
+    master_bank,
+    momentum_bank,
+    expert_inputs,
+    *,
+    bench_kind: str,
+):
+    """Stream chunk-local FSDP-use-site grads and return next packed master/momentum banks.
+
+    This is the state-returning variant of the checksum harness: the authoritative
+    fp32 master and momentum remain in the chunked packed NS-friendly layout, and
+    no FSDP-shaped update tree is produced at the optimizer boundary.
+    """
+
+    next_master_chunks = []
+    next_momentum_chunks = []
+    momentum_chunks = chunked_bank_chunks(momentum_bank)
+    for chunk_index, master_chunk in enumerate(chunked_bank_chunks(master_bank)):
+        momentum_chunk = momentum_chunks[chunk_index]
+
+        def loss_for_chunk(chunk, *, chunk_index=chunk_index):
+            return expert_chunked_packed_master_fsdp_chunk_consumer_loss_for_bench(
+                mesh,
+                config,
+                chunk,
+                expert_inputs,
+                chunk_index=chunk_index,
+                bench_kind=bench_kind,
+            )
+
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_streaming_grad_muonh_update/chunk_{chunk_index}/grad"
+        ):
+            grad_chunk = jax.grad(loss_for_chunk)(master_chunk)
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_streaming_grad_muonh_update/chunk_{chunk_index}/update"
+        ):
+            next_master_chunk, next_momentum_chunk = expert_chunked_packed_master_muonh_update_chunk_outputs(
+                config,
+                master_chunk,
+                grad_chunk,
+                momentum_chunk,
+                chunk_index=chunk_index,
+            )
+        next_master_chunks.append(next_master_chunk)
+        next_momentum_chunks.append(next_momentum_chunk)
+    return (
+        replace_chunked_bank(master_bank, tuple(next_master_chunks)),
+        replace_chunked_bank(momentum_bank, tuple(next_momentum_chunks)),
+    )
+
+
+def expert_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_outputs(
+    mesh: Mesh,
+    config: BenchConfig,
+    master_bank,
+    momentum_bank,
+    expert_inputs,
+    *,
+    bench_kind: str,
+):
+    """Stream current-loss value+grad through packed master, then update packed state.
+
+    This is the train-step-shaped harness: forward consumes the current packed
+    master through use-site materialization, gradients flow back to the packed
+    bank, and MuonH updates fp32 packed master/momentum without constructing a
+    per-leaf FSDP update tree.
+    """
+
+    loss = jnp.asarray(0, dtype=jnp.float32)
+    next_master_chunks = []
+    next_momentum_chunks = []
+    momentum_chunks = chunked_bank_chunks(momentum_bank)
+    for chunk_index, master_chunk in enumerate(chunked_bank_chunks(master_bank)):
+        momentum_chunk = momentum_chunks[chunk_index]
+
+        def loss_for_chunk(chunk, *, chunk_index=chunk_index):
+            return expert_chunked_packed_master_fsdp_chunk_consumer_loss_for_bench(
+                mesh,
+                config,
+                chunk,
+                expert_inputs,
+                chunk_index=chunk_index,
+                bench_kind=bench_kind,
+            )
+
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_streaming_value_grad_muonh_update/"
+            f"chunk_{chunk_index}/value_and_grad"
+        ):
+            chunk_loss, grad_chunk = jax.value_and_grad(loss_for_chunk)(master_chunk)
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_streaming_value_grad_muonh_update/" f"chunk_{chunk_index}/update"
+        ):
+            next_master_chunk, next_momentum_chunk = expert_chunked_packed_master_muonh_update_chunk_outputs(
+                config,
+                master_chunk,
+                grad_chunk,
+                momentum_chunk,
+                chunk_index=chunk_index,
+            )
+        loss = loss + chunk_loss
+        next_master_chunks.append(next_master_chunk)
+        next_momentum_chunks.append(next_momentum_chunk)
+    return (
+        loss,
+        replace_chunked_bank(master_bank, tuple(next_master_chunks)),
+        replace_chunked_bank(momentum_bank, tuple(next_momentum_chunks)),
+    )
+
+
+def expert_chunked_packed_master_fsdp_streaming_block_group_value_grad_muonh_update_outputs(
+    mesh: Mesh,
+    config: BenchConfig,
+    master_bank: MuonMasterBank,
+    momentum_bank: MuonMasterBank,
+    expert_inputs,
+    *,
+    bench_kind: str,
+):
+    """Stream block-group value+grad through `MuonMasterBank`, then update packed state.
+
+    This is the harness version closest to the intended trainer boundary:
+    forward consumes a bf16 FSDP block-group view produced by
+    `materialize_expert_block_group_from_muon_master_bank`, while MuonH updates
+    only the authoritative fp32 packed chunk for that group.
+    """
+
+    loss = jnp.asarray(0, dtype=jnp.float32)
+    next_master_chunks = []
+    next_momentum_chunks = []
+    master_chunks = chunked_bank_chunks(master_bank)
+    momentum_chunks = chunked_bank_chunks(momentum_bank)
+    for group_index, master_chunk in enumerate(master_chunks):
+        momentum_chunk = momentum_chunks[group_index]
+
+        def loss_for_group(chunk, *, group_index=group_index):
+            return expert_chunked_packed_master_fsdp_block_group_chunk_consumer_loss(
+                mesh,
+                config,
+                chunk,
+                expert_inputs,
+                group_index=group_index,
+                bench_kind=bench_kind,
+            )
+
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_streaming_block_group_value_grad_muonh_update/"
+            f"group_{group_index}/value_and_grad"
+        ):
+            group_loss, grad_chunk = jax.value_and_grad(loss_for_group)(master_chunk)
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_streaming_block_group_value_grad_muonh_update/"
+            f"group_{group_index}/update"
+        ):
+            next_master_chunk, next_momentum_chunk = expert_chunked_packed_master_muonh_update_chunk_outputs(
+                config,
+                master_chunk,
+                grad_chunk,
+                momentum_chunk,
+                chunk_index=group_index,
+            )
+        loss = loss + group_loss
+        next_master_chunks.append(next_master_chunk)
+        next_momentum_chunks.append(next_momentum_chunk)
+    return (
+        loss,
+        replace_chunked_bank(master_bank, tuple(next_master_chunks)),
+        replace_chunked_bank(momentum_bank, tuple(next_momentum_chunks)),
+    )
+
+
+def expert_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss(
+    mesh: Mesh,
+    config: BenchConfig,
+    master_bank,
+    momentum_bank,
+    expert_inputs,
+    *,
+    bench_kind: str,
+) -> jax.Array:
+    """Stream chunk-local grad+MuonH, then consume the updated chunk at FSDP use sites."""
+
+    loss = jnp.asarray(0, dtype=jnp.float32)
+    momentum_chunks = chunked_bank_chunks(momentum_bank)
+    for chunk_index, master_chunk in enumerate(chunked_bank_chunks(master_bank)):
+        momentum_chunk = momentum_chunks[chunk_index]
+
+        def loss_for_chunk(chunk, *, chunk_index=chunk_index):
+            return expert_chunked_packed_master_fsdp_chunk_consumer_loss_for_bench(
+                mesh,
+                config,
+                chunk,
+                expert_inputs,
+                chunk_index=chunk_index,
+                bench_kind=bench_kind,
+            )
+
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_streaming_grad_muonh_next_loss/chunk_{chunk_index}/grad"
+        ):
+            grad_chunk = jax.grad(loss_for_chunk)(master_chunk)
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_streaming_grad_muonh_next_loss/chunk_{chunk_index}/update"
+        ):
+            next_master_chunk, _next_momentum_chunk = expert_chunked_packed_master_muonh_update_chunk_outputs(
+                config,
+                master_chunk,
+                grad_chunk,
+                momentum_chunk,
+                chunk_index=chunk_index,
+            )
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_streaming_grad_muonh_next_loss/"
+            f"chunk_{chunk_index}/consume_updated_chunk"
+        ):
+            loss = loss + expert_chunked_packed_master_fsdp_chunk_consumer_loss(
+                mesh,
+                config,
+                next_master_chunk,
+                expert_inputs,
+                chunk_index=chunk_index,
+                bench_kind=bench_kind,
+            )
+    return loss
+
+
+def expert_chunked_packed_master_fsdp_streaming_grad_muonh_update_step_factory(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+):
+    def update_step(master_bank, momentum_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_chunked_packed_master_fsdp_streaming_grad_muonh_update_step"):
+            return expert_chunked_packed_master_fsdp_streaming_grad_muonh_update_outputs(
+                mesh,
+                config,
+                master_bank,
+                momentum_bank,
+                expert_inputs,
+                bench_kind=bench_kind,
+            )
+
+    return update_step
+
+
+def expert_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_step_factory(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+):
+    def update_step(master_bank, momentum_bank, expert_inputs):
+        with jax.named_scope(
+            "muon_update_bench/expert_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_step"
+        ):
+            return expert_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_outputs(
+                mesh,
+                config,
+                master_bank,
+                momentum_bank,
+                expert_inputs,
+                bench_kind=bench_kind,
+            )
+
+    return update_step
+
+
+def expert_chunked_packed_master_fsdp_streaming_block_group_value_grad_muonh_update_step_factory(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+):
+    def update_step(master_bank, momentum_bank, expert_inputs):
+        with jax.named_scope(
+            "muon_update_bench/" "expert_chunked_packed_master_fsdp_streaming_block_group_value_grad_muonh_update_step"
+        ):
+            return expert_chunked_packed_master_fsdp_streaming_block_group_value_grad_muonh_update_outputs(
+                mesh,
+                config,
+                master_bank,
+                momentum_bank,
+                expert_inputs,
+                bench_kind=bench_kind,
+            )
+
+    return update_step
+
+
+def expert_muon_master_bank_block_group_train_step_factory(
+    mesh: Mesh,
+    config: BenchConfig,
+):
+    """Return the harness train step for authoritative packed expert Muon state.
+
+    The returned step consumes only `MuonExpertState` plus synthetic expert
+    inputs. It materializes bf16 FSDP expert block-group views inside the loss,
+    differentiates back to the packed master chunks, and returns updated fp32
+    packed master/momentum state. No FSDP-shaped update tree is produced.
+    """
+
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH
+
+    def train_step(state: MuonExpertState, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_muon_master_bank_block_group_train_step"):
+            loss, next_master, next_momentum = (
+                expert_chunked_packed_master_fsdp_streaming_block_group_value_grad_muonh_update_outputs(
+                    mesh,
+                    config,
+                    state.master,
+                    state.momentum,
+                    expert_inputs,
+                    bench_kind=bench_kind,
+                )
+            )
+            return loss, MuonExpertState(master=next_master, momentum=next_momentum)
+
+    return train_step
+
+
+def expert_chunked_packed_master_fsdp_streaming_grad_muonh_checksum_step_factory(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+):
+    def update_step(master_bank, momentum_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_chunked_packed_master_fsdp_streaming_grad_muonh_checksum_step"):
+            return expert_chunked_packed_master_fsdp_streaming_grad_muonh_checksum(
+                mesh,
+                config,
+                master_bank,
+                momentum_bank,
+                expert_inputs,
+                bench_kind=bench_kind,
+            )
+
+    return update_step
+
+
+def expert_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_step_factory(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+):
+    def update_step(master_bank, momentum_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_step"):
+            return expert_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss(
+                mesh,
+                config,
+                master_bank,
+                momentum_bank,
+                expert_inputs,
+                bench_kind=bench_kind,
+            )
+
+    return update_step
+
+
+def expert_chunked_packed_master_grad_muonh_update_step_factory_for_bench(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+):
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH:
+        return expert_chunked_packed_master_fsdp_layer_grad_muonh_update_step_factory(mesh, config)
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_UPDATE_BENCH:
+        return expert_chunked_packed_master_fsdp_sequential_grad_muonh_update_step_factory(mesh, config)
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_CHECKSUM_BENCH:
+        return expert_chunked_packed_master_fsdp_sequential_grad_muonh_checksum_step_factory(mesh, config)
+    if bench_kind in (
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+    ):
+        return expert_chunked_packed_master_fsdp_streaming_grad_muonh_checksum_step_factory(mesh, config, bench_kind)
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_UPDATE_BENCH:
+        return expert_chunked_packed_master_fsdp_streaming_grad_muonh_update_step_factory(mesh, config, bench_kind)
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH:
+        return expert_chunked_packed_master_fsdp_streaming_block_group_value_grad_muonh_update_step_factory(
+            mesh,
+            config,
+            bench_kind,
+        )
+    if is_chunked_packed_master_streaming_value_grad_bench(bench_kind):
+        return expert_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_step_factory(
+            mesh,
+            config,
+            bench_kind,
+        )
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH:
+        return expert_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_step_factory(mesh, config, bench_kind)
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH:
+        return expert_chunked_packed_master_grouped_grad_muonh_update_step_factory(config, bench_kind)
+    raise ValueError(f"Unsupported chunked packed-master grad+MuonH bench kind: {bench_kind!r}.")
+
+
+def expert_chunked_packed_master_fsdp_consumer_step_factory_for_bench(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+):
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH:
+        return expert_chunked_packed_master_fsdp_layer_consumer_step_factory(mesh, config)
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH:
+        return expert_chunked_packed_master_fsdp_sequential_consumer_step_factory(mesh, config)
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH:
+        return expert_layer_chunked_packed_master_fsdp_sequential_consumer_step_factory(mesh, config)
+    raise ValueError(f"Unsupported chunked packed-master FSDP consumer bench kind: {bench_kind!r}.")
+
+
+def chunked_packed_master_grad_muonh_input_specs_for_bench(mesh: Mesh, config: BenchConfig, bench_kind: str) -> Any:
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH:
+        return synthetic_grouped_expert_consumer_input_specs(mesh, config, bench_kind)
+    return expert_fsdp_layer_consumer_input_specs(mesh, config)
+
+
+def make_chunked_packed_master_grad_muonh_input_tree_for_bench(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+    seed: int,
+) -> Any:
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH:
+        return make_grouped_expert_consumer_input_tree(mesh, config, bench_kind, seed)
+    return make_array_from_spec_tree(expert_fsdp_layer_consumer_input_specs(mesh, config), config, seed)
+
+
+def assert_chunked_packed_master_grad_muonh_input_sharding_for_bench(
+    inputs,
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+) -> None:
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH:
+        assert_grouped_expert_sharding(
+            inputs,
+            mesh,
+            config,
+            bench_kind,
+            "chunked packed master grouped-grad MuonH input",
+        )
+        return
+    input_sharding = getattr(inputs, "sharding", None)
+    expected_spec = P("expert", None, None) if inputs.ndim == 3 else P("expert", None)
+    if not isinstance(input_sharding, NamedSharding) or input_sharding.spec != expected_spec:
+        raise AssertionError(
+            f"chunked packed master layer-grad MuonH input expected {expected_spec}, "
+            f"got {getattr(input_sharding, 'spec', input_sharding)!r}."
+        )
+
+
+def expert_chunked_packed_master_fsdp_sequential_consumer_loss(
+    mesh: Mesh,
+    config: BenchConfig,
+    chunked_bank,
+    expert_inputs,
+) -> jax.Array:
+    loss = jnp.asarray(0, dtype=jnp.float32)
+    for layer_index in range(config.layers):
+        with jax.named_scope(f"muon_update_bench/chunked_packed_master_fsdp_sequential/layer_{layer_index}"):
+            layer = chunked_packed_master_bank_to_fsdp_expert_layer(
+                mesh,
+                config,
+                chunked_bank,
+                layer_index=layer_index,
+            )
+            loss = loss + expert_fsdp_layer_consumer_loss(mesh, config, layer, expert_inputs)
+    return loss
+
+
+def expert_layer_chunked_packed_master_fsdp_sequential_consumer_loss(
+    mesh: Mesh,
+    config: BenchConfig,
+    chunked_bank,
+    expert_inputs,
+) -> jax.Array:
+    """Consume all expert layers through the replica-aligned packed-master chunks."""
+
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH
+    loss = jnp.asarray(0, dtype=jnp.float32)
+    for chunk_index, chunk in enumerate(chunked_bank_chunks(chunked_bank)):
+        with jax.named_scope(f"muon_update_bench/layer_chunked_packed_master_fsdp_sequential/" f"chunk_{chunk_index}"):
+            loss = loss + expert_chunked_packed_master_fsdp_chunk_consumer_loss(
+                mesh,
+                config,
+                chunk,
+                expert_inputs,
+                chunk_index=chunk_index,
+                bench_kind=bench_kind,
+            )
+    return loss
+
+
+def expert_chunked_packed_master_fsdp_chunk_consumer_loss(
+    mesh: Mesh,
+    config: BenchConfig,
+    chunk,
+    expert_inputs,
+    *,
+    chunk_index: int,
+    bench_kind: str,
+) -> jax.Array:
+    """Consume all valid layers in one packed-master chunk through FSDP use-sites."""
+
+    loss = jnp.asarray(0, dtype=jnp.float32)
+    valid_group_size = chunked_packed_master_valid_group_sizes_for_bench(config, bench_kind)[chunk_index]
+    padded_group_size = grouped_expert_group_sizes_for_bench(config, bench_kind)[chunk_index]
+    padded_group_sharding = grouped_expert_group_sharding(mesh, config, bench_kind, padded_group_size)
+    padded_slab_size = min(padded_group_size, _sharding_axis_size(mesh, padded_group_sharding.spec[0]))
+    for slab_local_start in range(0, valid_group_size, padded_slab_size):
+        valid_slab_size = min(padded_slab_size, valid_group_size - slab_local_start)
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_fsdp_chunk_consumer/"
+            f"chunk_{chunk_index}/slab_{slab_local_start}"
+        ):
+            slab = chunked_packed_master_chunk_to_fsdp_expert_slab(
+                mesh,
+                config,
+                chunk,
+                chunk_index=chunk_index,
+                slab_local_start=slab_local_start,
+                valid_slab_size=valid_slab_size,
+                padded_slab_size=padded_slab_size,
+                bench_kind=bench_kind,
+            )
+            for slab_layer_index in range(valid_slab_size):
+                with jax.named_scope(
+                    f"muon_update_bench/chunked_packed_master_fsdp_chunk_consumer/"
+                    f"chunk_{chunk_index}/slab_{slab_local_start}/layer_{slab_layer_index}"
+                ):
+                    layer = {
+                        "mlp": {
+                            "expert_mlp": {
+                                name: value[slab_layer_index] for name, value in slab["mlp"]["expert_mlp"].items()
+                            }
+                        }
+                    }
+                    loss = loss + expert_fsdp_layer_consumer_loss(mesh, config, layer, expert_inputs)
+    return loss
+
+
+def expert_chunked_packed_master_fsdp_chunk_layerwise_consumer_loss(
+    mesh: Mesh,
+    config: BenchConfig,
+    chunk,
+    expert_inputs,
+    *,
+    chunk_index: int,
+    bench_kind: str,
+) -> jax.Array:
+    """Consume one packed-master chunk by materializing each valid layer at its use site."""
+
+    loss = jnp.asarray(0, dtype=jnp.float32)
+    valid_group_size = chunked_packed_master_valid_group_sizes_for_bench(config, bench_kind)[chunk_index]
+    for local_layer_index in range(valid_group_size):
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_fsdp_chunk_layerwise_consumer/"
+            f"chunk_{chunk_index}/layer_{local_layer_index}"
+        ):
+            layer = chunked_packed_master_chunk_to_fsdp_expert_layer(
+                mesh,
+                config,
+                chunk,
+                chunk_index=chunk_index,
+                local_layer_index=local_layer_index,
+                bench_kind=bench_kind,
+            )
+            loss = loss + expert_fsdp_layer_consumer_loss(mesh, config, layer, expert_inputs)
+    return loss
+
+
+def expert_chunked_packed_master_fsdp_block_group_consumer_loss(
+    mesh: Mesh,
+    config: BenchConfig,
+    master_bank: MuonMasterBank,
+    expert_inputs,
+    *,
+    group_index: int,
+    bench_kind: str,
+) -> jax.Array:
+    """Consume one packed-master block group via the explicit materialization API."""
+
+    loss = jnp.asarray(0, dtype=jnp.float32)
+    valid_group_size = chunked_packed_master_valid_group_sizes_for_bench(config, bench_kind)[group_index]
+    padded_group_size = grouped_expert_group_sizes_for_bench(config, bench_kind)[group_index]
+    padded_group_sharding = grouped_expert_group_sharding(mesh, config, bench_kind, padded_group_size)
+    padded_slab_size = min(padded_group_size, _sharding_axis_size(mesh, padded_group_sharding.spec[0]))
+    slabs = materialize_expert_block_group_from_muon_master_bank(
+        mesh,
+        config,
+        bench_kind,
+        master_bank,
+        group_index=group_index,
+    )
+    for slab_index, slab in enumerate(slabs):
+        slab_local_start = slab_index * padded_slab_size
+        valid_slab_size = min(padded_slab_size, valid_group_size - slab_local_start)
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_fsdp_block_group_consumer/"
+            f"group_{group_index}/slab_{slab_local_start}"
+        ):
+            for slab_layer_index in range(valid_slab_size):
+                with jax.named_scope(
+                    f"muon_update_bench/chunked_packed_master_fsdp_block_group_consumer/"
+                    f"group_{group_index}/slab_{slab_local_start}/layer_{slab_layer_index}"
+                ):
+                    layer = {
+                        "mlp": {
+                            "expert_mlp": {
+                                name: value[slab_layer_index] for name, value in slab["mlp"]["expert_mlp"].items()
+                            }
+                        }
+                    }
+                    loss = loss + expert_fsdp_layer_consumer_loss(mesh, config, layer, expert_inputs)
+    return loss
+
+
+def expert_chunked_packed_master_fsdp_block_group_chunk_consumer_loss(
+    mesh: Mesh,
+    config: BenchConfig,
+    chunk,
+    expert_inputs,
+    *,
+    group_index: int,
+    bench_kind: str,
+) -> jax.Array:
+    """Consume one packed-master block group from the chunk visible to autodiff."""
+
+    loss = jnp.asarray(0, dtype=jnp.float32)
+    valid_group_size = chunked_packed_master_valid_group_sizes_for_bench(config, bench_kind)[group_index]
+    padded_group_size = grouped_expert_group_sizes_for_bench(config, bench_kind)[group_index]
+    padded_group_sharding = grouped_expert_group_sharding(mesh, config, bench_kind, padded_group_size)
+    padded_slab_size = min(padded_group_size, _sharding_axis_size(mesh, padded_group_sharding.spec[0]))
+    slabs = materialize_expert_block_group_from_muon_master_chunk(
+        mesh,
+        config,
+        bench_kind,
+        chunk,
+        group_index=group_index,
+    )
+    for slab_index, slab in enumerate(slabs):
+        slab_local_start = slab_index * padded_slab_size
+        valid_slab_size = min(padded_slab_size, valid_group_size - slab_local_start)
+        with jax.named_scope(
+            f"muon_update_bench/chunked_packed_master_fsdp_block_group_chunk_consumer/"
+            f"group_{group_index}/slab_{slab_local_start}"
+        ):
+            for slab_layer_index in range(valid_slab_size):
+                with jax.named_scope(
+                    f"muon_update_bench/chunked_packed_master_fsdp_block_group_chunk_consumer/"
+                    f"group_{group_index}/slab_{slab_local_start}/layer_{slab_layer_index}"
+                ):
+                    layer = {
+                        "mlp": {
+                            "expert_mlp": {
+                                name: value[slab_layer_index] for name, value in slab["mlp"]["expert_mlp"].items()
+                            }
+                        }
+                    }
+                    loss = loss + expert_fsdp_layer_consumer_loss(mesh, config, layer, expert_inputs)
+    return loss
+
+
+def expert_chunked_packed_master_fsdp_chunk_consumer_loss_for_bench(
+    mesh: Mesh,
+    config: BenchConfig,
+    chunk,
+    expert_inputs,
+    *,
+    chunk_index: int,
+    bench_kind: str,
+) -> jax.Array:
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_LAYERWISE_VALUE_GRAD_MUONH_UPDATE_BENCH:
+        return expert_chunked_packed_master_fsdp_chunk_layerwise_consumer_loss(
+            mesh,
+            config,
+            chunk,
+            expert_inputs,
+            chunk_index=chunk_index,
+            bench_kind=bench_kind,
+        )
+    return expert_chunked_packed_master_fsdp_chunk_consumer_loss(
+        mesh,
+        config,
+        chunk,
+        expert_inputs,
+        chunk_index=chunk_index,
+        bench_kind=bench_kind,
+    )
+
+
+def expert_chunked_packed_master_fsdp_sequential_consumer_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(chunked_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_chunked_packed_master_fsdp_sequential_consumer_step"):
+            return expert_chunked_packed_master_fsdp_sequential_consumer_loss(
+                mesh,
+                config,
+                chunked_bank,
+                expert_inputs,
+            )
+
+    return update_step
+
+
+def expert_layer_chunked_packed_master_fsdp_sequential_consumer_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(chunked_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_layer_chunked_packed_master_fsdp_sequential_consumer_step"):
+            return expert_layer_chunked_packed_master_fsdp_sequential_consumer_loss(
+                mesh,
+                config,
+                chunked_bank,
+                expert_inputs,
+            )
+
+    return update_step
+
+
+def expert_packed_master_fsdp_slab_consumer_loss(mesh: Mesh, config: BenchConfig, master_bank, expert_inputs):
+    """Consume all expert layers by materializing each shard-aligned slab once."""
+
+    loss = jnp.asarray(0, dtype=jnp.float32)
+    for _group_index, slab_start, valid_slab_size, padded_slab_size in packed_master_fsdp_slab_ranges(mesh, config):
+        with jax.named_scope(f"muon_update_bench/packed_master_fsdp_slab_consumer/slab_{slab_start}"):
+            slab = packed_master_bank_to_fsdp_expert_slab(
+                mesh,
+                config,
+                master_bank,
+                slab_start=slab_start,
+                valid_slab_size=valid_slab_size,
+                padded_slab_size=padded_slab_size,
+            )
+            for slab_layer_index in range(valid_slab_size):
+                with jax.named_scope(
+                    f"muon_update_bench/packed_master_fsdp_slab_consumer/slab_{slab_start}/layer_{slab_layer_index}"
+                ):
+                    layer = {
+                        "mlp": {
+                            "expert_mlp": {
+                                name: value[slab_layer_index] for name, value in slab["mlp"]["expert_mlp"].items()
+                            }
+                        }
+                    }
+                    loss = loss + expert_fsdp_layer_consumer_loss(mesh, config, layer, expert_inputs)
+    return loss
+
+
+def expert_packed_master_fsdp_slab_consumer_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(master_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_packed_master_fsdp_slab_consumer_step"):
+            return expert_packed_master_fsdp_slab_consumer_loss(mesh, config, master_bank, expert_inputs)
+
+    return update_step
+
+
+def packed_master_bank_to_fsdp_expert_bulk_tree(mesh: Mesh, config: BenchConfig, packed_bank):
+    """Materialize all packed-master expert leaves to bf16 FSDP leaves in bulk."""
+
+    output_layers = [
+        {"mlp": {"expert_mlp": {name: None for name in synthetic_shapes(config)}}} for _ in range(config.layers)
+    ]
+    for name in synthetic_shapes(config):
+        with jax.named_scope(f"muon_update_bench/packed_master_fsdp_bulk/{name}/cast_bank_to_consumer_dtype"):
+            packed_leaf = packed_bank["packed"][name].astype(jnp.bfloat16)
+        with jax.named_scope(f"muon_update_bench/packed_master_fsdp_bulk/{name}/restore_fsdp_leaves"):
+            leaf_parts = _packed_bank_update_to_fsdp_leaf_tuple_slice_first(
+                mesh,
+                config,
+                name,
+                packed_leaf,
+            )
+        for layer_index, leaf_part in enumerate(leaf_parts):
+            output_layers[layer_index]["mlp"]["expert_mlp"][name] = leaf_part
+    return {"layers": tuple(output_layers)}
+
+
+def expert_packed_master_fsdp_bulk_consumer_loss(mesh: Mesh, config: BenchConfig, master_bank, expert_inputs):
+    """Consume all expert layers after a single bulk packed-master-to-FSDP materialization."""
+
+    materialized = packed_master_bank_to_fsdp_expert_bulk_tree(mesh, config, master_bank)
+    loss = jnp.asarray(0, dtype=jnp.float32)
+    for layer_index, layer in enumerate(materialized["layers"]):
+        with jax.named_scope(f"muon_update_bench/packed_master_fsdp_bulk_consumer/layer_{layer_index}"):
+            loss = loss + expert_fsdp_layer_consumer_loss(mesh, config, layer, expert_inputs)
+    return loss
+
+
+def expert_packed_master_fsdp_bulk_consumer_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(master_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_packed_master_fsdp_bulk_consumer_step"):
+            return expert_packed_master_fsdp_bulk_consumer_loss(mesh, config, master_bank, expert_inputs)
+
+    return update_step
+
+
+def packed_master_fsdp_consumer_loss_for_grad_bench(
+    mesh: Mesh, config: BenchConfig, bench_kind: str, master_bank, expert_inputs
+):
+    if bench_kind == EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_BENCH:
+        return expert_packed_master_fsdp_sequential_consumer_loss(mesh, config, master_bank, expert_inputs)
+    if bench_kind == EXPERT_PACKED_MASTER_FSDP_SLAB_GRAD_BENCH:
+        return expert_packed_master_fsdp_slab_consumer_loss(mesh, config, master_bank, expert_inputs)
+    if bench_kind == EXPERT_PACKED_MASTER_FSDP_BULK_GRAD_BENCH:
+        return expert_packed_master_fsdp_bulk_consumer_loss(mesh, config, master_bank, expert_inputs)
+    raise ValueError(f"Unsupported packed-master FSDP grad bench kind: {bench_kind!r}.")
+
+
+def expert_packed_master_fsdp_grad_outputs(mesh: Mesh, config: BenchConfig, bench_kind: str, master_bank, expert_inputs):
+    """Differentiate an FSDP consumer loss through the packed fp32 master view."""
+
+    def loss_fn(master_bank):
+        return packed_master_fsdp_consumer_loss_for_grad_bench(mesh, config, bench_kind, master_bank, expert_inputs)
+
+    with jax.named_scope("muon_update_bench/packed_master_fsdp_grad"):
+        return jax.grad(loss_fn)(master_bank)
+
+
+def expert_packed_master_fsdp_grad_step_factory(mesh: Mesh, config: BenchConfig, bench_kind: str):
+    def update_step(master_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_packed_master_fsdp_grad_step"):
+            return expert_packed_master_fsdp_grad_outputs(mesh, config, bench_kind, master_bank, expert_inputs)
+
+    return update_step
+
+
+def expert_packed_master_bulk_grad_muonh_update_outputs(
+    mesh: Mesh,
+    config: BenchConfig,
+    master_bank,
+    momentum_bank,
+    expert_inputs,
+):
+    """Differentiate the bulk FSDP view, then update packed master and momentum."""
+
+    with jax.named_scope("muon_update_bench/packed_master_bulk_grad_muonh/grad"):
+        grad_bank = expert_packed_master_fsdp_grad_outputs(
+            mesh,
+            config,
+            EXPERT_PACKED_MASTER_FSDP_BULK_GRAD_BENCH,
+            master_bank,
+            expert_inputs,
+        )
+    with jax.named_scope("muon_update_bench/packed_master_bulk_grad_muonh/update"):
+        return expert_packed_master_muonh_update_outputs(config, master_bank, grad_bank, momentum_bank)
+
+
+def expert_packed_master_bulk_grad_muonh_update_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(master_bank, momentum_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_packed_master_bulk_grad_muonh_update_step"):
+            return expert_packed_master_bulk_grad_muonh_update_outputs(
+                mesh,
+                config,
+                master_bank,
+                momentum_bank,
+                expert_inputs,
+            )
+
+    return update_step
+
+
+def expert_packed_master_muonh_update_step_factory(config: BenchConfig):
+    def update_step(master_bank, grad_bank, momentum_bank):
+        with jax.named_scope("muon_update_bench/expert_packed_master_muonh_update_step"):
+            return expert_packed_master_muonh_update_outputs(config, master_bank, grad_bank, momentum_bank)
+
+    return update_step
+
+
+def expert_packed_master_muonh_update_checksum_step_factory(config: BenchConfig):
+    def update_step(master_bank, grad_bank, momentum_bank):
+        with jax.named_scope("muon_update_bench/expert_packed_master_muonh_update_checksum_step"):
+            next_master, next_momentum = expert_packed_master_muonh_update_outputs(
+                config,
+                master_bank,
+                grad_bank,
+                momentum_bank,
+            )
+            with jax.named_scope("muon_update_bench/expert_packed_master_muonh_update_checksum"):
+                return scalar_tree_checksum(next_master) + scalar_tree_checksum(next_momentum)
+
+    return update_step
+
+
+def expert_packed_master_momentum_checksum_step_factory(config: BenchConfig):
+    def update_step(grad_bank, momentum_bank):
+        with jax.named_scope("muon_update_bench/expert_packed_master_momentum_checksum_step"):
+            next_momentum, direction_inputs = expert_packed_master_momentum_outputs(config, grad_bank, momentum_bank)
+            with jax.named_scope("muon_update_bench/expert_packed_master_momentum_checksum"):
+                return scalar_tree_checksum(next_momentum) + scalar_tree_checksum(direction_inputs)
+
+    return update_step
+
+
+def expert_packed_master_momentum_direction_step_factory(config: BenchConfig):
+    def update_step(grad_bank, momentum_bank):
+        with jax.named_scope("muon_update_bench/expert_packed_master_momentum_direction_step"):
+            return expert_packed_master_momentum_outputs(config, grad_bank, momentum_bank)
+
+    return update_step
+
+
+def expert_packed_master_ns_checksum_step_factory(config: BenchConfig):
+    def update_step(direction_inputs):
+        with jax.named_scope("muon_update_bench/expert_packed_master_ns_checksum_step"):
+            directions = expert_packed_master_ns_outputs(config, direction_inputs)
+            with jax.named_scope("muon_update_bench/expert_packed_master_ns_checksum"):
+                return scalar_tree_checksum(directions)
+
+    return update_step
+
+
+def expert_packed_master_ns_hyperball_checksum_step_factory(config: BenchConfig):
+    def update_step(master_bank, direction_inputs):
+        with jax.named_scope("muon_update_bench/expert_packed_master_ns_hyperball_checksum_step"):
+            updates = expert_packed_master_ns_hyperball_outputs(config, master_bank, direction_inputs)
+            with jax.named_scope("muon_update_bench/expert_packed_master_ns_hyperball_checksum"):
+                return scalar_tree_checksum(updates)
+
+    return update_step
+
+
+def expert_packed_master_ns_hyperball_apply_checksum_step_factory(config: BenchConfig):
+    def update_step(master_bank, direction_inputs):
+        with jax.named_scope("muon_update_bench/expert_packed_master_ns_hyperball_apply_checksum_step"):
+            next_master = expert_packed_master_ns_hyperball_apply_outputs(config, master_bank, direction_inputs)
+            with jax.named_scope("muon_update_bench/expert_packed_master_ns_hyperball_apply_checksum"):
+                return scalar_tree_checksum(next_master)
+
+    return update_step
+
+
+def expert_packed_master_direction_ns_hyperball_checksum_step_factory(config: BenchConfig):
+    def update_step(master_bank, grad_bank, momentum_bank):
+        with jax.named_scope("muon_update_bench/expert_packed_master_direction_ns_hyperball_checksum_step"):
+            updates, next_momentum = expert_packed_master_direction_ns_hyperball_outputs(
+                config,
+                master_bank,
+                grad_bank,
+                momentum_bank,
+            )
+            with jax.named_scope("muon_update_bench/expert_packed_master_direction_ns_hyperball_checksum"):
+                return scalar_tree_checksum(updates) + scalar_tree_checksum(next_momentum)
+
+    return update_step
+
+
+def expert_packed_master_chunked_direction_ns_hyperball_checksum_step_factory(config: BenchConfig):
+    def update_step(master_bank, grad_bank, momentum_bank):
+        with jax.named_scope("muon_update_bench/expert_packed_master_chunked_direction_ns_hyperball_checksum_step"):
+            return expert_packed_master_chunked_direction_ns_hyperball_checksum(
+                config,
+                master_bank,
+                grad_bank,
+                momentum_bank,
+            )
+
+    return update_step
+
+
+def expert_packed_master_chunked_muonh_update_step_factory(config: BenchConfig):
+    def update_step(master_bank, grad_bank, momentum_bank):
+        with jax.named_scope("muon_update_bench/expert_packed_master_chunked_muonh_update_step"):
+            return expert_packed_master_chunked_muonh_update_outputs(
+                config,
+                master_bank,
+                grad_bank,
+                momentum_bank,
+            )
+
+    return update_step
+
+
+def expert_chunked_packed_master_muonh_update_step_factory(config: BenchConfig):
+    def update_step(master_bank, grad_bank, momentum_bank):
+        with jax.named_scope("muon_update_bench/expert_chunked_packed_master_muonh_update_step"):
+            return expert_chunked_packed_master_muonh_update_outputs(
+                config,
+                master_bank,
+                grad_bank,
+                momentum_bank,
+            )
+
+    return update_step
+
+
+def expert_packed_master_muonh_fsdp_sequential_consumer_outputs(
+    mesh: Mesh,
+    config: BenchConfig,
+    master_bank,
+    grad_bank,
+    momentum_bank,
+    expert_inputs,
+):
+    """Update packed fp32 MuonH state, then consume one bf16 FSDP layer at a time."""
+
+    next_master, next_momentum = expert_packed_master_muonh_update_outputs(
+        config,
+        master_bank,
+        grad_bank,
+        momentum_bank,
+    )
+    with jax.named_scope("muon_update_bench/packed_master_muonh_fsdp_sequential/consume_updated_master"):
+        loss = expert_packed_master_fsdp_sequential_consumer_loss(mesh, config, next_master, expert_inputs)
+    return next_master, next_momentum, loss
+
+
+def expert_packed_master_muonh_fsdp_sequential_consumer_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(master_bank, grad_bank, momentum_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_packed_master_muonh_fsdp_sequential_consumer_step"):
+            return expert_packed_master_muonh_fsdp_sequential_consumer_outputs(
+                mesh,
+                config,
+                master_bank,
+                grad_bank,
+                momentum_bank,
+                expert_inputs,
+            )
+
+    return update_step
+
+
+def expert_packed_master_muonh_fsdp_slab_consumer_outputs(
+    mesh: Mesh,
+    config: BenchConfig,
+    master_bank,
+    grad_bank,
+    momentum_bank,
+    expert_inputs,
+):
+    """Update packed fp32 MuonH state, then consume shard-aligned bf16 FSDP slabs."""
+
+    next_master, next_momentum = expert_packed_master_muonh_update_outputs(
+        config,
+        master_bank,
+        grad_bank,
+        momentum_bank,
+    )
+    with jax.named_scope("muon_update_bench/packed_master_muonh_fsdp_slab/consume_updated_master"):
+        loss = expert_packed_master_fsdp_slab_consumer_loss(mesh, config, next_master, expert_inputs)
+    return next_master, next_momentum, loss
+
+
+def expert_packed_master_muonh_fsdp_slab_consumer_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(master_bank, grad_bank, momentum_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_packed_master_muonh_fsdp_slab_consumer_step"):
+            return expert_packed_master_muonh_fsdp_slab_consumer_outputs(
+                mesh,
+                config,
+                master_bank,
+                grad_bank,
+                momentum_bank,
+                expert_inputs,
+            )
+
+    return update_step
+
+
+def expert_packed_master_muonh_fsdp_bulk_consumer_outputs(
+    mesh: Mesh,
+    config: BenchConfig,
+    master_bank,
+    grad_bank,
+    momentum_bank,
+    expert_inputs,
+):
+    """Update packed fp32 MuonH state, then consume the bf16 FSDP view."""
+
+    next_master, next_momentum = expert_packed_master_muonh_update_outputs(
+        config,
+        master_bank,
+        grad_bank,
+        momentum_bank,
+    )
+    with jax.named_scope("muon_update_bench/packed_master_muonh_fsdp_bulk/consume_updated_master"):
+        loss = expert_packed_master_fsdp_bulk_consumer_loss(mesh, config, next_master, expert_inputs)
+    return next_master, next_momentum, loss
+
+
+def expert_packed_master_muonh_fsdp_bulk_consumer_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(master_bank, grad_bank, momentum_bank, expert_inputs):
+        with jax.named_scope("muon_update_bench/expert_packed_master_muonh_fsdp_bulk_consumer_step"):
+            return expert_packed_master_muonh_fsdp_bulk_consumer_outputs(
+                mesh,
+                config,
+                master_bank,
+                grad_bank,
+                momentum_bank,
+                expert_inputs,
+            )
+
+    return update_step
+
+
+def expert_packed_master_muonh_fsdp_consumer_step_factory_for_bench(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+):
+    if bench_kind == EXPERT_PACKED_MASTER_MUONH_FSDP_SEQUENTIAL_CONSUMER_BENCH:
+        return expert_packed_master_muonh_fsdp_sequential_consumer_step_factory(mesh, config)
+    if bench_kind == EXPERT_PACKED_MASTER_MUONH_FSDP_SLAB_CONSUMER_BENCH:
+        return expert_packed_master_muonh_fsdp_slab_consumer_step_factory(mesh, config)
+    if bench_kind == EXPERT_PACKED_MASTER_MUONH_FSDP_BULK_CONSUMER_BENCH:
+        return expert_packed_master_muonh_fsdp_bulk_consumer_step_factory(mesh, config)
+    raise ValueError(f"Unsupported packed-master MuonH/FSDP consumer bench kind: {bench_kind!r}.")
+
+
 def grouped_expert_muonh_bank_consumer_step_factory(config: BenchConfig):
     """Apply grouped MuonH and consume the updated grouped expert banks directly."""
     optimizer = build_grouped_expert_productionish_optimizer(config, use_hyperball=True)
@@ -2454,6 +5529,14 @@ def _restore_grouped_expert_update_for_split(
     return update
 
 
+def _sharding_axis_size(mesh: Mesh, axis: str | tuple[str, ...] | None) -> int:
+    if axis is None:
+        return 1
+    if isinstance(axis, tuple):
+        return math.prod(mesh_axis_size(mesh, axis_name) for axis_name in axis)
+    return mesh_axis_size(mesh, axis)
+
+
 def expert_fsdp_grouped_muonh_updates(mesh: Mesh, config: BenchConfig, params, updates):
     """Compute expert MuonH in grouped 4D form, then restore ordinary FSDP-shaped updates."""
 
@@ -2625,9 +5708,9 @@ def fsdp_grads_to_packed_grouped_chunks_step_factory(mesh: Mesh, config: BenchCo
 
 
 def _fsdp_grad_leaf_spec_and_grouped_data_axis(name: str) -> tuple[P, int]:
-    if name == "w_gate_up":
+    if expert_gate_up_like_name(name):
         return P("expert", "data", "model"), 2
-    if name == "w_down":
+    if expert_down_name(name):
         return P("expert", "model", "data"), 3
     raise ValueError(f"Unknown expert parameter name {name!r}.")
 
@@ -3058,10 +6141,10 @@ def _explicit_grouped_update_to_fsdp_group(
     require_model_axis_one(config)
     group_axis = _live_group_axis(mesh, config)
     input_spec = P(group_axis, "expert", None, None)
-    if name == "w_gate_up":
+    if expert_gate_up_like_name(name):
         output_spec = P(None, "expert", "data", "model")
         data_sharded_axis = 2
-    elif name == "w_down":
+    elif expert_down_name(name):
         output_spec = P(None, "expert", "model", "data")
         data_sharded_axis = 3
     else:
@@ -3117,10 +6200,10 @@ def _explicit_grouped_update_to_fsdp_group_a2a(
         return _explicit_grouped_update_to_fsdp_group(mesh, config, name, update)
 
     input_spec = P(group_axis, "expert", None, None)
-    if name == "w_gate_up":
+    if expert_gate_up_like_name(name):
         output_spec = P(None, "expert", "data", "model")
         data_sharded_axis = 2
-    elif name == "w_down":
+    elif expert_down_name(name):
         output_spec = P(None, "expert", "model", "data")
         data_sharded_axis = 3
     else:
@@ -3172,10 +6255,10 @@ def _explicit_grouped_update_to_fsdp_group_data_first_a2a(
         return _explicit_grouped_update_to_fsdp_group(mesh, config, name, update)
 
     input_spec = P(group_axis, "expert", None, None)
-    if name == "w_gate_up":
+    if expert_gate_up_like_name(name):
         output_spec = P(None, "expert", "data", "model")
         data_sharded_axis = 2
-    elif name == "w_down":
+    elif expert_down_name(name):
         output_spec = P(None, "expert", "model", "data")
         data_sharded_axis = 3
     else:
@@ -3271,10 +6354,10 @@ def _explicit_grouped_update_to_fsdp_group_data_first_ppermute(
         return _explicit_grouped_update_to_fsdp_group(mesh, config, name, update)
 
     input_spec = P(group_axis, "expert", None, None)
-    if name == "w_gate_up":
+    if expert_gate_up_like_name(name):
         output_spec = P(None, "expert", "data", "model")
         data_sharded_axis = 2
-    elif name == "w_down":
+    elif expert_down_name(name):
         output_spec = P(None, "expert", "model", "data")
         data_sharded_axis = 3
     else:
@@ -3325,10 +6408,10 @@ def _explicit_grouped_update_to_fsdp_group_data_ppermute(
         return _explicit_grouped_update_to_fsdp_group(mesh, config, name, update)
 
     input_spec = P(group_axis, "expert", None, None)
-    if name == "w_gate_up":
+    if expert_gate_up_like_name(name):
         output_spec = P(None, "expert", "data", "model")
         data_sharded_axis = 2
-    elif name == "w_down":
+    elif expert_down_name(name):
         output_spec = P(None, "expert", "model", "data")
         data_sharded_axis = 3
     else:
@@ -3374,10 +6457,10 @@ def _explicit_grouped_update_to_fsdp_group_slice_first_gather(
     require_model_axis_one(config)
     group_axis = _live_group_axis(mesh, config)
     input_spec = P(group_axis, "expert", None, None)
-    if name == "w_gate_up":
+    if expert_gate_up_like_name(name):
         output_spec = P(None, "expert", "data", "model")
         data_sharded_axis = 2
-    elif name == "w_down":
+    elif expert_down_name(name):
         output_spec = P(None, "expert", "model", "data")
         data_sharded_axis = 3
     else:
@@ -3410,9 +6493,9 @@ def _explicit_grouped_update_to_fsdp_group_slice_first_gather(
 
 
 def _fsdp_leaf_output_spec_for_expert_name(name: str) -> tuple[P, int]:
-    if name == "w_gate_up":
+    if expert_gate_up_like_name(name):
         return P("expert", "data", "model"), 2
-    if name == "w_down":
+    if expert_down_name(name):
         return P("expert", "model", "data"), 3
     raise ValueError(f"Unknown expert parameter name {name!r}.")
 
@@ -3777,6 +6860,43 @@ def _packed_bank_update_to_fsdp_leaf_tuple_a2a(
     )(packed_update)
 
 
+def _packed_bank_update_to_fsdp_leaf_tuple_slice_first(
+    mesh: Mesh,
+    config: BenchConfig,
+    name: str,
+    packed_update: jax.Array,
+) -> tuple[jax.Array, ...]:
+    """Convert a packed grouped update bank to FSDP leaves by slicing data before gathering groups."""
+
+    require_model_axis_one(config)
+    group_axis = _live_group_axis(mesh, config)
+    input_spec = P(group_axis, "expert", None, None)
+    output_spec, data_sharded_axis = _fsdp_leaf_output_spec_for_expert_name(name)
+    data_axis_size = mesh_axis_size(mesh, "data")
+    if packed_update.shape[data_sharded_axis] % data_axis_size != 0:
+        raise ValueError(
+            f"{name} axis {data_sharded_axis} has size {packed_update.shape[data_sharded_axis]}, "
+            f"which must be divisible by data_axis={data_axis_size}."
+        )
+
+    def restore_bank(local_update):
+        return _slice_first_gather_to_fsdp_leaf_tuple(
+            local_update,
+            group_axis=group_axis,
+            data_axis_size=data_axis_size,
+            data_sharded_axis=data_sharded_axis,
+            valid_group_size=config.layers,
+        )
+
+    return shard_map(
+        restore_bank,
+        mesh=mesh,
+        in_specs=input_spec,
+        out_specs=tuple(output_spec for _ in range(config.layers)),
+        check_vma=False,
+    )(packed_update)
+
+
 def _packed_bank_update_apply_to_fsdp_leaf_tuple_a2a(
     mesh: Mesh,
     config: BenchConfig,
@@ -3842,6 +6962,48 @@ def _packed_bank_update_apply_to_fsdp_leaf_tuple_a2a(
     )(packed_update, *params)
 
 
+def _packed_bank_update_apply_to_fsdp_leaf_tuple_slice_first(
+    mesh: Mesh,
+    config: BenchConfig,
+    name: str,
+    params: tuple[jax.Array, ...],
+    packed_update: jax.Array,
+) -> tuple[jax.Array, ...]:
+    """Apply a packed grouped update bank while restoring through slice-first FSDP leaves."""
+
+    require_model_axis_one(config)
+    group_axis = _live_group_axis(mesh, config)
+    input_spec = P(group_axis, "expert", None, None)
+    output_spec, data_sharded_axis = _fsdp_leaf_output_spec_for_expert_name(name)
+    data_axis_size = mesh_axis_size(mesh, "data")
+    if packed_update.shape[data_sharded_axis] % data_axis_size != 0:
+        raise ValueError(
+            f"{name} axis {data_sharded_axis} has size {packed_update.shape[data_sharded_axis]}, "
+            f"which must be divisible by data_axis={data_axis_size}."
+        )
+
+    def restore_and_apply_bank(local_update, *local_params):
+        update_parts = _slice_first_gather_to_fsdp_leaf_tuple(
+            local_update,
+            group_axis=group_axis,
+            data_axis_size=data_axis_size,
+            data_sharded_axis=data_sharded_axis,
+            valid_group_size=config.layers,
+        )
+        return tuple(
+            optax.apply_updates(param, update_part)
+            for param, update_part in zip(local_params, update_parts, strict=True)
+        )
+
+    return shard_map(
+        restore_and_apply_bank,
+        mesh=mesh,
+        in_specs=(input_spec, *tuple(output_spec for _ in range(config.layers))),
+        out_specs=tuple(output_spec for _ in range(config.layers)),
+        check_vma=False,
+    )(packed_update, *params)
+
+
 def expert_fsdp_packed_bank_updates_to_fsdp_tree(mesh: Mesh, config: BenchConfig, packed_updates):
     """Restore packed grouped expert updates to a normal FSDP update tree."""
 
@@ -3856,6 +7018,25 @@ def expert_fsdp_packed_bank_updates_to_fsdp_tree(mesh: Mesh, config: BenchConfig
             packed_updates["packed"][name],
         )
         with jax.named_scope(f"muon_update_bench/expert_fsdp_packed_bank_a2a_apply/{name}/restore_leaves"):
+            for layer_index, update_part in enumerate(update_parts):
+                output_layers[layer_index]["mlp"]["expert_mlp"][name] = update_part
+    return {"layers": tuple(output_layers)}
+
+
+def expert_fsdp_packed_bank_slice_first_updates_to_fsdp_tree(mesh: Mesh, config: BenchConfig, packed_updates):
+    """Restore packed grouped expert updates to an FSDP update tree through slice-first routing."""
+
+    output_layers = [
+        {"mlp": {"expert_mlp": {name: None for name in synthetic_shapes(config)}}} for _ in range(config.layers)
+    ]
+    for name in synthetic_shapes(config):
+        update_parts = _packed_bank_update_to_fsdp_leaf_tuple_slice_first(
+            mesh,
+            config,
+            name,
+            packed_updates["packed"][name],
+        )
+        with jax.named_scope(f"muon_update_bench/expert_fsdp_packed_bank_slice_first_apply/{name}/restore_leaves"):
             for layer_index, update_part in enumerate(update_parts):
                 output_layers[layer_index]["mlp"]["expert_mlp"][name] = update_part
     return {"layers": tuple(output_layers)}
@@ -3892,11 +7073,44 @@ def expert_fsdp_packed_bank_direct_apply_outputs(mesh: Mesh, config: BenchConfig
     return {"layers": tuple(output_layers)}
 
 
+def expert_fsdp_packed_bank_slice_first_apply_outputs(mesh: Mesh, config: BenchConfig, params, packed_updates):
+    """Restore packed grouped expert updates with slice-first routing, then apply with ordinary Optax."""
+
+    next_updates = expert_fsdp_packed_bank_slice_first_updates_to_fsdp_tree(mesh, config, packed_updates)
+    with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_slice_first_apply/optax_apply_updates"):
+        return optax.apply_updates(params, next_updates)
+
+
+def expert_fsdp_packed_bank_slice_first_direct_apply_outputs(mesh: Mesh, config: BenchConfig, params, packed_updates):
+    """Apply packed grouped expert updates directly while restoring them through slice-first routing."""
+
+    output_layers = [
+        {"mlp": {"expert_mlp": {name: None for name in synthetic_shapes(config)}}} for _ in range(config.layers)
+    ]
+    for name in synthetic_shapes(config):
+        param_parts = tuple(
+            params["layers"][layer_index]["mlp"]["expert_mlp"][name] for layer_index in range(config.layers)
+        )
+        output_parts = _packed_bank_update_apply_to_fsdp_leaf_tuple_slice_first(
+            mesh,
+            config,
+            name,
+            param_parts,
+            packed_updates["packed"][name],
+        )
+        with jax.named_scope(
+            f"muon_update_bench/expert_fsdp_packed_bank_slice_first_direct_apply/{name}/restore_applied_leaves"
+        ):
+            for layer_index, output_part in enumerate(output_parts):
+                output_layers[layer_index]["mlp"]["expert_mlp"][name] = output_part
+    return {"layers": tuple(output_layers)}
+
+
 def expert_fsdp_packed_bank_muonh_updates_outputs(mesh: Mesh, config: BenchConfig, params, grads):
     """Run MuonH over whole packed grouped banks and return FSDP updates."""
 
     packed_updates = expert_fsdp_packed_bank_muonh_update_only_outputs(mesh, config, params, grads)
-    return expert_fsdp_packed_bank_updates_to_fsdp_tree(mesh, config, packed_updates)
+    return expert_fsdp_packed_bank_slice_first_updates_to_fsdp_tree(mesh, config, packed_updates)
 
 
 def expert_fsdp_packed_bank_muonh_updates_step_factory(mesh: Mesh, config: BenchConfig):
@@ -3921,6 +7135,13 @@ def expert_fsdp_packed_bank_muonh_apply_outputs(mesh: Mesh, config: BenchConfig,
     next_updates = expert_fsdp_packed_bank_muonh_updates_outputs(mesh, config, params, grads)
     with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_muonh/optax_apply_updates"):
         return optax.apply_updates(params, next_updates)
+
+
+def expert_fsdp_packed_bank_muonh_direct_apply_outputs(mesh: Mesh, config: BenchConfig, params, grads):
+    """Run packed-bank MuonH and apply updates directly at the FSDP boundary."""
+
+    packed_updates = expert_fsdp_packed_bank_muonh_update_only_outputs(mesh, config, params, grads)
+    return expert_fsdp_packed_bank_slice_first_direct_apply_outputs(mesh, config, params, packed_updates)
 
 
 def expert_fsdp_packed_bank_muonh_update_only_outputs(mesh: Mesh, config: BenchConfig, params, grads):
@@ -3962,7 +7183,7 @@ def expert_fsdp_packed_bank_direction_apply_outputs(mesh: Mesh, config: BenchCon
             direction = zeropower_via_newtonschulz_4d_for_config(packed_grads["packed"][name], config)
         with jax.named_scope(f"muon_update_bench/expert_fsdp_packed_bank_direction_apply/{name}/scale_direction"):
             packed_updates["packed"][name] = scale_ns4d_update(direction, config)
-    return expert_fsdp_packed_bank_a2a_apply_outputs(mesh, config, params, packed_updates)
+    return expert_fsdp_packed_bank_slice_first_apply_outputs(mesh, config, params, packed_updates)
 
 
 def expert_fsdp_packed_bank_muonh_apply_step_factory(mesh: Mesh, config: BenchConfig):
@@ -3977,6 +7198,22 @@ def expert_fsdp_packed_bank_muonh_apply_timing_step_factory(mesh: Mesh, config: 
     def update_step(params, grads):
         with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_muonh_apply_timing_step"):
             return expert_fsdp_packed_bank_muonh_apply_outputs(mesh, config, params, grads)
+
+    return update_step
+
+
+def expert_fsdp_packed_bank_muonh_direct_apply_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(params, grads):
+        with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_muonh_direct_apply_step"):
+            return expert_fsdp_packed_bank_muonh_direct_apply_outputs(mesh, config, params, grads)
+
+    return update_step
+
+
+def expert_fsdp_packed_bank_muonh_direct_apply_timing_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(params, grads):
+        with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_muonh_direct_apply_timing_step"):
+            return expert_fsdp_packed_bank_muonh_direct_apply_outputs(mesh, config, params, grads)
 
     return update_step
 
@@ -4120,6 +7357,38 @@ def expert_fsdp_packed_bank_direct_apply_boundary_timing_step_factory(mesh: Mesh
     def update_step(params, packed_updates):
         with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_direct_apply_boundary_timing_step"):
             return expert_fsdp_packed_bank_direct_apply_outputs(mesh, config, params, packed_updates)
+
+    return update_step
+
+
+def expert_fsdp_packed_bank_slice_first_apply_boundary_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(params, packed_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_slice_first_apply_boundary_step"):
+            return expert_fsdp_packed_bank_slice_first_apply_outputs(mesh, config, params, packed_updates)
+
+    return update_step
+
+
+def expert_fsdp_packed_bank_slice_first_apply_boundary_timing_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(params, packed_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_slice_first_apply_boundary_timing_step"):
+            return expert_fsdp_packed_bank_slice_first_apply_outputs(mesh, config, params, packed_updates)
+
+    return update_step
+
+
+def expert_fsdp_packed_bank_slice_first_direct_apply_boundary_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(params, packed_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_slice_first_direct_apply_boundary_step"):
+            return expert_fsdp_packed_bank_slice_first_direct_apply_outputs(mesh, config, params, packed_updates)
+
+    return update_step
+
+
+def expert_fsdp_packed_bank_slice_first_direct_apply_boundary_timing_step_factory(mesh: Mesh, config: BenchConfig):
+    def update_step(params, packed_updates):
+        with jax.named_scope("muon_update_bench/expert_fsdp_packed_bank_slice_first_direct_apply_boundary_timing_step"):
+            return expert_fsdp_packed_bank_slice_first_direct_apply_outputs(mesh, config, params, packed_updates)
 
     return update_step
 
@@ -5395,6 +8664,14 @@ def ns4d_bench_uses_grouped_params(bench_kind: str) -> bool:
         bench_kind in GROUPED_APPLY_BOUNDARY_BENCHES
         or bench_kind in GROUPED_PARAM_INPUT_BENCHES
         or bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH
+        or bench_kind in PACKED_MASTER_MUONH_UPDATE_ONLY_BENCHES
+        or bench_kind in PACKED_MASTER_MUONH_CONSUMER_BENCHES
+        or bench_kind in PACKED_MASTER_FSDP_CONSUMER_BENCHES
+        or bench_kind in CHUNKED_PACKED_MASTER_FSDP_CONSUMER_BENCHES
+        or bench_kind in CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES
+        or bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES
+        or bench_kind in PACKED_MASTER_FSDP_GRAD_BENCHES
+        or bench_kind in PACKED_MASTER_GRAD_MUONH_BENCHES
         or is_expert_fsdp_grads_to_grouped_chunks_bench(bench_kind)
     )
 
@@ -5458,6 +8735,82 @@ def ns4d_boundary_status(config: BenchConfig, bench_kind: str) -> str | None:
         return "grouped_blocks_expert_muonh_apply_then_bank_consumer"
     if bench_kind == EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH:
         return "grouped_blocks_expert_muonh_apply_then_public_moe_mlp_consumer"
+    if bench_kind == EXPERT_PACKED_MASTER_MUONH_FSDP_SEQUENTIAL_CONSUMER_BENCH:
+        return "packed_master_muonh_then_materialize_sequential_fsdp_layer_consumer"
+    if bench_kind == EXPERT_PACKED_MASTER_MUONH_FSDP_SLAB_CONSUMER_BENCH:
+        return "packed_master_muonh_then_materialize_slab_fsdp_layer_consumer"
+    if bench_kind == EXPERT_PACKED_MASTER_MUONH_FSDP_BULK_CONSUMER_BENCH:
+        return "packed_master_muonh_then_materialize_bulk_fsdp_layer_consumer"
+    if bench_kind == EXPERT_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH:
+        return "packed_master_materialize_one_fsdp_layer_consumer"
+    if bench_kind == EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH:
+        return "packed_master_materialize_sequential_fsdp_layer_consumer"
+    if bench_kind == EXPERT_PACKED_MASTER_FSDP_SLAB_CONSUMER_BENCH:
+        return "packed_master_materialize_slab_fsdp_layer_consumer"
+    if bench_kind == EXPERT_PACKED_MASTER_FSDP_BULK_CONSUMER_BENCH:
+        return "packed_master_materialize_bulk_fsdp_layer_consumer"
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH:
+        return "chunked_packed_master_materialize_one_fsdp_layer_consumer"
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH:
+        return "chunked_packed_master_materialize_sequential_fsdp_layer_consumer"
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH:
+        return "replica_aligned_chunked_packed_master_materialize_sequential_fsdp_layer_consumer"
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_BENCH:
+        return "chunked_packed_master_materialize_one_fsdp_layer_consumer_grad"
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH:
+        return "chunked_packed_master_one_fsdp_layer_grad_then_muonh_update"
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_UPDATE_BENCH:
+        return "chunked_packed_master_sequential_fsdp_layer_grads_then_muonh_update"
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_CHECKSUM_BENCH:
+        return "chunked_packed_master_sequential_fsdp_layer_grads_then_muonh_checksum"
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH:
+        return "chunked_packed_master_streaming_chunk_fsdp_layer_grads_then_muonh_checksum"
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH:
+        return "replica_aligned_chunked_packed_master_streaming_fsdp_grad_then_muonh_checksum"
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_UPDATE_BENCH:
+        return "replica_aligned_chunked_packed_master_streaming_fsdp_grad_then_muonh_update"
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_VALUE_GRAD_MUONH_UPDATE_BENCH:
+        return "replica_aligned_chunked_packed_master_streaming_fsdp_value_grad_then_muonh_update"
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_LAYERWISE_VALUE_GRAD_MUONH_UPDATE_BENCH:
+        return "replica_aligned_chunked_packed_master_streaming_layerwise_fsdp_value_grad_then_muonh_update"
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH:
+        return "replica_aligned_chunked_packed_master_streaming_block_group_fsdp_value_grad_then_muonh_update"
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH:
+        return "replica_aligned_chunked_packed_master_streaming_fsdp_grad_then_muonh_next_loss"
+    if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH:
+        return "replica_aligned_chunked_packed_master_grouped_view_grad_then_muonh_update"
+    if bench_kind == EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_BENCH:
+        return "packed_master_materialize_sequential_fsdp_layer_consumer_grad"
+    if bench_kind == EXPERT_PACKED_MASTER_FSDP_SLAB_GRAD_BENCH:
+        return "packed_master_materialize_slab_fsdp_layer_consumer_grad"
+    if bench_kind == EXPERT_PACKED_MASTER_FSDP_BULK_GRAD_BENCH:
+        return "packed_master_materialize_bulk_fsdp_layer_consumer_grad"
+    if bench_kind == EXPERT_PACKED_MASTER_BULK_GRAD_MUONH_UPDATE_BENCH:
+        return "packed_master_bulk_fsdp_grad_then_muonh_update"
+    if bench_kind == EXPERT_PACKED_MASTER_BULK_GRAD_SPLIT_MUONH_UPDATE_BENCH:
+        return "packed_master_bulk_fsdp_grad_then_split_muonh_update"
+    if bench_kind == EXPERT_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH:
+        return "packed_master_muonh_update_only"
+    if bench_kind == EXPERT_PACKED_MASTER_MUONH_UPDATE_CHECKSUM_BENCH:
+        return "packed_master_muonh_update_checksum"
+    if bench_kind == EXPERT_PACKED_MASTER_MOMENTUM_DIRECTION_BENCH:
+        return "packed_master_momentum_direction"
+    if bench_kind == EXPERT_PACKED_MASTER_MOMENTUM_CHECKSUM_BENCH:
+        return "packed_master_momentum_checksum"
+    if bench_kind == EXPERT_PACKED_MASTER_NS_CHECKSUM_BENCH:
+        return "packed_master_ns_checksum"
+    if bench_kind == EXPERT_PACKED_MASTER_NS_HYPERBALL_CHECKSUM_BENCH:
+        return "packed_master_ns_hyperball_checksum"
+    if bench_kind == EXPERT_PACKED_MASTER_NS_HYPERBALL_APPLY_CHECKSUM_BENCH:
+        return "packed_master_ns_hyperball_apply_checksum"
+    if bench_kind == EXPERT_PACKED_MASTER_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH:
+        return "packed_master_direction_ns_hyperball_checksum"
+    if bench_kind == EXPERT_PACKED_MASTER_CHUNKED_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH:
+        return "packed_master_chunked_direction_ns_hyperball_checksum"
+    if bench_kind == EXPERT_PACKED_MASTER_CHUNKED_MUONH_UPDATE_ONLY_BENCH:
+        return "packed_master_chunked_muonh_update_only"
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH:
+        return "chunked_packed_master_muonh_update_only"
     if bench_kind == EXPERT_GROUPED_OPTIMIZER_APPLY_BENCH:
         return "grouped_blocks_expert_direction_optimizer_updates_apply"
     if bench_kind == EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH:
@@ -5514,6 +8867,10 @@ def ns4d_boundary_status(config: BenchConfig, bench_kind: str) -> str | None:
         return "expert_fsdp_packed_bank_updates_a2a_apply"
     if bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH:
         return "expert_fsdp_packed_bank_updates_direct_apply"
+    if bench_kind == EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH:
+        return "expert_fsdp_packed_bank_updates_slice_first_apply"
+    if bench_kind == EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH:
+        return "expert_fsdp_packed_bank_updates_slice_first_direct_apply"
     if bench_kind == EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH:
         return "expert_fsdp_grads_to_grouped_chunks"
     if bench_kind == EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH:
@@ -5523,11 +8880,19 @@ def ns4d_boundary_status(config: BenchConfig, bench_kind: str) -> str | None:
     if bench_kind == EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH:
         return "expert_fsdp_grads_to_explicit_packed_grouped_bank"
     if bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
-        return "fsdp_grads_to_explicit_packed_grouped_bank+whole_bank_muon_update+packed_grouped_updates_to_fsdp_apply"
+        return (
+            "fsdp_grads_to_explicit_packed_grouped_bank+whole_bank_muon_update+"
+            "packed_grouped_updates_to_fsdp_slice_first_apply"
+        )
+    if bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH:
+        return (
+            "fsdp_grads_to_explicit_packed_grouped_bank+whole_bank_muon_update+"
+            "packed_grouped_updates_to_fsdp_slice_first_direct_apply"
+        )
     if bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH:
         return "fsdp_grads_and_params_to_explicit_packed_grouped_bank+whole_bank_muon_update"
     if bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH:
-        return "fsdp_grads_to_explicit_packed_grouped_bank+ns_direction+packed_grouped_updates_to_fsdp_apply"
+        return "fsdp_grads_to_explicit_packed_grouped_bank+ns_direction+packed_grouped_updates_to_fsdp_slice_first_apply"
     if bench_kind == EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH:
         return "expert_fsdp_params_grouped_updates_muonh_restore_only"
     if bench_kind == EXPERT_FSDP_GROUPED_UPDATES_MUONH_APPLY_BENCH:
@@ -5646,7 +9011,10 @@ def is_expert_fsdp_grouped_boundary_bench(bench_kind: str) -> bool:
         EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
     )
 
 
@@ -5690,7 +9058,10 @@ def is_expert_fsdp_grouped_bench(bench_kind: str) -> bool:
         EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
         EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_UPDATES_BENCH,
@@ -6158,19 +9529,22 @@ def restore_ns4d_group_with_indexing(updates: Any) -> Any:
     return jax.tree.map(restore, updates)
 
 
-def estimate_grouping(config: BenchConfig) -> list[GroupEstimate]:
+def estimate_grouping(config: BenchConfig, bench_kind: str | None = None) -> list[GroupEstimate]:
     estimates = []
     for shape in synthetic_shapes(config).values():
-        chunks = []
-        current = 0
-        for _ in range(config.layers):
-            stack_size = shape[0]
-            if current and current + stack_size > config.max_grouped_stack_size:
+        if bench_kind is None:
+            chunks = []
+            current = 0
+            for _ in range(config.layers):
+                stack_size = shape[0]
+                if current and current + stack_size > config.max_grouped_stack_size:
+                    chunks.append(current)
+                    current = 0
+                current += stack_size
+            if current:
                 chunks.append(current)
-                current = 0
-            current += stack_size
-        if current:
-            chunks.append(current)
+        else:
+            chunks = [group_size * shape[0] for group_size in grouped_expert_group_sizes_for_bench(config, bench_kind)]
         estimates.append(
             GroupEstimate(
                 leaf_shape=shape,
@@ -6295,6 +9669,47 @@ def summarize_compiled_memory(compiled) -> dict[str, int | None] | None:
     }
 
 
+def combine_hlo_summaries(*summaries: HloSummary | None) -> HloSummary | None:
+    present = [summary for summary in summaries if summary is not None]
+    if not present:
+        return None
+    return HloSummary(
+        characters=sum(summary.characters for summary in present),
+        dot_general=sum(summary.dot_general for summary in present),
+        batched_stack_dot_general=sum(summary.batched_stack_dot_general for summary in present),
+        two_batch_axis_dot_general=sum(summary.two_batch_axis_dot_general for summary in present),
+        custom_call=sum(summary.custom_call for summary in present),
+        gpu_gemm_custom_call=sum(summary.gpu_gemm_custom_call for summary in present),
+        all_gather=sum(summary.all_gather for summary in present),
+        all_reduce=sum(summary.all_reduce for summary in present),
+        reduce_scatter=sum(summary.reduce_scatter for summary in present),
+        all_to_all=sum(summary.all_to_all for summary in present),
+        collective_permute=sum(summary.collective_permute for summary in present),
+        grouped_scope_mentions=sum(summary.grouped_scope_mentions for summary in present),
+        stack_sharded_scope_mentions=sum(summary.stack_sharded_scope_mentions for summary in present),
+        pad_scope_mentions=sum(summary.pad_scope_mentions for summary in present),
+        slice_scope_mentions=sum(summary.slice_scope_mentions for summary in present),
+    )
+
+
+def combine_sequential_compiled_memory(*summaries: dict[str, int | None] | None) -> dict[str, int | None] | None:
+    present = [summary for summary in summaries if summary is not None]
+    if not present:
+        return None
+
+    keys = set().union(*(summary.keys() for summary in present))
+    combined: dict[str, int | None] = {}
+    for key in keys:
+        values = [summary[key] for summary in present if summary.get(key) is not None]
+        if not values:
+            combined[key] = None
+        elif key == "generated_code_bytes":
+            combined[key] = int(sum(values))
+        else:
+            combined[key] = int(max(values))
+    return combined
+
+
 def is_tree_update_bench(bench_kind: str) -> bool:
     return bench_kind in (MUONH_UPDATE_BENCH, MUON_DIRECTION_BENCH, HYPERBALL_ONLY_BENCH)
 
@@ -6304,6 +9719,26 @@ def is_ordinary_2d_decomposition_bench(bench_kind: str) -> bool:
 
 
 def bench_skip_reason(config: BenchConfig, bench_kind: str) -> str | None:
+    if config.unfused_expert_gate_up and bench_kind in (
+        EXPERT_GROUPED_BANK_CONSUMER_BENCH,
+        EXPERT_GROUPED_SEQUENTIAL_BANK_CONSUMER_BENCH,
+        EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH,
+        EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
+        EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
+        EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
+        *PACKED_MASTER_MUONH_UPDATE_ONLY_BENCHES,
+        *PACKED_MASTER_MUONH_CONSUMER_BENCHES,
+        *PACKED_MASTER_FSDP_CONSUMER_BENCHES,
+        *CHUNKED_PACKED_MASTER_FSDP_CONSUMER_BENCHES,
+        *CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES,
+        *CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES,
+        *PACKED_MASTER_FSDP_GRAD_BENCHES,
+        *PACKED_MASTER_GRAD_MUONH_BENCHES,
+    ):
+        return (
+            "--unfused-expert-gate-up is currently an optimizer/update harness mode; "
+            f"{bench_kind} still consumes the fused public grouped MoE MLP interface."
+        )
     if (
         bench_kind
         in (
@@ -6382,6 +9817,14 @@ def grouped_expert_bank_consumer_flops(config: BenchConfig) -> int:
     return config.layers * per_layer
 
 
+def expert_fsdp_layer_consumer_flops(config: BenchConfig) -> int:
+    return (
+        config.num_experts
+        * config.grouped_expert_consumer_tokens_per_expert
+        * (2 * config.hidden_dim * (2 * config.intermediate_dim) + 2 * config.intermediate_dim * config.hidden_dim)
+    )
+
+
 def grouped_moe_consumer_chunk_tokens(config: BenchConfig) -> int | None:
     """Return the absolute routed-token chunk size for the grouped MoE helper."""
     if config.grouped_expert_consumer_chunk_tokens and config.grouped_expert_consumer_chunk_tokens_per_expert:
@@ -6425,9 +9868,66 @@ def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
         EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
     ):
         return grouped_expert_bank_consumer_flops(config)
+    if bench_kind == EXPERT_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH:
+        return expert_fsdp_layer_consumer_flops(config)
+    if bench_kind in (
+        EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+        EXPERT_PACKED_MASTER_FSDP_SLAB_CONSUMER_BENCH,
+        EXPERT_PACKED_MASTER_FSDP_BULK_CONSUMER_BENCH,
+    ):
+        return config.layers * expert_fsdp_layer_consumer_flops(config)
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH:
+        return expert_fsdp_layer_consumer_flops(config)
+    if bench_kind in (
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    ):
+        return config.layers * expert_fsdp_layer_consumer_flops(config)
+    if bench_kind in CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES:
+        return 3 * expert_fsdp_layer_consumer_flops(config)
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH:
+        ns_flops = sum(
+            ns_dot_flops_for_shape(shape, group_size, config.backend_steps)
+            for group_size in grouped_expert_group_sizes_for_bench(config, bench_kind)
+            for shape in synthetic_shapes(config).values()
+        )
+        return ns_flops + 3 * expert_fsdp_layer_consumer_flops(config)
+    if bench_kind in (
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_CHECKSUM_BENCH,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_VALUE_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_LAYERWISE_VALUE_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH,
+    ):
+        ns_flops = sum(
+            ns_dot_flops_for_shape(shape, group_size, config.backend_steps)
+            for group_size in grouped_expert_group_sizes_for_bench(config, bench_kind)
+            for shape in synthetic_shapes(config).values()
+        )
+        consumer_flops = (
+            grouped_expert_bank_consumer_flops(config)
+            if bench_kind == EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH
+            else config.layers * expert_fsdp_layer_consumer_flops(config)
+        )
+        return ns_flops + 3 * consumer_flops
+    if bench_kind in PACKED_MASTER_FSDP_GRAD_BENCHES:
+        return 3 * config.layers * expert_fsdp_layer_consumer_flops(config)
+    if bench_kind in PACKED_MASTER_GRAD_MUONH_BENCHES:
+        ns_flops = sum(
+            ns_dot_flops_for_shape(shape, group_size, config.backend_steps)
+            for group_size in grouped_expert_group_sizes_for_bench(config, bench_kind)
+            for shape in synthetic_shapes(config).values()
+        )
+        return ns_flops + 3 * config.layers * expert_fsdp_layer_consumer_flops(config)
     if bench_kind in (
         EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
         EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
     ):
         ns_flops = sum(
             ns_dot_flops_for_shape(shape, group_size, config.backend_steps)
@@ -6435,6 +9935,13 @@ def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
             for shape in synthetic_shapes(config).values()
         )
         return ns_flops + grouped_expert_bank_consumer_flops(config)
+    if bench_kind in PACKED_MASTER_MUONH_FSDP_CONSUMER_BENCHES:
+        ns_flops = sum(
+            ns_dot_flops_for_shape(shape, group_size, config.backend_steps)
+            for group_size in grouped_expert_group_sizes_for_bench(config, bench_kind)
+            for shape in synthetic_shapes(config).values()
+        )
+        return ns_flops + config.layers * expert_fsdp_layer_consumer_flops(config)
     if bench_kind in (
         HYPERBALL_ONLY_BENCH,
         ORDINARY_2D_GROUPED_RESTORE_SPLIT_BENCH,
@@ -6463,10 +9970,14 @@ def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
         EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
         EXPERT_FSDP_GRADS_TO_PACKED_GROUPED_CHUNKS_BENCH,
         EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
         EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
+        EXPERT_PACKED_MASTER_MOMENTUM_CHECKSUM_BENCH,
+        EXPERT_PACKED_MASTER_MOMENTUM_DIRECTION_BENCH,
     ):
         return 0
     if bench_kind == FULL_PRODUCTION_GROUPED_2D_PERSISTENT_APPLY_BENCH:
@@ -6492,7 +10003,14 @@ def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
         EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
         EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH,
+        EXPERT_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH,
+        EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH,
+        EXPERT_PACKED_MASTER_MUONH_UPDATE_CHECKSUM_BENCH,
+        EXPERT_PACKED_MASTER_NS_CHECKSUM_BENCH,
+        EXPERT_PACKED_MASTER_NS_HYPERBALL_CHECKSUM_BENCH,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
         REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     ):
@@ -6515,10 +10033,69 @@ def estimated_ns_dot_flops(config: BenchConfig, bench_kind: str) -> int:
 def estimated_matrix_count(config: BenchConfig, bench_kind: str) -> int:
     if bench_kind in (EXPERT_GROUPED_BANK_CONSUMER_BENCH, EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH):
         return config.layers * 2 * config.num_experts
+    if bench_kind == EXPERT_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH:
+        return 2 * config.num_experts
+    if bench_kind in (
+        EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+        EXPERT_PACKED_MASTER_FSDP_SLAB_CONSUMER_BENCH,
+        EXPERT_PACKED_MASTER_FSDP_BULK_CONSUMER_BENCH,
+    ):
+        return config.layers * 2 * config.num_experts
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH:
+        return 2 * config.num_experts
+    if bench_kind in (
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    ):
+        return config.layers * 2 * config.num_experts
+    if bench_kind in CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES:
+        return 3 * 2 * config.num_experts
+    if bench_kind == EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH:
+        ns_matrices = sum(grouped_expert_group_sizes_for_bench(config, bench_kind)) * sum(
+            shape[0] for shape in synthetic_shapes(config).values()
+        )
+        consumer_grad_matrices = 3 * 2 * config.num_experts
+        return ns_matrices + consumer_grad_matrices
+    if bench_kind in (
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_UPDATE_BENCH,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_CHECKSUM_BENCH,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH,
+    ):
+        ns_matrices = sum(grouped_expert_group_sizes_for_bench(config, bench_kind)) * sum(
+            shape[0] for shape in synthetic_shapes(config).values()
+        )
+        consumer_grad_matrices = 3 * config.layers * 2 * config.num_experts
+        return ns_matrices + consumer_grad_matrices
+    if bench_kind in PACKED_MASTER_FSDP_GRAD_BENCHES:
+        return 3 * config.layers * 2 * config.num_experts
+    if bench_kind in PACKED_MASTER_GRAD_MUONH_BENCHES:
+        ns_matrices = sum(grouped_expert_group_sizes_for_bench(config, bench_kind)) * sum(
+            shape[0] for shape in synthetic_shapes(config).values()
+        )
+        consumer_grad_matrices = 3 * config.layers * 2 * config.num_experts
+        return ns_matrices + consumer_grad_matrices
+    if bench_kind in (
+        EXPERT_PACKED_MASTER_MOMENTUM_CHECKSUM_BENCH,
+        EXPERT_PACKED_MASTER_MOMENTUM_DIRECTION_BENCH,
+    ):
+        return 0
+    if bench_kind in PACKED_MASTER_MUONH_UPDATE_ONLY_BENCHES:
+        return sum(grouped_expert_group_sizes_for_bench(config, bench_kind)) * sum(
+            shape[0] for shape in synthetic_shapes(config).values()
+        )
     if bench_kind in (
         EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
         EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
     ):
+        ns_matrices = sum(grouped_expert_group_sizes_for_bench(config, bench_kind)) * sum(
+            shape[0] for shape in synthetic_shapes(config).values()
+        )
+        consumer_matrices = config.layers * 2 * config.num_experts
+        return ns_matrices + consumer_matrices
+    if bench_kind in PACKED_MASTER_MUONH_FSDP_CONSUMER_BENCHES:
         ns_matrices = sum(grouped_expert_group_sizes_for_bench(config, bench_kind)) * sum(
             shape[0] for shape in synthetic_shapes(config).values()
         )
@@ -6553,6 +10130,8 @@ def estimated_matrix_count(config: BenchConfig, bench_kind: str) -> int:
         EXPERT_FSDP_GROUPED_UPDATES_MUONH_EXPLICIT_A2A_APPLY_BENCH,
         EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
         EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
         REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
     ):
         return sum(grouped_expert_group_sizes_for_bench(config, bench_kind)) * sum(
@@ -6604,12 +10183,22 @@ def estimated_boundary_byte_estimates(config: BenchConfig, bench_kind: str) -> d
     }
 
 
-def _packed_bank_phase_collective_info(config: BenchConfig, phase_name: str) -> tuple[str, int]:
+def _packed_bank_phase_collective_info(config: BenchConfig, bench_kind: str, phase_name: str) -> tuple[str, int]:
     if phase_name in ("fsdp_grads_to_packed_grouped_bank", "fsdp_params_to_packed_grouped_bank"):
         if config.data_axis > 1:
             return "all_to_all", 1
         return "none", 0
     if phase_name == "packed_grouped_updates_to_fsdp_apply":
+        if bench_kind in (
+            EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+            EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
+            EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+            EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
+            EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
+        ):
+            if "replica_dcn" in config.ns4d_group_axis or "data" in config.ns4d_group_axis:
+                return "all_gather", 1
+            return "none", 0
         if config.data_axis > 1:
             return "all_to_all", 1
         if config.replica_axis > 1 and "replica_dcn" in config.ns4d_group_axis:
@@ -6629,14 +10218,20 @@ def _real_grouped_muonh_phase_collective_info(
     group_axis_needs_gather = bool(group_axis_names)
     data_axis_needs_a2a = config.data_axis > 1 and "data" in group_axis_names
     chunked_count = names * group_count
+    bank_count = grouped_expert_packed_bank_count(config)
     packed_count = names
     mode = grouped_muonh_boundary_mode(config)
 
-    if mode in ("chunk_local", "packed_bank_compute"):
+    if mode == "chunk_local":
         if phase_name in ("fsdp_grads_to_grouped_chunks", "fsdp_params_to_grouped_chunks"):
             return ("all_to_all", chunked_count) if data_axis_needs_a2a else ("none", 0)
         if phase_name == "grouped_updates_to_fsdp_update_tree":
             return ("all_gather", chunked_count) if group_axis_needs_gather else ("none", 0)
+    elif mode == "packed_bank_compute":
+        if phase_name in ("fsdp_grads_to_grouped_chunks", "fsdp_params_to_grouped_chunks"):
+            return ("all_to_all", bank_count) if data_axis_needs_a2a else ("none", 0)
+        if phase_name == "grouped_updates_to_fsdp_update_tree":
+            return ("all_gather", bank_count) if group_axis_needs_gather else ("none", 0)
     elif mode == "packed_entry":
         if phase_name in ("fsdp_grads_to_grouped_chunks", "fsdp_params_to_grouped_chunks"):
             return ("all_to_all", packed_count) if data_axis_needs_a2a else ("none", 0)
@@ -6669,7 +10264,10 @@ def estimated_boundary_phase_estimates(config: BenchConfig, bench_kind: str) -> 
         EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
         EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
     )
@@ -6689,13 +10287,18 @@ def estimated_boundary_phase_estimates(config: BenchConfig, bench_kind: str) -> 
     elif bench_kind in (
         EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
         EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
     ):
         phase_names = ("packed_grouped_updates_to_fsdp_apply",)
     elif bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH:
         phase_names = ("fsdp_grads_to_packed_grouped_bank", "packed_grouped_updates_to_fsdp_apply")
     elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH:
         phase_names = ("fsdp_grads_to_packed_grouped_bank", "fsdp_params_to_packed_grouped_bank")
-    elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
+    elif bench_kind in (
+        EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
+    ):
         phase_names = (
             "fsdp_grads_to_packed_grouped_bank",
             "fsdp_params_to_packed_grouped_bank",
@@ -6720,7 +10323,11 @@ def estimated_boundary_phase_estimates(config: BenchConfig, bench_kind: str) -> 
                 group_count=group_count,
             )
         else:
-            collective_type, collective_count_per_weight = _packed_bank_phase_collective_info(config, phase_name)
+            collective_type, collective_count_per_weight = _packed_bank_phase_collective_info(
+                config,
+                bench_kind,
+                phase_name,
+            )
             ideal_collective_count = len(synthetic_shapes(config)) * collective_count_per_weight
         common = {
             "name": phase_name,
@@ -6731,6 +10338,26 @@ def estimated_boundary_phase_estimates(config: BenchConfig, bench_kind: str) -> 
             "grouped_input_per_device_bytes": boundary_bytes["grouped_input_per_device_bytes"],
             "fsdp_output_per_device_bytes": boundary_bytes["fsdp_output_per_device_bytes"],
         }
+        if ideal_collective_count:
+            common.update(
+                {
+                    "global_bytes_per_ideal_collective": boundary_bytes["global_update_bytes"] / ideal_collective_count,
+                    "grouped_input_per_device_bytes_per_ideal_collective": (
+                        boundary_bytes["grouped_input_per_device_bytes"] / ideal_collective_count
+                    ),
+                    "fsdp_output_per_device_bytes_per_ideal_collective": (
+                        boundary_bytes["fsdp_output_per_device_bytes"] / ideal_collective_count
+                    ),
+                }
+            )
+        else:
+            common.update(
+                {
+                    "global_bytes_per_ideal_collective": None,
+                    "grouped_input_per_device_bytes_per_ideal_collective": None,
+                    "fsdp_output_per_device_bytes_per_ideal_collective": None,
+                }
+            )
         if collective_type == "all_to_all+all_gather":
             for split_collective_type in ("all_to_all", "all_gather"):
                 phases.append({**common, "expected_collective_type": split_collective_type})
@@ -6750,6 +10377,32 @@ def boundary_phase_type_totals(boundary_phases: list[dict[str, Any]]) -> dict[st
         )
         totals[f"{collective_type}_ideal_collective_count"] = (
             sum(float(phase["ideal_collective_count"]) for phase in matching_phases) if matching_phases else None
+        )
+        totals[f"{collective_type}_global_bytes_per_ideal_collective"] = (
+            totals[f"{collective_type}_global_bytes"] / totals[f"{collective_type}_ideal_collective_count"]
+            if totals[f"{collective_type}_global_bytes"] is not None
+            and totals[f"{collective_type}_ideal_collective_count"]
+            else None
+        )
+        totals[f"{collective_type}_grouped_input_per_device_bytes_per_ideal_collective"] = (
+            sum(float(phase["grouped_input_per_device_bytes"]) for phase in matching_phases)
+            / totals[f"{collective_type}_ideal_collective_count"]
+            if matching_phases and totals[f"{collective_type}_ideal_collective_count"]
+            else None
+        )
+        totals[f"{collective_type}_fsdp_output_per_device_bytes_per_ideal_collective"] = (
+            sum(float(phase["fsdp_output_per_device_bytes"]) for phase in matching_phases)
+            / totals[f"{collective_type}_ideal_collective_count"]
+            if matching_phases and totals[f"{collective_type}_ideal_collective_count"]
+            else None
+        )
+        phase_payloads = [
+            float(phase["global_bytes_per_ideal_collective"])
+            for phase in matching_phases
+            if phase["global_bytes_per_ideal_collective"] is not None
+        ]
+        totals[f"{collective_type}_max_global_bytes_per_phase_ideal_collective"] = (
+            max(phase_payloads) if phase_payloads else None
         )
     return totals
 
@@ -6777,12 +10430,24 @@ def boundary_primitive_name(bench_kind: str) -> str | None:
         return "packed_grouped_updates_to_fsdp_apply"
     if bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH:
         return "packed_grouped_updates_to_fsdp_direct_apply"
+    if bench_kind == EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH:
+        return "packed_grouped_updates_to_fsdp_slice_first_apply"
+    if bench_kind == EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH:
+        return "packed_grouped_updates_to_fsdp_slice_first_direct_apply"
     if bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
-        return "fsdp_grads_to_explicit_packed_grouped_bank+whole_bank_muon_update+packed_grouped_updates_to_fsdp_apply"
+        return (
+            "fsdp_grads_to_explicit_packed_grouped_bank+whole_bank_muon_update+"
+            "packed_grouped_updates_to_fsdp_slice_first_apply"
+        )
+    if bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH:
+        return (
+            "fsdp_grads_to_explicit_packed_grouped_bank+whole_bank_muon_update+"
+            "packed_grouped_updates_to_fsdp_slice_first_direct_apply"
+        )
     if bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH:
         return "fsdp_grads_and_params_to_explicit_packed_grouped_bank+whole_bank_muon_update"
     if bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH:
-        return "fsdp_grads_to_explicit_packed_grouped_bank+ns_direction+packed_grouped_updates_to_fsdp_apply"
+        return "fsdp_grads_to_explicit_packed_grouped_bank+ns_direction+packed_grouped_updates_to_fsdp_slice_first_apply"
     if bench_kind in (
         EXPERT_FSDP_GROUPED_RESTORE_BOUNDARY_BENCH,
         EXPERT_FSDP_GROUPED_TARGET_RESTORE_BOUNDARY_BENCH,
@@ -6965,7 +10630,10 @@ def boundary_correctness_skipped_reason(
     max_global_bytes: int,
     force: bool,
 ) -> str | None:
-    if bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
+    if bench_kind in (
+        EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+        EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
+    ):
         return "packed-bank MuonH apply combines multiple phases; use primitive-specific apply benchmarks"
     if not is_expert_fsdp_grouped_boundary_primitive_bench(bench_kind):
         return "not an expert-FSDP grouped boundary primitive"
@@ -7010,6 +10678,8 @@ FSDP_GROUPED_APPLY_CORRECTNESS_BENCHES = (
     EXPERT_FSDP_GROUPED_PACKED_DATA_PPERMUTE_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
 )
 
 
@@ -7257,6 +10927,14 @@ def fsdp_grouped_boundary_correctness_max_error(
         expected = reference_packed_bank_updates_apply(config, params, grouped_updates)
     elif bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH:
         update_step = jax.jit(expert_fsdp_packed_bank_direct_apply_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_packed_bank_updates_apply(config, params, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_packed_bank_slice_first_apply_boundary_step_factory(mesh, config))
+        actual = update_step(params, grouped_updates)
+        expected = reference_packed_bank_updates_apply(config, params, grouped_updates)
+    elif bench_kind == EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH:
+        update_step = jax.jit(expert_fsdp_packed_bank_slice_first_direct_apply_boundary_step_factory(mesh, config))
         actual = update_step(params, grouped_updates)
         expected = reference_packed_bank_updates_apply(config, params, grouped_updates)
     else:
@@ -7904,12 +11582,49 @@ def lower_ns4d(
             )
             assert_expert_fsdp_sharding(result_specs, "expert FSDP packed-bank direct apply result")
             lower_args = None
+        elif bench_kind == EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH:
+            packed_specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_fsdp_packed_bank_slice_first_apply_boundary_step_factory(mesh, config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(update_step, specs, packed_specs)
+                lowered = update_step.lower(specs, packed_specs)
+            assert_packed_grouped_expert_bank_sharding(
+                packed_specs,
+                mesh,
+                config,
+                bench_kind,
+                "expert FSDP packed-bank slice-first apply updates",
+            )
+            assert_expert_fsdp_sharding(result_specs, "expert FSDP packed-bank slice-first apply result")
+            lower_args = None
+        elif bench_kind == EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH:
+            packed_specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_fsdp_packed_bank_slice_first_direct_apply_boundary_step_factory(mesh, config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(update_step, specs, packed_specs)
+                lowered = update_step.lower(specs, packed_specs)
+            assert_packed_grouped_expert_bank_sharding(
+                packed_specs,
+                mesh,
+                config,
+                bench_kind,
+                "expert FSDP packed-bank slice-first direct apply updates",
+            )
+            assert_expert_fsdp_sharding(result_specs, "expert FSDP packed-bank slice-first direct apply result")
+            lower_args = None
         elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
             update_step = jax.jit(expert_fsdp_packed_bank_muonh_apply_step_factory(mesh, config))
             with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
                 result_specs = jax.eval_shape(update_step, specs, specs)
                 lowered = update_step.lower(specs, specs)
             assert_expert_fsdp_sharding(result_specs, "expert FSDP packed-bank MuonH apply result")
+            lower_args = None
+        elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH:
+            update_step = jax.jit(expert_fsdp_packed_bank_muonh_direct_apply_step_factory(mesh, config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(update_step, specs, specs)
+                lowered = update_step.lower(specs, specs)
+            assert_expert_fsdp_sharding(result_specs, "expert FSDP packed-bank MuonH direct-apply result")
             lower_args = None
         elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH:
             update_step = jax.jit(expert_fsdp_packed_bank_muonh_update_only_step_factory(mesh, config))
@@ -7924,6 +11639,552 @@ def lower_ns4d(
                 "expert FSDP packed-bank MuonH update-only result",
             )
             lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            momentum_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            grad_specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_packed_master_muonh_update_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                next_master_specs, next_momentum_specs = jax.eval_shape(
+                    update_step,
+                    master_specs,
+                    grad_specs,
+                    momentum_specs,
+                )
+                lowered = update_step.lower(master_specs, grad_specs, momentum_specs)
+            assert_packed_grouped_expert_bank_sharding(
+                next_master_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master MuonH update-only next master",
+            )
+            assert_packed_grouped_expert_bank_sharding(
+                next_momentum_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master MuonH update-only next momentum",
+            )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_MUONH_UPDATE_CHECKSUM_BENCH:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            momentum_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            grad_specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_packed_master_muonh_update_checksum_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                checksum_specs = jax.eval_shape(
+                    update_step,
+                    master_specs,
+                    grad_specs,
+                    momentum_specs,
+                )
+                lowered = update_step.lower(master_specs, grad_specs, momentum_specs)
+            if checksum_specs.shape != () or checksum_specs.dtype != jnp.float32:
+                raise ValueError(
+                    "Timing-only packed-master MuonH checksum should return a scalar float32; "
+                    f"got shape={checksum_specs.shape}, dtype={checksum_specs.dtype}."
+                )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_MOMENTUM_CHECKSUM_BENCH:
+            momentum_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            grad_specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_packed_master_momentum_checksum_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                checksum_specs = jax.eval_shape(update_step, grad_specs, momentum_specs)
+                lowered = update_step.lower(grad_specs, momentum_specs)
+            if checksum_specs.shape != () or checksum_specs.dtype != jnp.float32:
+                raise ValueError(
+                    "Timing-only packed-master momentum checksum should return a scalar float32; "
+                    f"got shape={checksum_specs.shape}, dtype={checksum_specs.dtype}."
+                )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_MOMENTUM_DIRECTION_BENCH:
+            momentum_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            grad_specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_packed_master_momentum_direction_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                next_momentum_specs, direction_specs = jax.eval_shape(update_step, grad_specs, momentum_specs)
+                lowered = update_step.lower(grad_specs, momentum_specs)
+            assert_packed_grouped_expert_bank_sharding(
+                next_momentum_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master momentum-direction next momentum",
+            )
+            assert_packed_grouped_expert_bank_sharding(
+                direction_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master momentum-direction direction input",
+            )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_NS_CHECKSUM_BENCH:
+            direction_specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_packed_master_ns_checksum_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                checksum_specs = jax.eval_shape(update_step, direction_specs)
+                lowered = update_step.lower(direction_specs)
+            if checksum_specs.shape != () or checksum_specs.dtype != jnp.float32:
+                raise ValueError(
+                    "Timing-only packed-master NS checksum should return a scalar float32; "
+                    f"got shape={checksum_specs.shape}, dtype={checksum_specs.dtype}."
+                )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_NS_HYPERBALL_CHECKSUM_BENCH:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            direction_specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_packed_master_ns_hyperball_checksum_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                checksum_specs = jax.eval_shape(update_step, master_specs, direction_specs)
+                lowered = update_step.lower(master_specs, direction_specs)
+            if checksum_specs.shape != () or checksum_specs.dtype != jnp.float32:
+                raise ValueError(
+                    "Timing-only packed-master NS+hyperball checksum should return a scalar float32; "
+                    f"got shape={checksum_specs.shape}, dtype={checksum_specs.dtype}."
+                )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_NS_HYPERBALL_APPLY_CHECKSUM_BENCH:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            direction_specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_packed_master_ns_hyperball_apply_checksum_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                checksum_specs = jax.eval_shape(update_step, master_specs, direction_specs)
+                lowered = update_step.lower(master_specs, direction_specs)
+            if checksum_specs.shape != () or checksum_specs.dtype != jnp.float32:
+                raise ValueError(
+                    "Timing-only packed-master NS+hyperball apply checksum should return a scalar float32; "
+                    f"got shape={checksum_specs.shape}, dtype={checksum_specs.dtype}."
+                )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            momentum_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            grad_specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_packed_master_direction_ns_hyperball_checksum_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                checksum_specs = jax.eval_shape(update_step, master_specs, grad_specs, momentum_specs)
+                lowered = update_step.lower(master_specs, grad_specs, momentum_specs)
+            if checksum_specs.shape != () or checksum_specs.dtype != jnp.float32:
+                raise ValueError(
+                    "Timing-only packed-master direction NS+hyperball checksum should return a scalar float32; "
+                    f"got shape={checksum_specs.shape}, dtype={checksum_specs.dtype}."
+                )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_CHUNKED_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            momentum_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            grad_specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_packed_master_chunked_direction_ns_hyperball_checksum_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                checksum_specs = jax.eval_shape(update_step, master_specs, grad_specs, momentum_specs)
+                lowered = update_step.lower(master_specs, grad_specs, momentum_specs)
+            if checksum_specs.shape != () or checksum_specs.dtype != jnp.float32:
+                raise ValueError(
+                    "Timing-only packed-master chunked direction NS+hyperball checksum should return a scalar "
+                    f"float32; got shape={checksum_specs.shape}, dtype={checksum_specs.dtype}."
+                )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_CHUNKED_MUONH_UPDATE_ONLY_BENCH:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            momentum_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            grad_specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_packed_master_chunked_muonh_update_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                next_master_specs, next_momentum_specs = jax.eval_shape(
+                    update_step,
+                    master_specs,
+                    grad_specs,
+                    momentum_specs,
+                )
+                lowered = update_step.lower(master_specs, grad_specs, momentum_specs)
+            assert_packed_grouped_expert_bank_sharding(
+                next_master_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master chunked MuonH update-only next master",
+            )
+            assert_packed_grouped_expert_bank_sharding(
+                next_momentum_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master chunked MuonH update-only next momentum",
+            )
+            lower_args = None
+        elif bench_kind == EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH:
+            master_specs = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            momentum_specs = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            grad_specs = synthetic_chunked_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_chunked_packed_master_muonh_update_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                next_master_specs, next_momentum_specs = jax.eval_shape(
+                    update_step,
+                    master_specs,
+                    grad_specs,
+                    momentum_specs,
+                )
+                lowered = update_step.lower(master_specs, grad_specs, momentum_specs)
+            assert_chunked_packed_grouped_expert_bank_sharding(
+                next_master_specs,
+                mesh,
+                config,
+                bench_kind,
+                "chunked packed master MuonH update-only next master",
+            )
+            assert_chunked_packed_grouped_expert_bank_sharding(
+                next_momentum_specs,
+                mesh,
+                config,
+                bench_kind,
+                "chunked packed master MuonH update-only next momentum",
+            )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            momentum_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            grad_specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            activation_specs = synthetic_grouped_expert_consumer_input_specs(mesh, config, bench_kind)
+            update_step = jax.jit(expert_packed_master_muonh_consumer_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                next_master_specs, next_momentum_specs, output_specs = jax.eval_shape(
+                    update_step,
+                    master_specs,
+                    grad_specs,
+                    momentum_specs,
+                    activation_specs,
+                )
+                lowered = update_step.lower(master_specs, grad_specs, momentum_specs, activation_specs)
+            assert_packed_grouped_expert_bank_sharding(
+                next_master_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master MuonH next master",
+            )
+            assert_packed_grouped_expert_bank_sharding(
+                next_momentum_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master MuonH next momentum",
+            )
+            assert_ns4d_sharding(
+                output_specs,
+                grouped_expert_group_sharding(mesh, config, bench_kind, ns4d_group_size(config)).spec,
+                "packed master MuonH grouped consumer output",
+            )
+            lower_args = None
+        elif bench_kind in PACKED_MASTER_MUONH_FSDP_CONSUMER_BENCHES:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            momentum_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            grad_specs = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+            input_specs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+            update_step = jax.jit(
+                expert_packed_master_muonh_fsdp_consumer_step_factory_for_bench(mesh, config, bench_kind)
+            )
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                next_master_specs, next_momentum_specs, loss_specs = jax.eval_shape(
+                    update_step,
+                    master_specs,
+                    grad_specs,
+                    momentum_specs,
+                    input_specs,
+                )
+                lowered = update_step.lower(master_specs, grad_specs, momentum_specs, input_specs)
+            assert_packed_grouped_expert_bank_sharding(
+                next_master_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master MuonH/FSDP next master",
+            )
+            assert_packed_grouped_expert_bank_sharding(
+                next_momentum_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master MuonH/FSDP next momentum",
+            )
+            if loss_specs.shape != () or loss_specs.dtype != jnp.float32:
+                raise AssertionError(
+                    "packed master MuonH/FSDP consumer should return a scalar float32 loss; "
+                    f"got shape={loss_specs.shape}, dtype={loss_specs.dtype}."
+                )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            input_specs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+            update_step = jax.jit(expert_packed_master_fsdp_layer_consumer_step_factory(mesh, config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(update_step, master_specs, input_specs)
+                lowered = update_step.lower(master_specs, input_specs)
+            assert_packed_grouped_expert_bank_sharding(
+                master_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master FSDP layer consumer master input",
+            )
+            if result_specs.shape != () or result_specs.dtype != jnp.float32:
+                raise AssertionError(
+                    "packed master FSDP layer consumer should return a scalar float32 loss; "
+                    f"got shape={result_specs.shape}, dtype={result_specs.dtype}."
+                )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            input_specs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+            update_step = jax.jit(expert_packed_master_fsdp_sequential_consumer_step_factory(mesh, config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(update_step, master_specs, input_specs)
+                lowered = update_step.lower(master_specs, input_specs)
+            assert_packed_grouped_expert_bank_sharding(
+                master_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master FSDP sequential consumer master input",
+            )
+            if result_specs.shape != () or result_specs.dtype != jnp.float32:
+                raise AssertionError(
+                    "packed master FSDP sequential consumer should return a scalar float32 loss; "
+                    f"got shape={result_specs.shape}, dtype={result_specs.dtype}."
+                )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_FSDP_SLAB_CONSUMER_BENCH:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            input_specs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+            update_step = jax.jit(expert_packed_master_fsdp_slab_consumer_step_factory(mesh, config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(update_step, master_specs, input_specs)
+                lowered = update_step.lower(master_specs, input_specs)
+            assert_packed_grouped_expert_bank_sharding(
+                master_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master FSDP slab consumer master input",
+            )
+            if result_specs.shape != () or result_specs.dtype != jnp.float32:
+                raise AssertionError(
+                    "packed master FSDP slab consumer should return a scalar float32 loss; "
+                    f"got shape={result_specs.shape}, dtype={result_specs.dtype}."
+                )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_FSDP_BULK_CONSUMER_BENCH:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            input_specs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+            update_step = jax.jit(expert_packed_master_fsdp_bulk_consumer_step_factory(mesh, config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(update_step, master_specs, input_specs)
+                lowered = update_step.lower(master_specs, input_specs)
+            assert_packed_grouped_expert_bank_sharding(
+                master_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master FSDP bulk consumer master input",
+            )
+            if result_specs.shape != () or result_specs.dtype != jnp.float32:
+                raise AssertionError(
+                    "packed master FSDP bulk consumer should return a scalar float32 loss; "
+                    f"got shape={result_specs.shape}, dtype={result_specs.dtype}."
+                )
+            lower_args = None
+        elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_CONSUMER_BENCHES:
+            master_specs = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            input_specs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+            update_step = jax.jit(
+                expert_chunked_packed_master_fsdp_consumer_step_factory_for_bench(mesh, config, bench_kind)
+            )
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(update_step, master_specs, input_specs)
+                lowered = update_step.lower(master_specs, input_specs)
+            assert_chunked_packed_grouped_expert_bank_sharding(
+                master_specs,
+                mesh,
+                config,
+                bench_kind,
+                "chunked packed master FSDP consumer master input",
+            )
+            if result_specs.shape != () or result_specs.dtype != jnp.float32:
+                raise AssertionError(
+                    "chunked packed master FSDP consumer should return a scalar float32 loss; "
+                    f"got shape={result_specs.shape}, dtype={result_specs.dtype}."
+                )
+            lower_args = None
+        elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES:
+            master_specs = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            input_specs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+            update_step = jax.jit(expert_chunked_packed_master_fsdp_layer_grad_step_factory(mesh, config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                grad_specs = jax.eval_shape(update_step, master_specs, input_specs)
+                lowered = update_step.lower(master_specs, input_specs)
+            assert_chunked_packed_grouped_expert_bank_sharding(
+                grad_specs,
+                mesh,
+                config,
+                bench_kind,
+                "chunked packed master FSDP consumer grad output",
+            )
+            lower_args = None
+        elif bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES:
+            master_specs = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            momentum_specs = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            input_specs = chunked_packed_master_grad_muonh_input_specs_for_bench(mesh, config, bench_kind)
+            update_step = jax.jit(
+                expert_chunked_packed_master_grad_muonh_update_step_factory_for_bench(mesh, config, bench_kind)
+            )
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                result_specs = jax.eval_shape(
+                    update_step,
+                    master_specs,
+                    momentum_specs,
+                    input_specs,
+                )
+                lowered = update_step.lower(master_specs, momentum_specs, input_specs)
+            if bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_SCALAR_BENCHES:
+                if result_specs.shape != () or result_specs.dtype != jnp.float32:
+                    raise AssertionError(
+                        "chunked packed master grad+MuonH checksum should return a scalar float32; "
+                        f"got shape={result_specs.shape}, dtype={result_specs.dtype}."
+                    )
+            elif is_chunked_packed_master_streaming_value_grad_bench(bench_kind):
+                loss_specs, next_master_specs, next_momentum_specs = result_specs
+                if loss_specs.shape != () or loss_specs.dtype != jnp.float32:
+                    raise AssertionError(
+                        "chunked packed master value+grad MuonH update should return a scalar float32 loss; "
+                        f"got shape={loss_specs.shape}, dtype={loss_specs.dtype}."
+                    )
+                assert_chunked_packed_grouped_expert_bank_sharding(
+                    next_master_specs,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "chunked packed master value+grad MuonH next master",
+                )
+                assert_chunked_packed_grouped_expert_bank_sharding(
+                    next_momentum_specs,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "chunked packed master value+grad MuonH next momentum",
+                )
+            else:
+                next_master_specs, next_momentum_specs = result_specs
+                assert_chunked_packed_grouped_expert_bank_sharding(
+                    next_master_specs,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "chunked packed master layer-grad MuonH next master",
+                )
+                assert_chunked_packed_grouped_expert_bank_sharding(
+                    next_momentum_specs,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "chunked packed master layer-grad MuonH next momentum",
+                )
+            lower_args = None
+        elif bench_kind in PACKED_MASTER_FSDP_GRAD_BENCHES:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            input_specs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+            update_step = jax.jit(expert_packed_master_fsdp_grad_step_factory(mesh, config, bench_kind))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                grad_specs = jax.eval_shape(update_step, master_specs, input_specs)
+                lowered = update_step.lower(master_specs, input_specs)
+            assert_packed_grouped_expert_bank_sharding(
+                grad_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master FSDP consumer grad output",
+            )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_BULK_GRAD_MUONH_UPDATE_BENCH:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            momentum_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            input_specs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+            update_step = jax.jit(expert_packed_master_bulk_grad_muonh_update_step_factory(mesh, config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                next_master_specs, next_momentum_specs = jax.eval_shape(
+                    update_step,
+                    master_specs,
+                    momentum_specs,
+                    input_specs,
+                )
+                lowered = update_step.lower(master_specs, momentum_specs, input_specs)
+            assert_packed_grouped_expert_bank_sharding(
+                next_master_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master bulk-grad MuonH next master",
+            )
+            assert_packed_grouped_expert_bank_sharding(
+                next_momentum_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master bulk-grad MuonH next momentum",
+            )
+            lower_args = None
+        elif bench_kind == EXPERT_PACKED_MASTER_BULK_GRAD_SPLIT_MUONH_UPDATE_BENCH:
+            master_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            momentum_specs = synthetic_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+            input_specs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+            grad_step = jax.jit(
+                expert_packed_master_fsdp_grad_step_factory(
+                    mesh,
+                    config,
+                    EXPERT_PACKED_MASTER_FSDP_BULK_GRAD_BENCH,
+                )
+            )
+            update_step = jax.jit(expert_packed_master_muonh_update_step_factory(config))
+            with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+                grad_specs = jax.eval_shape(grad_step, master_specs, input_specs)
+                next_master_specs, next_momentum_specs = jax.eval_shape(
+                    update_step,
+                    master_specs,
+                    grad_specs,
+                    momentum_specs,
+                )
+                grad_lowered = grad_step.lower(master_specs, input_specs)
+                update_lowered = update_step.lower(master_specs, grad_specs, momentum_specs)
+            assert_packed_grouped_expert_bank_sharding(
+                grad_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master split bulk-grad MuonH grad bank",
+            )
+            assert_packed_grouped_expert_bank_sharding(
+                next_master_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master split bulk-grad MuonH next master",
+            )
+            assert_packed_grouped_expert_bank_sharding(
+                next_momentum_specs,
+                mesh,
+                config,
+                bench_kind,
+                "packed master split bulk-grad MuonH next momentum",
+            )
+            hlo_text = "\n\n".join(
+                [
+                    str(grad_lowered.compiler_ir(dialect="stablehlo")),
+                    str(update_lowered.compiler_ir(dialect="stablehlo")),
+                ]
+            )
+            maybe_write_text(hlo_output, hlo_text)
+            return summarize_hlo(hlo_text)
         elif bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH:
             update_step = jax.jit(expert_fsdp_packed_bank_direction_apply_step_factory(mesh, config))
             with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
@@ -8254,6 +12515,145 @@ def stop_profile_trace(profile_dir: Path | None) -> None:
     emit_jsonl({"event": "profile_stop", "profile_dir": str(profile_dir)})
 
 
+def time_packed_master_bulk_grad_split_muonh_update(
+    mesh: Mesh,
+    config: BenchConfig,
+    bench_kind: str,
+    warmup: int,
+    iters: int,
+    compile_only: bool,
+    compiled_hlo_output: Path | None,
+    abstract_mesh_enabled: bool,
+    profile_dir: Path | None,
+) -> TimingSummary:
+    with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
+        master_bank = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+        momentum_bank = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+        expert_inputs = make_array_from_spec_tree(expert_fsdp_layer_consumer_input_specs(mesh, config), config, seed=1)
+
+        assert_packed_grouped_expert_bank_sharding(
+            master_bank,
+            mesh,
+            config,
+            bench_kind,
+            "packed master split bulk-grad MuonH master input",
+        )
+        assert_packed_grouped_expert_bank_sharding(
+            momentum_bank,
+            mesh,
+            config,
+            bench_kind,
+            "packed master split bulk-grad MuonH momentum input",
+        )
+        block_until_ready_tree((master_bank, momentum_bank, expert_inputs))
+
+        grad_step = jax.jit(
+            expert_packed_master_fsdp_grad_step_factory(
+                mesh,
+                config,
+                EXPERT_PACKED_MASTER_FSDP_BULK_GRAD_BENCH,
+            )
+        )
+        muon_step = jax.jit(expert_packed_master_muonh_update_step_factory(config), donate_argnums=(0, 1, 2))
+
+        compile_start = time.perf_counter()
+        grad_compiled = grad_step.lower(master_bank, expert_inputs).compile()
+        grad_compile_seconds = time.perf_counter() - compile_start
+
+        grad_bank = grad_compiled(master_bank, expert_inputs)
+        block_until_ready_tree(grad_bank)
+        assert_packed_grouped_expert_bank_sharding(
+            grad_bank,
+            mesh,
+            config,
+            bench_kind,
+            "packed master split bulk-grad MuonH grad bank",
+        )
+
+        compile_start = time.perf_counter()
+        muon_compiled = muon_step.lower(master_bank, grad_bank, momentum_bank).compile()
+        muon_compile_seconds = time.perf_counter() - compile_start
+        compile_seconds = grad_compile_seconds + muon_compile_seconds
+
+        compiled_hlo = combine_hlo_summaries(
+            summarize_compiled_hlo(grad_compiled, output_path_for_config(compiled_hlo_output, "grad", 2)),
+            summarize_compiled_hlo(muon_compiled, output_path_for_config(compiled_hlo_output, "muonh", 2)),
+        )
+        compiled_memory = combine_sequential_compiled_memory(
+            summarize_compiled_memory(grad_compiled),
+            summarize_compiled_memory(muon_compiled),
+        )
+        if compile_only:
+            return TimingSummary(
+                compile_seconds,
+                compiled_hlo,
+                compiled_memory,
+                [],
+                None,
+                None,
+                None,
+                None,
+            )
+
+        for _ in range(warmup):
+            grad_bank = grad_compiled(master_bank, expert_inputs)
+            master_bank, momentum_bank = muon_compiled(master_bank, grad_bank, momentum_bank)
+            block_until_ready_tree((master_bank, momentum_bank))
+            assert_packed_grouped_expert_bank_sharding(
+                master_bank,
+                mesh,
+                config,
+                bench_kind,
+                "warmup packed master split bulk-grad MuonH next master",
+            )
+            assert_packed_grouped_expert_bank_sharding(
+                momentum_bank,
+                mesh,
+                config,
+                bench_kind,
+                "warmup packed master split bulk-grad MuonH next momentum",
+            )
+
+        times = []
+        for iteration in range(iters):
+            profiling = start_profile_trace(profile_dir) if iteration == 0 else False
+            start = time.perf_counter()
+            try:
+                grad_bank = grad_compiled(master_bank, expert_inputs)
+                master_bank, momentum_bank = muon_compiled(master_bank, grad_bank, momentum_bank)
+                block_until_ready_tree((master_bank, momentum_bank))
+            finally:
+                if profiling:
+                    stop_profile_trace(profile_dir)
+            times.append(time.perf_counter() - start)
+            assert_packed_grouped_expert_bank_sharding(
+                master_bank,
+                mesh,
+                config,
+                bench_kind,
+                "packed master split bulk-grad MuonH next master",
+            )
+            assert_packed_grouped_expert_bank_sharding(
+                momentum_bank,
+                mesh,
+                config,
+                bench_kind,
+                "packed master split bulk-grad MuonH next momentum",
+            )
+
+    return TimingSummary(
+        compile_seconds=compile_seconds,
+        compiled_hlo=compiled_hlo,
+        compiled_memory=compiled_memory,
+        times=times,
+        median_seconds=statistics.median(times) if times else None,
+        mean_seconds=statistics.mean(times) if times else None,
+        min_seconds=min(times) if times else None,
+        stdev_seconds=statistics.stdev(times) if len(times) > 1 else None,
+        profile_dir=str(profile_dir) if profile_dir is not None else None,
+    )
+
+
 def time_tree_update(
     mesh: Mesh,
     config: BenchConfig,
@@ -8361,6 +12761,19 @@ def time_ns4d(
     boundary_correctness_max_global_bytes: int,
     force_boundary_correctness: bool,
 ) -> TimingSummary:
+    if bench_kind == EXPERT_PACKED_MASTER_BULK_GRAD_SPLIT_MUONH_UPDATE_BENCH:
+        return time_packed_master_bulk_grad_split_muonh_update(
+            mesh,
+            config,
+            bench_kind,
+            warmup,
+            iters,
+            compile_only,
+            compiled_hlo_output,
+            abstract_mesh_enabled,
+            profile_dir,
+        )
+
     with mesh, maybe_abstract_mesh(config, abstract_mesh_enabled):
         optimizer_state = None
         if is_full_production_muonh_bench(bench_kind):
@@ -8370,14 +12783,31 @@ def time_ns4d(
         elif bench_kind in (
             EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
             EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+            EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+            EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
         ):
             updates = make_packed_grouped_expert_bank_tree(mesh, config, bench_kind, seed=1)
         elif bench_kind in (
             EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+            EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
             EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH,
             EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
         ):
             updates = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=1)
+        elif bench_kind == EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH:
+            updates = make_chunked_packed_grouped_expert_bank_tree(mesh, config, bench_kind, seed=1)
+        elif bench_kind in (*PACKED_MASTER_MUONH_UPDATE_ONLY_BENCHES, *PACKED_MASTER_MUONH_CONSUMER_BENCHES):
+            updates = make_packed_grouped_expert_bank_tree(mesh, config, bench_kind, seed=1)
+        elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_CONSUMER_BENCHES:
+            updates = make_array_from_spec_tree(expert_fsdp_layer_consumer_input_specs(mesh, config), config, seed=1)
+        elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES:
+            updates = make_array_from_spec_tree(expert_fsdp_layer_consumer_input_specs(mesh, config), config, seed=1)
+        elif bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES:
+            updates = make_chunked_packed_master_grad_muonh_input_tree_for_bench(mesh, config, bench_kind, seed=1)
+        elif bench_kind in PACKED_MASTER_FSDP_CONSUMER_BENCHES:
+            updates = make_array_from_spec_tree(expert_fsdp_layer_consumer_input_specs(mesh, config), config, seed=1)
+        elif bench_kind in (*PACKED_MASTER_FSDP_GRAD_BENCHES, *PACKED_MASTER_GRAD_MUONH_BENCHES):
+            updates = make_array_from_spec_tree(expert_fsdp_layer_consumer_input_specs(mesh, config), config, seed=1)
         elif is_expert_fsdp_grouped_boundary_bench(bench_kind) or is_expert_fsdp_grouped_updates_muonh_bench(bench_kind):
             updates = make_grouped_expert_array_tree(mesh, config, bench_kind, seed=1)
         elif is_real_expert_fsdp_grouped_muonh_bench(bench_kind):
@@ -8422,6 +12852,8 @@ def time_ns4d(
         elif bench_kind in (
             EXPERT_FSDP_PACKED_BANK_A2A_APPLY_BOUNDARY_BENCH,
             EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
+            EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+            EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
         ):
             assert_packed_grouped_expert_bank_sharding(
                 updates,
@@ -8432,10 +12864,53 @@ def time_ns4d(
             )
         elif bench_kind in (
             EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+            EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
             EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH,
             EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
         ):
             assert_expert_fsdp_sharding(updates, "expert FSDP packed-bank MuonH grads")
+        elif bench_kind == EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH:
+            assert_chunked_packed_grouped_expert_bank_sharding(
+                updates,
+                mesh,
+                config,
+                bench_kind,
+                "chunked packed master MuonH grad bank",
+            )
+        elif bench_kind in (*PACKED_MASTER_MUONH_UPDATE_ONLY_BENCHES, *PACKED_MASTER_MUONH_CONSUMER_BENCHES):
+            assert_packed_grouped_expert_bank_sharding(
+                updates,
+                mesh,
+                config,
+                bench_kind,
+                "packed master MuonH grad bank",
+            )
+        elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_CONSUMER_BENCHES:
+            input_sharding = getattr(updates, "sharding", None)
+            expected_spec = P("expert", None, None) if updates.ndim == 3 else P("expert", None)
+            if not isinstance(input_sharding, NamedSharding) or input_sharding.spec != expected_spec:
+                raise AssertionError(
+                    f"chunked packed master FSDP consumer input expected {expected_spec}, "
+                    f"got {getattr(input_sharding, 'spec', input_sharding)!r}."
+                )
+        elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES:
+            input_sharding = getattr(updates, "sharding", None)
+            expected_spec = P("expert", None, None) if updates.ndim == 3 else P("expert", None)
+            if not isinstance(input_sharding, NamedSharding) or input_sharding.spec != expected_spec:
+                raise AssertionError(
+                    f"chunked packed master FSDP grad input expected {expected_spec}, "
+                    f"got {getattr(input_sharding, 'spec', input_sharding)!r}."
+                )
+        elif bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES:
+            assert_chunked_packed_master_grad_muonh_input_sharding_for_bench(updates, mesh, config, bench_kind)
+        elif bench_kind in PACKED_MASTER_FSDP_CONSUMER_BENCHES:
+            input_sharding = getattr(updates, "sharding", None)
+            expected_spec = P("expert", None, None) if updates.ndim == 3 else P("expert", None)
+            if not isinstance(input_sharding, NamedSharding) or input_sharding.spec != expected_spec:
+                raise AssertionError(
+                    f"packed master FSDP layer consumer input expected {expected_spec}, "
+                    f"got {getattr(input_sharding, 'spec', input_sharding)!r}."
+                )
         elif is_expert_fsdp_grouped_boundary_bench(bench_kind) or is_expert_fsdp_grouped_updates_muonh_bench(bench_kind):
             assert_grouped_expert_sharding(updates, mesh, config, bench_kind, "expert FSDP grouped updates")
         elif is_real_expert_fsdp_grouped_muonh_bench(bench_kind):
@@ -8653,6 +13128,20 @@ def time_ns4d(
                     donate_argnums=(0,),
                 )
                 lower_args = (params, updates)
+            elif bench_kind == EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH:
+                params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
+                update_step = jax.jit(
+                    expert_fsdp_packed_bank_slice_first_apply_boundary_timing_step_factory(mesh, config),
+                    donate_argnums=(0,),
+                )
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH:
+                params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
+                update_step = jax.jit(
+                    expert_fsdp_packed_bank_slice_first_direct_apply_boundary_timing_step_factory(mesh, config),
+                    donate_argnums=(0,),
+                )
+                lower_args = (params, updates)
             elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
                 params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
                 update_step = jax.jit(
@@ -8660,10 +13149,157 @@ def time_ns4d(
                     donate_argnums=(0,),
                 )
                 lower_args = (params, updates)
+            elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH:
+                params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
+                update_step = jax.jit(
+                    expert_fsdp_packed_bank_muonh_direct_apply_timing_step_factory(mesh, config),
+                    donate_argnums=(0,),
+                )
+                lower_args = (params, updates)
             elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH:
                 params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
                 update_step = jax.jit(expert_fsdp_packed_bank_muonh_update_only_timing_step_factory(mesh, config))
                 lower_args = (params, updates)
+            elif bench_kind == EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                activations = make_grouped_expert_consumer_input_tree(mesh, config, bench_kind, seed=3)
+                update_step = jax.jit(
+                    expert_packed_master_muonh_consumer_step_factory(config),
+                    donate_argnums=(0, 2),
+                )
+                lower_args = (params, updates, optimizer_state, activations)
+            elif bench_kind == EXPERT_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(
+                    expert_packed_master_muonh_update_step_factory(config),
+                    donate_argnums=(0, 1, 2),
+                )
+                lower_args = (params, updates, optimizer_state)
+            elif bench_kind == EXPERT_PACKED_MASTER_MUONH_UPDATE_CHECKSUM_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(expert_packed_master_muonh_update_checksum_step_factory(config))
+                lower_args = (params, updates, optimizer_state)
+            elif bench_kind == EXPERT_PACKED_MASTER_MOMENTUM_CHECKSUM_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(expert_packed_master_momentum_checksum_step_factory(config))
+                lower_args = (updates, optimizer_state)
+            elif bench_kind == EXPERT_PACKED_MASTER_MOMENTUM_DIRECTION_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(
+                    expert_packed_master_momentum_direction_step_factory(config),
+                    donate_argnums=(1,),
+                )
+                lower_args = (updates, optimizer_state)
+            elif bench_kind == EXPERT_PACKED_MASTER_NS_CHECKSUM_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(expert_packed_master_ns_checksum_step_factory(config))
+                lower_args = (updates,)
+            elif bench_kind == EXPERT_PACKED_MASTER_NS_HYPERBALL_CHECKSUM_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(expert_packed_master_ns_hyperball_checksum_step_factory(config))
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_PACKED_MASTER_NS_HYPERBALL_APPLY_CHECKSUM_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(expert_packed_master_ns_hyperball_apply_checksum_step_factory(config))
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_PACKED_MASTER_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(expert_packed_master_direction_ns_hyperball_checksum_step_factory(config))
+                lower_args = (params, updates, optimizer_state)
+            elif bench_kind == EXPERT_PACKED_MASTER_CHUNKED_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(expert_packed_master_chunked_direction_ns_hyperball_checksum_step_factory(config))
+                lower_args = (params, updates, optimizer_state)
+            elif bench_kind == EXPERT_PACKED_MASTER_CHUNKED_MUONH_UPDATE_ONLY_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(
+                    expert_packed_master_chunked_muonh_update_step_factory(config),
+                    donate_argnums=(0, 2),
+                )
+                lower_args = (params, updates, optimizer_state)
+            elif bench_kind == EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH:
+                params = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(
+                    expert_chunked_packed_master_muonh_update_step_factory(config),
+                    donate_argnums=(0, 2),
+                )
+                lower_args = (params, updates, optimizer_state)
+            elif bench_kind in PACKED_MASTER_MUONH_FSDP_CONSUMER_BENCHES:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                activations = make_array_from_spec_tree(
+                    expert_fsdp_layer_consumer_input_specs(mesh, config),
+                    config,
+                    seed=3,
+                )
+                update_step = jax.jit(
+                    expert_packed_master_muonh_fsdp_consumer_step_factory_for_bench(mesh, config, bench_kind),
+                    donate_argnums=(0, 2),
+                )
+                lower_args = (params, updates, optimizer_state, activations)
+            elif bench_kind == EXPERT_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                update_step = jax.jit(expert_packed_master_fsdp_layer_consumer_step_factory(mesh, config))
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                update_step = jax.jit(expert_packed_master_fsdp_sequential_consumer_step_factory(mesh, config))
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_PACKED_MASTER_FSDP_SLAB_CONSUMER_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                update_step = jax.jit(expert_packed_master_fsdp_slab_consumer_step_factory(mesh, config))
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_PACKED_MASTER_FSDP_BULK_CONSUMER_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                update_step = jax.jit(expert_packed_master_fsdp_bulk_consumer_step_factory(mesh, config))
+                lower_args = (params, updates)
+            elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_CONSUMER_BENCHES:
+                params = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                update_step = jax.jit(
+                    expert_chunked_packed_master_fsdp_consumer_step_factory_for_bench(mesh, config, bench_kind)
+                )
+                lower_args = (params, updates)
+            elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES:
+                params = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                update_step = jax.jit(expert_chunked_packed_master_fsdp_layer_grad_step_factory(mesh, config))
+                lower_args = (params, updates)
+            elif bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES:
+                params = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step_factory = expert_chunked_packed_master_grad_muonh_update_step_factory_for_bench(
+                    mesh,
+                    config,
+                    bench_kind,
+                )
+                if bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_SCALAR_BENCHES:
+                    update_step = jax.jit(update_step_factory)
+                else:
+                    update_step = jax.jit(update_step_factory, donate_argnums=(0, 1))
+                lower_args = (params, optimizer_state, updates)
+            elif bench_kind in PACKED_MASTER_FSDP_GRAD_BENCHES:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                update_step = jax.jit(expert_packed_master_fsdp_grad_step_factory(mesh, config, bench_kind))
+                lower_args = (params, updates)
+            elif bench_kind in PACKED_MASTER_GRAD_MUONH_BENCHES:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(
+                    expert_packed_master_bulk_grad_muonh_update_step_factory(mesh, config),
+                    donate_argnums=(0, 1),
+                )
+                lower_args = (params, optimizer_state, updates)
             elif bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH:
                 params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
                 update_step = jax.jit(
@@ -8800,6 +13436,123 @@ def time_ns4d(
                     donate_argnums=(0, 2),
                 )
                 lower_args = (params, updates, optimizer_state, activations)
+            elif bench_kind == EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                activations = make_grouped_expert_consumer_input_tree(mesh, config, bench_kind, seed=3)
+                update_step = jax.jit(
+                    expert_packed_master_muonh_consumer_step_factory(config),
+                    donate_argnums=(0, 2),
+                )
+                lower_args = (params, updates, optimizer_state, activations)
+            elif bench_kind == EXPERT_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(
+                    expert_packed_master_muonh_update_step_factory(config),
+                    donate_argnums=(0, 1, 2),
+                )
+                lower_args = (params, updates, optimizer_state)
+            elif bench_kind == EXPERT_PACKED_MASTER_MUONH_UPDATE_CHECKSUM_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(expert_packed_master_muonh_update_checksum_step_factory(config))
+                lower_args = (params, updates, optimizer_state)
+            elif bench_kind == EXPERT_PACKED_MASTER_MOMENTUM_CHECKSUM_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(expert_packed_master_momentum_checksum_step_factory(config))
+                lower_args = (updates, optimizer_state)
+            elif bench_kind == EXPERT_PACKED_MASTER_MOMENTUM_DIRECTION_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(
+                    expert_packed_master_momentum_direction_step_factory(config),
+                    donate_argnums=(1,),
+                )
+                lower_args = (updates, optimizer_state)
+            elif bench_kind == EXPERT_PACKED_MASTER_NS_CHECKSUM_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(expert_packed_master_ns_checksum_step_factory(config))
+                lower_args = (updates,)
+            elif bench_kind == EXPERT_PACKED_MASTER_NS_HYPERBALL_CHECKSUM_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(expert_packed_master_ns_hyperball_checksum_step_factory(config))
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_PACKED_MASTER_NS_HYPERBALL_APPLY_CHECKSUM_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(expert_packed_master_ns_hyperball_apply_checksum_step_factory(config))
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_PACKED_MASTER_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(expert_packed_master_direction_ns_hyperball_checksum_step_factory(config))
+                lower_args = (params, updates, optimizer_state)
+            elif bench_kind == EXPERT_PACKED_MASTER_CHUNKED_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(expert_packed_master_chunked_direction_ns_hyperball_checksum_step_factory(config))
+                lower_args = (params, updates, optimizer_state)
+            elif bench_kind == EXPERT_PACKED_MASTER_CHUNKED_MUONH_UPDATE_ONLY_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(
+                    expert_packed_master_chunked_muonh_update_step_factory(config),
+                    donate_argnums=(0, 2),
+                )
+                lower_args = (params, updates, optimizer_state)
+            elif bench_kind == EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH:
+                params = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(
+                    expert_chunked_packed_master_muonh_update_step_factory(config),
+                    donate_argnums=(0, 2),
+                )
+                lower_args = (params, updates, optimizer_state)
+            elif bench_kind in PACKED_MASTER_MUONH_FSDP_CONSUMER_BENCHES:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                activations = make_array_from_spec_tree(
+                    expert_fsdp_layer_consumer_input_specs(mesh, config),
+                    config,
+                    seed=3,
+                )
+                update_step = jax.jit(
+                    expert_packed_master_muonh_fsdp_consumer_step_factory_for_bench(mesh, config, bench_kind),
+                    donate_argnums=(0, 2),
+                )
+                lower_args = (params, updates, optimizer_state, activations)
+            elif bench_kind == EXPERT_PACKED_MASTER_FSDP_LAYER_CONSUMER_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                update_step = jax.jit(expert_packed_master_fsdp_layer_consumer_step_factory(mesh, config))
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                update_step = jax.jit(expert_packed_master_fsdp_sequential_consumer_step_factory(mesh, config))
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_PACKED_MASTER_FSDP_SLAB_CONSUMER_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                update_step = jax.jit(expert_packed_master_fsdp_slab_consumer_step_factory(mesh, config))
+                lower_args = (params, updates)
+            elif bench_kind == EXPERT_PACKED_MASTER_FSDP_BULK_CONSUMER_BENCH:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                update_step = jax.jit(expert_packed_master_fsdp_bulk_consumer_step_factory(mesh, config))
+                lower_args = (params, updates)
+            elif bench_kind in PACKED_MASTER_FSDP_GRAD_BENCHES:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                update_step = jax.jit(expert_packed_master_fsdp_grad_step_factory(mesh, config, bench_kind))
+                lower_args = (params, updates)
+            elif bench_kind in PACKED_MASTER_GRAD_MUONH_BENCHES:
+                params = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=0)
+                optimizer_state = make_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=2)
+                update_step = jax.jit(
+                    expert_packed_master_bulk_grad_muonh_update_step_factory(mesh, config),
+                    donate_argnums=(0, 1),
+                )
+                lower_args = (params, optimizer_state, updates)
             elif bench_kind in GROUPED_OPTIMIZER_APPLY_BENCHES:
                 params = make_productionish_grouped_expert_array_tree(mesh, config, bench_kind, seed=0)
                 use_hyperball = bench_kind == EXPERT_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH
@@ -8849,6 +13602,141 @@ def time_ns4d(
                     bench_kind,
                     "grouped MuonH MoE consumer inputs",
                 )
+            elif bench_kind == EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH:
+                assert_packed_grouped_expert_bank_sharding(
+                    params,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "packed master MuonH params",
+                )
+                assert_packed_grouped_expert_bank_sharding(
+                    optimizer_state,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "packed master MuonH momentum",
+                )
+                assert_ns4d_sharding(activations, input_spec, "packed master MuonH consumer inputs")
+            elif bench_kind == EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH:
+                assert_chunked_packed_grouped_expert_bank_sharding(
+                    params,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "chunked packed master MuonH update-only params",
+                )
+                assert_chunked_packed_grouped_expert_bank_sharding(
+                    optimizer_state,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "chunked packed master MuonH update-only momentum",
+                )
+                assert_chunked_packed_grouped_expert_bank_sharding(
+                    updates,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "chunked packed master MuonH update grad bank",
+                )
+            elif bench_kind in PACKED_MASTER_MUONH_UPDATE_ONLY_BENCHES:
+                assert_packed_grouped_expert_bank_sharding(
+                    params,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "packed master MuonH update-only params",
+                )
+                assert_packed_grouped_expert_bank_sharding(
+                    optimizer_state,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "packed master MuonH update-only momentum",
+                )
+                assert_packed_grouped_expert_bank_sharding(
+                    updates,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "packed master MuonH update grad bank",
+                )
+            elif bench_kind in PACKED_MASTER_MUONH_FSDP_CONSUMER_BENCHES:
+                assert_packed_grouped_expert_bank_sharding(
+                    params,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "packed master MuonH/FSDP params",
+                )
+                assert_packed_grouped_expert_bank_sharding(
+                    optimizer_state,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "packed master MuonH/FSDP momentum",
+                )
+                input_sharding = getattr(activations, "sharding", None)
+                if not isinstance(input_sharding, NamedSharding) or input_sharding.spec != P("expert", None):
+                    raise AssertionError(
+                        "packed master MuonH/FSDP consumer input expected P('expert', None), "
+                        f"got {getattr(input_sharding, 'spec', input_sharding)!r}."
+                    )
+            elif bench_kind in PACKED_MASTER_FSDP_CONSUMER_BENCHES:
+                assert_packed_grouped_expert_bank_sharding(
+                    params,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "packed master FSDP consumer master input",
+                )
+            elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES:
+                assert_chunked_packed_grouped_expert_bank_sharding(
+                    params,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "chunked packed master FSDP grad master input",
+                )
+            elif bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES:
+                assert_chunked_packed_grouped_expert_bank_sharding(
+                    params,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "chunked packed master layer-grad MuonH master input",
+                )
+                assert_chunked_packed_grouped_expert_bank_sharding(
+                    optimizer_state,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "chunked packed master layer-grad MuonH momentum input",
+                )
+            elif bench_kind in PACKED_MASTER_FSDP_GRAD_BENCHES:
+                assert_packed_grouped_expert_bank_sharding(
+                    params,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "packed master FSDP grad master input",
+                )
+            elif bench_kind in PACKED_MASTER_GRAD_MUONH_BENCHES:
+                assert_packed_grouped_expert_bank_sharding(
+                    params,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "packed master bulk-grad MuonH master input",
+                )
+                assert_packed_grouped_expert_bank_sharding(
+                    optimizer_state,
+                    mesh,
+                    config,
+                    bench_kind,
+                    "packed master bulk-grad MuonH momentum input",
+                )
             elif bench_kind == EXPERT_FSDP_GROUPED_PERSISTENT_MUONH_APPLY_BENCH:
                 assert_grouped_expert_sharding(params, mesh, config, bench_kind, "persistent grouped MuonH params")
             elif bench_kind in (EXPERT_GROUPED_LAYER_SLICE_BENCH, EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH):
@@ -8867,8 +13755,19 @@ def time_ns4d(
             elif bench_kind in (
                 EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
                 EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
+                *PACKED_MASTER_MUONH_CONSUMER_BENCHES,
             ):
                 block_until_ready_tree((params, updates, optimizer_state, activations))
+            elif bench_kind in PACKED_MASTER_MUONH_UPDATE_ONLY_BENCHES:
+                block_until_ready_tree((params, updates, optimizer_state))
+            elif bench_kind in (
+                *PACKED_MASTER_FSDP_CONSUMER_BENCHES,
+                *CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES,
+                *PACKED_MASTER_FSDP_GRAD_BENCHES,
+            ):
+                block_until_ready_tree((params, updates))
+            elif bench_kind in (*PACKED_MASTER_GRAD_MUONH_BENCHES, *CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES):
+                block_until_ready_tree((params, optimizer_state, updates))
             else:
                 block_until_ready_tree((params, updates, optimizer_state))
         else:
@@ -8941,6 +13840,14 @@ def time_ns4d(
                     EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
                     EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
                     EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
+                    *PACKED_MASTER_MUONH_UPDATE_ONLY_BENCHES,
+                    *PACKED_MASTER_MUONH_CONSUMER_BENCHES,
+                    *PACKED_MASTER_FSDP_CONSUMER_BENCHES,
+                    *CHUNKED_PACKED_MASTER_FSDP_CONSUMER_BENCHES,
+                    *CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES,
+                    *CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES,
+                    *PACKED_MASTER_FSDP_GRAD_BENCHES,
+                    *PACKED_MASTER_GRAD_MUONH_BENCHES,
                 )
             ):
                 if bench_kind == EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH:
@@ -8976,9 +13883,84 @@ def time_ns4d(
                 elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
                     params = compiled(params, updates)
                     block_until_ready_tree(params)
+                elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH:
+                    params = compiled(params, updates)
+                    block_until_ready_tree(params)
                 elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH:
                     next_updates = compiled(params, updates)
                     block_until_ready_tree(next_updates)
+                elif bench_kind in (
+                    EXPERT_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH,
+                    EXPERT_PACKED_MASTER_CHUNKED_MUONH_UPDATE_ONLY_BENCH,
+                    EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH,
+                ):
+                    params, optimizer_state = compiled(params, updates, optimizer_state)
+                    block_until_ready_tree((params, optimizer_state))
+                elif bench_kind == EXPERT_PACKED_MASTER_MUONH_UPDATE_CHECKSUM_BENCH:
+                    next_updates = compiled(params, updates, optimizer_state)
+                    block_until_ready_tree(next_updates)
+                elif bench_kind == EXPERT_PACKED_MASTER_MOMENTUM_DIRECTION_BENCH:
+                    optimizer_state, direction_inputs = compiled(updates, optimizer_state)
+                    block_until_ready_tree((optimizer_state, direction_inputs))
+                elif bench_kind == EXPERT_PACKED_MASTER_MOMENTUM_CHECKSUM_BENCH:
+                    next_updates = compiled(updates, optimizer_state)
+                    block_until_ready_tree(next_updates)
+                elif bench_kind == EXPERT_PACKED_MASTER_NS_CHECKSUM_BENCH:
+                    next_updates = compiled(updates)
+                    block_until_ready_tree(next_updates)
+                elif bench_kind == EXPERT_PACKED_MASTER_NS_HYPERBALL_CHECKSUM_BENCH:
+                    next_updates = compiled(params, updates)
+                    block_until_ready_tree(next_updates)
+                elif bench_kind == EXPERT_PACKED_MASTER_NS_HYPERBALL_APPLY_CHECKSUM_BENCH:
+                    next_updates = compiled(params, updates)
+                    block_until_ready_tree(next_updates)
+                elif bench_kind == EXPERT_PACKED_MASTER_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH:
+                    next_updates = compiled(params, updates, optimizer_state)
+                    block_until_ready_tree(next_updates)
+                elif bench_kind == EXPERT_PACKED_MASTER_CHUNKED_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH:
+                    next_updates = compiled(params, updates, optimizer_state)
+                    block_until_ready_tree(next_updates)
+                elif bench_kind == EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH:
+                    params, optimizer_state, consumer_outputs = compiled(
+                        params,
+                        updates,
+                        optimizer_state,
+                        activations,
+                    )
+                    block_until_ready_tree((params, optimizer_state, consumer_outputs))
+                elif bench_kind in PACKED_MASTER_MUONH_FSDP_CONSUMER_BENCHES:
+                    params, optimizer_state, consumer_outputs = compiled(
+                        params,
+                        updates,
+                        optimizer_state,
+                        activations,
+                    )
+                    block_until_ready_tree((params, optimizer_state, consumer_outputs))
+                elif bench_kind in PACKED_MASTER_FSDP_CONSUMER_BENCHES:
+                    consumer_outputs = compiled(params, updates)
+                    block_until_ready_tree(consumer_outputs)
+                elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_CONSUMER_BENCHES:
+                    consumer_outputs = compiled(params, updates)
+                    block_until_ready_tree(consumer_outputs)
+                elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES:
+                    next_updates = compiled(params, updates)
+                    block_until_ready_tree(next_updates)
+                elif bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES:
+                    if bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_SCALAR_BENCHES:
+                        next_updates = compiled(params, optimizer_state, updates)
+                        block_until_ready_tree(next_updates)
+                    elif is_chunked_packed_master_streaming_value_grad_bench(bench_kind):
+                        loss, params, optimizer_state = compiled(params, optimizer_state, updates)
+                        block_until_ready_tree((loss, params, optimizer_state))
+                    else:
+                        params, optimizer_state = compiled(params, optimizer_state, updates)
+                        block_until_ready_tree((params, optimizer_state))
+                elif bench_kind in PACKED_MASTER_FSDP_GRAD_BENCHES:
+                    next_updates = compiled(params, updates)
+                    block_until_ready_tree(next_updates)
+                elif bench_kind in PACKED_MASTER_GRAD_MUONH_BENCHES:
+                    params, optimizer_state = compiled(params, optimizer_state, updates)
+                    block_until_ready_tree((params, optimizer_state))
                 elif bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH:
                     params = compiled(params, updates)
                     block_until_ready_tree(params)
@@ -9016,12 +13998,188 @@ def time_ns4d(
                     )
                 elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
                     assert_expert_fsdp_sharding(params, "warmup expert FSDP packed-bank MuonH params")
+                elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH:
+                    assert_expert_fsdp_sharding(params, "warmup expert FSDP packed-bank MuonH direct-apply params")
                 elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH:
                     if next_updates.shape != ():
                         raise ValueError(
                             "Timing-only packed-bank MuonH update-only step should return a scalar checksum; "
                             f"got shape {next_updates.shape}."
                         )
+                elif bench_kind == EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH:
+                    assert_chunked_packed_grouped_expert_bank_sharding(
+                        params,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup chunked packed master MuonH update-only next master",
+                    )
+                    assert_chunked_packed_grouped_expert_bank_sharding(
+                        optimizer_state,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup chunked packed master MuonH update-only next momentum",
+                    )
+                elif bench_kind in (
+                    EXPERT_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH,
+                    EXPERT_PACKED_MASTER_CHUNKED_MUONH_UPDATE_ONLY_BENCH,
+                ):
+                    assert_packed_grouped_expert_bank_sharding(
+                        params,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup packed master MuonH update-only next master",
+                    )
+                    assert_packed_grouped_expert_bank_sharding(
+                        optimizer_state,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup packed master MuonH update-only next momentum",
+                    )
+                elif bench_kind == EXPERT_PACKED_MASTER_MUONH_UPDATE_CHECKSUM_BENCH:
+                    if next_updates.shape != () or next_updates.dtype != jnp.float32:
+                        raise ValueError(
+                            "Timing-only packed-master MuonH checksum should return a scalar float32; "
+                            f"got shape={next_updates.shape}, dtype={next_updates.dtype}."
+                        )
+                elif bench_kind == EXPERT_PACKED_MASTER_MOMENTUM_DIRECTION_BENCH:
+                    assert_packed_grouped_expert_bank_sharding(
+                        optimizer_state,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup packed master momentum-direction next momentum",
+                    )
+                    assert_packed_grouped_expert_bank_sharding(
+                        direction_inputs,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup packed master momentum-direction direction input",
+                    )
+                elif bench_kind in (
+                    EXPERT_PACKED_MASTER_MOMENTUM_CHECKSUM_BENCH,
+                    EXPERT_PACKED_MASTER_NS_CHECKSUM_BENCH,
+                    EXPERT_PACKED_MASTER_NS_HYPERBALL_CHECKSUM_BENCH,
+                    EXPERT_PACKED_MASTER_NS_HYPERBALL_APPLY_CHECKSUM_BENCH,
+                    EXPERT_PACKED_MASTER_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH,
+                    EXPERT_PACKED_MASTER_CHUNKED_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH,
+                ):
+                    if next_updates.shape != () or next_updates.dtype != jnp.float32:
+                        raise ValueError(
+                            "Timing-only packed-master diagnostic should return a scalar float32; "
+                            f"got shape={next_updates.shape}, dtype={next_updates.dtype}."
+                        )
+                elif bench_kind == EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH:
+                    assert_packed_grouped_expert_bank_sharding(
+                        params,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup packed master MuonH params",
+                    )
+                    assert_packed_grouped_expert_bank_sharding(
+                        optimizer_state,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup packed master MuonH momentum",
+                    )
+                elif bench_kind in PACKED_MASTER_MUONH_FSDP_CONSUMER_BENCHES:
+                    assert_packed_grouped_expert_bank_sharding(
+                        params,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup packed master MuonH/FSDP params",
+                    )
+                    assert_packed_grouped_expert_bank_sharding(
+                        optimizer_state,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup packed master MuonH/FSDP momentum",
+                    )
+                    if consumer_outputs.shape != () or consumer_outputs.dtype != jnp.float32:
+                        raise ValueError(
+                            "Timing-only packed-master MuonH/FSDP consumer should return a scalar float32 loss; "
+                            f"got shape={consumer_outputs.shape}, dtype={consumer_outputs.dtype}."
+                        )
+                elif bench_kind in PACKED_MASTER_FSDP_CONSUMER_BENCHES:
+                    if consumer_outputs.shape != () or consumer_outputs.dtype != jnp.float32:
+                        raise ValueError(
+                            "Timing-only packed-master FSDP consumer should return a scalar float32 loss; "
+                            f"got shape={consumer_outputs.shape}, dtype={consumer_outputs.dtype}."
+                        )
+                elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_CONSUMER_BENCHES:
+                    if consumer_outputs.shape != () or consumer_outputs.dtype != jnp.float32:
+                        raise ValueError(
+                            "Timing-only chunked packed-master FSDP consumer should return a scalar float32 loss; "
+                            f"got shape={consumer_outputs.shape}, dtype={consumer_outputs.dtype}."
+                        )
+                    assert_chunked_packed_grouped_expert_bank_sharding(
+                        params,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup chunked packed master FSDP consumer params",
+                    )
+                elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES:
+                    assert_chunked_packed_grouped_expert_bank_sharding(
+                        next_updates,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup chunked packed master FSDP grad output",
+                    )
+                elif bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES:
+                    if bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_SCALAR_BENCHES:
+                        if next_updates.shape != () or next_updates.dtype != jnp.float32:
+                            raise ValueError(
+                                "Timing-only chunked packed-master grad+MuonH checksum should return a scalar "
+                                f"float32; got shape={next_updates.shape}, dtype={next_updates.dtype}."
+                            )
+                    else:
+                        assert_chunked_packed_grouped_expert_bank_sharding(
+                            params,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "warmup chunked packed master layer-grad MuonH next master",
+                        )
+                        assert_chunked_packed_grouped_expert_bank_sharding(
+                            optimizer_state,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "warmup chunked packed master layer-grad MuonH next momentum",
+                        )
+                elif bench_kind in PACKED_MASTER_FSDP_GRAD_BENCHES:
+                    assert_packed_grouped_expert_bank_sharding(
+                        next_updates,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup packed master FSDP grad output",
+                    )
+                elif bench_kind in PACKED_MASTER_GRAD_MUONH_BENCHES:
+                    assert_packed_grouped_expert_bank_sharding(
+                        params,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup packed master bulk-grad MuonH next master",
+                    )
+                    assert_packed_grouped_expert_bank_sharding(
+                        optimizer_state,
+                        mesh,
+                        config,
+                        bench_kind,
+                        "warmup packed master bulk-grad MuonH next momentum",
+                    )
                 elif bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH:
                     assert_expert_fsdp_sharding(params, "warmup expert FSDP packed-bank direction-apply params")
                 elif is_expert_fsdp_grouped_bench(bench_kind):
@@ -9153,6 +14311,14 @@ def time_ns4d(
                         EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH,
                         EXPERT_GROUPED_MUONH_BANK_CONSUMER_BENCH,
                         EXPERT_GROUPED_MUONH_MOE_MLP_CONSUMER_BENCH,
+                        *PACKED_MASTER_MUONH_UPDATE_ONLY_BENCHES,
+                        *PACKED_MASTER_MUONH_CONSUMER_BENCHES,
+                        *PACKED_MASTER_FSDP_CONSUMER_BENCHES,
+                        *CHUNKED_PACKED_MASTER_FSDP_CONSUMER_BENCHES,
+                        *CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES,
+                        *CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES,
+                        *PACKED_MASTER_FSDP_GRAD_BENCHES,
+                        *PACKED_MASTER_GRAD_MUONH_BENCHES,
                     )
                 ):
                     if bench_kind == EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH:
@@ -9192,9 +14358,84 @@ def time_ns4d(
                     elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
                         params = compiled(params, updates)
                         block_until_ready_tree(params)
+                    elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH:
+                        params = compiled(params, updates)
+                        block_until_ready_tree(params)
                     elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH:
                         next_updates = compiled(params, updates)
                         block_until_ready_tree(next_updates)
+                    elif bench_kind in (
+                        EXPERT_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH,
+                        EXPERT_PACKED_MASTER_CHUNKED_MUONH_UPDATE_ONLY_BENCH,
+                        EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH,
+                    ):
+                        params, optimizer_state = compiled(params, updates, optimizer_state)
+                        block_until_ready_tree((params, optimizer_state))
+                    elif bench_kind == EXPERT_PACKED_MASTER_MUONH_UPDATE_CHECKSUM_BENCH:
+                        next_updates = compiled(params, updates, optimizer_state)
+                        block_until_ready_tree(next_updates)
+                    elif bench_kind == EXPERT_PACKED_MASTER_MOMENTUM_DIRECTION_BENCH:
+                        optimizer_state, direction_inputs = compiled(updates, optimizer_state)
+                        block_until_ready_tree((optimizer_state, direction_inputs))
+                    elif bench_kind == EXPERT_PACKED_MASTER_MOMENTUM_CHECKSUM_BENCH:
+                        next_updates = compiled(updates, optimizer_state)
+                        block_until_ready_tree(next_updates)
+                    elif bench_kind == EXPERT_PACKED_MASTER_NS_CHECKSUM_BENCH:
+                        next_updates = compiled(updates)
+                        block_until_ready_tree(next_updates)
+                    elif bench_kind == EXPERT_PACKED_MASTER_NS_HYPERBALL_CHECKSUM_BENCH:
+                        next_updates = compiled(params, updates)
+                        block_until_ready_tree(next_updates)
+                    elif bench_kind == EXPERT_PACKED_MASTER_NS_HYPERBALL_APPLY_CHECKSUM_BENCH:
+                        next_updates = compiled(params, updates)
+                        block_until_ready_tree(next_updates)
+                    elif bench_kind == EXPERT_PACKED_MASTER_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH:
+                        next_updates = compiled(params, updates, optimizer_state)
+                        block_until_ready_tree(next_updates)
+                    elif bench_kind == EXPERT_PACKED_MASTER_CHUNKED_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH:
+                        next_updates = compiled(params, updates, optimizer_state)
+                        block_until_ready_tree(next_updates)
+                    elif bench_kind == EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH:
+                        params, optimizer_state, consumer_outputs = compiled(
+                            params,
+                            updates,
+                            optimizer_state,
+                            activations,
+                        )
+                        block_until_ready_tree((params, optimizer_state, consumer_outputs))
+                    elif bench_kind in PACKED_MASTER_MUONH_FSDP_CONSUMER_BENCHES:
+                        params, optimizer_state, consumer_outputs = compiled(
+                            params,
+                            updates,
+                            optimizer_state,
+                            activations,
+                        )
+                        block_until_ready_tree((params, optimizer_state, consumer_outputs))
+                    elif bench_kind in PACKED_MASTER_FSDP_CONSUMER_BENCHES:
+                        consumer_outputs = compiled(params, updates)
+                        block_until_ready_tree(consumer_outputs)
+                    elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_CONSUMER_BENCHES:
+                        consumer_outputs = compiled(params, updates)
+                        block_until_ready_tree(consumer_outputs)
+                    elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES:
+                        next_updates = compiled(params, updates)
+                        block_until_ready_tree(next_updates)
+                    elif bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES:
+                        if bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_SCALAR_BENCHES:
+                            next_updates = compiled(params, optimizer_state, updates)
+                            block_until_ready_tree(next_updates)
+                        elif is_chunked_packed_master_streaming_value_grad_bench(bench_kind):
+                            loss, params, optimizer_state = compiled(params, optimizer_state, updates)
+                            block_until_ready_tree((loss, params, optimizer_state))
+                        else:
+                            params, optimizer_state = compiled(params, optimizer_state, updates)
+                            block_until_ready_tree((params, optimizer_state))
+                    elif bench_kind in PACKED_MASTER_FSDP_GRAD_BENCHES:
+                        next_updates = compiled(params, updates)
+                        block_until_ready_tree(next_updates)
+                    elif bench_kind in PACKED_MASTER_GRAD_MUONH_BENCHES:
+                        params, optimizer_state = compiled(params, optimizer_state, updates)
+                        block_until_ready_tree((params, optimizer_state))
                     elif bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH:
                         params = compiled(params, updates)
                         block_until_ready_tree(params)
@@ -9232,12 +14473,188 @@ def time_ns4d(
                         )
                     elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH:
                         assert_expert_fsdp_sharding(params, "expert FSDP packed-bank MuonH params")
+                    elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH:
+                        assert_expert_fsdp_sharding(params, "expert FSDP packed-bank MuonH direct-apply params")
                     elif bench_kind == EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH:
                         if next_updates.shape != ():
                             raise ValueError(
                                 "Timing-only packed-bank MuonH update-only step should return a scalar checksum; "
                                 f"got shape {next_updates.shape}."
                             )
+                    elif bench_kind == EXPERT_CHUNKED_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH:
+                        assert_chunked_packed_grouped_expert_bank_sharding(
+                            params,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "chunked packed master MuonH update-only next master",
+                        )
+                        assert_chunked_packed_grouped_expert_bank_sharding(
+                            optimizer_state,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "chunked packed master MuonH update-only next momentum",
+                        )
+                    elif bench_kind in (
+                        EXPERT_PACKED_MASTER_MUONH_UPDATE_ONLY_BENCH,
+                        EXPERT_PACKED_MASTER_CHUNKED_MUONH_UPDATE_ONLY_BENCH,
+                    ):
+                        assert_packed_grouped_expert_bank_sharding(
+                            params,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "packed master MuonH update-only next master",
+                        )
+                        assert_packed_grouped_expert_bank_sharding(
+                            optimizer_state,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "packed master MuonH update-only next momentum",
+                        )
+                    elif bench_kind == EXPERT_PACKED_MASTER_MUONH_UPDATE_CHECKSUM_BENCH:
+                        if next_updates.shape != () or next_updates.dtype != jnp.float32:
+                            raise ValueError(
+                                "Timing-only packed-master MuonH checksum should return a scalar float32; "
+                                f"got shape={next_updates.shape}, dtype={next_updates.dtype}."
+                            )
+                    elif bench_kind == EXPERT_PACKED_MASTER_MOMENTUM_DIRECTION_BENCH:
+                        assert_packed_grouped_expert_bank_sharding(
+                            optimizer_state,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "packed master momentum-direction next momentum",
+                        )
+                        assert_packed_grouped_expert_bank_sharding(
+                            direction_inputs,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "packed master momentum-direction direction input",
+                        )
+                    elif bench_kind in (
+                        EXPERT_PACKED_MASTER_MOMENTUM_CHECKSUM_BENCH,
+                        EXPERT_PACKED_MASTER_NS_CHECKSUM_BENCH,
+                        EXPERT_PACKED_MASTER_NS_HYPERBALL_CHECKSUM_BENCH,
+                        EXPERT_PACKED_MASTER_NS_HYPERBALL_APPLY_CHECKSUM_BENCH,
+                        EXPERT_PACKED_MASTER_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH,
+                        EXPERT_PACKED_MASTER_CHUNKED_DIRECTION_NS_HYPERBALL_CHECKSUM_BENCH,
+                    ):
+                        if next_updates.shape != () or next_updates.dtype != jnp.float32:
+                            raise ValueError(
+                                "Timing-only packed-master diagnostic should return a scalar float32; "
+                                f"got shape={next_updates.shape}, dtype={next_updates.dtype}."
+                            )
+                    elif bench_kind == EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH:
+                        assert_packed_grouped_expert_bank_sharding(
+                            params,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "packed master MuonH params",
+                        )
+                        assert_packed_grouped_expert_bank_sharding(
+                            optimizer_state,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "packed master MuonH momentum",
+                        )
+                    elif bench_kind in PACKED_MASTER_MUONH_FSDP_CONSUMER_BENCHES:
+                        assert_packed_grouped_expert_bank_sharding(
+                            params,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "packed master MuonH/FSDP params",
+                        )
+                        assert_packed_grouped_expert_bank_sharding(
+                            optimizer_state,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "packed master MuonH/FSDP momentum",
+                        )
+                        if consumer_outputs.shape != () or consumer_outputs.dtype != jnp.float32:
+                            raise ValueError(
+                                "Timing-only packed-master MuonH/FSDP consumer should return a scalar float32 "
+                                f"loss; got shape={consumer_outputs.shape}, dtype={consumer_outputs.dtype}."
+                            )
+                    elif bench_kind in PACKED_MASTER_FSDP_CONSUMER_BENCHES:
+                        if consumer_outputs.shape != () or consumer_outputs.dtype != jnp.float32:
+                            raise ValueError(
+                                "Timing-only packed-master FSDP consumer should return a scalar float32 loss; "
+                                f"got shape={consumer_outputs.shape}, dtype={consumer_outputs.dtype}."
+                            )
+                    elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_CONSUMER_BENCHES:
+                        if consumer_outputs.shape != () or consumer_outputs.dtype != jnp.float32:
+                            raise ValueError(
+                                "Timing-only chunked packed-master FSDP consumer should return a scalar float32 "
+                                f"loss; got shape={consumer_outputs.shape}, dtype={consumer_outputs.dtype}."
+                            )
+                        assert_chunked_packed_grouped_expert_bank_sharding(
+                            params,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "chunked packed master FSDP consumer params",
+                        )
+                    elif bench_kind in CHUNKED_PACKED_MASTER_FSDP_GRAD_BENCHES:
+                        assert_chunked_packed_grouped_expert_bank_sharding(
+                            next_updates,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "chunked packed master FSDP grad output",
+                        )
+                    elif bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_BENCHES:
+                        if bench_kind in CHUNKED_PACKED_MASTER_GRAD_MUONH_SCALAR_BENCHES:
+                            if next_updates.shape != () or next_updates.dtype != jnp.float32:
+                                raise ValueError(
+                                    "Timing-only chunked packed-master grad+MuonH checksum should return a scalar "
+                                    f"float32; got shape={next_updates.shape}, dtype={next_updates.dtype}."
+                                )
+                        else:
+                            assert_chunked_packed_grouped_expert_bank_sharding(
+                                params,
+                                mesh,
+                                config,
+                                bench_kind,
+                                "chunked packed master layer-grad MuonH next master",
+                            )
+                            assert_chunked_packed_grouped_expert_bank_sharding(
+                                optimizer_state,
+                                mesh,
+                                config,
+                                bench_kind,
+                                "chunked packed master layer-grad MuonH next momentum",
+                            )
+                    elif bench_kind in PACKED_MASTER_FSDP_GRAD_BENCHES:
+                        assert_packed_grouped_expert_bank_sharding(
+                            next_updates,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "packed master FSDP grad output",
+                        )
+                    elif bench_kind in PACKED_MASTER_GRAD_MUONH_BENCHES:
+                        assert_packed_grouped_expert_bank_sharding(
+                            params,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "packed master bulk-grad MuonH next master",
+                        )
+                        assert_packed_grouped_expert_bank_sharding(
+                            optimizer_state,
+                            mesh,
+                            config,
+                            bench_kind,
+                            "packed master bulk-grad MuonH next momentum",
+                        )
                     elif bench_kind == EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH:
                         assert_expert_fsdp_sharding(params, "expert FSDP packed-bank direction-apply params")
                     elif is_expert_fsdp_grouped_bench(bench_kind):
@@ -9553,6 +14970,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--packed-master-layer-chunk-size",
+        type=int,
+        default=0,
+        help=(
+            "Layer chunk size for layer-chunked packed-master streaming benches. "
+            "Use 0 to default to the active replica/data sharding axis size."
+        ),
+    )
+    parser.add_argument(
         "--bench-kinds",
         default=MUONH_UPDATE_BENCH,
         help=f"Comma-separated benchmark kinds. Valid: {','.join(BENCH_KINDS)}.",
@@ -9581,6 +15007,14 @@ def parse_args() -> argparse.Namespace:
         "--expert-grouped-muonh-chunk-local-boundaries",
         action="store_true",
         help="Use per-chunk packed entry/restore boundaries in the real grouped MuonH optimizer bench.",
+    )
+    parser.add_argument(
+        "--unfused-expert-gate-up",
+        action="store_true",
+        help=(
+            "Harness-only Grug MoE expert shape probe: replace fused w_gate_up[E,D,2I] "
+            "with w_gate[E,D,I] and w_up[E,D,I]."
+        ),
     )
     parser.add_argument("--mode", choices=("lower", "run", "both"), default="both")
     parser.add_argument(
@@ -9666,6 +15100,8 @@ def config_from_args(args: argparse.Namespace) -> BenchConfig:
             "Specify at most one of --grouped-expert-consumer-chunk-tokens and "
             "--grouped-expert-consumer-chunk-tokens-per-expert."
         )
+    if args.packed_master_layer_chunk_size < 0:
+        raise ValueError("--packed-master-layer-chunk-size must be >= 0.")
     return BenchConfig(
         layers=args.layers,
         ns4d_group_size=args.ns4d_group_size,
@@ -9687,9 +15123,11 @@ def config_from_args(args: argparse.Namespace) -> BenchConfig:
         expert_grouped_muonh_packed_entry=args.expert_grouped_muonh_packed_entry,
         expert_grouped_muonh_packed_bank_compute=args.expert_grouped_muonh_packed_bank_compute,
         expert_grouped_muonh_chunk_local_boundaries=args.expert_grouped_muonh_chunk_local_boundaries,
+        unfused_expert_gate_up=args.unfused_expert_gate_up,
         grouped_expert_consumer_tokens_per_expert=args.grouped_expert_consumer_tokens_per_expert,
         grouped_expert_consumer_chunk_tokens=args.grouped_expert_consumer_chunk_tokens,
         grouped_expert_consumer_chunk_tokens_per_expert=args.grouped_expert_consumer_chunk_tokens_per_expert,
+        packed_master_layer_chunk_size=args.packed_master_layer_chunk_size,
     )
 
 
@@ -9778,6 +15216,7 @@ def run_config(
         "process_count": jax.process_count(),
         "device_kinds": sorted({getattr(device, "device_kind", "") for device in jax.devices()}),
         "synthetic_shapes": synthetic_shapes(config),
+        "ns_logical_matrix_shapes": ns_logical_matrix_shapes(config),
         "ns4d_group_size": ns4d_group_size(config),
         "ns4d_group_axis": ns4d_group_axis(config),
         "ns4d_padded_group_size": padded_ns4d_group_size(config, bench_kind),
@@ -9785,8 +15224,10 @@ def run_config(
         "ns4d_compute_sharding_spec": ns4d_compute_spec,
         "ns4d_result_sharding_spec": ns4d_result_spec,
         "ns4d_boundary_status": ns4d_boundary,
+        "grouped_expert_group_sizes": list(grouped_expert_group_sizes_for_bench(config, bench_kind)),
+        "grouped_expert_valid_group_sizes": list(chunked_packed_master_valid_group_sizes_for_bench(config, bench_kind)),
         "grouped_expert_paths": (
-            list(GROUPED_EXPERT_PATHS)
+            list(grouped_expert_paths(config))
             if bench_kind
             in (
                 EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
@@ -9818,7 +15259,7 @@ def run_config(
             else None
         ),
         "full_production_muonh_paths": (
-            list(FULL_PRODUCTION_MUONH_PATHS)
+            list(full_production_muonh_paths(config))
             if bench_kind
             in (
                 FULL_PRODUCTION_MUONH_OPTIMIZER_APPLY_BENCH,
@@ -9875,7 +15316,13 @@ def run_config(
             and bench_skip_reason(config, bench_kind) is None
             else None
         ),
-        "group_estimates": [asdict(estimate) for estimate in estimate_grouping(config)],
+        "grouped_expert_packed_bank_count": grouped_expert_packed_bank_count_for_bench(config, bench_kind),
+        "muon_master_bank_metadata": (
+            asdict(muon_master_bank_metadata(config, bench_kind, mesh))
+            if bench_kind in PACKED_MASTER_METADATA_BENCHES
+            else None
+        ),
+        "group_estimates": [asdict(estimate) for estimate in estimate_grouping(config, bench_kind)],
         "grouped_2d_estimates": grouped_2d_estimates,
     }
     emit_jsonl(metadata)
@@ -9982,6 +15429,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
     boundary_phase_totals = boundary_phase_type_totals(boundary_phases)
     boundary_phase_global_bytes = sum(phase["global_bytes"] for phase in boundary_phases)
     boundary_phase_ideal_collective_count = sum(phase["ideal_collective_count"] for phase in boundary_phases)
+    muon_master_metadata = result["metadata"].get("muon_master_bank_metadata") or {}
     row = {
         "label": result["metadata"]["label"],
         "bench_kind": bench_kind,
@@ -9997,6 +15445,7 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "grouped_expert_consumer_tokens_per_expert": config["grouped_expert_consumer_tokens_per_expert"],
         "grouped_expert_consumer_chunk_tokens": config["grouped_expert_consumer_chunk_tokens"],
         "grouped_expert_consumer_chunk_tokens_per_expert": config["grouped_expert_consumer_chunk_tokens_per_expert"],
+        "packed_master_layer_chunk_size": config["packed_master_layer_chunk_size"],
         "grouped_expert_consumer_effective_chunk_tokens": grouped_moe_consumer_chunk_tokens(bench_config),
         "ns4d_group_size": result["metadata"]["ns4d_group_size"],
         "ns4d_padded_group_size": result["metadata"]["ns4d_padded_group_size"],
@@ -10009,6 +15458,8 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "expert_grouped_muonh_packed_entry": bench_config.expert_grouped_muonh_packed_entry,
         "expert_grouped_muonh_packed_bank_compute": bench_config.expert_grouped_muonh_packed_bank_compute,
         "expert_grouped_muonh_chunk_local_boundaries": bench_config.expert_grouped_muonh_chunk_local_boundaries,
+        "unfused_expert_gate_up": bench_config.unfused_expert_gate_up,
+        "ns_logical_matrix_shapes": result["metadata"].get("ns_logical_matrix_shapes"),
         "boundary_collectives_allowed": result["metadata"]["boundary_collectives_allowed"],
         "boundary_collectives_required_absent": result["metadata"]["boundary_collectives_required_absent"],
         "estimated_ns_dot_flops": flops,
@@ -10060,6 +15511,21 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "estimated_boundary_phase_all_gather_ideal_collective_count": boundary_phase_totals[
             "all_gather_ideal_collective_count"
         ],
+        "estimated_boundary_phase_all_gather_global_bytes_per_ideal_collective": boundary_phase_totals[
+            "all_gather_global_bytes_per_ideal_collective"
+        ],
+        "estimated_boundary_phase_all_gather_global_gib_per_ideal_collective": bytes_to_gib(
+            boundary_phase_totals["all_gather_global_bytes_per_ideal_collective"]
+        ),
+        "estimated_boundary_phase_all_gather_grouped_input_per_device_bytes_per_ideal_collective": boundary_phase_totals[
+            "all_gather_grouped_input_per_device_bytes_per_ideal_collective"
+        ],
+        "estimated_boundary_phase_all_gather_fsdp_output_per_device_bytes_per_ideal_collective": boundary_phase_totals[
+            "all_gather_fsdp_output_per_device_bytes_per_ideal_collective"
+        ],
+        "estimated_boundary_phase_all_gather_max_global_bytes_per_phase_ideal_collective": boundary_phase_totals[
+            "all_gather_max_global_bytes_per_phase_ideal_collective"
+        ],
         "estimated_boundary_phase_all_reduce_global_bytes": boundary_phase_totals["all_reduce_global_bytes"],
         "estimated_boundary_phase_all_reduce_global_gib": bytes_to_gib(boundary_phase_totals["all_reduce_global_bytes"]),
         "estimated_boundary_phase_all_reduce_ideal_collective_count": boundary_phase_totals[
@@ -10077,6 +15543,21 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "estimated_boundary_phase_all_to_all_ideal_collective_count": boundary_phase_totals[
             "all_to_all_ideal_collective_count"
         ],
+        "estimated_boundary_phase_all_to_all_global_bytes_per_ideal_collective": boundary_phase_totals[
+            "all_to_all_global_bytes_per_ideal_collective"
+        ],
+        "estimated_boundary_phase_all_to_all_global_gib_per_ideal_collective": bytes_to_gib(
+            boundary_phase_totals["all_to_all_global_bytes_per_ideal_collective"]
+        ),
+        "estimated_boundary_phase_all_to_all_grouped_input_per_device_bytes_per_ideal_collective": boundary_phase_totals[
+            "all_to_all_grouped_input_per_device_bytes_per_ideal_collective"
+        ],
+        "estimated_boundary_phase_all_to_all_fsdp_output_per_device_bytes_per_ideal_collective": boundary_phase_totals[
+            "all_to_all_fsdp_output_per_device_bytes_per_ideal_collective"
+        ],
+        "estimated_boundary_phase_all_to_all_max_global_bytes_per_phase_ideal_collective": boundary_phase_totals[
+            "all_to_all_max_global_bytes_per_phase_ideal_collective"
+        ],
         "estimated_boundary_phase_collective_permute_global_bytes": boundary_phase_totals[
             "collective_permute_global_bytes"
         ],
@@ -10092,13 +15573,26 @@ def summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "estimated_boundary_phase_ideal_collective_count": (
             boundary_phase_ideal_collective_count if boundary_phases else None
         ),
-        "grouped_expert_group_count": result["metadata"]["grouped_expert_group_count"],
+        "grouped_expert_group_count": (
+            result["metadata"].get("grouped_expert_group_count") or grouped_expert_group_count(bench_config)
+        ),
+        "grouped_expert_packed_bank_count": (
+            result["metadata"].get("grouped_expert_packed_bank_count") or grouped_expert_packed_bank_count(bench_config)
+        ),
         "grouped_chunks": sum(estimate["grouped_chunks"] for estimate in estimates),
         "chunks": [estimate["chunks"] for estimate in estimates],
         "group_estimates": estimates,
         "grouped_2d_chunks": sum(estimate["grouped_chunks"] for estimate in grouped_2d_estimates),
         "grouped_2d_chunk_sizes": [estimate["chunks"] for estimate in grouped_2d_estimates],
         "grouped_2d_estimates": grouped_2d_estimates,
+        "muon_master_bank_master_dtype": muon_master_metadata.get("master_dtype"),
+        "muon_master_bank_momentum_dtype": muon_master_metadata.get("momentum_dtype"),
+        "muon_master_bank_consumer_dtype": muon_master_metadata.get("consumer_dtype"),
+        "muon_master_bank_group_axis": muon_master_metadata.get("group_axis"),
+        "muon_master_bank_group_sizes": muon_master_metadata.get("group_sizes"),
+        "muon_master_bank_leaf_count": (
+            len(muon_master_metadata["leaves"]) if muon_master_metadata.get("leaves") is not None else None
+        ),
     }
     if "skipped" in result:
         row.update({"skipped": True, "skip_reason": result["skipped"]["reason"]})

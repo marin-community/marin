@@ -18,6 +18,11 @@ from experiments.grug.moe.launch_cw_muon_update_bench import (
     build_step,
 )
 from experiments.grug.moe.muon_update_bench import (
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_CHECKSUM_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
     EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_BANK_BENCH,
     EXPERT_FSDP_GRADS_TO_EXPLICIT_PACKED_GROUPED_CHUNKS_BENCH,
     EXPERT_FSDP_GRADS_TO_GROUPED_CHUNKS_BENCH,
@@ -56,7 +61,10 @@ from experiments.grug.moe.muon_update_bench import (
     EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH,
     EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH,
     EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
     EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+    EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
     EXPERT_GROUPED_APPLY_BOUNDARY_BENCH,
     EXPERT_GROUPED_BANK_CONSUMER_BENCH,
     EXPERT_GROUPED_LAYER_SLICE_BENCH,
@@ -68,7 +76,25 @@ from experiments.grug.moe.muon_update_bench import (
     EXPERT_GROUPED_SCAN_BANK_CONSUMER_BENCH,
     EXPERT_GROUPED_SEQUENTIAL_BANK_CONSUMER_BENCH,
     EXPERT_GROUPED_SINGLE_LAYER_SLICE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_LAYERWISE_VALUE_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_VALUE_GRAD_MUONH_UPDATE_BENCH,
+    EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH,
     EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_BULK_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_BULK_GRAD_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_SLAB_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_FSDP_SLAB_GRAD_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_FSDP_BULK_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    EXPERT_PACKED_MASTER_MUONH_FSDP_SLAB_CONSUMER_BENCH,
     FULL_PRODUCTION_APPLY_ONLY_BENCH,
     FULL_PRODUCTION_GROUPED_2D_MUONH_OPTIMIZER_APPLY_BENCH,
     FULL_PRODUCTION_GROUPED_2D_PERSISTENT_APPLY_BENCH,
@@ -83,7 +109,10 @@ from experiments.grug.moe.muon_update_bench import (
     REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH,
     BenchConfig,
     HloSummary,
+    MuonExpertState,
+    MuonMasterBank,
     _stacked_2d_target,
+    assert_chunked_packed_grouped_expert_bank_sharding,
     assert_expert_ep_sharding,
     assert_expert_fsdp_sharding,
     assert_grouped_expert_sharding,
@@ -98,6 +127,10 @@ from experiments.grug.moe.muon_update_bench import (
     build_ordinary_2d_muonh_optimizer,
     build_real_expert_fsdp_grouped_muonh_optimizer,
     bytes_to_gib,
+    chunked_packed_master_bank_to_grouped_expert_tree,
+    chunked_packed_master_chunk_to_fsdp_expert_layer,
+    chunked_packed_master_valid_group_sizes_for_bench,
+    create_abstract_mesh,
     create_mesh,
     estimate_grouped_2d_muonh,
     estimate_grouping,
@@ -106,6 +139,23 @@ from experiments.grug.moe.muon_update_bench import (
     estimated_full_production_muonh_ns_dot_flops,
     estimated_matrix_count,
     estimated_ns_dot_flops,
+    expert_chunked_packed_master_fsdp_block_group_chunk_consumer_loss,
+    expert_chunked_packed_master_fsdp_block_group_consumer_loss,
+    expert_chunked_packed_master_fsdp_chunk_consumer_loss,
+    expert_chunked_packed_master_fsdp_layer_grad_muonh_update_step_factory,
+    expert_chunked_packed_master_fsdp_layer_grad_step_factory,
+    expert_chunked_packed_master_fsdp_sequential_consumer_loss,
+    expert_chunked_packed_master_fsdp_sequential_grad_muonh_checksum_step_factory,
+    expert_chunked_packed_master_fsdp_sequential_grad_muonh_update_step_factory,
+    expert_chunked_packed_master_fsdp_streaming_grad_muonh_checksum_step_factory,
+    expert_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss,
+    expert_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_step_factory,
+    expert_chunked_packed_master_fsdp_streaming_grad_muonh_update_step_factory,
+    expert_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_step_factory,
+    expert_chunked_packed_master_grad_muonh_update_step_factory_for_bench,
+    expert_chunked_packed_master_grouped_consumer_grad_step_factory,
+    expert_chunked_packed_master_grouped_consumer_loss,
+    expert_chunked_packed_master_grouped_grad_muonh_update_step_factory,
     expert_fsdp_grouped_apply_boundary_step_factory,
     expert_fsdp_grouped_custom_partition_slice_first_gather_restore_boundary_step_factory,
     expert_fsdp_grouped_explicit_a2a_apply_boundary_step_factory,
@@ -136,15 +186,42 @@ from experiments.grug.moe.muon_update_bench import (
     expert_fsdp_grouped_updates_muonh_explicit_a2a_apply_step_factory,
     expert_fsdp_grouped_updates_muonh_explicit_apply_step_factory,
     expert_fsdp_grouped_updates_muonh_updates_step_factory,
+    expert_fsdp_layer_consumer_input_specs,
+    expert_fsdp_layer_consumer_loss,
     expert_fsdp_packed_bank_a2a_apply_boundary_step_factory,
     expert_fsdp_packed_bank_direct_apply_boundary_step_factory,
     expert_fsdp_packed_bank_direction_apply_step_factory,
     expert_fsdp_packed_bank_muonh_apply_step_factory,
+    expert_fsdp_packed_bank_muonh_direct_apply_step_factory,
     expert_fsdp_packed_bank_muonh_update_only_step_factory,
     expert_fsdp_packed_bank_muonh_update_only_timing_step_factory,
     expert_fsdp_packed_bank_muonh_updates_step_factory,
+    expert_fsdp_packed_bank_slice_first_apply_boundary_step_factory,
+    expert_fsdp_packed_bank_slice_first_direct_apply_boundary_step_factory,
     expert_grouped_layer_slice_step_factory,
     expert_grouped_single_layer_slice_step_factory,
+    expert_layer_chunked_packed_master_fsdp_sequential_consumer_loss,
+    expert_layer_chunked_packed_master_fsdp_sequential_consumer_step_factory,
+    expert_muon_master_bank_block_group_train_step_factory,
+    expert_packed_master_consumer_grad_step_factory,
+    expert_packed_master_consumer_loss,
+    expert_packed_master_fsdp_bulk_consumer_loss,
+    expert_packed_master_fsdp_bulk_consumer_step_factory,
+    expert_packed_master_fsdp_grad_outputs,
+    expert_packed_master_fsdp_grad_step_factory,
+    expert_packed_master_fsdp_layer_consumer_step_factory,
+    expert_packed_master_fsdp_sequential_consumer_loss,
+    expert_packed_master_fsdp_sequential_consumer_step_factory,
+    expert_packed_master_fsdp_slab_consumer_loss,
+    expert_packed_master_fsdp_slab_consumer_step_factory,
+    expert_packed_master_muonh_consumer_step_factory,
+    expert_packed_master_muonh_fsdp_bulk_consumer_outputs,
+    expert_packed_master_muonh_fsdp_bulk_consumer_step_factory,
+    expert_packed_master_muonh_fsdp_sequential_consumer_outputs,
+    expert_packed_master_muonh_fsdp_sequential_consumer_step_factory,
+    expert_packed_master_muonh_fsdp_slab_consumer_outputs,
+    expert_packed_master_muonh_fsdp_slab_consumer_step_factory,
+    expert_packed_master_muonh_update_outputs,
     fsdp_grads_to_explicit_packed_grouped_bank_step_factory,
     fsdp_grads_to_explicit_packed_grouped_chunks_step_factory,
     fsdp_grads_to_grouped_chunks_step_factory,
@@ -161,6 +238,7 @@ from experiments.grug.moe.muon_update_bench import (
     grouped_apply_boundary_collectives,
     grouped_expert_apply_boundary_step_factory,
     grouped_expert_bank_consumer_flops,
+    grouped_expert_bank_consumer_outputs,
     grouped_expert_bank_consumer_step_factory,
     grouped_expert_group_sizes_for_bench,
     grouped_expert_muonh_bank_consumer_step_factory,
@@ -172,21 +250,33 @@ from experiments.grug.moe.muon_update_bench import (
     grouped_moe_mlp_consumer_step_factory,
     is_expert_fsdp_grouped_bench,
     make_array_tree,
+    make_chunked_packed_grouped_expert_master_bank_tree,
     make_grouped_expert_array_tree,
+    make_grouped_expert_consumer_input_tree,
     make_packed_grouped_expert_bank_tree,
+    make_packed_grouped_expert_master_bank_tree,
+    materialize_expert_block_group_from_muon_master_bank,
+    materialize_expert_layer_from_muon_master_bank,
+    muon_master_bank_metadata,
+    ns4d_boundary_status,
     ns4d_compute_sharding,
     ns4d_grouped_apply_step_factory,
     ns4d_input_sharding,
     ns4d_result_sharding,
+    ns_logical_matrix_shapes,
     ordinary_2d_grouped_persistent_apply_timing_step_factory,
     ordinary_2d_muonh_optimizer_apply_step_factory,
     output_path_for_config,
+    packed_master_bank_to_fsdp_expert_layer,
+    packed_master_bank_to_grouped_expert_tree,
     persistent_grouped_2d_metadata_from_specs,
     real_expert_fsdp_grouped_muonh_optimizer_apply_step_factory,
     real_expert_fsdp_grouped_muonh_optimizer_update_step_factory,
+    rebuild_expert_tree_from_muon_master_bank,
     should_check_grouped_apply_boundary_collectives,
     summarize_hlo,
     summary_row,
+    synthetic_chunked_packed_grouped_expert_master_bank_specs,
     synthetic_fsdp_expert_shardings,
     synthetic_fsdp_expert_specs,
     synthetic_full_production_grouped_persistent_specs,
@@ -199,7 +289,9 @@ from experiments.grug.moe.muon_update_bench import (
     synthetic_ordinary_2d_grouped_persistent_specs,
     synthetic_ordinary_2d_muonh_specs,
     synthetic_packed_grouped_expert_bank_specs,
+    synthetic_packed_grouped_expert_master_bank_specs,
     synthetic_productionish_grouped_expert_specs,
+    synthetic_shapes,
     time_ns4d,
     zeropower_via_newtonschulz_4d_for_config,
 )
@@ -266,6 +358,30 @@ def test_cw_muon_update_bench_launcher_reads_wandb_env(monkeypatch):
     assert step.config.wandb is True
     assert step.config.wandb_project == "marin_moe_test"
     assert step.config.wandb_group == "muon-test-group"
+
+
+def test_create_abstract_mesh_includes_current_device_kind_when_device_count_matches():
+    config = BenchConfig(
+        layers=1,
+        ns4d_group_size=1,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=1,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=1,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+
+    abstract_mesh = create_abstract_mesh(config)
+
+    assert abstract_mesh.abstract_device is not None
 
 
 def test_wandb_metric_row_keeps_scalar_topline_fields():
@@ -687,6 +803,94 @@ def test_expert_only_grouped_muonh_harness_preserves_expert_stack_without_collec
     assert hlo_summary.reduce_scatter == 0
     assert hlo_summary.all_to_all == 0
     assert estimated_matrix_count(config, EXPERT_ONLY_GROUPED_MUONH_OPTIMIZER_APPLY_BENCH) == expected_stack_size * 16
+
+
+def test_unfused_expert_gate_up_uses_three_uniform_logical_ns_shapes():
+    fused_config = BenchConfig(
+        layers=26,
+        ns4d_group_size=26,
+        ns4d_group_axis="none",
+        hidden_dim=2560,
+        intermediate_dim=1280,
+        num_experts=256,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=3,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=512,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=8,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    unfused_config = replace(fused_config, unfused_expert_gate_up=True)
+
+    assert synthetic_shapes(unfused_config) == {
+        "w_gate": (256, 2560, 1280),
+        "w_up": (256, 2560, 1280),
+        "w_down": (256, 1280, 2560),
+    }
+    assert ns_logical_matrix_shapes(unfused_config) == {
+        "w_gate": (1280, 2560),
+        "w_up": (1280, 2560),
+        "w_down": (1280, 2560),
+    }
+
+    fused_flops = estimated_ns_dot_flops(fused_config, EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH)
+    unfused_flops = estimated_ns_dot_flops(unfused_config, EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH)
+    assert fused_flops == 2_428_804_005_888_000
+    assert unfused_flops == 1_256_277_934_080_000
+    assert unfused_flops / fused_flops == pytest.approx(15 / 29)
+    assert estimated_matrix_count(unfused_config, EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH) == 26 * 3 * 256
+
+
+def test_unfused_expert_gate_up_packed_bank_update_only_returns_three_banks():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=4,
+        data_axis=1,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        unfused_expert_gate_up=True,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(4, 1, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = synthetic_fsdp_expert_specs(mesh, config)
+    update_step = jax.jit(expert_fsdp_packed_bank_muonh_update_only_step_factory(mesh, config))
+
+    assert_expert_fsdp_sharding(params, "unfused packed-bank MuonH params")
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        packed_updates = jax.eval_shape(update_step, params, params)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(params, params).lower(lowering_platforms=(platform,))
+
+    assert set(packed_updates["packed"]) == {"w_gate", "w_up", "w_down"}
+    assert packed_updates["packed"]["w_gate"].shape == (4, 8, 16, 8)
+    assert packed_updates["packed"]["w_up"].shape == (4, 8, 16, 8)
+    assert packed_updates["packed"]["w_down"].shape == (4, 8, 8, 16)
+    assert_packed_grouped_expert_bank_sharding(
+        packed_updates,
+        mesh,
+        config,
+        EXPERT_FSDP_PACKED_BANK_MUONH_UPDATE_ONLY_BENCH,
+        "unfused packed-bank MuonH updates",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_to_all == 0
 
 
 def test_grouped_expert_layer_slice_boundary_returns_ep_consumable_leaves():
@@ -1224,6 +1428,7 @@ def test_grouped_moe_mlp_consumer_skips_without_expert_parallel_axis():
         expert_axis=1,
         model_axis=1,
         learning_rate=0.02,
+        packed_master_layer_chunk_size=4,
     )
 
     assert bench_skip_reason(config, EXPERT_GROUPED_MOE_MLP_CONSUMER_BENCH) is not None
@@ -1259,6 +1464,7 @@ def test_grouped_expert_layer_slice_boundary_times_compile_only():
         expert_axis=1,
         model_axis=1,
         learning_rate=0.02,
+        packed_master_layer_chunk_size=4,
     )
     mesh = create_mesh(replica_axis=1, data_axis=1, expert_axis=1, model_axis=1)
 
@@ -1274,6 +1480,8 @@ def test_grouped_expert_layer_slice_boundary_times_compile_only():
         allow_boundary_collectives=True,
         require_no_boundary_collectives=False,
         profile_dir=None,
+        boundary_correctness_max_global_bytes=1 << 30,
+        force_boundary_correctness=False,
     )
 
     assert timing.compiled_hlo.all_reduce == 0
@@ -1312,6 +1520,8 @@ def test_grouped_expert_single_layer_slice_boundary_times_compile_only():
         allow_boundary_collectives=True,
         require_no_boundary_collectives=False,
         profile_dir=None,
+        boundary_correctness_max_global_bytes=1 << 30,
+        force_boundary_correctness=False,
     )
 
     assert timing.compiled_hlo.all_reduce == 0
@@ -1382,7 +1592,7 @@ def test_expert_fsdp_grouped_muonh_restores_ordinary_expert_updates_before_apply
 
 @pytest.mark.parametrize(
     ("packed_entry", "chunk_local_boundaries", "expected_all_gather", "expected_all_to_all"),
-    [(False, False, 6, 2), (True, False, 2, 6), (False, True, 2, 4)],
+    [(False, False, 6, 0), (True, False, 2, 4), (False, True, 2, 4)],
 )
 def test_real_expert_fsdp_grouped_muonh_optimizer_uses_fsdp_params_and_outputs(
     packed_entry: bool,
@@ -2432,6 +2642,44 @@ def test_expert_fsdp_packed_bank_direct_apply_boundary_correctness_max_error_is_
     assert max_error == 0.0
 
 
+def test_expert_fsdp_packed_bank_slice_first_direct_apply_boundary_correctness_max_error_is_zero_for_reference():
+    config = BenchConfig(
+        layers=2,
+        ns4d_group_size=2,
+        ns4d_group_axis="none",
+        hidden_dim=4,
+        intermediate_dim=2,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=2,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    params = make_array_tree(config, synthetic_fsdp_expert_shardings(mesh, config), seed=0)
+    packed_updates = make_packed_grouped_expert_bank_tree(
+        mesh,
+        config,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
+        seed=1,
+    )
+
+    max_error = fsdp_grouped_boundary_correctness_max_error(
+        mesh,
+        config,
+        EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
+        params,
+        packed_updates,
+    )
+
+    assert max_error == 0.0
+
+
 def test_expert_fsdp_packed_bank_a2a_apply_boundary_returns_fsdp_params():
     config = BenchConfig(
         layers=4,
@@ -2540,6 +2788,72 @@ def test_expert_fsdp_packed_bank_direct_apply_boundary_returns_fsdp_params():
     assert estimated_ns_dot_flops(config, EXPERT_FSDP_PACKED_BANK_DIRECT_APPLY_BOUNDARY_BENCH) == 0
 
 
+@pytest.mark.parametrize(
+    ("bench_kind", "step_factory"),
+    [
+        (
+            EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_APPLY_BOUNDARY_BENCH,
+            expert_fsdp_packed_bank_slice_first_apply_boundary_step_factory,
+        ),
+        (
+            EXPERT_FSDP_PACKED_BANK_SLICE_FIRST_DIRECT_APPLY_BOUNDARY_BENCH,
+            expert_fsdp_packed_bank_slice_first_direct_apply_boundary_step_factory,
+        ),
+    ],
+)
+def test_expert_fsdp_packed_bank_slice_first_apply_boundaries_return_fsdp_params_without_a2a(
+    bench_kind,
+    step_factory,
+):
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=4,
+        data_axis=1,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(4, 1, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = synthetic_fsdp_expert_specs(mesh, config)
+    packed_updates = synthetic_packed_grouped_expert_bank_specs(mesh, config, bench_kind)
+    update_step = jax.jit(step_factory(mesh, config))
+
+    assert_expert_fsdp_sharding(params, "slice-first packed-bank FSDP params")
+    assert_packed_grouped_expert_bank_sharding(
+        packed_updates,
+        mesh,
+        config,
+        bench_kind,
+        "slice-first packed grouped updates",
+    )
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        result = jax.eval_shape(update_step, params, packed_updates)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(params, packed_updates).lower(lowering_platforms=(platform,))
+
+    assert_expert_fsdp_sharding(result, "slice-first packed-bank apply FSDP params")
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general == 0
+    assert hlo_summary.all_gather > 0
+    assert hlo_summary.all_to_all == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert estimated_ns_dot_flops(config, bench_kind) == 0
+
+
 def test_expert_fsdp_packed_bank_a2a_apply_boundary_pads_for_r2d2_group_axis():
     config = BenchConfig(
         layers=5,
@@ -2637,6 +2951,48 @@ def test_expert_fsdp_packed_bank_muonh_apply_returns_fsdp_params():
     assert hlo_summary.dot_general > 0
     assert hlo_summary.all_to_all > 0
     assert estimated_ns_dot_flops(config, EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH) > 0
+
+
+def test_expert_fsdp_packed_bank_muonh_direct_apply_returns_fsdp_params():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(1, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    params = synthetic_fsdp_expert_specs(mesh, config)
+    grads = synthetic_fsdp_expert_specs(mesh, config)
+    update_step = jax.jit(expert_fsdp_packed_bank_muonh_direct_apply_step_factory(mesh, config))
+
+    assert_expert_fsdp_sharding(params, "packed-bank MuonH direct-apply params")
+    assert_expert_fsdp_sharding(grads, "packed-bank MuonH direct-apply grads")
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        result = jax.eval_shape(update_step, params, grads)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(params, grads).lower(lowering_platforms=(platform,))
+
+    assert_expert_fsdp_sharding(result, "packed-bank MuonH direct-apply FSDP params")
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_to_all > 0
+    assert estimated_ns_dot_flops(config, EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH) > 0
+    assert estimated_matrix_count(config, EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH) > 0
 
 
 def test_expert_fsdp_packed_bank_muonh_restores_fsdp_updates_before_apply():
@@ -2760,6 +3116,2677 @@ def test_expert_fsdp_packed_bank_muonh_update_only_timing_returns_scalar_checksu
 
     assert result.shape == ()
     assert result.dtype == jnp.float32
+
+
+def test_packed_master_rebuild_tree_matches_packed_slices_numerically():
+    config = BenchConfig(
+        layers=3,
+        ns4d_group_size=2,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    master_bank = make_packed_grouped_expert_master_bank_tree(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+        seed=0,
+    )
+    metadata = muon_master_bank_metadata(config, EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH, mesh)
+    grouped_view = packed_master_bank_to_grouped_expert_tree(
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+        jax.tree.map(lambda leaf: leaf.astype(jnp.bfloat16), master_bank),
+    )
+
+    assert metadata.group_sizes == (2, 1)
+    assert metadata.leaves[0].packed_path == "packed.w_gate_up[0:2]"
+    assert metadata.leaves[0].model_tree_path == "blocks[0].mlp.expert_mlp.w_gate_up"
+    assert metadata.leaves[0].target_fsdp_sharding_spec == "P('expert', 'data', 'model')"
+
+    layer_index = 0
+    for block in grouped_view["blocks"]:
+        block_size = block["mlp"]["expert_mlp"]["w_gate_up"].shape[0]
+        for local_index in range(block_size):
+            for name in synthetic_shapes(config):
+                rebuilt = block["mlp"]["expert_mlp"][name][local_index]
+                expected = master_bank["packed"][name][layer_index].astype(jnp.bfloat16)
+                assert jnp.array_equal(rebuilt, expected)
+            layer_index += 1
+
+
+def test_chunked_packed_master_rebuild_tree_matches_physical_chunk_slices_numerically():
+    config = BenchConfig(
+        layers=5,
+        ns4d_group_size=4,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+        packed_master_layer_chunk_size=4,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH
+    chunked_bank = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=3)
+    grouped_view = rebuild_expert_tree_from_muon_master_bank(config, bench_kind, chunked_bank)
+
+    assert isinstance(chunked_bank, MuonMasterBank)
+    assert chunked_packed_master_valid_group_sizes_for_bench(config, bench_kind) == (4, 1)
+    assert len(grouped_view["blocks"]) == 2
+    assert grouped_view["blocks"][0]["mlp"]["expert_mlp"]["w_gate_up"].shape[0] == 4
+    assert grouped_view["blocks"][1]["mlp"]["expert_mlp"]["w_gate_up"].shape[0] == 4
+
+    layer_index = 0
+    valid_group_sizes = chunked_packed_master_valid_group_sizes_for_bench(config, bench_kind)
+    for chunk_index, (block, valid_group_size) in enumerate(zip(grouped_view["blocks"], valid_group_sizes, strict=True)):
+        block_size = block["mlp"]["expert_mlp"]["w_gate_up"].shape[0]
+        for local_index in range(block_size):
+            for name in synthetic_shapes(config):
+                rebuilt = block["mlp"]["expert_mlp"][name][local_index]
+                expected = chunked_bank["chunks"][chunk_index]["packed"][name][local_index].astype(jnp.bfloat16)
+                assert jnp.array_equal(rebuilt, expected), (
+                    f"chunked rebuilt layer {layer_index} {name} did not match "
+                    f"chunk {chunk_index} local layer {local_index}"
+                )
+            if local_index < valid_group_size:
+                layer_index += 1
+    assert layer_index == config.layers
+
+
+def test_layer_chunked_packed_master_grouped_grad_muonh_update_allows_padded_r4_tail():
+    config = BenchConfig(
+        layers=6,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=4,
+        data_axis=1,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(4, 1, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH
+    assert chunked_packed_master_valid_group_sizes_for_bench(config, bench_kind) == (4, 2)
+    assert grouped_expert_group_sizes_for_bench(config, bench_kind) == (4, 4)
+
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+    momentum_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+    activations = synthetic_grouped_expert_consumer_input_specs(mesh, config, bench_kind)
+    update_step = jax.jit(expert_chunked_packed_master_grouped_grad_muonh_update_step_factory(config, bench_kind))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        next_master, next_momentum = jax.eval_shape(update_step, master_bank, momentum_bank, activations)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(master_bank, momentum_bank, activations).lower(lowering_platforms=(platform,))
+
+    assert len(next_master["chunks"]) == 2
+    assert len(next_momentum["chunks"]) == 2
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_master,
+        mesh,
+        config,
+        bench_kind,
+        "R4 padded-tail grouped-view grad MuonH next master",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_chunked_packed_master_grouped_consumer_grad_matches_rebuilt_grouped_view():
+    config = BenchConfig(
+        layers=5,
+        ns4d_group_size=4,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+        packed_master_layer_chunk_size=4,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH
+    chunked_bank = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=5)
+    activations = make_grouped_expert_consumer_input_tree(mesh, config, bench_kind, seed=6)
+
+    def direct_grouped_loss(bank):
+        grouped_view = chunked_packed_master_bank_to_grouped_expert_tree(
+            config,
+            bench_kind,
+            jax.tree.map(lambda leaf: leaf.astype(jnp.bfloat16), bank),
+        )
+        outputs = grouped_expert_bank_consumer_outputs(config, grouped_view, activations)
+        return sum(jnp.sum(leaf.astype(jnp.float32)) for leaf in jax.tree.leaves(outputs))
+
+    actual = jax.grad(
+        lambda bank: expert_chunked_packed_master_grouped_consumer_loss(config, bench_kind, bank, activations)
+    )(chunked_bank)
+    expected = jax.grad(direct_grouped_loss)(chunked_bank)
+
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        actual,
+        mesh,
+        config,
+        bench_kind,
+        "chunked packed master grouped consumer grad",
+    )
+    for actual_leaf, expected_leaf in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+        assert jnp.array_equal(actual_leaf, expected_leaf)
+
+
+def test_chunked_packed_master_grouped_consumer_grad_lowers_with_packed_sharding():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+    activations = synthetic_grouped_expert_consumer_input_specs(mesh, config, bench_kind)
+    grad_step = jax.jit(expert_chunked_packed_master_grouped_consumer_grad_step_factory(config, bench_kind))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        grad_specs = jax.eval_shape(grad_step, master_bank, activations)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = grad_step.trace(master_bank, activations).lower(lowering_platforms=(platform,))
+
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        grad_specs,
+        mesh,
+        config,
+        bench_kind,
+        "chunked packed master grouped consumer grad output",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_layer_chunked_packed_master_grouped_grad_muonh_update_preserves_packed_state():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+    momentum_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+    activations = synthetic_grouped_expert_consumer_input_specs(mesh, config, bench_kind)
+    update_step = jax.jit(expert_chunked_packed_master_grouped_grad_muonh_update_step_factory(config, bench_kind))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        next_master, next_momentum = jax.eval_shape(update_step, master_bank, momentum_bank, activations)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(master_bank, momentum_bank, activations).lower(lowering_platforms=(platform,))
+
+    assert len(next_master["chunks"]) == 1
+    assert len(next_momentum["chunks"]) == 1
+    for chunk in next_master["chunks"]:
+        for leaf in chunk["packed"].values():
+            assert leaf.dtype == jnp.float32
+    for chunk in next_momentum["chunks"]:
+        for leaf in chunk["packed"].values():
+            assert leaf.dtype == jnp.float32
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_master,
+        mesh,
+        config,
+        bench_kind,
+        "grouped-view grad MuonH next master",
+    )
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_momentum,
+        mesh,
+        config,
+        bench_kind,
+        "grouped-view grad MuonH next momentum",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_chunked_packed_master_fsdp_layer_matches_chunked_bank_slices_numerically():
+    config = BenchConfig(
+        layers=5,
+        ns4d_group_size=2,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    bench_kind = EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH
+    chunked_bank = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=4)
+    group_sizes = grouped_expert_group_sizes_for_bench(config, bench_kind)
+
+    def chunk_index_and_local_layer(layer_index: int) -> tuple[int, int]:
+        layer_offset = 0
+        for group_index, group_size in enumerate(group_sizes):
+            if layer_index < layer_offset + group_size:
+                return group_index, layer_index - layer_offset
+            layer_offset += group_size
+        raise AssertionError(f"layer_index={layer_index} was outside grouped packed chunks")
+
+    for layer_index in (0, 2, 4):
+        materialized = materialize_expert_layer_from_muon_master_bank(
+            mesh,
+            config,
+            bench_kind,
+            chunked_bank,
+            layer_index=layer_index,
+        )
+        group_index, local_layer_index = chunk_index_and_local_layer(layer_index)
+        for name in synthetic_shapes(config):
+            rebuilt = materialized["mlp"]["expert_mlp"][name]
+            expected = chunked_bank["chunks"][group_index]["packed"][name][local_layer_index].astype(jnp.bfloat16)
+            assert jnp.array_equal(rebuilt, expected), (
+                f"chunked packed layer {layer_index} {name} did not match "
+                f"chunk {group_index} local layer {local_layer_index}"
+            )
+
+
+def test_muon_master_bank_block_group_materialization_matches_chunked_bank_slices_numerically():
+    config = BenchConfig(
+        layers=5,
+        ns4d_group_size=4,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+        packed_master_layer_chunk_size=4,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_VALUE_GRAD_MUONH_UPDATE_BENCH
+    master_bank = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=21)
+
+    slabs = materialize_expert_block_group_from_muon_master_bank(
+        mesh,
+        config,
+        bench_kind,
+        master_bank,
+        group_index=0,
+    )
+
+    assert isinstance(master_bank, MuonMasterBank)
+    assert len(slabs) == 4
+    for local_layer_index, slab in enumerate(slabs):
+        for name in synthetic_shapes(config):
+            rebuilt = slab["mlp"]["expert_mlp"][name][0]
+            expected = master_bank["chunks"][0]["packed"][name][local_layer_index].astype(jnp.bfloat16)
+            assert jnp.array_equal(
+                rebuilt, expected
+            ), f"block-group slab for {name} local layer {local_layer_index} did not match packed master"
+
+
+def test_muon_master_bank_block_group_materialization_lowers_with_fsdp_slab_sharding():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_VALUE_GRAD_MUONH_UPDATE_BENCH
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+
+    def materialize(master):
+        return materialize_expert_block_group_from_muon_master_bank(
+            mesh,
+            config,
+            bench_kind,
+            master,
+            group_index=0,
+        )
+
+    materialize_step = jax.jit(materialize)
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        slab_specs = jax.eval_shape(materialize_step, master_bank)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = materialize_step.trace(master_bank).lower(lowering_platforms=(platform,))
+
+    assert len(slab_specs) == 1
+    slab = slab_specs[0]["mlp"]["expert_mlp"]
+    assert slab["w_gate_up"].sharding.spec == P(None, "expert", "data", "model")
+    assert slab["w_down"].sharding.spec == P(None, "expert", "model", "data")
+    assert slab["w_gate_up"].shape == (4, config.num_experts, config.hidden_dim, 2 * config.intermediate_dim)
+    assert slab["w_down"].shape == (4, config.num_experts, config.intermediate_dim, config.hidden_dim)
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_muon_master_bank_block_group_consumer_matches_chunk_consumer_numerically():
+    config = BenchConfig(
+        layers=5,
+        ns4d_group_size=4,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=2,
+        packed_master_layer_chunk_size=4,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH
+    master_bank = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=23)
+    expert_inputs = jax.device_put(
+        jnp.arange(config.num_experts * config.grouped_expert_consumer_tokens_per_expert * config.hidden_dim)
+        .reshape(config.num_experts, config.grouped_expert_consumer_tokens_per_expert, config.hidden_dim)
+        .astype(jnp.bfloat16),
+        NamedSharding(mesh, P("expert", None, None)),
+    )
+
+    block_group_loss = expert_chunked_packed_master_fsdp_block_group_consumer_loss(
+        mesh,
+        config,
+        master_bank,
+        expert_inputs,
+        group_index=0,
+        bench_kind=bench_kind,
+    )
+    chunk_block_group_loss = expert_chunked_packed_master_fsdp_block_group_chunk_consumer_loss(
+        mesh,
+        config,
+        master_bank["chunks"][0],
+        expert_inputs,
+        group_index=0,
+        bench_kind=bench_kind,
+    )
+    chunk_loss = expert_chunked_packed_master_fsdp_chunk_consumer_loss(
+        mesh,
+        config,
+        master_bank["chunks"][0],
+        expert_inputs,
+        chunk_index=0,
+        bench_kind=bench_kind,
+    )
+
+    assert jnp.allclose(block_group_loss, chunk_loss, atol=0, rtol=0)
+    assert jnp.allclose(chunk_block_group_loss, chunk_loss, atol=0, rtol=0)
+
+
+def test_layer_chunked_packed_master_fsdp_streaming_block_group_value_grad_muonh_update_lowers_with_packed_state():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+    momentum_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    update_step = jax.jit(
+        expert_chunked_packed_master_grad_muonh_update_step_factory_for_bench(
+            mesh,
+            config,
+            bench_kind,
+        )
+    )
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        loss, next_master, next_momentum = jax.eval_shape(update_step, master_bank, momentum_bank, expert_inputs)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(master_bank, momentum_bank, expert_inputs).lower(lowering_platforms=(platform,))
+
+    assert loss.shape == ()
+    assert loss.dtype == jnp.float32
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_master,
+        mesh,
+        config,
+        bench_kind,
+        "block-group value+grad streaming MuonH next master",
+    )
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_momentum,
+        mesh,
+        config,
+        bench_kind,
+        "block-group value+grad streaming MuonH next momentum",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_muon_expert_state_block_group_train_step_keeps_authoritative_packed_state():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH
+    state = MuonExpertState(
+        master=synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind),
+        momentum=synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind),
+    )
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    train_step = jax.jit(expert_muon_master_bank_block_group_train_step_factory(mesh, config))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        loss, next_state = jax.eval_shape(train_step, state, expert_inputs)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = train_step.trace(state, expert_inputs).lower(lowering_platforms=(platform,))
+
+    assert loss.shape == ()
+    assert loss.dtype == jnp.float32
+    assert isinstance(next_state, MuonExpertState)
+    assert isinstance(next_state.master, MuonMasterBank)
+    assert isinstance(next_state.momentum, MuonMasterBank)
+    assert next_state.master.metadata == state.master.metadata
+    assert next_state.momentum.metadata == state.momentum.metadata
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_state.master,
+        mesh,
+        config,
+        bench_kind,
+        "MuonExpertState block-group train step next master",
+    )
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_state.momentum,
+        mesh,
+        config,
+        bench_kind,
+        "MuonExpertState block-group train step next momentum",
+    )
+    assert all(leaf.dtype == jnp.float32 for leaf in jax.tree.leaves(next_state.master))
+    assert all(leaf.dtype == jnp.float32 for leaf in jax.tree.leaves(next_state.momentum))
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_summary_row_reports_packed_master_bank_dtypes_for_chunked_streaming_bench():
+    config = BenchConfig(
+        layers=5,
+        ns4d_group_size=2,
+        ns4d_group_axis="replica_dcn",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH
+    result = {
+        "metadata": {
+            "label": "layer_chunked_packed_master_streaming_grad_muonh_checksum",
+            "bench_kind": bench_kind,
+            "config": asdict(config),
+            "devices": 2,
+            "local_devices": 2,
+            "process_count": 1,
+            "ns4d_group_size": 2,
+            "ns4d_padded_group_size": 2,
+            "ns4d_input_sharding_spec": "P('expert', None, None)",
+            "ns4d_compute_sharding_spec": "P('replica_dcn', 'expert', None, None)",
+            "ns4d_result_sharding_spec": "P('replica_dcn', 'expert', None, None)",
+            "ns4d_boundary_status": ns4d_boundary_status(config, bench_kind),
+            "boundary_collectives_allowed": True,
+            "boundary_collectives_required_absent": False,
+            "grouped_expert_group_count": None,
+            "grouped_expert_packed_bank_count": None,
+            "muon_master_bank_metadata": asdict(muon_master_bank_metadata(config, bench_kind)),
+            "group_estimates": [asdict(estimate) for estimate in estimate_grouping(config, bench_kind)],
+            "grouped_2d_estimates": [],
+        },
+    }
+
+    row = summary_row(result)
+
+    assert row["muon_master_bank_master_dtype"] == str(jnp.dtype(jnp.float32))
+    assert row["muon_master_bank_momentum_dtype"] == str(jnp.dtype(jnp.float32))
+    assert row["muon_master_bank_consumer_dtype"] == str(jnp.dtype(jnp.bfloat16))
+    assert row["muon_master_bank_group_axis"] == "replica_dcn"
+    assert row["muon_master_bank_group_sizes"] == (2, 2, 2)
+    assert row["muon_master_bank_leaf_count"] == 6
+
+
+def test_layer_chunked_packed_master_chunk_size_override_controls_group_count():
+    config = BenchConfig(
+        layers=10,
+        ns4d_group_size=8,
+        ns4d_group_axis="replica_dcn",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH
+
+    assert chunked_packed_master_valid_group_sizes_for_bench(config, bench_kind) == (2, 2, 2, 2, 2)
+    assert grouped_expert_group_sizes_for_bench(config, bench_kind) == (2, 2, 2, 2, 2)
+
+    chunk4_config = replace(config, packed_master_layer_chunk_size=4)
+    assert chunked_packed_master_valid_group_sizes_for_bench(chunk4_config, bench_kind) == (4, 4, 2)
+    assert grouped_expert_group_sizes_for_bench(chunk4_config, bench_kind) == (4, 4, 4)
+
+    with pytest.raises(ValueError, match="divisible by the active NS sharding axis size"):
+        grouped_expert_group_sizes_for_bench(replace(config, packed_master_layer_chunk_size=3), bench_kind)
+
+
+def test_chunked_packed_master_fsdp_layer_grad_matches_direct_layer_grad_numerically():
+    config = BenchConfig(
+        layers=5,
+        ns4d_group_size=2,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=2,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    bench_kind = EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH
+    chunked_bank = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=5)
+    chunked_bank = jax.tree.map(lambda leaf: jnp.asarray(jax.device_get(leaf)), chunked_bank)
+    assert isinstance(chunked_bank, MuonMasterBank)
+    # With layers=5 and group_size=2, this is logical layer 2: first layer in the second chunk.
+    group_index = 1
+    local_layer_index = 0
+    direct_layer = {
+        "mlp": {
+            "expert_mlp": {
+                name: chunked_bank["chunks"][group_index]["packed"][name][local_layer_index]
+                for name in synthetic_shapes(config)
+            }
+        }
+    }
+    x = jnp.full(
+        (config.num_experts, config.grouped_expert_consumer_tokens_per_expert, config.hidden_dim),
+        0.125,
+        dtype=jnp.bfloat16,
+    )
+
+    def simple_expert_loss(layer):
+        expert_mlp = jax.tree.map(lambda leaf: leaf.astype(jnp.bfloat16), layer["mlp"]["expert_mlp"])
+        gate_up = jnp.einsum("etd,edi->eti", x, expert_mlp["w_gate_up"])
+        gate, up = jnp.split(gate_up, 2, axis=-1)
+        hidden = jax.nn.silu(gate) * up
+        out = jnp.einsum("eti,eid->etd", hidden, expert_mlp["w_down"])
+        return jnp.sum(out.astype(jnp.float32))
+
+    def chunked_loss(bank):
+        layer = {
+            "mlp": {
+                "expert_mlp": {
+                    name: bank["chunks"][group_index]["packed"][name][local_layer_index].astype(jnp.bfloat16)
+                    for name in synthetic_shapes(config)
+                }
+            }
+        }
+        return simple_expert_loss(layer)
+
+    def direct_loss(layer):
+        return simple_expert_loss(layer)
+
+    chunked_grads = jax.grad(chunked_loss)(chunked_bank)
+    direct_grads = jax.grad(direct_loss)(direct_layer)
+
+    assert isinstance(chunked_grads, MuonMasterBank)
+    assert chunked_grads.metadata == chunked_bank.metadata
+    for candidate_group_index, chunk in enumerate(chunked_grads.chunks):
+        for name in synthetic_shapes(config):
+            for candidate_local_layer_index in range(chunk["packed"][name].shape[0]):
+                chunked_grad = chunk["packed"][name][candidate_local_layer_index]
+                if candidate_group_index == group_index and candidate_local_layer_index == local_layer_index:
+                    expected = direct_grads["mlp"]["expert_mlp"][name]
+                else:
+                    expected = jnp.zeros_like(chunked_grad)
+                assert jnp.array_equal(chunked_grad, expected), (
+                    f"chunked packed grad for {name} chunk {candidate_group_index} "
+                    f"local layer {candidate_local_layer_index} did not match direct layer grad"
+                )
+
+
+def test_chunked_packed_master_fsdp_sequential_grad_reaches_all_layer_chunks_numerically():
+    config = BenchConfig(
+        layers=5,
+        ns4d_group_size=2,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=2,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    bench_kind = EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_UPDATE_BENCH
+    chunked_bank = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=6)
+    chunked_bank = jax.tree.map(lambda leaf: jnp.asarray(jax.device_get(leaf)), chunked_bank)
+    expert_inputs = jnp.full(
+        (config.num_experts, config.grouped_expert_consumer_tokens_per_expert, config.hidden_dim),
+        0.125,
+        dtype=jnp.bfloat16,
+    )
+
+    def layer_loss(bank):
+        expert_mlp = jax.tree.map(
+            lambda leaf: leaf.astype(jnp.bfloat16),
+            {name: bank["chunks"][0]["packed"][name][0] for name in synthetic_shapes(config)},
+        )
+        gate_up = jnp.einsum("etd,edi->eti", expert_inputs, expert_mlp["w_gate_up"])
+        hidden = gate_up[:, :, : config.intermediate_dim]
+        out = jnp.einsum("eti,eid->etd", hidden, expert_mlp["w_down"])
+        return jnp.sum(out.astype(jnp.float32))
+
+    def sequential_loss(bank):
+        loss = jnp.asarray(0, dtype=jnp.float32)
+        remaining_layers = config.layers
+        for chunk in bank["chunks"]:
+            chunk_layers = min(remaining_layers, chunk["packed"]["w_down"].shape[0])
+            for local_layer_index in range(chunk_layers):
+                expert_mlp = jax.tree.map(
+                    lambda leaf: leaf.astype(jnp.bfloat16),
+                    {name: chunk["packed"][name][local_layer_index] for name in synthetic_shapes(config)},
+                )
+                gate_up = jnp.einsum("etd,edi->eti", expert_inputs, expert_mlp["w_gate_up"])
+                hidden = gate_up[:, :, : config.intermediate_dim]
+                out = jnp.einsum("eti,eid->etd", hidden, expert_mlp["w_down"])
+                loss = loss + jnp.sum(out.astype(jnp.float32))
+            remaining_layers -= chunk_layers
+        return loss
+
+    layer_grad = jax.grad(layer_loss)(chunked_bank)
+    sequential_grad = jax.grad(sequential_loss)(chunked_bank)
+
+    for chunk_index, chunk in enumerate(sequential_grad["chunks"]):
+        for name in synthetic_shapes(config):
+            for local_layer_index in range(chunk["packed"][name].shape[0]):
+                grad_sum = jnp.sum(jnp.abs(chunk["packed"][name][local_layer_index].astype(jnp.float32)))
+                assert grad_sum > 0, f"sequential grad missed {name} chunk={chunk_index} local={local_layer_index}"
+
+    for chunk_index, chunk in enumerate(layer_grad["chunks"]):
+        for name in synthetic_shapes(config):
+            for local_layer_index in range(chunk["packed"][name].shape[0]):
+                grad_sum = jnp.sum(jnp.abs(chunk["packed"][name][local_layer_index].astype(jnp.float32)))
+                if chunk_index == 0 and local_layer_index == 0:
+                    assert grad_sum > 0
+                else:
+                    assert grad_sum == 0, f"one-layer grad unexpectedly touched {name} chunk={chunk_index}"
+
+
+def test_expert_packed_master_muonh_consumer_keeps_packed_master_and_grouped_outputs():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    master_bank = synthetic_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+    )
+    grad_bank = synthetic_packed_grouped_expert_bank_specs(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+    )
+    momentum_bank = synthetic_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+    )
+    activations = synthetic_grouped_expert_consumer_input_specs(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+    )
+    update_step = jax.jit(expert_packed_master_muonh_consumer_step_factory(config))
+
+    assert_packed_grouped_expert_bank_sharding(
+        master_bank,
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+        "packed-master MuonH master input",
+    )
+    assert_packed_grouped_expert_bank_sharding(
+        grad_bank,
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+        "packed-master MuonH grad input",
+    )
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        next_master, next_momentum, outputs = jax.eval_shape(
+            update_step,
+            master_bank,
+            grad_bank,
+            momentum_bank,
+            activations,
+        )
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(master_bank, grad_bank, momentum_bank, activations).lower(
+            lowering_platforms=(platform,)
+        )
+
+    assert next_master["packed"]["w_gate_up"].dtype == jnp.float32
+    assert next_momentum["packed"]["w_down"].dtype == jnp.float32
+    assert_packed_grouped_expert_bank_sharding(
+        next_master,
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+        "packed-master MuonH next master",
+    )
+    assert_packed_grouped_expert_bank_sharding(
+        next_momentum,
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+        "packed-master MuonH next momentum",
+    )
+    assert_ns4d_sharding(
+        outputs,
+        P(("replica_dcn", "data"), "expert", None, None),
+        "packed-master MuonH grouped consumer outputs",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_expert_packed_master_consumer_grad_returns_packed_master_grads_without_collectives():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    master_bank = synthetic_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+    )
+    activations = synthetic_grouped_expert_consumer_input_specs(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+    )
+    grad_step = jax.jit(expert_packed_master_consumer_grad_step_factory(config))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        packed_grads = jax.eval_shape(grad_step, master_bank, activations)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = grad_step.trace(master_bank, activations).lower(lowering_platforms=(platform,))
+
+    assert packed_grads["packed"]["w_gate_up"].dtype == jnp.float32
+    assert packed_grads["packed"]["w_down"].dtype == jnp.float32
+    assert_packed_grouped_expert_bank_sharding(
+        packed_grads,
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+        "packed-master consumer transposed grads",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_chunked_packed_master_fsdp_layer_grad_returns_chunked_bank_grads_without_lowered_collectives():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_BENCH,
+    )
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    grad_step = jax.jit(expert_chunked_packed_master_fsdp_layer_grad_step_factory(mesh, config))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        chunked_grads = jax.eval_shape(grad_step, master_bank, expert_inputs)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = grad_step.trace(master_bank, expert_inputs).lower(lowering_platforms=(platform,))
+
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        chunked_grads,
+        mesh,
+        config,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_BENCH,
+        "chunked packed-master FSDP layer transposed grads",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_chunked_packed_master_fsdp_layer_grad_muonh_update_preserves_chunked_banks():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH,
+    )
+    momentum_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH,
+    )
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    update_step = jax.jit(expert_chunked_packed_master_fsdp_layer_grad_muonh_update_step_factory(mesh, config))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        next_master, next_momentum = jax.eval_shape(update_step, master_bank, momentum_bank, expert_inputs)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(master_bank, momentum_bank, expert_inputs).lower(lowering_platforms=(platform,))
+
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_master,
+        mesh,
+        config,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH,
+        "chunked packed-master layer-grad MuonH next master",
+    )
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_momentum,
+        mesh,
+        config,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH,
+        "chunked packed-master layer-grad MuonH next momentum",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_chunked_packed_master_fsdp_sequential_grad_muonh_update_preserves_chunked_banks():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_UPDATE_BENCH,
+    )
+    momentum_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_UPDATE_BENCH,
+    )
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    update_step = jax.jit(expert_chunked_packed_master_fsdp_sequential_grad_muonh_update_step_factory(mesh, config))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        next_master, next_momentum = jax.eval_shape(update_step, master_bank, momentum_bank, expert_inputs)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(master_bank, momentum_bank, expert_inputs).lower(lowering_platforms=(platform,))
+
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_master,
+        mesh,
+        config,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_UPDATE_BENCH,
+        "chunked packed-master sequential-grad MuonH next master",
+    )
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_momentum,
+        mesh,
+        config,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_UPDATE_BENCH,
+        "chunked packed-master sequential-grad MuonH next momentum",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_chunked_packed_master_fsdp_sequential_grad_muonh_checksum_is_scalar():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_CHECKSUM_BENCH,
+    )
+    momentum_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_CHECKSUM_BENCH,
+    )
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    update_step = jax.jit(expert_chunked_packed_master_fsdp_sequential_grad_muonh_checksum_step_factory(mesh, config))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        checksum = jax.eval_shape(update_step, master_bank, momentum_bank, expert_inputs)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(master_bank, momentum_bank, expert_inputs).lower(lowering_platforms=(platform,))
+
+    assert checksum.shape == ()
+    assert checksum.dtype == jnp.float32
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_chunked_packed_master_fsdp_streaming_grad_muonh_checksum_is_scalar():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+    )
+    momentum_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+    )
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    update_step = jax.jit(
+        expert_chunked_packed_master_fsdp_streaming_grad_muonh_checksum_step_factory(
+            mesh,
+            config,
+            EXPERT_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+        )
+    )
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        checksum = jax.eval_shape(update_step, master_bank, momentum_bank, expert_inputs)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(master_bank, momentum_bank, expert_inputs).lower(lowering_platforms=(platform,))
+
+    assert checksum.shape == ()
+    assert checksum.dtype == jnp.float32
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_checksum_is_scalar():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+    )
+    momentum_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+    )
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    update_step = jax.jit(
+        expert_chunked_packed_master_fsdp_streaming_grad_muonh_checksum_step_factory(
+            mesh,
+            config,
+            EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH,
+        )
+    )
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        checksum = jax.eval_shape(update_step, master_bank, momentum_bank, expert_inputs)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(master_bank, momentum_bank, expert_inputs).lower(lowering_platforms=(platform,))
+
+    assert checksum.shape == ()
+    assert checksum.dtype == jnp.float32
+    assert len(master_bank["chunks"]) == 1
+    assert next(iter(master_bank["chunks"][0]["packed"].values())).shape[0] == 4
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_update_preserves_packed_state():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_UPDATE_BENCH
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+    momentum_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    update_step = jax.jit(
+        expert_chunked_packed_master_fsdp_streaming_grad_muonh_update_step_factory(
+            mesh,
+            config,
+            bench_kind,
+        )
+    )
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        next_master, next_momentum = jax.eval_shape(update_step, master_bank, momentum_bank, expert_inputs)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(master_bank, momentum_bank, expert_inputs).lower(lowering_platforms=(platform,))
+
+    assert len(next_master["chunks"]) == 1
+    assert len(next_momentum["chunks"]) == 1
+    for chunk in next_master["chunks"]:
+        for leaf in chunk["packed"].values():
+            assert leaf.dtype == jnp.float32
+    for chunk in next_momentum["chunks"]:
+        for leaf in chunk["packed"].values():
+            assert leaf.dtype == jnp.float32
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_master,
+        mesh,
+        config,
+        bench_kind,
+        "state-returning streaming MuonH next master",
+    )
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_momentum,
+        mesh,
+        config,
+        bench_kind,
+        "state-returning streaming MuonH next momentum",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_returns_current_loss():
+    config = BenchConfig(
+        layers=3,
+        ns4d_group_size=2,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=2,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_VALUE_GRAD_MUONH_UPDATE_BENCH
+    master_bank = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=18)
+    momentum_bank = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=19)
+    expert_inputs = jax.device_put(
+        jnp.arange(config.num_experts * config.grouped_expert_consumer_tokens_per_expert * config.hidden_dim)
+        .reshape(config.num_experts, config.grouped_expert_consumer_tokens_per_expert, config.hidden_dim)
+        .astype(jnp.bfloat16),
+        NamedSharding(mesh, P("expert", None, None)),
+    )
+    update_step = jax.jit(
+        expert_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_step_factory(
+            mesh,
+            config,
+            bench_kind,
+        )
+    )
+    old_loss_jit = jax.jit(
+        lambda master, inputs: expert_layer_chunked_packed_master_fsdp_sequential_consumer_loss(
+            mesh,
+            config,
+            master,
+            inputs,
+        )
+    )
+
+    with mesh:
+        loss, next_master, next_momentum = update_step(master_bank, momentum_bank, expert_inputs)
+        old_loss = old_loss_jit(master_bank, expert_inputs)
+
+    assert isinstance(master_bank, MuonMasterBank)
+    assert isinstance(momentum_bank, MuonMasterBank)
+    assert isinstance(next_master, MuonMasterBank)
+    assert isinstance(next_momentum, MuonMasterBank)
+    assert next_master.metadata == master_bank.metadata
+    assert next_momentum.metadata == momentum_bank.metadata
+    assert loss.shape == ()
+    assert jnp.allclose(loss, old_loss, atol=0, rtol=0)
+    assert all(leaf.dtype == jnp.float32 for leaf in jax.tree.leaves(next_master))
+    assert all(leaf.dtype == jnp.float32 for leaf in jax.tree.leaves(next_momentum))
+    assert any(
+        not jnp.allclose(old_leaf, new_leaf, atol=0, rtol=0)
+        for old_leaf, new_leaf in zip(jax.tree.leaves(master_bank), jax.tree.leaves(next_master), strict=True)
+    )
+
+
+def test_layer_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_lowers_with_packed_state():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_VALUE_GRAD_MUONH_UPDATE_BENCH
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+    momentum_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    update_step = jax.jit(
+        expert_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_step_factory(
+            mesh,
+            config,
+            bench_kind,
+        )
+    )
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        loss_specs, next_master, next_momentum = jax.eval_shape(update_step, master_bank, momentum_bank, expert_inputs)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(master_bank, momentum_bank, expert_inputs).lower(lowering_platforms=(platform,))
+
+    assert isinstance(master_bank, MuonMasterBank)
+    assert isinstance(momentum_bank, MuonMasterBank)
+    assert isinstance(next_master, MuonMasterBank)
+    assert isinstance(next_momentum, MuonMasterBank)
+    assert next_master.metadata == master_bank.metadata
+    assert next_momentum.metadata == momentum_bank.metadata
+    assert loss_specs.shape == ()
+    assert loss_specs.dtype == jnp.float32
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_master,
+        mesh,
+        config,
+        bench_kind,
+        "value+grad streaming MuonH next master",
+    )
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_momentum,
+        mesh,
+        config,
+        bench_kind,
+        "value+grad streaming MuonH next momentum",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_layer_chunked_packed_master_fsdp_streaming_layerwise_value_grad_muonh_update_lowers_with_packed_state():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_LAYERWISE_VALUE_GRAD_MUONH_UPDATE_BENCH
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+    momentum_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    update_step = jax.jit(
+        expert_chunked_packed_master_fsdp_streaming_value_grad_muonh_update_step_factory(
+            mesh,
+            config,
+            bench_kind,
+        )
+    )
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        loss_specs, next_master, next_momentum = jax.eval_shape(update_step, master_bank, momentum_bank, expert_inputs)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(master_bank, momentum_bank, expert_inputs).lower(lowering_platforms=(platform,))
+
+    assert isinstance(next_master, MuonMasterBank)
+    assert isinstance(next_momentum, MuonMasterBank)
+    assert next_master.metadata == master_bank.metadata
+    assert next_momentum.metadata == momentum_bank.metadata
+    assert loss_specs.shape == ()
+    assert loss_specs.dtype == jnp.float32
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_master,
+        mesh,
+        config,
+        bench_kind,
+        "layerwise value+grad streaming MuonH next master",
+    )
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        next_momentum,
+        mesh,
+        config,
+        bench_kind,
+        "layerwise value+grad streaming MuonH next momentum",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_layer_chunked_packed_master_fsdp_sequential_consumer_lowers_as_scalar():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(mesh, config, bench_kind)
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    consume_step = jax.jit(expert_layer_chunked_packed_master_fsdp_sequential_consumer_step_factory(mesh, config))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        result_specs = jax.eval_shape(consume_step, master_bank, expert_inputs)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = consume_step.trace(master_bank, expert_inputs).lower(lowering_platforms=(platform,))
+
+    assert result_specs.shape == ()
+    assert result_specs.dtype == jnp.float32
+    assert_chunked_packed_grouped_expert_bank_sharding(
+        master_bank,
+        mesh,
+        config,
+        bench_kind,
+        "layer-chunked packed master FSDP consumer input",
+    )
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_updates_before_consume():
+    config = BenchConfig(
+        layers=3,
+        ns4d_group_size=2,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=2,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    master_bank = make_chunked_packed_grouped_expert_master_bank_tree(
+        mesh,
+        config,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH,
+        seed=14,
+    )
+    momentum_bank = make_chunked_packed_grouped_expert_master_bank_tree(
+        mesh,
+        config,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH,
+        seed=15,
+    )
+    expert_inputs = jax.device_put(
+        jnp.arange(config.num_experts * config.grouped_expert_consumer_tokens_per_expert * config.hidden_dim)
+        .reshape(config.num_experts, config.grouped_expert_consumer_tokens_per_expert, config.hidden_dim)
+        .astype(jnp.bfloat16),
+        NamedSharding(mesh, P("expert", None, None)),
+    )
+
+    def actual_step(master, momentum, inputs):
+        return expert_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss(
+            mesh,
+            config,
+            master,
+            momentum,
+            inputs,
+            bench_kind=EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH,
+        )
+
+    platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+    actual_jit = jax.jit(actual_step)
+    old_loss_jit = jax.jit(
+        lambda master, inputs: expert_chunked_packed_master_fsdp_sequential_consumer_loss(
+            mesh,
+            config,
+            master,
+            inputs,
+        )
+    )
+    with mesh:
+        actual_compiled = (
+            actual_jit.trace(master_bank, momentum_bank, expert_inputs).lower(lowering_platforms=(platform,)).compile()
+        )
+        old_loss_compiled = (
+            old_loss_jit.trace(master_bank, expert_inputs).lower(lowering_platforms=(platform,)).compile()
+        )
+        actual = actual_compiled(master_bank, momentum_bank, expert_inputs)
+        old_loss = old_loss_compiled(master_bank, expert_inputs)
+
+    assert actual.shape == ()
+    assert old_loss.shape == ()
+    assert not jnp.allclose(actual, old_loss, atol=0, rtol=0)
+
+
+def test_layer_chunked_packed_master_fsdp_chunk_consumer_matches_per_layer_materialization():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=2,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    bench_kind = EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH
+    chunked_bank = make_chunked_packed_grouped_expert_master_bank_tree(mesh, config, bench_kind, seed=16)
+    expert_inputs = jax.device_put(
+        jnp.arange(config.num_experts * config.grouped_expert_consumer_tokens_per_expert * config.hidden_dim)
+        .reshape(config.num_experts, config.grouped_expert_consumer_tokens_per_expert, config.hidden_dim)
+        .astype(jnp.bfloat16),
+        NamedSharding(mesh, P("expert", None, None)),
+    )
+    chunk = chunked_bank["chunks"][0]
+
+    slab_loss = expert_chunked_packed_master_fsdp_chunk_consumer_loss(
+        mesh,
+        config,
+        chunk,
+        expert_inputs,
+        chunk_index=0,
+        bench_kind=bench_kind,
+    )
+
+    per_layer_loss = jnp.asarray(0, dtype=jnp.float32)
+    valid_group_size = len(chunk["packed"]["w_gate_up"])
+    for local_layer_index in range(valid_group_size):
+        layer = chunked_packed_master_chunk_to_fsdp_expert_layer(
+            mesh,
+            config,
+            chunk,
+            chunk_index=0,
+            local_layer_index=local_layer_index,
+            bench_kind=bench_kind,
+        )
+        per_layer_loss = per_layer_loss + expert_fsdp_layer_consumer_loss(mesh, config, layer, expert_inputs)
+
+    assert jnp.allclose(slab_loss, per_layer_loss, atol=0, rtol=0)
+
+
+def test_layer_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_lowers_as_scalar():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=3,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    master_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH,
+    )
+    momentum_bank = synthetic_chunked_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH,
+    )
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    update_step = jax.jit(
+        expert_chunked_packed_master_fsdp_streaming_grad_muonh_next_loss_step_factory(
+            mesh,
+            config,
+            EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH,
+        )
+    )
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        next_loss = jax.eval_shape(update_step, master_bank, momentum_bank, expert_inputs)
+        platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
+        lowered = update_step.trace(master_bank, momentum_bank, expert_inputs).lower(lowering_platforms=(platform,))
+
+    assert next_loss.shape == ()
+    assert next_loss.dtype == jnp.float32
+    assert len(master_bank["chunks"]) == 1
+    assert next(iter(master_bank["chunks"][0]["packed"].values())).shape[0] == 4
+    hlo_summary = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo_summary.dot_general > 0
+    assert hlo_summary.all_gather == 0
+    assert hlo_summary.all_reduce == 0
+    assert hlo_summary.reduce_scatter == 0
+    assert hlo_summary.all_to_all == 0
+
+
+def test_chunked_packed_master_grad_muonh_update_reports_specific_boundary_status():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+
+    assert (
+        ns4d_boundary_status(config, EXPERT_CHUNKED_PACKED_MASTER_FSDP_LAYER_GRAD_MUONH_UPDATE_BENCH)
+        == "chunked_packed_master_one_fsdp_layer_grad_then_muonh_update"
+    )
+    assert (
+        ns4d_boundary_status(config, EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_UPDATE_BENCH)
+        == "chunked_packed_master_sequential_fsdp_layer_grads_then_muonh_update"
+    )
+    assert (
+        ns4d_boundary_status(config, EXPERT_CHUNKED_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_MUONH_CHECKSUM_BENCH)
+        == "chunked_packed_master_sequential_fsdp_layer_grads_then_muonh_checksum"
+    )
+    assert (
+        ns4d_boundary_status(config, EXPERT_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH)
+        == "chunked_packed_master_streaming_chunk_fsdp_layer_grads_then_muonh_checksum"
+    )
+    assert (
+        ns4d_boundary_status(config, EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_CHECKSUM_BENCH)
+        == "replica_aligned_chunked_packed_master_streaming_fsdp_grad_then_muonh_checksum"
+    )
+    assert (
+        ns4d_boundary_status(config, EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_UPDATE_BENCH)
+        == "replica_aligned_chunked_packed_master_streaming_fsdp_grad_then_muonh_update"
+    )
+    assert (
+        ns4d_boundary_status(config, EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_GRAD_MUONH_NEXT_LOSS_BENCH)
+        == "replica_aligned_chunked_packed_master_streaming_fsdp_grad_then_muonh_next_loss"
+    )
+    assert (
+        ns4d_boundary_status(
+            config,
+            EXPERT_LAYER_CHUNKED_PACKED_MASTER_FSDP_STREAMING_BLOCK_GROUP_VALUE_GRAD_MUONH_UPDATE_BENCH,
+        )
+        == "replica_aligned_chunked_packed_master_streaming_block_group_fsdp_value_grad_then_muonh_update"
+    )
+    assert (
+        ns4d_boundary_status(config, EXPERT_LAYER_CHUNKED_PACKED_MASTER_GROUPED_GRAD_MUONH_UPDATE_BENCH)
+        == "replica_aligned_chunked_packed_master_grouped_view_grad_then_muonh_update"
+    )
+
+
+def test_expert_packed_master_consumer_grad_matches_grouped_tree_grad_numerically():
+    config = BenchConfig(
+        layers=3,
+        ns4d_group_size=2,
+        ns4d_group_axis="none",
+        hidden_dim=4,
+        intermediate_dim=2,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+        grouped_expert_consumer_tokens_per_expert=2,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    master_bank = make_packed_grouped_expert_master_bank_tree(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+        seed=2,
+    )
+    grouped_master = packed_master_bank_to_grouped_expert_tree(
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+        master_bank,
+    )
+    activations = make_grouped_expert_consumer_input_tree(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+        seed=3,
+    )
+
+    def grouped_loss(grouped_params):
+        bf16_grouped_params = jax.tree.map(lambda leaf: leaf.astype(jnp.bfloat16), grouped_params)
+        outputs = grouped_expert_bank_consumer_outputs(config, bf16_grouped_params, activations)
+        return sum(jnp.sum(leaf.astype(jnp.float32)) for leaf in jax.tree.leaves(outputs))
+
+    packed_grads = jax.grad(lambda bank: expert_packed_master_consumer_loss(config, bank, activations))(master_bank)
+    grouped_grads = jax.grad(grouped_loss)(grouped_master)
+
+    layer_index = 0
+    for block_index, block in enumerate(grouped_grads["blocks"]):
+        block_size = block["mlp"]["expert_mlp"]["w_gate_up"].shape[0]
+        for local_index in range(block_size):
+            for name in synthetic_shapes(config):
+                rebuilt_grad = block["mlp"]["expert_mlp"][name][local_index]
+                packed_grad = packed_grads["packed"][name][layer_index]
+                assert jnp.allclose(packed_grad, rebuilt_grad, atol=0, rtol=0), (
+                    f"packed grad for {name} layer {layer_index} did not match "
+                    f"grouped block {block_index} local layer {local_index}"
+                )
+            layer_index += 1
+
+
+def test_packed_master_fsdp_layer_consumer_materializes_one_use_site_layer():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    master_bank = synthetic_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_MUONH_CONSUMER_BENCH,
+    )
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+
+    def materialize_layer(master):
+        return packed_master_bank_to_fsdp_expert_layer(mesh, config, master, layer_index=1)
+
+    materialize_step = jax.jit(materialize_layer)
+    consume_step = jax.jit(expert_packed_master_fsdp_layer_consumer_step_factory(mesh, config, layer_index=1))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        layer = jax.eval_shape(materialize_step, master_bank)
+        layer_lowered = materialize_step.trace(master_bank).lower(
+            lowering_platforms=(jax.devices()[0].platform if jax.devices() else jax.default_backend(),)
+        )
+        loss = jax.eval_shape(consume_step, master_bank, expert_inputs)
+        consume_lowered = consume_step.trace(master_bank, expert_inputs).lower(
+            lowering_platforms=(jax.devices()[0].platform if jax.devices() else jax.default_backend(),)
+        )
+
+    assert_expert_fsdp_sharding(layer, "packed-master materialized FSDP layer")
+    assert layer["mlp"]["expert_mlp"]["w_gate_up"].dtype == jnp.bfloat16
+    assert loss.shape == ()
+    assert loss.dtype == jnp.float32
+
+    layer_hlo = summarize_hlo(str(layer_lowered.compiler_ir(dialect="stablehlo")))
+    assert layer_hlo.all_reduce == 0
+    assert layer_hlo.reduce_scatter == 0
+    assert layer_hlo.all_to_all == 0
+
+    consume_hlo = summarize_hlo(str(consume_lowered.compiler_ir(dialect="stablehlo")))
+    assert consume_hlo.dot_general > 0
+    assert consume_hlo.all_reduce == 0
+    assert consume_hlo.reduce_scatter == 0
+    assert consume_hlo.all_to_all == 0
+
+
+def test_packed_master_fsdp_sequential_consumer_matches_layer_sum():
+    config = BenchConfig(
+        layers=3,
+        ns4d_group_size=2,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    master_bank = make_packed_grouped_expert_master_bank_tree(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+        seed=4,
+    )
+    expert_inputs = jax.device_put(
+        jnp.arange(config.num_experts * config.hidden_dim, dtype=jnp.float32)
+        .reshape(config.num_experts, config.hidden_dim)
+        .astype(jnp.bfloat16),
+        NamedSharding(mesh, P("expert", None)),
+    )
+
+    with mesh:
+        sequential_loss = expert_packed_master_fsdp_sequential_consumer_loss(
+            mesh,
+            config,
+            master_bank,
+            expert_inputs,
+        )
+        expected_loss = sum(
+            expert_packed_master_fsdp_layer_consumer_step_factory(mesh, config, layer_index)(
+                master_bank,
+                expert_inputs,
+            )
+            for layer_index in range(config.layers)
+        )
+
+    assert jnp.allclose(sequential_loss, expected_loss, atol=0, rtol=0)
+
+
+def test_packed_master_fsdp_slab_consumer_matches_sequential_consumer():
+    config = BenchConfig(
+        layers=5,
+        ns4d_group_size=4,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    master_bank = make_packed_grouped_expert_master_bank_tree(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_FSDP_SLAB_CONSUMER_BENCH,
+        seed=5,
+    )
+    expert_inputs = jax.device_put(
+        jnp.arange(config.num_experts * config.hidden_dim, dtype=jnp.float32)
+        .reshape(config.num_experts, config.hidden_dim)
+        .astype(jnp.bfloat16),
+        NamedSharding(mesh, P("expert", None)),
+    )
+
+    with mesh:
+        slab_loss = expert_packed_master_fsdp_slab_consumer_loss(mesh, config, master_bank, expert_inputs)
+        sequential_loss = expert_packed_master_fsdp_sequential_consumer_loss(mesh, config, master_bank, expert_inputs)
+
+    assert jnp.allclose(slab_loss, sequential_loss, atol=0, rtol=0)
+
+
+def test_packed_master_fsdp_bulk_consumer_matches_sequential_consumer():
+    config = BenchConfig(
+        layers=5,
+        ns4d_group_size=4,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    master_bank = make_packed_grouped_expert_master_bank_tree(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_FSDP_BULK_CONSUMER_BENCH,
+        seed=6,
+    )
+    expert_inputs = jax.device_put(
+        jnp.arange(config.num_experts * config.hidden_dim, dtype=jnp.float32)
+        .reshape(config.num_experts, config.hidden_dim)
+        .astype(jnp.bfloat16),
+        NamedSharding(mesh, P("expert", None)),
+    )
+
+    with mesh:
+        bulk_loss = expert_packed_master_fsdp_bulk_consumer_loss(mesh, config, master_bank, expert_inputs)
+        sequential_loss = expert_packed_master_fsdp_sequential_consumer_loss(mesh, config, master_bank, expert_inputs)
+
+    assert jnp.allclose(bulk_loss, sequential_loss, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize(
+    ("bench_kind", "outputs_fn", "consumer_loss_fn"),
+    [
+        (
+            EXPERT_PACKED_MASTER_MUONH_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+            expert_packed_master_muonh_fsdp_sequential_consumer_outputs,
+            expert_packed_master_fsdp_sequential_consumer_loss,
+        ),
+        (
+            EXPERT_PACKED_MASTER_MUONH_FSDP_SLAB_CONSUMER_BENCH,
+            expert_packed_master_muonh_fsdp_slab_consumer_outputs,
+            expert_packed_master_fsdp_slab_consumer_loss,
+        ),
+        (
+            EXPERT_PACKED_MASTER_MUONH_FSDP_BULK_CONSUMER_BENCH,
+            expert_packed_master_muonh_fsdp_bulk_consumer_outputs,
+            expert_packed_master_fsdp_bulk_consumer_loss,
+        ),
+    ],
+)
+def test_packed_master_muonh_fsdp_consumer_matches_separate_update_then_consume(
+    bench_kind,
+    outputs_fn,
+    consumer_loss_fn,
+):
+    config = BenchConfig(
+        layers=3,
+        ns4d_group_size=2,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    master_bank = make_packed_grouped_expert_master_bank_tree(
+        mesh,
+        config,
+        bench_kind,
+        seed=7,
+    )
+    grad_bank = make_packed_grouped_expert_bank_tree(
+        mesh,
+        config,
+        bench_kind,
+        seed=8,
+    )
+    momentum_bank = make_packed_grouped_expert_master_bank_tree(
+        mesh,
+        config,
+        bench_kind,
+        seed=9,
+    )
+    expert_inputs = jax.device_put(
+        jnp.arange(config.num_experts * config.hidden_dim, dtype=jnp.float32)
+        .reshape(config.num_experts, config.hidden_dim)
+        .astype(jnp.bfloat16),
+        NamedSharding(mesh, P("expert", None)),
+    )
+
+    with mesh:
+        actual_master, actual_momentum, actual_loss = outputs_fn(
+            mesh,
+            config,
+            master_bank,
+            grad_bank,
+            momentum_bank,
+            expert_inputs,
+        )
+        expected_master, expected_momentum = expert_packed_master_muonh_update_outputs(
+            config,
+            master_bank,
+            grad_bank,
+            momentum_bank,
+        )
+        expected_loss = consumer_loss_fn(mesh, config, expected_master, expert_inputs)
+
+    for actual, expected in zip(jax.tree.leaves(actual_master), jax.tree.leaves(expected_master), strict=True):
+        assert jnp.allclose(actual, expected, atol=0, rtol=0)
+    for actual, expected in zip(jax.tree.leaves(actual_momentum), jax.tree.leaves(expected_momentum), strict=True):
+        assert jnp.allclose(actual, expected, atol=0, rtol=0)
+    assert jnp.allclose(actual_loss, expected_loss, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize(
+    ("bench_kind", "consumer_loss_fn"),
+    [
+        (
+            EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_BENCH,
+            expert_packed_master_fsdp_sequential_consumer_loss,
+        ),
+        (
+            EXPERT_PACKED_MASTER_FSDP_SLAB_GRAD_BENCH,
+            expert_packed_master_fsdp_slab_consumer_loss,
+        ),
+        (
+            EXPERT_PACKED_MASTER_FSDP_BULK_GRAD_BENCH,
+            expert_packed_master_fsdp_bulk_consumer_loss,
+        ),
+    ],
+)
+def test_packed_master_fsdp_grad_matches_direct_consumer_grad(bench_kind, consumer_loss_fn):
+    config = BenchConfig(
+        layers=3,
+        ns4d_group_size=2,
+        ns4d_group_axis="none",
+        hidden_dim=8,
+        intermediate_dim=4,
+        num_experts=2,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=1,
+        data_axis=1,
+        expert_axis=1,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = create_mesh(1, 1, 1, 1)
+    master_bank = make_packed_grouped_expert_master_bank_tree(
+        mesh,
+        config,
+        bench_kind,
+        seed=10,
+    )
+    expert_inputs = jax.device_put(
+        jnp.arange(config.num_experts * config.hidden_dim, dtype=jnp.float32)
+        .reshape(config.num_experts, config.hidden_dim)
+        .astype(jnp.bfloat16),
+        NamedSharding(mesh, P("expert", None)),
+    )
+
+    with mesh:
+        actual_grad = expert_packed_master_fsdp_grad_outputs(
+            mesh,
+            config,
+            bench_kind,
+            master_bank,
+            expert_inputs,
+        )
+        expected_grad = jax.grad(lambda bank: consumer_loss_fn(mesh, config, bank, expert_inputs))(master_bank)
+
+    for actual, expected in zip(jax.tree.leaves(actual_grad), jax.tree.leaves(expected_grad), strict=True):
+        assert jnp.allclose(actual, expected, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize(
+    "bench_kind",
+    [
+        EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_GRAD_BENCH,
+        EXPERT_PACKED_MASTER_FSDP_SLAB_GRAD_BENCH,
+        EXPERT_PACKED_MASTER_FSDP_BULK_GRAD_BENCH,
+    ],
+)
+def test_packed_master_fsdp_grad_lowers_with_packed_grad_sharding(bench_kind):
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    master_bank = synthetic_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        bench_kind,
+    )
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    grad_step = jax.jit(expert_packed_master_fsdp_grad_step_factory(mesh, config, bench_kind))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        grad_specs = jax.eval_shape(grad_step, master_bank, expert_inputs)
+        lowered = grad_step.trace(master_bank, expert_inputs).lower(
+            lowering_platforms=(jax.devices()[0].platform if jax.devices() else jax.default_backend(),)
+        )
+
+    assert_packed_grouped_expert_bank_sharding(
+        grad_specs,
+        mesh,
+        config,
+        bench_kind,
+        "packed-master FSDP consumer grad",
+    )
+    hlo = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo.dot_general > 0
+    if bench_kind != EXPERT_PACKED_MASTER_FSDP_BULK_GRAD_BENCH:
+        assert hlo.all_reduce == 0
+        assert hlo.reduce_scatter == 0
+
+
+def test_packed_master_fsdp_sequential_consumer_lowers_without_reduction_collectives():
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    master_bank = synthetic_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+    )
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    consume_step = jax.jit(expert_packed_master_fsdp_sequential_consumer_step_factory(mesh, config))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        loss = jax.eval_shape(consume_step, master_bank, expert_inputs)
+        lowered = consume_step.trace(master_bank, expert_inputs).lower(
+            lowering_platforms=(jax.devices()[0].platform if jax.devices() else jax.default_backend(),)
+        )
+
+    assert loss.shape == ()
+    assert loss.dtype == jnp.float32
+    hlo = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo.dot_general >= 2 * config.layers
+    assert hlo.all_reduce == 0
+    assert hlo.reduce_scatter == 0
+    assert hlo.all_to_all == 0
+
+
+def test_packed_master_fsdp_slab_consumer_lowers_without_reduction_collectives():
+    config = BenchConfig(
+        layers=5,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    master_bank = synthetic_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_FSDP_SLAB_CONSUMER_BENCH,
+    )
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    consume_step = jax.jit(expert_packed_master_fsdp_slab_consumer_step_factory(mesh, config))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        loss = jax.eval_shape(consume_step, master_bank, expert_inputs)
+        lowered = consume_step.trace(master_bank, expert_inputs).lower(
+            lowering_platforms=(jax.devices()[0].platform if jax.devices() else jax.default_backend(),)
+        )
+
+    assert loss.shape == ()
+    assert loss.dtype == jnp.float32
+    hlo = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo.dot_general >= 2 * config.layers
+    assert hlo.all_reduce == 0
+    assert hlo.reduce_scatter == 0
+    assert hlo.all_to_all == 0
+
+
+def test_packed_master_fsdp_bulk_consumer_lowers_without_reduction_collectives():
+    config = BenchConfig(
+        layers=5,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    master_bank = synthetic_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        EXPERT_PACKED_MASTER_FSDP_BULK_CONSUMER_BENCH,
+    )
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    consume_step = jax.jit(expert_packed_master_fsdp_bulk_consumer_step_factory(mesh, config))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        loss = jax.eval_shape(consume_step, master_bank, expert_inputs)
+        lowered = consume_step.trace(master_bank, expert_inputs).lower(
+            lowering_platforms=(jax.devices()[0].platform if jax.devices() else jax.default_backend(),)
+        )
+
+    assert loss.shape == ()
+    assert loss.dtype == jnp.float32
+    hlo = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo.dot_general >= 2 * config.layers
+    assert hlo.all_reduce == 0
+    assert hlo.reduce_scatter == 0
+    assert hlo.all_to_all == 0
+
+
+@pytest.mark.parametrize(
+    ("bench_kind", "step_factory"),
+    [
+        (
+            EXPERT_PACKED_MASTER_MUONH_FSDP_SEQUENTIAL_CONSUMER_BENCH,
+            expert_packed_master_muonh_fsdp_sequential_consumer_step_factory,
+        ),
+        (
+            EXPERT_PACKED_MASTER_MUONH_FSDP_SLAB_CONSUMER_BENCH,
+            expert_packed_master_muonh_fsdp_slab_consumer_step_factory,
+        ),
+        (
+            EXPERT_PACKED_MASTER_MUONH_FSDP_BULK_CONSUMER_BENCH,
+            expert_packed_master_muonh_fsdp_bulk_consumer_step_factory,
+        ),
+    ],
+)
+def test_packed_master_muonh_fsdp_consumer_lowers_with_packed_state_and_scalar_loss(bench_kind, step_factory):
+    config = BenchConfig(
+        layers=4,
+        ns4d_group_size=4,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.bfloat16)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+    )
+    mesh = AbstractMesh(
+        axis_sizes=(2, 2, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+    master_bank = synthetic_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        bench_kind,
+    )
+    grad_bank = synthetic_packed_grouped_expert_bank_specs(
+        mesh,
+        config,
+        bench_kind,
+    )
+    momentum_bank = synthetic_packed_grouped_expert_master_bank_specs(
+        mesh,
+        config,
+        bench_kind,
+    )
+    expert_inputs = expert_fsdp_layer_consumer_input_specs(mesh, config)
+    update_step = jax.jit(step_factory(mesh, config))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        next_master, next_momentum, loss = jax.eval_shape(
+            update_step, master_bank, grad_bank, momentum_bank, expert_inputs
+        )
+        lowered = update_step.trace(master_bank, grad_bank, momentum_bank, expert_inputs).lower(
+            lowering_platforms=(jax.devices()[0].platform if jax.devices() else jax.default_backend(),)
+        )
+
+    assert_packed_grouped_expert_bank_sharding(
+        next_master,
+        mesh,
+        config,
+        bench_kind,
+        "packed-master MuonH/FSDP next master",
+    )
+    assert_packed_grouped_expert_bank_sharding(
+        next_momentum,
+        mesh,
+        config,
+        bench_kind,
+        "packed-master MuonH/FSDP next momentum",
+    )
+    assert next_master["packed"]["w_gate_up"].dtype == jnp.float32
+    assert next_momentum["packed"]["w_down"].dtype == jnp.float32
+    assert loss.shape == ()
+    assert loss.dtype == jnp.float32
+    hlo = summarize_hlo(str(lowered.compiler_ir(dialect="stablehlo")))
+    assert hlo.dot_general > 0
+    assert hlo.all_reduce == 0
+    assert hlo.reduce_scatter == 0
+    assert hlo.all_to_all == 0
 
 
 def test_expert_fsdp_packed_bank_direction_apply_returns_fsdp_params():
@@ -4609,9 +7636,19 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
         "fsdp_params_to_packed_grouped_bank",
         "packed_grouped_updates_to_fsdp_apply",
     ]
-    assert [phase["expected_collective_type"] for phase in phases] == ["all_to_all"] * 3
+    assert [phase["expected_collective_type"] for phase in phases] == ["all_to_all", "all_to_all", "all_gather"]
     assert sum(phase["ideal_collective_count"] for phase in phases) == 6.0
     assert sum(phase["global_bytes"] for phase in phases) == 3 * estimates["global_update_bytes"]
+    assert [phase["global_bytes_per_ideal_collective"] for phase in phases] == [
+        estimates["global_update_bytes"] / 2,
+        estimates["global_update_bytes"] / 2,
+        estimates["global_update_bytes"] / 2,
+    ]
+    assert [phase["grouped_input_per_device_bytes_per_ideal_collective"] for phase in phases] == [
+        estimates["grouped_input_per_device_bytes"] / 2,
+        estimates["grouped_input_per_device_bytes"] / 2,
+        estimates["grouped_input_per_device_bytes"] / 2,
+    ]
 
     group_estimates = [asdict(estimate) for estimate in estimate_grouping(config)]
     result = {
@@ -4640,10 +7677,10 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
                 "two_batch_axis_dot_general": 18,
                 "custom_call": 0,
                 "gpu_gemm_custom_call": 0,
-                "all_gather": 0,
+                "all_gather": 2,
                 "all_reduce": 0,
                 "reduce_scatter": 0,
-                "all_to_all": 6,
+                "all_to_all": 4,
                 "collective_permute": 0,
             },
             "lower_seconds": 1.0,
@@ -4657,10 +7694,10 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
                     "two_batch_axis_dot_general": 0,
                     "custom_call": 90,
                     "gpu_gemm_custom_call": 41,
-                    "all_gather": 0,
+                    "all_gather": 2,
                     "all_reduce": 0,
                     "reduce_scatter": 0,
-                    "all_to_all": 6,
+                    "all_to_all": 4,
                     "collective_permute": 0,
                 },
                 "median_seconds": 2.0,
@@ -4685,29 +7722,67 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
     assert row["estimated_boundary_phase_count"] == 3
     assert row["estimated_boundary_phase_global_bytes"] == 3 * estimates["global_update_bytes"]
     assert row["estimated_boundary_phase_ideal_collective_count"] == 6.0
-    assert row["estimated_boundary_phase_all_gather_global_bytes"] is None
-    assert row["estimated_boundary_phase_all_gather_ideal_collective_count"] is None
-    assert row["estimated_boundary_phase_all_to_all_global_bytes"] == 3 * estimates["global_update_bytes"]
-    assert row["estimated_boundary_phase_all_to_all_global_gib"] == bytes_to_gib(3 * estimates["global_update_bytes"])
-    assert row["estimated_boundary_phase_all_to_all_ideal_collective_count"] == 6.0
+    assert row["estimated_boundary_phase_all_gather_global_bytes"] == estimates["global_update_bytes"]
+    assert row["estimated_boundary_phase_all_gather_ideal_collective_count"] == 2.0
+    assert (
+        row["estimated_boundary_phase_all_gather_global_bytes_per_ideal_collective"]
+        == estimates["global_update_bytes"] / 2
+    )
+    assert row["estimated_boundary_phase_all_gather_global_gib_per_ideal_collective"] == bytes_to_gib(
+        estimates["global_update_bytes"] / 2
+    )
+    assert (
+        row["estimated_boundary_phase_all_gather_grouped_input_per_device_bytes_per_ideal_collective"]
+        == estimates["grouped_input_per_device_bytes"] / 2
+    )
+    assert (
+        row["estimated_boundary_phase_all_gather_fsdp_output_per_device_bytes_per_ideal_collective"]
+        == estimates["fsdp_output_per_device_bytes"] / 2
+    )
+    assert (
+        row["estimated_boundary_phase_all_gather_max_global_bytes_per_phase_ideal_collective"]
+        == estimates["global_update_bytes"] / 2
+    )
+    assert row["estimated_boundary_phase_all_to_all_global_bytes"] == 2 * estimates["global_update_bytes"]
+    assert row["estimated_boundary_phase_all_to_all_global_gib"] == bytes_to_gib(2 * estimates["global_update_bytes"])
+    assert row["estimated_boundary_phase_all_to_all_ideal_collective_count"] == 4.0
+    assert (
+        row["estimated_boundary_phase_all_to_all_global_bytes_per_ideal_collective"]
+        == estimates["global_update_bytes"] / 2
+    )
+    assert row["estimated_boundary_phase_all_to_all_global_gib_per_ideal_collective"] == bytes_to_gib(
+        estimates["global_update_bytes"] / 2
+    )
+    assert (
+        row["estimated_boundary_phase_all_to_all_grouped_input_per_device_bytes_per_ideal_collective"]
+        == estimates["grouped_input_per_device_bytes"] / 2
+    )
+    assert (
+        row["estimated_boundary_phase_all_to_all_fsdp_output_per_device_bytes_per_ideal_collective"]
+        == estimates["fsdp_output_per_device_bytes"] / 2
+    )
+    assert (
+        row["estimated_boundary_phase_all_to_all_max_global_bytes_per_phase_ideal_collective"]
+        == estimates["global_update_bytes"] / 2
+    )
     assert row["estimated_boundary_phase_none_global_bytes"] is None
     assert row["estimated_boundary_phase_none_ideal_collective_count"] is None
     assert row["estimated_boundary_lowered_collective_to_phase_ideal_ratio"] == 1.0
     assert row["estimated_boundary_compiled_collective_to_phase_ideal_ratio"] == 1.0
-    assert row["estimated_boundary_lowered_all_to_all_collective_count"] == 6.0
-    assert row["estimated_boundary_lowered_all_to_all_ideal_collective_count"] == 6.0
+    assert row["estimated_boundary_lowered_all_to_all_collective_count"] == 4.0
+    assert row["estimated_boundary_lowered_all_to_all_ideal_collective_count"] == 4.0
     assert row["estimated_boundary_lowered_all_to_all_excess_collective_count"] == 0.0
     assert row["estimated_boundary_lowered_all_to_all_collective_to_ideal_ratio"] == 1.0
     assert row["estimated_boundary_lowered_all_to_all_matches_ideal_collective_count"] is True
-    assert row["estimated_boundary_lowered_all_gather_collective_count"] == 0.0
-    assert row["estimated_boundary_lowered_all_gather_ideal_collective_count"] == 0.0
+    assert row["estimated_boundary_lowered_all_gather_collective_count"] == 2.0
+    assert row["estimated_boundary_lowered_all_gather_ideal_collective_count"] == 2.0
     assert row["estimated_boundary_lowered_all_gather_excess_collective_count"] == 0.0
-    assert row["estimated_boundary_lowered_all_gather_collective_to_ideal_ratio"] is None
+    assert row["estimated_boundary_lowered_all_gather_collective_to_ideal_ratio"] == 1.0
     assert row["estimated_boundary_lowered_all_gather_matches_ideal_collective_count"] is True
     assert row["estimated_boundary_lowered_total_excess_collective_count"] == 0.0
     assert row["estimated_boundary_lowered_matches_ideal_collective_counts"] is True
-    assert row["estimated_boundary_compiled_all_to_all_collective_count"] == 6.0
-    assert row["estimated_boundary_compiled_all_to_all_ideal_collective_count"] == 6.0
+    assert row["estimated_boundary_compiled_all_to_all_collective_count"] == 4.0
+    assert row["estimated_boundary_compiled_all_to_all_ideal_collective_count"] == 4.0
     assert row["estimated_boundary_compiled_all_to_all_excess_collective_count"] == 0.0
     assert row["estimated_boundary_compiled_all_to_all_collective_to_ideal_ratio"] == 1.0
     assert row["estimated_boundary_compiled_all_to_all_matches_ideal_collective_count"] is True
@@ -4717,13 +7792,15 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
     assert row["mean_estimated_boundary_phase_global_gbps"] == 3 * estimates["global_update_bytes"] / 2.0 / 1e9
     assert row["median_estimated_boundary_phase_global_gbps"] == 3 * estimates["global_update_bytes"] / 2.0 / 1e9
     assert row["mean_estimated_boundary_phase_all_to_all_global_gbps"] == (
-        3 * estimates["global_update_bytes"] / 2.0 / 1e9
+        2 * estimates["global_update_bytes"] / 2.0 / 1e9
     )
     assert row["median_estimated_boundary_phase_all_to_all_global_gbps"] == (
-        3 * estimates["global_update_bytes"] / 2.0 / 1e9
+        2 * estimates["global_update_bytes"] / 2.0 / 1e9
     )
-    assert row["mean_estimated_boundary_phase_all_gather_global_gbps"] is None
-    assert row["median_estimated_boundary_phase_all_gather_global_gbps"] is None
+    assert row["mean_estimated_boundary_phase_all_gather_global_gbps"] == (estimates["global_update_bytes"] / 2.0 / 1e9)
+    assert row["median_estimated_boundary_phase_all_gather_global_gbps"] == (
+        estimates["global_update_bytes"] / 2.0 / 1e9
+    )
 
     direction_phases = estimated_boundary_phase_estimates(config, EXPERT_FSDP_PACKED_BANK_DIRECTION_APPLY_BENCH)
     assert [phase["name"] for phase in direction_phases] == [
@@ -4746,6 +7823,20 @@ def test_summary_row_reports_packed_bank_boundary_phase_estimates():
     assert [phase["name"] for phase in update_only_phases] == [
         "fsdp_grads_to_packed_grouped_bank",
         "fsdp_params_to_packed_grouped_bank",
+    ]
+    direct_muonh_phases = estimated_boundary_phase_estimates(
+        config,
+        EXPERT_FSDP_PACKED_BANK_MUONH_DIRECT_APPLY_BENCH,
+    )
+    assert [phase["name"] for phase in direct_muonh_phases] == [
+        "fsdp_grads_to_packed_grouped_bank",
+        "fsdp_params_to_packed_grouped_bank",
+        "packed_grouped_updates_to_fsdp_apply",
+    ]
+    assert [phase["expected_collective_type"] for phase in direct_muonh_phases] == [
+        "all_to_all",
+        "all_to_all",
+        "all_gather",
     ]
     n1_config = replace(config, data_axis=1, ns4d_group_axis="none", ns4d_group_size=1)
     n1_phases = estimated_boundary_phase_estimates(n1_config, EXPERT_FSDP_PACKED_BANK_MUONH_APPLY_BENCH)
@@ -4979,6 +8070,55 @@ def test_real_grouped_muonh_summary_row_reports_boundary_phase_estimates(
     )
 
 
+def test_real_grouped_muonh_packed_bank_compute_phase_estimates_use_bank_count():
+    config = BenchConfig(
+        layers=6,
+        ns4d_group_size=2,
+        ns4d_group_axis="replica_dcn,data",
+        hidden_dim=16,
+        intermediate_dim=8,
+        num_experts=8,
+        dtype=str(jnp.dtype(jnp.float32)),
+        backend_steps=1,
+        orthogonalization_layout="stack_batch_4d_sharded",
+        max_grouped_stack_size=8,
+        replica_axis=2,
+        data_axis=2,
+        expert_axis=2,
+        model_axis=1,
+        learning_rate=0.02,
+        expert_grouped_muonh_packed_entry=True,
+        expert_grouped_muonh_packed_bank_compute=True,
+    )
+    result = {
+        "metadata": {
+            "label": "real_expert_fsdp_grouped_muonh_optimizer_update_h3",
+            "bench_kind": REAL_EXPERT_FSDP_GROUPED_MUONH_OPTIMIZER_UPDATE_BENCH,
+            "config": asdict(config),
+            "devices": 16,
+            "ns4d_group_size": 2,
+            "ns4d_padded_group_size": 2,
+            "ns4d_input_sharding_spec": "P('expert', 'data', 'model')",
+            "ns4d_compute_sharding_spec": "P(('replica_dcn', 'data'), 'expert', None, None)",
+            "ns4d_result_sharding_spec": "P('expert', 'data', 'model')",
+            "ns4d_boundary_status": "real_expert_fsdp_grouped_muonh_optimizer_update",
+            "boundary_collectives_allowed": True,
+            "boundary_collectives_required_absent": False,
+            "grouped_expert_group_count": None,
+            "grouped_expert_packed_bank_count": 2,
+            "group_estimates": [asdict(estimate) for estimate in estimate_grouping(config)],
+        },
+    }
+
+    row = summary_row(result)
+
+    assert row["grouped_expert_group_count"] == 3
+    assert row["grouped_expert_packed_bank_count"] == 2
+    assert row["estimated_boundary_phase_all_gather_ideal_collective_count"] == 2.0
+    assert row["estimated_boundary_phase_all_to_all_ideal_collective_count"] == 4.0
+    assert row["estimated_boundary_phase_ideal_collective_count"] == 6.0
+
+
 def test_summary_row_flags_boundary_collective_type_excess():
     config = BenchConfig(
         layers=4,
@@ -5041,10 +8181,10 @@ def test_summary_row_flags_boundary_collective_type_excess():
 
     row = summary_row(result)
 
-    assert row["estimated_boundary_phase_all_to_all_ideal_collective_count"] == 6.0
-    assert row["estimated_boundary_phase_all_gather_ideal_collective_count"] is None
-    assert row["estimated_boundary_compiled_all_to_all_excess_collective_count"] == 0.0
-    assert row["estimated_boundary_compiled_all_gather_excess_collective_count"] == 3.0
+    assert row["estimated_boundary_phase_all_to_all_ideal_collective_count"] == 4.0
+    assert row["estimated_boundary_phase_all_gather_ideal_collective_count"] == 2.0
+    assert row["estimated_boundary_compiled_all_to_all_excess_collective_count"] == 2.0
+    assert row["estimated_boundary_compiled_all_gather_excess_collective_count"] == 1.0
     assert row["estimated_boundary_compiled_total_excess_collective_count"] == 3.0
     assert row["estimated_boundary_compiled_matches_ideal_collective_counts"] is False
 
