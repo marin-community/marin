@@ -160,7 +160,11 @@ def main() -> int:
 
     if on_tpu:
         num_stages, num_layers, hidden_dim, num_experts = 8, 8, 1024, 8
-        seq_len, vocab_size = 512, 8192
+        seq_len = 512
+        # Vocab is overridable to probe how the head ([D, V]) cost scales the
+        # zero-bubble-vs-FSDP gap: small vocab hides the head, a large (LLM-class)
+        # vocab makes it the dominant per-stage matmul.
+        vocab_size = int(os.environ.get("MOE_ZB_VOCAB", "8192"))
         num_microbatches, microbatch = 16, 4
         warmup, iters = 5, 30
     else:
