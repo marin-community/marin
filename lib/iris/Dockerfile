@@ -208,3 +208,48 @@ ARG IRIS_GIT_HASH=unknown
 ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
 
 WORKDIR /app
+
+
+# ── Stage: task-cuda-devel ───────────────────────────────────────────
+# CUDA toolkit task image for GPU jobs that compile CUDA extensions inside the
+# task pod, such as the experimental DeepEP FFI path. Keep this separate from
+# the ordinary task image so CPU and non-compiler GPU jobs do not pay the CUDA
+# devel image size.
+FROM nvidia/cuda:13.2.0-devel-ubuntu24.04 AS task-cuda-devel
+
+LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
+LABEL org.opencontainers.image.description="Iris task image with CUDA toolkit and nvcc"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    unzip \
+    ca-certificates \
+    openssh-client \
+    git \
+    build-essential \
+    lldb \
+    libibverbs1 \
+    ibverbs-providers \
+    python3.12 \
+    python3.12-venv \
+    python3-pip \
+    python-is-python3 \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/root/.cargo/bin:/usr/local/cuda/bin:$PATH"
+ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
+
+ENV UV_CACHE_DIR=/uv/cache
+ENV CARGO_TARGET_DIR=/root/.cargo/target
+ARG PYTHONDONTWRITEBYTECODE=1
+
+ARG IRIS_GIT_HASH=unknown
+ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
+
+WORKDIR /app

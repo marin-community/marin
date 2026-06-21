@@ -37,6 +37,8 @@ jobs:
             target: controller
           - image: iris-task
             target: task
+          - image: iris-task-cuda-devel
+            target: task-cuda-devel
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
