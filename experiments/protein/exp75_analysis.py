@@ -53,8 +53,7 @@ VAL_LOSS_KEY = "eval/contacts-v1-val/loss"
 RESULTS_DIR = Path(__file__).parent / "exp75_results"
 
 # 1.5B unmasked run on the same eval — the baseline exp75 is trying to beat. Lives in a
-# different entity/project and is still training, so we record its current step alongside
-# the value (the horizontal line is a moving target until that run finishes).
+# different entity/project; we snapshot its current val loss into baseline.json.
 BASELINE_RUN = "open-athena/MarinFold/protein-contacts-1_5b-3.5e-4-contacts-v1-unmasked-3b5cf2"
 
 # Tag keys lifted into their own CSV columns (see exp75_sweep.build_trial tags).
@@ -69,7 +68,7 @@ EPOCH_COLORS = {1: "#4C72B0", 2: "#DD8452", 4: "#55A868", 8: "#C44E52"}
 CLIP_HIGH = 3.18
 
 
-def _scatter_clipped(ax, sub, *, size, edgewidth, zorder, alpha=1.0, color, label=None):
+def _scatter_clipped(ax, sub, *, size, zorder, alpha=1.0, color, label=None):
     """Scatter ``sub`` (rows with completed_dt/val_loss), pinning val_loss > CLIP_HIGH to the
     clip line as up-triangles. The circle layer always carries ``label`` so the legend entry
     survives even when every point of a group is clipped."""
@@ -80,8 +79,7 @@ def _scatter_clipped(ax, sub, *, size, edgewidth, zorder, alpha=1.0, color, labe
         below["val_loss"],
         s=size,
         color=color,
-        edgecolor="white",
-        linewidth=edgewidth,
+        edgecolor="none",
         alpha=alpha,
         zorder=zorder,
         label=label,
@@ -93,8 +91,7 @@ def _scatter_clipped(ax, sub, *, size, edgewidth, zorder, alpha=1.0, color, labe
             s=size * 1.25,
             marker="^",
             color=color,
-            edgecolor="white",
-            linewidth=edgewidth,
+            edgecolor="none",
             alpha=alpha,
             zorder=zorder,
         )
@@ -159,7 +156,7 @@ def load_or_refresh(version: str, refresh: bool) -> pd.DataFrame:
 
 
 def fetch_baseline() -> dict:
-    """Current val loss + step of the 1.5B baseline run (still training, so a snapshot)."""
+    """Current val loss + run_progress of the 1.5B baseline run (a point-in-time snapshot)."""
     import wandb  # noqa: PLC0415 -- lazy: only --refresh touches W&B; plotting reads the JSON
 
     api = wandb.Api()
@@ -224,7 +221,6 @@ def plot(df: pd.DataFrame, version: str, baseline: dict | None = None) -> None:
                 ax,
                 sub,
                 size=95,
-                edgewidth=1.3,
                 zorder=3,
                 color=EPOCH_COLORS.get(int(ep), "#8c8c8c"),
                 label=f"{int(ep)} epoch" + ("" if ep == 1 else "s"),
@@ -235,17 +231,6 @@ def plot(df: pd.DataFrame, version: str, baseline: dict | None = None) -> None:
         ax.step(
             done["completed_dt"], run_min, where="post", color="#2b2b2b", lw=1.7, ls="--", zorder=2, label="best so far"
         )
-        prev = run_min.shift(1)
-        improved = done[prev.isna() | (run_min < prev - 1e-12)]
-        ax.scatter(
-            improved["completed_dt"],
-            improved["val_loss"],
-            s=210,
-            facecolor="none",
-            edgecolor="#b5172f",
-            linewidth=1.9,
-            zorder=4,
-        )
 
         best = done.loc[done["val_loss"].idxmin()]
         # Box parked in the right margin, left edge aligned with the legend (x=1.01 in axes
@@ -255,12 +240,12 @@ def plot(df: pd.DataFrame, version: str, baseline: dict | None = None) -> None:
             (best["completed_dt"], best["val_loss"]),
             xycoords="data",
             textcoords=ax.transAxes,
-            xytext=(1.01, 0.52),
+            xytext=(1.016, 0.28),
             ha="left",
             va="top",
             fontsize=10,
             bbox=dict(boxstyle="round,pad=0.35", fc="#fff7e0", ec="#b5172f", alpha=0.95),
-            arrowprops=dict(arrowstyle="->", color="#b5172f", lw=1.4),
+            arrowprops=dict(arrowstyle="-", color="#b5172f", lw=1.4),
         )
 
         loc = mdates.AutoDateLocator()
@@ -270,41 +255,36 @@ def plot(df: pd.DataFrame, version: str, baseline: dict | None = None) -> None:
     if not running.empty:
         for ep in sorted(running["epochs"].dropna().unique()):
             sub = running[running["epochs"] == ep]
-            _scatter_clipped(
-                ax, sub, size=70, edgewidth=0.8, zorder=2.2, alpha=0.22, color=EPOCH_COLORS.get(int(ep), "#8c8c8c")
-            )
+            _scatter_clipped(ax, sub, size=70, zorder=2.2, alpha=0.22, color=EPOCH_COLORS.get(int(ep), "#8c8c8c"))
         # Single grey proxy so the legend explains the faint points without per-epoch duplicates.
-        ax.scatter([], [], s=70, color="#8c8c8c", edgecolor="white", alpha=0.45, label=f"in progress ({len(running)})")
+        ax.scatter([], [], s=70, color="#8c8c8c", edgecolor="none", alpha=0.45, label=f"in progress ({len(running)})")
 
     # Clip line + a triangle proxy so the up-triangles read as "value is above the cap".
     if (df["val_loss"] > CLIP_HIGH).any():
         ax.axhline(CLIP_HIGH, color="#cccccc", lw=0.9, zorder=1)
-        ax.scatter([], [], marker="^", s=80, color="#8c8c8c", edgecolor="white", label=f"≥ {CLIP_HIGH:.2f} (clipped)")
+        ax.scatter([], [], marker="^", s=80, color="#8c8c8c", edgecolor="none", label=f"≥ {CLIP_HIGH:.2f} (clipped)")
         ax.set_ylim(top=CLIP_HIGH + 0.012)
 
     if baseline and baseline.get("val_loss") is not None:
         bl = baseline["val_loss"]
-        progress = baseline.get("run_progress")
-        if progress is None:
-            progress_note = baseline.get("state", "")
-        else:
-            tail = ", still running" if baseline.get("state") == "running" else ""
-            progress_note = f"{progress:.0%} progress{tail}"
         # Solid seaborn-deep purple: stands out yet sits in the same family as the epoch colors.
         ax.axhline(bl, color="#8172B3", lw=2.0, ls="-", zorder=1.5)
-        # Detail sits above the line, flush to the y-axis (x in axes coords, y in data coords).
         run_id = BASELINE_RUN.split("/")[-1]
-        # x in axes coords, y in data coords, lifted a few points off the line so text doesn't touch it.
-        label_tx = mpl.transforms.offset_copy(
-            mpl.transforms.blended_transform_factory(ax.transAxes, ax.transData), fig=fig, y=3, units="points"
-        )
+        # Label parked bottom-left, with a thin vertical leader up to the purple line. The
+        # leader is pinned far left (x in axes coords) to stay clear of the data points;
+        # y is in data coords so it meets the line exactly.
+        conn_tx = mpl.transforms.blended_transform_factory(ax.transAxes, ax.transData)
+        y_lo, y_hi = ax.get_ylim()
+        x_conn = 0.012
+        y_label_top = y_lo + 0.12 * (y_hi - y_lo)
+        ax.plot([x_conn, x_conn], [y_label_top, bl], transform=conn_tx, color="#8172B3", lw=1.1, zorder=1.4)
         ax.text(
-            0.006,
-            bl,
-            f"1.5B baseline  {bl:.4f}  ({progress_note})\n{run_id}",
-            transform=label_tx,
+            x_conn + 0.008,  # nudged right of the leader so the line doesn't clip the text
+            y_label_top,
+            f"1.5B baseline  {bl:.4f}\n{run_id}",
+            transform=conn_tx,
             ha="left",
-            va="bottom",
+            va="top",
             fontsize=9.5,
             color="#5e4b8b",
         )
@@ -312,8 +292,12 @@ def plot(df: pd.DataFrame, version: str, baseline: dict | None = None) -> None:
     ax.set_xlabel("run completion time (UTC)")
     ax.set_ylabel("final  eval/contacts-v1-val/loss")
     n_done = 0 if done.empty else len(done)
-    ax.set_title(f"exp75 {version} — final val loss by completion time   ({n_done} completed runs)")
-    ax.grid(True, which="major", axis="both", alpha=0.3)
+    ax.set_title(f"exp75 {version} — final val loss by completion time ({n_done} completed runs)")
+    ax.grid(False)
+    for spine in ax.spines.values():  # thin full border around the plot area
+        spine.set_visible(True)
+        spine.set_linewidth(0.8)
+        spine.set_edgecolor("#333333")
     # Placed just outside the axes (top-right) so it never overlaps the in-progress dots;
     # savefig(bbox_inches="tight") expands the export to include it.
     ax.legend(
