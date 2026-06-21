@@ -24,7 +24,15 @@ ConfigT = TypeVar("ConfigT")
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
-_FORWARDED_ENV_PREFIXES = ("XLA_FLAGS", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
+_FORWARDED_ENV_PREFIXES = (
+    "XLA_FLAGS",
+    "LIBTPU_INIT_ARGS",
+    "NCCL_",
+    "JAX_",
+    "DEEPEP_",
+    "MARIN_DEEPEP_",
+    "MAY_DEEPEP_",
+)
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 

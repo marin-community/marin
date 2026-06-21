@@ -22,6 +22,7 @@ PspecAxis: TypeAlias = str | tuple[str, ...] | None
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
+    "assigned_token",  # Expert-parallel plain-XLA assigned-token backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
@@ -30,7 +31,7 @@ MoeImplementation: TypeAlias = Literal[
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 MoERematMode: TypeAlias = Literal["none", "recompute_all", "save_moe"]
 _VALID_MOE_REMAT_MODES = get_args(MoERematMode)
-_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep")
+_EP_MOE_IMPLEMENTATIONS = ("ring", "assigned_token", "ragged_all_to_all", "deepep")
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (

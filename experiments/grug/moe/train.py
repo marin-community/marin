@@ -8,6 +8,7 @@ import functools
 import logging
 import os
 import statistics
+import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,6 +37,11 @@ from levanter.data.text import GrugLmExample, LmDataConfig
 from levanter.data.text.examples import grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.kernels.deepep.availability import (
+    DEEPEP_CUDA_ARCH_ENV,
+    DEEPEP_KNOWN_GOOD_COMMIT,
+    DEEPEP_SRC_ENV,
+)
 from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
@@ -57,6 +63,50 @@ logger = logging.getLogger(__name__)
 
 
 LiveParamMode = Literal["param", "compute_with_master"]
+
+_DEEPEP_SOURCE_URL = "https://github.com/deepseek-ai/DeepEP.git"
+
+
+def _env_bool(key: str, default: bool) -> bool:
+    raw = os.environ.get(key, "")
+    if not raw:
+        return default
+    normalized = raw.lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{key}={raw!r} must be a boolean")
+
+
+def _maybe_bootstrap_deepep_source(model: GrugModelConfig) -> None:
+    if model.moe_implementation != "deepep":
+        return
+
+    raw_root = os.environ.get(DEEPEP_SRC_ENV, "")
+    if raw_root and Path(raw_root).exists():
+        return
+
+    if not _env_bool("MAY_DEEPEP_BOOTSTRAP_SOURCE", False):
+        return
+
+    root = Path(raw_root or "/tmp/marin-deepep/DeepEP").expanduser()
+    revision = os.environ.get("MAY_DEEPEP_REVISION", DEEPEP_KNOWN_GOOD_COMMIT)
+    os.environ[DEEPEP_SRC_ENV] = str(root)
+    os.environ.setdefault(DEEPEP_CUDA_ARCH_ENV, "sm_90")
+    os.environ.setdefault("MARIN_DEEPEP_CACHE_DIR", "/tmp/marin-deepep-cache")
+
+    if (root / ".git").exists():
+        logger.info("Using existing DeepEP source checkout at %s", root)
+        return
+
+    logger.info("Cloning DeepEP source revision %s into %s", revision, root)
+    root.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "clone", "--filter=blob:none", _DEEPEP_SOURCE_URL, str(root)],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(root), "checkout", revision], check=True)
 
 
 @dataclass(frozen=True)
@@ -474,6 +524,7 @@ def _make_train_step(
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    _maybe_bootstrap_deepep_source(config.model)
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)

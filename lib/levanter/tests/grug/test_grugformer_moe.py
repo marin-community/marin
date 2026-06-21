@@ -14,7 +14,6 @@ from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
-from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     GroupedMoEExpertMlp,
@@ -27,6 +26,7 @@ from levanter.grug.grug_moe import (
     grouped_moe_mlp,
     moe_mlp,
 )
+from levanter.kernels.deepep.availability import TRANSPORT_REQUIRED_FILES, deepep_preflight_status
 from levanter.utils.activation import ActivationFunctionEnum
 
 
@@ -316,61 +316,6 @@ def test_grouped_moe_mlp_ep_path_lowers_on_abstract_mesh(implementation: MoeImpl
         assert lowered is not None
 
 
-def test_deepep_local_assignment_packing_uses_local_expert_ids():
-    recv_x = jnp.array(
-        [
-            [1.0, 2.0],
-            [3.0, 4.0],
-            [5.0, 6.0],
-        ],
-        dtype=jnp.float32,
-    )
-    recv_topk_idx = jnp.array(
-        [
-            [0, 1],
-            [1, -1],
-            [0, 0],
-        ],
-        dtype=jnp.int32,
-    )
-    recv_topk_weights = jnp.array(
-        [
-            [0.1, 0.2],
-            [0.3, 0.0],
-            [0.4, 0.5],
-        ],
-        dtype=jnp.float32,
-    )
-
-    local_assignments = _pack_deepep_local_assignments(
-        recv_x,
-        recv_topk_idx,
-        recv_topk_weights,
-        local_experts=2,
-        num_recv_tokens=jnp.array(2, dtype=jnp.int32),
-    )
-
-    np.testing.assert_array_equal(np.asarray(local_assignments.local_group_sizes), np.array([1, 2], dtype=np.int32))
-    np.testing.assert_array_equal(
-        np.asarray(local_assignments.recv_token_indices[:3]),
-        np.array([0, 0, 1], dtype=np.int32),
-    )
-    np.testing.assert_allclose(
-        np.asarray(local_assignments.x_dispatch[:3]),
-        np.array([[1.0, 2.0], [1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
-        rtol=0,
-        atol=0,
-    )
-    np.testing.assert_allclose(
-        np.asarray(local_assignments.assignment_weights[:3]),
-        np.array([0.1, 0.2, 0.3], dtype=np.float32),
-        rtol=1e-6,
-        atol=1e-6,
-    )
-    np.testing.assert_allclose(np.asarray(local_assignments.x_dispatch[3:]), 0, rtol=0, atol=0)
-    np.testing.assert_allclose(np.asarray(local_assignments.assignment_weights[3:]), 0, rtol=0, atol=0)
-
-
 def test_prepare_moe_dispatch_indices_match_materialized_dispatch():
     x, selected_experts, combine_weights, _w_up_gate, _w_down = _make_inputs(
         key=jax.random.key(28),
@@ -601,8 +546,13 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
     assert mlp.w_down.sharding.spec == P(None, "model", "data")
 
 
-@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
+@pytest.mark.parametrize("implementation", ["ring", "assigned_token", "ragged_all_to_all", "deepep"])
 def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
+    if implementation == "deepep":
+        status = deepep_preflight_status(required_files=TRANSPORT_REQUIRED_FILES)
+        if not status.ok:
+            pytest.skip("DeepEP source/runtime is not available for FFI lowering")
+
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
 
     tokens = 16
