@@ -289,6 +289,7 @@ EXTENDED_TASKS = {
     "regex_lite",
     "turtle_commands",
 }
+# PPL circuit prompts should stay as compact few-shot completions, not task-labeled instructions.
 BANNED_SCAFFOLD_STRINGS = (
     "Family:",
     "Task:",
