@@ -51,7 +51,7 @@ The tokenized dataset is a directory containing one file per shard of the datase
 ```python
 from levanter.data.text import TextLmDatasetFormat
 from marin.execution.executor import versioned
-from experiments.tokenization import default_tokenize
+from marin.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
 
 tinystories_tokenized = default_tokenize(
@@ -142,7 +142,7 @@ This function takes a tokenized dataset, a model configuration, and a training c
 
 ```python
 from experiments.llama import llama_nano
-from experiments.defaults import default_train
+from marin.defaults import default_train
 
 nano_tinystories_model = default_train(
     name="marin-nano-tinystories",

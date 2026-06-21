@@ -4,11 +4,10 @@
 import dataclasses
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
+from marin.defaults import default_download
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, hf_dataset_to_jsonl
-
-from experiments.tokenization import default_download
 
 """
 This script downloads HF datasets for various tasks and converts them to prompt/response JSONL format for log prob

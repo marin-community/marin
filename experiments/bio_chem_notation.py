@@ -29,6 +29,7 @@ from marin.datakit.download.bio_chem.rcsb_pdb import rcsb_pdb_step
 from marin.datakit.download.bio_chem.refseq import refseq_viral_step
 from marin.datakit.download.bio_chem.rnacentral import rnacentral_step
 from marin.datakit.download.bio_chem.uniprot import uniprot_sprot_step
+from marin.defaults import default_tokenize
 from marin.evaluation.perplexity_gap import raw_text_dataset
 from marin.execution.executor import executor_main
 from marin.execution.step_spec import StepSpec
@@ -37,7 +38,6 @@ from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
 
 from experiments.llama import llama3_tokenizer
-from experiments.tokenization import default_tokenize
 
 
 @dataclass(frozen=True)

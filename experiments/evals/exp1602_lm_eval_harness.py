@@ -7,9 +7,9 @@ Reference: https://github.com/EleutherAI/lm-evaluation-harness
 """
 
 from fray.cluster import ResourceConfig
+from marin.defaults.evals import default_eval
 from marin.execution.executor import executor_main
 
-from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import (
     ACTION_TASKS,
     BIAS_SAFETY_TASKS,

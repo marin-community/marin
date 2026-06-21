@@ -8,12 +8,12 @@ The goal was to see if there were any structural differences in the log probabil
 
 """
 
+from marin.defaults import default_validation_sets
 from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 
-from experiments.defaults import default_validation_sets
 from experiments.posttrain.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
 from experiments.tootsie.exp600_tootsie import llama3_tokenizer, llama_8b
 

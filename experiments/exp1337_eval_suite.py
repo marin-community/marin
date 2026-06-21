@@ -62,15 +62,15 @@ Launch via iris:
 """
 
 from fray.cluster import ResourceConfig
-from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import executor_main
-from marin.execution.types import ExecutorStep, InputName
-
-from experiments.evals.evals import (
+from marin.defaults import (
     evaluate_levanter_lm_evaluation_harness,
     evaluate_lm_evaluation_harness,
     extract_model_name_and_path,
 )
+from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep, InputName
+
 from experiments.models import (
     llama_2_7b,
     llama_2_13b,

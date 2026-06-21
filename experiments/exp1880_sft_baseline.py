@@ -16,12 +16,12 @@ import re
 
 from fray.cluster import ResourceConfig
 from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, ChatLmDatasetFormat
+from marin.defaults import SimpleSFTConfig, default_sft, default_tokenize
+from marin.defaults.evals import default_sft_eval
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep
 from marin.processing.tokenize import lm_mixture_data_config
 
-from experiments.defaults import default_sft
-from experiments.evals.evals import default_sft_eval
 from experiments.llama import llama_8b
 from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.instruction_datasets import (
@@ -30,8 +30,6 @@ from experiments.posttrain.instruction_datasets import (
     SMOLTALK2_SPLITS,
     get_instruction_dataset,
 )
-from experiments.simple_sft_config import SimpleSFTConfig
-from experiments.tokenization import default_tokenize
 
 SLUGIFY_PATTERN = re.compile(r"[^a-z0-9]+")
 

@@ -9,14 +9,15 @@ This guide shows the current evaluation entrypoints in Marin. For a high-level o
 
 ## Core APIs
 
-The canonical helpers live in `experiments/evals/evals.py`:
+The canonical helpers live in `marin/defaults/evals.py`:
 
 ```python
-from experiments.evals.evals import (
-    default_eval,
-    default_key_evals,
-    evaluate_lm_evaluation_harness,
-    evaluate_levanter_lm_evaluation_harness,
+
+from marin.defaults import (
+  default_eval,
+  default_key_evals,
+  evaluate_lm_evaluation_harness,
+  evaluate_levanter_lm_evaluation_harness,
 )
 ```
 
@@ -38,7 +39,7 @@ Use `default_eval` when you want the default multiple-choice evaluation suite:
 
 ```python
 from fray.cluster import ResourceConfig
-from experiments.evals.evals import default_eval
+from marin.defaults import default_eval
 from marin.execution.executor import executor_main
 
 model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
@@ -64,7 +65,7 @@ Use `default_key_evals` for the repository's current key-eval bundle:
 
 ```python
 from fray.cluster import ResourceConfig
-from experiments.evals.evals import default_key_evals
+from marin.defaults import default_key_evals
 from marin.execution.executor import executor_main
 
 model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
@@ -106,7 +107,7 @@ Use the lower-level helpers when you want a custom task list or evaluator:
 
 ```python
 from fray.cluster import ResourceConfig
-from experiments.evals.evals import evaluate_lm_evaluation_harness
+from marin.defaults import evaluate_lm_evaluation_harness
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import executor_main
 

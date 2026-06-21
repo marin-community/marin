@@ -17,11 +17,10 @@ from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
 from levanter.optim.clip_update_norm import ClipUpdateNormConfig
 from levanter.schedule import ScheduleStep
+from marin.defaults import default_base_eval, default_train
 from marin.execution import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
-from experiments.defaults import default_train
-from experiments.evals.evals import default_base_eval
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.midtraining_datasets import (
     megamath_token_counts,

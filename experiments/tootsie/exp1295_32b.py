@@ -17,12 +17,11 @@ from levanter.callbacks.watch import WatchConfig
 from levanter.optim import AdamConfig
 from levanter.optim.clip_update_norm import ClipUpdateNormConfig
 from levanter.schedule import ScheduleStep
+from marin.defaults import SimpleTrainConfig, default_train
 from marin.execution import executor_main
 
-from experiments.defaults import default_train
 from experiments.llama import llama_32b
 from experiments.pretraining_datasets import nemotron_mix
-from experiments.simple_train_config import SimpleTrainConfig
 
 ## 32b experiments
 

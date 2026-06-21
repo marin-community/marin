@@ -12,10 +12,10 @@ GitHub Issue: https://github.com/marin-community/marin/issues/1237
 
 import dataclasses
 
+from marin.defaults import default_sft
+from marin.defaults.evals import default_sft_eval
 from marin.execution.executor import executor_main
 
-from experiments.defaults import default_sft
-from experiments.evals.evals import default_sft_eval
 from experiments.exp808_sft_mixture import mixture_config as sft_mixture_llama3
 from experiments.llama import llama_8b
 from experiments.tootsie.exp600_tootsie import tootsie_8b_deeper_starling

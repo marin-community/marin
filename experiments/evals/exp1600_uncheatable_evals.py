@@ -17,66 +17,27 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from fray.cluster import ResourceConfig
-from marin.datakit.download.uncheatable_eval import make_uncheatable_eval_step
+from marin.defaults import (
+    ACTIVE_DATASETS,
+    ALL_UNCHEATABLE_EVAL_DATASETS,
+    uncheatable_eval,
+    uncheatable_eval_tokenized,
+)
 from marin.evaluation.perplexity_gap import raw_text_dataset
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, output_path_of
-from marin.processing.tokenize import TokenizeConfig
-from marin.processing.tokenize.data_configs import TokenizerStep, mixture_for_evaluation
+from marin.processing.tokenize.data_configs import mixture_for_evaluation
 
 from experiments.evals.hf_log_probs import default_hf_lm_log_probs
 from experiments.llama import llama3_tokenizer
 from experiments.models import ModelConfig as HFModelConfig
 from experiments.models import download_model_step
-from experiments.tokenization import default_tokenize
 
 logger = logging.getLogger(__name__)
 
 # Complete mapping of all available datasets
-ALL_UNCHEATABLE_EVAL_DATASETS = {
-    "wikipedia_arabic": "wikipedia_arabic_*.jsonl.gz",
-    "wikipedia_english": "wikipedia_english_*.jsonl.gz",
-    "wikipedia_french": "wikipedia_french_*.jsonl.gz",
-    "wikipedia_german": "wikipedia_german_*.jsonl.gz",
-    "wikipedia_japanese": "wikipedia_japanese_*.jsonl.gz",
-    "wikipedia_spanish": "wikipedia_spanish_*.jsonl.gz",
-    "github_python": "github_python_*.jsonl.gz",
-    "github_cpp": "github_cpp_*.jsonl.gz",
-    "bbc_news": "bbc_news_*.jsonl.gz",
-    "arxiv_physics": "arxiv_physics_*.jsonl.gz",
-    "arxiv_computer_science": "arxiv_computer_science_*.jsonl.gz",
-    "ao3_chinese": "ao3_chinese_*.jsonl.gz",
-    "ao3_english": "ao3_english_*.jsonl.gz",
-}
 
 # We only include English and code datasets for this experiment
-ACTIVE_DATASETS = [
-    "wikipedia_english",
-    "github_python",
-    "github_cpp",
-    "bbc_news",
-    "arxiv_physics",
-    "arxiv_computer_science",
-    "ao3_english",
-]
-
-uncheatable_eval = make_uncheatable_eval_step()
-
-
-def uncheatable_eval_tokenized(
-    *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, uncheatable_eval_raw: ExecutorStep = uncheatable_eval
-) -> dict[str, TokenizerStep]:
-    uncheatable_eval_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
-    for dataset in ACTIVE_DATASETS:
-        path_part = ALL_UNCHEATABLE_EVAL_DATASETS[dataset]
-        uncheatable_eval_steps[os.path.join("uncheatable_eval", dataset)] = default_tokenize(
-            name=os.path.join("uncheatable_eval", dataset),
-            dataset=uncheatable_eval_raw.cd(f"{path_part}"),
-            tokenizer=tokenizer,
-            is_validation=True,
-        )
-
-    return uncheatable_eval_steps
 
 
 def uncheatable_eval_raw_validation_sets(*, uncheatable_eval_raw: ExecutorStep = uncheatable_eval):

@@ -158,7 +158,7 @@ from levanter.data.text import ChatLmDatasetFormat
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 
-from experiments.defaults import default_tokenize, default_validation_sets
+from marin.defaults import default_tokenize, default_validation_sets
 from experiments.grug.base.launch import GrugBaseLaunchConfig, run_grug_base_trial
 from experiments.grug.base.model import GrugModelConfig
 from experiments.grug.base.train import GrugEvalConfig
