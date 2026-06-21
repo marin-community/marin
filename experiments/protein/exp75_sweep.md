@@ -455,7 +455,7 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   |---|---|---|---|
   | **0.05** | 2.962 | 2.949 | _running_ |
   | **0.1**  | 2.958 | **2.937** | 2.942 |
-  | **0.2**  | _running_ | 2.938 | _running_ |
+  | **0.2**  | 2.949 | 2.938 | _running_ |
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ — **6/9 in. Center
   `7e-4/0.1` FINISHED at 2.937 (~10:15Z) — now the best recorded cell** (edges 7e-4/0.2=2.938
