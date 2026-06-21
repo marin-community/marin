@@ -126,6 +126,13 @@ class GrugModelConfig:
     ``rms_norm()`` function. Only takes effect when c_kv is actually being
     normalized (i.e., ``mla_norm_compressed=True`` or ``qk_rope_head_dim`` is
     set). Adds ``(d_c,)`` learnable params per layer."""
+    xsa: bool = False
+    """When True, apply exclusive self-attention (XSA) after the attention call:
+    subtract the per-head component of ``attn_out`` that is parallel to ``v`` at
+    the same query position. ``z = y - (y·v / ‖v‖²) v``. In MLA, ``v`` is per-head
+    by construction (up-projected from c_kv via w_uv), so no align_kv_heads is
+    needed. Cost is 3 small per-head ops; absorption-compatible at decode via
+    a precomputed M[h] = w_uv[h].T @ w_uv[h] matrix."""
     pko_last_layer: bool = False
     """When True, apply Partial Key Offset (PKO) on the final transformer layer
     only. PKO shifts the no-rope K signal back by one position (with doc-start
@@ -411,6 +418,14 @@ class CausalSelfAttention(eqx.Module):
         # Half-RoPE's slice+concat can leave the propagator with ``model`` annotated on
         # head_dim rather than num_q_heads; force the canonical TP layout.
         attn_out = reshard(attn_out, P(_BATCH_AXES, None, "model", None))
+        # Exclusive Self Attention: subtract the per-head component of attn_out
+        # parallel to v at the same query position. MLA's v is already per-head,
+        # so no align_kv_heads call is needed.
+        if self.cfg.xsa:
+            v_aligned = reshard(v, P(_BATCH_AXES, None, "model", None))
+            dot = jnp.sum(attn_out * v_aligned, axis=-1, keepdims=True)
+            v_norm_sq = jnp.sum(v_aligned * v_aligned, axis=-1, keepdims=True)
+            attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * v_aligned
         # Per-head sigmoid attention gate (optional). Scalar per (token, head),
         # broadcast over head_dim. Zero-init -> gate=1.0 at step 0.
         if self.w_attn_gate is not None:
