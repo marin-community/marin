@@ -63,9 +63,10 @@ def reserved_pool_view(
     """Build the cross-variant preemption chip-ledger view from scaling groups.
 
     Only groups with ``reservation_chips > 0`` participate; they are bucketed by
-    ``quota_pool``. ``free_chips`` comes from :func:`reserved_pool_usage`, and the
-    per-variant and per-worker maps let the preemption pass resolve a preemptor's
-    variant and a victim's worker to their pool and chip footprint.
+    ``quota_pool``. ``free_chips`` is the reservation budget minus live and in-flight
+    slice consumption, and the per-variant and per-worker maps let the preemption
+    pass resolve a preemptor's variant and a victim's worker to their pool and chip
+    footprint.
     """
     groups = list(groups)
     free_chips = {pool_id: usage.free_chips for pool_id, usage in reserved_pool_usage(groups).items()}

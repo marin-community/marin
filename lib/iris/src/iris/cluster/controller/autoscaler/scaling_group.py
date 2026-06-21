@@ -437,7 +437,7 @@ class ScalingGroup:
 
         >0 marks the group as a member of a reserved pool whose chips are
         interchangeable across slice sizes; 0 means not part of a fungible
-        reservation. See :class:`ReservedPoolUsage`.
+        reservation.
         """
         return self._config.reservation_chips
 

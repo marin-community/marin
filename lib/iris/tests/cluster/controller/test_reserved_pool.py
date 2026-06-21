@@ -8,6 +8,7 @@ from iris.cluster.constraints import PlacementRequirements
 from iris.cluster.controller.autoscaler.models import UNRANKED_DEMAND_BAND, DemandEntry, RoutingDecision
 from iris.cluster.controller.autoscaler.planning import (
     _admit_in_band_order,
+    _PoolCandidate,
     build_group_scale_plan,
     build_scale_plan,
 )
@@ -197,34 +198,41 @@ class TestAdmitInBandOrder:
     def test_highest_band_claims_chips_first(self):
         # PROD v4-16 (8 chips) and BATCH v4-8 (4 chips) each want 2 slices; only 16
         # chips free. PROD takes all 16; BATCH gets nothing.
-        admitted = _admit_in_band_order([("v4-8", BATCH, 4, 2), ("v4-16", PRODUCTION, 8, 2)], free_chips=16)
+        admitted = _admit_in_band_order(
+            [_PoolCandidate("v4-8", BATCH, 4, 2), _PoolCandidate("v4-16", PRODUCTION, 8, 2)], free_chips=16
+        )
         assert admitted == {"v4-16": 2, "v4-8": 0}
 
     def test_head_of_line_holds_chips_for_unsatisfiable_high_band(self):
         # Only 4 chips free — too few for the PROD v4-16 slice (8). The 4 chips are
         # held for it, NOT handed to the BATCH v4-8 that would fit. This is the
         # re-grab the cap prevents while a preemptor accumulates chips over ticks.
-        admitted = _admit_in_band_order([("v4-16", PRODUCTION, 8, 1), ("v4-8", BATCH, 4, 1)], free_chips=4)
+        admitted = _admit_in_band_order(
+            [_PoolCandidate("v4-16", PRODUCTION, 8, 1), _PoolCandidate("v4-8", BATCH, 4, 1)], free_chips=4
+        )
         assert admitted == {"v4-16": 0, "v4-8": 0}
 
     def test_same_band_groups_share_remaining(self):
         # Equal priority: no head-of-line between them; admitted greedily in name
         # order until chips run out (a takes 2 of the 3 affordable, b takes 1).
-        admitted = _admit_in_band_order([("a", PRODUCTION, 4, 2), ("b", PRODUCTION, 4, 2)], free_chips=12)
+        admitted = _admit_in_band_order(
+            [_PoolCandidate("a", PRODUCTION, 4, 2), _PoolCandidate("b", PRODUCTION, 4, 2)], free_chips=12
+        )
         assert admitted == {"a": 2, "b": 1}
 
     def test_unranked_band_yields_to_ranked(self):
         admitted = _admit_in_band_order(
-            [("v4-8", UNRANKED_DEMAND_BAND, 4, 1), ("v4-16", PRODUCTION, 8, 1)], free_chips=8
+            [_PoolCandidate("v4-8", UNRANKED_DEMAND_BAND, 4, 1), _PoolCandidate("v4-16", PRODUCTION, 8, 1)],
+            free_chips=8,
         )
         assert admitted == {"v4-16": 1, "v4-8": 0}
 
     def test_demand_trimmed_to_budget(self):
-        assert _admit_in_band_order([("v4-8", BATCH, 4, 10)], free_chips=16) == {"v4-8": 4}
+        assert _admit_in_band_order([_PoolCandidate("v4-8", BATCH, 4, 10)], free_chips=16) == {"v4-8": 4}
 
     def test_over_committed_pool_admits_nothing(self):
         # Negative free chips (pool already over budget) launches nothing more.
-        assert _admit_in_band_order([("v4-8", BATCH, 4, 2)], free_chips=-4) == {"v4-8": 0}
+        assert _admit_in_band_order([_PoolCandidate("v4-8", BATCH, 4, 2)], free_chips=-4) == {"v4-8": 0}
 
 
 class TestFungiblePoolLaunchCap:

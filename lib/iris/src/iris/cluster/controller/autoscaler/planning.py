@@ -5,6 +5,7 @@
 
 from collections import defaultdict
 from dataclasses import dataclass, replace
+from typing import NamedTuple
 
 from rigging.timing import Timestamp
 
@@ -130,30 +131,40 @@ def build_group_scale_plan(group: ScalingGroup, required_slices: int, ts: Timest
     )
 
 
-def _admit_in_band_order(candidates: list[tuple[str, int, int, int]], free_chips: int) -> dict[str, int]:
+class _PoolCandidate(NamedTuple):
+    """A scaling group of one fungible pool that wants to launch slices this tick."""
+
+    name: str
+    band: int
+    chips_per_slice: int
+    want_slices: int
+
+
+def _admit_in_band_order(candidates: list[_PoolCandidate], free_chips: int) -> dict[str, int]:
     """Admit per-group new-slice counts under one fungible pool's chip budget.
 
-    ``candidates`` are ``(group_name, band, chips_per_slice, want_slices)`` for the
-    groups of one ``quota_pool`` that want to launch this tick (lower band = higher
-    priority). Returns ``group_name -> admitted_slices``. Groups are admitted highest
-    priority first; once a band cannot fully launch, every strictly-lower-priority
-    group on the pool is denied — so the remaining chips are held for the
-    high-priority slice (e.g. accumulating across a multi-tick drain) instead of
-    being re-grabbed by the lower-priority slice they were freed from. Same-band
-    groups share the remaining chips greedily.
+    ``candidates`` are the groups of one ``quota_pool`` that want to launch this tick
+    (lower band = higher priority). Returns ``group_name -> admitted_slices``. Groups
+    are admitted highest priority first; once a band cannot fully launch, every
+    strictly-lower-priority group on the pool is denied — so the remaining chips are
+    held for the high-priority slice (e.g. accumulating across a multi-tick drain)
+    instead of being re-grabbed by the lower-priority slice they were freed from.
+    Same-band groups share the remaining chips greedily.
     """
     remaining = max(0, free_chips)
     admitted: dict[str, int] = {}
     blocking_band: int | None = None
-    for name, band, chips, want in sorted(candidates, key=lambda candidate: (candidate[1], candidate[0])):
-        if blocking_band is not None and band > blocking_band:
-            admitted[name] = 0
+    for cand in sorted(candidates, key=lambda c: (c.band, c.name)):
+        if blocking_band is not None and cand.band > blocking_band:
+            admitted[cand.name] = 0
             continue
-        grant = want if chips <= 0 else min(want, remaining // chips)
-        admitted[name] = grant
-        remaining -= grant * chips
-        if grant < want and blocking_band is None:
-            blocking_band = band
+        grant = (
+            cand.want_slices if cand.chips_per_slice <= 0 else min(cand.want_slices, remaining // cand.chips_per_slice)
+        )
+        admitted[cand.name] = grant
+        remaining -= grant * cand.chips_per_slice
+        if grant < cand.want_slices and blocking_band is None:
+            blocking_band = cand.band
     return admitted
 
 
@@ -178,7 +189,7 @@ def _cap_fungible_pool_launches(
     if not usage:
         return group_plans
 
-    candidates_by_pool: dict[str, list[tuple[str, int, int, int]]] = defaultdict(list)
+    candidates_by_pool: dict[str, list[_PoolCandidate]] = defaultdict(list)
     for name, group in groups.items():
         plan = group_plans[name]
         if group.reservation_chips <= 0 or plan.slices_to_add <= 0:
@@ -188,7 +199,9 @@ def _cap_fungible_pool_launches(
             default=UNRANKED_DEMAND_BAND,
         )
         chips = get_tpu_topology(group.accelerator_variant).chip_count
-        candidates_by_pool[group.config.quota_pool].append((name, band, chips, plan.slices_to_add))
+        candidates_by_pool[group.config.quota_pool].append(
+            _PoolCandidate(name=name, band=band, chips_per_slice=chips, want_slices=plan.slices_to_add)
+        )
 
     if not candidates_by_pool:
         return group_plans
