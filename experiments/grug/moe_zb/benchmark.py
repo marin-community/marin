@@ -88,7 +88,7 @@ def _config(num_stages, num_layers, hidden_dim, num_experts, seq_len, vocab_size
     )
 
 
-def bench_zero_bubble(cfg, *, num_microbatches, microbatch, seq_len, lr, warmup, iters, seed) -> float:
+def bench_pipeline(cfg, schedule, *, num_microbatches, microbatch, seq_len, lr, warmup, iters, seed) -> float:
     mesh = make_stage_mesh(cfg.num_stages)
     params, model = build_pipeline_params(cfg, key=jax.random.PRNGKey(seed))
     optimizer = optax.adam(lr)
@@ -102,7 +102,7 @@ def bench_zero_bubble(cfg, *, num_microbatches, microbatch, seq_len, lr, warmup,
             mesh,
             num_microbatches=num_microbatches,
             hidden_shape=hidden_shape,
-            schedule=Schedule.ZERO_BUBBLE,
+            schedule=schedule,
         )
 
         def data_fn(i):
@@ -113,7 +113,7 @@ def bench_zero_bubble(cfg, *, num_microbatches, microbatch, seq_len, lr, warmup,
                 seq_len=seq_len,
                 vocab_size=cfg.vocab_size,
             )
-            return jax.reshard(tokens, NamedSharding(mesh, P()))
+            return jax.device_put(tokens, NamedSharding(mesh, P()))
 
         def step_fn(state, tokens):
             params, opt_state = state
@@ -187,8 +187,7 @@ def main() -> int:
         tokens_per_step,
     )
 
-    zb_s = bench_zero_bubble(
-        cfg,
+    bench_kwargs = dict(
         num_microbatches=num_microbatches,
         microbatch=microbatch,
         seq_len=seq_len,
@@ -197,12 +196,19 @@ def main() -> int:
         iters=iters,
         seed=0,
     )
+    # GPIPE is the head-hoisted backend (head scored once, distributed over the
+    # stage axis); ZERO_BUBBLE keeps the head inside the per-stage program.
+    gpipe_s = bench_pipeline(cfg, Schedule.GPIPE, **bench_kwargs)
+    zb_s = bench_pipeline(cfg, Schedule.ZERO_BUBBLE, **bench_kwargs)
     fsdp_s = bench_fsdp(cfg, global_batch=global_batch, seq_len=seq_len, lr=3e-3, warmup=warmup, iters=iters, seed=0)
 
+    gpipe_tps = tokens_per_step / gpipe_s
     zb_tps = tokens_per_step / zb_s
     fsdp_tps = tokens_per_step / fsdp_s
-    logger.info("ZeroBubble PP : %.1f ms/step  %.0f tokens/sec", zb_s * 1e3, zb_tps)
-    logger.info("FSDP          : %.1f ms/step  %.0f tokens/sec", fsdp_s * 1e3, fsdp_tps)
+    logger.info("GPipe (head-hoisted): %.1f ms/step  %.0f tokens/sec", gpipe_s * 1e3, gpipe_tps)
+    logger.info("ZeroBubble PP       : %.1f ms/step  %.0f tokens/sec", zb_s * 1e3, zb_tps)
+    logger.info("FSDP                : %.1f ms/step  %.0f tokens/sec", fsdp_s * 1e3, fsdp_tps)
+    logger.info("GPipe/FSDP throughput ratio:      %.2fx", gpipe_tps / fsdp_tps)
     logger.info("ZeroBubble/FSDP throughput ratio: %.2fx", zb_tps / fsdp_tps)
     return 0
 

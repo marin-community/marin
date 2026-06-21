@@ -87,7 +87,7 @@ def reference_loss(params, tokens, targets):
 def main():
     devices = np.array(jax.devices())
     assert devices.size == NUM_STAGES, f"need {NUM_STAGES} devices, got {devices.size}"
-    mesh = Mesh(devices.reshape(NUM_STAGES), (("stage",)), axis_types=(AxisType.Explicit,))
+    mesh = Mesh(devices.reshape(NUM_STAGES), (("stage",)), axis_types=(AxisType.Auto,))
 
     key = jax.random.PRNGKey(0)
     k_p, k_x, k_t = jax.random.split(key, 3)
@@ -98,14 +98,14 @@ def main():
     ref_loss, ref_grads = jax.value_and_grad(reference_loss)(params, tokens, targets)
 
     with jax.set_mesh(mesh):
-        stage_sharded = jax.reshard(params.stage, NamedSharding(mesh, P("stage")))
+        stage_sharded = jax.device_put(params.stage, NamedSharding(mesh, P("stage")))
         params_sharded = PipelineParams(
-            embed=jax.reshard(params.embed, NamedSharding(mesh, P())),
+            embed=jax.device_put(params.embed, NamedSharding(mesh, P())),
             stage=stage_sharded,
-            head=jax.reshard(params.head, NamedSharding(mesh, P())),
+            head=jax.device_put(params.head, NamedSharding(mesh, P())),
         )
-        tok_r = jax.reshard(tokens, NamedSharding(mesh, P()))
-        tgt_r = jax.reshard(targets, NamedSharding(mesh, P()))
+        tok_r = jax.device_put(tokens, NamedSharding(mesh, P()))
+        tgt_r = jax.device_put(targets, NamedSharding(mesh, P()))
         gpipe_loss, gpipe_grads = pipeline_value_and_grad(
             params_sharded,
             tok_r,

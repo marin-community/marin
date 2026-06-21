@@ -48,11 +48,17 @@ class Schedule(enum.Enum):
 
 
 def make_stage_mesh(num_stages: int) -> Mesh:
-    """Build a 1-D explicit mesh with ``num_stages`` devices on the stage axis."""
+    """Build a 1-D ``Auto`` mesh with ``num_stages`` devices on the stage axis.
+
+    The axis is ``Auto`` (not ``Explicit``) so that outside the pipeline
+    ``shard_map`` — where the single head is scored with its batch axis sharded
+    over ``stage`` — GSPMD auto-inserts the stage-reduce for the head gradient
+    (an ``Explicit`` axis would reject the sharded contraction as ambiguous).
+    """
     devices = np.array(jax.devices())
     if devices.size < num_stages:
         raise ValueError(f"need >= {num_stages} devices for {num_stages}-way PP, have {devices.size}")
-    return Mesh(devices[:num_stages].reshape(num_stages), (STAGE_AXIS,), axis_types=(AxisType.Explicit,))
+    return Mesh(devices[:num_stages].reshape(num_stages), (STAGE_AXIS,), axis_types=(AxisType.Auto,))
 
 
 def _value_and_grad_for(schedule: Schedule) -> Callable:
@@ -62,13 +68,17 @@ def _value_and_grad_for(schedule: Schedule) -> Callable:
 
 
 def shard_params(params: PipelineParams, mesh: Mesh) -> PipelineParams:
-    """Reshard params onto the mesh: embed/head replicated, stage over ``stage``."""
+    """Place params on the mesh: embed/head replicated, stage over ``stage``.
+
+    The stage axis is ``Auto``, so use ``device_put`` (``jax.reshard`` is for
+    ``Explicit`` axes only).
+    """
     repl = NamedSharding(mesh, P())
     stage_sh = NamedSharding(mesh, P(STAGE_AXIS))
     return PipelineParams(
-        embed=jax.tree_util.tree_map(lambda x: jax.reshard(x, repl), params.embed),
-        stage=jax.tree_util.tree_map(lambda x: jax.reshard(x, stage_sh), params.stage),
-        head=jax.tree_util.tree_map(lambda x: jax.reshard(x, repl), params.head),
+        embed=jax.tree_util.tree_map(lambda x: jax.device_put(x, repl), params.embed),
+        stage=jax.tree_util.tree_map(lambda x: jax.device_put(x, stage_sh), params.stage),
+        head=jax.tree_util.tree_map(lambda x: jax.device_put(x, repl), params.head),
     )
 
 
@@ -173,7 +183,7 @@ def run_synthetic_smoke(
                 seq_len=seq_len,
                 vocab_size=vocab_size,
             )
-            tokens = jax.reshard(tokens, NamedSharding(mesh, P()))
+            tokens = jax.device_put(tokens, NamedSharding(mesh, P()))
             params, opt_state, loss = train_step(params, opt_state, tokens)
             loss_f = float(loss)
             losses.append(loss_f)

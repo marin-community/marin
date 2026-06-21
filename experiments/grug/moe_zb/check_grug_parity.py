@@ -33,8 +33,10 @@ from experiments.grug.moe_zb.pipeline import (
     zero_bubble_value_and_grad,
 )
 
+# M*MICROBATCH must be divisible by NUM_STAGES so the hoisted head's batch axis
+# shards evenly over the stage axis (8 * 2 = 16, divisible by 8).
 NUM_STAGES = 8
-NUM_MICROBATCHES = 6
+NUM_MICROBATCHES = 8
 MICROBATCH = 2
 SEQ_LEN = 16
 
@@ -58,7 +60,7 @@ CONFIG = GrugMoEConfig(
 def main() -> int:
     devices = np.array(jax.devices())
     assert devices.size == NUM_STAGES, f"need {NUM_STAGES} devices, got {devices.size}"
-    mesh = Mesh(devices.reshape(NUM_STAGES), ("stage",), axis_types=(AxisType.Explicit,))
+    mesh = Mesh(devices.reshape(NUM_STAGES), ("stage",), axis_types=(AxisType.Auto,))
 
     key = jax.random.PRNGKey(0)
     k_params, k_tokens = jax.random.split(key, 2)
@@ -74,11 +76,11 @@ def main() -> int:
     hidden_shape = (MICROBATCH, SEQ_LEN, CONFIG.hidden_dim)
     with jax.set_mesh(mesh):
         params_sharded = PipelineParams(
-            embed=jax.reshard(params.embed, NamedSharding(mesh, P())),
-            stage=jax.reshard(params.stage, NamedSharding(mesh, P("stage"))),
-            head=jax.reshard(params.head, NamedSharding(mesh, P())),
+            embed=jax.device_put(params.embed, NamedSharding(mesh, P())),
+            stage=jax.device_put(params.stage, NamedSharding(mesh, P("stage"))),
+            head=jax.device_put(params.head, NamedSharding(mesh, P())),
         )
-        tokens_r = jax.reshard(tokens, NamedSharding(mesh, P()))
+        tokens_r = jax.device_put(tokens, NamedSharding(mesh, P()))
         gpipe_loss, gpipe_grads = pipeline_value_and_grad(
             params_sharded,
             tokens_r,

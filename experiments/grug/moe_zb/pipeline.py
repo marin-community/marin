@@ -47,6 +47,7 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 from jax import shard_map
+from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
 from experiments.grug.moe_zb.schedule import Op, backward_order
@@ -87,68 +88,64 @@ class PipelineParams:
     head: PyTree
 
 
-def _forward_pipeline_loss(
-    params: PipelineParams,
+def _pipeline_forward_hidden(
+    params_stage: PyTree,
+    params_embed: PyTree,
     tokens: jax.Array,
-    targets: jax.Array,
     *,
     model: PipelineModel,
     num_stages: int,
     num_microbatches: int,
     hidden_shape: tuple[int, ...],
     hidden_dtype: jnp.dtype,
-) -> jax.Array:
-    """Forward pipeline body, run *inside* a shard_map over the stage axis.
+) -> tuple[jax.Array, jax.Array]:
+    """Forward pipeline carrying only hidden states, run *inside* a shard_map.
 
-    Each device holds one stage. At timestep ``t`` stage ``s`` works on
-    microbatch ``m = t - s``: stage 0 embeds ``tokens[m]``, every other stage
-    consumes the activation ppermute delivered from stage ``s-1`` last step, and
-    stage ``N-1`` accumulates the loss for microbatch ``m``. Invalid (warmup /
-    cooldown) slots are masked to a zero loss contribution, so they produce zero
-    gradient and never corrupt a valid slot (whenever stage ``s`` has a valid
-    microbatch at ``t``, stage ``s-1`` produced exactly that microbatch at
-    ``t-1``).
+    Each device holds one stage. At timestep ``t`` stage ``s`` works on microbatch
+    ``m = t - s``: stage 0 embeds ``tokens[m]`` (a cheap gather, kept here +
+    masked), every other stage consumes the activation ``ppermute`` delivered from
+    stage ``s-1`` last step. The head is *not* here — instead the final stage's
+    valid output for microbatch ``m`` is written into ``h_final[m]`` so a single
+    head can score every microbatch once, outside the per-stage program.
+
+    Returns ``(h_final, aux_total)`` — ``h_final`` is ``[num_microbatches,
+    *hidden_shape]`` and ``aux_total`` the summed per-stage aux; both are reduced
+    onto every stage (``psum``) so the caller reads a stage-replicated value.
     """
     sid = jax.lax.axis_index(STAGE_AXIS)
     S = num_stages
     M = num_microbatches
     T = M + S - 1
     fwd_perm = [(i, i + 1) for i in range(S - 1)]
-
-    # shard_map shards (does not unbind) the mapped axis: with one stage per
-    # device the leading stage-shard axis is size 1. Drop it so stage_fn sees a
-    # clean [layers_per_stage, ...] pytree. Autodiff re-expands it for the grad.
-    stage_params = jax.tree_util.tree_map(lambda x: x[0], params.stage)
-
-    buf = jnp.zeros(hidden_shape, hidden_dtype)
-    total_loss = jnp.zeros((), jnp.float32)
-
     is_first = sid == 0
     is_last = sid == (S - 1)
 
+    stage_params = jax.tree_util.tree_map(lambda x: x[0], params_stage)
+
+    buf = jnp.zeros(hidden_shape, hidden_dtype)
+    aux_total = jnp.zeros((), jnp.float32)
+    h_final = jnp.zeros((M, *hidden_shape), hidden_dtype)
     for t in range(T):
         m = t - sid
         valid = (m >= 0) & (m < M)
         m_clip = jnp.clip(m, 0, M - 1)
-
         tok_m = jax.lax.dynamic_index_in_dim(tokens, m_clip, axis=0, keepdims=False)
-        embedded = model.embed_fn(params.embed, tok_m)
+        embedded = model.embed_fn(params_embed, tok_m)
         stage_in = jnp.where(is_first, embedded, buf)
-
         stage_out, stage_aux = model.stage_fn(stage_params, stage_in)
         # Per-stage aux (e.g. router z-loss) is local to a stage's own layers and
         # summed across stages — count it on every valid slot, not just the last.
-        total_loss = total_loss + jnp.where(valid, stage_aux, 0.0)
-
-        tgt_m = jax.lax.dynamic_index_in_dim(targets, m_clip, axis=0, keepdims=False)
-        loss_m = model.head_loss_fn(params.head, stage_out, tgt_m)
-        total_loss = total_loss + jnp.where(is_last & valid, loss_m, 0.0)
-
+        aux_total = aux_total + jnp.where(valid, stage_aux, 0.0)
+        # Last stage's valid output for microbatch m is its final hidden; add it
+        # into slot m (other stages / invalid slots add zero — each m written once).
+        contrib = jnp.where(is_last & valid, stage_out, jnp.zeros_like(stage_out))
+        prev = jax.lax.dynamic_index_in_dim(h_final, m_clip, axis=0, keepdims=False)
+        h_final = jax.lax.dynamic_update_index_in_dim(h_final, prev + contrib, m_clip, axis=0)
         buf = jax.lax.ppermute(stage_out, STAGE_AXIS, fwd_perm)
 
-    # Sum loss+aux across stages (head loss on last stage, aux on all), mean over microbatches.
-    total_loss = jax.lax.psum(total_loss, STAGE_AXIS) / M
-    return total_loss
+    h_final = jax.lax.psum(h_final, STAGE_AXIS)
+    aux_total = jax.lax.psum(aux_total, STAGE_AXIS)
+    return h_final, aux_total
 
 
 def pipeline_value_and_grad(
@@ -162,45 +159,64 @@ def pipeline_value_and_grad(
     hidden_shape: tuple[int, ...],
     hidden_dtype: jnp.dtype = jnp.float32,
 ) -> tuple[jax.Array, PipelineParams]:
-    """GPipe-schedule (loss, grads) via autodiff through the forward pipeline.
+    """(loss, grads) with the head hoisted out of the per-stage pipeline.
 
-    ``tokens``/``targets`` are ``[num_microbatches, microbatch, ...]`` and are
-    replicated across stages. ``hidden_shape`` is the per-microbatch activation
-    shape that flows between stages (``[microbatch, ...]``).
+    The pipeline ``shard_map`` carries only hidden states; the final-stage hidden
+    of every microbatch is emitted and a *single* head scores them with the batch
+    (``num_microbatches * microbatch``) axis sharded over ``stage``, so the
+    ``[D, V]`` projection runs once across all stages rather than redundantly on
+    each (a per-stage ``lax.cond`` does not help — XLA predicates it). Sequences
+    stay whole on their stage, so the head's next-token shift is intact.
+    ``jax.value_and_grad`` builds the GPipe-schedule backward and the head grad
+    reduces over ``stage``.
+
+    ``tokens``/``targets`` are ``[num_microbatches, microbatch, seq]``;
+    ``hidden_shape`` is the per-microbatch activation shape ``[microbatch, seq, D]``.
     """
     num_stages = mesh.shape[STAGE_AXIS]
+    M = num_microbatches
+    microbatch = hidden_shape[0]
+    batch = M * microbatch
+    if batch % num_stages != 0:
+        raise ValueError(
+            f"num_microbatches*microbatch={batch} must be divisible by num_stages={num_stages} "
+            "to shard the head's batch axis over the stage axis"
+        )
     stage_spec = P(STAGE_AXIS)
     repl = P()
-    in_specs = (
-        PipelineParams(embed=repl, stage=stage_spec, head=repl),
-        repl,
-        repl,
-    )
 
-    def value_and_grad_body(p, toks, tgts):
-        return jax.value_and_grad(
-            lambda pp: _forward_pipeline_loss(
-                pp,
-                toks,
-                tgts,
+    def full_loss(p: PipelineParams) -> jax.Array:
+        h_final, aux_total = shard_map(
+            lambda ps, pe, tk: _pipeline_forward_hidden(
+                ps,
+                pe,
+                tk,
                 model=model,
                 num_stages=num_stages,
-                num_microbatches=num_microbatches,
+                num_microbatches=M,
                 hidden_shape=hidden_shape,
                 hidden_dtype=hidden_dtype,
-            )
-        )(p)
+            ),
+            mesh=mesh,
+            in_specs=(stage_spec, repl, repl),
+            out_specs=(repl, repl),
+            axis_names=frozenset({STAGE_AXIS}),
+        )(p.stage, p.embed, tokens)
+        # Distribute the single head over the stage axis: collapse [M, microbatch]
+        # into one batch axis and shard it, so each stage scores 1/S of the (whole)
+        # sequences. The [D, V] projection and its grad then run once across stages.
+        # Generic over the per-microbatch hidden rank (dense [mb, H] or grug
+        # [mb, seq, D]) — only the leading batch axis is sharded.
+        h_rest = hidden_shape[1:]
+        h_batched = h_final.reshape(batch, *h_rest)
+        h_dist = jax.device_put(h_batched, NamedSharding(mesh, P(STAGE_AXIS, *([None] * len(h_rest)))))
+        tgt_rest = targets.shape[2:]
+        tgt_batched = targets.reshape(batch, *tgt_rest)
+        tgt_dist = jax.device_put(tgt_batched, NamedSharding(mesh, P(STAGE_AXIS, *([None] * len(tgt_rest)))))
+        head_loss = model.head_loss_fn(p.head, h_dist, tgt_dist)
+        return head_loss + aux_total / M
 
-    # Only `stage` is manual (ppermute runs over it). Any other mesh axes
-    # (data/expert for FSDP/EP) stay auto so GSPMD partitions the model inside.
-    loss, grads = shard_map(
-        value_and_grad_body,
-        mesh=mesh,
-        in_specs=in_specs,
-        out_specs=(repl, PipelineParams(embed=repl, stage=stage_spec, head=repl)),
-        axis_names=frozenset({STAGE_AXIS}),
-    )(params, tokens, targets)
-    return loss, grads
+    return jax.value_and_grad(full_loss)(params)
 
 
 def _tree_add(a: PyTree, b: PyTree) -> PyTree:
