@@ -126,6 +126,15 @@ class GrugModelConfig:
     ``rms_norm()`` function. Only takes effect when c_kv is actually being
     normalized (i.e., ``mla_norm_compressed=True`` or ``qk_rope_head_dim`` is
     set). Adds ``(d_c,)`` learnable params per layer."""
+    pko_last_layer: bool = False
+    """When True, apply Partial Key Offset (PKO) on the final transformer layer
+    only. PKO shifts the no-rope K signal back by one position (with doc-start
+    zero) so each query at position i attends to K's no-rope content from
+    position i-1 instead of i. For MLA the shift is applied directly to
+    ``c_kv`` before the no-rope K up-projection (path-agnostic for half-RoPE
+    vs additive rope; V's c_kv path is left unshifted). Absorption-compatible:
+    at decode you just index c_kv[j-1] instead of c_kv[j] for the no-rope dot
+    product."""
     attn_gate: bool = False
     """When True, add a per-head sigmoid attention gate
     ``gate = 2 * sigmoid(x @ w_attn_gate)`` with ``w_attn_gate: (D, NH)``,
@@ -291,6 +300,7 @@ class CausalSelfAttention(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        use_pko: bool = False,
     ) -> Float[Array, "B S D"]:
         hd = self.cfg.inferred_head_dim
         nh = self.cfg.num_heads
@@ -314,15 +324,39 @@ class CausalSelfAttention(eqx.Module):
             else:
                 c_kv = rms_norm(c_kv)
 
-        # K no-rope half (per head) up-projected from c_kv.
+        # Optional PKO: shift c_kv back by one position (with doc-start zero) for
+        # the K no-rope up-projection only. V is up-projected from the unshifted
+        # c_kv. Absorption-compatible: at decode you read c_kv[j-1] instead of
+        # c_kv[j] for the no-rope dot product; V still reads c_kv[j].
+        if use_pko:
+            c_kv_for_k = jnp.concatenate([c_kv[:, :1, :], c_kv[:, :-1, :]], axis=1)
+            segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+            if segment_ids is None:
+                is_doc_start_seq = jnp.zeros((seq_len,), dtype=bool).at[0].set(True)
+                is_doc_start = jnp.broadcast_to(is_doc_start_seq, c_kv_for_k.shape[:2])
+            else:
+                q_seg = segment_ids[0]
+                if q_seg.ndim == 1:
+                    is_doc_start_seq = jnp.concatenate([jnp.ones((1,), dtype=bool), q_seg[1:] != q_seg[:-1]])
+                    is_doc_start = jnp.broadcast_to(is_doc_start_seq, c_kv_for_k.shape[:2])
+                else:
+                    is_doc_start = jnp.concatenate(
+                        [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
+                        axis=1,
+                    )
+            c_kv_for_k = jnp.where(is_doc_start[..., None], jnp.zeros_like(c_kv_for_k), c_kv_for_k)
+        else:
+            c_kv_for_k = c_kv
+
+        # K no-rope half (per head) up-projected from c_kv (PKO-shifted if use_pko).
         # Legacy: per-head half. Additive: per-head HD.
         k_nr_per_head = hd if is_additive else hd // 2
         k_nr = rearrange(
-            jnp.einsum("bsc,cd->bsd", c_kv, self.w_uk_nr),
+            jnp.einsum("bsc,cd->bsd", c_kv_for_k, self.w_uk_nr),
             "... (n d) -> ... n d",
             d=k_nr_per_head,
         )
-        # V (per head) up-projected from c_kv.
+        # V (per head) up-projected from the unshifted c_kv.
         v = rearrange(
             jnp.einsum("bsc,cd->bsd", c_kv, self.w_uv),
             "... (n d) -> ... n d",
@@ -664,9 +698,10 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        use_pko: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask)
+        x = x + self.attn(attn_in, mask, use_pko=use_pko)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -729,8 +764,12 @@ class Transformer(eqx.Module):
             remat_policy = None
 
         moe_router_stats: list[dict[str, jax.Array]] = []
-        for block in self.blocks:
-            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, full_mask)
+        num_blocks = len(self.blocks)
+        for i, block in enumerate(self.blocks):
+            # PKO on the final layer only when cfg.pko_last_layer is set.
+            is_last = i == num_blocks - 1
+            use_pko = cfg.pko_last_layer and is_last
+            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, full_mask, use_pko)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
