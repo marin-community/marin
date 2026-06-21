@@ -103,6 +103,14 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.3
     router_z_loss_coef: float = 0.0
+    disable_pko: bool = False
+    """When True, the every-4th-and-last long layers skip the Partial Key Offset
+    (no K shift, no doc-start zero). Short layers are unaffected (PKO never ran
+    on them). Long layers still run full causal attention."""
+    disable_attn_gate: bool = False
+    """When True, drop the per-head sigmoid attention gate
+    ``2 * sigmoid(x @ w_attn_gate)`` and its (D, NH) weight matrix entirely from
+    the attention block."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
@@ -151,19 +159,20 @@ class CausalSelfAttention(eqx.Module):
     w_k: Float[Array, "D MH"]
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
-    attn_gate: Float[Array, "D N"]
+    attn_gate: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        attn_gate = None if cfg.disable_attn_gate else reshard(jnp.zeros((d, n)), P(None, None))
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
-            attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            attn_gate=attn_gate,
             cfg=cfg,
         )
 
@@ -232,9 +241,11 @@ class CausalSelfAttention(eqx.Module):
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
-        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
-        attn_out = gate * attn_out
+        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head. Skipped
+        # entirely when cfg.disable_attn_gate=True.
+        if self.attn_gate is not None:
+            gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+            attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
@@ -606,7 +617,7 @@ class Transformer(eqx.Module):
             is_last = i == num_blocks - 1
             is_long = i % 4 == 3 or is_last
             layer_mask = long_mask if is_long else short_mask
-            use_pko = is_long
+            use_pko = is_long and not cfg.disable_pko
             hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask, use_pko)
             moe_router_stats.append(router_stats)
 
