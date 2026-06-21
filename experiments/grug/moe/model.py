@@ -142,6 +142,11 @@ class GrugModelConfig:
     vs additive rope; V's c_kv path is left unshifted). Absorption-compatible:
     at decode you just index c_kv[j-1] instead of c_kv[j] for the no-rope dot
     product."""
+    pko_half_k_dims: bool = False
+    """When True (and PKO is being applied via ``pko_last_layer``), only half of
+    the per-head k_nope channels come from the PKO-shifted c_kv; the other half
+    come from the unshifted c_kv. Mimics the original PKO's "shift only half
+    head_dim" behavior. Costs one extra c_kv up-projection on the PKO layer."""
     attn_gate: bool = False
     """When True, add a per-head sigmoid attention gate
     ``gate = 2 * sigmoid(x @ w_attn_gate)`` with ``w_attn_gate: (D, NH)``,
@@ -336,33 +341,60 @@ class CausalSelfAttention(eqx.Module):
         # c_kv. Absorption-compatible: at decode you read c_kv[j-1] instead of
         # c_kv[j] for the no-rope dot product; V still reads c_kv[j].
         if use_pko:
-            c_kv_for_k = jnp.concatenate([c_kv[:, :1, :], c_kv[:, :-1, :]], axis=1)
+            c_kv_shifted = jnp.concatenate([c_kv[:, :1, :], c_kv[:, :-1, :]], axis=1)
             segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
             if segment_ids is None:
                 is_doc_start_seq = jnp.zeros((seq_len,), dtype=bool).at[0].set(True)
-                is_doc_start = jnp.broadcast_to(is_doc_start_seq, c_kv_for_k.shape[:2])
+                is_doc_start = jnp.broadcast_to(is_doc_start_seq, c_kv_shifted.shape[:2])
             else:
                 q_seg = segment_ids[0]
                 if q_seg.ndim == 1:
                     is_doc_start_seq = jnp.concatenate([jnp.ones((1,), dtype=bool), q_seg[1:] != q_seg[:-1]])
-                    is_doc_start = jnp.broadcast_to(is_doc_start_seq, c_kv_for_k.shape[:2])
+                    is_doc_start = jnp.broadcast_to(is_doc_start_seq, c_kv_shifted.shape[:2])
                 else:
                     is_doc_start = jnp.concatenate(
                         [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
                         axis=1,
                     )
-            c_kv_for_k = jnp.where(is_doc_start[..., None], jnp.zeros_like(c_kv_for_k), c_kv_for_k)
+            c_kv_shifted = jnp.where(is_doc_start[..., None], jnp.zeros_like(c_kv_shifted), c_kv_shifted)
         else:
-            c_kv_for_k = c_kv
+            c_kv_shifted = None
 
-        # K no-rope half (per head) up-projected from c_kv (PKO-shifted if use_pko).
-        # Legacy: per-head half. Additive: per-head HD.
+        # K no-rope half (per head) up-projected from c_kv. Legacy: per-head
+        # half. Additive: per-head HD.
         k_nr_per_head = hd if is_additive else hd // 2
-        k_nr = rearrange(
-            jnp.einsum("bsc,cd->bsd", c_kv_for_k, self.w_uk_nr),
-            "... (n d) -> ... n d",
-            d=k_nr_per_head,
-        )
+        if use_pko and self.cfg.pko_half_k_dims:
+            # Half-shift PKO: first half of per-head k_nope from shifted c_kv,
+            # second half from unshifted. Mimics original PKO's "shift only half
+            # the head_dim" behavior. Costs one extra c_kv up-projection.
+            k_nope_shifted = rearrange(
+                jnp.einsum("bsc,cd->bsd", c_kv_shifted, self.w_uk_nr),
+                "... (n d) -> ... n d",
+                d=k_nr_per_head,
+            )
+            k_nope_unshifted = rearrange(
+                jnp.einsum("bsc,cd->bsd", c_kv, self.w_uk_nr),
+                "... (n d) -> ... n d",
+                d=k_nr_per_head,
+            )
+            half = k_nr_per_head // 2
+            k_nr = jnp.concatenate(
+                [k_nope_shifted[..., :half], k_nope_unshifted[..., half:]],
+                axis=-1,
+            )
+        elif use_pko:
+            # Full shift: all per-head k_nope channels come from shifted c_kv.
+            k_nr = rearrange(
+                jnp.einsum("bsc,cd->bsd", c_kv_shifted, self.w_uk_nr),
+                "... (n d) -> ... n d",
+                d=k_nr_per_head,
+            )
+        else:
+            k_nr = rearrange(
+                jnp.einsum("bsc,cd->bsd", c_kv, self.w_uk_nr),
+                "... (n d) -> ... n d",
+                d=k_nr_per_head,
+            )
         # V (per head) up-projected from the unshifted c_kv.
         v = rearrange(
             jnp.einsum("bsc,cd->bsd", c_kv, self.w_uv),
