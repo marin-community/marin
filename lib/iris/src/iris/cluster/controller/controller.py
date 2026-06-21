@@ -781,7 +781,7 @@ class Controller:
             scan_timeouts=scan_timeouts,
         )
 
-        sched_result = self._schedule_phase(inputs) if run_schedule else None
+        sched_result = self._schedule_phase(inputs, autoscale_runs=run_autoscale) if run_schedule else None
 
         recon_result: ReconcileResult | None = None
         timeout_decisions: list[TerminalDecision] = []
@@ -881,12 +881,14 @@ class Controller:
             inputs.control = drained_control
         return inputs
 
-    def _schedule_phase(self, inputs: _TickInputs) -> ScheduleResult | None:
+    def _schedule_phase(self, inputs: _TickInputs, *, autoscale_runs: bool) -> ScheduleResult | None:
         """Run the pure scheduling decision over this tick's snapshot.
 
         The decision does no DB writes — the returned ``ScheduleResult`` is
         applied in the end-of-tick commit. Returns None when the schedule phase
-        did not run (no context built this tick).
+        did not run (no context built this tick). ``autoscale_runs`` flags whether
+        the autoscaler runs this tick, gating cross-variant reserved-pool
+        preemption to ticks that also apply its drain.
         """
         ctx = inputs.ctx
         if ctx is None:
@@ -902,7 +904,7 @@ class Controller:
                 context=ctx,
                 max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
                 trace=trace,
-                autoscale_runs=inputs.run_autoscale,
+                autoscale_runs=autoscale_runs,
             )
         )
 
