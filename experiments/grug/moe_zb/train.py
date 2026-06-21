@@ -182,9 +182,27 @@ def run_synthetic_smoke(
     return losses
 
 
+# A ~100M-class MoE config for the 8-chip v6e-8 hardware run (one stage per chip).
+_TPU_SMOKE_KWARGS = dict(
+    num_stages=8,
+    num_layers=8,
+    hidden_dim=512,
+    num_experts=8,
+    num_experts_per_token=2,
+    num_microbatches=8,
+    microbatch=8,
+    seq_len=256,
+    vocab_size=8192,
+    steps=50,
+)
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    losses = run_synthetic_smoke()
+    on_tpu = jax.devices()[0].platform == "tpu"
+    logger.info("running on %d %s device(s)", jax.device_count(), jax.devices()[0].platform)
+    kwargs = _TPU_SMOKE_KWARGS if on_tpu else {}
+    losses = run_synthetic_smoke(**kwargs)
     first, last = losses[0], losses[-1]
     logger.info("first loss %.4f -> last loss %.4f", first, last)
     # A correct pipeline learns the deterministic task: loss must drop sharply.
