@@ -112,7 +112,10 @@ def main() -> int:
     on_tpu = jax.devices()[0].platform == "tpu"
     logger.info("benchmarking on %d %s device(s)", jax.device_count(), jax.devices()[0].platform)
 
-    num_stages, num_data, num_expert = 4, 4, 2
+    # Keep 4-way PP and 2-way EP; spend the rest on FSDP so the layout adapts to
+    # whatever slice is available (v6e-32 -> 4x4x2, v6e-16 -> 4x2x2, v6e-8 -> 4x1x2).
+    num_stages, num_expert = 4, 2
+    num_data = max(1, jax.device_count() // (num_stages * num_expert))
     if on_tpu:
         num_layers, hidden_dim, num_experts = 8, 1024, 8
         seq_len, vocab_size = 512, 8192
