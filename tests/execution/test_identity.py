@@ -75,12 +75,6 @@ def test_getpass_fallback_when_iris_import_fails(monkeypatch):
     assert resolve_marin_user() == "power"
 
 
-def test_accepts_normal_names(monkeypatch):
-    _make_iris_unimportable(monkeypatch)
-    _force_getpass(monkeypatch, "wmoss")
-    assert resolve_marin_user() == "wmoss"
-
-
 @pytest.mark.parametrize("bad", ["../shared", "alice/extra", "al\x00ice", "\x07bell"])
 def test_sanitizer_rejects_invalid_names(bad):
     with pytest.raises(ValueError):

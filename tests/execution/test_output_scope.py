@@ -224,11 +224,12 @@ def test_user_relative_override_joined_against_user_home(tmp_path, monkeypatch):
     assert executor.output_paths[step] == os.path.join(prefix, "users", "alice", "custom/sub")
 
 
-def test_identity_resolution_is_lazy_for_shared_runs(tmp_path, monkeypatch):
-    """A SHARED-only run with a generic OS user never resolves identity.
+def test_shared_run_does_not_require_a_real_user(tmp_path, monkeypatch):
+    """A SHARED-only run plans fine even when the OS user is a generic identity.
 
-    A SHARED step never calls ``_resolved_user``, so ``_user`` stays ``None``
-    even though ``getpass.getuser()`` is a generic identity (``root``).
+    USER scope rejects a generic identity (``root``), but SHARED scope never
+    resolves the user, so planning must succeed and write the shared path. If
+    SHARED resolved identity, the generic name would raise here.
     """
     monkeypatch.delenv("MARIN_USER", raising=False)
     monkeypatch.setattr("getpass.getuser", lambda: "root")
@@ -237,7 +238,6 @@ def test_identity_resolution_is_lazy_for_shared_runs(tmp_path, monkeypatch):
 
     executor = _make_executor(prefix)
     executor.compute_version(step, is_pseudo_dep=False)
-    assert executor._user is None
     assert executor.output_paths[step].startswith(prefix + "/train-")
 
 
