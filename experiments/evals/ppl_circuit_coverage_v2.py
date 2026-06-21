@@ -29,14 +29,14 @@ from marin.execution.types import this_output_path
 
 EPIC_5005 = 5005
 PPL_CIRCUIT_COVERAGE_V2_ISSUE = 6070
-PPL_CIRCUIT_COVERAGE_V2_SOURCE = "generated_ppl_circuit_coverage_v2_compact_v1"
+PPL_CIRCUIT_COVERAGE_V2_SOURCE = "generated_ppl_circuit_coverage_v2_compact_v2"
 PPL_CIRCUIT_COVERAGE_V2_SEED = 6203
 EXAMPLES_PER_CONFIG = 1000
 LOCAL_SAMPLE_EXAMPLES_PER_CONFIG = 4
 RAW_SHARD_SUFFIX = ".jsonl.gz"
 PLAIN_TEXT_PRETRAINING_TARGET_TOKENS = 1_000_000_000
 PLAIN_TEXT_PRETRAINING_SHARDS = 256
-PLAIN_TEXT_PRETRAINING_SOURCE = "generated_ppl_circuit_coverage_v2_plain_text_compact_v1"
+PLAIN_TEXT_PRETRAINING_SOURCE = "generated_ppl_circuit_coverage_v2_plain_text_compact_v2"
 CHARS_PER_TOKEN_ESTIMATE = 4
 
 
@@ -1536,13 +1536,13 @@ def materialize_ppl_circuit_coverage_v2_plain_text_pretraining_from_config(
 
 
 ppl_circuit_coverage_v2_raw_executor = ExecutorStep(
-    name=os.path.join("raw", "evals", "ppl_circuit_coverage_v2_compact_v1"),
+    name=os.path.join("raw", "evals", "ppl_circuit_coverage_v2_compact_v2"),
     fn=materialize_ppl_circuit_coverage_v2_raw_from_config,
     config=PplCircuitCoverageV2RawConfig(output_path=this_output_path()),
 )
 
 ppl_circuit_coverage_v2_plain_text_pretraining_executor = ExecutorStep(
-    name=os.path.join("raw", "pretraining", "ppl_circuit_coverage_v2_plain_text_1b_compact_v1"),
+    name=os.path.join("raw", "pretraining", "ppl_circuit_coverage_v2_plain_text_1b_compact_v2"),
     fn=materialize_ppl_circuit_coverage_v2_plain_text_pretraining_from_config,
     config=PplCircuitCoverageV2PlainTextPretrainingConfig(output_path=this_output_path()),
     resources=ResourceConfig.with_cpu(cpu=16, ram="64g", disk="200g"),

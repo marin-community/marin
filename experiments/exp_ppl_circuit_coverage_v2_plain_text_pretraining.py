@@ -26,7 +26,7 @@ TOKENIZED = default_tokenize(
     tags=[
         f"source={PLAIN_TEXT_PRETRAINING_SOURCE}",
         "dataset_bundle=ppl_circuit_coverage_v2",
-        "template=compact_v1",
+        "template=compact_v2",
         f"target_tokens={PLAIN_TEXT_PRETRAINING_TARGET_TOKENS}",
         "issue:6070",
     ],
