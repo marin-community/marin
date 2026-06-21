@@ -546,10 +546,13 @@ def run_preemption_pass(
 class _VictimSlice:
     """A running slice eligible for cross-variant reserved-pool eviction."""
 
-    key: JobName
+    slice_id: str
     pool: str
     chips: int
-    band: int  # lowest priority (max band_sort_key) among the slice's members
+    # Highest priority (min band_sort_key) among the slice's members: evicting the
+    # slice tears down every task on it, so the most important one must still be
+    # strictly lower priority than the preemptor for the slice to be evictable.
+    band: int
     workers: frozenset[WorkerId]
     tasks: tuple[JobName, ...]
 
@@ -576,19 +579,33 @@ def run_reserved_pool_preemption(
     Returns ``(preemptor, victim)`` pairs (one per evicted member task) and the
     set of worker ids whose slices the autoscaler must drain.
     """
-    # Group running victims into slices on the reserved pools.
-    slices: dict[JobName, list[RunningTaskInfo]] = defaultdict(list)
+    # Group running victims by physical slice. The drain tears down a whole slice,
+    # so every task on it is evicted together and the slice's chips free once
+    # (grouping by task would double-count chips and silently kill a sibling task
+    # the pass never checked). A coscheduled job spanning multiple slices cannot be
+    # evicted safely here — preempting one slice's tasks cascades to siblings on
+    # the others, which the drain never reaps — so those slices are excluded.
+    slice_members: dict[str, list[RunningTaskInfo]] = defaultdict(list)
+    parent_slices: dict[JobName, set[str]] = defaultdict(set)
     for task in running_tasks_info:
         # Skip tasks the same-variant pass already claimed this tick: re-using one
         # would double-count its chips and emit a duplicate PREEMPT for it.
         if task.already_preempted:
             continue
+        slice_id = view.worker_slice.get(str(task.worker_id))
+        if slice_id is None:
+            continue
+        slice_members[slice_id].append(task)
         parent = task.task_id.parent
-        slice_key = parent if (task.is_coscheduled and parent is not None) else task.task_id
-        slices[slice_key].append(task)
+        if task.is_coscheduled and parent is not None:
+            parent_slices[parent].add(slice_id)
+
+    entangled = {sid for slice_ids in parent_slices.values() if len(slice_ids) > 1 for sid in slice_ids}
 
     victims_by_pool: dict[str, list[_VictimSlice]] = defaultdict(list)
-    for key, members in slices.items():
+    for slice_id, members in slice_members.items():
+        if slice_id in entangled:
+            continue
         variant = members[0].device_variant
         if variant is None or variant not in view.chips_per_variant:
             continue
@@ -598,17 +615,17 @@ def run_reserved_pool_preemption(
             continue
         victims_by_pool[pool].append(
             _VictimSlice(
-                key=key,
+                slice_id=slice_id,
                 pool=pool,
                 chips=view.chips_per_variant[variant],
-                band=max(m.band_sort_key for m in members),
+                band=min(m.band_sort_key for m in members),
                 workers=frozenset(m.worker_id for m in members),
                 tasks=tuple(m.task_id for m in members),
             )
         )
 
     free = dict(view.free_chips)
-    claimed: set[JobName] = set()
+    claimed: set[str] = set()
     pairs: list[tuple[JobName, JobName]] = []
     drain_workers: set[WorkerId] = set()
     handled_preemptor_jobs: set[JobName] = set()
@@ -637,7 +654,7 @@ def run_reserved_pool_preemption(
         deficit = need - free.get(pool, 0)
         # Lowest priority (highest band) first, then smallest, for minimal eviction.
         eligible = sorted(
-            (v for v in victims_by_pool.get(pool, []) if v.key not in claimed and v.band > candidate.band),
+            (v for v in victims_by_pool.get(pool, []) if v.slice_id not in claimed and v.band > candidate.band),
             key=lambda v: (-v.band, v.chips),
         )
         chosen: list[_VictimSlice] = []
@@ -653,7 +670,7 @@ def run_reserved_pool_preemption(
 
         handled_preemptor_jobs.add(preemptor_job)
         for victim in chosen:
-            claimed.add(victim.key)
+            claimed.add(victim.slice_id)
             drain_workers.update(victim.workers)
             pairs.extend((candidate.job_name, victim_task) for victim_task in victim.tasks)
         free[pool] = free.get(pool, 0) + freed - need

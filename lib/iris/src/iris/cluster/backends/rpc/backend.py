@@ -173,7 +173,12 @@ class RpcTaskBackend:
         no zone that can satisfy it).
         """
         zone_capabilities = self.autoscaler.zone_capabilities() if self.autoscaler is not None else None
-        reserved_view = self.autoscaler.reserved_pool_view() if self.autoscaler is not None else None
+        # The reserved view drives cross-variant preemption, whose victim drain is
+        # applied by the autoscaler. Build it only on ticks the autoscaler runs, so
+        # a schedule-only mini-tick never commits a preemption the drain can't reap.
+        reserved_view = (
+            self.autoscaler.reserved_pool_view() if self.autoscaler is not None and snapshot.autoscale_runs else None
+        )
         return run_scheduling_decision(self._scheduler, snapshot, zone_capabilities, reserved_view)
 
     def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:

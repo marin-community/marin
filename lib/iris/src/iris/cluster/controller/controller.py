@@ -902,6 +902,7 @@ class Controller:
                 context=ctx,
                 max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
                 trace=trace,
+                autoscale_runs=inputs.run_autoscale,
             )
         )
 

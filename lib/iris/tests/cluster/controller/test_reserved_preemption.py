@@ -61,10 +61,14 @@ def _running(task_wire: str, worker: str, variant: str, band: int, *, coschedule
     )
 
 
-def _view(free_chips: int, worker_pool: dict[str, str], *, cooldown: frozenset[str] = frozenset()) -> ReservedPoolView:
+def _view(free_chips: int, worker_slice: dict[str, str], *, cooldown: frozenset[str] = frozenset()) -> ReservedPoolView:
+    # worker_slice maps each victim worker to its physical slice id; coscheduled
+    # siblings share a slice so the drain reaps them together. Every worker here
+    # belongs to the single test pool.
     return ReservedPoolView(
         free_chips={POOL: free_chips},
-        worker_pool=worker_pool,
+        worker_pool={worker: POOL for worker in worker_slice},
+        worker_slice=dict(worker_slice),
         variant_pool={v: POOL for v in CHIPS_PER_VARIANT},
         chips_per_variant=dict(CHIPS_PER_VARIANT),
         pools_on_cooldown=cooldown,
@@ -79,7 +83,7 @@ def test_production_v4_8_preempts_interactive_v4_16_when_pool_full():
         _running("/bob/inter/0", "w0", "v4-16", INTERACTIVE, coscheduled=True),
         _running("/bob/inter/1", "w1", "v4-16", INTERACTIVE, coscheduled=True),
     ]
-    view = _view(free_chips=0, worker_pool={"w0": POOL, "w1": POOL})
+    view = _view(free_chips=0, worker_slice={"w0": "s-inter", "w1": "s-inter"})
 
     pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
 
@@ -91,7 +95,7 @@ def test_production_v4_8_preempts_interactive_v4_16_when_pool_full():
 def test_same_band_victim_not_evicted():
     preemptor = _candidate("/alice/prod/0", "v4-8", INTERACTIVE)
     victims = [_running("/bob/other/0", "w0", "v4-16", INTERACTIVE, coscheduled=True)]
-    view = _view(free_chips=0, worker_pool={"w0": POOL})
+    view = _view(free_chips=0, worker_slice={"w0": "s0"})
 
     pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
 
@@ -103,7 +107,7 @@ def test_higher_priority_victim_not_evicted():
     # Preemptor is interactive; the only victim is production (higher priority).
     preemptor = _candidate("/alice/inter/0", "v4-8", INTERACTIVE)
     victims = [_running("/bob/prod/0", "w0", "v4-8", PRODUCTION)]
-    view = _view(free_chips=0, worker_pool={"w0": POOL})
+    view = _view(free_chips=0, worker_slice={"w0": "s0"})
 
     pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
 
@@ -115,7 +119,7 @@ def test_no_preemption_when_pool_has_enough_free_chips():
     preemptor = _candidate("/alice/prod/0", "v4-8", PRODUCTION)
     victims = [_running("/bob/inter/0", "w0", "v4-8", INTERACTIVE)]
     # 4 free chips already satisfy the v4-8 (4-chip) preemptor.
-    view = _view(free_chips=4, worker_pool={"w0": POOL})
+    view = _view(free_chips=4, worker_slice={"w0": "s0"})
 
     pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
 
@@ -135,7 +139,7 @@ def test_minimal_eviction_picks_fewest_lowest_priority_slices():
         _running("/bob/inter/0", "wc", "v4-16", INTERACTIVE, coscheduled=True),
         _running("/bob/inter/1", "wd", "v4-16", INTERACTIVE, coscheduled=True),
     ]
-    view = _view(free_chips=0, worker_pool={"wa": POOL, "wb": POOL, "wc": POOL, "wd": POOL})
+    view = _view(free_chips=0, worker_slice={"wa": "sa", "wb": "sb", "wc": "s-inter", "wd": "s-inter"})
 
     pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
 
@@ -158,7 +162,7 @@ def test_no_extra_slices_evicted_beyond_deficit():
         _running("/bob/batch-big/0", "wbig0", "v4-16", BATCH, coscheduled=True),
         _running("/bob/batch-big/1", "wbig1", "v4-16", BATCH, coscheduled=True),
     ]
-    view = _view(free_chips=0, worker_pool={"wsmall": POOL, "wbig0": POOL, "wbig1": POOL})
+    view = _view(free_chips=0, worker_slice={"wsmall": "s-small", "wbig0": "s-big", "wbig1": "s-big"})
 
     pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
 
@@ -171,7 +175,7 @@ def test_nothing_evicted_when_total_evictable_below_deficit():
     # Need 16 chips, only one evictable v4-8 (4 chips). Never partial-evict.
     preemptor = _candidate("/alice/prod/0", "v4-32", PRODUCTION)
     victims = [_running("/bob/batch/0", "wa", "v4-8", BATCH)]
-    view = _view(free_chips=0, worker_pool={"wa": POOL})
+    view = _view(free_chips=0, worker_slice={"wa": "sa"})
 
     pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
 
@@ -182,7 +186,7 @@ def test_nothing_evicted_when_total_evictable_below_deficit():
 def test_cooldown_suppresses_preemption_for_that_pool():
     preemptor = _candidate("/alice/prod/0", "v4-8", PRODUCTION)
     victims = [_running("/bob/inter/0", "w0", "v4-8", INTERACTIVE)]
-    view = _view(free_chips=0, worker_pool={"w0": POOL}, cooldown=frozenset({POOL}))
+    view = _view(free_chips=0, worker_slice={"w0": "s0"}, cooldown=frozenset({POOL}))
 
     pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
 
@@ -195,7 +199,7 @@ def test_batch_preemptor_never_preempts():
     # A lower-priority victim does not exist below batch, but even a hypothetical
     # one must not be evicted because batch never preempts.
     victims = [_running("/bob/other/0", "w0", "v4-8", BATCH)]
-    view = _view(free_chips=0, worker_pool={"w0": POOL})
+    view = _view(free_chips=0, worker_slice={"w0": "s0"})
 
     pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
 
@@ -214,7 +218,7 @@ def test_two_preemptors_do_not_claim_the_same_victim():
         _running("/bob/inter/0", "w0", "v4-16", INTERACTIVE, coscheduled=True),
         _running("/bob/inter/1", "w1", "v4-16", INTERACTIVE, coscheduled=True),
     ]
-    view = _view(free_chips=0, worker_pool={"w0": POOL, "w1": POOL})
+    view = _view(free_chips=0, worker_slice={"w0": "s-inter", "w1": "s-inter"})
 
     pairs, drain = run_reserved_pool_preemption(preemptors, victims, view)
 
@@ -257,7 +261,7 @@ class TestOrderReservedDemandByBand:
         batch = _demand("/u/batch/0", "v4-8")
         cpu = _demand("/u/cpu/0", None)
         prod = _demand("/u/prod/0", "v4-16")
-        view = _view(free_chips=0, worker_pool={})
+        view = _view(free_chips=0, worker_slice={})
         bands = _band_map(**{"/u/batch/0": BATCH, "/u/cpu/0": INTERACTIVE, "/u/prod/0": PRODUCTION})
 
         ordered = _order_reserved_demand_by_band([batch, cpu, prod], view, bands)
@@ -268,7 +272,7 @@ class TestOrderReservedDemandByBand:
         # Only one reserved entry -> nothing to reorder; list returned as-is.
         cpu = _demand("/u/cpu/0", None)
         prod = _demand("/u/prod/0", "v4-8")
-        view = _view(free_chips=0, worker_pool={})
+        view = _view(free_chips=0, worker_slice={})
         bands = _band_map(**{"/u/cpu/0": INTERACTIVE, "/u/prod/0": PRODUCTION})
 
         ordered = _order_reserved_demand_by_band([cpu, prod], view, bands)
@@ -280,7 +284,7 @@ class TestOrderReservedDemandByBand:
         # reserved demand for the same pool.
         ranked = _demand("/u/prod/0", "v4-8")
         unranked = _demand("/u/mystery/0", "v4-16")
-        view = _view(free_chips=0, worker_pool={})
+        view = _view(free_chips=0, worker_slice={})
         bands = _band_map(**{"/u/prod/0": PRODUCTION})
 
         ordered = _order_reserved_demand_by_band([unranked, ranked], view, bands)
@@ -301,10 +305,47 @@ def test_coscheduled_preemptor_handled_once():
         _running("/bob/batch-c/0", "wc", "v4-16", BATCH, coscheduled=True),
         _running("/bob/batch-c/1", "wd", "v4-16", BATCH, coscheduled=True),
     ]
-    view = _view(free_chips=0, worker_pool={"wa": POOL, "wb": POOL, "wc": POOL, "wd": POOL})
+    view = _view(free_chips=0, worker_slice={"wa": "s-a", "wb": "s-a", "wc": "s-c", "wd": "s-c"})
 
     pairs, drain = run_reserved_pool_preemption(preemptors, victims, view)
 
     # Exactly one victim slice (8 chips) is evicted to satisfy the 8-chip job.
     assert drain == {WorkerId("wa"), WorkerId("wb")}
     assert {v.to_wire() for _, v in pairs} == {"/bob/batch-a/0", "/bob/batch-a/1"}
+
+
+def test_slice_with_a_higher_band_task_is_not_evicted():
+    # Two independent (non-coscheduled) tasks share one physical slice: a batch
+    # task and an interactive task. The drain tears down the whole slice, so the
+    # interactive task (equal priority to the preemptor) must protect it — the
+    # pass groups by slice, gates on the highest-priority member, and evicts
+    # nothing even though the batch task alone would be fair game.
+    preemptor = _candidate("/alice/prod/0", "v4-8", PRODUCTION)
+    victims = [
+        _running("/bob/batch/0", "w0", "v4-8", BATCH),
+        _running("/bob/inter/0", "w1", "v4-8", PRODUCTION),
+    ]
+    # Both workers belong to the same physical slice.
+    view = _view(free_chips=0, worker_slice={"w0": "shared", "w1": "shared"})
+
+    pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
+
+    assert pairs == []
+    assert drain == set()
+
+
+def test_slice_chips_counted_once_for_colocated_tasks():
+    # Two independent batch tasks on one physical slice free that slice's chips
+    # once (not once per task). A v4-16 preemptor needs 8 chips; the shared v4-16
+    # slice supplies exactly 8, and both colocated tasks are preempted together.
+    preemptor = _candidate("/alice/prod/0", "v4-16", PRODUCTION, coscheduled=True)
+    victims = [
+        _running("/bob/batch-x/0", "w0", "v4-16", BATCH),
+        _running("/bob/batch-y/0", "w1", "v4-16", BATCH),
+    ]
+    view = _view(free_chips=0, worker_slice={"w0": "shared", "w1": "shared"})
+
+    pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
+
+    assert drain == {WorkerId("w0"), WorkerId("w1")}
+    assert {v.to_wire() for _, v in pairs} == {"/bob/batch-x/0", "/bob/batch-y/0"}

@@ -1193,6 +1193,11 @@ class ScalingGroup:
         with self._slices_lock:
             return [wid for state in self._slices.values() for wid in state.worker_ids]
 
+    def worker_slice_ids(self) -> dict[str, str]:
+        """Map each tracked worker id to its slice id (any lifecycle)."""
+        with self._slices_lock:
+            return {wid: slice_id for slice_id, state in self._slices.items() for wid in state.worker_ids}
+
     def terminate_all(self) -> None:
         """Terminate all slices in this scale group.
 

@@ -127,6 +127,13 @@ class TestReservedPoolView:
             "b1-vm-0": "pool-a",
             "b1-vm-1": "pool-a",
         }
+        # ...and to its physical slice, so the preemption pass groups victims by
+        # slice. The two VMs of the v4-16 slice share one slice id.
+        assert view.worker_slice == {
+            "a1-vm-0": "a1",
+            "b1-vm-0": "b1",
+            "b1-vm-1": "b1",
+        }
         assert view.pools_on_cooldown == frozenset()
         assert not view.is_empty()
 

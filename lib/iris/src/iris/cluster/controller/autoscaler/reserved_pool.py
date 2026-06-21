@@ -38,6 +38,12 @@ class ReservedPoolView:
     """pool_id -> chips currently free against the reservation budget."""
     worker_pool: dict[str, str]
     """worker_id -> pool_id of the pool that worker's slice draws from."""
+    worker_slice: dict[str, str]
+    """worker_id -> slice_id of the physical slice that worker belongs to.
+
+    The preemption pass groups victims by slice (not by task) because the drain
+    tears down a whole physical slice: every task on a slice is evicted together,
+    and the slice's chips are freed once."""
     variant_pool: dict[str, str]
     """device_variant -> pool_id the variant's slices draw from."""
     chips_per_variant: dict[str, int]
@@ -66,6 +72,7 @@ def reserved_pool_view(
     variant_pool: dict[str, str] = {}
     chips_per_variant: dict[str, int] = {}
     worker_pool: dict[str, str] = {}
+    worker_slice: dict[str, str] = {}
     for group in groups:
         if group.reservation_chips <= 0:
             continue
@@ -75,9 +82,11 @@ def reserved_pool_view(
         chips_per_variant[variant] = get_tpu_topology(variant).chip_count
         for worker_id in group.all_worker_ids():
             worker_pool[worker_id] = pool_id
+        worker_slice.update(group.worker_slice_ids())
     return ReservedPoolView(
         free_chips=free_chips,
         worker_pool=worker_pool,
+        worker_slice=worker_slice,
         variant_pool=variant_pool,
         chips_per_variant=chips_per_variant,
         pools_on_cooldown=pools_on_cooldown,
