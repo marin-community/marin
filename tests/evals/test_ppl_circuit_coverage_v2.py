@@ -20,6 +20,7 @@ from experiments.evals.ppl_circuit_coverage_v2 import (
     iter_ppl_circuit_coverage_v2_records,
     ppl_circuit_coverage_v2_raw_validation_sets,
     render_ppl_circuit_coverage_v2_plain_text_document,
+    write_local_sample,
 )
 
 
@@ -288,6 +289,15 @@ EXTENDED_TASKS = {
     "regex_lite",
     "turtle_commands",
 }
+BANNED_SCAFFOLD_STRINGS = (
+    "Family:",
+    "Task:",
+    "Prompt:",
+    "worked examples",
+    "held-out query",
+    "answer:",
+    "Final answer:",
+)
 
 
 def test_registry_points_all_slices_at_target_only_supervised_fields():
@@ -326,16 +336,38 @@ def test_records_are_deterministic_target_only_completion_prompts():
 
 
 def test_string_slicing_prompt_keeps_demonstrations_complete_and_query_completion_only():
-    row = next(
-        row for row in iter_ppl_circuit_coverage_v2_records(examples_per_config=1) if row["task"] == "string_slicing"
-    )
+    slice_ = next(slice_ for slice_ in PPL_CIRCUIT_COVERAGE_V2_SLICES if slice_.task_name == "string_slicing")
+    rows = iter_ppl_circuit_coverage_v2_records(slices=(slice_,), examples_per_config=10, seed=2027)
 
-    lines = str(row["input"]).splitlines()
+    surfaces = set()
+    for row in rows:
+        metadata = row["metadata"]
+        assert isinstance(metadata, dict)
+        surfaces.add(metadata["surface"])
+        input_text = str(row["input"])
+        output = str(row["output"])
+        lines = input_text.splitlines()
 
-    assert lines[0] == "text = \"abcdef\"; text[1:5:2] -> 'bd'"
-    assert lines[1] == "text = \"marin\"; text[0:4:1] -> 'mari'"
-    assert lines[-1].endswith(" -> ")
-    assert str(row["output"]).strip() not in lines[-1]
+        assert output.endswith("\n")
+        assert output.count("\n") == 1
+        assert len(lines) == 3
+        assert lines[-1].endswith(" -> ")
+        assert output.strip() not in lines[-1]
+        assert not input_text.endswith(output)
+        assert output == f"{_expected_string_slicing(metadata)}\n"
+        assert all(scaffold not in input_text for scaffold in BANNED_SCAFFOLD_STRINGS)
+
+    assert len(surfaces) >= 5
+
+
+def test_string_slicing_surfaces_are_used_in_local_samples(tmp_path):
+    write_local_sample(tmp_path, examples_per_config=10, seed=2027)
+    sample_file = tmp_path / "string_byte_transforms_string_slicing.jsonl"
+    rows = (json.loads(line) for line in sample_file.read_text(encoding="utf-8").splitlines())
+
+    surfaces = {row["metadata"]["surface"] for row in rows}
+
+    assert len(surfaces) >= 5
 
 
 def test_generated_targets_match_independent_task_interpreters():

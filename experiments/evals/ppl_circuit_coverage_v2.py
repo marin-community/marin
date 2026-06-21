@@ -242,6 +242,30 @@ def _string_text(rng: random.Random) -> str:
     return "".join(parts)
 
 
+_STRING_SLICING_SURFACES = (
+    "python_statement",
+    "slice_function",
+    "inline_subscript",
+    "pipe_fields",
+    "json_fields",
+)
+
+
+def _string_slicing_query(surface: str, text: str, start: int, stop: int, step: int) -> str:
+    text_json = _json_string(text)
+    if surface == "python_statement":
+        return f"text = {text_json}; text[{start}:{stop}:{step}] ->"
+    if surface == "slice_function":
+        return f"slice({text_json}, {start}, {stop}, {step}) ->"
+    if surface == "inline_subscript":
+        return f"{text_json}[{start}:{stop}:{step}] ->"
+    if surface == "pipe_fields":
+        return f"{text_json} | {start} | {stop} | {step} ->"
+    if surface == "json_fields":
+        return f'{{"text":{text_json},"start":{start},"stop":{stop},"step":{step}}} ->'
+    raise ValueError(f"Unknown string_slicing surface: {surface}")
+
+
 def _generate_string_slicing(
     slice_: PplCircuitCoverageV2Slice, row_index: int, rng: random.Random, seed: int
 ) -> dict[str, object]:
@@ -250,14 +274,15 @@ def _generate_string_slicing(
     stop = rng.randint(start + 1, len(text))
     step = rng.choice((1, 2))
     result = text[start:stop:step]
+    surface = _STRING_SLICING_SURFACES[row_index % len(_STRING_SLICING_SURFACES)]
     input_text = (
         _few_shot_block(
             (
-                ('text = "abcdef"; text[1:5:2] ->', "'bd'"),
-                ('text = "marin"; text[0:4:1] ->', "'mari'"),
+                (_string_slicing_query(surface, "abcdef", 1, 5, 2), "'bd'"),
+                (_string_slicing_query(surface, "marin", 0, 4, 1), "'mari'"),
             )
         )
-        + f"text = {_json_string(text)}; text[{start}:{stop}:{step}] ->\n"
+        + f"{_string_slicing_query(surface, text, start, stop, step)}\n"
     )
     return _record(
         slice_=slice_,
@@ -265,7 +290,14 @@ def _generate_string_slicing(
         seed=seed,
         input_text=input_text,
         target=repr(result),
-        metadata={"operation": "slice", "text": text, "start": start, "stop": stop, "step": step},
+        metadata={
+            "operation": "slice",
+            "surface": surface,
+            "text": text,
+            "start": start,
+            "stop": stop,
+            "step": step,
+        },
     )
 
 
