@@ -49,6 +49,8 @@ import jax.numpy as jnp
 from jax import shard_map
 from jax.sharding import PartitionSpec as P
 
+from experiments.grug.moe_zb.schedule import Op, backward_order
+
 STAGE_AXIS = "stage"
 
 PyTree = Any
@@ -189,11 +191,14 @@ def pipeline_value_and_grad(
             )
         )(p)
 
+    # Only `stage` is manual (ppermute runs over it). Any other mesh axes
+    # (data/expert for FSDP/EP) stay auto so GSPMD partitions the model inside.
     loss, grads = shard_map(
         value_and_grad_body,
         mesh=mesh,
         in_specs=in_specs,
         out_specs=(repl, PipelineParams(embed=repl, stage=stage_spec, head=repl)),
+        axis_names=frozenset({STAGE_AXIS}),
     )(params, tokens, targets)
     return loss, grads
 
@@ -278,12 +283,18 @@ def _zero_bubble_body(
 
     total_loss = jax.lax.psum(total_loss, STAGE_AXIS) / M
 
-    # Backward B pass (reverse time): dx upstream + head/embed grads + store dy.
+    # Interleaved zero-bubble backward: one op stream per `schedule.backward_order`
+    # that runs B (input-grad, the ppermute critical path) in reverse time and
+    # slots each deferred W (weight-grad) into the next B's upstream-ppermute
+    # stall. B and W of the same timestep stay ordered (W(t) follows B(t)), so the
+    # gradients are identical to the two-phase backward; only execution interleaves.
     g_embed = jax.tree_util.tree_map(jnp.zeros_like, params.embed)
     g_head = jax.tree_util.tree_map(jnp.zeros_like, params.head)
+    g_stage = jax.tree_util.tree_map(jnp.zeros_like, stage_params)
     dy_by_t: list[Any] = [None] * T
     dbuf = jnp.zeros(hidden_shape, hidden_dtype)
-    for t in reversed(range(T)):
+
+    def b_op(t: int, dbuf: jax.Array) -> jax.Array:
         valid = valid_by_t[t]
         # Cotangent on this microbatch's loss is 1/M, but only the last stage's
         # valid slots actually feed the loss; everything else contributes nothing.
@@ -293,6 +304,7 @@ def _zero_bubble_body(
         g_head_t, dout = head_vjp(loss_w)
         dy = jnp.where(is_last, dout, dbuf)
         dy_by_t[t] = dy
+        nonlocal g_head, g_embed
         g_head = _tree_add(g_head, g_head_t)
 
         # Aux (stage-local) is part of the loss on every valid slot; cotangent 1/M.
@@ -302,14 +314,23 @@ def _zero_bubble_body(
         first_valid = is_first & valid
         (g_embed_t,) = embed_vjp_by_t[t](jnp.where(first_valid, dx, jnp.zeros_like(dx)))
         g_embed = _tree_add(g_embed, g_embed_t)
-        dbuf = jax.lax.ppermute(dx, STAGE_AXIS, bwd_perm)
+        # Pin the B->ppermute->B critical chain so XLA keeps it serialized and lets
+        # the dependency-free W ops fill the cross-stage stalls rather than collapsing
+        # the interleave back into two monolithic phases.
+        dx = jax.lax.optimization_barrier(dx)
+        return jax.lax.ppermute(dx, STAGE_AXIS, bwd_perm)
 
-    # Backward W pass (deferred): replay stored cotangents through vjp_p.
-    g_stage = jax.tree_util.tree_map(jnp.zeros_like, stage_params)
-    for t in range(T):
+    def w_op(t: int) -> None:
         aux_cot = jnp.where(valid_by_t[t], 1.0 / M, 0.0)
         (dp,) = vjp_p_by_t[t]((dy_by_t[t], aux_cot))
+        nonlocal g_stage
         g_stage = _tree_add(g_stage, dp)
+
+    for op, t in backward_order(S, M):
+        if op is Op.B:
+            dbuf = b_op(t, dbuf)
+        else:
+            w_op(t)
 
     # embed/head are replicated, so a vjp w.r.t. them inside shard_map already
     # psums the cotangent across the stage axis: g_embed/g_head come back correct
@@ -350,9 +371,12 @@ def zero_bubble_value_and_grad(
             hidden_dtype=hidden_dtype,
         )
 
+    # Only `stage` is manual (ppermute runs over it). Any other mesh axes
+    # (data/expert for FSDP/EP) stay auto so GSPMD partitions the model inside.
     return shard_map(
         body,
         mesh=mesh,
         in_specs=(PipelineParams(embed=repl, stage=stage_spec, head=repl), repl, repl),
         out_specs=(repl, PipelineParams(embed=repl, stage=stage_spec, head=repl)),
+        axis_names=frozenset({STAGE_AXIS}),
     )(params, tokens, targets)
