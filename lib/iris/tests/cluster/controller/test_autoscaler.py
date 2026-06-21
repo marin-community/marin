@@ -21,6 +21,7 @@ from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Aut
 from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.routing import route_demand
+from iris.cluster.controller.autoscaler.runtime import RESERVED_DRAIN_COOLDOWN
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
 from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
 from iris.cluster.types import WorkerStatus
@@ -557,6 +558,71 @@ class TestAutoscalerWorkerFailure:
         # Slice should be removed despite terminate() failure
         assert group.slice_count() == 0
         assert siblings == []
+
+
+class TestAutoscalerDrainSlices:
+    """Tests for intentional drain (cross-variant reserved-pool preemption)."""
+
+    def _fungible_group(self, slice_id: str = "slice-001", *, vms: int = 4) -> tuple[ScalingGroup, Autoscaler]:
+        """A fungible reserved group with one young READY multi-VM slice.
+
+        The slice's ``created_at`` is now so a PREEMPTED fate would be classified
+        short-lived and decay the detector — making the "drain does not feed
+        backoff" difference observable.
+        """
+        config = make_scale_group_config(name="v4-res-16", accelerator_variant="v4-16", max_slices=8)
+        config.reservation_chips = 1024
+        config.quota_pool = "v4-res/zone"
+        handle = make_mock_slice_handle(
+            slice_id,
+            all_ready=True,
+            vm_states=[vm_pb2.VM_STATE_READY] * vms,
+            created_at_ms=Timestamp.now().epoch_ms(),
+        )
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(config, platform)
+        group.reconcile()
+        autoscaler = make_autoscaler({group.name: group})
+        _mark_discovered_ready(group, [handle])
+        return group, autoscaler
+
+    def test_drain_tears_down_slice_and_returns_siblings(self):
+        group, autoscaler = self._fungible_group(vms=4)
+
+        siblings = autoscaler.drain_slices_for_workers(["slice-001-vm-0"])
+
+        assert group.slice_count() == 0
+        assert sorted(siblings) == [f"slice-001-vm-{i}" for i in range(1, 4)]
+
+    def test_drain_does_not_decay_detector_health(self):
+        """A drain must not feed the churn detector, unlike a worker-failure teardown."""
+        drained_group, drained_auto = self._fungible_group(vms=1)
+        failed_group, failed_auto = self._fungible_group(vms=1)
+
+        before = drained_group.health()
+        drained_auto.drain_slices_for_workers(["slice-001-vm-0"])
+        failed_auto.terminate_slices_for_workers(["slice-001-vm-0"])
+
+        # Drain leaves health untouched; the worker-failure path decays it
+        # (the young slice is classified short-lived PREEMPTED).
+        assert drained_group.health() == before
+        assert failed_group.health() < before
+
+    def test_drain_stamps_pool_cooldown(self):
+        # A 2-VM slice so the pool still reports a member after draining one VM's
+        # slice (the group config keeps the pool present in the view regardless).
+        _, autoscaler = self._fungible_group(vms=2)
+
+        assert autoscaler.reserved_pool_view().pools_on_cooldown == frozenset()
+
+        autoscaler.drain_slices_for_workers(["slice-001-vm-0"])
+
+        view = autoscaler.reserved_pool_view()
+        assert view.pools_on_cooldown == frozenset({"v4-res/zone"})
+
+        # The cooldown lapses once RESERVED_DRAIN_COOLDOWN has elapsed.
+        later = Timestamp.from_ms(Timestamp.now().epoch_ms() + RESERVED_DRAIN_COOLDOWN.to_ms() + 1000)
+        assert autoscaler.reserved_pool_view(later).pools_on_cooldown == frozenset()
 
 
 class TestAutoscalerIdleVerification:

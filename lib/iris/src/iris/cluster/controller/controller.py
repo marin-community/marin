@@ -801,13 +801,16 @@ class Controller:
         auto_result: AutoscaleResult | None = None
         if run_autoscale:
             residual_demand = sched_result.residual_demand if sched_result is not None else []
+            drain_workers = sched_result.reserved_drain_workers if sched_result is not None else []
             autoscale_snap = reads.ControlSnapshot(
                 worker_addresses={},
                 reconcile_rows=[],
                 timeout_rows=[],
                 worker_status_map=inputs.worker_status_map,
             )
-            auto_result = self._task_backend.autoscale(autoscale_snap, residual_demand, dead_workers=[])
+            auto_result = self._task_backend.autoscale(
+                autoscale_snap, residual_demand, dead_workers=[], drain_workers=drain_workers
+            )
 
         reconcile_effects = self._commit_tick(
             inputs=inputs,
@@ -817,6 +820,14 @@ class Controller:
             auto_result=auto_result,
             now=now,
         )
+
+        # A cross-variant reserved-pool drain deletes whole slices: their workers
+        # are gone, so fail them out of the registry now (closing the victims'
+        # dangling attempts) rather than waiting for ping timeouts to reap zombie
+        # rows that would otherwise stay schedulable. The victims' tasks were
+        # already moved to PENDING by the committed PREEMPT decisions above.
+        if auto_result is not None and auto_result.removed_workers:
+            self._remove_drained_workers(auto_result.removed_workers)
 
         # Post-commit, in-memory: cache scheduling diagnostics, request a prompt
         # dispatch follow-up for fresh assignments, fold health.
@@ -1258,6 +1269,27 @@ class Controller:
                 worker_attrs=self._worker_attrs,
             )
         self._health.forget_many(set(removed_ids) | set(auto.removed_workers))
+
+    def _remove_drained_workers(self, drained_workers: list[WorkerId]) -> None:
+        """Fail and forget workers whose slices a cross-variant drain deleted.
+
+        The autoscaler already detached + terminated their slices; this clears the
+        worker rows (and any still-active attempt) so the scheduler stops seeing
+        deleted VMs as live placement targets. The reason marks the drain so it is
+        distinguishable from a health failure in the audit log.
+        """
+        reason = "drained for cross-variant preemption"
+        for wid in drained_workers:
+            log_event("worker_failing", str(wid), trigger=reason)
+        ops.worker.fail(
+            self._db,
+            worker_ids=[str(wid) for wid in drained_workers],
+            reason=reason,
+            health=self._health,
+            endpoints=self._endpoints,
+            worker_attrs=self._worker_attrs,
+        )
+        self._health.forget_many(set(drained_workers))
 
     def _drain_pending_evictions(self) -> None:
         """Fail-and-teardown the workers queued by :meth:`request_worker_eviction`.

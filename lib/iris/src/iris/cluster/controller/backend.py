@@ -34,7 +34,7 @@ health events.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import ClassVar, Protocol
@@ -44,6 +44,7 @@ from finelog.types import LogWriterProtocol
 
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.autoscaler.reserved_pool import ReservedPoolView
 from iris.cluster.controller.autoscaler.state import AutoscalerState
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import ControlSnapshot
@@ -186,6 +187,9 @@ class ScheduleResult:
     """Per-job scheduling diagnostics surfaced on the dashboard."""
     scheduling_context: SchedulingContext | None = None
     """Post-placement scheduling context cached for dashboard diagnostics."""
+    reserved_drain_workers: list[WorkerId] = field(default_factory=list)
+    """Workers whose slices the autoscaler must drain to free reserved chips for
+    a cross-variant preemptor whose victim PREEMPT decisions this tick commits."""
 
 
 @dataclass(frozen=True)
@@ -232,6 +236,7 @@ def run_scheduling_decision(
     scheduler: Scheduler,
     snapshot: ScheduleInput,
     zone_capabilities: Mapping[str, frozenset[str]] | None = None,
+    reserved_view: ReservedPoolView | None = None,
 ) -> ScheduleResult:
     """Run the full Iris scheduling decision pipeline over a DB-less snapshot.
 
@@ -245,6 +250,11 @@ def run_scheduling_decision(
     is folded onto worker attributes as ``availability:<variant>`` markers so a hard
     availability constraint confines a job to a zone where the accelerator has
     actually been obtained.
+
+    ``reserved_view`` (the fungible reservation chip ledger) enables cross-variant
+    preemption: a higher-band preemptor on a full reserved pool evicts the minimal
+    set of lower-band victim slices (any variant) so the autoscaler can drain them
+    and reprovision. The drained workers ride back in ``reserved_drain_workers``.
     """
     ctx = snapshot.context
     trace = snapshot.trace
@@ -287,12 +297,28 @@ def run_scheduling_decision(
             unschedulable=list(gated.expired_tasks),
             scheduling_context=ctx,
             residual_demand=residual_demand,
+            reserved_drain_workers=[],
         )
 
     order = compute_scheduling_order(ctx, gated, trace=trace)
     all_assignments, context, placed_jobs = apply_placements(scheduler, order, gated, ctx, trace=trace)
-    preemptions = apply_preemptions(order, placed_jobs, all_assignments, ctx.running_for_preemption, context)
+    preemptions, drain_workers = apply_preemptions(
+        order, placed_jobs, all_assignments, ctx.running_for_preemption, context, reserved_view
+    )
     diagnostics = compute_diagnostics(scheduler, context, placed_jobs, all_assignments, order.ordered_task_ids)
+
+    # Order fungible reservation demand by band so the autoscaler provisions the
+    # higher-priority job's slice first. This must hold every tick, not only when a
+    # drain fires: the preemptor's replacement slice provisions a tick or more
+    # after the drain (the drain tick only tears slices down, and GCP frees
+    # reserved chips asynchronously), and by then the victim it evicted has
+    # re-queued into the same pool. route_demand consumes entries in order, so
+    # without this the just-evicted lower-band victim could re-grab the chips its
+    # own preemption freed before the preemptor that displaced it.
+    if reserved_view is not None and not reserved_view.is_empty():
+        ordered_residual = _order_reserved_demand_by_band(residual_demand, reserved_view, order.task_band_map)
+    else:
+        ordered_residual = residual_demand
 
     return ScheduleResult(
         assignments=[
@@ -310,8 +336,50 @@ def run_scheduling_decision(
         unschedulable=list(gated.expired_tasks),
         diagnostics=diagnostics,
         scheduling_context=context,
-        residual_demand=residual_demand,
+        residual_demand=ordered_residual,
+        reserved_drain_workers=sorted(drain_workers),
     )
+
+
+# Band assigned to a demand entry whose tasks are absent from the band map (none
+# pending under a resolved band); sorts after every real band so unranked demand
+# trails ranked demand for the same pool.
+_UNRANKED_BAND = 1 << 30
+
+
+def _order_reserved_demand_by_band(
+    residual_demand: list[DemandEntry],
+    reserved_view: ReservedPoolView,
+    task_band_map: Mapping[JobName, int],
+) -> list[DemandEntry]:
+    """Reorder fungible-reservation demand entries by band, lowest (highest priority) first.
+
+    On a fungible reservation the per-size groups share one chip budget, so the
+    autoscaler must provision a higher-band job's slice before a lower-band job's.
+    Only entries targeting a fungible pool are reordered, and each keeps one of the
+    slots those entries originally held — every non-reserved entry stays in place,
+    so demand routing for the rest of the fleet is untouched. The sort is stable,
+    preserving submission order within a band.
+    """
+    variant_pool = reserved_view.variant_pool
+
+    def targets_reserved_pool(entry: DemandEntry) -> bool:
+        variants = entry.normalized.device_variants
+        return bool(variants) and any(variant in variant_pool for variant in variants)
+
+    reserved_positions = [i for i, entry in enumerate(residual_demand) if targets_reserved_pool(entry)]
+    if len(reserved_positions) < 2:
+        return residual_demand
+
+    def entry_band(entry: DemandEntry) -> int:
+        bands = [band for tid in entry.task_ids if (band := task_band_map.get(JobName.from_wire(tid))) is not None]
+        return min(bands) if bands else _UNRANKED_BAND
+
+    reserved_entries = sorted((residual_demand[i] for i in reserved_positions), key=entry_band)
+    ordered = list(residual_demand)
+    for position, entry in zip(reserved_positions, reserved_entries, strict=True):
+        ordered[position] = entry
+    return ordered
 
 
 def apply_placements(
@@ -389,15 +457,19 @@ class TaskBackend(Protocol):
         snapshot: ControlSnapshot,
         residual_demand: list[DemandEntry],
         dead_workers: list[WorkerId],
+        drain_workers: Sequence[WorkerId] = (),
     ) -> AutoscaleResult:
-        """Provision capacity for unmet demand, OR tear down dead workers.
+        """Provision capacity for unmet demand, OR tear down dead/drained workers.
 
         Bounded I/O. With ``dead_workers`` set, the backend terminates those
         workers' slices AND their healthy siblings and returns the full set as
-        ``removed_workers`` (no provisioning this call). Otherwise it runs one
-        scaling cycle against ``residual_demand``. Either way it returns its
-        tracked ``autoscaler_state`` for the controller to persist. Backends that
-        manage their own capacity (k8s) return an empty result.
+        ``removed_workers`` (no provisioning this call). With only
+        ``drain_workers`` set (cross-variant reserved-pool preemption) it tears
+        them down through an intentional-drain path that does not feed the churn
+        detector. Otherwise it runs one scaling cycle against ``residual_demand``.
+        Either way it returns its tracked ``autoscaler_state`` for the controller
+        to persist. Backends that manage their own capacity (k8s) return an empty
+        result.
         """
         ...
 

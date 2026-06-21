@@ -626,6 +626,50 @@ def _merge_zones_into_platform_gcp(data: dict, zones: set[str]) -> None:
         platform_gcp["zones"] = sorted(existing)
 
 
+def _validate_fungible_reservation(
+    pool_name: str,
+    pool: dict,
+    base_resources: dict,
+    family: str,
+    sorted_sizes: list,
+) -> int:
+    """Validate a pool's optional fungible-reservation budget; return chips (0 if absent).
+
+    Fungibility means the pool's TPU chips are interchangeable across its slice
+    sizes up to a shared budget. It is only sound on a true reservation — where
+    freeing a slice guarantees the chips can be re-provisioned at a different size
+    — so it is rejected on preemptible/on-demand capacity. The budget is in
+    physical chips (topology ``chip_count``), not the GCP ``vN-SIZE`` suffix.
+    """
+    fungible = bool(pool.get("fungible_reservation", False))
+    reservation_chips = pool.get("reservation_chips", 0)
+    if not fungible and not reservation_chips:
+        return 0
+    if not fungible:
+        raise ValueError(f"tpu_pools.{pool_name}: reservation_chips set without 'fungible_reservation: true'")
+    capacity_key = str(base_resources.get("capacity_type", "")).strip().lower().replace("-", "_")
+    if _CAPACITY_TYPE_MAP.get(capacity_key) != "CAPACITY_TYPE_RESERVED":
+        raise ValueError(
+            f"tpu_pools.{pool_name}: fungible_reservation requires resources.capacity_type=reserved, "
+            f"got {base_resources.get('capacity_type')!r}"
+        )
+    if not isinstance(reservation_chips, int) or reservation_chips <= 0:
+        raise ValueError(
+            f"tpu_pools.{pool_name}: fungible_reservation requires a positive integer reservation_chips, "
+            f"got {reservation_chips!r}"
+        )
+    # Every slice size must individually fit within the reservation, else a job of
+    # that size could never be placed in the pool.
+    largest = tpu_variant_name(family, int(sorted_sizes[-1]))
+    largest_chips = get_tpu_topology(largest).chip_count
+    if largest_chips > reservation_chips:
+        raise ValueError(
+            f"tpu_pools.{pool_name}: reservation_chips={reservation_chips} is smaller than the largest slice "
+            f"'{largest}' ({largest_chips} chips); it could never be placed"
+        )
+    return reservation_chips
+
+
 def _expand_tpu_pools(data: dict) -> None:
     """Expand ``tpu_pools`` into per-(size, zone) scale groups.
 
@@ -677,6 +721,11 @@ def _expand_tpu_pools(data: dict) -> None:
             except ValueError:
                 raise ValueError(f"tpu_pools.{pool_name}.sizes.{size}: unknown TPU topology '{variant}'") from None
 
+        # Fungible reservation: chips are interchangeable across this pool's slice
+        # sizes up to a shared budget. Only legal on reserved capacity; the budget
+        # is in physical chips (topology chip_count), not the GCP size suffix.
+        reservation_chips = _validate_fungible_reservation(pool_name, pool, base_resources, family, sorted_sizes)
+
         for tier_index, size in enumerate(sorted_sizes):
             size_int = int(size)
             size_overrides = sizes[size] or {}
@@ -713,6 +762,8 @@ def _expand_tpu_pools(data: dict) -> None:
                     "max_slices": size_overrides["max_slices"],
                     "slice_template": st,
                 }
+                if reservation_chips:
+                    sg["reservation_chips"] = reservation_chips
 
                 scale_groups[sg_name] = sg
 

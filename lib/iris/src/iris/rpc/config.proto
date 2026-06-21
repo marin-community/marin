@@ -250,6 +250,14 @@ message ScaleGroupConfig {
   // skipped during routing. Groups at the same tier are independent.
   // 0 means unset (not part of any tier ordering).
   int32 allocation_tier = 81 [features.field_presence = EXPLICIT];
+
+  // Fungible-reservation chip budget shared across all groups in this group's
+  // quota_pool. >0 marks the group as a member of a reserved pool whose TPU
+  // chips are interchangeable across slice sizes up to this many physical chips
+  // (see tpu_topology chip_count, NOT the GCP size suffix). Every member of one
+  // quota_pool carries the same value. 0 means the group is not part of a
+  // fungible reservation (default; preemptible/on-demand groups never set it).
+  int32 reservation_chips = 82 [features.field_presence = EXPLICIT];
 }
 
 // ============================================================================

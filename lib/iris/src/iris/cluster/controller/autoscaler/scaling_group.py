@@ -432,6 +432,16 @@ class ScalingGroup:
         return self._config.max_slices
 
     @property
+    def reservation_chips(self) -> int:
+        """Fungible-reservation chip budget shared across this group's quota_pool.
+
+        >0 marks the group as a member of a reserved pool whose chips are
+        interchangeable across slice sizes; 0 means not part of a fungible
+        reservation. See :class:`ReservedPoolUsage`.
+        """
+        return self._config.reservation_chips
+
+    @property
     def region(self) -> str | None:
         """Region derived from the slice template."""
         template = self._config.slice_template
@@ -1177,6 +1187,11 @@ class ScalingGroup:
         if state is None:
             return []
         return list(state.worker_ids)
+
+    def all_worker_ids(self) -> list[str]:
+        """Worker IDs across all tracked slices (any lifecycle)."""
+        with self._slices_lock:
+            return [wid for state in self._slices.values() for wid in state.worker_ids]
 
     def terminate_all(self) -> None:
         """Terminate all slices in this scale group.

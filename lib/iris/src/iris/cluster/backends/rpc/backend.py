@@ -173,7 +173,8 @@ class RpcTaskBackend:
         no zone that can satisfy it).
         """
         zone_capabilities = self.autoscaler.zone_capabilities() if self.autoscaler is not None else None
-        return run_scheduling_decision(self._scheduler, snapshot, zone_capabilities)
+        reserved_view = self.autoscaler.reserved_pool_view() if self.autoscaler is not None else None
+        return run_scheduling_decision(self._scheduler, snapshot, zone_capabilities, reserved_view)
 
     def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
         """Build per-worker plans, fan the Reconcile RPC out, observe liveness.
@@ -235,30 +236,53 @@ class RpcTaskBackend:
         snapshot: ControlSnapshot,
         residual_demand: list[DemandEntry],
         dead_workers: list[WorkerId],
+        drain_workers: Sequence[WorkerId] = (),
     ) -> AutoscaleResult:
-        """Tear down dead workers' slices, or run one provisioning cycle.
+        """Tear down dead/drained workers' slices, or run one provisioning cycle.
 
         With ``dead_workers`` set the autoscaler terminates their slices and
         returns the dead workers plus their healthy siblings as
         ``removed_workers`` (no provisioning this call); the cached stub for
         every torn-down worker is evicted, since none will be reconciled again.
-        Otherwise it runs a refresh + probe_health + update cycle against
-        ``residual_demand``. The DB reads (worker status, demand) are done by the
-        controller and handed in; this only drives the in-memory autoscaler.
+        With only ``drain_workers`` set (cross-variant reserved-pool preemption),
+        it drains those slices through the intentional-drain path — which does
+        not feed the churn detector — and returns them the same way. Otherwise it
+        runs a refresh + probe_health + update cycle against ``residual_demand``.
+        The DB reads (worker status, demand) are done by the controller and
+        handed in; this only drives the in-memory autoscaler.
         """
         if self.autoscaler is None:
             return AutoscaleResult()
         if dead_workers:
             siblings = self.autoscaler.terminate_slices_for_workers([str(wid) for wid in dead_workers])
-            removed = list(dead_workers) + [WorkerId(wid) for wid in siblings]
-            for wid in removed:
-                if address := snapshot.worker_addresses.get(wid):
-                    self.stub_factory.evict(address)
-            return AutoscaleResult(removed_workers=removed, autoscaler_state=self.autoscaler.persistable_state())
+            return self._evict_and_result(snapshot, list(dead_workers), siblings)
+        if drain_workers:
+            siblings = self.autoscaler.drain_slices_for_workers([str(wid) for wid in drain_workers])
+            return self._evict_and_result(snapshot, list(drain_workers), siblings)
         self.autoscaler.refresh(snapshot.worker_status_map)
         self.autoscaler.probe_health()
         self.autoscaler.update(residual_demand)
         return AutoscaleResult(autoscaler_state=self.autoscaler.persistable_state())
+
+    def _evict_and_result(
+        self,
+        snapshot: ControlSnapshot,
+        primary_workers: list[WorkerId],
+        sibling_ids: list[str],
+    ) -> AutoscaleResult:
+        """Evict torn-down workers' stubs and build the removal result.
+
+        Shared by the dead-worker and intentional-drain teardown branches: both
+        return the primary workers plus their healthy siblings as
+        ``removed_workers`` and evict each cached stub, since none of these
+        workers will be reconciled again.
+        """
+        assert self.autoscaler is not None
+        removed = primary_workers + [WorkerId(wid) for wid in sibling_ids]
+        for wid in removed:
+            if address := snapshot.worker_addresses.get(wid):
+                self.stub_factory.evict(address)
+        return AutoscaleResult(removed_workers=removed, autoscaler_state=self.autoscaler.persistable_state())
 
     def get_process_status(
         self,

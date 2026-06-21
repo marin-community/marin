@@ -1141,7 +1141,7 @@ class _ScriptedProvider:
     def profile_task(self, *_args, **_kwargs):
         raise NotImplementedError
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers, drain_workers=()) -> AutoscaleResult:
         return AutoscaleResult()
 
     def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
@@ -1312,7 +1312,7 @@ class _UnreachableProvider:
                 events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
         return ReconcileResult(worker_results=worker_results, health_events=events)
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers, drain_workers=()) -> AutoscaleResult:
         self.autoscale_calls.append(list(dead_workers))
         removed: list[WorkerId] = list(dead_workers)
         for dead in dead_workers:

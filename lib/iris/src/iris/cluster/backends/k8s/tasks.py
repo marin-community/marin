@@ -1355,9 +1355,10 @@ class K8sTaskProvider:
         snapshot: ControlSnapshot,
         residual_demand: list[DemandEntry],
         dead_workers: list[WorkerId],
+        drain_workers: Sequence[WorkerId] = (),
     ) -> AutoscaleResult:
         """No-op: the cluster autoscaler + Kueue provision nodes; K8s has no
-        Iris-managed slices to tear down."""
+        Iris-managed slices to tear down or drain."""
         return AutoscaleResult()
 
     def attach_autoscaler(self, autoscaler: Autoscaler) -> None:

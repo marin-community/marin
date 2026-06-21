@@ -10,10 +10,12 @@ carry no edge back to the controller's ops/reconcile/schema layer.
 
 from __future__ import annotations
 
+from iris.cluster.controller.autoscaler.reserved_pool import ReservedPoolView
 from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
     SchedulingOrder,
     run_preemption_pass,
+    run_reserved_pool_preemption,
 )
 from iris.cluster.controller.scheduling.scheduler import (
     JobRequirements,
@@ -31,8 +33,16 @@ def apply_preemptions(
     all_assignments: list[tuple[JobName, WorkerId]],
     running_for_preemption: list[RunningTaskInfo],
     context: SchedulingContext,
-) -> list[tuple[JobName, JobName]]:
-    """Decide which running tasks to evict for higher-priority unscheduled work."""
+    reserved_view: ReservedPoolView | None = None,
+) -> tuple[list[tuple[JobName, JobName]], set[WorkerId]]:
+    """Decide which running tasks to evict for higher-priority unscheduled work.
+
+    Runs the same-variant pass first, then a cross-variant pass over fungible
+    reserved pools for the preemptors the same-variant pass could not satisfy.
+    Returns the combined ``(preemptor, victim)`` pairs and the set of worker ids
+    whose slices the autoscaler must drain (empty for same-variant evictions,
+    which the worker-failure teardown already handles).
+    """
     assigned_ids = {task_id for task_id, _ in all_assignments}
     unscheduled = [
         PreemptionCandidate(
@@ -44,8 +54,20 @@ def apply_preemptions(
         if tid not in assigned_ids and tid.parent is not None and tid.parent in jobs
     ]
     if not unscheduled:
-        return []
-    return run_preemption_pass(unscheduled, running_for_preemption, context)
+        return [], set()
+
+    pairs = run_preemption_pass(unscheduled, running_for_preemption, context)
+    if reserved_view is None or reserved_view.is_empty():
+        return pairs, set()
+
+    # Only preemptors the same-variant pass did not already satisfy fall through
+    # to the cross-variant reserved pass (the freed slot otherwise double-counts).
+    # Key on the preemptor *job* (parent), matching the reserved pass's own dedup,
+    # so a coscheduled preemptor satisfied via one sibling excludes all siblings.
+    satisfied_jobs = {preemptor.parent or preemptor for preemptor, _ in pairs}
+    remaining = [c for c in unscheduled if (c.job_name.parent or c.job_name) not in satisfied_jobs]
+    reserved_pairs, drain_workers = run_reserved_pool_preemption(remaining, running_for_preemption, reserved_view)
+    return pairs + reserved_pairs, drain_workers
 
 
 def compute_diagnostics(

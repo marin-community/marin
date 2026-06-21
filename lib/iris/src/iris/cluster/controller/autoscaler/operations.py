@@ -47,7 +47,61 @@ def terminate_slices_for_workers(
     The detector classifies internally based on slice age — short-lived deaths
     move churn rate; long-lived deaths count as positive samples.
     """
+    return _detach_slices_for_workers(
+        groups=groups,
+        worker_ids=worker_ids,
+        unregister_slice_workers=unregister_slice_workers,
+        log_action=log_action,
+        timestamp=timestamp,
+        action_type="worker_failed",
+        reason_prefix="workers failed",
+        feed_backoff=True,
+    )
 
+
+def drain_slices_for_workers(
+    groups: dict[str, ScalingGroup],
+    worker_ids: Sequence[str],
+    unregister_slice_workers: Callable[[str, Sequence[str] | None], None],
+    log_action: Callable[..., vm_pb2.AutoscalerAction],
+    timestamp: Timestamp,
+) -> SliceTerminationResult:
+    """Detach slices for an intentional drain (cross-variant preemption).
+
+    Unlike :func:`terminate_slices_for_workers`, this does NOT feed the group's
+    churn detector: the drain is a deliberate scheduling decision, not a slice
+    failure, so it must not poison the AIMD backoff/health signals that make the
+    pool look unhealthy and throttle reprovision.
+    """
+    return _detach_slices_for_workers(
+        groups=groups,
+        worker_ids=worker_ids,
+        unregister_slice_workers=unregister_slice_workers,
+        log_action=log_action,
+        timestamp=timestamp,
+        action_type="slice_drained",
+        reason_prefix="drained for preemption",
+        feed_backoff=False,
+    )
+
+
+def _detach_slices_for_workers(
+    *,
+    groups: dict[str, ScalingGroup],
+    worker_ids: Sequence[str],
+    unregister_slice_workers: Callable[[str, Sequence[str] | None], None],
+    log_action: Callable[..., vm_pb2.AutoscalerAction],
+    timestamp: Timestamp,
+    action_type: str,
+    reason_prefix: str,
+    feed_backoff: bool,
+) -> SliceTerminationResult:
+    """Find the slices for ``worker_ids``, detach them, and collect siblings.
+
+    Shared by the dead-worker teardown and the intentional drain. ``feed_backoff``
+    controls whether each detached slice is recorded as a PREEMPTED fate on the
+    group's churn detector — true for failures, false for deliberate drains.
+    """
     if not worker_ids:
         return SliceTerminationResult(sibling_worker_ids=[], termination_requests=[])
 
@@ -67,16 +121,17 @@ def terminate_slices_for_workers(
 
         slice_worker_ids = group.get_slice_worker_ids(slice_id)
         sibling_worker_ids.update(wid for wid in slice_worker_ids if wid not in primary_workers)
-        failed_workers = sorted(primary_workers & set(slice_worker_ids))
+        affected_workers = sorted(primary_workers & set(slice_worker_ids))
 
-        logger.info("Workers %s triggered slice termination for %s", failed_workers, slice_id)
+        logger.info("Workers %s triggered slice termination for %s", affected_workers, slice_id)
         log_action(
-            "worker_failed",
+            action_type,
             group.name,
             slice_id=slice_id,
-            reason=f"workers failed: {', '.join(failed_workers)}",
+            reason=f"{reason_prefix}: {', '.join(affected_workers)}",
         )
-        group.record_slice_preempted(slice_id, timestamp)
+        if feed_backoff:
+            group.record_slice_preempted(slice_id, timestamp)
         handle = group.detach_slice(slice_id)
         unregister_slice_workers(slice_id, slice_worker_ids)
         if handle is not None:

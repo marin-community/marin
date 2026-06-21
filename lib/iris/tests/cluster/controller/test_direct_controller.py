@@ -51,7 +51,7 @@ class FakeDirectProvider:
     def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
         return ScheduleResult()
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers, drain_workers=()) -> AutoscaleResult:
         return AutoscaleResult()
 
     def get_process_status(self, target: TaskTarget, request):

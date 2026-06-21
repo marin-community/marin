@@ -44,6 +44,9 @@ from iris.cluster.controller.autoscaler.models import (
     ScalingDecision,
 )
 from iris.cluster.controller.autoscaler.operations import (
+    drain_slices_for_workers as drain_slices_for_workers_operation,
+)
+from iris.cluster.controller.autoscaler.operations import (
     terminate_slices_for_workers as terminate_slices_for_workers_operation,
 )
 from iris.cluster.controller.autoscaler.planning import build_scale_plan
@@ -56,6 +59,12 @@ from iris.cluster.controller.autoscaler.provisioning import (
 from iris.cluster.controller.autoscaler.recovery import (
     load_autoscaler_checkpoint,
     restore_autoscaler_state,
+)
+from iris.cluster.controller.autoscaler.reserved_pool import (
+    ReservedPoolView,
+    log_reserved_pool_usage,
+    reserved_pool_usage,
+    reserved_pool_view,
 )
 from iris.cluster.controller.autoscaler.routing import (
     availability_probe_entries,
@@ -107,6 +116,16 @@ _REFRESH_DESCRIBE_MAX_WORKERS = 64
 # fan-out keeps a burst (cold-start scale-up, mass-preemption teardown) within
 # the phase budget instead of serializing one bounded HTTP round-trip at a time.
 _CLOUD_OP_MAX_WORKERS = 16
+
+# How long a fungible reservation pool stays off-limits to cross-variant
+# preemption after a drain. Once a drain frees chips, the autoscaler reprovisions
+# the preemptor's slice — and that pending slice re-consumes the freed chips, so
+# the pool reads "full" again until the slice boots and the preemptor places
+# (minutes for a TPU slice). The cooldown must outlast that reprovision so the
+# scheduler doesn't keep re-preempting (killing extra low-priority work) while the
+# preemptor's own replacement is still booting. A drained pool that genuinely
+# needs more preemption recovers once the cooldown lapses.
+RESERVED_DRAIN_COOLDOWN = Duration.from_minutes(5)
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")
@@ -243,6 +262,11 @@ class Autoscaler:
         self._provisioning_table: Table | None = None
 
         self._last_evaluation: Timestamp = Timestamp.from_ms(0)
+
+        # Per-pool drain cooldown: pool_id -> last drain timestamp. A pool stays
+        # off-limits to cross-variant preemption for RESERVED_DRAIN_COOLDOWN after
+        # a drain so the scheduler doesn't re-preempt it mid-reprovision. Memory-only.
+        self._drain_cooldown: dict[str, Timestamp] = {}
 
         # Most recent routing decision, materialized as status protos. Dashboard
         # polls (GetJobStatus, ListJobs) hit these on every pending job; building
@@ -410,6 +434,12 @@ class Autoscaler:
 
         routing_decision = route_demand(list(self._groups.values()), demand_entries, ts, zone_capabilities=caps)
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
+
+        # Log fungible-reservation chip utilization for operability. The same
+        # ledger (via reserved_pool_view) is what the scheduler's cross-variant
+        # preemption pass consults; provisioning itself is still bounded by GCP,
+        # not this budget.
+        log_reserved_pool_usage(reserved_pool_usage(self._groups.values()))
         # Build cached views eagerly here so dashboard/service RPCs never pay
         # the conversion cost on the hot path (#4844).
         self._last_routing_decision_proto = routing_decision_to_proto(
@@ -997,3 +1027,48 @@ class Autoscaler:
             thread_name_prefix="slice-terminate",
         )
         return result.sibling_worker_ids
+
+    def drain_slices_for_workers(self, worker_ids: Sequence[str]) -> list[str]:
+        """Drain the unique slices containing the given workers for preemption.
+
+        Like :meth:`terminate_slices_for_workers` but for an intentional, scheduler-
+        driven drain: it does NOT record a preemption/failure outcome (no churn
+        detector feed, no provisioning outcome) so the deliberate teardown never
+        poisons the pool's backoff/health signals. Stamps the drain cooldown for
+        each affected pool so the scheduler holds off re-preempting it while the
+        reprovision is in flight. Returns sibling worker IDs to fail immediately.
+        """
+        timestamp = Timestamp.now()
+        result = drain_slices_for_workers_operation(
+            groups=self._groups,
+            worker_ids=worker_ids,
+            unregister_slice_workers=self._unregister_slice_workers,
+            log_action=self._log_action,
+            timestamp=timestamp,
+        )
+        for req in result.termination_requests:
+            pool_id = req.group.config.quota_pool
+            if pool_id:
+                self._drain_cooldown[pool_id] = timestamp
+        _run_io_batch(
+            result.termination_requests,
+            lambda req: req.group.terminate_slice_handle(req.handle, context="draining for preemption"),
+            max_workers=_CLOUD_OP_MAX_WORKERS,
+            thread_name_prefix="slice-drain",
+        )
+        return result.sibling_worker_ids
+
+    def reserved_pool_view(self, timestamp: Timestamp | None = None) -> ReservedPoolView:
+        """Build the cross-variant preemption chip ledger from live group state.
+
+        Pools drained within ``RESERVED_DRAIN_COOLDOWN`` of ``timestamp`` are
+        reported as on cooldown so the scheduler skips re-preempting them while
+        their drain + reprovision is still settling.
+        """
+        ts = timestamp or Timestamp.now()
+        on_cooldown = frozenset(
+            pool_id
+            for pool_id, drained_at in self._drain_cooldown.items()
+            if Duration.from_ms(ts.epoch_ms() - drained_at.epoch_ms()) < RESERVED_DRAIN_COOLDOWN
+        )
+        return reserved_pool_view(self._groups.values(), pools_on_cooldown=on_cooldown)

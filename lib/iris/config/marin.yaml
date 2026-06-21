@@ -151,8 +151,12 @@ tpu_pools:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: tpu-ubuntu2204-base
-    # max_slices = 2048 / size for each entry (~2048-chip-equivalent reservation
-    # in TensorCore units; sizes >2048 omitted since they'd exceed the budget).
+    # Chips are fungible across slice sizes up to the reservation: 1024 physical
+    # v4 chips (= 2048 TensorCores; the GCP vN-SIZE suffix counts TensorCores, so
+    # a v4-8 slice is 4 chips). per-size max_slices = 2048 / size keeps each size
+    # individually bounded; reservation_chips bounds them jointly.
+    fungible_reservation: true
+    reservation_chips: 1024
     sizes:
       8:    { buffer_slices: 0, max_slices: 256 }
       16:   { buffer_slices: 0, max_slices: 128 }

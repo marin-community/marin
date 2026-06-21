@@ -252,7 +252,7 @@ class WorkerSettings(_message.Message):
     def __init__(self, attributes: _Optional[_Mapping[str, str]] = ..., cache_dir: _Optional[str] = ...) -> None: ...
 
 class ScaleGroupConfig(_message.Message):
-    __slots__ = ("name", "buffer_slices", "max_slices", "resources", "num_vms", "priority", "scale_up_rate_limit", "scale_down_rate_limit", "slice_template", "worker", "quota_pool", "allocation_tier")
+    __slots__ = ("name", "buffer_slices", "max_slices", "resources", "num_vms", "priority", "scale_up_rate_limit", "scale_down_rate_limit", "slice_template", "worker", "quota_pool", "allocation_tier", "reservation_chips")
     NAME_FIELD_NUMBER: _ClassVar[int]
     BUFFER_SLICES_FIELD_NUMBER: _ClassVar[int]
     MAX_SLICES_FIELD_NUMBER: _ClassVar[int]
@@ -265,6 +265,7 @@ class ScaleGroupConfig(_message.Message):
     WORKER_FIELD_NUMBER: _ClassVar[int]
     QUOTA_POOL_FIELD_NUMBER: _ClassVar[int]
     ALLOCATION_TIER_FIELD_NUMBER: _ClassVar[int]
+    RESERVATION_CHIPS_FIELD_NUMBER: _ClassVar[int]
     name: str
     buffer_slices: int
     max_slices: int
@@ -277,7 +278,8 @@ class ScaleGroupConfig(_message.Message):
     worker: WorkerSettings
     quota_pool: str
     allocation_tier: int
-    def __init__(self, name: _Optional[str] = ..., buffer_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., resources: _Optional[_Union[ScaleGroupResources, _Mapping]] = ..., num_vms: _Optional[int] = ..., priority: _Optional[int] = ..., scale_up_rate_limit: _Optional[int] = ..., scale_down_rate_limit: _Optional[int] = ..., slice_template: _Optional[_Union[SliceConfig, _Mapping]] = ..., worker: _Optional[_Union[WorkerSettings, _Mapping]] = ..., quota_pool: _Optional[str] = ..., allocation_tier: _Optional[int] = ...) -> None: ...
+    reservation_chips: int
+    def __init__(self, name: _Optional[str] = ..., buffer_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., resources: _Optional[_Union[ScaleGroupResources, _Mapping]] = ..., num_vms: _Optional[int] = ..., priority: _Optional[int] = ..., scale_up_rate_limit: _Optional[int] = ..., scale_down_rate_limit: _Optional[int] = ..., slice_template: _Optional[_Union[SliceConfig, _Mapping]] = ..., worker: _Optional[_Union[WorkerSettings, _Mapping]] = ..., quota_pool: _Optional[str] = ..., allocation_tier: _Optional[int] = ..., reservation_chips: _Optional[int] = ...) -> None: ...
 
 class WorkerConfig(_message.Message):
     __slots__ = ("docker_image", "host", "port", "port_range", "worker_id", "controller_address", "cache_dir", "default_task_image", "task_env", "runtime", "accelerator_type", "accelerator_variant", "gpu_count", "capacity_type", "cpu_millicores", "worker_attributes", "poll_interval", "heartbeat_timeout", "slice_id", "platform", "storage_prefix", "auth_token")

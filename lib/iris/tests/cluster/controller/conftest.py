@@ -117,7 +117,7 @@ class FakeProvider:
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
         return ReconcileResult(worker_results=worker_results, health_events=events)
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers, drain_workers=()) -> AutoscaleResult:
         return AutoscaleResult()
 
     def attach_autoscaler(self, autoscaler) -> None:
