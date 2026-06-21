@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import ClassVar, Protocol
 
@@ -43,7 +43,7 @@ from finelog.client.log_client import Table
 from finelog.types import LogWriterProtocol
 
 from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.autoscaler.models import UNRANKED_DEMAND_BAND, DemandEntry
 from iris.cluster.controller.autoscaler.reserved_pool import ReservedPoolView
 from iris.cluster.controller.autoscaler.state import AutoscalerState
 from iris.cluster.controller.ops.task import Assignment
@@ -312,18 +312,12 @@ def run_scheduling_decision(
     )
     diagnostics = compute_diagnostics(scheduler, context, placed_jobs, all_assignments, order.ordered_task_ids)
 
-    # Order fungible reservation demand by band so the autoscaler provisions the
-    # higher-priority job's slice first. This must hold every tick, not only when a
-    # drain fires: the preemptor's replacement slice provisions a tick or more
-    # after the drain (the drain tick only tears slices down, and GCP frees
-    # reserved chips asynchronously), and by then the victim it evicted has
-    # re-queued into the same pool. route_demand consumes entries in order, so
-    # without this the just-evicted lower-band victim could re-grab the chips its
-    # own preemption freed before the preemptor that displaced it.
-    if reserved_view is not None and not reserved_view.is_empty():
-        ordered_residual = _order_reserved_demand_by_band(residual_demand, reserved_view, order.task_band_map)
-    else:
-        ordered_residual = residual_demand
+    # Stamp each demand entry with its tasks' effective band so the autoscaler's
+    # reservation-aware launch cap admits a fungible pool's new slices in priority
+    # order: the higher-priority job's larger slice claims the shared chip budget
+    # before a lower-priority job's, and a just-drained victim cannot re-grab the
+    # freed chips.
+    banded_residual = _stamp_demand_bands(residual_demand, order.task_band_map)
 
     return ScheduleResult(
         assignments=[
@@ -341,50 +335,29 @@ def run_scheduling_decision(
         unschedulable=list(gated.expired_tasks),
         diagnostics=diagnostics,
         scheduling_context=context,
-        residual_demand=ordered_residual,
+        residual_demand=banded_residual,
         reserved_drain_workers=sorted(drain_workers),
     )
 
 
-# Band assigned to a demand entry whose tasks are absent from the band map (none
-# pending under a resolved band); sorts after every real band so unranked demand
-# trails ranked demand for the same pool.
-_UNRANKED_BAND = 1 << 30
-
-
-def _order_reserved_demand_by_band(
+def _stamp_demand_bands(
     residual_demand: list[DemandEntry],
-    reserved_view: ReservedPoolView,
     task_band_map: Mapping[JobName, int],
 ) -> list[DemandEntry]:
-    """Reorder fungible-reservation demand entries by band, lowest (highest priority) first.
+    """Stamp each demand entry with its tasks' effective band for the autoscaler.
 
-    On a fungible reservation the per-size groups share one chip budget, so the
-    autoscaler must provision a higher-band job's slice before a lower-band job's.
-    Only entries targeting a fungible pool are reordered, and each keeps one of the
-    slots those entries originally held — every non-reserved entry stays in place,
-    so demand routing for the rest of the fleet is untouched. The sort is stable,
-    preserving submission order within a band.
+    Band is the min (highest-priority) resolved band over the entry's tasks; an
+    entry whose tasks carry no resolved band trails ranked demand. The autoscaler's
+    reservation-aware launch cap admits a fungible pool's new slices in band order,
+    so it needs each entry's priority alongside its shape and constraints.
     """
-    variant_pool = reserved_view.variant_pool
-
-    def targets_reserved_pool(entry: DemandEntry) -> bool:
-        variants = entry.normalized.device_variants
-        return bool(variants) and any(variant in variant_pool for variant in variants)
-
-    reserved_positions = [i for i, entry in enumerate(residual_demand) if targets_reserved_pool(entry)]
-    if len(reserved_positions) < 2:
+    if not residual_demand:
         return residual_demand
-
-    def entry_band(entry: DemandEntry) -> int:
+    stamped: list[DemandEntry] = []
+    for entry in residual_demand:
         bands = [band for tid in entry.task_ids if (band := task_band_map.get(JobName.from_wire(tid))) is not None]
-        return min(bands) if bands else _UNRANKED_BAND
-
-    reserved_entries = sorted((residual_demand[i] for i in reserved_positions), key=entry_band)
-    ordered = list(residual_demand)
-    for position, entry in zip(reserved_positions, reserved_entries, strict=True):
-        ordered[position] = entry
-    return ordered
+        stamped.append(replace(entry, band=min(bands) if bands else UNRANKED_DEMAND_BAND))
+    return stamped
 
 
 def apply_placements(

@@ -4,16 +4,28 @@
 """Tests for fungible reservation chip accounting and the preemption view."""
 
 import pytest
+from iris.cluster.constraints import PlacementRequirements
+from iris.cluster.controller.autoscaler.models import UNRANKED_DEMAND_BAND, DemandEntry, RoutingDecision
+from iris.cluster.controller.autoscaler.planning import (
+    _admit_in_band_order,
+    build_group_scale_plan,
+    build_scale_plan,
+)
 from iris.cluster.controller.autoscaler.reserved_pool import (
     reserved_pool_usage,
     reserved_pool_view,
 )
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
-from iris.rpc import vm_pb2
+from iris.rpc import job_pb2, vm_pb2
+from rigging.timing import Timestamp
 
 from tests.cluster.backends.conftest import make_fake_slice_handle, make_mock_platform
 
 from .conftest import make_scale_group_config
+
+# Lower band_sort_key = higher priority.
+PRODUCTION = job_pb2.PRIORITY_BAND_PRODUCTION
+BATCH = job_pb2.PRIORITY_BAND_BATCH
 
 
 def _ready_group(
@@ -153,3 +165,110 @@ class TestReservedPoolView:
         assert view.is_empty()
         assert view.variant_pool == {}
         assert view.free_chips == {}
+
+
+def _demand_entry(band: int) -> DemandEntry:
+    return DemandEntry(
+        task_ids=("/u/t/0",),
+        coschedule_group_id=None,
+        normalized=PlacementRequirements(
+            device_type=None, device_variants=None, preemptible=None, required_regions=None, required_zones=None
+        ),
+        constraints=[],
+        resources=job_pb2.ResourceSpecProto(),
+        band=band,
+    )
+
+
+def _routing(required: dict[str, int], routed_bands: dict[str, int]) -> RoutingDecision:
+    return RoutingDecision(
+        group_to_launch={},
+        group_required_slices=required,
+        routed_entries={name: [_demand_entry(band)] for name, band in routed_bands.items()},
+        unmet_entries=[],
+        group_reasons={},
+        group_statuses=[],
+    )
+
+
+class TestAdmitInBandOrder:
+    """Band-ordered, head-of-line chip admission under one fungible pool's budget."""
+
+    def test_highest_band_claims_chips_first(self):
+        # PROD v4-16 (8 chips) and BATCH v4-8 (4 chips) each want 2 slices; only 16
+        # chips free. PROD takes all 16; BATCH gets nothing.
+        admitted = _admit_in_band_order([("v4-8", BATCH, 4, 2), ("v4-16", PRODUCTION, 8, 2)], free_chips=16)
+        assert admitted == {"v4-16": 2, "v4-8": 0}
+
+    def test_head_of_line_holds_chips_for_unsatisfiable_high_band(self):
+        # Only 4 chips free — too few for the PROD v4-16 slice (8). The 4 chips are
+        # held for it, NOT handed to the BATCH v4-8 that would fit. This is the
+        # re-grab the cap prevents while a preemptor accumulates chips over ticks.
+        admitted = _admit_in_band_order([("v4-16", PRODUCTION, 8, 1), ("v4-8", BATCH, 4, 1)], free_chips=4)
+        assert admitted == {"v4-16": 0, "v4-8": 0}
+
+    def test_same_band_groups_share_remaining(self):
+        # Equal priority: no head-of-line between them; admitted greedily in name
+        # order until chips run out (a takes 2 of the 3 affordable, b takes 1).
+        admitted = _admit_in_band_order([("a", PRODUCTION, 4, 2), ("b", PRODUCTION, 4, 2)], free_chips=12)
+        assert admitted == {"a": 2, "b": 1}
+
+    def test_unranked_band_yields_to_ranked(self):
+        admitted = _admit_in_band_order(
+            [("v4-8", UNRANKED_DEMAND_BAND, 4, 1), ("v4-16", PRODUCTION, 8, 1)], free_chips=8
+        )
+        assert admitted == {"v4-16": 1, "v4-8": 0}
+
+    def test_demand_trimmed_to_budget(self):
+        assert _admit_in_band_order([("v4-8", BATCH, 4, 10)], free_chips=16) == {"v4-8": 4}
+
+    def test_over_committed_pool_admits_nothing(self):
+        # Negative free chips (pool already over budget) launches nothing more.
+        assert _admit_in_band_order([("v4-8", BATCH, 4, 2)], free_chips=-4) == {"v4-8": 0}
+
+
+class TestFungiblePoolLaunchCap:
+    """build_scale_plan caps a fungible pool's launches to its reservation budget."""
+
+    def test_high_band_slice_wins_reservation_over_low_band(self):
+        # Empty 16-chip pool. PROD v4-16 wants 2 slices (16 chips), BATCH v4-8 wants
+        # 2 (8 chips): 24 requested, 16 available. PROD claims the reservation.
+        v16 = _ready_group("v4-16", "v4-16", quota_pool="pool-a", reservation_chips=16, slice_ids=[])
+        v8 = _ready_group("v4-8", "v4-8", quota_pool="pool-a", reservation_chips=16, slice_ids=[])
+        groups = {g.name: g for g in (v16, v8)}
+
+        plan = build_scale_plan(
+            groups, _routing({"v4-16": 2, "v4-8": 2}, {"v4-16": PRODUCTION, "v4-8": BATCH}), Timestamp.now()
+        )
+
+        assert plan.group_plans["v4-16"].slices_to_add == 2
+        assert plan.group_plans["v4-8"].slices_to_add == 0
+
+    def test_drained_victim_cannot_regrab_chips_held_for_preemptor(self):
+        # 16-chip pool, 12 consumed by three live v4-8 slices -> 4 free. A PROD v4-16
+        # (needs 8) is waiting; the just-drained victim's re-queued BATCH v4-8 (needs
+        # 4) would fit the 4 free chips. Head-of-line holds them for the preemptor:
+        # neither launches this tick, so the chips accumulate rather than re-grab.
+        v16 = _ready_group("v4-16", "v4-16", quota_pool="pool-a", reservation_chips=16, slice_ids=[])
+        v8 = _ready_group("v4-8", "v4-8", quota_pool="pool-a", reservation_chips=16, slice_ids=["a1", "a2", "a3"])
+        groups = {g.name: g for g in (v16, v8)}
+
+        plan = build_scale_plan(
+            groups, _routing({"v4-16": 1, "v4-8": 1}, {"v4-16": PRODUCTION, "v4-8": BATCH}), Timestamp.now()
+        )
+
+        assert plan.group_plans["v4-16"].slices_to_add == 0
+        assert plan.group_plans["v4-8"].slices_to_add == 0
+
+    def test_non_fungible_group_untouched(self):
+        # A plain group (reservation_chips=0) is not part of any pool, so the cap
+        # leaves its planned launches exactly as build_group_scale_plan computed them.
+        ts = Timestamp.now()
+        plain_config = make_scale_group_config(name="plain", accelerator_variant="v4-8", max_slices=8)
+        plain = ScalingGroup(plain_config, make_mock_platform())
+        expected = build_group_scale_plan(plain, 3, ts).slices_to_add
+
+        plan = build_scale_plan({"plain": plain}, _routing({"plain": 3}, {"plain": BATCH}), ts)
+
+        assert plan.group_plans["plain"].slices_to_add == expected
+        assert expected > 0

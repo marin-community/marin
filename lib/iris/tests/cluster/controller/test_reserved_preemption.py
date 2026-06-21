@@ -4,9 +4,9 @@
 """Tests for cross-variant preemption on a fungible reservation pool."""
 
 from iris.cluster.constraints import PlacementRequirements
-from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.autoscaler.models import UNRANKED_DEMAND_BAND, DemandEntry
 from iris.cluster.controller.autoscaler.reserved_pool import ReservedPoolView
-from iris.cluster.controller.backend import _order_reserved_demand_by_band
+from iris.cluster.controller.backend import _stamp_demand_bands
 from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
     run_reserved_pool_preemption,
@@ -229,17 +229,12 @@ def test_two_preemptors_do_not_claim_the_same_victim():
     assert drain == {WorkerId("w0"), WorkerId("w1")}
 
 
-def _demand(task_wire: str, variant: str | None) -> DemandEntry:
-    variants = frozenset({variant}) if variant is not None else None
+def _demand(*task_wires: str) -> DemandEntry:
     return DemandEntry(
-        task_ids=(task_wire,),
+        task_ids=task_wires,
         coschedule_group_id=None,
         normalized=PlacementRequirements(
-            device_type=None,
-            device_variants=variants,
-            preemptible=None,
-            required_regions=None,
-            required_zones=None,
+            device_type=None, device_variants=None, preemptible=None, required_regions=None, required_zones=None
         ),
         constraints=[],
         resources=job_pb2.ResourceSpecProto(),
@@ -250,46 +245,29 @@ def _band_map(**by_wire: int) -> dict[JobName, int]:
     return {JobName.from_wire(wire): band for wire, band in by_wire.items()}
 
 
-class TestOrderReservedDemandByBand:
-    """The per-tick demand reorder that keeps a preemptor ahead of its victim."""
+class TestStampDemandBands:
+    """The scheduler stamps each demand entry's effective band for the cap."""
 
-    def test_reserved_entries_reorder_by_band_within_their_slots(self):
-        # Submission order puts the batch victim's demand before the production
-        # preemptor's; a non-reserved (cpu) entry sits between them. After
-        # ordering, the two reserved slots hold prod-then-batch; the cpu entry,
-        # in a slot of its own, never moves.
-        batch = _demand("/u/batch/0", "v4-8")
-        cpu = _demand("/u/cpu/0", None)
-        prod = _demand("/u/prod/0", "v4-16")
-        view = _view(free_chips=0, worker_slice={})
-        bands = _band_map(**{"/u/batch/0": BATCH, "/u/cpu/0": INTERACTIVE, "/u/prod/0": PRODUCTION})
-
-        ordered = _order_reserved_demand_by_band([batch, cpu, prod], view, bands)
-
-        assert ordered == [prod, cpu, batch]
-
-    def test_non_reserved_demand_left_untouched(self):
-        # Only one reserved entry -> nothing to reorder; list returned as-is.
-        cpu = _demand("/u/cpu/0", None)
-        prod = _demand("/u/prod/0", "v4-8")
-        view = _view(free_chips=0, worker_slice={})
-        bands = _band_map(**{"/u/cpu/0": INTERACTIVE, "/u/prod/0": PRODUCTION})
-
-        ordered = _order_reserved_demand_by_band([cpu, prod], view, bands)
-
-        assert ordered == [cpu, prod]
-
-    def test_entry_absent_from_band_map_sorts_last(self):
-        # A reserved entry whose task carries no resolved band trails ranked
-        # reserved demand for the same pool.
-        ranked = _demand("/u/prod/0", "v4-8")
-        unranked = _demand("/u/mystery/0", "v4-16")
-        view = _view(free_chips=0, worker_slice={})
+    def test_entry_takes_its_task_band(self):
         bands = _band_map(**{"/u/prod/0": PRODUCTION})
 
-        ordered = _order_reserved_demand_by_band([unranked, ranked], view, bands)
+        [stamped] = _stamp_demand_bands([_demand("/u/prod/0")], bands)
 
-        assert ordered == [ranked, unranked]
+        assert stamped.band == PRODUCTION
+
+    def test_entry_without_resolved_band_is_unranked(self):
+        [stamped] = _stamp_demand_bands([_demand("/u/mystery/0")], _band_map())
+
+        assert stamped.band == UNRANKED_DEMAND_BAND
+
+    def test_coscheduled_entry_takes_highest_priority_member_band(self):
+        # A gang carries several tasks; the entry's band is the min (highest
+        # priority) so the whole slice is admitted at its strongest member's band.
+        bands = _band_map(**{"/u/g/0": BATCH, "/u/g/1": PRODUCTION})
+
+        [stamped] = _stamp_demand_bands([_demand("/u/g/0", "/u/g/1")], bands)
+
+        assert stamped.band == PRODUCTION
 
 
 def test_coscheduled_preemptor_handled_once():
