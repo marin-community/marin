@@ -82,6 +82,9 @@ class FinelogConfig:
     image: str
     remote_log_dir: str
     deployment: Deployment
+    # Rigging transport URL clients use to reach this server through the controller proxy
+    # (e.g. `iap+https://iris-marin.oa.dev/proxy/system.log-server`); unset = fall back to SSH/k8s tunnel.
+    client_url: str | None = None
 
 
 def _config_search_paths(name_or_path: str) -> list[Path]:
@@ -151,6 +154,7 @@ def _load_from_path(path: Path) -> FinelogConfig:
         image=raw["image"],
         remote_log_dir=raw.get("remote_log_dir", ""),
         deployment=deployment,
+        client_url=raw.get("client_url"),
     )
 
 
