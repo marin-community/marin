@@ -112,6 +112,15 @@ def test_build_pod_manifest_fields():
     assert container["resources"]["requests"]["memory"] == str(4 * 1024**3)
 
 
+def test_build_pod_manifest_uses_task_image_override_for_task_container():
+    req = make_run_req("/test-job/0")
+    req.task_image = "custom/task:cuda-devel"
+
+    manifest = _build_pod_manifest(req, pod_config(default_image="default/task:latest"))
+
+    assert manifest["spec"]["containers"][0]["image"] == "custom/task:cuda-devel"
+
+
 def test_build_pod_manifest_env_vars():
     req = make_run_req("/test-job/0")
     req.environment.env_vars["MY_VAR"] = "hello"

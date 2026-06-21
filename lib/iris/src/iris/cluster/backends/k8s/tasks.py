@@ -490,6 +490,7 @@ def _build_pod_manifest(
 
     namespace = config.namespace
     default_image = config.default_image
+    task_image = run_req.task_image or default_image
     cache_dir = config.cache_dir
     service_account = config.service_account
     host_network = config.host_network
@@ -559,7 +560,7 @@ def _build_pod_manifest(
 
     container: dict = {
         "name": "task",
-        "image": default_image,
+        "image": task_image,
         "imagePullPolicy": "IfNotPresent",
         "env": env_list,
         "workingDir": "/app",
