@@ -42,12 +42,14 @@ def embed_fn(embed_params, tokens):
 
 
 def stage_fn(stage_params, h):
-    # stage_params: [layers_per_stage, H, H]. Apply each layer in order.
+    # stage_params: [layers_per_stage, H, H]. Apply each layer in order and return
+    # a stage-local aux scalar (stands in for the MoE router z-loss).
     def one_layer(h, w):
         return jnp.tanh(h @ w), None
 
     h, _ = jax.lax.scan(one_layer, h, stage_params)
-    return h
+    aux = 0.05 * jnp.mean(h**2)
+    return h, aux
 
 
 def head_loss_fn(head_params, h, target):
@@ -72,9 +74,11 @@ def reference_loss(params, tokens, targets):
 
     def loss_one(m):
         h = embed_fn(params.embed, tokens[m])
+        aux_sum = jnp.zeros(())
         for s in range(NUM_STAGES):
-            h = stage_fn(params.stage[s], h)
-        return head_loss_fn(params.head, h, targets[m])
+            h, aux = stage_fn(params.stage[s], h)
+            aux_sum = aux_sum + aux
+        return head_loss_fn(params.head, h, targets[m]) + aux_sum
 
     losses = jnp.stack([loss_one(m) for m in range(NUM_MICROBATCHES)])
     return jnp.mean(losses)
