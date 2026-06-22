@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import re
 import socket
 import tempfile
 import time
@@ -25,10 +26,12 @@ from dataclasses import dataclass, field
 
 import fsspec
 import requests
+from huggingface_hub import snapshot_download
 from iris.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.tpu_topology import get_tpu_topology
 from rigging.connect import proxy_path
+from rigging.filesystem import marin_temp_bucket
 from rigging.log_setup import configure_logging
 from transformers import AutoConfig
 
@@ -43,6 +46,10 @@ logger = logging.getLogger(__name__)
 _VLLM_API_SUFFIX = "/v1"
 # Cadence of the wall-clock timeout / liveness loop.
 _TIMEOUT_POLL_SECONDS = 30
+# GCS prefix (under the region-local TTL temp bucket) for mirrored HF snapshots.
+_MODEL_CACHE_PREFIX = "quick-serve-models"
+# Written last after a snapshot mirror so a half-uploaded cache never reads as a hit.
+_CACHE_COMPLETE_MARKER = ".quick_serve_complete"
 
 
 @dataclass(frozen=True)
@@ -66,8 +73,14 @@ class QuickServeConfig:
     tensor_parallel_size: int | None = None
     """``None`` auto-selects the largest power-of-two TP that divides the model's
     attention-head count and fits the slice's chip count."""
+    max_num_batched_tokens: int = 512
+    """Prefill batch size. Kept modest because the TPU paged-attention kernel's
+    on-chip (VMEM) scratch grows with this; large values overflow VMEM at compile."""
     chat_template_content: str | None = None
     """Inline Jinja chat template forwarded to vLLM; resolved from a path/URL by the CLI."""
+    cache_ttl_days: int = 14
+    """Mirror HF models to a region-local GCS cache with this lifecycle TTL so repeat
+    serves skip the HuggingFace download. ``0`` disables caching; ignored for gs:// paths."""
     timeout_hours: float = 24.0
     vllm_startup_timeout_seconds: int = 1800
     extra_vllm_args: tuple[str, ...] = field(default_factory=tuple)
@@ -123,6 +136,38 @@ def _read_model_config_dict(model: str) -> dict:
     return AutoConfig.from_pretrained(model, trust_remote_code=True).to_dict()
 
 
+def _model_cache_slug(model: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", model.strip("/"))
+
+
+def resolve_model_path(model: str, cache_ttl_days: int) -> str:
+    """Resolve ``model`` to a path vLLM can load, mirroring HF repos to a TTL'd GCS cache.
+
+    Object-store paths are served directly. HF ids are mirrored once to a region-local
+    GCS cache (``marin_temp_bucket``); a later serve of the same model reads the cached
+    snapshot from same-region GCS instead of re-downloading from HuggingFace. On a cache
+    miss the freshly downloaded local snapshot is served (fast local read) and uploaded
+    for next time.
+    """
+    if cache_ttl_days <= 0 or _is_object_store_path(model):
+        return model
+
+    cache_path = marin_temp_bucket(cache_ttl_days, f"{_MODEL_CACHE_PREFIX}/{_model_cache_slug(model)}").rstrip("/")
+    fs, _ = fsspec.core.url_to_fs(cache_path)
+    if fs.exists(f"{cache_path}/{_CACHE_COMPLETE_MARKER}"):
+        logger.info("quick-serve model cache hit: %s", cache_path)
+        return cache_path
+
+    logger.info("quick-serve model cache miss; downloading %s and mirroring to %s", model, cache_path)
+    local_dir = tempfile.mkdtemp(prefix="quick_serve_model_")
+    snapshot_download(model, local_dir=local_dir)
+    fs.put(f"{local_dir.rstrip('/')}/", f"{cache_path}/", recursive=True)
+    # Marker last: its presence is the cache-hit signal, so a crashed upload won't read as complete.
+    with fs.open(f"{cache_path}/{_CACHE_COMPLETE_MARKER}", "w") as marker:
+        marker.write("ok")
+    return local_dir
+
+
 def detect_chat_support(vllm_base_url: str, model_id: str) -> bool:
     """Probe whether the served model accepts ``/v1/chat/completions``.
 
@@ -158,7 +203,16 @@ def _reserve_localhost_port() -> int:
 def _build_vllm_extra_args(
     config: QuickServeConfig, tensor_parallel_size: int, chat_template_path: str | None
 ) -> list[str]:
-    args = ["--tensor-parallel-size", str(tensor_parallel_size), "--dtype", config.dtype]
+    # Pin the served model name to the requested model so the OpenAI API id stays
+    # the friendly HF id regardless of whether the backing path is local or gs://.
+    args = [
+        "--tensor-parallel-size",
+        str(tensor_parallel_size),
+        "--dtype",
+        config.dtype,
+        "--served-model-name",
+        config.model,
+    ]
     if chat_template_path is not None:
         args += ["--chat-template", chat_template_path]
     args += list(config.extra_vllm_args)
@@ -186,6 +240,7 @@ def serve_in_job(config: QuickServeConfig) -> None:
     port = ctx.get_port(config.port_name)
     advertise_host = job_info.advertise_host
 
+    model_path = resolve_model_path(config.model, config.cache_ttl_days)
     num_chips = get_tpu_topology(config.tpu_type).chips_per_vm
     if config.tensor_parallel_size is not None:
         tensor_parallel_size = config.tensor_parallel_size
@@ -197,7 +252,7 @@ def serve_in_job(config: QuickServeConfig) -> None:
             tensor_parallel_size,
         )
     else:
-        num_attention_heads, num_key_value_heads = read_attention_heads(config.model)
+        num_attention_heads, num_key_value_heads = read_attention_heads(model_path)
         tensor_parallel_size = select_tensor_parallel_size(num_attention_heads, num_chips, num_key_value_heads)
         logger.info(
             "quick-serve model=%s tpu=%s chips=%d heads=%d kv_heads=%s -> tensor_parallel_size=%d",
@@ -210,10 +265,10 @@ def serve_in_job(config: QuickServeConfig) -> None:
         )
 
     chat_template_path = _write_chat_template(config.chat_template_content)
-    engine_kwargs: dict[str, object] = {}
+    engine_kwargs: dict[str, object] = {"max_num_batched_tokens": config.max_num_batched_tokens}
     if config.max_model_len is not None:
         engine_kwargs["max_model_len"] = config.max_model_len
-    vllm_model = ModelConfig(name="quick-serve", path=config.model, engine_kwargs=engine_kwargs)
+    vllm_model = ModelConfig(name="quick-serve", path=model_path, engine_kwargs=engine_kwargs)
     extra_args = _build_vllm_extra_args(config, tensor_parallel_size, chat_template_path)
     internal_port = _reserve_localhost_port()
 

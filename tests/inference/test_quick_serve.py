@@ -8,7 +8,7 @@ import socket
 
 import pytest
 import requests
-from marin.inference.quick_serve import select_tensor_parallel_size
+from marin.inference.quick_serve import resolve_model_path, select_tensor_parallel_size
 from marin.inference.quick_serve_dashboard import build_dashboard_app, serve_app_background
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -35,6 +35,19 @@ from starlette.routing import Route
 )
 def test_select_tensor_parallel_size(heads, chips, kv_heads, expected):
     assert select_tensor_parallel_size(heads, chips, kv_heads) == expected
+
+
+@pytest.mark.parametrize(
+    ("model", "ttl_days"),
+    [
+        ("gs://bucket/ckpt", 14),  # object-store paths are served directly, never mirrored
+        ("s3://bucket/ckpt", 14),
+        ("Qwen/Qwen3-0.6B", 0),  # caching disabled
+    ],
+)
+def test_resolve_model_path_passthrough(model, ttl_days):
+    # These paths must not touch the network or GCS; they return the input unchanged.
+    assert resolve_model_path(model, ttl_days) == model
 
 
 def _free_port() -> int:

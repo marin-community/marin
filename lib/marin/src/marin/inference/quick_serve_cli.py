@@ -126,8 +126,15 @@ def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout
 @click.option("--endpoint-name", default=None, help="Endpoint name to register (default: /serve/<job-name>).")
 @click.option("--chat-template", default=None, help="Jinja chat template: local file path or http(s) URL.")
 @click.option("--max-model-len", type=int, default=None, help="vLLM max sequence length (default: derived from model).")
+@click.option(
+    "--max-num-batched-tokens", type=int, default=512, help="Prefill batch size; small values avoid TPU VMEM overflow."
+)
 @click.option("--tensor-parallel-size", type=int, default=None, help="TP size (default: auto from heads + chips).")
 @click.option("--dtype", default="bfloat16", help="vLLM dtype.")
+@click.option("--cache-ttl-days", type=int, default=14, help="Mirror HF models to a TTL'd GCS cache (0 disables).")
+@click.option(
+    "--no-cache", is_flag=True, default=False, help="Skip the GCS model cache; always download from HuggingFace."
+)
 @click.option("--timeout-hours", type=float, default=24.0, help="Wall-clock lifetime before the server self-stops.")
 @click.option("--region", default=None, help="Comma-separated region(s) to pin the slice to.")
 @click.option("--cpu", type=float, default=8.0)
@@ -146,8 +153,11 @@ def main(
     endpoint_name: str | None,
     chat_template: str | None,
     max_model_len: int | None,
+    max_num_batched_tokens: int,
     tensor_parallel_size: int | None,
     dtype: str,
+    cache_ttl_days: int,
+    no_cache: bool,
     timeout_hours: float,
     region: str | None,
     cpu: float,
@@ -181,8 +191,10 @@ def main(
         endpoint_name=endpoint,
         dtype=dtype,
         max_model_len=max_model_len,
+        max_num_batched_tokens=max_num_batched_tokens,
         tensor_parallel_size=tensor_parallel_size,
         chat_template_content=_resolve_chat_template(chat_template),
+        cache_ttl_days=0 if no_cache else cache_ttl_days,
         timeout_hours=timeout_hours,
         extra_vllm_args=tuple(vllm_args),
     )
