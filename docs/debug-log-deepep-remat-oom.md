@@ -434,6 +434,56 @@ ranks. If those logs reproduce the split cleanly, the next code change should
 either add a more explicit pre/post CUDA sync marker around x-only combine or
 replace the x-only combine path with a lower-risk call shape.
 
+## Results
+
+MAY335 reran the B32 EP16 x-only/JAX-backward shape with the 3600s counter
+timeout and rank-filtered stage logs for ranks 0, 6, 11, 12, and 14:
+
+- W&B:
+  `marin-community/marin_moe/MAY335-RANKFILTER-B32-XONLY-JAXBWD-1352`
+- Parent Iris job: `/dlwh/iris-run-job-20260622-135240`
+- Child Iris job:
+  `/dlwh/iris-run-job-20260622-135240/grug-train-MAY335-RANKFILTER-B32-XONLY-JAXBWD-1352`
+- W&B marked the run failed before train metrics:
+  `_runtime=225`, no `global_step`, no `train/loss`, no throughput metrics.
+- The child restarted once; the retry was stopped to avoid wasting GPUs.
+- First-attempt logs again had no Python traceback, OOM, NCCL error, CUDA
+  warning, or explicit thrown exception before task 0 bounced.
+- The rank-filtered breadcrumbs show repeated successful x-only combine cycles
+  before failure. Ranks 0 and 6 reached sequence 38 and both emitted
+  `internode_jax_after_cached_notify_combine_x_only` followed by
+  `internode_jax_before_combine_x_only_launch`, but neither emitted
+  `internode_jax_after_combine_x_only`.
+- Earlier filtered ranks were staggered when task 0 bounced:
+  rank 11 stopped around dispatch sequence 25, rank 12 at cached notify for
+  sequence 26, and rank 14 after x-only combine for sequence 26.
+
+MAY335 is the cleanest localization so far. The failure is not the recv-count
+wait, assignment packing, or cached notify. At least ranks 0 and 6 made it to
+the x-only combine launch boundary for sequence 38 and then the task bounced
+before the post-combine marker.
+
+## Hypothesis 13: x-only combine launch or stream sync is the native failure
+
+The remaining suspect is the `CombineInternodeXOnly` call shape itself:
+
+- The failure reproduces after many successful x-only combine calls, so the
+  primitive is not simply missing setup.
+- The missing `internode_jax_after_combine_x_only` marker means the failure is
+  inside the DeepEP `combine` launch, `cudaGetLastError`, or the post-launch
+  stream synchronization.
+- The x-only FFI currently calls DeepEP `combine` with `num_topk=0` and dummy
+  top-k pointers because the caller only needs `combined_x`. DeepEP may not
+  fully tolerate that no-topk call shape under repeated internode use, even if
+  some ranks/sequences complete.
+
+The next diagnostic should split the x-only combine marker into launch-return,
+CUDA-error-check, and stream-sync boundaries. If that confirms a launch/sync
+failure, the next fallback should avoid the `num_topk=0` dummy-topk call shape:
+either pass real scratch top-k buffers and ignore the result, or temporarily
+route the x-only path through the normal combine primitive to validate whether
+the dummy top-k convention is the trigger.
+
 ## Future work
 
 - [x] Add a C++/FFI primitive for x-only internode combine-with-local-collapse
@@ -457,8 +507,12 @@ replace the x-only combine path with a lower-risk call shape.
       stage logs.
 - [x] Re-run B32 EP16 with 3600s counter timeout to tolerate first-step compile
       skew.
-- [ ] Re-run B32 EP16 with 3600s counter timeout and rank-filtered x-only
+- [x] Re-run B32 EP16 with 3600s counter timeout and rank-filtered x-only
       combine logs for the suspected failing ranks.
+- [ ] Split x-only combine diagnostics into launch-return, CUDA-error-check,
+      and stream-sync boundaries.
+- [ ] If the split markers confirm x-only combine launch/sync failure, retry
+      with real top-k scratch buffers or the normal combine call shape.
 - [ ] If B32 passes, retry B64 and profile remat overhead versus ring/all-to-all.
 - [ ] If B32 reaches `cudaMallocAsync(x-only fused local-collapse bwd recv_out)`
       OOM, replace the staging temp with a true direct packed-output backward
