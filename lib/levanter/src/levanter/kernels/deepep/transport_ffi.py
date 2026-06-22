@@ -2194,7 +2194,8 @@ def _dispatch_internode_impl(
         assignment_capacity=np.int32(output_assignments),
         low_latency_mode=_internode_low_latency_mode(),
     )
-    return DeepEPInternodeDispatch(*results[:21])
+    dispatch_results = (*results[:20], results[22])
+    return DeepEPInternodeDispatch(*dispatch_results)
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(7, 8, 9, 10, 11, 12, 13))
