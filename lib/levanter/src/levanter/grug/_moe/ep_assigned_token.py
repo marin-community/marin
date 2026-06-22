@@ -27,6 +27,7 @@ from levanter.grug._moe.ep_common import (
     _expert_prefix_keep_mask,
     _local_permute_from_counts,
     _permute_by_global_expert,
+    _ragged_all_to_all_same_route_payloads,
     _shard_a2a_params,
     _sort_activations,
 )
@@ -108,24 +109,13 @@ def _assigned_token_dispatch(
 
     all_shard_counts = jnp.sum(clipped_group_sizes.reshape(ep_size, ep_size, local_experts), axis=2)
     input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(all_shard_counts, shard_id)
-    dispatch_out_shape = jnp.zeros((recv_capacity, x_local.shape[1]), dtype=x_local.dtype)
-    x_dispatched = jax.lax.ragged_all_to_all(
-        sorted_x,
-        dispatch_out_shape,
-        input_offsets,
-        send_sizes,
-        output_offsets,
-        recv_sizes,
-        axis_name="expert",
-    )
-    weight_out_shape = jnp.zeros((recv_capacity, 1), dtype=x_local.dtype)
-    weights_dispatched = jax.lax.ragged_all_to_all(
-        sorted_weights,
-        weight_out_shape,
-        input_offsets,
-        send_sizes,
-        output_offsets,
-        recv_sizes,
+    x_dispatched, weights_dispatched = _ragged_all_to_all_same_route_payloads(
+        (sorted_x, sorted_weights),
+        output_leading_size=recv_capacity,
+        input_offsets=input_offsets,
+        send_sizes=send_sizes,
+        output_offsets=output_offsets,
+        recv_sizes=recv_sizes,
         axis_name="expert",
     )
     x_dispatch, local_sorted_indices, local_group_sizes = _local_permute_from_counts(

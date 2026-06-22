@@ -14,6 +14,12 @@ from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
+from levanter.grug._moe.ep_deepep import (
+    _collapse_local_assignments_gather_jax,
+    _collapse_local_assignments_jax,
+    _tokens_per_rdma_rank,
+)
+from levanter.grug._moe.ep_common import _pack_same_route_payloads, _split_same_route_payloads
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     GroupedMoEExpertMlp,
@@ -257,7 +263,10 @@ def test_grouped_moe_expert_mlp_layer_view_matches_grouped_call():
     np.testing.assert_allclose(np.asarray(grouped_out[1]), np.asarray(layer_out), rtol=1e-5, atol=1e-5)
 
 
-@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
+@pytest.mark.parametrize(
+    "implementation",
+    ["ring", "ragged_all_to_all", "padded_all_to_all", "grouped_assigned_token"],
+)
 def test_grouped_moe_mlp_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
 
@@ -314,6 +323,55 @@ def test_grouped_moe_mlp_ep_path_lowers_on_abstract_mesh(implementation: MoeImpl
             .lower(lowering_platforms=(platform,))
         )
         assert lowered is not None
+
+
+def test_grouped_assigned_token_single_layer_alias_lowers_on_abstract_mesh():
+    mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        x = jax.ShapeDtypeStruct(
+            shape=(16, 32),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P(("data", "expert"), None)),
+        )
+        selected_experts = jax.ShapeDtypeStruct(
+            shape=(16, 2),
+            dtype=jnp.int32,
+            sharding=NamedSharding(mesh, P(("data", "expert"), None)),
+        )
+        combine_weights = jax.ShapeDtypeStruct(
+            shape=(16, 2),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P(("data", "expert"), None)),
+        )
+        w_up_gate = jax.ShapeDtypeStruct(
+            shape=(4, 32, 128),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P("expert", None, None)),
+        )
+        w_down = jax.ShapeDtypeStruct(
+            shape=(4, 64, 32),
+            dtype=jnp.float32,
+            sharding=NamedSharding(mesh, P("expert", None, None)),
+        )
+
+        out = jax.eval_shape(
+            lambda x, sel, cw, up_gate, down: moe_mlp(
+                x,
+                sel,
+                cw,
+                up_gate,
+                down,
+                implementation="grouped_assigned_token",
+                mesh=mesh,
+            ),
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+        assert out.shape == (16, 32)
 
 
 def test_prepare_moe_dispatch_indices_match_materialized_dispatch():
@@ -390,7 +448,8 @@ def test_moe_expert_mlp_init_uses_concat_w13_for_sonic_backend():
     np.testing.assert_allclose(np.asarray(sonic_mlp.w_down), np.asarray(scatter_mlp.w_down), rtol=1e-5, atol=1e-5)
 
 
-def test_moe_expert_mlp_init_preserves_remat_mode():
+@pytest.mark.parametrize("remat_mode", ["save_moe", "offload_moe"])
+def test_moe_expert_mlp_init_preserves_remat_mode(remat_mode: str):
     mlp = MoEExpertMlp.init(
         num_experts=4,
         hidden_dim=16,
@@ -398,10 +457,116 @@ def test_moe_expert_mlp_init_preserves_remat_mode():
         initializer_std=0.02,
         key=jax.random.key(28),
         implementation="deepep",
+        remat_mode=remat_mode,
+    )
+
+    assert mlp.remat_mode == remat_mode
+
+
+def test_moe_expert_mlp_init_accepts_deepep_internode():
+    mlp = MoEExpertMlp.init(
+        num_experts=16,
+        hidden_dim=16,
+        intermediate_dim=24,
+        initializer_std=0.02,
+        key=jax.random.key(2801),
+        implementation="deepep_internode",
         remat_mode="save_moe",
     )
 
+    assert mlp.implementation == "deepep_internode"
     assert mlp.remat_mode == "save_moe"
+
+
+def test_deepep_internode_tokens_per_rdma_rank_groups_by_local_ranks():
+    tokens_per_rank = jnp.arange(16, dtype=jnp.int32)
+
+    np.testing.assert_array_equal(
+        np.asarray(_tokens_per_rdma_rank(tokens_per_rank, num_local_ranks=8)),
+        np.array([28, 92], dtype=np.int32),
+    )
+
+
+def test_deepep_internode_tokens_per_rdma_rank_rejects_single_node():
+    tokens_per_rank = jnp.arange(8, dtype=jnp.int32)
+
+    with pytest.raises(ValueError, match="more than one RDMA node rank"):
+        _tokens_per_rdma_rank(tokens_per_rank, num_local_ranks=8)
+
+
+def test_deepep_internode_gather_collapse_matches_scatter_collapse():
+    recv_capacity = 4
+    hidden_dim = 3
+    out_dispatch = (jnp.arange(5 * hidden_dim, dtype=jnp.float32).reshape(5, hidden_dim) / 7).astype(jnp.bfloat16)
+    assignment_weights = jnp.array([1.0, 0.5, 0.25, 0.75, 1.25], dtype=jnp.bfloat16)
+    recv_token_indices = jnp.array([0, 0, 1, 2, 2], dtype=jnp.int32)
+    assignment_destinations = jnp.array([0, 1, 2, -1, 3, 4, -1, -1], dtype=jnp.int32)
+    local_group_sizes = jnp.array([2, 3], dtype=jnp.int32)
+    num_recv_tokens = jnp.array([3], dtype=jnp.int32)
+
+    scatter = _collapse_local_assignments_jax(
+        out_dispatch,
+        assignment_weights,
+        recv_token_indices,
+        local_group_sizes,
+        recv_capacity=recv_capacity,
+    )
+    gather = _collapse_local_assignments_gather_jax(
+        out_dispatch,
+        assignment_weights,
+        assignment_destinations,
+        local_group_sizes,
+        num_recv_tokens,
+        recv_capacity=recv_capacity,
+    )
+
+    np.testing.assert_allclose(np.asarray(gather), np.asarray(scatter), rtol=0, atol=0)
+
+
+def test_deepep_internode_gather_collapse_gradients_match_scatter_collapse():
+    recv_capacity = 4
+    hidden_dim = 3
+    out_dispatch = (jnp.arange(5 * hidden_dim, dtype=jnp.float32).reshape(5, hidden_dim) / 7).astype(jnp.float32)
+    assignment_weights = jnp.array([1.0, 0.5, 0.25, 0.75, 1.25], dtype=jnp.float32)
+    recv_token_indices = jnp.array([0, 0, 1, 2, 2], dtype=jnp.int32)
+    assignment_destinations = jnp.array([0, 1, 2, -1, 3, 4, -1, -1], dtype=jnp.int32)
+    local_group_sizes = jnp.array([2, 3], dtype=jnp.int32)
+    num_recv_tokens = jnp.array([3], dtype=jnp.int32)
+
+    def scatter_loss(dispatch_rows, weights):
+        return jnp.sum(
+            _collapse_local_assignments_jax(
+                dispatch_rows,
+                weights,
+                recv_token_indices,
+                local_group_sizes,
+                recv_capacity=recv_capacity,
+            ).astype(jnp.float32)
+        )
+
+    def gather_loss(dispatch_rows, weights):
+        return jnp.sum(
+            _collapse_local_assignments_gather_jax(
+                dispatch_rows,
+                weights,
+                assignment_destinations,
+                local_group_sizes,
+                num_recv_tokens,
+                recv_capacity=recv_capacity,
+            ).astype(jnp.float32)
+        )
+
+    scatter_dispatch_grad, scatter_weight_grad = jax.grad(scatter_loss, argnums=(0, 1))(
+        out_dispatch,
+        assignment_weights,
+    )
+    gather_dispatch_grad, gather_weight_grad = jax.grad(gather_loss, argnums=(0, 1))(
+        out_dispatch,
+        assignment_weights,
+    )
+
+    np.testing.assert_allclose(np.asarray(gather_dispatch_grad), np.asarray(scatter_dispatch_grad), rtol=0, atol=0)
+    np.testing.assert_allclose(np.asarray(gather_weight_grad), np.asarray(scatter_weight_grad), rtol=0, atol=0)
 
 
 def test_moe_expert_mlp_init_rejects_unknown_remat_mode():
@@ -546,7 +711,9 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
     assert mlp.w_down.sharding.spec == P(None, "model", "data")
 
 
-@pytest.mark.parametrize("implementation", ["ring", "assigned_token", "ragged_all_to_all", "deepep"])
+@pytest.mark.parametrize(
+    "implementation", ["ring", "assigned_token", "ragged_all_to_all", "padded_all_to_all", "deepep"]
+)
 def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
     if implementation == "deepep":
         status = deepep_preflight_status(required_files=TRANSPORT_REQUIRED_FILES)
@@ -629,7 +796,8 @@ def test_shard_a2a_params_uses_sender_side_output_offsets():
     np.testing.assert_array_equal(np.asarray(output_offsets), np.array([1, 7, 2], dtype=np.int32))
 
 
-def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available():
+@pytest.mark.parametrize("implementation", ["ragged_all_to_all", "padded_all_to_all"])
+def test_moe_mlp_a2a_backend_matches_ring_with_ep_axis_when_available(implementation: MoeImplementation):
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
         pytest.skip("requires an even number of >=2 devices")
@@ -671,20 +839,20 @@ def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available():
             report_capacity_overflow=True,
             capacity_factor=1.0,
         )
-        ragged_out, ragged_dropped = moe_mlp(
+        a2a_out, a2a_dropped = moe_mlp(
             x,
             selected_experts,
             combine_weights,
             w_up_gate,
             w_down,
-            implementation="ragged_all_to_all",
+            implementation=implementation,
             mesh=None,
             report_capacity_overflow=True,
             capacity_factor=1.0,
         )
 
-    np.testing.assert_allclose(np.asarray(ragged_out), np.asarray(ring_out), rtol=1e-5, atol=1e-5)
-    assert int(ragged_dropped) == int(ring_dropped)
+    np.testing.assert_allclose(np.asarray(a2a_out), np.asarray(ring_out), rtol=1e-5, atol=1e-5)
+    assert int(a2a_dropped) == int(ring_dropped)
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():
@@ -835,6 +1003,38 @@ def test_compact_and_expand_from_keep_mask_roundtrip():
         rtol=0,
         atol=0,
     )
+
+
+def test_pack_same_route_payloads_roundtrip():
+    activations = jnp.array(
+        [
+            [1.0, 10.0, 100.0],
+            [2.0, 20.0, 200.0],
+            [3.0, 30.0, 300.0],
+        ],
+        dtype=jnp.float32,
+    )
+    weights = jnp.array([[0.25], [0.5], [0.75]], dtype=jnp.float32)
+
+    packed, widths = _pack_same_route_payloads((activations, weights))
+    restored_activations, restored_weights = _split_same_route_payloads(packed, widths)
+
+    assert widths == (3, 1)
+    np.testing.assert_allclose(
+        np.asarray(packed),
+        np.asarray(
+            [
+                [1.0, 10.0, 100.0, 0.25],
+                [2.0, 20.0, 200.0, 0.5],
+                [3.0, 30.0, 300.0, 0.75],
+            ],
+            dtype=np.float32,
+        ),
+        rtol=0,
+        atol=0,
+    )
+    np.testing.assert_allclose(np.asarray(restored_activations), np.asarray(activations), rtol=0, atol=0)
+    np.testing.assert_allclose(np.asarray(restored_weights), np.asarray(weights), rtol=0, atol=0)
 
 
 def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():

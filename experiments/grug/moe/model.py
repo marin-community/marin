@@ -34,6 +34,7 @@ from levanter.grug.attention import (
 )
 from levanter.grug.grug_moe import (
     DEEPEP_REMAT_SAVE_NAMES,
+    MOE_REMAT_OFFLOAD_NAMES,
     MOE_REMAT_SAVE_NAMES,
     GroupedMoEExpertMlp,
     MoeActivation,
@@ -65,8 +66,8 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
-RematMode = Literal["none", "recompute_all", "save_moe"]
-VALID_REMAT_MODES: tuple[RematMode, ...] = ("none", "recompute_all", "save_moe")
+RematMode = Literal["none", "recompute_all", "save_moe", "offload_moe"]
+VALID_REMAT_MODES: tuple[RematMode, ...] = ("none", "recompute_all", "save_moe", "offload_moe")
 CrossEntropyImplementation = Literal["pallas_gpu", "pallas_tpu", "xla", "reference"]
 OutputProjSharding = Literal["lm_head", "replicated"]
 VALID_OUTPUT_PROJ_SHARDINGS: tuple[OutputProjSharding, ...] = ("lm_head", "replicated")
@@ -177,13 +178,17 @@ class GrugModelConfig:
     output_proj_sharding: OutputProjSharding = "lm_head"
     """Output projection parameter sharding. Use "replicated" only for layout diagnostics."""
     moe_implementation: MoeImplementation | None = None
+    moe_capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
+    """Capacity multiplier for expert-parallel dispatch buffers."""
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing.
 
     "none" keeps block activations live; use it only for narrow memory/throughput
     probes. "recompute_all" reruns the whole block in backward (lowest memory).
     "save_moe" keeps the tagged MoE dispatch tensors so backward skips
-    re-running expert dispatch and its EP collectives.
+    re-running expert dispatch and its EP collectives. "offload_moe" keeps
+    DeepEP effect handles live but moves the bulky MoE residuals to pinned host
+    memory instead of HBM.
     """
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -219,6 +224,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be positive")
         if self.num_experts_per_token > self.num_experts:
             raise ValueError("num_experts_per_token must be <= num_experts")
+        if self.moe_capacity_factor <= 0:
+            raise ValueError("moe_capacity_factor must be positive")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         if self.routing_renorm_sum is not None and self.routing_renorm_sum <= 0:
@@ -558,7 +565,7 @@ class MoEMLP(eqx.Module):
                 key=k_expert_mlp,
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
-                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                capacity_factor=cfg.moe_capacity_factor,
                 remat_mode=cfg.remat_mode,
             ),
             cfg=cfg,
@@ -880,8 +887,12 @@ class Transformer(eqx.Module):
             batch_size, seq_len = hidden.shape[:2]
             pko_doc_starts = _segment_start_mask(mask, batch_size=batch_size, seq_len=seq_len)
 
-        uses_effectful_moe = resolve_moe_implementation(cfg.moe_implementation) == "deepep"
-        if cfg.remat_mode == "save_moe":
+        uses_effectful_moe = resolve_moe_implementation(cfg.moe_implementation) in (
+            "deepep",
+            "deepep_composed",
+            "deepep_internode",
+        )
+        if cfg.remat_mode in ("save_moe", "offload_moe"):
             remat_save_names = MOE_REMAT_SAVE_NAMES
             if uses_effectful_moe:
                 remat_save_names = (
@@ -889,7 +900,21 @@ class Transformer(eqx.Module):
                     *DEEPEP_REMAT_SAVE_NAMES,
                     *MOE_REMAT_SAVE_NAMES,
                 )
-            remat_policy = jax.checkpoint_policies.save_only_these_names(*remat_save_names)
+            if cfg.remat_mode == "offload_moe":
+                remat_names_to_save = ()
+                if uses_effectful_moe:
+                    remat_names_to_save = (
+                        _CHECKPOINT_BLOCK_ATTENTION_OUTPUT,
+                        *DEEPEP_REMAT_SAVE_NAMES,
+                    )
+                remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+                    names_which_can_be_saved=remat_names_to_save,
+                    names_which_can_be_offloaded=MOE_REMAT_OFFLOAD_NAMES,
+                    offload_src="device",
+                    offload_dst="pinned_host",
+                )
+            else:
+                remat_policy = jax.checkpoint_policies.save_only_these_names(*remat_save_names)
         elif uses_effectful_moe and cfg.remat_mode == "recompute_all":
             remat_policy = jax.checkpoint_policies.save_only_these_names(
                 _CHECKPOINT_BLOCK_ATTENTION_OUTPUT,
@@ -1003,6 +1028,7 @@ __all__ = [
     "CrossEntropyImplementation",
     "DenseMLP",
     "GatedNorm",
+    "GroupedMoEMLP",
     "GrugModelConfig",
     "MoEMLP",
     "MoeActivation",

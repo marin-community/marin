@@ -7,15 +7,22 @@ import dataclasses
 import functools
 import logging
 import os
+import pickle
+import shutil
+import socket
 import statistics
 import subprocess
+import sys
+import tarfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
 import equinox as eqx
+import fsspec
 import jax
+import jax._src.distributed as jax_distributed
 import jax.numpy as jnp
 import jmp
 import levanter.callbacks as callbacks
@@ -25,6 +32,8 @@ from fray.cluster import ResourceConfig
 from fray.device_flops import device_flops_for_jax_device
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from iris.client.client import iris_ctx
+from iris.cluster.client.job_info import get_job_info
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -41,6 +50,14 @@ from levanter.kernels.deepep.availability import (
     DEEPEP_CUDA_ARCH_ENV,
     DEEPEP_KNOWN_GOOD_COMMIT,
     DEEPEP_SRC_ENV,
+)
+from levanter.kernels.deepep.layout_ffi import build_layout_library
+from levanter.kernels.deepep.transport_ffi import (
+    TransportBuildMode,
+    build_transport_library,
+    ensure_internode_runtime,
+    internode_dispatch_clean_buffer_size_hint,
+    internode_runtime_status,
 )
 from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig, OptimizerConfig
@@ -65,6 +82,26 @@ logger = logging.getLogger(__name__)
 LiveParamMode = Literal["param", "compute_with_master"]
 
 _DEEPEP_SOURCE_URL = "https://github.com/deepseek-ai/DeepEP.git"
+_DEFAULT_DEEPEP_INTERNODE_NVL_BYTES = 256 * 1024 * 1024
+_DEFAULT_DEEPEP_INTERNODE_RDMA_BYTES = 256 * 1024 * 1024
+_DEEPEP_GRUG_COORDINATOR_PORT = 8476
+
+
+def _maybe_install_rdma_headers(model: GrugModelConfig) -> None:
+    if model.moe_implementation != "deepep_internode":
+        return
+    if Path("/usr/include/infiniband/mlx5dv.h").is_file():
+        return
+    if os.geteuid() != 0:
+        raise RuntimeError("DeepEP internode training needs infiniband/mlx5dv.h but cannot apt-get as non-root")
+
+    logger.info("Installing libibverbs-dev for DeepEP internode transport build")
+    subprocess.run(["apt-get", "update"], check=True)
+    subprocess.run(
+        ["apt-get", "install", "-y", "--no-install-recommends", "libibverbs-dev"],
+        check=True,
+        env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
+    )
 
 
 def _env_bool(key: str, default: bool) -> bool:
@@ -79,8 +116,36 @@ def _env_bool(key: str, default: bool) -> bool:
     raise ValueError(f"{key}={raw!r} must be a boolean")
 
 
+def _env_int(key: str, default: int) -> int:
+    raw = os.environ.get(key, "")
+    if not raw:
+        return default
+    return int(raw)
+
+
+def _maybe_upload_profiler_tar(profile_dir: Path, *, run_id: str) -> str | None:
+    remote_prefix = os.environ.get("MAY_UPLOAD_PROFILER_REMOTE_PREFIX", "")
+    if not remote_prefix:
+        return None
+    if not profile_dir.exists():
+        logger.warning("Profiler remote upload requested, but profile directory does not exist: %s", profile_dir)
+        return None
+
+    archive_path = Path("/tmp") / f"{run_id}-profiler.tgz"
+    logger.info("Creating profiler tarball %s from %s", archive_path, profile_dir)
+    with tarfile.open(archive_path, "w:gz") as tar:
+        tar.add(profile_dir, arcname="profiler")
+
+    remote_path = f"{remote_prefix.rstrip('/')}/{run_id}-profiler.tgz"
+    logger.info("Uploading profiler tarball to %s", remote_path)
+    with archive_path.open("rb") as src, fsspec.open(remote_path, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    logger.info("Uploaded profiler tarball to %s", remote_path)
+    return remote_path
+
+
 def _maybe_bootstrap_deepep_source(model: GrugModelConfig) -> None:
-    if model.moe_implementation != "deepep":
+    if model.moe_implementation not in ("deepep", "deepep_composed", "deepep_internode"):
         return
 
     raw_root = os.environ.get(DEEPEP_SRC_ENV, "")
@@ -107,6 +172,169 @@ def _maybe_bootstrap_deepep_source(model: GrugModelConfig) -> None:
         check=True,
     )
     subprocess.run(["git", "-C", str(root), "checkout", revision], check=True)
+
+
+def _maybe_initialize_deepep_internode_runtime(config: GrugRunConfig) -> None:
+    model = config.model
+    if model.moe_implementation != "deepep_internode":
+        return
+    ranks_per_node = _env_int("DEEPEP_RANKS_PER_NODE", _deepep_grug_processes_per_task(model))
+    num_rdma_ranks = max(1, config.trainer.expert_axis_size // ranks_per_node)
+    required_nvl_bytes, required_rdma_bytes = internode_dispatch_clean_buffer_size_hint(
+        hidden=model.hidden_dim,
+        topk=model.num_experts_per_token,
+        num_rdma_ranks=max(2, num_rdma_ranks),
+    )
+    num_nvl_bytes = _env_int("DEEPEP_RUNTIME_NVL_BYTES", _DEFAULT_DEEPEP_INTERNODE_NVL_BYTES)
+    num_rdma_bytes = _env_int("DEEPEP_RUNTIME_RDMA_BYTES", _DEFAULT_DEEPEP_INTERNODE_RDMA_BYTES)
+    if num_nvl_bytes < required_nvl_bytes or num_rdma_bytes < required_rdma_bytes:
+        raise ValueError(
+            "DeepEP internode runtime buffers are too small for the configured dispatch clean regions: "
+            f"{num_nvl_bytes=} required_nvl_bytes={required_nvl_bytes} "
+            f"{num_rdma_bytes=} required_rdma_bytes={required_rdma_bytes} "
+            f"hidden={model.hidden_dim} topk={model.num_experts_per_token} {num_rdma_ranks=} {ranks_per_node=}"
+        )
+    logger.info("DeepEP internode runtime pre-init status: %s", internode_runtime_status())
+    ensure_internode_runtime(
+        num_nvl_bytes=num_nvl_bytes,
+        num_rdma_bytes=num_rdma_bytes,
+        configure_nvshmem_env=True,
+    )
+    logger.info("DeepEP internode runtime post-init status: %s", internode_runtime_status())
+
+
+def _deepep_grug_processes_per_task(model: GrugModelConfig) -> int:
+    if model.moe_implementation != "deepep_internode":
+        return 1
+    return _env_int("MAY_DEEPEP_PROCESSES_PER_TASK", 1)
+
+
+def _coordinator_address_for_iris_task(*, endpoint_name: str, port: int, timeout: float = 300.0) -> str:
+    job_info = get_job_info()
+    if job_info is None:
+        return f"127.0.0.1:{port}"
+    ctx = iris_ctx()
+    if job_info.task_index == 0:
+        address = f"{job_info.advertise_host}:{port}"
+        ctx.registry.register(endpoint_name, address)
+        return address
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        resolved = ctx.resolver.resolve(endpoint_name)
+        if not resolved.is_empty:
+            return resolved.first().url
+        time.sleep(2.0)
+    raise RuntimeError(f"Timed out after {timeout}s waiting for DeepEP Grug coordinator {endpoint_name!r}")
+
+
+def _run_grug_process_per_gpu_supervisor(config: GrugRunConfig, *, processes_per_task: int) -> None:
+    _maybe_install_rdma_headers(config.model)
+    _maybe_bootstrap_deepep_source(config.model)
+    logger.info("Prebuilding DeepEP FFI libraries before spawning local Grug workers")
+    layout_library = build_layout_library()
+    intranode_library = build_transport_library(TransportBuildMode.INTRANODE)
+    internode_library = build_transport_library(TransportBuildMode.INTERNODE)
+    logger.info(
+        "DeepEP prebuilt libraries: layout=%s intranode=%s internode=%s",
+        layout_library,
+        intranode_library,
+        internode_library,
+    )
+
+    job_info = get_job_info()
+    if job_info is None:
+        raise RuntimeError("DeepEP process-per-GPU Grug supervisor must run inside an Iris task")
+    if processes_per_task <= 1:
+        raise ValueError(f"processes_per_task must be greater than 1, got {processes_per_task}")
+    if job_info.num_tasks <= 1:
+        raise ValueError("DeepEP process-per-GPU Grug supervisor needs at least two Iris tasks")
+
+    run_id = config.trainer.trainer.id or "unknown"
+    coordinator_address = _coordinator_address_for_iris_task(
+        endpoint_name=os.environ.get("MAY_DEEPEP_COORDINATOR_ENDPOINT", f"deepep_grug_jax_coordinator_{run_id}"),
+        port=_DEEPEP_GRUG_COORDINATOR_PORT,
+    )
+    process_count = job_info.num_tasks * processes_per_task
+    base_process_index = job_info.task_index * processes_per_task
+    config_path = Path(f"/tmp/grug_deepep_process_per_gpu_config_{os.getpid()}.pkl")
+    config_path.write_bytes(pickle.dumps(config))
+    logger.info(
+        "Starting DeepEP process-per-GPU Grug supervisor: task=%s/%s host=%s coordinator=%s "
+        "process_count=%s processes_per_task=%s config_path=%s",
+        job_info.task_index,
+        job_info.num_tasks,
+        socket.gethostname(),
+        coordinator_address,
+        process_count,
+        processes_per_task,
+        config_path,
+    )
+
+    procs: list[subprocess.Popen[bytes]] = []
+    for local_rank in range(processes_per_task):
+        env = {
+            **os.environ,
+            "CUDA_VISIBLE_DEVICES": str(local_rank),
+            "DEEPEP_RANKS_PER_NODE": str(processes_per_task),
+            "DEEPEP_GRUG_LOCAL_WORKER": "1",
+            "DEEPEP_GRUG_CONFIG_PATH": str(config_path),
+            "DEEPEP_GRUG_PROCESS_COUNT": str(process_count),
+            "DEEPEP_GRUG_PROCESS_INDEX": str(base_process_index + local_rank),
+            "DEEPEP_GRUG_LOCAL_RANK": str(local_rank),
+            "JAX_COORDINATOR_ADDRESS": coordinator_address,
+            "JAX_PROCESS_COUNT": str(process_count),
+            "JAX_PROCESS_INDEX": str(base_process_index + local_rank),
+            "JAX_LOCAL_DEVICE_IDS": "0",
+        }
+        procs.append(
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    "from experiments.grug.moe.train import _run_grug_local_worker_from_env; "
+                    "_run_grug_local_worker_from_env()",
+                ],
+                env=env,
+            )
+        )
+
+    failures: list[tuple[int, int]] = []
+    for local_rank, proc in enumerate(procs):
+        return_code = proc.wait()
+        if return_code != 0:
+            failures.append((local_rank, return_code))
+    if failures:
+        raise RuntimeError(f"DeepEP process-per-GPU Grug workers failed: {failures}")
+    logger.info("DeepEP process-per-GPU Grug supervisor completed")
+
+
+def _run_grug_local_worker_from_env() -> None:
+    config_path = Path(os.environ["DEEPEP_GRUG_CONFIG_PATH"])
+    config = pickle.loads(config_path.read_bytes())
+    process_count = int(os.environ["DEEPEP_GRUG_PROCESS_COUNT"])
+    process_index = int(os.environ["DEEPEP_GRUG_PROCESS_INDEX"])
+    local_rank = int(os.environ["DEEPEP_GRUG_LOCAL_RANK"])
+    coordinator_address = os.environ["JAX_COORDINATOR_ADDRESS"]
+    logger.info(
+        "Starting DeepEP process-per-GPU Grug worker: host=%s process=%s/%s local_rank=%s",
+        socket.gethostname(),
+        process_index,
+        process_count,
+        local_rank,
+    )
+    jax.distributed.initialize(
+        coordinator_address=coordinator_address,
+        num_processes=process_count,
+        process_id=process_index,
+        local_device_ids=0,
+        coordinator_bind_address=f"0.0.0.0:{_DEEPEP_GRUG_COORDINATOR_PORT}" if process_index == 0 else None,
+    )
+    client = jax_distributed.global_state.client
+    if client is None:
+        raise RuntimeError("DeepEP process-per-GPU Grug worker requires jax.distributed to be initialized")
+    client.wait_at_barrier("deepep_grug_process_per_gpu_pre_train", timeout_in_ms=300_000)
+    _run_grug_local(config)
 
 
 @dataclass(frozen=True)
@@ -524,9 +752,16 @@ def _make_train_step(
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    processes_per_task = _deepep_grug_processes_per_task(config.model)
+    if processes_per_task > 1 and os.environ.get("DEEPEP_GRUG_LOCAL_WORKER") != "1":
+        _run_grug_process_per_gpu_supervisor(config, processes_per_task=processes_per_task)
+        return
+
+    _maybe_install_rdma_headers(config.model)
     _maybe_bootstrap_deepep_source(config.model)
     trainer = config.trainer.trainer
     trainer.initialize()
+    _maybe_initialize_deepep_internode_runtime(config)
     levanter.tracker.log_configuration(config)
 
     run_id = trainer.id
@@ -651,9 +886,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if isinstance(trainer.tracker, WandbConfig) and trainer.tracker.save_xla_dumps:
             state_callbacks.add_hook(callbacks.wandb_xla_logger(trainer.tracker), every=log_every)
         if profiler_enabled:
+            profile_dir = Path(trainer.log_dir) / run_id / "profiler"
+            if os.environ.get("DEEPEP_GRUG_LOCAL_WORKER") == "1":
+                # DeepEP process-per-GPU workers on the same Iris task share a local filesystem.
+                # Give each JAX process its own trace directory so stop_trace() does not race.
+                profile_dir = profile_dir / f"process_{jax.process_index()}"
             state_callbacks.add_hook(
                 callbacks.profile(
-                    str(trainer.log_dir / run_id / "profiler"),
+                    str(profile_dir),
                     profiler_cfg.start_step,
                     profiler_num_steps,
                     profiler_cfg.perfetto_link,
@@ -781,6 +1021,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 checkpointer.on_step(tree=state, step=int(state.step), force=True)
                 checkpointer.wait_until_finished()
 
+    if jax.process_index() == 0:
+        profile_dir = Path(trainer.log_dir) / run_id / "profiler"
+        _maybe_upload_profiler_tar(profile_dir, run_id=run_id)
     if os.environ.get("MAY_UPLOAD_PROFILER_ARTIFACT", "false").lower() == "true" and jax.process_index() == 0:
         profile_dir = Path(trainer.log_dir) / run_id / "profiler"
         if profile_dir.exists():

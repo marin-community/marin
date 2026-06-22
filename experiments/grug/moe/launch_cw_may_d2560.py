@@ -18,13 +18,14 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_CPU_PER_REPLICA=32   CPU request for each 8xH100 worker pod
     MAY_CHECKPOINTS=none     disable checkpoint restore/saves for throughput probes
     MAY_MP=params=float32,compute=bfloat16,output=bfloat16
-    MAY_CE_IMPLEMENTATION=   empty = default; xla forces streaming XLA CE
+    MAY_CE_IMPLEMENTATION=pallas_gpu  pallas_gpu by default; xla forces streaming XLA CE
     MAY_WATCH_INTERVAL=0     grad/param watch interval; 0 disables
     MAY_LOG_EVERY=1          train progress/scalar logging cadence
     MAY_LOG_JAXPRS=false     disable JAXPR dumps for throughput probes
     MAY_LOG_XLA_HLO=false    disable HLO dumps for throughput probes
     MAY_SAVE_XLA_DUMPS=false upload XLA_FLAGS dump directory to W&B
-    MAY_REMAT=save_moe       none | recompute_all | save_moe
+    MAY_REMAT=save_moe       none | recompute_all | save_moe | offload_moe
+    MAY_MOE_CAPACITY_FACTOR=1.0  expert-parallel dispatch capacity multiplier
     MAY_USE_PKO=true         enable PKO/doc-start mask path on long layers
     MAY_PKO_ON_LAST_LAYER=true
     MAY_BLOCK_CROSS_DOCUMENT_ATTENTION=true  synthetic data segment-id diagnostic
@@ -33,14 +34,14 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_OPTIMIZER=muonh     muonh | sgd diagnostic for optimizer overhead
     MAY_MUON_BACKEND_STEPS=5  Newton-Schulz steps for MuonH when MAY_OPTIMIZER=muonh
     MAY_MUON_ORTHOGONALIZATION_LAYOUT=stack_batch_sharded  stack_batch_sharded | vmap_replicated
-    MAY_MUON_MAX_GROUPED_STACK_SIZE=256  Maximum grouped Muon stack size
+    MAY_MUON_MAX_GROUPED_STACK_SIZE=8  Maximum grouped Muon stack size for grouped_muonh packed-bank compute
     MAY_MUON_NS_COMPUTE_DTYPE=input  input | bf16 | fp32 | fp16 Newton-Schulz compute dtype
     MAY_MUON_NESTEROV=true  true | false Muon momentum update mode
     MAY_EXPERT_3D_OPTIMIZER=muonh  muonh | adamh | grouped_muonh for routed expert weights
     MAY_ORDINARY_2D_OPTIMIZER=muonh  muonh | adamh | adam | sgd for ordinary non-expert 2D weights
     MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE=  optional grouped_muonh stack group size
     MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY=true  use packed Route A boundary for grouped_muonh
-    MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE=false  experimental: keep packed banks through grouped_muonh compute
+    MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE=true  keep packed banks through grouped_muonh compute
 
 The default parameter policy keeps one sharded fp32 parameter tree plus sharded
 optimizer state. Set ``MAY_LIVE_PARAM_MODE=compute_with_master`` to keep a
@@ -158,7 +159,7 @@ def build_may_model() -> GrugModelConfig:
         valid = ", ".join(VALID_INPUT_EMBED_SHARDINGS)
         raise ValueError(f"MAY_INPUT_EMBED_SHARDING={input_embed_sharding!r} must be one of {valid}")
     attention_implementation = os.environ.get("MAY_ATTENTION_IMPLEMENTATION", "gpu_fa4_cute")
-    cross_entropy_implementation = os.environ.get("MAY_CE_IMPLEMENTATION") or None
+    cross_entropy_implementation = os.environ.get("MAY_CE_IMPLEMENTATION", "pallas_gpu") or None
 
     model = MAY_HEURISTIC.build_model_config(hidden_dim, seq_len=seq_len)
     return dataclasses.replace(
@@ -167,6 +168,7 @@ def build_may_model() -> GrugModelConfig:
         sliding_window=sliding_window,
         num_experts=env_int("MAY_NUM_EXPERTS", 256),
         num_experts_per_token=env_int("MAY_TOP_K", 4),
+        moe_capacity_factor=env_float("MAY_MOE_CAPACITY_FACTOR", model.moe_capacity_factor),
         router_z_loss_coef=0.0,
         routing_renorm_sum=env_float("MAY_ROUTING_RENORM_SUM", 2.5),
         use_half_rope=True,
@@ -205,6 +207,18 @@ def build_may_optimizer(*, batch_size: int, seq_len: int) -> OptimizerConfig:
             lr_schedule=base_optimizer.lr_schedule,
             decay=base_optimizer.decay,
         )
+    expert_grouped_muonh_packed_entry = env_bool(
+        "MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY",
+        GrugMoeMuonHConfig.expert_grouped_muonh_packed_entry,
+    )
+    expert_grouped_muonh_packed_bank_compute = env_bool(
+        "MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE",
+        GrugMoeMuonHConfig.expert_grouped_muonh_packed_bank_compute,
+    )
+    max_grouped_stack_size_default = GrugMoeMuonHConfig.max_grouped_stack_size
+    if expert_3d_optimizer == "grouped_muonh" and expert_grouped_muonh_packed_bank_compute:
+        max_grouped_stack_size_default = 8
+
     return GrugMoeMuonHConfig(
         learning_rate=base_optimizer.learning_rate,
         adam_lr=base_optimizer.adam_lr,
@@ -217,18 +231,12 @@ def build_may_optimizer(*, batch_size: int, seq_len: int) -> OptimizerConfig:
         orthogonalization_layout=os.environ.get(
             "MAY_MUON_ORTHOGONALIZATION_LAYOUT", GrugMoeMuonHConfig.orthogonalization_layout
         ),
-        max_grouped_stack_size=env_int("MAY_MUON_MAX_GROUPED_STACK_SIZE", GrugMoeMuonHConfig.max_grouped_stack_size),
+        max_grouped_stack_size=env_int("MAY_MUON_MAX_GROUPED_STACK_SIZE", max_grouped_stack_size_default),
         ns_compute_dtype=os.environ.get("MAY_MUON_NS_COMPUTE_DTYPE", GrugMoeMuonHConfig.ns_compute_dtype),
         nesterov=env_bool("MAY_MUON_NESTEROV", GrugMoeMuonHConfig.nesterov),
         expert_grouped_muonh_group_size=env_optional_int("MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE"),
-        expert_grouped_muonh_packed_entry=env_bool(
-            "MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY",
-            GrugMoeMuonHConfig.expert_grouped_muonh_packed_entry,
-        ),
-        expert_grouped_muonh_packed_bank_compute=env_bool(
-            "MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE",
-            GrugMoeMuonHConfig.expert_grouped_muonh_packed_bank_compute,
-        ),
+        expert_grouped_muonh_packed_entry=expert_grouped_muonh_packed_entry,
+        expert_grouped_muonh_packed_bank_compute=expert_grouped_muonh_packed_bank_compute,
         expert_grouped_muonh_chunk_local_boundaries=env_bool(
             "MAY_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES",
             GrugMoeMuonHConfig.expert_grouped_muonh_chunk_local_boundaries,

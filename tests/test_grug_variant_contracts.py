@@ -457,6 +457,7 @@ def test_grug_moe_may_recipe_attention_flags_lower():
         ("none", False),
         ("recompute_all", True),
         ("save_moe", True),
+        ("offload_moe", True),
     ],
 )
 def test_grug_moe_remat_mode_controls_checkpoint_boundary(remat_mode: str, expects_remat: bool):
@@ -507,6 +508,8 @@ def test_grug_moe_may_launcher_diagnostic_overrides(monkeypatch):
     monkeypatch.setenv("MAY_PKO_ON_LAST_LAYER", "false")
     monkeypatch.setenv("MAY_INPUT_EMBED_SHARDING", "replicated")
     monkeypatch.setenv("MAY_OUTPUT_PROJ_SHARDING", "replicated")
+    monkeypatch.setenv("MAY_MOE_CAPACITY_FACTOR", "1.5")
+    monkeypatch.delenv("MAY_CE_IMPLEMENTATION", raising=False)
 
     launch_module = importlib.import_module("experiments.grug.moe.launch_cw_may_d2560")
     model = launch_module.build_may_model()
@@ -516,6 +519,8 @@ def test_grug_moe_may_launcher_diagnostic_overrides(monkeypatch):
     assert model.pko_on_last_layer is False
     assert model.input_embed_sharding == "replicated"
     assert model.output_proj_sharding == "replicated"
+    assert model.moe_capacity_factor == 1.5
+    assert model.cross_entropy_implementation == "pallas_gpu"
 
 
 def test_grug_moe_pko_attention_accepts_precomputed_segment_starts(monkeypatch):

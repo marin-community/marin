@@ -24,14 +24,27 @@ MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "assigned_token",  # Expert-parallel plain-XLA assigned-token backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
+    "padded_all_to_all",  # Expert-parallel fixed-bucket all-to-all backend.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
+    "deepep_composed",  # Intranode DeepEP transport with separate capped local assignment packing.
+    "deepep_internode",  # Expert-parallel DeepEP internode dispatch/combine backend.
+    "grouped_assigned_token",  # Grouped-layer JAX EP backend with one assigned-token transport for the bank.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
-MoERematMode: TypeAlias = Literal["none", "recompute_all", "save_moe"]
+MoERematMode: TypeAlias = Literal["none", "recompute_all", "save_moe", "offload_moe"]
 _VALID_MOE_REMAT_MODES = get_args(MoERematMode)
-_EP_MOE_IMPLEMENTATIONS = ("ring", "assigned_token", "ragged_all_to_all", "deepep")
+_EP_MOE_IMPLEMENTATIONS = (
+    "ring",
+    "assigned_token",
+    "ragged_all_to_all",
+    "padded_all_to_all",
+    "deepep",
+    "deepep_composed",
+    "deepep_internode",
+    "grouped_assigned_token",
+)
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
@@ -56,6 +69,16 @@ _CHECKPOINT_DEEPEP_IS_TOKEN_IN_RANK = "grug_moe_deepep_is_token_in_rank"
 _CHECKPOINT_DEEPEP_ASSIGNMENT_WEIGHTS = "grug_moe_deepep_assignment_weights"
 _CHECKPOINT_DEEPEP_RECV_TOKEN_INDICES = "grug_moe_deepep_recv_token_indices"
 _CHECKPOINT_DEEPEP_LOCAL_GROUP_SIZES = "grug_moe_deepep_local_group_sizes"
+_CHECKPOINT_DEEPEP_RECV_SRC_META = "grug_moe_deepep_recv_src_meta"
+_CHECKPOINT_DEEPEP_RDMA_CHANNEL_PREFIX_MATRIX = "grug_moe_deepep_rdma_channel_prefix_matrix"
+_CHECKPOINT_DEEPEP_RECV_RDMA_CHANNEL_PREFIX_MATRIX = "grug_moe_deepep_recv_rdma_channel_prefix_matrix"
+_CHECKPOINT_DEEPEP_RECV_RDMA_RANK_PREFIX_SUM = "grug_moe_deepep_recv_rdma_rank_prefix_sum"
+_CHECKPOINT_DEEPEP_GBL_CHANNEL_PREFIX_MATRIX = "grug_moe_deepep_gbl_channel_prefix_matrix"
+_CHECKPOINT_DEEPEP_RECV_GBL_CHANNEL_PREFIX_MATRIX = "grug_moe_deepep_recv_gbl_channel_prefix_matrix"
+_CHECKPOINT_DEEPEP_RECV_GBL_RANK_PREFIX_SUM = "grug_moe_deepep_recv_gbl_rank_prefix_sum"
+_CHECKPOINT_DEEPEP_SEND_RDMA_HEAD = "grug_moe_deepep_send_rdma_head"
+_CHECKPOINT_DEEPEP_SEND_NVL_HEAD = "grug_moe_deepep_send_nvl_head"
+_CHECKPOINT_DEEPEP_NUM_RECV_RDMA_TOKENS = "grug_moe_deepep_num_recv_rdma_tokens"
 
 # Checkpoint names every MoE backend tags on its dispatch tensors. A remat
 # policy of jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
@@ -67,6 +90,7 @@ MOE_REMAT_SAVE_NAMES = (
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_MOE_OUTPUT,
 )
+MOE_REMAT_OFFLOAD_NAMES = MOE_REMAT_SAVE_NAMES
 
 # DeepEP's transport FFI calls are effectful and expensive. Saving these
 # residuals lets a normal block-level remat policy keep dispatch/combine handles
@@ -85,6 +109,16 @@ DEEPEP_REMAT_SAVE_NAMES = (
     _CHECKPOINT_DEEPEP_ASSIGNMENT_WEIGHTS,
     _CHECKPOINT_DEEPEP_RECV_TOKEN_INDICES,
     _CHECKPOINT_DEEPEP_LOCAL_GROUP_SIZES,
+    _CHECKPOINT_DEEPEP_RECV_SRC_META,
+    _CHECKPOINT_DEEPEP_RDMA_CHANNEL_PREFIX_MATRIX,
+    _CHECKPOINT_DEEPEP_RECV_RDMA_CHANNEL_PREFIX_MATRIX,
+    _CHECKPOINT_DEEPEP_RECV_RDMA_RANK_PREFIX_SUM,
+    _CHECKPOINT_DEEPEP_GBL_CHANNEL_PREFIX_MATRIX,
+    _CHECKPOINT_DEEPEP_RECV_GBL_CHANNEL_PREFIX_MATRIX,
+    _CHECKPOINT_DEEPEP_RECV_GBL_RANK_PREFIX_SUM,
+    _CHECKPOINT_DEEPEP_SEND_RDMA_HEAD,
+    _CHECKPOINT_DEEPEP_SEND_NVL_HEAD,
+    _CHECKPOINT_DEEPEP_NUM_RECV_RDMA_TOKENS,
 )
 
 

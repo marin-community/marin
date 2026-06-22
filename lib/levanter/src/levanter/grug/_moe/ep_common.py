@@ -195,3 +195,72 @@ def _expand_from_keep_mask(compacted: jax.Array, keep_mask: Bool[Array, "T"]) ->
     compact_index = jnp.cumsum(keep_i32, dtype=jnp.int32) - 1
     gathered = jnp.take(compacted, jnp.maximum(compact_index, 0), axis=0)
     return jnp.where(keep_mask[:, None], gathered, 0)
+
+
+def _pack_same_route_payloads(payloads: tuple[jax.Array, ...]) -> tuple[jax.Array, tuple[int, ...]]:
+    """Concatenate payloads that share identical ragged routing metadata.
+
+    This is the JAX-side bridge shape we can rely on today: when several
+    arrays are sent with the same input offsets, send sizes, output offsets,
+    and receive sizes, concatenate them into one wider payload before the
+    collective and split them locally after the collective. It reduces launch
+    count without changing the variable-size transfer semantics.
+    """
+    if not payloads:
+        raise ValueError("payloads must be non-empty")
+
+    first = payloads[0]
+    if first.ndim < 2:
+        raise ValueError(f"payloads must have at least rank 2, got shape={first.shape}")
+
+    leading_shape = first.shape[:-1]
+    dtype = first.dtype
+    widths: list[int] = []
+    for payload in payloads:
+        if payload.shape[:-1] != leading_shape:
+            raise ValueError(f"payload leading shapes must match: {payload.shape[:-1]} vs {leading_shape}")
+        if payload.dtype != dtype:
+            raise ValueError(f"payload dtypes must match: {payload.dtype} vs {dtype}")
+        widths.append(int(payload.shape[-1]))
+    return jnp.concatenate(payloads, axis=-1), tuple(widths)
+
+
+def _split_same_route_payloads(packed: jax.Array, widths: tuple[int, ...]) -> tuple[jax.Array, ...]:
+    if not widths:
+        raise ValueError("widths must be non-empty")
+    total_width = sum(widths)
+    if packed.shape[-1] != total_width:
+        raise ValueError(f"packed payload width must be {total_width}, got shape={packed.shape}")
+
+    outputs: list[jax.Array] = []
+    start = 0
+    for width in widths:
+        stop = start + width
+        outputs.append(packed[..., start:stop])
+        start = stop
+    return tuple(outputs)
+
+
+def _ragged_all_to_all_same_route_payloads(
+    payloads: tuple[jax.Array, ...],
+    *,
+    output_leading_size: int,
+    input_offsets: jax.Array,
+    send_sizes: jax.Array,
+    output_offsets: jax.Array,
+    recv_sizes: jax.Array,
+    axis_name: str,
+) -> tuple[jax.Array, ...]:
+    """Run one ragged all-to-all for multiple same-route rank-2 payloads."""
+    packed, widths = _pack_same_route_payloads(payloads)
+    output_shape = jnp.zeros((output_leading_size, packed.shape[-1]), dtype=packed.dtype)
+    routed = jax.lax.ragged_all_to_all(
+        packed,
+        output_shape,
+        input_offsets,
+        send_sizes,
+        output_offsets,
+        recv_sizes,
+        axis_name=axis_name,
+    )
+    return _split_same_route_payloads(routed, widths)

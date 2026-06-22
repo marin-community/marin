@@ -94,10 +94,16 @@ def _build_shared_library(out_path: Path) -> None:
     subprocess.run(cmd, check=True)
 
 
-def _load_library() -> ctypes.CDLL:
+def build_layout_library() -> Path:
+    """Compile the DeepEP dispatch-layout FFI library and return its cache path."""
     lib_path = _shared_library_path()
     if not lib_path.exists():
         _build_shared_library(lib_path)
+    return lib_path
+
+
+def _load_library() -> ctypes.CDLL:
+    lib_path = build_layout_library()
     return ctypes.cdll.LoadLibrary(str(lib_path))
 
 

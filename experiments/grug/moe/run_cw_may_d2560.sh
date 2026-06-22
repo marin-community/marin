@@ -18,6 +18,7 @@ MARIN_PREFIX="s3://marin-na/tmp/ttl=7d"
 RUN_ID=""
 SUBMIT=false
 TASK_IMAGE="${MAY_TASK_IMAGE:-}"
+PARENT_PREEMPTIBLE="${MAY_PARENT_PREEMPTIBLE:-}"
 
 GPU_REPLICAS=32
 EXPERT_AXIS=8
@@ -33,6 +34,8 @@ TOTAL_TOKENS="${MAY_TOTAL_TOKENS:-10000000000000}"
 CHECKPOINTS="none"
 DATA="slimpajama"
 REMAT="save_moe"
+MOE_CAPACITY_FACTOR="${MAY_MOE_CAPACITY_FACTOR:-1.0}"
+TOP_K="${MAY_TOP_K:-4}"
 USE_PKO="${MAY_USE_PKO:-true}"
 PKO_ON_LAST_LAYER="${MAY_PKO_ON_LAST_LAYER:-true}"
 BLOCK_CROSS_DOCUMENT_ATTENTION="${MAY_BLOCK_CROSS_DOCUMENT_ATTENTION:-true}"
@@ -41,7 +44,7 @@ OUTPUT_PROJ_SHARDING="${MAY_OUTPUT_PROJ_SHARDING:-lm_head}"
 OPTIMIZER="${MAY_OPTIMIZER:-muonh}"
 MUON_BACKEND_STEPS="${MAY_MUON_BACKEND_STEPS:-5}"
 MUON_ORTHOGONALIZATION_LAYOUT="${MAY_MUON_ORTHOGONALIZATION_LAYOUT:-stack_batch_sharded}"
-MUON_MAX_GROUPED_STACK_SIZE="${MAY_MUON_MAX_GROUPED_STACK_SIZE:-256}"
+MUON_MAX_GROUPED_STACK_SIZE="${MAY_MUON_MAX_GROUPED_STACK_SIZE:-}"
 MUON_NS_COMPUTE_DTYPE="${MAY_MUON_NS_COMPUTE_DTYPE:-input}"
 MUON_NESTEROV="${MAY_MUON_NESTEROV:-true}"
 ASSERT_OPTIMIZER_SHARDING="${MAY_ASSERT_OPTIMIZER_SHARDING:-true}"
@@ -50,12 +53,12 @@ EXPERT_3D_OPTIMIZER="${MAY_EXPERT_3D_OPTIMIZER:-muonh}"
 ORDINARY_2D_OPTIMIZER="${MAY_ORDINARY_2D_OPTIMIZER:-muonh}"
 EXPERT_GROUPED_MUONH_GROUP_SIZE="${MAY_EXPERT_GROUPED_MUONH_GROUP_SIZE:-}"
 EXPERT_GROUPED_MUONH_PACKED_ENTRY="${MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY:-true}"
-EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE="${MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE:-false}"
+EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE="${MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE:-true}"
 EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES="${MAY_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES:-false}"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 LIVE_PARAM_MODE="param"
 ATTENTION_IMPLEMENTATION="gpu_fa4_cute"
-CE_IMPLEMENTATION=""
+CE_IMPLEMENTATION="${MAY_CE_IMPLEMENTATION:-pallas_gpu}"
 MOE_IMPLEMENTATION="${MAY_MOE_IMPLEMENTATION:-ring}"
 TRACKER="wandb"
 PROFILER_START=12
@@ -65,6 +68,7 @@ HOST_TRACER_LEVEL="${MAY_PROFILER_HOST_TRACER_LEVEL:-1}"
 PYTHON_TRACER_LEVEL="${MAY_PROFILER_PYTHON_TRACER_LEVEL:-0}"
 DEVICE_TRACER_LEVEL="${MAY_PROFILER_DEVICE_TRACER_LEVEL:-}"
 UPLOAD_PROFILER_ARTIFACT="${MAY_UPLOAD_PROFILER_ARTIFACT:-false}"
+UPLOAD_PROFILER_REMOTE_PREFIX="${MAY_UPLOAD_PROFILER_REMOTE_PREFIX:-}"
 XLA_MEMORY_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.95}"
 PALLAS_CE_AUTOTUNE_ON_MISS="${LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS:-false}"
 NCCL_SOCKET_IFNAME_VALUE="${NCCL_SOCKET_IFNAME:-^ibs,ibp,lo,docker,veth,cilium,lxc}"
@@ -76,6 +80,9 @@ LOG_JAXPRS="${MAY_LOG_JAXPRS:-false}"
 LOG_XLA_HLO="${MAY_LOG_XLA_HLO:-false}"
 SAVE_XLA_DUMPS="${MAY_SAVE_XLA_DUMPS:-false}"
 XLA_FLAGS_VALUE="${MAY_XLA_FLAGS:-}"
+DEEPEP_BOOTSTRAP_SOURCE="${MAY_DEEPEP_BOOTSTRAP_SOURCE:-false}"
+DEEPEP_RANKS_PER_NODE="${MAY_DEEPEP_RANKS_PER_NODE:-}"
+DEEPEP_PROCESSES_PER_TASK="${MAY_DEEPEP_PROCESSES_PER_TASK:-}"
 
 usage() {
     cat <<'EOF'
@@ -115,7 +122,9 @@ Options:
   --tracker NAME            MAY_TRACKER: wandb or json_logger (default: wandb).
   --data NAME               MAY_DATA: slimpajama, nemotron, or synthetic (default: slimpajama).
   --checkpoints MODE        MAY_CHECKPOINTS: none, local, or s3 (default: none).
-  --remat MODE              MAY_REMAT: save_moe or recompute_all (default: save_moe).
+  --remat MODE              MAY_REMAT: none, recompute_all, save_moe, or offload_moe (default: save_moe).
+  --moe-capacity-factor F   MAY_MOE_CAPACITY_FACTOR expert-parallel dispatch capacity multiplier (default: 1.0).
+  --top-k N                 MAY_TOP_K experts per token (default: 4).
   --use-pko BOOL            MAY_USE_PKO diagnostic toggle (default: true).
   --pko-on-last-layer BOOL  MAY_PKO_ON_LAST_LAYER diagnostic toggle (default: true).
   --block-cross-document-attention BOOL
@@ -127,7 +136,8 @@ Options:
   --muon-orthogonalization-layout MODE
                             MAY_MUON_ORTHOGONALIZATION_LAYOUT: stack_batch_sharded or vmap_replicated (default: stack_batch_sharded).
   --muon-max-grouped-stack-size N
-                            MAY_MUON_MAX_GROUPED_STACK_SIZE for grouped Muon (default: 256).
+                            MAY_MUON_MAX_GROUPED_STACK_SIZE for grouped Muon
+                            (default: 8 for grouped_muonh packed-bank compute, otherwise 256).
   --muon-ns-compute-dtype DTYPE
                             MAY_MUON_NS_COMPUTE_DTYPE: input, bf16, bfloat16, fp32, float32, fp16, or float16 (default: input).
   --muon-nesterov BOOL      MAY_MUON_NESTEROV: true or false (default: true).
@@ -143,20 +153,37 @@ Options:
   --expert-grouped-muonh-packed-entry BOOL
                             MAY_EXPERT_GROUPED_MUONH_PACKED_ENTRY for grouped_muonh (default: true).
   --expert-grouped-muonh-packed-bank-compute BOOL
-                            MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE keeps packed banks through grouped_muonh compute (default: false).
+                            MAY_EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE keeps packed banks through grouped_muonh compute (default: true).
   --expert-grouped-muonh-chunk-local-boundaries BOOL
                             MAY_EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES experimental grouped_muonh boundary mode (default: false).
   --mp POLICY               MAY_MP policy string.
   --live-param-mode MODE    MAY_LIVE_PARAM_MODE: param or compute_with_master (default: param).
   --attention NAME          MAY_ATTENTION_IMPLEMENTATION (default: gpu_fa4_cute).
-  --ce-implementation NAME  MAY_CE_IMPLEMENTATION: pallas_gpu, xla, reference, or empty default.
-  --moe-implementation NAME MAY_MOE_IMPLEMENTATION: ring, ragged_all_to_all, or deepep (default: ring).
+  --ce-implementation NAME  MAY_CE_IMPLEMENTATION: pallas_gpu, xla, reference, or empty fused-API default (default: pallas_gpu).
+  --moe-implementation NAME MAY_MOE_IMPLEMENTATION: ring, assigned_token, grouped_assigned_token, ragged_all_to_all, padded_all_to_all, deepep, deepep_composed, or deepep_internode (default: ring).
+                            Note: deepep/deepep_composed use Marin's intranode DeepEP path; deepep_internode uses upstream normal-mode internode dispatch/combine and needs process-per-GPU launch topology.
   --watch-interval N        MAY_WATCH_INTERVAL; 0 disables grad/param watch stats (default: 0).
   --log-every N             MAY_LOG_EVERY train progress/scalar logging cadence (default: 1).
   --log-jaxprs BOOL         MAY_LOG_JAXPRS; true dumps JAXPRs (default: false).
   --log-xla-hlo BOOL        MAY_LOG_XLA_HLO; true dumps XLA HLO (default: false).
   --save-xla-dumps BOOL     MAY_SAVE_XLA_DUMPS; true uploads XLA_FLAGS dump dir to W&B (default: false).
   --xla-flags FLAGS         XLA_FLAGS forwarded to worker tasks; defaults to per-run HLO dumps when --save-xla-dumps true.
+                            MAY_UPLOAD_PROFILER_REMOTE_PREFIX can be set in the environment to upload a
+                            profiler tarball to an S3/R2 prefix after training.
+  --deepep-bootstrap-source BOOL
+                            MAY_DEEPEP_BOOTSTRAP_SOURCE: clone validated DeepEP source into GPU workers when DEEPEP_SRC_ROOT is unset (default: false).
+  --deepep-ranks-per-node N
+                            MAY_DEEPEP_RANKS_PER_NODE forwarded as DEEPEP_RANKS_PER_NODE for internode topology preflight.
+  --deepep-processes-per-task N
+                            MAY_DEEPEP_PROCESSES_PER_TASK process-per-GPU supervisor count for deepep_internode.
+                            Optional DeepEP internode dispatch tuning is forwarded from environment:
+                            DEEPEP_INTERNODE_DISPATCH_NUM_SMS,
+                            DEEPEP_INTERNODE_DISPATCH_MAX_NVL_SEND_TOKENS,
+                            DEEPEP_INTERNODE_DISPATCH_MAX_NVL_RECV_TOKENS,
+                            DEEPEP_INTERNODE_DISPATCH_MAX_RDMA_SEND_TOKENS,
+                            DEEPEP_INTERNODE_DISPATCH_MAX_RDMA_RECV_TOKENS,
+                            LEVANTER_DEEPEP_INTERNODE_COLLAPSE_MODE,
+                            LEVANTER_DEEPEP_INTERNODE_ASSIGNMENT_GRADIENT_MODE.
   -h, --help                Show this help.
 
 This wrapper forwards explicit MAY_* environment variables to Iris; local shell
@@ -283,6 +310,14 @@ while [ "$#" -gt 0 ]; do
             REMAT="$2"
             shift 2
             ;;
+        --moe-capacity-factor)
+            MOE_CAPACITY_FACTOR="$2"
+            shift 2
+            ;;
+        --top-k)
+            TOP_K="$2"
+            shift 2
+            ;;
         --use-pko)
             USE_PKO="$2"
             shift 2
@@ -403,6 +438,18 @@ while [ "$#" -gt 0 ]; do
             XLA_FLAGS_VALUE="$2"
             shift 2
             ;;
+        --deepep-bootstrap-source)
+            DEEPEP_BOOTSTRAP_SOURCE="$2"
+            shift 2
+            ;;
+        --deepep-ranks-per-node)
+            DEEPEP_RANKS_PER_NODE="$2"
+            shift 2
+            ;;
+        --deepep-processes-per-task)
+            DEEPEP_PROCESSES_PER_TASK="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -487,6 +534,14 @@ case "$ORDINARY_2D_OPTIMIZER" in
         ;;
 esac
 
+if [ -z "$MUON_MAX_GROUPED_STACK_SIZE" ]; then
+    if [ "$EXPERT_3D_OPTIMIZER" = "grouped_muonh" ] && [ "$EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE" = true ]; then
+        MUON_MAX_GROUPED_STACK_SIZE=8
+    else
+        MUON_MAX_GROUPED_STACK_SIZE=256
+    fi
+fi
+
 if [ -f "$ENV_FILE" ] || [ "$ENV_FILE_EXPLICIT" = true ]; then
     R2_EXPORTS="$("${REPO_ROOT}/scripts/iris/cloudflare_r2_env.sh" "$ENV_FILE")"
 else
@@ -533,6 +588,8 @@ ENV_ARGS=(
     -e MAY_CHECKPOINTS "$CHECKPOINTS"
     -e MAY_DATA "$DATA"
     -e MAY_REMAT "$REMAT"
+    -e MAY_MOE_CAPACITY_FACTOR "$MOE_CAPACITY_FACTOR"
+    -e MAY_TOP_K "$TOP_K"
     -e MAY_USE_PKO "$USE_PKO"
     -e MAY_PKO_ON_LAST_LAYER "$PKO_ON_LAST_LAYER"
     -e MAY_BLOCK_CROSS_DOCUMENT_ATTENTION "$BLOCK_CROSS_DOCUMENT_ATTENTION"
@@ -569,6 +626,8 @@ ENV_ARGS=(
     -e MAY_LOG_JAXPRS "$LOG_JAXPRS"
     -e MAY_LOG_XLA_HLO "$LOG_XLA_HLO"
     -e MAY_SAVE_XLA_DUMPS "$SAVE_XLA_DUMPS"
+    -e MAY_DEEPEP_BOOTSTRAP_SOURCE "$DEEPEP_BOOTSTRAP_SOURCE"
+    -e MAY_DEEPEP_PROCESSES_PER_TASK "$DEEPEP_PROCESSES_PER_TASK"
     -e XLA_PYTHON_CLIENT_MEM_FRACTION "$XLA_MEMORY_FRACTION"
     -e LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS "$PALLAS_CE_AUTOTUNE_ON_MISS"
     -e NCCL_SOCKET_IFNAME "$NCCL_SOCKET_IFNAME_VALUE"
@@ -581,17 +640,77 @@ fi
 if [ -n "$DEVICE_TRACER_LEVEL" ]; then
     ENV_ARGS+=(-e MAY_PROFILER_DEVICE_TRACER_LEVEL "$DEVICE_TRACER_LEVEL")
 fi
+if [ -n "$UPLOAD_PROFILER_REMOTE_PREFIX" ]; then
+    ENV_ARGS+=(-e MAY_UPLOAD_PROFILER_REMOTE_PREFIX "$UPLOAD_PROFILER_REMOTE_PREFIX")
+fi
+if [ -n "$DEEPEP_RANKS_PER_NODE" ]; then
+    ENV_ARGS+=(-e DEEPEP_RANKS_PER_NODE "$DEEPEP_RANKS_PER_NODE")
+fi
 
-for maybe_env in WANDB_API_KEY WANDB_ENTITY WANDB_PROJECT MAY_WANDB_GROUP TF_GPU_ALLOCATOR NCCL_DEBUG NCCL_DEBUG_SUBSYS NCCL_IB_DISABLE LEVANTER_PALLAS_GPU_CUSTOM_BWD_V_BLOCK_SIZE; do
+for maybe_env in WANDB_API_KEY WANDB_ENTITY WANDB_PROJECT MAY_WANDB_GROUP MAY_TOP_K TF_GPU_ALLOCATOR NCCL_DEBUG NCCL_DEBUG_SUBSYS NCCL_IB_DISABLE LEVANTER_PALLAS_GPU_CUSTOM_BWD_V_BLOCK_SIZE; do
     if [ -n "${!maybe_env:-}" ]; then
         ENV_ARGS+=(-e "$maybe_env" "${!maybe_env}")
     fi
 done
 
+for maybe_env in \
+    DEEPEP_SRC_ROOT \
+    DEEPEP_CUDA_ARCH \
+    DEEPEP_BUILD_WITH_TORCH_EXTENSION \
+    DEEPEP_LOAD_AS_PYTHON_MODULE \
+    DEEPEP_DISPATCH_NUM_THREADS \
+    DEEPEP_DISPATCH_NUM_SMS \
+    DEEPEP_DISPATCH_MAX_SEND_TOKENS \
+    DEEPEP_DISPATCH_MAX_RECV_TOKENS \
+    DEEPEP_COMBINE_NUM_SMS \
+    DEEPEP_COMBINE_MAX_SEND_TOKENS \
+    DEEPEP_COMBINE_MAX_RECV_TOKENS \
+    DEEPEP_INTERNODE_DISPATCH_NUM_SMS \
+    DEEPEP_INTERNODE_DISPATCH_MAX_NVL_SEND_TOKENS \
+    DEEPEP_INTERNODE_DISPATCH_MAX_NVL_RECV_TOKENS \
+    DEEPEP_INTERNODE_DISPATCH_MAX_RDMA_SEND_TOKENS \
+    DEEPEP_INTERNODE_DISPATCH_MAX_RDMA_RECV_TOKENS \
+    DEEPEP_RUNTIME_NVL_BYTES \
+    DEEPEP_RUNTIME_RDMA_BYTES \
+    MARIN_DEEPEP_CACHE_DIR \
+    LEVANTER_DEEPEP_HOST_DISPATCH_DEBUG \
+    LEVANTER_DEEPEP_INTERNODE_DEBUG \
+    LEVANTER_DEEPEP_INTERNODE_COLLAPSE_MODE \
+    LEVANTER_DEEPEP_INTERNODE_ASSIGNMENT_GRADIENT_MODE \
+    MAY_DEEPEP_REVISION; do
+    if [ -n "${!maybe_env:-}" ]; then
+        ENV_ARGS+=(-e "$maybe_env" "${!maybe_env}")
+    fi
+done
+
+IRIS_EXTRAS=(--extra=cpu)
+if [ "$MOE_IMPLEMENTATION" = "deepep" ] || [ "$MOE_IMPLEMENTATION" = "deepep_composed" ] || [ "$MOE_IMPLEMENTATION" = "deepep_internode" ]; then
+    IRIS_EXTRAS+=(--extra=deepep)
+fi
+
+PARENT_SCHEDULING_ARGS=()
+if [ -n "$PARENT_PREEMPTIBLE" ]; then
+    PARENT_PREEMPTIBLE_NORMALIZED="$(printf '%s' "$PARENT_PREEMPTIBLE" | tr '[:upper:]' '[:lower:]')"
+    case "$PARENT_PREEMPTIBLE_NORMALIZED" in
+        1|true|yes|on)
+            PARENT_SCHEDULING_ARGS+=(--preemptible)
+            ;;
+        0|false|no|off)
+            PARENT_SCHEDULING_ARGS+=(--no-preemptible)
+            ;;
+        *)
+            echo "ERROR: MAY_PARENT_PREEMPTIBLE must be a boolean, got: $PARENT_PREEMPTIBLE" >&2
+            exit 1
+            ;;
+    esac
+fi
+
 CMD=(
     uv run --package marin-iris --extra controller iris --cluster="$CLUSTER"
     job run --no-wait
-    --memory=2G --disk=4G --cpu=1 --extra=cpu
+    "${PARENT_SCHEDULING_ARGS[@]}"
+    --memory=2G --disk=4G --cpu=1
+    "${IRIS_EXTRAS[@]}"
     "${ENV_ARGS[@]}"
     -- python -m experiments.grug.moe.launch_cw_may_d2560
 )
@@ -607,6 +726,7 @@ r2_endpoint: $AWS_ENDPOINT_URL
 nodes: $GPU_REPLICAS
 worker_cpu: $WORKER_CPU
 task_image: ${TASK_IMAGE:-default}
+iris_extras: ${IRIS_EXTRAS[*]}
 mesh axes: replica=$REPLICA_AXIS expert=$EXPERT_AXIS model=$MODEL_AXIS
 batch: $BATCH
 seq_len: $SEQ_LEN
@@ -616,7 +736,7 @@ steps: $STEPS
 run_tokens: $RUN_TOKENS
 total_tokens: $TOTAL_TOKENS
 tracker: $TRACKER
-profiler: start=$PROFILER_START steps=$PROFILER_STEPS hlo_proto=$ENABLE_HLO_PROTO device_tracer=$DEVICE_TRACER_LEVEL upload_artifact=$UPLOAD_PROFILER_ARTIFACT
+profiler: start=$PROFILER_START steps=$PROFILER_STEPS hlo_proto=$ENABLE_HLO_PROTO device_tracer=$DEVICE_TRACER_LEVEL upload_artifact=$UPLOAD_PROFILER_ARTIFACT remote_prefix=${UPLOAD_PROFILER_REMOTE_PREFIX:-unset}
 checkpoints: $CHECKPOINTS
 xla_memory_fraction: $XLA_MEMORY_FRACTION
 nccl_socket_ifname: $NCCL_SOCKET_IFNAME_VALUE
@@ -630,6 +750,11 @@ log_jaxprs: $LOG_JAXPRS
 log_xla_hlo: $LOG_XLA_HLO
 save_xla_dumps: $SAVE_XLA_DUMPS
 xla_flags: ${XLA_FLAGS_VALUE:-unset}
+deepep_bootstrap_source: $DEEPEP_BOOTSTRAP_SOURCE
+deepep_ranks_per_node: ${DEEPEP_RANKS_PER_NODE:-unset}
+deepep_processes_per_task: ${DEEPEP_PROCESSES_PER_TASK:-unset}
+deepep_internode_collapse_mode: ${LEVANTER_DEEPEP_INTERNODE_COLLAPSE_MODE:-scatter}
+deepep_internode_assignment_gradient_mode: ${LEVANTER_DEEPEP_INTERNODE_ASSIGNMENT_GRADIENT_MODE:-jax}
 use_pko: $USE_PKO
 pko_on_last_layer: $PKO_ON_LAST_LAYER
 block_cross_document_attention: $BLOCK_CROSS_DOCUMENT_ATTENTION
@@ -650,9 +775,11 @@ expert_grouped_muonh_packed_entry: $EXPERT_GROUPED_MUONH_PACKED_ENTRY
 expert_grouped_muonh_packed_bank_compute: $EXPERT_GROUPED_MUONH_PACKED_BANK_COMPUTE
 expert_grouped_muonh_chunk_local_boundaries: $EXPERT_GROUPED_MUONH_CHUNK_LOCAL_BOUNDARIES
 attention: $ATTENTION_IMPLEMENTATION
-ce_implementation: ${CE_IMPLEMENTATION:-default}
+ce_implementation: ${CE_IMPLEMENTATION:-fused-api-default}
 moe_implementation: $MOE_IMPLEMENTATION
 data: $DATA
+moe_capacity_factor: $MOE_CAPACITY_FACTOR
+top_k: $TOP_K
 
 Command shape:
   uv run --package marin-iris --extra controller iris --cluster=$CLUSTER job run --no-wait ... -- python -m experiments.grug.moe.launch_cw_may_d2560

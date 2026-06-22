@@ -31,6 +31,7 @@ from levanter.grug._moe.common import (
     _EP_MOE_IMPLEMENTATIONS,
     _init_weight,
     DEEPEP_REMAT_SAVE_NAMES as DEEPEP_REMAT_SAVE_NAMES,
+    MOE_REMAT_OFFLOAD_NAMES as MOE_REMAT_OFFLOAD_NAMES,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
     MoEExpertMlpPspecs,
     MoeActivation,
@@ -48,7 +49,13 @@ from levanter.grug._moe.ep_common import (
     _shard_a2a_params as _shard_a2a_params,
 )
 from levanter.grug._moe.ep_assigned_token import _moe_mlp_ep_assigned_token_local
-from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
+from levanter.grug._moe.ep_deepep import (
+    _moe_mlp_ep_deepep_composed_local,
+    _moe_mlp_ep_deepep_internode_local,
+    _moe_mlp_ep_deepep_local,
+)
+from levanter.grug._moe.ep_grouped_assigned_token import _moe_mlp_ep_grouped_assigned_token_local
+from levanter.grug._moe.ep_padded_all_to_all import _moe_mlp_ep_padded_a2a_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
@@ -271,6 +278,10 @@ def grouped_moe_mlp(
     resolved_remat_mode = resolve_moe_remat_mode(remat_mode)
     if mesh is None:
         mesh = _current_mesh()
+    if resolved_implementation == "grouped_assigned_token" and (
+        mesh is None or mesh.empty or not _mesh_has_axis(mesh, "expert") or _mesh_axis_size(mesh, "expert") <= 1
+    ):
+        raise ValueError("implementation='grouped_assigned_token' requires grouped_moe_mlp with an expert mesh")
 
     if isinstance(activation, ActivationFunctionEnum):
         activation_fn: Callable[[jax.Array], jax.Array] = activation.to_jax_fn()
@@ -289,14 +300,23 @@ def grouped_moe_mlp(
         if num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
 
-        if resolved_implementation == "ring":
+        grouped_shard_local_fn = None
+        if resolved_implementation == "grouped_assigned_token":
+            grouped_shard_local_fn = _moe_mlp_ep_grouped_assigned_token_local
+        elif resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
         elif resolved_implementation == "assigned_token":
             shard_local_fn = _moe_mlp_ep_assigned_token_local
         elif resolved_implementation == "ragged_all_to_all":
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
+        elif resolved_implementation == "padded_all_to_all":
+            shard_local_fn = _moe_mlp_ep_padded_a2a_local
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local
+        elif resolved_implementation == "deepep_composed":
+            shard_local_fn = _moe_mlp_ep_deepep_composed_local
+        elif resolved_implementation == "deepep_internode":
+            shard_local_fn = _moe_mlp_ep_deepep_internode_local
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
 
@@ -312,28 +332,49 @@ def grouped_moe_mlp(
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
-        def run_grouped_shard(x_local, selected_local, combine_local, w_up_gate_local, w_down_local):
-            def run_one(x_one, selected_one, combine_one, w_up_gate_one, w_down_one):
-                return shard_local_fn(
-                    x_one,
-                    selected_one,
-                    combine_one,
-                    w_up_gate_one,
-                    w_down_one,
+        if grouped_shard_local_fn is not None:
+
+            def run_grouped_shard(x_local, selected_local, combine_local, w_up_gate_local, w_down_local):
+                out, dropped = grouped_shard_local_fn(
+                    x_local,
+                    selected_local,
+                    combine_local,
+                    w_up_gate_local,
+                    w_down_local,
                     activation_fn=activation_fn,
                     num_experts=num_experts,
                     capacity_factor=capacity_factor,
                     remat_mode=resolved_remat_mode,
+                    valid_group_size=valid_group_size,
                 )
+                if report_capacity_overflow:
+                    return out, dropped
+                return out
 
-            out, dropped = jax.vmap(run_one)(x_local, selected_local, combine_local, w_up_gate_local, w_down_local)
-            if valid_group_size != group_size:
-                valid = jnp.arange(group_size) < valid_group_size
-                out = jnp.where(valid[:, None, None], out, jnp.zeros_like(out))
-                dropped = jnp.where(valid, dropped, jnp.zeros_like(dropped))
-            if report_capacity_overflow:
-                return out, dropped
-            return out
+        else:
+
+            def run_grouped_shard(x_local, selected_local, combine_local, w_up_gate_local, w_down_local):
+                def run_one(x_one, selected_one, combine_one, w_up_gate_one, w_down_one):
+                    return shard_local_fn(
+                        x_one,
+                        selected_one,
+                        combine_one,
+                        w_up_gate_one,
+                        w_down_one,
+                        activation_fn=activation_fn,
+                        num_experts=num_experts,
+                        capacity_factor=capacity_factor,
+                        remat_mode=resolved_remat_mode,
+                    )
+
+                out, dropped = jax.vmap(run_one)(x_local, selected_local, combine_local, w_up_gate_local, w_down_local)
+                if valid_group_size != group_size:
+                    valid = jnp.arange(group_size) < valid_group_size
+                    out = jnp.where(valid[:, None, None], out, jnp.zeros_like(out))
+                    dropped = jnp.where(valid, dropped, jnp.zeros_like(dropped))
+                if report_capacity_overflow:
+                    return out, dropped
+                return out
 
         grouped_shard_fn = shard_map(
             run_grouped_shard,
@@ -397,6 +438,8 @@ def moe_mlp(
     """
     resolved_implementation = resolve_moe_implementation(implementation)
     resolved_remat_mode = resolve_moe_remat_mode(remat_mode)
+    if resolved_implementation == "grouped_assigned_token":
+        resolved_implementation = "assigned_token"
 
     if mesh is None:
         mesh = _current_mesh()
@@ -463,8 +506,14 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_assigned_token_local
         elif resolved_implementation == "ragged_all_to_all":
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
+        elif resolved_implementation == "padded_all_to_all":
+            shard_local_fn = _moe_mlp_ep_padded_a2a_local
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local
+        elif resolved_implementation == "deepep_composed":
+            shard_local_fn = _moe_mlp_ep_deepep_composed_local
+        elif resolved_implementation == "deepep_internode":
+            shard_local_fn = _moe_mlp_ep_deepep_internode_local
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
 

@@ -185,6 +185,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     build-essential \
     lldb \
+    libibverbs-dev \
     libibverbs1 \
     ibverbs-providers \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \

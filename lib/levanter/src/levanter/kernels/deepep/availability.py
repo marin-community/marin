@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import importlib.metadata
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -17,6 +19,7 @@ DEEPEP_CUDA_ARCH_ENV = "DEEPEP_CUDA_ARCH"
 DISABLE_SM90_ENV = "DISABLE_SM90_FEATURES"
 BUILD_WITH_TORCH_EXTENSION_ENV = "DEEPEP_BUILD_WITH_TORCH_EXTENSION"
 LOAD_AS_PYTHON_MODULE_ENV = "DEEPEP_LOAD_AS_PYTHON_MODULE"
+DEEPEP_RDMA_INCLUDE_DIR_ENV = "DEEPEP_RDMA_INCLUDE_DIR"
 DEEPEP_KNOWN_GOOD_COMMIT = "7febc6e25660af0f54d95dd781ecdcd62265ecca"
 
 LAYOUT_SOURCE_CANDIDATES = (
@@ -31,8 +34,18 @@ TRANSPORT_REQUIRED_FILES = (
     "csrc/kernels/runtime.cu",
     "csrc/kernels/intranode.cu",
 )
+INTERNODE_TRANSPORT_REQUIRED_FILES = (
+    *TRANSPORT_REQUIRED_FILES,
+    "csrc/kernels/internode.cu",
+    "csrc/kernels/internode_ll.cu",
+    "csrc/kernels/pcie.cu",
+)
+INTERNODE_RDMA_REQUIRED_HEADERS = ("infiniband/mlx5dv.h",)
 
 _SUPPORTED_ARCHES = ("sm_90", "sm_90a", "sm_100")
+_PREFERRED_NVSHMEM_DISTRIBUTIONS = ("nvidia-nvshmem-cu13", "nvidia-nvshmem-cu12")
+_NVSHMEM_CUDA13_MARKERS = ("cu13", "cuda13", "cuda-13", "r13.")
+_NVSHMEM_CUDA12_MARKERS = ("cu12", "cuda12", "cuda-12", "r12.")
 
 
 @dataclass(frozen=True)
@@ -44,6 +57,11 @@ class DeepEPPreflightStatus:
     cache_root: Path
     cuda_arch: str
     nvcc_path: str | None
+    nvshmem_dir: Path | None
+    nvshmem_host_lib: str | None
+    nvshmem_device_lib: str | None
+    rdma_include_dirs: tuple[Path, ...]
+    missing_rdma_headers: tuple[str, ...]
     missing_source_files: tuple[Path, ...]
     errors: tuple[str, ...]
     warnings: tuple[str, ...]
@@ -53,11 +71,43 @@ class DeepEPPreflightStatus:
         return not self.errors
 
 
+@dataclass(frozen=True)
+class DeepEPNVSHMEMConfig:
+    """Resolved NVSHMEM include/library paths for DeepEP internode builds."""
+
+    root: Path
+    host_library_path: Path
+    device_library_path: Path
+
+    @property
+    def host_library_name(self) -> str:
+        return self.host_library_path.name
+
+    @property
+    def device_library_name(self) -> str:
+        return self.device_library_path.name
+
+    @property
+    def include_dirs(self) -> tuple[Path, ...]:
+        candidates = (
+            self.root / "include",
+            self.root / "include" / "nvshmem",
+        )
+        return tuple(path for path in candidates if path.is_dir())
+
+    @property
+    def library_dirs(self) -> tuple[Path, ...]:
+        return (self.host_library_path.parent,)
+
+
 def deepep_install_help() -> str:
     return (
         "DeepEP support expects an external DeepEP source checkout. Set "
         f"{DEEPEP_SRC_ENV}=/path/to/DeepEP and, on B200/GB200, set {DEEPEP_CUDA_ARCH_ENV}=sm_100. "
         f"The validated DeepEP revision is {DEEPEP_KNOWN_GOOD_COMMIT}. "
+        "Internode transport also requires NVSHMEM; install levanter[deepep] or set "
+        "NVSHMEM_DIR to a valid NVSHMEM install. Internode builds also require RDMA development headers "
+        f"such as infiniband/mlx5dv.h; install libibverbs-dev or set {DEEPEP_RDMA_INCLUDE_DIR_ENV}. "
         f"Compiled JAX FFI objects are cached under {DEEPEP_CACHE_ENV} when set, otherwise under "
         "~/.cache/marin."
     )
@@ -93,6 +143,169 @@ def deepep_torch_cuda_arch_list() -> str:
     if arch == "sm_100":
         return "10.0"
     raise AssertionError(f"Unhandled DeepEP CUDA architecture {arch!r}")
+
+
+def _dedupe_paths(paths: tuple[Path, ...] | list[Path]) -> tuple[Path, ...]:
+    seen: set[Path] = set()
+    deduped: list[Path] = []
+    for path in paths:
+        resolved = path.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            deduped.append(resolved)
+    return tuple(deduped)
+
+
+def _nvshmem_cuda_sort_key(path: Path) -> tuple[int, str]:
+    text = str(path).lower()
+    if any(marker in text for marker in _NVSHMEM_CUDA13_MARKERS):
+        return (0, text)
+    if any(marker in text for marker in _NVSHMEM_CUDA12_MARKERS):
+        return (2, text)
+    return (1, text)
+
+
+def _nvshmem_python_package_roots() -> tuple[Path, ...]:
+    roots: list[Path] = []
+    for distribution_name in _PREFERRED_NVSHMEM_DISTRIBUTIONS:
+        try:
+            distribution = importlib.metadata.distribution(distribution_name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        package_root = Path(distribution.locate_file("nvidia/nvshmem"))
+        if package_root.exists():
+            roots.append(package_root)
+
+    fallback_roots: list[Path] = []
+    try:
+        spec = importlib.util.find_spec("nvidia.nvshmem")
+    except ModuleNotFoundError:
+        spec = None
+    if spec is not None and spec.submodule_search_locations:
+        fallback_roots.extend(Path(location) for location in spec.submodule_search_locations)
+
+    return _dedupe_paths([*roots, *sorted(fallback_roots, key=_nvshmem_cuda_sort_key)])
+
+
+def _nvshmem_host_lib_candidates(base_dir: Path) -> tuple[Path, ...]:
+    return tuple(
+        sorted(
+            _dedupe_paths([base_dir / "lib" / "libnvshmem_host.so", *base_dir.rglob("libnvshmem_host.so.*")]),
+            key=_nvshmem_cuda_sort_key,
+        )
+    )
+
+
+def _nvshmem_device_lib_candidates(base_dir: Path) -> tuple[Path, ...]:
+    return tuple(
+        sorted(
+            _dedupe_paths([base_dir / "lib" / "libnvshmem_device.a", *base_dir.rglob("libnvshmem_device.a")]),
+            key=_nvshmem_cuda_sort_key,
+        )
+    )
+
+
+def _first_existing_path(paths: tuple[Path, ...]) -> Path | None:
+    for path in paths:
+        if path.exists():
+            return path
+    return None
+
+
+def _nvshmem_host_lib_path(base_dir: Path) -> Path | None:
+    return _first_existing_path(_nvshmem_host_lib_candidates(base_dir))
+
+
+def _nvshmem_device_lib_path(base_dir: Path) -> Path | None:
+    return _first_existing_path(_nvshmem_device_lib_candidates(base_dir))
+
+
+def _nvshmem_host_lib_name(base_dir: Path) -> str | None:
+    library_path = _nvshmem_host_lib_path(base_dir)
+    return library_path.name if library_path is not None else None
+
+
+def _nvshmem_device_lib_name(base_dir: Path) -> str | None:
+    library_path = _nvshmem_device_lib_path(base_dir)
+    return library_path.name if library_path is not None else None
+
+
+def deepep_nvshmem_status() -> tuple[Path | None, str | None, tuple[str, ...]]:
+    """Return DeepEP NVSHMEM discovery status for internode transport builds."""
+    raw_dir = os.environ.get("NVSHMEM_DIR")
+    if raw_dir:
+        nvshmem_dir = Path(raw_dir).expanduser().resolve()
+        if not nvshmem_dir.exists():
+            return nvshmem_dir, None, (f"NVSHMEM_DIR={nvshmem_dir} does not exist",)
+        host_lib = _nvshmem_host_lib_name(nvshmem_dir)
+        errors = (
+            () if host_lib is not None else (f"Could not find libnvshmem_host.so under NVSHMEM_DIR={nvshmem_dir}",)
+        )
+        return nvshmem_dir, host_lib, errors
+
+    candidate_roots = _nvshmem_python_package_roots()
+    if not candidate_roots:
+        return None, None, ("NVSHMEM_DIR is unset and Python package nvidia.nvshmem is not installed",)
+    nvshmem_dir = next(
+        (root for root in candidate_roots if _nvshmem_host_lib_path(root) is not None), candidate_roots[0]
+    )
+    host_lib = _nvshmem_host_lib_name(nvshmem_dir)
+    errors = (
+        ()
+        if host_lib is not None
+        else (
+            "Could not find libnvshmem_host.so under nvidia.nvshmem at any candidate root: "
+            + ", ".join(str(root) for root in candidate_roots),
+        )
+    )
+    return nvshmem_dir, host_lib, errors
+
+
+def deepep_nvshmem_config() -> DeepEPNVSHMEMConfig:
+    """Return resolved NVSHMEM build paths or raise with install guidance."""
+    nvshmem_dir, _host_lib, errors = deepep_nvshmem_status()
+    if errors or nvshmem_dir is None:
+        detail = "; ".join(errors) if errors else "NVSHMEM root is unavailable"
+        raise RuntimeError(f"DeepEP internode transport requires NVSHMEM: {detail}. {deepep_install_help()}")
+    host_library_path = _nvshmem_host_lib_path(nvshmem_dir)
+    if host_library_path is None:
+        raise RuntimeError(f"DeepEP internode transport requires libnvshmem_host.so under {nvshmem_dir}.")
+    device_library_path = _nvshmem_device_lib_path(nvshmem_dir)
+    if device_library_path is None:
+        raise RuntimeError(f"DeepEP internode transport requires libnvshmem_device.a under {nvshmem_dir}.")
+    config = DeepEPNVSHMEMConfig(
+        root=nvshmem_dir,
+        host_library_path=host_library_path.resolve(),
+        device_library_path=device_library_path.resolve(),
+    )
+    if not config.include_dirs:
+        raise RuntimeError(f"DeepEP internode transport could not find NVSHMEM headers under {nvshmem_dir}.")
+    return config
+
+
+def deepep_rdma_include_dirs() -> tuple[Path, ...]:
+    """Return include roots to search for RDMA headers needed by DeepEP internode kernels."""
+    dirs: list[Path] = []
+    raw_dir = os.environ.get(DEEPEP_RDMA_INCLUDE_DIR_ENV)
+    if raw_dir:
+        dirs.append(Path(raw_dir).expanduser().resolve())
+    for path in (Path("/usr/local/include"), Path("/usr/include")):
+        if path not in dirs:
+            dirs.append(path)
+    return tuple(path for path in dirs if path.is_dir())
+
+
+def missing_deepep_rdma_headers(
+    include_dirs: tuple[Path, ...] | None = None,
+    required_headers: tuple[str, ...] = INTERNODE_RDMA_REQUIRED_HEADERS,
+) -> tuple[str, ...]:
+    """Return required RDMA headers not found under any candidate include root."""
+    roots = include_dirs if include_dirs is not None else deepep_rdma_include_dirs()
+    missing = []
+    for header in required_headers:
+        if not any((root / header).is_file() for root in roots):
+            missing.append(header)
+    return tuple(missing)
 
 
 def env_flag(name: str) -> bool:
@@ -159,6 +372,8 @@ def deepep_preflight_status(
     required_files: tuple[str, ...] = TRANSPORT_REQUIRED_FILES,
     component: str = "deepep_transport_ffi",
     requires_layout_source: bool = True,
+    requires_nvshmem: bool = False,
+    requires_rdma: bool = False,
 ) -> DeepEPPreflightStatus:
     errors: list[str] = []
     warnings: list[str] = []
@@ -205,6 +420,25 @@ def deepep_preflight_status(
     if nvcc_path is None:
         errors.append("nvcc is not on PATH")
 
+    nvshmem_dir, nvshmem_host_lib, nvshmem_errors = deepep_nvshmem_status()
+    nvshmem_device_lib = _nvshmem_device_lib_name(nvshmem_dir) if nvshmem_dir is not None else None
+    if requires_nvshmem:
+        errors.extend(nvshmem_errors)
+        if not nvshmem_errors and nvshmem_device_lib is None:
+            errors.append(f"DeepEP internode transport requires libnvshmem_device.a under {nvshmem_dir}")
+    elif nvshmem_errors:
+        warnings.extend(nvshmem_errors)
+
+    rdma_include_dirs = deepep_rdma_include_dirs()
+    missing_rdma_headers = missing_deepep_rdma_headers(rdma_include_dirs)
+    if requires_rdma and missing_rdma_headers:
+        missing_text = ", ".join(missing_rdma_headers)
+        search_text = ", ".join(str(path) for path in rdma_include_dirs) or "<none>"
+        errors.append(
+            f"DeepEP internode transport is missing RDMA development headers: {missing_text}; "
+            f"searched include roots: {search_text}"
+        )
+
     if env_flag(BUILD_WITH_TORCH_EXTENSION_ENV) and env_flag(LOAD_AS_PYTHON_MODULE_ENV):
         errors.append(
             f"{BUILD_WITH_TORCH_EXTENSION_ENV}=1 is not supported together with {LOAD_AS_PYTHON_MODULE_ENV}=1"
@@ -219,6 +453,11 @@ def deepep_preflight_status(
         cache_root=deepep_cache_root(component),
         cuda_arch=arch,
         nvcc_path=nvcc_path,
+        nvshmem_dir=nvshmem_dir,
+        nvshmem_host_lib=nvshmem_host_lib,
+        nvshmem_device_lib=nvshmem_device_lib,
+        rdma_include_dirs=rdma_include_dirs,
+        missing_rdma_headers=missing_rdma_headers,
         missing_source_files=missing,
         errors=tuple(errors),
         warnings=tuple(warnings),
