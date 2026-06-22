@@ -1,5 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+# GRUG NOVERIFY -- research toy, not a production grug variant: it uses a
+# reshard-free GrugMoEConfig model and a stage-only mesh, so it does not satisfy
+# the production GrugModelConfig variant contract by design.
 
 """Training loop for the grug-MoE zero-bubble pipeline.
 

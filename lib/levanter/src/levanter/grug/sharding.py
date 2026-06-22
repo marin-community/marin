@@ -106,7 +106,7 @@ def _reshard_for_shard_map(
     return x
 
 
-_GRUG_MESH_AXIS_NAMES: tuple[str, ...] = ("replica_dcn", "data", "expert", "model")
+_GRUG_MESH_AXIS_NAMES: tuple[str, ...] = ("stage", "replica_dcn", "data", "expert", "model")
 
 
 def _compact_grug_mesh_shape(
@@ -116,6 +116,7 @@ def _compact_grug_mesh_shape(
     expert_axis_size: int,
     replica_axis_size: int,
     model_axis_size: int,
+    stage_axis_size: int = 1,
 ) -> tuple[int, ...]:
     if process_count <= 0:
         raise ValueError(f"process_count must be positive, got {process_count}")
@@ -127,18 +128,20 @@ def _compact_grug_mesh_shape(
         raise ValueError(f"replica_axis_size must be positive, got {replica_axis_size}")
     if model_axis_size <= 0:
         raise ValueError(f"model_axis_size must be positive, got {model_axis_size}")
+    if stage_axis_size <= 0:
+        raise ValueError(f"stage_axis_size must be positive, got {stage_axis_size}")
 
     global_device_count = process_count * local_device_count
-    fixed_axes = replica_axis_size * expert_axis_size * model_axis_size
+    fixed_axes = stage_axis_size * replica_axis_size * expert_axis_size * model_axis_size
     if global_device_count % fixed_axes != 0:
         raise ValueError(
             f"global_device_count ({global_device_count}) must be divisible by "
-            f"replica_axis_size ({replica_axis_size}) * expert_axis_size ({expert_axis_size}) * "
-            f"model_axis_size ({model_axis_size})"
+            f"stage_axis_size ({stage_axis_size}) * replica_axis_size ({replica_axis_size}) * "
+            f"expert_axis_size ({expert_axis_size}) * model_axis_size ({model_axis_size})"
         )
 
     data_axis_size = global_device_count // fixed_axes
-    return (replica_axis_size, data_axis_size, expert_axis_size, model_axis_size)
+    return (stage_axis_size, replica_axis_size, data_axis_size, expert_axis_size, model_axis_size)
 
 
 def compact_grug_mesh(
@@ -146,14 +149,17 @@ def compact_grug_mesh(
     expert_axis_size: int = 1,
     replica_axis_size: int | None = None,
     model_axis_size: int = 1,
+    stage_axis_size: int = 1,
 ) -> Mesh:
     """Return the compact explicit mesh used by raw Grug PartitionSpecs.
 
-    The mesh is always ``(replica_dcn, data, expert, model)``; length-1 axes are
-    kept so downstream PartitionSpecs can name "expert" unconditionally. Unlike
-    the old local-only layout, ``expert_axis_size`` may span multiple processes,
+    The mesh is always ``(stage, replica_dcn, data, expert, model)``; length-1
+    axes are kept so downstream PartitionSpecs can name "expert" unconditionally.
+    ``stage`` is the outermost (slowest-varying) axis, used by pipeline
+    parallelism to manualize a ``shard_map`` over stage while the remaining axes
+    stay GSPMD-partitioned. ``expert_axis_size`` may span multiple processes,
     e.g. a 32-process job with 4 local devices can build an effective
-    ``(4, 2, 16, 1)`` Grug mesh.
+    ``(1, 4, 2, 16, 1)`` Grug mesh.
     """
     if replica_axis_size is None:
         replica_axis_size = jax.process_count()
@@ -164,6 +170,7 @@ def compact_grug_mesh(
         expert_axis_size=expert_axis_size,
         replica_axis_size=replica_axis_size,
         model_axis_size=model_axis_size,
+        stage_axis_size=stage_axis_size,
     )
     devices = np.array(jax.devices(), dtype=object).reshape(shape)
     axis_types = tuple(AxisType.Explicit for _ in _GRUG_MESH_AXIS_NAMES)
