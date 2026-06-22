@@ -137,21 +137,20 @@ def connect_to_cluster(
     workspace: Path | None = None,
     timeout_ms: int = 30_000,
 ) -> Iterator[IrisClient]:
-    """Resolve a named cluster, open a tunnel, and yield a connected IrisClient.
+    """Resolve a named cluster, tunnel to its controller, and yield a connected client.
 
-    The non-click twin of the ``iris`` CLI connection path. Resolves ``cluster``
-    against the same config search dirs (:data:`IRIS_CLUSTER_CONFIG_DIRS`),
-    loads the cluster config, configures storage credentials, builds the
-    provider bundle, discovers/tunnels to the controller, loads the stored
-    ``iris login`` token, and yields ``IrisClient.remote(...)``. The tunnel,
-    any local controller, and the client are all torn down on exit.
+    A context manager: the tunnel, any local controller it starts, and the
+    client are all torn down on exit. Requests authenticate with the token
+    cached by ``iris login`` for this cluster, falling back to the cluster
+    config's auth provider.
 
     Args:
-        cluster: Named cluster to resolve (e.g. ``"marin"``). Must match a config
-            YAML in the search dirs; raises ``FileNotFoundError`` otherwise.
-        workspace: Directory bundled and shipped to workers (the git repo root,
-            containing ``pyproject.toml``). Required for external job submission;
-            without it workers have no code to run.
+        cluster: Named cluster to resolve (e.g. ``"marin"``) against
+            :data:`IRIS_CLUSTER_CONFIG_DIRS`. Raises ``FileNotFoundError`` if no
+            matching config YAML exists.
+        workspace: Repo root (containing ``pyproject.toml``) bundled and shipped
+            to workers. Required for external job submission; without it workers
+            have no code to run.
         timeout_ms: RPC timeout for the controller client.
 
     Yields:
