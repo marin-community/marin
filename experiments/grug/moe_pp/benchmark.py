@@ -102,7 +102,14 @@ def _timed_steps(step_fn, state, data_fn, *, warmup: int, iters: int) -> float:
     return (time.perf_counter() - start) / iters
 
 
-def _config(*, vocab_size, hidden_dim, num_layers, num_experts, num_experts_per_token, seq_len) -> GrugModelConfig:
+def _config(
+    *, vocab_size, hidden_dim, num_layers, num_experts, num_experts_per_token, seq_len, attention_implementation
+) -> GrugModelConfig:
+    # The pipeline path requires ``reference`` (plain-JAX einsum) attention: the manual
+    # GPipe backward differentiates the per-stage forward by hand inside the stage-manual
+    # shard_map, and the TPU splash kernel emits a custom-VJP/ShapeDtypeStruct that does
+    # not transpose through it. The FSDP baseline (ordinary top-level autodiff) can run
+    # either impl, so it is timed under both to measure the splash-vs-reference delta.
     return GrugModelConfig(
         vocab_size=vocab_size,
         hidden_dim=hidden_dim,
@@ -116,11 +123,7 @@ def _config(*, vocab_size, hidden_dim, num_layers, num_experts, num_experts_per_
         max_seq_len=seq_len,
         sliding_window=seq_len,
         moe_implementation="ring",
-        # Reference (plain-JAX einsum) attention so the manual pipeline backward can
-        # differentiate it: the TPU splash kernel emits a custom-VJP/ShapeDtypeStruct
-        # that does not transpose through the stage-manual shard_map. Both the PP and
-        # FSDP paths use the same impl, so the throughput ratio stays apples-to-apples.
-        attention_implementation="reference",
+        attention_implementation=attention_implementation,
     )
 
 
@@ -339,7 +342,7 @@ def main() -> int:
     if num_experts % expert != 0:
         raise ValueError(f"num_experts={num_experts} must be divisible by expert={expert}")
 
-    cfg = _config(
+    cfg_kwargs = dict(
         vocab_size=vocab_size,
         hidden_dim=hidden_dim,
         num_layers=num_layers,
@@ -347,6 +350,7 @@ def main() -> int:
         num_experts_per_token=num_experts_per_token,
         seq_len=seq_len,
     )
+    cfg = _config(**cfg_kwargs, attention_implementation="reference")
     global_batch = num_microbatches * microbatch
     tokens_per_step = global_batch * seq_len
     total_b, active_b = _param_count(cfg)
@@ -391,24 +395,54 @@ def main() -> int:
         pp_loss,
     )
 
-    try:
-        fsdp_s, fsdp_loss = bench_fsdp(cfg, expert=expert, global_batch=global_batch, seq_len=seq_len, **bench_kwargs)
-    except jax.errors.JaxRuntimeError as e:
-        if "RESOURCE_EXHAUSTED" not in str(e):
-            raise
-        logger.info("FSDP OOM at this size -- pipeline microbatching fits where pure FSDP does not")
-        return 0
+    def run_fsdp(cfg_variant: GrugModelConfig, label: str, *, optional: bool) -> float | None:
+        """Time an FSDP baseline; return tokens/sec, or None if it OOMs (or, for an
+        ``optional`` variant, if the attention impl is incompatible with this mesh)."""
+        tolerated: tuple[type[Exception], ...] = (jax.errors.JaxRuntimeError,)
+        if optional:
+            # A splash-attention variant may be incompatible with this mesh; that is a
+            # diagnostic, not a failure, so do not let it abort the PP/FSDP comparison.
+            tolerated = (jax.errors.JaxRuntimeError, ValueError, RuntimeError)
+        try:
+            seconds, loss = bench_fsdp(
+                cfg_variant, expert=expert, global_batch=global_batch, seq_len=seq_len, **bench_kwargs
+            )
+        except tolerated as e:
+            if not optional and "RESOURCE_EXHAUSTED" not in str(e):
+                raise
+            reason = "OOM" if "RESOURCE_EXHAUSTED" in str(e) else "unsupported on this mesh"
+            logger.info("FSDP[%s] skipped (%s)", label, reason)
+            return None
+        tps = tokens_per_step / seconds
+        logger.info(
+            "FSDP[%s]  (stage=1,data=%d,expert=%d): %.1f ms/step  %.0f tokens/sec  (loss=%.4f)",
+            label,
+            num_devices // expert,
+            expert,
+            seconds * 1e3,
+            tps,
+            loss,
+        )
+        return tps
 
-    fsdp_tps = tokens_per_step / fsdp_s
-    logger.info(
-        "FSDP       (stage=1,data=%d,expert=%d): %.1f ms/step  %.0f tokens/sec  (loss=%.4f)",
-        num_devices // expert,
-        expert,
-        fsdp_s * 1e3,
-        fsdp_tps,
-        fsdp_loss,
-    )
-    logger.info("PP/FSDP throughput ratio: %.2fx", pp_tps / fsdp_tps)
+    # Reference-attention FSDP is the apples-to-apples baseline (same attention as PP).
+    # Splash-attention FSDP is production-representative and quantifies the attention-impl
+    # cost; it runs only on TPU (no splash kernel on CPU) and is best-effort.
+    fsdp_ref_tps = run_fsdp(cfg, "reference", optional=False)
+    fsdp_splash_tps = None
+    if on_tpu:
+        cfg_splash = _config(**cfg_kwargs, attention_implementation="tpu_splash")
+        fsdp_splash_tps = run_fsdp(cfg_splash, "splash", optional=True)
+
+    if fsdp_ref_tps is not None:
+        logger.info("PP / FSDP(reference) ratio: %.2fx  [apples-to-apples, same attention]", pp_tps / fsdp_ref_tps)
+    else:
+        logger.info("FSDP(reference) OOM -- pipeline microbatching fits where one-shot FSDP does not")
+    if fsdp_ref_tps is not None and fsdp_splash_tps is not None:
+        logger.info(
+            "FSDP splash / reference ratio: %.2fx  [attention-impl speedup; how much reference understates production]",
+            fsdp_splash_tps / fsdp_ref_tps,
+        )
     return 0
 
 
