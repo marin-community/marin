@@ -66,10 +66,12 @@ def _floats(env: str, default: str) -> tuple[float, ...]:
     return tuple(float(x) for x in os.environ.get(env, default).split(","))
 
 
-# LR is primary (the earlier attempt diverged); damping λ trades off whitening strength
-# vs. the plain-Muon anchor (large λ → ≈ Muon).
-LR_MULTIPLIERS: tuple[float, ...] = _floats("LR_MULTS", "0.5,1.0,2.0")
-DAMPINGS: tuple[float, ...] = _floats("DAMPINGS", "0.001,0.01,0.1")
+# LR is the primary axis (the earlier attempt diverged → LR transferability is the open
+# question, and the Σ^{-1/2} factors shift the natural update scale even with the Frobenius
+# norm). Swept wide around the Muon center (0.016). Damping λ trades off whitening strength
+# vs. the plain-Muon anchor (large λ → ≈ Muon); secondary.
+LR_MULTIPLIERS: tuple[float, ...] = _floats("LR_MULTS", "0.25,0.5,1.0,2.0,4.0")
+DAMPINGS: tuple[float, ...] = _floats("DAMPINGS", "0.001,0.01")
 
 
 @dataclass(frozen=True)
