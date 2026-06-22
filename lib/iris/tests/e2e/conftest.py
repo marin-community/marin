@@ -30,6 +30,7 @@ from iris.chaos import reset_chaos
 from iris.client.client import IrisClient, Job
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.constraints import Constraint, WellKnownAttribute
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -40,6 +41,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from rigging.connect import proxy_path
 from rigging.timing import Duration
 
 from .chronos import VirtualClock
@@ -357,7 +359,10 @@ def cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        log_client = LogServiceClientSync(address=url, timeout_ms=30000)
+        log_client = LogServiceClientSync(
+            address=f"{url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}",
+            timeout_ms=30000,
+        )
         yield IrisTestCluster(url=url, client=client, controller_client=controller_client, log_client=log_client)
         log_client.close()
         controller_client.close()
@@ -393,7 +398,10 @@ def multi_worker_cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        log_client = LogServiceClientSync(address=url, timeout_ms=30000)
+        log_client = LogServiceClientSync(
+            address=f"{url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}",
+            timeout_ms=30000,
+        )
         tc = IrisTestCluster(url=url, client=client, controller_client=controller_client, log_client=log_client)
         tc.wait_for_workers(num_workers, timeout=60)
         yield tc

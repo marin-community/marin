@@ -23,12 +23,14 @@ from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.version import client_revision_date
+from rigging.connect import proxy_path
 from rigging.timing import Duration, ExponentialBackoff
 
 from .conftest import (
@@ -122,7 +124,10 @@ def smoke_cluster(request):
     if controller_url:
         client = IrisClient.remote(controller_url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
-        log_client = LogServiceClientSync(address=controller_url, timeout_ms=30000)
+        log_client = LogServiceClientSync(
+            address=f"{controller_url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}",
+            timeout_ms=30000,
+        )
         tc = IrisTestCluster(
             url=controller_url,
             client=client,
@@ -137,6 +142,7 @@ def smoke_cluster(request):
         if workers:
             tc.wait_for_workers(1, timeout=600)
         yield tc
+        log_client.close()
         controller_client.close()
         return
 
@@ -144,10 +150,14 @@ def smoke_cluster(request):
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        log_client = LogServiceClientSync(address=url, timeout_ms=30000)
+        log_client = LogServiceClientSync(
+            address=f"{url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}",
+            timeout_ms=30000,
+        )
         tc = IrisTestCluster(url=url, client=client, controller_client=controller_client, log_client=log_client)
         tc.wait_for_workers(SMOKE_WORKER_COUNT, timeout=60)
         yield tc
+        log_client.close()
         controller_client.close()
 
 

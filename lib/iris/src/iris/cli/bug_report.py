@@ -13,7 +13,9 @@ from dataclasses import dataclass, field
 
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from rigging.connect import proxy_path
 
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
@@ -127,7 +129,11 @@ def gather_bug_report(
         accept_compression=IRIS_RPC_COMPRESSIONS,
         send_compression=None,
     )
-    log_client = LogClient.connect(controller_url, timeout_ms=30000, interceptors=interceptors)
+    log_client = LogClient.connect(
+        f"{controller_url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}",
+        timeout_ms=30000,
+        interceptors=interceptors,
+    )
     try:
         return _gather(client, log_client, job_id, tail=tail)
     finally:
