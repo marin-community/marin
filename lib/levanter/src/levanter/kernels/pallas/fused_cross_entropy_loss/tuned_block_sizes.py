@@ -10,10 +10,10 @@ import jax
 import jax.numpy as jnp
 
 from .config import BlockSizes
+from .gpu_launch_limits import NVIDIA_WEIGHT_TILE_BYTES_LIMIT, is_power_of_two
 
 
 DEFAULT_DEVICE_KEY = "default"
-_NVIDIA_WEIGHT_TILE_BYTES_LIMIT = 101_376
 
 
 @dataclass(frozen=True, slots=True)
@@ -452,10 +452,6 @@ def _is_nvidia_device(device_key: Optional[str]) -> bool:
     return bool(device_key and device_key.startswith("NVIDIA"))
 
 
-def _is_power_of_two(n: int) -> bool:
-    return n > 0 and (n & (n - 1) == 0)
-
-
 def _dtype_itemsize(dtype: Optional[jnp.dtype]) -> int:
     if dtype is None:
         return 4
@@ -694,10 +690,10 @@ def _is_valid_for_pallas_shape(
             return False
         if block_sizes.b_block_size % 16 != 0 or block_sizes.h_block_size % 16 != 0:
             return False
-        if not _is_power_of_two(block_sizes.h_block_size) or not _is_power_of_two(block_sizes.v_block_size):
+        if not is_power_of_two(block_sizes.h_block_size) or not is_power_of_two(block_sizes.v_block_size):
             return False
         weight_tile_bytes = block_sizes.h_block_size * block_sizes.v_block_size * _dtype_itemsize(w_dtype)
-        if weight_tile_bytes > _NVIDIA_WEIGHT_TILE_BYTES_LIMIT:
+        if weight_tile_bytes > NVIDIA_WEIGHT_TILE_BYTES_LIMIT:
             return False
     return True
 
@@ -711,7 +707,7 @@ def _sanitize_for_pallas(
     device_kind: Optional[str],
     w_dtype: Optional[jnp.dtype] = None,
 ) -> BlockSizes:
-    """Adjust inferred block sizes so B/H blocks divide local shapes when possible."""
+    """Adjust inferred block sizes to satisfy backend launch constraints."""
     del device_kind
     if not _is_tpu_device(device_key):
         if not _is_nvidia_device(device_key):
@@ -722,7 +718,7 @@ def _sanitize_for_pallas(
             b_block_size = 128
 
         h_block_size = _largest_power_of_two_at_most(min(block_sizes.h_block_size, 64), minimum=16)
-        max_v_for_tile = _NVIDIA_WEIGHT_TILE_BYTES_LIMIT // (_dtype_itemsize(w_dtype) * h_block_size)
+        max_v_for_tile = NVIDIA_WEIGHT_TILE_BYTES_LIMIT // (_dtype_itemsize(w_dtype) * h_block_size)
         v_block_size = _largest_power_of_two_at_most(
             min(block_sizes.v_block_size, 256, max_v_for_tile),
             minimum=16,

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from functools import partial
-import os
 from typing import Optional
 
 import jax
@@ -12,15 +11,11 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
+from .gpu_launch_limits import is_power_of_two, max_weight_tile_bytes_for_device
 from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import linear_softmax_cross_entropy_loss_xla
 
 
-# Empirical launch guardrails from Triton shared-memory launch failures.
-# H100 has 232,448 bytes per-SM shared memory; kernel overhead (input tiles,
-# accumulators, Triton metadata) consumes ~131 KB, leaving 101,376 bytes for
-# the weight tile.  Same limit applies to all NVIDIA GPUs including GB10.
-_NVIDIA_WEIGHT_TILE_BYTES_LIMIT = 101_376
 # Compile-time safety cap observed to avoid pathological GB10 H-tiling compile behavior.
 _GB10_MAX_H_TILES = 512
 _GB10_FULL_MATMUL_MAX_OUTPUT_ELEMENTS = 67_108_864
@@ -31,7 +26,6 @@ _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K = 6144
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS = 7168
 _NVIDIA_CUSTOM_BWD_V_BLOCK_LARGE_VOCAB = 8192
 _GPU_MIN_B_BLOCK_SIZE = 128
-_CUSTOM_BWD_V_BLOCK_SIZE_ENV = "LEVANTER_PALLAS_GPU_CUSTOM_BWD_V_BLOCK_SIZE"
 
 
 def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
@@ -44,20 +38,10 @@ def _ceil_div(n: int, d: int) -> int:
     return (n + d - 1) // d
 
 
-def _is_power_of_two(n: int) -> bool:
-    return n > 0 and (n & (n - 1)) == 0
-
-
 def _device_kind() -> str:
     if not jax.devices():
         return ""
     return jax.devices()[0].device_kind.lower()
-
-
-def _max_weight_tile_bytes_for_device(device_kind: str) -> Optional[int]:
-    if "nvidia" in device_kind:
-        return _NVIDIA_WEIGHT_TILE_BYTES_LIMIT
-    return None
 
 
 def _max_h_tiles_for_device(device_kind: str) -> Optional[int]:
@@ -162,17 +146,17 @@ def _validate_launch_feasibility(
     v_block_size: int,
     num_h_blocks: int,
 ) -> None:
-    if not _is_power_of_two(h_block_size):
+    if not is_power_of_two(h_block_size):
         raise PallasUnsupportedError(
             "h_block_size must be a power of 2 for current GPU Triton lowering; " f"got h_block_size={h_block_size}."
         )
-    if not _is_power_of_two(v_block_size):
+    if not is_power_of_two(v_block_size):
         raise PallasUnsupportedError(
             "v_block_size must be a power of 2 for current GPU Triton lowering; " f"got v_block_size={v_block_size}."
         )
 
     device_kind = _device_kind()
-    max_weight_tile_bytes = _max_weight_tile_bytes_for_device(device_kind)
+    max_weight_tile_bytes = max_weight_tile_bytes_for_device(device_kind)
     if max_weight_tile_bytes is not None:
         requested = h_block_size * v_block_size * jnp.dtype(w_dtype).itemsize
         if requested > max_weight_tile_bytes:
@@ -453,11 +437,6 @@ def _custom_backward_v_block_size(
     w: Float[Array, "H V"],
     block_sizes: BlockSizes | None,
 ) -> int:
-    if raw_override := os.environ.get(_CUSTOM_BWD_V_BLOCK_SIZE_ENV):
-        override = int(raw_override)
-        if override <= 0:
-            raise ValueError(f"{_CUSTOM_BWD_V_BLOCK_SIZE_ENV} must be positive, got {override}.")
-        return override
     gb10_tuned = _gb10_custom_backward_v_block_size(x, w)
     if gb10_tuned is not None:
         return gb10_tuned

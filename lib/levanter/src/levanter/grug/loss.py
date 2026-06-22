@@ -16,9 +16,9 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_m
 from haliax.jax_utils import named_call
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     IMPLEMENTATIONS,
-    default_implementations,
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
+from levanter.kernels.pallas.fused_cross_entropy_loss.api import default_implementations
 from levanter.kernels.pallas.fused_cross_entropy_loss.tuned_block_sizes import infer_block_sizes_with_tuned_match
 from levanter.kernels.pallas.fused_cross_entropy_loss.xla import linear_softmax_cross_entropy_loss_xla
 
@@ -171,14 +171,6 @@ def _lm_head_spec_for_ce(
     return P(None, None)
 
 
-def _lm_head_spec_for_xla_ce(
-    lm_head: jax.Array,
-    mesh: Mesh | jax.sharding.AbstractMesh | None,
-    implementation: str | tuple[str, ...] | None,
-) -> P:
-    return _lm_head_spec_for_ce(lm_head, mesh, implementation)
-
-
 def _vocab_axis_for_lm_head_spec(lm_head_spec: P) -> str | None:
     if len(lm_head_spec) < 2:
         return None
@@ -301,7 +293,7 @@ def fused_linear_softmax_cross_entropy_loss(
         return _loss_shard(hidden, lm_head, labels, weight_array)
 
     hidden_spec = P(batch_axis_spec)
-    lm_head_spec = _lm_head_spec_for_xla_ce(lm_head, mesh, implementation)
+    lm_head_spec = _lm_head_spec_for_ce(lm_head, mesh, implementation)
     label_spec = P(batch_axis_spec)
     hidden = _reshard_for_shard_map(hidden, mesh, hidden_spec)
     lm_head = _reshard_for_shard_map(lm_head, mesh, lm_head_spec)
