@@ -677,6 +677,8 @@ for maybe_env in \
     LEVANTER_DEEPEP_HOST_DISPATCH_DEBUG \
     LEVANTER_DEEPEP_INTERNODE_DEBUG \
     LEVANTER_DEEPEP_INTERNODE_COLLAPSE_MODE \
+    LEVANTER_DEEPEP_INTERNODE_COMBINE_X_ONLY \
+    LEVANTER_DEEPEP_INTERNODE_RECV_CAPACITY_MODE \
     LEVANTER_DEEPEP_INTERNODE_ASSIGNMENT_GRADIENT_MODE \
     MAY_DEEPEP_REVISION; do
     if [ -n "${!maybe_env:-}" ]; then
@@ -755,6 +757,8 @@ deepep_bootstrap_source: $DEEPEP_BOOTSTRAP_SOURCE
 deepep_ranks_per_node: ${DEEPEP_RANKS_PER_NODE:-unset}
 deepep_processes_per_task: ${DEEPEP_PROCESSES_PER_TASK:-unset}
 deepep_internode_collapse_mode: ${LEVANTER_DEEPEP_INTERNODE_COLLAPSE_MODE:-scatter}
+deepep_internode_combine_x_only: ${LEVANTER_DEEPEP_INTERNODE_COMBINE_X_ONLY:-false}
+deepep_internode_recv_capacity_mode: ${LEVANTER_DEEPEP_INTERNODE_RECV_CAPACITY_MODE:-worst_case}
 deepep_internode_assignment_gradient_mode: ${LEVANTER_DEEPEP_INTERNODE_ASSIGNMENT_GRADIENT_MODE:-jax}
 use_pko: $USE_PKO
 pko_on_last_layer: $PKO_ON_LAST_LAYER

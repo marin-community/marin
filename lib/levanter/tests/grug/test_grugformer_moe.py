@@ -18,6 +18,7 @@ from levanter.grug._moe.ep_deepep import (
     _assignment_destinations_have_recv_topk_layout,
     _collapse_local_assignments_gather_jax,
     _collapse_local_assignments_jax,
+    _deepep_internode_recv_capacity,
     _tokens_per_rdma_rank,
 )
 from levanter.grug._moe.ep_common import _pack_same_route_payloads, _split_same_route_payloads
@@ -502,6 +503,25 @@ def test_deepep_internode_tokens_per_rdma_rank_rejects_single_node():
 
     with pytest.raises(ValueError, match="more than one RDMA node rank"):
         _tokens_per_rdma_rank(tokens_per_rank, num_local_ranks=8)
+
+
+def test_deepep_internode_recv_capacity_modes(monkeypatch: pytest.MonkeyPatch):
+    kwargs = {
+        "local_tokens": 32,
+        "topk": 2,
+        "num_rdma_ranks": 2,
+        "local_assignment_capacity": 64,
+    }
+
+    monkeypatch.delenv("LEVANTER_DEEPEP_INTERNODE_RECV_CAPACITY_MODE", raising=False)
+    assert _deepep_internode_recv_capacity(**kwargs) == 128
+
+    monkeypatch.setenv("LEVANTER_DEEPEP_INTERNODE_RECV_CAPACITY_MODE", "local_assignment")
+    assert _deepep_internode_recv_capacity(**kwargs) == 64
+
+    monkeypatch.setenv("LEVANTER_DEEPEP_INTERNODE_RECV_CAPACITY_MODE", "nope")
+    with pytest.raises(ValueError, match="LEVANTER_DEEPEP_INTERNODE_RECV_CAPACITY_MODE"):
+        _deepep_internode_recv_capacity(**kwargs)
 
 
 def test_deepep_internode_gather_collapse_matches_scatter_collapse():

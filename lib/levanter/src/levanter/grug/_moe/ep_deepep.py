@@ -72,10 +72,13 @@ from levanter.kernels.deepep import (
 _DEEPEP_RANKS_PER_NODE_ENV = "DEEPEP_RANKS_PER_NODE"
 _DEEPEP_INTERNODE_COLLAPSE_MODE_ENV = "LEVANTER_DEEPEP_INTERNODE_COLLAPSE_MODE"
 _DEEPEP_INTERNODE_COMBINE_X_ONLY_ENV = "LEVANTER_DEEPEP_INTERNODE_COMBINE_X_ONLY"
+_DEEPEP_INTERNODE_RECV_CAPACITY_MODE_ENV = "LEVANTER_DEEPEP_INTERNODE_RECV_CAPACITY_MODE"
 _DEEPEP_INTERNODE_COLLAPSE_SCATTER = "scatter"
 _DEEPEP_INTERNODE_COLLAPSE_GATHER = "gather"
 _DEEPEP_INTERNODE_COLLAPSE_FFI = "ffi"
 _DEEPEP_INTERNODE_COLLAPSE_FUSED_COMBINE = "fused_combine"
+_DEEPEP_INTERNODE_RECV_CAPACITY_WORST_CASE = "worst_case"
+_DEEPEP_INTERNODE_RECV_CAPACITY_LOCAL_ASSIGNMENT = "local_assignment"
 
 
 def _deepep_num_local_ranks() -> int:
@@ -107,6 +110,25 @@ def _deepep_internode_collapse_mode() -> str:
 
 def _deepep_internode_combine_x_only() -> bool:
     return os.environ.get(_DEEPEP_INTERNODE_COMBINE_X_ONLY_ENV, "").lower() in {"1", "true", "yes", "on"}
+
+
+def _deepep_internode_recv_capacity(
+    *,
+    local_tokens: int,
+    topk: int,
+    num_rdma_ranks: int,
+    local_assignment_capacity: int,
+) -> int:
+    mode = os.environ.get(_DEEPEP_INTERNODE_RECV_CAPACITY_MODE_ENV, _DEEPEP_INTERNODE_RECV_CAPACITY_WORST_CASE)
+    if mode == _DEEPEP_INTERNODE_RECV_CAPACITY_WORST_CASE:
+        return local_tokens * topk * num_rdma_ranks
+    if mode == _DEEPEP_INTERNODE_RECV_CAPACITY_LOCAL_ASSIGNMENT:
+        return local_assignment_capacity
+    raise ValueError(
+        f"{_DEEPEP_INTERNODE_RECV_CAPACITY_MODE_ENV} must be "
+        f"{_DEEPEP_INTERNODE_RECV_CAPACITY_WORST_CASE!r} or "
+        f"{_DEEPEP_INTERNODE_RECV_CAPACITY_LOCAL_ASSIGNMENT!r}, got {mode!r}"
+    )
 
 
 def _deepep_combine_internode_output(
@@ -552,7 +574,12 @@ def _moe_mlp_ep_deepep_internode_local(
     topk = selected_experts_local.shape[1]
     local_capacity = int(math.ceil(capacity_factor * x_local.shape[0] * topk))
     local_capacity = max(local_experts, local_capacity)
-    max_recv_tokens = x_local.shape[0] * topk * num_rdma_ranks
+    max_recv_tokens = _deepep_internode_recv_capacity(
+        local_tokens=x_local.shape[0],
+        topk=topk,
+        num_rdma_ranks=num_rdma_ranks,
+        local_assignment_capacity=local_capacity,
+    )
 
     with jax.named_scope("moe_ep_deepep_internode/dispatch"):
         with jax.named_scope("deepep_layout"):
