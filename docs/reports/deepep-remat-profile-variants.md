@@ -215,3 +215,29 @@ At submission time May349 was `SchedulingGated` by Kueue behind the admitted
 32-task banked-MuonH workload `/dlwh/iris-run-job-20260622-175816`. The Kueue
 condition said the two-pod set could not fit because topology `"infiniband"`
 excluded all 32 nodes for CPU availability.
+
+If May349 starts and reproduces the May348 recv-counter timeout, the next two
+controls are queued as scripts but should not be submitted while May349 is still
+waiting for the same two-node topology slot:
+
+```text
+script=scratch/launch_may350_deepep_ep16_savemoe_l26_b64_scatter_n2_throughput.sh
+shape=2 H100x8 nodes, EP16, global batch 64, 4 sequences/device
+moe=deepep_internode
+remat=save_moe
+profiler=disabled
+collapse=scatter
+assignment_gradient=fused
+purpose=separate FFI local-collapse from the recv-counter timeout
+```
+
+```text
+script=scratch/launch_may351_deepep_ep16_savemoe_l26_b64_jaxassign_n2_throughput.sh
+shape=2 H100x8 nodes, EP16, global batch 64, 4 sequences/device
+moe=deepep_internode
+remat=save_moe
+profiler=disabled
+collapse=ffi
+assignment_gradient=jax
+purpose=separate fused dispatch-backward assignment-gradient from the recv-counter timeout
+```
