@@ -24,7 +24,7 @@ is the caller's responsibility and fails fast in ``shard_pipeline_params``.
 from __future__ import annotations
 
 import jax
-import numpy as np
+from jax.experimental import mesh_utils
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
@@ -47,12 +47,17 @@ def make_pipeline_mesh(num_stages: int, num_data: int, num_expert: int) -> Mesh:
     All three axes are ``Auto`` so that, inside the pipeline ``shard_map`` (which
     manualizes only ``stage``), ``data``/``expert`` stay visible to GSPMD and the
     model's einsums partition + reduce over them without explicit ``out_sharding``.
+
+    Device ordering comes from ``mesh_utils.create_device_mesh`` so the axes map to
+    the physical TPU topology: a naive ``reshape`` of ``jax.devices()`` leaves the
+    ``stage`` ring-shift (ppermute) straddling non-adjacent chips, which makes XLA's
+    SPMD partitioner reject the collective device groups when ``data``/``expert`` are
+    also partitioned (``spmd_partitioner_util.cc`` num_devices_per_group check).
     """
     need = num_stages * num_data * num_expert
-    devices = np.array(jax.devices())
-    if devices.size < need:
-        raise ValueError(f"need {need} devices for {num_stages}x{num_data}x{num_expert}, have {devices.size}")
-    grid = devices[:need].reshape(num_stages, num_data, num_expert)
+    if jax.device_count() < need:
+        raise ValueError(f"need {need} devices for {num_stages}x{num_data}x{num_expert}, have {jax.device_count()}")
+    grid = mesh_utils.create_device_mesh((num_stages, num_data, num_expert), devices=jax.devices()[:need])
     return Mesh(grid, (STAGE_AXIS, DATA_AXIS, EXPERT_AXIS), axis_types=(AxisType.Auto,) * 3)
 
 
