@@ -136,6 +136,7 @@ class TrainerState(eqx.Module, Generic[M]):
         *,
         obj_fun: Callable[[M], Scalar] | None = None,
         loss: float | None = None,
+        grams: PyTree | None = None,
         key: PRNGKeyArray,
     ) -> tuple[S, M]:
         assert isinstance(self, TrainerState)  # make mypy happy
@@ -146,6 +147,7 @@ class TrainerState(eqx.Module, Generic[M]):
             grads,
             obj_fun=obj_fun,
             loss=loss,
+            grams=grams,
             is_trainable=self.is_trainable,
         )
 
@@ -237,6 +239,7 @@ def take_train_step(
     *,
     obj_fun: Optional[Callable[[M], Scalar]] = None,
     loss: Optional[float] = None,
+    grams: Optional[PyTree] = None,
     is_trainable: FilterTree = True,
 ) -> tuple[M, OptState, M]:
     """
@@ -258,7 +261,9 @@ def take_train_step(
     trainable_model = trainables_only(model, is_trainable)
     _, trainable_model = partition_for_grad_overwrite(trainable_model)
 
-    updates, opt_state = optimizer.update(train_grads, opt_state, params=trainable_model, obj_fn=obj_fun, loss=loss)
+    updates, opt_state = optimizer.update(
+        train_grads, opt_state, params=trainable_model, obj_fn=obj_fun, loss=loss, grams=grams
+    )
     model = apply_updates(model, updates, overwrites)
 
     return model, opt_state, updates
