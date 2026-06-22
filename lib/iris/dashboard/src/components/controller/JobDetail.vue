@@ -7,6 +7,7 @@ import { stateToName, stateDisplayName } from '@/types/status'
 import type {
   JobStatus, TaskStatus, LaunchJobRequest, JobQuery,
   GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
+  EndpointInfo, ListEndpointsResponse,
 } from '@/types/rpc'
 import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
@@ -20,6 +21,7 @@ import InfoRow from '@/components/shared/InfoRow.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
+import EndpointLink from '@/components/shared/EndpointLink.vue'
 import { useMediaQuery } from '@/composables/useMediaQuery'
 
 // Tailwind's `sm` breakpoint is 640px. Cards on mobile, table on desktop.
@@ -38,6 +40,8 @@ const FAILED_TERMINAL_STATES = new Set(['failed', 'worker_failed', 'cosched_fail
 const job = ref<JobStatus | null>(null)
 const jobRequest = ref<LaunchJobRequest | null>(null)
 const tasks = ref<TaskStatus[]>([])
+// Endpoints registered by this job's tasks, grouped by wire-format task id.
+const endpointsByTask = ref<Map<string, EndpointInfo[]>>(new Map())
 const childJobsByParent = ref<Map<string, JobStatus[]>>(new Map())
 const expandedChildJobs = ref<Set<string>>(new Set())
 const loadingChildJobs = ref<Set<string>>(new Set())
@@ -227,6 +231,34 @@ const runningResourceRange = computed<RunningResourceRange | null>(() => {
   }
 })
 
+async function fetchEndpoints(gen: number) {
+  const taskIds = tasks.value.map(t => t.taskId)
+  if (taskIds.length === 0) {
+    endpointsByTask.value = new Map()
+    return
+  }
+  // Endpoint links are an enhancement; a fetch failure should never block the
+  // task table, so swallow the error and leave the prior grouping in place.
+  try {
+    const resp = await controllerRpcCall<ListEndpointsResponse>('ListEndpoints', { taskIds })
+    if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
+    const grouped = new Map<string, EndpointInfo[]>()
+    for (const ep of resp.endpoints ?? []) {
+      if (!ep.taskId) continue
+      const list = grouped.get(ep.taskId)
+      if (list) list.push(ep)
+      else grouped.set(ep.taskId, [ep])
+    }
+    endpointsByTask.value = grouped
+  } catch (e) {
+    console.warn('ListEndpoints failed', e)
+  }
+}
+
+function taskEndpoints(taskId: string): EndpointInfo[] {
+  return endpointsByTask.value.get(taskId) ?? []
+}
+
 async function fetchData() {
   const gen = ++fetchGeneration
   error.value = null
@@ -250,6 +282,9 @@ async function fetchData() {
     if (tasks.value.length > 0) {
       void fetchTaskStats()
       void fetchStatusText()
+      void fetchEndpoints(gen)
+    } else {
+      endpointsByTask.value = new Map()
     }
 
     const parentIds = [props.jobId, ...expandedChildJobs.value]
@@ -289,6 +324,7 @@ watch(() => props.jobId, () => {
   job.value = null
   jobRequest.value = null
   tasks.value = []
+  endpointsByTask.value = new Map()
   childJobsByParent.value = new Map()
   expandedChildJobs.value = new Set()
   loadingChildJobs.value = new Set()
@@ -1177,6 +1213,15 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             <MarkdownRenderer v-if="taskStatusTextSummary(task.taskId) && !TERMINAL_STATES.has(stateToName(task.state))" :content="taskStatusTextSummary(task.taskId)" class="text-text-secondary" />
             <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
           </div>
+          <div v-if="taskEndpoints(task.taskId).length" class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+            <EndpointLink
+              v-for="ep in taskEndpoints(task.taskId)"
+              :key="ep.endpointId ?? ep.name"
+              :name="ep.name"
+              short
+              class="text-[11px]"
+            />
+          </div>
           <div v-if="stateToName(task.state) === 'running'" class="mt-2 flex gap-1">
             <button
               class="px-2 py-0.5 text-[11px] font-semibold rounded bg-status-purple text-white hover:opacity-80 disabled:opacity-50"
@@ -1252,6 +1297,13 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                 >
                   {{ taskIndex(task.taskId) }}
                 </RouterLink>
+                <div
+                  v-for="ep in taskEndpoints(task.taskId)"
+                  :key="ep.endpointId ?? ep.name"
+                  class="mt-0.5"
+                >
+                  <EndpointLink :name="ep.name" short class="text-[11px] max-w-full truncate" />
+                </div>
               </td>
               <td class="px-2 sm:px-3 py-2 text-[13px]">
                 <StatusBadge :status="task.state" size="sm" />
