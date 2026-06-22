@@ -270,3 +270,23 @@ confirms the path.
 - Interpretation:
 - Next action:
 -->
+
+### 2026-06-22 — GFP8-001: S1 dense microbench rig
+- **Goal:** Build the dense-dot microbench rig (S1) — the BF16 baseline arm of David's
+  linear-FP8 harness. Shapes/dtypes/timing/HLO/profiler hooks; FP8 paths (S2) extend the same file.
+- **Code:** `lib/levanter/scripts/bench/bench_dense_fp8.py`, 3 commits on `research/grug-fp8-h100`
+  (8aa4dcda9 core rig · d9b88150a HLO-dump/profiler hooks · 325927f42 roofline). Single dense
+  projection `[M,K]@[K,N]` fwd+bwd via `lax.dot_general` with shared `_DIMENSION_NUMBERS` (so S2
+  swaps only dtype/precision). Emits compiled HLO to stdout (path-A `iris job logs` read),
+  `--xla-dump-dir`/`--profiler-dir` for the R2-upload path B, and one `result_json` line with
+  achieved TFLOP/s + %-of-H100-peak (peak shown only when an H100 is detected).
+- **Command (local verify):** `uv run python lib/levanter/scripts/bench/bench_dense_fp8.py
+  --m 1024 --k 1024 --n 1024 --steps 5 --warmup 2`
+- **Result:** Runs on CPU (JAX 0.10.0); emits forward HLO (`dot_general` op visible) + fwd/bwd
+  timing + achieved TFLOP/s in `result_json`. `./infra/pre-commit.py` green. **S1 acceptance met**
+  (BF16 dense-dot baseline runs; emits timing + HLO). Not yet run on H100 — %-peak and the real
+  d3072/d4096 baseline numbers land on the first `cw-us-east-02a` run.
+- **Interpretation:** Rig is the reusable measurement substrate for S2–S4 (dense lowering paths);
+  the shared `dimension_numbers` + dtype/precision seam is the extension point for the Path-A FP8 dot.
+- **Next action:** S2 — lower an `Fp8DotGeneral` at d3072/d4096 on H100 through this rig and grep the
+  HLO for `__cublas$lt$matmul$f8` (+ `_FAST_ACCUM`?); same H100 run yields the BF16 baseline datapoint.
