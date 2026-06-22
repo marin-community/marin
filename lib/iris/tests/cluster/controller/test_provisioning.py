@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 from iris.cluster.backends.types import InfraError, QuotaExhaustedError
+from iris.cluster.controller.autoscaler.operations import SliceDrainCause
 from iris.cluster.controller.autoscaler.provisioning import (
     ProvisioningOutcome,
     classify_create_failure,
@@ -151,7 +152,7 @@ def test_runtime_worker_loss_records_preempted():
     table = FakeTable()
     autoscaler.set_provisioning_sink(table)
     try:
-        autoscaler.terminate_slices_for_workers(["slice-001-vm-0"])
+        autoscaler.drain_slices_for_workers(["slice-001-vm-0"], cause=SliceDrainCause.WORKER_FAILED)
     finally:
         autoscaler.shutdown()
 

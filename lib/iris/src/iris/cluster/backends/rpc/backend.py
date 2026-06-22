@@ -26,6 +26,7 @@ from rigging.timing import Duration
 from iris.chaos import chaos
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.autoscaler.operations import SliceDrainCause
 from iris.cluster.controller.backend import (
     AutoscaleResult,
     BackendCapability,
@@ -259,10 +260,14 @@ class RpcTaskBackend:
         if self.autoscaler is None:
             return AutoscaleResult()
         if dead_workers:
-            siblings = self.autoscaler.terminate_slices_for_workers([str(wid) for wid in dead_workers])
+            siblings = self.autoscaler.drain_slices_for_workers(
+                [str(wid) for wid in dead_workers], cause=SliceDrainCause.WORKER_FAILED
+            )
             return self._evict_and_result(snapshot, list(dead_workers), siblings)
         if drain_workers:
-            siblings = self.autoscaler.drain_slices_for_workers([str(wid) for wid in drain_workers])
+            siblings = self.autoscaler.drain_slices_for_workers(
+                [str(wid) for wid in drain_workers], cause=SliceDrainCause.PREEMPTED
+            )
             return self._evict_and_result(snapshot, list(drain_workers), siblings)
         self.autoscaler.refresh(snapshot.worker_status_map)
         self.autoscaler.probe_health()

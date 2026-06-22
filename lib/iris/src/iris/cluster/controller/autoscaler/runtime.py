@@ -43,11 +43,9 @@ from iris.cluster.controller.autoscaler.models import (
     ScalingAction,
     ScalingDecision,
 )
+from iris.cluster.controller.autoscaler.operations import DRAIN_TELEMETRY, SliceDrainCause
 from iris.cluster.controller.autoscaler.operations import (
-    mark_slices_draining_for_workers as mark_slices_draining_for_workers_operation,
-)
-from iris.cluster.controller.autoscaler.operations import (
-    terminate_slices_for_workers as terminate_slices_for_workers_operation,
+    drain_slices_for_workers as drain_slices_for_workers_operation,
 )
 from iris.cluster.controller.autoscaler.planning import build_scale_plan
 from iris.cluster.controller.autoscaler.provisioning import (
@@ -683,8 +681,10 @@ class Autoscaler:
                     worker_count=len(worker_ids),
                 )
             elif status.state == CloudSliceState.FAILED:
+                # The cloud already reports the allocation gone, so this is the
+                # cleanup step: detach directly (no terminate to issue).
                 group.mark_slice_failed(slice_id, error_message=status.error_message)
-                group.scale_down(slice_id)
+                group.detach_slice(slice_id)
                 self._unregister_slice_workers(slice_id)
                 group.record_slice_boot_failed(slice_id, timestamp)
                 reason = status.error_message if status.error_message else "bootstrap failed"
@@ -704,8 +704,12 @@ class Autoscaler:
                 # still has running tasks.
                 unknown_for = group.note_slice_unknown(slice_id, timestamp)
                 if unknown_for >= self._unresolvable_timeout:
+                    # Given up on an undescribable slice: detach and best-effort
+                    # terminate, since its VMs may still be live.
                     group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
-                    group.scale_down(slice_id)
+                    handle = group.detach_slice(slice_id)
+                    if handle is not None:
+                        group.terminate_slice_handle(handle, context="unresolvable after timeout")
                     self._unregister_slice_workers(slice_id)
                     group.record_slice_boot_failed(slice_id, timestamp)
                     self._log_action(
@@ -846,12 +850,13 @@ class Autoscaler:
                     logger.warning("Slice %s: %s; terminating", slice_id, reason)
                     tripped[slice_id] = (group, reason)
 
-        # Phase 4: terminate tripped slices. These booted cleanly and only died
-        # at runtime, so record PREEMPTED (excluded from the create success rate),
-        # not a boot failure — the BackoffDetector's scale-up budget shouldn't decay.
+        # Phase 4: drain tripped slices. These booted cleanly and only died at
+        # runtime, so record PREEMPTED (excluded from the create success rate), not a
+        # boot failure — the BackoffDetector's scale-up budget shouldn't decay. The
+        # VM is a live zombie, so it drains (mark DRAINING, terminate, reap on
+        # confirm) rather than detaching before its deletion lands.
         for slice_id, (group, reason) in tripped.items():
-            group.mark_slice_failed(slice_id, error_message=reason)
-            group.scale_down(slice_id, timestamp)
+            handle = group.drain_slice(slice_id, timestamp)
             self._unregister_slice_workers(slice_id)
             self._log_action(
                 "slice_failed",
@@ -862,6 +867,8 @@ class Autoscaler:
                 group=group,
                 outcome=ProvisioningOutcome.PREEMPTED,
             )
+            if handle is not None:
+                group.terminate_slice_handle(handle, context="health probe failed")
 
     def _worker_urls(self, workers: Sequence[RemoteWorkerHandle]) -> dict[str, str]:
         """Map worker_id to the worker's reachable ``http://host:port`` URL.
@@ -1024,61 +1031,41 @@ class Autoscaler:
         """All scale groups."""
         return self._groups
 
-    def terminate_slices_for_workers(self, worker_ids: Sequence[str]) -> list[str]:
-        """Terminate the unique slices containing the given workers.
+    def drain_slices_for_workers(self, worker_ids: Sequence[str], *, cause: SliceDrainCause) -> list[str]:
+        """Drain the unique slices holding the given workers and start their deletion.
 
-        Returns sibling worker IDs that should be failed immediately because
-        their slices are being torn down. The operation detaches the slices from
-        tracking serially (the state mutation), then issues the deletes in a
-        bounded parallel fan-out: each ``terminate_slice_handle`` is a bounded
-        cloud request that catches and logs its own errors and touches no shared
-        state, so the fan-out stays within the phase budget under a mass
-        preemption without racing.
+        Each affected slice is marked DRAINING (kept tracked, still counted against
+        its reservation pool) and its VMs are terminated now; ``refresh`` reaps it
+        once the cloud confirms it is gone. The slices are mutated serially, then the
+        deletes issue in a bounded parallel fan-out — each ``terminate_slice_handle``
+        is a self-contained cloud request that logs its own errors and touches no
+        shared state, so a mass teardown stays within the phase budget without
+        racing.
+
+        ``cause`` distinguishes a worker-liveness failure (charged to the group as a
+        PREEMPTED provisioning outcome and churn) from a deliberate cross-variant
+        preemption (health and backoff signals stay clean). Returns the drained
+        slices' sibling worker ids for the caller to fail immediately.
         """
-        result = terminate_slices_for_workers_operation(
+        result = drain_slices_for_workers_operation(
             groups=self._groups,
             worker_ids=worker_ids,
             unregister_slice_workers=self._unregister_slice_workers,
             log_action=self._log_action,
             timestamp=Timestamp.now(),
+            cause=cause,
         )
-        # These slices had registered workers (so they reached READY) and lost
-        # them at runtime — the primary preemption path, which the probe_health
-        # backstop never sees. Record PREEMPTED so they don't pollute the create
-        # success rate (mirrors the probe_health termination path).
-        for req in result.termination_requests:
-            self._record_provisioning_outcome(
-                req.group, ProvisioningOutcome.PREEMPTED, error_message="worker liveness lost"
-            )
+        if cause is SliceDrainCause.WORKER_FAILED:
+            # Reached READY then lost liveness at runtime — record PREEMPTED so these
+            # don't pollute the create success rate.
+            for req in result.termination_requests:
+                self._record_provisioning_outcome(
+                    req.group, ProvisioningOutcome.PREEMPTED, error_message="worker liveness lost"
+                )
+        context = DRAIN_TELEMETRY[cause].terminate_context
         _run_io_batch(
             result.termination_requests,
-            lambda req: req.group.terminate_slice_handle(req.handle, context="cleaning up anyway"),
-            max_workers=_CLOUD_OP_MAX_WORKERS,
-            thread_name_prefix="slice-terminate",
-        )
-        return result.sibling_worker_ids
-
-    def drain_slices_for_workers(self, worker_ids: Sequence[str]) -> list[str]:
-        """Drain the unique slices holding the given workers for preemption.
-
-        For a scheduler-driven cross-variant preemption: each affected slice is
-        marked DRAINING (kept tracked, still counted against its reservation pool)
-        and its VMs are terminated now; the teardown records no failure or
-        preemption outcome, so the pool's health and backoff signals stay clean. The
-        slice lingers DRAINING until ``refresh`` observes its VMs are gone and reaps
-        it. Returns the drained slices' sibling worker ids, which the caller fails
-        immediately.
-        """
-        result = mark_slices_draining_for_workers_operation(
-            groups=self._groups,
-            worker_ids=worker_ids,
-            unregister_slice_workers=self._unregister_slice_workers,
-            log_action=self._log_action,
-            timestamp=Timestamp.now(),
-        )
-        _run_io_batch(
-            result.termination_requests,
-            lambda req: req.group.terminate_slice_handle(req.handle, context="draining for preemption"),
+            lambda req: req.group.terminate_slice_handle(req.handle, context=context),
             max_workers=_CLOUD_OP_MAX_WORKERS,
             thread_name_prefix="slice-drain",
         )

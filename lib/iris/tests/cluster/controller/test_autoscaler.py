@@ -20,6 +20,7 @@ from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Autoscaler
 from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
+from iris.cluster.controller.autoscaler.operations import SliceDrainCause
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
@@ -233,7 +234,9 @@ class TestAutoscalerScaleDown:
         # At t=10_000 dwell=8s, well past the 1s threshold.
         autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
 
-        assert group.slice_count() == 1
+        # run_once drains the idle slices; they linger DRAINING until the reap.
+        assert group.slice_lifecycle("slice-001") == SliceLifecycleState.DRAINING
+        assert group.slice_lifecycle("slice-002") == SliceLifecycleState.DRAINING
 
     def test_no_scale_down_at_buffer_target(self):
         """Does not scale down when at buffer target."""
@@ -343,7 +346,7 @@ class TestAutoscalerScaleDown:
 
         # With rate_limit=1, only 1 slice should be scaled down per cycle
         autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
-        assert group.slice_count() == 2
+        assert group.ready_slice_count() == 2
 
     def test_scale_down_multiple_idle_slices_in_one_cycle(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """With enough rate-limit tokens, multiple idle slices are scaled down in one cycle."""
@@ -382,7 +385,7 @@ class TestAutoscalerScaleDown:
         # With rate_limit=5, all 3 idle slices should be scaled down in one cycle
         # at t=10_000 (8s dwell, past 1s threshold).
         autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
-        assert group.slice_count() == 0
+        assert group.ready_slice_count() == 0
 
 
 class TestAutoscalerExecution:
@@ -453,10 +456,10 @@ class TestAutoscalerExecution:
 
 
 class TestAutoscalerWorkerFailure:
-    """Tests for worker failure handling."""
+    """Tests for worker-liveness failure teardown (drains with cause WORKER_FAILED)."""
 
-    def test_terminate_slices_for_workers_terminates_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """terminate_slices_for_workers() terminates the slice containing the worker."""
+    def test_worker_failure_drains_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A failed worker's slice drains: DRAINING, VMs terminated, still tracked until reaped."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
@@ -464,28 +467,26 @@ class TestAutoscalerWorkerFailure:
         autoscaler = make_autoscaler({"test-group": group})
         _mark_discovered_ready(group, [mock_handle])
 
-        failed_worker_id = "slice-001-vm-0"
-        autoscaler.terminate_slices_for_workers([failed_worker_id])
+        autoscaler.drain_slices_for_workers(["slice-001-vm-0"], cause=SliceDrainCause.WORKER_FAILED)
 
-        assert group.slice_count() == 0
+        assert group.slice_count() == 1
+        assert group.slice_lifecycle("slice-001") == SliceLifecycleState.DRAINING
+        assert mock_handle.terminated
 
-    def test_terminate_slices_for_workers_unknown_worker_is_noop(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """terminate_slices_for_workers() does nothing for unknown workers."""
+    def test_worker_failure_unknown_worker_is_noop(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """An unknown worker drains nothing."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
-        autoscaler.terminate_slices_for_workers(["unknown-worker-99"])
+        autoscaler.drain_slices_for_workers(["unknown-worker-99"], cause=SliceDrainCause.WORKER_FAILED)
 
         assert group.slice_count() == 1
 
-    def test_terminate_slices_for_workers_returns_sibling_worker_ids(
-        self, scale_group_config: config_pb2.ScaleGroupConfig
-    ):
-        """terminate_slices_for_workers() returns sibling worker IDs for multi-VM slices."""
-        # Create a slice with 4 VMs
+    def test_worker_failure_returns_sibling_worker_ids(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A multi-VM slice returns its other workers to be failed immediately."""
         mock_handle = make_mock_slice_handle(
             "slice-001",
             all_ready=True,
@@ -497,17 +498,12 @@ class TestAutoscalerWorkerFailure:
         autoscaler = make_autoscaler({"test-group": group})
         _mark_discovered_ready(group, [mock_handle])
 
-        # Fail the first worker -- should return 3 sibling worker IDs
-        failed_worker_id = "slice-001-vm-0"
-        siblings = autoscaler.terminate_slices_for_workers([failed_worker_id])
+        siblings = autoscaler.drain_slices_for_workers(["slice-001-vm-0"], cause=SliceDrainCause.WORKER_FAILED)
 
-        expected_siblings = [f"slice-001-vm-{i}" for i in range(1, 4)]
-        assert sorted(siblings) == sorted(expected_siblings)
-        assert group.slice_count() == 0
+        assert sorted(siblings) == [f"slice-001-vm-{i}" for i in range(1, 4)]
+        assert group.slice_lifecycle("slice-001") == SliceLifecycleState.DRAINING
 
-    def test_terminate_slices_for_workers_returns_empty_for_single_vm_slice(
-        self, scale_group_config: config_pb2.ScaleGroupConfig
-    ):
+    def test_worker_failure_returns_empty_for_single_vm_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Single-VM slices return no siblings."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[mock_handle])
@@ -516,13 +512,12 @@ class TestAutoscalerWorkerFailure:
         autoscaler = make_autoscaler({"test-group": group})
         _mark_discovered_ready(group, [mock_handle])
 
-        failed_worker_id = "slice-001-vm-0"
-        siblings = autoscaler.terminate_slices_for_workers([failed_worker_id])
+        siblings = autoscaler.drain_slices_for_workers(["slice-001-vm-0"], cause=SliceDrainCause.WORKER_FAILED)
 
         assert siblings == []
 
-    def test_terminate_slices_for_workers_dedupes_by_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """Workers from the same slice trigger one slice termination."""
+    def test_worker_failure_dedupes_by_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """Workers from the same slice drain it once."""
         mock_handle = make_mock_slice_handle(
             "slice-001",
             all_ready=True,
@@ -534,15 +529,15 @@ class TestAutoscalerWorkerFailure:
         autoscaler = make_autoscaler({"test-group": group})
         _mark_discovered_ready(group, [mock_handle])
 
-        siblings = autoscaler.terminate_slices_for_workers(["slice-001-vm-0", "slice-001-vm-1"])
+        siblings = autoscaler.drain_slices_for_workers(
+            ["slice-001-vm-0", "slice-001-vm-1"], cause=SliceDrainCause.WORKER_FAILED
+        )
 
         assert siblings == ["slice-001-vm-2", "slice-001-vm-3"]
-        assert group.slice_count() == 0
+        assert group.slice_count() == 1
 
-    def test_terminate_slices_for_workers_cleans_up_even_if_terminate_fails(
-        self, scale_group_config: config_pb2.ScaleGroupConfig
-    ):
-        """terminate_slices_for_workers() removes the slice even if terminate() raises."""
+    def test_worker_failure_does_not_raise_when_terminate_fails(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """A terminate() error during the drain is swallowed; the slice still drains."""
         mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
         mock_handle.terminate_error = RuntimeError("resource not found")
         platform = make_mock_platform(slices_to_discover=[mock_handle])
@@ -551,11 +546,9 @@ class TestAutoscalerWorkerFailure:
         autoscaler = make_autoscaler({"test-group": group})
         _mark_discovered_ready(group, [mock_handle])
 
-        failed_worker_id = "slice-001-vm-0"
-        siblings = autoscaler.terminate_slices_for_workers([failed_worker_id])
+        siblings = autoscaler.drain_slices_for_workers(["slice-001-vm-0"], cause=SliceDrainCause.WORKER_FAILED)
 
-        # Slice should be removed despite terminate() failure
-        assert group.slice_count() == 0
+        assert group.slice_lifecycle("slice-001") == SliceLifecycleState.DRAINING
         assert siblings == []
 
 
@@ -590,7 +583,7 @@ class TestAutoscalerDrainSlices:
         handle = group.get_slice("slice-001")
         assert handle is not None
 
-        siblings = autoscaler.drain_slices_for_workers(["slice-001-vm-0"])
+        siblings = autoscaler.drain_slices_for_workers(["slice-001-vm-0"], cause=SliceDrainCause.PREEMPTED)
 
         # The slice lingers DRAINING (still counted) rather than being detached,
         # but its VMs are terminated now and the siblings come back to be failed.
@@ -605,8 +598,8 @@ class TestAutoscalerDrainSlices:
         failed_group, failed_auto = self._fungible_group(vms=1)
 
         before = drained_group.health()
-        drained_auto.drain_slices_for_workers(["slice-001-vm-0"])
-        failed_auto.terminate_slices_for_workers(["slice-001-vm-0"])
+        drained_auto.drain_slices_for_workers(["slice-001-vm-0"], cause=SliceDrainCause.PREEMPTED)
+        failed_auto.drain_slices_for_workers(["slice-001-vm-0"], cause=SliceDrainCause.WORKER_FAILED)
 
         # Drain leaves health untouched; the worker-failure path decays it
         # (the young slice is classified short-lived PREEMPTED).
@@ -620,7 +613,7 @@ class TestAutoscalerDrainSlices:
         ledger_before = autoscaler.reservation_ledger()
         assert ledger_before.pools["v4-res/zone"].draining_chips == 0
 
-        autoscaler.drain_slices_for_workers(["slice-001-vm-0"])
+        autoscaler.drain_slices_for_workers(["slice-001-vm-0"], cause=SliceDrainCause.PREEMPTED)
 
         pool = autoscaler.reservation_ledger().pools["v4-res/zone"]
         # The whole slice (8 chips for a v4-16) is now draining, not free.
@@ -632,7 +625,7 @@ class TestAutoscalerDrainSlices:
         handle = group.get_slice("slice-001")
         assert isinstance(handle, FakeSliceHandle)
 
-        autoscaler.drain_slices_for_workers(["slice-001-vm-0"])
+        autoscaler.drain_slices_for_workers(["slice-001-vm-0"], cause=SliceDrainCause.PREEMPTED)
         assert group.slice_count() == 1
 
         # The cloud now reports the allocation gone (zero workers): a clean reap.
@@ -646,7 +639,7 @@ class TestAutoscalerDrainSlices:
 
     def test_refresh_keeps_draining_slice_while_vms_still_alive(self):
         group, autoscaler = self._fungible_group(slice_id="slice-001", vms=2)
-        autoscaler.drain_slices_for_workers(["slice-001-vm-0"])
+        autoscaler.drain_slices_for_workers(["slice-001-vm-0"], cause=SliceDrainCause.PREEMPTED)
 
         # describe() still reports live VMs: the slice stays DRAINING (VMs deleting).
         autoscaler.refresh({})
@@ -655,7 +648,7 @@ class TestAutoscalerDrainSlices:
 
     def test_refresh_force_reaps_draining_slice_past_timeout(self):
         group, autoscaler = self._fungible_group(slice_id="slice-001", vms=2)
-        autoscaler.drain_slices_for_workers(["slice-001-vm-0"])
+        autoscaler.drain_slices_for_workers(["slice-001-vm-0"], cause=SliceDrainCause.PREEMPTED)
 
         # The VMs never disappear; past the reap timeout the slice is force-reaped.
         late = Timestamp.from_ms(Timestamp.now().epoch_ms() + DEFAULT_UNRESOLVABLE_TIMEOUT.to_ms() + 1000)
@@ -937,7 +930,7 @@ class TestAutoscalerActionLogging:
         _mark_discovered_ready(group, [mock_handle])
 
         failed_worker_id = "slice-001-vm-0"
-        autoscaler.terminate_slices_for_workers([failed_worker_id])
+        autoscaler.drain_slices_for_workers([failed_worker_id], cause=SliceDrainCause.WORKER_FAILED)
 
         status = autoscaler.get_status()
         actions_by_type = {a.action_type: a for a in status.recent_actions}
@@ -1567,8 +1560,8 @@ class TestMultiSliceScaleUp:
         group.update_slice_activity(vm_status_map, Timestamp.from_ms(2_000))
         autoscaler.run_once([], vm_status_map, timestamp=Timestamp.from_ms(10_000))
 
-        # One idle slice should be scaled down.
-        assert group.slice_count() == 1
+        # One idle slice should be scaled down (drained, lingering DRAINING).
+        assert group.ready_slice_count() == 1
 
 
 class TestAutoscalerUnresolvableTimeout:

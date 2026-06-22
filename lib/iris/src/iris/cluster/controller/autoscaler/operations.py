@@ -6,6 +6,7 @@
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 from rigging.timing import Timestamp
 
@@ -16,9 +17,47 @@ from iris.rpc import vm_pb2
 logger = logging.getLogger(__name__)
 
 
+class SliceDrainCause(StrEnum):
+    """Why a slice's workers are being drained.
+
+    Selects telemetry and whether the teardown counts against the group's health
+    and backoff signals: a lost-liveness failure is charged to the group as churn,
+    a deliberate cross-variant preemption leaves those signals untouched.
+    """
+
+    WORKER_FAILED = "worker_failed"
+    PREEMPTED = "preempted"
+
+
+@dataclass(frozen=True)
+class DrainTelemetry:
+    """Per-cause action label, reason prefix, log verb, and terminate context."""
+
+    action_type: str
+    reason_prefix: str
+    log_verb: str
+    terminate_context: str
+
+
+DRAIN_TELEMETRY: dict[SliceDrainCause, DrainTelemetry] = {
+    SliceDrainCause.WORKER_FAILED: DrainTelemetry(
+        action_type="worker_failed",
+        reason_prefix="workers failed",
+        log_verb="termination",
+        terminate_context="cleaning up anyway",
+    ),
+    SliceDrainCause.PREEMPTED: DrainTelemetry(
+        action_type="slice_drained",
+        reason_prefix="drained for preemption",
+        log_verb="drain",
+        terminate_context="draining for preemption",
+    ),
+}
+
+
 @dataclass(frozen=True)
 class SliceTerminationRequest:
-    """A detached slice handle scheduled for termination."""
+    """A DRAINING slice handle whose VMs the caller must terminate."""
 
     slice_id: str
     group: ScalingGroup
@@ -27,94 +66,37 @@ class SliceTerminationRequest:
 
 @dataclass(frozen=True)
 class SliceTerminationResult:
-    """Batch termination work derived from a set of failed workers."""
+    """Drain work derived from a set of workers leaving their slices."""
 
     sibling_worker_ids: list[str]
     termination_requests: list[SliceTerminationRequest]
 
 
-def terminate_slices_for_workers(
-    groups: dict[str, ScalingGroup],
-    worker_ids: Sequence[str],
-    unregister_slice_workers: Callable[[str, Sequence[str] | None], None],
-    log_action: Callable[..., vm_pb2.AutoscalerAction],
-    timestamp: Timestamp,
-) -> SliceTerminationResult:
-    """Detach and schedule slice termination for the given failed workers.
-
-    Every observed slice termination is reported to the group's churn detector
-    as :class:`~iris.cluster.controller.autoscaler.backoff_detector.SliceFate.PREEMPTED`.
-    The detector classifies internally based on slice age — short-lived deaths
-    move churn rate; long-lived deaths count as positive samples.
-    """
-    return _teardown_slices_for_workers(
-        groups=groups,
-        worker_ids=worker_ids,
-        unregister_slice_workers=unregister_slice_workers,
-        log_action=log_action,
-        timestamp=timestamp,
-        action_type="worker_failed",
-        reason_prefix="workers failed",
-        log_verb="termination",
-        feed_backoff=True,
-        remove=lambda group, slice_id, _timestamp: group.detach_slice(slice_id),
-    )
-
-
-def mark_slices_draining_for_workers(
-    groups: dict[str, ScalingGroup],
-    worker_ids: Sequence[str],
-    unregister_slice_workers: Callable[[str, Sequence[str] | None], None],
-    log_action: Callable[..., vm_pb2.AutoscalerAction],
-    timestamp: Timestamp,
-) -> SliceTerminationResult:
-    """Mark the slices holding ``worker_ids`` DRAINING for an intentional drain.
-
-    For a deliberate scheduling decision (cross-variant preemption), not a slice
-    failure: the teardown leaves the group's health and backoff signals untouched
-    so a drained pool is not treated as unhealthy. Unlike the dead-worker teardown,
-    the slice is NOT removed from tracking — it stays counted against the reservation
-    pool as DRAINING until ``refresh`` observes its VMs are gone and reaps it.
-    Returns the drained slices' sibling worker ids.
-    """
-    return _teardown_slices_for_workers(
-        groups=groups,
-        worker_ids=worker_ids,
-        unregister_slice_workers=unregister_slice_workers,
-        log_action=log_action,
-        timestamp=timestamp,
-        action_type="slice_drained",
-        reason_prefix="drained for preemption",
-        log_verb="drain",
-        feed_backoff=False,
-        remove=lambda group, slice_id, ts: group.mark_slice_draining(slice_id, ts),
-    )
-
-
-def _teardown_slices_for_workers(
+def drain_slices_for_workers(
     *,
     groups: dict[str, ScalingGroup],
     worker_ids: Sequence[str],
     unregister_slice_workers: Callable[[str, Sequence[str] | None], None],
     log_action: Callable[..., vm_pb2.AutoscalerAction],
     timestamp: Timestamp,
-    action_type: str,
-    reason_prefix: str,
-    log_verb: str,
-    feed_backoff: bool,
-    remove: Callable[[ScalingGroup, str, Timestamp], SliceHandle | None],
+    cause: SliceDrainCause,
 ) -> SliceTerminationResult:
-    """Find the unique slices for ``worker_ids``, remove each, and collect siblings.
+    """Mark every slice holding ``worker_ids`` DRAINING and collect its handle.
 
-    Shared by the dead-worker teardown (``remove`` detaches the slice) and the
-    cross-variant drain (``remove`` marks it DRAINING and leaves it tracked). Each
-    returns the slice's handle for the caller to terminate. ``feed_backoff`` records
-    a PREEMPTED fate on the group's churn detector — true for failures, false for
-    deliberate drains.
+    Workers are grouped by physical slice because the teardown removes a whole
+    slice: every task on it goes together and its chips free once. Each slice is
+    drained at most once. The slice stays tracked — counted against its reservation
+    pool as DRAINING — until ``refresh`` observes its VMs are gone and reaps it; the
+    caller terminates the returned handles to start that deletion.
+
+    ``cause`` selects telemetry and, for ``WORKER_FAILED``, records a PREEMPTED fate
+    on the group's churn detector. Returns the drained slices' sibling worker ids
+    for the caller to fail immediately.
     """
     if not worker_ids:
         return SliceTerminationResult(sibling_worker_ids=[], termination_requests=[])
 
+    telemetry = DRAIN_TELEMETRY[cause]
     primary_workers = set(worker_ids)
     sibling_worker_ids: set[str] = set()
     termination_requests: list[SliceTerminationRequest] = []
@@ -133,16 +115,16 @@ def _teardown_slices_for_workers(
         sibling_worker_ids.update(wid for wid in slice_worker_ids if wid not in primary_workers)
         affected_workers = sorted(primary_workers & set(slice_worker_ids))
 
-        logger.info("Workers %s triggered slice %s for %s", affected_workers, log_verb, slice_id)
+        logger.info("Workers %s triggered slice %s for %s", affected_workers, telemetry.log_verb, slice_id)
         log_action(
-            action_type,
+            telemetry.action_type,
             group.name,
             slice_id=slice_id,
-            reason=f"{reason_prefix}: {', '.join(affected_workers)}",
+            reason=f"{telemetry.reason_prefix}: {', '.join(affected_workers)}",
         )
-        if feed_backoff:
+        if cause is SliceDrainCause.WORKER_FAILED:
             group.record_slice_preempted(slice_id, timestamp)
-        handle = remove(group, slice_id, timestamp)
+        handle = group.drain_slice(slice_id, timestamp)
         unregister_slice_workers(slice_id, slice_worker_ids)
         if handle is not None:
             termination_requests.append(SliceTerminationRequest(slice_id=slice_id, group=group, handle=handle))

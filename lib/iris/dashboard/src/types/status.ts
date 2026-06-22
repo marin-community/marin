@@ -267,7 +267,7 @@ export const SLICE_STATUS_STYLES: Record<SliceStatus, SliceStatusStyle> = {
   },
   draining: {
     label: 'draining',
-    description: 'Being torn down to free reserved chips for a higher-priority job',
+    description: 'Being torn down — still counted until the cloud confirms its VMs are gone',
     dot: 'bg-status-warning',
     bg: 'bg-status-warning-bg',
     text: 'text-status-warning',

@@ -604,13 +604,16 @@ class ScalingGroup:
                 error_message,
             )
 
-    def mark_slice_draining(self, slice_id: str, timestamp: Timestamp | None = None) -> SliceHandle | None:
-        """Mark a slice DRAINING for cross-variant preemption and return its handle.
+    def drain_slice(self, slice_id: str, timestamp: Timestamp | None = None) -> SliceHandle | None:
+        """Begin tearing down a live slice: mark it DRAINING and return its handle.
 
-        The slice stays tracked (still counted against the reservation pool) so the
+        The single entry point for removing a tracked slice — idle scale-down,
+        worker-liveness teardown, and cross-variant preemption all route through it.
+        The slice stays tracked (still counted against its reservation pool) so the
         ledger reports its chips as ``draining`` until ``refresh`` observes the cloud
-        VMs are gone and reaps it. The caller issues the terminate using the returned
-        handle. Returns None if the slice is not tracked.
+        VMs are gone and reaps it via ``detach_slice``. The caller terminates the
+        returned handle to start the deletion. Returns None if the slice is not
+        tracked.
         """
         timestamp = timestamp or Timestamp.now()
         with self._slices_lock:
@@ -704,24 +707,14 @@ class ScalingGroup:
 
         return self._platform.create_slice(slice_config, worker_config=worker_config)
 
-    def scale_down(self, slice_id: str, timestamp: Timestamp | None = None) -> None:
-        """Terminate a slice.
-
-        Always removes the slice from in-memory tracking and the DB, even if
-        the cloud terminate call fails (e.g. resource already deleted by
-        preemption). This prevents ghost slices that the autoscaler counts as
-        live capacity but that no longer exist.
-
-        Args:
-            slice_id: ID of the slice to terminate
-            timestamp: Optional timestamp (for testing)
-        """
-        handle = self.detach_slice(slice_id, timestamp=timestamp)
-        if handle is not None:
-            self.terminate_slice_handle(handle, context="cleaning up anyway")
-
     def detach_slice(self, slice_id: str, timestamp: Timestamp | None = None) -> SliceHandle | None:
-        """Remove a slice from tracking and persistence without terminating it."""
+        """Remove a slice from tracking and persistence without terminating it.
+
+        The cleanup step of a teardown: called by the reap once the cloud confirms
+        a DRAINING slice's VMs are gone, and by the failure path for a slice the
+        cloud already reports dead. Returns the handle so a give-up teardown can
+        still issue a terminate.
+        """
         timestamp = timestamp or Timestamp.now()
         with self._slices_lock:
             state = self._slices.pop(slice_id, None)
@@ -1039,7 +1032,9 @@ class ScalingGroup:
                 pending,
                 target_capacity,
             )
-            self.scale_down(slice_state.handle.slice_id, timestamp)
+            handle = self.drain_slice(slice_state.handle.slice_id, timestamp)
+            if handle is not None:
+                self.terminate_slice_handle(handle, context="draining idle slice")
             terminated.append(slice_state.handle)
 
         return terminated

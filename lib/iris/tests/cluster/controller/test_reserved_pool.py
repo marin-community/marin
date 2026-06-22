@@ -107,7 +107,7 @@ class TestReservationLedgerBuckets:
         # A drained slice stays counted until reaped: its chips are draining, not
         # free, but they are incoming (free + draining).
         group = _ready_group("v4-8", "v4-8", quota_pool="pool-a", reservation_chips=16, slice_ids=["a1", "a2"])
-        group.mark_slice_draining("a1")
+        group.drain_slice("a1")
 
         pool = build_reservation_ledger([group]).pools["pool-a"]
 
@@ -326,7 +326,7 @@ class TestFungiblePoolLaunchCap:
         # cap must read free (4) and admit exactly one v4-8 (4 chips); reading
         # incoming (8) would wrongly admit two.
         v8 = _ready_group("v4-8", "v4-8", quota_pool="pool-a", reservation_chips=16, slice_ids=["a1", "a2", "a3"])
-        v8.mark_slice_draining("a3")
+        v8.drain_slice("a3")
         groups = {v8.name: v8}
 
         plan = build_scale_plan(groups, _routing({"v4-8": 2}, {"v4-8": BATCH}), Timestamp.now())
