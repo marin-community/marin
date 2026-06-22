@@ -310,12 +310,32 @@ the named May349 `cudaMallocAsync(fused bwd recv_x)` allocation, but EP16 B64
 still does not fit this path. The next useful control is the same
 `save_moe`/FFI-collapse/JAX-assignment path at global batch 32.
 
-May351 was submitted as:
+May352 ran that B32 control:
 
 ```text
-parent=/dlwh/iris-run-job-20260622-195438
-wandb=marin-community/marin_moe/MAY351-DEEPEP-EP16-SAVEMOE-JAXASSIGN-FIXEDFFICOLLAPSE-L26-B64-N2-20260622-1954
+script=scratch/launch_may352_deepep_ep16_savemoe_l26_b32_jaxassign_n2_throughput.sh
+parent=/dlwh/iris-run-job-20260622-201346
+child=/dlwh/iris-run-job-20260622-201346/grug-train-MAY352-DEEPEP-EP16-SAVEMOE-JAXASSIGN-FIXEDFFICOLLAPSE-L26-B32-N2-20260622-2013
+wandb=marin-community/marin_moe/MAY352-DEEPEP-EP16-SAVEMOE-JAXASSIGN-FIXEDFFICOLLAPSE-L26-B32-N2-20260622-2013
 ```
 
-At submission time the parent was pending scheduler feedback and had not yet
-created a child job or W&B run.
+Result:
+
+- May352 admitted on two H100x8 tasks, built DeepEP, initialized all 16 ranks,
+  confirmed the EP16 mesh, compiled, and dispatched step 0.
+- It failed before any W&B metric rows with the same NCCL/CUDA OOM class as
+  May351:
+
+```text
+jax.errors.JaxRuntimeError: INTERNAL: NCCL operation ncclGroupEnd() failed:
+unhandled cuda error (run with NCCL_DEBUG=INFO for details). Last NCCL
+warning(error) log entry (may be unrelated) 'Cuda failure 2 'out of memory''.
+```
+
+- The retrying child was stopped to avoid repeating the same failure.
+
+Interpretation: EP16 `save_moe` with FFI local collapse and JAX assignment
+gradient still does not fit at global batch 32, so the failure is not merely
+B64 activation pressure. The next EP16 control, if needed, should be a B16
+minimum-batch sanity probe or a different assignment/collapse implementation;
+it should not be treated as an expected-throughput run.
