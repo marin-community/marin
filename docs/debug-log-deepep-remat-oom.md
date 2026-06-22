@@ -294,6 +294,58 @@ The next branch state adds a CUDA error check, debug stream sync, and
 `internode_jax_after_assignment_pack` stage line after that launch. If the pack
 kernel is the silent failure, the next run should report it directly.
 
+## Results
+
+MAY332 reran the B32 EP16 stage-debug shape with the local-assignment pack CUDA
+check and `internode_jax_after_assignment_pack` marker:
+
+- W&B:
+  `marin-community/marin_moe/MAY332-PACKCHK-B32-XONLY-JAXBWD-1301`
+- Parent Iris job: `/dlwh/iris-run-job-20260622-130115`
+- Child Iris job:
+  `/dlwh/iris-run-job-20260622-130115/grug-train-MAY332-PACKCHK-B32-XONLY-JAXBWD-1301`
+- All ranks reached DeepEP runtime post-init and entered step 0.
+- Stage logs included `internode_jax_after_assignment_pack` across ranks, so
+  the local assignment pack kernel is not the silent bounce point.
+- The run still failed before first train metrics with task 0 reporting a
+  generic `Error` and task 1 bouncing as the atomic sibling. The filtered logs
+  did not show a Python traceback, OOM, NCCL error, or counter-timeout line.
+
+A narrow parser over the `HOST_DISPATCH_STAGE` logs found repeated progress
+past assignment packing and into the x-only combine path. The most informative
+counts were:
+
+```text
+internode_jax_after_assignment_pack              54
+internode_jax_after_notify_dispatch              48
+internode_jax_after_wait_recv_counts             48
+internode_jax_before_cached_notify_combine_x_only 45
+internode_jax_before_combine_x_only_launch       41
+```
+
+The parser output is imperfect because multiple ranks interleave writes to the
+same stderr stream, but the signal is enough: the next suspected boundary is
+cached-notify or the x-only combine launch after forward dispatch, not local
+assignment packing.
+
+## Hypothesis 10: x-only combine completion is the silent bounce point
+
+The next diagnostic change adds:
+
+- `LEVANTER_DEEPEP_HOST_DISPATCH_STAGE_DEBUG_RANKS`, a comma-separated global
+  rank filter for low-noise stage logs.
+- `internode_jax_after_cached_notify_combine_x_only`, emitted after cached
+  notify and its CUDA error/sync checks.
+- `internode_jax_after_combine_x_only`, emitted after the x-only combine launch
+  and its CUDA error/sync checks.
+
+If the next run fails before `after_cached_notify_combine_x_only`, the cached
+notify path is the likely native failure boundary. If it passes cached notify
+but not `after_combine_x_only`, the combine kernel or its synchronization is the
+likely boundary. If both markers appear on the failing task before the bounce,
+the failure is later in the step and the probe should move to the next FFI
+boundary.
+
 ## Future work
 
 - [x] Add a C++/FFI primitive for x-only internode combine-with-local-collapse
@@ -312,7 +364,9 @@ kernel is the silent failure, the next run should report it directly.
 - [x] Re-run B32 EP16 DeepEP internode with
       `LEVANTER_DEEPEP_HOST_DISPATCH_STAGE_DEBUG=1`.
 - [x] Re-run B32 EP16 DeepEP internode with internode `num_sms=16`.
-- [ ] Re-run B32 EP16 with the dispatch local-assignment pack CUDA check.
+- [x] Re-run B32 EP16 with the dispatch local-assignment pack CUDA check.
+- [ ] Re-run B32 EP16 with x-only combine after-success markers and filtered
+      stage logs.
 - [ ] If B32 passes, retry B64 and profile remat overhead versus ring/all-to-all.
 - [ ] If B32 reaches `cudaMallocAsync(x-only fused local-collapse bwd recv_out)`
       OOM, replace the staging temp with a true direct packed-output backward

@@ -80,6 +80,7 @@ constexpr int kProbeDispatchHidden = 2048;
 constexpr int kProbeDispatchTopK = 2;
 constexpr int kProbeDispatchExperts = 128;
 constexpr const char* kCounterTimeoutEnv = "LEVANTER_DEEPEP_COUNTER_TIMEOUT_SECONDS";
+constexpr const char* kHostDispatchStageDebugRanksEnv = "LEVANTER_DEEPEP_HOST_DISPATCH_STAGE_DEBUG_RANKS";
 
 struct ScopedCudaAsyncAllocation {
   void* ptr = nullptr;
@@ -186,6 +187,45 @@ bool HostDispatchStageDebugEnabled() {
   return enabled;
 }
 
+bool HostDispatchStageRankEnabled(int rank) {
+  static const std::optional<std::string> filter = []() -> std::optional<std::string> {
+    const char* value = std::getenv(kHostDispatchStageDebugRanksEnv);
+    if (value == nullptr || value[0] == '\0') {
+      return std::nullopt;
+    }
+    return std::string(value);
+  }();
+  if (!filter.has_value()) {
+    return true;
+  }
+
+  const char* cursor = filter->c_str();
+  while (*cursor != '\0') {
+    while (*cursor == ',' || *cursor == ' ') {
+      ++cursor;
+    }
+    if (*cursor == '\0') {
+      break;
+    }
+    char* end = nullptr;
+    const long parsed = std::strtol(cursor, &end, 10);
+    if (end == cursor) {
+      while (*cursor != '\0' && *cursor != ',') {
+        ++cursor;
+      }
+      continue;
+    }
+    if (parsed == rank) {
+      return true;
+    }
+    cursor = end;
+    while (*cursor != '\0' && *cursor != ',') {
+      ++cursor;
+    }
+  }
+  return false;
+}
+
 bool InternodeDebugEnabled() {
   static const bool enabled = []() {
     const char* value = std::getenv("LEVANTER_DEEPEP_INTERNODE_DEBUG");
@@ -255,6 +295,9 @@ void LogHostDispatchStage(
     int aux0 = -1,
     int aux1 = -1) {
   if (!HostDispatchStageDebugEnabled()) {
+    return;
+  }
+  if (!HostDispatchStageRankEnabled(rank)) {
     return;
   }
   fprintf(
@@ -4491,6 +4534,18 @@ ffi::Error CombineInternodeXOnly(
         low_latency_mode);
     ThrowOnCuda(cudaGetLastError(), "DeepEP internode cached_notify x-only combine");
     DebugSynchronizeStream(stream, "cudaStreamSynchronize(DeepEP internode cached_notify x-only combine)");
+    LogHostDispatchStage(
+        runtime.rank,
+        call_sequence,
+        "internode_jax_after_cached_notify_combine_x_only",
+        actual_recv_tokens,
+        hidden,
+        /*num_experts=*/num_ranks,
+        num_topk,
+        combined_tokens,
+        actual_recv_rdma_tokens,
+        num_channels,
+        recv_capacity);
 
     LogHostDispatchStage(
         runtime.rank,
@@ -4538,6 +4593,18 @@ ffi::Error CombineInternodeXOnly(
         low_latency_mode);
     ThrowOnCuda(cudaGetLastError(), "DeepEP internode x-only combine");
     DebugSynchronizeStream(stream, "cudaStreamSynchronize(DeepEP internode x-only combine)");
+    LogHostDispatchStage(
+        runtime.rank,
+        call_sequence,
+        "internode_jax_after_combine_x_only",
+        actual_recv_tokens,
+        hidden,
+        /*num_experts=*/num_ranks,
+        num_topk,
+        combined_tokens,
+        actual_recv_rdma_tokens,
+        num_channels,
+        recv_capacity);
     return ffi::Error::Success();
   } catch (const std::exception& exc) {
     return ffi::Error::Internal(exc.what());
