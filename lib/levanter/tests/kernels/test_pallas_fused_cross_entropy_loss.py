@@ -1016,6 +1016,118 @@ def test_fused_cross_entropy_pallas_gpu_grad_tracing_non_gb10_path(
     jax.make_jaxpr(jax.grad(loss_fn, argnums=(0, 1)))(x, w)
 
 
+@pytest.mark.parametrize("batch", [4096, 32768])
+def test_pallas_gpu_h100_large_vocab_custom_backward_uses_large_v_block(
+    batch: int,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("LEVANTER_PALLAS_GPU_CUSTOM_BWD_V_BLOCK_SIZE", raising=False)
+    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
+
+    x = jax.ShapeDtypeStruct((batch, 2560), dtype=jnp.bfloat16)
+    w = jax.ShapeDtypeStruct((2560, 128256), dtype=jnp.bfloat16)
+    block_sizes = fused_api.BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256)
+
+    assert pallas_gpu._custom_backward_v_block_size(x, w, block_sizes) == 8192
+
+
+def test_pallas_gpu_h100_large_vocab_custom_backward_dispatches_large_v_block(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("LEVANTER_PALLAS_GPU_CUSTOM_BWD_V_BLOCK_SIZE", raising=False)
+    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
+
+    captured_v_blocks: list[int] = []
+
+    def fake_forward_impl(x_arg, labels_arg, w_arg, **_kwargs):
+        del labels_arg, w_arg
+        return jnp.zeros((x_arg.shape[0],), dtype=jnp.float32), jnp.ones((x_arg.shape[0],), dtype=jnp.float32)
+
+    def fake_backward_from_lse(
+        x_arg,
+        labels_arg,
+        w_arg,
+        lse_arg,
+        g_loss_arg,
+        g_lse_arg,
+        *,
+        v_block_size,
+        logit_soft_cap,
+        precision,
+    ):
+        del labels_arg, lse_arg, g_loss_arg, g_lse_arg, logit_soft_cap, precision
+        captured_v_blocks.append(v_block_size)
+        return jnp.zeros_like(x_arg), jnp.zeros_like(w_arg)
+
+    monkeypatch.setattr(pallas_gpu, "_linear_softmax_cross_entropy_loss_pallas_gpu_impl", fake_forward_impl)
+    monkeypatch.setattr(pallas_gpu, "_backward_streaming_from_lse", fake_backward_from_lse)
+
+    x = jnp.ones((1024, 16), dtype=jnp.bfloat16)
+    y = jnp.zeros((1024,), dtype=jnp.int32)
+    w = jnp.ones((16, 65536), dtype=jnp.bfloat16)
+    block_sizes = fused_api.BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256)
+
+    def loss_fn(x_arg: jax.Array, w_arg: jax.Array) -> jax.Array:
+        loss, _ = pallas_gpu._linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
+            x_arg,
+            y,
+            w_arg,
+            block_sizes,
+            jnp.float32,
+            None,
+            None,
+        )
+        return loss.sum()
+
+    jax.grad(loss_fn, argnums=(0, 1))(x, w)
+
+    assert captured_v_blocks == [8192]
+
+
+def test_pallas_gpu_custom_backward_env_override_wins(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LEVANTER_PALLAS_GPU_CUSTOM_BWD_V_BLOCK_SIZE", "4096")
+    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
+
+    x = jax.ShapeDtypeStruct((4096, 2560), dtype=jnp.bfloat16)
+    w = jax.ShapeDtypeStruct((2560, 128256), dtype=jnp.bfloat16)
+    block_sizes = fused_api.BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256)
+
+    assert pallas_gpu._custom_backward_v_block_size(x, w, block_sizes) == 4096
+
+
+def test_pallas_gpu_custom_backward_small_vocab_uses_block_size(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("LEVANTER_PALLAS_GPU_CUSTOM_BWD_V_BLOCK_SIZE", raising=False)
+    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
+
+    x = jax.ShapeDtypeStruct((4096, 2560), dtype=jnp.bfloat16)
+    w = jax.ShapeDtypeStruct((2560, 32000), dtype=jnp.bfloat16)
+    block_sizes = fused_api.BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256)
+
+    assert pallas_gpu._custom_backward_v_block_size(x, w, block_sizes) == 256
+
+
+def test_pallas_gpu_custom_backward_non_h100_nvidia_uses_block_size(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("LEVANTER_PALLAS_GPU_CUSTOM_BWD_V_BLOCK_SIZE", raising=False)
+    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia a100")
+
+    x = jax.ShapeDtypeStruct((4096, 2560), dtype=jnp.bfloat16)
+    w = jax.ShapeDtypeStruct((2560, 128256), dtype=jnp.bfloat16)
+    block_sizes = fused_api.BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256)
+
+    assert pallas_gpu._custom_backward_v_block_size(x, w, block_sizes) == 256
+
+
+def test_pallas_gpu_custom_backward_float32_uses_block_size(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("LEVANTER_PALLAS_GPU_CUSTOM_BWD_V_BLOCK_SIZE", raising=False)
+    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
+
+    x = jax.ShapeDtypeStruct((4096, 2560), dtype=jnp.float32)
+    w = jax.ShapeDtypeStruct((2560, 128256), dtype=jnp.float32)
+    block_sizes = fused_api.BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256)
+
+    assert pallas_gpu._custom_backward_v_block_size(x, w, block_sizes) == 256
+
+
 def test_pallas_autotune_used_when_tuned_match_missing(monkeypatch: pytest.MonkeyPatch):
     x = jnp.ones((4, 8), dtype=jnp.float32)
     w = jnp.ones((8, 16), dtype=jnp.float32)
