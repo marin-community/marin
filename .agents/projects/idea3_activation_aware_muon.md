@@ -59,3 +59,17 @@ Muon (damped-eigh Σ^{-1/2} + Frobenius-norm) **does NOT diverge** at any LR, re
 loss than Muon (0.0015 vs 0.0020 best), and is more robust at high LR (act lr0.1=0.0021 stable
 vs Muon lr0.1=0.0076 degrading). ⟹ the construction is sound; Kaiyue's divergence was missing
 damping/normalization. Justifies the full 130m levanter integration (capture build).
+
+## Build complete + launched (2026-06-21)
+Faithful integration DONE on worktree /tmp/marin-actaware (branch activation-aware-muon):
+- `lib/levanter/src/levanter/optim/activation_aware.py` — optimizer (D=NS5(MΣ^{-1/2})Σ^{-1/2},
+  damped eigh + Frobenius norm; act-aware on q/k/v/gate/up, Muon on o/down, AdamW rest).
+- `lib/levanter/src/levanter/optim/activation_capture.py` — per-layer block-input Grams via
+  `Stacked.scan_via` (input_layernorm→q/k/v, post_attention_layernorm→gate/up), summed over tokens.
+- trainer.py / trainer_state.py — `compute_activation_grams` flag → grams routed through
+  take_step → take_train_step → optimizer.update(grams=).
+- CPU smoke test (tiny qwen3) passes end-to-end.
+- Sweep: experiments/speedrun/activation_aware_qwen3_scaling/sweep.py (LR × damping).
+Validation run launched: /kaiyue/iris-run-job-20260622-004318 (LR=1x, damping=1e-3, v5p-8
+preemptible us-central1). Reference: Muon 1.1663 (paloma bpb). Gradient-derived Σ is degenerate
+(M(MᵀM)^{-1/2} already the polar factor) → real activation capture is required, hence this build.
