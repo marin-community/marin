@@ -452,7 +452,7 @@ def _dtype_itemsize(dtype: Optional[jnp.dtype]) -> int:
     return jnp.dtype(dtype).itemsize
 
 
-def _largest_power_of_two_at_most(value: int, *, minimum: int) -> int:
+def _power_of_two_at_most_or_minimum(value: int, *, minimum: int) -> int:
     if value < minimum:
         return minimum
     return 1 << value.bit_length() - 1
@@ -711,9 +711,9 @@ def _sanitize_for_pallas(
         if b_block_size < 128 or b_block_size % 16 != 0:
             b_block_size = 128
 
-        h_block_size = _largest_power_of_two_at_most(min(block_sizes.h_block_size, 64), minimum=16)
+        h_block_size = _power_of_two_at_most_or_minimum(min(block_sizes.h_block_size, 64), minimum=16)
         max_v_for_tile = NVIDIA_WEIGHT_TILE_BYTES_LIMIT // (_dtype_itemsize(w_dtype) * h_block_size)
-        v_block_size = _largest_power_of_two_at_most(
+        v_block_size = _power_of_two_at_most_or_minimum(
             min(block_sizes.v_block_size, 256, max_v_for_tile),
             minimum=16,
         )
