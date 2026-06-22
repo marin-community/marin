@@ -83,23 +83,66 @@ with `_dispatch_internode_cached_impl`, then runs collapse backward to produce
 packed expert-output gradients. That defeats the intended x-only/local-collapse
 memory savings.
 
-## Changes to make
+## Hypothesis 4: hide the backward recv buffer inside one FFI
 
-The next useful patch is a lower-level fused backward/transport primitive for
-the x-only local-collapse path. It should transport `grad_combined_x` directly
-to packed expert-output gradients and assignment-weight gradients, avoiding the
-materialized recv-capacity `grad_recv_out` intermediate.
+Commit `d1fc8e172` adds
+`levanter_deepep_combine_internode_x_only_with_local_collapse_bwd_fused`. The
+new primitive keeps the cached backward DeepEP dispatch and local-collapse
+backward in one C++ FFI call, with the recv-capacity `grad_recv_out` allocated
+as a scoped CUDA temp instead of an XLA-visible array.
 
-The forward path may also need a true no-`collapsed_recv` implementation, but
-the repeated step-0 backward OOM makes the backward primitive the priority.
+This is a staging primitive, not the final no-temp solution: it tests whether
+XLA liveness was the dominant problem before writing a direct packed-output
+transport kernel.
+
+## Results
+
+MAY327 validated that the fused backward target compiles and loads on
+CoreWeave:
+
+- W&B: `marin-community/marin_moe/MAY327-FUSEDBWD-B32-XONLY-JAXBWD-1117`
+- Parent Iris job: `/dlwh/iris-run-job-20260622-111711`
+- Child Iris job:
+  `/dlwh/iris-run-job-20260622-111711/grug-train-MAY327-FUSEDBWD-B32-XONLY-JAXBWD-1117`
+- Runtime reached 16-rank DeepEP internode init and step-0 train dispatch.
+- Failure: DeepEP recv-counter timeout, not NCCL OOM:
+  `INTERNAL: DeepEP internode JAX dispatch timed out waiting for recv counters`.
+- Node 0 ranks reached `Finished Grug train_step dispatch for step 0; waiting
+  for train/loss`; node 1 ranks started step-0 dispatch but did not reach the
+  same completion line before node 0 timed out.
+- The run was stopped after the fatal training-loop errors to avoid wasting
+  GPUs.
+
+This did not prove the fused backward memory behavior because the run appears
+to fail before the fused backward path is exercised.
+
+## Current hypothesis
+
+The x-only/local-collapse backward change is compile-valid, but the B32 EP16
+validation is currently blocked by DeepEP internode rendezvous/counter behavior
+on the forward dispatch. The next debugging step is to make the counter wait
+diagnostic enough to distinguish:
+
+- one node stuck before `notify_dispatch`;
+- one node stuck inside `notify_dispatch`;
+- the recv counters being written somewhere other than the mapped host-visible
+  locations;
+- a timeout that is simply too short for this launch mode.
+
+The forward path may also still need a true no-`collapsed_recv` implementation,
+but the current failure must be cleared before memory results are meaningful.
 
 ## Future work
 
-- [ ] Add a C++/FFI primitive for x-only internode combine-with-local-collapse
+- [x] Add a C++/FFI primitive for x-only internode combine-with-local-collapse
       backward that returns `grad_out_dispatch` and `grad_assignment_weights`
-      directly.
-- [ ] Wire the Python custom VJP to call that primitive instead of
+      without exposing `grad_recv_out` to XLA.
+- [x] Wire the Python custom VJP to call that primitive instead of
       `_dispatch_internode_cached_impl` followed by
       `_collapse_local_assignments_internode_bwd_impl`.
+- [ ] Add narrower DeepEP recv-counter diagnostics for the EP16 timeout.
 - [ ] Re-run B32 EP16 DeepEP internode with `offload_moe_hidden` first.
 - [ ] If B32 passes, retry B64 and profile remat overhead versus ring/all-to-all.
+- [ ] If B32 reaches `cudaMallocAsync(x-only fused local-collapse bwd recv_out)`
+      OOM, replace the staging temp with a true direct packed-output backward
+      transport kernel.
