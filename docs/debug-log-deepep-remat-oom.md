@@ -132,6 +132,48 @@ diagnostic enough to distinguish:
 The forward path may also still need a true no-`collapsed_recv` implementation,
 but the current failure must be cleared before memory results are meaningful.
 
+## Hypothesis 5: the recv-counter timeout was too short
+
+Commit `d19d24de7` adds `LEVANTER_DEEPEP_COUNTER_TIMEOUT_SECONDS` and logs
+recv-counter timeout state (`ready_expert_counters`, `first_pending_expert`,
+and `timeout_seconds`). I launched MAY328 with a 900s timeout and host-dispatch
+stage diagnostics.
+
+## Results
+
+MAY328 showed that the original 180s timeout was too short for at least some
+attempts, but it did not yet produce a clean training result:
+
+- W&B: `marin-community/marin_moe/MAY328-COUNTERDBG-B32-XONLY-JAXBWD-1133`
+- Parent Iris job: `/dlwh/iris-run-job-20260622-113322`
+- Child Iris job:
+  `/dlwh/iris-run-job-20260622-113322/grug-train-MAY328-COUNTERDBG-B32-XONLY-JAXBWD-1133`
+- The run reached W&B and 16-rank DeepEP runtime initialization.
+- With the longer timeout, host-dispatch diagnostics showed ranks getting past
+  `internode_jax_after_wait_recv_counts` and into dispatch/combine calls.
+- The job bounced twice under Iris atomic re-scheduling before producing
+  metrics. The first bounce did not surface a Python traceback, OOM, NCCL
+  error, or counter-timeout line in the filtered logs.
+- The third attempt was still running when this note was written; W&B only had
+  static FLOP summary fields and no `train/loss` or throughput rows yet.
+
+The useful signal is that the counter timeout is no longer the only known
+blocker. The next missing diagnostic is which local process-per-GPU worker dies
+first when an Iris task bounces.
+
+## Hypothesis 6: expose process-per-GPU worker exits
+
+Commit `4258fe300` changes the DeepEP process-per-GPU supervisor to:
+
+- run child workers unbuffered;
+- poll local workers and log each `local_rank`, global process index, and return
+  code as soon as it exits;
+- terminate sibling workers immediately after the first nonzero exit, with a
+  kill fallback if a sibling ignores `terminate()`.
+
+This is an observability change only. It should make the next MAY328-style run
+report the first failed local rank instead of a generic Iris task `Error`.
+
 ## Future work
 
 - [x] Add a C++/FFI primitive for x-only internode combine-with-local-collapse
@@ -140,8 +182,9 @@ but the current failure must be cleared before memory results are meaningful.
 - [x] Wire the Python custom VJP to call that primitive instead of
       `_dispatch_internode_cached_impl` followed by
       `_collapse_local_assignments_internode_bwd_impl`.
-- [ ] Add narrower DeepEP recv-counter diagnostics for the EP16 timeout.
-- [ ] Re-run B32 EP16 DeepEP internode with `offload_moe_hidden` first.
+- [x] Add narrower DeepEP recv-counter diagnostics for the EP16 timeout.
+- [ ] Re-run B32 EP16 DeepEP internode with `offload_moe_hidden` from
+      `4258fe300` or later if MAY328 bounces again without metrics.
 - [ ] If B32 passes, retry B64 and profile remat overhead versus ring/all-to-all.
 - [ ] If B32 reaches `cudaMallocAsync(x-only fused local-collapse bwd recv_out)`
       OOM, replace the staging temp with a true direct packed-output backward
