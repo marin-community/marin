@@ -24,7 +24,8 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_LOG_JAXPRS=false     disable JAXPR dumps for throughput probes
     MAY_LOG_XLA_HLO=false    disable HLO dumps for throughput probes
     MAY_SAVE_XLA_DUMPS=false upload XLA_FLAGS dump directory to W&B
-    MAY_REMAT=save_moe       none | recompute_all | save_moe | offload_moe | offload_moe_hidden
+    MAY_REMAT=save_moe       none | recompute_all | save_moe | offload_moe | offload_moe_hidden |
+                             offload_moe_output | offload_moe_expert
     MAY_MOE_CAPACITY_FACTOR=1.0  expert-parallel dispatch capacity multiplier
     MAY_USE_PKO=true         enable PKO/doc-start mask path on long layers
     MAY_PKO_ON_LAST_LAYER=true

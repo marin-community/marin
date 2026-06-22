@@ -33,7 +33,15 @@ MoeImplementation: TypeAlias = Literal[
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
-MoERematMode: TypeAlias = Literal["none", "recompute_all", "save_moe", "offload_moe", "offload_moe_hidden"]
+MoERematMode: TypeAlias = Literal[
+    "none",
+    "recompute_all",
+    "save_moe",
+    "offload_moe",
+    "offload_moe_hidden",
+    "offload_moe_output",
+    "offload_moe_expert",
+]
 _VALID_MOE_REMAT_MODES = get_args(MoERematMode)
 _EP_MOE_IMPLEMENTATIONS = (
     "ring",
@@ -95,6 +103,20 @@ MOE_REMAT_HIDDEN_OFFLOAD_NAMES = (_CHECKPOINT_EXPERT_HIDDEN,)
 MOE_REMAT_HIDDEN_SAVE_NAMES = (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
+    _CHECKPOINT_MOE_OUTPUT,
+)
+MOE_REMAT_OUTPUT_OFFLOAD_NAMES = (_CHECKPOINT_DISPATCH_OUTPUT,)
+MOE_REMAT_OUTPUT_SAVE_NAMES = (
+    _CHECKPOINT_DISPATCH_INPUT,
+    _CHECKPOINT_EXPERT_HIDDEN,
+    _CHECKPOINT_MOE_OUTPUT,
+)
+MOE_REMAT_EXPERT_OFFLOAD_NAMES = (
+    _CHECKPOINT_EXPERT_HIDDEN,
+    _CHECKPOINT_DISPATCH_OUTPUT,
+)
+MOE_REMAT_EXPERT_SAVE_NAMES = (
+    _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_MOE_OUTPUT,
 )
 

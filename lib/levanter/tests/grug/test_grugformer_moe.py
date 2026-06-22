@@ -448,7 +448,16 @@ def test_moe_expert_mlp_init_uses_concat_w13_for_sonic_backend():
     np.testing.assert_allclose(np.asarray(sonic_mlp.w_down), np.asarray(scatter_mlp.w_down), rtol=1e-5, atol=1e-5)
 
 
-@pytest.mark.parametrize("remat_mode", ["save_moe", "offload_moe", "offload_moe_hidden"])
+@pytest.mark.parametrize(
+    "remat_mode",
+    [
+        "save_moe",
+        "offload_moe",
+        "offload_moe_hidden",
+        "offload_moe_output",
+        "offload_moe_expert",
+    ],
+)
 def test_moe_expert_mlp_init_preserves_remat_mode(remat_mode: str):
     mlp = MoEExpertMlp.init(
         num_experts=4,

@@ -34,9 +34,13 @@ from levanter.grug.attention import (
 )
 from levanter.grug.grug_moe import (
     DEEPEP_REMAT_SAVE_NAMES,
+    MOE_REMAT_EXPERT_OFFLOAD_NAMES,
+    MOE_REMAT_EXPERT_SAVE_NAMES,
     MOE_REMAT_HIDDEN_OFFLOAD_NAMES,
     MOE_REMAT_HIDDEN_SAVE_NAMES,
     MOE_REMAT_OFFLOAD_NAMES,
+    MOE_REMAT_OUTPUT_OFFLOAD_NAMES,
+    MOE_REMAT_OUTPUT_SAVE_NAMES,
     MOE_REMAT_SAVE_NAMES,
     GroupedMoEExpertMlp,
     MoeActivation,
@@ -68,13 +72,23 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
-RematMode = Literal["none", "recompute_all", "save_moe", "offload_moe", "offload_moe_hidden"]
+RematMode = Literal[
+    "none",
+    "recompute_all",
+    "save_moe",
+    "offload_moe",
+    "offload_moe_hidden",
+    "offload_moe_output",
+    "offload_moe_expert",
+]
 VALID_REMAT_MODES: tuple[RematMode, ...] = (
     "none",
     "recompute_all",
     "save_moe",
     "offload_moe",
     "offload_moe_hidden",
+    "offload_moe_output",
+    "offload_moe_expert",
 )
 CrossEntropyImplementation = Literal["pallas_gpu", "pallas_tpu", "xla", "reference"]
 OutputProjSharding = Literal["lm_head", "replicated"]
@@ -198,6 +212,9 @@ class GrugModelConfig:
     DeepEP effect handles live but moves the bulky MoE residuals to pinned host
     memory instead of HBM. "offload_moe_hidden" offloads only the expert hidden
     activation while keeping the other tagged MoE residuals in HBM.
+    "offload_moe_output" offloads only the post-expert dispatch output.
+    "offload_moe_expert" offloads the expert hidden activation and dispatch
+    output while keeping dispatch inputs and final MoE outputs in HBM.
     """
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -901,7 +918,13 @@ class Transformer(eqx.Module):
             "deepep_composed",
             "deepep_internode",
         )
-        if cfg.remat_mode in ("save_moe", "offload_moe", "offload_moe_hidden"):
+        if cfg.remat_mode in (
+            "save_moe",
+            "offload_moe",
+            "offload_moe_hidden",
+            "offload_moe_output",
+            "offload_moe_expert",
+        ):
             remat_save_names = MOE_REMAT_SAVE_NAMES
             if uses_effectful_moe:
                 remat_save_names = (
@@ -909,7 +932,7 @@ class Transformer(eqx.Module):
                     *DEEPEP_REMAT_SAVE_NAMES,
                     *MOE_REMAT_SAVE_NAMES,
                 )
-            if cfg.remat_mode in ("offload_moe", "offload_moe_hidden"):
+            if cfg.remat_mode in ("offload_moe", "offload_moe_hidden", "offload_moe_output", "offload_moe_expert"):
                 remat_names_to_save = ()
                 remat_names_to_offload = MOE_REMAT_OFFLOAD_NAMES
                 if uses_effectful_moe:
@@ -920,6 +943,12 @@ class Transformer(eqx.Module):
                 if cfg.remat_mode == "offload_moe_hidden":
                     remat_names_to_save = (*remat_names_to_save, *MOE_REMAT_HIDDEN_SAVE_NAMES)
                     remat_names_to_offload = MOE_REMAT_HIDDEN_OFFLOAD_NAMES
+                elif cfg.remat_mode == "offload_moe_output":
+                    remat_names_to_save = (*remat_names_to_save, *MOE_REMAT_OUTPUT_SAVE_NAMES)
+                    remat_names_to_offload = MOE_REMAT_OUTPUT_OFFLOAD_NAMES
+                elif cfg.remat_mode == "offload_moe_expert":
+                    remat_names_to_save = (*remat_names_to_save, *MOE_REMAT_EXPERT_SAVE_NAMES)
+                    remat_names_to_offload = MOE_REMAT_EXPERT_OFFLOAD_NAMES
                 remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
                     names_which_can_be_saved=remat_names_to_save,
                     names_which_can_be_offloaded=remat_names_to_offload,

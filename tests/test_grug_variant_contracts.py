@@ -459,6 +459,8 @@ def test_grug_moe_may_recipe_attention_flags_lower():
         ("save_moe", True),
         ("offload_moe", True),
         ("offload_moe_hidden", True),
+        ("offload_moe_output", True),
+        ("offload_moe_expert", True),
     ],
 )
 def test_grug_moe_remat_mode_controls_checkpoint_boundary(remat_mode: str, expects_remat: bool):
