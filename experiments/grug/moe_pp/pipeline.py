@@ -62,9 +62,16 @@ from experiments.grug.moe import model as grug_model
 from experiments.grug.moe.model import Transformer, _batch_spec
 
 EXPERT_AXIS = "expert"
+DATA_AXIS = "data"
 _GRUG_MESH_AXIS_NAMES = ("stage", "replica_dcn", "data", "expert", "model")
 
 STAGE_AXIS = "stage"
+
+# The inline ring-EP pipeline manualizes both batch-sharding axes (expert + data) so
+# the megablox GMM kernel -- which GSPMD cannot auto-partition -- sees only Manual/Auto
+# axes on its operands. Token reductions (cross-entropy mean, router z-loss mean) span
+# the full batch, which is split across both manual axes, so they psum over both.
+_EP_BATCH_AXES = (EXPERT_AXIS, DATA_AXIS)
 
 # The production model's inner EP / fused-CE / QB shard_maps default to
 # ``check_vma=False``. That is fine for the forward and for top-level autodiff (where
@@ -962,38 +969,44 @@ def pipeline_value_and_grad_autodiff(
     return loss, g_embed, g_stage
 
 
-# --- Real sparse ring-EP inline in the {stage, expert}-manual pipeline shard_map -
+# --- Real sparse ring-EP inline in the {stage, expert, data}-manual pipeline shard_map
 #
 # The dense ``_local_moe_mlp`` above keeps ``expert`` a GSPMD axis and runs every
 # expert over every token. The path below runs the PRODUCTION ring EP
 # (``_moe_mlp_ep_ring_local``: all_gather dispatch + ragged_dot GMM + psum_scatter
 # collect) INLINE in the same manual region as the pipeline ppermute -- one
-# shard_map manualizing BOTH ``stage`` and ``expert``, no nested EP shard_map.
+# shard_map manualizing ``stage``, ``expert``, AND ``data``, no nested EP shard_map.
 #
-# Mesh: ``stage`` / ``expert`` are Explicit (manualized by the outer shard_map);
-# ``data`` / ``replica_dcn`` / ``model`` are Auto (GSPMD / FSDP). Auto -- not
-# Explicit -- is load-bearing: ``ragged_dot_general`` has no Explicit-axis sharding
-# rule (it only lowers when its axes are Auto or Manual), and an Auto ``data`` axis
-# lets whole-program ``value_and_grad`` insert the FSDP expert-weight grad reduction
-# exactly as top-level training does. Because ``expert`` is MANUAL the 3-way
-# PP x FSDP x EP has a single GSPMD axis (``data``), avoiding the two-GSPMD-under-
-# manual partitioner crash; because there is exactly one shard_map the transpose is
-# clean (ppermute<->reverse-ppermute, all_gather<->psum_scatter) with no
-# ``check_vma=True`` and no manual backward.
+# Mesh: ``stage`` / ``expert`` / ``data`` are Explicit (all manualized by the outer
+# shard_map); ``replica_dcn`` / ``model`` are size-1 Auto. Manualizing ``data`` is
+# load-bearing on TPU: ``ragged_dot`` lowers to the Mosaic/Pallas ``_gmm_megablox``
+# kernel, which GSPMD CANNOT auto-partition -- every mesh axis touching its operands
+# (the dispatched tokens and the expert weights) must be Manual, not a GSPMD/Auto
+# axis. The dispatched tokens carry a ``data``-sharded batch dim, so ``data`` must be
+# Manual too. Because all three sharding axes are MANUAL there is no live GSPMD axis
+# under the manual region, avoiding both the megablox auto-partition failure and the
+# two-GSPMD-under-manual partitioner crash; the replicated weights' grad reduce over
+# ``data`` is inserted by the single shard_map's transpose. With exactly one shard_map
+# the transpose is clean (ppermute<->reverse-ppermute, all_gather<->psum_scatter) with
+# no ``check_vma=True`` and no manual backward.
 
 
 def ep_pipeline_mesh(*, stage: int, expert: int, replica: int, data: int, model: int = 1) -> Mesh:
-    """Mesh for the inline ring-EP pipeline: ``stage``/``expert`` Explicit, rest Auto.
+    """Mesh for the inline ring-EP pipeline: ``stage``/``expert``/``data`` Explicit, rest Auto.
 
-    ``stage`` and ``expert`` are ``AxisType.Explicit`` so the outer shard_map can
-    manualize them; ``replica_dcn`` / ``data`` / ``model`` are ``AxisType.Auto`` so
-    ``ragged_dot_general`` lowers and GSPMD inserts the FSDP weight-grad reduce.
+    ``stage``, ``expert``, AND ``data`` are ``AxisType.Explicit`` so the outer shard_map
+    manualizes all three. Manualizing ``data`` is load-bearing on TPU: the megablox GMM
+    (``ragged_dot`` -> ``_gmm_megablox``) is a Mosaic/Pallas kernel that GSPMD cannot
+    auto-partition, so every mesh axis touching its operands -- the dispatched tokens
+    (batch-sharded over ``data``) and the expert weights -- must be Manual inside the
+    shard_map, not a GSPMD/Auto axis. ``replica_dcn`` / ``model`` are size-1 here and
+    stay ``AxisType.Auto`` (harmless: nothing is sharded over them).
     """
     shape = (stage, replica, data, expert, model)
     if int(np.prod(shape)) != jax.device_count():
         raise ValueError(f"mesh shape {shape} (prod={int(np.prod(shape))}) must use all {jax.device_count()} devices")
     devices = np.array(jax.devices(), dtype=object).reshape(shape)
-    axis_types = (AxisType.Explicit, AxisType.Auto, AxisType.Auto, AxisType.Explicit, AxisType.Auto)
+    axis_types = (AxisType.Explicit, AxisType.Auto, AxisType.Explicit, AxisType.Explicit, AxisType.Auto)
     return Mesh(devices, _GRUG_MESH_AXIS_NAMES, axis_types=axis_types)
 
 
@@ -1016,14 +1029,13 @@ def _inline_ring_moe_mlp(
     weights enter sharded over it (each shard holds ``E / expert_size`` experts), so
     the routed path runs directly: ``all_gather(..., "expert")`` reconstitutes the
     token set, ``ragged_dot`` does the grouped expert GMM, ``psum_scatter(...,
-    "expert")`` returns each shard's token slice. ``x`` is this expert-shard's local
-    token slice ``[TL, D]`` (sharded over ``data`` by GSPMD); the all-gather makes it
-    global over ``expert``.
+    "expert")`` returns each shard's token slice. ``x`` is this (expert, data)-shard's
+    local token slice ``[TL, D]``; the all-gather makes it global over ``expert``.
 
-    ``ragged_dot_general`` has no Explicit-axis sharding rule, so the remaining GSPMD
-    axes (``data`` / ``replica_dcn`` / ``model``) must be Auto here -- see
-    :func:`ep_pipeline_mesh`. The ``dropped`` diagnostic is discarded; its psum is
-    scoped to the manual ``expert`` axis by :func:`_inline_ring_moe_mlp_context`.
+    ``data`` is Manual here too (see :func:`ep_pipeline_mesh`): the megablox GMM the
+    ``ragged_dot`` lowers to cannot be GSPMD-partitioned, so no live GSPMD axis may
+    touch its token / weight operands. The ``dropped`` diagnostic is discarded; its
+    psum is scoped to the manual ``expert`` axis by :func:`_inline_ring_moe_mlp_context`.
 
     ``w_up_gate`` is this shard's LOCAL slice (``E / expert_size`` experts), so the
     full (static) ``num_experts`` -- which the ring's routing offsets need -- is read
@@ -1064,12 +1076,13 @@ def _inline_ring_moe_mlp_context(num_experts: int):
     2. ``_EP_NUM_EXPERTS`` -> ``num_experts`` (the full count; the local weight slice
        only reveals ``E / expert_size``).
     3. ``ep_ring._batch_axes`` -> ``("expert",)`` so the ring's ``dropped``
-       diagnostic ``psum`` reduces over the manual ``expert`` axis only (``data`` /
-       ``replica_dcn`` are Auto here and would be unbound).
+       diagnostic ``psum`` reduces over the manual ``expert`` axis only (the ring
+       all_gather / psum_scatter operate within each data group, so the per-shard
+       drop count is summed over ``expert``; ``data`` is a separate batch group).
     4. The router QB-beta ``shard_map`` -> a local threshold (``qb_beta`` is
        metrics-only; its production ``shard_map`` is invalid under the EP mesh).
 
-    The reshard / ``out_sharding`` neutralization for the Auto mesh is supplied
+    The reshard / ``out_sharding`` neutralization for the inline EP mesh is supplied
     separately by :func:`_neutralize_reshards_auto`.
     """
     moe_original = grug_moe.moe_mlp
@@ -1114,14 +1127,15 @@ def _pmean_is_identity():
 
 @contextlib.contextmanager
 def _neutralize_reshards_auto():
-    """Drop the production forward's Explicit-axis sharding calls for the Auto EP mesh.
+    """Drop the production forward's batch-axis sharding calls for the inline EP mesh.
 
-    Under the EP mesh ``data`` / ``replica_dcn`` / ``model`` are Auto, so NO
-    ``reshard`` / ``out_sharding=`` may name them. This drops every in-body
-    ``reshard`` to identity (the model's batch axes are GSPMD-inferred under Auto) and
+    Inside the ``{stage, expert, data}``-manual shard_map the model's batch axes
+    (``data`` / ``expert``) are Manual and ``replica_dcn`` / ``model`` are size-1 Auto,
+    so NO in-body ``reshard`` / ``out_sharding=`` may name the batch axes. This drops
+    every in-body ``reshard`` to identity (the local shard already holds its slice) and
     rewrites ``grug_model._batch_spec`` to ``P()`` so the model's ``out_sharding=
-    _batch_spec()`` einsums replicate (valid under Auto) instead of naming the batch
-    axes. Restored on exit.
+    _batch_spec()`` einsums replicate over the surviving Auto axes instead of naming the
+    now-manual batch axes. Restored on exit.
     """
     reshard_originals = [(m, m.reshard) for m in _RESHARD_PATCHED_MODULES]
     batch_spec_original = grug_model._batch_spec
@@ -1155,13 +1169,14 @@ def _ep_pipeline_loss(
     mesh: jax.sharding.Mesh,
     num_stages: int,
 ) -> jax.Array:
-    """Pipelined next-token loss with the real ring EP inline; ``{stage, expert}`` manual.
+    """Pipelined next-token loss with the real ring EP inline; ``{stage, expert, data}`` manual.
 
-    Mirrors :func:`pipeline_loss` but (1) manualizes ``{stage, expert}`` instead of
-    ``{stage}``, (2) shards the expert MLP weights' leading expert dim over the manual
-    ``expert`` axis (stacked under ``stage``), (3) shards each microbatch's tokens
-    over ``expert`` too, and (4) uses only Auto-safe sharding ops in its own body
-    (the model's Explicit reshards are neutralized by :func:`_neutralize_reshards_auto`).
+    Mirrors :func:`pipeline_loss` but (1) manualizes ``{stage, expert, data}`` instead
+    of ``{stage}``, (2) shards the expert MLP weights' leading expert dim over the
+    manual ``expert`` axis (stacked under ``stage``), (3) shards each batch's tokens
+    over BOTH ``expert`` and ``data`` (the two batch-sharding axes the megablox GMM
+    needs Manual), and (4) uses only batch-axis-free sharding ops in its own body (the
+    model's Explicit reshards are neutralized by :func:`_neutralize_reshards_auto`).
     """
     num_layers = len(transformer.blocks)
     cfg = transformer.config
@@ -1173,10 +1188,11 @@ def _ep_pipeline_loss(
     # Stacked block arrays carry a leading [stage, layers_per_stage, ...]; the expert
     # MLP weights additionally carry the expert dim at array-position 2 (after stage,
     # layers_per_stage), so they are sharded P("stage", None, "expert", ...) and every
-    # other block leaf is P("stage", ...). Tokens are sharded over expert.
+    # other block leaf is P("stage", ...). Tokens shard their batch dim over both
+    # expert and data (each shard holds B / (expert*data) rows).
     stage_in_specs = _stage_in_specs(stage_block_arrays)
     embed_in_specs = jax.tree_util.tree_map(lambda _: P(), embed_arrays)
-    token_spec = P(EXPERT_AXIS, None)
+    token_spec = P(_EP_BATCH_AXES, None)
 
     def body(stage_arrays, embed, masks, tokens, weight):
         sid = jax.lax.axis_index(STAGE_AXIS)
@@ -1207,16 +1223,16 @@ def _ep_pipeline_loss(
 
         final_hidden = final_gated_norm(final_norm(buf))
         labels = _next_token_labels(tokens)
-        # Each expert-shard holds its token slice; sum NLL / weight over the local
-        # slice then reduce over the manual expert axis to score the full batch.
+        # Each (expert, data) shard holds its token slice; sum NLL / weight over the
+        # local slice then reduce over both manual batch axes to score the full batch.
         ce = _ep_cross_entropy(final_hidden, output_proj, labels, weight.astype(jnp.float32))
         ce_total = jax.lax.psum(jnp.where(is_last, ce, 0.0), STAGE_AXIS)
-        # Each layer's router z-loss is a token mean over this expert-shard's slice; the
+        # Each layer's router z-loss is a token mean over this shard's slice; the
         # full-batch mean (what the oracle computes) is the mean over the equal-size
-        # expert shards, so average ``z_total`` over the manual expert axis as well as
-        # summing it over stages.
+        # (expert, data) shards, so average ``z_total`` over both manual batch axes as
+        # well as summing it over stages.
         z_total = jax.lax.psum(z_total, STAGE_AXIS)
-        z_total = jax.lax.psum(z_total, EXPERT_AXIS) / jax.lax.psum(1, EXPERT_AXIS)
+        z_total = jax.lax.psum(z_total, _EP_BATCH_AXES) / jax.lax.psum(1, _EP_BATCH_AXES)
         aux = cfg.router_z_loss_coef * (z_total / num_layers)
         return ce_total + aux
 
@@ -1234,7 +1250,7 @@ def _ep_pipeline_loss(
         mesh=mesh,
         in_specs=(stage_in_specs, embed_in_specs, stage_spec, token_spec, token_spec),
         out_specs=P(),
-        axis_names=frozenset({STAGE_AXIS, EXPERT_AXIS}),
+        axis_names=frozenset({STAGE_AXIS, EXPERT_AXIS, DATA_AXIS}),
         check_vma=False,
     )(stage_block_arrays, embed_arrays, layer_masks, token_ids, loss_weight)
 
@@ -1262,20 +1278,20 @@ def _ep_cross_entropy(
     labels: jax.Array,
     weight: jax.Array,
 ) -> jax.Array:
-    """Mean next-token cross-entropy whose token reduction spans the manual expert axis.
+    """Mean next-token cross-entropy whose token reduction spans the manual batch axes.
 
-    ``final_hidden`` is this expert-shard's local token slice. The cross-entropy is a
-    weighted mean over ALL tokens; with tokens sharded over the manual ``expert``
-    axis, sum the per-shard NLL and weight then ``psum`` both over ``expert`` before
-    dividing -- so every shard returns the full-batch mean.
+    ``final_hidden`` is this ``(expert, data)`` shard's local token slice. The
+    cross-entropy is a weighted mean over ALL tokens; with tokens sharded over the
+    manual ``expert`` and ``data`` axes, sum the per-shard NLL and weight then ``psum``
+    both over those axes before dividing -- so every shard returns the full-batch mean.
     """
     logits = jnp.einsum("bsd,dv->bsv", final_hidden, output_proj).astype(jnp.float32)
     log_z = jax.scipy.special.logsumexp(logits, axis=-1)
     label_logit = jnp.take_along_axis(logits, labels[..., None], axis=-1)[..., 0]
     nll = jnp.sum((log_z - label_logit) * weight)
     wsum = jnp.sum(weight)
-    nll = jax.lax.psum(nll, EXPERT_AXIS)
-    wsum = jax.lax.psum(wsum, EXPERT_AXIS)
+    nll = jax.lax.psum(nll, _EP_BATCH_AXES)
+    wsum = jax.lax.psum(wsum, _EP_BATCH_AXES)
     return nll / wsum
 
 
@@ -1292,8 +1308,8 @@ def pipeline_value_and_grad_ep(
     """``(loss, embed_grads, stage_grads)`` for the REAL ring-EP inline pipeline.
 
     Differentiates :func:`_ep_pipeline_loss` with whole-program ``jax.value_and_grad``
-    under the inline-ring + Auto-reshard patches. ``mesh`` must be an
-    :func:`ep_pipeline_mesh` (``stage``/``expert`` Explicit, rest Auto). Return
+    under the inline-ring + reshard-neutralization patches. ``mesh`` must be an
+    :func:`ep_pipeline_mesh` (``stage``/``expert``/``data`` Explicit, rest Auto). Return
     grouping matches :func:`pipeline_value_and_grad_autodiff`.
     """
     embed_arrays, embed_static = eqx.partition(
@@ -1340,8 +1356,8 @@ def pipeline_value_and_grad_ep(
 # The body is differentiated by whole-program ``jax.value_and_grad`` -- the same
 # autodiff path as ``pipeline_value_and_grad_ep`` (no manual backward, no
 # ``check_vma=True``): the forward ppermute transposes to a reverse ppermute and the
-# inline ring's all_gather/psum_scatter transpose cleanly because ``expert`` is
-# manual and only ``data`` survives as a GSPMD axis.
+# inline ring's all_gather/psum_scatter transpose cleanly because ``expert`` and
+# ``data`` are both manual (no live GSPMD axis under the manual region).
 
 
 def _ep_pipeline_loss_microbatched(
@@ -1357,15 +1373,16 @@ def _ep_pipeline_loss_microbatched(
     num_stages: int,
     num_microbatches: int,
 ) -> jax.Array:
-    """Microbatched (GPipe) next-token loss with the real ring EP inline; ``{stage, expert}`` manual.
+    """Microbatched (GPipe) next-token loss with the real ring EP inline; ``{stage, expert, data}`` manual.
 
     Mirrors :func:`_ep_pipeline_loss` but runs the GPipe microbatch schedule inside
-    the single ``{stage, expert}``-manual ``shard_map``. ``token_microbatches`` /
+    the single ``{stage, expert, data}``-manual ``shard_map``. ``token_microbatches`` /
     ``weight_microbatches`` are ``[num_microbatches, microbatch, seq]``; each
-    microbatch's tokens are sharded over the manual ``expert`` axis
-    (``P(None, EXPERT_AXIS, None)``) exactly as the single-batch tokens are. The loss
-    is the full-batch weighted next-token CE (one fused score over all microbatches'
-    drained hiddens) plus the router z-aux averaged over microbatches.
+    microbatch's tokens shard their per-microbatch batch dim over BOTH the manual
+    ``expert`` and ``data`` axes (``P(None, (EXPERT_AXIS, DATA_AXIS), None)``) exactly
+    as the single-batch tokens are. The loss is the full-batch weighted next-token CE
+    (one fused score over all microbatches' drained hiddens) plus the router z-aux
+    averaged over microbatches.
     """
     num_layers = len(transformer.blocks)
     cfg = transformer.config
@@ -1376,9 +1393,9 @@ def _ep_pipeline_loss_microbatched(
     stage_spec = P(STAGE_AXIS)
     stage_in_specs = _stage_in_specs(stage_block_arrays)
     embed_in_specs = jax.tree_util.tree_map(lambda _: P(), embed_arrays)
-    # Each microbatch's tokens shard their microbatch axis over expert (data Auto);
-    # the leading num_microbatches axis is replicated.
-    token_spec = P(None, EXPERT_AXIS, None)
+    # Each microbatch's tokens shard their per-microbatch batch axis over both expert
+    # and data; the leading num_microbatches axis is replicated.
+    token_spec = P(None, _EP_BATCH_AXES, None)
 
     def body(stage_arrays, embed, masks, tokens, weights):
         sid = jax.lax.axis_index(STAGE_AXIS)
@@ -1395,10 +1412,10 @@ def _ep_pipeline_loss_microbatched(
         stage_blocks = jax.tree_util.tree_map(lambda x: x[0], stage_arrays)
         stage_masks = masks[0]
 
-        # Activation buffer for one microbatch's local token slice. ``expert`` is
-        # manual, so ``tokens`` is already this shard's slice -- the local microbatch
-        # count is ``tokens.shape[1]`` (= microbatch / expert_size). Auto GSPMD places
-        # the data axis.
+        # Activation buffer for one microbatch's local token slice. ``expert`` and
+        # ``data`` are both manual, so ``tokens`` is already this shard's slice -- the
+        # local per-microbatch row count is ``tokens.shape[1]`` (= microbatch /
+        # (expert_size * data_size)).
         local_microbatch = tokens.shape[1]
         hidden_shape = (local_microbatch, seq_len, cfg.hidden_dim)
         buf = jnp.zeros(hidden_shape, jnp.float32)
@@ -1439,12 +1456,12 @@ def _ep_pipeline_loss_microbatched(
         labels = _next_token_labels(tokens_flat)
         ce = _ep_cross_entropy(final_hidden, output_proj, labels, weights_flat.astype(jnp.float32))
 
-        # Router z-loss: per-(stage,microbatch) it is a token mean over this expert
-        # shard's slice. The full-batch mean is the mean over stages' layers, expert
-        # shards, AND microbatches -- so sum over stages, average over the manual expert
-        # axis, and divide by both num_layers and num_microbatches.
+        # Router z-loss: per-(stage,microbatch) it is a token mean over this
+        # (expert, data) shard's slice. The full-batch mean is the mean over stages'
+        # layers, (expert, data) shards, AND microbatches -- so sum over stages, average
+        # over both manual batch axes, and divide by both num_layers and num_microbatches.
         z_total = jax.lax.psum(z_total, STAGE_AXIS)
-        z_total = jax.lax.psum(z_total, EXPERT_AXIS) / jax.lax.psum(1, EXPERT_AXIS)
+        z_total = jax.lax.psum(z_total, _EP_BATCH_AXES) / jax.lax.psum(1, _EP_BATCH_AXES)
         aux = cfg.router_z_loss_coef * (z_total / num_layers / num_microbatches)
         return ce + aux
 
@@ -1462,7 +1479,7 @@ def _ep_pipeline_loss_microbatched(
         mesh=mesh,
         in_specs=(stage_in_specs, embed_in_specs, stage_spec, token_spec, token_spec),
         out_specs=P(),
-        axis_names=frozenset({STAGE_AXIS, EXPERT_AXIS}),
+        axis_names=frozenset({STAGE_AXIS, EXPERT_AXIS, DATA_AXIS}),
         check_vma=False,
     )(stage_block_arrays, embed_arrays, layer_masks, token_microbatches, weight_microbatches)
 

@@ -7,11 +7,12 @@ Both paths train the IDENTICAL production ``Transformer`` (real ring-EP ``moe_ml
 FSDP over ``data``, vocab-TP over ``model``, fused-CE head) on the same chips with
 the same global batch -- only the parallelism layout differs:
 
-- **PP x FSDP x EP** (the pipeline): ``compact_grug_mesh(stage_axis_size=S,
-  expert_axis_size=E)`` with ``data`` filling the rest. The global batch is split
-  into ``num_microbatches`` microbatches that pipeline across the ``stage`` axis;
-  the gradient-exact manual GPipe backward (:func:`pipeline_value_and_grad`) feeds
-  an ``optax.adamw`` update.
+- **PP x FSDP x EP** (the pipeline): an :func:`ep_pipeline_mesh` with ``stage`` /
+  ``expert`` / ``data`` all manual (``data`` fills whatever ``stage`` and ``expert``
+  leave). The global batch is split into ``num_microbatches`` microbatches that
+  pipeline across the ``stage`` axis with the real ring EP inline; the gradient-exact
+  whole-program backward (:func:`pipeline_value_and_grad_ep_microbatched`) feeds an
+  ``optax.adamw`` update.
 - **FSDP baseline**: the same production ``Transformer`` run NON-pipelined
   (``stage=1``, optionally EP over ``expert``), the global batch consumed one-shot,
   ``jax.value_and_grad(Transformer.next_token_loss)`` (via the oracle) feeding the
@@ -43,11 +44,18 @@ import numpy as np
 import optax
 from haliax.partitioning import set_mesh
 from iris.runtime.jax_init import initialize_jax
+from jax.sharding import NamedSharding, reshard
+from jax.sharding import PartitionSpec as P
 from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 from experiments.grug.moe_pp.oracle import oracle_loss
-from experiments.grug.moe_pp.pipeline import pipeline_value_and_grad, stack_blocks_for_stages
+from experiments.grug.moe_pp.pipeline import (
+    _stage_in_specs,
+    ep_pipeline_mesh,
+    pipeline_value_and_grad_ep_microbatched,
+    stack_blocks_for_stages,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,11 +113,12 @@ def _timed_steps(step_fn, state, data_fn, *, warmup: int, iters: int) -> float:
 def _config(
     *, vocab_size, hidden_dim, num_layers, num_experts, num_experts_per_token, seq_len, attention_implementation
 ) -> GrugModelConfig:
-    # The pipeline path requires ``reference`` (plain-JAX einsum) attention: the manual
-    # GPipe backward differentiates the per-stage forward by hand inside the stage-manual
-    # shard_map, and the TPU splash kernel emits a custom-VJP/ShapeDtypeStruct that does
-    # not transpose through it. The FSDP baseline (ordinary top-level autodiff) can run
-    # either impl, so it is timed under both to measure the splash-vs-reference delta.
+    # The pipeline path requires ``reference`` (plain-JAX einsum) attention: it
+    # differentiates the forward with whole-program autodiff inside the
+    # {stage, expert, data}-manual check_vma=False shard_map, and the TPU splash kernel
+    # emits a custom-VJP/ShapeDtypeStruct that does not transpose through it. The FSDP
+    # baseline (ordinary top-level autodiff) can run either impl, so it is timed under
+    # both to measure the splash-vs-reference delta.
     return GrugModelConfig(
         vocab_size=vocab_size,
         hidden_dim=hidden_dim,
@@ -138,6 +147,7 @@ def bench_pipeline(
     *,
     stage: int,
     expert: int,
+    data: int,
     num_microbatches: int,
     microbatch: int,
     seq_len: int,
@@ -147,14 +157,20 @@ def bench_pipeline(
 ) -> tuple[float, float]:
     """Time a full PP x FSDP x EP training step. Returns ``(seconds_per_step, loss)``.
 
-    ``data`` fills whatever ``stage`` and ``expert`` leave; the global batch is
-    ``num_microbatches * microbatch`` and the microbatch dim shards over ``data``.
+    Runs the inline ring-EP pipeline (:func:`pipeline_value_and_grad_ep_microbatched`)
+    under an :func:`ep_pipeline_mesh` -- ``stage`` / ``expert`` / ``data`` all manual so
+    the megablox GMM lowers on TPU and the FSDP weight-grad reduce over ``data`` is
+    inserted by the single shard_map's transpose. The model is initialized under a
+    ``compact_grug_mesh(stage_axis_size=stage)`` (the init-time weight sharding) and the
+    value_and_grad runs under the EP mesh. The global batch is ``num_microbatches *
+    microbatch``; each microbatch's batch dim shards over both ``expert`` and ``data``.
     """
-    mesh = compact_grug_mesh(expert_axis_size=expert, replica_axis_size=1, model_axis_size=1, stage_axis_size=stage)
+    init_mesh = compact_grug_mesh(expert_axis_size=expert, replica_axis_size=1, model_axis_size=1, stage_axis_size=stage)
+    run_mesh = ep_pipeline_mesh(stage=stage, expert=expert, replica=1, data=data)
     weight_microbatches = jnp.ones((num_microbatches, microbatch, seq_len), dtype=jnp.float32)
     optimizer = optax.adamw(LR)
 
-    with set_mesh(mesh):
+    with set_mesh(init_mesh):
         model = Transformer.init(cfg, key=jax.random.PRNGKey(seed))
         stage_arrays, block_static = stack_blocks_for_stages(model, stage)
         embed_arrays, _ = eqx.partition(
@@ -168,9 +184,24 @@ def bench_pipeline(
             ),
             eqx.is_array,
         )
+
+    with set_mesh(run_mesh):
+        # The params, optimizer state, and grads must all live on the run mesh: the EP
+        # value_and_grad reshards its inputs to the run mesh internally and returns grads
+        # there, so reshard the init-mesh params to the run mesh's in-specs (embed/head
+        # replicated, blocks stage-sharded with expert-sharded MLP weights) up front so
+        # optax never mixes the all-Explicit init aval mesh with the run mesh.
+        stage_in_specs = _stage_in_specs(stage_arrays)
+        embed_in_specs = jax.tree_util.tree_map(lambda _: P(), embed_arrays)
+        embed_arrays = jax.tree_util.tree_map(
+            lambda x, spec: reshard(x, NamedSharding(run_mesh, spec)), embed_arrays, embed_in_specs
+        )
+        stage_arrays = jax.tree_util.tree_map(
+            lambda x, spec: reshard(x, NamedSharding(run_mesh, spec)), stage_arrays, stage_in_specs
+        )
         # The trainable leaves are the replicated embed/norm/head tuple and the
-        # stage-sharded stacked blocks -- the exact two grad groups
-        # pipeline_value_and_grad returns.
+        # stage-sharded stacked blocks -- the exact two grad groups the EP pipeline
+        # value_and_grad returns.
         params = (embed_arrays, stage_arrays)
         opt_state = optimizer.init(params)
 
@@ -192,7 +223,7 @@ def bench_pipeline(
                 )[1],
             )
             # Rebuild a Transformer carrying the (possibly updated) embed/norm/head
-            # leaves so pipeline_value_and_grad reads the current head params.
+            # leaves so the pipeline reads the current head params.
             updated_model = eqx.tree_at(
                 lambda t: (
                     t.token_embed,
@@ -205,13 +236,13 @@ def bench_pipeline(
                 model,
                 host,
             )
-            loss, g_embed, g_stage = pipeline_value_and_grad(
+            loss, g_embed, g_stage = pipeline_value_and_grad_ep_microbatched(
                 updated_model,
                 stage_arrays,
                 block_static,
                 tokens,
                 weight_microbatches,
-                mesh=mesh,
+                mesh=run_mesh,
                 num_stages=stage,
                 num_microbatches=num_microbatches,
             )
@@ -379,6 +410,7 @@ def main() -> int:
         cfg,
         stage=stage,
         expert=expert,
+        data=data,
         num_microbatches=num_microbatches,
         microbatch=microbatch,
         seq_len=seq_len,
