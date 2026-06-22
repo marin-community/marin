@@ -13,11 +13,15 @@ trap is that "merged" does not mean "deployed."
 - marin pins `iris-controller:latest` (`config/marin.yaml:33`). A restart only
   re-pulls whatever `:latest` *currently* is — it does **not** rebuild from your
   merged commit.
-- To deploy a merged fix: **rebuild the image first** (`gh workflow run "Ops -
-  Docker Images"`), wait for it to push, **then** `iris cluster controller
-  restart`. Restarting against a stale `:latest` ships nothing.
-- **Verify** the running controller is the `:<git-short-hash>` you expect — not
-  merely that it came back up.
+- The two mechanical ends are scripted; the restart in between is the one
+  human-gated step (`scripts/iris/controller_deploy.py`):
+  1. `uv run scripts/iris/controller_deploy.py build --ref main` — rebuild the
+     image and stream the run to completion.
+  2. **Restart the controller** — gated on a human yes (see below).
+  3. `uv run scripts/iris/controller_deploy.py verify --cluster marin` — confirm
+     the controller is running the merged code, not merely that it came back up.
+- Restarting against a stale `:latest` ships nothing; "the restart returned" is
+  not "the fix shipped."
 
 ## Before you touch anything
 
@@ -49,10 +53,13 @@ This is the default and most common case. Don't assume the merge deployed.
    `gh run list --workflow "Ops - Docker Images" -R marin-community/marin -L 5`
    and compare the run's commit against the one carrying your fix.
 
-2. **What is the controller actually running right now?** `iris cluster status`
-   reports the controller image/tag. If it shows `:latest` resolved to an old
-   digest (or you redeployed and the behavior is unchanged), the image was never
-   rebuilt — go to Resolve, rebuild first.
+2. **What is the controller actually running right now?**
+   `uv run scripts/iris/controller_deploy.py verify --cluster marin` reads the
+   controller's reported git hash (`iris cluster status`) and compares it to
+   `origin/main`'s tree hash. A `MISMATCH` means the image was never rebuilt (or
+   the restart shipped a stale `:latest`) — go to Resolve, rebuild first. Pass
+   `--ref <branch>` or `--expected <hash>` to check against something other than
+   `origin/main`.
 
    - If a rebuild *did* run and pushed, but the controller still runs old code,
      suspect a **slow/cached AR pull** rather than a missing build (see "Why").
@@ -64,24 +71,22 @@ come back here and confirm the controller is actually on the fixed image.
 
 ## Resolve
 
-Least-destructive first. You almost never need more than steps 1–3.
+Least-destructive first. You almost never need more than steps 1–2.
 
-1. **Rebuild the image.** Trigger the build that pushes
-   `iris-{controller,worker,task}:latest` to GHCR:
+1. **Rebuild the image, then wait for it to push.**
    ```bash
-   gh workflow run "Ops - Docker Images" -R marin-community/marin --ref main
+   uv run scripts/iris/controller_deploy.py build --ref main
    ```
-   (syntax: lib/iris/OPS.md:301). Or, if it's not urgent, just wait for the
-   Sunday 02:00 UTC build. Do **not** skip this step and restart — that ships the
-   stale `:latest`.
+   This triggers the "Ops - Docker Images" workflow, finds the run it started,
+   and streams it to completion — failing loudly if the run fails. It pushes
+   `iris-{controller,worker,task}:latest` to GHCR; GCP VMs pull through the
+   Artifact Registry mirror (lib/iris/docs/image-push.md). Or, if it's not
+   urgent, just wait for the Sunday 02:00 UTC build. Do **not** skip this and
+   restart — that ships the stale `:latest`. For the underlying `gh workflow
+   run` / `gh run view --log-failed` commands, see lib/iris/OPS.md:301 "CI
+   Workflows".
 
-2. **Wait for the build to finish and push.** Watch it:
-   `gh run watch <run-id> -R marin-community/marin`, or view a failed one with
-   `gh run view <run-id> -R marin-community/marin --log-failed | tail -50`
-   (lib/iris/OPS.md:303). The job pushes to `ghcr.io/marin-community/...`; GCP
-   VMs pull through the Artifact Registry mirror (see lib/iris/docs/image-push.md).
-
-3. **Restart the controller** (after baseline + dry-run from above):
+2. **Restart the controller** (after baseline + dry-run from above):
    ```bash
    iris --cluster=marin cluster controller restart
    ```
@@ -89,7 +94,7 @@ Least-destructive first. You almost never need more than steps 1–3.
    connection selector (`--cluster`/`--config`) is a global flag, before the
    subcommand (lib/iris/OPS.md:11 "Connection selectors").
 
-4. **Fallback — checkpoint times out.** If the restart hangs checkpointing
+3. **Fallback — checkpoint times out.** If the restart hangs checkpointing
    controller state, use `iris cluster controller restart --skip-checkpoint`
    (lib/iris/OPS.md:34). This restores from the last *periodic* checkpoint, so
    some recent in-memory state may be lost — acceptable to unstick a deploy,
@@ -99,10 +104,14 @@ Least-destructive first. You almost never need more than steps 1–3.
 
 The restart returning is **not** proof the fix shipped. Confirm the image:
 
-- `iris cluster status` should show the controller running the
-  `:<git-short-hash>` (or `:latest` resolved to the digest) that matches your
-  merged fix — not the previous one. If it still shows the old code, the rebuild
-  didn't run or the pull was cached; loop back to Resolve step 1.
+- ```bash
+  uv run scripts/iris/controller_deploy.py verify --cluster marin
+  ```
+  `MATCH` means the controller is running `origin/main`'s code (it compares the
+  controller's reported git hash to the ref's *tree* hash — the value baked into
+  the image, not the commit sha). A `MISMATCH` means the rebuild didn't run or
+  the pull was cached; loop back to Resolve step 1. (Add `--expected <hash>` if
+  the fix you care about isn't yet `origin/main`.)
 - **Confirm the blast radius stayed small:** compare against the baseline you
   captured — workers still present, running jobs still RUNNING. If workers
   vanished, you ran a full restart, not a controller restart.
@@ -133,6 +142,9 @@ the pull, not the workflow.
 
 ## See also
 
+- `scripts/iris/controller_deploy.py` — the `build` and `verify` spine this
+  runbook drives; `--help` for options. The restart between them stays manual
+  and gated, by design.
 - lib/iris/OPS.md:19 "Cluster Lifecycle" and lib/iris/OPS.md:27 "Controller
   Restart" — restart command syntax, dry-run/baseline workflow,
   `--skip-checkpoint`.
