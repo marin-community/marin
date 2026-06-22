@@ -10,6 +10,8 @@
  */
 import { ref, type Ref } from 'vue'
 
+const LOG_SERVICE_PATH = 'proxy/system.log-server/finelog.logging.LogService'
+
 export type RpcBody = Record<string, unknown> | (() => Record<string, unknown>)
 
 export interface RpcState<T> {
@@ -107,7 +109,7 @@ export function useLogServiceRpc<T>(
   method: string,
   body?: RpcBody,
 ): RpcState<T> {
-  return useRpc<T>('proxy/system.log-server/finelog.logging.LogService', method, body)
+  return useRpc<T>(LOG_SERVICE_PATH, method, body)
 }
 
 /** RPC composable for StatsService endpoints. */
@@ -131,7 +133,7 @@ export function useLogServerStatsRpc<T>(
 
 /** One-shot RPC call for LogService. */
 export async function logServiceRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
-  const resp = await fetch(`/proxy/system.log-server/finelog.logging.LogService/${method}`, {
+  const resp = await fetch(`/${LOG_SERVICE_PATH}/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
