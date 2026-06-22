@@ -547,7 +547,6 @@ class _VictimSlice:
     """A running slice eligible for cross-variant reserved-pool eviction."""
 
     slice_id: str
-    pool: str
     chips: int
     # Highest priority (min band_sort_key) among the slice's members: evicting the
     # slice tears down every task on it, so the most important one must still be
@@ -600,7 +599,6 @@ def _victim_slices_by_pool(
         victims_by_pool[pool].append(
             _VictimSlice(
                 slice_id=slice_id,
-                pool=pool,
                 chips=ledger.chips_per_variant[variant],
                 band=min(m.band_sort_key for m in members),
                 workers=frozenset(m.worker_id for m in members),
@@ -630,11 +628,11 @@ def run_reserved_pool_preemption(
     timer — is what holds further preemptions back across the drain-and-reprovision
     window.
 
-    Band rules mirror the same-variant preemption pass: a preemptor evicts only
-    strictly lower-priority victims (``band_sort_key > candidate.band``), and a
-    BATCH preemptor never preempts. Victims are chosen lowest-priority-then-
-    smallest so the eviction is minimal; if no combination of evictable victims
-    covers the deficit, nothing is evicted (no partial work).
+    A preemptor evicts only strictly lower-priority victims
+    (``band_sort_key > candidate.band``), and a BATCH preemptor never preempts.
+    Victims are chosen lowest-priority-then-smallest so the eviction is minimal;
+    if no combination of evictable victims covers the deficit, nothing is evicted
+    (no partial work).
 
     Returns ``(preemptor, victim)`` pairs (one per evicted member task) and the
     set of worker ids whose slices the autoscaler must drain.

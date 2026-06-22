@@ -283,9 +283,8 @@ class RpcTaskBackend:
     ) -> AutoscaleResult:
         """Evict torn-down workers' stubs and build the removal result.
 
-        Shared by the dead-worker and intentional-drain teardown branches: both
-        return the primary workers plus their healthy siblings as
-        ``removed_workers`` and evict each cached stub, since none of these
+        Returns the primary workers plus their healthy siblings as
+        ``removed_workers`` and evicts each cached stub, since none of these
         workers will be reconciled again.
         """
         assert self.autoscaler is not None
