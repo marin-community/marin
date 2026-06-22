@@ -1,7 +1,9 @@
 //! object_store remote sync surface (LOCAL -> BOTH -> REMOTE).
 //!
 //! `build_remote_store` dispatches on the configured `remote_log_dir`:
-//! `gs://bucket/prefix` -> `GoogleCloudStorageBuilder` (prod); any other
+//! `gs://bucket/prefix` -> `GoogleCloudStorageBuilder` (GCP prod);
+//! `s3://bucket/prefix` -> `AmazonS3Builder` for any S3-compatible store
+//! (Cloudflare R2 / CoreWeave Object Storage on CoreWeave clusters); any other
 //! non-empty value -> `LocalFileSystem` rooted at that directory (tests pass a
 //! plain tmp path). An empty `remote_log_dir` disables sync (returns `None`).
 //!
@@ -32,6 +34,13 @@ pub struct RemoteStore {
 /// disabled (empty string).
 ///
 /// `gs://bucket/sub/dir` -> a GCS store on `bucket` with prefix `sub/dir`.
+/// `s3://bucket/sub/dir` -> an S3-compatible store on `bucket` with prefix
+/// `sub/dir`. Everything else about the connection comes from the standard
+/// `AWS_*` env the deploy environment injects (on CoreWeave: the `iris-task-env`
+/// Secret's R2 creds). `AmazonS3Builder::from_env` reads credentials, region,
+/// the custom `AWS_ENDPOINT_URL`, and `AWS_VIRTUAL_HOSTED_STYLE_REQUEST` — so
+/// iris owns the addressing-style decision (path-style for R2, virtual-hosted
+/// for CoreWeave Object Storage) and this server stays endpoint-agnostic.
 /// Any other value -> a `LocalFileSystem` rooted at that (created) directory,
 /// with an empty prefix, writing into `{remote_log_dir}/{namespace}/{basename}`.
 pub fn build_remote_store(remote_log_dir: &str) -> Result<Option<RemoteStore>, StatsError> {
@@ -48,6 +57,20 @@ pub fn build_remote_store(remote_log_dir: &str) -> Result<Option<RemoteStore>, S
             .with_bucket_name(bucket)
             .build()
             .map_err(|e| StatsError::Internal(format!("build gcs store {bucket:?}: {e}")))?;
+        return Ok(Some(RemoteStore {
+            store: Arc::new(store),
+            prefix: prefix.trim_matches('/').to_string(),
+        }));
+    }
+    if let Some(rest) = dir.strip_prefix("s3://") {
+        let (bucket, prefix) = match rest.split_once('/') {
+            Some((b, p)) => (b, p),
+            None => (rest, ""),
+        };
+        let store = object_store::aws::AmazonS3Builder::from_env()
+            .with_bucket_name(bucket)
+            .build()
+            .map_err(|e| StatsError::Internal(format!("build s3 store {bucket:?}: {e}")))?;
         return Ok(Some(RemoteStore {
             store: Arc::new(store),
             prefix: prefix.trim_matches('/').to_string(),
@@ -238,6 +261,22 @@ mod tests {
         assert_eq!(store.prefix, "logs/sub");
         let p = store.object_path("ns.a", "seg_L1_0001.parquet");
         assert_eq!(p.to_string(), "logs/sub/ns.a/seg_L1_0001.parquet");
+    }
+
+    #[test]
+    fn s3_url_parses_bucket_and_prefix() {
+        // from_env() builds without credentials; the parse + prefix split is the
+        // logic under test (no network — we never call put/list here). No
+        // AWS_ENDPOINT_URL is set, so the builder keeps its default endpoint.
+        let store = build_remote_store("s3://my-bucket/finelog/cw-us-east-02a")
+            .unwrap()
+            .unwrap();
+        assert_eq!(store.prefix, "finelog/cw-us-east-02a");
+        let p = store.object_path("iris.worker", "seg_L1_0001.parquet");
+        assert_eq!(
+            p.to_string(),
+            "finelog/cw-us-east-02a/iris.worker/seg_L1_0001.parquet"
+        );
     }
 
     #[tokio::test]
