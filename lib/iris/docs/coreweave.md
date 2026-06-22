@@ -184,7 +184,9 @@ operator reference (any `--cluster=NAME`) and the lifecycle details behind it.
 - Controller extras: `uv pip install 'marin-iris[controller]'`
 
 For S3 storage, export `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`;
-`iris cluster start` turns them into the `iris-s3-credentials` Secret.
+`iris cluster start` folds them — plus the derived endpoint/region/`FSSPEC_S3`
+config — into the `iris-task-env` Secret, projected into the controller and task
+pods via `envFrom`.
 
 > **Note**: CoreWeave AI Object Storage (`cwobject.com`, `cwlota.com`) uses
 > virtual-hosted-style S3 addressing, which is auto-detected and configured but
@@ -600,11 +602,11 @@ The platform detects fatal errors before the full timeout expires:
 | `IRIS_POD_NAME` | Downward API (`metadata.name`) | Pod's name |
 | `IRIS_POD_UID` | Downward API (`metadata.uid`) | Pod's UID |
 | `IRIS_SERVICE_ACCOUNT_NAME` | Platform | ServiceAccount for task Pods (set when `runtime: kubernetes`) |
-| `IRIS_S3_SECRET_NAME` | Platform | K8s Secret name for S3 credentials |
-| `AWS_ACCESS_KEY_ID` | Secret ref | From `iris-s3-credentials` Secret |
-| `AWS_SECRET_ACCESS_KEY` | Secret ref | From `iris-s3-credentials` Secret |
-| `AWS_ENDPOINT_URL` | Config | S3 endpoint URL |
-| `FSSPEC_S3` | Platform | JSON-encoded fsspec S3 config (includes endpoint and addressing style) |
+| `AWS_ACCESS_KEY_ID` | `envFrom` | From the `iris-task-env` Secret |
+| `AWS_SECRET_ACCESS_KEY` | `envFrom` | From the `iris-task-env` Secret |
+| `AWS_ENDPOINT_URL` | `envFrom` | From `iris-task-env`; derived from `object_storage_endpoint` |
+| `AWS_REGION` / `AWS_DEFAULT_REGION` | `envFrom` | From `iris-task-env`; `auto` for R2 / CoreWeave endpoints |
+| `FSSPEC_S3` | `envFrom` | From `iris-task-env`; JSON-encoded fsspec S3 config (endpoint + addressing style) |
 
 ## 11. Timeouts
 
@@ -651,8 +653,8 @@ See `lib/iris/src/iris/providers/k8s/coreweave.py`.
 Worker Pod runs `iris.cluster.worker.main serve --runtime=kubernetes`. It:
 1. Reads config from ConfigMap mount (`/etc/iris/config.json`)
 2. Discovers controller via `iris-controller-svc.iris.svc.cluster.local:10000`
-3. Creates `KubernetesRuntime` (reads `IRIS_SERVICE_ACCOUNT_NAME`,
-   `IRIS_S3_SECRET_NAME` from environment)
+3. Creates `KubernetesRuntime` (reads `IRIS_SERVICE_ACCOUNT_NAME` from
+   environment; S3 credentials arrive via `envFrom` on the `iris-task-env` Secret)
 4. Registers with controller, enters heartbeat loop
 
 ### Task execution
@@ -754,7 +756,7 @@ by polling.
 | Resource | Purpose | Created By |
 |----------|---------|------------|
 | `iris` Namespace + RBAC | K8s API auth and permissions | `start_controller()` via `ensure_rbac()` |
-| `iris-s3-credentials` Secret | S3 object storage auth | `start_controller()`, from `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` env vars |
+| `iris-task-env` Secret | S3 object storage auth + operator-injected env (`defaults.inject_env`) | `start_controller()` via `ensure_task_env_secret()`, from `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` + the configured `object_storage_endpoint` |
 | `iris-cluster-config` ConfigMap | Cluster config for controller and workers | `start_controller()` |
 | In-cluster ServiceAccount token | kubectl calls from controller Pod | Auto-mounted by Kubernetes |
 
