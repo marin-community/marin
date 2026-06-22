@@ -339,3 +339,35 @@ gradient still does not fit at global batch 32, so the failure is not merely
 B64 activation pressure. The next EP16 control, if needed, should be a B16
 minimum-batch sanity probe or a different assignment/collapse implementation;
 it should not be treated as an expected-throughput run.
+
+May353 attempted the next different assignment-gradient implementation:
+
+```text
+script=scratch/launch_may353_deepep_ep16_savemoe_l26_b32_ffiassign_n2_throughput.sh
+parent=/dlwh/iris-run-job-20260622-203041
+child=/dlwh/iris-run-job-20260622-203041/grug-train-MAY353-DEEPEP-EP16-SAVEMOE-FFIASSIGN-FIXEDFFICOLLAPSE-L26-B32-N2-20260622-2030
+shape=2 H100x8 nodes, EP16, global batch 32, 2 sequences/device
+moe=deepep_internode
+remat=save_moe
+profiler=disabled
+collapse=ffi
+assignment_gradient=ffi
+```
+
+Result:
+
+- May353 did not reach W&B or model execution. It failed during DeepEP source
+  bootstrap because a worker could not clone upstream DeepEP from GitHub:
+
+```text
+fatal: unable to access 'https://github.com/deepseek-ai/DeepEP.git/':
+Failed to connect to github.com port 443 after 133097 ms: Couldn't connect to server
+```
+
+- Iris retried twice; the child was stopped to avoid burning the two-node slot
+  on a network/bootstrap failure.
+
+Interpretation: May353 is not evidence for or against FFI assignment gradients.
+Before retrying this control, remove the live GitHub clone dependency by using
+an existing `DEEPEP_SRC_ROOT`, a pre-staged DeepEP source tarball/prefix, or an
+image with the validated DeepEP checkout baked in.
