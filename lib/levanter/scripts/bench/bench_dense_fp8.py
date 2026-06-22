@@ -30,6 +30,18 @@ from jax import lax
 # so the lowering differs only by dtype/precision, not the einsum.
 _DIMENSION_NUMBERS = (((1,), (0,)), ((), ()))
 
+# H100 SXM dense (non-sparse) BF16 matmul peak.
+_H100_SXM_BF16_TFLOPS_PER_S = 989.5e12
+
+
+def _bf16_peak_tflops_per_s() -> float | None:
+    """Reference dense BF16 peak for the local device, or None if unrecognized."""
+    if not jax.devices():
+        return None
+    if "h100" in jax.devices()[0].device_kind.lower():
+        return _H100_SXM_BF16_TFLOPS_PER_S
+    return None
+
 
 def dense_dot(x: jax.Array, w: jax.Array) -> jax.Array:
     """Dense projection ``[M, K] @ [K, N] -> [M, N]``."""
@@ -99,6 +111,10 @@ def main() -> None:
         print("=== forward HLO ===")
         print(fwd.lower(x, w).compile().as_text())
 
+    # Backward runs both grad matmuls (dx, dw), so 2x the forward flop count.
+    peak = _bf16_peak_tflops_per_s()
+    fwd_flops = 2.0 * args.m * args.k * args.n
+
     fwd_compile, fwd_steady = _time_jitted(fwd, x, w, steps=args.steps, warmup=args.warmup)
     result = {
         "m": args.m,
@@ -107,11 +123,17 @@ def main() -> None:
         "dtype": str(dtype),
         "fwd_compile_time_s": fwd_compile,
         "fwd_steady_time_s": fwd_steady,
+        "fwd_tflops_per_s": fwd_flops / fwd_steady / 1e12,
     }
+    if peak is not None:
+        result["fwd_pct_bf16_peak"] = 100.0 * fwd_flops / fwd_steady / peak
     if not args.forward_only:
         bwd_compile, bwd_steady = _time_jitted(grad, x, w, steps=args.steps, warmup=args.warmup)
         result["bwd_compile_time_s"] = bwd_compile
         result["bwd_steady_time_s"] = bwd_steady
+        result["bwd_tflops_per_s"] = 2.0 * fwd_flops / bwd_steady / 1e12
+        if peak is not None:
+            result["bwd_pct_bf16_peak"] = 100.0 * 2.0 * fwd_flops / bwd_steady / peak
 
     if args.profiler_dir:
         profiler_dir = os.path.abspath(args.profiler_dir)
