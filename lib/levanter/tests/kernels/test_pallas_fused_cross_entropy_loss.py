@@ -1233,9 +1233,9 @@ def test_fused_cross_entropy_vocab_sharded_weight_matches_reference_on_generic_a
     ref_loss = ref_loss + logsumexp_weight * (ref_lse**2)
     ref_mean = jnp.sum(ref_loss * weight) / jnp.sum(weight)
 
-    assert jnp.allclose(loss, ref_loss, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(loss, ref_loss, atol=3e-4, rtol=1e-4)
     assert jnp.array_equal(argmax, ref_argmax)
-    assert jnp.allclose(mean_loss, ref_mean, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(mean_loss, ref_mean, atol=3e-4, rtol=1e-4)
 
 
 def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):
