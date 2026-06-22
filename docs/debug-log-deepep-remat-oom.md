@@ -267,6 +267,33 @@ invalid internode dispatch channel count rather than the previous silent
 counter wait. The branch now caps the default internode dispatch configuration
 to `num_sms=16` (8 channels) and fails fast if an override asks for more.
 
+## Hypothesis 9: dispatch-local assignment packing is the silent bounce point
+
+MAY331 reran the same B32 EP16 stage-debug shape after capping internode
+`num_sms` to 16:
+
+- W&B:
+  `marin-community/marin_moe/MAY331-SMS16-B32-XONLY-JAXBWD-1247`
+- Parent Iris job: `/dlwh/iris-run-job-20260622-124757`
+- Child Iris job:
+  `/dlwh/iris-run-job-20260622-124757/grug-train-MAY331-SMS16-B32-XONLY-JAXBWD-1247`
+- Stage logs showed `aux0=8`, confirming the channel cap took effect.
+- Forward dispatch reached `after_wait_recv_counts` and `before_dispatch_launch`
+  on task-0 ranks with non-negative recv counts.
+- The run still failed before first train metrics; W&B marked the run failed and
+  Iris retried after task 0 reported a generic `Error`.
+- The filtered logs did not show a Python traceback, DeepEP counter timeout,
+  CUDA OOM, NCCL error, or local-worker supervisor line for the first attempt.
+- Later `pcie.cu:219` assertion text appeared only as compile warning text from
+  the retry, not as a proven runtime trap in the first attempt.
+
+The suspicious gap is immediately after `before_dispatch_launch`.
+`DispatchInternode` launched `LaunchPackLocalAssignmentsFromCounts` after the
+DeepEP dispatch but did not check `cudaGetLastError()` before returning success.
+The next branch state adds a CUDA error check, debug stream sync, and
+`internode_jax_after_assignment_pack` stage line after that launch. If the pack
+kernel is the silent failure, the next run should report it directly.
+
 ## Future work
 
 - [x] Add a C++/FFI primitive for x-only internode combine-with-local-collapse
@@ -284,7 +311,8 @@ to `num_sms=16` (8 channels) and fails fast if an override asks for more.
       asymmetry without enabling full buffer summaries.
 - [x] Re-run B32 EP16 DeepEP internode with
       `LEVANTER_DEEPEP_HOST_DISPATCH_STAGE_DEBUG=1`.
-- [ ] Re-run B32 EP16 DeepEP internode with internode `num_sms=16`.
+- [x] Re-run B32 EP16 DeepEP internode with internode `num_sms=16`.
+- [ ] Re-run B32 EP16 with the dispatch local-assignment pack CUDA check.
 - [ ] If B32 passes, retry B64 and profile remat overhead versus ring/all-to-all.
 - [ ] If B32 reaches `cudaMallocAsync(x-only fused local-collapse bwd recv_out)`
       OOM, replace the staging temp with a true direct packed-output backward

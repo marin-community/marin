@@ -4131,6 +4131,20 @@ ffi::Error DispatchInternode(
         num_recv_tokens,
         assignment_capacity,
         stream);
+    ThrowOnCuda(cudaGetLastError(), "DeepEP internode dispatch local assignment pack");
+    DebugSynchronizeStream(stream, "cudaStreamSynchronize(DeepEP internode dispatch local assignment pack)");
+    LogHostDispatchStage(
+        runtime.rank,
+        call_sequence,
+        "internode_jax_after_assignment_pack",
+        num_tokens,
+        hidden,
+        num_experts,
+        num_topk,
+        num_recv_tokens,
+        num_recv_rdma_tokens,
+        num_channels,
+        assignment_capacity);
     return ffi::Error::Success();
   } catch (const std::exception& exc) {
     return ffi::Error::Internal(exc.what());
