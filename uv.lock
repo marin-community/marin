@@ -4917,7 +4917,7 @@ controller = [
     { name = "kubernetes" },
 ]
 iap = [
-    { name = "google-auth-oauthlib" },
+    { name = "marin-rigging", extra = ["iap"] },
 ]
 
 [package.dev-dependencies]
@@ -4950,7 +4950,6 @@ requires-dist = [
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "google-auth", specifier = ">=2.0" },
-    { name = "google-auth-oauthlib", marker = "extra == 'iap'", specifier = ">=1.0" },
     { name = "google-cloud-tpu", specifier = ">=1.18.0" },
     { name = "grpcio", specifier = ">=1.76.0" },
     { name = "httpx", specifier = ">=0.28.1" },
@@ -4959,6 +4958,7 @@ requires-dist = [
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-finelog-server", specifier = ">=0.2.10" },
     { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'", editable = "lib/rigging" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyjwt", specifier = ">=2.12.0" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -5020,6 +5020,7 @@ dependencies = [
     { name = "lenses" },
     { name = "marin-fray" },
     { name = "marin-haliax" },
+    { name = "marin-iris" },
     { name = "marin-rigging" },
     { name = "marin-zephyr" },
     { name = "optax" },
@@ -5153,6 +5154,7 @@ requires-dist = [
     { name = "lm-eval", marker = "extra == 'lm-eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness.git?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
+    { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "nvidia-cublas", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=13.2.0.9" },
@@ -5222,11 +5224,18 @@ name = "marin-rigging"
 version = "0.2.0"
 source = { editable = "lib/rigging" }
 dependencies = [
+    { name = "click" },
     { name = "connect-python" },
     { name = "fsspec" },
     { name = "gcsfs" },
+    { name = "google-auth" },
     { name = "pyyaml" },
     { name = "s3fs" },
+]
+
+[package.optional-dependencies]
+iap = [
+    { name = "google-auth-oauthlib" },
 ]
 
 [package.dev-dependencies]
@@ -5238,12 +5247,16 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.3.1" },
     { name = "connect-python", specifier = ">=0.9.0" },
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
+    { name = "google-auth", specifier = ">=2.0.0" },
+    { name = "google-auth-oauthlib", marker = "extra == 'iap'", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
 ]
+provides-extras = ["iap"]
 
 [package.metadata.requires-dev]
 dev = [

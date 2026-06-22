@@ -56,6 +56,11 @@ ZEPHYR_WORKER_MEM_PEAK_KEY = "zephyr/worker/mem_peak_bytes"
 """Monotonically increasing peak RSS seen across all sampling intervals"""
 
 
+def per_second(total: float, elapsed: float) -> float:
+    """Rate of ``total`` over ``elapsed`` seconds, or 0.0 when no time has passed."""
+    return total / elapsed if elapsed > 0 else 0.0
+
+
 class ZephyrWorkerStatStatus(enum.StrEnum):
     """Lifecycle status of a ZephyrWorkerStat or ZephyrStageStat row."""
 
@@ -177,8 +182,8 @@ class StatsWriter:
 
         total_items = stage_counters.get(ZEPHYR_STAGE_ITEM_COUNT_KEY, 0)
         total_bytes = stage_counters.get(ZEPHYR_STAGE_BYTES_PROCESSED_KEY, 0)
-        item_rate = total_items / elapsed if elapsed > 0 else 0.0
-        byte_rate = total_bytes / elapsed if elapsed > 0 else 0.0
+        item_rate = per_second(total_items, elapsed)
+        byte_rate = per_second(total_bytes, elapsed)
 
         stat = ZephyrStageStat(
             execution_id=execution_id,
@@ -216,8 +221,8 @@ class StatsWriter:
         elapsed = time.monotonic() - start_time
         items = counters.get(ZEPHYR_STAGE_ITEM_COUNT_KEY, 0)
         bytes_processed = counters.get(ZEPHYR_STAGE_BYTES_PROCESSED_KEY, 0)
-        item_rate = items / elapsed if elapsed > 0 else 0.0
-        byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
+        item_rate = per_second(items, elapsed)
+        byte_rate = per_second(bytes_processed, elapsed)
         stat = ZephyrWorkerStat(
             execution_id=execution_id,
             stage_name=stage_name,

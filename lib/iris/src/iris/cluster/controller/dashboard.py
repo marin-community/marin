@@ -31,12 +31,6 @@ from urllib.parse import urlparse
 import httpx
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
-from finelog.rpc.finelog_stats_connect import (
-    StatsServiceASGIApplication as FinelogStatsServiceASGIApplication,
-)
-from finelog.rpc.logging_connect import LogServiceASGIApplication
-from rigging.rpc import ConcurrencyLimitInterceptor
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
@@ -57,6 +51,7 @@ from iris.cluster.dashboard_common import (
     requires_auth,
     static_files_mount,
 )
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.rpc.async_adapter import AsyncServiceAdapter
 from iris.rpc.auth import (
     SESSION_COOKIE,
@@ -295,6 +290,15 @@ class _DashboardAuthInterceptor:
 # ``iris.oa.dev``, or any other public host.
 PROXY_HOST_LABEL = "proxy"
 
+# Backward-compat for finelog clients built before logs moved behind the generic
+# endpoint proxy: they resolve /system/log-server to the bare controller URL and
+# POST to /finelog.logging.LogService/<method> directly. We forward those to the
+# log server through the same EndpointProxy the dashboard uses, so no typed
+# LogService forwarding mount is needed on the controller. The encoded name is
+# the endpoint's wire name with the leading slash dropped and "/" -> ".".
+_LOG_SERVICE_RPC_PREFIX = "finelog.logging.LogService"
+_LOG_SERVER_PROXY_NAME = LOG_SERVER_ENDPOINT_NAME.strip("/").replace("/", ".")
+
 
 def _extract_proxy_subdomain(host: str) -> str | None:
     """Return the encoded endpoint name from a Host header, or None.
@@ -379,26 +383,6 @@ class _SubdomainProxyMiddleware:
         return headers.get("x-forwarded-host") or headers.get("host", "")
 
 
-_LEGACY_FETCH_LOGS_PATH = "/iris.cluster.ControllerService/FetchLogs"
-_CANONICAL_FETCH_LOGS_PATH = "/finelog.logging.LogService/FetchLogs"
-_CANONICAL_PUSH_LOGS_PATH = "/finelog.logging.LogService/PushLogs"
-
-
-class _LegacyFetchLogsRedirect:
-    """Rewrites the legacy ControllerService/FetchLogs path to the canonical
-    LogService path so old workers reach the LogService mount, where the
-    full auth + timing + concurrency interceptor chain handles the request.
-    """
-
-    def __init__(self, app: ASGIApp):
-        self._app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope.get("type") == "http" and scope.get("path") == _LEGACY_FETCH_LOGS_PATH:
-            scope = {**scope, "path": _CANONICAL_FETCH_LOGS_PATH}
-        await self._app(scope, receive, send)
-
-
 class ControllerDashboard:
     """HTTP dashboard with Connect RPC and web UI.
 
@@ -411,16 +395,12 @@ class ControllerDashboard:
     def __init__(
         self,
         service: ControllerServiceImpl,
-        log_service: LogServiceProxy,
         host: str = "0.0.0.0",
         port: int = 8080,
         auth_provider: str | None = None,
-        finelog_stats_service: StatsServiceProxy | None = None,
         auth_policy: ControllerAuthPolicy = ControllerAuthPolicy(),
     ):
         self._service = service
-        self._log_service = log_service
-        self._finelog_stats_service = finelog_stats_service
         self._host = host
         self._port = port
         self._auth_provider = auth_provider
@@ -440,14 +420,10 @@ class ControllerDashboard:
         return self._app
 
     def _create_app(self) -> ASGIApp:
-        # Two timing interceptors: only the controller chain feeds the stats
-        # collector, so the panel stays a clean view of ControllerService
-        # traffic. The log server runs in a subprocess and will gain its own
-        # collector separately; the controller-side LogService mount is a
-        # legacy proxy whose forwarded calls would just add noise here.
+        # Only the controller RPC chain feeds the stats collector. Finelog RPCs
+        # use the generic endpoint proxy and are measured by the log server.
         include_tb = bool(os.environ.get("IRIS_DEBUG"))
         controller_timing = RequestTimingInterceptor(include_traceback=include_tb, collector=self._stats_collector)
-        log_timing = RequestTimingInterceptor(include_traceback=include_tb)
         if self._auth_provider is not None and self._auth_policy.request_auth_enabled:
             auth_interceptor = _DashboardAuthInterceptor(self._auth_policy)
         else:
@@ -472,32 +448,6 @@ class ControllerDashboard:
             compressions=IRIS_RPC_COMPRESSIONS,
         )
         stats_app = WSGIMiddleware(stats_wsgi_app)
-
-        # PushLogs is kept on the controller as a forwarding proxy: older workers
-        # cached /system/log-server -> controller URL, so we must accept their
-        # pushes and forward them to the real log server. Forwarding happens
-        # transparently because self._log_service is a LogServiceProxy whose
-        # push_logs() calls the remote LogService over RPC.
-        # Cap concurrent FetchLogs RPCs to avoid evicting the page cache with
-        # parallel log-segment scans against the finelog store.
-        log_interceptors = [auth_interceptor, log_timing, ConcurrencyLimitInterceptor({"FetchLogs": 4})]
-        log_app = LogServiceASGIApplication(
-            service=self._log_service, interceptors=log_interceptors, compressions=IRIS_RPC_COMPRESSIONS
-        )
-
-        # Backward-compat: clients/workers built before the finelog lift call
-        # /iris.logging.LogService/{FetchLogs,PushLogs}. Wire bytes are identical
-        # to /finelog.logging.LogService/*, so mount the same ASGI app at the
-        # legacy prefix and register relative-path aliases.
-        # connectrpc dispatch (_server_async.py) first looks up scope["path"]
-        # directly; under the Starlette Mount the legacy prefix is stripped to
-        # a relative path. Adding relative keys lets that first lookup succeed
-        # regardless of which mount handled the request. We pre-resolve so the
-        # aliased dict survives lifespan/lazy resolution.
-        log_app._resolved_endpoints = dict(log_app._resolve_endpoints(self._log_service))
-        log_app._resolved_endpoints["/FetchLogs"] = log_app._resolved_endpoints[_CANONICAL_FETCH_LOGS_PATH]
-        log_app._resolved_endpoints["/PushLogs"] = log_app._resolved_endpoints[_CANONICAL_PUSH_LOGS_PATH]
-        _LEGACY_LOG_SERVICE_PATH = "/iris.logging.LogService"
 
         self._endpoint_proxy = EndpointProxy(self._service.resolve_endpoint)
 
@@ -524,6 +474,18 @@ class ControllerDashboard:
             query = f"?{request.url.query}" if request.url.query else ""
             return RedirectResponse(f"/proxy/{name}/{query}", status_code=307)
 
+        @requires_auth
+        async def _legacy_log_service(request: Request) -> Response:
+            # Forward pre-proxy clients' bare LogService calls to the log server
+            # through the generic endpoint proxy (see _LOG_SERVER_PROXY_NAME).
+            method = request.path_params["method"]
+            return await self._endpoint_proxy.dispatch(
+                request,
+                encoded_name=_LOG_SERVER_PROXY_NAME,
+                sub_path=f"{_LOG_SERVICE_RPC_PREFIX}/{method}",
+                proxy_prefix="",
+            )
+
         routes = [
             Route("/", self._dashboard),
             favicon_route(),
@@ -546,18 +508,14 @@ class ControllerDashboard:
                 _proxy_endpoint,
                 methods=list(endpoint_proxy.ALLOWED_METHODS),
             ),
-            Mount(log_app.path, app=log_app),
-            Mount(_LEGACY_LOG_SERVICE_PATH, app=log_app),
+            Route(
+                f"/{_LOG_SERVICE_RPC_PREFIX}/{{method}}",
+                _legacy_log_service,
+                methods=["POST"],
+            ),
             Mount(rpc_asgi_app.path, app=rpc_asgi_app),
             Mount(stats_wsgi_app.path, app=stats_app),
         ]
-        if self._finelog_stats_service is not None:
-            finelog_stats_asgi_app = FinelogStatsServiceASGIApplication(
-                service=self._finelog_stats_service,
-                interceptors=[auth_interceptor],
-                compressions=IRIS_RPC_COMPRESSIONS,
-            )
-            routes.append(Mount(finelog_stats_asgi_app.path, app=finelog_stats_asgi_app))
         routes.append(static_files_mount())
 
         app: Starlette | _RouteAuthMiddleware = Starlette(
@@ -577,9 +535,6 @@ class ControllerDashboard:
         wrapped: ASGIApp = app
         if self._auth_policy.request_auth_enabled and self._auth_provider is not None:
             wrapped = _RouteAuthMiddleware(app, self._auth_policy)
-        # Wrap auth so the legacy FetchLogs rewrite happens before route
-        # matching: auth and routing both see the canonical path.
-        wrapped = _LegacyFetchLogsRedirect(wrapped)
         # Subdomain dispatch wraps everything: subdomain requests don't match
         # any Starlette route, so _RouteAuthMiddleware would default-allow
         # them. This middleware enforces auth itself before forwarding.
@@ -735,11 +690,6 @@ class ProxyControllerDashboard:
             Route(
                 "/iris.cluster.ControllerService/{method}",
                 functools.partial(self._proxy_rpc_post, service="iris.cluster.ControllerService"),
-                methods=["POST"],
-            ),
-            Route(
-                "/finelog.logging.LogService/{method}",
-                functools.partial(self._proxy_rpc_post, service="finelog.logging.LogService"),
                 methods=["POST"],
             ),
             Route("/proxy/{path:path}", self._proxy_endpoint, methods=list(endpoint_proxy.ALLOWED_METHODS)),

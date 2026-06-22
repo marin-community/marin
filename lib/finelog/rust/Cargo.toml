@@ -82,7 +82,7 @@ datafusion = "53"
 # `downcast_ref::<ParquetAccessPlan>()` silently miss).
 datafusion-datasource = "53"
 datafusion-datasource-parquet = "53"
-object_store = { version = "0.13", features = ["gcp"] }
+object_store = { version = "0.13", features = ["gcp", "aws"] }
 async-trait = "0.1"
 url = "2"
 # Rust-owned catalog sidecar; `bundled` keeps the build hermetic (no system

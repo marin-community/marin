@@ -419,6 +419,7 @@ def job_feasibility(
     groups: Sequence[ScalingGroup],
     constraints: Sequence[Constraint],
     replicas: int | None = None,
+    resources: job_pb2.ResourceSpecProto | None = None,
 ) -> GroupFeasibility:
     """Answer: can any scaling group ever host this job shape?
 
@@ -431,12 +432,20 @@ def job_feasibility(
     constraint is ANDed with the job's other routing constraints, so an availability
     job with an incompatible region/zone still fails fast.
 
+    When ``resources`` is given, a matching group must also have enough per-VM
+    capacity for the request's additive dimensions (cpu, memory, disk, device
+    count). This catches over-requests like 300GB disk on a pool that advertises
+    100GB, which would otherwise route to no group and sit pending forever.
+
     Args:
         groups: scaling groups to consider.
         constraints: the job's hard + soft routing constraints.
         replicas: for coscheduled jobs, the required replica count; None for
             non-coscheduled jobs. When set, groups must also have num_vms that
             divides replicas evenly.
+        resources: the job's per-task resource spec. When set, groups whose
+            advertised per-VM capacity can't hold it are dropped from the
+            feasible set.
     """
     groups_list = list(groups)
     if not groups_list:
@@ -463,6 +472,17 @@ def job_feasibility(
             )
             return GroupFeasibility(feasible=[], reason=reason)
         matching = compatible
+
+    if resources is not None:
+        fit_reasons = {g.name: g.check_resource_fit(resources) for g in matching}
+        fitting = [g for g in matching if fit_reasons[g.name] is None]
+        if not fitting:
+            details = "; ".join(f"{name} ({reason})" for name, reason in fit_reasons.items() if reason)
+            return GroupFeasibility(
+                feasible=[],
+                reason=f"no matching scaling group has enough per-VM capacity: {details}",
+            )
+        matching = fitting
 
     return GroupFeasibility(feasible=matching, reason=None)
 

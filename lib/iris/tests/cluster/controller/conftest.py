@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
 import pytest
-from finelog.client.proxy import LogServiceProxy
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.backends.gcp.fake import InMemoryGcpService
 from iris.cluster.backends.gcp.workers import GcpWorkerProvider
 from iris.cluster.backends.types import CloudSliceState
@@ -172,16 +172,15 @@ def mock_controller() -> MockController:
 
 
 @pytest.fixture
-def log_service(embedded_log_server) -> LogServiceProxy:
-    """A LogService client (RPC proxy) against a fresh in-process finelog server.
+def log_service(embedded_log_server) -> LogServiceClientSync:
+    """A LogService RPC client against a fresh in-process finelog server.
 
     The native server makes pushed log entries immediately fetchable (RAM
     buffer), so push→fetch is synchronously visible within a test without any
-    manual flush. ``LogServiceProxy`` exposes the same async
-    ``push_logs(request, ctx)`` / ``fetch_logs(request, ctx)`` surface the tests
-    drive, so callers are unchanged.
+    manual flush. The sync client exposes ``push_logs(request)`` /
+    ``fetch_logs(request)``.
     """
-    return LogServiceProxy(embedded_log_server.address)
+    return LogServiceClientSync(address=embedded_log_server.address)
 
 
 @pytest.fixture

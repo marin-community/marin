@@ -44,7 +44,7 @@ controller = [
 worker = []
 # Interactive `iris login` against an IAP-fronted cluster (desktop OAuth flow).
 # Kept out of core so the controller/worker import path stays free of oauthlib.
-iap = ["google-auth-oauthlib>=1.0"]
+iap = ["marin-rigging[iap]"]
 
 [project.scripts]
 iris = "iris.cli:iris"

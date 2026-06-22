@@ -44,6 +44,15 @@ spec:
             - name: rpc
               containerPort: {{ port }}
               protocol: TCP
+          # S3 credentials for an s3:// remote_log_dir. `finelog deploy up` mints
+          # the `{{ name }}-env` Secret (R2 AWS_* creds + AWS_ENDPOINT_URL) from
+          # the operator's env and projects it here. optional=true keeps the pod
+          # schedulable when no Secret exists (gs:// or local archives, where GCS
+          # uses workload identity). The explicit env below wins on key collision.
+          envFrom:
+            - secretRef:
+                name: {{ name }}-env
+                optional: true
           env:
             - name: FINELOG_PORT
               value: "{{ port }}"
