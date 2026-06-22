@@ -359,8 +359,10 @@ confirms the path.
 - **Result — GEMM lowering (live delayed-scaling scales; every `custom_call_target` captured):**
   | shape | forward | backward dx/dw |
   |-------|---------|----------------|
-  | d3072 | **no cuBLAS matmul** (plain `dot`/fusion) — **no `$f8`** | `__cublas$lt$matmul$f8` ×2 (live `%loop_convert_fusion` scales) |
-  | d4096 | `__cublas$lt$matmul` (bf16, `%loop_multiply_fusion` operands) — **no `$f8`** | `__cublas$lt$matmul$f8` ×2 |
+  | d3072 | bf16 Triton `gemm_fusion_dot_general` (dequant operands) — **no `$f8`** | `__cublas$lt$matmul$f8` ×2 (live `%loop_convert_fusion` scales) |
+  | d4096 | bf16 `__cublas$lt$matmul` (dequant `%loop_multiply_fusion` operands) — **no `$f8`** | `__cublas$lt$matmul$f8` ×2 |
+  Both forwards are **bf16 fallbacks** (no FP8); they differ only in XLA's GEMM-backend autotune — Triton
+  fusion at d3072 vs cuBLASLt at d4096 (job `…-fwdhlo-150727`, forward-only full HLO). Not FP8-relevant.
 - **Result — throughput (qdq %-peak vs FP8 1978.9; bf16 vs 989.5):**
   | shape | bf16 fwd | qdq fwd | bf16 bwd | qdq bwd |
   |-------|----------|---------|----------|---------|
@@ -379,7 +381,7 @@ confirms the path.
   operands; XLA's current `kScaledDot`/`ScaledDotRewriter` doesn't match that shape with a runtime
   scale (the version-drift fragility R5 flagged). Don't rely on the QDQ→f8 pattern for the forward.
 - **Reproduced on the rewritten branch** (`234fddd23`, job `/matt/grug-s2-verify-20260622-150148`):
-  identical lowering — qdq fwd no `$f8` (d3072 no cuBLAS matmul, d4096 bf16 `$lt$matmul`), bwd `$f8` ×2
+  identical lowering — qdq fwd no `$f8` (d3072 bf16 Triton gemm fusion, d4096 bf16 `$lt$matmul`), bwd `$f8` ×2
   both dims with live `%loop_convert_fusion` scales; perf within run-to-run variance (qdq fwd 341/451,
   bwd 539/712 TF/s; bf16 fwd 405/532, bwd 521/630).
 - **Ops notes:** (1) `iris job logs` tail-caps at ~1000 lines → pipe the remote bench through `grep` for
