@@ -846,6 +846,7 @@ class AutoscalerProtocol(Protocol):
         constraints: list[Constraint],
         *,
         replicas: int | None = None,
+        resources: job_pb2.ResourceSpecProto | None = None,
     ) -> str | None:
         """Check if a job can ever be scheduled. Returns error message or None."""
         ...
@@ -1257,6 +1258,7 @@ class ControllerServiceImpl:
             error = autoscaler.job_feasibility(
                 constraints=constraints,
                 replicas=replicas,
+                resources=request.resources,
             )
             if error:
                 raise ConnectError(
