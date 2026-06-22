@@ -43,6 +43,7 @@ no checkpoints.
 | MAY358 | `offload_moe_output` | disabled | 20.60 | 0.3440s | Matches `none` within run noise while preserving output offload semantics. |
 | MAY359 | `none` | disabled | 24.60 | 0.5762s | B16 control; increasing batch from 8 to 16 improves throughput substantially. |
 | MAY360 | `offload_moe_output` | disabled | 24.82 | 0.5711s | B16 output-offload comparison; still matches `none` within run noise. |
+| MAY361 | `save_moe` | disabled | 24.94 | 0.5682s | B16 save control; also matches `none`, slightly faster in this run. |
 
 Interpretation:
 
@@ -50,8 +51,9 @@ Interpretation:
   pressure with large H2D/D2H copies. Narrow offload is different:
   `offload_moe_hidden` is still expensive, but `offload_moe_output` is
   effectively throughput-neutral at B8.
-- `save_moe` is slightly slower than `none` when measured without profiler
-  flags.
+- `save_moe` is at worst a small tax for this guarded DeepEP path. At B8 it
+  measured slightly slower than `none`; at B16 it measured slightly faster, so
+  the practical conclusion is that its effect is in run-noise range for EP8.
 - Current best EP8 DeepEP remat setting for pure throughput is `--remat none`,
   with `--remat offload_moe_output` as the first memory-headroom knob to try
   because it matched `none` in both B8 and B16 throughput runs.
@@ -106,14 +108,24 @@ MAY360:
   global_batch=16
   steady_mfu=24.82
   steady_step_duration=0.5711s
+
+MAY361:
+  parent=/dlwh/iris-run-job-20260622-230807
+  wandb=https://wandb.ai/marin-community/marin_moe/runs/MAY361-DEEPEP-EP8-SAVEMOE-L26-B16-N1-20260622-2308
+  remat=save_moe
+  global_batch=16
+  steady_mfu=24.94
+  steady_step_duration=0.5682s
 ```
 
 Interpretation: the output tensor is a narrow enough boundary that host offload
 does not show up materially in the EP8 throughput runs. The hidden tensor is not
 narrow enough; it behaves more like the earlier broad offload result and gives
 back most of the `save_moe` versus `none` win. B16 is the current best
-single-node EP8 DeepEP throughput point in this report, but it is a batch-size
-axis result rather than a remat-policy result.
+single-node EP8 DeepEP throughput point in this report. The B16 result also
+shows that the `save_moe` versus `none` difference is not a stable throughput
+tax for the guarded DeepEP path; it is small enough to be dominated by run
+noise.
 
 ## EP16 Internode Direction
 
