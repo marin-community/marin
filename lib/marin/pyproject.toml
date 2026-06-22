@@ -49,6 +49,7 @@ file = "../../LICENSE"
 
 [project.scripts]
 marin-mcp-babysitter = "marin.mcp.babysitter:main"
+marin-serve = "marin.inference.quick_serve_cli:main"
 
 [dependency-groups]
 test = [
