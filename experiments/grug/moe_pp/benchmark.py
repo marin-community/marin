@@ -116,6 +116,11 @@ def _config(*, vocab_size, hidden_dim, num_layers, num_experts, num_experts_per_
         max_seq_len=seq_len,
         sliding_window=seq_len,
         moe_implementation="ring",
+        # Reference (plain-JAX einsum) attention so the manual pipeline backward can
+        # differentiate it: the TPU splash kernel emits a custom-VJP/ShapeDtypeStruct
+        # that does not transpose through the stage-manual shard_map. Both the PP and
+        # FSDP paths use the same impl, so the throughput ratio stays apples-to-apples.
+        attention_implementation="reference",
     )
 
 
