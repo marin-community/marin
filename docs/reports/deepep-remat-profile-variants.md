@@ -75,3 +75,50 @@ assignment_gradient=fused
 
 This run tests whether the EP8 conclusion (`remat=none` wins) also holds for
 the current best EP16 internode DeepEP boundary.
+
+Update:
+
+- May345 reached train-step dispatch but failed before metrics with
+  `RESOURCE_EXHAUSTED: Out of memory while trying to allocate 102.90GiB`.
+- The failed May345 parent/child were stopped to avoid retry churn.
+- The next lower-memory comparison is the same EP16 no-remat config at global
+  batch 64:
+
+```text
+script=scratch/launch_may346_deepep_ep16_noremat_l26_b64_n2_throughput.sh
+shape=2 H100x8 nodes, EP16, global batch 64, 4 sequences/device
+```
+
+May346 reached train step 0 but failed before metrics with:
+
+```text
+jax.errors.JaxRuntimeError: INVALID_ARGUMENT: DeepEP local assignment collapse destination map shape is invalid
+```
+
+This is not the May345 B128 allocation failure. It isolates a separate issue in
+the explicit local-collapse FFI when combined with the no-remat B64 path.
+
+The next isolation run keeps EP16 B64 no-remat and fused assignment-gradient,
+but switches only the local collapse mode back to the JAX scatter path:
+
+```text
+script=scratch/launch_may347_deepep_ep16_noremat_l26_b64_scatter_n2_throughput.sh
+shape=2 H100x8 nodes, EP16, global batch 64, 4 sequences/device
+moe=deepep_internode
+remat=none
+profiler=disabled
+collapse=scatter
+assignment_gradient=fused
+```
+
+May347 was submitted as:
+
+```text
+parent=/dlwh/iris-run-job-20260622-182310
+child=/dlwh/iris-run-job-20260622-182310/grug-train-MAY347-DEEPEP-EP16-NOREMAT-FUSEDASSIGN-SCATTERCOLLAPSE-L26-B64-N2-20260622-1823
+wandb=marin-community/marin_moe/MAY347-DEEPEP-EP16-NOREMAT-FUSEDASSIGN-SCATTERCOLLAPSE-L26-B64-N2-20260622-1823
+```
+
+At launch time the child pods were `SchedulingGated` by Kueue admission/topology
+because the H100 nodepool was fully occupied by one admitted 32-pod workload.
+The run has not yet tested the model/runtime path.
