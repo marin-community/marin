@@ -37,6 +37,15 @@ class ShapeBucket:
 #   - shape_bucket
 # value:
 #   - BlockSizes
+_NVIDIA_MEDIUM_H_BLOCK_SIZES: dict[tuple[str, str], BlockSizes] = {
+    ("bfloat16", "small-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+    ("float32", "small-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+    ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+    ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+    ("bfloat16", "large-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+    ("float32", "large-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+}
+
 TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
     DEFAULT_DEVICE_KEY: {
         ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
@@ -51,12 +60,7 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "llama3-ish"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=1024),
         ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
         ("float32", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
-        ("bfloat16", "small-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
-        ("float32", "small-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
-        ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
-        ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
-        ("bfloat16", "large-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
-        ("float32", "large-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        **_NVIDIA_MEDIUM_H_BLOCK_SIZES,
     },
     "NVIDIA GB10": {
         ("bfloat16", "tiny"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=128),
@@ -79,12 +83,7 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "llama3-ish"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=1024),
         ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
         ("float32", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
-        ("bfloat16", "small-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
-        ("float32", "small-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
-        ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
-        ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
-        ("bfloat16", "large-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
-        ("float32", "large-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        **_NVIDIA_MEDIUM_H_BLOCK_SIZES,
     },
     "NVIDIA A100": {
         ("bfloat16", "tiny"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=128),
@@ -95,12 +94,7 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "llama3-ish"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=1024),
         ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
         ("float32", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
-        ("bfloat16", "small-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
-        ("float32", "small-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
-        ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
-        ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
-        ("bfloat16", "large-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
-        ("float32", "large-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        **_NVIDIA_MEDIUM_H_BLOCK_SIZES,
     },
     "TPU v5e": {
         ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024),

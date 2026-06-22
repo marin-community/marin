@@ -95,7 +95,6 @@ def _default_implementations() -> tuple[Implementation, ...]:
 
 
 def default_implementations() -> tuple[Implementation, ...]:
-    """Return the fused CE implementation order for the current backend."""
     return _default_implementations()
 
 

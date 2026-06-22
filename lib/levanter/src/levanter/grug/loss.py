@@ -111,12 +111,10 @@ def _local_linear_softmax_cross_entropy_loss(
     precision: jax.lax.PrecisionLike,
     implementation: str | tuple[str, ...] | None,
 ) -> tuple[jax.Array, jax.Array]:
-    errors: list[Exception] = []
     for impl in _ce_implementation_order(implementation):
         if impl == "pallas_gpu":
             pallas_gpu_impl = IMPLEMENTATIONS.get("pallas_gpu")
             if pallas_gpu_impl is None:
-                errors.append(ValueError("pallas_gpu fused cross-entropy is not available"))
                 continue
             block_sizes, _ = infer_block_sizes_with_tuned_match(
                 flat_hidden.shape[0],
@@ -126,19 +124,15 @@ def _local_linear_softmax_cross_entropy_loss(
                 x_dtype=flat_hidden.dtype,
                 w_dtype=shard_lm_head.dtype,
             )
-            try:
-                pallas_result = pallas_gpu_impl(
-                    flat_hidden,
-                    safe_labels,
-                    shard_lm_head,
-                    block_sizes=block_sizes,
-                    dtype=dtype,
-                    logit_soft_cap=None,
-                    precision=precision,
-                )
-            except Exception as exc:
-                errors.append(exc)
-                continue
+            pallas_result = pallas_gpu_impl(
+                flat_hidden,
+                safe_labels,
+                shard_lm_head,
+                block_sizes=block_sizes,
+                dtype=dtype,
+                logit_soft_cap=None,
+                precision=precision,
+            )
             local_loss = pallas_result[0]
             local_lse = pallas_result[1]
             return local_loss, local_lse
@@ -156,8 +150,6 @@ def _local_linear_softmax_cross_entropy_loss(
                 ),
             )
 
-    if errors:
-        raise ValueError("No vocab-sharded fused CE implementation succeeded") from errors[-1]
     raise ValueError(
         "Vocab-sharded fused CE requires xla or pallas_gpu, " f"got {_ce_implementation_order(implementation)!r}"
     )
