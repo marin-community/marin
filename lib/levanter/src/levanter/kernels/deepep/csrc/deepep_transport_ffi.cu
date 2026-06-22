@@ -5170,6 +5170,244 @@ ffi::Error CombineInternodeXOnlyWithLocalCollapse(
   }
 }
 
+ffi::Error CombineInternodeXOnlyWithLocalCollapseBwdFused(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::BF16, 2> grad_combined_x,
+    ffi::Buffer<ffi::BF16, 2> out_dispatch,
+    ffi::Buffer<ffi::BF16, 1> assignment_weights,
+    ffi::Buffer<ffi::S32, 1> recv_token_indices,
+    ffi::Buffer<ffi::S32, 1> accepted_total_assignments,
+    ffi::Buffer<ffi::PRED, 2> is_token_in_rank,
+    ffi::Buffer<ffi::S32, 2> rdma_channel_prefix_matrix,
+    ffi::Buffer<ffi::S32, 1> recv_rdma_rank_prefix_sum,
+    ffi::Buffer<ffi::S32, 2> gbl_channel_prefix_matrix,
+    ffi::Buffer<ffi::S32, 1> recv_gbl_rank_prefix_sum,
+    ffi::Buffer<ffi::S32, 1> num_recv_tokens_buffer,
+    ffi::Buffer<ffi::S32, 1> num_recv_rdma_tokens_buffer,
+    int32_t recv_capacity_attr,
+    int32_t num_topk,
+    int32_t num_sms,
+    int32_t num_max_nvl_chunked_send_tokens,
+    int32_t num_max_nvl_chunked_recv_tokens,
+    int32_t num_max_rdma_chunked_send_tokens,
+    int32_t num_max_rdma_chunked_recv_tokens,
+    bool low_latency_mode,
+    ffi::Result<ffi::Buffer<ffi::BF16, 2>> grad_out_dispatch,
+    ffi::Result<ffi::Buffer<ffi::F32, 1>> grad_assignment_weights) {
+  try {
+    InternodeRuntimeManager& manager = InternodeRuntimeManager::Instance();
+    const int num_ranks = manager.NumGlobalRanks();
+    const int num_rdma_ranks = manager.ProcessCount();
+
+    const auto grad_dims = grad_combined_x.dimensions();
+    const auto dispatch_dims = out_dispatch.dimensions();
+    const auto assignment_weight_dims = assignment_weights.dimensions();
+    const auto recv_token_dims = recv_token_indices.dimensions();
+    const auto accepted_total_dims = accepted_total_assignments.dimensions();
+    const auto token_rank_dims = is_token_in_rank.dimensions();
+    const auto rdma_prefix_dims = rdma_channel_prefix_matrix.dimensions();
+    const auto rdma_sum_dims = recv_rdma_rank_prefix_sum.dimensions();
+    const auto gbl_prefix_dims = gbl_channel_prefix_matrix.dimensions();
+    const auto gbl_sum_dims = recv_gbl_rank_prefix_sum.dimensions();
+    if (grad_dims.size() != 2 || dispatch_dims.size() != 2 || assignment_weight_dims.size() != 1 ||
+        recv_token_dims.size() != 1 || accepted_total_dims.size() != 1 || token_rank_dims.size() != 2 ||
+        rdma_prefix_dims.size() != 2 || rdma_sum_dims.size() != 1 || gbl_prefix_dims.size() != 2 ||
+        gbl_sum_dims.size() != 1 || num_recv_tokens_buffer.dimensions().size() != 1 ||
+        num_recv_rdma_tokens_buffer.dimensions().size() != 1) {
+      return ffi::Error::InvalidArgument(
+          "DeepEP internode x-only fused local-collapse backward expects rank-1/2 tensors");
+    }
+    if (accepted_total_dims[0] != 1 || num_recv_tokens_buffer.dimensions()[0] != 1 ||
+        num_recv_rdma_tokens_buffer.dimensions()[0] != 1) {
+      return ffi::Error::InvalidArgument(
+          "DeepEP internode x-only fused local-collapse backward count buffers must have shape [1]");
+    }
+
+    const int num_tokens = static_cast<int>(grad_dims[0]);
+    const int hidden = static_cast<int>(grad_dims[1]);
+    const int total_assignments = static_cast<int>(dispatch_dims[0]);
+    const int recv_capacity = static_cast<int>(recv_capacity_attr);
+    if (recv_capacity <= 0) {
+      return ffi::Error::InvalidArgument(
+          "DeepEP internode x-only fused local-collapse backward recv_capacity must be positive");
+    }
+    if (hidden <= 0 || (hidden * static_cast<int>(ffi::ByteWidth(ffi::BF16))) % sizeof(int4) != 0) {
+      return ffi::Error::InvalidArgument(
+          "DeepEP internode x-only fused local-collapse backward requires hidden*element_size divisible by int4");
+    }
+    if (num_sms <= 0 || num_sms % 2 != 0) {
+      return ffi::Error::InvalidArgument(
+          "DeepEP internode x-only fused local-collapse backward num_sms must be positive and even");
+    }
+    if (num_topk < 0) {
+      return ffi::Error::InvalidArgument(
+          "DeepEP internode x-only fused local-collapse backward num_topk must be nonnegative");
+    }
+    if (num_max_nvl_chunked_send_tokens <= 0 || num_max_nvl_chunked_recv_tokens <= 0 ||
+        num_max_rdma_chunked_send_tokens <= 0 || num_max_rdma_chunked_recv_tokens <= 0) {
+      return ffi::Error::InvalidArgument(
+          "DeepEP internode x-only fused local-collapse backward chunk capacities must be positive");
+    }
+    const int num_channels = num_sms / 2;
+    if (dispatch_dims[1] != hidden || assignment_weight_dims[0] != total_assignments ||
+        recv_token_dims[0] != total_assignments || token_rank_dims[0] != num_tokens ||
+        token_rank_dims[1] != num_ranks || rdma_prefix_dims[0] != num_rdma_ranks ||
+        rdma_prefix_dims[1] != num_channels || rdma_sum_dims[0] != num_rdma_ranks ||
+        gbl_prefix_dims[0] != num_ranks || gbl_prefix_dims[1] != num_channels ||
+        gbl_sum_dims[0] != num_ranks) {
+      return ffi::Error::InvalidArgument(
+          "DeepEP internode x-only fused local-collapse backward tensor shapes are invalid");
+    }
+    if (grad_out_dispatch->dimensions().size() != 2 || grad_out_dispatch->dimensions()[0] != total_assignments ||
+        grad_out_dispatch->dimensions()[1] != hidden || grad_assignment_weights->dimensions().size() != 1 ||
+        grad_assignment_weights->dimensions()[0] != total_assignments) {
+      return ffi::Error::InvalidArgument(
+          "DeepEP internode x-only fused local-collapse backward output shapes are invalid");
+    }
+
+    const int num_recv_tokens = ReadDeviceScalarInt(
+        stream,
+        num_recv_tokens_buffer.typed_data(),
+        "cudaMemcpyAsync(read x-only fused local-collapse bwd num_recv_tokens)");
+    const int num_recv_rdma_tokens = ReadDeviceScalarInt(
+        stream,
+        num_recv_rdma_tokens_buffer.typed_data(),
+        "cudaMemcpyAsync(read x-only fused local-collapse bwd num_recv_rdma_tokens)");
+    if (num_recv_tokens < 0 || num_recv_tokens > recv_capacity || num_recv_rdma_tokens < 0) {
+      return ffi::Error::InvalidArgument(
+          "DeepEP internode x-only fused local-collapse backward receive counts are out of range");
+    }
+
+    ScopedCudaAsyncAllocation grad_recv_out;
+    grad_recv_out.stream = stream;
+    const size_t recv_bytes =
+        static_cast<size_t>(recv_capacity) * hidden * static_cast<size_t>(sizeof(nv_bfloat16));
+    ThrowOnCuda(
+        cudaMallocAsync(&grad_recv_out.ptr, recv_bytes, stream),
+        "cudaMallocAsync(x-only fused local-collapse bwd recv_out)");
+
+    deep_ep::Config config(
+        num_sms,
+        num_max_nvl_chunked_send_tokens,
+        num_max_nvl_chunked_recv_tokens,
+        num_max_rdma_chunked_send_tokens,
+        num_max_rdma_chunked_recv_tokens);
+    const int hidden_int4 = hidden * static_cast<int>(sizeof(nv_bfloat16)) / sizeof(int4);
+    DeviceRuntime& runtime = manager.RuntimeForCurrentDevice();
+    const int call_sequence = NextHostDispatchCallSequence(runtime);
+    LogHostDispatchStage(
+        runtime.rank,
+        call_sequence,
+        "internode_jax_before_x_only_local_collapse_bwd_cached_notify_dispatch",
+        num_tokens,
+        hidden,
+        /*num_experts=*/0,
+        /*num_topk=*/0,
+        num_recv_tokens,
+        num_recv_rdma_tokens,
+        num_channels,
+        recv_capacity);
+    deep_ep::internode::cached_notify(
+        hidden_int4,
+        /*num_scales=*/0,
+        /*num_topk_idx=*/0,
+        /*num_topk_weights=*/0,
+        num_ranks,
+        num_channels,
+        /*num_combined_tokens=*/0,
+        /*combined_rdma_head=*/nullptr,
+        /*rdma_channel_prefix_matrix=*/nullptr,
+        /*rdma_rank_prefix_sum=*/nullptr,
+        /*combined_nvl_head=*/nullptr,
+        manager.RdmaBufferPtr(),
+        config.num_max_rdma_chunked_recv_tokens,
+        runtime.buffer_ptrs_gpu,
+        config.num_max_nvl_chunked_recv_tokens,
+        runtime.barrier_signal_ptrs_gpu,
+        runtime.rank,
+        stream,
+        config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4), num_ranks),
+        manager.NumNvlBytes(),
+        /*is_cached_dispatch=*/true,
+        low_latency_mode);
+    ThrowOnCuda(cudaGetLastError(), "DeepEP internode x-only local-collapse backward cached_notify dispatch");
+    DebugSynchronizeStream(
+        stream,
+        "cudaStreamSynchronize(DeepEP internode x-only local-collapse backward cached_notify dispatch)");
+
+    LogHostDispatchStage(
+        runtime.rank,
+        call_sequence,
+        "internode_jax_before_x_only_local_collapse_bwd_cached_dispatch",
+        num_tokens,
+        hidden,
+        /*num_experts=*/0,
+        /*num_topk=*/0,
+        num_recv_tokens,
+        num_recv_rdma_tokens,
+        num_channels,
+        recv_capacity);
+    deep_ep::internode::dispatch(
+        reinterpret_cast<nv_bfloat16*>(grad_recv_out.ptr),
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        reinterpret_cast<const nv_bfloat16*>(grad_combined_x.typed_data()),
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        rdma_channel_prefix_matrix.typed_data(),
+        recv_rdma_rank_prefix_sum.typed_data(),
+        gbl_channel_prefix_matrix.typed_data(),
+        recv_gbl_rank_prefix_sum.typed_data(),
+        is_token_in_rank.typed_data(),
+        num_tokens,
+        hidden_int4,
+        /*num_scales=*/0,
+        /*num_topk=*/0,
+        /*num_experts=*/0,
+        /*scale_token_stride=*/0,
+        /*scale_hidden_stride=*/0,
+        manager.RdmaBufferPtr(),
+        config.num_max_rdma_chunked_send_tokens,
+        config.num_max_rdma_chunked_recv_tokens,
+        runtime.buffer_ptrs_gpu,
+        config.num_max_nvl_chunked_send_tokens,
+        config.num_max_nvl_chunked_recv_tokens,
+        runtime.rank,
+        num_ranks,
+        /*is_cached_dispatch=*/true,
+        stream,
+        num_channels,
+        low_latency_mode);
+    ThrowOnCuda(cudaGetLastError(), "DeepEP internode x-only local-collapse backward cached dispatch");
+    DebugSynchronizeStream(
+        stream,
+        "cudaStreamSynchronize(DeepEP internode x-only local-collapse backward cached dispatch)");
+
+    LaunchCollapseLocalAssignmentsBackward(
+        reinterpret_cast<const nv_bfloat16*>(grad_recv_out.ptr),
+        reinterpret_cast<const nv_bfloat16*>(out_dispatch.typed_data()),
+        reinterpret_cast<const nv_bfloat16*>(assignment_weights.typed_data()),
+        recv_token_indices.typed_data(),
+        accepted_total_assignments.typed_data(),
+        reinterpret_cast<nv_bfloat16*>(grad_out_dispatch->typed_data()),
+        grad_assignment_weights->typed_data(),
+        recv_capacity,
+        total_assignments,
+        hidden,
+        stream);
+    return ffi::Error::Success();
+  } catch (const std::exception& exc) {
+    return ffi::Error::Internal(exc.what());
+  }
+}
+
 ffi::Error DispatchInternodeCached(
     cudaStream_t stream,
     ffi::Buffer<ffi::BF16, 2> x,
@@ -5623,6 +5861,33 @@ auto CombineInternodeXOnlyWithLocalCollapseBinding() {
       .Attr<int32_t>("num_max_rdma_chunked_recv_tokens")
       .Attr<bool>("low_latency_mode")
       .Ret<ffi::Buffer<ffi::BF16, 2>>();
+}
+
+auto CombineInternodeXOnlyWithLocalCollapseBwdFusedBinding() {
+  return ffi::Ffi::Bind()
+      .Ctx<ffi::PlatformStream<cudaStream_t>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::BF16, 1>>()
+      .Arg<ffi::Buffer<ffi::S32, 1>>()
+      .Arg<ffi::Buffer<ffi::S32, 1>>()
+      .Arg<ffi::Buffer<ffi::PRED, 2>>()
+      .Arg<ffi::Buffer<ffi::S32, 2>>()
+      .Arg<ffi::Buffer<ffi::S32, 1>>()
+      .Arg<ffi::Buffer<ffi::S32, 2>>()
+      .Arg<ffi::Buffer<ffi::S32, 1>>()
+      .Arg<ffi::Buffer<ffi::S32, 1>>()
+      .Arg<ffi::Buffer<ffi::S32, 1>>()
+      .Attr<int32_t>("recv_capacity")
+      .Attr<int32_t>("num_topk")
+      .Attr<int32_t>("num_sms")
+      .Attr<int32_t>("num_max_nvl_chunked_send_tokens")
+      .Attr<int32_t>("num_max_nvl_chunked_recv_tokens")
+      .Attr<int32_t>("num_max_rdma_chunked_send_tokens")
+      .Attr<int32_t>("num_max_rdma_chunked_recv_tokens")
+      .Attr<bool>("low_latency_mode")
+      .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::F32, 1>>();
 }
 
 auto DispatchInternodeBwdFusedBinding() {
@@ -6684,6 +6949,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     levanter_deepep_combine_internode_x_only_with_local_collapse,
     CombineInternodeXOnlyWithLocalCollapse,
     CombineInternodeXOnlyWithLocalCollapseBinding());
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    levanter_deepep_combine_internode_x_only_with_local_collapse_bwd_fused,
+    CombineInternodeXOnlyWithLocalCollapseBwdFused,
+    CombineInternodeXOnlyWithLocalCollapseBwdFusedBinding());
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     levanter_deepep_dispatch_internode_bwd_fused,

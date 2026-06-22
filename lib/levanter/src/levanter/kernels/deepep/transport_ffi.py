@@ -56,6 +56,9 @@ _COMBINE_INTERNODE_TARGET = "levanter_deepep_combine_internode"
 _COMBINE_INTERNODE_X_ONLY_TARGET = "levanter_deepep_combine_internode_x_only"
 _COMBINE_INTERNODE_WITH_LOCAL_COLLAPSE_TARGET = "levanter_deepep_combine_internode_with_local_collapse"
 _COMBINE_INTERNODE_X_ONLY_WITH_LOCAL_COLLAPSE_TARGET = "levanter_deepep_combine_internode_x_only_with_local_collapse"
+_COMBINE_INTERNODE_X_ONLY_WITH_LOCAL_COLLAPSE_BWD_FUSED_TARGET = (
+    "levanter_deepep_combine_internode_x_only_with_local_collapse_bwd_fused"
+)
 _COLLAPSE_LOCAL_ASSIGNMENTS_INTERNODE_TARGET = "levanter_deepep_collapse_local_assignments_internode"
 _COLLAPSE_LOCAL_ASSIGNMENTS_INTERNODE_BWD_TARGET = "levanter_deepep_collapse_local_assignments_internode_bwd"
 _DISPATCH_INTERNODE_BWD_FUSED_TARGET = "levanter_deepep_dispatch_internode_bwd_fused"
@@ -1198,6 +1201,7 @@ def _register_internode_targets() -> None:
         _COMBINE_INTERNODE_X_ONLY_TARGET,
         _COMBINE_INTERNODE_WITH_LOCAL_COLLAPSE_TARGET,
         _COMBINE_INTERNODE_X_ONLY_WITH_LOCAL_COLLAPSE_TARGET,
+        _COMBINE_INTERNODE_X_ONLY_WITH_LOCAL_COLLAPSE_BWD_FUSED_TARGET,
         _COLLAPSE_LOCAL_ASSIGNMENTS_INTERNODE_TARGET,
         _COLLAPSE_LOCAL_ASSIGNMENTS_INTERNODE_BWD_TARGET,
         _DISPATCH_INTERNODE_BWD_FUSED_TARGET,
@@ -3507,6 +3511,89 @@ def _combine_internode_x_only_with_local_collapse_impl(
     return combined
 
 
+def _combine_internode_x_only_with_local_collapse_bwd_fused_impl(
+    grad_combined_x: jax.Array,
+    out_dispatch: jax.Array,
+    assignment_weights: jax.Array,
+    recv_token_indices: jax.Array,
+    local_group_sizes: jax.Array,
+    is_token_in_rank: jax.Array,
+    rdma_channel_prefix_matrix: jax.Array,
+    recv_rdma_rank_prefix_sum: jax.Array,
+    gbl_channel_prefix_matrix: jax.Array,
+    recv_gbl_rank_prefix_sum: jax.Array,
+    num_recv_tokens: jax.Array,
+    num_recv_rdma_tokens: jax.Array,
+    *,
+    recv_capacity: int,
+    num_topk: int,
+    dispatch_config: InternodeConfig | None = None,
+) -> tuple[jax.Array, jax.Array]:
+    """Backward for x-only local-collapse combine without an XLA-visible recv buffer."""
+    _register_internode_targets()
+    config = dispatch_config or _default_internode_dispatch_config()
+    if recv_capacity <= 0:
+        raise ValueError(f"recv_capacity must be positive, got {recv_capacity}")
+    if num_topk < 0:
+        raise ValueError(f"num_topk must be nonnegative, got {num_topk}")
+    if config.num_sms <= 0 or config.num_sms % 2 != 0:
+        raise ValueError(
+            f"internode x-only fused-collapse backward num_sms must be positive even, got {config.num_sms}"
+        )
+
+    grad_combined_x_bf16 = jnp.asarray(grad_combined_x, dtype=jnp.bfloat16)
+    out_dispatch_bf16 = jnp.asarray(out_dispatch, dtype=jnp.bfloat16)
+    assignment_weights_bf16 = jnp.asarray(assignment_weights, dtype=jnp.bfloat16)
+    recv_token_indices_i32 = jnp.asarray(recv_token_indices, dtype=jnp.int32)
+    local_group_sizes_i32 = jnp.asarray(local_group_sizes, dtype=jnp.int32)
+    accepted_total_i32 = jnp.reshape(jnp.sum(local_group_sizes_i32, dtype=jnp.int32), (1,))
+    is_token_in_rank_bool = jnp.asarray(is_token_in_rank, dtype=jnp.bool_)
+    rdma_channel_prefix_matrix_i32 = jnp.asarray(rdma_channel_prefix_matrix, dtype=jnp.int32)
+    recv_rdma_rank_prefix_sum_i32 = jnp.asarray(recv_rdma_rank_prefix_sum, dtype=jnp.int32)
+    gbl_channel_prefix_matrix_i32 = jnp.asarray(gbl_channel_prefix_matrix, dtype=jnp.int32)
+    recv_gbl_rank_prefix_sum_i32 = jnp.asarray(recv_gbl_rank_prefix_sum, dtype=jnp.int32)
+    num_recv_tokens_i32 = jnp.asarray(num_recv_tokens, dtype=jnp.int32)
+    num_recv_rdma_tokens_i32 = jnp.asarray(num_recv_rdma_tokens, dtype=jnp.int32)
+
+    if num_recv_tokens_i32.ndim == 0:
+        num_recv_tokens_i32 = jnp.reshape(num_recv_tokens_i32, (1,))
+    if num_recv_rdma_tokens_i32.ndim == 0:
+        num_recv_rdma_tokens_i32 = jnp.reshape(num_recv_rdma_tokens_i32, (1,))
+
+    result_shape_dtypes = (
+        jax.ShapeDtypeStruct(out_dispatch_bf16.shape, out_dispatch_bf16.dtype),
+        jax.ShapeDtypeStruct(assignment_weights_bf16.shape, jnp.float32),
+    )
+    grad_out_dispatch, grad_assignment_weights = jax.ffi.ffi_call(
+        _COMBINE_INTERNODE_X_ONLY_WITH_LOCAL_COLLAPSE_BWD_FUSED_TARGET,
+        result_shape_dtypes,
+        has_side_effect=True,
+        vmap_method="broadcast_all",
+    )(
+        grad_combined_x_bf16,
+        out_dispatch_bf16,
+        assignment_weights_bf16,
+        recv_token_indices_i32,
+        accepted_total_i32,
+        is_token_in_rank_bool,
+        rdma_channel_prefix_matrix_i32,
+        recv_rdma_rank_prefix_sum_i32,
+        gbl_channel_prefix_matrix_i32,
+        recv_gbl_rank_prefix_sum_i32,
+        num_recv_tokens_i32,
+        num_recv_rdma_tokens_i32,
+        recv_capacity=np.int32(recv_capacity),
+        num_topk=np.int32(num_topk),
+        num_sms=np.int32(config.num_sms),
+        num_max_nvl_chunked_send_tokens=np.int32(config.num_max_nvl_chunked_send_tokens),
+        num_max_nvl_chunked_recv_tokens=np.int32(config.num_max_nvl_chunked_recv_tokens),
+        num_max_rdma_chunked_send_tokens=np.int32(config.num_max_rdma_chunked_send_tokens),
+        num_max_rdma_chunked_recv_tokens=np.int32(config.num_max_rdma_chunked_recv_tokens),
+        low_latency_mode=_internode_low_latency_mode(),
+    )
+    return grad_out_dispatch, grad_assignment_weights
+
+
 @partial(jax.custom_vjp, nondiff_argnums=(17, 18))
 def _combine_internode_x_only_with_local_collapse_vjp(
     out_dispatch: jax.Array,
@@ -3635,8 +3722,12 @@ def _combine_internode_x_only_with_local_collapse_vjp_bwd(
         dtype=out_dispatch.dtype,
         shape=(is_token_in_rank.shape[0], out_dispatch.shape[1]),
     )
-    grad_recv_out = _dispatch_internode_cached_impl(
+    grad_out_dispatch, grad_assignment_weights = _combine_internode_x_only_with_local_collapse_bwd_fused_impl(
         grad_combined_x,
+        out_dispatch,
+        assignment_weights,
+        recv_token_indices,
+        local_group_sizes,
         is_token_in_rank,
         rdma_channel_prefix_matrix,
         recv_rdma_rank_prefix_sum,
@@ -3644,16 +3735,9 @@ def _combine_internode_x_only_with_local_collapse_vjp_bwd(
         recv_gbl_rank_prefix_sum,
         num_recv_tokens,
         num_recv_rdma_tokens,
-        max_recv_tokens=recv_capacity,
+        recv_capacity=recv_capacity,
         num_topk=num_topk,
         dispatch_config=dispatch_config,
-    )
-    grad_out_dispatch, grad_assignment_weights = _collapse_local_assignments_internode_bwd_impl(
-        grad_recv_out,
-        out_dispatch,
-        assignment_weights,
-        recv_token_indices,
-        local_group_sizes,
     )
     return (
         grad_out_dispatch,
