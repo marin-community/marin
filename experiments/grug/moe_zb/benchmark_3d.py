@@ -115,7 +115,10 @@ def main() -> int:
     # Keep 2-way PP and 2-way EP; spend the rest on FSDP so all three axes stay >1
     # on every slice (v6e-8 -> 2x2x2, v6e-16 -> 2x4x2, v6e-32 -> 2x8x2). 2x2x2 fits
     # one v6e-8 host, so the full PP x FSDP x EP composition runs without any DCN.
-    num_stages, num_expert = 2, 2
+    # MOE_ZB_PP / MOE_ZB_EP override stage / expert counts (data fills the rest) so
+    # the axis composition can be isolated on hardware.
+    num_stages = int(os.environ.get("MOE_ZB_PP", "2"))
+    num_expert = int(os.environ.get("MOE_ZB_EP", "2"))
     num_data = max(1, jax.device_count() // (num_stages * num_expert))
     if on_tpu:
         num_layers, hidden_dim, num_experts = 8, 1024, 8
