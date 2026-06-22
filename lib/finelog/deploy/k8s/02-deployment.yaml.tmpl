@@ -44,6 +44,17 @@ spec:
             - name: rpc
               containerPort: {{ port }}
               protocol: TCP
+          # On iris-managed clusters the controller mints an iris-task-env Secret
+          # holding the object-store credentials (on CoreWeave: the R2 AWS_*
+          # vars + AWS_ENDPOINT_URL). Project it so an s3:// remote_log_dir can
+          # authenticate. optional=true keeps the pod schedulable on clusters
+          # without the Secret (e.g. a gs:// or local-only deployment), where
+          # GCS uses workload identity instead. The explicit env below wins on
+          # any key collision.
+          envFrom:
+            - secretRef:
+                name: iris-task-env
+                optional: true
           env:
             - name: FINELOG_PORT
               value: "{{ port }}"

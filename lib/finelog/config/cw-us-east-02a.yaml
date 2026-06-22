@@ -1,0 +1,24 @@
+# finelog log server for the CoreWeave US-EAST-02A cluster (cw-us-east-02a).
+#
+# Deployed as an in-cluster k8s Deployment + ClusterIP Service in the `iris`
+# namespace, the same namespace as the iris controller. iris references it from
+# its cluster config via `log_server_config: cw-us-east-02a`, which resolves to
+# the endpoint `k8s://finelog-cw-use02a.iris` ->
+# finelog-cw-use02a.iris.svc.cluster.local:10001.
+#
+# Archive: segments offload to Cloudflare R2 (s3://), the same object store the
+# cluster uses for controller state. The pod authenticates with the R2 creds the
+# controller injects via the iris-task-env Secret (see deploy/k8s/02-deployment).
+#
+# Deploy: export KUBECONFIG=~/.kube/coreweave-iris-gpu, then
+#   uv run finelog deploy up cw-us-east-02a
+name: finelog-cw-use02a
+port: 10001
+image: ghcr.io/marin-community/finelog:latest
+remote_log_dir: s3://marin-na/finelog/cw-us-east-02a
+deployment:
+  k8s:
+    namespace: iris
+    # storage_class omitted -> the cluster's default StorageClass backs the PVC.
+    # Segments offload to R2, so the local cache PVC stays small.
+    storage_gb: 50
