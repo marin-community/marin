@@ -12,6 +12,7 @@ Branch checkpoint:
 ```text
 branch=codex/deepep-remat-profile-variants
 guard_commit=31599501c [grug] Guard DeepEP remat launcher path
+archive_bootstrap_commit=99ba0edcf [grug] Bootstrap DeepEP from source archive
 ```
 
 The guard commit skips outer block-level checkpointing when the MoE
@@ -371,3 +372,47 @@ Interpretation: May353 is not evidence for or against FFI assignment gradients.
 Before retrying this control, remove the live GitHub clone dependency by using
 an existing `DEEPEP_SRC_ROOT`, a pre-staged DeepEP source tarball/prefix, or an
 image with the validated DeepEP checkout baked in.
+
+May354 retried that FFI-assignment control with a pre-staged source archive:
+
+```text
+script=scratch/launch_may354_deepep_ep16_savemoe_l26_b32_ffiassign_archive_n2_throughput.sh
+source_archive=s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/deepep-source/DeepEP-7febc6e25660af0f54d95dd781ecdcd62265ecca.tgz
+parent=/dlwh/iris-run-job-20260622-204910
+child=/dlwh/iris-run-job-20260622-204910/grug-train-MAY354-DEEPEP-EP16-SAVEMOE-FFIASSIGN-ARCHIVE-FIXEDFFICOLLAPSE-L26-B32-N2-20260622-2049
+wandb=marin-community/marin_moe/MAY354-DEEPEP-EP16-SAVEMOE-FFIASSIGN-ARCHIVE-FIXEDFFICOLLAPSE-L26-B32-N2-20260622-2049
+shape=2 H100x8 nodes, EP16, global batch 32, 2 sequences/device
+moe=deepep_internode
+remat=save_moe
+profiler=disabled
+collapse=ffi
+assignment_gradient=ffi
+```
+
+Result:
+
+- The archive bootstrap worked on both tasks:
+
+```text
+Using DeepEP source archive s3://marin-na/tmp/ttl=7d/experiments/grug-moe-cw/deepep-source/DeepEP-7febc6e25660af0f54d95dd781ecdcd62265ecca.tgz for /tmp/marin-deepep/DeepEP
+```
+
+- May354 reached W&B, initialized all 16 process-per-GPU ranks, confirmed the
+  EP16 mesh, and dispatched step 0.
+- It produced no W&B metric rows. The first attempt died with JAX coordination
+  connection-refused noise after one worker group exited. The automatic retry
+  reached the model path again, then failed while waiting for `train/loss` with:
+
+```text
+DEEPEP_INTERNODE_COUNTER_TIMEOUT {"rank":4,"call_sequence":-1,"num_recv_tokens":-1,"num_rdma_recv_tokens":-1,"num_local_experts":16,"expert_counters":[-1,...,-1]}
+jax.errors.JaxRuntimeError: INTERNAL: DeepEP internode JAX dispatch timed out waiting for recv counters
+```
+
+- The retrying child and parent were stopped after the reproduced model-path
+  failure to avoid retry churn.
+
+Interpretation: removing the live GitHub dependency was necessary and is now
+working, but FFI assignment-gradient does not rescue the EP16 B32
+`save_moe`/FFI-collapse path. The failure class is back to the internode DeepEP
+recv-counter timeout seen in May348, not a source-bootstrap failure and not the
+JAX-assignment NCCL/CUDA OOM from May351/May352.
