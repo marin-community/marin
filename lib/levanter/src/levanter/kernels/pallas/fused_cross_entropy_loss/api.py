@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from functools import lru_cache
 import hashlib
 import logging
 import time
-from typing import Literal, Optional, TypeAlias, cast, overload
+from typing import Literal, NamedTuple, Optional, TypeAlias, cast, overload
 import warnings
 
 import jax
@@ -37,6 +38,23 @@ Reduction: TypeAlias = Literal["sum", "mean"] | None
 
 KernelOutput: TypeAlias = tuple[jax.Array, jax.Array] | tuple[jax.Array, jax.Array, jax.Array]
 ArrayImpl = Callable[..., KernelOutput]
+
+
+@dataclass(frozen=True)
+class _FusedCrossEntropyCallOptions:
+    block_size: Optional[int]
+    block_sizes: Optional[BlockSizes]
+    dtype: Optional[jnp.dtype]
+    logit_soft_cap: Optional[float]
+    precision: jax.lax.PrecisionLike
+    implementation: Implementation | Sequence[Implementation | ArrayImpl] | None
+    return_argmax: bool
+
+
+class _FusedCrossEntropyImplOutput(NamedTuple):
+    loss: jax.Array
+    logsumexp: jax.Array
+    argmax: jax.Array | None
 
 
 IMPLEMENTATIONS: dict[str, ArrayImpl] = {
@@ -622,29 +640,25 @@ def _call_fused_cross_entropy_impls(
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
     *,
-    block_size: Optional[int],
-    block_sizes: Optional[BlockSizes],
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
-    precision: jax.lax.PrecisionLike,
-    implementation: Implementation | Sequence[Implementation | ArrayImpl] | None,
-    return_argmax: bool,
-) -> tuple[jax.Array, jax.Array, jax.Array | None]:
-    explicit_block_sizes = block_size is not None or block_sizes is not None
+    options: _FusedCrossEntropyCallOptions,
+) -> _FusedCrossEntropyImplOutput:
+    explicit_block_sizes = options.block_size is not None or options.block_sizes is not None
     resolved_block_sizes = (
-        _resolve_block_sizes(block_size, block_sizes, x=x, w=w, dtype=dtype) if explicit_block_sizes else None
+        _resolve_block_sizes(options.block_size, options.block_sizes, x=x, w=w, dtype=options.dtype)
+        if explicit_block_sizes
+        else None
     )
 
-    if implementation is None:
+    if options.implementation is None:
         impls = cast(Sequence[Implementation | ArrayImpl], _default_implementations())
         explicit = False
         user_requested_impls = False
-    elif isinstance(implementation, Sequence) and not isinstance(implementation, (str, bytes)):
-        impls = cast(Sequence[Implementation | ArrayImpl], implementation)
+    elif isinstance(options.implementation, Sequence) and not isinstance(options.implementation, (str, bytes)):
+        impls = cast(Sequence[Implementation | ArrayImpl], options.implementation)
         explicit = len(impls) == 1
         user_requested_impls = True
     else:
-        impls = (cast(Implementation, implementation),)
+        impls = (cast(Implementation, options.implementation),)
         explicit = True
         user_requested_impls = True
 
@@ -660,7 +674,7 @@ def _call_fused_cross_entropy_impls(
                 x.shape[0],
                 x.shape[1],
                 w.shape[1],
-                dtype=dtype,
+                dtype=options.dtype,
                 x_dtype=x.dtype,
                 w_dtype=w.dtype,
             )
@@ -678,10 +692,10 @@ def _call_fused_cross_entropy_impls(
                         labels=labels,
                         w=w,
                         inferred=inferred,
-                        dtype=dtype,
-                        logit_soft_cap=logit_soft_cap,
-                        precision=precision,
-                        return_argmax=return_argmax,
+                        dtype=options.dtype,
+                        logit_soft_cap=options.logit_soft_cap,
+                        precision=options.precision,
+                        return_argmax=options.return_argmax,
                     )
                 except Exception as exc:
                     if explicit:
@@ -694,7 +708,7 @@ def _call_fused_cross_entropy_impls(
                 x.shape[0],
                 x.shape[1],
                 w.shape[1],
-                dtype=dtype,
+                dtype=options.dtype,
                 x_dtype=x.dtype,
                 w_dtype=w.dtype,
             )
@@ -702,11 +716,11 @@ def _call_fused_cross_entropy_impls(
             try:
                 kwargs = dict(
                     block_sizes=block_sizes_for_impl,
-                    dtype=dtype,
-                    logit_soft_cap=logit_soft_cap,
-                    precision=precision,
+                    dtype=options.dtype,
+                    logit_soft_cap=options.logit_soft_cap,
+                    precision=options.precision,
                 )
-                if return_argmax:
+                if options.return_argmax:
                     kwargs["return_argmax"] = True
                 result = impl_for_call(x, labels, w, **kwargs)
             except PallasUnsupportedError as e:
@@ -728,11 +742,11 @@ def _call_fused_cross_entropy_impls(
             try:
                 kwargs = dict(
                     block_sizes=block_sizes_for_impl,
-                    dtype=dtype,
-                    logit_soft_cap=logit_soft_cap,
-                    precision=precision,
+                    dtype=options.dtype,
+                    logit_soft_cap=options.logit_soft_cap,
+                    precision=options.precision,
                 )
-                if return_argmax:
+                if options.return_argmax:
                     kwargs["return_argmax"] = True
                 result = fn(x, labels, w, **kwargs)
             except PallasUnsupportedError as e:
@@ -776,9 +790,9 @@ def _call_fused_cross_entropy_impls(
         else:
             raise ValueError(f"Implementation returned unexpected output tuple length: {len(result)}")
 
-        if return_argmax and argmax is None:
+        if options.return_argmax and argmax is None:
             raise ValueError("Implementation does not support return_argmax=True")
-        return loss, lse, argmax
+        return _FusedCrossEntropyImplOutput(loss=loss, logsumexp=lse, argmax=argmax)
 
     raise ExceptionGroup("all implementations failed", errors)
 
@@ -791,35 +805,19 @@ def _fused_cross_entropy_loss_and_logsumexp_penalty_local(
     reduction: Reduction,
     weight: Optional[Float[Array, "B"]],
     logsumexp_weight: Optional[float],
-    block_size: Optional[int],
-    block_sizes: Optional[BlockSizes],
-    dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
-    precision: jax.lax.PrecisionLike,
-    implementation: Implementation | Sequence[Implementation | ArrayImpl] | None,
-    return_argmax: bool,
+    options: _FusedCrossEntropyCallOptions,
     vocab_axis_names: tuple[str, ...] = (),
     reduction_axis_names: tuple[str, ...] = (),
 ) -> jax.Array | tuple[jax.Array, jax.Array]:
     if len(vocab_axis_names) == 0:
-        loss, lse, argmax = _call_fused_cross_entropy_impls(
-            x,
-            labels,
-            w,
-            block_size=block_size,
-            block_sizes=block_sizes,
-            dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-            implementation=implementation,
-            return_argmax=return_argmax,
-        )
+        output = _call_fused_cross_entropy_impls(x, labels, w, options=options)
+        loss = output.loss
         if logsumexp_weight is not None and logsumexp_weight != 0.0:
-            loss = loss + logsumexp_weight * (lse**2)
+            loss = loss + logsumexp_weight * (output.logsumexp**2)
         reduced_loss = _apply_reduction(loss, reduction, weight)
-        if return_argmax:
-            assert argmax is not None
-            return reduced_loss, argmax
+        if options.return_argmax:
+            assert output.argmax is not None
+            return reduced_loss, output.argmax
         return reduced_loss
 
     local_vocab_size = w.shape[1]
@@ -827,18 +825,9 @@ def _fused_cross_entropy_loss_and_logsumexp_penalty_local(
     local_labels = labels - vocab_start
     in_vocab_shard = (0 <= local_labels) & (local_labels < local_vocab_size)
     safe_labels = jnp.clip(local_labels, 0, local_vocab_size - 1)
-    local_loss, local_lse, local_argmax = _call_fused_cross_entropy_impls(
-        x,
-        safe_labels,
-        w,
-        block_size=block_size,
-        block_sizes=block_sizes,
-        dtype=dtype,
-        logit_soft_cap=logit_soft_cap,
-        precision=precision,
-        implementation=implementation,
-        return_argmax=return_argmax,
-    )
+    local_output = _call_fused_cross_entropy_impls(x, safe_labels, w, options=options)
+    local_loss = local_output.loss
+    local_lse = local_output.logsumexp
     local_label_logit = local_lse - local_loss
     global_lse = _logsumexp_over_axes(local_lse, vocab_axis_names)
     global_label_logit = _psum_over_axes(jnp.where(in_vocab_shard, local_label_logit, 0.0), vocab_axis_names)
@@ -847,21 +836,21 @@ def _fused_cross_entropy_loss_and_logsumexp_penalty_local(
         loss = loss + logsumexp_weight * (global_lse**2)
 
     reduced_loss = _apply_reduction_sharded(loss, reduction, weight, reduction_axis_names)
-    if not return_argmax:
+    if not options.return_argmax:
         return reduced_loss
 
-    assert local_argmax is not None
+    assert local_output.argmax is not None
     local_argmax_logit = jnp.einsum(
         "bh,bh->b",
         x,
-        jnp.swapaxes(w[:, local_argmax], 0, 1),
-        precision=precision,
+        jnp.swapaxes(w[:, local_output.argmax], 0, 1),
+        precision=options.precision,
     )
     global_argmax_logit = _pmax_over_axes(local_argmax_logit, vocab_axis_names)
     global_argmax = _pmin_over_axes(
         jnp.where(
             local_argmax_logit == global_argmax_logit,
-            local_argmax + vocab_start,
+            local_output.argmax + vocab_start,
             jnp.iinfo(jnp.int32).max,
         ),
         vocab_axis_names,
@@ -945,6 +934,15 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         If return_argmax=True: tuple of (loss, argmax_ids[B]).
     """
     _validate_inputs(x, labels, w)
+    options = _FusedCrossEntropyCallOptions(
+        block_size=block_size,
+        block_sizes=block_sizes,
+        dtype=dtype,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+        implementation=implementation,
+        return_argmax=return_argmax,
+    )
     vocab_axis_names = _vocab_axis_names_from_sharding(w)
     mesh = _mesh_from_sharding(w)
     if len(vocab_axis_names) == 0 or mesh is None:
@@ -955,13 +953,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             reduction=reduction,
             weight=weight,
             logsumexp_weight=logsumexp_weight,
-            block_size=block_size,
-            block_sizes=block_sizes,
-            dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-            implementation=implementation,
-            return_argmax=return_argmax,
+            options=options,
         )
 
     x_spec = _partition_spec_for_array(x)
@@ -978,26 +970,28 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     else:
         out_specs = jax.sharding.PartitionSpec() if reduction is not None else labels_spec
 
+    def mapped_local(
+        x_shard: jax.Array,
+        labels_shard: jax.Array,
+        w_shard: jax.Array,
+        weight_shard: jax.Array | None,
+    ):
+        return _fused_cross_entropy_loss_and_logsumexp_penalty_local(
+            x_shard,
+            labels_shard,
+            w_shard,
+            reduction=reduction,
+            weight=weight_shard,
+            logsumexp_weight=logsumexp_weight,
+            options=options,
+            vocab_axis_names=vocab_axis_names,
+            reduction_axis_names=reduction_axis_names,
+        )
+
     if weight is None:
 
         def mapped(x_shard: jax.Array, labels_shard: jax.Array, w_shard: jax.Array):
-            return _fused_cross_entropy_loss_and_logsumexp_penalty_local(
-                x_shard,
-                labels_shard,
-                w_shard,
-                reduction=reduction,
-                weight=None,
-                logsumexp_weight=logsumexp_weight,
-                block_size=block_size,
-                block_sizes=block_sizes,
-                dtype=dtype,
-                logit_soft_cap=logit_soft_cap,
-                precision=precision,
-                implementation=implementation,
-                return_argmax=return_argmax,
-                vocab_axis_names=vocab_axis_names,
-                reduction_axis_names=reduction_axis_names,
-            )
+            return mapped_local(x_shard, labels_shard, w_shard, None)
 
         return jax.shard_map(
             mapped,
@@ -1015,23 +1009,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         w_shard: jax.Array,
         weight_shard: jax.Array,
     ):
-        return _fused_cross_entropy_loss_and_logsumexp_penalty_local(
-            x_shard,
-            labels_shard,
-            w_shard,
-            reduction=reduction,
-            weight=weight_shard,
-            logsumexp_weight=logsumexp_weight,
-            block_size=block_size,
-            block_sizes=block_sizes,
-            dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-            implementation=implementation,
-            return_argmax=return_argmax,
-            vocab_axis_names=vocab_axis_names,
-            reduction_axis_names=reduction_axis_names,
-        )
+        return mapped_local(x_shard, labels_shard, w_shard, weight_shard)
 
     return jax.shard_map(
         mapped_with_weight,
