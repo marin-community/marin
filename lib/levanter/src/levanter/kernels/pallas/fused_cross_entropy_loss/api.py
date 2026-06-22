@@ -510,82 +510,126 @@ def _apply_reduction(loss: jax.Array, reduction: Reduction, weight: Optional[jax
     raise ValueError(f"Unsupported reduction: {reduction}")
 
 
-@overload
-def fused_cross_entropy_loss_and_logsumexp_penalty(
+def _axis_names_from_spec(axis_spec) -> tuple[str, ...]:
+    if axis_spec is None:
+        return ()
+    if isinstance(axis_spec, tuple):
+        return tuple(str(name) for name in axis_spec)
+    return (str(axis_spec),)
+
+
+def _axis_names_from_partition_spec(spec: jax.sharding.PartitionSpec) -> tuple[str, ...]:
+    axis_names: list[str] = []
+    for axis_spec in spec:
+        axis_names.extend(_axis_names_from_spec(axis_spec))
+    return tuple(axis_names)
+
+
+def _psum_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
+    if len(axis_names) == 0:
+        return x
+    if len(axis_names) == 1:
+        return jax.lax.psum(x, axis_names[0])
+    return jax.lax.psum(x, axis_names)
+
+
+def _pmax_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
+    if len(axis_names) == 0:
+        return x
+    if len(axis_names) == 1:
+        return jax.lax.pmax(x, axis_names[0])
+    return jax.lax.pmax(x, axis_names)
+
+
+def _pmin_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
+    if len(axis_names) == 0:
+        return x
+    if len(axis_names) == 1:
+        return jax.lax.pmin(x, axis_names[0])
+    return jax.lax.pmin(x, axis_names)
+
+
+def _axis_index(axis_names: tuple[str, ...]) -> jax.Array:
+    if len(axis_names) == 1:
+        return jax.lax.axis_index(axis_names[0])
+    return jax.lax.axis_index(axis_names)
+
+
+def _logsumexp_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
+    if len(axis_names) == 0:
+        return x
+    x_max = _pmax_over_axes(jax.lax.stop_gradient(x), axis_names)
+    return x_max + jnp.log(_psum_over_axes(jnp.exp(x - x_max), axis_names))
+
+
+def _partition_spec_for_array(x: jax.Array) -> jax.sharding.PartitionSpec:
+    sharding = getattr(x, "sharding", None)
+    spec = getattr(sharding, "spec", None)
+    if spec is not None:
+        return spec
+    sharding = getattr(jax.typeof(x), "sharding", None)
+    spec = getattr(sharding, "spec", None)
+    if spec is not None:
+        return spec
+    return jax.sharding.PartitionSpec(*(None for _ in range(x.ndim)))
+
+
+def _vocab_axis_names_from_sharding(w: jax.Array) -> tuple[str, ...]:
+    spec = _partition_spec_for_array(w)
+    if len(spec) < 2:
+        return ()
+    return _axis_names_from_spec(spec[1])
+
+
+def _mesh_from_sharding(x: jax.Array) -> jax.sharding.Mesh | None:
+    sharding = getattr(x, "sharding", None)
+    mesh = getattr(sharding, "mesh", None)
+    if mesh is None or getattr(mesh, "empty", False):
+        sharding = getattr(jax.typeof(x), "sharding", None)
+        mesh = getattr(sharding, "mesh", None)
+    if mesh is None or getattr(mesh, "empty", False):
+        return None
+    return mesh
+
+
+def _apply_reduction_sharded(
+    loss: jax.Array,
+    reduction: Reduction,
+    weight: Optional[jax.Array],
+    reduction_axis_names: tuple[str, ...],
+) -> jax.Array:
+    if weight is not None:
+        weight = weight.astype(loss.dtype)
+        loss = loss * weight
+
+    if reduction is None:
+        return loss
+    if reduction == "sum":
+        return _psum_over_axes(jnp.sum(loss), reduction_axis_names)
+    if reduction == "mean":
+        total = _psum_over_axes(jnp.sum(loss), reduction_axis_names)
+        if weight is None:
+            count = jnp.asarray(loss.size, dtype=loss.dtype)
+            denom = _psum_over_axes(count, reduction_axis_names)
+        else:
+            denom = _psum_over_axes(jnp.sum(weight), reduction_axis_names)
+        return jnp.where(denom != 0, total / denom, jnp.zeros_like(denom))
+    raise ValueError(f"Unsupported reduction: {reduction}")
+
+
+def _call_fused_cross_entropy_impls(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
     *,
-    reduction: Reduction = "mean",
-    weight: Optional[Float[Array, "B"]] = None,
-    logsumexp_weight: Optional[float] = 0.0,
-    block_size: Optional[int] = None,
-    block_sizes: Optional[BlockSizes] = None,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
-    precision: jax.lax.PrecisionLike = None,
-    implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
-    return_argmax: Literal[False] = False,
-) -> jax.Array: ...
-
-
-@overload
-def fused_cross_entropy_loss_and_logsumexp_penalty(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
-    *,
-    reduction: Reduction = "mean",
-    weight: Optional[Float[Array, "B"]] = None,
-    logsumexp_weight: Optional[float] = 0.0,
-    block_size: Optional[int] = None,
-    block_sizes: Optional[BlockSizes] = None,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
-    precision: jax.lax.PrecisionLike = None,
-    implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
-    return_argmax: Literal[True] = True,
-) -> tuple[jax.Array, jax.Array]: ...
-
-
-def fused_cross_entropy_loss_and_logsumexp_penalty(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
-    *,
-    reduction: Reduction = "mean",
-    weight: Optional[Float[Array, "B"]] = None,
-    logsumexp_weight: Optional[float] = 0.0,
-    block_size: Optional[int] = None,
-    block_sizes: Optional[BlockSizes] = None,
-    dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
-    precision: jax.lax.PrecisionLike = None,
-    implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
-    return_argmax: bool = False,
-) -> jax.Array | tuple[jax.Array, jax.Array]:
-    """Fused cross-entropy + logsumexp penalty on raw arrays.
-
-    Args:
-        x: [B, H] input activations.
-        labels: [B] integer labels.
-        w: [H, V] projection weights.
-        reduction: "sum", "mean", or None to return per-example loss.
-        weight: Optional per-example weights/mask, broadcastable to [B].
-        logsumexp_weight: Weight for the logsumexp (z-loss) penalty.
-        block_size: Optional convenience for setting block_sizes.v_block_size.
-        block_sizes: Block size configuration for the kernel.
-        dtype: Optional dtype for logits/softmax computations.
-        logit_soft_cap: Optional tanh soft cap for logits.
-        precision: Optional matmul precision override for XLA/reference paths.
-        implementation: Backend selector or override implementation list.
-        return_argmax: Whether to additionally return per-example argmax ids.
-
-    Returns:
-        If return_argmax=False: reduced loss (scalar) or per-example loss [B] if reduction is None.
-        If return_argmax=True: tuple of (loss, argmax_ids[B]).
-    """
-    _validate_inputs(x, labels, w)
+    block_size: Optional[int],
+    block_sizes: Optional[BlockSizes],
+    dtype: Optional[jnp.dtype],
+    logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
+    implementation: Implementation | Sequence[Implementation | ArrayImpl] | None,
+    return_argmax: bool,
+) -> tuple[jax.Array, jax.Array, jax.Array | None]:
     explicit_block_sizes = block_size is not None or block_sizes is not None
     resolved_block_sizes = (
         _resolve_block_sizes(block_size, block_sizes, x=x, w=w, dtype=dtype) if explicit_block_sizes else None
@@ -734,7 +778,42 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
 
         if return_argmax and argmax is None:
             raise ValueError("Implementation does not support return_argmax=True")
+        return loss, lse, argmax
 
+    raise ExceptionGroup("all implementations failed", errors)
+
+
+def _fused_cross_entropy_loss_and_logsumexp_penalty_local(
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    w: Float[Array, "H V"],
+    *,
+    reduction: Reduction,
+    weight: Optional[Float[Array, "B"]],
+    logsumexp_weight: Optional[float],
+    block_size: Optional[int],
+    block_sizes: Optional[BlockSizes],
+    dtype: Optional[jnp.dtype],
+    logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
+    implementation: Implementation | Sequence[Implementation | ArrayImpl] | None,
+    return_argmax: bool,
+    vocab_axis_names: tuple[str, ...] = (),
+    reduction_axis_names: tuple[str, ...] = (),
+) -> jax.Array | tuple[jax.Array, jax.Array]:
+    if len(vocab_axis_names) == 0:
+        loss, lse, argmax = _call_fused_cross_entropy_impls(
+            x,
+            labels,
+            w,
+            block_size=block_size,
+            block_sizes=block_sizes,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+            implementation=implementation,
+            return_argmax=return_argmax,
+        )
         if logsumexp_weight is not None and logsumexp_weight != 0.0:
             loss = loss + logsumexp_weight * (lse**2)
         reduced_loss = _apply_reduction(loss, reduction, weight)
@@ -743,7 +822,224 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             return reduced_loss, argmax
         return reduced_loss
 
-    raise ExceptionGroup("all implementations failed", errors)
+    local_vocab_size = w.shape[1]
+    vocab_start = _axis_index(vocab_axis_names) * local_vocab_size
+    local_labels = labels - vocab_start
+    in_vocab_shard = (0 <= local_labels) & (local_labels < local_vocab_size)
+    safe_labels = jnp.clip(local_labels, 0, local_vocab_size - 1)
+    local_loss, local_lse, local_argmax = _call_fused_cross_entropy_impls(
+        x,
+        safe_labels,
+        w,
+        block_size=block_size,
+        block_sizes=block_sizes,
+        dtype=dtype,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+        implementation=implementation,
+        return_argmax=return_argmax,
+    )
+    local_label_logit = local_lse - local_loss
+    global_lse = _logsumexp_over_axes(local_lse, vocab_axis_names)
+    global_label_logit = _psum_over_axes(jnp.where(in_vocab_shard, local_label_logit, 0.0), vocab_axis_names)
+    loss = global_lse - global_label_logit
+    if logsumexp_weight is not None and logsumexp_weight != 0.0:
+        loss = loss + logsumexp_weight * (global_lse**2)
+
+    reduced_loss = _apply_reduction_sharded(loss, reduction, weight, reduction_axis_names)
+    if not return_argmax:
+        return reduced_loss
+
+    assert local_argmax is not None
+    local_argmax_logit = jnp.einsum(
+        "bh,bh->b",
+        x,
+        jnp.swapaxes(w[:, local_argmax], 0, 1),
+        precision=precision,
+    )
+    global_argmax_logit = _pmax_over_axes(local_argmax_logit, vocab_axis_names)
+    global_argmax = _pmin_over_axes(
+        jnp.where(
+            local_argmax_logit == global_argmax_logit,
+            local_argmax + vocab_start,
+            jnp.iinfo(jnp.int32).max,
+        ),
+        vocab_axis_names,
+    ).astype(jnp.int32)
+    return reduced_loss, global_argmax
+
+
+@overload
+def fused_cross_entropy_loss_and_logsumexp_penalty(
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    w: Float[Array, "H V"],
+    *,
+    reduction: Reduction = "mean",
+    weight: Optional[Float[Array, "B"]] = None,
+    logsumexp_weight: Optional[float] = 0.0,
+    block_size: Optional[int] = None,
+    block_sizes: Optional[BlockSizes] = None,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
+    implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
+    return_argmax: Literal[False] = False,
+) -> jax.Array: ...
+
+
+@overload
+def fused_cross_entropy_loss_and_logsumexp_penalty(
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    w: Float[Array, "H V"],
+    *,
+    reduction: Reduction = "mean",
+    weight: Optional[Float[Array, "B"]] = None,
+    logsumexp_weight: Optional[float] = 0.0,
+    block_size: Optional[int] = None,
+    block_sizes: Optional[BlockSizes] = None,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
+    implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
+    return_argmax: Literal[True] = True,
+) -> tuple[jax.Array, jax.Array]: ...
+
+
+def fused_cross_entropy_loss_and_logsumexp_penalty(
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    w: Float[Array, "H V"],
+    *,
+    reduction: Reduction = "mean",
+    weight: Optional[Float[Array, "B"]] = None,
+    logsumexp_weight: Optional[float] = 0.0,
+    block_size: Optional[int] = None,
+    block_sizes: Optional[BlockSizes] = None,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
+    implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
+    return_argmax: bool = False,
+) -> jax.Array | tuple[jax.Array, jax.Array]:
+    """Fused cross-entropy + logsumexp penalty on raw arrays.
+
+    Args:
+        x: [B, H] input activations.
+        labels: [B] integer labels.
+        w: [H, V] projection weights.
+        reduction: "sum", "mean", or None to return per-example loss.
+        weight: Optional per-example weights/mask, broadcastable to [B].
+        logsumexp_weight: Weight for the logsumexp (z-loss) penalty.
+        block_size: Optional convenience for setting block_sizes.v_block_size.
+        block_sizes: Block size configuration for the kernel.
+        dtype: Optional dtype for logits/softmax computations.
+        logit_soft_cap: Optional tanh soft cap for logits.
+        precision: Optional matmul precision override for XLA/reference paths.
+        implementation: Backend selector or override implementation list.
+        return_argmax: Whether to additionally return per-example argmax ids.
+
+    Returns:
+        If return_argmax=False: reduced loss (scalar) or per-example loss [B] if reduction is None.
+        If return_argmax=True: tuple of (loss, argmax_ids[B]).
+    """
+    _validate_inputs(x, labels, w)
+    vocab_axis_names = _vocab_axis_names_from_sharding(w)
+    mesh = _mesh_from_sharding(w)
+    if len(vocab_axis_names) == 0 or mesh is None:
+        return _fused_cross_entropy_loss_and_logsumexp_penalty_local(
+            x,
+            labels,
+            w,
+            reduction=reduction,
+            weight=weight,
+            logsumexp_weight=logsumexp_weight,
+            block_size=block_size,
+            block_sizes=block_sizes,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+            implementation=implementation,
+            return_argmax=return_argmax,
+        )
+
+    x_spec = _partition_spec_for_array(x)
+    labels_spec = _partition_spec_for_array(labels)
+    w_spec = _partition_spec_for_array(w)
+    weight_spec = _partition_spec_for_array(weight) if weight is not None else None
+    reduction_axis_names = _axis_names_from_partition_spec(labels_spec)
+
+    if return_argmax:
+        out_specs = (
+            jax.sharding.PartitionSpec() if reduction is not None else labels_spec,
+            labels_spec,
+        )
+    else:
+        out_specs = jax.sharding.PartitionSpec() if reduction is not None else labels_spec
+
+    if weight is None:
+
+        def mapped(x_shard: jax.Array, labels_shard: jax.Array, w_shard: jax.Array):
+            return _fused_cross_entropy_loss_and_logsumexp_penalty_local(
+                x_shard,
+                labels_shard,
+                w_shard,
+                reduction=reduction,
+                weight=None,
+                logsumexp_weight=logsumexp_weight,
+                block_size=block_size,
+                block_sizes=block_sizes,
+                dtype=dtype,
+                logit_soft_cap=logit_soft_cap,
+                precision=precision,
+                implementation=implementation,
+                return_argmax=return_argmax,
+                vocab_axis_names=vocab_axis_names,
+                reduction_axis_names=reduction_axis_names,
+            )
+
+        return jax.shard_map(
+            mapped,
+            mesh=mesh,
+            in_specs=(x_spec, labels_spec, w_spec),
+            out_specs=out_specs,
+            check_vma=False,
+        )(x, labels, w)
+
+    assert weight_spec is not None
+
+    def mapped_with_weight(
+        x_shard: jax.Array,
+        labels_shard: jax.Array,
+        w_shard: jax.Array,
+        weight_shard: jax.Array,
+    ):
+        return _fused_cross_entropy_loss_and_logsumexp_penalty_local(
+            x_shard,
+            labels_shard,
+            w_shard,
+            reduction=reduction,
+            weight=weight_shard,
+            logsumexp_weight=logsumexp_weight,
+            block_size=block_size,
+            block_sizes=block_sizes,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+            implementation=implementation,
+            return_argmax=return_argmax,
+            vocab_axis_names=vocab_axis_names,
+            reduction_axis_names=reduction_axis_names,
+        )
+
+    return jax.shard_map(
+        mapped_with_weight,
+        mesh=mesh,
+        in_specs=(x_spec, labels_spec, w_spec, weight_spec),
+        out_specs=out_specs,
+        check_vma=False,
+    )(x, labels, w, weight)
 
 
 __all__ = [

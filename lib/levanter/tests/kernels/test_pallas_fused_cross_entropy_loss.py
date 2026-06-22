@@ -1180,6 +1180,64 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
     assert faster in seen_block_sizes
 
 
+def test_fused_cross_entropy_vocab_sharded_weight_matches_reference_on_generic_axis():
+    devices = jax.devices()
+    if len(devices) < 2:
+        pytest.skip("requires at least two devices to exercise a sharded vocab axis")
+
+    partition_spec = jax.sharding.PartitionSpec
+    mesh = jax.sharding.Mesh(
+        np.array(devices[:2]),
+        ("tensor",),
+        axis_types=(jax.sharding.AxisType.Explicit,),
+    )
+    batch, hidden, vocab = 6, 8, 10
+    key = jax.random.PRNGKey(49)
+    key_x, key_w = jax.random.split(key)
+    x = jax.random.normal(key_x, (batch, hidden), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (hidden, vocab), dtype=jnp.float32)
+    labels = jnp.array([0, 1, 4, 5, 8, 9], dtype=jnp.int32)
+    weight = jnp.array([1.0, 0.25, 0.5, 1.0, 0.75, 1.0], dtype=jnp.float32)
+    logsumexp_weight = 0.03
+
+    x_sharded = jax.device_put(x, jax.sharding.NamedSharding(mesh, partition_spec(None, None)))
+    labels_sharded = jax.device_put(labels, jax.sharding.NamedSharding(mesh, partition_spec(None)))
+    weight_sharded = jax.device_put(weight, jax.sharding.NamedSharding(mesh, partition_spec(None)))
+    w_sharded = jax.device_put(w, jax.sharding.NamedSharding(mesh, partition_spec(None, "tensor")))
+
+    loss, argmax = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x_sharded,
+        labels_sharded,
+        w_sharded,
+        reduction=None,
+        logsumexp_weight=logsumexp_weight,
+        implementation="xla",
+        return_argmax=True,
+    )
+    mean_loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+        x_sharded,
+        labels_sharded,
+        w_sharded,
+        reduction="mean",
+        weight=weight_sharded,
+        logsumexp_weight=logsumexp_weight,
+        implementation="xla",
+    )
+
+    ref_loss, ref_lse, ref_argmax = linear_softmax_cross_entropy_loss_reference(
+        x,
+        labels,
+        w,
+        return_argmax=True,
+    )
+    ref_loss = ref_loss + logsumexp_weight * (ref_lse**2)
+    ref_mean = jnp.sum(ref_loss * weight) / jnp.sum(weight)
+
+    assert jnp.allclose(loss, ref_loss, atol=1e-5, rtol=1e-5)
+    assert jnp.array_equal(argmax, ref_argmax)
+    assert jnp.allclose(mean_loss, ref_mean, atol=1e-5, rtol=1e-5)
+
+
 def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):
     x = jnp.ones((4, 8), dtype=jnp.float32)
     w = jnp.ones((8, 16), dtype=jnp.float32)

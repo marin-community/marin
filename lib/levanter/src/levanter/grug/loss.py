@@ -7,22 +7,14 @@ This wraps the shared fused kernel API for TPU and falls back to a full-logits
 reference implementation on non-TPU backends.
 """
 
-from typing import cast
-import warnings
-
 import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh, get_mesh, reshard
 
 from haliax.jax_utils import named_call
 from levanter.grug.sharding import _mesh_axis_size
-from levanter.kernels.pallas.fused_cross_entropy_loss import (
-    IMPLEMENTATIONS,
-    fused_cross_entropy_loss_and_logsumexp_penalty,
-)
+from levanter.kernels.pallas.fused_cross_entropy_loss import fused_cross_entropy_loss_and_logsumexp_penalty
 from levanter.kernels.pallas.fused_cross_entropy_loss.api import default_implementations
-from levanter.kernels.pallas.fused_cross_entropy_loss.tuned_block_sizes import infer_block_sizes_with_tuned_match
-from levanter.kernels.pallas.fused_cross_entropy_loss.xla import linear_softmax_cross_entropy_loss_xla
 
 
 def _batch_axis_spec(x: jax.Array):
@@ -36,37 +28,6 @@ def _batch_axis_spec(x: jax.Array):
     if spec is not None and len(spec) > 0 and spec[0] is not None:
         return spec[0]
     return ("data",)
-
-
-def _axis_names_from_spec(axis_spec) -> tuple[str, ...]:
-    if axis_spec is None:
-        return ()
-    if isinstance(axis_spec, tuple):
-        return tuple(str(name) for name in axis_spec)
-    return (str(axis_spec),)
-
-
-def _psum_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
-    if len(axis_names) == 0:
-        return x
-    if len(axis_names) == 1:
-        return jax.lax.psum(x, axis_names[0])
-    return jax.lax.psum(x, axis_names)
-
-
-def _pmax_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
-    if len(axis_names) == 0:
-        return x
-    if len(axis_names) == 1:
-        return jax.lax.pmax(x, axis_names[0])
-    return jax.lax.pmax(x, axis_names)
-
-
-def _logsumexp_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
-    if len(axis_names) == 0:
-        return x
-    x_max = _pmax_over_axes(jax.lax.stop_gradient(x), axis_names)
-    return x_max + jnp.log(_psum_over_axes(jnp.exp(x - x_max), axis_names))
 
 
 def _current_mesh() -> Mesh | jax.sharding.AbstractMesh:
@@ -103,67 +64,6 @@ def _uses_vocab_sharded_ce(implementation_order: tuple[str, ...]) -> bool:
     return any(impl in ("xla", "pallas_gpu") for impl in implementation_order)
 
 
-def _local_linear_softmax_cross_entropy_loss(
-    flat_hidden: jax.Array,
-    safe_labels: jax.Array,
-    shard_lm_head: jax.Array,
-    *,
-    dtype: jnp.dtype,
-    precision: jax.lax.PrecisionLike,
-    implementation_order: tuple[str, ...],
-) -> tuple[jax.Array, jax.Array]:
-    for index, impl in enumerate(implementation_order):
-        if impl == "pallas_gpu":
-            pallas_gpu_impl = IMPLEMENTATIONS.get("pallas_gpu")
-            if pallas_gpu_impl is None:
-                continue
-            block_sizes, _ = infer_block_sizes_with_tuned_match(
-                flat_hidden.shape[0],
-                flat_hidden.shape[1],
-                shard_lm_head.shape[1],
-                dtype=dtype,
-                x_dtype=flat_hidden.dtype,
-                w_dtype=shard_lm_head.dtype,
-            )
-            try:
-                pallas_result = pallas_gpu_impl(
-                    flat_hidden,
-                    safe_labels,
-                    shard_lm_head,
-                    block_sizes=block_sizes,
-                    dtype=dtype,
-                    logit_soft_cap=None,
-                    precision=precision,
-                )
-            except Exception as exc:
-                if "xla" not in implementation_order[index + 1 :]:
-                    raise
-                warnings.warn(
-                    "pallas_gpu vocab-sharded fused CE failed; falling back to xla. " f"Error: {exc}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-                continue
-            local_loss = pallas_result[0]
-            local_lse = pallas_result[1]
-            return local_loss, local_lse
-
-        if impl == "xla":
-            return cast(
-                tuple[jax.Array, jax.Array],
-                linear_softmax_cross_entropy_loss_xla(
-                    flat_hidden,
-                    safe_labels,
-                    shard_lm_head,
-                    dtype=dtype,
-                    logit_soft_cap=None,
-                    precision=precision,
-                ),
-            )
-
-    raise ValueError("Vocab-sharded fused CE requires xla or pallas_gpu, " f"got {implementation_order!r}")
-
-
 def _lm_head_spec_for_ce(
     lm_head: jax.Array,
     mesh: Mesh | jax.sharding.AbstractMesh | None,
@@ -173,15 +73,6 @@ def _lm_head_spec_for_ce(
         if _mesh_axis_size(mesh, "model") > 1:
             return P(None, "model")
     return P(None, None)
-
-
-def _vocab_axis_for_lm_head_spec(lm_head_spec: P) -> str | None:
-    if len(lm_head_spec) < 2:
-        return None
-    vocab_spec = lm_head_spec[1]
-    if isinstance(vocab_spec, str):
-        return vocab_spec
-    return None
 
 
 @named_call
@@ -233,86 +124,35 @@ def fused_linear_softmax_cross_entropy_loss(
     has_mesh = mesh is not None and not mesh.empty
     weight_array = weight if weight is not None else jnp.ones_like(labels, dtype=dtype)
     batch_axis_spec = _batch_axis_spec(hidden) if has_mesh else None
-    batch_axis_names = _axis_names_from_spec(batch_axis_spec) if has_mesh else ()
-    lm_head_spec = P(None, None)
 
-    def _loss_shard(
-        shard_hidden: jax.Array,
-        shard_lm_head: jax.Array,
-        shard_labels: jax.Array,
-        shard_weight: jax.Array,
-    ) -> jax.Array:
-        flat_hidden = shard_hidden.reshape((-1, hidden_dim))
-        flat_labels = shard_labels.reshape((-1,)).astype(jnp.int32)
-        flat_weight = shard_weight.reshape((-1,))
+    flat_hidden = hidden.reshape((-1, hidden_dim))
+    flat_labels = labels.reshape((-1,)).astype(jnp.int32)
+    flat_weight = weight_array.reshape((-1,))
 
-        vocab_axis = _vocab_axis_for_lm_head_spec(lm_head_spec)
-        if vocab_axis is None:
-            loss = fused_cross_entropy_loss_and_logsumexp_penalty(
-                flat_hidden,
-                flat_labels,
-                shard_lm_head,
-                reduction=None,
-                weight=flat_weight,
-                logsumexp_weight=logsumexp_weight,
-                dtype=dtype,
-                logit_soft_cap=None,
-                precision=precision,
-                implementation=implementation,
-            )
-        else:
-            local_vocab_size = shard_lm_head.shape[1]
-            vocab_start = jax.lax.axis_index(vocab_axis) * local_vocab_size
-            local_labels = flat_labels - vocab_start
-            in_vocab_shard = (0 <= local_labels) & (local_labels < local_vocab_size)
-            safe_labels = jnp.clip(local_labels, 0, local_vocab_size - 1)
-            local_loss, local_lse = _local_linear_softmax_cross_entropy_loss(
-                flat_hidden,
-                safe_labels,
-                shard_lm_head,
-                dtype=dtype,
-                precision=precision,
-                implementation_order=implementation_order,
-            )
-            local_label_logit = local_lse - local_loss
-            vocab_axis_names = (vocab_axis,)
-            global_lse = _logsumexp_over_axes(local_lse, vocab_axis_names)
-            global_label_logit = _psum_over_axes(jnp.where(in_vocab_shard, local_label_logit, 0.0), vocab_axis_names)
-            loss = global_lse - global_label_logit
-            if logsumexp_weight is not None and logsumexp_weight != 0.0:
-                loss = loss + logsumexp_weight * (global_lse**2)
-            loss = loss * flat_weight.astype(loss.dtype)
+    if has_mesh:
+        hidden_spec = P(batch_axis_spec, None)
+        lm_head_spec = _lm_head_spec_for_ce(lm_head, mesh, implementation_order)
+        label_spec = P(batch_axis_spec)
+        flat_hidden = _reshard_for_shard_map(flat_hidden, mesh, hidden_spec)
+        lm_head = _reshard_for_shard_map(lm_head, mesh, lm_head_spec)
+        flat_labels = _reshard_for_shard_map(flat_labels, mesh, label_spec)
+        flat_weight = _reshard_for_shard_map(flat_weight, mesh, label_spec)
 
-        if reduction_mode is None:
-            return loss.reshape(shard_labels.shape)
-
-        local_sum = jnp.sum(loss)
-        local_denom = jnp.sum(flat_weight)
-        total_sum = _psum_over_axes(local_sum, batch_axis_names)
-        if reduction_mode == "sum":
-            return total_sum
-        total_denom = _psum_over_axes(local_denom, batch_axis_names)
-        return jnp.where(total_denom != 0, total_sum / total_denom, jnp.zeros_like(total_denom))
-
-    if not has_mesh:
-        return _loss_shard(hidden, lm_head, labels, weight_array)
-
-    hidden_spec = P(batch_axis_spec)
-    lm_head_spec = _lm_head_spec_for_ce(lm_head, mesh, implementation_order)
-    label_spec = P(batch_axis_spec)
-    hidden = _reshard_for_shard_map(hidden, mesh, hidden_spec)
-    lm_head = _reshard_for_shard_map(lm_head, mesh, lm_head_spec)
-    labels = _reshard_for_shard_map(labels, mesh, label_spec)
-    weight_array = _reshard_for_shard_map(weight_array, mesh, label_spec)
-
-    out_specs = hidden_spec if reduction_mode is None else P()
-    return jax.shard_map(
-        _loss_shard,
-        mesh=mesh,
-        in_specs=(hidden_spec, lm_head_spec, label_spec, label_spec),
-        out_specs=out_specs,
-        check_vma=False,
-    )(hidden, lm_head, labels, weight_array)
+    loss = fused_cross_entropy_loss_and_logsumexp_penalty(
+        flat_hidden,
+        flat_labels,
+        lm_head,
+        reduction=reduction_mode,
+        weight=flat_weight,
+        logsumexp_weight=logsumexp_weight,
+        dtype=dtype,
+        logit_soft_cap=None,
+        precision=precision,
+        implementation=implementation,
+    )
+    if reduction_mode is None:
+        return loss.reshape(labels.shape)
+    return loss
 
 
 __all__ = [
