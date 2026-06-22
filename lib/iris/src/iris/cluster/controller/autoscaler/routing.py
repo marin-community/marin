@@ -434,9 +434,8 @@ def job_feasibility(
 
     When ``resources`` is given, a matching group must also have enough per-VM
     capacity for the request's additive dimensions (cpu, memory, disk, device
-    count) — the same fit check :func:`route_demand` applies each tick. This
-    catches over-requests like 300GB disk on a pool that advertises 100GB, which
-    would otherwise route to no group and sit pending forever.
+    count). This catches over-requests like 300GB disk on a pool that advertises
+    100GB, which would otherwise route to no group and sit pending forever.
 
     Args:
         groups: scaling groups to consider.
