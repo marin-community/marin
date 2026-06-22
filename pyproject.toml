@@ -188,10 +188,11 @@ line-length = 121
 target-version = "py312"
 
 # Note :: Grow more strict over time!
-# Most of `scripts/**` is excluded until cleaned up, but `scripts/ci/**` holds
-# the scripts invoked directly by `.github/workflows` and stays under ruff.
+# Most of `scripts/**` is excluded until cleaned up, but `scripts/ci/**` and
+# `scripts/cost_manager/**` hold scripts invoked directly by `.github/workflows`
+# and stay under ruff.
 extend-exclude = ["scripts/"]
-extend-include = ["scripts/ci/**/*.py"]
+extend-include = ["scripts/ci/**/*.py", "scripts/cost_manager/**/*.py"]
 
 [tool.ruff.lint]
 # A,B,E,F,I,NPY,RUF,UP,W are the established families. The individually-listed
@@ -263,6 +264,7 @@ project-includes = [
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
     "scripts/ci",
+    "scripts/cost_manager",
 ]
 
 # Explicitly tell Pyrefly where our editable packages live so it resolves imports

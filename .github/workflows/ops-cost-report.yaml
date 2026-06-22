@@ -1,0 +1,89 @@
+name: "Ops - Cost Report"
+
+# Daily provider-cost pull. Fetches a trailing window of API/cloud spend from
+# the configured backends (OpenAI, Anthropic, ... see scripts/cost_manager/
+# config.yaml) and writes one CostEvent row per (day, provider, category,
+# detail) into the finelog `cost.events` namespace.
+#
+# Writing to the marin finelog server requires reaching it; like the storage
+# report, this runner authenticates to GCP with the CI service account and
+# opens a gcloud SSH tunnel to the finelog VM (scripts/cost_manager opens the
+# tunnel internally from the `marin` finelog deploy config).
+
+on:
+  schedule:
+    - cron: '0 15 * * *'  # daily 15:00 UTC (after the egress report at 14:00)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Fetch and print only; do not write to finelog'
+        type: boolean
+        default: false
+      lookback_days:
+        description: 'Trailing UTC days to fetch (overrides config)'
+        type: number
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ops-cost-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Sync uv environment
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      # Required for the finelog SSH tunnel (gcloud compute ssh) — same as the
+      # storage report's controller tunnel.
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
+          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
+          chmod 600 ~/.ssh/google_compute_engine
+          chmod 644 ~/.ssh/google_compute_engine.pub
+
+      - name: Fetch and record costs
+        env:
+          # Provider credentials (see scripts/cost_manager/README.md). Missing
+          # keys fail only their own provider; the rest still record.
+          OPENAI_ADMIN_KEY: ${{ secrets.OPENAI_ADMIN_KEY }}
+          ANTHROPIC_ADMIN_KEY: ${{ secrets.ANTHROPIC_ADMIN_KEY }}
+          COREWEAVE_API_TOKEN: ${{ secrets.COREWEAVE_API_TOKEN }}
+        run: |
+          uv run python -m scripts.cost_manager.run \
+            ${{ inputs.dry_run && '--dry-run' || '' }} \
+            ${{ inputs.lookback_days && format('--lookback-days {0}', inputs.lookback_days) || '' }}
