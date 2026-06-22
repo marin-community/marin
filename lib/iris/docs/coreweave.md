@@ -223,7 +223,7 @@ iris cluster list
 
 `--cluster=NAME` resolves to a config under `lib/iris/config/` and opens a
 `kubectl port-forward` to the controller service. This path requires the
-`iris[controller]` extras (`duckdb`, `pyarrow`, `kubernetes`). Without them,
+`iris[controller]` extras (`kubernetes`). Without them,
 auto-tunneled CoreWeave commands fail before connecting:
 `ImportError: Install iris[controller] to use CloudK8sService`.
 

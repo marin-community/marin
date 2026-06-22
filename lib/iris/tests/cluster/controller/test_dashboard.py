@@ -10,8 +10,6 @@ The dashboard serves a web UI that fetches data via RPC calls.
 from unittest.mock import Mock
 
 import pytest
-from finelog.client.proxy import LogServiceProxy
-from finelog.rpc import logging_pb2
 from iris.cluster.backends.k8s.fake import InMemoryK8sService
 from iris.cluster.backends.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE, K8sTaskProvider
 from iris.cluster.backends.k8s.types import K8sResource
@@ -38,7 +36,7 @@ from iris.cluster.controller.schema import jobs_table, task_attempts_table, task
 from iris.cluster.controller.service import ControllerServiceImpl, _overlay_worker_usability
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, WorkerUsability
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
-from iris.rpc.auth import StaticTokenVerifier
+from iris.rpc.auth import ControllerAuthPolicy, StaticTokenVerifier
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
 from sqlalchemy import func, select
@@ -198,12 +196,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 
 
 @pytest.fixture
-def log_service(embedded_log_server) -> LogServiceProxy:
-    return LogServiceProxy(embedded_log_server.address)
-
-
-@pytest.fixture
-def service(state, scheduler, tmp_path, log_client):
+def service(state, scheduler, tmp_path, embedded_log_server, log_client):
     controller_mock = _make_controller_mock(state, scheduler)
     return ControllerServiceImpl(
         controller=controller_mock,
@@ -213,12 +206,13 @@ def service(state, scheduler, tmp_path, log_client):
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
+        system_endpoints={"/system/log-server": embedded_log_server.address},
     )
 
 
 @pytest.fixture
-def client(service, log_service):
-    dashboard = ControllerDashboard(service, log_service=log_service)
+def client(service):
+    dashboard = ControllerDashboard(service)
     return TestClient(dashboard.app)
 
 
@@ -631,9 +625,9 @@ def mock_autoscaler():
 
 
 @pytest.fixture
-def client_with_autoscaler(service_with_autoscaler, log_service):
+def client_with_autoscaler(service_with_autoscaler):
     """Dashboard test client with autoscaler enabled."""
-    dashboard = ControllerDashboard(service_with_autoscaler, log_service=log_service)
+    dashboard = ControllerDashboard(service_with_autoscaler)
     return TestClient(dashboard.app)
 
 
@@ -1180,10 +1174,10 @@ def test_health_endpoint_returns_ok(client):
 
 
 def test_fetch_logs_for_missing_task_returns_empty_entries(client):
-    """FetchLogs on LogService returns empty entries for a nonexistent task."""
+    """The endpoint proxy forwards FetchLogs to the registered log server."""
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     resp = client.post(
-        "/finelog.logging.LogService/FetchLogs",
+        "/proxy/system.log-server/finelog.logging.LogService/FetchLogs",
         json={"source": f"{task_id}:", "match_scope": "MATCH_SCOPE_PREFIX"},
         headers={"Content-Type": "application/json"},
     )
@@ -1192,47 +1186,18 @@ def test_fetch_logs_for_missing_task_returns_empty_entries(client):
     assert data.get("entries", []) == []
 
 
-def test_fetch_logs_backward_compat_proxy(client):
-    """The old ControllerService/FetchLogs path proxies to LogService."""
-    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
-    resp = client.post(
+@pytest.mark.parametrize(
+    "path",
+    [
         "/iris.cluster.ControllerService/FetchLogs",
-        json={"source": f"{task_id}:", "match_scope": "MATCH_SCOPE_PREFIX"},
-        headers={"Content-Type": "application/json"},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data.get("entries", []) == []
-
-
-def test_fetch_logs_backward_compat_proxy_proto_binary(client):
-    """Old clients using default Connect proto encoding hit the compat endpoint."""
-    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
-    req = logging_pb2.FetchLogsRequest(
-        source=f"{task_id}:",
-        match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
-    )
-    resp = client.post(
-        "/iris.cluster.ControllerService/FetchLogs",
-        content=req.SerializeToString(),
-        headers={"Content-Type": "application/proto"},
-    )
-    assert resp.status_code == 200
-    parsed = logging_pb2.FetchLogsResponse()
-    parsed.ParseFromString(resp.content)
-    assert list(parsed.entries) == []
-
-
-def test_fetch_logs_legacy_iris_logging_path(client):
-    """Pre-finelog-lift clients call /iris.logging.LogService/FetchLogs."""
-    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
-    resp = client.post(
         "/iris.logging.LogService/FetchLogs",
-        json={"source": f"{task_id}:", "match_scope": "MATCH_SCOPE_PREFIX"},
-        headers={"Content-Type": "application/json"},
-    )
-    assert resp.status_code == 200
-    assert resp.json().get("entries", []) == []
+        "/finelog.logging.LogService/FetchLogs",
+    ],
+)
+def test_fetch_logs_outside_endpoint_proxy_is_not_exposed(client, path):
+    resp = client.post(path, json={}, headers={"Content-Type": "application/json"})
+
+    assert resp.status_code == 404
 
 
 # =============================================================================
@@ -1372,10 +1337,14 @@ def test_auth_config_returns_disabled_by_default(client):
     assert data["provider"] is None
 
 
-def test_auth_config_returns_enabled_when_verifier_set(service, log_service):
+def test_auth_config_returns_enabled_when_verifier_set(service):
     """Auth config endpoint reports auth enabled with provider name."""
     verifier = StaticTokenVerifier({"test-token": "test-user"})
-    dashboard = ControllerDashboard(service, log_service=log_service, auth_verifier=verifier, auth_provider="gcp")
+    dashboard = ControllerDashboard(
+        service,
+        auth_provider="gcp",
+        auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier),
+    )
     authed_client = TestClient(dashboard.app)
 
     resp = authed_client.get("/auth/config")
@@ -1398,14 +1367,13 @@ def test_auth_config_worker_capabilities(client):
     assert "cluster" not in backend["capabilities"]
 
 
-def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, embedded_log_server, log_client):
+def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, log_client):
     """auth/config advertises the cluster capability for a backend-placed (k8s) backend."""
     controller_mock = _make_controller_mock(state, scheduler)
     cluster_caps = frozenset({BackendCapability.CLUSTER_VIEW})
     controller_mock.capabilities = cluster_caps
     controller_mock.provider = Mock(capabilities=cluster_caps)
     controller_mock.provider.name = "kubernetes"
-    log_service = LogServiceProxy(embedded_log_server.address)
     svc = ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -1415,7 +1383,7 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, embedde
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
     )
-    dashboard = ControllerDashboard(svc, log_service=log_service)
+    dashboard = ControllerDashboard(svc)
     k8s_client = TestClient(dashboard.app)
 
     resp = k8s_client.get("/auth/config")
@@ -1434,14 +1402,13 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, embedde
 # =============================================================================
 
 
-def _make_k8s_dashboard_client(state, scheduler, tmp_path, embedded_log_server, log_client):
+def _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client):
     """Build a TestClient wired to a real K8sTaskProvider backed by InMemoryK8sService."""
     k8s = InMemoryK8sService(namespace="iris")
     provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest", cluster_scan_interval=0.0)
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     controller_mock.provider = provider
-    log_service = LogServiceProxy(embedded_log_server.address)
     svc = ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -1451,13 +1418,13 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, embedded_log_server, 
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
     )
-    dashboard = ControllerDashboard(svc, log_service=log_service)
+    dashboard = ControllerDashboard(svc)
     return TestClient(dashboard.app), k8s, provider
 
 
-def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path, embedded_log_server, log_client):
+def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path, log_client):
     """GetKubernetesClusterStatus returns node capacity and pod statuses after sync."""
-    client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, embedded_log_server, log_client)
+    client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
 
     # Seed nodes and a pod.
     k8s.seed_resource(
@@ -1514,9 +1481,9 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path, e
     provider.close()
 
 
-def test_k8s_cluster_status_empty_before_sync(state, scheduler, tmp_path, embedded_log_server, log_client):
+def test_k8s_cluster_status_empty_before_sync(state, scheduler, tmp_path, log_client):
     """GetKubernetesClusterStatus returns empty data when no sync has run yet."""
-    client, _k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, embedded_log_server, log_client)
+    client, _k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetKubernetesClusterStatus",

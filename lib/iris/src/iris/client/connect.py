@@ -32,7 +32,7 @@ from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import IrisConfig
 from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token
 from iris.rpc import config_pb2, job_pb2
-from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
+from iris.rpc.auth import ClientCredentials, GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,12 @@ def create_client_token_provider(
             raise ValueError("Static auth config requires at least one token")
         first_token = next(iter(tokens))
         return StaticTokenProvider(first_token)
+    elif provider == "iap":
+        # The Iris JWT for an IAP cluster comes only from the token store after
+        # `iris login` (handled above). With none cached yet there is no
+        # config-derived fallback — return None so commands fail clearly until
+        # the user logs in.
+        return None
     raise ValueError(f"Unknown auth provider: {provider}")
 
 
@@ -181,7 +187,7 @@ def connect_to_cluster(
                 tunnel_url,
                 workspace=workspace,
                 timeout_ms=timeout_ms,
-                token_provider=token_provider,
+                credentials=ClientCredentials(token_provider=token_provider),
             )
         )
         yield client

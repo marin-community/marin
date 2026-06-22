@@ -424,10 +424,55 @@ message StaticAuthConfig {
   map<string, string> tokens = 1;
 }
 
+// Authentication for a controller fronted by Google Identity-Aware Proxy (IAP).
+//
+// IAP terminates a Google identity at the ingress (a GCLB or Cloud Run service)
+// and only forwards requests it authorizes via IAM. The Iris controller keeps
+// its own JWT model on top: the client sends the IAP OIDC ID token in the
+// `Proxy-Authorization` header (consumed by IAP) and the Iris JWT in
+// `Authorization` (passed through to the controller). See
+// docs/auth-loopback-transition.md.
+message IapAuthConfig {
+  // Public HTTPS URL of the IAP-fronted ingress the CLI connects to directly
+  // (no SSH tunnel), e.g. "https://iris-marin.example.com".
+  string url = 1;
+
+  // Desktop OAuth client the CLI drives for the installed-app login flow.
+  // Installed-app client secrets are non-confidential per the OAuth 2.0 spec
+  // (RFC 8252 §8.5), so shipping them in the cluster config is expected — same
+  // posture as the gcloud CLI's own baked-in client.
+  string oauth_client_id = 2;
+  string oauth_client_secret = 3;
+
+  // Accepted OIDC ID-token audiences (the `aud` claim) the controller will
+  // verify at login. Typically the desktop client id (user flow) and/or the
+  // IAP-secured OAuth client id (service-account flow).
+  //
+  // IAP's own IAM (roles/iap.httpsResourceAccessor) is the access gate; the
+  // controller does not re-check project membership.
+  repeated string audiences = 4;
+
+  // Audience of the signed header JWT that IAP injects on every admitted
+  // request (the `X-Goog-IAP-JWT-Assertion` header). For a GCLB backend it is
+  // "/projects/<PROJECT_NUMBER>/global/backendServices/<BACKEND_SERVICE_ID>".
+  //
+  // When set, the controller verifies that signed assertion (signature +
+  // audience) and authenticates a tokenless caller as the asserted email,
+  // resolved to its provisioned role from the user store (admin/user), or the
+  // read-only `dashboard` role if the email is not provisioned. So an admin
+  // behind IAP gets full access without running `iris login`, while an
+  // unprovisioned browser gets read-only dashboard access. Verifying the Google
+  // signature is what makes this safe: an internal caller that bypasses the load
+  // balancer cannot forge the header. Leave empty to disable implicit IAP auth
+  // (tokenless public requests are then rejected as before).
+  string signed_header_audience = 5;
+}
+
 message AuthConfig {
   oneof provider {
     GcpAuthConfig gcp = 1;
     StaticAuthConfig static = 2;
+    IapAuthConfig iap = 5;
   }
   repeated string admin_users = 3;
 

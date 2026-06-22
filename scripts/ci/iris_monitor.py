@@ -26,7 +26,7 @@ from iris.cluster.config import IrisConfig
 from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token
 from iris.cluster.types import JobName, is_job_finished
 from iris.rpc import job_pb2
-from iris.rpc.auth import StaticTokenProvider, TokenProvider
+from iris.rpc.auth import ClientCredentials, StaticTokenProvider, TokenProvider
 from rigging.redaction import redact_value
 from rigging.timing import ExponentialBackoff
 
@@ -102,7 +102,7 @@ def _open_iris_client(
         with IrisClient.remote(
             controller_url,
             workspace=repo_root,
-            token_provider=_token_provider_for_url(controller_url),
+            credentials=ClientCredentials(token_provider=_token_provider_for_url(controller_url)),
         ) as client:
             yield client
         return
@@ -119,7 +119,9 @@ def _open_iris_client(
     if config.proto.controller.WhichOneof("controller") == "local":
         cluster = LocalCluster(config.proto)
         try:
-            with IrisClient.remote(cluster.start(), workspace=repo_root, token_provider=token_provider) as client:
+            with IrisClient.remote(
+                cluster.start(), workspace=repo_root, credentials=ClientCredentials(token_provider=token_provider)
+            ) as client:
                 yield client
         finally:
             cluster.close()
@@ -128,7 +130,9 @@ def _open_iris_client(
     bundle = config.provider_bundle()
     controller_address = config.controller_address() or bundle.controller.discover_controller(config.proto.controller)
     with bundle.controller.tunnel(address=controller_address) as tunnel_url:
-        with IrisClient.remote(tunnel_url, workspace=repo_root, token_provider=token_provider) as client:
+        with IrisClient.remote(
+            tunnel_url, workspace=repo_root, credentials=ClientCredentials(token_provider=token_provider)
+        ) as client:
             yield client
 
 

@@ -51,7 +51,7 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.rpc import job_pb2
-from iris.rpc.auth import TokenProvider
+from iris.rpc.auth import ClientCredentials
 from iris.rpc.proto_display import (
     PRIORITY_BAND_NAMES,
     job_state_friendly,
@@ -72,6 +72,16 @@ _STATE_MAP: dict[str, job_pb2.JobState] = {
     "worker_failed": job_pb2.JOB_STATE_WORKER_FAILED,
     "unschedulable": job_pb2.JOB_STATE_UNSCHEDULABLE,
 }
+
+
+def _remote_client(ctx: click.Context) -> IrisClient:
+    """Build an IrisClient for the current cluster, threading the auth credentials
+    (the Iris JWT and, for IAP-fronted clusters, the IAP ID token) from context."""
+    return IrisClient.remote(
+        require_controller_url(ctx),
+        workspace=Path.cwd(),
+        credentials=ctx.obj.get("credentials"),
+    )
 
 
 def _terminate_jobs(
@@ -551,7 +561,7 @@ def run_iris_job(
     priority: str | None = None,
     preemptible: bool | None = None,
     task_image: str | None = None,
-    token_provider: TokenProvider | None = None,
+    credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
 ) -> int:
@@ -650,7 +660,7 @@ def run_iris_job(
         coscheduling=coscheduling,
         user=user,
         priority_band=priority_band,
-        token_provider=token_provider,
+        credentials=credentials,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
         task_image=task_image,
@@ -673,7 +683,7 @@ def _submit_and_wait_job(
     coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
-    token_provider: TokenProvider | None = None,
+    credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
     task_image: str | None = None,
@@ -683,7 +693,7 @@ def _submit_and_wait_job(
     Only KeyboardInterrupt terminates the remote job; connection failures
     are logged and re-raised without killing the job.
     """
-    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=token_provider)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd(), credentials=credentials)
     entrypoint = Entrypoint.from_command(*command)
 
     job = client.submit(
@@ -931,7 +941,7 @@ def run(
             priority=priority,
             preemptible=preemptible,
             task_image=task_image,
-            token_provider=ctx.obj.get("token_provider"),
+            credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,
         )
@@ -957,8 +967,7 @@ def run(
 @click.pass_context
 def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     """Terminate one or more jobs."""
-    controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
+    client = _remote_client(ctx)
     terminated = _terminate_jobs(client, job_id, include_children)
     _print_terminated(terminated)
 
@@ -973,8 +982,7 @@ def stop(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 @click.pass_context
 def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     """Terminate one or more jobs (alias for stop)."""
-    controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
+    client = _remote_client(ctx)
     terminated = _terminate_jobs(client, job_id, include_children)
     _print_terminated(terminated)
 
@@ -991,8 +999,7 @@ def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 @click.pass_context
 def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> None:
     """List jobs with optional filtering."""
-    controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
+    client = _remote_client(ctx)
 
     state_value: job_pb2.JobState | None = None
     if state is not None:
@@ -1159,8 +1166,7 @@ def summary(ctx, job_id: str, json_output: bool) -> None:
     Works for both running and completed jobs. Data is read from the controller's
     existing ``GetJobStatus`` / ``ListTasks`` RPCs (no checkpoint scraping).
     """
-    controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
+    client = _remote_client(ctx)
     job_name = JobName.from_wire(job_id)
     job_status = client.status(job_name)
     tasks = client.list_tasks(job_name)
@@ -1209,8 +1215,7 @@ def logs(
     if since_ms is not None and since_seconds is not None:
         raise click.UsageError("Specify only one of --since-ms or --since-seconds.")
 
-    controller_url = require_controller_url(ctx)
-    client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
+    client = _remote_client(ctx)
 
     if since_seconds is not None:
         since_ms = Timestamp.now().epoch_ms() - (since_seconds * 1000)
@@ -1254,7 +1259,7 @@ def bug_report(ctx, job_id: str, file_issue: bool, repo: str | None, tail: int, 
     """Generate a diagnostic bug report for a job."""
     controller_url = require_controller_url(ctx)
     report = gather_bug_report(
-        controller_url, JobName.from_wire(job_id), tail=tail, token_provider=ctx.obj.get("token_provider")
+        controller_url, JobName.from_wire(job_id), tail=tail, credentials=ctx.obj.get("credentials")
     )
     markdown = format_bug_report(report)
 

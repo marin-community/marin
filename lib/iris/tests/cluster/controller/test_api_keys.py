@@ -26,7 +26,7 @@ from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjecti
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.rpc import config_pb2, job_pb2
-from iris.rpc.auth import VerifiedIdentity, _verified_identity
+from iris.rpc.auth import IapIdTokenVerifier, VerifiedIdentity, _verified_identity
 from rigging.timing import Timestamp
 
 
@@ -105,6 +105,22 @@ def test_worker_token_in_api_keys(db):
     assert auth.worker_token is not None
     identity = auth.verifier.verify(auth.worker_token)
     assert identity.user_id == WORKER_USER
+
+
+def test_iap_provider_uses_id_token_login_verifier(db):
+    config = config_pb2.AuthConfig(iap={"audiences": ["desktop-client-id"]})
+    auth = create_controller_auth(config, db=db)
+
+    # IAP login proof is an OIDC ID token verified by IapIdTokenVerifier.
+    assert isinstance(auth.login_verifier, IapIdTokenVerifier)
+    # Per-RPC requests still ride on Iris JWTs (the worker token verifies).
+    assert auth.verifier.verify(auth.worker_token).user_id == WORKER_USER
+
+
+def test_iap_provider_requires_audiences(db):
+    config = config_pb2.AuthConfig(iap={"url": "https://iris-marin.example.com"})
+    with pytest.raises(ValueError, match="at least one audience"):
+        create_controller_auth(config, db=db)
 
 
 def test_worker_token_differs_after_restart(db):

@@ -21,7 +21,7 @@ from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider, TokenProvider
+from iris.rpc.auth import AuthTokenInjector, ClientCredentials, StaticTokenProvider, TokenProvider
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_display import job_state_friendly, task_state_friendly
@@ -601,7 +601,9 @@ class IrisBabysitter:
             self.config.controller_url,
             JobName.from_wire(job_id),
             tail=tail,
-            token_provider=self.token_provider,
+            credentials=(
+                ClientCredentials(token_provider=self.token_provider) if self.token_provider is not None else None
+            ),
         )
         return self.envelope(asdict(report))
 

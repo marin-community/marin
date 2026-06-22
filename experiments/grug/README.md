@@ -58,7 +58,7 @@ troubleshooting.
 When template-copying `experiments/grug/base/` to a new variant, use the HTML diff tool to review changes:
 
 ```bash
-uv run python scripts/grug_dir_diff.py \
+uv run python scripts/ci/grug_dir_diff.py \
   experiments/grug/base \
   experiments/grug/<variant> \
   --out /tmp/grug-diff

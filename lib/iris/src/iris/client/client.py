@@ -57,7 +57,7 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import TokenProvider, client_interceptors
+from iris.rpc.auth import ClientCredentials
 from iris.rpc.proto_display import job_state_friendly
 from iris.time_proto import timestamp_from_proto
 
@@ -490,7 +490,7 @@ class IrisClient:
         workspace: Path | None = None,
         bundle_id: str | None = None,
         timeout_ms: int = 30000,
-        token_provider: TokenProvider | None = None,
+        credentials: ClientCredentials | None = None,
     ) -> "IrisClient":
         """Create an IrisClient for an external client (CLI, laptop, notebook).
 
@@ -506,7 +506,9 @@ class IrisClient:
             bundle_id: Workspace bundle identifier for sub-job inheritance.
                 When set, sub-jobs use this bundle ID instead of creating new bundles.
             timeout_ms: RPC timeout in milliseconds
-            token_provider: When set, attaches bearer tokens to all outgoing RPCs.
+            credentials: Auth material for outgoing RPCs — the Iris JWT and, for
+                an IAP-fronted cluster, the IAP OIDC ID token. None sends neither
+                (a loopback-trusted tunnel).
 
         Returns:
             IrisClient wrapping RemoteClusterClient
@@ -516,7 +518,7 @@ class IrisClient:
             workspace=workspace,
             bundle_id=bundle_id,
             timeout_ms=timeout_ms,
-            token_provider=token_provider,
+            credentials=credentials,
             use_controller_proxy=True,
         )
 
@@ -528,22 +530,22 @@ class IrisClient:
         workspace: Path | None = None,
         bundle_id: str | None = None,
         timeout_ms: int = 30000,
-        token_provider: TokenProvider | None = None,
+        credentials: ClientCredentials | None = None,
     ) -> "IrisClient":
         """Create an IrisClient for code running inside the cluster (in-task).
 
         Same as :meth:`remote`, except finelog logs/stats are written straight
         to the resolved finelog server instead of through the controller's
-        StatsServiceProxy — so high-frequency task-status pushes don't compete
-        for the controller's RPC thread pool. Only valid where the finelog
-        server's internal address is reachable (i.e. inside the cluster).
+        endpoint proxy — so high-frequency task-status pushes don't compete for
+        the controller's HTTP proxy. Only valid where the finelog server's
+        internal address is reachable (i.e. inside the cluster).
         """
         return cls._make(
             controller_address,
             workspace=workspace,
             bundle_id=bundle_id,
             timeout_ms=timeout_ms,
-            token_provider=token_provider,
+            credentials=credentials,
             use_controller_proxy=False,
         )
 
@@ -555,10 +557,10 @@ class IrisClient:
         workspace: Path | None,
         bundle_id: str | None,
         timeout_ms: int,
-        token_provider: TokenProvider | None,
         use_controller_proxy: bool,
+        credentials: ClientCredentials | None = None,
     ) -> "IrisClient":
-        interceptors = client_interceptors(token_provider)
+        interceptors = credentials.interceptors() if credentials is not None else []
 
         cluster = RemoteClusterClient(
             controller_address=controller_address,
@@ -1106,7 +1108,7 @@ def get_iris_ctx() -> IrisContext | None:
     if job_info.controller_address:
         bundle_id = job_info.bundle_id
         # In-task code runs inside the cluster and can reach the finelog server
-        # directly, so task-status pushes bypass the controller's StatsServiceProxy.
+        # directly, so task-status pushes bypass the controller's endpoint proxy.
         client = IrisClient.in_cluster(
             controller_address=job_info.controller_address,
             bundle_id=bundle_id,

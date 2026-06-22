@@ -20,7 +20,6 @@ from typing import Any
 
 import uvicorn
 from finelog.client import LogClient, RemoteLogHandler
-from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
 from finelog.embedded import require_embedded_server
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
@@ -32,6 +31,7 @@ from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
+from iris.cluster.controller.autoscaler.provisioning import PROVISIONING_NAMESPACE, IrisProvisioning
 from iris.cluster.controller.backend import (
     AutoscaleResult,
     BackendCapability,
@@ -88,7 +88,7 @@ from iris.cluster.types import (
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider, TokenVerifier
+from iris.rpc.auth import AuthTokenInjector, ControllerAuthPolicy, StaticTokenProvider, TokenVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -345,9 +345,6 @@ class Controller:
             self._log_service_address = self._start_local_log_server()
 
         log_client_interceptors = _log_client_interceptors(config)
-        self._remote_log_service = LogServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
-        self._remote_stats_service = StatsServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
-
         # A single log client serves both the controller's own logs and any backend
         # that collects logs out-of-process.
         self._log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
@@ -359,6 +356,14 @@ class Controller:
             self._log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
             self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile),
         )
+
+        # The autoscaler emits slice provisioning outcomes to iris.provisioning;
+        # wire its sink now that the log client is up (no-op backends have none).
+        # TODO(#6520): thread the log client through the constructor and drop this
+        # delayed-sink wiring.
+        autoscaler = self._task_backend.autoscaler
+        if autoscaler is not None:
+            autoscaler.set_provisioning_sink(self._log_client.get_table(PROVISIONING_NAMESPACE, IrisProvisioning))
 
         self._log_handler = RemoteLogHandler(self._log_client, key=CONTROLLER_LOG_KEY)
 
@@ -384,13 +389,14 @@ class Controller:
         )
         self._dashboard = ControllerDashboard(
             self._service,
-            log_service=self._remote_log_service,
             host=config.host,
             port=config.port,
-            auth_verifier=config.auth_verifier,
             auth_provider=config.auth_provider,
-            auth_optional=config.auth.optional if config.auth else False,
-            finelog_stats_service=self._remote_stats_service,
+            auth_policy=ControllerAuthPolicy.from_verifiers(
+                verifier=config.auth_verifier,
+                optional=config.auth.optional if config.auth else False,
+                iap_assertion_verifier=config.auth.iap_assertion_verifier if config.auth else None,
+            ),
         )
 
         # Wakes the control-tick driver. A submit triggers a schedule-only
@@ -625,8 +631,6 @@ class Controller:
         logging.getLogger("iris").removeHandler(self._log_handler)
         self._log_handler.close()
         self._log_client.close()
-        self._remote_log_service.close()
-        self._remote_stats_service.close()
         if self._log_server is not None:
             self._log_server.stop()
         self._db.close()

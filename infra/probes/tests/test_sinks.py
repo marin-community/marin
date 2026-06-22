@@ -7,6 +7,7 @@ is stubbed to capture uploads in memory."""
 
 from __future__ import annotations
 
+import dataclasses
 import gzip
 import io
 import json
@@ -14,21 +15,21 @@ from datetime import UTC, datetime
 
 import pytest
 import sinks
-from result import ProbeResult
+from sample import Sample
 from sinks import JsonlGcsSink
 
 GCS_PREFIX = "gs://bucket/infra/probes"
 
 
-def _result(day: str, name: str = "controller-ping", ok: bool = True) -> ProbeResult:
-    started = datetime.fromisoformat(day).replace(tzinfo=UTC)
-    return ProbeResult(is_success=ok, name=name, started_at=started, wall_time=1.0)
+def _sample(day: str, metric: str = "probe_up", value: float = 1.0, **labels: str) -> Sample:
+    collected = datetime.fromisoformat(day).replace(tzinfo=UTC)
+    return dataclasses.replace(Sample.of(metric, value, **labels), collected_at=collected)
 
 
 @pytest.fixture
 def captured_uploads(monkeypatch):
     """Stub sinks.open_url so finalized files are captured in memory instead of
-    hitting GCS. Returns {dest_url: decompressed_text}."""
+    hitting GCS. Returns {dest_url: gzipped_bytes}."""
     uploads: dict[str, bytes] = {}
 
     def fake_open_url(dest: str, mode: str = "rb"):
@@ -54,19 +55,22 @@ def _decompressed(uploads: dict[str, bytes]) -> dict[str, str]:
 
 def test_same_day_appends_without_upload(tmp_path, captured_uploads):
     sink = JsonlGcsSink(tmp_path, GCS_PREFIX)
-    sink.record(_result("2026-05-30T00:00:01"))
-    sink.record(_result("2026-05-30T00:01:01", name="finelog-write"))
+    sink.record(_sample("2026-05-30T00:00:01", metric="probe_up", probe="controller-ping"))
+    sink.record(_sample("2026-05-30T00:01:01", metric="tpu_provision_success", value=3.0, zone="us-east5-a"))
 
     assert captured_uploads == {}, "no rollover should have happened"
     lines = (tmp_path / "probes-2026-05-30.jsonl").read_text().splitlines()
     assert len(lines) == 2
-    assert {json.loads(line)["name"] for line in lines} == {"controller-ping", "finelog-write"}
+    rows = [json.loads(line) for line in lines]
+    assert {r["metric"] for r in rows} == {"probe_up", "tpu_provision_success"}
+    # labels round-trip as a nested object
+    assert any(r["labels"] == {"zone": "us-east5-a"} for r in rows)
 
 
 def test_day_rollover_finalizes_previous_file(tmp_path, captured_uploads):
     sink = JsonlGcsSink(tmp_path, GCS_PREFIX)
-    sink.record(_result("2026-05-30T23:59:00"))
-    sink.record(_result("2026-05-31T00:00:30"))  # new UTC day -> rolls 05-30 up
+    sink.record(_sample("2026-05-30T23:59:00"))
+    sink.record(_sample("2026-05-31T00:00:30"))  # new UTC day -> rolls 05-30 up
 
     dest = f"{GCS_PREFIX}/dt=2026-05-30/probes-2026-05-30.jsonl.gz"
     assert dest in captured_uploads
@@ -79,10 +83,10 @@ def test_day_rollover_finalizes_previous_file(tmp_path, captured_uploads):
 
 def test_startup_sweeps_stranded_file(tmp_path, captured_uploads):
     # A file left behind by a previous process that died before rollover.
-    (tmp_path / "probes-2026-05-29.jsonl").write_text('{"name":"controller-ping"}\n')
+    (tmp_path / "probes-2026-05-29.jsonl").write_text('{"metric":"probe_up"}\n')
 
     sink = JsonlGcsSink(tmp_path, GCS_PREFIX)
-    sink.record(_result("2026-05-30T00:00:01"))
+    sink.record(_sample("2026-05-30T00:00:01"))
 
     dest = f"{GCS_PREFIX}/dt=2026-05-29/probes-2026-05-29.jsonl.gz"
     assert dest in captured_uploads

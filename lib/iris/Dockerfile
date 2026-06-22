@@ -140,8 +140,8 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 # ── Stage: controller ────────────────────────────────────────────────
 FROM deps AS controller
 
-# Controller-only deps: duckdb, pyarrow, kubernetes (marin-iris's `controller`
-# extra). --inexact keeps the py-spy/memray installed above from being pruned.
+# Controller-only deps: kubernetes (marin-iris's `controller` extra).
+# --inexact keeps the py-spy/memray installed above from being pruned.
 RUN uv sync --frozen --package marin-iris --extra controller --inexact
 
 LABEL org.opencontainers.image.description="Iris controller image"

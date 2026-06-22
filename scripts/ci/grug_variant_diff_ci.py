@@ -12,7 +12,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from scripts.grug_dir_diff import (
+from scripts.ci.grug_dir_diff import (
     DEFAULT_EXTENSIONS,
     build_directory_diff_report,
     collect_files,

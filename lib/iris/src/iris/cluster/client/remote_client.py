@@ -15,6 +15,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from rigging.connect import proxy_path
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.cluster.client.bundle import create_workspace_zip
@@ -406,12 +407,12 @@ class RemoteClusterClient:
         """Resolve ``endpoint_name`` to a service address.
 
         When ``use_controller_proxy`` is set (external clients), returns the
-        controller address so RPCs flow through its proxies; otherwise looks
+        endpoint's path under the controller's generic proxy; otherwise looks
         the name up in the controller's endpoint registry and returns the
         backing service's direct address.
         """
         if self._use_controller_proxy:
-            return self._address
+            return f"{self._address.rstrip('/')}{proxy_path(endpoint_name)}"
         endpoints = self.list_endpoints(endpoint_name, exact=True)
         if not endpoints:
             raise ConnectionError(f"No {endpoint_name!r} endpoint registered on controller")
