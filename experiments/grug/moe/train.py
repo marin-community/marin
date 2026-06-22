@@ -82,9 +82,11 @@ logger = logging.getLogger(__name__)
 LiveParamMode = Literal["param", "compute_with_master"]
 
 _DEEPEP_SOURCE_URL = "https://github.com/deepseek-ai/DeepEP.git"
+_DEEPEP_SOURCE_ARCHIVE_ENV = "MAY_DEEPEP_SOURCE_ARCHIVE"
 _DEFAULT_DEEPEP_INTERNODE_NVL_BYTES = 256 * 1024 * 1024
 _DEFAULT_DEEPEP_INTERNODE_RDMA_BYTES = 256 * 1024 * 1024
 _DEEPEP_GRUG_COORDINATOR_PORT = 8476
+_DEEPEP_SOURCE_MARKER_FILE = "csrc/config.hpp"
 
 
 def _maybe_install_rdma_headers(model: GrugModelConfig) -> None:
@@ -144,6 +146,62 @@ def _maybe_upload_profiler_tar(profile_dir: Path, *, run_id: str) -> str | None:
     return remote_path
 
 
+def _safe_extract_tarball(archive: tarfile.TarFile, destination: Path) -> None:
+    destination_resolved = destination.resolve()
+    for member in archive.getmembers():
+        member_path = destination / member.name
+        try:
+            member_resolved = member_path.resolve()
+            member_resolved.relative_to(destination_resolved)
+        except ValueError as exc:
+            raise RuntimeError(f"DeepEP source archive member escapes extraction directory: {member.name}") from exc
+        if member.issym() or member.islnk():
+            raise RuntimeError(f"DeepEP source archive may not contain links: {member.name}")
+    archive.extractall(destination)
+
+
+def _deepep_source_candidate(extracted_root: Path) -> Path:
+    if (extracted_root / _DEEPEP_SOURCE_MARKER_FILE).is_file():
+        return extracted_root
+
+    candidates = []
+    for path in extracted_root.iterdir():
+        if path.is_dir() and (path / _DEEPEP_SOURCE_MARKER_FILE).is_file():
+            candidates.append(path)
+    if len(candidates) == 1:
+        return candidates[0]
+    if candidates:
+        candidate_text = ", ".join(str(path.relative_to(extracted_root)) for path in candidates)
+        raise RuntimeError(f"DeepEP source archive contains multiple candidate source roots: {candidate_text}")
+    raise RuntimeError(f"DeepEP source archive does not contain {_DEEPEP_SOURCE_MARKER_FILE}")
+
+
+def _extract_deepep_source_archive(archive_uri: str, root: Path) -> None:
+    staging_parent = root.parent / f".{root.name}.extracting.{os.getpid()}"
+    if staging_parent.exists():
+        shutil.rmtree(staging_parent)
+    staging_parent.mkdir(parents=True)
+    try:
+        archive_path = staging_parent / "source.tgz"
+        logger.info("Downloading DeepEP source archive from %s", archive_uri)
+        with fsspec.open(archive_uri, "rb") as src, archive_path.open("wb") as dst:
+            shutil.copyfileobj(src, dst)
+
+        extracted_root = staging_parent / "extract"
+        extracted_root.mkdir()
+        logger.info("Extracting DeepEP source archive %s", archive_uri)
+        with tarfile.open(archive_path, "r:*") as archive:
+            _safe_extract_tarball(archive, extracted_root)
+
+        source_candidate = _deepep_source_candidate(extracted_root)
+        if root.exists():
+            shutil.rmtree(root)
+        root.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source_candidate), str(root))
+    finally:
+        shutil.rmtree(staging_parent, ignore_errors=True)
+
+
 def _maybe_bootstrap_deepep_source(model: GrugModelConfig) -> None:
     if model.moe_implementation not in ("deepep", "deepep_composed", "deepep_internode"):
         return
@@ -152,7 +210,8 @@ def _maybe_bootstrap_deepep_source(model: GrugModelConfig) -> None:
     if raw_root and Path(raw_root).exists():
         return
 
-    if not _env_bool("MAY_DEEPEP_BOOTSTRAP_SOURCE", False):
+    archive_uri = os.environ.get(_DEEPEP_SOURCE_ARCHIVE_ENV, "")
+    if not archive_uri and not _env_bool("MAY_DEEPEP_BOOTSTRAP_SOURCE", False):
         return
 
     root = Path(raw_root or "/tmp/marin-deepep/DeepEP").expanduser()
@@ -160,6 +219,11 @@ def _maybe_bootstrap_deepep_source(model: GrugModelConfig) -> None:
     os.environ[DEEPEP_SRC_ENV] = str(root)
     os.environ.setdefault(DEEPEP_CUDA_ARCH_ENV, "sm_90")
     os.environ.setdefault("MARIN_DEEPEP_CACHE_DIR", "/tmp/marin-deepep-cache")
+
+    if archive_uri:
+        logger.info("Using DeepEP source archive %s for %s", archive_uri, root)
+        _extract_deepep_source_archive(archive_uri, root)
+        return
 
     if (root / ".git").exists():
         logger.info("Using existing DeepEP source checkout at %s", root)

@@ -173,6 +173,7 @@ Options:
                             profiler tarball to an S3/R2 prefix after training.
   --deepep-bootstrap-source BOOL
                             MAY_DEEPEP_BOOTSTRAP_SOURCE: clone validated DeepEP source into GPU workers when DEEPEP_SRC_ROOT is unset (default: false).
+                            MAY_DEEPEP_SOURCE_ARCHIVE may point at a tar/tgz archive to extract instead of cloning from GitHub.
   --deepep-ranks-per-node N
                             MAY_DEEPEP_RANKS_PER_NODE forwarded as DEEPEP_RANKS_PER_NODE for internode topology preflight.
   --deepep-processes-per-task N
@@ -674,6 +675,7 @@ for maybe_env in \
     DEEPEP_RUNTIME_NVL_BYTES \
     DEEPEP_RUNTIME_RDMA_BYTES \
     MARIN_DEEPEP_CACHE_DIR \
+    MAY_DEEPEP_SOURCE_ARCHIVE \
     LEVANTER_DEEPEP_HOST_DISPATCH_DEBUG \
     LEVANTER_DEEPEP_INTERNODE_DEBUG \
     LEVANTER_DEEPEP_INTERNODE_COLLAPSE_MODE \
