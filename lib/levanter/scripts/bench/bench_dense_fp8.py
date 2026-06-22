@@ -114,6 +114,11 @@ def main() -> None:
     if args.print_hlo:
         print("=== forward HLO ===")
         print(fwd.lower(x, w).compile().as_text())
+        # The backward holds the dx/dw matmuls (and, for FP8, the E5M2 output-grad
+        # quant) — grep this section separately for __cublas$lt$matmul$f8.
+        if not args.forward_only:
+            print("=== backward HLO ===")
+            print(grad.lower(x, w).compile().as_text())
 
     # Backward runs both grad matmuls (dx, dw), so 2x the forward flop count.
     peak = _bf16_peak_tflops_per_s()
