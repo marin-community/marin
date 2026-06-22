@@ -5,19 +5,22 @@
 
 Benchmarks a single dense projection ``[M, K] @ [K, N]`` (forward + backward),
 emitting steady-state timing, the compiled HLO, and one machine-readable
-``result_json`` line. This is the BF16 baseline arm of the linear-FP8 harness;
-FP8 lowering paths land on top of the same rig (task S2).
+``result_json`` line. ``--path bf16`` (default) is the baseline arm; ``--path
+qdq`` is S2's first FP8 arm — the existing haliax ``Fp8DotGeneralOp`` delayed-
+scaling path, re-measured to see whether XLA still fuses it to an f8 cuBLASLt
+matmul or silently falls back to BF16.
 
 The default shape is a hidden-dim-3072 projection at seq 4096; sweep ``--k``
-over 3072/4096 for the two benchmark dims. Run on an H100 via Iris and read the
-HLO back through ``iris job logs`` (no storage needed):
+over 3072/4096 for the two benchmark dims. Run on an H100 via Iris and grep the
+HLO back through ``iris job logs`` (no storage needed) for ``__cublas$lt$matmul$f8``:
 
     uv run iris --cluster=cw-us-east-02a job run --gpu H100x1 \\
         --enable-extra-resources --extra gpu -- \\
-        python lib/levanter/scripts/bench/bench_dense_fp8.py --k 4096
+        python lib/levanter/scripts/bench/bench_dense_fp8.py --k 4096 --path qdq
 """
 
 import argparse
+import dataclasses
 import json
 import os
 import time
@@ -26,26 +29,48 @@ import jax
 import jax.numpy as jnp
 from jax import lax
 
+from haliax.quantization import Fp8DotGeneralOp
+
 # Contract K (lhs dim 1, rhs dim 0); no batch dims. Shared with the FP8 paths
 # so the lowering differs only by dtype/precision, not the einsum.
 _DIMENSION_NUMBERS = (((1,), (0,)), ((), ()))
 
-# H100 SXM dense (non-sparse) BF16 matmul peak.
+# H100 SXM dense (non-sparse) matmul peaks; FP8 (E4M3) is 2x the BF16 rate.
 _H100_SXM_BF16_TFLOPS_PER_S = 989.5e12
+_H100_SXM_FP8_TFLOPS_PER_S = 1978.9e12
 
 
-def _bf16_peak_tflops_per_s() -> float | None:
-    """Reference dense BF16 peak for the local device, or None if unrecognized."""
+def _peak_tflops_per_s(is_fp8: bool) -> float | None:
+    """Reference dense matmul peak for the local device, or None if unrecognized."""
     if not jax.devices():
         return None
     if "h100" in jax.devices()[0].device_kind.lower():
-        return _H100_SXM_BF16_TFLOPS_PER_S
+        return _H100_SXM_FP8_TFLOPS_PER_S if is_fp8 else _H100_SXM_BF16_TFLOPS_PER_S
     return None
 
 
 def dense_dot(x: jax.Array, w: jax.Array) -> jax.Array:
     """Dense projection ``[M, K] @ [K, N] -> [M, N]``."""
     return lax.dot_general(x, w, _DIMENSION_NUMBERS)
+
+
+def build_dot(path: str, amax_history_length: int):
+    """Return ``(dot_fn, op)`` for the requested lowering path.
+
+    ``qdq`` calls the existing haliax ``Fp8DotGeneralOp`` verbatim: per-tensor
+    delayed-scaling QDQ (E4M3 fwd weights/acts, E5M2 output grad) around a
+    DEFAULT-precision dot, relying on XLA's GemmRewriter to fuse the f8 cuBLASLt
+    matmul. The op is *returned*, not closed over: ``dot_fn(x, w, op)`` takes the
+    state as a runtime argument so the per-tensor scales stay live operands. If
+    the op is closed into the jit instead, XLA constant-folds ``compute_scale``
+    over the (constant) amax history and bakes scale=const into the f8 call —
+    which is the real-training delayed-scaling case faked into a trivially-easier
+    one for the rewriter. ``op`` is ``None`` for bf16.
+    """
+    if path == "bf16":
+        return (lambda x, w: dense_dot(x, w)), None
+    op = Fp8DotGeneralOp.init(amax_history_length=amax_history_length)
+    return (lambda x, w, op: op(x, w, _DIMENSION_NUMBERS)), op
 
 
 def _configure_xla_dump_dir(xla_dump_dir: str) -> str:
@@ -80,7 +105,14 @@ def main() -> None:
     parser.add_argument("--m", type=int, default=4096, help="rows / tokens")
     parser.add_argument("--k", type=int, default=3072, help="contracting / hidden dim")
     parser.add_argument("--n", type=int, default=3072, help="output dim")
-    parser.add_argument("--dtype", type=str, default="bfloat16")
+    parser.add_argument("--dtype", type=str, default="bfloat16", help="operand dtype (QDQ quantizes internally)")
+    parser.add_argument(
+        "--path",
+        choices=("bf16", "qdq"),
+        default="bf16",
+        help="bf16 baseline, or qdq = existing haliax Fp8DotGeneralOp delayed-scaling path",
+    )
+    parser.add_argument("--amax-history-length", type=int, default=1024, help="delayed-scaling amax window (qdq)")
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--forward-only", action="store_true")
@@ -108,24 +140,39 @@ def main() -> None:
     # scalar loss <out, cotangent> gives d(loss)/d(out) = cotangent.
     cotangent = jax.random.normal(key_c, (args.m, args.n), dtype=dtype)
 
-    fwd = jax.jit(dense_dot)
-    grad = jax.jit(jax.grad(lambda a, b: jnp.sum(dense_dot(a, b) * cotangent), argnums=(0, 1)))
+    dot, op = build_dot(args.path, args.amax_history_length)
+    if op is not None:
+        # Seed the delayed-scaling histories from the actual tensors so the scales
+        # are realistic non-unit *runtime* operands (a warmed-up delayed-scaling
+        # state), then pass the op as a jit arg. Zeros + closed-over would collapse
+        # the scale to a baked-in constant 1.0 (see build_dot).
+        length = args.amax_history_length
+        op = dataclasses.replace(
+            op,
+            input_amax_history=jnp.full((length,), jnp.max(jnp.abs(x)).astype(jnp.float32)),
+            kernel_amax_history=jnp.full((length,), jnp.max(jnp.abs(w)).astype(jnp.float32)),
+            output_grad_amax_history=jnp.full((length,), jnp.max(jnp.abs(cotangent)).astype(jnp.float32)),
+        )
+    extra = () if op is None else (op,)
+    fwd = jax.jit(dot)
+    grad = jax.jit(jax.grad(lambda *a: jnp.sum(dot(*a) * cotangent), argnums=(0, 1)))
 
     if args.print_hlo:
         print("=== forward HLO ===")
-        print(fwd.lower(x, w).compile().as_text())
+        print(fwd.lower(x, w, *extra).compile().as_text())
         # The backward holds the dx/dw matmuls (and, for FP8, the E5M2 output-grad
         # quant) — grep this section separately for __cublas$lt$matmul$f8.
         if not args.forward_only:
             print("=== backward HLO ===")
-            print(grad.lower(x, w).compile().as_text())
+            print(grad.lower(x, w, *extra).compile().as_text())
 
     # Backward runs both grad matmuls (dx, dw), so 2x the forward flop count.
-    peak = _bf16_peak_tflops_per_s()
+    peak = _peak_tflops_per_s(is_fp8=args.path != "bf16")
     fwd_flops = 2.0 * args.m * args.k * args.n
 
-    fwd_compile, fwd_steady = _time_jitted(fwd, x, w, steps=args.steps, warmup=args.warmup)
+    fwd_compile, fwd_steady = _time_jitted(fwd, x, w, *extra, steps=args.steps, warmup=args.warmup)
     result = {
+        "path": args.path,
         "m": args.m,
         "k": args.k,
         "n": args.n,
@@ -135,21 +182,22 @@ def main() -> None:
         "fwd_tflops_per_s": fwd_flops / fwd_steady / 1e12,
     }
     if peak is not None:
-        result["fwd_pct_bf16_peak"] = 100.0 * fwd_flops / fwd_steady / peak
+        result["peak_tflops_per_s"] = peak / 1e12
+        result["fwd_pct_peak"] = 100.0 * fwd_flops / fwd_steady / peak
     if not args.forward_only:
-        bwd_compile, bwd_steady = _time_jitted(grad, x, w, steps=args.steps, warmup=args.warmup)
+        bwd_compile, bwd_steady = _time_jitted(grad, x, w, *extra, steps=args.steps, warmup=args.warmup)
         result["bwd_compile_time_s"] = bwd_compile
         result["bwd_steady_time_s"] = bwd_steady
         result["bwd_tflops_per_s"] = 2.0 * fwd_flops / bwd_steady / 1e12
         if peak is not None:
-            result["bwd_pct_bf16_peak"] = 100.0 * 2.0 * fwd_flops / bwd_steady / peak
+            result["bwd_pct_peak"] = 100.0 * 2.0 * fwd_flops / bwd_steady / peak
 
     if args.profiler_dir:
         profiler_dir = os.path.abspath(args.profiler_dir)
         with jax.profiler.trace(profiler_dir):
-            jax.block_until_ready(fwd(x, w))
+            jax.block_until_ready(fwd(x, w, *extra))
             if not args.forward_only:
-                jax.block_until_ready(grad(x, w))
+                jax.block_until_ready(grad(x, w, *extra))
         result["profiler_dir"] = profiler_dir
     if xla_dump_dir is not None:
         result["xla_dump_dir"] = xla_dump_dir
