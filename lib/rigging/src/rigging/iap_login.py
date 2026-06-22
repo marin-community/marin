@@ -78,7 +78,7 @@ def desktop_login(name: str, client_secrets_path: str, *, headless: bool = False
 
 def _login_hint(name: str) -> str:
     """The canonical 'run marin-login' remedy for endpoint ``name``."""
-    return f"run `marin-login {name} --client-secrets <desktop.json>` to authenticate"
+    return f"run `marin-login login {name} --client-secrets <desktop.json>` to authenticate"
 
 
 def provider_for(name: str) -> IapRefreshTokenProvider:
