@@ -158,19 +158,16 @@ WANDB_API_KEY="$WANDB_API_KEY" \
   uv run python experiments/${YOUR_EXPERIMENT_SCRIPT}.py --cluster=marin
 ```
 
-This ships the executor to a lightweight CPU **coordinator** job on the cluster,
-which drives the DAG and spawns the TPU/GPU sub-tasks via Fray; your terminal
-only streams logs, so the run survives a disconnect (reconnect with `iris job
-logs -f <id>`, or `--detach` to return right after submit). The coordinator bakes
-each step's output path under the marin prefix in its own region and pins the
-sub-tasks there, so checkpoints land in that regional bucket — no `MARIN_PREFIX`
-to set.
+The run executes on the cluster, not your laptop — your terminal just streams
+logs, so a disconnect won't kill it (reconnect with `iris job logs -f <id>`, or
+pass `--detach` to return right after submitting). Checkpoints land in the
+cluster's regional bucket, so there's no `MARIN_PREFIX` to set. See
+[the executor docs](../explanations/executor.md) for what `--cluster` does under
+the hood.
 
 Useful flags: `--tpu_type=v4-8` overrides the accelerator, `--region=...` places
 the whole run in a region, `--local` runs in-process, and
-`--executor.dry_run=True` plans without submitting. See
-[`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
-for the Iris CLI reference.
+`--executor.dry_run=True` plans without submitting.
 
 Following Marin's guidelines, name your experiment script `experiments/exp{GITHUB_ISSUE_NUMBER}_{DESCRIPTOR}.py`, where `GITHUB_ISSUE_NUMBER` is the issue number for your experiment and `DESCRIPTOR` is a brief description.
 

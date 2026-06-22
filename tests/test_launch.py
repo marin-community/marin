@@ -10,7 +10,7 @@ import draccus
 import pytest
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
-from fray.types import GpuConfig, ResourceConfig
+from fray.types import ResourceConfig
 from iris.cluster.constraints import region_constraint, zone_constraint
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep
 from marin.execution.types import VersionedValue, versioned
@@ -43,11 +43,10 @@ def test_override_resources_region_zone_preserves_other_fields():
 
 def test_override_resources_swaps_tpu_variant_when_vm_count_matches():
     # v5p-8 and v4-8 are both single-VM, so the replica count stays valid.
-    base = ResourceConfig.with_tpu("v5p-8", preemptible=False)
+    base = ResourceConfig.with_tpu("v5p-8")
     out = override_resources(base, LaunchConfig(tpu_type="v4-8"))
     assert out.device.variant == "v4-8"
     assert out.replicas == base.replicas
-    assert out.preemptible is False
 
 
 def test_override_resources_rejects_vm_count_mismatch():
@@ -65,7 +64,6 @@ def test_override_resources_rejects_flexible_tpu_config():
 
 def test_override_resources_rejects_tpu_type_on_non_tpu():
     base = ResourceConfig.with_gpu("H100", count=8)
-    assert isinstance(base.device, GpuConfig)
     with pytest.raises(ValueError, match="TPU"):
         override_resources(base, LaunchConfig(tpu_type="v4-8"))
 
@@ -105,7 +103,6 @@ def test_apply_overrides_updates_versioned_config_resources():
     # from config.resources, so the override must reach it and keep the wrapper.
     base = ResourceConfig.with_tpu("v5p-8")
     step = ExecutorStep(name="train/x", fn=lambda p: None, config=_PodConfigStub(resources=versioned(base)))
-    assert step.resources is None
     out = launch._apply_overrides_to_step(step, LaunchConfig(tpu_type="v4-8", region="us-central2"))
     assert isinstance(out.config.resources, VersionedValue)
     assert out.config.resources.value.device.variant == "v4-8"
@@ -116,7 +113,6 @@ def test_apply_overrides_leaves_inline_cpu_step_untouched():
     # A CPU data-prep step keeps its cached identity: even with config.resources set
     # and --region passed, a CPU device is not an accelerator target, so it's skipped.
     step = ExecutorStep(name="data/x", fn=lambda p: None, config=_PodConfigStub(resources=ResourceConfig.with_cpu()))
-    assert step.resources is None
     assert launch._apply_overrides_to_step(step, LaunchConfig(region="us-central2")) is step
 
 

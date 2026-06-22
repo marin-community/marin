@@ -44,14 +44,12 @@ WANDB_API_KEY="$WANDB_API_KEY" \
   uv run python experiments/grug/base/launch.py --cluster=marin
 ```
 
-`--cluster` ships the executor to a lightweight CPU **coordinator** job on the
-cluster, which submits the TPU training job via Fray; your terminal only streams
-logs, so the run survives a disconnect (reconnect with `iris job logs -f <id>`,
-or `--detach` to return right after submit). `--tpu_type=v4-8` / `--region=...`
-override the template's resources. Outputs and checkpoints land in the regional
-bucket inferred on the worker, so there is no `MARIN_PREFIX` to set. See
-[`lib/iris/OPS.md`](../../lib/iris/OPS.md) for the Iris CLI reference and
-troubleshooting.
+`--cluster` runs the experiment on the cluster instead of your laptop; your
+terminal just streams logs, so a disconnect won't kill the run (reconnect with
+`iris job logs -f <id>`, or `--detach` to return right after submitting).
+`--tpu_type=v4-8` / `--region=...` override the template's resources. See
+[the executor docs](../../docs/explanations/executor.md) for what `--cluster`
+does, and [`lib/iris/OPS.md`](../../lib/iris/OPS.md) for the Iris CLI reference.
 
 ## Visual diff for template variants
 
