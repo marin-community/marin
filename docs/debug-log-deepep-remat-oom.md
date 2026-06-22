@@ -199,6 +199,30 @@ executing. It is emitted immediately before the first compiled train-step call.
 For MAY329, the current active state is first-step compilation, not a proven
 DeepEP forward-dispatch hang.
 
+## Results
+
+MAY329 eventually got past the first-step compilation window and failed in the
+DeepEP internode forward-dispatch counter wait:
+
+- W&B state: failed, with only static FLOP summary fields and no train metrics.
+- Task 0 ranks 0-7 timed out in
+  `WaitForInternodeRecvCounts`.
+- The timeout diagnostics reported `ready_expert_counters=0`,
+  `num_recv_tokens=-1`, `num_rdma_recv_tokens=-1`, and all expert counters as
+  `-1`.
+- No matching filtered task-1 Python traceback, OOM, NCCL error, or counter
+  timeout was visible before the run was stopped.
+- The child and parent Iris jobs were stopped after W&B had already marked the
+  run failed.
+
+This changes the interpretation again: the long silent phase was compilation,
+but after compilation the EP16 x-only/JAX-backward DeepEP path still has an
+internode forward-dispatch synchronization problem. The untouched counters on
+task 0 mean the peer-side notify/write path did not become visible to task 0.
+The next run needs low-noise host-dispatch stage logging that distinguishes
+`before_notify`, `after_notify`, `before_wait`, and `after_wait` by rank without
+dumping buffers.
+
 ## Future work
 
 - [x] Add a C++/FFI primitive for x-only internode combine-with-local-collapse
@@ -208,10 +232,12 @@ DeepEP forward-dispatch hang.
       `_dispatch_internode_cached_impl` followed by
       `_collapse_local_assignments_internode_bwd_impl`.
 - [x] Add narrower DeepEP recv-counter diagnostics for the EP16 timeout.
-- [ ] Re-run B32 EP16 DeepEP internode with `offload_moe_hidden` from
-      `4258fe300` or later if MAY328 bounces again without metrics.
-- [ ] Let MAY329 compile long enough to distinguish compile latency from
+- [x] Re-run B32 EP16 DeepEP internode with worker-exit diagnostics from
+      `4258fe300` or later.
+- [x] Let MAY329 compile long enough to distinguish compile latency from
       runtime DeepEP transport failure.
+- [ ] Add low-noise DeepEP host-dispatch stage diagnostics for notify/wait
+      asymmetry without enabling full buffer summaries.
 - [ ] If B32 passes, retry B64 and profile remat overhead versus ring/all-to-all.
 - [ ] If B32 reaches `cudaMallocAsync(x-only fused local-collapse bwd recv_out)`
       OOM, replace the staging temp with a true direct packed-output backward
