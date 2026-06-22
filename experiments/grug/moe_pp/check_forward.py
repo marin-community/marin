@@ -69,6 +69,11 @@ CONFIG = GrugModelConfig(
     max_seq_len=SEQ_LEN,
     sliding_window=SEQ_LEN,
     moe_implementation="ring",
+    # Reference (plain-JAX) attention: the parity checks run short sequences, and the
+    # TPU splash kernel requires kv seq length to be a multiple of 128. The pipeline
+    # differentiates attention inside the shard_map, where reference (einsum) attention
+    # transposes cleanly; the EP ring is what these checks exercise.
+    attention_implementation="reference",
 )
 
 
