@@ -377,9 +377,13 @@ confirms the path.
      (+6–15%). XLA matches the bwd dot shape with a runtime scale but not the fwd one.
   - *Sanity:* a control with the op **closed over the jit** (constant scales) flips the fwd to `$f8` —
     confirming the failure is specific to *live* delayed-scaling scales, the training-relevant case.
-- **Interpretation:** the fwd is one DEFAULT-precision dot fed by `in_qdq` (dequant×live-scale) on both
-  operands; XLA's current `kScaledDot`/`ScaledDotRewriter` doesn't match that shape with a runtime
-  scale (the version-drift fragility R5 flagged). Don't rely on the QDQ→f8 pattern for the forward.
+- **Interpretation (SUPERSEDED — see GFP8-005):** the original read here was a TN-layout / `kScaledDot`
+  /`ScaledDotRewriter` version-drift story. Both the layout-causal claim and the "rewriter declined"
+  claim were later **refuted** (primary-source research + a pass-level HLO dump + an independent Codex
+  review). The defensible statement is narrower: *the QDQ forward is not captured by any FP8 rewrite
+  before XLA's `float_normalization`/`simplify-fp-conversions` strips its f8 representation; the backward
+  is captured and fires `$f8`.* Root-cause discriminator still open — tracked in GFP8-005. Practical
+  takeaway unchanged: don't rely on the QDQ→f8 pattern for the forward as it stands.
 - **Reproduced on the rewritten branch** (`234fddd23`, job `/matt/grug-s2-verify-20260622-150148`):
   identical lowering — qdq fwd no `$f8` (d3072 bf16 Triton gemm fusion, d4096 bf16 `$lt$matmul`), bwd `$f8` ×2
   both dims with live `%loop_convert_fusion` scales; perf within run-to-run variance (qdq fwd 341/451,
@@ -388,7 +392,49 @@ confirms the path.
   `result_json|=== |custom_call_target` to capture complete, untruncated HLO evidence. (2) iris CLI via
   `--project /Users/matt/projects/marin` (main venv's `iris[controller]`) while cwd stays the S2 worktree
   (bundle carries the qdq code); `KUBECONFIG=~/.kube/coreweave-iris-gpu` (`use coreweave` direnv target).
-- **Next action:** build the fix arms and re-measure fwd `$f8` under **live** scaling — (i) David's manual
-  `dq(op(q,q))` (genuine f8 operands + explicit scale → the kScaledDot shape directly), (ii)
-  `jax.nn.scaled_dot_general` (path C), (iii) fast-accum. Bar to clear: fire fwd `$f8` with live scales
-  and beat the bf16 baseline.
+- **Next action:** root-cause the forward non-capture first (GFP8-005), then build the manual
+  `dq(dot(q,q))` fix arm. Dropped from the earlier list: `jax.nn.scaled_dot_general` (path C — Blackwell-
+  only mxfp8, dead on Hopper) and fast-accum (out of scope until `$f8` fires at all). Bar to clear:
+  fire fwd `$f8` with live scales and beat the bf16 baseline.
+
+### 2026-06-22 — GFP8-005: S2 root-cause — forward f8 stripped pre-rewrite; layout/"declined" claims refuted
+- **Goal:** find *why* the QDQ forward never emits `$f8` (GFP8-004), to a primary-source standard. Three
+  causal stories were tested and the first two **refuted**.
+- **Refuted — TN-vs-NN layout (was the leading hypothesis):** cuBLASLt FP8 on Hopper is genuinely TN-only,
+  but XLA's GPU `GemmRewriter` *inserts transposes* to canonicalize FP8 operands (OpenXLA PR #59515, Feb
+  2023; JAX #22313 shows a plain NN `[1]×[0]` forward fuses to `$f8`). So TN-vs-NN is a **perf** concern
+  (avoids an inserted transpose — what TransformerEngine precomputes via a column-major FP8 copy), **not**
+  a correctness gate. If layout were the cause we'd see `$f8` + a transpose, not a pure bf16 GEMM with the
+  f8 converts gone. (Primary-source research, 4 claims, 3-0 each.)
+- **Refuted — target-independent simplification:** CPU HLO dump (`--xla-dump-dir`, `--m 256 --k 256 --n
+  256 --path qdq --forward-only`): the forward module carries **2 `f8e4m3` converts in
+  `before_optimizations` and still 2 in `cpu_after_optimizations`**, feeding the dot. Nothing
+  target-independent removes them → the collapse is GPU-pipeline-specific.
+- **Eliminated for the bench — operand rank:** the bench forward dot is 2-D (one contracting + one free
+  dim), so the f8 rewriter's dimension-count precondition is satisfied. (Still live for the real model's
+  3-D attention projections — separate concern.)
+- **Decisive evidence — H100 pass-level dump** (`--xla_dump_hlo_pass_re=.*`, forward-only d4096, job
+  `/matt/grug-s2-passdump`; analysis script `lib/levanter/scripts/bench/_s2_passdump.sh`): f8e4m3 count
+  per pass on the forward module (`module_11249.jit__lambda`, 83 pass files):
+  - `2` from pass `0000` through `0028`; `0` after pass `0029` **`simplify-fp-conversions`** (the
+    `float_normalization` pipeline).
+  - `__cublas$lt$matmul$f8` appears in **none** of the 83 files; a **bf16** `__cublas$lt$matmul` is
+    created later at `0031` (post-layout-assignment / autotuner).
+- **Independent review (Codex, gpt-5.5, read the source) — refined the deduction:** my step "the rewriter
+  *inspected and declined* the forward" is **not** established by the forward dump. Proven only:
+  *the forward f8 representation is destroyed at `simplify-fp-conversions` and no `$f8` survives.* Whether
+  an FP8 rewrite ran-and-missed vs. never-reached-it is **unresolved** (unchanged passes may emit no dump,
+  so a missing filename ≠ a pass that didn't run; `ScaledDotRewriter` is also a *separate* pass from the
+  FP8 path of `GemmRewriter`). Codex also down-ranked precision as the discriminator (XLA emits E4M3²
+  `DEFAULT` NN f8 dots — issue #17276; our backward accepts `HIGHEST`); stronger suspects: **scale
+  representation** (state inits scales as `f32[1]`, not scalar `f32[]` — `quantization.py:163`), the exact
+  syntactic dequant DAG, and the number of runtime-scaled operands.
+- **Defensible conclusion:** *the forward QDQ graph is not captured by an FP8 rewrite before
+  float-normalization eliminates its f8 representation; the backward is captured and fires `$f8`.* The
+  fwd/bwd discriminator is open.
+- **Next action:** a confirm/refute research agent is dispatched (claims C1 pass-order, C2
+  captured-vs-never-seen, C3 true discriminator, C4 does manual `dq(dot(q,q))` fire on 0.10/H100; methods
+  = XLA 0.10 source + two experiments: backward pass dump, forward-only factorial probe over
+  precision×dtype×scale-count×scale-shape with direct `convert(f8)*scale` operands). Hold local
+  experiments for its verdict; then implement the indicated fix (manual arm, or a one-line QDQ change if
+  the discriminator is scale-shape/precision).
