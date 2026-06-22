@@ -378,6 +378,10 @@ confirms the path.
 - **Interpretation:** the fwd is one DEFAULT-precision dot fed by `in_qdq` (dequant×live-scale) on both
   operands; XLA's current `kScaledDot`/`ScaledDotRewriter` doesn't match that shape with a runtime
   scale (the version-drift fragility R5 flagged). Don't rely on the QDQ→f8 pattern for the forward.
+- **Reproduced on the rewritten branch** (`234fddd23`, job `/matt/grug-s2-verify-20260622-150148`):
+  identical lowering — qdq fwd no `$f8` (d3072 no cuBLAS matmul, d4096 bf16 `$lt$matmul`), bwd `$f8` ×2
+  both dims with live `%loop_convert_fusion` scales; perf within run-to-run variance (qdq fwd 341/451,
+  bwd 539/712 TF/s; bf16 fwd 405/532, bwd 521/630).
 - **Ops notes:** (1) `iris job logs` tail-caps at ~1000 lines → pipe the remote bench through `grep` for
   `result_json|=== |custom_call_target` to capture complete, untruncated HLO evidence. (2) iris CLI via
   `--project /Users/matt/projects/marin` (main venv's `iris[controller]`) while cwd stays the S2 worktree
