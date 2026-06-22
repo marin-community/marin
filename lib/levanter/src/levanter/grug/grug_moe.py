@@ -17,6 +17,7 @@ Implementation overview:
 
 from collections.abc import Callable, Sequence
 from functools import partial
+from typing import cast
 
 import equinox as eqx
 import jax
@@ -411,11 +412,14 @@ def grouped_moe_mlp(
         return result
 
     if report_capacity_overflow:
-        out, dropped = result
+        out, dropped = cast(tuple[Float[Array, "G T D"], Int[Array, "G"]], result)
         out = jnp.where(jnp.arange(group_size)[:, None, None] < valid_group_size, out, jnp.zeros_like(out))
         dropped = jnp.where(jnp.arange(group_size) < valid_group_size, dropped, jnp.zeros_like(dropped))
         return out, dropped
-    return jnp.where(jnp.arange(group_size)[:, None, None] < valid_group_size, result, jnp.zeros_like(result))
+    result_array = cast(Float[Array, "G T D"], result)
+    return jnp.where(
+        jnp.arange(group_size)[:, None, None] < valid_group_size, result_array, jnp.zeros_like(result_array)
+    )
 
 
 @named_call
