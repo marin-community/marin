@@ -15,6 +15,7 @@ from haliax.nn.ragged_dot import ragged_dot
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import (
+    _assignment_destinations_have_recv_topk_layout,
     _collapse_local_assignments_gather_jax,
     _collapse_local_assignments_jax,
     _tokens_per_rdma_rank,
@@ -530,6 +531,16 @@ def test_deepep_internode_gather_collapse_matches_scatter_collapse():
     )
 
     np.testing.assert_allclose(np.asarray(gather), np.asarray(scatter), rtol=0, atol=0)
+
+
+def test_deepep_internode_collapse_destination_layout_detects_invalid_shape():
+    recv_capacity = 4
+
+    assert _assignment_destinations_have_recv_topk_layout(jnp.arange(8, dtype=jnp.int32), recv_capacity=recv_capacity)
+    assert not _assignment_destinations_have_recv_topk_layout(
+        jnp.arange(5, dtype=jnp.int32),
+        recv_capacity=recv_capacity,
+    )
 
 
 def test_deepep_internode_gather_collapse_gradients_match_scatter_collapse():
