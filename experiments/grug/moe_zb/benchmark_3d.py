@@ -35,6 +35,23 @@ from experiments.grug.moe_zb.train import Schedule, _arithmetic_batch, make_trai
 logger = logging.getLogger(__name__)
 
 
+def _param_count(num_layers, hidden_dim, num_experts, vocab_size) -> tuple[float, float]:
+    """(total, active) parameter counts for the grug-MoE config, in billions.
+
+    Per layer: attention ~4*D^2 (square q/k/v/o at this head config), dense-eval MoE
+    3 expert matrices of [E,D,2D] plus a [D,E] router. Embed + untied head are 2*V*D.
+    "Active" replaces all-experts with top-2 in the FFN term.
+    """
+    d = hidden_dim
+    attn = 4 * d * d
+    moe_total = 6 * num_experts * d * d + d * num_experts
+    moe_active = 6 * 2 * d * d + d * num_experts
+    embed_head = 2 * vocab_size * d
+    total = embed_head + num_layers * (attn + moe_total)
+    active = embed_head + num_layers * (attn + moe_active)
+    return total / 1e9, active / 1e9
+
+
 def bench_pipeline_3d(
     cfg, num_stages, num_data, num_expert, *, num_microbatches, microbatch, seq_len, lr, warmup, iters, seed
 ) -> float:
@@ -129,6 +146,13 @@ def main() -> int:
         seq_len, vocab_size = 32, 256
         num_microbatches, microbatch = 8, 4
         warmup, iters = 2, 5
+    # Model-dimension overrides for a largest-that-fits sweep on hardware.
+    num_layers = int(os.environ.get("MOE_ZB_LAYERS", num_layers))
+    hidden_dim = int(os.environ.get("MOE_ZB_HIDDEN", hidden_dim))
+    num_experts = int(os.environ.get("MOE_ZB_EXPERTS", num_experts))
+    seq_len = int(os.environ.get("MOE_ZB_SEQ", seq_len))
+    vocab_size = int(os.environ.get("MOE_ZB_VOCAB", vocab_size))
+    microbatch = int(os.environ.get("MOE_ZB_MICROBATCH", microbatch))
 
     num_devices = jax.device_count()
     fill = num_devices // num_stages
@@ -150,14 +174,19 @@ def main() -> int:
         cfg, num_devices, global_batch=global_batch, seq_len=seq_len, lr=3e-3, warmup=warmup, iters=iters, seed=0
     )
     fsdp_tps = tokens_per_step / fsdp_s
+    total_b, active_b = _param_count(num_layers, hidden_dim, num_experts, vocab_size)
     logger.info(
-        "model: layers=%d hidden=%d experts=%d seq=%d global_batch=%d tok/step=%d",
+        "model: layers=%d hidden=%d experts=%d seq=%d vocab=%d global_batch=%d tok/step=%d"
+        " | ~%.1fB total / ~%.1fB active",
         num_layers,
         hidden_dim,
         num_experts,
         seq_len,
+        vocab_size,
         global_batch,
         tokens_per_step,
+        total_b,
+        active_b,
     )
     logger.info("FSDP (%d-way) baseline: %.1f ms/step  %.0f tokens/sec", num_devices, fsdp_s * 1e3, fsdp_tps)
 
