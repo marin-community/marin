@@ -70,7 +70,7 @@ def _resolve_controller(cluster: str | None, controller: str | None) -> Abstract
     """Return a context manager yielding a reachable controller URL.
 
     ``--controller`` is used verbatim; otherwise the named ``--cluster`` config is
-    resolved and an SSH tunnel to its controller is opened (mirroring the iris CLI).
+    resolved and an SSH tunnel to its controller is opened.
     """
     if controller:
         return contextlib.nullcontext(controller)

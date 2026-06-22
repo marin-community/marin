@@ -3,13 +3,14 @@
 
 """Tests for the quick-serve TP auto-selection and dashboard reverse proxy."""
 
+import dataclasses
 import json
 import socket
 
 import pytest
 import requests
 from marin.inference.quick_serve import resolve_model_path, select_tensor_parallel_size
-from marin.inference.quick_serve_dashboard import build_dashboard_app, serve_app_background
+from marin.inference.quick_serve_dashboard import ServingInfo, build_dashboard_app, serve_app_background
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Route
@@ -18,8 +19,8 @@ from starlette.routing import Route
 @pytest.mark.parametrize(
     ("heads", "chips", "kv_heads", "expected"),
     [
-        # The two cases the issue calls out for the Delphi ladder on an 8-chip slice.
-        (30, 8, None, 2),  # 9.7B-1e22: only 1 and 2 are power-of-two divisors of 30
+        # Non-power-of-two head counts on an 8-chip slice still pick a valid TP.
+        (30, 8, None, 2),  # only 1 and 2 are power-of-two divisors of 30
         (11, 8, None, 1),  # odd/prime head count cannot shard
         # Power-of-two head counts use the whole slice.
         (32, 8, 8, 8),
@@ -106,7 +107,15 @@ def _collect_sse_text(response: requests.Response, field: str) -> str:
 def test_dashboard_serves_ui_and_reverse_proxies_streaming():
     upstream_port = _free_port()
     dashboard_port = _free_port()
-    info = {"model": "fake-model", "tensor_parallel_size": 2, "dtype": "bfloat16", "has_chat_template": True}
+    info = ServingInfo(
+        model="fake-model",
+        tensor_parallel_size=2,
+        max_model_len=4096,
+        dtype="bfloat16",
+        has_chat_template=True,
+        tpu_type="v6e-8",
+        endpoint="/serve/fake",
+    )
 
     with serve_app_background(_fake_vllm_app(), host="127.0.0.1", port=upstream_port):
         app = build_dashboard_app(
@@ -119,7 +128,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
             assert page.status_code == 200
             assert "marin · quick serve" in page.text
 
-            assert requests.get(f"{base}/info", timeout=10).json() == info
+            assert requests.get(f"{base}/info", timeout=10).json() == dataclasses.asdict(info)
             assert requests.get(f"{base}/health", timeout=10).json() == {"status": "ok", "model": "fake-model"}
             assert requests.get(f"{base}/v1/models", timeout=10).json()["data"][0]["id"] == "fake-model"
 
@@ -142,10 +151,17 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
 
 def test_dashboard_health_reports_loading_when_upstream_down():
     dashboard_port = _free_port()
-    # Point at a closed port so the upstream health probe fails fast.
-    app = build_dashboard_app(
-        upstream_base_url=f"http://127.0.0.1:{_free_port()}", model_id="fake-model", info={"model": "fake-model"}
+    info = ServingInfo(
+        model="fake-model",
+        tensor_parallel_size=1,
+        max_model_len=None,
+        dtype="bfloat16",
+        has_chat_template=False,
+        tpu_type="v6e-8",
+        endpoint="/serve/fake",
     )
+    # Point at a closed port so the upstream health probe fails fast.
+    app = build_dashboard_app(upstream_base_url=f"http://127.0.0.1:{_free_port()}", model_id="fake-model", info=info)
     with serve_app_background(app, host="127.0.0.1", port=dashboard_port):
         response = requests.get(f"http://127.0.0.1:{dashboard_port}/health", timeout=10)
     assert response.status_code == 503

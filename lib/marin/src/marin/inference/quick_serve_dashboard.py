@@ -15,10 +15,12 @@ streamed back verbatim, so server-sent-event token streaming works end to end.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import threading
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass
 
 import httpx
 import uvicorn
@@ -51,11 +53,24 @@ _REQUEST_DROP_HEADERS = frozenset(
 _RESPONSE_DROP_HEADERS = frozenset({"content-length", "connection", "keep-alive", "transfer-encoding"})
 
 
+@dataclass(frozen=True)
+class ServingInfo:
+    """Static serving metadata surfaced at ``/info`` and rendered by the dashboard."""
+
+    model: str
+    tensor_parallel_size: int
+    max_model_len: int | None
+    dtype: str
+    has_chat_template: bool
+    tpu_type: str
+    endpoint: str
+
+
 def build_dashboard_app(
     *,
     upstream_base_url: str,
     model_id: str,
-    info: Mapping[str, object],
+    info: ServingInfo,
     request_timeout_seconds: float = 600.0,
 ) -> Starlette:
     """Build the Starlette app fronting a local vLLM server.
@@ -83,7 +98,7 @@ def build_dashboard_app(
         return HTMLResponse(DASHBOARD_HTML)
 
     async def serving_info(_request: Request) -> Response:
-        return JSONResponse(dict(info))
+        return JSONResponse(dataclasses.asdict(info))
 
     async def health(_request: Request) -> Response:
         client = state["client"]

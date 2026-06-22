@@ -9,13 +9,12 @@ dashboard as an Iris endpoint so it is reachable through the controller proxy. T
 job shuts itself down after a wall-clock timeout so a forgotten server does not sit
 on a slice indefinitely.
 
-The launcher CLI lives in :mod:`marin.inference.quick_serve_cli`; this module holds
-the config and the in-job entrypoint (:func:`serve_in_job`) that runs on the slice.
+This module holds the serving config and the in-job entrypoint that boots vLLM on
+the slice; the ``marin-serve`` launcher CLI is a separate module.
 """
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import re
@@ -36,7 +35,7 @@ from rigging.log_setup import configure_logging
 from transformers import AutoConfig
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.inference.quick_serve_dashboard import build_dashboard_app, serve_app_background
+from marin.inference.quick_serve_dashboard import ServingInfo, build_dashboard_app, serve_app_background
 from marin.inference.vllm_server import VllmEnvironment, _is_object_store_path
 
 logger = logging.getLogger(__name__)
@@ -284,15 +283,15 @@ def serve_in_job(config: QuickServeConfig) -> None:
         model_id = env.model_id
         upstream_base_url = env.server_url.removesuffix(_VLLM_API_SUFFIX)
         has_chat_template = config.chat_template_content is not None or detect_chat_support(upstream_base_url, model_id)
-        info = {
-            "model": model_id,
-            "tensor_parallel_size": tensor_parallel_size,
-            "max_model_len": config.max_model_len,
-            "dtype": config.dtype,
-            "has_chat_template": has_chat_template,
-            "tpu_type": config.tpu_type,
-            "endpoint": config.endpoint_name,
-        }
+        info = ServingInfo(
+            model=model_id,
+            tensor_parallel_size=tensor_parallel_size,
+            max_model_len=config.max_model_len,
+            dtype=config.dtype,
+            has_chat_template=has_chat_template,
+            tpu_type=config.tpu_type,
+            endpoint=config.endpoint_name,
+        )
         app = build_dashboard_app(upstream_base_url=upstream_base_url, model_id=model_id, info=info)
         with serve_app_background(app, host="0.0.0.0", port=port):
             address = f"http://{advertise_host}:{port}"
@@ -313,5 +312,9 @@ def serve_in_job(config: QuickServeConfig) -> None:
             try:
                 _block_until_timeout(env, config.timeout_hours)
             finally:
-                with contextlib.suppress(Exception):
+                try:
                     ctx.registry.unregister(endpoint_id)
+                except Exception:
+                    # Best-effort during teardown: the controller may already have
+                    # dropped the endpoint when the task began terminating.
+                    logger.warning("Failed to unregister quick-serve endpoint id=%s", endpoint_id, exc_info=True)
