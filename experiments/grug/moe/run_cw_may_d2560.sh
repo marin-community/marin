@@ -122,7 +122,7 @@ Options:
   --tracker NAME            MAY_TRACKER: wandb or json_logger (default: wandb).
   --data NAME               MAY_DATA: slimpajama, nemotron, or synthetic (default: slimpajama).
   --checkpoints MODE        MAY_CHECKPOINTS: none, local, or s3 (default: none).
-  --remat MODE              MAY_REMAT: none, recompute_all, save_moe, or offload_moe (default: save_moe).
+  --remat MODE              MAY_REMAT: none, recompute_all, save_moe, offload_moe, or offload_moe_hidden (default: save_moe).
   --moe-capacity-factor F   MAY_MOE_CAPACITY_FACTOR expert-parallel dispatch capacity multiplier (default: 1.0).
   --top-k N                 MAY_TOP_K experts per token (default: 4).
   --use-pko BOOL            MAY_USE_PKO diagnostic toggle (default: true).
