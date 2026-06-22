@@ -15,12 +15,14 @@ import json
 import os
 import re
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import click
 
 from finelog.deploy.bootstrap import render_template
 from finelog.deploy.config import FinelogConfig
+from finelog.deploy.image import resolve_image_digest
 
 _TEMPLATE_VAR_RE = re.compile(r"\{\{ (\w+) \}\}")
 
@@ -123,8 +125,14 @@ def _kubectl_apply(manifest: str) -> None:
 
 
 def k8s_up(cfg: FinelogConfig) -> None:
-    """Render manifests and apply them; wait for the deployment to roll out."""
+    """Render manifests and apply them; wait for the deployment to roll out.
+
+    ``cfg.image`` is pinned to its content digest before rendering, so the
+    Deployment references an immutable image and a redeploy lands exactly what
+    the tag points to now (with ``imagePullPolicy: IfNotPresent``, cache-safe).
+    """
     assert cfg.deployment.k8s is not None
+    cfg = replace(cfg, image=resolve_image_digest(cfg.image))
     k8s = cfg.deployment.k8s
     secret_manifest = _build_s3_secret_manifest(cfg)
     if secret_manifest is not None:
@@ -175,7 +183,7 @@ def k8s_restart(cfg: FinelogConfig) -> None:
         "set",
         "image",
         f"deployment/{cfg.name}",
-        f"finelog={cfg.image}",
+        f"finelog={resolve_image_digest(cfg.image)}",
         "-n",
         k8s.namespace,
     )
