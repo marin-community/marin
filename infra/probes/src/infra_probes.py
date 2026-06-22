@@ -16,6 +16,7 @@ import uuid
 from pathlib import Path
 
 import click
+from cluster import collect_jobs, collect_workers
 from finelog.client.log_client import FlushResult, LogClient
 from finelog.rpc import logging_pb2
 from iris.cluster.client.remote_client import RemoteClusterClient
@@ -47,6 +48,15 @@ DEFAULT_ZONES = ("europe-west4-b", "us-west4-a")
 PROVISION_WINDOW_HOURS = 3.0
 PROVISION_CADENCE = 900.0
 PROVISION_TIMEOUT = 60.0
+
+# Cluster-state gauges backing the status page. Workers is a single ListWorkers
+# RPC paged client-side; jobs is one raw-SQL GROUP BY. Both are sub-second, so the
+# cadences are about freshness (workers churn faster than the 24h job window) and
+# the timeouts only cover a slow/hung controller.
+WORKERS_CADENCE = 60.0
+WORKERS_TIMEOUT = 30.0
+JOBS_CADENCE = 120.0
+JOBS_TIMEOUT = 30.0
 
 # The iris worker unconditionally runs `uv sync --all-packages --no-group dev`
 # against the job's bundle, which fails without a pyproject.toml (and without a
@@ -191,6 +201,18 @@ def build_collectors(iris: RemoteClusterClient, finelog: LogClient, zones: tuple
             collect=lambda: collect_provisioning(finelog, window_hours=PROVISION_WINDOW_HOURS),
             timeout=PROVISION_TIMEOUT,
             cadence=PROVISION_CADENCE,
+        ),
+        Collector(
+            name="workers",
+            collect=lambda: collect_workers(iris),
+            timeout=WORKERS_TIMEOUT,
+            cadence=WORKERS_CADENCE,
+        ),
+        Collector(
+            name="jobs",
+            collect=lambda: collect_jobs(iris),
+            timeout=JOBS_TIMEOUT,
+            cadence=JOBS_CADENCE,
         ),
     ]
     for zone in zones:

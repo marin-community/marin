@@ -93,6 +93,8 @@ class ClusterClient(Protocol):
 
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]: ...
 
+    def execute_raw_query(self, sql: str) -> list[list[object]]: ...
+
     def fetch_logs(
         self,
         source: str,

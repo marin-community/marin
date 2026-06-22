@@ -11,7 +11,7 @@ Health checks (emit a `probe_up` 1/0 sample; the runner adds `probe_latency_ms`)
 - `finelog-write` — write a nonce and read it back (60s).
 - `iris-job-submit/<zone>` — submit a tiny job per zone, wait for SUCCEEDED (300s).
 
-Gauge:
+Gauges:
 
 - `provisioning` — accelerator provisioning stats over a trailing 3h window,
   recomputed every 15 min. The controller's autoscaler emits one structured row
@@ -21,6 +21,23 @@ Gauge:
   `provision_*` count/latency/success-ratio gauges. See
   `iris.cluster.controller.autoscaler.provisioning` for the outcome vocabulary
   and `src/provisioning.py` for the emitted metrics.
+- `workers` — worker-fleet snapshot from `list_workers()` (60s). Rolls the
+  healthy workers into fleet resource totals (`worker_healthy`,
+  `worker_cpu_millicores`, `worker_memory_bytes`, `worker_tpu_chips`, all
+  labelled `scope=fleet`) plus a per-region healthy head count
+  (`worker_healthy{region=…}`).
+- `jobs` — root-job-state breakdown from one raw-SQL `GROUP BY` (120s). Splits
+  into a live in-flight snapshot (`job_inflight{state=…}`) and a trailing-24h
+  terminal window (`job_terminal_24h{state=…}`), each with a `scope=fleet` total.
+
+The `workers` and `jobs` gauges back the Iris section of `infra/status-page`
+(`server/sources/workers.ts`, `jobs.ts`) — same label vocabulary, so the
+dashboard can read them from finelog instead of hitting the controller live. See
+`src/cluster.py` for the emitted metrics.[^jobs-iris]
+
+[^jobs-iris]: `jobs` calls `RemoteClusterClient.execute_raw_query`, added
+  alongside this collector; it only works once `uv lock -U` picks up a
+  `marin-iris` nightly that postdates that change.
 
 Each sample is logged to stdout (`probe <name>: ok|fail [<ms>ms] start=<utc>`),
 written to the `infra.canary.metrics` finelog namespace (query it with
