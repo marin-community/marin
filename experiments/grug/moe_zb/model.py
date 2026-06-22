@@ -35,9 +35,10 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 from jax import random
+from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
-from experiments.grug.moe_zb.pipeline import PipelineModel, PipelineParams
+from experiments.grug.moe_zb.pipeline import STAGE_AXIS, PipelineModel, PipelineParams
 
 RMS_EPS = 1e-6
 
@@ -68,6 +69,12 @@ class GrugMoEConfig:
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.num_experts_per_token > self.num_experts:
             raise ValueError("num_experts_per_token must be <= num_experts")
+        # The vocab-parallel head shards output_proj's V axis over the stage axis.
+        if self.vocab_size % self.num_stages != 0:
+            raise ValueError(
+                f"vocab_size={self.vocab_size} must be divisible by num_stages={self.num_stages} "
+                "for the vocab-parallel head"
+            )
 
     @property
     def inferred_head_dim(self) -> int:
@@ -312,12 +319,60 @@ def make_head_loss_fn(cfg: GrugMoEConfig):
     return head_loss_fn
 
 
+def head_normalize_fn(head_params: HeadParams, hidden: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+    """Final RMSNorm of the head (reads only ``final_norm``). Collective-free."""
+    return rms_norm(hidden, head_params.final_norm)
+
+
+def head_project_fn(head_params: HeadParams, normed: Float[Array, "B S D"]) -> Float[Array, "B S V"]:
+    """Output projection of the head (reads only ``output_proj``). Collective-free.
+
+    With ``output_proj`` vocab-sharded ``[D, V/S]`` this yields a ``[B, S, V/S]``
+    logit slice; the vocab-parallel CE folds the sharded vocab back together.
+    """
+    return jnp.einsum("bsd,dv->bsv", normed, head_params.output_proj).astype(jnp.float32)
+
+
+def make_head_logits_fn(cfg: GrugMoEConfig):
+    """Build ``head_logits_fn(head_params, hidden) -> logits`` for the pipeline.
+
+    Final RMSNorm + output projection -> logits (no cross-entropy): ``head_loss_fn``
+    minus the CE reduction. On a vocab-axis-sharded ``[D, V/S]`` ``output_proj`` it
+    yields ``[B, S, V/S]`` and the vocab-parallel CE folds the sharded vocab back
+    together. The norm/project split lets the zero-bubble backend insert the
+    vocab-reduce between the projection and the norm.
+    """
+
+    def head_logits_fn(head_params: HeadParams, hidden: Float[Array, "B S D"]) -> Float[Array, "B S V"]:
+        return head_project_fn(head_params, head_normalize_fn(head_params, hidden))
+
+    return head_logits_fn
+
+
+def grug_head_vp_specs() -> HeadParams:
+    """PartitionSpec tree placing the head's vocab axis over the ``stage`` axis.
+
+    ``output_proj [D, V]`` is sharded on V over ``stage`` so each stage device
+    holds ``[D, V/S]`` and computes its own vocab slice of the logits; ``final_norm``
+    stays replicated.
+    """
+    return HeadParams(final_norm=P(), output_proj=P(None, STAGE_AXIS))
+
+
 def build_model(cfg: GrugMoEConfig) -> PipelineModel:
-    """Bundle the three SPMD-identical pipeline callables for ``cfg``."""
+    """Bundle the SPMD-identical pipeline callables for ``cfg``.
+
+    Includes ``head_logits_fn`` so the pipeline runs the vocab-parallel head; the
+    CE-fused ``head_loss_fn`` is kept for :func:`reference_loss`.
+    """
     return PipelineModel(
         embed_fn=make_embed_fn(cfg),
         stage_fn=make_stage_fn(cfg),
         head_loss_fn=make_head_loss_fn(cfg),
+        head_logits_fn=make_head_logits_fn(cfg),
+        head_normalize_fn=head_normalize_fn,
+        head_project_fn=head_project_fn,
+        head_vp_specs=grug_head_vp_specs(),
     )
 
 

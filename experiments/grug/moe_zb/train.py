@@ -28,7 +28,7 @@ import optax
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
-from experiments.grug.moe_zb.model import GrugMoEConfig, build_pipeline_params
+from experiments.grug.moe_zb.model import GrugMoEConfig, build_pipeline_params, grug_head_vp_specs
 from experiments.grug.moe_zb.pipeline import (
     STAGE_AXIS,
     PipelineModel,
@@ -68,17 +68,22 @@ def _value_and_grad_for(schedule: Schedule) -> Callable:
 
 
 def shard_params(params: PipelineParams, mesh: Mesh) -> PipelineParams:
-    """Place params on the mesh: embed/head replicated, stage over ``stage``.
+    """Place params on the mesh: embed replicated, stage over ``stage``, head vocab-parallel.
 
-    The stage axis is ``Auto``, so use ``device_put`` (``jax.reshard`` is for
-    ``Explicit`` axes only).
+    The head's ``output_proj`` is vocab-sharded over ``stage`` (each stage holds
+    ``[D, V/S]``) so the vocab-parallel head runs the ``[D, V]`` projection once
+    across stages. The stage axis is ``Auto``, so use ``device_put``
+    (``jax.reshard`` is for ``Explicit`` axes only).
     """
     repl = NamedSharding(mesh, P())
     stage_sh = NamedSharding(mesh, P(STAGE_AXIS))
+    head_specs = grug_head_vp_specs()
     return PipelineParams(
         embed=jax.tree_util.tree_map(lambda x: jax.device_put(x, repl), params.embed),
         stage=jax.tree_util.tree_map(lambda x: jax.device_put(x, stage_sh), params.stage),
-        head=jax.tree_util.tree_map(lambda x: jax.device_put(x, repl), params.head),
+        head=jax.tree_util.tree_map(
+            lambda x, spec: jax.device_put(x, NamedSharding(mesh, spec)), params.head, head_specs
+        ),
     )
 
 

@@ -82,9 +82,14 @@ def _stage_spec() -> BlockParams:
 
 
 def pipeline_param_specs() -> PipelineParams:
-    """The full ``PartitionSpec`` tree for ``PipelineParams`` on the 3-D mesh."""
+    """The full ``PartitionSpec`` tree for ``PipelineParams`` on the 3-D mesh.
+
+    The head's ``output_proj`` is vocab-sharded over ``stage`` (the V axis) so the
+    vocab-parallel head computes the ``[D, V]`` projection once across stages, with
+    the grad staying stage-sharded (no ``[D, V]`` all-reduce).
+    """
     embed = EmbedParams(token_embed=P(DATA_AXIS, None), embed_norm=P())
-    head = HeadParams(final_norm=P(), output_proj=P(None, DATA_AXIS))
+    head = HeadParams(final_norm=P(), output_proj=P(None, STAGE_AXIS))
     return PipelineParams(embed=embed, stage=_stage_spec(), head=head)
 
 

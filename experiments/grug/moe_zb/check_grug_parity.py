@@ -26,7 +26,12 @@ import numpy as np
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
-from experiments.grug.moe_zb.model import GrugMoEConfig, build_pipeline_params, reference_loss
+from experiments.grug.moe_zb.model import (
+    GrugMoEConfig,
+    build_pipeline_params,
+    grug_head_vp_specs,
+    reference_loss,
+)
 from experiments.grug.moe_zb.pipeline import (
     PipelineParams,
     pipeline_value_and_grad,
@@ -74,11 +79,14 @@ def main() -> int:
     ref_loss, ref_grads = jax.value_and_grad(batched_reference_loss)(params)
 
     hidden_shape = (MICROBATCH, SEQ_LEN, CONFIG.hidden_dim)
+    head_specs = grug_head_vp_specs()
     with jax.set_mesh(mesh):
         params_sharded = PipelineParams(
             embed=jax.device_put(params.embed, NamedSharding(mesh, P())),
             stage=jax.device_put(params.stage, NamedSharding(mesh, P("stage"))),
-            head=jax.device_put(params.head, NamedSharding(mesh, P())),
+            head=jax.tree_util.tree_map(
+                lambda x, spec: jax.device_put(x, NamedSharding(mesh, spec)), params.head, head_specs
+            ),
         )
         tokens_r = jax.device_put(tokens, NamedSharding(mesh, P()))
         gpipe_loss, gpipe_grads = pipeline_value_and_grad(
