@@ -175,6 +175,17 @@ bool HostDispatchDebugEnabled() {
   return enabled;
 }
 
+bool HostDispatchStageDebugEnabled() {
+  static const bool enabled = []() {
+    if (HostDispatchDebugEnabled()) {
+      return true;
+    }
+    const char* value = std::getenv("LEVANTER_DEEPEP_HOST_DISPATCH_STAGE_DEBUG");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+  }();
+  return enabled;
+}
+
 bool InternodeDebugEnabled() {
   static const bool enabled = []() {
     const char* value = std::getenv("LEVANTER_DEEPEP_INTERNODE_DEBUG");
@@ -243,7 +254,7 @@ void LogHostDispatchStage(
     int num_rdma_recv_tokens = -1,
     int aux0 = -1,
     int aux1 = -1) {
-  if (!HostDispatchDebugEnabled()) {
+  if (!HostDispatchStageDebugEnabled()) {
     return;
   }
   fprintf(
@@ -279,7 +290,7 @@ void LogHostDispatchStage(
 void ThrowOnCuda(cudaError_t status, const char* context);
 
 int NextHostDispatchCallSequence(DeviceRuntime& runtime) {
-  if (!HostDispatchDebugEnabled()) {
+  if (!HostDispatchStageDebugEnabled()) {
     return -1;
   }
   return ++runtime.debug_call_sequence;

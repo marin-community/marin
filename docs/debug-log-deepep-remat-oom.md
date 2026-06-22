@@ -223,6 +223,24 @@ The next run needs low-noise host-dispatch stage logging that distinguishes
 `before_notify`, `after_notify`, `before_wait`, and `after_wait` by rank without
 dumping buffers.
 
+## Hypothesis 8: stage-only host-dispatch logging can expose the asymmetry
+
+The existing `LEVANTER_DEEPEP_HOST_DISPATCH_DEBUG` flag enables both stage logs
+and buffer summaries. That is too noisy for a 16-rank training launch and also
+means `call_sequence` stays `-1` unless the heavyweight debug mode is enabled.
+
+The fresh `codex/deepep-stage-debug` branch adds
+`LEVANTER_DEEPEP_HOST_DISPATCH_STAGE_DEBUG`, which enables:
+
+- `HOST_DISPATCH_STAGE` lines at notify/wait boundaries;
+- per-runtime `call_sequence` IDs in those lines;
+- matching `call_sequence` IDs in recv-counter timeout diagnostics.
+
+It intentionally does not enable `HOST_DISPATCH_BUFFER` summaries. The next B32
+EP16 run should use this stage-only flag with the 900s counter timeout to
+determine whether task 1 reaches notify/wait and whether task 0 is waiting
+before its peer has notified.
+
 ## Future work
 
 - [x] Add a C++/FFI primitive for x-only internode combine-with-local-collapse
@@ -236,8 +254,10 @@ dumping buffers.
       `4258fe300` or later.
 - [x] Let MAY329 compile long enough to distinguish compile latency from
       runtime DeepEP transport failure.
-- [ ] Add low-noise DeepEP host-dispatch stage diagnostics for notify/wait
+- [x] Add low-noise DeepEP host-dispatch stage diagnostics for notify/wait
       asymmetry without enabling full buffer summaries.
+- [ ] Re-run B32 EP16 DeepEP internode with
+      `LEVANTER_DEEPEP_HOST_DISPATCH_STAGE_DEBUG=1`.
 - [ ] If B32 passes, retry B64 and profile remat overhead versus ring/all-to-all.
 - [ ] If B32 reaches `cudaMallocAsync(x-only fused local-collapse bwd recv_out)`
       OOM, replace the staging temp with a true direct packed-output backward
