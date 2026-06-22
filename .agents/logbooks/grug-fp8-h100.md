@@ -290,3 +290,33 @@ confirms the path.
   the shared `dimension_numbers` + dtype/precision seam is the extension point for the Path-A FP8 dot.
 - **Next action:** S2 — lower an `Fp8DotGeneral` at d3072/d4096 on H100 through this rig and grep the
   HLO for `__cublas$lt$matmul$f8` (+ `_FAST_ACCUM`?); same H100 run yields the BF16 baseline datapoint.
+
+### 2026-06-22 — GFP8-002: S1 H100 BF16 baseline datapoint (job /matt/iris-run-job-20260622-185707)
+- **Hypothesis:** The S1 rig runs on a real H100 and emits the BF16 dense-dot baseline (timing + HLO),
+  with the HLO grep-able for the cuBLASLt matmul custom-call — the exact mechanism S2 reuses for `$f8`.
+- **Command:** `uv run iris --cluster=cw-us-east-02a job run --no-wait --cpu 8 --memory 64GB
+  --gpu H100x1 --enable-extra-resources --extra gpu -- bash -c 'python -u
+  lib/levanter/scripts/bench/bench_dense_fp8.py --k 3072 --n 3072 && python -u
+  lib/levanter/scripts/bench/bench_dense_fp8.py --k 4096 --n 4096 --no-print-hlo'`
+- **Config:** 1×H100 (`CudaDevice(id=0)`), M=4096 (seq 4096), BF16, steps 20 / warmup 5, fwd+bwd.
+- **Result (succeeded):**
+  - d3072 `[4096,3072]@[3072,3072]`: fwd **435 TFLOP/s = 44.0%** of H100 BF16 peak (0.178 ms);
+    bwd **600 TFLOP/s = 60.7%** (0.257 ms).
+  - d4096 `[4096,4096]@[4096,4096]`: fwd **549 TFLOP/s = 55.5%** (0.250 ms);
+    bwd **682 TFLOP/s = 68.9%** (0.403 ms).
+  - HLO forward dot lowers to `custom_call_target="__cublas$lt$matmul"`, operands+output `bf16`,
+    `precision_config.operand_precision=["DEFAULT","DEFAULT"]`, `scale_mode:0`, **no `__cublas$lt$matmul$f8`**
+    (grep count 0) — the expected BF16 signature. Peak ref = H100 SXM BF16 989.5 TFLOP/s.
+- **Interpretation:** S1 fully validated on hardware: rig runs, emits timing + HLO, %-of-peak fires on
+  H100. The captured BF16 HLO is the reference S2 diffs against — the FP8 path must flip operands to
+  `f8e4m3fn`, add scale operands, and set a nonzero `scale_mode`. Larger K (d4096) sits closer to peak,
+  as expected (more arithmetic to amortize launch/IO). These are the controlled BF16 numbers the FP8
+  arm must beat (~2x is the rough ceiling: H100 FP8 peak ~1979 TFLOP/s).
+- **Ops notes:** (1) needed `uv pip install kubernetes` for the laptop-side controller tunnel. (2) Iris
+  bundles the working tree to `/app` (12.8 MB) — the committed script runs at its repo path, no inlining
+  needed. (3) **First submit failed** (`ModuleNotFoundError: jax`): wrapping in `bash -lc` (login shell)
+  re-sourced profile and reset PATH off the Iris-activated `/app/.venv`; fix = `bash -c` (non-login) or
+  run `python <path>` directly, as R3's hello-world did. (4) Retrieval was path A (HLO + result_json via
+  `iris job logs`, zero storage); `python -u` for unbuffered logs.
+- **Next action:** S2 — lower `Fp8DotGeneral` (manual `dq(op(q,q))` per David's 6/22 steer) at
+  d3072/d4096 through this same rig; diff the HLO against this baseline for `$f8` + `_FAST_ACCUM`.
