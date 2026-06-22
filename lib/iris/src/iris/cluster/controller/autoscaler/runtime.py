@@ -73,7 +73,7 @@ from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, Wo
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
 from iris.cluster.types import WorkerStatusMap
-from iris.rpc import config_pb2, vm_pb2
+from iris.rpc import config_pb2, job_pb2, vm_pb2
 from iris.time_proto import duration_from_proto, timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -913,6 +913,7 @@ class Autoscaler:
         constraints: list[Constraint],
         *,
         replicas: int | None = None,
+        resources: job_pb2.ResourceSpecProto | None = None,
     ) -> str | None:
         """Gate LaunchJob: can this job shape ever be scheduled?
 
@@ -921,9 +922,11 @@ class Autoscaler:
         reason suitable for returning to the caller.
 
         `replicas` applies only to coscheduled jobs — None skips the
-        num_vms-divisibility check.
+        num_vms-divisibility check. `resources`, when given, additionally
+        rejects requests whose per-VM capacity (cpu/memory/disk/device count)
+        no matching group can satisfy.
         """
-        result = job_feasibility(self._groups.values(), constraints, replicas=replicas)
+        result = job_feasibility(self._groups.values(), constraints, replicas=replicas, resources=resources)
         return result.reason
 
     def get_last_routing_decision_proto(self) -> vm_pb2.RoutingDecision | None:
