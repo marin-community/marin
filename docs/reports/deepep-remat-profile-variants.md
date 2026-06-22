@@ -39,14 +39,20 @@ no checkpoints.
 | MAY342 | `save_moe` | readable profile | 16.76 | 0.436s | Host copies gone; profiler overhead/readability flags depress throughput. |
 | MAY343 | `save_moe` | disabled | 20.20 | 0.3509s | Throughput comparison without command-buffer readability penalty. |
 | MAY344 | `none` | disabled | 20.56 | 0.3447s | Best measured EP8 variant so far. |
+| MAY357 | `offload_moe_hidden` | disabled | 17.30 | 0.4097s | Works, but costs about 3.3 MFU versus `none`; narrow hidden offload is still too expensive. |
+| MAY358 | `offload_moe_output` | disabled | 20.60 | 0.3440s | Matches `none` within run noise while preserving output offload semantics. |
 
 Interpretation:
 
-- Host offload is not useful for this EP8 shape; it replaces remat pressure with
-  large H2D/D2H copies.
+- Broad/expert host offload is not useful for this EP8 shape; it replaces remat
+  pressure with large H2D/D2H copies. Narrow offload is different:
+  `offload_moe_hidden` is still expensive, but `offload_moe_output` is
+  effectively throughput-neutral at B8.
 - `save_moe` is slightly slower than `none` when measured without profiler
   flags.
-- Current best EP8 DeepEP remat setting is `--remat none`.
+- Current best EP8 DeepEP remat setting for pure throughput is `--remat none`,
+  with `--remat offload_moe_output` as the first memory-headroom knob to try
+  because it matched `none` in the B8 throughput run.
 
 Why the `save_moe` delta is small:
 
@@ -65,6 +71,29 @@ _should_checkpoint_block(remat_mode, uses_effectful_moe=True) == False
   allowing the rest of the small expert up/down wrapper to remat. That is much
   narrower than "save every block activation", which is why the measured loss
   is only about 1.8% versus `none`.
+
+Narrow offload follow-up:
+
+```text
+MAY357:
+  parent=/dlwh/iris-run-job-20260622-215727
+  wandb=https://wandb.ai/marin-community/marin_moe/runs/MAY357-DEEPEP-EP8-OFFLOAD-HIDDEN-L26-B8-N1-20260622-2157
+  remat=offload_moe_hidden
+  steady_mfu=17.30
+  steady_step_duration=0.4097s
+
+MAY358:
+  parent=/dlwh/iris-run-job-20260622-220907
+  wandb=https://wandb.ai/marin-community/marin_moe/runs/MAY358-DEEPEP-EP8-OFFLOAD-OUTPUT-L26-B8-N1-20260622-2209
+  remat=offload_moe_output
+  steady_mfu=20.60
+  steady_step_duration=0.3440s
+```
+
+Interpretation: the output tensor is a narrow enough boundary that host offload
+does not show up materially in this EP8/B8 throughput run. The hidden tensor is
+not narrow enough; it behaves more like the earlier broad offload result and
+gives back most of the `save_moe` versus `none` win.
 
 ## EP16 Internode Direction
 
