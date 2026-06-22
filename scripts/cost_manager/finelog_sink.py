@@ -24,8 +24,8 @@ from contextlib import closing, contextmanager
 from typing import Any, Protocol
 
 from finelog.client import FlushResult, LogClient, StoragePolicy
-from finelog.deploy.config import FinelogConfig, load_finelog_config
-from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget, open_tunnel
+from finelog.deploy.config import load_finelog_config, tunnel_target_for
+from rigging.tunnel import open_tunnel
 
 from scripts.cost_manager.cost_event import COST_EVENTS_MAX_BYTES, COST_EVENTS_NAMESPACE, CostEvent
 
@@ -101,23 +101,7 @@ def open_sink(finelog_cfg: Mapping[str, Any], *, dry_run: bool, tunnel_timeout: 
     if not config_name:
         raise ValueError("finelog config must set 'config' or 'url' (or pass --dry-run)")
     cfg = load_finelog_config(config_name)
-    target = _tunnel_target(cfg)
+    target = tunnel_target_for(cfg)
     logger.info("Opening tunnel to finelog '%s' (%s)", cfg.name, type(target).__name__)
     with open_tunnel(target, timeout=tunnel_timeout) as tunnel_url, closing(LogClient.connect(tunnel_url)) as client:
         yield FinelogSink(client, namespace)
-
-
-def _tunnel_target(cfg: FinelogConfig) -> TunnelTarget:
-    """Build a rigging tunnel target from a finelog deployment block."""
-    if cfg.deployment.gcp is not None:
-        gcp = cfg.deployment.gcp
-        return GcpSshForwardTarget(
-            project=gcp.project,
-            zone=gcp.zone,
-            instance=cfg.name,
-            port=cfg.port,
-            impersonate_service_account=gcp.service_account,
-        )
-    assert cfg.deployment.k8s is not None
-    k8s = cfg.deployment.k8s
-    return K8sPortForwardTarget(namespace=k8s.namespace, service=cfg.name, port=cfg.port)
