@@ -10,7 +10,7 @@ carry no edge back to the controller's ops/reconcile/schema layer.
 
 from __future__ import annotations
 
-from iris.cluster.controller.autoscaler.reserved_pool import ReservedPoolView
+from iris.cluster.controller.autoscaler.reserved_pool import ReservationLedger
 from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
     SchedulingOrder,
@@ -33,7 +33,7 @@ def apply_preemptions(
     all_assignments: list[tuple[JobName, WorkerId]],
     running_for_preemption: list[RunningTaskInfo],
     context: SchedulingContext,
-    reserved_view: ReservedPoolView | None = None,
+    ledger: ReservationLedger | None = None,
 ) -> tuple[list[tuple[JobName, JobName]], set[WorkerId]]:
     """Decide which running tasks to evict for higher-priority unscheduled work.
 
@@ -57,7 +57,7 @@ def apply_preemptions(
         return [], set()
 
     pairs = run_preemption_pass(unscheduled, running_for_preemption, context)
-    if reserved_view is None or reserved_view.is_empty():
+    if ledger is None or ledger.is_empty():
         return pairs, set()
 
     # Only preemptors the same-variant pass did not already satisfy fall through
@@ -66,7 +66,7 @@ def apply_preemptions(
     # so a coscheduled preemptor satisfied via one sibling excludes all siblings.
     satisfied_jobs = {preemptor.parent or preemptor for preemptor, _ in pairs}
     remaining = [c for c in unscheduled if (c.job_name.parent or c.job_name) not in satisfied_jobs]
-    reserved_pairs, drain_workers = run_reserved_pool_preemption(remaining, running_for_preemption, reserved_view)
+    reserved_pairs, drain_workers = run_reserved_pool_preemption(remaining, running_for_preemption, ledger)
     return pairs + reserved_pairs, drain_workers
 
 

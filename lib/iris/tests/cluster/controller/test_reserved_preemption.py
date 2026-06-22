@@ -5,7 +5,7 @@
 
 from iris.cluster.constraints import PlacementRequirements
 from iris.cluster.controller.autoscaler.models import UNRANKED_DEMAND_BAND, DemandEntry
-from iris.cluster.controller.autoscaler.reserved_pool import ReservedPoolView
+from iris.cluster.controller.autoscaler.reserved_pool import PoolLedger, ReservationLedger
 from iris.cluster.controller.backend import _stamp_demand_bands
 from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
@@ -61,17 +61,32 @@ def _running(task_wire: str, worker: str, variant: str, band: int, *, coschedule
     )
 
 
-def _view(free_chips: int, worker_slice: dict[str, str], *, cooldown: frozenset[str] = frozenset()) -> ReservedPoolView:
+def _ledger(
+    free_chips: int,
+    worker_slice: dict[str, str],
+    *,
+    draining_chips: int = 0,
+    inflight_slices: dict[str, int] | None = None,
+) -> ReservationLedger:
     # worker_slice maps each victim worker to its physical slice id; coscheduled
     # siblings share a slice so the drain reaps them together. Every worker here
-    # belongs to the single test pool.
-    return ReservedPoolView(
-        free_chips={POOL: free_chips},
+    # belongs to the single test pool. ``draining_chips`` are chips a drain is
+    # already freeing (incoming = free + draining); ``inflight_slices`` marks a
+    # replacement slice of a variant already booting.
+    pool = PoolLedger(
+        pool_id=POOL,
+        reservation_chips=free_chips + draining_chips,
+        live_chips=0,
+        inflight_chips=0,
+        draining_chips=draining_chips,
+        inflight_slices_by_variant=dict(inflight_slices or {}),
+    )
+    return ReservationLedger(
+        pools={POOL: pool},
         worker_pool={worker: POOL for worker in worker_slice},
         worker_slice=dict(worker_slice),
         variant_pool={v: POOL for v in CHIPS_PER_VARIANT},
         chips_per_variant=dict(CHIPS_PER_VARIANT),
-        pools_on_cooldown=cooldown,
     )
 
 
@@ -83,9 +98,9 @@ def test_production_v4_8_preempts_interactive_v4_16_when_pool_full():
         _running("/bob/inter/0", "w0", "v4-16", INTERACTIVE, coscheduled=True),
         _running("/bob/inter/1", "w1", "v4-16", INTERACTIVE, coscheduled=True),
     ]
-    view = _view(free_chips=0, worker_slice={"w0": "s-inter", "w1": "s-inter"})
+    ledger = _ledger(free_chips=0, worker_slice={"w0": "s-inter", "w1": "s-inter"})
 
-    pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
+    pairs, drain = run_reserved_pool_preemption([preemptor], victims, ledger)
 
     assert {v.to_wire() for _, v in pairs} == {"/bob/inter/0", "/bob/inter/1"}
     assert all(p.to_wire() == "/alice/prod/0" for p, _ in pairs)
@@ -95,9 +110,9 @@ def test_production_v4_8_preempts_interactive_v4_16_when_pool_full():
 def test_same_band_victim_not_evicted():
     preemptor = _candidate("/alice/prod/0", "v4-8", INTERACTIVE)
     victims = [_running("/bob/other/0", "w0", "v4-16", INTERACTIVE, coscheduled=True)]
-    view = _view(free_chips=0, worker_slice={"w0": "s0"})
+    ledger = _ledger(free_chips=0, worker_slice={"w0": "s0"})
 
-    pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
+    pairs, drain = run_reserved_pool_preemption([preemptor], victims, ledger)
 
     assert pairs == []
     assert drain == set()
@@ -107,9 +122,9 @@ def test_higher_priority_victim_not_evicted():
     # Preemptor is interactive; the only victim is production (higher priority).
     preemptor = _candidate("/alice/inter/0", "v4-8", INTERACTIVE)
     victims = [_running("/bob/prod/0", "w0", "v4-8", PRODUCTION)]
-    view = _view(free_chips=0, worker_slice={"w0": "s0"})
+    ledger = _ledger(free_chips=0, worker_slice={"w0": "s0"})
 
-    pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
+    pairs, drain = run_reserved_pool_preemption([preemptor], victims, ledger)
 
     assert pairs == []
     assert drain == set()
@@ -119,9 +134,9 @@ def test_no_preemption_when_pool_has_enough_free_chips():
     preemptor = _candidate("/alice/prod/0", "v4-8", PRODUCTION)
     victims = [_running("/bob/inter/0", "w0", "v4-8", INTERACTIVE)]
     # 4 free chips already satisfy the v4-8 (4-chip) preemptor.
-    view = _view(free_chips=4, worker_slice={"w0": "s0"})
+    ledger = _ledger(free_chips=4, worker_slice={"w0": "s0"})
 
-    pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
+    pairs, drain = run_reserved_pool_preemption([preemptor], victims, ledger)
 
     assert pairs == []
     assert drain == set()
@@ -139,9 +154,9 @@ def test_minimal_eviction_picks_fewest_lowest_priority_slices():
         _running("/bob/inter/0", "wc", "v4-16", INTERACTIVE, coscheduled=True),
         _running("/bob/inter/1", "wd", "v4-16", INTERACTIVE, coscheduled=True),
     ]
-    view = _view(free_chips=0, worker_slice={"wa": "sa", "wb": "sb", "wc": "s-inter", "wd": "s-inter"})
+    ledger = _ledger(free_chips=0, worker_slice={"wa": "sa", "wb": "sb", "wc": "s-inter", "wd": "s-inter"})
 
-    pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
+    pairs, drain = run_reserved_pool_preemption([preemptor], victims, ledger)
 
     # 2 batch v4-8 (8) + 1 interactive v4-16 (8) = 16 chips, covering the deficit.
     assert drain == {WorkerId("wa"), WorkerId("wb"), WorkerId("wc"), WorkerId("wd")}
@@ -162,9 +177,9 @@ def test_no_extra_slices_evicted_beyond_deficit():
         _running("/bob/batch-big/0", "wbig0", "v4-16", BATCH, coscheduled=True),
         _running("/bob/batch-big/1", "wbig1", "v4-16", BATCH, coscheduled=True),
     ]
-    view = _view(free_chips=0, worker_slice={"wsmall": "s-small", "wbig0": "s-big", "wbig1": "s-big"})
+    ledger = _ledger(free_chips=0, worker_slice={"wsmall": "s-small", "wbig0": "s-big", "wbig1": "s-big"})
 
-    pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
+    pairs, drain = run_reserved_pool_preemption([preemptor], victims, ledger)
 
     # Smallest-first: the v4-8 (4 chips) covers the deficit alone; the v4-16 is spared.
     assert drain == {WorkerId("wsmall")}
@@ -175,23 +190,74 @@ def test_nothing_evicted_when_total_evictable_below_deficit():
     # Need 16 chips, only one evictable v4-8 (4 chips). Never partial-evict.
     preemptor = _candidate("/alice/prod/0", "v4-32", PRODUCTION)
     victims = [_running("/bob/batch/0", "wa", "v4-8", BATCH)]
-    view = _view(free_chips=0, worker_slice={"wa": "sa"})
+    ledger = _ledger(free_chips=0, worker_slice={"wa": "sa"})
 
-    pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
+    pairs, drain = run_reserved_pool_preemption([preemptor], victims, ledger)
 
     assert pairs == []
     assert drain == set()
 
 
-def test_cooldown_suppresses_preemption_for_that_pool():
+def test_draining_chips_cover_deficit_so_no_re_preempt():
+    # Window 1: the victim chosen on a prior tick is now DRAINING. Its chips show
+    # up as draining (not free), so incoming = free + draining covers the v4-8
+    # preemptor's 4-chip need. A second eviction would kill extra work for capacity
+    # already in flight, so nothing is evicted.
     preemptor = _candidate("/alice/prod/0", "v4-8", PRODUCTION)
-    victims = [_running("/bob/inter/0", "w0", "v4-8", INTERACTIVE)]
-    view = _view(free_chips=0, worker_slice={"w0": "s0"}, cooldown=frozenset({POOL}))
+    # An evictable batch victim still exists, but the deficit is already covered.
+    victims = [_running("/bob/batch/0", "w0", "v4-8", BATCH)]
+    ledger = _ledger(free_chips=0, draining_chips=4, worker_slice={"w0": "s0"})
 
-    pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
+    pairs, drain = run_reserved_pool_preemption([preemptor], victims, ledger)
 
     assert pairs == []
     assert drain == set()
+
+
+def test_replacement_slice_booting_skips_re_preempt():
+    # Window 2: the prior victim was already reaped and a replacement slice of the
+    # preemptor's own variant is booting (inflight_slices >= 1). Free+draining is 0,
+    # but the booting replacement covers the need, so no further eviction.
+    preemptor = _candidate("/alice/prod/0", "v4-8", PRODUCTION)
+    victims = [_running("/bob/batch/0", "w0", "v4-8", BATCH)]
+    ledger = _ledger(free_chips=0, worker_slice={"w0": "s0"}, inflight_slices={"v4-8": 1})
+
+    pairs, drain = run_reserved_pool_preemption([preemptor], victims, ledger)
+
+    assert pairs == []
+    assert drain == set()
+
+
+def test_replacement_slice_of_other_variant_does_not_skip():
+    # An in-flight slice of a DIFFERENT variant does not cover a v4-8 preemptor:
+    # only a replacement of the preemptor's own variant counts. With no free or
+    # draining chips and no v4-8 replacement, the batch victim is evicted.
+    preemptor = _candidate("/alice/prod/0", "v4-8", PRODUCTION)
+    victims = [_running("/bob/batch/0", "w0", "v4-8", BATCH)]
+    ledger = _ledger(free_chips=0, worker_slice={"w0": "s0"}, inflight_slices={"v4-16": 1})
+
+    pairs, drain = run_reserved_pool_preemption([preemptor], victims, ledger)
+
+    assert {v.to_wire() for _, v in pairs} == {"/bob/batch/0"}
+    assert drain == {WorkerId("w0")}
+
+
+def test_two_preemptors_one_replacement_slice_evicts_for_the_second():
+    # A single booting replacement slice covers exactly one preemptor. Two v4-8
+    # preemptors of distinct jobs: the first is satisfied by the booting
+    # replacement; the second has nothing left and must evict a victim.
+    preemptors = [
+        _candidate("/alice/prod-a/0", "v4-8", PRODUCTION),
+        _candidate("/alice/prod-b/0", "v4-8", PRODUCTION),
+    ]
+    victims = [_running("/bob/batch/0", "w0", "v4-8", BATCH)]
+    ledger = _ledger(free_chips=0, worker_slice={"w0": "s0"}, inflight_slices={"v4-8": 1})
+
+    pairs, drain = run_reserved_pool_preemption(preemptors, victims, ledger)
+
+    # First preemptor consumes the replacement; second evicts the batch victim.
+    assert {p.to_wire() for p, _ in pairs} == {"/alice/prod-b/0"}
+    assert drain == {WorkerId("w0")}
 
 
 def test_batch_preemptor_never_preempts():
@@ -199,9 +265,9 @@ def test_batch_preemptor_never_preempts():
     # A lower-priority victim does not exist below batch, but even a hypothetical
     # one must not be evicted because batch never preempts.
     victims = [_running("/bob/other/0", "w0", "v4-8", BATCH)]
-    view = _view(free_chips=0, worker_slice={"w0": "s0"})
+    ledger = _ledger(free_chips=0, worker_slice={"w0": "s0"})
 
-    pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
+    pairs, drain = run_reserved_pool_preemption([preemptor], victims, ledger)
 
     assert pairs == []
     assert drain == set()
@@ -218,9 +284,9 @@ def test_two_preemptors_do_not_claim_the_same_victim():
         _running("/bob/inter/0", "w0", "v4-16", INTERACTIVE, coscheduled=True),
         _running("/bob/inter/1", "w1", "v4-16", INTERACTIVE, coscheduled=True),
     ]
-    view = _view(free_chips=0, worker_slice={"w0": "s-inter", "w1": "s-inter"})
+    ledger = _ledger(free_chips=0, worker_slice={"w0": "s-inter", "w1": "s-inter"})
 
-    pairs, drain = run_reserved_pool_preemption(preemptors, victims, view)
+    pairs, drain = run_reserved_pool_preemption(preemptors, victims, ledger)
 
     # The single v4-16 slice is evicted once (freeing 8 chips); after the first
     # preemptor takes 4, 4 remain — enough for the second, so it preempts nothing.
@@ -283,9 +349,9 @@ def test_coscheduled_preemptor_handled_once():
         _running("/bob/batch-c/0", "wc", "v4-16", BATCH, coscheduled=True),
         _running("/bob/batch-c/1", "wd", "v4-16", BATCH, coscheduled=True),
     ]
-    view = _view(free_chips=0, worker_slice={"wa": "s-a", "wb": "s-a", "wc": "s-c", "wd": "s-c"})
+    ledger = _ledger(free_chips=0, worker_slice={"wa": "s-a", "wb": "s-a", "wc": "s-c", "wd": "s-c"})
 
-    pairs, drain = run_reserved_pool_preemption(preemptors, victims, view)
+    pairs, drain = run_reserved_pool_preemption(preemptors, victims, ledger)
 
     # Exactly one victim slice (8 chips) is evicted to satisfy the 8-chip job.
     assert drain == {WorkerId("wa"), WorkerId("wb")}
@@ -304,9 +370,9 @@ def test_slice_with_a_higher_band_task_is_not_evicted():
         _running("/bob/inter/0", "w1", "v4-8", PRODUCTION),
     ]
     # Both workers belong to the same physical slice.
-    view = _view(free_chips=0, worker_slice={"w0": "shared", "w1": "shared"})
+    ledger = _ledger(free_chips=0, worker_slice={"w0": "shared", "w1": "shared"})
 
-    pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
+    pairs, drain = run_reserved_pool_preemption([preemptor], victims, ledger)
 
     assert pairs == []
     assert drain == set()
@@ -321,9 +387,9 @@ def test_slice_chips_counted_once_for_colocated_tasks():
         _running("/bob/batch-x/0", "w0", "v4-16", BATCH),
         _running("/bob/batch-y/0", "w1", "v4-16", BATCH),
     ]
-    view = _view(free_chips=0, worker_slice={"w0": "shared", "w1": "shared"})
+    ledger = _ledger(free_chips=0, worker_slice={"w0": "shared", "w1": "shared"})
 
-    pairs, drain = run_reserved_pool_preemption([preemptor], victims, view)
+    pairs, drain = run_reserved_pool_preemption([preemptor], victims, ledger)
 
     assert drain == {WorkerId("w0"), WorkerId("w1")}
     assert {v.to_wire() for _, v in pairs} == {"/bob/batch-x/0", "/bob/batch-y/0"}

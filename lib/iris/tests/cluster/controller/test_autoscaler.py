@@ -21,8 +21,7 @@ from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Aut
 from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.routing import route_demand
-from iris.cluster.controller.autoscaler.runtime import RESERVED_DRAIN_COOLDOWN
-from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
+from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
 from iris.cluster.types import WorkerStatus
 from iris.rpc import config_pb2, vm_pb2
@@ -586,12 +585,18 @@ class TestAutoscalerDrainSlices:
         _mark_discovered_ready(group, [handle])
         return group, autoscaler
 
-    def test_drain_tears_down_slice_and_returns_siblings(self):
-        group, autoscaler = self._fungible_group(vms=4)
+    def test_drain_marks_slice_draining_terminates_vms_and_returns_siblings(self):
+        group, autoscaler = self._fungible_group(slice_id="slice-001", vms=4)
+        handle = group.get_slice("slice-001")
+        assert handle is not None
 
         siblings = autoscaler.drain_slices_for_workers(["slice-001-vm-0"])
 
-        assert group.slice_count() == 0
+        # The slice lingers DRAINING (still counted) rather than being detached,
+        # but its VMs are terminated now and the siblings come back to be failed.
+        assert group.slice_count() == 1
+        assert group.slice_lifecycle("slice-001") == SliceLifecycleState.DRAINING
+        assert handle.terminated  # the drain issued the VM delete
         assert sorted(siblings) == [f"slice-001-vm-{i}" for i in range(1, 4)]
 
     def test_drain_does_not_decay_detector_health(self):
@@ -608,21 +613,55 @@ class TestAutoscalerDrainSlices:
         assert drained_group.health() == before
         assert failed_group.health() < before
 
-    def test_drain_stamps_pool_cooldown(self):
-        # A 2-VM slice so the pool still reports a member after draining one VM's
-        # slice (the group config keeps the pool present in the view regardless).
-        _, autoscaler = self._fungible_group(vms=2)
+    def test_drain_counts_slice_as_draining_in_ledger(self):
+        # A 2-VM slice so the pool still has a live member after draining the other.
+        group, autoscaler = self._fungible_group(vms=2)
 
-        assert autoscaler.reserved_pool_view().pools_on_cooldown == frozenset()
+        ledger_before = autoscaler.reservation_ledger()
+        assert ledger_before.pools["v4-res/zone"].draining_chips == 0
 
         autoscaler.drain_slices_for_workers(["slice-001-vm-0"])
 
-        view = autoscaler.reserved_pool_view()
-        assert view.pools_on_cooldown == frozenset({"v4-res/zone"})
+        pool = autoscaler.reservation_ledger().pools["v4-res/zone"]
+        # The whole slice (8 chips for a v4-16) is now draining, not free.
+        assert pool.draining_chips == 8
+        assert group.slice_lifecycle("slice-001") == SliceLifecycleState.DRAINING
 
-        # The cooldown lapses once RESERVED_DRAIN_COOLDOWN has elapsed.
-        later = Timestamp.from_ms(Timestamp.now().epoch_ms() + RESERVED_DRAIN_COOLDOWN.to_ms() + 1000)
-        assert autoscaler.reserved_pool_view(later).pools_on_cooldown == frozenset()
+    def test_refresh_reaps_draining_slice_when_vms_gone(self):
+        group, autoscaler = self._fungible_group(slice_id="slice-001", vms=2)
+        handle = group.get_slice("slice-001")
+        assert isinstance(handle, FakeSliceHandle)
+
+        autoscaler.drain_slices_for_workers(["slice-001-vm-0"])
+        assert group.slice_count() == 1
+
+        # The cloud now reports the allocation gone (zero workers): a clean reap.
+        handle._status = SliceStatus(state=CloudSliceState.READY, worker_count=0, workers=[])
+        before = group.health()
+        autoscaler.refresh({})
+
+        assert group.slice_count() == 0
+        # The reap is clean: it does NOT feed the churn detector.
+        assert group.health() == before
+
+    def test_refresh_keeps_draining_slice_while_vms_still_alive(self):
+        group, autoscaler = self._fungible_group(slice_id="slice-001", vms=2)
+        autoscaler.drain_slices_for_workers(["slice-001-vm-0"])
+
+        # describe() still reports live VMs: the slice stays DRAINING (VMs deleting).
+        autoscaler.refresh({})
+
+        assert group.slice_lifecycle("slice-001") == SliceLifecycleState.DRAINING
+
+    def test_refresh_force_reaps_draining_slice_past_timeout(self):
+        group, autoscaler = self._fungible_group(slice_id="slice-001", vms=2)
+        autoscaler.drain_slices_for_workers(["slice-001-vm-0"])
+
+        # The VMs never disappear; past the reap timeout the slice is force-reaped.
+        late = Timestamp.from_ms(Timestamp.now().epoch_ms() + DEFAULT_UNRESOLVABLE_TIMEOUT.to_ms() + 1000)
+        autoscaler.refresh({}, late)
+
+        assert group.slice_count() == 0
 
 
 class TestAutoscalerIdleVerification:

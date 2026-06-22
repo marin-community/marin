@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for fungible reservation chip accounting and the preemption view."""
+"""Tests for the fungible reservation chip ledger and the launch cap it feeds."""
 
 import pytest
 from iris.cluster.constraints import PlacementRequirements
@@ -12,10 +12,7 @@ from iris.cluster.controller.autoscaler.planning import (
     build_group_scale_plan,
     build_scale_plan,
 )
-from iris.cluster.controller.autoscaler.reserved_pool import (
-    reserved_pool_usage,
-    reserved_pool_view,
-)
+from iris.cluster.controller.autoscaler.reserved_pool import build_reservation_ledger
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.rpc import job_pb2, vm_pb2
 from rigging.timing import Timestamp
@@ -63,34 +60,96 @@ def _ready_group(
     return group
 
 
-class TestReservedPoolUsage:
-    def test_consumed_and_free_chips_sum_across_variants_in_a_pool(self):
+class TestReservationLedgerBuckets:
+    def test_live_chips_sum_across_variants_in_a_pool(self):
         # Two v4-8 slices (4 chips each) + one v4-16 slice (8 chips) = 16 chips
-        # consumed against a shared 64-chip budget.
+        # live against a shared 64-chip budget.
         v8 = _ready_group("v4-8", "v4-8", quota_pool="pool-a", reservation_chips=64, slice_ids=["a1", "a2"])
         v16 = _ready_group(
             "v4-16", "v4-16", quota_pool="pool-a", reservation_chips=64, slice_ids=["b1"], vms_per_slice=2
         )
 
-        usage = reserved_pool_usage([v8, v16])
+        ledger = build_reservation_ledger([v8, v16])
 
-        assert set(usage) == {"pool-a"}
-        pool = usage["pool-a"]
+        assert set(ledger.pools) == {"pool-a"}
+        pool = ledger.pools["pool-a"]
         assert pool.reservation_chips == 64
-        assert pool.consumed_chips == 4 + 4 + 8
+        assert pool.live_chips == 4 + 4 + 8
+        assert pool.inflight_chips == 0
+        assert pool.draining_chips == 0
+        assert pool.allocated_chips == 16
         assert pool.free_chips == 64 - 16
+        assert pool.incoming_chips == 64 - 16
         assert pool.utilization == pytest.approx(16 / 64)
+
+    def test_inflight_slices_counted_as_inflight_chips(self):
+        # A pending scale-up (begin_scale_up) is one in-flight slice; a booting
+        # discovered slice (not marked READY) is another. Both consume chips but
+        # are not live.
+        config = make_scale_group_config(name="v4-8", accelerator_variant="v4-8", max_slices=64)
+        config.quota_pool = "pool-a"
+        config.reservation_chips = 64
+        booting = make_fake_slice_handle("boot1", scale_group="v4-8", vm_states=[vm_pb2.VM_STATE_BOOTING])
+        platform = make_mock_platform(slices_to_discover=[booting])
+        group = ScalingGroup(config, platform)
+        group.reconcile()  # booting slice tracked as BOOTING (never marked READY)
+        group.begin_scale_up()  # one pending (REQUESTING) scale-up
+
+        pool = build_reservation_ledger([group]).pools["pool-a"]
+
+        # 2 in-flight slices (1 booting + 1 requesting) * 4 chips each.
+        assert pool.live_chips == 0
+        assert pool.inflight_chips == 8
+        assert pool.draining_chips == 0
+        assert pool.free_chips == 64 - 8
+
+    def test_draining_slice_counted_as_draining_not_free(self):
+        # A drained slice stays counted until reaped: its chips are draining, not
+        # free, but they are incoming (free + draining).
+        group = _ready_group("v4-8", "v4-8", quota_pool="pool-a", reservation_chips=16, slice_ids=["a1", "a2"])
+        group.mark_slice_draining("a1")
+
+        pool = build_reservation_ledger([group]).pools["pool-a"]
+
+        assert pool.live_chips == 4  # only a2 remains live
+        assert pool.draining_chips == 4  # a1 is draining
+        assert pool.allocated_chips == 8  # both still allocated
+        assert pool.free_chips == 16 - 8
+        assert pool.incoming_chips == (16 - 8) + 4  # free + draining
+
+    def test_inflight_slices_by_variant(self):
+        # Two distinct variants share a pool; each contributes its in-flight slice
+        # count keyed by variant.
+        config8 = make_scale_group_config(name="v4-8", accelerator_variant="v4-8", max_slices=64)
+        config8.quota_pool = "pool-a"
+        config8.reservation_chips = 64
+        g8 = ScalingGroup(config8, make_mock_platform())
+        g8.begin_scale_up()
+        g8.begin_scale_up()
+
+        config16 = make_scale_group_config(name="v4-16", accelerator_variant="v4-16", max_slices=64)
+        config16.quota_pool = "pool-a"
+        config16.reservation_chips = 64
+        g16 = ScalingGroup(config16, make_mock_platform())
+        g16.begin_scale_up()
+
+        ledger = build_reservation_ledger([g8, g16])
+
+        assert ledger.inflight_slices("pool-a", "v4-8") == 2
+        assert ledger.inflight_slices("pool-a", "v4-16") == 1
+        assert ledger.inflight_slices("pool-a", "v4-32") == 0
+        assert ledger.inflight_slices("absent-pool", "v4-8") == 0
 
     def test_distinct_pools_bucket_separately(self):
         a = _ready_group("v4-8", "v4-8", quota_pool="pool-a", reservation_chips=32, slice_ids=["a1"])
         b = _ready_group("v5p-8", "v5p-8", quota_pool="pool-b", reservation_chips=16, slice_ids=["b1"])
 
-        usage = reserved_pool_usage([a, b])
+        ledger = build_reservation_ledger([a, b])
 
-        assert usage["pool-a"].consumed_chips == 4
-        assert usage["pool-b"].consumed_chips == 4
-        assert usage["pool-a"].free_chips == 28
-        assert usage["pool-b"].free_chips == 12
+        assert ledger.pools["pool-a"].live_chips == 4
+        assert ledger.pools["pool-b"].live_chips == 4
+        assert ledger.free_chips("pool-a") == 28
+        assert ledger.free_chips("pool-b") == 12
 
     def test_non_fungible_groups_excluded(self):
         fungible = _ready_group("v4-8", "v4-8", quota_pool="pool-a", reservation_chips=32, slice_ids=["a1"])
@@ -99,18 +158,18 @@ class TestReservedPoolUsage:
         plain_config.quota_pool = "pool-a"
         plain = ScalingGroup(plain_config, make_mock_platform())
 
-        usage = reserved_pool_usage([fungible, plain])
+        ledger = build_reservation_ledger([fungible, plain])
 
-        assert set(usage) == {"pool-a"}
+        assert set(ledger.pools) == {"pool-a"}
         # Only the fungible group's slice counts; the plain group is invisible.
-        assert usage["pool-a"].consumed_chips == 4
+        assert ledger.pools["pool-a"].live_chips == 4
 
     def test_conflicting_budgets_in_one_pool_raise(self):
         a = _ready_group("v4-8", "v4-8", quota_pool="pool-a", reservation_chips=64, slice_ids=["a1"])
         b = _ready_group("v4-16", "v4-16", quota_pool="pool-a", reservation_chips=128, slice_ids=["b1"], vms_per_slice=2)
 
         with pytest.raises(ValueError, match="conflicting reservation_chips"):
-            reserved_pool_usage([a, b])
+            build_reservation_ledger([a, b])
 
     def test_reservation_chips_without_quota_pool_raises(self):
         config = make_scale_group_config(name="v4-8", accelerator_variant="v4-8", max_slices=8)
@@ -119,53 +178,46 @@ class TestReservedPoolUsage:
         group = ScalingGroup(config, make_mock_platform())
 
         with pytest.raises(ValueError, match="no quota_pool"):
-            reserved_pool_usage([group])
+            build_reservation_ledger([group])
 
 
-class TestReservedPoolView:
-    def test_view_maps_workers_variants_and_free_chips(self):
+class TestReservationLedgerMaps:
+    def test_maps_workers_variants_and_chips(self):
         v8 = _ready_group("v4-8", "v4-8", quota_pool="pool-a", reservation_chips=64, slice_ids=["a1"])
         v16 = _ready_group(
             "v4-16", "v4-16", quota_pool="pool-a", reservation_chips=64, slice_ids=["b1"], vms_per_slice=2
         )
 
-        view = reserved_pool_view([v8, v16])
+        ledger = build_reservation_ledger([v8, v16])
 
-        assert view.variant_pool == {"v4-8": "pool-a", "v4-16": "pool-a"}
-        assert view.chips_per_variant == {"v4-8": 4, "v4-16": 8}
-        assert view.free_chips == {"pool-a": 64 - 12}
+        assert ledger.variant_pool == {"v4-8": "pool-a", "v4-16": "pool-a"}
+        assert ledger.chips_per_variant == {"v4-8": 4, "v4-16": 8}
         # Every worker in both groups maps back to the shared pool.
-        assert view.worker_pool == {
+        assert ledger.worker_pool == {
             "a1-vm-0": "pool-a",
             "b1-vm-0": "pool-a",
             "b1-vm-1": "pool-a",
         }
         # ...and to its physical slice, so the preemption pass groups victims by
         # slice. The two VMs of the v4-16 slice share one slice id.
-        assert view.worker_slice == {
+        assert ledger.worker_slice == {
             "a1-vm-0": "a1",
             "b1-vm-0": "b1",
             "b1-vm-1": "b1",
         }
-        assert view.pools_on_cooldown == frozenset()
-        assert not view.is_empty()
-
-    def test_cooldown_passed_through(self):
-        v8 = _ready_group("v4-8", "v4-8", quota_pool="pool-a", reservation_chips=32, slice_ids=["a1"])
-
-        view = reserved_pool_view([v8], pools_on_cooldown=frozenset({"pool-a"}))
-
-        assert view.pools_on_cooldown == frozenset({"pool-a"})
+        assert not ledger.is_empty()
 
     def test_empty_when_no_fungible_groups(self):
         plain_config = make_scale_group_config(name="plain", accelerator_variant="v4-8", max_slices=8)
         plain = ScalingGroup(plain_config, make_mock_platform())
 
-        view = reserved_pool_view([plain])
+        ledger = build_reservation_ledger([plain])
 
-        assert view.is_empty()
-        assert view.variant_pool == {}
-        assert view.free_chips == {}
+        assert ledger.is_empty()
+        assert ledger.variant_pool == {}
+        assert ledger.pools == {}
+        assert ledger.free_chips("anything") == 0
+        assert ledger.incoming_chips("anything") == 0
 
 
 def _demand_entry(band: int) -> DemandEntry:
@@ -267,6 +319,19 @@ class TestFungiblePoolLaunchCap:
 
         assert plan.group_plans["v4-16"].slices_to_add == 0
         assert plan.group_plans["v4-8"].slices_to_add == 0
+
+    def test_launch_cap_reads_free_not_incoming_so_draining_chips_are_unavailable(self):
+        # A draining slice's chips are NOT free for a new launch until reaped. Pool
+        # of 16 chips: a1,a2 live (8) + a3 draining (4) -> 4 free, 8 incoming. The
+        # cap must read free (4) and admit exactly one v4-8 (4 chips); reading
+        # incoming (8) would wrongly admit two.
+        v8 = _ready_group("v4-8", "v4-8", quota_pool="pool-a", reservation_chips=16, slice_ids=["a1", "a2", "a3"])
+        v8.mark_slice_draining("a3")
+        groups = {v8.name: v8}
+
+        plan = build_scale_plan(groups, _routing({"v4-8": 2}, {"v4-8": BATCH}), Timestamp.now())
+
+        assert plan.group_plans["v4-8"].slices_to_add == 1
 
     def test_non_fungible_group_untouched(self):
         # A plain group (reservation_chips=0) is not part of any pool, so the cap

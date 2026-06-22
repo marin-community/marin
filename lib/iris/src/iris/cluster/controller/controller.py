@@ -1274,12 +1274,14 @@ class Controller:
         self._health.forget_many(set(removed_ids) | set(auto.removed_workers))
 
     def _remove_drained_workers(self, drained_workers: list[WorkerId]) -> None:
-        """Fail and forget workers whose slices a cross-variant drain deleted.
+        """Fail and forget workers whose slices a cross-variant drain is tearing down.
 
-        The autoscaler already detached + terminated their slices; this clears the
-        worker rows (and any still-active attempt) so the scheduler stops seeing
-        deleted VMs as live placement targets. The reason marks the drain so it is
-        distinguishable from a health failure in the audit log.
+        The autoscaler marked their slices DRAINING and started terminating the VMs;
+        the slices linger DRAINING (still counted against the reservation pool) until
+        refresh reaps them. This clears the worker rows (and any still-active attempt)
+        so the scheduler stops seeing draining VMs as live placement targets. The
+        reason marks the drain so it is distinguishable from a health failure in the
+        audit log.
         """
         reason = "drained for cross-variant preemption"
         for wid in drained_workers:

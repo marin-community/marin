@@ -57,6 +57,8 @@ class SliceLifecycleState(StrEnum):
     - BOOTING: At least one VM is booting (VM_STATE_BOOTING)
     - INITIALIZING: At least one VM is initializing (VM_STATE_INITIALIZING)
     - READY: All VMs are ready (VM_STATE_READY)
+    - DRAINING: Cross-variant preemption is tearing the slice down; its VMs are
+      being deleted but still count against the reservation pool until reaped.
     - FAILED: At least one VM has failed (VM_STATE_FAILED or VM_STATE_PREEMPTED)
 
     Note: These are slice-level aggregate states, not direct VM states.
@@ -66,6 +68,7 @@ class SliceLifecycleState(StrEnum):
     BOOTING = "booting"
     INITIALIZING = "initializing"
     READY = "ready"
+    DRAINING = "draining"
     FAILED = "failed"
 
 
@@ -147,6 +150,11 @@ class SliceState:
     # Memory-only.
     unknown_since: Timestamp | None = None
     error_message: str = ""
+    # Timestamp at which the slice was marked DRAINING for cross-variant
+    # preemption. The reap-timeout fallback is measured from here; None (e.g. a
+    # DRAINING slice restored from a checkpoint) makes refresh measure from the
+    # first describe instead. Memory-only.
+    drain_started: Timestamp | None = None
 
 
 def prepare_slice_config(
@@ -264,6 +272,7 @@ def _lifecycle_to_vm_state(lifecycle: SliceLifecycleState) -> vm_pb2.VmState:
         SliceLifecycleState.BOOTING: vm_pb2.VM_STATE_BOOTING,
         SliceLifecycleState.INITIALIZING: vm_pb2.VM_STATE_INITIALIZING,
         SliceLifecycleState.READY: vm_pb2.VM_STATE_READY,
+        SliceLifecycleState.DRAINING: vm_pb2.VM_STATE_STOPPING,
         SliceLifecycleState.FAILED: vm_pb2.VM_STATE_FAILED,
     }[lifecycle]
 
@@ -595,6 +604,31 @@ class ScalingGroup:
                 error_message,
             )
 
+    def mark_slice_draining(self, slice_id: str, timestamp: Timestamp | None = None) -> SliceHandle | None:
+        """Mark a slice DRAINING for cross-variant preemption and return its handle.
+
+        The slice stays tracked (still counted against the reservation pool) so the
+        ledger reports its chips as ``draining`` until ``refresh`` observes the cloud
+        VMs are gone and reaps it. The caller issues the terminate using the returned
+        handle. Returns None if the slice is not tracked.
+        """
+        timestamp = timestamp or Timestamp.now()
+        with self._slices_lock:
+            state = self._slices.get(slice_id)
+            if state is None:
+                return None
+            state.lifecycle = SliceLifecycleState.DRAINING
+            state.drain_started = timestamp
+            state.quiet_since = None
+            handle = state.handle
+        logger.info(
+            "slice draining group=%s slice=%s workers=%s",
+            self._config.name,
+            slice_id,
+            state.worker_ids,
+        )
+        return handle
+
     def note_slice_unknown(self, slice_id: str, timestamp: Timestamp) -> Duration:
         """Record an UNKNOWN describe and return how long the slice has been continuously UNKNOWN.
 
@@ -727,9 +761,10 @@ class ScalingGroup:
     def slices_needing_describe(self) -> list[tuple[str, SliceHandle]]:
         """Snapshot slice handles the caller must ``describe()`` this tick.
 
-        Returns not-yet-ready slices (BOOTING/INITIALIZING), plus READY slices
-        the autoscaler tracks no workers for. A READY slice with empty
-        ``worker_ids`` never resolved its membership (e.g. adopted from a
+        Returns not-yet-ready slices (BOOTING/INITIALIZING), DRAINING slices (so
+        ``refresh`` polls them and reaps the slice once its VMs are gone), plus
+        READY slices the autoscaler tracks no workers for. A READY slice with
+        empty ``worker_ids`` never resolved its membership (e.g. adopted from a
         checkpoint that recorded none); re-describing lets ``refresh`` repopulate
         or reap it instead of leaving it stuck DEGRADED.
         """
@@ -737,7 +772,12 @@ class ScalingGroup:
             return [
                 (slice_id, state.handle)
                 for slice_id, state in self._slices.items()
-                if state.lifecycle in (SliceLifecycleState.BOOTING, SliceLifecycleState.INITIALIZING)
+                if state.lifecycle
+                in (
+                    SliceLifecycleState.BOOTING,
+                    SliceLifecycleState.INITIALIZING,
+                    SliceLifecycleState.DRAINING,
+                )
                 or (state.lifecycle == SliceLifecycleState.READY and not state.worker_ids)
             ]
 
@@ -817,6 +857,29 @@ class ScalingGroup:
                 return None
             return state.handle
 
+    def slice_lifecycle(self, slice_id: str) -> SliceLifecycleState | None:
+        """Lifecycle of a tracked slice, or None if untracked."""
+        with self._slices_lock:
+            state = self._slices.get(slice_id)
+            return state.lifecycle if state is not None else None
+
+    def draining_for(self, slice_id: str, timestamp: Timestamp) -> Duration:
+        """How long a slice has been DRAINING, measured from ``drain_started``.
+
+        When ``drain_started`` is unset (e.g. a DRAINING slice restored from a
+        checkpoint), it is stamped to ``timestamp`` on this first observation so the
+        reap-timeout is measured from first-seen rather than from an unknown drain
+        start. Returns a zero duration for an untracked slice.
+        """
+        with self._slices_lock:
+            state = self._slices.get(slice_id)
+            if state is None:
+                return Duration.from_ms(0)
+            if state.drain_started is None:
+                state.drain_started = timestamp
+                return Duration.from_ms(0)
+            return Duration.from_ms(timestamp.epoch_ms() - state.drain_started.epoch_ms())
+
     def update_demand(self, demand: int) -> None:
         """Update current demand."""
         self._current_demand = demand
@@ -895,6 +958,8 @@ class ScalingGroup:
             snapshot = list(self._slices.items())
         eligible: list[tuple[SliceState, int]] = []
         for slice_id, state in snapshot:
+            # Only READY slices are reclaimable as idle capacity — this also excludes
+            # a DRAINING slice, which is already being torn down for preemption.
             if state.lifecycle != SliceLifecycleState.READY:
                 continue
             if not self.is_slice_eligible_for_scaledown(slice_id, timestamp):

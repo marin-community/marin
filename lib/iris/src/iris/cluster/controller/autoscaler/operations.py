@@ -47,7 +47,7 @@ def terminate_slices_for_workers(
     The detector classifies internally based on slice age — short-lived deaths
     move churn rate; long-lived deaths count as positive samples.
     """
-    return _detach_slices_for_workers(
+    return _teardown_slices_for_workers(
         groups=groups,
         worker_ids=worker_ids,
         unregister_slice_workers=unregister_slice_workers,
@@ -55,25 +55,29 @@ def terminate_slices_for_workers(
         timestamp=timestamp,
         action_type="worker_failed",
         reason_prefix="workers failed",
+        log_verb="termination",
         feed_backoff=True,
+        remove=lambda group, slice_id, _timestamp: group.detach_slice(slice_id),
     )
 
 
-def drain_slices_for_workers(
+def mark_slices_draining_for_workers(
     groups: dict[str, ScalingGroup],
     worker_ids: Sequence[str],
     unregister_slice_workers: Callable[[str, Sequence[str] | None], None],
     log_action: Callable[..., vm_pb2.AutoscalerAction],
     timestamp: Timestamp,
 ) -> SliceTerminationResult:
-    """Detach the slices holding ``worker_ids`` for an intentional drain.
+    """Mark the slices holding ``worker_ids`` DRAINING for an intentional drain.
 
     For a deliberate scheduling decision (cross-variant preemption), not a slice
     failure: the teardown leaves the group's health and backoff signals untouched
-    so a drained pool is not treated as unhealthy. Returns the detached slices'
-    sibling worker ids.
+    so a drained pool is not treated as unhealthy. Unlike the dead-worker teardown,
+    the slice is NOT removed from tracking — it stays counted against the reservation
+    pool as DRAINING until ``refresh`` observes its VMs are gone and reaps it.
+    Returns the drained slices' sibling worker ids.
     """
-    return _detach_slices_for_workers(
+    return _teardown_slices_for_workers(
         groups=groups,
         worker_ids=worker_ids,
         unregister_slice_workers=unregister_slice_workers,
@@ -81,11 +85,13 @@ def drain_slices_for_workers(
         timestamp=timestamp,
         action_type="slice_drained",
         reason_prefix="drained for preemption",
+        log_verb="drain",
         feed_backoff=False,
+        remove=lambda group, slice_id, ts: group.mark_slice_draining(slice_id, ts),
     )
 
 
-def _detach_slices_for_workers(
+def _teardown_slices_for_workers(
     *,
     groups: dict[str, ScalingGroup],
     worker_ids: Sequence[str],
@@ -94,13 +100,17 @@ def _detach_slices_for_workers(
     timestamp: Timestamp,
     action_type: str,
     reason_prefix: str,
+    log_verb: str,
     feed_backoff: bool,
+    remove: Callable[[ScalingGroup, str, Timestamp], SliceHandle | None],
 ) -> SliceTerminationResult:
-    """Find the slices for ``worker_ids``, detach them, and collect siblings.
+    """Find the unique slices for ``worker_ids``, remove each, and collect siblings.
 
-    Shared by the dead-worker teardown and the intentional drain. ``feed_backoff``
-    controls whether each detached slice is recorded as a PREEMPTED fate on the
-    group's churn detector — true for failures, false for deliberate drains.
+    Shared by the dead-worker teardown (``remove`` detaches the slice) and the
+    cross-variant drain (``remove`` marks it DRAINING and leaves it tracked). Each
+    returns the slice's handle for the caller to terminate. ``feed_backoff`` records
+    a PREEMPTED fate on the group's churn detector — true for failures, false for
+    deliberate drains.
     """
     if not worker_ids:
         return SliceTerminationResult(sibling_worker_ids=[], termination_requests=[])
@@ -123,7 +133,7 @@ def _detach_slices_for_workers(
         sibling_worker_ids.update(wid for wid in slice_worker_ids if wid not in primary_workers)
         affected_workers = sorted(primary_workers & set(slice_worker_ids))
 
-        logger.info("Workers %s triggered slice termination for %s", affected_workers, slice_id)
+        logger.info("Workers %s triggered slice %s for %s", affected_workers, log_verb, slice_id)
         log_action(
             action_type,
             group.name,
@@ -132,7 +142,7 @@ def _detach_slices_for_workers(
         )
         if feed_backoff:
             group.record_slice_preempted(slice_id, timestamp)
-        handle = group.detach_slice(slice_id)
+        handle = remove(group, slice_id, timestamp)
         unregister_slice_workers(slice_id, slice_worker_ids)
         if handle is not None:
             termination_requests.append(SliceTerminationRequest(slice_id=slice_id, group=group, handle=handle))

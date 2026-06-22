@@ -30,7 +30,7 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler.models import DemandEntry
-from iris.cluster.controller.autoscaler.reserved_pool import ReservedPoolView
+from iris.cluster.controller.autoscaler.reserved_pool import ReservationLedger
 from iris.cluster.controller.budget import (
     UserTask,
     compute_effective_band,
@@ -560,7 +560,7 @@ class _VictimSlice:
 def run_reserved_pool_preemption(
     unscheduled_tasks: list[PreemptionCandidate],
     running_tasks_info: list[RunningTaskInfo],
-    view: ReservedPoolView,
+    ledger: ReservationLedger,
 ) -> tuple[list[tuple[JobName, JobName]], set[WorkerId]]:
     """Evict cross-variant victims on a full fungible reservation pool.
 
@@ -570,7 +570,14 @@ def run_reserved_pool_preemption(
     enough chips. The same-variant preemption gate cannot do this; this pass
     runs only over reserved pools and only on chip-count arithmetic.
 
-    Band rules mirror :func:`run_preemption_pass`: a preemptor evicts only
+    The pass does not re-preempt a pool whose deficit is already being addressed:
+    its incoming chips (free now plus chips a drain is in the middle of freeing)
+    already cover the need, or a replacement slice of the preemptor's own variant
+    is already booting. That direct observation of in-flight recovery — not a
+    timer — is what holds further preemptions back across the drain-and-reprovision
+    window.
+
+    Band rules mirror the same-variant preemption pass: a preemptor evicts only
     strictly lower-priority victims (``band_sort_key > candidate.band``), and a
     BATCH preemptor never preempts. Victims are chosen lowest-priority-then-
     smallest so the eviction is minimal; if no combination of evictable victims
@@ -592,7 +599,7 @@ def run_reserved_pool_preemption(
         # would double-count its chips and emit a duplicate PREEMPT for it.
         if task.already_preempted:
             continue
-        slice_id = view.worker_slice.get(str(task.worker_id))
+        slice_id = ledger.worker_slice.get(str(task.worker_id))
         if slice_id is None:
             continue
         slice_members[slice_id].append(task)
@@ -607,9 +614,9 @@ def run_reserved_pool_preemption(
         if slice_id in entangled:
             continue
         variant = members[0].device_variant
-        if variant is None or variant not in view.chips_per_variant:
+        if variant is None or variant not in ledger.chips_per_variant:
             continue
-        worker_pools = {view.worker_pool.get(str(m.worker_id)) for m in members}
+        worker_pools = {ledger.worker_pool.get(str(m.worker_id)) for m in members}
         pool = next(iter(worker_pools)) if len(worker_pools) == 1 else None
         if pool is None:
             continue
@@ -617,14 +624,20 @@ def run_reserved_pool_preemption(
             _VictimSlice(
                 slice_id=slice_id,
                 pool=pool,
-                chips=view.chips_per_variant[variant],
+                chips=ledger.chips_per_variant[variant],
                 band=min(m.band_sort_key for m in members),
                 workers=frozenset(m.worker_id for m in members),
                 tasks=tuple(m.task_id for m in members),
             )
         )
 
-    free = dict(view.free_chips)
+    # ``incoming`` (free now + draining chips) is what a deficit is measured
+    # against, so an already-draining victim isn't double-counted; ``replacement``
+    # lazily mirrors the ledger's in-flight slice count of each preemptor's own
+    # variant, marking a replacement that is already booting. Both are consumed as
+    # the pass commits preemptions within this tick.
+    incoming: dict[str, int] = {}
+    replacement: dict[str, dict[str, int]] = {}
     claimed: set[str] = set()
     pairs: list[tuple[JobName, JobName]] = []
     drain_workers: set[WorkerId] = set()
@@ -643,15 +656,24 @@ def run_reserved_pool_preemption(
         variant = candidate.requirements.device_variant
         if variant is None:
             continue
-        pool = view.variant_pool.get(variant)
-        if pool is None or pool in view.pools_on_cooldown:
+        pool = ledger.variant_pool.get(variant)
+        if pool is None:
             continue
-        need = view.chips_per_variant[variant]
-        if free.get(pool, 0) >= need:
-            # The autoscaler can already provision; no preemption needed.
+        need = ledger.chips_per_variant[variant]
+        incoming.setdefault(pool, ledger.incoming_chips(pool))
+        pool_replacement = replacement.setdefault(pool, {})
+        pool_replacement.setdefault(variant, ledger.inflight_slices(pool, variant))
+
+        if incoming[pool] >= need:
+            # Covered by free chips or chips a drain is already freeing; no preemption.
+            incoming[pool] -= need
+            continue
+        if pool_replacement[variant] >= 1:
+            # A replacement slice of the preemptor's variant is already booting.
+            pool_replacement[variant] -= 1
             continue
 
-        deficit = need - free.get(pool, 0)
+        deficit = need - incoming[pool]
         # Lowest priority (highest band) first, then smallest, for minimal eviction.
         eligible = sorted(
             (v for v in victims_by_pool.get(pool, []) if v.slice_id not in claimed and v.band > candidate.band),
@@ -673,7 +695,8 @@ def run_reserved_pool_preemption(
             claimed.add(victim.slice_id)
             drain_workers.update(victim.workers)
             pairs.extend((candidate.job_name, victim_task) for victim_task in victim.tasks)
-        free[pool] = free.get(pool, 0) + freed - need
+        # Surplus freed chips stay available to later, lower-priority preemptors.
+        incoming[pool] += freed - need
 
     return pairs, drain_workers
 

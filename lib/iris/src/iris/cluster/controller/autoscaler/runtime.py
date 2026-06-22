@@ -44,7 +44,7 @@ from iris.cluster.controller.autoscaler.models import (
     ScalingDecision,
 )
 from iris.cluster.controller.autoscaler.operations import (
-    drain_slices_for_workers as drain_slices_for_workers_operation,
+    mark_slices_draining_for_workers as mark_slices_draining_for_workers_operation,
 )
 from iris.cluster.controller.autoscaler.operations import (
     terminate_slices_for_workers as terminate_slices_for_workers_operation,
@@ -61,10 +61,9 @@ from iris.cluster.controller.autoscaler.recovery import (
     restore_autoscaler_state,
 )
 from iris.cluster.controller.autoscaler.reserved_pool import (
-    ReservedPoolView,
-    log_reserved_pool_usage,
-    reserved_pool_usage,
-    reserved_pool_view,
+    ReservationLedger,
+    build_reservation_ledger,
+    log_reservation_ledger,
 )
 from iris.cluster.controller.autoscaler.routing import (
     availability_probe_entries,
@@ -74,6 +73,7 @@ from iris.cluster.controller.autoscaler.routing import (
 )
 from iris.cluster.controller.autoscaler.scaling_group import (
     ScalingGroup,
+    SliceLifecycleState,
     build_worker_config_for_group,
 )
 from iris.cluster.controller.autoscaler.state import AutoscalerState, GroupPersist, SlicePersist
@@ -116,16 +116,6 @@ _REFRESH_DESCRIBE_MAX_WORKERS = 64
 # fan-out keeps a burst (cold-start scale-up, mass-preemption teardown) within
 # the phase budget instead of serializing one bounded HTTP round-trip at a time.
 _CLOUD_OP_MAX_WORKERS = 16
-
-# How long a fungible reservation pool stays off-limits to cross-variant
-# preemption after a drain. Once a drain frees chips, the autoscaler reprovisions
-# the preemptor's slice — and that pending slice re-consumes the freed chips, so
-# the pool reads "full" again until the slice boots and the preemptor places
-# (minutes for a TPU slice). The cooldown must outlast that reprovision so the
-# scheduler doesn't keep re-preempting (killing extra low-priority work) while the
-# preemptor's own replacement is still booting. A drained pool that genuinely
-# needs more preemption recovers once the cooldown lapses.
-RESERVED_DRAIN_COOLDOWN = Duration.from_minutes(5)
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")
@@ -262,11 +252,6 @@ class Autoscaler:
         self._provisioning_table: Table | None = None
 
         self._last_evaluation: Timestamp = Timestamp.from_ms(0)
-
-        # Per-pool drain cooldown: pool_id -> last drain timestamp. A pool stays
-        # off-limits to cross-variant preemption for RESERVED_DRAIN_COOLDOWN after
-        # a drain so the scheduler doesn't re-preempt it mid-reprovision. Memory-only.
-        self._drain_cooldown: dict[str, Timestamp] = {}
 
         # Most recent routing decision, materialized as status protos. Dashboard
         # polls (GetJobStatus, ListJobs) hit these on every pending job; building
@@ -436,10 +421,9 @@ class Autoscaler:
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
 
         # Log fungible-reservation chip utilization for operability. The same
-        # ledger (via reserved_pool_view) is what the scheduler's cross-variant
-        # preemption pass consults; provisioning itself is still bounded by GCP,
-        # not this budget.
-        log_reserved_pool_usage(reserved_pool_usage(self._groups.values()))
+        # ledger is what the scheduler's cross-variant preemption pass consults;
+        # provisioning itself is still bounded by GCP, not this budget.
+        log_reservation_ledger(build_reservation_ledger(self._groups.values()))
         # Build cached views eagerly here so dashboard/service RPCs never pay
         # the conversion cost on the hot path (#4844).
         self._last_routing_decision_proto = routing_decision_to_proto(
@@ -680,6 +664,9 @@ class Autoscaler:
         for (group, slice_id, handle), status in zip(targets, statuses, strict=True):
             if status is None:
                 continue
+            if group.slice_lifecycle(slice_id) == SliceLifecycleState.DRAINING:
+                self._fold_draining_slice(group, slice_id, handle, status, timestamp)
+                continue
             if status.state == CloudSliceState.READY:
                 worker_ids = [w.worker_id for w in status.workers]
                 worker_urls = self._worker_urls(status.workers)
@@ -750,6 +737,50 @@ class Autoscaler:
                     slice_id=handle.slice_id,
                     reason=f"idle slice (target={target_capacity}, ready={ready_before})",
                 )
+
+    def _fold_draining_slice(
+        self,
+        group: ScalingGroup,
+        slice_id: str,
+        handle: SliceHandle,
+        status: SliceStatus,
+        timestamp: Timestamp,
+    ) -> None:
+        """Fold one describe of a DRAINING slice: reap it once its VMs are gone.
+
+        A DRAINING slice was marked for cross-variant preemption and its VMs were
+        already terminated; this only watches for the deletion to land. When the
+        cloud reports it FAILED or with zero workers (allocation gone), the slice is
+        cleanly removed — without a FAILED outcome and without feeding the churn
+        detector, since the drain is intentional. A slice still stuck DRAINING past
+        the reap timeout is force-detached and re-terminated. While its VMs are still
+        deleting the slice stays DRAINING and counted against the reservation pool.
+        """
+        gone = status.state == CloudSliceState.FAILED or not status.workers
+        if gone:
+            group.detach_slice(slice_id)
+            self._unregister_slice_workers(slice_id)
+            self._log_action(
+                "slice_drain_complete",
+                group.name,
+                slice_id,
+                reason="drain reaped (cloud allocation gone)",
+            )
+            return
+
+        draining_for = group.draining_for(slice_id, timestamp)
+        if draining_for >= self._unresolvable_timeout:
+            logger.warning("Slice %s stuck DRAINING for %s; forcing teardown", slice_id, draining_for)
+            self._unregister_slice_workers(slice_id)
+            self._log_action(
+                "slice_drain_complete",
+                group.name,
+                slice_id,
+                reason=f"drain timed out after {draining_for}; forcing teardown",
+            )
+            detached = group.detach_slice(slice_id)
+            if detached is not None:
+                group.terminate_slice_handle(detached, context="draining timed out")
 
     def probe_health(self, timestamp: Timestamp | None = None) -> None:
         """Probe each READY slice's worker /health endpoint and terminate dead slices.
@@ -1031,24 +1062,21 @@ class Autoscaler:
     def drain_slices_for_workers(self, worker_ids: Sequence[str]) -> list[str]:
         """Drain the unique slices holding the given workers for preemption.
 
-        For a scheduler-driven cross-variant preemption: the teardown records no
-        failure or preemption outcome, so the pool's health and backoff signals
-        stay clean. Stamps each affected pool's drain cooldown so the scheduler
-        holds off re-preempting it while the replacement slice provisions. Returns
-        the drained slices' sibling worker ids, which the caller fails immediately.
+        For a scheduler-driven cross-variant preemption: each affected slice is
+        marked DRAINING (kept tracked, still counted against its reservation pool)
+        and its VMs are terminated now; the teardown records no failure or
+        preemption outcome, so the pool's health and backoff signals stay clean. The
+        slice lingers DRAINING until ``refresh`` observes its VMs are gone and reaps
+        it. Returns the drained slices' sibling worker ids, which the caller fails
+        immediately.
         """
-        timestamp = Timestamp.now()
-        result = drain_slices_for_workers_operation(
+        result = mark_slices_draining_for_workers_operation(
             groups=self._groups,
             worker_ids=worker_ids,
             unregister_slice_workers=self._unregister_slice_workers,
             log_action=self._log_action,
-            timestamp=timestamp,
+            timestamp=Timestamp.now(),
         )
-        for req in result.termination_requests:
-            pool_id = req.group.config.quota_pool
-            if pool_id:
-                self._drain_cooldown[pool_id] = timestamp
         _run_io_batch(
             result.termination_requests,
             lambda req: req.group.terminate_slice_handle(req.handle, context="draining for preemption"),
@@ -1057,17 +1085,10 @@ class Autoscaler:
         )
         return result.sibling_worker_ids
 
-    def reserved_pool_view(self, timestamp: Timestamp | None = None) -> ReservedPoolView:
-        """Build the cross-variant preemption chip ledger from live group state.
+    def reservation_ledger(self) -> ReservationLedger:
+        """Build the per-tick reservation chip ledger from live group state.
 
-        Pools drained within ``RESERVED_DRAIN_COOLDOWN`` of ``timestamp`` are
-        reported as on cooldown so the scheduler skips re-preempting them while
-        their drain + reprovision is still settling.
+        The single capacity view both the scheduler's cross-variant preemption pass
+        and the autoscaler's launch planner read.
         """
-        ts = timestamp or Timestamp.now()
-        on_cooldown = frozenset(
-            pool_id
-            for pool_id, drained_at in self._drain_cooldown.items()
-            if Duration.from_ms(ts.epoch_ms() - drained_at.epoch_ms()) < RESERVED_DRAIN_COOLDOWN
-        )
-        return reserved_pool_view(self._groups.values(), pools_on_cooldown=on_cooldown)
+        return build_reservation_ledger(self._groups.values())

@@ -4,127 +4,127 @@
 """Reserved-pool chip accounting.
 
 On a fungible reservation, the per-size scale groups sharing a ``quota_pool`` draw
-from one physical pool of interchangeable TPU chips. This module computes, per
-pool, how many chips live + in-flight slices consume and how many remain free
-against the configured budget.
+from one physical pool of interchangeable TPU chips. This module builds, once per
+control tick, the single chip ledger both the scheduler's cross-variant preemption
+pass and the autoscaler's launch planner read.
 
-It is read-only accounting: it backs the utilization log line and is the capacity
-view the cross-variant preemption pass consults to decide when a full reserved
-pool must shed lower-priority slices. It changes no scaling decision on its own.
+The ledger buckets every pool's chips into live (READY), in-flight
+(REQUESTING/BOOTING/INITIALIZING), and draining (DRAINING) slices. The launch
+planner asks how many chips are free *now* to bound new launches; the preemption
+pass asks whether a pool's deficit is already being addressed — by chips that are
+free or about to be freed by a drain, or by a replacement slice of the preemptor's
+own variant already booting — so it does not re-preempt across the drain-and-
+reprovision window. It changes no scaling decision on its own.
 """
 
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, SliceLifecycleState
 from iris.cluster.tpu_topology import get_tpu_topology
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class ReservedPoolView:
-    """Read-only chip-ledger view of the fungible reservation pools.
-
-    Built once per scheduling tick from live scaling-group state and consumed by
-    the cross-variant preemption pass. It maps every fungible pool to its free
-    chips and lets the pass translate a victim worker / preemptor variant into
-    the pool and chip count it touches. ``pools_on_cooldown`` carries the pools
-    whose drain + reprovision is still in flight, so the pass leaves them alone.
-    """
-
-    free_chips: dict[str, int]
-    """pool_id -> chips currently free against the reservation budget."""
-    worker_pool: dict[str, str]
-    """worker_id -> pool_id of the pool that worker's slice draws from."""
-    worker_slice: dict[str, str]
-    """worker_id -> slice_id of the physical slice that worker belongs to.
-
-    The preemption pass groups victims by slice (not by task) because the drain
-    tears down a whole physical slice: every task on a slice is evicted together,
-    and the slice's chips are freed once."""
-    variant_pool: dict[str, str]
-    """device_variant -> pool_id the variant's slices draw from."""
-    chips_per_variant: dict[str, int]
-    """device_variant -> physical chips one slice of that variant consumes."""
-    pools_on_cooldown: frozenset[str] = frozenset()
-    """Pools recently drained whose reprovision is in flight; skip preemption."""
-
-    def is_empty(self) -> bool:
-        """True when no fungible reservation pool participates."""
-        return not self.variant_pool
-
-
-def reserved_pool_view(
-    groups: Iterable[ScalingGroup],
-    pools_on_cooldown: frozenset[str] = frozenset(),
-) -> ReservedPoolView:
-    """Build the cross-variant preemption chip-ledger view from scaling groups.
-
-    Only groups with ``reservation_chips > 0`` participate; they are bucketed by
-    ``quota_pool``. ``free_chips`` is the reservation budget minus live and in-flight
-    slice consumption, and the per-variant and per-worker maps let the preemption
-    pass resolve a preemptor's variant and a victim's worker to their pool and chip
-    footprint.
-    """
-    groups = list(groups)
-    free_chips = {pool_id: usage.free_chips for pool_id, usage in reserved_pool_usage(groups).items()}
-    variant_pool: dict[str, str] = {}
-    chips_per_variant: dict[str, int] = {}
-    worker_pool: dict[str, str] = {}
-    worker_slice: dict[str, str] = {}
-    for group in groups:
-        if group.reservation_chips <= 0:
-            continue
-        pool_id = group.config.quota_pool
-        variant = group.accelerator_variant
-        variant_pool[variant] = pool_id
-        chips_per_variant[variant] = get_tpu_topology(variant).chip_count
-        for worker_id in group.all_worker_ids():
-            worker_pool[worker_id] = pool_id
-        worker_slice.update(group.worker_slice_ids())
-    return ReservedPoolView(
-        free_chips=free_chips,
-        worker_pool=worker_pool,
-        worker_slice=worker_slice,
-        variant_pool=variant_pool,
-        chips_per_variant=chips_per_variant,
-        pools_on_cooldown=pools_on_cooldown,
-    )
-
-
-@dataclass(frozen=True)
-class ReservedPoolUsage:
-    """Chip accounting for one fungible reservation pool (one ``quota_pool``)."""
+class PoolLedger:
+    """Chip accounting for one fungible reservation pool, one tick."""
 
     pool_id: str
     reservation_chips: int
-    consumed_chips: int
+    live_chips: int  # READY slices
+    inflight_chips: int  # REQUESTING/BOOTING/INITIALIZING (+ pending_scale_ups), NOT draining
+    draining_chips: int  # DRAINING slices (still physically allocated until reaped)
+    inflight_slices_by_variant: dict[str, int]  # variant -> count of in-flight (non-draining) slices
+
+    @property
+    def allocated_chips(self) -> int:
+        """Chips currently held by any slice (live + in-flight + draining)."""
+        return self.live_chips + self.inflight_chips + self.draining_chips
 
     @property
     def free_chips(self) -> int:
-        return self.reservation_chips - self.consumed_chips
+        """Chips free against the reservation budget right now (excludes draining)."""
+        return self.reservation_chips - self.allocated_chips
+
+    @property
+    def incoming_chips(self) -> int:
+        """Chips free now or being freed by an in-flight drain (free + draining)."""
+        return self.free_chips + self.draining_chips
 
     @property
     def utilization(self) -> float:
         """Fraction of the reservation consumed (0.0 when the budget is zero)."""
         if self.reservation_chips <= 0:
             return 0.0
-        return self.consumed_chips / self.reservation_chips
+        return self.allocated_chips / self.reservation_chips
 
 
-def reserved_pool_usage(groups: Iterable[ScalingGroup]) -> dict[str, ReservedPoolUsage]:
-    """Aggregate live + in-flight chip consumption per fungible reservation pool.
+@dataclass(frozen=True)
+class ReservationLedger:
+    """Single per-tick chip ledger over all fungible reservation pools.
+
+    The one capacity view both the scheduler's cross-variant preemption pass and
+    the autoscaler's launch planner read. The pass asks ``incoming_chips`` /
+    ``inflight_slices`` ("is the deficit already being addressed?"); the planner
+    asks ``free_chips`` ("how many new slices may I launch now?").
+    """
+
+    pools: dict[str, PoolLedger]
+    worker_pool: dict[str, str]  # worker_id -> pool_id of the pool that worker's slice draws from
+    worker_slice: dict[str, str]  # worker_id -> slice_id of the physical slice the worker belongs to
+    variant_pool: dict[str, str]  # device_variant -> pool_id the variant's slices draw from
+    chips_per_variant: dict[str, int]  # device_variant -> physical chips one slice of that variant consumes
+
+    def is_empty(self) -> bool:
+        """True when no fungible reservation pool participates."""
+        return not self.variant_pool
+
+    def free_chips(self, pool_id: str) -> int:
+        """Chips free against the reservation budget now (0 if the pool is absent)."""
+        pool = self.pools.get(pool_id)
+        return pool.free_chips if pool is not None else 0
+
+    def incoming_chips(self, pool_id: str) -> int:
+        """Chips free now or being freed by a drain (0 if the pool is absent)."""
+        pool = self.pools.get(pool_id)
+        return pool.incoming_chips if pool is not None else 0
+
+    def inflight_slices(self, pool_id: str, variant: str) -> int:
+        """In-flight (non-draining) slice count of ``variant`` in ``pool_id`` (0 if absent)."""
+        pool = self.pools.get(pool_id)
+        if pool is None:
+            return 0
+        return pool.inflight_slices_by_variant.get(variant, 0)
+
+
+_INFLIGHT_LIFECYCLES = (
+    SliceLifecycleState.REQUESTING,
+    SliceLifecycleState.BOOTING,
+    SliceLifecycleState.INITIALIZING,
+)
+
+
+def build_reservation_ledger(groups: Iterable[ScalingGroup]) -> ReservationLedger:
+    """Build the per-tick chip ledger from live scaling-group state.
 
     Only groups with ``reservation_chips > 0`` participate; they are bucketed by
-    ``quota_pool``. Each slice consumes ``chip_count(variant)`` physical chips, so
-    a v4-16 (8 chips) and two v4-8s (4 chips each) count equally against the pool.
-    Every member of a pool carries the same budget; a mismatch is a config error
-    and raises.
+    ``quota_pool``. Each slice consumes ``chip_count(variant)`` physical chips, so a
+    v4-16 (8 chips) and two v4-8s (4 chips each) count equally against the pool.
+    Every member of a pool carries the same budget; a mismatch (or a member with no
+    ``quota_pool``) is a config error and raises.
     """
     budgets: dict[str, int] = {}
-    consumed: dict[str, int] = {}
+    live: dict[str, int] = {}
+    inflight: dict[str, int] = {}
+    draining: dict[str, int] = {}
+    inflight_slices_by_variant: dict[str, dict[str, int]] = {}
+    variant_pool: dict[str, str] = {}
+    chips_per_variant: dict[str, int] = {}
+    worker_pool: dict[str, str] = {}
+    worker_slice: dict[str, str] = {}
+
     for group in groups:
         budget = group.reservation_chips
         if budget <= 0:
@@ -135,27 +135,54 @@ def reserved_pool_usage(groups: Iterable[ScalingGroup]) -> dict[str, ReservedPoo
         prior = budgets.setdefault(pool_id, budget)
         if prior != budget:
             raise ValueError(f"reservation pool {pool_id!r} has conflicting reservation_chips: {prior} vs {budget}")
-        chips_per_slice = get_tpu_topology(group.accelerator_variant).chip_count
-        consumed[pool_id] = consumed.get(pool_id, 0) + group.slice_count() * chips_per_slice
 
-    return {
-        pool_id: ReservedPoolUsage(
+        variant = group.accelerator_variant
+        chips = get_tpu_topology(variant).chip_count
+        variant_pool[variant] = pool_id
+        chips_per_variant[variant] = chips
+
+        counts = group.slice_state_counts()
+        inflight_count = sum(counts[state] for state in _INFLIGHT_LIFECYCLES)
+        live[pool_id] = live.get(pool_id, 0) + counts[SliceLifecycleState.READY] * chips
+        inflight[pool_id] = inflight.get(pool_id, 0) + inflight_count * chips
+        draining[pool_id] = draining.get(pool_id, 0) + counts[SliceLifecycleState.DRAINING] * chips
+        if inflight_count:
+            inflight_slices_by_variant.setdefault(pool_id, {})[variant] = inflight_count
+
+        for worker_id in group.all_worker_ids():
+            worker_pool[worker_id] = pool_id
+        worker_slice.update(group.worker_slice_ids())
+
+    pools = {
+        pool_id: PoolLedger(
             pool_id=pool_id,
             reservation_chips=budget,
-            consumed_chips=consumed.get(pool_id, 0),
+            live_chips=live.get(pool_id, 0),
+            inflight_chips=inflight.get(pool_id, 0),
+            draining_chips=draining.get(pool_id, 0),
+            inflight_slices_by_variant=inflight_slices_by_variant.get(pool_id, {}),
         )
         for pool_id, budget in budgets.items()
     }
+    return ReservationLedger(
+        pools=pools,
+        worker_pool=worker_pool,
+        worker_slice=worker_slice,
+        variant_pool=variant_pool,
+        chips_per_variant=chips_per_variant,
+    )
 
 
-def log_reserved_pool_usage(usage: dict[str, ReservedPoolUsage]) -> None:
+def log_reservation_ledger(ledger: ReservationLedger) -> None:
     """Emit one utilization line per fungible reservation pool."""
-    for pool in usage.values():
+    for pool in ledger.pools.values():
         logger.info(
-            "reserved pool %s: %d/%d chips used (%d free, %.0f%% utilized)",
+            "reserved pool %s: res=%d live=%d inflight=%d draining=%d free=%d (%.0f%% utilized)",
             pool.pool_id,
-            pool.consumed_chips,
             pool.reservation_chips,
+            pool.live_chips,
+            pool.inflight_chips,
+            pool.draining_chips,
             pool.free_chips,
             pool.utilization * 100,
         )

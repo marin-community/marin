@@ -44,7 +44,7 @@ from finelog.types import LogWriterProtocol
 
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import UNRANKED_DEMAND_BAND, DemandEntry
-from iris.cluster.controller.autoscaler.reserved_pool import ReservedPoolView
+from iris.cluster.controller.autoscaler.reserved_pool import ReservationLedger
 from iris.cluster.controller.autoscaler.state import AutoscalerState
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import ControlSnapshot
@@ -241,7 +241,7 @@ def run_scheduling_decision(
     scheduler: Scheduler,
     snapshot: ScheduleInput,
     zone_capabilities: Mapping[str, frozenset[str]] | None = None,
-    reserved_view: ReservedPoolView | None = None,
+    ledger: ReservationLedger | None = None,
 ) -> ScheduleResult:
     """Run the full Iris scheduling decision pipeline over a DB-less snapshot.
 
@@ -256,7 +256,7 @@ def run_scheduling_decision(
     availability constraint confines a job to a zone where the accelerator has
     actually been obtained.
 
-    ``reserved_view`` (the fungible reservation chip ledger) enables cross-variant
+    ``ledger`` (the fungible reservation chip ledger) enables cross-variant
     preemption: a higher-band preemptor on a full reserved pool evicts the minimal
     set of lower-band victim slices (any variant) so the autoscaler can drain them
     and reprovision. The drained workers ride back in ``reserved_drain_workers``.
@@ -308,7 +308,7 @@ def run_scheduling_decision(
     order = compute_scheduling_order(ctx, gated, trace=trace)
     all_assignments, context, placed_jobs = apply_placements(scheduler, order, gated, ctx, trace=trace)
     preemptions, drain_workers = apply_preemptions(
-        order, placed_jobs, all_assignments, ctx.running_for_preemption, context, reserved_view
+        order, placed_jobs, all_assignments, ctx.running_for_preemption, context, ledger
     )
     diagnostics = compute_diagnostics(scheduler, context, placed_jobs, all_assignments, order.ordered_task_ids)
 

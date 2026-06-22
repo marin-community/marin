@@ -16,7 +16,7 @@
 import type { SliceInfo } from '@/types/rpc'
 import { timestampMs } from '@/utils/formatting'
 
-export type SliceLifecycle = 'requesting' | 'booting' | 'initializing' | 'ready' | 'failed'
+export type SliceLifecycle = 'requesting' | 'booting' | 'initializing' | 'ready' | 'draining' | 'failed'
 
 /**
  * Display status: lifecycle for non-ready slices, else the server-derived capacity
@@ -58,6 +58,7 @@ const LIFECYCLE_VALUES: ReadonlySet<string> = new Set([
   'booting',
   'initializing',
   'ready',
+  'draining',
   'failed',
 ])
 
@@ -153,6 +154,7 @@ const STATUS_RANK: Record<SliceStatus, number> = {
   requesting: 2,
   booting: 2,
   initializing: 2,
+  draining: 2,
   idle: 3,
   in_use: 4,
   available: 5,

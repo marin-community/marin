@@ -265,6 +265,14 @@ export const SLICE_STATUS_STYLES: Record<SliceStatus, SliceStatusStyle> = {
     text: 'text-status-purple',
     border: 'border-status-purple-border',
   },
+  draining: {
+    label: 'draining',
+    description: 'Being torn down to free reserved chips for a higher-priority job',
+    dot: 'bg-status-warning',
+    bg: 'bg-status-warning-bg',
+    text: 'text-status-warning',
+    border: 'border-status-warning-border',
+  },
   failed: {
     label: 'failed',
     description: 'Slice failed to provision or was lost',
@@ -295,6 +303,7 @@ export const SLICE_STATUS_SUMMARY_ORDER: readonly SliceStatus[] = [
   'idle',
   'degraded',
   'failed',
+  'draining',
   'requesting',
   'booting',
   'initializing',

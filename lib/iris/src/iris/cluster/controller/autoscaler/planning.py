@@ -15,7 +15,7 @@ from iris.cluster.controller.autoscaler.models import (
     ScalingAction,
     ScalingDecision,
 )
-from iris.cluster.controller.autoscaler.reserved_pool import reserved_pool_usage
+from iris.cluster.controller.autoscaler.reserved_pool import ReservationLedger, build_reservation_ledger
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, SliceLifecycleState
 from iris.cluster.tpu_topology import get_tpu_topology
 
@@ -172,6 +172,7 @@ def _cap_fungible_pool_launches(
     group_plans: dict[str, GroupScalePlan],
     groups: dict[str, ScalingGroup],
     routing_decision: RoutingDecision,
+    ledger: ReservationLedger,
 ) -> dict[str, GroupScalePlan]:
     """Trim new launches per fungible reservation pool to its chip budget.
 
@@ -180,13 +181,12 @@ def _cap_fungible_pool_launches(
     the shared budget — so unconstrained planning can request far more chips than the
     reservation holds (256 v4-8 *and* 128 v4-16 = 2048 chips against a 1024-chip
     pool). This caps each pool's total ``slices_to_add * chips`` to the chips free
-    against the reservation (live + in-flight slices already counted by
-    ``reserved_pool_usage``), admitting groups highest priority first and holding
-    chips for an unsatisfied high-priority slice rather than a lower one. Non-fungible
-    groups are untouched.
+    against the reservation *now* (live + in-flight slices, excluding draining chips
+    that aren't free until reaped), admitting groups highest priority first and
+    holding chips for an unsatisfied high-priority slice rather than a lower one.
+    Non-fungible groups are untouched.
     """
-    usage = reserved_pool_usage(groups.values())
-    if not usage:
+    if not ledger.pools:
         return group_plans
 
     candidates_by_pool: dict[str, list[_PoolCandidate]] = defaultdict(list)
@@ -208,7 +208,7 @@ def _cap_fungible_pool_launches(
 
     capped = dict(group_plans)
     for pool_id, candidates in candidates_by_pool.items():
-        for name, grant in _admit_in_band_order(candidates, usage[pool_id].free_chips).items():
+        for name, grant in _admit_in_band_order(candidates, ledger.free_chips(pool_id)).items():
             if grant != capped[name].slices_to_add:
                 capped[name] = replace(capped[name], slices_to_add=grant)
     return capped
@@ -230,5 +230,6 @@ def build_scale_plan(
         name: build_group_scale_plan(group, routing_decision.group_required_slices.get(name, 0), ts)
         for name, group in groups.items()
     }
-    group_plans = _cap_fungible_pool_launches(group_plans, groups, routing_decision)
+    ledger = build_reservation_ledger(groups.values())
+    group_plans = _cap_fungible_pool_launches(group_plans, groups, routing_decision, ledger)
     return ScalePlan(routing_decision=routing_decision, group_plans=group_plans)
