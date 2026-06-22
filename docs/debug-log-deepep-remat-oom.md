@@ -484,6 +484,77 @@ either pass real scratch top-k buffers and ignore the result, or temporarily
 route the x-only path through the normal combine primitive to validate whether
 the dummy top-k convention is the trigger.
 
+## Results
+
+MAY336 attempted the split-marker rerun from the new x-only combine breadcrumb
+build:
+
+- W&B/run id:
+  `marin-community/marin_moe/MAY336-SPLITXCOMB-B32-XONLY-JAXBWD-1405`
+- Parent Iris job: `/dlwh/iris-run-job-20260622-140506`
+- Child Iris job:
+  `/dlwh/iris-run-job-20260622-140506/grug-train-MAY336-SPLITXCOMB-B32-XONLY-JAXBWD-1405`
+- The run failed before W&B was created and before any DeepEP runtime
+  breadcrumbs.
+- Task 1 cloned DeepEP and built the FFI libraries. Task 0 failed while cloning
+  DeepEP from GitHub:
+  `Failed to connect to github.com port 443 after 134104 ms`, followed by
+  `fatal: could not fetch ... from promisor remote`.
+- The child restarted; the retry and parent were stopped to avoid burning GPUs
+  on a bootstrap failure.
+
+This was not a DeepEP transport result. The source bootstrap was hardened after
+MAY336 to clone with `--no-checkout`, check out the pinned DeepEP revision
+directly, and remove incomplete auto-managed checkouts instead of accepting any
+directory containing `.git`.
+
+MAY337 reran the split-marker shape after the bootstrap hardening:
+
+- W&B/run id:
+  `marin-community/marin_moe/MAY337-SPLITXCOMB-B32-XONLY-JAXBWD-1411`
+- Parent Iris job: `/dlwh/iris-run-job-20260622-141130`
+- Child Iris job:
+  `/dlwh/iris-run-job-20260622-141130/grug-train-MAY337-SPLITXCOMB-B32-XONLY-JAXBWD-1411`
+- Both tasks cloned DeepEP and built prebuilt FFI libraries.
+- W&B was created, but no train metrics landed.
+- All local workers logged `Starting Grug train_step dispatch for step 0`.
+- Only task-1 filtered ranks reached DeepEP runtime breadcrumbs:
+  ranks 11, 12, and 14 emitted
+  `internode_jax_before_notify_dispatch`,
+  `internode_jax_after_notify_dispatch`, and
+  `internode_jax_before_wait_recv_counts` for call sequence 1.
+- No filtered task-0 ranks reached `HOST_DISPATCH_STAGE` during the observation
+  window.
+- A task-0 process snapshot showed all eight local workers alive and CPU-hot,
+  with hot Python threads and LLVM workers mostly idle late in the run.
+- After roughly 40 minutes from child start, the job was still running with
+  `failure_count=0`, no W&B metrics, and unchanged breadcrumbs. The child and
+  parent were stopped to avoid holding GPUs for a stalled-launch diagnosis.
+
+MAY337 is another compile/task-skew blocker rather than the intended x-only
+combine split-marker result. Unlike MAY333, the longer transport timeout
+prevented an early recv-count timeout, but task 0 still did not reach DeepEP
+runtime in a useful window.
+
+## Hypothesis 14: B32 EP16 diagnostics need synchronized compile/cache warmup
+
+The current 2-task process-per-GPU launch can put one task into DeepEP runtime
+while the other task is still doing long first-step host work. Increasing the
+DeepEP counter timeout prevents a false transport exception, but does not make
+the diagnostic productive: one task can hold GPUs in `wait_recv_counts` for a
+long time while the other task never reaches the FFI boundary.
+
+Before another split-marker transport run, reduce or eliminate first-step
+compile skew. Viable options are:
+
+- pre-populate or share the XLA compile cache for this exact branch/config,
+- add an explicit process/task synchronization point immediately before the
+  first compiled train-step dispatch,
+- run a cheap compile-only/warmup path before any rank enters DeepEP runtime,
+- or temporarily shrink the diagnostic shape enough that all ranks reach the
+  transport boundary quickly, then restore B32 once the x-only combine marker
+  split is understood.
+
 ## Future work
 
 - [x] Add a C++/FFI primitive for x-only internode combine-with-local-collapse
@@ -509,8 +580,11 @@ the dummy top-k convention is the trigger.
       skew.
 - [x] Re-run B32 EP16 with 3600s counter timeout and rank-filtered x-only
       combine logs for the suspected failing ranks.
-- [ ] Split x-only combine diagnostics into launch-return, CUDA-error-check,
-      and stream-sync boundaries.
+- [x] Add split x-only combine diagnostics around launch-return,
+      CUDA-error-check, and stream-sync.
+- [x] Harden DeepEP source bootstrap against partial GitHub promisor checkouts.
+- [ ] Address first-step compile/task skew before relaunching the B32 EP16
+      split-marker diagnostic.
 - [ ] If the split markers confirm x-only combine launch/sync failure, retry
       with real top-k scratch buffers or the normal combine call shape.
 - [ ] If B32 passes, retry B64 and profile remat overhead versus ring/all-to-all.
