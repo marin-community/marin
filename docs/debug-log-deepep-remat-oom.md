@@ -386,6 +386,54 @@ failure should again be interpreted using the x-only combine breadcrumbs. If
 one task remains in compile for close to an hour, the issue is no longer DeepEP
 transport and should move to compile-cache/compile-skew mitigation.
 
+## Results
+
+MAY334 reran the B32 EP16 x-only/JAX-backward shape with a 3600s DeepEP counter
+timeout:
+
+- W&B:
+  `marin-community/marin_moe/MAY334-TIMEOUT3600-B32-XONLY-JAXBWD-1340`
+- Parent Iris job: `/dlwh/iris-run-job-20260622-134018`
+- Child Iris job:
+  `/dlwh/iris-run-job-20260622-134018/grug-train-MAY334-TIMEOUT3600-B32-XONLY-JAXBWD-1340`
+- The longer timeout avoided the MAY333 false transport timeout caused by
+  cross-task compile skew. Both tasks entered repeated DeepEP dispatch/combine
+  sequences.
+- W&B marked the run failed before any train metrics. The child restarted once;
+  the retry was stopped to avoid wasting GPUs.
+- First-attempt logs did not include a Python traceback, OOM, NCCL error, or
+  explicit CUDA error. The visible user logs jump from `HOST_DISPATCH_STAGE`
+  lines at 13:47:38 UTC to fresh task setup at 13:47:55 UTC.
+- A bounded parser over the first-attempt stage logs found all 16 ranks
+  completed dispatch sequence 9, then most ranks entered x-only combine
+  sequence 10. Only 10/16 parsed ranks emitted
+  `internode_jax_after_combine_x_only` for sequence 10; ranks 6 and 12 then
+  reached `internode_jax_after_notify_dispatch` for sequence 11.
+
+The strongest signal is that x-only combine can complete for some ranks and
+some sequences, but the first attempt silently bounces while other ranks are
+still in or immediately after the sequence-10 x-only combine. The next run uses
+the existing rank filter to reduce log interleaving around ranks 0, 6, 11, 12,
+and 14.
+
+## Hypothesis 12: x-only combine has a rank-divergent native failure
+
+The sequence-10/11 split looks like a native failure or hang inside the x-only
+combine stream synchronization on a subset of ranks rather than a cached-notify
+failure:
+
+- Cached notify after-success markers appeared for most sequence-10 ranks.
+- `internode_jax_after_combine_x_only` appeared for only a subset of
+  sequence-10 ranks.
+- A couple of ranks advanced into the next dispatch, so this is not a simple
+  all-rank deadlock at the start of sequence 10.
+
+The next diagnostic run should keep `LEVANTER_DEEPEP_COUNTER_TIMEOUT_SECONDS=3600`
+and enable `LEVANTER_DEEPEP_HOST_DISPATCH_STAGE_DEBUG_RANKS` for the suspicious
+ranks. If those logs reproduce the split cleanly, the next code change should
+either add a more explicit pre/post CUDA sync marker around x-only combine or
+replace the x-only combine path with a lower-risk call shape.
+
 ## Future work
 
 - [x] Add a C++/FFI primitive for x-only internode combine-with-local-collapse
@@ -407,8 +455,10 @@ transport and should move to compile-cache/compile-skew mitigation.
 - [x] Re-run B32 EP16 with the dispatch local-assignment pack CUDA check.
 - [x] Re-run B32 EP16 with x-only combine after-success markers and filtered
       stage logs.
-- [ ] Re-run B32 EP16 with 3600s counter timeout to tolerate first-step compile
+- [x] Re-run B32 EP16 with 3600s counter timeout to tolerate first-step compile
       skew.
+- [ ] Re-run B32 EP16 with 3600s counter timeout and rank-filtered x-only
+      combine logs for the suspected failing ranks.
 - [ ] If B32 passes, retry B64 and profile remat overhead versus ring/all-to-all.
 - [ ] If B32 reaches `cudaMallocAsync(x-only fused local-collapse bwd recv_out)`
       OOM, replace the staging temp with a true direct packed-output backward
