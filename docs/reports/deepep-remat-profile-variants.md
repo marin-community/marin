@@ -416,3 +416,41 @@ working, but FFI assignment-gradient does not rescue the EP16 B32
 `save_moe`/FFI-collapse path. The failure class is back to the internode DeepEP
 recv-counter timeout seen in May348, not a source-bootstrap failure and not the
 JAX-assignment NCCL/CUDA OOM from May351/May352.
+
+May355 tested the other branch of the isolation: keep `save_moe` and fused
+assignment-gradient, but use the JAX scatter collapse path instead of FFI
+collapse, with the same source archive bootstrap:
+
+```text
+script=scratch/launch_may355_deepep_ep16_savemoe_l26_b64_scatter_archive_n2_throughput.sh
+parent=/dlwh/iris-run-job-20260622-212253
+child=/dlwh/iris-run-job-20260622-212253/grug-train-MAY355-DEEPEP-EP16-SAVEMOE-FUSEDASSIGN-SCATTERCOLLAPSE-ARCHIVE-L26-B64-N2-20260622-2122
+wandb=marin-community/marin_moe/MAY355-DEEPEP-EP16-SAVEMOE-FUSEDASSIGN-SCATTERCOLLAPSE-ARCHIVE-L26-B64-N2-20260622-2122
+shape=2 H100x8 nodes, EP16, global batch 64, 4 sequences/device
+moe=deepep_internode
+remat=save_moe
+profiler=disabled
+collapse=scatter
+assignment_gradient=fused
+```
+
+Result:
+
+- May355 used the source archive, reached W&B, initialized all 16 ranks, and
+  dispatched step 0.
+- It failed before any metric rows with the same fused assignment-gradient
+  allocation class seen in May349:
+
+```text
+jax.errors.JaxRuntimeError: INTERNAL: cudaMallocAsync(fused bwd recv_x): out of memory
+```
+
+- The retrying child and parent were stopped to avoid repeating the same
+  failure.
+
+Interpretation: scatter collapse avoids the May354 FFI recv-counter timeout
+surface, but at B64 the fused assignment-gradient backward still does not fit.
+The next useful control is the same `save_moe`/scatter/fused path at B32; if
+that fits, it can give an EP16 remat-throughput point, and if it still OOMs the
+fused assignment-gradient path is not viable for this comparison without memory
+work.
