@@ -246,6 +246,17 @@ interior minimum of the grid:
    refine once (×√2 LR, intermediate WD rung) around it to sharpen `(lr*, wd*)`;
    the same neighbor-dominance test applies at the finer spacing.
 
+Two precision rules for the comparisons above:
+
+- **Final-step evals only.** Compare `eval/contacts-v1-val/loss` at the run's full
+  step count. Mid-run evals read misleadingly high and drop near the end (e.g. E2
+  wd0.8 read 2.976 at 91% but finished 2.942) — never decide on a mid-flight value.
+- **~0.01–0.015 is noise.** Differences inside that band are run-to-run scatter, i.e.
+  a flat basin, not a real min — so a nominal winner inside it isn't accepted on its
+  own; still bracket the edge (a clearly-worse point on each side) before stopping.
+  Because the WD optimum is **LR-coupled** (low LR wants high WD, high LR wants low
+  WD), judge "interior" jointly over the 2-D grid, not per-axis in isolation.
+
 Record, per epoch, the confirmed `(lr*, wd*)`, its val loss, and the neighbor
 losses that establish dominance (so the evidence is auditable).
 
