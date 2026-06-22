@@ -170,10 +170,6 @@ def main() -> int:
     else:
         layouts = [(num_stages, fill, 1), (num_stages, 1, fill)]
 
-    fsdp_s = bench_fsdp(
-        cfg, num_devices, global_batch=global_batch, seq_len=seq_len, lr=3e-3, warmup=warmup, iters=iters, seed=0
-    )
-    fsdp_tps = tokens_per_step / fsdp_s
     total_b, active_b = _param_count(num_layers, hidden_dim, num_experts, vocab_size)
     logger.info(
         "model: layers=%d hidden=%d experts=%d seq=%d vocab=%d global_batch=%d tok/step=%d"
@@ -188,8 +184,11 @@ def main() -> int:
         total_b,
         active_b,
     )
-    logger.info("FSDP (%d-way) baseline: %.1f ms/step  %.0f tokens/sec", num_devices, fsdp_s * 1e3, fsdp_tps)
 
+    # Run the pipeline layouts first: each microbatches the global batch, so it fits
+    # where the one-shot FSDP baseline below may not. Then time the FSDP baseline,
+    # tolerating an OOM and reporting it (that gap IS the memory case for PP).
+    pp_results = []
     for ns, nd, ne in layouts:
         kind = "PPxEP " if nd == 1 else "PPxFSDP" if ne == 1 else "PPxFSDPxEP"
         pp_s = bench_pipeline_3d(
@@ -205,17 +204,27 @@ def main() -> int:
             iters=iters,
             seed=0,
         )
-        pp_tps = tokens_per_step / pp_s
-        logger.info(
-            "%s (%dx%dx%d): %.1f ms/step  %.0f tokens/sec  %.2fx FSDP",
-            kind,
-            ns,
-            nd,
-            ne,
-            pp_s * 1e3,
-            pp_tps,
-            pp_tps / fsdp_tps,
+        pp_results.append((kind, ns, nd, ne, pp_s))
+        logger.info("%s (%dx%dx%d): %.1f ms/step  %.0f tokens/sec", kind, ns, nd, ne, pp_s * 1e3, tokens_per_step / pp_s)
+
+    try:
+        fsdp_s = bench_fsdp(
+            cfg, num_devices, global_batch=global_batch, seq_len=seq_len, lr=3e-3, warmup=warmup, iters=iters, seed=0
         )
+    except jax.errors.JaxRuntimeError as e:
+        if "RESOURCE_EXHAUSTED" not in str(e):
+            raise
+        logger.info(
+            "FSDP (%d-way) baseline: OOM at this size (one-shot global batch); "
+            "pipeline microbatching fits where pure FSDP does not",
+            num_devices,
+        )
+        return 0
+
+    fsdp_tps = tokens_per_step / fsdp_s
+    logger.info("FSDP (%d-way) baseline: %.1f ms/step  %.0f tokens/sec", num_devices, fsdp_s * 1e3, fsdp_tps)
+    for kind, ns, nd, ne, pp_s in pp_results:
+        logger.info("%s (%dx%dx%d): %.2fx FSDP", kind, ns, nd, ne, (tokens_per_step / pp_s) / fsdp_tps)
 
     logger.info(
         "note: PPxFSDPxEP with data>1 AND expert>1 does not lower on TPU "
