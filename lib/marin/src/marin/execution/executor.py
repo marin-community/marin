@@ -582,9 +582,8 @@ def _maybe_attach_inferred_region_constraint(
 
     if allowed_regions is None:
         # No GCS region to infer and no DAG-forced region: the step has no
-        # data-locality reason to run in any particular region. Mark it ANY so it
-        # runs region-flexibly instead of silently inheriting the coordinator (or
-        # parent job's) incidental region via Iris worker-region propagation.
+        # data-locality reason to run anywhere in particular, so mark it ANY and
+        # let the scheduler place it.
         return dataclasses.replace(
             remote_fn,
             resources=dataclasses.replace(remote_fn.resources, regions=[ANY_REGION]),

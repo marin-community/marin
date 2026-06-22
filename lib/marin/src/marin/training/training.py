@@ -374,10 +374,6 @@ def resolve_training_env(
     Combines the base env from the user (typically ``train_config.env_vars``)
     with hardware-specific defaults from ``levanter.infra.cli_helpers`` and run
     metadata (GIT_COMMIT, FERRY_DATE, etc. via ``add_run_env_variables``).
-
-    The JAX compilation cache is *not* set here: levanter resolves it on the
-    worker at trainer init (``TrainerConfig._initialize_jax_config``) so it lands
-    in the worker's region rather than the launcher's.
     """
     default_launch_config = _cli_helpers_module().load_config()
 

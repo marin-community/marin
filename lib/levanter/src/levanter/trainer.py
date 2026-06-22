@@ -91,11 +91,8 @@ def _configure_compilation_cache(cache_dir: Optional[str]) -> None:
 
     Resolution precedence: an explicit ``TrainerConfig.jax_compilation_cache_dir``,
     then a ``JAX_COMPILATION_CACHE_DIR`` env override, then a region-local default
-    from :func:`rigging.filesystem.marin_temp_bucket`. The default is resolved
-    here — on the worker, at trainer init — so the cache lands in the *worker's*
-    region. Resolving it on the driver would ship a useless local path (a laptop
-    has no region metadata) or pin the cache to the launcher's region (forcing
-    cross-region traffic from workers elsewhere).
+    from :func:`rigging.filesystem.marin_temp_bucket`. Resolving the default at
+    trainer init keeps the cache in the worker's own region.
     """
     if cache_dir is None:
         cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR")

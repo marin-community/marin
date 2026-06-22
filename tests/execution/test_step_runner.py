@@ -1039,11 +1039,10 @@ def test_resolve_executor_step_uses_dag_tpu_regions_without_gcs_inputs(iris_acti
 
 
 def test_resolve_executor_step_marks_any_without_inferable_region(iris_active, remote_step):
-    """A region-unpinned step with no inferable region runs ANY, not the parent's region.
+    """A region-unpinned step with no inferable region is marked ANY.
 
-    With no GCS region to infer (local-only paths) and no TPU-DAG region, leaving the
-    step region-unset would let Iris pin it to the coordinator/parent job's incidental
-    region. The executor instead marks it ANY so it runs region-flexibly.
+    With no GCS region to infer (local-only paths) and no TPU-DAG region, the
+    executor marks the step ANY so the scheduler places it.
     """
     resolved = resolve_executor_step(
         remote_step,

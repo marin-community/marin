@@ -13,8 +13,7 @@ without a ``click.Context``.
 :func:`connect_to_cluster` runs the full resolve → tunnel → authenticate →
 connect sequence and yields a live client; :func:`stream_until_complete` waits on
 a submitted job, streaming its logs and surviving a dropped connection. Together
-they let an experiment script connect and submit on its own (see
-``experiments/launch.py``) instead of being wrapped in ``uv run iris ... job run``.
+they let an experiment script connect to a cluster and submit jobs on its own.
 """
 
 from __future__ import annotations

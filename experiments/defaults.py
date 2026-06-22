@@ -396,10 +396,9 @@ def _submit_train_job(
     resolved_env_vars = dict(env_vars or {})
     env = resolve_training_env(resolved_env_vars, resources)
 
-    # Training bakes its output paths on the worker under the worker's own region
-    # (see resolve_lm_train_config), so it is region-flexible by design. Default to
-    # ANY so that, when launched from a coordinator job, it is not silently pinned to
-    # the coordinator's incidental region; an explicit pin (e.g. --region) is kept.
+    # Training bakes its output paths on the worker in the worker's own region,
+    # so it can run anywhere. Default to ANY to let the scheduler place it; an
+    # explicit pin (e.g. --region) overrides.
     if resources.regions is None:
         resources = dataclasses.replace(resources, regions=[ANY_REGION])
 
