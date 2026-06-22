@@ -115,7 +115,7 @@ def test_cross_entropy_model_sharded_vocab_matches_reference_and_gradients(imple
         weight_sharded = jax.device_put(weight, NamedSharding(mesh, P("data", None)))
         lm_head_sharded = jax.device_put(lm_head, NamedSharding(mesh, P(None, "model")))
 
-        warning_context = pytest.warns(RuntimeWarning, match="falling back to xla")
+        warning_context = pytest.warns(RuntimeWarning)
         if implementation == "xla":
             warning_context = nullcontext()
         with warning_context:

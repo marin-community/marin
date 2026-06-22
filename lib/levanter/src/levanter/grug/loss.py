@@ -99,8 +99,8 @@ def _ce_implementation_order(implementation: str | tuple[str, ...] | None) -> tu
     return ()
 
 
-def _uses_vocab_sharded_ce(implementation: str | tuple[str, ...] | None) -> bool:
-    return any(impl in ("xla", "pallas_gpu") for impl in _ce_implementation_order(implementation))
+def _uses_vocab_sharded_ce(implementation_order: tuple[str, ...]) -> bool:
+    return any(impl in ("xla", "pallas_gpu") for impl in implementation_order)
 
 
 def _local_linear_softmax_cross_entropy_loss(
@@ -110,9 +110,8 @@ def _local_linear_softmax_cross_entropy_loss(
     *,
     dtype: jnp.dtype,
     precision: jax.lax.PrecisionLike,
-    implementation: str | tuple[str, ...] | None,
+    implementation_order: tuple[str, ...],
 ) -> tuple[jax.Array, jax.Array]:
-    implementation_order = _ce_implementation_order(implementation)
     for index, impl in enumerate(implementation_order):
         if impl == "pallas_gpu":
             pallas_gpu_impl = IMPLEMENTATIONS.get("pallas_gpu")
@@ -162,17 +161,15 @@ def _local_linear_softmax_cross_entropy_loss(
                 ),
             )
 
-    raise ValueError(
-        "Vocab-sharded fused CE requires xla or pallas_gpu, " f"got {_ce_implementation_order(implementation)!r}"
-    )
+    raise ValueError("Vocab-sharded fused CE requires xla or pallas_gpu, " f"got {implementation_order!r}")
 
 
 def _lm_head_spec_for_ce(
     lm_head: jax.Array,
     mesh: Mesh | jax.sharding.AbstractMesh | None,
-    implementation: str | tuple[str, ...] | None,
+    implementation_order: tuple[str, ...],
 ) -> P:
-    if _uses_vocab_sharded_ce(implementation) and lm_head.shape[1] % _mesh_axis_size(mesh, "model") == 0:
+    if _uses_vocab_sharded_ce(implementation_order) and lm_head.shape[1] % _mesh_axis_size(mesh, "model") == 0:
         if _mesh_axis_size(mesh, "model") > 1:
             return P(None, "model")
     return P(None, None)
@@ -230,6 +227,7 @@ def fused_linear_softmax_cross_entropy_loss(
         reduction_mode = reduction
     else:
         raise ValueError(f"Unknown reduction: {reduction}")
+    implementation_order = _ce_implementation_order(implementation)
 
     mesh = _current_mesh()
     has_mesh = mesh is not None and not mesh.empty
@@ -274,7 +272,7 @@ def fused_linear_softmax_cross_entropy_loss(
                 shard_lm_head,
                 dtype=dtype,
                 precision=precision,
-                implementation=implementation,
+                implementation_order=implementation_order,
             )
             local_label_logit = local_lse - local_loss
             vocab_axis_names = (vocab_axis,)
@@ -300,7 +298,7 @@ def fused_linear_softmax_cross_entropy_loss(
         return _loss_shard(hidden, lm_head, labels, weight_array)
 
     hidden_spec = P(batch_axis_spec)
-    lm_head_spec = _lm_head_spec_for_ce(lm_head, mesh, implementation)
+    lm_head_spec = _lm_head_spec_for_ce(lm_head, mesh, implementation_order)
     label_spec = P(batch_axis_spec)
     hidden = _reshard_for_shard_map(hidden, mesh, hidden_spec)
     lm_head = _reshard_for_shard_map(lm_head, mesh, lm_head_spec)
