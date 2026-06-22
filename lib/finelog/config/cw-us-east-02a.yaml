@@ -7,10 +7,12 @@
 # finelog-cw-use02a.iris.svc.cluster.local:10001.
 #
 # Archive: segments offload to Cloudflare R2 (s3://), the same object store the
-# cluster uses for controller state. The pod authenticates with the R2 creds the
-# controller injects via the iris-task-env Secret (see deploy/k8s/02-deployment).
+# cluster uses for controller state. `finelog deploy up` mints the
+# `finelog-cw-use02a-env` Secret from the operator's R2 creds + object_storage_endpoint
+# and projects it into the pod via envFrom (see deploy/k8s/02-deployment).
 #
-# Deploy: export KUBECONFIG=~/.kube/coreweave-iris-gpu, then
+# Deploy: export KUBECONFIG=~/.kube/coreweave-iris-gpu and the R2 creds, then
+#   export R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
 #   uv run finelog deploy up cw-us-east-02a
 name: finelog-cw-use02a
 port: 10001
@@ -19,6 +21,9 @@ remote_log_dir: s3://marin-na/finelog/cw-us-east-02a
 deployment:
   k8s:
     namespace: iris
-    # storage_class omitted -> the cluster's default StorageClass backs the PVC.
-    # Segments offload to R2, so the local cache PVC stays small.
-    storage_gb: 50
+    # storage_class omitted -> the cluster's default StorageClass (shared-vast,
+    # VAST CSI) backs the PVC. Segments offload to R2, but size the local cache
+    # generously to absorb ingest bursts + L0->L1 compaction before offload.
+    storage_gb: 250
+    # R2 endpoint for the s3:// archive; folded into the minted creds Secret.
+    object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
