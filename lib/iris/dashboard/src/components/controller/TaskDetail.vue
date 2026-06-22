@@ -7,10 +7,13 @@ import { stateToName } from '@/types/status'
 import type {
   TaskStatus,
   GetTaskStatusResponse,
+  EndpointInfo,
+  ListEndpointsResponse,
 } from '@/types/rpc'
 import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import { detailSql } from '@/utils/taskStatus'
+import { canProxyEndpoint, proxyPathForEndpoint } from '@/utils/endpoints'
 
 import { controllerRpcCall } from '@/composables/useRpc'
 import { useProfileAction } from '@/composables/useProfileAction'
@@ -24,6 +27,7 @@ import ProfileButtons from '@/components/shared/ProfileButtons.vue'
 import ProfileLink from '@/components/shared/ProfileLink.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
+import CopyButton from '@/components/shared/CopyButton.vue'
 
 const props = defineProps<{
   jobId: string
@@ -39,6 +43,16 @@ const {
 
 const task = computed(() => taskResponse.value?.task ?? null)
 const jobResources = computed(() => taskResponse.value?.jobResources ?? null)
+
+// Endpoints this task registered with the controller. Each is reachable
+// through the controller's reverse proxy, so we render a link to jump to an
+// attached dashboard/server without looking up its address.
+const {
+  data: endpointsResponse,
+  refresh: fetchEndpoints,
+} = useControllerRpc<ListEndpointsResponse>('ListEndpoints', () => ({ taskIds: [props.taskId] }))
+
+const endpoints = computed<EndpointInfo[]>(() => endpointsResponse.value?.endpoints ?? [])
 
 const normalizedState = computed(() => (task.value ? stateToName(task.value.state) : ''))
 
@@ -190,16 +204,23 @@ const { start: startStatusTextRefresh, stop: stopStatusTextRefresh } = useAutoRe
   5_000,
   false,
 )
+const { start: startEndpointsRefresh, stop: stopEndpointsRefresh } = useAutoRefresh(
+  fetchEndpoints,
+  5_000,
+  false,
+)
 
 watch(isActive, (active) => {
   if (active) {
     startRefresh()
     startStatsRefresh()
     startStatusTextRefresh()
+    startEndpointsRefresh()
   } else {
     stopRefresh()
     stopStatsRefresh()
     stopStatusTextRefresh()
+    stopEndpointsRefresh()
   }
 })
 
@@ -207,10 +228,12 @@ onMounted(async () => {
   await fetchTask()
   fetchTaskStats()
   fetchStatusText()
+  fetchEndpoints()
   if (isActive.value) {
     startRefresh()
     startStatsRefresh()
     startStatusTextRefresh()
+    startEndpointsRefresh()
   }
 })
 
@@ -240,13 +263,17 @@ function selectAttempt(attemptId: number) {
 watch(() => props.taskId, async () => {
   taskResponse.value = null
   taskStatsData.value = null
+  endpointsResponse.value = null
   stopRefresh()
   stopStatsRefresh()
+  stopEndpointsRefresh()
   await fetchTask()
   fetchTaskStats()
+  fetchEndpoints()
   if (isActive.value) {
     startRefresh()
     startStatsRefresh()
+    startEndpointsRefresh()
   }
 })
 </script>
@@ -365,6 +392,35 @@ watch(() => props.taskId, async () => {
           <div v-else class="text-sm text-text-muted py-2">No build data</div>
         </InfoCard>
       </div>
+
+      <!-- Endpoints registered by this task, linked through the controller proxy -->
+      <InfoCard v-if="endpoints.length > 0" title="Endpoints" class="mb-6">
+        <ul class="divide-y divide-surface-border-subtle">
+          <li
+            v-for="ep in endpoints"
+            :key="ep.endpointId ?? ep.name"
+            class="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 first:pt-0 last:pb-0"
+          >
+            <a
+              v-if="canProxyEndpoint(ep.name)"
+              :href="proxyPathForEndpoint(ep.name)"
+              target="_blank"
+              rel="noopener"
+              class="font-mono text-[13px] text-accent hover:underline inline-flex items-center gap-1"
+              :title="`Open ${ep.name} via proxy`"
+            >
+              <span aria-hidden="true">↗</span>{{ ep.name }}
+            </a>
+            <span v-else class="font-mono text-[13px]" :title="'Not proxyable: name contains a dot'">
+              {{ ep.name }}
+            </span>
+            <span v-if="ep.address" class="group/addr inline-flex items-center gap-1 text-xs font-mono text-text-muted">
+              {{ ep.address }}
+              <CopyButton :value="ep.address" />
+            </span>
+          </li>
+        </ul>
+      </InfoCard>
 
       <!-- Resource sparklines -->
       <div v-if="cpuHistory.length > 1" class="grid grid-cols-2 gap-4 mb-6">

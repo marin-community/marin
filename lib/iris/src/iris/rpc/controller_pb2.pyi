@@ -350,12 +350,14 @@ class Controller(_message.Message):
         endpoint_id: str
         def __init__(self, endpoint_id: _Optional[str] = ...) -> None: ...
     class ListEndpointsRequest(_message.Message):
-        __slots__ = ("prefix", "exact")
+        __slots__ = ("prefix", "exact", "task_ids")
         PREFIX_FIELD_NUMBER: _ClassVar[int]
         EXACT_FIELD_NUMBER: _ClassVar[int]
+        TASK_IDS_FIELD_NUMBER: _ClassVar[int]
         prefix: str
         exact: bool
-        def __init__(self, prefix: _Optional[str] = ..., exact: _Optional[bool] = ...) -> None: ...
+        task_ids: _containers.RepeatedScalarFieldContainer[str]
+        def __init__(self, prefix: _Optional[str] = ..., exact: _Optional[bool] = ..., task_ids: _Optional[_Iterable[str]] = ...) -> None: ...
     class ListEndpointsResponse(_message.Message):
         __slots__ = ("endpoints",)
         ENDPOINTS_FIELD_NUMBER: _ClassVar[int]

@@ -1774,6 +1774,10 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.ListEndpointsResponse:
         """List endpoints by name prefix (or exact name when request.exact is set).
 
+        When ``request.task_ids`` is set, only endpoints registered by those
+        tasks are returned, ANDed with any prefix/exact match. The dashboard
+        uses this to show a task's endpoints on the task list and detail pages.
+
         System endpoints (names starting with ``/system/``) are resolved from
         an in-memory map rather than the DB.  This allows system services like
         the LogService to be discovered via the same API as job-scoped actors.
@@ -1786,6 +1790,7 @@ class ControllerServiceImpl:
             EndpointQuery(
                 exact_name=prefix if request.exact else None,
                 name_prefix=None if request.exact else prefix,
+                task_ids=tuple(JobName.from_wire(t) for t in request.task_ids),
             ),
         )
         return controller_pb2.Controller.ListEndpointsResponse(

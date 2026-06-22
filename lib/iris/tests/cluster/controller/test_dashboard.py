@@ -394,6 +394,43 @@ def test_list_endpoints_returns_task_id(client, state, job_request):
     assert endpoints[0]["taskId"] == task_id.to_wire()
 
 
+def test_list_endpoints_filters_by_task_ids(client, state):
+    """ListEndpoints(task_ids=[...]) returns only endpoints owned by those tasks.
+
+    The dashboard's task list and detail pages use this to render a proxy link
+    per task without scanning every endpoint in the cluster.
+    """
+    request = controller_pb2.Controller.LaunchJobRequest(
+        name="multi-ep-job",
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=2,
+        environment=job_pb2.EnvironmentConfig(),
+    )
+    job_id = submit_job(state, "multi-ep", request)
+    set_job_state(state, job_id, job_pb2.JOB_STATE_RUNNING)
+
+    task0, task1 = job_id.task(0), job_id.task(1)
+    with state._db.transaction() as cur:
+        for endpoint_id, task in (("ep-0", task0), ("ep-1", task1)):
+            state._endpoints.add(
+                cur,
+                EndpointRow(
+                    endpoint_id=endpoint_id,
+                    name=f"/svc/{endpoint_id}",
+                    address="h:1",
+                    task_id=task,
+                    metadata={},
+                    registered_at=Timestamp.now(),
+                ),
+            )
+
+    resp = rpc_post(client, "ListEndpoints", {"taskIds": [task0.to_wire()]})
+    endpoints = resp.get("endpoints", [])
+    assert [e["taskId"] for e in endpoints] == [task0.to_wire()]
+    assert endpoints[0]["name"] == "/svc/ep-0"
+
+
 def test_list_jobs_includes_retry_counts(client, state, job_request):
     """ListJobs RPC includes retry count fields aggregated from tasks."""
     job_id = submit_job(state, "test-job", job_request)
