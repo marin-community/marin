@@ -44,7 +44,8 @@ from any region.  The `mirrored()` wrapper marks an input path for
 marin prefix before the step runs.
 
 ```python
-from marin.execution.executor import mirrored, versioned
+from marin.execution.executor import mirrored
+from marin.execution.types import versioned
 
 step = ExecutorStep(
     name="train",
