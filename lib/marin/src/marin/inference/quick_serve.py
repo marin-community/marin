@@ -245,8 +245,10 @@ def serve_in_job(config: QuickServeConfig) -> None:
     advertise_host = job_info.advertise_host
     # Claim the dashboard's port now, before vLLM launches: Iris' named-port range
     # overlaps the OS ephemeral range, so vLLM's internal sockets could otherwise
-    # squat it. Binding here reserves it for us until uvicorn takes over.
-    serving_socket = bind_serving_socket("0.0.0.0", port)
+    # squat it. Binding here reserves it for us until uvicorn takes over. Bind only
+    # the advertised interface (the address the controller proxy connects to), not
+    # all interfaces.
+    serving_socket = bind_serving_socket(advertise_host, port)
 
     model_path = resolve_model_path(config.model, config.cache_ttl_days)
     num_chips = get_tpu_topology(config.tpu_type).chips_per_vm
