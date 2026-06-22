@@ -709,12 +709,18 @@ fi
 CMD=(
     uv run --package marin-iris --extra controller iris --cluster="$CLUSTER"
     job run --no-wait
-    "${PARENT_SCHEDULING_ARGS[@]}"
-    --memory=2G --disk=4G --cpu=1
-    "${IRIS_EXTRAS[@]}"
-    "${ENV_ARGS[@]}"
-    -- python -m experiments.grug.moe.launch_cw_may_d2560
 )
+if [ "${#PARENT_SCHEDULING_ARGS[@]}" -gt 0 ]; then
+    CMD+=("${PARENT_SCHEDULING_ARGS[@]}")
+fi
+CMD+=(--memory=2G --disk=4G --cpu=1)
+if [ "${#IRIS_EXTRAS[@]}" -gt 0 ]; then
+    CMD+=("${IRIS_EXTRAS[@]}")
+fi
+if [ "${#ENV_ARGS[@]}" -gt 0 ]; then
+    CMD+=("${ENV_ARGS[@]}")
+fi
+CMD+=(-- python -m experiments.grug.moe.launch_cw_may_d2560)
 
 if [ "$SUBMIT" != true ]; then
     cat <<EOF

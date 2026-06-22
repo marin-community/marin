@@ -505,6 +505,33 @@ def test_grug_moe_remat_mode_controls_checkpoint_boundary(remat_mode: str, expec
     assert _jaxpr_has_primitive(closed_jaxpr, "remat2") is expects_remat
 
 
+@pytest.mark.parametrize(
+    ("remat_mode", "uses_effectful_moe", "expects_checkpoint"),
+    [
+        ("none", False, False),
+        ("none", True, False),
+        ("recompute_all", False, True),
+        ("recompute_all", True, False),
+        ("save_moe", False, True),
+        ("save_moe", True, False),
+        ("offload_moe", False, True),
+        ("offload_moe", True, False),
+        ("offload_moe_hidden", False, True),
+        ("offload_moe_hidden", True, False),
+        ("offload_moe_output", False, True),
+        ("offload_moe_output", True, False),
+        ("offload_moe_expert", False, True),
+        ("offload_moe_expert", True, False),
+    ],
+)
+def test_grug_moe_remat_mode_checkpoint_decision_excludes_effectful_moe(
+    remat_mode: str, uses_effectful_moe: bool, expects_checkpoint: bool
+):
+    model_module = importlib.import_module("experiments.grug.moe.model")
+
+    assert model_module._should_checkpoint_block(remat_mode, uses_effectful_moe=uses_effectful_moe) is expects_checkpoint
+
+
 def test_grug_moe_may_launcher_diagnostic_overrides(monkeypatch):
     monkeypatch.setenv("MAY_NUM_LAYERS", "3")
     monkeypatch.setenv("MAY_USE_PKO", "false")

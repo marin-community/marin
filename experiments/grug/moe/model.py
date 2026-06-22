@@ -160,6 +160,10 @@ def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple
     return mask.with_sliding_window(sliding_window), mask.with_sliding_window(None)
 
 
+def _should_checkpoint_block(remat_mode: "RematMode", *, uses_effectful_moe: bool) -> bool:
+    return remat_mode != "none" and not uses_effectful_moe
+
+
 @dataclass(frozen=True)
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
@@ -972,7 +976,7 @@ class Transformer(eqx.Module):
             layer_mask = long_mask if use_long_layer else short_mask
             use_pko = cfg.use_pko and use_long_layer
             block_kwargs = {"use_pko": use_pko, "pko_doc_starts": pko_doc_starts if use_pko else None}
-            if cfg.remat_mode == "none" or uses_effectful_moe:
+            if not _should_checkpoint_block(cfg.remat_mode, uses_effectful_moe=uses_effectful_moe):
                 hidden, router_stats = block(hidden, layer_mask, **block_kwargs)
             else:
                 hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
