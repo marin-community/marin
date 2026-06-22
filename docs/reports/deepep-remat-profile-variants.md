@@ -216,6 +216,18 @@ At submission time May349 was `SchedulingGated` by Kueue behind the admitted
 condition said the two-pod set could not fit because topology `"infiniband"`
 excluded all 32 nodes for CPU availability.
 
+May349 later admitted on nodes `g73b7ae` and `g7406a6`. It built DeepEP,
+initialized all 16 process-per-GPU ranks, confirmed the EP16 mesh, and reached
+train step 0 dispatch. It failed before any W&B metric rows with:
+
+```text
+jax.errors.JaxRuntimeError: INTERNAL: cudaMallocAsync(fused bwd recv_x): out of memory
+```
+
+The run retried and reproduced the same failure mode, then was stopped to avoid
+retry churn. This points at the fused dispatch-backward assignment-gradient path
+rather than the inner `save_moe` remat policy itself.
+
 If May349 starts and reproduces the May348 recv-counter timeout, the next two
 controls are queued as scripts but should not be submitted while May349 is still
 waiting for the same two-node topology slot:
@@ -241,3 +253,17 @@ collapse=ffi
 assignment_gradient=jax
 purpose=separate fused dispatch-backward assignment-gradient from the recv-counter timeout
 ```
+
+Because May349 failed in `fused bwd recv_x` allocation rather than with the
+recv-counter timeout, the preferred next control is May351: keep FFI local
+collapse, but switch assignment gradients back to the JAX path.
+
+May351 was submitted as:
+
+```text
+parent=/dlwh/iris-run-job-20260622-195438
+wandb=marin-community/marin_moe/MAY351-DEEPEP-EP16-SAVEMOE-JAXASSIGN-FIXEDFFICOLLAPSE-L26-B64-N2-20260622-1954
+```
+
+At submission time the parent was pending scheduler feedback and had not yet
+created a child job or W&B run.
