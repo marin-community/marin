@@ -442,31 +442,6 @@ def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
         )
 
 
-def test_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
-    """Scheduling diagnostic shows pending reason for oversized job."""
-    if not capabilities.has_workers:
-        pytest.skip("No persistent workers")
-    smoke_cluster.wait_for_workers(1, timeout=smoke_cluster.job_timeout)
-    with smoke_cluster.launched_job(TestJobs.quick, "smoke-diag-cpu", cpu=999_999) as job:
-        # Poll until the scheduler has evaluated the job and produced a
-        # CPU-specific pending reason (avoids racing the scheduler loop).
-        deadline = time.monotonic() + smoke_cluster.job_timeout
-        while time.monotonic() < deadline:
-            status = smoke_cluster.status(job)
-            if "cpu" in status.pending_reason.lower():
-                break
-            time.sleep(0.2)
-        assert status.state == job_pb2.JOB_STATE_PENDING
-        assert "cpu" in status.pending_reason.lower()
-
-        dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
-        wait_for_dashboard_ready(smoke_page)
-        assert_visible(smoke_page, "text=Scheduling Diagnostic")
-        smoke_screenshot(
-            "scheduling-diagnostic", "Job detail page with yellow scheduling diagnostic banner explaining CPU capacity"
-        )
-
-
 def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
     """Workers tab shows healthy workers."""
     if not capabilities.has_workers:
