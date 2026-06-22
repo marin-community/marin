@@ -977,36 +977,48 @@ def pipeline_value_and_grad_autodiff(
 # collect) INLINE in the same manual region as the pipeline ppermute -- one
 # shard_map manualizing ``stage``, ``expert``, AND ``data``, no nested EP shard_map.
 #
-# Mesh: ``stage`` / ``expert`` / ``data`` are Explicit (all manualized by the outer
-# shard_map); ``replica_dcn`` / ``model`` are size-1 Auto. Manualizing ``data`` is
-# load-bearing on TPU: ``ragged_dot`` lowers to the Mosaic/Pallas ``_gmm_megablox``
-# kernel, which GSPMD CANNOT auto-partition -- every mesh axis touching its operands
-# (the dispatched tokens and the expert weights) must be Manual, not a GSPMD/Auto
-# axis. The dispatched tokens carry a ``data``-sharded batch dim, so ``data`` must be
-# Manual too. Because all three sharding axes are MANUAL there is no live GSPMD axis
-# under the manual region, avoiding both the megablox auto-partition failure and the
-# two-GSPMD-under-manual partitioner crash; the replicated weights' grad reduce over
-# ``data`` is inserted by the single shard_map's transpose. With exactly one shard_map
-# the transpose is clean (ppermute<->reverse-ppermute, all_gather<->psum_scatter) with
-# no ``check_vma=True`` and no manual backward.
+# Mesh: ALL five axes are Explicit and the outer shard_map manualizes every one. The
+# load-bearing axes are ``stage`` (pipeline), ``expert`` (EP), and ``data`` (the
+# dispatched tokens carry a ``data``-sharded batch dim); ``replica_dcn`` / ``model``
+# are size-1 but still manualized so NO GSPMD axis survives. This is required on TPU:
+# ``ragged_dot`` lowers to the Mosaic/Pallas ``_gmm_megablox`` kernel, which GSPMD
+# CANNOT auto-partition -- and the XLA SPMD partitioner processes every GSPMD axis for
+# every op, including size-1 ones the operands are merely replicated over, so even one
+# residual Auto axis trips "Mosaic kernels cannot be automatically partitioned."
+# Manualizing all five leaves zero GSPMD axis touching the kernel, so megablox lowers;
+# and with no live Explicit axis inside the manual region the xla ragged_dot path
+# lowers too. The replicated weights' grad reduce is inserted by the single shard_map's
+# transpose. With exactly one shard_map the transpose is clean
+# (ppermute<->reverse-ppermute, all_gather<->psum_scatter) -- no ``check_vma=True``,
+# no manual backward, and no two-GSPMD-under-manual partitioner crash.
 
 
 def ep_pipeline_mesh(*, stage: int, expert: int, replica: int, data: int, model: int = 1) -> Mesh:
-    """Mesh for the inline ring-EP pipeline: ``stage``/``expert``/``data`` Explicit, rest Auto.
+    """Mesh for the inline ring-EP pipeline: ALL axes Explicit (fully manualized).
 
-    ``stage``, ``expert``, AND ``data`` are ``AxisType.Explicit`` so the outer shard_map
-    manualizes all three. Manualizing ``data`` is load-bearing on TPU: the megablox GMM
-    (``ragged_dot`` -> ``_gmm_megablox``) is a Mosaic/Pallas kernel that GSPMD cannot
-    auto-partition, so every mesh axis touching its operands -- the dispatched tokens
-    (batch-sharded over ``data``) and the expert weights -- must be Manual inside the
-    shard_map, not a GSPMD/Auto axis. ``replica_dcn`` / ``model`` are size-1 here and
-    stay ``AxisType.Auto`` (harmless: nothing is sharded over them).
+    Every axis is ``AxisType.Explicit`` so the outer shard_map can manualize all five.
+    The load-bearing axes are ``stage`` (pipeline), ``expert`` (EP), and ``data`` (the
+    dispatched tokens are batch-sharded over it); ``replica_dcn`` / ``model`` are size-1
+    but still manualized. This is required on TPU: the megablox GMM (``ragged_dot`` ->
+    ``_gmm_megablox``) is a Mosaic/Pallas kernel GSPMD cannot auto-partition, and the
+    SPMD partitioner processes every GSPMD axis for every op (including size-1 ones the
+    operands are merely replicated over), so even one residual Auto axis trips the
+    Mosaic auto-partition error. Manualizing all five leaves zero GSPMD axis on the
+    kernel; with no live Explicit axis inside, the xla ragged_dot path also lowers.
     """
     shape = (stage, replica, data, expert, model)
     if int(np.prod(shape)) != jax.device_count():
         raise ValueError(f"mesh shape {shape} (prod={int(np.prod(shape))}) must use all {jax.device_count()} devices")
     devices = np.array(jax.devices(), dtype=object).reshape(shape)
-    axis_types = (AxisType.Explicit, AxisType.Auto, AxisType.Explicit, AxisType.Explicit, AxisType.Auto)
+    # ALL axes Explicit so the outer shard_map can manualize EVERY axis. The megablox
+    # GMM (a Mosaic kernel) cannot survive ANY GSPMD partition attempt -- the XLA SPMD
+    # partitioner processes every GSPMD axis for every op, including size-1 ones the
+    # operands are merely replicated over, so a single residual Auto axis is enough to
+    # trip "Mosaic kernels cannot be automatically partitioned." Manualizing all five
+    # leaves zero GSPMD axis touching the kernel. With no live Explicit axis inside the
+    # manual region the xla ragged_dot path lowers too (no Explicit-axis sharding-rule
+    # error), so this mesh works under both RAGGED_DOT_IMPL=xla and megablox.
+    axis_types = (AxisType.Explicit,) * 5
     return Mesh(devices, _GRUG_MESH_AXIS_NAMES, axis_types=axis_types)
 
 
@@ -1250,7 +1262,7 @@ def _ep_pipeline_loss(
         mesh=mesh,
         in_specs=(stage_in_specs, embed_in_specs, stage_spec, token_spec, token_spec),
         out_specs=P(),
-        axis_names=frozenset({STAGE_AXIS, EXPERT_AXIS, DATA_AXIS}),
+        axis_names=frozenset(_GRUG_MESH_AXIS_NAMES),
         check_vma=False,
     )(stage_block_arrays, embed_arrays, layer_masks, token_ids, loss_weight)
 
@@ -1479,7 +1491,7 @@ def _ep_pipeline_loss_microbatched(
         mesh=mesh,
         in_specs=(stage_in_specs, embed_in_specs, stage_spec, token_spec, token_spec),
         out_specs=P(),
-        axis_names=frozenset({STAGE_AXIS, EXPERT_AXIS, DATA_AXIS}),
+        axis_names=frozenset(_GRUG_MESH_AXIS_NAMES),
         check_vma=False,
     )(stage_block_arrays, embed_arrays, layer_masks, token_microbatches, weight_microbatches)
 
