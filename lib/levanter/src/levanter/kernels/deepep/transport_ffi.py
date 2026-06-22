@@ -266,12 +266,14 @@ _DEFAULT_COMBINE_CONFIGS = {
 }
 
 _DEFAULT_INTERNODE_DISPATCH_CONFIG = InternodeConfig(
-    num_sms=24,
+    num_sms=16,
     num_max_nvl_chunked_send_tokens=8,
     num_max_nvl_chunked_recv_tokens=512,
     num_max_rdma_chunked_send_tokens=16,
     num_max_rdma_chunked_recv_tokens=128,
 )
+
+_MAX_INTERNODE_DISPATCH_NUM_SMS = 16
 
 
 def _align_up(value: int, alignment: int) -> int:
@@ -1910,6 +1912,10 @@ def _internode_config_with_env_overrides(config: InternodeConfig) -> InternodeCo
     )
     if num_sms <= 0 or num_sms % 2 != 0:
         raise RuntimeError(f"{_INTERNODE_DISPATCH_NUM_SMS_ENV} must be a positive even integer, got {num_sms}")
+    if num_sms > _MAX_INTERNODE_DISPATCH_NUM_SMS:
+        raise RuntimeError(
+            f"{_INTERNODE_DISPATCH_NUM_SMS_ENV} must be <= {_MAX_INTERNODE_DISPATCH_NUM_SMS}, got {num_sms}"
+        )
     if nvl_send_tokens <= 0:
         raise RuntimeError(f"{_INTERNODE_DISPATCH_MAX_NVL_SEND_TOKENS_ENV} must be positive, got {nvl_send_tokens}")
     if nvl_recv_tokens <= 0:

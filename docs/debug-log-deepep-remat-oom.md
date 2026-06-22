@@ -241,6 +241,32 @@ EP16 run should use this stage-only flag with the 900s counter timeout to
 determine whether task 1 reaches notify/wait and whether task 0 is waiting
 before its peer has notified.
 
+## Results
+
+MAY330 used `LEVANTER_DEEPEP_HOST_DISPATCH_STAGE_DEBUG=1` from
+`codex/deepep-stage-debug`:
+
+- W&B:
+  `marin-community/marin_moe/MAY330-STAGEDBG-B32-XONLY-JAXBWD-1238`
+- Parent Iris job: `/dlwh/iris-run-job-20260622-123834`
+- Child Iris job:
+  `/dlwh/iris-run-job-20260622-123834/grug-train-MAY330-STAGEDBG-B32-XONLY-JAXBWD-1238`
+- All ranks reached DeepEP runtime post-init and first `train_step` dispatch.
+- Stage logs showed forward dispatch/combine execution with real `call_sequence`
+  IDs. Call sequence 1 reached `after_wait_recv_counts` on both nodes with
+  non-negative recv counts, so this attempt did not reproduce the untouched
+  recv-counter timeout from MAY329.
+- The run failed with a DeepEP generated-kernel assertion:
+  `pcie.cu:219, condition: num_warps >= num_channels`.
+- Stage logs showed `aux0=12`, where `aux0` is the resolved channel count. This
+  comes from the internode dispatch default `num_sms=24`, i.e. 12 channels.
+- The child and parent jobs were stopped while Iris was retrying.
+
+This is progress: the stage-only diagnostics work, and the next blocker is an
+invalid internode dispatch channel count rather than the previous silent
+counter wait. The branch now caps the default internode dispatch configuration
+to `num_sms=16` (8 channels) and fails fast if an override asks for more.
+
 ## Future work
 
 - [x] Add a C++/FFI primitive for x-only internode combine-with-local-collapse
@@ -256,8 +282,9 @@ before its peer has notified.
       runtime DeepEP transport failure.
 - [x] Add low-noise DeepEP host-dispatch stage diagnostics for notify/wait
       asymmetry without enabling full buffer summaries.
-- [ ] Re-run B32 EP16 DeepEP internode with
+- [x] Re-run B32 EP16 DeepEP internode with
       `LEVANTER_DEEPEP_HOST_DISPATCH_STAGE_DEBUG=1`.
+- [ ] Re-run B32 EP16 DeepEP internode with internode `num_sms=16`.
 - [ ] If B32 passes, retry B64 and profile remat overhead versus ring/all-to-all.
 - [ ] If B32 reaches `cudaMallocAsync(x-only fused local-collapse bwd recv_out)`
       OOM, replace the staging temp with a true direct packed-output backward
