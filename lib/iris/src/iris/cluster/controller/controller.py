@@ -20,7 +20,6 @@ from typing import Any
 
 import uvicorn
 from finelog.client import LogClient, RemoteLogHandler
-from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
 from finelog.embedded import require_embedded_server
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
@@ -346,9 +345,6 @@ class Controller:
             self._log_service_address = self._start_local_log_server()
 
         log_client_interceptors = _log_client_interceptors(config)
-        self._remote_log_service = LogServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
-        self._remote_stats_service = StatsServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
-
         # A single log client serves both the controller's own logs and any backend
         # that collects logs out-of-process.
         self._log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
@@ -393,11 +389,9 @@ class Controller:
         )
         self._dashboard = ControllerDashboard(
             self._service,
-            log_service=self._remote_log_service,
             host=config.host,
             port=config.port,
             auth_provider=config.auth_provider,
-            finelog_stats_service=self._remote_stats_service,
             auth_policy=ControllerAuthPolicy.from_verifiers(
                 verifier=config.auth_verifier,
                 optional=config.auth.optional if config.auth else False,
@@ -637,8 +631,6 @@ class Controller:
         logging.getLogger("iris").removeHandler(self._log_handler)
         self._log_handler.close()
         self._log_client.close()
-        self._remote_log_service.close()
-        self._remote_stats_service.close()
         if self._log_server is not None:
             self._log_server.stop()
         self._db.close()

@@ -18,8 +18,10 @@ import humanfriendly
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from google.protobuf import json_format
+from rigging.connect import proxy_path
 
 from iris.cli.connect import require_controller_url, rpc_client_for_ctx
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.rpc import job_pb2
 
@@ -90,8 +92,11 @@ def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, subs
     """Show process logs."""
     url = require_controller_url(ctx)
     source = target or _CONTROLLER_LOG_TARGET
+    credentials = ctx.obj.get("credentials") if ctx.obj else None
+    interceptors = credentials.interceptors() if credentials is not None else ()
 
-    with contextlib.closing(LogClient.connect(url)) as log_client:
+    log_server_url = f"{url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}"
+    with contextlib.closing(LogClient.connect(log_server_url, interceptors=interceptors)) as log_client:
         cursor = 0
         first = True
         while True:
