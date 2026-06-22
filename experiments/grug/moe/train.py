@@ -286,6 +286,7 @@ def _run_grug_process_per_gpu_supervisor(config: GrugRunConfig, *, processes_per
             "JAX_PROCESS_COUNT": str(process_count),
             "JAX_PROCESS_INDEX": str(base_process_index + local_rank),
             "JAX_LOCAL_DEVICE_IDS": "0",
+            "PYTHONUNBUFFERED": "1",
         }
         procs.append(
             subprocess.Popen(
@@ -300,10 +301,47 @@ def _run_grug_process_per_gpu_supervisor(config: GrugRunConfig, *, processes_per
         )
 
     failures: list[tuple[int, int]] = []
-    for local_rank, proc in enumerate(procs):
-        return_code = proc.wait()
-        if return_code != 0:
-            failures.append((local_rank, return_code))
+    pending = set(range(len(procs)))
+    while pending:
+        for local_rank in tuple(pending):
+            return_code = procs[local_rank].poll()
+            if return_code is None:
+                continue
+            pending.remove(local_rank)
+            logger.info(
+                "DeepEP process-per-GPU Grug worker exited: local_rank=%s process_index=%s return_code=%s",
+                local_rank,
+                base_process_index + local_rank,
+                return_code,
+            )
+            if return_code != 0:
+                failures.append((local_rank, return_code))
+        if failures:
+            logger.error("DeepEP local worker failure detected; terminating sibling workers: failures=%s", failures)
+            for local_rank in tuple(pending):
+                procs[local_rank].terminate()
+            for local_rank in tuple(pending):
+                try:
+                    return_code = procs[local_rank].wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    logger.error(
+                        "DeepEP process-per-GPU Grug worker ignored terminate; killing: "
+                        "local_rank=%s process_index=%s",
+                        local_rank,
+                        base_process_index + local_rank,
+                    )
+                    procs[local_rank].kill()
+                    return_code = procs[local_rank].wait()
+                pending.remove(local_rank)
+                logger.info(
+                    "DeepEP process-per-GPU Grug worker terminated after sibling failure: "
+                    "local_rank=%s process_index=%s return_code=%s",
+                    local_rank,
+                    base_process_index + local_rank,
+                    return_code,
+                )
+            break
+        time.sleep(1.0)
     if failures:
         raise RuntimeError(f"DeepEP process-per-GPU Grug workers failed: {failures}")
     logger.info("DeepEP process-per-GPU Grug supervisor completed")
