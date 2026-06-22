@@ -200,7 +200,7 @@ def test_gpu_fa4_thd_supports_hopper_kernel_config(monkeypatch):
 
     config = fa4_thd._thd_kernel_config(128)
 
-    assert config.forward_tile == (128, 64)
+    assert config.forward_tile == (64, 64)
     assert config.backward_tile == (64, 128)
     assert config.num_threads == 384
 
