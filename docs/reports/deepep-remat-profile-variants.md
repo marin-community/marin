@@ -41,6 +41,8 @@ no checkpoints.
 | MAY344 | `none` | disabled | 20.56 | 0.3447s | Best measured EP8 variant so far. |
 | MAY357 | `offload_moe_hidden` | disabled | 17.30 | 0.4097s | Works, but costs about 3.3 MFU versus `none`; narrow hidden offload is still too expensive. |
 | MAY358 | `offload_moe_output` | disabled | 20.60 | 0.3440s | Matches `none` within run noise while preserving output offload semantics. |
+| MAY359 | `none` | disabled | 24.60 | 0.5762s | B16 control; increasing batch from 8 to 16 improves throughput substantially. |
+| MAY360 | `offload_moe_output` | disabled | 24.82 | 0.5711s | B16 output-offload comparison; still matches `none` within run noise. |
 
 Interpretation:
 
@@ -52,7 +54,7 @@ Interpretation:
   flags.
 - Current best EP8 DeepEP remat setting for pure throughput is `--remat none`,
   with `--remat offload_moe_output` as the first memory-headroom knob to try
-  because it matched `none` in the B8 throughput run.
+  because it matched `none` in both B8 and B16 throughput runs.
 
 Why the `save_moe` delta is small:
 
@@ -88,12 +90,30 @@ MAY358:
   remat=offload_moe_output
   steady_mfu=20.60
   steady_step_duration=0.3440s
+
+MAY359:
+  parent=/dlwh/iris-run-job-20260622-222336
+  wandb=https://wandb.ai/marin-community/marin_moe/runs/MAY359-DEEPEP-EP8-NOREMAT-L26-B16-N1-20260622-2223
+  remat=none
+  global_batch=16
+  steady_mfu=24.60
+  steady_step_duration=0.5762s
+
+MAY360:
+  parent=/dlwh/iris-run-job-20260622-224147
+  wandb=https://wandb.ai/marin-community/marin_moe/runs/MAY360-DEEPEP-EP8-OFFLOAD-OUTPUT-L26-B16-N1-20260622-2241
+  remat=offload_moe_output
+  global_batch=16
+  steady_mfu=24.82
+  steady_step_duration=0.5711s
 ```
 
 Interpretation: the output tensor is a narrow enough boundary that host offload
-does not show up materially in this EP8/B8 throughput run. The hidden tensor is
-not narrow enough; it behaves more like the earlier broad offload result and
-gives back most of the `save_moe` versus `none` win.
+does not show up materially in the EP8 throughput runs. The hidden tensor is not
+narrow enough; it behaves more like the earlier broad offload result and gives
+back most of the `save_moe` versus `none` win. B16 is the current best
+single-node EP8 DeepEP throughput point in this report, but it is a batch-size
+axis result rather than a remat-policy result.
 
 ## EP16 Internode Direction
 
