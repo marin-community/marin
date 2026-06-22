@@ -3,7 +3,6 @@
 
 """RPC-based cluster client implementation."""
 
-import json
 import logging
 import time
 import uuid
@@ -26,7 +25,7 @@ from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.runtime.env import with_slice_topology_env
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
 from iris.cluster.worker.stats import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
-from iris.rpc import controller_pb2, job_pb2, query_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
@@ -465,22 +464,6 @@ class RemoteClusterClient:
             if not response.has_more or not response.jobs:
                 return jobs
             offset += len(response.jobs)
-
-    def execute_raw_query(self, sql: str) -> list[list[object]]:
-        """Run a read-only SQL SELECT against the controller database.
-
-        Returns each row as a JSON-decoded list of cell values, in the column
-        order written in ``sql`` (the same wire shape the ``iris query`` CLI
-        decodes). Admin-only on the server; the marin cluster's null-auth mode
-        grants it without a bearer token.
-        """
-
-        def _call():
-            request = query_pb2.RawQueryRequest(sql=sql)
-            response = self._client.execute_raw_query(request)
-            return [json.loads(row) for row in response.rows]
-
-        return call_with_retry("execute_raw_query", _call)
 
     def shutdown(self, wait: bool = True) -> None:
         del wait

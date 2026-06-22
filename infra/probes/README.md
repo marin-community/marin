@@ -29,11 +29,9 @@ Gauges:
 - `jobs` — root-job-state breakdown from one raw-SQL `GROUP BY` (120s). Splits
   into a live in-flight snapshot (`job_inflight{state=…}`) and a trailing-24h
   terminal window (`job_terminal_24h{state=…}`), each with a `scope=fleet` total.
-  See `src/cluster.py` for the emitted metrics.[^jobs-iris]
-
-[^jobs-iris]: `jobs` calls `RemoteClusterClient.execute_raw_query`, added
-  alongside this collector; it only works once `uv lock -U` picks up a
-  `marin-iris` nightly that postdates that change.
+  Runs the controller's `ExecuteRawQuery` RPC over a dedicated connect client
+  (the same call the `iris query` CLI makes). See `src/cluster.py` for the
+  emitted metrics.
 
 Each sample is logged to stdout (`probe <name>: ok|fail [<ms>ms] start=<utc>`),
 written to the `infra.canary.metrics` finelog namespace (query it with

@@ -12,12 +12,14 @@ so the labelling/windowing is unit-testable without a live controller.
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from collections.abc import Sequence
 from typing import NamedTuple
 
 from iris.cluster.client.remote_client import RemoteClusterClient
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, query_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from sample import Sample
 
 # Label value marking the fleet-wide aggregate series (no per-pool/region label).
@@ -169,7 +171,14 @@ def aggregate_jobs(rows: Sequence[StateCount]) -> list[Sample]:
     return samples
 
 
-def collect_jobs(iris: RemoteClusterClient) -> list[Sample]:
-    """Raw-SQL job-state GROUP BY → in-flight / terminal-24h root-job gauges."""
-    rows = iris.execute_raw_query(JOB_BREAKDOWN_SQL)
+def collect_jobs(client: ControllerServiceClientSync) -> list[Sample]:
+    """Raw-SQL job-state GROUP BY → in-flight / terminal-24h root-job gauges.
+
+    Talks to the controller's ``ExecuteRawQuery`` RPC directly (the same call the
+    ``iris query`` CLI makes); each response row is a JSON-encoded array of cell
+    values. Admin-only on the server, but the marin cluster's null-auth mode
+    grants it without a bearer token.
+    """
+    response = client.execute_raw_query(query_pb2.RawQueryRequest(sql=JOB_BREAKDOWN_SQL))
+    rows = [json.loads(row) for row in response.rows]
     return aggregate_jobs([StateCount(int(state), int(count)) for state, count in rows])
