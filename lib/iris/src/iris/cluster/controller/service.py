@@ -1775,8 +1775,7 @@ class ControllerServiceImpl:
         """List endpoints by name prefix (or exact name when request.exact is set).
 
         When ``request.task_ids`` is set, only endpoints registered by those
-        tasks are returned, ANDed with any prefix/exact match. The dashboard
-        uses this to show a task's endpoints on the task list and detail pages.
+        tasks are returned, ANDed with any prefix/exact match.
 
         System endpoints (names starting with ``/system/``) are resolved from
         an in-memory map rather than the DB.  This allows system services like

@@ -12,7 +12,6 @@ import type {
 import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import { getLeafJobName } from '@/utils/jobTree'
-import { canProxyEndpoint, proxyPathForEndpoint, endpointLabel } from '@/utils/endpoints'
 import { batchSummarySql } from '@/utils/taskStatus'
 import { openSpeedscopeWindow } from '@/utils/speedscope'
 import PageShell from '@/components/layout/PageShell.vue'
@@ -22,6 +21,7 @@ import InfoRow from '@/components/shared/InfoRow.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
+import EndpointLink from '@/components/shared/EndpointLink.vue'
 import { useMediaQuery } from '@/composables/useMediaQuery'
 
 // Tailwind's `sm` breakpoint is 640px. Cards on mobile, table on desktop.
@@ -1214,19 +1214,13 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
           </div>
           <div v-if="taskEndpoints(task.taskId).length" class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-            <template v-for="ep in taskEndpoints(task.taskId)" :key="ep.endpointId ?? ep.name">
-              <a
-                v-if="canProxyEndpoint(ep.name)"
-                :href="proxyPathForEndpoint(ep.name)"
-                target="_blank"
-                rel="noopener"
-                class="text-accent hover:underline text-[11px] inline-flex items-center gap-0.5"
-                :title="`Open ${ep.name} via proxy`"
-              >
-                <span aria-hidden="true">↗</span>{{ endpointLabel(ep.name) }}
-              </a>
-              <span v-else class="text-text-muted text-[11px]" :title="ep.name">{{ endpointLabel(ep.name) }}</span>
-            </template>
+            <EndpointLink
+              v-for="ep in taskEndpoints(task.taskId)"
+              :key="ep.endpointId ?? ep.name"
+              :name="ep.name"
+              short
+              class="text-[11px]"
+            />
           </div>
           <div v-if="stateToName(task.state) === 'running'" class="mt-2 flex gap-1">
             <button
@@ -1308,17 +1302,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                   :key="ep.endpointId ?? ep.name"
                   class="mt-0.5"
                 >
-                  <a
-                    v-if="canProxyEndpoint(ep.name)"
-                    :href="proxyPathForEndpoint(ep.name)"
-                    target="_blank"
-                    rel="noopener"
-                    class="text-accent hover:underline text-[11px] inline-flex items-center gap-0.5 max-w-full truncate"
-                    :title="`Open ${ep.name} via proxy`"
-                  >
-                    <span aria-hidden="true">↗</span>{{ endpointLabel(ep.name) }}
-                  </a>
-                  <span v-else class="text-text-muted text-[11px] truncate" :title="ep.name">{{ endpointLabel(ep.name) }}</span>
+                  <EndpointLink :name="ep.name" short class="text-[11px] max-w-full truncate" />
                 </div>
               </td>
               <td class="px-2 sm:px-3 py-2 text-[13px]">

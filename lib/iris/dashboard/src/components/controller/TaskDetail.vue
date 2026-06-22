@@ -13,7 +13,6 @@ import type {
 import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import { detailSql } from '@/utils/taskStatus'
-import { canProxyEndpoint, proxyPathForEndpoint } from '@/utils/endpoints'
 
 import { controllerRpcCall } from '@/composables/useRpc'
 import { useProfileAction } from '@/composables/useProfileAction'
@@ -28,6 +27,7 @@ import ProfileLink from '@/components/shared/ProfileLink.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 import CopyButton from '@/components/shared/CopyButton.vue'
+import EndpointLink from '@/components/shared/EndpointLink.vue'
 
 const props = defineProps<{
   jobId: string
@@ -401,19 +401,7 @@ watch(() => props.taskId, async () => {
             :key="ep.endpointId ?? ep.name"
             class="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 first:pt-0 last:pb-0"
           >
-            <a
-              v-if="canProxyEndpoint(ep.name)"
-              :href="proxyPathForEndpoint(ep.name)"
-              target="_blank"
-              rel="noopener"
-              class="font-mono text-[13px] text-accent hover:underline inline-flex items-center gap-1"
-              :title="`Open ${ep.name} via proxy`"
-            >
-              <span aria-hidden="true">↗</span>{{ ep.name }}
-            </a>
-            <span v-else class="font-mono text-[13px]" :title="'Not proxyable: name contains a dot'">
-              {{ ep.name }}
-            </span>
+            <EndpointLink :name="ep.name" class="font-mono text-[13px]" />
             <span v-if="ep.address" class="group/addr inline-flex items-center gap-1 text-xs font-mono text-text-muted">
               {{ ep.address }}
               <CopyButton :value="ep.address" />

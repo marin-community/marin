@@ -6,7 +6,7 @@ import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh
 import type { EndpointInfo, ListEndpointsResponse } from '@/types/rpc'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import CopyButton from '@/components/shared/CopyButton.vue'
-import { canProxyEndpoint, proxyPathForEndpoint } from '@/utils/endpoints'
+import EndpointLink from '@/components/shared/EndpointLink.vue'
 
 const SHOW_ALL_THRESHOLD = 100
 
@@ -145,17 +145,7 @@ function jobIdFromTaskId(taskId?: string): string | null {
           class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
         >
           <td class="px-3 py-2 text-[13px] font-mono">
-            <a
-              v-if="canProxyEndpoint(ep.name)"
-              :href="proxyPathForEndpoint(ep.name)"
-              target="_blank"
-              rel="noopener"
-              class="text-accent hover:underline inline-flex items-center gap-1"
-              :title="`Open ${ep.name} via proxy`"
-            >
-              <span aria-hidden="true">↗</span>{{ ep.name }}
-            </a>
-            <span v-else :title="'Not proxyable: name contains a dot'">{{ ep.name }}</span>
+            <EndpointLink :name="ep.name" />
           </td>
           <td class="px-3 py-2 text-[13px] font-mono text-text-secondary">
             <span v-if="ep.address" class="group/addr inline-flex items-center gap-1">
