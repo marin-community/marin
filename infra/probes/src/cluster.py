@@ -1,15 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Iris cluster-state gauges that back the infra status page: a worker-fleet
-snapshot (from ``ListWorkers``) and a root-job-state breakdown (from a raw SQL
-``GROUP BY``), each run as its own collector on its own cadence.
-
-The status page reads these live from the controller today (see
-``infra/status-page`` ``server/sources/workers.ts`` and ``jobs.ts``); emitting
-them here gives the same numbers a durable history in finelog/GCS and a path off
-the per-request live RPC. The label vocabulary mirrors those sources so the
-dashboard can read either source interchangeably.
+"""Iris cluster-state gauges: a worker-fleet snapshot (from ``ListWorkers``) and a
+root-job-state breakdown (from a raw SQL ``GROUP BY``), each run as its own
+collector on its own cadence. They give the controller's live worker and job
+counts a durable history in finelog/GCS.
 
 I/O (the iris RPC / SQL call) is separated from the pure ``aggregate_*`` rollups
 so the labelling/windowing is unit-testable without a live controller.
@@ -30,8 +25,7 @@ FLEET = "fleet"
 
 # ---- workers --------------------------------------------------------------
 
-# Workers report their GCP region under this attribute; absent → UNKNOWN_REGION,
-# matching server/sources/workers.ts regionOf().
+# Workers report their GCP region under this attribute; absent → UNKNOWN_REGION.
 WORKER_REGION_ATTRIBUTE = "region"
 UNKNOWN_REGION = "unknown"
 
@@ -54,11 +48,10 @@ class WorkerInfo(NamedTuple):
 def aggregate_workers(workers: Sequence[WorkerInfo]) -> list[Sample]:
     """Roll healthy workers into fleet resource totals + per-region head counts.
 
-    Mirrors ``server/sources/workers.ts``: only healthy workers count, resources
-    are summed across them, and the per-region series is the healthy head count
-    keyed by the worker's ``region`` attribute. Unhealthy workers are dropped
-    (Iris schedules at whole-VM granularity, so an unhealthy VM contributes no
-    usable capacity).
+    Only healthy workers count, resources are summed across them, and the
+    per-region series is the healthy head count keyed by the worker's ``region``
+    attribute. Unhealthy workers are dropped (Iris schedules at whole-VM
+    granularity, so an unhealthy VM contributes no usable capacity).
     """
     healthy = 0
     cpu_millicores = 0
@@ -131,7 +124,6 @@ IN_FLIGHT_STATES = frozenset({1, 2, 3})
 # explicitly submitted rather than every root's child fan-out. In-flight states
 # (1/2/3) count regardless of age so long-running experiments still show; terminal
 # states (4-8) are filtered to those finished within the window via finished_at_ms.
-# Mirrors infra/status-page server/sources/jobs.ts BREAKDOWN_SQL.
 JOB_BREAKDOWN_SQL = f"""
   SELECT state, COUNT(*) AS n
   FROM jobs
@@ -159,7 +151,7 @@ def aggregate_jobs(rows: Sequence[StateCount]) -> list[Sample]:
 
     Emits one sample per state (labelled ``state=<name>``) plus a fleet total per
     bucket. Unknown enum values fall through as ``state_<n>`` rather than being
-    dropped, mirroring ``server/sources/jobs.ts``.
+    dropped.
     """
     samples: list[Sample] = []
     inflight_total = 0

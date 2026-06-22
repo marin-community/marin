@@ -29,11 +29,7 @@ Gauges:
 - `jobs` — root-job-state breakdown from one raw-SQL `GROUP BY` (120s). Splits
   into a live in-flight snapshot (`job_inflight{state=…}`) and a trailing-24h
   terminal window (`job_terminal_24h{state=…}`), each with a `scope=fleet` total.
-
-The `workers` and `jobs` gauges back the Iris section of `infra/status-page`
-(`server/sources/workers.ts`, `jobs.ts`) — same label vocabulary, so the
-dashboard can read them from finelog instead of hitting the controller live. See
-`src/cluster.py` for the emitted metrics.[^jobs-iris]
+  See `src/cluster.py` for the emitted metrics.[^jobs-iris]
 
 [^jobs-iris]: `jobs` calls `RemoteClusterClient.execute_raw_query`, added
   alongside this collector; it only works once `uv lock -U` picks up a

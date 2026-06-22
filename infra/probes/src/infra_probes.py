@@ -49,10 +49,10 @@ PROVISION_WINDOW_HOURS = 3.0
 PROVISION_CADENCE = 900.0
 PROVISION_TIMEOUT = 60.0
 
-# Cluster-state gauges backing the status page. Workers is a single ListWorkers
-# RPC paged client-side; jobs is one raw-SQL GROUP BY. Both are sub-second, so the
-# cadences are about freshness (workers churn faster than the 24h job window) and
-# the timeouts only cover a slow/hung controller.
+# Cluster-state gauges. Workers is a single ListWorkers RPC paged client-side;
+# jobs is one raw-SQL GROUP BY. Both are sub-second, so the cadences are about
+# freshness (workers churn faster than the 24h job window) and the timeouts only
+# cover a slow/hung controller.
 WORKERS_CADENCE = 60.0
 WORKERS_TIMEOUT = 30.0
 JOBS_CADENCE = 120.0
