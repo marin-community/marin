@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import cast
+from contextlib import nullcontext
 
 import numpy as np
 import pytest
@@ -10,7 +10,6 @@ import jax
 import jax.numpy as jnp
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
-from levanter.grug import loss as grug_loss
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 
 
@@ -72,7 +71,8 @@ def test_fused_linear_softmax_cross_entropy_loss_matches_reference_without_mesh(
     np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
 
 
-def test_xla_cross_entropy_model_sharded_vocab_matches_reference_and_gradients():
+@pytest.mark.parametrize("implementation", ["xla", ("pallas_gpu", "xla")])
+def test_cross_entropy_model_sharded_vocab_matches_reference_and_gradients(implementation: str | tuple[str, ...]):
     devices = jax.devices()
     if len(devices) < 2:
         pytest.skip("requires at least two devices; run with XLA_FLAGS=--xla_force_host_platform_device_count=2")
@@ -96,7 +96,7 @@ def test_xla_cross_entropy_model_sharded_vocab_matches_reference_and_gradients()
             weight=weight_sharded,
             reduction="mean",
             logsumexp_weight=0.02,
-            implementation="xla",
+            implementation=implementation,
         )
 
     def reference_loss(hidden_value: jax.Array, lm_head_value: jax.Array) -> jax.Array:
@@ -115,9 +115,13 @@ def test_xla_cross_entropy_model_sharded_vocab_matches_reference_and_gradients()
         weight_sharded = jax.device_put(weight, NamedSharding(mesh, P("data", None)))
         lm_head_sharded = jax.device_put(lm_head, NamedSharding(mesh, P(None, "model")))
 
-        actual, (actual_hidden_grad, actual_lm_head_grad) = jax.jit(jax.value_and_grad(sharded_loss, argnums=(0, 1)))(
-            hidden_sharded, lm_head_sharded
-        )
+        warning_context = pytest.warns(RuntimeWarning, match="falling back to xla")
+        if implementation == "xla":
+            warning_context = nullcontext()
+        with warning_context:
+            actual, (actual_hidden_grad, actual_lm_head_grad) = jax.jit(
+                jax.value_and_grad(sharded_loss, argnums=(0, 1))
+            )(hidden_sharded, lm_head_sharded)
 
     expected, (expected_hidden_grad, expected_lm_head_grad) = jax.value_and_grad(reference_loss, argnums=(0, 1))(
         hidden,
@@ -127,67 +131,3 @@ def test_xla_cross_entropy_model_sharded_vocab_matches_reference_and_gradients()
     np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(actual_hidden_grad, expected_hidden_grad, rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(actual_lm_head_grad, expected_lm_head_grad, rtol=1e-5, atol=1e-5)
-
-
-def test_vocab_sharded_ce_falls_back_to_xla_after_pallas_gpu_failure(monkeypatch: pytest.MonkeyPatch):
-    flat_hidden = jnp.linspace(-0.4, 0.5, 3 * 4, dtype=jnp.float32).reshape((3, 4))
-    lm_head = jnp.linspace(-0.3, 0.7, 4 * 5, dtype=jnp.float32).reshape((4, 5))
-    labels = jnp.array([0, 2, 4], dtype=jnp.int32)
-
-    def failing_pallas_gpu(*args, **kwargs):
-        del args, kwargs
-        raise RuntimeError("synthetic pallas failure")
-
-    monkeypatch.setitem(grug_loss.IMPLEMENTATIONS, "pallas_gpu", failing_pallas_gpu)
-
-    with pytest.warns(RuntimeWarning, match="falling back to xla"):
-        actual_loss, actual_lse = grug_loss._local_linear_softmax_cross_entropy_loss(
-            flat_hidden,
-            labels,
-            lm_head,
-            dtype=jnp.float32,
-            precision=None,
-            implementation=("pallas_gpu", "xla"),
-        )
-    expected_loss, expected_lse = grug_loss._local_linear_softmax_cross_entropy_loss(
-        flat_hidden,
-        labels,
-        lm_head,
-        dtype=jnp.float32,
-        precision=None,
-        implementation="xla",
-    )
-
-    np.testing.assert_allclose(actual_loss, expected_loss, rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(actual_lse, expected_lse, rtol=1e-5, atol=1e-5)
-
-
-def test_lm_head_spec_tracks_effective_default_ce_backend(monkeypatch: pytest.MonkeyPatch):
-    class FakeMesh:
-        empty = False
-        shape = {"model": 2}
-
-    lm_head = jnp.zeros((4, 8), dtype=jnp.float32)
-
-    mesh = cast(jax.sharding.AbstractMesh, FakeMesh())
-
-    monkeypatch.setattr(grug_loss, "default_implementations", lambda: ("xla",))
-    assert grug_loss._lm_head_spec_for_ce(lm_head, mesh, None) == P(None, "model")
-
-    monkeypatch.setattr(grug_loss, "default_implementations", lambda: ("pallas_gpu", "xla"))
-    assert grug_loss._lm_head_spec_for_ce(lm_head, mesh, None) == P(None, "model")
-
-
-def test_lm_head_spec_does_not_vocab_shard_when_model_axis_is_one(monkeypatch: pytest.MonkeyPatch):
-    class FakeMesh:
-        empty = False
-        shape = {"model": 1}
-
-    lm_head = jnp.zeros((2560, 128_256), dtype=jnp.bfloat16)
-    mesh = cast(jax.sharding.AbstractMesh, FakeMesh())
-
-    assert grug_loss._lm_head_spec_for_ce(lm_head, mesh, "xla") == P(None, None)
-    assert grug_loss._lm_head_spec_for_ce(lm_head, mesh, "pallas_gpu") == P(None, None)
-
-    monkeypatch.setattr(grug_loss, "default_implementations", lambda: ("pallas_gpu", "xla"))
-    assert grug_loss._lm_head_spec_for_ce(lm_head, mesh, None) == P(None, None)

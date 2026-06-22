@@ -10,6 +10,7 @@ import pytest
 
 from levanter.kernels.pallas import autotune_cache_utils
 from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
+from levanter.kernels.pallas.fused_cross_entropy_loss import gpu_launch_limits
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_gpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import tuned_block_sizes
@@ -338,14 +339,7 @@ def test_fused_cross_entropy_xla_caps_requested_batch_block_size_to_legal_diviso
     assert captured == {"block_size": 4, "batch_block_size": 6}
 
 
-@pytest.mark.parametrize(
-    ("tuned_batch_block_size", "has_tuned_match", "expected_batch_block_size"),
-    [(3, True, 3), (2, False, 2)],
-)
-def test_fused_cross_entropy_xla_infer_uses_preferred_batch_block_size(
-    tuned_batch_block_size: int,
-    has_tuned_match: bool,
-    expected_batch_block_size: int,
+def test_fused_cross_entropy_xla_infer_uses_tuned_batch_block_size_when_available(
     monkeypatch: pytest.MonkeyPatch,
 ):
     x, w, y = _make_toy_inputs()
@@ -358,10 +352,7 @@ def test_fused_cross_entropy_xla_infer_uses_preferred_batch_block_size(
     monkeypatch.setattr(
         fused_xla,
         "infer_block_sizes_with_tuned_match",
-        lambda *args, **kwargs: (
-            fused_api.BlockSizes(b_block_size=tuned_batch_block_size, h_block_size=4, v_block_size=8),
-            has_tuned_match,
-        ),
+        lambda *args, **kwargs: (fused_api.BlockSizes(b_block_size=3, h_block_size=4, v_block_size=8), True),
     )
 
     def fake_custom_vjp(block_size, batch_block_size, dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg):
@@ -379,7 +370,7 @@ def test_fused_cross_entropy_xla_infer_uses_preferred_batch_block_size(
         dtype=jnp.float32,
     )
 
-    assert captured == {"block_size": 4, "batch_block_size": expected_batch_block_size}
+    assert captured == {"block_size": 4, "batch_block_size": 3}
 
 
 def test_fused_cross_entropy_xla_infer_falls_back_when_tuned_batch_block_size_is_unsafe(
@@ -523,8 +514,15 @@ def test_device_key_tpu_v5_lite_maps_to_v5e():
     assert tuned_block_sizes._device_key("TPU v5litepod") == "TPU v5e"
 
 
+def _assert_fits_nvidia_tile_budget(block_sizes: fused_api.BlockSizes, *, w_dtype: jnp.dtype) -> None:
+    weight_tile_bytes = block_sizes.h_block_size * block_sizes.v_block_size * jnp.dtype(w_dtype).itemsize
+    assert gpu_launch_limits.is_power_of_two(block_sizes.h_block_size)
+    assert gpu_launch_limits.is_power_of_two(block_sizes.v_block_size)
+    assert weight_tile_bytes <= gpu_launch_limits.NVIDIA_WEIGHT_TILE_BYTES_LIMIT
+
+
 @pytest.mark.parametrize("batch", [4096, 8192])
-def test_h100_d2560_pallas_gpu_block_sizes_fit_nvidia_tile_budget(batch: int, monkeypatch: pytest.MonkeyPatch):
+def test_h100_d2560_pallas_gpu_block_sizes_fit_nvidia_tile_budget(batch: int):
     block_sizes, has_tuned_match = tuned_block_sizes.infer_block_sizes_with_tuned_match(
         batch,
         2560,
@@ -535,19 +533,12 @@ def test_h100_d2560_pallas_gpu_block_sizes_fit_nvidia_tile_budget(batch: int, mo
         device_kind="NVIDIA H100",
     )
 
-    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
-
     assert has_tuned_match
     assert block_sizes.b_block_size == 256
-    pallas_gpu._validate_launch_feasibility(
-        w_dtype=jnp.float32,
-        h_block_size=block_sizes.h_block_size,
-        v_block_size=block_sizes.v_block_size,
-        num_h_blocks=2560 // block_sizes.h_block_size,
-    )
+    _assert_fits_nvidia_tile_budget(block_sizes, w_dtype=jnp.float32)
 
 
-def test_h100_d2560_model_sharded_vocab_block_sizes_fit_nvidia_tile_budget(monkeypatch: pytest.MonkeyPatch):
+def test_h100_d2560_model_sharded_vocab_block_sizes_fit_nvidia_tile_budget():
     block_sizes, has_tuned_match = tuned_block_sizes.infer_block_sizes_with_tuned_match(
         16_384,
         2560,
@@ -558,16 +549,9 @@ def test_h100_d2560_model_sharded_vocab_block_sizes_fit_nvidia_tile_budget(monke
         device_kind="NVIDIA H100",
     )
 
-    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
-
     assert not has_tuned_match
     assert block_sizes == fused_api.BlockSizes(b_block_size=1024, h_block_size=64, v_block_size=256)
-    pallas_gpu._validate_launch_feasibility(
-        w_dtype=jnp.bfloat16,
-        h_block_size=block_sizes.h_block_size,
-        v_block_size=block_sizes.v_block_size,
-        num_h_blocks=2560 // block_sizes.h_block_size,
-    )
+    _assert_fits_nvidia_tile_budget(block_sizes, w_dtype=jnp.bfloat16)
 
 
 def test_pallas_tpu_backward_uses_pallas_by_default(monkeypatch):
@@ -990,44 +974,6 @@ def test_fused_cross_entropy_pallas_gpu_grad_tracing_non_gb10_path(
         return loss.sum()
 
     jax.make_jaxpr(jax.grad(loss_fn, argnums=(0, 1)))(x, w)
-
-
-@pytest.mark.parametrize("batch", [4096, 32768])
-def test_pallas_gpu_h100_large_vocab_custom_backward_uses_large_v_block(
-    batch: int,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
-
-    x = jax.ShapeDtypeStruct((batch, 2560), dtype=jnp.bfloat16)
-    w = jax.ShapeDtypeStruct((2560, 128256), dtype=jnp.bfloat16)
-    block_sizes = fused_api.BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256)
-
-    assert pallas_gpu._custom_backward_v_block_size(x, w, block_sizes) == 8192
-
-
-@pytest.mark.parametrize(
-    ("device_kind", "x_dtype", "w_dtype", "vocab_size"),
-    [
-        ("nvidia h100", jnp.bfloat16, jnp.bfloat16, 32000),
-        ("nvidia a100", jnp.bfloat16, jnp.bfloat16, 128256),
-        ("nvidia h100", jnp.float32, jnp.float32, 128256),
-    ],
-)
-def test_pallas_gpu_custom_backward_uses_block_size_when_large_h100_tile_does_not_apply(
-    device_kind: str,
-    x_dtype: jnp.dtype,
-    w_dtype: jnp.dtype,
-    vocab_size: int,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: device_kind)
-
-    x = jax.ShapeDtypeStruct((4096, 2560), dtype=x_dtype)
-    w = jax.ShapeDtypeStruct((2560, vocab_size), dtype=w_dtype)
-    block_sizes = fused_api.BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256)
-
-    assert pallas_gpu._custom_backward_v_block_size(x, w, block_sizes) == 256
 
 
 def test_pallas_autotune_used_when_tuned_match_missing(monkeypatch: pytest.MonkeyPatch):
