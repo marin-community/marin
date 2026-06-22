@@ -346,6 +346,46 @@ likely boundary. If both markers appear on the failing task before the bounce,
 the failure is later in the step and the probe should move to the next FFI
 boundary.
 
+## Results
+
+MAY333 reran the B32 EP16 shape with x-only combine after-success markers and
+task-0 rank-filtered stage logs:
+
+- W&B:
+  `marin-community/marin_moe/MAY333-XCOMBINECHK-B32-XONLY-JAXBWD-1314`
+- Parent Iris job: `/dlwh/iris-run-job-20260622-131416`
+- Child Iris job:
+  `/dlwh/iris-run-job-20260622-131416/grug-train-MAY333-XCOMBINECHK-B32-XONLY-JAXBWD-1314`
+- All ranks reached DeepEP runtime post-init and logged `Starting Grug
+  train_step dispatch for step 0`.
+- Task 1 ranks 8-15 then timed out in
+  `WaitForInternodeRecvCounts`, with all expert counters still `-1`.
+- Task 0 ranks 0-7 produced no `HOST_DISPATCH_STAGE`, no `Finished Grug
+  train_step dispatch`, and no error lines.
+- A thread dump of task 0 while task 1 was timing out showed a local worker
+  still in JAX/XLA compilation:
+  `backend_compile_and_load -> _compile_and_write_cache ->
+  compile_or_get_cached -> pxla.compile -> _pjit_call_impl_python`.
+
+This means MAY333 did not reach the x-only combine diagnostic boundary. The
+counter timeout was caused by cross-task first-step compile skew: task 1
+finished compilation and entered DeepEP dispatch while task 0 was still
+compiling, so task 1 waited for peer recv counters that task 0 had not begun to
+write. The child and parent jobs were stopped after this diagnosis.
+
+## Hypothesis 11: first-step compile skew needs a longer transport timeout
+
+`LEVANTER_DEEPEP_COUNTER_TIMEOUT_SECONDS=900` is too short when one task spends
+more than 15 minutes in first-step XLA compilation after the peer has begun
+DeepEP dispatch. The next diagnostic run should use the existing maximum
+counter timeout, 3600 seconds, so compile skew does not get misclassified as a
+DeepEP transport failure.
+
+If the longer-timeout run gets both tasks into `HOST_DISPATCH_STAGE`, the next
+failure should again be interpreted using the x-only combine breadcrumbs. If
+one task remains in compile for close to an hour, the issue is no longer DeepEP
+transport and should move to compile-cache/compile-skew mitigation.
+
 ## Future work
 
 - [x] Add a C++/FFI primitive for x-only internode combine-with-local-collapse
@@ -365,8 +405,10 @@ boundary.
       `LEVANTER_DEEPEP_HOST_DISPATCH_STAGE_DEBUG=1`.
 - [x] Re-run B32 EP16 DeepEP internode with internode `num_sms=16`.
 - [x] Re-run B32 EP16 with the dispatch local-assignment pack CUDA check.
-- [ ] Re-run B32 EP16 with x-only combine after-success markers and filtered
+- [x] Re-run B32 EP16 with x-only combine after-success markers and filtered
       stage logs.
+- [ ] Re-run B32 EP16 with 3600s counter timeout to tolerate first-step compile
+      skew.
 - [ ] If B32 passes, retry B64 and profile remat overhead versus ring/all-to-all.
 - [ ] If B32 reaches `cudaMallocAsync(x-only fused local-collapse bwd recv_out)`
       OOM, replace the staging temp with a true direct packed-output backward
