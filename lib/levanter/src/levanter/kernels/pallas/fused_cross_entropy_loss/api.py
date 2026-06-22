@@ -94,6 +94,11 @@ def _default_implementations() -> tuple[Implementation, ...]:
     return implementations
 
 
+def default_implementations() -> tuple[Implementation, ...]:
+    """Return the fused CE implementation order for the current backend."""
+    return _default_implementations()
+
+
 def _warn_pallas_fallback_once(exc: Exception) -> None:
     message = str(exc)
     if "requires TPU backend" in message:
@@ -747,5 +752,6 @@ __all__ = [
     "Implementation",
     "IMPLEMENTATIONS",
     "Reduction",
+    "default_implementations",
     "fused_cross_entropy_loss_and_logsumexp_penalty",
 ]

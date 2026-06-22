@@ -13,6 +13,7 @@ from .config import BlockSizes
 
 
 DEFAULT_DEVICE_KEY = "default"
+_NVIDIA_WEIGHT_TILE_BYTES_LIMIT = 101_376
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,8 +51,12 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "llama3-ish"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=1024),
         ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
         ("float32", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
-        ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
-        ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
+        ("bfloat16", "small-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        ("float32", "small-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        ("bfloat16", "large-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        ("float32", "large-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
     },
     "NVIDIA GB10": {
         ("bfloat16", "tiny"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=128),
@@ -74,8 +79,12 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "llama3-ish"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=1024),
         ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
         ("float32", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
-        ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
-        ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
+        ("bfloat16", "small-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        ("float32", "small-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        ("bfloat16", "large-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        ("float32", "large-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
     },
     "NVIDIA A100": {
         ("bfloat16", "tiny"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=128),
@@ -86,8 +95,12 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "llama3-ish"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=1024),
         ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
         ("float32", "large-batch-small-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
-        ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
-        ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
+        ("bfloat16", "small-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        ("float32", "small-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        ("bfloat16", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        ("bfloat16", "large-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
+        ("float32", "large-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256),
     },
     "TPU v5e": {
         ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024),
@@ -352,6 +365,15 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
         v_max=262144,
     ),
     ShapeBucket(
+        name="small-batch-medium-h",
+        b_min=4096,
+        b_max=8191,
+        h_min=1537,
+        h_max=3072,
+        v_min=120000,
+        v_max=131072,
+    ),
+    ShapeBucket(
         name="mid-h-large-vocab",
         b_min=4096,
         b_max=32768,
@@ -424,6 +446,26 @@ _WARNED_HUGE_BATCH_SAFE_FALLBACK = False
 
 def _is_tpu_device(device_key: Optional[str]) -> bool:
     return bool(device_key and device_key.startswith("TPU"))
+
+
+def _is_nvidia_device(device_key: Optional[str]) -> bool:
+    return bool(device_key and device_key.startswith("NVIDIA"))
+
+
+def _is_power_of_two(n: int) -> bool:
+    return n > 0 and (n & (n - 1) == 0)
+
+
+def _dtype_itemsize(dtype: Optional[jnp.dtype]) -> int:
+    if dtype is None:
+        return 4
+    return jnp.dtype(dtype).itemsize
+
+
+def _largest_power_of_two_at_most(value: int, *, minimum: int) -> int:
+    if value < minimum:
+        return minimum
+    return 1 << value.bit_length() - 1
 
 
 def _normalized_device_kind(device_kind: Optional[str]) -> Optional[str]:
@@ -633,6 +675,7 @@ def _is_valid_for_pallas_shape(
     h: int,
     device_key: Optional[str],
     device_kind: Optional[str],
+    w_dtype: Optional[jnp.dtype] = None,
 ) -> bool:
     del device_kind
     if _is_tpu_device(device_key):
@@ -646,10 +689,15 @@ def _is_valid_for_pallas_shape(
 
     if block_sizes.b_block_size <= 0 or block_sizes.h_block_size <= 0 or block_sizes.v_block_size <= 0:
         return False
-    if device_key and device_key.startswith("NVIDIA"):
+    if _is_nvidia_device(device_key):
         if block_sizes.b_block_size < 16 or block_sizes.h_block_size < 16 or block_sizes.v_block_size < 16:
             return False
         if block_sizes.b_block_size % 16 != 0 or block_sizes.h_block_size % 16 != 0:
+            return False
+        if not _is_power_of_two(block_sizes.h_block_size) or not _is_power_of_two(block_sizes.v_block_size):
+            return False
+        weight_tile_bytes = block_sizes.h_block_size * block_sizes.v_block_size * _dtype_itemsize(w_dtype)
+        if weight_tile_bytes > _NVIDIA_WEIGHT_TILE_BYTES_LIMIT:
             return False
     return True
 
@@ -661,11 +709,30 @@ def _sanitize_for_pallas(
     h: int,
     device_key: Optional[str],
     device_kind: Optional[str],
+    w_dtype: Optional[jnp.dtype] = None,
 ) -> BlockSizes:
     """Adjust inferred block sizes so B/H blocks divide local shapes when possible."""
     del device_kind
     if not _is_tpu_device(device_key):
-        return block_sizes
+        if not _is_nvidia_device(device_key):
+            return block_sizes
+
+        b_block_size = block_sizes.b_block_size
+        if b_block_size < 128 or b_block_size % 16 != 0:
+            b_block_size = 128
+
+        h_block_size = _largest_power_of_two_at_most(min(block_sizes.h_block_size, 64), minimum=16)
+        max_v_for_tile = _NVIDIA_WEIGHT_TILE_BYTES_LIMIT // (_dtype_itemsize(w_dtype) * h_block_size)
+        v_block_size = _largest_power_of_two_at_most(
+            min(block_sizes.v_block_size, 256, max_v_for_tile),
+            minimum=16,
+        )
+        return BlockSizes(
+            b_block_size=b_block_size,
+            h_block_size=h_block_size,
+            v_block_size=v_block_size,
+        )
+
     if b >= 1024:
         b_block_size = _largest_divisor_multiple_of_1024(b, block_sizes.b_block_size)
     else:
@@ -746,6 +813,7 @@ def infer_block_sizes_with_tuned_match(
                     h=h,
                     device_key=device_key,
                     device_kind=normalized_device_kind,
+                    w_dtype=w_dtype,
                 ):
                     return entry, True
 
@@ -756,6 +824,7 @@ def infer_block_sizes_with_tuned_match(
         h=h,
         device_key=device_key,
         device_kind=normalized_device_kind,
+        w_dtype=w_dtype,
     ):
         return default_entry, False
     return (
@@ -765,6 +834,7 @@ def infer_block_sizes_with_tuned_match(
             h=h,
             device_key=device_key,
             device_kind=normalized_device_kind,
+            w_dtype=w_dtype,
         ),
         False,
     )

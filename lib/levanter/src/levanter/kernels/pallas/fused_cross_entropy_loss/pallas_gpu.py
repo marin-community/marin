@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from functools import partial
+import os
 from typing import Optional
 
 import jax
@@ -28,7 +29,9 @@ _GB10_XLA_STREAMING_V_BLOCK_BATCH_4K = 3072
 _GB10_XLA_STREAMING_V_BLOCK_BATCH_8K = 3072
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K = 6144
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS = 7168
+_NVIDIA_CUSTOM_BWD_V_BLOCK_LARGE_VOCAB = 8192
 _GPU_MIN_B_BLOCK_SIZE = 128
+_CUSTOM_BWD_V_BLOCK_SIZE_ENV = "LEVANTER_PALLAS_GPU_CUSTOM_BWD_V_BLOCK_SIZE"
 
 
 def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
@@ -426,14 +429,41 @@ def _gb10_custom_backward_v_block_size(
     return None
 
 
+def _nvidia_custom_backward_v_block_size(
+    x: Float[Array, "B H"],
+    w: Float[Array, "H V"],
+) -> int | None:
+    """Return the H100-style large-vocab custom-backward tile when applicable."""
+    device_kind = _device_kind()
+    if "h100" not in device_kind:
+        return None
+    if "gb10" in device_kind:
+        return None
+    if x.dtype != jnp.bfloat16 or w.dtype != jnp.bfloat16:
+        return None
+    if w.shape[1] < 65536:
+        return None
+    if x.shape[0] < 1024:
+        return None
+    return _NVIDIA_CUSTOM_BWD_V_BLOCK_LARGE_VOCAB
+
+
 def _custom_backward_v_block_size(
     x: Float[Array, "B H"],
     w: Float[Array, "H V"],
     block_sizes: BlockSizes | None,
 ) -> int:
+    if raw_override := os.environ.get(_CUSTOM_BWD_V_BLOCK_SIZE_ENV):
+        override = int(raw_override)
+        if override <= 0:
+            raise ValueError(f"{_CUSTOM_BWD_V_BLOCK_SIZE_ENV} must be positive, got {override}.")
+        return override
     gb10_tuned = _gb10_custom_backward_v_block_size(x, w)
     if gb10_tuned is not None:
         return gb10_tuned
+    nvidia_tuned = _nvidia_custom_backward_v_block_size(x, w)
+    if nvidia_tuned is not None:
+        return nvidia_tuned
     if block_sizes is not None:
         return block_sizes.v_block_size
     return BlockSizes.get_default().v_block_size
@@ -471,7 +501,6 @@ def _backward_streaming_from_lse(
     v_offsets = jnp.arange(v_block_size, dtype=jnp.int32)
 
     grad_x_init = jnp.zeros((b_dim, h_dim), dtype=jnp.float32)
-    v_indices = jnp.arange(num_v_blocks, dtype=jnp.int32)
 
     def body(grad_x, v_block_index):
         v_start = v_block_index * v_block_size
@@ -515,9 +544,13 @@ def _backward_streaming_from_lse(
         ).astype(jnp.float32)
 
         grad_x = grad_x + grad_x_block
-        return grad_x, grad_w_block
+        return grad_x, grad_w_block.astype(w.dtype)
 
-    grad_x, grad_w_blocks = jax.lax.scan(body, grad_x_init, v_indices)
+    grad_x, grad_w_blocks = jax.lax.scan(
+        body,
+        grad_x_init,
+        jnp.arange(num_v_blocks, dtype=jnp.int32),
+    )
     grad_w = jnp.transpose(grad_w_blocks, (1, 0, 2)).reshape((h_dim, v_pad))
     grad_w = grad_w[:, :v_dim]
     return grad_x.astype(x.dtype), grad_w.astype(w.dtype)
