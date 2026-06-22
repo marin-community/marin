@@ -4591,7 +4591,44 @@ ffi::Error CombineInternodeXOnly(
         stream,
         num_channels,
         low_latency_mode);
-    ThrowOnCuda(cudaGetLastError(), "DeepEP internode x-only combine");
+    LogHostDispatchStage(
+        runtime.rank,
+        call_sequence,
+        "internode_jax_after_combine_x_only_call_return",
+        actual_recv_tokens,
+        hidden,
+        /*num_experts=*/num_ranks,
+        num_topk,
+        combined_tokens,
+        actual_recv_rdma_tokens,
+        num_channels,
+        recv_capacity);
+    cudaError_t combine_status = cudaGetLastError();
+    LogHostDispatchStage(
+        runtime.rank,
+        call_sequence,
+        "internode_jax_after_combine_x_only_cuda_status",
+        actual_recv_tokens,
+        hidden,
+        /*num_experts=*/num_ranks,
+        num_topk,
+        combined_tokens,
+        actual_recv_rdma_tokens,
+        num_channels,
+        recv_capacity);
+    ThrowOnCuda(combine_status, "DeepEP internode x-only combine");
+    LogHostDispatchStage(
+        runtime.rank,
+        call_sequence,
+        "internode_jax_before_combine_x_only_stream_sync",
+        actual_recv_tokens,
+        hidden,
+        /*num_experts=*/num_ranks,
+        num_topk,
+        combined_tokens,
+        actual_recv_rdma_tokens,
+        num_channels,
+        recv_capacity);
     DebugSynchronizeStream(stream, "cudaStreamSynchronize(DeepEP internode x-only combine)");
     LogHostDispatchStage(
         runtime.rank,
