@@ -27,8 +27,17 @@ _KNOWN_VOCAB_SIZES: dict[str, int] = {
     "gpt2": 50_257,
 }
 
-# The marin tokenizer is a re-upload of the llama3 tokenizer with a custom chat template.
-_EQUIVALENT_TOKENIZERS = frozenset({"meta-llama/Meta-Llama-3.1-8B", "marin-community/marin-tokenizer"})
+# The marin tokenizer is a re-upload of the llama3 tokenizer with a custom chat template; the
+# Llama-3.1 base and Instruct checkpoints likewise share the same vocabulary and token IDs and
+# differ only in their chat template. Listing all of them lets _are_tokenizers_equivalent
+# short-circuit without loading the gated meta-llama tokenizers from the Hub.
+_EQUIVALENT_TOKENIZERS = frozenset(
+    {
+        "meta-llama/Meta-Llama-3.1-8B",
+        "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        "marin-community/marin-tokenizer",
+    }
+)
 
 
 def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_raw_paths: bool) -> DatasetComponent:
