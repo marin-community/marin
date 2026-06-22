@@ -50,6 +50,11 @@ from levanter.kernels.deepep.availability import (
     DEEPEP_CUDA_ARCH_ENV,
     DEEPEP_KNOWN_GOOD_COMMIT,
     DEEPEP_SRC_ENV,
+    INTERNODE_TRANSPORT_REQUIRED_FILES,
+    LAYOUT_SOURCE_CANDIDATES,
+    TRANSPORT_REQUIRED_FILES,
+    deepep_source_revision,
+    missing_deepep_source_files,
 )
 from levanter.kernels.deepep.layout_ffi import build_layout_library
 from levanter.kernels.deepep.transport_ffi import (
@@ -123,6 +128,22 @@ def _env_int(key: str, default: int) -> int:
     return int(raw)
 
 
+def _deepep_bootstrap_required_files(model: GrugModelConfig) -> tuple[str, ...]:
+    if model.moe_implementation == "deepep_internode":
+        return INTERNODE_TRANSPORT_REQUIRED_FILES
+    return TRANSPORT_REQUIRED_FILES
+
+
+def _deepep_bootstrap_checkout_ready(root: Path, model: GrugModelConfig, revision: str) -> bool:
+    if not (root / ".git").exists():
+        return False
+    if deepep_source_revision(root) != revision:
+        return False
+    if missing_deepep_source_files(root, _deepep_bootstrap_required_files(model)):
+        return False
+    return any((root / relative).is_file() for relative in LAYOUT_SOURCE_CANDIDATES)
+
+
 def _maybe_upload_profiler_tar(profile_dir: Path, *, run_id: str) -> str | None:
     remote_prefix = os.environ.get("MAY_UPLOAD_PROFILER_REMOTE_PREFIX", "")
     if not remote_prefix:
@@ -161,17 +182,20 @@ def _maybe_bootstrap_deepep_source(model: GrugModelConfig) -> None:
     os.environ.setdefault(DEEPEP_CUDA_ARCH_ENV, "sm_90")
     os.environ.setdefault("MARIN_DEEPEP_CACHE_DIR", "/tmp/marin-deepep-cache")
 
-    if (root / ".git").exists():
+    if _deepep_bootstrap_checkout_ready(root, model, revision):
         logger.info("Using existing DeepEP source checkout at %s", root)
         return
+    if (root / ".git").exists():
+        logger.warning("Removing incomplete DeepEP source checkout at %s", root)
+        shutil.rmtree(root)
 
     logger.info("Cloning DeepEP source revision %s into %s", revision, root)
     root.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        ["git", "clone", "--filter=blob:none", _DEEPEP_SOURCE_URL, str(root)],
+        ["git", "clone", "--filter=blob:none", "--no-checkout", _DEEPEP_SOURCE_URL, str(root)],
         check=True,
     )
-    subprocess.run(["git", "-C", str(root), "checkout", revision], check=True)
+    subprocess.run(["git", "-C", str(root), "checkout", "--detach", revision], check=True)
 
 
 def _maybe_initialize_deepep_internode_runtime(config: GrugRunConfig) -> None:
