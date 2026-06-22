@@ -19,6 +19,7 @@ HLO back through ``iris job logs`` (no storage needed):
 
 import argparse
 import json
+import os
 import time
 
 import jax
@@ -33,6 +34,18 @@ _DIMENSION_NUMBERS = (((1,), (0,)), ((), ()))
 def dense_dot(x: jax.Array, w: jax.Array) -> jax.Array:
     """Dense projection ``[M, K] @ [K, N] -> [M, N]``."""
     return lax.dot_general(x, w, _DIMENSION_NUMBERS)
+
+
+def _configure_xla_dump_dir(xla_dump_dir: str) -> str:
+    """Direct XLA HLO text dumps to ``xla_dump_dir``. Must run before backend init."""
+    resolved = os.path.abspath(xla_dump_dir)
+    os.makedirs(resolved, exist_ok=True)
+    flags = os.environ.get("XLA_FLAGS", "").split()
+    for flag in (f"--xla_dump_to={resolved}", "--xla_dump_hlo_as_text"):
+        if flag not in flags:
+            flags.append(flag)
+    os.environ["XLA_FLAGS"] = " ".join(flags)
+    return resolved
 
 
 def _time_jitted(fn, *args, steps: int, warmup: int) -> tuple[float, float]:
@@ -60,7 +73,16 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--forward-only", action="store_true")
     parser.add_argument("--no-print-hlo", dest="print_hlo", action="store_false")
+    parser.add_argument(
+        "--xla-dump-dir", type=str, default=None, help="dir for XLA HLO text dumps (upload to R2 to retrieve)"
+    )
+    parser.add_argument(
+        "--profiler-dir", type=str, default=None, help="dir for a jax.profiler trace of the timed runs"
+    )
     args = parser.parse_args()
+
+    # Dump flags must be set before the backend initializes (first JAX op below).
+    xla_dump_dir = _configure_xla_dump_dir(args.xla_dump_dir) if args.xla_dump_dir else None
 
     dtype = jnp.dtype(args.dtype)
     print("devices:", jax.devices())
@@ -90,6 +112,16 @@ def main() -> None:
         bwd_compile, bwd_steady = _time_jitted(grad, x, w, steps=args.steps, warmup=args.warmup)
         result["bwd_compile_time_s"] = bwd_compile
         result["bwd_steady_time_s"] = bwd_steady
+
+    if args.profiler_dir:
+        profiler_dir = os.path.abspath(args.profiler_dir)
+        with jax.profiler.trace(profiler_dir):
+            jax.block_until_ready(fwd(x, w))
+            if not args.forward_only:
+                jax.block_until_ready(grad(x, w))
+        result["profiler_dir"] = profiler_dir
+    if xla_dump_dir is not None:
+        result["xla_dump_dir"] = xla_dump_dir
 
     print("result_json", json.dumps(result, sort_keys=True))
 
