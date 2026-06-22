@@ -1324,3 +1324,194 @@ def pipeline_value_and_grad_ep(
     with _inline_ring_moe_mlp_context(transformer.config.num_experts), _neutralize_reshards_auto():
         loss, (g_embed, g_stage) = jax.value_and_grad(loss_fn, argnums=(0, 1))(embed_arrays, stage_block_arrays)
     return loss, g_embed, g_stage
+
+
+# --- Microbatched (GPipe-scheduled) inline ring-EP pipeline ---------------------
+#
+# ``_ep_pipeline_loss`` ripples a SINGLE batch through the stages (one stage active
+# per step), which is 100% pipeline bubble -- useless as a throughput benchmark. The
+# loss below splits the batch into ``num_microbatches`` microbatches and runs the
+# same GPipe schedule the toy ``moe_zb`` pipeline uses: stage 0 injects microbatch
+# ``tick`` at timestep ``tick``, every stage runs its blocks on its current buffer
+# each tick, and the activation is ``ppermute``d downstream stage->stage+1. The last
+# stage collects each microbatch's drained hidden and the head scores them in one
+# fused pass after the sweep, so the bubble shrinks to ``(S-1)/(M+S-1)``.
+#
+# The body is differentiated by whole-program ``jax.value_and_grad`` -- the same
+# autodiff path as ``pipeline_value_and_grad_ep`` (no manual backward, no
+# ``check_vma=True``): the forward ppermute transposes to a reverse ppermute and the
+# inline ring's all_gather/psum_scatter transpose cleanly because ``expert`` is
+# manual and only ``data`` survives as a GSPMD axis.
+
+
+def _ep_pipeline_loss_microbatched(
+    embed_arrays: eqx.Module,
+    stage_block_arrays: eqx.Module,
+    embed_static: eqx.Module,
+    block_static: eqx.Module,
+    transformer: Transformer,
+    token_microbatches: jax.Array,
+    weight_microbatches: jax.Array,
+    *,
+    mesh: jax.sharding.Mesh,
+    num_stages: int,
+    num_microbatches: int,
+) -> jax.Array:
+    """Microbatched (GPipe) next-token loss with the real ring EP inline; ``{stage, expert}`` manual.
+
+    Mirrors :func:`_ep_pipeline_loss` but runs the GPipe microbatch schedule inside
+    the single ``{stage, expert}``-manual ``shard_map``. ``token_microbatches`` /
+    ``weight_microbatches`` are ``[num_microbatches, microbatch, seq]``; each
+    microbatch's tokens are sharded over the manual ``expert`` axis
+    (``P(None, EXPERT_AXIS, None)``) exactly as the single-batch tokens are. The loss
+    is the full-batch weighted next-token CE (one fused score over all microbatches'
+    drained hiddens) plus the router z-aux averaged over microbatches.
+    """
+    num_layers = len(transformer.blocks)
+    cfg = transformer.config
+    seq_len = token_microbatches.shape[-1]
+
+    layer_masks = build_layer_masks(transformer, num_stages, seq_len)
+
+    stage_spec = P(STAGE_AXIS)
+    stage_in_specs = _stage_in_specs(stage_block_arrays)
+    embed_in_specs = jax.tree_util.tree_map(lambda _: P(), embed_arrays)
+    # Each microbatch's tokens shard their microbatch axis over expert (data Auto);
+    # the leading num_microbatches axis is replicated.
+    token_spec = P(None, EXPERT_AXIS, None)
+
+    def body(stage_arrays, embed, masks, tokens, weights):
+        sid = jax.lax.axis_index(STAGE_AXIS)
+        S = num_stages
+        M = num_microbatches
+        T = M + S - 1
+        fwd_perm = [(i, i + 1) for i in range(S - 1)]
+        is_first = sid == 0
+        is_last = sid == (S - 1)
+
+        token_embed, embed_norm, embed_gated_norm, final_norm, final_gated_norm, output_proj = eqx.combine(
+            embed, embed_static
+        )
+        stage_blocks = jax.tree_util.tree_map(lambda x: x[0], stage_arrays)
+        stage_masks = masks[0]
+
+        # Activation buffer for one microbatch's local token slice. ``expert`` is
+        # manual, so ``tokens`` is already this shard's slice -- the local microbatch
+        # count is ``tokens.shape[1]`` (= microbatch / expert_size). Auto GSPMD places
+        # the data axis.
+        local_microbatch = tokens.shape[1]
+        hidden_shape = (local_microbatch, seq_len, cfg.hidden_dim)
+        buf = jnp.zeros(hidden_shape, jnp.float32)
+        z_total = jnp.zeros((), jnp.float32)
+        # Last stage drains microbatch m into h_final[m]; every other stage / invalid
+        # slot adds zero, so each microbatch is written exactly once.
+        h_final = jnp.zeros((M, *hidden_shape), jnp.float32)
+
+        for t in range(T):
+            m = t - sid
+            valid = (m >= 0) & (m < M)
+            m_clip = jnp.clip(m, 0, M - 1)
+            tok_m = jax.lax.dynamic_index_in_dim(tokens, m_clip, axis=0, keepdims=False)
+
+            embedded = token_embed[tok_m]
+            embedded = embed_gated_norm(embed_norm(embedded))
+            stage_in = jnp.where(is_first, embedded, buf)
+
+            stage_out, z_local = _run_stage_blocks(stage_blocks, block_static, stage_in, stage_masks)
+            # Per-stage router z-loss is local to this stage's layers; count it once
+            # per microbatch (every valid slot processes a distinct microbatch).
+            z_total = z_total + jnp.where(valid, z_local, 0.0)
+
+            contrib = jnp.where(is_last & valid, stage_out, jnp.zeros_like(stage_out))
+            prev = jax.lax.dynamic_index_in_dim(h_final, m_clip, axis=0, keepdims=False)
+            h_final = jax.lax.dynamic_update_index_in_dim(h_final, prev + contrib, m_clip, axis=0)
+
+            buf = jax.lax.ppermute(stage_out, STAGE_AXIS, fwd_perm)
+
+        # Replicate each microbatch's last-stage hidden onto every stage (others held
+        # zero), then score the whole global batch in ONE fused CE -- a single weighted
+        # mean over all microbatches' tokens, identical to the non-pipelined oracle.
+        h_final = jax.lax.psum(h_final, STAGE_AXIS)
+        flat_batch = M * local_microbatch
+        final_hidden = final_gated_norm(final_norm(h_final.reshape(flat_batch, seq_len, cfg.hidden_dim)))
+        tokens_flat = tokens.reshape(flat_batch, seq_len)
+        weights_flat = weights.reshape(flat_batch, seq_len)
+        labels = _next_token_labels(tokens_flat)
+        ce = _ep_cross_entropy(final_hidden, output_proj, labels, weights_flat.astype(jnp.float32))
+
+        # Router z-loss: per-(stage,microbatch) it is a token mean over this expert
+        # shard's slice. The full-batch mean is the mean over stages' layers, expert
+        # shards, AND microbatches -- so sum over stages, average over the manual expert
+        # axis, and divide by both num_layers and num_microbatches.
+        z_total = jax.lax.psum(z_total, STAGE_AXIS)
+        z_total = jax.lax.psum(z_total, EXPERT_AXIS) / jax.lax.psum(1, EXPERT_AXIS)
+        aux = cfg.router_z_loss_coef * (z_total / num_layers / num_microbatches)
+        return ce + aux
+
+    def _place(x, spec):
+        return reshard(x, NamedSharding(mesh, spec))
+
+    stage_block_arrays = jax.tree_util.tree_map(_place, stage_block_arrays, stage_in_specs)
+    embed_arrays = jax.tree_util.tree_map(_place, embed_arrays, embed_in_specs)
+    layer_masks = _place(layer_masks, stage_spec)
+    token_microbatches = _place(token_microbatches, token_spec)
+    weight_microbatches = _place(weight_microbatches, token_spec)
+
+    return shard_map(
+        body,
+        mesh=mesh,
+        in_specs=(stage_in_specs, embed_in_specs, stage_spec, token_spec, token_spec),
+        out_specs=P(),
+        axis_names=frozenset({STAGE_AXIS, EXPERT_AXIS}),
+        check_vma=False,
+    )(stage_block_arrays, embed_arrays, layer_masks, token_microbatches, weight_microbatches)
+
+
+def pipeline_value_and_grad_ep_microbatched(
+    transformer: Transformer,
+    stage_block_arrays: eqx.Module,
+    block_static: eqx.Module,
+    token_ids: jax.Array,
+    loss_weight: jax.Array,
+    *,
+    mesh: jax.sharding.Mesh,
+    num_stages: int,
+    num_microbatches: int,
+) -> tuple[jax.Array, eqx.Module, eqx.Module]:
+    """``(loss, embed_grads, stage_grads)`` for the microbatched ring-EP inline pipeline.
+
+    Differentiates :func:`_ep_pipeline_loss_microbatched` with whole-program
+    ``jax.value_and_grad`` under the inline-ring + Auto-reshard patches (the same
+    wrapping as :func:`pipeline_value_and_grad_ep`). ``token_ids`` / ``loss_weight``
+    are ``[num_microbatches, microbatch, seq]``; ``mesh`` must be an
+    :func:`ep_pipeline_mesh`. Return grouping matches :func:`pipeline_value_and_grad_ep`.
+    """
+    embed_arrays, embed_static = eqx.partition(
+        (
+            transformer.token_embed,
+            transformer.embed_norm,
+            transformer.embed_gated_norm,
+            transformer.final_norm,
+            transformer.final_gated_norm,
+            transformer.output_proj,
+        ),
+        eqx.is_array,
+    )
+
+    def loss_fn(embed_arrays, stage_block_arrays):
+        return _ep_pipeline_loss_microbatched(
+            embed_arrays,
+            stage_block_arrays,
+            embed_static,
+            block_static,
+            transformer,
+            token_ids,
+            loss_weight,
+            mesh=mesh,
+            num_stages=num_stages,
+            num_microbatches=num_microbatches,
+        )
+
+    with _inline_ring_moe_mlp_context(transformer.config.num_experts), _neutralize_reshards_auto():
+        loss, (g_embed, g_stage) = jax.value_and_grad(loss_fn, argnums=(0, 1))(embed_arrays, stage_block_arrays)
+    return loss, g_embed, g_stage
