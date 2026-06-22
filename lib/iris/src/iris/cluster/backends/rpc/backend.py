@@ -244,18 +244,19 @@ class RpcTaskBackend:
         dead_workers: list[WorkerId],
         drain_workers: Sequence[WorkerId] = (),
     ) -> AutoscaleResult:
-        """Tear down dead/drained workers' slices, or run one provisioning cycle.
+        """Drain dead/drained workers' slices, or run one provisioning cycle.
 
-        With ``dead_workers`` set the autoscaler terminates their slices and
-        returns the dead workers plus their healthy siblings as
-        ``removed_workers`` (no provisioning this call); the cached stub for
-        every torn-down worker is evicted, since none will be reconciled again.
-        With only ``drain_workers`` set (cross-variant reserved-pool preemption),
-        it drains those slices through the intentional-drain path — which does
-        not feed the churn detector — and returns them the same way. Otherwise it
-        runs a refresh + probe_health + update cycle against ``residual_demand``.
-        The DB reads (worker status, demand) are done by the controller and
-        handed in; this only drives the in-memory autoscaler.
+        With ``dead_workers`` set the autoscaler drains their slices — charging the
+        loss to the group's churn detector — and returns the dead workers plus their
+        healthy siblings as ``removed_workers`` (no provisioning this call); the
+        cached stub for every torn-down worker is evicted, since none will be
+        reconciled again. With only ``drain_workers`` set (cross-variant
+        reserved-pool preemption), it drains those slices without charging the group,
+        so health and backoff signals stay clean, and returns them the same way.
+        Either way the slices are marked DRAINING and reaped by a later refresh.
+        Otherwise it runs a refresh + probe_health + update cycle against
+        ``residual_demand``. The DB reads (worker status, demand) are done by the
+        controller and handed in; this only drives the in-memory autoscaler.
         """
         if self.autoscaler is None:
             return AutoscaleResult()

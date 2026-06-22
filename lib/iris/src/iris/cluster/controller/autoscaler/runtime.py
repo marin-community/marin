@@ -751,13 +751,13 @@ class Autoscaler:
     ) -> None:
         """Fold one describe of a DRAINING slice: reap it once its VMs are gone.
 
-        A DRAINING slice was marked for cross-variant preemption and its VMs were
-        already terminated; this only watches for the deletion to land. When the
-        cloud reports it FAILED or with zero workers (allocation gone), the slice is
-        cleanly removed — without a FAILED outcome and without feeding the churn
-        detector, since the drain is intentional. A slice still stuck DRAINING past
-        the reap timeout is force-detached and re-terminated. While its VMs are still
-        deleting the slice stays DRAINING and counted against the reservation pool.
+        A DRAINING slice has already had its VMs terminated; this only watches for
+        the deletion to land. When the cloud reports it FAILED or with zero workers
+        (allocation gone), the slice is cleanly removed — without a FAILED outcome
+        and without feeding the churn detector, since the teardown is deliberate. A
+        slice still stuck DRAINING past the reap timeout is force-detached and
+        re-terminated. While its VMs are still deleting the slice stays DRAINING and
+        counted against the reservation pool.
         """
         gone = status.state == CloudSliceState.FAILED or not status.workers
         if gone:

@@ -710,10 +710,9 @@ class ScalingGroup:
     def detach_slice(self, slice_id: str, timestamp: Timestamp | None = None) -> SliceHandle | None:
         """Remove a slice from tracking and persistence without terminating it.
 
-        The cleanup step of a teardown: called by the reap once the cloud confirms
-        a DRAINING slice's VMs are gone, and by the failure path for a slice the
-        cloud already reports dead. Returns the handle so a give-up teardown can
-        still issue a terminate.
+        The cleanup step of a teardown, used once a slice's VMs are gone (or for one
+        the cloud already reports dead). Returns the handle so a caller that is
+        giving up can still issue a terminate.
         """
         timestamp = timestamp or Timestamp.now()
         with self._slices_lock:
