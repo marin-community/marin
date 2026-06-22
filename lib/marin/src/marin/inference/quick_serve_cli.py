@@ -66,14 +66,16 @@ def _resolve_chat_template(spec: str | None) -> str | None:
     return path.read_text()
 
 
-def _resolve_controller(cluster: str | None, controller: str | None) -> AbstractContextManager[str]:
-    """Return a context manager yielding a reachable controller URL.
+def _resolve_controller(cluster: str | None, controller: str | None) -> tuple[AbstractContextManager[str], str | None]:
+    """Resolve a reachable controller URL and the cluster's public dashboard origin.
 
-    ``--controller`` is used verbatim; otherwise the named ``--cluster`` config is
-    resolved and an SSH tunnel to its controller is opened.
+    Returns a context manager yielding the controller URL to talk to (a local SSH
+    tunnel for a named ``--cluster``), plus the public dashboard origin (e.g.
+    ``https://iris.oa.dev``) used to build shareable proxy links, or ``None`` when
+    a bare ``--controller`` is given (no cluster config to read it from).
     """
     if controller:
-        return contextlib.nullcontext(controller)
+        return contextlib.nullcontext(controller), None
     if not cluster:
         raise click.ClickException("Either --controller or --cluster is required.")
 
@@ -83,16 +85,17 @@ def _resolve_controller(cluster: str | None, controller: str | None) -> Abstract
         raise click.ClickException(f"Unknown cluster {cluster!r}; run `iris cluster list`.") from exc
 
     iris_config = IrisConfig.load(str(resolved))
+    dashboard_url = iris_config.proto.dashboard_url or None
     bundle = iris_config.provider_bundle()
     if iris_config.proto.controller.WhichOneof("controller") == "local":
         controller_address = LocalCluster(iris_config.proto).start()
-        return contextlib.nullcontext(controller_address)
+        return contextlib.nullcontext(controller_address), dashboard_url
 
     controller_address = iris_config.controller_address() or bundle.controller.discover_controller(
         iris_config.proto.controller
     )
     click.echo(f"Opening SSH tunnel to controller {controller_address} …")
-    return bundle.controller.tunnel(address=controller_address)
+    return bundle.controller.tunnel(address=controller_address), dashboard_url
 
 
 def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout_seconds: float) -> str:
@@ -143,7 +146,12 @@ def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout
 @click.option("--max-retries-preemption", type=int, default=10)
 @click.option("--vllm-arg", "vllm_args", multiple=True, help="Extra raw flag forwarded to `vllm serve` (repeatable).")
 @click.option("--wait/--no-wait", default=True, help="Hold the tunnel open until the endpoint is ready, then block.")
-@click.option("--wait-timeout", type=float, default=1800.0, help="Seconds to wait for vLLM to boot when --wait.")
+@click.option(
+    "--wait-timeout",
+    type=float,
+    default=1800.0,
+    help="Seconds allowed for vLLM to boot; bounds both the client wait and the in-job startup.",
+)
 def main(
     model: str,
     cluster: str | None,
@@ -182,6 +190,11 @@ def main(
     if "/" in job_name:
         raise click.ClickException("--name cannot contain '/'.")
     endpoint = endpoint_name or f"/serve/{job_name}"
+    if not endpoint.startswith("/"):
+        # The in-job registry prefixes a relative name with the job namespace, which
+        # the client cannot then resolve; require an absolute name so the printed
+        # proxy URL matches what actually registers.
+        raise click.ClickException("--endpoint-name must be absolute (start with '/'), e.g. /serve/my-model.")
     if "." in endpoint:
         raise click.ClickException("--endpoint-name cannot contain '.' (it breaks controller proxy routing).")
 
@@ -196,6 +209,9 @@ def main(
         chat_template_content=_resolve_chat_template(chat_template),
         cache_ttl_days=0 if no_cache else cache_ttl_days,
         timeout_hours=timeout_hours,
+        # The in-job vLLM startup budget must cover the same window the client waits,
+        # so raising --wait-timeout for a slow-booting model actually takes effect.
+        vllm_startup_timeout_seconds=int(wait_timeout),
         extra_vllm_args=tuple(vllm_args),
     )
 
@@ -205,7 +221,8 @@ def main(
         if regions:
             constraints = [region_constraint(regions)]
 
-    with _resolve_controller(cluster, controller) as controller_url:
+    controller_cm, dashboard_url = _resolve_controller(cluster, controller)
+    with controller_cm as controller_url:
         click.echo(f"Using controller {controller_url}")
         with IrisClient.remote(controller_url, workspace=Path.cwd()) as client:
             job = client.submit(
@@ -224,7 +241,10 @@ def main(
             click.echo(f"  model        {model}")
             click.echo(f"  tpu          {tpu}")
             click.echo(f"  endpoint     {endpoint}")
-            click.echo(f"  proxy path   {proxy_path(endpoint)}/")
+            if dashboard_url:
+                click.echo(f"  share url    {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")
+            else:
+                click.echo(f"  proxy path   {proxy_path(endpoint)}/")
             click.echo(f"  timeout      {timeout_hours:g}h")
             click.echo(f"  stop with    iris job stop {job} --cluster {cluster or ''}".rstrip())
             click.echo("")
@@ -238,6 +258,8 @@ def main(
             click.echo("")
             click.echo(f"READY — dashboard: {proxy_url}/")
             click.echo(f"        OpenAI:    {proxy_url}/v1")
+            if dashboard_url:
+                click.echo(f"        share:     {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")
             click.echo("")
             click.echo("Tunnel held open; press Ctrl-C to detach (the server stays up on Iris).")
             with contextlib.suppress(KeyboardInterrupt):
