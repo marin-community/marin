@@ -1,5 +1,5 @@
 ---
-name: finelog-rollout-rollback
+name: deploy-finelog
 description: Ship a new finelog server image with health-gated auto-rollback, roll back to a prior digest, or query evicted-segment parquet from GCS.
 ---
 
@@ -144,14 +144,5 @@ the deploy CLI docstrings are the operational reference.
 
 ## See also
 
-- `lib/finelog/scripts/safe_deploy.py` — the health-gated rollout / rollback /
-  status authority (module docstring + `rollout`/`rollback`/`status` commands).
-- `lib/finelog/src/finelog/deploy/cli.py` — `finelog deploy up/down/restart/
-  status/logs` and `gcs-query` flag reference and docstrings.
-- lib/iris/OPS.md:161 "Stats Namespaces" — the `iris.worker`/`iris.task`/
-  `iris.profile` schemas, keys, retention, and the live `finelog query` tunnel
-  (iris owns these; do not restate them here).
-- `lib/finelog/AGENTS.md` — the iris↔finelog decoupling (no imports, opaque keys,
-  no built-in auth).
-- `lib/finelog/config/<name>.yaml` — the per-cluster deployment block
-  (`image`, `port`, `remote_log_dir`, GCP target).
+- `lib/finelog/scripts/safe_deploy.py` — the rollout/rollback/status authority (owns the flags).
+- lib/iris/OPS.md "Stats Namespaces" — the `iris.*` schemas you read when querying archived parquet (iris owns them).

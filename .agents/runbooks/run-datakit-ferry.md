@@ -1,5 +1,5 @@
 ---
-name: run-datakit-ferry-manually
+name: run-datakit-ferry
 description: Run, stop, and validate a datakit ferry smoke run by hand from a dev box.
 ---
 
@@ -126,16 +126,7 @@ don't transcribe them here, they drift with the dataset.
 ## See also
 
 - `experiments/ferries/OPS.md` — the ferry's flags, `MARIN_PREFIX` default, and
-  validate invocation reference; the one-line pointer back to this runbook.
-- lib/iris/OPS.md:50 "job run gotchas" — `--memory` vs `--ram`, `-e KEY VALUE`
-  two-positional, `--extra` vs hardware, and the CPU-only-parent rule
-  (lib/iris/OPS.md:60) that explains the sizing flags above.
-- lib/iris/OPS.md:38 — `job status` / `job summary` / `job stop` syntax.
-- `run-ferries` skill — owns the scheduled canary/daily ferry loop; this runbook
-  is the by-hand analog.
-- `triage-canary` skill — when a *scheduled* datakit canary goes red, start
-  there; reproduce by hand with this runbook.
-- `stand-up-coreweave-cluster` — the GPU canary analog (manual smoke on
-  different hardware).
-- `evaluate-zephyr-perf` skill — Gate 1 runs this manual ferry to sanity-check a
-  zephyr-internals change before the perf gate.
+  validate invocation reference.
+- lib/iris/OPS.md "job run gotchas" — `--memory` vs `--ram`, `-e KEY VALUE`
+  two-positional, `--extra` vs hardware, and the CPU-only-parent rule behind the
+  sizing flags above.

@@ -34,7 +34,7 @@ If any required field is missing, ask for it before proceeding.
 - Recovery is stop then resubmit at the job level.
 - Cluster-level actions are out of scope. Do not restart, recreate, or otherwise
   mutate the cluster unless the user gives explicit consent in the current thread.
-- For TPU bad-node errors, escalate to **debug** → `.agents/runbooks/triage-tpu-worker-failure.md` (rule out a wedged container before any node delete).
+- For TPU bad-node errors, escalate to **debug**; rule out a wedged container before any node delete (`lib/iris/OPS.md` "TPU Bad-Node Recovery").
 
 ## Monitoring Ownership and Duration
 
@@ -135,7 +135,7 @@ part of the setup. The state file allows resume after context reset.
    capacity wait — do not run cluster update/recreate/restart actions. Continue
    waiting on cadence, or stop+resubmit only if user explicitly asks. But if the
    *same* pending_reason text appears across many unrelated jobs, that is a frozen
-   scheduler, not capacity — see `.agents/runbooks/diagnose-stuck-pending-job.md`.
+   scheduler, not capacity — see `lib/iris/OPS.md` "Troubleshooting" (Job stuck PENDING).
 
    Treat RUNNING as controller-level signal only; confirm allocation via expected
    W&B run when possible.

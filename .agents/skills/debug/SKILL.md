@@ -16,8 +16,8 @@ the matching `OPS.md` section:
 
 | Symptom | Read |
 |---|---|
-| Job stuck PENDING (capacity vs frozen scheduler vs reservation-taint) | Runbook: `.agents/runbooks/diagnose-stuck-pending-job.md` |
-| TPU task failing (`No accelerator found`, `FAILED_PRECONDITION`, `Device or resource busy`) | Runbook: `.agents/runbooks/triage-tpu-worker-failure.md` (rule out a wedged container *before* deleting a node) |
+| Job stuck PENDING (capacity vs frozen scheduler vs reservation-taint) | `lib/iris/OPS.md` "Troubleshooting" (Job stuck PENDING) |
+| TPU task failing (`No accelerator found`, `FAILED_PRECONDITION`, `Device or resource busy`) | `lib/iris/OPS.md` "TPU Bad-Node Recovery" — rule out a wedged container holding the iommu group *before* deleting a node |
 | Other stuck job, resource leak, controller stalled | `lib/iris/OPS.md` → SQL Queries, Process Inspection & Profiling, Known Bugs, Troubleshooting |
 | Iris task misbehaving, container inspection, profiling a running task | `lib/iris/OPS.md` → Task Operations, Process Inspection & Profiling |
 | Zephyr pipeline slow / stragglers / data skew / worker failures | `lib/zephyr/OPS.md` → Diagnostic Patterns, Observability |
@@ -26,7 +26,7 @@ Operational guardrails (never modify the controller DB, prefer
 `iris process profile` over SSH, never run a full `iris cluster restart`
 without approval) live next to the relevant commands in `OPS.md` — read those
 sections. The restart/redeploy nuance — a restart alone re-pulls a stale
-`:latest` — is owned by `.agents/runbooks/deploy-controller-fix.md`. After a TPU
+`:latest` — is owned by `.agents/runbooks/deploy-iris-gcp.md`. After a TPU
 recovery or zephyr fix, return to the active babysit loop (`babysit-job` or
 `babysit-zephyr`).
 

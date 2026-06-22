@@ -164,7 +164,7 @@ uv run iris --config=lib/iris/config/marin.yaml \
   -- python -m experiments.ferries.canary_ferry
 ```
 
-Launch (GPU / CoreWeave): the `CANARY_ACCELERATOR=gpu` submit command, region-correct prefix/endpoint, and the multinode canary smoke walkthrough are owned by `.agents/runbooks/stand-up-coreweave-cluster.md`.
+Launch (GPU / CoreWeave): the `CANARY_ACCELERATOR=gpu` submit command, region-correct prefix/endpoint, and the multinode canary smoke walkthrough are owned by `.agents/runbooks/deploy-iris-coreweave.md`.
 
 If canary fails: triage and identify root cause, only then open a focused PR if a canary script/config change is necessary, relaunch and monitor to terminal state.
 

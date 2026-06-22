@@ -2,7 +2,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The mechanical spine of the deploy-controller-fix runbook.
+"""Build and verify the Iris controller image — the mechanical spine of the
+"push a merged fix" path in the deploy-iris-gcp runbook.
 
 Deploying a merged controller/iris fix is three steps: rebuild the image, restart
 the controller, confirm the controller is actually running the new code. Two of
@@ -20,7 +21,7 @@ them:
 
 The restart in between is deliberately NOT automated here. It is human-gated
 (controller-only vs. full restart, ``--skip-checkpoint`` recovery) and the
-runbook owns when and how. See .agents/runbooks/deploy-controller-fix.md.
+runbook owns when and how. See .agents/runbooks/deploy-iris-gcp.md.
 """
 
 from __future__ import annotations
@@ -96,7 +97,7 @@ def _existing_run_ids(repo: str) -> set[int]:
 
 @click.group()
 def cli() -> None:
-    """Build and verify the Iris controller image (deploy-controller-fix spine)."""
+    """Build and verify the Iris controller image (deploy-iris-gcp deploy spine)."""
 
 
 @cli.command("build")

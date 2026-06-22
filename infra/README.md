@@ -20,7 +20,7 @@ and [zephyr](../lib/zephyr/README.md) for data pipelines.
 
 To stand up a brand-new cluster from scratch — the ordered bootstrap sequence
 (IAM, buckets, registry mirror, configs, controller) — see
-[`.agents/runbooks/new-cluster.md`](../.agents/runbooks/new-cluster.md). To
+[`.agents/runbooks/deploy-iris-gcp.md`](../.agents/runbooks/deploy-iris-gcp.md). To
 operate the self-hosted TPU CI runner fleet (`tpu-ci/`), see
 [`.agents/runbooks/tpu-ci-fleet.md`](../.agents/runbooks/tpu-ci-fleet.md).
 

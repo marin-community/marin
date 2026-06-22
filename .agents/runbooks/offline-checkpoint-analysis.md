@@ -32,17 +32,16 @@ loop may already be dead.
   (state filter, `LIMIT`) are fine and are the *first* step, not a banned one.
 - **Never trigger a new checkpoint on a controller you suspect is wedged.**
   `iris cluster controller checkpoint` briefly stalls the controller; if the
-  scheduling loop has already crashed (see `diagnose-stuck-pending-job`), the
-  checkpoint can hang and buys you nothing — checkpoints already land in GCS
-  roughly hourly. Copy the existing one instead.
+  scheduling loop has already crashed, the checkpoint can hang and buys you
+  nothing — checkpoints already land in GCS roughly hourly. Copy the existing
+  one instead.
 - **Read-only, always.** Even on an offline copy: **never modify the controller
   DB** without explicit user approval (lib/iris/OPS.md:113). The offline file is
   for inspection; fixes go through migrations, not `UPDATE`.
 - **Snapshot staleness is the standing gotcha.** A copied checkpoint or a stale
   `/tmp/iris-debug/controller.sqlite3` may be older than the event you're
   chasing. Treat offline counts (e.g. "0 split jobs", "row not present") as
-  *suggestive*, not authoritative, and confirm against the live DB
-  (`.agents/ops/2026-04-28-iris-split-slice-and-orphan-attempts.md:64`).
+  *suggestive*, not authoritative, and confirm against the live DB.
 - **Cross-region cost.** Copy from the cluster's own region bucket
   (`gs://marin-us-central2/...` for marin). Don't pull checkpoints or log shards
   across regions.
@@ -84,9 +83,9 @@ sqlite3 /tmp/controller.sqlite3 "SELECT task_id, max(attempt_id) FROM task_attem
 
 `gcloud storage cp`, **not** `gsutil` (deprecated at this org). Note the
 checkpoint's timestamp against your incident window — if it pre-dates the event,
-the row you want may simply not be in it yet (this exact thing refuted three
-hypotheses in `.agents/ops/2026-04-21-iris-scheduler-freeze.md:33`). That is a
-staleness artifact, not a finding.
+the row you want may simply not be in it yet. A stale snapshot has quietly
+refuted real-looking hypotheses before; that is a staleness artifact, not a
+finding.
 
 ### 3. Query the parquet log shards directly (for log history)
 
@@ -115,18 +114,16 @@ con.execute("""
 Auth is ADC (`gcloud auth application-default login`). **Do not** reach for
 duckdb's native `gs://` httpfs extension — it wants HMAC keys and rejects ADC;
 the `CREATE SECRET` path is a 10-minute dead end. The `pyarrow.dataset` +
-`con.register` path is the one that works
-(`.agents/ops/2026-04-21-iris-scheduler-freeze.md:78`). For low-volume audit
-events, `iris process logs --since 24h | grep 'event=...'` is simpler — see
-lib/iris/OPS.md:141.
+`con.register` path is the one that works. For low-volume audit events,
+`iris process logs --since 24h | grep 'event=...'` is simpler — see
+lib/iris/OPS.md "Audit events".
 
 ## Verify
 
 - **Re-confirm any actionable conclusion against the live DB.** If the offline
   scan says a poisoned/orphan row exists (or doesn't), re-run the narrowest form
   of that query via `iris query` before acting. The snapshot may pre-date the
-  state you care about
-  (`.agents/ops/2026-04-28-iris-split-slice-and-orphan-attempts.md:64`).
+  state you care about.
 - **Confirm you took no checkpoint on a wedged controller.** If you ran step 2
   by copying an existing file, the controller never paused. If scheduling was
   frozen and you reflexively ran `iris cluster controller checkpoint`, check
@@ -141,9 +138,8 @@ scheduling loop also uses. An expensive scan blocks that connection, so a "just
 checking" query becomes a scheduling stall. Taking a fresh checkpoint has the
 same failure mode plus a worse one: when the scheduling loop has *already*
 crashed (a `ManagedThread` dies silently, logs `<name> crashed`, and is never
-respawned — `.agents/ops/2026-04-21-iris-scheduler-freeze.md:56`), the
-checkpoint can hang and you learn nothing the hourly GCS checkpoint wouldn't
-have told you. Copying the existing checkpoint sidesteps both: zero controller
+respawned), the checkpoint can hang and you learn nothing the hourly GCS
+checkpoint wouldn't have told you. Copying the existing checkpoint sidesteps both: zero controller
 impact, and the data is at most ~an hour stale — which is exactly why the
 verify-against-live step exists.
 
@@ -157,14 +153,3 @@ scan too few.
 - lib/iris/OPS.md:104 "SQL Queries" — the query catalog, state codes, active-state
   and committed-resource sharp edges, and the audit-event grep. This runbook owns
   the *offline procedure*; that section owns the *query reference*.
-- lib/iris/OPS.md:151 "Offline checkpoint analysis" — the reference pointer back
-  here.
-- `diagnose-stuck-pending-job` — links here when a frozen-scheduler hypothesis
-  needs a deep cross-table or log scan; a silent `ManagedThread` death is the
-  classic reason the live DB looks fine but scheduling has stopped.
-- `repair-task-attempts-invariant` — the fix side when an offline scan turns up a
-  `tasks.current_attempt_id` / `task_attempts` mismatch.
-- `.agents/ops/2026-04-21-iris-scheduler-freeze.md` — the duckdb-over-GCS recipe,
-  the copy-existing-checkpoint guidance, and the ADC-vs-HMAC dead end.
-- `.agents/ops/2026-04-28-iris-split-slice-and-orphan-attempts.md` — the
-  verify-against-live-first lesson when a snapshot pre-dates the incident.

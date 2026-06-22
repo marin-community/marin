@@ -2,7 +2,7 @@
 
 **Issue**: [#2822 -- Iris: Implement CoreWeave platform](https://github.com/marin-community/marin/issues/2822)
 
-> Operating a cluster? Start at `.agents/runbooks/stand-up-coreweave-cluster.md`
+> Operating a cluster? Start at `.agents/runbooks/deploy-iris-coreweave.md`
 > for the guarded walkthrough (cost guardrails, the shared `iris-ci` warning,
 > zero-to-job, the canary smoke, nodepool cleanup). This document is the detailed
 > reference it points into — RBAC, config fields, instance-type naming, and the

@@ -33,7 +33,7 @@ Workflow: dry-run locally (`iris cluster controller serve --dry-run`) -> capture
 
 If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
 
-**Deploying a merged fix is not just a restart.** marin pins `iris-controller:latest`, so a restart only re-pulls whatever `:latest` currently is — you must rebuild the image first, then restart, then verify the running git-hash. Full procedure and the stale-`:latest` trap (which cost ~5 red-canary days): `.agents/runbooks/deploy-controller-fix.md`.
+**Deploying a merged fix is not just a restart.** marin pins `iris-controller:latest`, so a restart only re-pulls whatever `:latest` currently is — you must rebuild the image first, then restart, then verify the running git-hash. Full procedure and the stale-`:latest` trap (which cost ~5 red-canary days): `.agents/runbooks/deploy-iris-gcp.md`.
 
 ## Job Management
 
@@ -162,7 +162,7 @@ iris cluster controller checkpoint
 
 Time-series measurements live in finelog stats namespaces, not the controller SQLite DB (see `AGENTS.md` "Decisions vs measurements"). The controller bundles a StatsService alongside its log server (started by `_start_local_log_server` in `controller/controller.py`); both are mounted on the same uvicorn app and reachable at the `/system/log-server` endpoint advertised by `cluster_config.endpoints` (or, in fallback mode, at the URL printed as `Local log server ready at <addr>` on controller startup).
 
-To deploy or roll back the finelog server itself, or to query stats parquet that has evicted to GCS, see `.agents/runbooks/finelog-rollout-rollback.md`.
+To deploy or roll back the finelog server itself, or to query stats parquet that has evicted to GCS, see `.agents/runbooks/deploy-finelog.md`.
 
 Namespaces:
 
@@ -210,7 +210,7 @@ iris key list / iris key revoke       # manage API keys
 
 | Symptom | Diagnostic |
 |---------|-----------|
-| Job stuck PENDING | First read the *spread* of pending-reasons (uniform text across unrelated jobs ⇒ frozen scheduler, not capacity). Decision tree: `.agents/runbooks/diagnose-stuck-pending-job.md`. Quick capacity check: `iris rpc controller get-scheduler-state`; quota: `iris query "SELECT name, consecutive_failures, quota_reason FROM scaling_groups WHERE quota_reason != ''"` |
+| Job stuck PENDING | Read the *spread* of pending-reasons first. Uniform fallback text across unrelated jobs ⇒ **frozen scheduler** (the scheduling thread died; recovers only on a human-gated controller restart — see `.agents/runbooks/deploy-iris-gcp.md`), not capacity. Varied/job-specific reasons ⇒ a real per-job cause: capacity/quota — `iris rpc controller get-scheduler-state`, quota `iris query "SELECT name, consecutive_failures, quota_reason FROM scaling_groups WHERE quota_reason != ''"`. A `--reserve` parent PENDING while its `:reservation:` holder is RUNNING is the reservation-taint bug (a CPU parent pinned by an EQ taint to the reservation's TPU workers) — resubmit without `--reserve`. |
 | Workers not joining (GCP) | `iris cluster vm status` for slice lifecycle. SSH to VM, check bootstrap logs. |
 | Autoscaler not scaling | `iris rpc controller get-autoscaler-status` — check `backoff_until_ms`, `consecutive_failures`. |
 | Task retrying | `iris job bug-report /user/job` — full attempt history with per-attempt errors. |
@@ -219,7 +219,7 @@ iris key list / iris key revoke       # manage API keys
 
 ## Known Bugs
 
-1. **Committed resource leak** (`transitions.py`): `_decommit_worker_resources()` can miss certain task termination paths, leaving stale committed resources on workers. Symptom: workers show high committed CPU/memory/TPU with zero active tasks. Detection queries (with the ghost-co-tenant and split-slice siblings): `.agents/runbooks/repair-task-attempts-invariant.md`.
+1. **Committed resource leak** (`transitions.py`): `_decommit_worker_resources()` can miss certain task termination paths, leaving stale committed resources on workers. Symptom: workers show high committed CPU/memory/TPU with zero active tasks.
 
 2. **Worker-failure thread stall on gcloud subprocess** (#3678): The reaper thread calls `notify_worker_failed` -> `scale_down` -> `terminate` which runs a synchronous `gcloud compute tpus tpu-vm delete`. If the gcloud API hangs, worker removals queue up. Symptoms: tasks stuck in ASSIGNED (9), stale `last_heartbeat_ms`. Diagnose with `py-spy dump` — look for `subprocess.run` -> `terminate` on the reaper thread. Kill the stuck gcloud process to unblock.
 
@@ -264,7 +264,7 @@ gcloud compute tpus tpu-vm list --project=hai-gcp-models --zone=- \
 - `FAILED_PRECONDITION`
 - `Device or resource busy`
 
-> **Before you delete a node:** these same strings are also produced by a *wedged iris-managed container* still holding the iommu group on an otherwise healthy node — deleting the node then wastes a live slice and does not fix the wedge. Rule that out first via `.agents/runbooks/triage-tpu-worker-failure.md`; the recipe below is the genuinely-bad-node branch.
+> **Before you delete a node:** these same strings are also produced by a *wedged iris-managed container* still holding the iommu group on an otherwise healthy node — deleting the node then wastes a live slice and does not fix the wedge. Rule that out first (SSH to the worker and check for a stuck iris container holding the device); the recipe below is the genuinely-bad-node branch.
 
 **Recovery:** extract worker IP from logs -> map to VM name (`gcloud compute tpus tpu-vm list --zone <ZONE> --format="table(name,networkEndpoints[0].ipAddress)"`) -> delete bad node (`gcloud compute tpus tpu-vm delete <NAME> --zone <ZONE> --quiet`) -> resubmit job.
 
@@ -283,7 +283,7 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 
 ## CoreWeave (GPU) Operations
 
-Procedure — stand up a cluster to a running job, the multinode canary smoke, nodepool scale/delete/stuck-deletion escape: `.agents/runbooks/stand-up-coreweave-cluster.md`. Reference — RBAC, config fields, instance-type naming, credentials: [`docs/coreweave.md`](docs/coreweave.md). Use `lib/iris/config/coreweave-*.yaml` for CoreWeave cluster configs.
+Procedure — stand up a cluster to a running job, the multinode canary smoke, nodepool scale/delete/stuck-deletion escape: `.agents/runbooks/deploy-iris-coreweave.md`. Reference — RBAC, config fields, instance-type naming, credentials: [`docs/coreweave.md`](docs/coreweave.md). Use `lib/iris/config/coreweave-*.yaml` for CoreWeave cluster configs.
 
 ## CI Workflows
 

@@ -1,5 +1,5 @@
 ---
-name: stand-up-coreweave-cluster
+name: deploy-iris-coreweave
 description: Bring a CoreWeave GPU cluster from zero to a running job, run the multinode canary smoke, and clean up nodepools afterward.
 ---
 
@@ -200,15 +200,8 @@ not a fault — don't redrive it.
 
 ## See also
 
-- `lib/iris/docs/coreweave.md` — the reference half this runbook leans on: RBAC
-  table (§5, :425), config fields (§6, :446), instance-type naming (§7, :493),
-  credential summary (§10/§14, :584/:750), timeouts (§11, :609). Read it before
+- `lib/iris/docs/coreweave.md` — the reference half this runbook leans on (RBAC,
+  config fields, instance-type naming, credentials, timeouts). Read it before
   operating a new region.
-- lib/iris/OPS.md:285 "CoreWeave (GPU) Operations" — the one-line pointer + the
-  `coreweave-*.yaml` config note; lib/iris/OPS.md:289 "CI Workflows" for the
-  shared `iris-ci` canary/smoke rows.
-- `run-ferries` and `triage-canary` skills — the GPU canary lane that submits and
-  triages the smoke this runbook stands the cluster up for.
-- [deploy-controller-fix](deploy-controller-fix.md) — if the controller is
-  running stale code after a merged fix (the `:latest` trap), not a stand-up
-  problem.
+- [deploy-iris-gcp](deploy-iris-gcp.md) — pushing a merged controller fix (the
+  stale-`:latest` trap), which is a deploy problem, not a stand-up one.

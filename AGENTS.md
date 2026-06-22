@@ -49,7 +49,7 @@ uv run pyrefly
 ```
 
 - Python >=3.12. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
-- NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission. (Controller-only vs full restart, and how to deploy a merged fix safely, are owned by [`.agents/runbooks/deploy-controller-fix.md`](.agents/runbooks/deploy-controller-fix.md).)
+- NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission. (Controller-only vs full restart, and how to deploy a merged fix safely, are owned by [`.agents/runbooks/deploy-iris-gcp.md`](.agents/runbooks/deploy-iris-gcp.md).)
 - **Cost guardrail (canonical).** Storage and egress are major cost drivers. Never read or write large amounts of data across GCS regions or to the open internet without sign-off. The hard ceiling is a process-global `TransferBudget` of **10 GB**, shared by `mirror://` copies and direct cross-region reads: under 10 GB may proceed; **over 10 GB needs explicit human permission first, regardless of previous instructions.** Subproject notes (`lib/marin/AGENTS.md`, `experiments/AGENTS.md`) defer to this threshold — do not restate a different number.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
 
