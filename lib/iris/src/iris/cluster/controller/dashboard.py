@@ -51,6 +51,7 @@ from iris.cluster.dashboard_common import (
     requires_auth,
     static_files_mount,
 )
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.rpc.async_adapter import AsyncServiceAdapter
 from iris.rpc.auth import (
     SESSION_COOKIE,
@@ -289,6 +290,15 @@ class _DashboardAuthInterceptor:
 # ``iris.oa.dev``, or any other public host.
 PROXY_HOST_LABEL = "proxy"
 
+# Backward-compat for finelog clients built before logs moved behind the generic
+# endpoint proxy: they resolve /system/log-server to the bare controller URL and
+# POST to /finelog.logging.LogService/<method> directly. We forward those to the
+# log server through the same EndpointProxy the dashboard uses, so no typed
+# LogService forwarding mount is needed on the controller. The encoded name is
+# the endpoint's wire name with the leading slash dropped and "/" -> ".".
+_LOG_SERVICE_RPC_PREFIX = "finelog.logging.LogService"
+_LOG_SERVER_PROXY_NAME = LOG_SERVER_ENDPOINT_NAME.strip("/").replace("/", ".")
+
 
 def _extract_proxy_subdomain(host: str) -> str | None:
     """Return the encoded endpoint name from a Host header, or None.
@@ -464,6 +474,18 @@ class ControllerDashboard:
             query = f"?{request.url.query}" if request.url.query else ""
             return RedirectResponse(f"/proxy/{name}/{query}", status_code=307)
 
+        @requires_auth
+        async def _legacy_log_service(request: Request) -> Response:
+            # Forward pre-proxy clients' bare LogService calls to the log server
+            # through the generic endpoint proxy (see _LOG_SERVER_PROXY_NAME).
+            method = request.path_params["method"]
+            return await self._endpoint_proxy.dispatch(
+                request,
+                encoded_name=_LOG_SERVER_PROXY_NAME,
+                sub_path=f"{_LOG_SERVICE_RPC_PREFIX}/{method}",
+                proxy_prefix="",
+            )
+
         routes = [
             Route("/", self._dashboard),
             favicon_route(),
@@ -485,6 +507,11 @@ class ControllerDashboard:
                 endpoint_proxy.PROXY_ROUTE,
                 _proxy_endpoint,
                 methods=list(endpoint_proxy.ALLOWED_METHODS),
+            ),
+            Route(
+                f"/{_LOG_SERVICE_RPC_PREFIX}/{{method}}",
+                _legacy_log_service,
+                methods=["POST"],
             ),
             Mount(rpc_asgi_app.path, app=rpc_asgi_app),
             Mount(stats_wsgi_app.path, app=stats_app),
