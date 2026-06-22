@@ -79,6 +79,7 @@ constexpr int kProbeDispatchTokens = 4096;
 constexpr int kProbeDispatchHidden = 2048;
 constexpr int kProbeDispatchTopK = 2;
 constexpr int kProbeDispatchExperts = 128;
+constexpr const char* kCounterTimeoutEnv = "LEVANTER_DEEPEP_COUNTER_TIMEOUT_SECONDS";
 
 struct ScopedCudaAsyncAllocation {
   void* ptr = nullptr;
@@ -180,6 +181,29 @@ bool InternodeDebugEnabled() {
     return value != nullptr && value[0] != '\0' && value[0] != '0';
   }();
   return enabled;
+}
+
+int CounterTimeoutSeconds() {
+  static const int timeout_seconds = []() {
+    const char* value = std::getenv(kCounterTimeoutEnv);
+    if (value == nullptr || value[0] == '\0') {
+      return kCounterTimeoutSeconds;
+    }
+    char* end = nullptr;
+    const long parsed = std::strtol(value, &end, 10);
+    if (end == value || *end != '\0' || parsed <= 0 || parsed > 3600) {
+      fprintf(
+          stderr,
+          "DEEPEP_COUNTER_TIMEOUT_ENV_INVALID {\"env\":\"%s\",\"value\":\"%s\",\"default_seconds\":%d}\n",
+          kCounterTimeoutEnv,
+          value,
+          kCounterTimeoutSeconds);
+      fflush(stderr);
+      return kCounterTimeoutSeconds;
+    }
+    return static_cast<int>(parsed);
+  }();
+  return timeout_seconds;
 }
 
 void LogInternodeStage(
@@ -2245,6 +2269,7 @@ void ResetRecvCounters(DeviceRuntime& runtime, int num_local_experts) {
 
 void WaitForRecvCounts(DeviceRuntime& runtime, int num_local_experts, int* num_recv_tokens_out) {
   auto start_time = std::chrono::high_resolution_clock::now();
+  const int timeout_seconds = CounterTimeoutSeconds();
   while (true) {
     int num_recv_tokens = static_cast<int>(*runtime.moe_recv_counter);
     bool ready = (num_recv_tokens >= 0);
@@ -2257,7 +2282,7 @@ void WaitForRecvCounts(DeviceRuntime& runtime, int num_local_experts, int* num_r
     }
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::high_resolution_clock::now() - start_time);
-    if (elapsed.count() > kCounterTimeoutSeconds) {
+    if (elapsed.count() > timeout_seconds) {
       throw std::runtime_error("DeepEP intranode JAX dispatch timed out waiting for recv counters");
     }
   }
@@ -2270,6 +2295,7 @@ void WaitForInternodeRecvCounts(
     int* num_rdma_recv_tokens_out,
     int call_sequence = -1) {
   auto start_time = std::chrono::high_resolution_clock::now();
+  const int timeout_seconds = CounterTimeoutSeconds();
   while (true) {
     int num_recv_tokens = static_cast<int>(*runtime.moe_recv_counter);
     int num_rdma_recv_tokens = static_cast<int>(*runtime.moe_recv_rdma_counter);
@@ -2284,16 +2310,29 @@ void WaitForInternodeRecvCounts(
     }
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::high_resolution_clock::now() - start_time);
-    if (elapsed.count() > kCounterTimeoutSeconds) {
+    if (elapsed.count() > timeout_seconds) {
+      int ready_expert_counters = 0;
+      int first_pending_expert = -1;
+      for (int i = 0; i < num_local_experts; ++i) {
+        if (runtime.moe_recv_expert_counter[i] >= 0) {
+          ++ready_expert_counters;
+        } else if (first_pending_expert < 0) {
+          first_pending_expert = i;
+        }
+      }
       fprintf(
           stderr,
           "DEEPEP_INTERNODE_COUNTER_TIMEOUT {\"rank\":%d,\"call_sequence\":%d,\"num_recv_tokens\":%d,"
-          "\"num_rdma_recv_tokens\":%d,\"num_local_experts\":%d,\"expert_counters\":[",
+          "\"num_rdma_recv_tokens\":%d,\"num_local_experts\":%d,\"ready_expert_counters\":%d,"
+          "\"first_pending_expert\":%d,\"timeout_seconds\":%d,\"expert_counters\":[",
           runtime.rank,
           call_sequence,
           num_recv_tokens,
           num_rdma_recv_tokens,
-          num_local_experts);
+          num_local_experts,
+          ready_expert_counters,
+          first_pending_expert,
+          timeout_seconds);
       for (int i = 0; i < num_local_experts; ++i) {
         fprintf(stderr, "%s%d", i == 0 ? "" : ",", static_cast<int>(runtime.moe_recv_expert_counter[i]));
       }
