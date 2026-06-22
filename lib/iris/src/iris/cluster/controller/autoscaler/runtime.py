@@ -665,7 +665,7 @@ class Autoscaler:
             if status is None:
                 continue
             if group.slice_lifecycle(slice_id) == SliceLifecycleState.DRAINING:
-                self._fold_draining_slice(group, slice_id, handle, status, timestamp)
+                self._fold_draining_slice(group, slice_id, status, timestamp)
                 continue
             if status.state == CloudSliceState.READY:
                 worker_ids = [w.worker_id for w in status.workers]
@@ -742,7 +742,6 @@ class Autoscaler:
         self,
         group: ScalingGroup,
         slice_id: str,
-        handle: SliceHandle,
         status: SliceStatus,
         timestamp: Timestamp,
     ) -> None:
@@ -1086,9 +1085,5 @@ class Autoscaler:
         return result.sibling_worker_ids
 
     def reservation_ledger(self) -> ReservationLedger:
-        """Build the per-tick reservation chip ledger from live group state.
-
-        The single capacity view both the scheduler's cross-variant preemption pass
-        and the autoscaler's launch planner read.
-        """
+        """Build the per-tick reservation chip ledger from live group state."""
         return build_reservation_ledger(self._groups.values())

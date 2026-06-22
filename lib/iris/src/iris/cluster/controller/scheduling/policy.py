@@ -557,46 +557,23 @@ class _VictimSlice:
     tasks: tuple[JobName, ...]
 
 
-def run_reserved_pool_preemption(
-    unscheduled_tasks: list[PreemptionCandidate],
+def _victim_slices_by_pool(
     running_tasks_info: list[RunningTaskInfo],
     ledger: ReservationLedger,
-) -> tuple[list[tuple[JobName, JobName]], set[WorkerId]]:
-    """Evict cross-variant victims on a full fungible reservation pool.
+) -> dict[str, list[_VictimSlice]]:
+    """Group evictable running tasks into per-pool victim slices.
 
-    A fungible reservation's chips are interchangeable across slice sizes, so a
-    higher-band preemptor targeting a full reserved pool can evict the minimal
-    set of lowest-band victim slices of ANY variant in the SAME pool to free
-    enough chips. The same-variant preemption gate cannot do this; this pass
-    runs only over reserved pools and only on chip-count arithmetic.
-
-    The pass does not re-preempt a pool whose deficit is already being addressed:
-    its incoming chips (free now plus chips a drain is in the middle of freeing)
-    already cover the need, or a replacement slice of the preemptor's own variant
-    is already booting. That direct observation of in-flight recovery — not a
-    timer — is what holds further preemptions back across the drain-and-reprovision
-    window.
-
-    Band rules mirror the same-variant preemption pass: a preemptor evicts only
-    strictly lower-priority victims (``band_sort_key > candidate.band``), and a
-    BATCH preemptor never preempts. Victims are chosen lowest-priority-then-
-    smallest so the eviction is minimal; if no combination of evictable victims
-    covers the deficit, nothing is evicted (no partial work).
-
-    Returns ``(preemptor, victim)`` pairs (one per evicted member task) and the
-    set of worker ids whose slices the autoscaler must drain.
+    Victims are grouped by physical slice because the drain tears down a whole
+    slice: every task on it is evicted together and its chips free once (grouping
+    by task would double-count chips and silently kill a sibling task the pass
+    never checked). A coscheduled job spanning multiple slices is excluded —
+    preempting one slice's tasks cascades to siblings on the others, which the
+    drain never reaps. Tasks the same-variant pass already claimed this tick are
+    skipped so their chips are not double-counted.
     """
-    # Group running victims by physical slice. The drain tears down a whole slice,
-    # so every task on it is evicted together and the slice's chips free once
-    # (grouping by task would double-count chips and silently kill a sibling task
-    # the pass never checked). A coscheduled job spanning multiple slices cannot be
-    # evicted safely here — preempting one slice's tasks cascades to siblings on
-    # the others, which the drain never reaps — so those slices are excluded.
     slice_members: dict[str, list[RunningTaskInfo]] = defaultdict(list)
     parent_slices: dict[JobName, set[str]] = defaultdict(set)
     for task in running_tasks_info:
-        # Skip tasks the same-variant pass already claimed this tick: re-using one
-        # would double-count its chips and emit a duplicate PREEMPT for it.
         if task.already_preempted:
             continue
         slice_id = ledger.worker_slice.get(str(task.worker_id))
@@ -630,6 +607,39 @@ def run_reserved_pool_preemption(
                 tasks=tuple(m.task_id for m in members),
             )
         )
+    return victims_by_pool
+
+
+def run_reserved_pool_preemption(
+    unscheduled_tasks: list[PreemptionCandidate],
+    running_tasks_info: list[RunningTaskInfo],
+    ledger: ReservationLedger,
+) -> tuple[list[tuple[JobName, JobName]], set[WorkerId]]:
+    """Evict cross-variant victims on a full fungible reservation pool.
+
+    A fungible reservation's chips are interchangeable across slice sizes, so a
+    higher-band preemptor targeting a full reserved pool can evict the minimal
+    set of lowest-band victim slices of ANY variant in the SAME pool to free
+    enough chips. The same-variant preemption gate cannot do this; this pass
+    runs only over reserved pools and only on chip-count arithmetic.
+
+    The pass does not re-preempt a pool whose deficit is already being addressed:
+    its incoming chips (free now plus chips a drain is in the middle of freeing)
+    already cover the need, or a replacement slice of the preemptor's own variant
+    is already booting. That direct observation of in-flight recovery — not a
+    timer — is what holds further preemptions back across the drain-and-reprovision
+    window.
+
+    Band rules mirror the same-variant preemption pass: a preemptor evicts only
+    strictly lower-priority victims (``band_sort_key > candidate.band``), and a
+    BATCH preemptor never preempts. Victims are chosen lowest-priority-then-
+    smallest so the eviction is minimal; if no combination of evictable victims
+    covers the deficit, nothing is evicted (no partial work).
+
+    Returns ``(preemptor, victim)`` pairs (one per evicted member task) and the
+    set of worker ids whose slices the autoscaler must drain.
+    """
+    victims_by_pool = _victim_slices_by_pool(running_tasks_info, ledger)
 
     # ``incoming`` (free now + draining chips) is what a deficit is measured
     # against, so an already-draining victim isn't double-counted; ``replacement``
