@@ -12,9 +12,8 @@ configured to write. This backend runs a daily-cost query via the ``bq`` CLI
 Net cost adds the (negative) credits to gross ``cost``; both are cast to
 ``NUMERIC`` before summing to avoid float rounding.
 
-Note: the ``hai-gcp-models`` billing account is Stanford-managed, so its export
-dataset may be inaccessible from CI. Point ``billing_export_table`` at a
-dataset the runner's service account can read.
+The billing export must be enabled and readable by the runner's service
+account; point ``billing_export_table`` at that dataset.
 """
 
 from __future__ import annotations

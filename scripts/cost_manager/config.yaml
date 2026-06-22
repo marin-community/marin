@@ -33,10 +33,10 @@ providers:
     api_key_env: ANTHROPIC_ADMIN_KEY
     group_by: [description]
 
-  # GCP costs from the BigQuery billing export. Disabled by default: the
-  # hai-gcp-models billing account is Stanford-managed, so its export dataset
-  # may be unreadable from CI. Enable once `billing_export_table` points at a
-  # dataset the runner's service account can query.
+  # GCP costs from the BigQuery billing export. Disabled by default: the Cloud
+  # Billing API exposes no actual spend, so detailed cost requires the BigQuery
+  # billing export to be enabled. Enable once `billing_export_table` points at
+  # an export dataset the runner's service account can query.
   - name: gcp
     enabled: false
     project: hai-gcp-models

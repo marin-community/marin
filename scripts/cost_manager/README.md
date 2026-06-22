@@ -54,7 +54,7 @@ Secrets are passed via the environment only — `config.yaml` holds the env-var
 |----------|--------|------------------|--------|
 | **openai** | Costs API `GET /v1/organization/costs` | `OPENAI_ADMIN_KEY` | Works. Needs an **org Admin key** with the dashboard "Usage" permission — a project `sk-proj-…` key is rejected. |
 | **anthropic** | Admin Cost Report `GET /v1/organizations/cost_report` | `ANTHROPIC_ADMIN_KEY` | Works. Needs an **Admin key** (`sk-ant-admin01-…`). Amounts arrive in cents → converted to USD. |
-| **gcp** | BigQuery billing export (`bq query`) | none (ADC / runner SA) | Disabled by default. The Cloud Billing API exposes no spend; detailed cost lives only in the BigQuery export. The `hai-gcp-models` billing account is Stanford-managed, so its export dataset may be unreadable from CI — point `billing_export_table` at a readable dataset and set `enabled: true`. |
+| **gcp** | BigQuery billing export (`bq query`) | none (ADC / runner SA) | Disabled by default. The Cloud Billing API exposes no actual spend; detailed cost lives only in the BigQuery export. Enable once `billing_export_table` points at an export dataset the runner's service account can read. |
 | **coreweave** | Prometheus usage API (`observe.coreweave.com`) × rate card | `COREWEAVE_API_TOKEN` | Disabled by default, **estimate only**. CoreWeave has no dollar API; cost is `usage × rate_card` and tagged `amount_kind=estimated`. Fill in real `unit_rate`s and a token with the Observability Viewer role. |
 
 Adding a provider: drop a `fetch(config, window) -> list[CostEvent]` module in
