@@ -454,3 +454,39 @@ The next useful control is the same `save_moe`/scatter/fused path at B32; if
 that fits, it can give an EP16 remat-throughput point, and if it still OOMs the
 fused assignment-gradient path is not viable for this comparison without memory
 work.
+
+May356 ran that B32 control:
+
+```text
+script=scratch/launch_may356_deepep_ep16_savemoe_l26_b32_scatter_archive_n2_throughput.sh
+parent=/dlwh/iris-run-job-20260622-214151
+child=/dlwh/iris-run-job-20260622-214151/grug-train-MAY356-DEEPEP-EP16-SAVEMOE-FUSEDASSIGN-SCATTERCOLLAPSE-ARCHIVE-L26-B32-N2-20260622-2141
+wandb=marin-community/marin_moe/MAY356-DEEPEP-EP16-SAVEMOE-FUSEDASSIGN-SCATTERCOLLAPSE-ARCHIVE-L26-B32-N2-20260622-2141
+shape=2 H100x8 nodes, EP16, global batch 32, 2 sequences/device
+moe=deepep_internode
+remat=save_moe
+profiler=disabled
+collapse=scatter
+assignment_gradient=fused
+```
+
+Result:
+
+- May356 used the source archive, reached W&B, initialized all 16 DeepEP ranks,
+  confirmed the EP16 mesh, and dispatched step 0.
+- It produced no W&B metric rows. After dispatch, `train/loss` failed while
+  blocking on an NCCL group:
+
+```text
+jax.errors.JaxRuntimeError: INTERNAL: NCCL operation ncclGroupEnd() failed: unhandled cuda error
+Last NCCL warning(error) log entry (may be unrelated) 'Cuda failure 2 'out of memory''.
+```
+
+- The process-per-GPU workers then exited, Iris began retrying, and the retrying
+  child and parent were stopped.
+
+Interpretation: lowering the scatter/fused EP16 `save_moe` run from B64 to B32
+does not produce a usable throughput point. It changes the visible error from a
+direct fused `recv_x` allocation failure to an NCCL group CUDA OOM during
+`train/loss` blocking, but the fused assignment-gradient path still does not fit
+cleanly enough for the remat comparison.
