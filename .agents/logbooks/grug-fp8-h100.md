@@ -320,3 +320,69 @@ confirms the path.
   `iris job logs`, zero storage); `python -u` for unbuffered logs.
 - **Next action:** S2 — lower `Fp8DotGeneral` (manual `dq(op(q,q))` per David's 6/22 steer) at
   d3072/d4096 through this same rig; diff the HLO against this baseline for `$f8` + `_FAST_ACCUM`.
+
+### 2026-06-22 — GFP8-003: S2 method — replicate the existing QDQ path under *delayed scaling*
+- **Goal:** the R5 prior is that the existing `Fp8DotGeneralOp` QDQ path "silently falls back to BF16"
+  — but the hypothesis is specifically about the **real delayed-scaling setting** (the MoE training
+  path), where the per-tensor scales are *live runtime scalars* threaded from amax-history state. So S2
+  replicates that path faithfully and asks: does XLA's GemmRewriter still fuse `__cublas$lt$matmul$f8`
+  when the scales are live? Fixes (manual `dq(op(q,q))`, `scaled_dot_general`, fast-accum) come after.
+- **Code:** `lib/levanter/scripts/bench/bench_dense_fp8.py`, 3 commits on `research/grug-fp8-h100-s2`
+  (realistic bwd cotangent · print backward HLO · `--path qdq` arm). The `qdq` arm calls
+  `haliax.quantization.Fp8DotGeneralOp` verbatim (E4M3 fwd weights/acts, E5M2 output grad). **Two
+  faithfulness points that decide the result:**
+  - *Delayed scaling, not constant scaling:* the op state (scales + amax histories) is passed as a
+    **runtime jit arg**, not closed over. Closing it folds `compute_scale(history)` to a compile-time
+    constant and bakes scale=const into the f8 call — a trivially-easier rewriter case that does **not**
+    represent training. Histories are seeded from the tensors so the scales are realistic non-unit live
+    scalars.
+  - *Realistic backward cotangent:* a `sum` loss gives an all-ones cotangent, and `dequant(quant(1.0))`
+    is an identity XLA folds — which would erase the E5M2 output-grad QDQ and stop a bwd f8 matmul from
+    lowering. A random cotangent keeps it non-trivial.
+- **Command (CPU verify):** `uv run python lib/levanter/scripts/bench/bench_dense_fp8.py --m 256 --k 256
+  --n 256 --steps 3 --warmup 1 --path qdq` (+ a jaxpr probe).
+- **Result (CPU):** both paths run fwd+bwd; `result_json` gains `path` + `peak_tflops_per_s`. jaxpr is
+  recipe-faithful (`float8_e4m3` ×2 + `float8_e5m2` ×1); with the op as a runtime arg the fwd jaxpr
+  carries the state inputs and computes the scale **in-graph** (`reduce_max` over the history) — i.e.
+  the scales are live, not folded. `./infra/pre-commit.py` green. CPU can't render the `$f8` verdict
+  (`__cublas$lt$matmul$f8` is a GPU-only custom-call) — that's H100.
+- **Next action:** run `--path bf16` (baseline) and `--path qdq` at d3072/d4096 on H100; grep for
+  `__cublas$lt$matmul$f8` in the fwd and bwd HLO separately.
+
+### 2026-06-22 — GFP8-004: S2 H100 result — QDQ *forward* does NOT fire `$f8` under delayed scaling
+- **Hypotheses (Matt):** (1) the QDQ path fails to emit `__cublas$lt$matmul$f8` in the real delayed-
+  scaling setting; (2) it is then ≤ bf16 (bf16 matmul + QDQ overhead). **Confirmed for the forward.**
+- **Jobs (1×H100, `CudaDevice(id=0)`, M=4096/seq 4096, steps 20/warmup 5, random cotangent):** bf16
+  baseline + qdq at d3072/d4096 (`/matt/grug-s2-fp8-qdq-20260622-124154`); qdq with live delayed-scaling
+  scales (`…-qdq-livescale-…125923`), re-captured `grep`-filtered to dodge the `iris job logs` ~1000-line
+  tail cap (`…-qdq-live2-…130401`, `…-qdq-live3-…130651`).
+- **Result — GEMM lowering (live delayed-scaling scales; every `custom_call_target` captured):**
+  | shape | forward | backward dx/dw |
+  |-------|---------|----------------|
+  | d3072 | **no cuBLAS matmul** (plain `dot`/fusion) — **no `$f8`** | `__cublas$lt$matmul$f8` ×2 (live `%loop_convert_fusion` scales) |
+  | d4096 | `__cublas$lt$matmul` (bf16, `%loop_multiply_fusion` operands) — **no `$f8`** | `__cublas$lt$matmul$f8` ×2 |
+- **Result — throughput (qdq %-peak vs FP8 1978.9; bf16 vs 989.5):**
+  | shape | bf16 fwd | qdq fwd | bf16 bwd | qdq bwd |
+  |-------|----------|---------|----------|---------|
+  | d3072 | 410 | **357 (18.0%) −13%** | 523 | **557 (28.2%) +6%** |
+  | d4096 | 531 | **454 (23.0%) −14%** | 633 | **725 (36.6%) +15%** |
+  (TFLOP/s; bwd counts dx+dw = 2× fwd flops.)
+- **Verdict:**
+  1. **The existing QDQ *forward* does NOT lower to `$f8` under live delayed scaling** — bf16 fallback
+     (d4096) or a plain non-cuBLAS dot (d3072), and **slower than bf16** (−13–14%). This is the
+     previously-reported "fails to fire / slower today" — **R5 prior confirmed for the forward.**
+  2. **The *backward* does fire `$f8`** (both dims, live scales folded into the call) and beats bf16
+     (+6–15%). XLA matches the bwd dot shape with a runtime scale but not the fwd one.
+  - *Sanity:* a control with the op **closed over the jit** (constant scales) flips the fwd to `$f8` —
+    confirming the failure is specific to *live* delayed-scaling scales, the training-relevant case.
+- **Interpretation:** the fwd is one DEFAULT-precision dot fed by `in_qdq` (dequant×live-scale) on both
+  operands; XLA's current `kScaledDot`/`ScaledDotRewriter` doesn't match that shape with a runtime
+  scale (the version-drift fragility R5 flagged). Don't rely on the QDQ→f8 pattern for the forward.
+- **Ops notes:** (1) `iris job logs` tail-caps at ~1000 lines → pipe the remote bench through `grep` for
+  `result_json|=== |custom_call_target` to capture complete, untruncated HLO evidence. (2) iris CLI via
+  `--project /Users/matt/projects/marin` (main venv's `iris[controller]`) while cwd stays the S2 worktree
+  (bundle carries the qdq code); `KUBECONFIG=~/.kube/coreweave-iris-gpu` (`use coreweave` direnv target).
+- **Next action:** build the fix arms and re-measure fwd `$f8` under **live** scaling — (i) David's manual
+  `dq(op(q,q))` (genuine f8 operands + explicit scale → the kScaledDot shape directly), (ii)
+  `jax.nn.scaled_dot_general` (path C), (iii) fast-accum. Bar to clear: fire fwd `$f8` with live scales
+  and beat the bf16 baseline.
