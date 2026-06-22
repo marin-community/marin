@@ -42,7 +42,7 @@ DEFAULT_STEP_SECONDS = 3600
 REQUEST_TIMEOUT = 60.0
 # observe.coreweave.com sits behind Cloudflare, which rejects non-browser
 # clients; present a browser User-Agent to get past the bot challenge.
-_BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+_BROWSER_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
 
 def fetch(config: Mapping[str, Any], window: DateWindow) -> list[CostEvent]:
@@ -61,7 +61,7 @@ def fetch(config: Mapping[str, Any], window: DateWindow) -> list[CostEvent]:
         )
 
     session = requests.Session()
-    session.headers.update({"Authorization": f"Bearer {token}", "User-Agent": _BROWSER_UA})
+    session.headers.update({"Authorization": f"Bearer {token}", "User-Agent": _BROWSER_USER_AGENT})
     step_hours = step_seconds / 3600.0
 
     events: list[CostEvent] = []

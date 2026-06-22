@@ -28,7 +28,8 @@ from typing import Any
 
 import requests
 
-from scripts.cost_manager.cost_event import CostEvent, CostFetchError, DateWindow, cost_event, require_env
+from scripts.cost_manager.backends import cost_api
+from scripts.cost_manager.cost_event import CostEvent, DateWindow, cost_event, require_env
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,6 @@ PROVIDER = "anthropic"
 MAX_BUCKETS = 31
 # Amounts are reported in cents; convert to dollars.
 CENTS_PER_DOLLAR = Decimal(100)
-REQUEST_TIMEOUT = 30.0
 
 
 def fetch(config: Mapping[str, Any], window: DateWindow) -> list[CostEvent]:
@@ -63,34 +63,22 @@ def fetch(config: Mapping[str, Any], window: DateWindow) -> list[CostEvent]:
     headers = {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION}
     session = requests.Session()
     events: list[CostEvent] = []
-    page: str | None = None
-    while True:
-        if page:
-            params["page"] = page
-        payload = _get(session, base_url, headers, params)
+    for payload in cost_api.paginate(
+        session,
+        base_url,
+        headers,
+        params,
+        provider=PROVIDER,
+        api_label="Cost Report API",
+        permission_hint="the key is likely not an org Admin key",
+    ):
         events.extend(_buckets_to_events(payload.get("data", []) or []))
-        if not payload.get("has_more"):
-            break
-        page = payload.get("next_page")
-        if not page:
-            break
     logger.info("anthropic: fetched %d cost rows for %s..%s", len(events), window.start, window.end)
     return events
 
 
 def _rfc3339(when: dt.datetime) -> str:
     return when.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _get(session: requests.Session, url: str, headers: dict[str, str], params: dict[str, Any]) -> dict[str, Any]:
-    response = session.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
-    if response.status_code in (401, 403):
-        raise CostFetchError(
-            f"anthropic: {response.status_code} from Cost Report API — the key is likely "
-            f"not an org Admin key: {response.text[:200]}"
-        )
-    response.raise_for_status()
-    return response.json()
 
 
 def _buckets_to_events(buckets: list[dict[str, Any]]) -> list[CostEvent]:

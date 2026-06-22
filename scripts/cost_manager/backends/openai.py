@@ -22,7 +22,8 @@ from typing import Any
 
 import requests
 
-from scripts.cost_manager.cost_event import CostEvent, CostFetchError, DateWindow, cost_event, require_env
+from scripts.cost_manager.backends import cost_api
+from scripts.cost_manager.cost_event import CostEvent, DateWindow, cost_event, require_env
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,6 @@ COSTS_URL = "https://api.openai.com/v1/organization/costs"
 PROVIDER = "openai"
 # The API caps a single page at 180 daily buckets.
 MAX_BUCKETS = 180
-REQUEST_TIMEOUT = 30.0
 
 
 def fetch(config: Mapping[str, Any], window: DateWindow) -> list[CostEvent]:
@@ -54,30 +54,18 @@ def fetch(config: Mapping[str, Any], window: DateWindow) -> list[CostEvent]:
     headers = {"Authorization": f"Bearer {api_key}"}
     session = requests.Session()
     events: list[CostEvent] = []
-    page: str | None = None
-    while True:
-        if page:
-            params["page"] = page
-        payload = _get(session, base_url, headers, params)
+    for payload in cost_api.paginate(
+        session,
+        base_url,
+        headers,
+        params,
+        provider=PROVIDER,
+        api_label="Costs API",
+        permission_hint="the key likely lacks org Admin/Usage access",
+    ):
         events.extend(_buckets_to_events(payload.get("data", []) or []))
-        if not payload.get("has_more"):
-            break
-        page = payload.get("next_page")
-        if not page:
-            break
     logger.info("openai: fetched %d cost rows for %s..%s", len(events), window.start, window.end)
     return events
-
-
-def _get(session: requests.Session, url: str, headers: dict[str, str], params: dict[str, Any]) -> dict[str, Any]:
-    response = session.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
-    if response.status_code in (401, 403):
-        raise CostFetchError(
-            f"openai: {response.status_code} from Costs API — the key likely lacks org "
-            f"Admin/Usage access: {response.text[:200]}"
-        )
-    response.raise_for_status()
-    return response.json()
 
 
 def _buckets_to_events(buckets: list[dict[str, Any]]) -> list[CostEvent]:
