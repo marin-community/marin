@@ -755,7 +755,7 @@ def infer_block_sizes(
         device_kind: Optional `jax.Device.device_kind` string.
 
     Returns:
-        BlockSizes chosen from the tuned table, or the default if no match.
+        BlockSizes chosen from the tuned table, or a backend-safe fallback if no match exists.
     """
     block_sizes, _ = infer_block_sizes_with_tuned_match(
         b,

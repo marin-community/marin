@@ -16,6 +16,7 @@ def is_power_of_two(n: int) -> bool:
 
 
 def max_weight_tile_bytes_for_device(device_kind: str) -> Optional[int]:
+    """Return the device weight-tile byte limit, or None when no limit is known."""
     if "nvidia" in device_kind.lower():
         return NVIDIA_WEIGHT_TILE_BYTES_LIMIT
     return None
