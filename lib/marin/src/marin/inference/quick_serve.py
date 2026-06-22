@@ -35,7 +35,12 @@ from rigging.log_setup import configure_logging
 from transformers import AutoConfig
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.inference.quick_serve_dashboard import ServingInfo, build_dashboard_app, serve_app_background
+from marin.inference.quick_serve_dashboard import (
+    ServingInfo,
+    bind_serving_socket,
+    build_dashboard_app,
+    serve_app_background,
+)
 from marin.inference.vllm_server import VllmEnvironment, _is_object_store_path
 
 logger = logging.getLogger(__name__)
@@ -238,6 +243,10 @@ def serve_in_job(config: QuickServeConfig) -> None:
     ctx = iris_ctx()
     port = ctx.get_port(config.port_name)
     advertise_host = job_info.advertise_host
+    # Claim the dashboard's port now, before vLLM launches: Iris' named-port range
+    # overlaps the OS ephemeral range, so vLLM's internal sockets could otherwise
+    # squat it. Binding here reserves it for us until uvicorn takes over.
+    serving_socket = bind_serving_socket("0.0.0.0", port)
 
     model_path = resolve_model_path(config.model, config.cache_ttl_days)
     num_chips = get_tpu_topology(config.tpu_type).chips_per_vm
@@ -293,7 +302,7 @@ def serve_in_job(config: QuickServeConfig) -> None:
             endpoint=config.endpoint_name,
         )
         app = build_dashboard_app(upstream_base_url=upstream_base_url, model_id=model_id, info=info)
-        with serve_app_background(app, host="0.0.0.0", port=port):
+        with serve_app_background(app, serving_socket):
             address = f"http://{advertise_host}:{port}"
             metadata = {
                 "model": str(model_id),

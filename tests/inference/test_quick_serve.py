@@ -10,7 +10,12 @@ import socket
 import pytest
 import requests
 from marin.inference.quick_serve import resolve_model_path, select_tensor_parallel_size
-from marin.inference.quick_serve_dashboard import ServingInfo, build_dashboard_app, serve_app_background
+from marin.inference.quick_serve_dashboard import (
+    ServingInfo,
+    bind_serving_socket,
+    build_dashboard_app,
+    serve_app_background,
+)
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Route
@@ -105,8 +110,10 @@ def _collect_sse_text(response: requests.Response, field: str) -> str:
 
 
 def test_dashboard_serves_ui_and_reverse_proxies_streaming():
-    upstream_port = _free_port()
-    dashboard_port = _free_port()
+    upstream_sock = bind_serving_socket("127.0.0.1", 0)
+    upstream_port = upstream_sock.getsockname()[1]
+    dashboard_sock = bind_serving_socket("127.0.0.1", 0)
+    dashboard_port = dashboard_sock.getsockname()[1]
     info = ServingInfo(
         model="fake-model",
         tensor_parallel_size=2,
@@ -117,11 +124,11 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
         endpoint="/serve/fake",
     )
 
-    with serve_app_background(_fake_vllm_app(), host="127.0.0.1", port=upstream_port):
+    with serve_app_background(_fake_vllm_app(), upstream_sock):
         app = build_dashboard_app(
             upstream_base_url=f"http://127.0.0.1:{upstream_port}", model_id="fake-model", info=info
         )
-        with serve_app_background(app, host="127.0.0.1", port=dashboard_port):
+        with serve_app_background(app, dashboard_sock):
             base = f"http://127.0.0.1:{dashboard_port}"
 
             page = requests.get(f"{base}/", timeout=10)
@@ -150,7 +157,8 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
 
 
 def test_dashboard_health_reports_loading_when_upstream_down():
-    dashboard_port = _free_port()
+    dashboard_sock = bind_serving_socket("127.0.0.1", 0)
+    dashboard_port = dashboard_sock.getsockname()[1]
     info = ServingInfo(
         model="fake-model",
         tensor_parallel_size=1,
@@ -162,7 +170,7 @@ def test_dashboard_health_reports_loading_when_upstream_down():
     )
     # Point at a closed port so the upstream health probe fails fast.
     app = build_dashboard_app(upstream_base_url=f"http://127.0.0.1:{_free_port()}", model_id="fake-model", info=info)
-    with serve_app_background(app, host="127.0.0.1", port=dashboard_port):
+    with serve_app_background(app, dashboard_sock):
         response = requests.get(f"http://127.0.0.1:{dashboard_port}/health", timeout=10)
     assert response.status_code == 503
     assert response.json()["status"] == "loading"

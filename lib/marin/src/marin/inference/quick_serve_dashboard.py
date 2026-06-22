@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import socket
 import threading
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
@@ -156,12 +157,31 @@ def build_dashboard_app(
     )
 
 
+def bind_serving_socket(host: str, port: int) -> socket.socket:
+    """Bind a listening socket up front so the port is claimed before serving.
+
+    Iris allocates the task's named port from a range (30000-40000) that overlaps
+    the OS ephemeral range, so any ephemeral socket the task later opens — notably
+    vLLM's many internal sockets — can squat the port we need. Binding here, before
+    vLLM starts, removes the port from the ephemeral pool and reserves it for us.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((host, port))
+    return sock
+
+
 @contextmanager
-def serve_app_background(app: Starlette, *, host: str, port: int, start_timeout_seconds: float = 30.0) -> Iterator[None]:
-    """Run ``app`` under uvicorn in a daemon thread for the duration of the context."""
-    config = uvicorn.Config(app, host=host, port=port, log_level="info", log_config=None, workers=1)
+def serve_app_background(app: Starlette, sock: socket.socket, *, start_timeout_seconds: float = 30.0) -> Iterator[None]:
+    """Run ``app`` under uvicorn on an already-bound ``sock`` in a daemon thread.
+
+    The caller owns the listening socket (see :func:`bind_serving_socket`) so it can
+    be claimed before any competing socket in the process can take the port.
+    """
+    host, port = sock.getsockname()[:2]
+    config = uvicorn.Config(app, log_level="info", log_config=None, workers=1)
     server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, name="quick-serve-dashboard", daemon=True)
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, name="quick-serve-dashboard", daemon=True)
     logger.info("Starting quick-serve dashboard on %s:%d", host, port)
     thread.start()
     started = ExponentialBackoff(initial=0.02, maximum=1, jitter=0).wait_until(
