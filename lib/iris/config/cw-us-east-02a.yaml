@@ -14,7 +14,7 @@
 #   1. Set R2 object storage credentials (required for s3:// storage URIs):
 #        export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
 #        export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
-#      `iris cluster start` turns these into the iris-s3-credentials Secret.
+#      `iris cluster start` turns these into the iris-task-env Secret.
 #   2. Point kubectl/iris at the region kubeconfig:
 #        export KUBECONFIG=~/.kube/coreweave-iris-gpu   # context marin-gpu_US-EAST-02A
 #   3. Start / inspect the cluster:
