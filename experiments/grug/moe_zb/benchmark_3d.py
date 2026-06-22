@@ -153,6 +153,9 @@ def main() -> int:
     seq_len = int(os.environ.get("MOE_ZB_SEQ", seq_len))
     vocab_size = int(os.environ.get("MOE_ZB_VOCAB", vocab_size))
     microbatch = int(os.environ.get("MOE_ZB_MICROBATCH", microbatch))
+    # The schedule keeps every in-flight microbatch's activations live (no
+    # cross-microbatch remat), so fewer microbatches lowers the activation peak.
+    num_microbatches = int(os.environ.get("MOE_ZB_NMICRO", num_microbatches))
 
     num_devices = jax.device_count()
     fill = num_devices // num_stages
