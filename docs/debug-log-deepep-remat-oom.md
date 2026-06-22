@@ -174,6 +174,31 @@ Commit `4258fe300` changes the DeepEP process-per-GPU supervisor to:
 This is an observability change only. It should make the next MAY328-style run
 report the first failed local rank instead of a generic Iris task `Error`.
 
+## Hypothesis 7: the apparent dispatch hang is actually first-step compilation
+
+MAY328 was stopped after its third attempt ran for more than 20 minutes without
+metrics, counter-timeout diagnostics, or worker-exit logs. I launched MAY329
+from commit `381b88233`, which includes the worker-exit diagnostics and omits
+the very noisy host-dispatch debug logging.
+
+MAY329:
+
+- W&B: `marin-community/marin_moe/MAY329-WORKEREXIT-B32-XONLY-JAXBWD-1209`
+- Parent Iris job: `/dlwh/iris-run-job-20260622-120913`
+- Child Iris job:
+  `/dlwh/iris-run-job-20260622-120913/grug-train-MAY329-WORKEREXIT-B32-XONLY-JAXBWD-1209`
+- All 16 local worker processes reached DeepEP internode runtime post-init.
+- All 16 ranks logged `Starting Grug train_step dispatch for step 0`.
+- After ~17 minutes with no metrics, process inspection showed all local worker
+  main threads inside JAX compilation:
+  `backend_compile_and_load` -> `_compile_and_write_cache` ->
+  `compile_or_get_cached` -> `pxla.compile` -> `_pjit_call_impl_python`.
+
+This means the "dispatch" log line is not proof that DeepEP transport is
+executing. It is emitted immediately before the first compiled train-step call.
+For MAY329, the current active state is first-step compilation, not a proven
+DeepEP forward-dispatch hang.
+
 ## Future work
 
 - [x] Add a C++/FFI primitive for x-only internode combine-with-local-collapse
@@ -185,6 +210,8 @@ report the first failed local rank instead of a generic Iris task `Error`.
 - [x] Add narrower DeepEP recv-counter diagnostics for the EP16 timeout.
 - [ ] Re-run B32 EP16 DeepEP internode with `offload_moe_hidden` from
       `4258fe300` or later if MAY328 bounces again without metrics.
+- [ ] Let MAY329 compile long enough to distinguish compile latency from
+      runtime DeepEP transport failure.
 - [ ] If B32 passes, retry B64 and profile remat overhead versus ring/all-to-all.
 - [ ] If B32 reaches `cudaMallocAsync(x-only fused local-collapse bwd recv_out)`
       OOM, replace the staging temp with a true direct packed-output backward
