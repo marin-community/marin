@@ -56,6 +56,11 @@ class K8sDeployment:
     namespace: str
     storage_class: str | None = None
     storage_gb: int = 200
+    # S3-compatible endpoint (e.g. Cloudflare R2) for an `s3://` remote_log_dir.
+    # Required there: `finelog deploy up` mints a Secret holding this endpoint
+    # plus the operator's R2 creds, projected into the pod via envFrom so the
+    # server can authenticate. Unused for `gs://` (GCS uses workload identity).
+    object_storage_endpoint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -115,6 +120,7 @@ def _build_k8s(raw: dict) -> K8sDeployment:
         namespace=raw["namespace"],
         storage_class=raw.get("storage_class"),
         storage_gb=int(raw.get("storage_gb", 200)),
+        object_storage_endpoint=raw.get("object_storage_endpoint"),
     )
 
 
