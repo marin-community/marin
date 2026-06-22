@@ -151,3 +151,67 @@ profiler=disabled
 collapse=ffi
 assignment_gradient=fused
 ```
+
+May348 was submitted as:
+
+```text
+parent=/dlwh/iris-run-job-20260622-184105
+child=/dlwh/iris-run-job-20260622-184105/grug-train-MAY348-DEEPEP-EP16-NOREMAT-FUSEDASSIGN-FIXEDFFICOLLAPSE-L26-B64-N2-20260622-1841
+wandb=marin-community/marin_moe/MAY348-DEEPEP-EP16-NOREMAT-FUSEDASSIGN-FIXEDFFICOLLAPSE-L26-B64-N2-20260622-1841
+```
+
+Result:
+
+- May348 got past the May346 projection bug. The run built DeepEP, initialized
+  all 16 process-per-GPU ranks, and confirmed:
+
+```text
+Grug compact mesh shape: {'replica_dcn': 1, 'data': 1, 'expert': 16, 'model': 1}; batch_shards=16
+```
+
+- It compiled and dispatched train step 0, then failed while waiting for
+  `train/loss` with:
+
+```text
+jax.errors.JaxRuntimeError: INTERNAL: DeepEP internode JAX dispatch timed out waiting for recv counters
+```
+
+- The FFI printed timeout diagnostics for ranks on the second node, for example:
+
+```text
+DEEPEP_INTERNODE_COUNTER_TIMEOUT {"rank":11,"call_sequence":-1,"num_recv_tokens":-1,"num_rdma_recv_tokens":-1,"num_local_experts":16,"expert_counters":[-1,...,-1]}
+```
+
+- Iris retried and reproduced the same failure before any W&B metric rows. The
+  run was stopped to avoid retry churn.
+
+Interpretation: the exposed `assignment_destinations` shape bug is fixed, but
+the EP16 no-remat FFI-collapse throughput run is still blocked by an internode
+DeepEP dispatch/counter timeout before metrics. This is not yet evidence about
+the remat overhead of EP16 `none` versus `save_moe`.
+
+Follow-up control:
+
+```text
+script=scratch/launch_may349_deepep_ep16_savemoe_l26_b64_fixedffi_n2_throughput.sh
+shape=2 H100x8 nodes, EP16, global batch 64, 4 sequences/device
+moe=deepep_internode
+remat=save_moe
+profiler=disabled
+collapse=ffi
+assignment_gradient=fused
+```
+
+May349 keeps the May348 code path and switches only the inner MoE remat mode
+back to `save_moe`. It was submitted as:
+
+```text
+parent=/dlwh/iris-run-job-20260622-192045
+child=/dlwh/iris-run-job-20260622-192045/grug-train-MAY349-DEEPEP-EP16-SAVEMOE-FUSEDASSIGN-FIXEDFFICOLLAPSE-L26-B64-N2-20260622-1920
+wandb=marin-community/marin_moe/MAY349-DEEPEP-EP16-SAVEMOE-FUSEDASSIGN-FIXEDFFICOLLAPSE-L26-B64-N2-20260622-1920
+```
+
+At submission time May349 was `SchedulingGated` by Kueue behind the admitted
+32-task banked-MuonH workload `/dlwh/iris-run-job-20260622-175816`. The Kueue
+condition said the two-pod set could not fit because topology `"infiniband"`
+excluded all 32 nodes for CPU availability.
