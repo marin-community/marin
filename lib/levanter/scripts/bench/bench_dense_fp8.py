@@ -1,0 +1,98 @@
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Dense matmul microbench for the Grug FP8-on-H100 spike.
+
+Benchmarks a single dense projection ``[M, K] @ [K, N]`` (forward + backward),
+emitting steady-state timing, the compiled HLO, and one machine-readable
+``result_json`` line. This is the BF16 baseline arm of the linear-FP8 harness;
+FP8 lowering paths land on top of the same rig (task S2).
+
+The default shape is a hidden-dim-3072 projection at seq 4096; sweep ``--k``
+over 3072/4096 for the two benchmark dims. Run on an H100 via Iris and read the
+HLO back through ``iris job logs`` (no storage needed):
+
+    uv run iris --cluster=cw-us-east-02a job run --gpu H100x1 \\
+        --enable-extra-resources --extra gpu -- \\
+        python lib/levanter/scripts/bench/bench_dense_fp8.py --k 4096
+"""
+
+import argparse
+import json
+import time
+
+import jax
+import jax.numpy as jnp
+from jax import lax
+
+# Contract K (lhs dim 1, rhs dim 0); no batch dims. Shared with the FP8 paths
+# so the lowering differs only by dtype/precision, not the einsum.
+_DIMENSION_NUMBERS = (((1,), (0,)), ((), ()))
+
+
+def dense_dot(x: jax.Array, w: jax.Array) -> jax.Array:
+    """Dense projection ``[M, K] @ [K, N] -> [M, N]``."""
+    return lax.dot_general(x, w, _DIMENSION_NUMBERS)
+
+
+def _time_jitted(fn, *args, steps: int, warmup: int) -> tuple[float, float]:
+    """Return (compile_time, mean steady-state time) in seconds."""
+    start = time.perf_counter()
+    jax.block_until_ready(fn(*args))
+    compile_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        jax.block_until_ready(fn(*args))
+
+    start = time.perf_counter()
+    for _ in range(steps):
+        jax.block_until_ready(fn(*args))
+    return compile_time, (time.perf_counter() - start) / steps
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--m", type=int, default=4096, help="rows / tokens")
+    parser.add_argument("--k", type=int, default=3072, help="contracting / hidden dim")
+    parser.add_argument("--n", type=int, default=3072, help="output dim")
+    parser.add_argument("--dtype", type=str, default="bfloat16")
+    parser.add_argument("--steps", type=int, default=20)
+    parser.add_argument("--warmup", type=int, default=5)
+    parser.add_argument("--forward-only", action="store_true")
+    parser.add_argument("--no-print-hlo", dest="print_hlo", action="store_false")
+    args = parser.parse_args()
+
+    dtype = jnp.dtype(args.dtype)
+    print("devices:", jax.devices())
+
+    key_x, key_w = jax.random.split(jax.random.PRNGKey(0))
+    x = jax.random.normal(key_x, (args.m, args.k), dtype=dtype)
+    w = jax.random.normal(key_w, (args.k, args.n), dtype=dtype)
+
+    fwd = jax.jit(dense_dot)
+    # grad needs a scalar loss; sum is the cheapest reduction over the projection.
+    grad = jax.jit(jax.grad(lambda a, b: jnp.sum(dense_dot(a, b)), argnums=(0, 1)))
+
+    if args.print_hlo:
+        print("=== forward HLO ===")
+        print(fwd.lower(x, w).compile().as_text())
+
+    fwd_compile, fwd_steady = _time_jitted(fwd, x, w, steps=args.steps, warmup=args.warmup)
+    result = {
+        "m": args.m,
+        "k": args.k,
+        "n": args.n,
+        "dtype": str(dtype),
+        "fwd_compile_time_s": fwd_compile,
+        "fwd_steady_time_s": fwd_steady,
+    }
+    if not args.forward_only:
+        bwd_compile, bwd_steady = _time_jitted(grad, x, w, steps=args.steps, warmup=args.warmup)
+        result["bwd_compile_time_s"] = bwd_compile
+        result["bwd_steady_time_s"] = bwd_steady
+
+    print("result_json", json.dumps(result, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()
