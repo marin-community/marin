@@ -467,7 +467,9 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   |---|---|---|---|
   | **0.05** | 2.962 | 2.949 | **2.924** |
   | **0.1**  | 2.958 | 2.937 | 2.942 |
-  | **0.2**  | 2.949 | 2.938 | _running_ |
+  | **0.2**  | 2.949 | 2.938 | 2.934 |
+  _(E4 base 3×3 COMPLETE 9/9. Min = 1e-3/wd0.05=2.924 on the high-LR/low-WD corner; 1e-3 col
+  wd0.05<wd0.2<wd0.1. Corner extensions 1.5e-3/0.05, 2e-3/0.05, 1e-3/0.02 running to test it.)_
 
 - Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ — **8/9 in (only 1e-3/0.2
   still running, mid 2.960). New min = `1e-3/0.05` FINISHED at 2.924 (~23:15Z)** — beats the
