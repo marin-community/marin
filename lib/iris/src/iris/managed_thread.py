@@ -148,10 +148,6 @@ class ManagedThread:
         self._thread.join(timeout=timeout.to_seconds() if timeout is not None else None)
 
     @property
-    def stop_event(self) -> threading.Event:
-        return self._stop_event
-
-    @property
     def is_alive(self) -> bool:
         return self._thread.is_alive()
 
@@ -251,25 +247,6 @@ class ThreadContainer:
             except ValueError:
                 # Already removed, that's fine
                 pass
-
-    @property
-    def is_alive(self) -> bool:
-        """True if any thread in this container or its children is still running."""
-        with self._lock:
-            threads = list(self._threads)
-            children = list(self._children)
-        return any(t.is_alive for t in threads) or any(c.is_alive for c in children)
-
-    def alive_threads(self) -> list[ManagedThread]:
-        """Return threads that are still alive, including those in child containers."""
-        with self._lock:
-            threads = list(self._threads)
-            children = list(self._children)
-
-        alive = [t for t in threads if t.is_alive]
-        for child in children:
-            alive.extend(child.alive_threads())
-        return alive
 
     def wait(self) -> None:
         """Block until all threads have exited.
