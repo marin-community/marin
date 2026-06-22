@@ -486,7 +486,12 @@ def gpu_device(variant: str, count: int = 1) -> job_pb2.DeviceConfig:
 
     Returns:
         DeviceConfig with the gpu field set.
+
+    Raises:
+        ValueError: if count is not a positive integer.
     """
+    if count < 1:
+        raise ValueError(f"GPU count must be a positive integer, got {count}")
     return job_pb2.DeviceConfig(
         gpu=job_pb2.GpuDevice(
             variant=variant,
