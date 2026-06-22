@@ -41,8 +41,8 @@ logger = logging.getLogger(__name__)
 # submit) body on the cluster, so the run survives the launching laptop
 # disconnecting. It only schedules and dispatches work — CPU is enough, even
 # though the DAG runner imports levanter/marin and holds a thread pool.
-COORDINATOR_CPU = 1.0
-COORDINATOR_MEMORY = "4GB"
+COORDINATOR_CPU = 0.5
+COORDINATOR_MEMORY = "2GB"
 COORDINATOR_DISK = "10GB"
 
 
