@@ -31,6 +31,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+from iris.runtime.jax_init import initialize_jax
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
@@ -71,6 +72,17 @@ def _timed_steps(step_fn, state, data_fn, *, warmup: int, iters: int) -> float:
         state = step_fn(state, data_fn(warmup + i))
     jax.block_until_ready(state)
     return (time.perf_counter() - start) / iters
+
+
+def init_distributed() -> None:
+    """Bring up JAX distributed for a multi-host TPU slice (no-op on one host).
+
+    A v6e-16 is two hosts; without this each host only sees its 8 local chips.
+    `iris.runtime.jax_init.initialize_jax` calls `jax.distributed.initialize()`
+    via TPU runtime autodiscovery inside an Iris job and skips cleanly off-cluster
+    (e.g. the forced-CPU smoke), so it is safe to call unconditionally.
+    """
+    initialize_jax()
 
 
 def _config(num_stages, num_layers, hidden_dim, num_experts, seq_len, vocab_size) -> GrugMoEConfig:
@@ -155,6 +167,7 @@ def bench_fsdp(cfg, *, global_batch, seq_len, lr, warmup, iters, seed) -> float:
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    init_distributed()
     on_tpu = jax.devices()[0].platform == "tpu"
     logger.info("benchmarking on %d %s device(s)", jax.device_count(), jax.devices()[0].platform)
 

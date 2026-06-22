@@ -27,7 +27,7 @@ import optax
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
-from experiments.grug.moe_zb.benchmark import _config, _fsdp_sharding, _timed_steps
+from experiments.grug.moe_zb.benchmark import _config, _fsdp_sharding, _timed_steps, init_distributed
 from experiments.grug.moe_zb.model import build_pipeline_params, reference_loss
 from experiments.grug.moe_zb.parallelism import DATA_AXIS, make_pipeline_mesh, shard_pipeline_params
 from experiments.grug.moe_zb.train import Schedule, _arithmetic_batch, make_train_step
@@ -109,8 +109,14 @@ def bench_fsdp(cfg, num_devices, *, global_batch, seq_len, lr, warmup, iters, se
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    init_distributed()
     on_tpu = jax.devices()[0].platform == "tpu"
-    logger.info("benchmarking on %d %s device(s)", jax.device_count(), jax.devices()[0].platform)
+    logger.info(
+        "benchmarking on %d %s device(s) across %d host(s)",
+        jax.device_count(),
+        jax.devices()[0].platform,
+        jax.process_count(),
+    )
 
     num_stages = int(os.environ.get("MOE_ZB_PP", "2"))
     if on_tpu:
