@@ -9,7 +9,7 @@ Each event is ``<kind> <arg>``. The general kind is an arbitrary shell predicate
 the ``github.*`` kinds are built-in conveniences so common PR waits need no shell:
 
     poll <shell command>    fires when the command exits 0
-    github.ci <PR>          fires when CI on the PR head finishes (pass or fail)
+    github.ci <PR>          fires the moment any check fails, else when all checks pass
     github.pr_comment <PR>  fires on a new issue/review comment (not your own)
     github.review <PR>      fires on a new submitted review
 
@@ -55,7 +55,9 @@ MAX_SOURCE_ERRORS = 5
 
 # `gh pr checks --json` reports one bucket per check, already deduped to the latest
 # run (the same view as the UI / `gh pr checks` exit code), so superseded reruns do
-# not leak through. We wait while anything is pending and fail on a fail/cancel.
+# not leak through. We fire the instant anything is failing/cancelled — without
+# waiting on the slower checks — so the caller can react to the failure; with nothing
+# failing we wait until nothing is pending and report success.
 _CI_PENDING_BUCKET = "pending"
 _CI_FAILING_BUCKETS = {"fail", "cancel"}
 
@@ -201,21 +203,30 @@ class CiOutcome:
     observed: int
     conclusion: str | None
     failing: tuple[str, ...]
+    pending: tuple[str, ...]
     checks: tuple[dict, ...]
 
 
 def evaluate_ci(rows: Iterable[dict]) -> CiOutcome:
-    """Decide whether CI is finished from `gh pr checks` rows. Empty or any pending ⇒ not done."""
+    """Decide whether the ``github.ci`` arm should fire from `gh pr checks` rows.
+
+    Fire the moment any check fails so the caller can start addressing the failure
+    without waiting for the slower checks to finish; with nothing failing, fire only
+    once every check has settled. Empty rows (no checks registered yet) or
+    still-pending checks with none failing ⇒ keep waiting.
+    """
     rows = list(rows)
-    if not rows or any(r["bucket"] == _CI_PENDING_BUCKET for r in rows):
-        return CiOutcome(done=False, observed=len(rows), conclusion=None, failing=(), checks=())
     failing = tuple(r["name"] for r in rows if r["bucket"] in _CI_FAILING_BUCKETS)
+    pending = tuple(r["name"] for r in rows if r["bucket"] == _CI_PENDING_BUCKET)
+    if not rows or (pending and not failing):
+        return CiOutcome(done=False, observed=len(rows), conclusion=None, failing=(), pending=pending, checks=())
     checks = tuple({"name": r["name"], "bucket": r["bucket"]} for r in rows)
     return CiOutcome(
         done=True,
         observed=len(rows),
         conclusion="failure" if failing else "success",
         failing=failing,
+        pending=pending,
         checks=checks,
     )
 
@@ -249,7 +260,7 @@ def _parse_pr(arg: str) -> str:
 
 
 class CiSource(Source):
-    """Fires when CI on the PR head finishes (pass or fail), via gh's deduped check view."""
+    """Fires the moment any check fails, else once every check passes, via gh's deduped view."""
 
     def __init__(self, spec: EventSpec, repo: str):
         super().__init__(spec)
@@ -259,12 +270,16 @@ class CiSource(Source):
     def check(self) -> dict | None:
         outcome = evaluate_ci(gh_pr_checks(self.pr, self.repo))
         if not outcome.done:
-            self.last_status = f"{outcome.observed} checks, not all done"
+            self.last_status = f"{outcome.observed} checks, none failing, not all done"
             return None
-        self.last_status = f"done: {outcome.conclusion} ({outcome.observed} checks)"
+        if outcome.pending:
+            self.last_status = f"failing early: {', '.join(outcome.failing)} ({len(outcome.pending)} still pending)"
+        else:
+            self.last_status = f"done: {outcome.conclusion} ({outcome.observed} checks)"
         return {
             "conclusion": outcome.conclusion,
             "failing": list(outcome.failing),
+            "pending": list(outcome.pending),
             "observed_checks": outcome.observed,
             "checks": list(outcome.checks),
         }

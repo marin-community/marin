@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import pytest
-from finelog.client.proxy import LogServiceProxy
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.backends.k8s.fake import InMemoryK8sService
 from iris.cluster.backends.k8s.tasks import (
     _LABEL_MANAGED,
@@ -35,8 +35,8 @@ def k8s() -> InMemoryK8sService:
 
 
 @pytest.fixture
-def log_service(embedded_log_server) -> LogServiceProxy:
-    return LogServiceProxy(embedded_log_server.address)
+def log_service(embedded_log_server) -> LogServiceClientSync:
+    return LogServiceClientSync(address=embedded_log_server.address)
 
 
 @pytest.fixture

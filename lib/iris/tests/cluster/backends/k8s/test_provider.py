@@ -5,13 +5,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from finelog.client.proxy import LogServiceProxy
 from finelog.rpc import logging_pb2
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.backends.k8s.tasks import (
     _GANG_GC_MAX_AGE_SECONDS,
     _GC_MAX_AGE_SECONDS,
@@ -46,8 +45,8 @@ from iris.rpc import job_pb2
 from .conftest import make_batch, make_kueue_provider, make_run_req, populate_node, populate_pod
 
 
-def _fetch_logs(log_service: LogServiceProxy, key: str, max_lines: int = 100) -> list[logging_pb2.LogEntry]:
-    resp = asyncio.run(log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=key, max_lines=max_lines), ctx=None))
+def _fetch_logs(log_service: LogServiceClientSync, key: str, max_lines: int = 100) -> list[logging_pb2.LogEntry]:
+    resp = log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=key, max_lines=max_lines))
     return list(resp.entries)
 
 
@@ -284,7 +283,7 @@ def test_pod_not_found_grace_resets_when_pod_reappears(provider, k8s):
     assert result.updates[0].new_state == job_pb2.TASK_STATE_FAILED
 
 
-def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceProxy, log_client):
+def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceClientSync, log_client):
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
     pod_name = _pod_name(task_id, attempt_id)
@@ -316,7 +315,7 @@ def test_sync_empty_batch(provider):
 # ---------------------------------------------------------------------------
 
 
-def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_service: LogServiceProxy):
+def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_service: LogServiceClientSync):
     """Running pods get incremental logs via the background LogCollector."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -340,7 +339,7 @@ def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_servi
     assert logs[0].data == "hello from running pod"
 
 
-def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_service: LogServiceProxy):
+def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_service: LogServiceClientSync):
     """LogCollector advances byte offsets: repeated fetches don't duplicate."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -367,7 +366,7 @@ def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_service: LogS
     assert logs[1].data == "line 2"
 
 
-def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServiceProxy, log_client):
+def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServiceClientSync, log_client):
     """Completed pods get a final log fetch when removed from the collector's tracked set."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
