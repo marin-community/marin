@@ -99,13 +99,17 @@ def main() -> None:
     dtype = jnp.dtype(args.dtype)
     print("devices:", jax.devices())
 
-    key_x, key_w = jax.random.split(jax.random.PRNGKey(0))
+    key_x, key_w, key_c = jax.random.split(jax.random.PRNGKey(0), 3)
     x = jax.random.normal(key_x, (args.m, args.k), dtype=dtype)
     w = jax.random.normal(key_w, (args.k, args.n), dtype=dtype)
+    # Backward through a random output cotangent, not a sum-loss's all-ones one:
+    # a constant cotangent lets XLA fold an FP8 output-grad QDQ (dequant(quant(1.0))
+    # is identity), which would stop a backward f8 matmul from ever lowering. The
+    # scalar loss <out, cotangent> gives d(loss)/d(out) = cotangent.
+    cotangent = jax.random.normal(key_c, (args.m, args.n), dtype=dtype)
 
     fwd = jax.jit(dense_dot)
-    # grad needs a scalar loss; sum is the cheapest reduction over the projection.
-    grad = jax.jit(jax.grad(lambda a, b: jnp.sum(dense_dot(a, b)), argnums=(0, 1)))
+    grad = jax.jit(jax.grad(lambda a, b: jnp.sum(dense_dot(a, b) * cotangent), argnums=(0, 1)))
 
     if args.print_hlo:
         print("=== forward HLO ===")
