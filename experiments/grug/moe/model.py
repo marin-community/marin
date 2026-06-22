@@ -972,7 +972,7 @@ class Transformer(eqx.Module):
             layer_mask = long_mask if use_long_layer else short_mask
             use_pko = cfg.use_pko and use_long_layer
             block_kwargs = {"use_pko": use_pko, "pko_doc_starts": pko_doc_starts if use_pko else None}
-            if cfg.remat_mode == "none" or uses_effectful_moe:
+            if cfg.remat_mode == "none":
                 hidden, router_stats = block(hidden, layer_mask, **block_kwargs)
             else:
                 hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
