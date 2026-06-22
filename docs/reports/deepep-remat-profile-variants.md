@@ -47,6 +47,24 @@ Interpretation:
   flags.
 - Current best EP8 DeepEP remat setting is `--remat none`.
 
+Why the `save_moe` delta is small:
+
+- For effectful DeepEP backends the model skips the outer block checkpoint
+  entirely:
+
+```text
+_should_checkpoint_block(remat_mode, uses_effectful_moe=True) == False
+```
+
+  That avoids rematting a block containing DeepEP FFI effects, so EP8
+  `save_moe` is not paying for a full block remat versus `none`.
+- The remaining difference is the inner DeepEP expert MLP checkpoint in
+  `ep_deepep.py`. `save_moe` keeps the tagged ragged-dot residuals
+  (`dispatch_input`, `expert_hidden`, `dispatch_output`, `moe_output`) while
+  allowing the rest of the small expert up/down wrapper to remat. That is much
+  narrower than "save every block activation", which is why the measured loss
+  is only about 1.8% versus `none`.
+
 ## EP16 Internode Direction
 
 The working EP16 path is `moe=deepep_internode` in process-per-GPU topology:
@@ -257,6 +275,40 @@ purpose=separate fused dispatch-backward assignment-gradient from the recv-count
 Because May349 failed in `fused bwd recv_x` allocation rather than with the
 recv-counter timeout, the preferred next control is May351: keep FFI local
 collapse, but switch assignment gradients back to the JAX path.
+
+May351 was submitted as:
+
+```text
+parent=/dlwh/iris-run-job-20260622-195438
+child=/dlwh/iris-run-job-20260622-195438/grug-train-MAY351-DEEPEP-EP16-SAVEMOE-JAXASSIGN-FIXEDFFICOLLAPSE-L26-B64-N2-20260622-1954
+wandb=marin-community/marin_moe/MAY351-DEEPEP-EP16-SAVEMOE-JAXASSIGN-FIXEDFFICOLLAPSE-L26-B64-N2-20260622-1954
+```
+
+Result:
+
+- May351 admitted on two H100x8 tasks, built DeepEP, initialized all 16
+  process-per-GPU ranks, and confirmed:
+
+```text
+Grug compact mesh shape: {'replica_dcn': 1, 'data': 1, 'expert': 16, 'model': 1}; batch_shards=16
+```
+
+- The run compiled `jit_train_step` and dispatched step 0, but failed before
+  any W&B metric rows while waiting for `train/loss`:
+
+```text
+jax.errors.JaxRuntimeError: INTERNAL: NCCL operation ncclGroupEnd() failed:
+unhandled cuda error (run with NCCL_DEBUG=INFO for details). Last NCCL
+warning(error) log entry (may be unrelated) 'Cuda failure 2 'out of memory''.
+```
+
+- The child began retrying and was stopped after the first reproduced run
+  failure signal to avoid retry churn.
+
+Interpretation: switching `assignment_gradient` from `fused` to `jax` avoided
+the named May349 `cudaMallocAsync(fused bwd recv_x)` allocation, but EP16 B64
+still does not fit this path. The next useful control is the same
+`save_moe`/FFI-collapse/JAX-assignment path at global batch 32.
 
 May351 was submitted as:
 
