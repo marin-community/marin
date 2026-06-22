@@ -971,7 +971,7 @@ def test_deepep_dispatch_internode_exposes_static_jax_contract(monkeypatch: pyte
     assert dispatch.x_dispatch.shape == (24, 16)
     assert dispatch.assignment_weights.shape == (24,)
     assert dispatch.recv_token_indices.shape == (24,)
-    assert dispatch.assignment_destinations.shape == (2,)
+    assert dispatch.assignment_destinations.shape == (24,)
 
 
 def test_internode_dispatch_config_accepts_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:

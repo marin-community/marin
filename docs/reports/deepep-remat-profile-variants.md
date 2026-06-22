@@ -98,8 +98,23 @@ jax.errors.JaxRuntimeError: INVALID_ARGUMENT: DeepEP local assignment collapse d
 This is not the May345 B128 allocation failure. It isolates a separate issue in
 the explicit local-collapse FFI when combined with the no-remat B64 path.
 
-The next isolation run keeps EP16 B64 no-remat and fused assignment-gradient,
-but switches only the local collapse mode back to the JAX scatter path:
+Root cause: this branch was missing the internode dispatch output projection
+fix. The FFI dispatch result tuple stores:
+
+```text
+20 = local_group_cursors
+21 = recv_assignment_indices
+22 = assignment_destinations
+```
+
+but `_dispatch_internode_impl` returned `DeepEPInternodeDispatch(*results[:21])`,
+which exposed `local_group_cursors` as `assignment_destinations`. The FFI
+collapse correctly rejected that length-`local_experts` vector because the
+destination map must have length `max_recv_tokens * topk`.
+
+May347 was a temporary fallback isolation that kept EP16 B64 no-remat and fused
+assignment-gradient, but switched only the local collapse mode back to the JAX
+scatter path:
 
 ```text
 script=scratch/launch_may347_deepep_ep16_noremat_l26_b64_scatter_n2_throughput.sh
@@ -122,3 +137,17 @@ wandb=marin-community/marin_moe/MAY347-DEEPEP-EP16-NOREMAT-FUSEDASSIGN-SCATTERCO
 At launch time the child pods were `SchedulingGated` by Kueue admission/topology
 because the H100 nodepool was fully occupied by one admitted 32-pod workload.
 The run has not yet tested the model/runtime path.
+
+After fixing the projection and adding test coverage for the exposed
+`assignment_destinations` shape, the next preferred run is the original FFI
+collapse comparison:
+
+```text
+script=scratch/launch_may348_deepep_ep16_noremat_l26_b64_fixedffi_n2_throughput.sh
+shape=2 H100x8 nodes, EP16, global batch 64, 4 sequences/device
+moe=deepep_internode
+remat=none
+profiler=disabled
+collapse=ffi
+assignment_gradient=fused
+```

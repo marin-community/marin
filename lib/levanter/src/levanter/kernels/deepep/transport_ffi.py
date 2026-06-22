@@ -2194,7 +2194,29 @@ def _dispatch_internode_impl(
         assignment_capacity=np.int32(output_assignments),
         low_latency_mode=_internode_low_latency_mode(),
     )
-    return DeepEPInternodeDispatch(*results[:21])
+    return DeepEPInternodeDispatch(
+        recv_x=results[0],
+        recv_topk_idx=results[1],
+        recv_topk_weights=results[2],
+        is_token_in_rank=results[3],
+        recv_src_meta=results[4],
+        rdma_channel_prefix_matrix=results[5],
+        recv_rdma_channel_prefix_matrix=results[6],
+        recv_rdma_rank_prefix_sum=results[7],
+        gbl_channel_prefix_matrix=results[8],
+        recv_gbl_channel_prefix_matrix=results[9],
+        recv_gbl_rank_prefix_sum=results[10],
+        send_rdma_head=results[11],
+        send_nvl_head=results[12],
+        local_expert_counts=results[13],
+        num_recv_tokens=results[14],
+        num_recv_rdma_tokens=results[15],
+        local_group_sizes=results[16],
+        x_dispatch=results[17],
+        assignment_weights=results[18],
+        recv_token_indices=results[19],
+        assignment_destinations=results[22],
+    )
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(7, 8, 9, 10, 11, 12, 13))
