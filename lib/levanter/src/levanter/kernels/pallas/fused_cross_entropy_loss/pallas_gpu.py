@@ -22,6 +22,7 @@ _GB10_FULL_MATMUL_MAX_OUTPUT_ELEMENTS = 67_108_864
 _GB10_XLA_STREAMING_V_BLOCK_BATCH_1K = 2048
 _GB10_XLA_STREAMING_V_BLOCK_BATCH_4K = 3072
 _GB10_XLA_STREAMING_V_BLOCK_BATCH_8K = 3072
+_LARGE_VOCAB_THRESHOLD = 65536
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K = 6144
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS = 7168
 _NVIDIA_CUSTOM_BWD_V_BLOCK_LARGE_VOCAB = 8192
@@ -70,7 +71,7 @@ def _gb10_xla_fallback_block_sizes(
     b_dim: int,
     v_dim: int,
 ) -> BlockSizes | None:
-    if v_dim < 65536:
+    if v_dim < _LARGE_VOCAB_THRESHOLD:
         return None
     if b_dim >= 8192:
         return BlockSizes(v_block_size=_GB10_XLA_STREAMING_V_BLOCK_BATCH_8K)
@@ -404,7 +405,7 @@ def _gb10_custom_backward_v_block_size(
         return None
     if _should_use_gb10_full_matmul_fallback(x, w):
         return None
-    if w.shape[1] < 65536:
+    if w.shape[1] < _LARGE_VOCAB_THRESHOLD:
         return None
     if x.shape[0] >= 2048:
         return _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS
@@ -413,7 +414,7 @@ def _gb10_custom_backward_v_block_size(
     return None
 
 
-def _nvidia_custom_backward_v_block_size(
+def _h100_custom_backward_v_block_size(
     x: Float[Array, "B H"],
     w: Float[Array, "H V"],
 ) -> int | None:
@@ -425,7 +426,7 @@ def _nvidia_custom_backward_v_block_size(
         return None
     if x.dtype != jnp.bfloat16 or w.dtype != jnp.bfloat16:
         return None
-    if w.shape[1] < 65536:
+    if w.shape[1] < _LARGE_VOCAB_THRESHOLD:
         return None
     if x.shape[0] < 1024:
         return None
@@ -440,9 +441,9 @@ def _custom_backward_v_block_size(
     gb10_tuned = _gb10_custom_backward_v_block_size(x, w)
     if gb10_tuned is not None:
         return gb10_tuned
-    nvidia_tuned = _nvidia_custom_backward_v_block_size(x, w)
-    if nvidia_tuned is not None:
-        return nvidia_tuned
+    h100_tuned = _h100_custom_backward_v_block_size(x, w)
+    if h100_tuned is not None:
+        return h100_tuned
     if block_sizes is not None:
         return block_sizes.v_block_size
     return BlockSizes.get_default().v_block_size

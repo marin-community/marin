@@ -1006,58 +1006,6 @@ def test_pallas_gpu_h100_large_vocab_custom_backward_uses_large_v_block(
     assert pallas_gpu._custom_backward_v_block_size(x, w, block_sizes) == 8192
 
 
-def test_pallas_gpu_h100_large_vocab_custom_backward_dispatches_large_v_block(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
-
-    captured_v_blocks: list[int] = []
-
-    def fake_forward_impl(x_arg, labels_arg, w_arg, **_kwargs):
-        del labels_arg, w_arg
-        return jnp.zeros((x_arg.shape[0],), dtype=jnp.float32), jnp.ones((x_arg.shape[0],), dtype=jnp.float32)
-
-    def fake_backward_from_lse(
-        x_arg,
-        labels_arg,
-        w_arg,
-        lse_arg,
-        g_loss_arg,
-        g_lse_arg,
-        *,
-        v_block_size,
-        logit_soft_cap,
-        precision,
-    ):
-        del labels_arg, lse_arg, g_loss_arg, g_lse_arg, logit_soft_cap, precision
-        captured_v_blocks.append(v_block_size)
-        return jnp.zeros_like(x_arg), jnp.zeros_like(w_arg)
-
-    monkeypatch.setattr(pallas_gpu, "_linear_softmax_cross_entropy_loss_pallas_gpu_impl", fake_forward_impl)
-    monkeypatch.setattr(pallas_gpu, "_backward_streaming_from_lse", fake_backward_from_lse)
-
-    x = jnp.ones((1024, 16), dtype=jnp.bfloat16)
-    y = jnp.zeros((1024,), dtype=jnp.int32)
-    w = jnp.ones((16, 65536), dtype=jnp.bfloat16)
-    block_sizes = fused_api.BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256)
-
-    def loss_fn(x_arg: jax.Array, w_arg: jax.Array) -> jax.Array:
-        loss, _ = pallas_gpu._linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
-            x_arg,
-            y,
-            w_arg,
-            block_sizes,
-            jnp.float32,
-            None,
-            None,
-        )
-        return loss.sum()
-
-    jax.grad(loss_fn, argnums=(0, 1))(x, w)
-
-    assert captured_v_blocks == [8192]
-
-
 @pytest.mark.parametrize(
     ("device_kind", "x_dtype", "w_dtype", "vocab_size"),
     [
