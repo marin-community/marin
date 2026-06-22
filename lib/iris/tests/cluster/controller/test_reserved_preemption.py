@@ -311,29 +311,31 @@ def _band_map(**by_wire: int) -> dict[JobName, int]:
     return {JobName.from_wire(wire): band for wire, band in by_wire.items()}
 
 
-class TestStampDemandBands:
-    """The scheduler stamps each demand entry's effective band for the cap."""
+# -- _stamp_demand_bands: the scheduler stamps each demand entry's effective band for the cap --
 
-    def test_entry_takes_its_task_band(self):
-        bands = _band_map(**{"/u/prod/0": PRODUCTION})
 
-        [stamped] = _stamp_demand_bands([_demand("/u/prod/0")], bands)
+def test_stamp_demand_entry_takes_its_task_band():
+    bands = _band_map(**{"/u/prod/0": PRODUCTION})
 
-        assert stamped.band == PRODUCTION
+    [stamped] = _stamp_demand_bands([_demand("/u/prod/0")], bands)
 
-    def test_entry_without_resolved_band_is_unranked(self):
-        [stamped] = _stamp_demand_bands([_demand("/u/mystery/0")], _band_map())
+    assert stamped.band == PRODUCTION
 
-        assert stamped.band == UNRANKED_DEMAND_BAND
 
-    def test_coscheduled_entry_takes_highest_priority_member_band(self):
-        # A gang carries several tasks; the entry's band is the min (highest
-        # priority) so the whole slice is admitted at its strongest member's band.
-        bands = _band_map(**{"/u/g/0": BATCH, "/u/g/1": PRODUCTION})
+def test_stamp_demand_entry_without_resolved_band_is_unranked():
+    [stamped] = _stamp_demand_bands([_demand("/u/mystery/0")], _band_map())
 
-        [stamped] = _stamp_demand_bands([_demand("/u/g/0", "/u/g/1")], bands)
+    assert stamped.band == UNRANKED_DEMAND_BAND
 
-        assert stamped.band == PRODUCTION
+
+def test_stamp_demand_coscheduled_entry_takes_highest_priority_member_band():
+    # A gang carries several tasks; the entry's band is the min (highest
+    # priority) so the whole slice is admitted at its strongest member's band.
+    bands = _band_map(**{"/u/g/0": BATCH, "/u/g/1": PRODUCTION})
+
+    [stamped] = _stamp_demand_bands([_demand("/u/g/0", "/u/g/1")], bands)
+
+    assert stamped.band == PRODUCTION
 
 
 def test_coscheduled_preemptor_handled_once():
