@@ -112,14 +112,7 @@ def main() -> int:
     on_tpu = jax.devices()[0].platform == "tpu"
     logger.info("benchmarking on %d %s device(s)", jax.device_count(), jax.devices()[0].platform)
 
-    # Keep 2-way PP and 2-way EP; spend the rest on FSDP so all three axes stay >1
-    # on every slice (v6e-8 -> 2x2x2, v6e-16 -> 2x4x2, v6e-32 -> 2x8x2). 2x2x2 fits
-    # one v6e-8 host, so the full PP x FSDP x EP composition runs without any DCN.
-    # MOE_ZB_PP / MOE_ZB_EP override stage / expert counts (data fills the rest) so
-    # the axis composition can be isolated on hardware.
     num_stages = int(os.environ.get("MOE_ZB_PP", "2"))
-    num_expert = int(os.environ.get("MOE_ZB_EP", "2"))
-    num_data = max(1, jax.device_count() // (num_stages * num_expert))
     if on_tpu:
         num_layers, hidden_dim, num_experts = 8, 1024, 8
         seq_len, vocab_size = 512, 8192
@@ -131,16 +124,28 @@ def main() -> int:
         num_microbatches, microbatch = 8, 4
         warmup, iters = 2, 5
 
-    num_devices = num_stages * num_data * num_expert
+    num_devices = jax.device_count()
+    fill = num_devices // num_stages
     global_batch = num_microbatches * microbatch
     tokens_per_step = global_batch * seq_len
     cfg = _config(num_stages, num_layers, hidden_dim, num_experts, seq_len, vocab_size)
+
+    # The pipeline shard_map manualizes `stage` while `data`/`expert` stay GSPMD.
+    # Composing PP with ONE GSPMD axis lowers on TPU; composing both data AND expert
+    # at once trips XLA's SPMD partitioner (see parallelism.make_pipeline_mesh), so we
+    # sweep the two pairwise compositions. MOE_ZB_EP forces a single layout instead.
+    if "MOE_ZB_EP" in os.environ:
+        ep = int(os.environ["MOE_ZB_EP"])
+        layouts = [(num_stages, max(1, fill // ep), ep)]
+    else:
+        layouts = [(num_stages, fill, 1), (num_stages, 1, fill)]
+
+    fsdp_s = bench_fsdp(
+        cfg, num_devices, global_batch=global_batch, seq_len=seq_len, lr=3e-3, warmup=warmup, iters=iters, seed=0
+    )
+    fsdp_tps = tokens_per_step / fsdp_s
     logger.info(
-        "mesh=%dx%dx%d (stage,data,expert)=%d chips | layers=%d hidden=%d experts=%d seq=%d global_batch=%d tok/step=%d",
-        num_stages,
-        num_data,
-        num_expert,
-        num_devices,
+        "model: layers=%d hidden=%d experts=%d seq=%d global_batch=%d tok/step=%d",
         num_layers,
         hidden_dim,
         num_experts,
@@ -148,31 +153,39 @@ def main() -> int:
         global_batch,
         tokens_per_step,
     )
+    logger.info("FSDP (%d-way) baseline: %.1f ms/step  %.0f tokens/sec", num_devices, fsdp_s * 1e3, fsdp_tps)
 
-    pp_s = bench_pipeline_3d(
-        cfg,
-        num_stages,
-        num_data,
-        num_expert,
-        num_microbatches=num_microbatches,
-        microbatch=microbatch,
-        seq_len=seq_len,
-        lr=3e-3,
-        warmup=warmup,
-        iters=iters,
-        seed=0,
-    )
-    fsdp_s = bench_fsdp(
-        cfg, num_devices, global_batch=global_batch, seq_len=seq_len, lr=3e-3, warmup=warmup, iters=iters, seed=0
-    )
+    for ns, nd, ne in layouts:
+        kind = "PPxEP " if nd == 1 else "PPxFSDP" if ne == 1 else "PPxFSDPxEP"
+        pp_s = bench_pipeline_3d(
+            cfg,
+            ns,
+            nd,
+            ne,
+            num_microbatches=num_microbatches,
+            microbatch=microbatch,
+            seq_len=seq_len,
+            lr=3e-3,
+            warmup=warmup,
+            iters=iters,
+            seed=0,
+        )
+        pp_tps = tokens_per_step / pp_s
+        logger.info(
+            "%s (%dx%dx%d): %.1f ms/step  %.0f tokens/sec  %.2fx FSDP",
+            kind,
+            ns,
+            nd,
+            ne,
+            pp_s * 1e3,
+            pp_tps,
+            pp_tps / fsdp_tps,
+        )
 
-    pp_tps = tokens_per_step / pp_s
-    fsdp_tps = tokens_per_step / fsdp_s
     logger.info(
-        "PPxFSDPxEP (%dx%dx%d): %.1f ms/step  %.0f tokens/sec", num_stages, num_data, num_expert, pp_s * 1e3, pp_tps
+        "note: PPxFSDPxEP with data>1 AND expert>1 does not lower on TPU "
+        "(XLA SPMD partitioner; see parallelism.make_pipeline_mesh)"
     )
-    logger.info("FSDP (%d-way)        : %.1f ms/step  %.0f tokens/sec", num_devices, fsdp_s * 1e3, fsdp_tps)
-    logger.info("PPxFSDPxEP / FSDP throughput ratio: %.2fx", pp_tps / fsdp_tps)
     return 0
 
 

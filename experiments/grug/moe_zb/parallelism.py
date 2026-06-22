@@ -49,10 +49,14 @@ def make_pipeline_mesh(num_stages: int, num_data: int, num_expert: int) -> Mesh:
     model's einsums partition + reduce over them without explicit ``out_sharding``.
 
     Device ordering comes from ``mesh_utils.create_device_mesh`` so the axes map to
-    the physical TPU topology: a naive ``reshape`` of ``jax.devices()`` leaves the
-    ``stage`` ring-shift (ppermute) straddling non-adjacent chips, which makes XLA's
-    SPMD partitioner reject the collective device groups when ``data``/``expert`` are
-    also partitioned (``spmd_partitioner_util.cc`` num_devices_per_group check).
+    the physical TPU topology. Note this composes with ONE GSPMD-partitioned axis
+    (PP x FSDP at ``Sx D x1`` or PP x EP at ``S x1 x E`` both lower and run on a
+    v6e-8); composing TWO at once (``data`` AND ``expert`` both >1) trips XLA's SPMD
+    partitioner (``spmd_partitioner_util.cc:497`` num_devices_per_group check) — it
+    can't factor a GSPMD collective's device groups against a second GSPMD axis when
+    a third (``stage``) is manual. Mesh axis order (stage inner/outer, topology-aware)
+    does not change this; the fix is to manualize one of the two GSPMD axes (e.g. a
+    hand-written expert ``psum``) so only one GSPMD axis remains under the shard_map.
     """
     need = num_stages * num_data * num_expert
     if jax.device_count() < need:
