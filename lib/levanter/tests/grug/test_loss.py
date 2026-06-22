@@ -129,6 +129,39 @@ def test_xla_cross_entropy_model_sharded_vocab_matches_reference_and_gradients()
     np.testing.assert_allclose(actual_lm_head_grad, expected_lm_head_grad, rtol=1e-5, atol=1e-5)
 
 
+def test_vocab_sharded_ce_falls_back_to_xla_after_pallas_gpu_failure(monkeypatch: pytest.MonkeyPatch):
+    flat_hidden = jnp.linspace(-0.4, 0.5, 3 * 4, dtype=jnp.float32).reshape((3, 4))
+    lm_head = jnp.linspace(-0.3, 0.7, 4 * 5, dtype=jnp.float32).reshape((4, 5))
+    labels = jnp.array([0, 2, 4], dtype=jnp.int32)
+
+    def failing_pallas_gpu(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("synthetic pallas failure")
+
+    monkeypatch.setitem(grug_loss.IMPLEMENTATIONS, "pallas_gpu", failing_pallas_gpu)
+
+    with pytest.warns(RuntimeWarning, match="falling back to xla"):
+        actual_loss, actual_lse = grug_loss._local_linear_softmax_cross_entropy_loss(
+            flat_hidden,
+            labels,
+            lm_head,
+            dtype=jnp.float32,
+            precision=None,
+            implementation=("pallas_gpu", "xla"),
+        )
+    expected_loss, expected_lse = grug_loss._local_linear_softmax_cross_entropy_loss(
+        flat_hidden,
+        labels,
+        lm_head,
+        dtype=jnp.float32,
+        precision=None,
+        implementation="xla",
+    )
+
+    np.testing.assert_allclose(actual_loss, expected_loss, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(actual_lse, expected_lse, rtol=1e-5, atol=1e-5)
+
+
 def test_lm_head_spec_tracks_effective_default_ce_backend(monkeypatch: pytest.MonkeyPatch):
     class FakeMesh:
         empty = False

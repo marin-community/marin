@@ -8,6 +8,7 @@ reference implementation on non-TPU backends.
 """
 
 from typing import cast
+import warnings
 
 import jax
 import jax.numpy as jnp
@@ -111,7 +112,8 @@ def _local_linear_softmax_cross_entropy_loss(
     precision: jax.lax.PrecisionLike,
     implementation: str | tuple[str, ...] | None,
 ) -> tuple[jax.Array, jax.Array]:
-    for impl in _ce_implementation_order(implementation):
+    implementation_order = _ce_implementation_order(implementation)
+    for index, impl in enumerate(implementation_order):
         if impl == "pallas_gpu":
             pallas_gpu_impl = IMPLEMENTATIONS.get("pallas_gpu")
             if pallas_gpu_impl is None:
@@ -124,15 +126,25 @@ def _local_linear_softmax_cross_entropy_loss(
                 x_dtype=flat_hidden.dtype,
                 w_dtype=shard_lm_head.dtype,
             )
-            pallas_result = pallas_gpu_impl(
-                flat_hidden,
-                safe_labels,
-                shard_lm_head,
-                block_sizes=block_sizes,
-                dtype=dtype,
-                logit_soft_cap=None,
-                precision=precision,
-            )
+            try:
+                pallas_result = pallas_gpu_impl(
+                    flat_hidden,
+                    safe_labels,
+                    shard_lm_head,
+                    block_sizes=block_sizes,
+                    dtype=dtype,
+                    logit_soft_cap=None,
+                    precision=precision,
+                )
+            except Exception as exc:
+                if "xla" not in implementation_order[index + 1 :]:
+                    raise
+                warnings.warn(
+                    "pallas_gpu vocab-sharded fused CE failed; falling back to xla. " f"Error: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                continue
             local_loss = pallas_result[0]
             local_lse = pallas_result[1]
             return local_loss, local_lse
