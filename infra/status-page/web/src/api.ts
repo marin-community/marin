@@ -183,6 +183,56 @@ export interface JobsSnapshot {
   error?: string;
 }
 
+// Synthetic-canary probes, read from finelog's `infra.canary.metrics`. Mirrors
+// server/sources/probes.ts.
+export interface ProbeCheck {
+  probe: string;
+  up: boolean;
+  latencyMs: number | null;
+  collectedAt: string;
+}
+
+export interface ProvisionPool {
+  resourceType: string;
+  scaleGroup: string;
+  zone: string;
+  ready: number;
+  stockout: number;
+  error: number;
+  preempted: number;
+  outcomes: number;
+  successRatio: number | null;
+  latencyP50Seconds: number | null;
+  latencyP95Seconds: number | null;
+}
+
+export interface ProvisionFleet {
+  ready: number;
+  stockout: number;
+  error: number;
+  preempted: number;
+  outcomes: number;
+  successRatio: number | null;
+  poolsPlacing: number;
+  poolsStockoutDead: number;
+  latencyP50Seconds: number | null;
+  latencyP95Seconds: number | null;
+}
+
+export interface ProvisioningSnapshot {
+  windowHours: number | null;
+  collectedAt: string | null;
+  fleet: ProvisionFleet | null;
+  pools: ProvisionPool[];
+}
+
+export interface ProbesSnapshot {
+  checks: ProbeCheck[];
+  provisioning: ProvisioningSnapshot;
+  fetchedAt: string;
+  error?: string;
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path);
   if (!res.ok) {
@@ -199,3 +249,4 @@ export const fetchControlPlaneHealth = () =>
 export const fetchWorkers = () => getJson<WorkersSnapshot>("/api/workers");
 export const fetchWorkersHistory = () => getJson<WorkersHistoryResponse>("/api/workers/history");
 export const fetchJobs = () => getJson<JobsSnapshot>("/api/jobs");
+export const fetchProbes = () => getJson<ProbesSnapshot>("/api/probes");

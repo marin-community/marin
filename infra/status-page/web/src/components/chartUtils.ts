@@ -1,5 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 
+// Human "N{s,m,h,d} ago" for an ISO timestamp. Non-parseable input is
+// echoed back. Shared by every panel's "updated …" / "collected …" line.
+export function formatRelative(iso: string): string {
+  const delta = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(delta)) return iso;
+  const seconds = Math.round(delta / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+}
+
 export function formatClock(ms: number): string {
   const d = new Date(ms);
   const hh = d.getHours().toString().padStart(2, "0");
