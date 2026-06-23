@@ -35,7 +35,7 @@ import jax
 import jax.numpy as jnp
 from jax import lax
 
-from haliax._src.fp8 import compute_scale, get_fp8_max, quantize
+from haliax._src.fp8 import compute_scale, get_fp8_max, in_qdq, quantize
 from haliax.quantization import Fp8DotGeneralOp
 
 _E4M3 = jnp.float8_e4m3fn
@@ -108,7 +108,23 @@ def manual_fp8_dot(x: jax.Array, w: jax.Array, op: Fp8DotGeneralOp, dimension_nu
     return (acc * (x_scale * w_scale).astype(jnp.float32)).astype(comp_dtype)
 
 
-def build_dot(path: str, amax_history_length: int, dimension_numbers):
+def qdq_prec_dot(x: jax.Array, w: jax.Array, op: Fp8DotGeneralOp, dimension_numbers, precision) -> jax.Array:
+    """Operand-QDQ forward (like ``Fp8DotGeneralOp``) but at an *explicit* precision.
+
+    Tests the fwd-vs-bwd discriminator (GFP8-009): the backward grad dots fire
+    ``$f8`` at ``HIGHEST``, the forward declines at ``DEFAULT``. Haliax's
+    ``dot_general_with_precision`` hardwires DEFAULT, so we rebuild the same
+    ``in_qdq`` (round-trip) operands and call ``lax.dot_general`` with the chosen
+    precision. If ``HIGHEST`` now fires ``$f8`` at ``e4m3 × e4m3``, precision is the
+    gate; if not, the ``e5m2`` output-grad dtype (or DAG shape) is the discriminator.
+    """
+    comp_dtype = w.dtype
+    x_qdq = in_qdq(comp_dtype, x, op.input_scale, op.input_amax_history)
+    w_qdq = in_qdq(comp_dtype, w, op.kernel_scale, op.kernel_amax_history)
+    return lax.dot_general(x_qdq, w_qdq, dimension_numbers, precision=precision)
+
+
+def build_dot(path: str, amax_history_length: int, dimension_numbers, precision):
     """Return ``(dot_fn, op)`` for the requested lowering path.
 
     ``qdq`` calls the existing haliax ``Fp8DotGeneralOp`` verbatim: per-tensor
@@ -130,6 +146,8 @@ def build_dot(path: str, amax_history_length: int, dimension_numbers):
     op = Fp8DotGeneralOp.init(amax_history_length=amax_history_length)
     if path == "manual":
         return (lambda x, w, op: manual_fp8_dot(x, w, op, dimension_numbers)), op
+    if path == "qdq_prec":
+        return (lambda x, w, op: qdq_prec_dot(x, w, op, dimension_numbers, precision)), op
     return (lambda x, w, op: op(x, w, dimension_numbers)), op
 
 
@@ -168,9 +186,16 @@ def main() -> None:
     parser.add_argument("--dtype", type=str, default="bfloat16", help="operand dtype (QDQ quantizes internally)")
     parser.add_argument(
         "--path",
-        choices=("bf16", "qdq", "manual"),
+        choices=("bf16", "qdq", "manual", "qdq_prec"),
         default="bf16",
-        help="bf16 baseline; qdq = existing haliax Fp8DotGeneralOp; manual = direct-f8 dot (forward-only)",
+        help="bf16 baseline; qdq = existing haliax Fp8DotGeneralOp; manual = direct-f8 dot (forward-only); "
+        "qdq_prec = operand-QDQ at an explicit --precision (forward-only)",
+    )
+    parser.add_argument(
+        "--precision",
+        choices=("default", "highest"),
+        default="default",
+        help="dot precision for --path qdq_prec (tests whether HIGHEST gates the f8 forward fusion)",
     )
     parser.add_argument(
         "--layout",
@@ -192,10 +217,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # The manual arm exists to answer the open *forward* question (does a direct-f8
-    # dot fire $f8 where QDQ falls back?); its backward is not the e5m2 grad path.
-    if args.path == "manual" and not args.forward_only:
-        parser.error("--path manual is forward-only; pass --forward-only")
+    # manual/qdq_prec answer the *forward* $f8 question; their backward is not the
+    # e5m2 grad path, so they are forward-only.
+    if args.path in ("manual", "qdq_prec") and not args.forward_only:
+        parser.error(f"--path {args.path} is forward-only; pass --forward-only")
+    precision = lax.Precision.HIGHEST if args.precision == "highest" else lax.Precision.DEFAULT
 
     # Dump flags must be set before the backend initializes (first JAX op below).
     xla_dump_dir = _configure_xla_dump_dir(args.xla_dump_dir) if args.xla_dump_dir else None
@@ -213,7 +239,7 @@ def main() -> None:
     # scalar loss <out, cotangent> gives d(loss)/d(out) = cotangent.
     cotangent = jax.random.normal(key_c, (args.m, args.n), dtype=dtype)
 
-    dot, op = build_dot(args.path, args.amax_history_length, dimension_numbers)
+    dot, op = build_dot(args.path, args.amax_history_length, dimension_numbers, precision)
     if op is not None:
         # Seed the delayed-scaling histories from the actual tensors so the scales
         # are realistic non-unit *runtime* operands (a warmed-up delayed-scaling
@@ -247,6 +273,7 @@ def main() -> None:
     result = {
         "path": args.path,
         "layout": args.layout,
+        "precision": args.precision,
         "m": args.m,
         "k": args.k,
         "n": args.n,
