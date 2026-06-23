@@ -4,11 +4,9 @@
 
 # Deploy the Marin infra dashboard to Cloud Run with native IAP integration.
 #
-# Mirrors infra/iris-iap-proxy/deploy.sh: one Cloud Run service
-# (`marin-infra-dashboard`) in hai-gcp-models/us-central1, Direct VPC
-# egress so the service can reach the iris controller at its internal
-# IP, native IAP for auth, min/max-instances=1 to keep the TTL cache
-# warm.
+# One Cloud Run service (`marin-infra-dashboard`) in hai-gcp-models/us-central1,
+# Direct VPC egress so the service can reach the iris controller at its internal
+# IP, native IAP for auth, min/max-instances=1 to keep the TTL cache warm.
 #
 # The service account and GitHub-token secret still use the historical
 # `marin-status-page*` names — GCP does not support renaming either
@@ -65,10 +63,10 @@ echo -n "<paste-github-token>" | gcloud secrets create ${GITHUB_TOKEN_SECRET} \\
   --project=${PROJECT} \\
   --data-file=-
 
-# 3. OAuth consent screen + OAuth client are shared with the iris IAP
-#    proxy — no extra setup if you already ran
-#    infra/iris-iap-proxy/deploy.sh marin --setup. Otherwise see that
-#    script for the one-time project-level steps.
+# 3. OAuth consent screen + OAuth client are project-level and shared
+#    across the project's IAP-protected services, so there is no per-service
+#    setup here. The clients are created by hand in the Cloud Console (the
+#    IAP OAuth Admin API is turned down); see lib/iris/docs/iap-gclb.md.
 
 # 4. Deploy (use deploy.sh without --setup)
 

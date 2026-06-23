@@ -10,11 +10,13 @@ from click.testing import CliRunner
 from rigging import iap_login_cli
 from rigging.auth import IapLoginRequired, StaticTokenProvider
 from rigging.iap_login import (
+    MARIN_DESKTOP_OAUTH_CLIENT,
     IapCredentials,
     credentials_path,
     desktop_login,
     load_iap_credentials,
     provider_for,
+    read_desktop_client,
     save_iap_credentials,
 )
 
@@ -67,7 +69,7 @@ def test_provider_for_threads_cached_credentials_and_login_hint(home, monkeypatc
     assert "marin-login login marin" in captured["login_hint"]
 
 
-def test_desktop_login_caches_refresh_token(home, tmp_path, monkeypatch):
+def test_desktop_login_with_override_client_caches_refresh_token(home, tmp_path, monkeypatch):
     secret_file = tmp_path / "client_secret.json"
     secret_file.write_text(json.dumps({"installed": {"client_id": "cid", "client_secret": "secret"}}))
 
@@ -79,7 +81,7 @@ def test_desktop_login_caches_refresh_token(home, tmp_path, monkeypatch):
 
     monkeypatch.setattr("rigging.iap_login.run_iap_desktop_login", fake_login)
 
-    creds = desktop_login("marin", str(secret_file), headless=True)
+    creds = desktop_login("marin", read_desktop_client(str(secret_file)), headless=True)
 
     assert captured["args"] == ("cid", "secret", True)
     assert creds == IapCredentials("cid", "secret", "rtok")
@@ -87,32 +89,42 @@ def test_desktop_login_caches_refresh_token(home, tmp_path, monkeypatch):
     assert load_iap_credentials("marin") == creds
 
 
-def test_desktop_login_rejects_web_client_secret(home, tmp_path):
+def test_desktop_login_defaults_to_builtin_marin_client(home, monkeypatch):
+    captured = {}
+
+    def fake_login(client_id, client_secret, *, headless):
+        captured["args"] = (client_id, client_secret)
+        return "id-token", "rtok"
+
+    monkeypatch.setattr("rigging.iap_login.run_iap_desktop_login", fake_login)
+
+    desktop_login("marin", headless=True)
+
+    assert captured["args"] == (MARIN_DESKTOP_OAUTH_CLIENT.client_id, MARIN_DESKTOP_OAUTH_CLIENT.client_secret)
+
+
+def test_read_desktop_client_rejects_web_client_secret(tmp_path):
     secret_file = tmp_path / "web_secret.json"
     secret_file.write_text(json.dumps({"web": {"client_id": "cid", "client_secret": "secret"}}))
 
     with pytest.raises(ValueError, match="desktop"):
-        desktop_login("marin", str(secret_file))
+        read_desktop_client(str(secret_file))
 
 
-def test_cli_login_threads_args_and_detects_headless(home, tmp_path, monkeypatch):
-    secret_file = tmp_path / "desktop.json"
-    secret_file.write_text("{}")
-
+def test_cli_login_uses_builtin_client_and_detects_headless(home, monkeypatch):
     captured = {}
     monkeypatch.setattr(
         "rigging.iap_login_cli.desktop_login",
-        lambda name, client_secrets, *, headless: captured.update(
-            name=name, client_secrets=client_secrets, headless=headless
-        ),
+        lambda name, client, *, headless: captured.update(name=name, client=client, headless=headless),
     )
     # No browser on the box -> the CLI should pick the headless paste flow.
     monkeypatch.setattr("rigging.iap_login_cli.webbrowser.get", lambda *a: (_ for _ in ()).throw(webbrowser.Error()))
 
-    result = CliRunner().invoke(iap_login_cli.main, ["login", "marin", "--client-secrets", str(secret_file)])
+    result = CliRunner().invoke(iap_login_cli.main, ["login", "marin"])
 
     assert result.exit_code == 0, result.output
-    assert captured == {"name": "marin", "client_secrets": str(secret_file), "headless": True}
+    # With no --client-secrets the login uses the built-in Marin desktop client.
+    assert captured == {"name": "marin", "client": MARIN_DESKTOP_OAUTH_CLIENT, "headless": True}
 
 
 def test_cli_print_token_writes_only_token(monkeypatch):
@@ -132,4 +144,4 @@ def test_cli_print_token_without_login_reports_login_command(home):
     result = CliRunner().invoke(iap_login_cli.main, ["print-token", "marin"])
 
     assert result.exit_code == 1
-    assert "marin-login login marin --client-secrets <desktop.json>" in result.output
+    assert "marin-login login marin" in result.output
