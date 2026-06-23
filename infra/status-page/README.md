@@ -2,18 +2,21 @@
 
 Internal dashboard for Marin: ferry workflow status from GitHub Actions,
 a GitHub Build panel showing aggregate CI status for the last 100
-commits on main (per-commit check-run rollup), and an Iris section
+commits on main (per-commit check-run rollup), an Iris section
 surfacing controller reachability, worker counts (current + 24h
 history), active-environment Iris + finelog health, and the 24h
-job-state breakdown. Deployed as Cloud Run + native IAP, following the
-`infra/iris-iap-proxy/` pattern.
+job-state breakdown, and a Probes section reading the synthetic-canary
+metrics that `infra/probes/` writes to finelog — health checks plus the
+accelerator-provisioning rollup. Deployed as Cloud Run + native IAP,
+following the `infra/iris-iap-proxy/` pattern.
 
 ## Stack
 
 - **Server** — Node 20 + TypeScript + [Hono](https://hono.dev). Exposes
   `/api/ferry`, `/api/builds`, `/api/iris`, `/api/workers`,
   `/api/control-plane/health`, `/api/workers/history`, `/api/jobs`,
-  `/api/health`, and serves the built web UI from `web/dist`.
+  `/api/probes`, `/api/health`, and serves the built web UI from
+  `web/dist`.
 - **Web** — Vite + React 18 + TypeScript + Jotai + `@tanstack/react-query`
   + Tailwind.
 - Single `package.json`, multi-stage Dockerfile, single service account,
@@ -31,9 +34,11 @@ server/
     githubActions.ts   Ferry workflow runs (REST API)
     githubCommits.ts   Build panel: per-commit CI rollup on main (GraphQL)
     iris.ts            iris controller /health caller
-    serviceHealth.ts   active env Iris + finelog /health probes
+    serviceHealth.ts   active env Iris + finelog /health probes (+ finelog URL)
     workers.ts         iris worker counts via the ListWorkers RPC
     jobs.ts            iris 24h job-state breakdown via ExecuteRawQuery
+    probes.ts          synthetic-canary checks + provisioning from finelog
+    finelogQuery.ts    finelog StatsService SQL query → Arrow IPC decode
     controllerQuery.ts helper for the raw-SQL Connect RPC
     discovery.ts       GCE label → controller internal URL
 web/
@@ -51,6 +56,7 @@ web/
       useWorkers.ts
       useWorkersHistory.ts
       useJobs.ts
+      useProbes.ts
     components/
       FerryPanel.tsx
       BuildPanel.tsx  GitHub CI, last 100 runs on main
@@ -58,6 +64,7 @@ web/
       ControlPlanePanel.tsx active env Iris + finelog latency chart
       WorkersPanel.tsx
       JobsPanel.tsx
+      ProbesPanel.tsx synthetic-canary health checks + provisioning rollup
     style.css       Tailwind entry
 Dockerfile          multi-stage build → node:20-slim runtime
 deploy.sh           Cloud Run + IAP deploy
@@ -188,6 +195,39 @@ pending, expected, and commits with no checks configured — so the
 number reflects actual CI pass/fail ratios rather than being dragged
 down by in-flight builds.
 
+### Probes panel
+
+The Probes panel renders the synthetic-canary telemetry the
+`infra/probes/` daemon writes to the finelog `infra.canary.metrics`
+namespace (one flat `{metric, value, labels, collected_at}` row per
+sample). Two bounded DuckDB queries run against the **active
+environment's** finelog log-server through its `StatsService.Query`
+Connect RPC — the same JSON-over-HTTP shape the controller's
+`ExecuteRawQuery` uses, except the result is an Arrow IPC stream, which
+`server/sources/finelogQuery.ts` decodes with `apache-arrow`. No
+controller hop is involved; the finelog URL is resolved by
+`activeFinelogUrl()` (same overrides + GCE discovery as the
+control-plane health probe). The two queries are:
+
+- **Health checks** — the latest `probe_up` (+ matching
+  `probe_latency_ms`) per synthetic check (`controller-ping`,
+  `finelog-write`, `iris-job-submit/<zone>`). Only checks that emit
+  `probe_up` appear; a gauge collector surfaces here only when it
+  fails.
+- **Provisioning** — the latest provisioning cycle's `provision_*`
+  gauges, which the probe rolls up from the controller's
+  `iris.provisioning` namespace over a trailing window (default 3h).
+  Rendered as a fleet summary (create success ratio = ready /
+  resolved attempts, create→ready latency p50/p95, ready / stockout /
+  error / preempted counts, pools placing vs. stuck) plus a per-pool
+  breakdown keyed by `(resource_type, scale_group, zone)`. Per-pool
+  success ratio is computed client-side; preemptions are runtime
+  deaths and excluded from the create-success rate. See
+  `infra/probes/src/provisioning.py` for the metric vocabulary.
+
+The panel surfaces a friendly empty state until the canary has written
+metrics (e.g. before first deploy, or if the namespace is missing).
+
 ## Deploy
 
 ```bash
@@ -219,6 +259,7 @@ plus the dev controller discovery settings.
 | Workers         | 15s         | 30s                        | current only        |
 | Workers history | in-memory   | 30s                        | 24h ring buffer     |
 | Jobs            | 60s         | 60s                        | 24h window          |
+| Probes          | 60s         | 60s                        | latest cycle        |
 
 Backend TTL is the authoritative shield against the GitHub rate limit —
 frontend polling can be tuned without affecting upstream. Concurrent
