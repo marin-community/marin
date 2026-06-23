@@ -93,13 +93,13 @@ function regionFromGroupName(name: string): string {
 
 const fleetSummary = computed<FleetChipSummary[]>(() => {
   const now = Date.now()
-  const chips = new Map<string, { total: number; inUse: number; uptimes: number[]; regions: Map<string, number>; bands: Map<string, number>; capacityByRegion: Map<string, { statuses: string[]; failures: number }> }>()
+  const chips = new Map<string, { total: number; inUse: number; uptimes: number[]; regions: Map<string, number>; bands: Map<string, number>; capacityByRegion: Map<string, string[]> }>()
 
   for (const g of props.groups) {
     const chip = chipFromGroupName(g.name)
     if (chip == null) continue
     const region = regionFromGroupName(g.name)
-    const entry = chips.get(chip) ?? { total: 0, inUse: 0, uptimes: [], regions: new Map(), bands: new Map<string, number>(), capacityByRegion: new Map<string, { statuses: string[]; failures: number }>() }
+    const entry = chips.get(chip) ?? { total: 0, inUse: 0, uptimes: [], regions: new Map(), bands: new Map<string, number>(), capacityByRegion: new Map<string, string[]>() }
 
     const readyCount = g.sliceStateCounts?.['ready'] ?? 0
     const readySlices = (g.slices ?? []).filter(s => {
@@ -113,10 +113,9 @@ const fleetSummary = computed<FleetChipSummary[]>(() => {
     entry.inUse += readySlices.filter(s => sliceInUse(s)).length
     entry.regions.set(region, (entry.regions.get(region) ?? 0) + sliceCount)
 
-    const capEntry = entry.capacityByRegion.get(region) ?? { statuses: [], failures: 0 }
-    if (g.availabilityStatus) capEntry.statuses.push(g.availabilityStatus)
-    capEntry.failures += g.consecutiveFailures ?? 0
-    entry.capacityByRegion.set(region, capEntry)
+    const statuses = entry.capacityByRegion.get(region) ?? []
+    if (g.availabilityStatus) statuses.push(g.availabilityStatus)
+    entry.capacityByRegion.set(region, statuses)
 
     // Assign each in-use slice to a single dominant band (the band with the most
     // task-count across its VMs) so band shares partition slices rather than
@@ -171,14 +170,14 @@ const fleetSummary = computed<FleetChipSummary[]>(() => {
       bands: Array.from(c.bands.entries())
         .map(([band, count]) => ({ band, count }))
         .sort((a, b) => b.count - a.count),
-      capacity: Array.from(c.capacityByRegion.entries()).map(([region, cap]) => {
-        const hasQuotaExceeded = cap.statuses.includes('quota_exceeded')
-        const hasBackoff = cap.statuses.includes('backoff')
-        const hasAtCapacity = cap.statuses.includes('at_capacity')
-        if (hasQuotaExceeded) {
+      capacity: Array.from(c.capacityByRegion.entries()).map(([region, statuses]) => {
+        if (statuses.includes('quota_exceeded')) {
           return { region, status: 'blocked' as const, detail: 'At Region Quota' }
         }
-        if (hasAtCapacity || hasBackoff) {
+        if (statuses.includes('at_max_slices')) {
+          return { region, status: 'limited' as const, detail: 'At Max Slices' }
+        }
+        if (statuses.includes('backoff')) {
           return { region, status: 'limited' as const, detail: 'At TRC Capacity' }
         }
         return { region, status: 'available' as const, detail: 'Compute Potentially Available' }
