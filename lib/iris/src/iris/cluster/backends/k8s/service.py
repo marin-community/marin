@@ -134,7 +134,7 @@ class K8sService(Protocol):
         field_selector: str | None = None,
     ) -> list[dict]: ...
 
-    def top_pod(self, pod_name: str) -> PodResourceUsage | None: ...
+    def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]: ...
 
     def read_file(
         self,
@@ -684,39 +684,50 @@ class CloudK8sService:
         """Remove files inside a Pod container. Ignores missing files."""
         self.exec(pod_name, ["rm", "-f", *paths], container=container, timeout=10)
 
-    # -- top_pod -------------------------------------------------------------
+    # -- top_pods ------------------------------------------------------------
 
-    def top_pod(self, pod_name: str) -> PodResourceUsage | None:
-        """Get CPU/memory usage for a pod via metrics.k8s.io API."""
-        logger.info("k8s: top_pod %s", pod_name)
-        with slow_log(logger, f"top_pod {pod_name}", threshold_ms=_SLOW_THRESHOLD_MS):
+    def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]:
+        """Return CPU/memory usage for every pod, keyed by pod name.
+
+        Lists ``PodMetrics`` for the namespace (optionally scoped by ``labels``)
+        via the metrics.k8s.io list endpoint. A 404 means the metrics API is
+        unavailable (metrics-server absent); returns an empty map rather than
+        raising so callers degrade quietly.
+        """
+        logger.info("k8s: top_pods labels=%s", labels)
+        kwargs = self._request_timeout_kwargs()
+        if labels:
+            kwargs["label_selector"] = _label_selector(labels)
+        with slow_log(logger, "top_pods", threshold_ms=_SLOW_THRESHOLD_MS):
             try:
-                result = self._custom.get_namespaced_custom_object(
+                result = self._custom.list_namespaced_custom_object(
                     group="metrics.k8s.io",
                     version="v1beta1",
                     namespace=self.namespace,
                     plural="pods",
-                    name=pod_name,
-                    **self._request_timeout_kwargs(),
+                    **kwargs,
                 )
             except ApiException as e:
                 if e.status == 404:
-                    return None
+                    return {}
                 raise
 
-        containers = result.get("containers", [])
-        if not containers:
-            return None
-
-        total_cpu = 0
-        total_mem = 0
-        for c in containers:
-            usage = c.get("usage", {})
-            if "cpu" in usage:
-                total_cpu += parse_k8s_cpu(usage["cpu"])
-            if "memory" in usage:
-                total_mem += parse_k8s_quantity(usage["memory"])
-        return PodResourceUsage(cpu_millicores=total_cpu, memory_bytes=total_mem)
+        usage_by_pod: dict[str, PodResourceUsage] = {}
+        for item in result.get("items", []):
+            name = item.get("metadata", {}).get("name", "")
+            containers = item.get("containers", [])
+            if not name or not containers:
+                continue
+            total_cpu = 0
+            total_mem = 0
+            for c in containers:
+                usage = c.get("usage", {})
+                if "cpu" in usage:
+                    total_cpu += parse_k8s_cpu(usage["cpu"])
+                if "memory" in usage:
+                    total_mem += parse_k8s_quantity(usage["memory"])
+            usage_by_pod[name] = PodResourceUsage(cpu_millicores=total_cpu, memory_bytes=total_mem)
+        return usage_by_pod
 
     # -- port_forward (subprocess-based) -------------------------------------
 
