@@ -17,6 +17,7 @@ from rigging.config_discovery import list_cluster_configs
 from rigging.filesystem import MARIN_CLUSTER_CONFIG_DIRS
 
 from marin_cluster import config as cluster_config
+from marin_cluster import login as login_flow
 
 _MARIN_CLUSTER_ENV = "MARIN_CLUSTER"
 
@@ -37,6 +38,26 @@ def main(ctx: click.Context, cluster: str | None) -> None:
     # Export so delegated iris/finelog commands resolve the same cluster.
     if active:
         os.environ[_MARIN_CLUSTER_ENV] = active
+
+
+@main.command("login")
+@click.pass_context
+def login_cmd(ctx: click.Context) -> None:
+    """Authenticate to the active cluster and cache one set of credentials."""
+    try:
+        record = login_flow.login(ctx.obj.get("cluster"))
+    except (ValueError, ImportError) as e:
+        raise click.ClickException(str(e)) from e
+    user = record.metadata.get("user_id", "?")
+    click.echo(f"Authenticated as {user}; credentials cached for cluster '{record.cluster}'.")
+
+
+@main.command("logout")
+@click.pass_context
+def logout_cmd(ctx: click.Context) -> None:
+    """Remove cached credentials for the active cluster."""
+    removed = login_flow.logout(ctx.obj.get("cluster"))
+    click.echo("Logged out." if removed else "No cached credentials to remove.")
 
 
 @main.group()
