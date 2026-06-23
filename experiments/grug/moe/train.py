@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import importlib
 import logging
 import os
 import pickle
@@ -50,6 +51,7 @@ from levanter.kernels.deepep.availability import (
     DEEPEP_CUDA_ARCH_ENV,
     DEEPEP_KNOWN_GOOD_COMMIT,
     DEEPEP_SRC_ENV,
+    deepep_nvcc_path,
 )
 from levanter.kernels.deepep.layout_ffi import build_layout_library
 from levanter.kernels.deepep.transport_ffi import (
@@ -405,10 +407,29 @@ def _run_grug_local_worker_from_env() -> None:
 def _maybe_prebuild_deepep_intranode_libraries(model: GrugModelConfig) -> None:
     if model.moe_implementation not in ("deepep", "deepep_composed"):
         return
+    _ensure_deepep_nvcc_available()
     logger.info("Prebuilding DeepEP intranode FFI libraries")
     layout_library = build_layout_library()
     intranode_library = build_transport_library(TransportBuildMode.INTRANODE)
     logger.info("DeepEP intranode prebuilt libraries: layout=%s intranode=%s", layout_library, intranode_library)
+
+
+def _ensure_deepep_nvcc_available() -> None:
+    if (nvcc := deepep_nvcc_path()) is not None:
+        logger.info("DeepEP nvcc available at %s", nvcc)
+        return
+
+    uv = shutil.which("uv")
+    if uv is not None:
+        cmd = [uv, "pip", "install", "--link-mode", "symlink", _DEEPEP_NVCC_PIP_PACKAGE]
+    else:
+        cmd = [sys.executable, "-m", "pip", "install", _DEEPEP_NVCC_PIP_PACKAGE]
+    logger.info("DeepEP nvcc missing; installing %s", _DEEPEP_NVCC_PIP_PACKAGE)
+    subprocess.run(cmd, check=True)
+    importlib.invalidate_caches()
+    if (nvcc := deepep_nvcc_path()) is None:
+        raise RuntimeError("Installed nvidia-cuda-nvcc, but DeepEP still cannot resolve nvcc")
+    logger.info("DeepEP nvcc available after install at %s", nvcc)
 
 
 def _deepep_environment_extras(model: GrugModelConfig) -> tuple[str, ...]:
