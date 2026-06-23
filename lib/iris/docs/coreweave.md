@@ -20,7 +20,7 @@ Console links:
 create a token for `marin-gpu` and download its kubeconfig.
 
 **2. Install the kubeconfig** at `~/.kube/coreweave-iris-gpu` (context
-`marin-gpu_US-EAST-02A`), plus controller extras and R2 credentials:
+`marin-gpu_US-EAST-02A`), plus R2 credentials:
 
 ```bash
 mkdir -p ~/.kube
@@ -28,37 +28,51 @@ mv ~/Downloads/kubeconfig.yaml ~/.kube/coreweave-iris-gpu
 export KUBECONFIG=~/.kube/coreweave-iris-gpu
 kubectl cluster-info   # sanity check
 
-uv pip install 'marin-iris[controller]'
 export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
 export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
 ```
+
+The CoreWeave operator path needs the Iris controller extra (`kubernetes`). From
+the Marin repo root, run `uv run --package marin-iris --extra controller iris ...`;
+if `marin-iris[controller]` is already installed, plain `iris ...` also works.
 
 **3. Check cluster status.** `--cluster=cw-us-east-02a` resolves the in-tree
 config and opens a `kubectl port-forward` to the controller for you:
 
 ```bash
-uv run iris --cluster=cw-us-east-02a cluster status
+uv run --package marin-iris --extra controller iris \
+  --cluster=cw-us-east-02a cluster status
 ```
 
 If the controller isn't up yet, start it (idempotent):
-`uv run iris --cluster=cw-us-east-02a cluster start`.
+
+```bash
+uv run --package marin-iris --extra controller iris \
+  --cluster=cw-us-east-02a cluster start
+```
 
 **4. Hello world.**
 
 ```bash
 # CPU
-uv run iris --cluster=cw-us-east-02a job run \
+uv run --package marin-iris --extra controller iris \
+  --cluster=cw-us-east-02a job run \
   --cpu 1 --memory 2GB --extra cpu \
   -- python -c "print('Hello from CoreWeave!')"
 
 # One H100, proving JAX sees the GPU
-uv run iris --cluster=cw-us-east-02a job run \
+uv run --package marin-iris --extra controller iris \
+  --cluster=cw-us-east-02a job run \
   --cpu 8 --memory 64GB --gpu H100x1 --enable-extra-resources --extra gpu \
   -- python -c "import jax; print(jax.devices())"
 ```
 
-Follow logs of a detached job with
-`uv run iris --cluster=cw-us-east-02a job logs <job-id> -f`.
+Follow logs of a detached job with:
+
+```bash
+uv run --package marin-iris --extra controller iris \
+  --cluster=cw-us-east-02a job logs <job-id> -f
+```
 
 ## 1. Overview
 
@@ -195,6 +209,9 @@ pods via `envFrom`.
 
 ### Lifecycle
 
+These examples assume `marin-iris[controller]` is installed. From the Marin repo
+root, prefix the command with `uv run --package marin-iris --extra controller`.
+
 ```bash
 iris --cluster=<name> cluster start      # idempotent; reconciles everything below
 iris --cluster=<name> cluster status
@@ -227,7 +244,9 @@ iris cluster list
 `kubectl port-forward` to the controller service. This path requires the
 `iris[controller]` extras (`kubernetes`). Without them,
 auto-tunneled CoreWeave commands fail before connecting:
-`ImportError: Install iris[controller] to use CloudK8sService`.
+`ImportError: Install iris[controller] to use CloudK8sService`. From the Marin
+repo root, rerun the command with `uv run --package marin-iris --extra
+controller iris ...`.
 
 Fallback: manual port-forward if you need a long-lived tunnel:
 
