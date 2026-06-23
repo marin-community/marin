@@ -1,17 +1,8 @@
 import { useIris } from "../hooks/useIris";
-import { formatDuration } from "./chartUtils";
+import { formatDuration, formatRelative } from "./chartUtils";
 import { ControlPlanePanel } from "./ControlPlanePanel";
 import { JobsPanel } from "./JobsPanel";
 import { WorkersPanel } from "./WorkersPanel";
-
-function formatRelative(iso: string): string {
-  const delta = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(delta)) return iso;
-  const seconds = Math.round(delta / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.round(seconds / 60);
-  return `${minutes}m ago`;
-}
 
 function percentileTitle(spanMs: number, count: number): string {
   if (spanMs > 0) return `over last ${formatDuration(spanMs)}, n=${count}`;

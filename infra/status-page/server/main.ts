@@ -8,6 +8,7 @@
 //   GET /api/workers         — current iris worker counts (15s cache)
 //   GET /api/workers/history — in-memory 24h worker count ring buffer
 //   GET /api/jobs            — iris job counts for last 24h by state (60s cache)
+//   GET /api/probes          — synthetic-canary checks + provisioning from finelog (60s cache)
 //   GET /api/health          — liveness probe, no upstream calls
 //   GET /*                   — static assets from web/dist (production only)
 //
@@ -28,6 +29,7 @@ import {
 import { fetchBuildsOnMain, type BuildsResponse } from "./sources/githubCommits.js";
 import { irisStatus, pingIris, type IrisPingResult } from "./sources/iris.js";
 import { jobsSnapshot, type JobsSnapshot } from "./sources/jobs.js";
+import { probesSnapshot, type ProbesSnapshot } from "./sources/probes.js";
 import {
   serviceHealthResponse,
   serviceHealthSample,
@@ -45,6 +47,9 @@ const ferryCache = new TTLCache<FerryTierStatus>(60_000);
 const buildCache = new TTLCache<BuildsResponse>(60_000);
 const workersCache = new TTLCache<WorkersSnapshot>(15_000);
 const jobsCache = new TTLCache<JobsSnapshot>(60_000);
+// Probe metrics turn over slowly — health checks every ≤5min, provisioning
+// every 15min — so a 60s shield is plenty and keeps finelog query load low.
+const probesCache = new TTLCache<ProbesSnapshot>(60_000);
 
 // Iris controller ping sampler. We probe /health on a fixed cadence and
 // keep a rolling 1h window of successful samples so /api/iris can report
@@ -181,6 +186,11 @@ app.get("/api/workers/history", (c) => {
 
 app.get("/api/jobs", async (c) => {
   const snapshot = await jobsCache.get("jobs", () => jobsSnapshot());
+  return c.json(snapshot);
+});
+
+app.get("/api/probes", async (c) => {
+  const snapshot = await probesCache.get("probes", () => probesSnapshot());
   return c.json(snapshot);
 });
 

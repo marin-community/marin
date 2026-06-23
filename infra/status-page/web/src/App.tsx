@@ -2,6 +2,7 @@ import { useAtom } from "jotai";
 import { BuildPanel } from "./components/BuildPanel";
 import { FerryPanel } from "./components/FerryPanel";
 import { IrisPanel } from "./components/IrisPanel";
+import { ProbesPanel } from "./components/ProbesPanel";
 import { autoRefreshAtom } from "./state";
 
 export function App() {
@@ -26,6 +27,7 @@ export function App() {
         <FerryPanel />
         <BuildPanel />
         <IrisPanel />
+        <ProbesPanel />
       </div>
     </div>
   );
