@@ -1,0 +1,124 @@
+{
+  "rules": [
+    {
+      "semantic_op": "muon_ns_gram",
+      "match": {
+        "op_name_regex": "(?:grouped_muonh|grug_muon)/.*/newton_schulz.*?/gram/|newton_schulz_(?:grouped_4d|replicated)/.*/gram/"
+      }
+    },
+    {
+      "semantic_op": "muon_ns_polynomial",
+      "match": {
+        "op_name_regex": "(?:grouped_muonh|grug_muon)/.*/newton_schulz.*?/polynomial/|newton_schulz_(?:grouped_4d|replicated)/.*/polynomial/"
+      }
+    },
+    {
+      "semantic_op": "muon_ns_apply",
+      "match": {
+        "op_name_regex": "(?:grouped_muonh|grug_muon)/.*/newton_schulz.*?/apply/|newton_schulz_(?:grouped_4d|replicated)/.*/apply/"
+      }
+    },
+    {
+      "semantic_op": "grouped_muon_restore",
+      "match": {
+        "op_name_regex": "grouped_muonh/.*/chunk_local_restore/.*/all_gather"
+      }
+    },
+    {
+      "semantic_op": "muon_hyperball",
+      "match": {
+        "op_name_regex": "(?:grouped_muonh|muonh)/.*/hyperball/"
+      }
+    },
+    {
+      "semantic_op": "optimizer_vector_ops",
+      "match": {
+        "op_name_regex": "newton_schulz.*?/normalize_input/|apply_updates/|adamh/.*/hyperball/|adamh/.*/update_second_moment/|grug_muon/nesterov_update/"
+      }
+    },
+    {
+      "semantic_op": "unaccounted_for",
+      "match": {
+        "op_name_regex": "unaccounted_for"
+      }
+    },
+    {
+      "semantic_op": "expert_all_to_all",
+      "match": {
+        "op_name_regex": "(?=.*(?:MoEExpertMlp|moe_mlp|expert))(?=.*(?:all_gather|gather/.*/jit\\(_where\\)|scatter/reduce_scatter))"
+      }
+    },
+    {
+      "semantic_op": "expert_activation_reduce_scatter",
+      "match": {
+        "op_name_regex": "(?=.*(?:MoEExpertMlp|moe_mlp|expert))(?=.*reduce_scatter)"
+      }
+    },
+    {
+      "semantic_op": "expert_backward_psum",
+      "match": {
+        "op_name_regex": "(?=.*(?:MoEExpertMlp|moe_mlp|expert))(?=.*psum)"
+      }
+    },
+    {
+      "semantic_op": "expert_all_to_all",
+      "match": {
+        "op_name_regex": "(?=.*(?:MoEExpertMlp|moe_mlp|expert))(?=.*(?:all[_-]?to[_-]?all|AllToAll|collective-permute|ffi|custom-call))"
+      }
+    },
+    {
+      "semantic_op": "attention_fa4",
+      "match": {
+        "op_name_regex": "fa4_cute|SegmentedFlashAttention"
+      }
+    },
+    {
+      "semantic_op": "attention_block_other",
+      "match": {
+        "op_name_regex": "CausalSelfAttention/"
+      }
+    },
+    {
+      "semantic_op": "moe_expert",
+      "match": {
+        "op_name_regex": "MoEExpertMlp|MoEMLP|moe_mlp|ragged|gmm"
+      }
+    },
+    {
+      "semantic_op": "dense_mlp",
+      "match": {
+        "op_name_regex": "DenseMLP/"
+      }
+    },
+    {
+      "semantic_op": "norms",
+      "match": {
+        "op_name_regex": "RMSNorm/|GatedNorm/"
+      }
+    },
+    {
+      "semantic_op": "remat_overhead",
+      "match": {
+        "op_name_regex": "remat2:|wrapped_transpose|wrapped_concatenate"
+      }
+    },
+    {
+      "semantic_op": "scatter_add_collective",
+      "match": {
+        "op_name_regex": "scatter-add.*AllReduce"
+      }
+    },
+    {
+      "semantic_op": "unknown_collective",
+      "match": {
+        "op_name_regex": "ncclDevKernel_(?:AllReduce|AllGather|ReduceScatter|AllToAll)"
+      }
+    },
+    {
+      "semantic_op": "xent",
+      "match": {
+        "op_name_regex": "cross_entropy|softmax_cross_entropy|fused_linear_softmax"
+      }
+    }
+  ]
+}

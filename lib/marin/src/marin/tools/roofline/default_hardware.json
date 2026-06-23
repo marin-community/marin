@@ -1,0 +1,154 @@
+{
+  "hardware": [
+    {
+      "name": "coreweave_h100",
+      "devices_per_host": 8,
+      "bf16_peak_tflops_per_device": 989.0,
+      "fp32_peak_tflops_per_device": 67.0,
+      "hbm_bandwidth_gbps_per_device": 3350.0,
+      "intra_host_collective_bandwidth_gbps": 900.0,
+      "inter_host_collective_bandwidth_gbps": 400.0,
+      "default_compute_efficiency": {
+        "attention_fwd": 0.5,
+        "attention_bwd": 0.5,
+        "dense_mlp_gemm": 0.7,
+        "moe_gmm": 0.5,
+        "xent": 0.3,
+        "muon_ns": 0.8,
+        "optimizer_vector_ops": 0.2
+      },
+      "default_comm_efficiency": {
+        "fsdp_param_all_gather": 0.6,
+        "grad_reduce_scatter": 0.6,
+        "grouped_muon_restore": 0.5,
+        "expert_all_to_all": 0.5
+      },
+      "provenance": "Editable v1 default; calibrate with cluster-local microbenchmarks before treating as authoritative."
+    },
+    {
+      "name": "b200",
+      "devices_per_host": 8,
+      "bf16_peak_tflops_per_device": 2250.0,
+      "fp32_peak_tflops_per_device": 72.0,
+      "hbm_bandwidth_gbps_per_device": 8000.0,
+      "intra_host_collective_bandwidth_gbps": 1800.0,
+      "inter_host_collective_bandwidth_gbps": 400.0,
+      "default_compute_efficiency": {
+        "attention_fwd": 0.5,
+        "attention_bwd": 0.5,
+        "dense_mlp_gemm": 0.7,
+        "moe_gmm": 0.5,
+        "xent": 0.3,
+        "muon_ns": 0.8,
+        "optimizer_vector_ops": 0.2
+      },
+      "default_comm_efficiency": {
+        "fsdp_param_all_gather": 0.6,
+        "grad_reduce_scatter": 0.6,
+        "grouped_muon_restore": 0.5,
+        "expert_all_to_all": 0.5
+      },
+      "provenance": "Editable v1 default; calibrate with deployed B200 nodes."
+    },
+    {
+      "name": "tpu_v4",
+      "devices_per_host": 4,
+      "bf16_peak_tflops_per_device": 275.0,
+      "fp32_peak_tflops_per_device": 19.5,
+      "hbm_bandwidth_gbps_per_device": 1200.0,
+      "intra_host_collective_bandwidth_gbps": 200.0,
+      "inter_host_collective_bandwidth_gbps": 100.0,
+      "default_compute_efficiency": {
+        "attention_fwd": 0.45,
+        "attention_bwd": 0.45,
+        "dense_mlp_gemm": 0.65,
+        "moe_gmm": 0.45,
+        "xent": 0.3,
+        "muon_ns": 0.75,
+        "optimizer_vector_ops": 0.2
+      },
+      "default_comm_efficiency": {
+        "fsdp_param_all_gather": 0.55,
+        "grad_reduce_scatter": 0.55,
+        "grouped_muon_restore": 0.5,
+        "expert_all_to_all": 0.5
+      },
+      "provenance": "Editable v1 default."
+    },
+    {
+      "name": "tpu_v5p",
+      "devices_per_host": 4,
+      "bf16_peak_tflops_per_device": 459.0,
+      "fp32_peak_tflops_per_device": 32.0,
+      "hbm_bandwidth_gbps_per_device": 2765.0,
+      "intra_host_collective_bandwidth_gbps": 450.0,
+      "inter_host_collective_bandwidth_gbps": 200.0,
+      "default_compute_efficiency": {
+        "attention_fwd": 0.45,
+        "attention_bwd": 0.45,
+        "dense_mlp_gemm": 0.65,
+        "moe_gmm": 0.45,
+        "xent": 0.3,
+        "muon_ns": 0.75,
+        "optimizer_vector_ops": 0.2
+      },
+      "default_comm_efficiency": {
+        "fsdp_param_all_gather": 0.55,
+        "grad_reduce_scatter": 0.55,
+        "grouped_muon_restore": 0.5,
+        "expert_all_to_all": 0.5
+      },
+      "provenance": "Editable v1 default."
+    },
+    {
+      "name": "tpu_v5e",
+      "devices_per_host": 4,
+      "bf16_peak_tflops_per_device": 197.0,
+      "fp32_peak_tflops_per_device": 14.0,
+      "hbm_bandwidth_gbps_per_device": 820.0,
+      "intra_host_collective_bandwidth_gbps": 160.0,
+      "inter_host_collective_bandwidth_gbps": 100.0,
+      "default_compute_efficiency": {
+        "attention_fwd": 0.45,
+        "attention_bwd": 0.45,
+        "dense_mlp_gemm": 0.65,
+        "moe_gmm": 0.45,
+        "xent": 0.3,
+        "muon_ns": 0.75,
+        "optimizer_vector_ops": 0.2
+      },
+      "default_comm_efficiency": {
+        "fsdp_param_all_gather": 0.55,
+        "grad_reduce_scatter": 0.55,
+        "grouped_muon_restore": 0.5,
+        "expert_all_to_all": 0.5
+      },
+      "provenance": "Editable v1 default."
+    },
+    {
+      "name": "tpu_v6e",
+      "devices_per_host": 4,
+      "bf16_peak_tflops_per_device": 918.0,
+      "fp32_peak_tflops_per_device": 64.0,
+      "hbm_bandwidth_gbps_per_device": 1640.0,
+      "intra_host_collective_bandwidth_gbps": 320.0,
+      "inter_host_collective_bandwidth_gbps": 200.0,
+      "default_compute_efficiency": {
+        "attention_fwd": 0.45,
+        "attention_bwd": 0.45,
+        "dense_mlp_gemm": 0.65,
+        "moe_gmm": 0.45,
+        "xent": 0.3,
+        "muon_ns": 0.75,
+        "optimizer_vector_ops": 0.2
+      },
+      "default_comm_efficiency": {
+        "fsdp_param_all_gather": 0.55,
+        "grad_reduce_scatter": 0.55,
+        "grouped_muon_restore": 0.5,
+        "expert_all_to_all": 0.5
+      },
+      "provenance": "Editable v1 default."
+    }
+  ]
+}
