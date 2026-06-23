@@ -687,3 +687,45 @@ confirms the path.
   field (default unchanged) + an HLO-`$f8` regression test (both reviewers recommended the canary). H100 batch
   queued: bf16 precision A/B (mechanism), profiler/HLO convert-check on the 1.38× (is it fully fused?), and the
   `preferred_element_type` de-confound.
+
+### 2026-06-23 — GFP8-013: S2 H100 — fix FIRES the fwd $f8, but the real win over bf16 is ~+7% at d4096
+- **Job:** `/matt/grug-s2-gfp8012-batch` (H100x1, d4096/TN, single-run). Validates the GFP8-012 fix end-to-end
+  and closes the audit's open questions. Numbers are one-shot (no error bars).
+
+  | arm | path / precision | `$f8` | fwd TFLOP/s | note |
+  |-----|------------------|-------|-------------|------|
+  | A3 | bf16 (real)              | 0 | **561** | true bf16 baseline (57% of bf16 peak) |
+  | A1 | qdq / default (fwd)      | 0 | 459 | legacy fwd fallback: bf16 gemm **+ dead QDQ converts** |
+  | A2 | qdq / **highest** (fwd)  | **1** | **602** | **THE FIX: real Fp8DotGeneralOp fwd fires `$f8`** (30% of f8 peak) |
+  | C1 | qdq / highest, long warmup | 1 | 618 | +autotune settled → still ~31% of peak (not an autotune artifact) |
+  | D1 | manual, PET=f32          | 1 | 528 | materialized f8 |
+  | D2 | manual, PET=none         | 1 | 560 | materialized f8 |
+  | B1 | bf16 / default           | 0 | 518 | `__cublas$lt$matmul` |
+  | B2 | bf16 / highest           | 0 | 551 | `__cublas$lt$matmul` (same target) |
+
+  fwd+bwd: A4 (qdq/highest) fwd 600 / bwd 665 / `$f8`=3; A5 (qdq/default) fwd 457 / bwd 723 / `$f8`=2. The bwd
+  fires `$f8` in both (2 grad dots, always HIGHEST); the fix adds the +1 forward `$f8` (3 vs 2).
+- **Fix validated (high):** the real `Fp8DotGeneralOp` at `forward_precision="highest"` emits
+  `__cublas$lt$matmul$f8` on the forward (A2/C1/A4) — operands are genuine `f8e4m3fn[4096,4096]` leaves with
+  `operand_precision:["HIGHEST","HIGHEST"]`, `scale_mode:1` (scaled f8 gemm, bf16 out). Backward unchanged.
+- **CORRECTS GFP8-010's "+38% / beats bf16" claim.** The +38% was qdq/highest (602) vs the qdq/**DEFAULT
+  fallback** (459) — but that baseline is *slower than real bf16* (561) because it still pays the QDQ convert
+  round-trip then runs bf16. Against a **true bf16 dot the fwd f8 win is only ~+7%** (602 vs 561), at ~30% of
+  f8 peak.
+- **Why so small — quantization-convert overhead, NOT partial fusion (refines GLM's concern).** The HLO shows
+  the f8 gemm consuming f8 operands *directly*; the QDQ is fully absorbed into f8 leaves. The cost is the **two
+  standalone bf16→f8 `loop_convert_fusion` kernels** (one per operand, each 4096²) that quantize the operands
+  and are **not amortized** by the d4096 gemm. Longer warmup (618) rules out autotune. This matches GFP8-007/008
+  (manual f8 ties bf16 at d4096): the per-call per-tensor quantization is the ceiling, not the gemm.
+- **Mechanism — H2 favored (medium):** on pure bf16, DEFAULT vs HIGHEST both lower to `__cublas$lt$matmul`
+  (B1≈B2, 518 vs 551 = noise, same target) — precision does **not** change bf16 gemm selection. So the
+  DEFAULT-vs-HIGHEST `$f8` difference is the f8 GemmRewriter's matcher independently keying on the dot's
+  `precision_config` and declining DEFAULT (not the bf16 rewriter preempting).
+- **PET de-confound — resolved clean (high):** manual fires `$f8` at DEFAULT with PET=f32 *and* PET=none
+  (D1=D2=1). So materialization alone (genuine f8 operands) is what fires obs-4; `preferred_element_type` is
+  irrelevant. GFP8-012 Correction-1's confound is closed.
+- **Phase-1 implication:** the precision flip is **correct and confirmed** (forward `$f8` fires on the real op),
+  but at d4096 it buys only ~+7% over bf16 — the headline MFU win must come from **amortizing the quantization**
+  (larger GEMMs; keeping activations resident in f8 across consecutive matmuls / output-requant; or fusing the
+  convert into the gemm prologue) rather than from merely making `$f8` appear. Re-measure at the real MoE expert
+  GEMM shapes before sizing the win.
