@@ -868,7 +868,6 @@ def _is_preemptible_blocker(pod: dict) -> bool:
 
 
 def _kueue_workloads_by_name(workloads: list[dict]) -> dict[str, dict]:
-    """Index Kueue Workloads by metadata.name."""
     result = {}
     for workload in workloads:
         name = workload.get("metadata", {}).get("name", "")
