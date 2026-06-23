@@ -592,3 +592,73 @@ DeepEP internode recv-counter synchronization failure, not remat overhead. EP16
 therefore remains blocked for this remat comparison; the usable throughput
 evidence in this report is the EP8 path, where B16 with `none`,
 `save_moe`, and `offload_moe_output` all cluster around 24.6-24.9 MFU.
+
+## EP8 B16 Readable Profile
+
+May363 captured a readable B16 profile for the current practical EP8
+memory-headroom setting:
+
+```text
+script=scratch/launch_may363_deepep_ep8_offload_output_l26_b16_n1_profile.sh
+parent=/dlwh/iris-run-job-20260623-005829
+child=/dlwh/iris-run-job-20260623-005829/grug-train-MAY363-DEEPEP-EP8-OFFLOAD-OUTPUT-PROFILE-L26-B16-N1-20260623-0058
+wandb=https://wandb.ai/marin-community/marin_moe/runs/MAY363-DEEPEP-EP8-OFFLOAD-OUTPUT-PROFILE-L26-B16-N1-20260623-0058
+artifact=marin-community/marin_moe/MAY363-DEEPEP-EP8-OFFLOAD-OUTPUT-PROFILE-L26-B16-N1-20260623-0058-profiler:v0
+profile_summary=scratch/profiles/may363/profile_summary.json
+profile_report=scratch/profiles/may363/profile_report.md
+shape=1 H100x8 node, EP8, global batch 16, 2 sequences/device
+moe=deepep
+remat=offload_moe_output
+profiler=start 3, steps 2, HLO proto enabled
+xla_flags=--xla_gpu_enable_command_buffer=''
+```
+
+Result:
+
+- May363 succeeded and uploaded a JAX profile artifact.
+- W&B steady steps after compile/profile startup were in the same range as the
+  earlier B16 throughput controls, with the readability flags depressing some
+  profile-window steps:
+
+```text
+step=2 mfu=24.29 duration=0.5836s tokens/s=112289.6
+step=3 mfu=21.85 duration=0.6488s tokens/s=101013.4
+step=4 mfu=21.89 duration=0.6474s tokens/s=101232.5
+step=5 mfu=24.05 duration=0.5894s tokens/s=111197.6
+```
+
+- The XPlane/xprof summary had no explicit step markers, so step duration
+  comes from W&B and the profile is used only for attribution. It was not
+  truncated.
+- xprof kernel time was compute-heavy: compute 92.2%, communication 7.8%.
+- Semantic attribution in the profile window:
+
+| Family | Share | Notes |
+| --- | ---: | --- |
+| MoE | 39.5% | DeepEP transport plus expert ragged-dot kernels dominate the remaining profile. |
+| Loss/xent | 14.1% | Pallas CE backward loop kernels are still visible. |
+| Other/idle | 12.6% | Includes large pre-op gaps; treat as profile-context evidence, not a direct kernel bucket. |
+| FA4 attention | 11.3% | Flash attention backward is the single largest kernel row. |
+| Dense attention | 6.6% | QKV/projection dot-generals. |
+| Dense MLP | 4.6% | Non-MoE dense layers. |
+| Norm/gating | 4.4% | Gated norm and related elementwise work. |
+| Collectives | 3.5% | All-reduce rows in semantic families; xprof aggregate collectives reported all-reduce plus send/recv. |
+| Optimizer apply | 3.3% | SGD apply/update add. |
+
+Top MoE rows:
+
+- Expert `w13_ragged_dot` forward/backward pallas calls are about 0.37s each
+  across the profile window.
+- DeepEP combine/dispatch transport FFI calls are about 0.32s each across the
+  profile window.
+- DeepEP `dispatch_assignments` is about 0.31s across the profile window.
+- Expert `w2_ragged_dot` rows are about 0.18-0.20s each across the profile
+  window.
+
+Interpretation: `offload_moe_output` is throughput-neutral in scalar runs, and
+this readable profile does not show host copy kernels as a dominant direct
+bucket. The remaining EP8 B16 work is mostly the normal MoE path: expert
+ragged-dot compute and DeepEP transport/assignment, not an obvious broad remat
+or host-offload copy tax. To separate the narrow offload boundary from normal
+MoE cost in the profile, the next control is the same readable profile with
+`remat=none`.
