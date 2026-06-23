@@ -116,19 +116,7 @@ def _validate_inputs(
     w: Float[Array, "H V"],
     block_sizes: BlockSizes,
 ) -> None:
-    if jax.default_backend() != "gpu":
-        raise PallasUnsupportedError("Pallas fused cross-entropy requires GPU backend.")
-
-    if x.ndim != 2:
-        raise PallasUnsupportedError(f"x must be rank-2 [B, H], got shape {x.shape}.")
-    if labels.ndim != 1:
-        raise PallasUnsupportedError(f"labels must be rank-1 [B], got shape {labels.shape}.")
-    if w.ndim != 2:
-        raise PallasUnsupportedError(f"w must be rank-2 [H, V], got shape {w.shape}.")
-    if x.shape[0] != labels.shape[0]:
-        raise PallasUnsupportedError(f"Batch mismatch: x has B={x.shape[0]}, labels has B={labels.shape[0]}.")
-    if x.shape[1] != w.shape[0]:
-        raise PallasUnsupportedError(f"Hidden mismatch: x has H={x.shape[1]}, w has H={w.shape[0]}.")
+    _validate_input_contract(x, labels, w)
 
     if block_sizes.b_block_size <= 0:
         raise PallasUnsupportedError(f"b_block_size must be positive, got {block_sizes.b_block_size}.")
@@ -146,6 +134,26 @@ def _validate_inputs(
         raise PallasUnsupportedError("b_block_size must be a multiple of 16 on GPU.")
     if block_sizes.h_block_size % 16 != 0:
         raise PallasUnsupportedError("h_block_size must be a multiple of 16 on GPU.")
+
+
+def _validate_input_contract(
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    w: Float[Array, "H V"],
+) -> None:
+    if jax.default_backend() != "gpu":
+        raise PallasUnsupportedError("Pallas fused cross-entropy requires GPU backend.")
+
+    if x.ndim != 2:
+        raise PallasUnsupportedError(f"x must be rank-2 [B, H], got shape {x.shape}.")
+    if labels.ndim != 1:
+        raise PallasUnsupportedError(f"labels must be rank-1 [B], got shape {labels.shape}.")
+    if w.ndim != 2:
+        raise PallasUnsupportedError(f"w must be rank-2 [H, V], got shape {w.shape}.")
+    if x.shape[0] != labels.shape[0]:
+        raise PallasUnsupportedError(f"Batch mismatch: x has B={x.shape[0]}, labels has B={labels.shape[0]}.")
+    if x.shape[1] != w.shape[0]:
+        raise PallasUnsupportedError(f"Hidden mismatch: x has H={x.shape[1]}, w has H={w.shape[0]}.")
 
     if not jnp.issubdtype(labels.dtype, jnp.integer):
         raise PallasUnsupportedError(f"labels must be integer dtype, got {labels.dtype}.")
@@ -409,7 +417,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
     if block_sizes is None:
         block_sizes = BlockSizes.get_default()
 
-    _validate_inputs(x, labels, w, block_sizes)
+    _validate_input_contract(x, labels, w)
 
     if _should_use_gb10_full_matmul_fallback(x, w):
         return linear_softmax_cross_entropy_loss_reference(
@@ -450,6 +458,8 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
             precision=precision,
             return_argmax=return_argmax,
         )
+
+    _validate_inputs(x, labels, w, block_sizes)
 
     b_dim, _ = x.shape
     v_dim = w.shape[1]
