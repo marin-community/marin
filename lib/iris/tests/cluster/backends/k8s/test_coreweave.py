@@ -20,6 +20,8 @@ import pytest
 from iris.cluster.backends.k8s.controller import (
     _CONTROLLER_CPU_REQUEST,
     _CONTROLLER_MEMORY_REQUEST,
+    _CONTROLLER_STATE_PVC_NAME,
+    _CONTROLLER_STATE_PVC_SIZE,
     K8sControllerProvider,
 )
 from iris.cluster.backends.k8s.fake import InMemoryK8sService
@@ -151,6 +153,7 @@ def test_start_controller_creates_all_resources():
     assert address == "iris-controller-svc.iris.svc.cluster.local:10000"
     assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is not None
     assert k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is not None
+    assert k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME) is not None
     assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is not None
 
     # S3 storage auth lives in the iris-task-env Secret, not the ConfigMap.
@@ -171,6 +174,20 @@ def test_start_controller_creates_all_resources():
     assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
     assert container["resources"]["requests"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
     assert container["resources"]["limits"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
+    # Recreate (not RollingUpdate): the old controller pod must be gone before
+    # the new one mounts the ReadWriteOnce SQLite state PVC.
+    assert deploy_spec["strategy"] == {"type": "Recreate"}
+    assert {"name": "local-state", "mountPath": "/var/cache/iris/controller"} in container["volumeMounts"]
+    assert {
+        "name": "local-state",
+        "persistentVolumeClaim": {"claimName": _CONTROLLER_STATE_PVC_NAME},
+    } in deploy_spec[
+        "template"
+    ]["spec"]["volumes"]
+
+    pvc = k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME)
+    assert pvc["spec"]["accessModes"] == ["ReadWriteOnce"]
+    assert pvc["spec"]["resources"]["requests"]["storage"] == _CONTROLLER_STATE_PVC_SIZE
 
     t.join(timeout=5)
     provider.shutdown()
@@ -240,6 +257,45 @@ def test_start_controller_reconciles_when_already_available():
     provider.shutdown()
 
 
+def test_start_controller_stops_old_controller_before_reapply():
+    """start_controller tears the old Deployment down before applying the new one.
+
+    The controller SQLite state lives on a ReadWriteOnce PVC, so two controller
+    pods must never run at once. start_controller must delete the existing
+    Deployment (and wait for it to disappear) before re-applying, rather than
+    letting a rolling update briefly run two pods.
+    """
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+
+    events: list[tuple[str, str]] = []
+    real_delete = k8s.delete
+    real_apply = k8s.apply_json
+
+    def recording_delete(resource, name, **kwargs):
+        if resource is K8sResource.DEPLOYMENTS and name == "iris-controller":
+            events.append(("delete", name))
+        return real_delete(resource, name, **kwargs)
+
+    def recording_apply(manifest):
+        if manifest.get("kind") == "Deployment" and manifest["metadata"]["name"] == "iris-controller":
+            events.append(("apply", "iris-controller"))
+        return real_apply(manifest)
+
+    k8s.delete = recording_delete
+    k8s.apply_json = recording_apply
+
+    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
+    t.start()
+
+    provider.start_controller(cluster_config)
+
+    assert events == [("delete", "iris-controller"), ("apply", "iris-controller")]
+
+    t.join(timeout=5)
+    provider.shutdown()
+
+
 def test_stop_controller_deletes_resources():
     """stop_controller deletes Deployment, Service, ConfigMap, S3 secret, and RBAC."""
     provider, k8s = _make_provider()
@@ -250,6 +306,7 @@ def test_stop_controller_deletes_resources():
     _apply_stub(k8s, "Service", "iris-controller-svc")
     _apply_stub(k8s, "ConfigMap", "iris-cluster-config")
     _apply_stub(k8s, "Secret", "iris-task-env")
+    _apply_stub(k8s, "PersistentVolumeClaim", _CONTROLLER_STATE_PVC_NAME)
 
     provider.stop_controller(cluster_config)
 
@@ -257,6 +314,7 @@ def test_stop_controller_deletes_resources():
     assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is None
     assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is None
     assert k8s.get_json(K8sResource.SECRETS, "iris-task-env") is None
+    assert k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME) is None
     provider.shutdown()
 
 
