@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import jax.tree_util
 import numpy as np
+import pytest
 from chex import assert_trees_all_close
 
 import haliax as hax
@@ -20,6 +21,46 @@ from haliax.quantization import (
     partition_for_grad_overwrite,
     quantize_linear_layers,
 )
+
+_NN_DIMS = (((1,), (0,)), ((), ()))
+
+
+def _subjaxprs(value):
+    if hasattr(value, "eqns"):
+        return [value]
+    inner = getattr(value, "jaxpr", None)
+    if inner is not None and hasattr(inner, "eqns"):
+        return [inner]
+    if isinstance(value, (tuple, list)):
+        return [sub for item in value for sub in _subjaxprs(item)]
+    return []
+
+
+def _dot_general_precisions(closed_jaxpr):
+    """Every dot_general `precision` param in a (possibly nested) jaxpr, as strings, in trace order."""
+    found: list[str] = []
+
+    def walk(jaxpr):
+        for eqn in jaxpr.eqns:
+            if eqn.primitive.name == "dot_general":
+                found.append(str(eqn.params.get("precision")))
+            for param in eqn.params.values():
+                for sub in _subjaxprs(param):
+                    walk(sub)
+
+    walk(closed_jaxpr.jaxpr)
+    return found
+
+
+def _fp8_dot_loss(forward_precision):
+    op = Fp8DotGeneralOp.init(forward_precision=forward_precision)
+    x = jnp.ones((8, 16), jnp.bfloat16)
+    w = jnp.ones((16, 32), jnp.bfloat16)
+
+    def loss(x, w):
+        return jnp.sum(op(x, w, _NN_DIMS).astype(jnp.float32))
+
+    return loss, x, w
 
 
 def test_fp8_is_reasonable():
@@ -165,6 +206,46 @@ def test_layer_splicing():
             assert isinstance(layer.dot_general, Fp8DotGeneralOp)
         else:
             assert not isinstance(layer.dot_general, Fp8DotGeneralOp)
+
+
+def test_fp8_forward_precision_forward_only():
+    # The standalone primal (fp8.py:133) governs the eval/inference forward.
+    loss_d, x, w = _fp8_dot_loss(None)
+    loss_h, _, _ = _fp8_dot_loss("highest")
+    prec_d = _dot_general_precisions(jax.make_jaxpr(loss_d)(x, w))
+    prec_h = _dot_general_precisions(jax.make_jaxpr(loss_h)(x, w))
+    assert len(prec_d) == 1 and "DEFAULT" in prec_d[0]
+    assert len(prec_h) == 1 and "HIGHEST" in prec_h[0]
+
+
+def test_fp8_forward_precision_reaches_training_forward():
+    # Regression for GFP8-012: dot_general_with_precision is a custom_jvp, so under
+    # value_and_grad the forward VALUE is the jvp primal-recompute (fp8.py:146), not the
+    # standalone primal (:133). forward_precision must reach it — else flipping only :133
+    # would leave the training forward at DEFAULT (bf16) while passing a forward-only check.
+    loss_d, x, w = _fp8_dot_loss(None)
+    loss_h, _, _ = _fp8_dot_loss("highest")
+
+    prec_d = _dot_general_precisions(jax.make_jaxpr(jax.value_and_grad(loss_d))(x, w))
+    # forward value DEFAULT + two HIGHEST grad-dot tangents
+    assert sum("DEFAULT" in p for p in prec_d) == 1
+    assert sum("HIGHEST" in p for p in prec_d) == 2
+
+    prec_h = _dot_general_precisions(jax.make_jaxpr(jax.value_and_grad(loss_h))(x, w))
+    # forward value flipped to HIGHEST too -> no DEFAULT dot remains
+    assert len(prec_h) == 3
+    assert all("HIGHEST" in p for p in prec_h)
+
+
+@pytest.mark.skipif(jax.default_backend() != "gpu", reason="cuBLASLt $f8 only lowers on GPU")
+def test_fp8_forward_fuses_cublas_f8_on_gpu():
+    # Canary: forward_precision=HIGHEST must make the operand-QDQ forward re-fuse to a
+    # $f8 cuBLASLt matmul (GFP8-012). Alarms if a future jaxlib silently regresses to bf16.
+    op = Fp8DotGeneralOp.init(forward_precision="highest")
+    x = jnp.ones((512, 512), jnp.bfloat16)
+    w = jnp.ones((512, 512), jnp.bfloat16)
+    hlo = jax.jit(lambda x, w: op(x, w, _NN_DIMS)).lower(x, w).compile().as_text()
+    assert "__cublas$lt$matmul$f8" in hlo
 
 
 def test_fp8ize_stacking():

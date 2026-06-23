@@ -159,9 +159,19 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
     output_grad_amax_history: jnp.ndarray
     kernel_amax_history: jnp.ndarray
     compute_dtype: DTypeLike | None = eqx.field(static=True)
+    # Forward-dot precision. None keeps the original DEFAULT forward (which, on the
+    # transient operand-QDQ round-trip, XLA strips to a bf16 GEMM); HIGHEST makes the
+    # forward re-fuse to a $f8 cuBLASLt matmul. Backward grad dots are always HIGHEST.
+    # See logbook GFP8-010/012.
+    forward_precision: PrecisionLike = eqx.field(static=True, default=None)
 
     @classmethod
-    def init(cls, amax_history_length: int = 1024, compute_dtype: DTypeLike | None = None):
+    def init(
+        cls,
+        amax_history_length: int = 1024,
+        compute_dtype: DTypeLike | None = None,
+        forward_precision: PrecisionLike = None,
+    ):
         return cls(
             input_scale=jnp.ones(1, dtype=jnp.float32),
             output_grad_scale=jnp.ones(1, dtype=jnp.float32),
@@ -170,6 +180,7 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
             output_grad_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
             kernel_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
             compute_dtype=compute_dtype,
+            forward_precision=forward_precision,
         )
 
     # copied from flax
@@ -192,8 +203,10 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
 
         x_qdq = in_qdq(comp_dtype, lhs, self.input_scale, self.input_amax_history)
         k_qdq = in_qdq(comp_dtype, rhs, self.kernel_scale, self.kernel_amax_history)
+        # The op controls its own forward precision (self.forward_precision); the
+        # caller's `precision` is ignored on the fp8 path, as it always has been.
         y_qdq = dot_general_with_precision(
-            x_qdq, k_qdq, dimension_numbers, precision, preferred_element_type, **kwargs
+            x_qdq, k_qdq, dimension_numbers, self.forward_precision, preferred_element_type, **kwargs
         )
         y = out_qdq(comp_dtype, y_qdq, self.output_grad_scale, self.output_grad_amax_history)
 
@@ -239,6 +252,10 @@ class QuantizationConfig:
     fp8: bool = False
     int8: bool = False
 
+    fp8_forward_precision: PrecisionLike = None
+    """Forward-dot precision for FP8. None keeps the legacy DEFAULT forward (bf16 GEMM on H100);
+    ``"highest"`` makes the forward re-fuse to a $f8 cuBLASLt matmul. Accepts jax precision aliases."""
+
     def __post_init__(self):
         assert not (self.fp8 and self.int8), "Cannot use FP8 and INT8 quantization at the same time."
 
@@ -248,7 +265,14 @@ def quantize_linear_layers(tree: T, config: QuantizationConfig) -> T:
     Converts a module tree to use FP8/INT8 quantization.
     """
     if config.fp8:
-        return _quantize_linear_layers(tree, config, Fp8DotGeneralOp, config.amax_history_length, config.compute_dtype)
+        return _quantize_linear_layers(
+            tree,
+            config,
+            Fp8DotGeneralOp,
+            config.amax_history_length,
+            config.compute_dtype,
+            config.fp8_forward_precision,
+        )
     elif config.int8:
         return _quantize_linear_layers(tree, config, Int8DotGeneralOp)
     else:

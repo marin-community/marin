@@ -122,15 +122,14 @@ out_qdq.defvjp(out_qdq_fwd, out_qdq_bwd)
 def dot_general_with_precision(
     lhs, rhs, dimension_numbers, precision=None, preferred_element_type=None, out_sharding=None, **kwargs
 ):
-    if precision is not None or preferred_element_type is not None:
-        # einsum sets preferred_element_type and so this is just noisy
-        # warnings.warn(
-        #     "The function dot_general_with_precision will set the "
-        #     "precision/preferred_element_type and disregard any provided "
-        #     "values."
-        # )
-        pass
-    return lax.dot_general(lhs, rhs, dimension_numbers, precision=lax.Precision.DEFAULT, **kwargs)
+    # `precision` gates whether XLA's GPU GemmRewriter re-fuses the transient
+    # bf16->f8->bf16 operand round-trip into a $f8 cuBLASLt matmul on the FORWARD:
+    # HIGHEST fires it, DEFAULT is stripped to bf16 (logbook GFP8-010/012). None
+    # keeps the original DEFAULT forward. This primal and the jvp primal-recompute
+    # below must use the same precision (custom_jvp contract); `preferred_element_type`
+    # is intentionally not forwarded (einsum sets it noisily on the fp8 path).
+    fwd_precision = lax.Precision.DEFAULT if precision is None else precision
+    return lax.dot_general(lhs, rhs, dimension_numbers, precision=fwd_precision, **kwargs)
 
 
 @dot_general_with_precision.defjvp
@@ -139,11 +138,14 @@ def dot_general_with_precision_jvp(
 ):
     del preferred_element_type
     del out_sharding
-    del precision
     lhs, rhs = primals
     lhs_dot, rhs_dot = tangents
 
-    out = lax.dot_general(lhs, rhs, dimension_numbers, precision=lax.Precision.DEFAULT)
+    # Under value_and_grad this recompute — not the standalone primal — produces the
+    # training forward value, so the forward precision must be applied here too
+    # (GFP8-012). Tangent (grad) dots are always HIGHEST.
+    fwd_precision = lax.Precision.DEFAULT if precision is None else precision
+    out = lax.dot_general(lhs, rhs, dimension_numbers, precision=fwd_precision)
     grad_out = lax.dot_general(lhs_dot, rhs, dimension_numbers, precision=lax.Precision.HIGHEST) + lax.dot_general(
         lhs, rhs_dot, dimension_numbers, precision=lax.Precision.HIGHEST
     )
