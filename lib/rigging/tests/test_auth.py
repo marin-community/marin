@@ -200,9 +200,12 @@ def test_iap_refresh_token_provider_raises_login_required_when_refresh_fails(mon
     monkeypatch.setattr("google.auth.transport.requests.Request", lambda: object())
 
     provider = IapRefreshTokenProvider(
-        "client-id", "secret", "refresh-tok", login_hint="run `marin-login marin --client-secrets <desktop.json>`"
+        "client-id",
+        "secret",
+        "refresh-tok",
+        login_hint="run `marin-login login marin --client-secrets <desktop.json>`",
     )
 
     # The raw google-auth error becomes an actionable, self-contained IapLoginRequired.
-    with pytest.raises(IapLoginRequired, match="marin-login marin"):
+    with pytest.raises(IapLoginRequired, match="marin-login login marin"):
         provider.get_token()

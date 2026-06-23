@@ -3,9 +3,9 @@
 # Build context is THIS directory's parent (infra/probes/):
 #   docker build -f deploy/Dockerfile -t probes:dev infra/probes
 #
-# marin-iris, marin-finelog, marin-rigging come from the per-package rolling
-# GitHub releases (see pyproject.toml [tool.uv] find-links). No marin source
-# is required in the build context.
+# marin-iris, marin-finelog, marin-rigging are installed from PyPI per the
+# lockfile (their nightly dev wheels). No marin source is required in the
+# build context.
 
 FROM python:3.12-slim AS base
 
