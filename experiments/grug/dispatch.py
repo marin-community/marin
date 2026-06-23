@@ -54,15 +54,17 @@ def dispatch_grug_training_run(
     local_entrypoint: Callable[[ConfigT], None],
     resources: ResourceConfig,
     max_retries_failure: int = 3,
+    extra_environment_extras: tuple[str, ...] = (),
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion."""
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
+    extras = list(dict.fromkeys([*extras_for_resources(resources), *extra_environment_extras]))
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
         resources=resources,
-        environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
+        environment=create_environment(env_vars=env_vars, extras=extras),
         max_retries_failure=max_retries_failure,
     )
     logger.info("Dispatching grug training via Fray: %s", request.name)
