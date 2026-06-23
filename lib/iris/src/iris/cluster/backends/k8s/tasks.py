@@ -866,9 +866,72 @@ def _is_preemptible_blocker(pod: dict) -> bool:
     return _pod_gpu_request(pod) > 0
 
 
-def _build_pod_statuses(pods: list[dict]) -> list[controller_pb2.Controller.KubernetesPodStatus]:
+def _kueue_workloads_by_name(workloads: list[dict]) -> dict[str, dict]:
+    result = {}
+    for workload in workloads:
+        name = workload.get("metadata", {}).get("name", "")
+        if name:
+            result[name] = workload
+    return result
+
+
+def _format_kueue_condition(cond: dict) -> str:
+    """Render one Kueue Workload condition as a compact diagnostic."""
+    condition_type = cond.get("type", "Condition")
+    status = cond.get("status", "")
+    reason = cond.get("reason", "")
+    message = cond.get("message", "")
+
+    prefix = condition_type
+    if status and status != "False":
+        prefix = f"{prefix}={status}"
+    if reason:
+        prefix = f"{prefix} ({reason})"
+    return f"{prefix}: {message}" if message else prefix
+
+
+def _format_kueue_workload_status(pod: dict, workload: dict | None) -> str:
+    """Return Kueue admission context for a gated pod."""
+    pod_group = pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME, "")
+    if workload is None:
+        return f"Kueue workload {pod_group!r} not found yet; waiting for Kueue to create/admit the pod group"
+
+    spec = workload.get("spec", {})
+    status = workload.get("status", {})
+    details = []
+
+    cluster_queue = status.get("admission", {}).get("clusterQueue", "")
+    queue_name = spec.get("queueName", "")
+    if queue_name and cluster_queue:
+        details.append(f"queue={queue_name}, clusterQueue={cluster_queue}")
+    elif queue_name:
+        details.append(f"queue={queue_name}")
+    elif cluster_queue:
+        details.append(f"clusterQueue={cluster_queue}")
+
+    conditions = status.get("conditions", [])
+    waiting_conditions = [
+        _format_kueue_condition(cond)
+        for cond in conditions
+        if cond.get("status") != "True" and (cond.get("reason") or cond.get("message"))
+    ]
+    if waiting_conditions:
+        details.extend(waiting_conditions)
+    elif status.get("admission"):
+        details.append("admitted by Kueue; waiting for scheduler gate removal")
+    else:
+        details.append("waiting for Kueue admission")
+
+    workload_name = workload.get("metadata", {}).get("name", pod_group)
+    return f"Kueue workload {workload_name}: " + "; ".join(details)
+
+
+def _build_pod_statuses(
+    pods: list[dict], workloads: list[dict] | None = None
+) -> list[controller_pb2.Controller.KubernetesPodStatus]:
     """Build pod status protos from raw kubectl pod objects."""
     statuses = []
+    workloads_by_name = _kueue_workloads_by_name(workloads or [])
     for pod in pods:
         meta = pod.get("metadata", {})
         pod_name = meta.get("name", "")
@@ -902,6 +965,10 @@ def _build_pod_statuses(pods: list[dict]) -> list[controller_pb2.Controller.Kube
                         except (ValueError, AttributeError):
                             pass
                     break
+        if reason == "SchedulingGated" and labels.get(_KUEUE_POD_GROUP_NAME):
+            pod_group = labels[_KUEUE_POD_GROUP_NAME]
+            kueue_status = _format_kueue_workload_status(pod, workloads_by_name.get(pod_group))
+            message = f"{message}; {kueue_status}" if message else kueue_status
 
         ps = controller_pb2.Controller.KubernetesPodStatus(
             pod_name=pod_name,
@@ -971,20 +1038,24 @@ class ClusterState:
         self._lock = threading.Lock()
         self._pods: list[dict] = []
         self._nodes: list[dict] = []
+        self._workloads: list[dict] = []
         self._node_pools: list[controller_pb2.Controller.NodePoolStatus] = []
 
     def update(
         self,
         pods: list[dict],
         nodes: list[dict],
+        workloads: list[dict],
         node_pools: list[controller_pb2.Controller.NodePoolStatus],
     ) -> None:
         """Atomically replace all cluster state from a completed sync cycle."""
         new_pods = sorted(pods, key=lambda p: p.get("metadata", {}).get("name", ""))
         new_nodes = sorted(nodes, key=lambda n: n.get("metadata", {}).get("name", ""))
+        new_workloads = sorted(workloads, key=lambda w: w.get("metadata", {}).get("name", ""))
         with self._lock:
             self._pods = new_pods
             self._nodes = new_nodes
+            self._workloads = new_workloads
             self._node_pools = list(node_pools)
 
     def to_status_response(self, namespace: str) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
@@ -992,6 +1063,7 @@ class ClusterState:
         with self._lock:
             pods = self._pods[:]
             nodes = self._nodes[:]
+            workloads = self._workloads[:]
             node_pools = self._node_pools[:]
 
         total_nodes = len(nodes)
@@ -1018,7 +1090,7 @@ class ClusterState:
             schedulable_nodes=schedulable_nodes,
             allocatable_cpu=f"{total_cpu_mc / 1000:.1f} cores" if total_cpu_mc else "0 cores",
             allocatable_memory=_format_bytes(total_memory_bytes),
-            pod_statuses=_build_pod_statuses(pods),
+            pod_statuses=_build_pod_statuses(pods, workloads),
             provider_version="iris-kubernetes/v1",
             node_pools=node_pools,
         )
@@ -1463,8 +1535,17 @@ class K8sTaskProvider:
             logger.warning("Failed to query node resources: %s", e)
             nodes = []
 
+        if self.local_queue:
+            try:
+                workloads = self.kubectl.list_json(K8sResource.WORKLOADS)
+            except Exception as e:
+                logger.warning("Failed to query Kueue workloads: %s", e)
+                workloads = []
+        else:
+            workloads = []
+
         node_pools = _fetch_node_pools(self.kubectl, self.managed_label)
-        self._cluster_state.update(managed_pods, nodes, node_pools)
+        self._cluster_state.update(managed_pods, nodes, workloads, node_pools)
 
         self._maybe_gc_terminal_resources(managed_pods)
 
