@@ -87,6 +87,7 @@ _DEFAULT_DEEPEP_INTERNODE_NVL_BYTES = 256 * 1024 * 1024
 _DEFAULT_DEEPEP_INTERNODE_RDMA_BYTES = 256 * 1024 * 1024
 _DEEPEP_GRUG_COORDINATOR_PORT = 8476
 _DEEPEP_SOURCE_MARKER_FILE = "csrc/config.hpp"
+_DEEPEP_NVCC_PIP_PACKAGE = "nvidia-cuda-nvcc>=13.2.78; sys_platform == 'linux'"
 
 
 def _maybe_install_rdma_headers(model: GrugModelConfig) -> None:
@@ -413,6 +414,12 @@ def _maybe_prebuild_deepep_intranode_libraries(model: GrugModelConfig) -> None:
 def _deepep_environment_extras(model: GrugModelConfig) -> tuple[str, ...]:
     if model.moe_implementation in ("deepep", "deepep_composed", "deepep_internode"):
         return ("deepep",)
+    return ()
+
+
+def _deepep_environment_pip_packages(model: GrugModelConfig) -> tuple[str, ...]:
+    if model.moe_implementation in ("deepep", "deepep_composed", "deepep_internode"):
+        return (_DEEPEP_NVCC_PIP_PACKAGE,)
     return ()
 
 
@@ -1130,6 +1137,7 @@ def run_grug(config: GrugRunConfig) -> None:
         local_entrypoint=_run_grug_local,
         resources=config.resources,
         extra_environment_extras=_deepep_environment_extras(config.model),
+        extra_environment_pip_packages=_deepep_environment_pip_packages(config.model),
     )
 
 
