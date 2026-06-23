@@ -461,6 +461,7 @@ def test_transport_internode_flags_enable_nvshmem(tmp_path: Path, monkeypatch: p
 def test_transport_link_includes_cuda_runtime_library_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cuda_lib = tmp_path / "cuda" / "lib"
     cuda_lib.mkdir(parents=True)
+    (cuda_lib / "libcudart.so.12").write_text("")
     out_path = tmp_path / "libdeepep_transport_ffi.so"
     object_path = tmp_path / "object.o"
     dlink_object = tmp_path / "dlink.o"
@@ -479,6 +480,8 @@ def test_transport_link_includes_cuda_runtime_library_paths(tmp_path: Path, monk
     assert commands
     assert "-L" in commands[0]
     assert str(cuda_lib) in commands[0]
+    assert "--cudart=none" in commands[0]
+    assert "-l:libcudart.so.12" in commands[0]
     assert "-rpath" in commands[0]
 
 
@@ -514,11 +517,12 @@ def test_transport_internode_final_link_includes_nvshmem_device_archive(
             "-shared",
             "-Xcompiler",
             "-fPIC",
-            "--cudart=shared",
+            "--cudart=none",
             "--gpu-architecture=sm_90",
             str(object_path),
             str(dlink_path),
             str(device_archive),
+            "-lcudart",
             "-lcuda",
             "-lnvshmem_host",
             "-o",

@@ -106,7 +106,7 @@ _INTERNODE_ASSIGNMENT_GRADIENT_FFI = "ffi"
 _INTERNODE_ASSIGNMENT_GRADIENT_FUSED = "fused"
 _DEFAULT_INTERNODE_QPS_PER_RANK = 24
 _DEFAULT_INTERNODE_SOURCE_META_BYTES = 8
-_BUILD_CACHE_SCHEMA_VERSION = "transport_ffi_raw_dlink_v43"
+_BUILD_CACHE_SCHEMA_VERSION = "transport_ffi_raw_dlink_v44"
 _LIBRARY_DLOPEN_MODE = getattr(os, "RTLD_NOW", 0) | getattr(ctypes, "RTLD_GLOBAL", 0)
 _SM100_TMA_DISPATCH_THREADS = 512
 _UPSTREAM_DISPATCH_THREADS = 768
@@ -897,17 +897,19 @@ def _link_shared_library(
         for library_dir in deepep_cuda_library_dirs()
         for flag in ("-Xlinker", "-rpath", "-Xlinker", str(library_dir))
     ]
+    cudart_link_flags = _cudart_link_flags()
     cmd = [
         _require_nvcc(),
         "-shared",
         "-Xcompiler",
         "-fPIC",
-        "--cudart=shared",
+        "--cudart=none",
         *_cuda_arch_flag(),
         *cuda_library_flags,
         *[str(path) for path in all_object_paths],
         str(dlink_object),
         *_nvshmem_device_link_flags(build_mode),
+        *cudart_link_flags,
         "-lcuda",
         *_nvshmem_link_flags(build_mode),
         *cuda_rpath_flags,
@@ -915,6 +917,15 @@ def _link_shared_library(
         str(out_path),
     ]
     subprocess.run(cmd, check=True)
+
+
+def _cudart_link_flags() -> list[str]:
+    for library_dir in deepep_cuda_library_dirs():
+        if (library_dir / "libcudart.so.12").is_file():
+            return ["-l:libcudart.so.12"]
+        if (library_dir / "libcudart.so").is_file():
+            return ["-lcudart"]
+    return ["-lcudart"]
 
 
 def _build_raw_shared_library(
