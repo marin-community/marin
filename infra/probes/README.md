@@ -40,8 +40,9 @@ labels with DuckDB `json_extract`), and appended to a daily JSONL that rolls up
 to `gs://<us-central1 data bucket>/infra/probes/dt=<date>/` at UTC rollover.
 
 Standalone package (own `pyproject.toml`/`uv.lock`): pulls `marin-iris`,
-`marin-finelog`, `marin-rigging` from the rolling GitHub releases via
-`find-links`. Bump to today's nightly with `uv lock -U` inside `infra/probes/`.
+`marin-finelog`, `marin-rigging` from PyPI as `0.2.x.dev` nightlies
+(`prerelease = "if-necessary"`). Bump to today's nightly with `uv lock -U`
+inside `infra/probes/`.
 
 ## Run
 
