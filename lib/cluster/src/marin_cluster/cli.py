@@ -18,6 +18,7 @@ from rigging.filesystem import MARIN_CLUSTER_CONFIG_DIRS
 
 from marin_cluster import config as cluster_config
 from marin_cluster import login as login_flow
+from marin_cluster.admin.cli import admin
 
 _MARIN_CLUSTER_ENV = "MARIN_CLUSTER"
 
@@ -136,6 +137,7 @@ def _mount_delegated(group: click.Group) -> None:
         pass
 
 
+main.add_command(admin)
 _mount_delegated(main)
 
 

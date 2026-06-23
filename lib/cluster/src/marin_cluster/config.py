@@ -7,9 +7,9 @@
 sections of ``config/<cluster>.yaml`` no client library reads:
 
 - ``provisioning:`` — the one-time GCP rollout spec (project, zone, service
-  accounts, IAP/GCLB resources) that drives ``marin-cluster admin``. Today these
-  values are baked into ``setup_iam.py`` / ``iap_gclb.py`` as constants; modeling
-  them here is what makes the rollouts config-driven instead of hard-coded.
+  accounts, IAP/GCLB resources) that drives ``marin-cluster admin``. Modeling
+  these here is what makes the IAM and IAP/GCLB rollouts config-driven instead of
+  reading hard-coded constants.
 
 It composes (does not subclass) rigging's :class:`~rigging.cluster_manifest.ClusterManifest`,
 which carries the identity/auth slice every client shares. Secrets in
