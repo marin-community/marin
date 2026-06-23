@@ -48,3 +48,11 @@ Branch: `agent/grug-moe-crawl-compare`
   us-central1/us-east5 → `ResourceConfig.with_tpu("v5p-8", regions=["us-central1","us-east5"])`.
 - All 8 runs launched: `/held/grug-crawlcmp-{focus,main}-{d512,d768,d1024,d1280}-r3`.
 - Next: collect final `eval/paloma/macro_loss` per rung from json-logger output.
+
+### 2026-06-23 — d512 results
+- Final eval/paloma/macro_loss: focus 4.712, main 4.402 (Δ main−focus = −0.310).
+- Main (general crawl) < focus (science crawl) on paloma macro at d512. Both >> the
+  Nemotron-curated baseline (3.81), expected for raw WET. eval/macro_loss (overall):
+  focus 4.627, main 4.420.
+- Each d512 run took 1 preemption, auto-resumed from checkpoint. Wall ~1h for ~0.6h compute.
+- Extraction: `iris job logs --max-lines N` (default tail is ~1000 lines; eval block needs a larger tail).
