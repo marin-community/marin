@@ -327,17 +327,14 @@ function nodeDisplayClass(nodeName?: string, phase?: string): string {
                   pod.phase === 'Failed' ? 'bg-status-danger-bg/30' : '',
                 ]"
               >
-                <!-- Pod name -->
                 <td class="px-3 pt-2 pb-1 text-[13px] font-mono text-text-secondary truncate" :title="pod.podName">
                   {{ pod.podName }}
                 </td>
 
-                <!-- Task ID -->
                 <td class="px-3 pt-2 pb-1 text-[13px] font-mono text-text-secondary truncate" :title="pod.taskId">
                   {{ pod.taskId || '-' }}
                 </td>
 
-                <!-- Phase with dot -->
                 <td class="px-3 pt-2 pb-1 text-[13px]">
                   <span class="inline-flex items-center gap-1.5">
                     <span :class="['w-1.5 h-1.5 rounded-full flex-shrink-0', phaseDotClass(pod.phase)]" />
@@ -345,19 +342,16 @@ function nodeDisplayClass(nodeName?: string, phase?: string): string {
                   </span>
                 </td>
 
-                <!-- Node -->
                 <td class="px-3 pt-2 pb-1 text-[13px] font-mono truncate" :title="pod.nodeName || undefined">
                   <span :class="nodeDisplayClass(pod.nodeName, pod.phase)">
                     {{ nodeDisplayName(pod.nodeName, pod.phase) }}
                   </span>
                 </td>
 
-                <!-- Reason -->
                 <td class="px-3 pt-2 pb-1 text-[13px] text-text-secondary truncate" :title="pod.reason || undefined">
                   {{ pod.reason || '-' }}
                 </td>
 
-                <!-- Age -->
                 <td class="px-3 pt-2 pb-1 text-[13px] text-text-muted font-mono whitespace-nowrap">
                   {{ formatTransition(pod.lastTransition) }}
                 </td>
