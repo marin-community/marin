@@ -44,6 +44,9 @@ class K8sResource(Enum):
     CLUSTER_ROLES = ("rbac.authorization.k8s.io", "v1", False, "clusterroles", "ClusterRole")
     CLUSTER_ROLE_BINDINGS = ("rbac.authorization.k8s.io", "v1", False, "clusterrolebindings", "ClusterRoleBinding")
 
+    # Scheduling v1
+    PRIORITY_CLASSES = ("scheduling.k8s.io", "v1", False, "priorityclasses", "PriorityClass")
+
     # CoreWeave custom resources
     NODE_POOLS = ("compute.coreweave.com", "v1alpha1", False, "nodepools", "NodePool")
 

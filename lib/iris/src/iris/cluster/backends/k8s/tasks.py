@@ -159,6 +159,19 @@ _CW_DEFAULT_TOPOLOGIES: dict[str, tuple[str, bool]] = {
     "nvlink.domain": (CW_LABEL_NVLINK_DOMAIN, True),
 }
 
+# Default PriorityClass names Iris creates at controller startup and uses when
+# the cluster config does not override priority_class_names. Override via
+# kubernetes_provider.priority_classes.
+IRIS_PRIORITY_CLASS_PRODUCTION = "iris-production"
+IRIS_PRIORITY_CLASS_INTERACTIVE = "iris-interactive"
+IRIS_PRIORITY_CLASS_BATCH = "iris-batch"
+
+_DEFAULT_PRIORITY_CLASS_NAMES: dict[int, str] = {
+    job_pb2.PRIORITY_BAND_PRODUCTION: IRIS_PRIORITY_CLASS_PRODUCTION,
+    job_pb2.PRIORITY_BAND_INTERACTIVE: IRIS_PRIORITY_CLASS_INTERACTIVE,
+    job_pb2.PRIORITY_BAND_BATCH: IRIS_PRIORITY_CLASS_BATCH,
+}
+
 
 def _job_path(task_id: JobName) -> str:
     """Return the raw (unsanitized) parent job path of a task wire ID.
@@ -343,6 +356,10 @@ class PodConfig:
     # coscheduling group_by -> (node label, required?). Defaults to CoreWeave
     # conventions; a group_by with no entry carries no topology annotation.
     kueue_topologies: dict[str, tuple[str, bool]] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
+    # PriorityBand -> Kubernetes PriorityClass name. Sets spec.priorityClassName.
+    # UNSPECIFIED is treated as INTERACTIVE. Defaults to the iris-{band} classes
+    # Iris creates at startup; override via kubernetes_provider.priority_classes.
+    priority_class_names: dict[int, str] = field(default_factory=lambda: dict(_DEFAULT_PRIORITY_CLASS_NAMES))
 
 
 def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
@@ -672,6 +689,15 @@ def _build_pod_manifest(
     # ever runs. The controller's own timeout accounting governs these.
     if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not kueue_enabled:
         spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
+
+    # Stamp the native k8s PriorityClass so the scheduler knows how to
+    # preempt/queue this pod relative to others. UNSPECIFIED defaults to
+    # INTERACTIVE (the normal user work band). A band with no configured
+    # class name leaves priorityClassName unset (cluster default applies).
+    effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
+    priority_class_name = config.priority_class_names.get(effective_band)
+    if priority_class_name:
+        spec["priorityClassName"] = priority_class_name
 
     return {
         "apiVersion": "v1",
@@ -1388,6 +1414,7 @@ class K8sTaskProvider:
     local_queue: str = ""
     kueue_priority_classes: dict[int, str] = field(default_factory=dict)
     kueue_topologies: dict[str, tuple[str, bool]] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
+    priority_class_names: dict[int, str] = field(default_factory=lambda: dict(_DEFAULT_PRIORITY_CLASS_NAMES))
     # Namespaces whose preemptible (negative-priority) GPU pods Iris evicts
     # when it has gang work for Kueue. Empty disables the feature; see
     # _evict_preemptible_blockers for the safety guards.
@@ -1670,6 +1697,7 @@ class K8sTaskProvider:
             local_queue=self.local_queue,
             kueue_priority_classes=self.kueue_priority_classes,
             kueue_topologies=self.kueue_topologies,
+            priority_class_names=self.priority_class_names,
         )
 
     def _apply_pod(self, run_req: job_pb2.RunTaskRequest) -> None:

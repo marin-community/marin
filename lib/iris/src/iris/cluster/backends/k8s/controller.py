@@ -25,6 +25,11 @@ from rigging.timing import Deadline
 
 from iris.cluster.backends.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.backends.k8s.service import CloudK8sService, K8sService
+from iris.cluster.backends.k8s.tasks import (
+    IRIS_PRIORITY_CLASS_BATCH,
+    IRIS_PRIORITY_CLASS_INTERACTIVE,
+    IRIS_PRIORITY_CLASS_PRODUCTION,
+)
 from iris.cluster.backends.k8s.types import K8sResource, parse_k8s_timestamp
 from iris.cluster.backends.types import InfraError, Labels, local_queue_name
 from iris.cluster.config_serde import config_to_dict
@@ -314,6 +319,7 @@ class K8sControllerProvider:
 
         self.ensure_nodepools(config)
         self.ensure_kueue_queues(config)
+        self.ensure_priority_classes()
 
         deploy_manifest = _build_controller_deployment(
             namespace=self._namespace,
@@ -536,6 +542,13 @@ class K8sControllerProvider:
                     "resources": ["workloads"],
                     "verbs": ["get", "list", "watch", "delete"],
                 },
+                {
+                    # Iris creates iris-{production,interactive,batch} PriorityClass
+                    # objects at startup so pods can be stamped without manual setup.
+                    "apiGroups": ["scheduling.k8s.io"],
+                    "resources": ["priorityclasses"],
+                    "verbs": ["get", "create", "update", "patch"],
+                },
             ],
         }
 
@@ -582,6 +595,38 @@ class K8sControllerProvider:
         }
         self._kubectl.apply_json(manifest)
         logger.info("LocalQueue %s applied (clusterQueue=%s)", name, cluster_queue)
+
+    def ensure_priority_classes(self) -> None:
+        """Create or update the iris-{production,interactive,batch} PriorityClass objects.
+
+        PriorityClass is cluster-scoped. Iris owns these three names; any cluster
+        running Iris gets them so pods are stamped without manual admin setup.
+
+        Priority values:
+          iris-production  1000  — preempts interactive/batch; never preempted
+          iris-interactive    0  — normal user work (scheduler default)
+          iris-batch        -10  — opportunistic; preemptible by the scheduler
+        """
+        priority_classes = [
+            (IRIS_PRIORITY_CLASS_PRODUCTION, 1000, "PreemptLowerPriority"),
+            (IRIS_PRIORITY_CLASS_INTERACTIVE, 0, "PreemptLowerPriority"),
+            (IRIS_PRIORITY_CLASS_BATCH, -10, "Never"),
+        ]
+        for name, value, preemption_policy in priority_classes:
+            manifest = {
+                "apiVersion": "scheduling.k8s.io/v1",
+                "kind": "PriorityClass",
+                "metadata": {"name": name},
+                "value": value,
+                "preemptionPolicy": preemption_policy,
+                "globalDefault": False,
+                "description": f"Iris {name.removeprefix('iris-')} priority band",
+            }
+            self._kubectl.apply_json(manifest)
+        logger.info(
+            "PriorityClasses applied: %s",
+            ", ".join(n for n, _, _ in priority_classes),
+        )
 
     # -- NodePool Management ---------------------------------------------------
 
