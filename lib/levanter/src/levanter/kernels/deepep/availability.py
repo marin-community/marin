@@ -47,6 +47,11 @@ _PREFERRED_NVSHMEM_DISTRIBUTIONS = ("nvidia-nvshmem-cu13", "nvidia-nvshmem-cu12"
 _PREFERRED_NVCC_DISTRIBUTIONS = ("nvidia-cuda-nvcc",)
 _NVSHMEM_CUDA13_MARKERS = ("cu13", "cuda13", "cuda-13", "r13.")
 _NVSHMEM_CUDA12_MARKERS = ("cu12", "cuda12", "cuda-12", "r12.")
+_SYSTEM_NVCC_CANDIDATES = (
+    Path("/usr/local/cuda/bin/nvcc"),
+    Path("/usr/local/cuda-13/bin/nvcc"),
+    Path("/usr/local/cuda-12/bin/nvcc"),
+)
 
 
 @dataclass(frozen=True)
@@ -189,10 +194,14 @@ def _nvshmem_python_package_roots() -> tuple[Path, ...]:
 
 
 def deepep_nvcc_path() -> str | None:
-    """Return an nvcc executable path from PATH or installed NVIDIA CUDA wheels."""
+    """Return an nvcc executable path from PATH, CUDA images, or NVIDIA CUDA wheels."""
     path_nvcc = shutil.which("nvcc")
     if path_nvcc is not None:
         return path_nvcc
+
+    for candidate in _SYSTEM_NVCC_CANDIDATES:
+        if candidate.is_file():
+            return str(candidate)
 
     for distribution_name in _PREFERRED_NVCC_DISTRIBUTIONS:
         try:
@@ -448,7 +457,10 @@ def deepep_preflight_status(
 
     nvcc_path = deepep_nvcc_path()
     if nvcc_path is None:
-        errors.append("nvcc is not available on PATH or from the nvidia-cuda-nvcc Python package")
+        errors.append(
+            "nvcc is not available on PATH, in standard CUDA image locations, "
+            "or from the nvidia-cuda-nvcc Python package"
+        )
 
     nvshmem_dir, nvshmem_host_lib, nvshmem_errors = deepep_nvshmem_status()
     nvshmem_device_lib = _nvshmem_device_lib_name(nvshmem_dir) if nvshmem_dir is not None else None

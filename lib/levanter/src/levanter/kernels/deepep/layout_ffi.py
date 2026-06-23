@@ -75,7 +75,8 @@ def _build_shared_library(out_path: Path) -> None:
     nvcc = deepep_nvcc_path()
     if nvcc is None:
         raise RuntimeError(
-            "DeepEP layout FFI build requires nvcc. Install nvidia-cuda-nvcc or use a CUDA devel image with nvcc on PATH."
+            "DeepEP layout FFI build requires nvcc. Install nvidia-cuda-nvcc or use a CUDA devel image "
+            "with nvcc on PATH or under /usr/local/cuda/bin."
         )
     cmd = [
         nvcc,

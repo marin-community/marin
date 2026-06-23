@@ -90,6 +90,16 @@ def test_deepep_nvcc_path_falls_back_to_python_package(tmp_path: Path, monkeypat
     assert deepep_nvcc_path() == str(nvcc)
 
 
+def test_deepep_nvcc_path_falls_back_to_cuda_image_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    nvcc = tmp_path / "usr" / "local" / "cuda" / "bin" / "nvcc"
+    nvcc.parent.mkdir(parents=True)
+    nvcc.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(deepep_availability.shutil, "which", lambda name: None)
+    monkeypatch.setattr(deepep_availability, "_SYSTEM_NVCC_CANDIDATES", (nvcc,))
+
+    assert deepep_nvcc_path() == str(nvcc)
+
+
 def test_internode_dispatch_clean_buffer_size_hint_catches_d2560_topk2_regression() -> None:
     nvl_bytes, rdma_bytes = transport_ffi.internode_dispatch_clean_buffer_size_hint(
         hidden=2560,
