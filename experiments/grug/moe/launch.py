@@ -135,7 +135,9 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
             base_path=os.path.join(config.output_path, "checkpoints"),
             temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,
-            save_interval=timedelta(minutes=10),
+            # GRUG_CHECKPOINT_MINUTES lets preemption-heavy runs checkpoint more
+            # often (default 10) so less progress is lost per preemption.
+            save_interval=timedelta(minutes=env_int("GRUG_CHECKPOINT_MINUTES", 10)),
             keep=None,
         ),
     )
