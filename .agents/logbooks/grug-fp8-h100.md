@@ -438,3 +438,44 @@ confirms the path.
   precision×dtype×scale-count×scale-shape with direct `convert(f8)*scale` operands). Hold local
   experiments for its verdict; then implement the indicated fix (manual arm, or a one-line QDQ change if
   the discriminator is scale-shape/precision).
+
+### 2026-06-23 — GFP8-006: S2 — research verdict + manual direct-f8 forward arm
+- **Confirm/refute research verdict** (the agent dispatched in GFP8-005; 94 agents, 12 sources, 25 claims
+  adversarially verified, 21 confirmed / 4 killed):
+  - **H0 outcome CONFIRMED, mechanism partial:** the fwd→bf16 / bwd→`$f8` split matches a real,
+    compiler-attributable regression — JAX #24051 documents 0.4.30 fusing QDQ→`$f8` vs 0.4.31+ splitting
+    it into an FP32/bf16 dot + separate requant; Flax docs call the operand-QDQ pattern-match "brittle."
+    Our "stripped before float-normalization" wording is consistent-but-unproven at the 0.10 tag.
+  - **C3 — scale representation REFUTED 0-3:** `f32[1]` vs scalar `f32[]` is **not** the discriminator (no
+    `IsScalar` bailout in the matcher). **Do not chase scale shape.** Precision-per-se also down-ranked
+    (matcher DAG is precision-agnostic). Live suspects narrowed to: exact syntactic dequant DAG + number of
+    runtime-scaled operands.
+  - **C1 (0.10 pass order) and C2 (declined-vs-stripped) UNDETERMINED:** no source read `gpu_compiler.cc`
+    at the 0.10 tag; C2 leans "never-seen/stripped" (bf16 matmul created at ~0031 *after* converts gone at
+    ~0029 ⇒ consistent with `IsF8Type==false`, not the `TurnF8DotIntoF16Dot` decline branch). Matcher locus
+    on `main`: `gemm_rewriter.cc` `MatchFp8Param` → `MultiplyAnyOrder(Convert(fp8_input), Broadcast(scale))`,
+    `num_dequant_ops=2` (note: 0.10 path is `xla/service/gpu/gemm_rewriter.cc`, not `xla/backends/...`).
+  - **C4 (direct-f8 fix) design-intent CONFIRMED, 0.10 emission UNPROVEN:** the `quantize → dot → dequant`
+    form is Flax's own endorsed migration off brittle QDQ, but no source shows it emitting `$f8` on
+    0.10/H100 — the same brittleness *could* suppress it. Experimental burden remains → settle on the rig.
+- **Bottom line:** web research nailed the *what* (real 0.4.31+ XLA QDQ-pattern regression) but cannot pin
+  the 0.10-tag line refs or run the decisive experiments — those are exactly C1/C2/C3/C4.
+- **Built — `--path manual` (forward-only), commit `3e58f5a55`:** the candidate fix as a bench arm. Feeds
+  genuine E4M3 operands straight into `dot_general` (`dot(f8,f8)->f32`, `preferred_element_type=f32`) and
+  dequantizes only the f32 accumulator by `x_scale * w_scale` — so **no operand f8→bf16 round-trip exists**
+  for `simplify-fp-conversions` to strip. Scales computed live from the same delayed-scaling histories as
+  qdq (apples-to-apples). Scoped forward-only on purpose: the whole open question is forward emission; the
+  e5m2 backward is deferred until the forward is shown to fire.
+- **CPU verification:** unoptimized StableHLO shows `dot_general` consuming `f8E4M3FN` operands directly
+  (`(f8E4M3FN, f8E4M3FN) -> f32`), contrast qdq's bf16 operands. Numerics match qdq (rel err vs an fp32
+  reference: manual 0.0367, qdq 0.0370). On CPU the operands upcast to f32 (no f8 matmul there) — the f8
+  emission question is H100-only.
+- **Next action:** run `--path manual --forward-only` on H100 and grep the forward HLO for
+  `__cublas$lt$matmul$f8`. This is the decisive test of C4 and the candidate fix in one shot:
+  - fires `$f8` ⇒ the fix works; promote to a real haliax op with the e5m2 backward, wire into grug dense.
+  - falls back to bf16 ⇒ the 0.4.31+ brittleness suppresses even direct-f8; escalate to the C1/C2 source
+    read (pin `gpu_compiler.cc` pass order + `gemm_rewriter.cc` matcher at the 0.10 tag) and the factorial
+    probe over the surviving suspects (dequant-DAG shape, # runtime-scaled operands).
+  - Command: `uv run iris --cluster=cw-us-east-02a job run --gpu H100x1 --enable-extra-resources --extra
+    gpu -- python lib/levanter/scripts/bench/bench_dense_fp8.py --k 4096 --n 4096 --path manual
+    --forward-only` (grep logs for `$f8`; no storage needed).
