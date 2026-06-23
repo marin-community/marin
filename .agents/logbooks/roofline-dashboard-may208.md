@@ -1,6 +1,6 @@
 # May208 Roofline Dashboard
 
-Experiment issue: pending creation
+Experiment issue: https://github.com/marin-community/marin/issues/6573
 Branch: `codex/experiment-roofline-dashboard-may208`
 Parent issue: https://github.com/marin-community/marin/issues/4302
 Implementation issue: https://github.com/marin-community/marin/issues/6557
