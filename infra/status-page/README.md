@@ -7,8 +7,7 @@ surfacing controller reachability, worker counts (current + 24h
 history), active-environment Iris + finelog health, and the 24h
 job-state breakdown, and a Probes section reading the synthetic-canary
 metrics that `infra/probes/` writes to finelog — health checks plus the
-accelerator-provisioning rollup. Deployed as Cloud Run + native IAP,
-following the `infra/iris-iap-proxy/` pattern.
+accelerator-provisioning rollup. Deployed as Cloud Run + native IAP.
 
 ## Stack
 

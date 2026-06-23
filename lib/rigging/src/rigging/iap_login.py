@@ -25,6 +25,26 @@ from rigging.auth import IapLoginRequired, IapRefreshTokenProvider, run_iap_desk
 
 
 @dataclass(frozen=True)
+class OAuthClient:
+    """A Google OAuth client identity (client id + secret)."""
+
+    client_id: str
+    client_secret: str
+
+
+# The Marin desktop ("installed") OAuth client that drives the IAP browser-login
+# flow. For an installed app the "client secret" is not confidential — it is part
+# of the app's public identity, not a credential (RFC 8252 §8.5) — so it ships in
+# source: `marin-login login <cluster>` then needs no Console download. It only
+# names the app to Google's OAuth endpoint; IAP still authorizes each user
+# individually against its per-backend allowlist.
+MARIN_DESKTOP_OAUTH_CLIENT = OAuthClient(
+    client_id="748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com",
+    client_secret="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",
+)
+
+
+@dataclass(frozen=True)
 class IapCredentials:
     """Cached desktop-OAuth material for one IAP-fronted endpoint."""
 
@@ -55,30 +75,37 @@ def save_iap_credentials(name: str, credentials: IapCredentials) -> Path:
     return path
 
 
-def desktop_login(name: str, client_secrets_path: str, *, headless: bool = False) -> IapCredentials:
-    """Run the browser OAuth flow for ``name`` and cache the refresh token.
-
-    Reads the Google *desktop* OAuth client secret JSON at ``client_secrets_path``
-    (downloaded from the Cloud Console), runs the consent flow (or prints a URL to
-    paste back when ``headless``), and stores the credentials for later silent use
-    via :func:`provider_for`. Returns the freshly cached credentials.
-    """
-    with open(client_secrets_path) as f:
+def read_desktop_client(path: str) -> OAuthClient:
+    """Read a Google *desktop* ('installed') OAuth client secret JSON from ``path``."""
+    with open(path) as f:
         installed = json.load(f).get("installed")
     if installed is None:
-        raise ValueError(f"{client_secrets_path}: expected a desktop ('installed') OAuth client secret")
-    client_id = installed["client_id"]
-    client_secret = installed["client_secret"]
+        raise ValueError(f"{path}: expected a desktop ('installed') OAuth client secret")
+    return OAuthClient(installed["client_id"], installed["client_secret"])
 
-    _, refresh_token = run_iap_desktop_login(client_id, client_secret, headless=headless)
-    credentials = IapCredentials(client_id=client_id, client_secret=client_secret, refresh_token=refresh_token)
+
+def desktop_login(
+    name: str, client: OAuthClient = MARIN_DESKTOP_OAUTH_CLIENT, *, headless: bool = False
+) -> IapCredentials:
+    """Run the browser OAuth flow for ``name`` and cache the refresh token.
+
+    Uses the built-in :data:`MARIN_DESKTOP_OAUTH_CLIENT` unless ``client`` overrides
+    it (load one from a Console download with :func:`read_desktop_client`). Runs the
+    consent flow (or prints a URL to paste back when ``headless``) and stores the
+    credentials for later silent use via :func:`provider_for`. Returns the freshly
+    cached credentials.
+    """
+    _, refresh_token = run_iap_desktop_login(client.client_id, client.client_secret, headless=headless)
+    credentials = IapCredentials(
+        client_id=client.client_id, client_secret=client.client_secret, refresh_token=refresh_token
+    )
     save_iap_credentials(name, credentials)
     return credentials
 
 
 def _login_hint(name: str) -> str:
     """The canonical 'run marin-login' remedy for endpoint ``name``."""
-    return f"run `marin-login login {name} --client-secrets <desktop.json>` to authenticate"
+    return f"run `marin-login login {name}` to authenticate"
 
 
 def provider_for(name: str) -> IapRefreshTokenProvider:

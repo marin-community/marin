@@ -3,14 +3,14 @@
 ## Access through the Iris IAP endpoint
 
 The Iris controller exposes its finelog server as the `/system/log-server`
-endpoint. For `iris-marin.oa.dev`, the public path prefix is
-`https://iris-marin.oa.dev/proxy/system.log-server/`.
+endpoint. For `iris.oa.dev`, the public path prefix is
+`https://iris.oa.dev/proxy/system.log-server/`.
 
-Authenticate once with the desktop OAuth client registered as an IAP
-programmatic client:
+Authenticate once with the built-in Marin desktop OAuth client (it is
+registered as an IAP programmatic client):
 
 ```bash
-uv run marin-login login marin --client-secrets /path/to/desktop.json
+uv run marin-login login marin
 ```
 
 The command stores a refresh token in `~/.config/marin/iap/marin.json`.
@@ -21,7 +21,7 @@ opening the browser again:
 IAP_TOKEN="$(uv run marin-login print-token marin)"
 curl --fail-with-body \
   --header "Proxy-Authorization: Bearer ${IAP_TOKEN}" \
-  https://iris-marin.oa.dev/proxy/system.log-server/health
+  https://iris.oa.dev/proxy/system.log-server/health
 ```
 
 IAP consumes `Proxy-Authorization`. Use `Authorization` separately if the
