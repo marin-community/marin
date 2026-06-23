@@ -10,7 +10,6 @@ k8s API via kubectl, launching one Pod per task attempt.
 from __future__ import annotations
 
 import base64
-import concurrent.futures
 import hashlib
 import json
 import logging
@@ -69,7 +68,7 @@ from iris.cluster.runtime.profile import (
     wrap_with_kill_watchdog,
 )
 from iris.cluster.types import JobName, TaskAttempt, WorkerId, get_gpu_count
-from iris.cluster.worker.stats import build_task_stat
+from iris.cluster.worker.stats import IrisTaskStat, build_task_stat
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.time_proto import timestamp_to_proto
 
@@ -1138,22 +1137,35 @@ class ResourceCollector:
     """Background resource usage collector that writes to ``iris.task`` stats.
 
     Same set_pods() pattern as LogCollector: the sync loop declares the
-    authoritative set of running pods once per cycle. Each tick, the collector
-    fans out to ``kubectl top`` per pod and appends one ``IrisTaskStat`` row
-    per successful read to the supplied stats Table — the same table the
-    worker daemon writes to on the GCE/TPU path, so the dashboard's
-    ``iris.task`` queries cover both runtimes uniformly.
+    authoritative set of running pods once per cycle. Each tick the collector
+    issues a single bulk metrics list (``kubectl top`` equivalent) scoped to the
+    managed-pod labels, then appends one ``IrisTaskStat`` row per tracked pod
+    that has a sample — to the same table the worker daemon writes to on the
+    GCE/TPU path, so the dashboard's ``iris.task`` queries cover both runtimes
+    uniformly. One API round-trip covers every pod, so cost is independent of
+    pod count and no per-pod thread fan-out is needed.
+
+    ``poll_interval`` defaults to the metrics-server scrape resolution (15s);
+    polling faster only re-reads the same sample.
     """
 
-    def __init__(self, kubectl: K8sService, task_stats_table: Table, *, concurrency: int = 8):
+    def __init__(
+        self,
+        kubectl: K8sService,
+        task_stats_table: Table,
+        *,
+        labels: dict[str, str] | None = None,
+        poll_interval: float = 15.0,
+    ):
         self._kubectl = kubectl
         self._table = task_stats_table
+        self._labels = labels
+        self._poll_interval = poll_interval
         # (task_id_wire, attempt_id) -> pod_name. Tuple keys carry the
         # identity needed to build IrisTaskStat without parsing strings.
         self._pods: dict[tuple[str, int], str] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
-        self._executor = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="resource-collect")
         self._thread = threading.Thread(target=self._run, daemon=True, name="resource-collector")
         self._thread.start()
 
@@ -1164,47 +1176,47 @@ class ResourceCollector:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            with self._lock:
-                snapshot = list(self._pods.items())
-            if snapshot:
-                futures = [self._executor.submit(self._fetch_one, key, pod_name) for key, pod_name in snapshot]
-                for f in concurrent.futures.as_completed(futures):
-                    try:
-                        f.result()
-                    except Exception:
-                        pass
-            self._stop.wait(timeout=5.0)
+            self._collect_once()
+            self._stop.wait(timeout=self._poll_interval)
 
-    def _fetch_one(self, key: tuple[str, int], pod_name: str) -> None:
+    def _collect_once(self) -> None:
+        with self._lock:
+            snapshot = list(self._pods.items())
+        if not snapshot:
+            return
         try:
-            top = self._kubectl.top_pod(pod_name)
+            usage_by_pod = self._kubectl.top_pods(labels=self._labels)
         except Exception as e:
-            logger.debug("ResourceCollector: top_pod raised for pod %s: %s", pod_name, e)
-            return
-        if top is None:
+            logger.debug("ResourceCollector: top_pods raised: %s", e)
             return
 
-        task_id_wire, attempt_id = key
-        usage = job_pb2.ResourceUsage(
-            cpu_millicores=top.cpu_millicores,
-            memory_mb=top.memory_bytes // (1024 * 1024),
-        )
-        stat = build_task_stat(
-            task_id=task_id_wire,
-            attempt_id=attempt_id,
-            # Pod name is the per-attempt platform identity on k8s, mirroring
-            # worker_id on the GCE/TPU path.
-            worker_id=pod_name,
-            usage=usage,
-        )
+        stats: list[IrisTaskStat] = []
+        for (task_id_wire, attempt_id), pod_name in snapshot:
+            top = usage_by_pod.get(pod_name)
+            if top is None:
+                continue
+            stats.append(
+                build_task_stat(
+                    task_id=task_id_wire,
+                    attempt_id=attempt_id,
+                    # Pod name is the per-attempt platform identity on k8s,
+                    # mirroring worker_id on the GCE/TPU path.
+                    worker_id=pod_name,
+                    usage=job_pb2.ResourceUsage(
+                        cpu_millicores=top.cpu_millicores,
+                        memory_mb=top.memory_bytes // (1024 * 1024),
+                    ),
+                )
+            )
+        if not stats:
+            return
         try:
-            self._table.write([stat])
+            self._table.write(stats)
         except Exception:
             logger.debug("ResourceCollector: write to iris.task failed", exc_info=True)
 
     def close(self) -> None:
         self._stop.set()
-        self._executor.shutdown(wait=False)
         self._thread.join(timeout=5)
 
 
@@ -1310,8 +1322,14 @@ class K8sTaskProvider:
     # Pre-resolved iris.profile Table handle injected by the controller
     # alongside task_stats_table. None in test mode.
     profile_table: Table | None = None
+    # Log fetch fan-out: logs have no bulk API, so each pod is streamed on its
+    # own worker thread.
     poll_concurrency: int = 32
     log_poll_interval: float = 15.0
+    # Resource-usage poll cadence. Defaults to the metrics-server scrape
+    # resolution (15s) — sampling faster only re-reads the same value. One bulk
+    # metrics list per tick covers every managed pod (see ResourceCollector).
+    resource_poll_interval: float = 15.0
     # Cluster-wide kubectl scans (pod list, stray-pod GC, pod poll, node refresh)
     # are coarse-grained: the controller ticks reconcile at poll_interval (1s),
     # but these LISTs run at most once per cluster_scan_interval to bound kubectl
@@ -1335,7 +1353,10 @@ class K8sTaskProvider:
             return None
         if self._resource_collector is None:
             self._resource_collector = ResourceCollector(
-                self.kubectl, self.task_stats_table, concurrency=self.poll_concurrency
+                self.kubectl,
+                self.task_stats_table,
+                labels=_MANAGED_POD_LABELS,
+                poll_interval=self.resource_poll_interval,
             )
         return self._resource_collector
 

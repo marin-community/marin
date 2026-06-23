@@ -54,6 +54,7 @@ def provider(k8s, log_client, task_stats_table):
         log_client=log_client,
         task_stats_table=task_stats_table,
         log_poll_interval=1.0,
+        resource_poll_interval=0.5,
         cluster_scan_interval=0.0,
     )
     yield p

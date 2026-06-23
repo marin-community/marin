@@ -547,7 +547,7 @@ def test_resource_stats_from_kubectl_top(provider, k8s, task_stats_table):
     # First sync registers the pod with the ResourceCollector.
     provider.reconcile(batch)
     # Wait for background collector to fetch and write.
-    time.sleep(6)
+    time.sleep(2)
     # No more sync needed — the row has already been written to the table.
 
     rows = [row for batch_rows in task_stats_table.writes for row in batch_rows]
@@ -573,24 +573,26 @@ def test_resource_stats_skipped_when_metrics_unavailable(provider, k8s, task_sta
 
     batch = make_batch(running_tasks=[entry])
     provider.reconcile(batch)
-    time.sleep(6)
+    time.sleep(2)
 
     assert task_stats_table.writes == []
 
 
-def test_resource_stats_skipped_when_top_pod_raises(provider, k8s, task_stats_table):
-    """No IrisTaskStat row is written when kubectl top raises an exception."""
+def test_resource_stats_skipped_when_top_pods_raises(provider, k8s, task_stats_table):
+    """No IrisTaskStat row is written when the bulk metrics query raises."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
     pod_name = _pod_name(task_id, attempt_id)
     entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
 
     populate_pod(k8s, pod_name, "Running")
-    k8s.inject_failure("top_pod", RuntimeError("metrics-server unavailable"))
+    # Persistent: the background collector retries on its own cadence, so a
+    # one-shot failure would be consumed and later polls would succeed.
+    k8s.inject_failure("top_pods", RuntimeError("metrics-server unavailable"), persistent=True)
 
     batch = make_batch(running_tasks=[entry])
     provider.reconcile(batch)
-    time.sleep(6)
+    time.sleep(2)
 
     assert task_stats_table.writes == []
 
@@ -606,7 +608,7 @@ def test_resource_stats_skipped_for_non_running_pods(provider, k8s, task_stats_t
 
     batch = make_batch(running_tasks=[entry])
     provider.reconcile(batch)
-    time.sleep(6)
+    time.sleep(2)
 
     assert task_stats_table.writes == []
 
@@ -1137,7 +1139,7 @@ def test_log_collector_set_pods_preserves_cursor_state(k8s, log_client):
 def test_resource_collector_set_pods_replaces_active_set(k8s, task_stats_table):
     """set_pods() replaces the tracked pod set wholesale."""
 
-    collector = ResourceCollector(k8s, task_stats_table, concurrency=1)
+    collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
     key_a = ("/job/0", 0)
     key_b = ("/job/1", 0)
 
@@ -1153,14 +1155,15 @@ def test_resource_collector_set_pods_replaces_active_set(k8s, task_stats_table):
 
 
 def test_resource_collector_writes_iris_task_rows(k8s, task_stats_table):
-    """A successful kubectl top read appends one IrisTaskStat row to the Table."""
+    """A successful bulk metrics read appends one IrisTaskStat row to the Table."""
 
     k8s.set_top_pod("pod-a", PodResourceUsage(cpu_millicores=750, memory_bytes=2 * 1024 * 1024 * 1024))
 
-    collector = ResourceCollector(k8s, task_stats_table, concurrency=1)
-    collector.set_pods({("/job/0", 3): "pod-a"})
-    time.sleep(6)
+    collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
+    # Stop the background loop so we drive a single collection deterministically.
     collector.close()
+    collector.set_pods({("/job/0", 3): "pod-a"})
+    collector._collect_once()
 
     rows = [row for batch_rows in task_stats_table.writes for row in batch_rows]
     assert rows, "no rows emitted"
@@ -1171,6 +1174,28 @@ def test_resource_collector_writes_iris_task_rows(k8s, task_stats_table):
     assert row.worker_id == "pod-a"
     assert row.cpu_millicores == 750
     assert row.memory_mb == 2048
+
+
+def test_resource_collector_uses_one_bulk_query_for_many_pods(k8s, task_stats_table):
+    """One poll fetches every tracked pod's usage in a single metrics query.
+
+    This is the load fix: cost is one API round-trip per tick regardless of how
+    many pods are running, and the resulting rows land in a single batched write.
+    """
+    pods = {(f"/job/{i}", 0): f"pod-{i}" for i in range(50)}
+    for _, pod_name in pods.items():
+        k8s.set_top_pod(pod_name, PodResourceUsage(cpu_millicores=100, memory_bytes=128 * 1024 * 1024))
+
+    collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
+    # Stop the background loop so the single collection below is deterministic.
+    collector.close()
+    collector.set_pods(pods)
+    calls_before = k8s.top_pods_call_count
+    collector._collect_once()
+
+    assert k8s.top_pods_call_count - calls_before == 1, "expected exactly one bulk metrics query"
+    assert len(task_stats_table.writes) == 1, "expected a single batched write"
+    assert len(task_stats_table.writes[0]) == len(pods), "every tracked pod should produce one row"
 
 
 # ---------------------------------------------------------------------------
