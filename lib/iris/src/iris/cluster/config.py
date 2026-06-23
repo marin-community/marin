@@ -1162,6 +1162,15 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> TaskBackend:
                     f"valid bands: {sorted(_KUEUE_PRIORITY_BANDS)}"
                 )
             priority_classes[band] = wpc
+        pod_priority_classes: dict[int, str] = {}
+        for band_name, pc_name in kp.priority_classes.items():
+            band = _KUEUE_PRIORITY_BANDS.get(band_name)
+            if band is None:
+                raise ValueError(
+                    f"Unknown priority band {band_name!r} in kubernetes_provider.priority_classes; "
+                    f"valid bands: {sorted(_KUEUE_PRIORITY_BANDS)}"
+                )
+            pod_priority_classes[band] = pc_name
         # Empty topologies falls back to the CoreWeave-convention defaults (the
         # provider would otherwise be handed an empty map, suppressing them).
         topologies = {group_by: (topo.node_label, topo.required) for group_by, topo in kp.kueue.topologies.items()}
@@ -1188,6 +1197,7 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> TaskBackend:
             kueue_priority_classes=priority_classes,
             kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
             preempt_namespaces=list(kp.preempt_namespaces),
+            priority_class_names=pod_priority_classes,
         )
     if which == "worker_provider":
         return RpcTaskBackend(stub_factory=RpcWorkerStubFactory())
