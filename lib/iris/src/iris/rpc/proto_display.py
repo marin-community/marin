@@ -4,24 +4,27 @@
 """Protobuf enum utilities."""
 
 import humanfriendly
+from google.protobuf.internal.enum_type_wrapper import EnumTypeWrapper
 
 from iris.rpc import config_pb2, job_pb2, vm_pb2
 
 
+def _enum_name(enum_wrapper: EnumTypeWrapper, value: int) -> str:
+    """Return the proto enum name for ``value``, or ``UNKNOWN(value)`` if unmapped."""
+    try:
+        return enum_wrapper.Name(value)
+    except ValueError:
+        return f"UNKNOWN({value})"
+
+
 def vm_state_name(state: int) -> str:
     """Return enum name like 'VM_STATE_READY'."""
-    try:
-        return vm_pb2.VmState.Name(state)
-    except ValueError:
-        return f"UNKNOWN({state})"
+    return _enum_name(vm_pb2.VmState, state)
 
 
 def job_state_name(state: int) -> str:
     """Return enum name like 'JOB_STATE_RUNNING'."""
-    try:
-        return job_pb2.JobState.Name(state)
-    except ValueError:
-        return f"UNKNOWN({state})"
+    return _enum_name(job_pb2.JobState, state)
 
 
 def job_state_friendly(state: int) -> str:
@@ -31,10 +34,7 @@ def job_state_friendly(state: int) -> str:
 
 def task_state_name(state: int) -> str:
     """Return enum name like 'TASK_STATE_RUNNING'."""
-    try:
-        return job_pb2.TaskState.Name(state)
-    except ValueError:
-        return f"UNKNOWN({state})"
+    return _enum_name(job_pb2.TaskState, state)
 
 
 def task_state_friendly(state: int) -> str:
@@ -44,10 +44,7 @@ def task_state_friendly(state: int) -> str:
 
 def accelerator_type_name(accel_type: int) -> str:
     """Return enum name like 'ACCELERATOR_TYPE_TPU'."""
-    try:
-        return config_pb2.AcceleratorType.Name(accel_type)
-    except ValueError:
-        return f"UNKNOWN({accel_type})"
+    return _enum_name(config_pb2.AcceleratorType, accel_type)
 
 
 def accelerator_type_friendly(accel_type: int) -> str:
@@ -59,10 +56,7 @@ def accelerator_type_friendly(accel_type: int) -> str:
         ACCELERATOR_TYPE_GPU (2) -> "gpu"
         ACCELERATOR_TYPE_TPU (3) -> "tpu"
     """
-    name = accelerator_type_name(accel_type)
-    if name.startswith("ACCELERATOR_TYPE_"):
-        return name.replace("ACCELERATOR_TYPE_", "").lower()
-    return name.lower()
+    return accelerator_type_name(accel_type).removeprefix("ACCELERATOR_TYPE_").lower()
 
 
 def format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
