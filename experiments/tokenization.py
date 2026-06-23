@@ -104,6 +104,7 @@ def default_tokenize(
     tags: Sequence[str] = (),
     resources: ResourceConfig | None = None,
     worker_resources: ResourceConfig | None = None,
+    allow_test_in_train: bool = False,
 ) -> ExecutorStep:
     """
     Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
@@ -123,6 +124,8 @@ def default_tokenize(
         sample_count: Optional limit on the number of samples to tokenize per shard. If ``None``, tokenize everything.
         is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
         tags: Tags to attach to the Levanter dataset source for tagged evaluation.
+        allow_test_in_train: Permit ``test``/``validation`` substrings in path-based train paths
+            (e.g. a source bucket named ``...-test``). Only applies to path datasets, not HF ids.
     Returns:
         An ExecutorStep that represents the tokenized dataset.
     """
@@ -171,6 +174,7 @@ def default_tokenize(
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
             levanter_batch_size=levanter_batch_size,
             tags=[*tags],
+            allow_test_in_train=allow_test_in_train,
             **extra_kwargs,
         )
 

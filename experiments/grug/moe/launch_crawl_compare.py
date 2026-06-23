@@ -87,17 +87,20 @@ def _ingest_main() -> ExecutorStep:
     ).as_executor_step()
 
 
-def _tokenize(name: str, ingest: ExecutorStep) -> ExecutorStep:
+def _tokenize(name: str, ingest: ExecutorStep, *, allow_test_in_train: bool = False) -> ExecutorStep:
     return default_tokenize(
         name=name,
         dataset=ingest,
         tokenizer=llama3_tokenizer,
         format=TextLmDatasetFormat(),
+        allow_test_in_train=allow_test_in_train,
     )
 
 
 TOKENIZE_STEPS: dict[str, ExecutorStep] = {
-    "focus": _tokenize("cc_wet/focus_supplemental_2026_22", _ingest_focus()),
+    # The focus source bucket is named ``cc-open-athena-test``; the ``test`` substring
+    # is in the source path, not a held-out split, so the tokenize guard is waived.
+    "focus": _tokenize("cc_wet/focus_supplemental_2026_22", _ingest_focus(), allow_test_in_train=True),
     "main": _tokenize("cc_wet/main_2024_18", _ingest_main()),
 }
 
