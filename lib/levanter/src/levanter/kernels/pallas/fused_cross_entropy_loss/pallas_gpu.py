@@ -26,9 +26,12 @@ _GB10_FULL_MATMUL_MAX_OUTPUT_ELEMENTS = 67_108_864
 _GB10_XLA_STREAMING_V_BLOCK_BATCH_1K = 2048
 _GB10_XLA_STREAMING_V_BLOCK_BATCH_4K = 3072
 _GB10_XLA_STREAMING_V_BLOCK_BATCH_8K = 3072
+_LARGE_VOCAB_THRESHOLD = 65536
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K = 6144
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS = 7168
 _GPU_MIN_B_BLOCK_SIZE = 128
+_H100_FULL_VOCAB_B_TILED_BLOCK_SIZE = 8192
+_H100_FULL_VOCAB_B_TILED_MIN_BATCH = 8192
 
 
 def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
@@ -83,7 +86,7 @@ def _gb10_xla_fallback_block_sizes(
     b_dim: int,
     v_dim: int,
 ) -> BlockSizes | None:
-    if v_dim < 65536:
+    if v_dim < _LARGE_VOCAB_THRESHOLD:
         return None
     if b_dim >= 8192:
         return BlockSizes(v_block_size=_GB10_XLA_STREAMING_V_BLOCK_BATCH_8K)
@@ -293,6 +296,85 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_fa_style_streaming(
     return loss, lse
 
 
+@partial(jax.jit, static_argnames=["b_block_size", "dtype", "logit_soft_cap", "precision"])
+def _linear_softmax_cross_entropy_loss_full_vocab_b_tiled(
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    w: Float[Array, "H V"],
+    *,
+    b_block_size: int,
+    dtype: Optional[jnp.dtype],
+    logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
+) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
+    """Forward pass over batch tiles, materializing one [B_tile, V] logits tile at a time."""
+    b_dim, h_dim = x.shape
+    v_dim = w.shape[1]
+    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
+
+    x_pad = _zero_pad(x, axis=0, multiple=b_block_size, pad_value=0.0)
+    labels_pad = _zero_pad(labels.astype(jnp.int32), axis=0, multiple=b_block_size, pad_value=-1)
+    b_pad = x_pad.shape[0]
+    num_b_blocks = b_pad // b_block_size
+
+    loss_init = jnp.zeros((b_pad,), dtype=out_dtype)
+    lse_init = jnp.zeros((b_pad,), dtype=out_dtype)
+
+    def body(block_index, state):
+        loss, lse = state
+        b_start = block_index * b_block_size
+        x_block = jax.lax.dynamic_slice(x_pad, (b_start, 0), (b_block_size, h_dim))
+        labels_block = jax.lax.dynamic_slice(labels_pad, (b_start,), (b_block_size,))
+
+        logits = jax.lax.dot_general(
+            x_block,
+            w,
+            (((1,), (0,)), ((), ())),
+            precision=precision,
+        )
+        if dtype is not None:
+            logits = logits.astype(dtype)
+        logits = _apply_logit_soft_cap(logits, logit_soft_cap)
+
+        valid_rows = labels_block >= 0
+        lse_block = jax.nn.logsumexp(logits, axis=-1)
+        safe_labels = jnp.clip(labels_block, 0, v_dim - 1)
+        label_logits = jnp.take_along_axis(logits, safe_labels[:, None], axis=1).squeeze(-1)
+        loss_block = lse_block - label_logits
+
+        loss_block = jnp.where(valid_rows, loss_block, 0.0).astype(out_dtype)
+        lse_block = jnp.where(valid_rows, lse_block, 0.0).astype(out_dtype)
+        loss = jax.lax.dynamic_update_slice(loss, loss_block, (b_start,))
+        lse = jax.lax.dynamic_update_slice(lse, lse_block, (b_start,))
+        return loss, lse
+
+    loss, lse = jax.lax.fori_loop(0, num_b_blocks, body, (loss_init, lse_init))
+    return loss[:b_dim], lse[:b_dim]
+
+
+def _h100_full_vocab_b_tiled_block_size(
+    x: Float[Array, "B H"],
+    w: Float[Array, "H V"],
+    *,
+    return_argmax: bool = False,
+) -> int | None:
+    """Return the H100 full-vocab batch tile when the materialized logits path would be too large."""
+    if return_argmax:
+        return None
+    device_kind = _device_kind()
+    if "h100" not in device_kind:
+        return None
+    if "gb10" in device_kind:
+        return None
+    if x.dtype != jnp.bfloat16 or w.dtype != jnp.bfloat16:
+        return None
+    if x.shape[0] < _H100_FULL_VOCAB_B_TILED_MIN_BATCH:
+        return None
+    if w.shape[1] < _LARGE_VOCAB_THRESHOLD:
+        return None
+    return _H100_FULL_VOCAB_B_TILED_BLOCK_SIZE
+
+
 @partial(
     jax.jit,
     static_argnames=[
@@ -318,6 +400,11 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
     device_kind = _device_kind()
     is_gb10_bf16 = "gb10" in device_kind and x.dtype == jnp.bfloat16 and w.dtype == jnp.bfloat16
 
+    if block_sizes is None:
+        block_sizes = BlockSizes.get_default()
+
+    _validate_inputs(x, labels, w, block_sizes)
+
     if _should_use_gb10_full_matmul_fallback(x, w):
         return linear_softmax_cross_entropy_loss_reference(
             x,
@@ -327,6 +414,17 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
             logit_soft_cap=logit_soft_cap,
             precision=precision,
             return_argmax=return_argmax,
+        )
+    full_vocab_b_block = _h100_full_vocab_b_tiled_block_size(x, w, return_argmax=return_argmax)
+    if full_vocab_b_block is not None:
+        return _linear_softmax_cross_entropy_loss_full_vocab_b_tiled(
+            x,
+            labels,
+            w,
+            b_block_size=full_vocab_b_block,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
         )
     if is_gb10_bf16:
         # On GB10 BF16 we intentionally keep forward on the XLA streaming path and attach
@@ -346,11 +444,6 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
             precision=precision,
             return_argmax=return_argmax,
         )
-
-    if block_sizes is None:
-        block_sizes = BlockSizes.get_default()
-
-    _validate_inputs(x, labels, w, block_sizes)
 
     b_dim, _ = x.shape
     v_dim = w.shape[1]
@@ -417,7 +510,7 @@ def _gb10_custom_backward_v_block_size(
         return None
     if _should_use_gb10_full_matmul_fallback(x, w):
         return None
-    if w.shape[1] < 65536:
+    if w.shape[1] < _LARGE_VOCAB_THRESHOLD:
         return None
     if x.shape[0] >= 2048:
         return _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS
@@ -437,6 +530,87 @@ def _custom_backward_v_block_size(
     if block_sizes is not None:
         return block_sizes.v_block_size
     return BlockSizes.get_default().v_block_size
+
+
+@partial(jax.jit, static_argnames=["b_block_size", "logit_soft_cap", "precision"])
+def _backward_b_tiled_from_lse(
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    w: Float[Array, "H V"],
+    lse: Float[Array, "B"],
+    g_loss: Float[Array, "B"],
+    g_lse: Float[Array, "B"],
+    *,
+    b_block_size: int,
+    logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
+) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
+    """Backward pass over batch tiles using full-vocab GEMMs per tile."""
+    b_dim, h_dim = x.shape
+    v_dim = w.shape[1]
+
+    x_pad = _zero_pad(x, axis=0, multiple=b_block_size, pad_value=0.0)
+    labels_pad = _zero_pad(labels.astype(jnp.int32), axis=0, multiple=b_block_size, pad_value=-1)
+    lse_pad = _zero_pad(lse, axis=0, multiple=b_block_size, pad_value=0.0)
+    g_loss_pad = _zero_pad(g_loss, axis=0, multiple=b_block_size, pad_value=0.0)
+    g_lse_pad = _zero_pad(g_lse, axis=0, multiple=b_block_size, pad_value=0.0)
+    b_pad = x_pad.shape[0]
+    num_b_blocks = b_pad // b_block_size
+
+    grad_x_init = jnp.zeros((b_pad, h_dim), dtype=jnp.float32)
+    grad_w_init = jnp.zeros((h_dim, v_dim), dtype=jnp.float32)
+
+    def body(block_index, state):
+        grad_x, grad_w = state
+        b_start = block_index * b_block_size
+        x_block = jax.lax.dynamic_slice(x_pad, (b_start, 0), (b_block_size, h_dim))
+        labels_block = jax.lax.dynamic_slice(labels_pad, (b_start,), (b_block_size,))
+        lse_block = jax.lax.dynamic_slice(lse_pad, (b_start,), (b_block_size,)).astype(jnp.float32)
+        g_loss_block = jax.lax.dynamic_slice(g_loss_pad, (b_start,), (b_block_size,)).astype(jnp.float32)
+        g_lse_block = jax.lax.dynamic_slice(g_lse_pad, (b_start,), (b_block_size,)).astype(jnp.float32)
+
+        logits_raw = jax.lax.dot_general(
+            x_block,
+            w,
+            (((1,), (0,)), ((), ())),
+            precision=precision,
+        ).astype(jnp.float32)
+        logits = _apply_logit_soft_cap(logits_raw, logit_soft_cap)
+
+        probs = jnp.exp(logits - lse_block[:, None])
+        dlogits = probs * (g_loss_block + g_lse_block)[:, None]
+
+        valid_rows = labels_block >= 0
+        safe_labels = jnp.clip(labels_block, 0, v_dim - 1)
+        label_one_hot = jax.nn.one_hot(safe_labels, v_dim, dtype=jnp.float32)
+        label_one_hot = label_one_hot * valid_rows[:, None].astype(jnp.float32)
+        dlogits = dlogits - label_one_hot * g_loss_block[:, None]
+
+        if logit_soft_cap is not None:
+            cap = jnp.asarray(logit_soft_cap, dtype=jnp.float32)
+            soft_cap_grad = 1.0 - jnp.square(logits / cap)
+            dlogits = dlogits * soft_cap_grad
+
+        dlogits_for_matmul = dlogits.astype(x.dtype)
+        grad_x_block = jax.lax.dot_general(
+            dlogits_for_matmul,
+            w,
+            (((1,), (1,)), ((), ())),
+            precision=precision,
+        ).astype(jnp.float32)
+        grad_w_block = jax.lax.dot_general(
+            x_block,
+            dlogits_for_matmul,
+            (((0,), (0,)), ((), ())),
+            precision=precision,
+        ).astype(jnp.float32)
+
+        grad_x = jax.lax.dynamic_update_slice(grad_x, grad_x_block, (b_start, 0))
+        grad_w = grad_w + grad_w_block
+        return grad_x, grad_w
+
+    grad_x, grad_w = jax.lax.fori_loop(0, num_b_blocks, body, (grad_x_init, grad_w_init))
+    return grad_x[:b_dim].astype(x.dtype), grad_w.astype(w.dtype)
 
 
 @partial(jax.jit, static_argnames=["v_block_size", "logit_soft_cap", "precision"])
@@ -564,8 +738,9 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_fwd(
     )
     # We carry this shape-derived tuning choice in residuals so bwd can use
     # exactly the same policy decision as fwd without recomputing dispatch logic.
+    full_vocab_b_block = _h100_full_vocab_b_tiled_block_size(x, w)
     backward_v_block = _custom_backward_v_block_size(x, w, block_sizes)
-    return (loss, lse), (x, labels, w, lse, backward_v_block)
+    return (loss, lse), (x, labels, w, lse, full_vocab_b_block, backward_v_block)
 
 
 def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_bwd(
@@ -576,20 +751,33 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_bwd(
     residuals,
     output_cotangent,
 ):
-    x, labels, w, lse, backward_v_block = residuals
+    x, labels, w, lse, full_vocab_b_block, backward_v_block = residuals
     g_loss, g_lse = output_cotangent
 
-    grad_x, grad_w = _backward_streaming_from_lse(
-        x,
-        labels,
-        w,
-        lse,
-        g_loss,
-        g_lse,
-        v_block_size=backward_v_block,
-        logit_soft_cap=logit_soft_cap,
-        precision=precision,
-    )
+    if full_vocab_b_block is not None:
+        grad_x, grad_w = _backward_b_tiled_from_lse(
+            x,
+            labels,
+            w,
+            lse,
+            g_loss,
+            g_lse,
+            b_block_size=full_vocab_b_block,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+        )
+    else:
+        grad_x, grad_w = _backward_streaming_from_lse(
+            x,
+            labels,
+            w,
+            lse,
+            g_loss,
+            g_lse,
+            v_block_size=backward_v_block,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+        )
 
     return grad_x, None, grad_w
 

@@ -822,6 +822,104 @@ def test_fused_cross_entropy_pallas_gpu_requires_gpu():
         )
 
 
+def test_pallas_gpu_full_vocab_b_tiled_forward_matches_reference():
+    if jax.default_backend() == "tpu":
+        pytest.skip("pallas_gpu full-vocab B-tiled helper is covered by CPU/GPU precision paths")
+
+    key = jax.random.PRNGKey(41)
+    key_x, key_w, key_y = jax.random.split(key, 3)
+    x = jax.random.normal(key_x, (7, 5), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (5, 11), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (7,), 0, 11, dtype=jnp.int32)
+
+    expected_loss, expected_lse = linear_softmax_cross_entropy_loss_reference(
+        x,
+        y,
+        w,
+        dtype=jnp.float32,
+        logit_soft_cap=1.7,
+    )
+    actual_loss, actual_lse = pallas_gpu._linear_softmax_cross_entropy_loss_full_vocab_b_tiled(
+        x,
+        y,
+        w,
+        b_block_size=4,
+        dtype=jnp.float32,
+        logit_soft_cap=1.7,
+        precision=None,
+    )
+
+    np.testing.assert_allclose(actual_loss, expected_loss, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(actual_lse, expected_lse, rtol=1e-5, atol=1e-5)
+
+
+def test_pallas_gpu_backward_b_tiled_from_lse_matches_reference_gradients():
+    if jax.default_backend() == "tpu":
+        pytest.skip("pallas_gpu custom backward helper is covered by CPU/GPU precision paths")
+
+    key = jax.random.PRNGKey(43)
+    key_x, key_w, key_y, key_loss, key_lse = jax.random.split(key, 5)
+    x = jax.random.normal(key_x, (7, 5), dtype=jnp.float32)
+    w = jax.random.normal(key_w, (5, 11), dtype=jnp.float32)
+    y = jax.random.randint(key_y, (7,), 0, 11, dtype=jnp.int32)
+    g_loss = jax.random.normal(key_loss, (7,), dtype=jnp.float32)
+    g_lse = jax.random.normal(key_lse, (7,), dtype=jnp.float32)
+
+    _, lse = linear_softmax_cross_entropy_loss_reference(x, y, w, dtype=jnp.float32, logit_soft_cap=1.7)
+
+    def reference_cotangent_loss(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+        loss, logsumexp = linear_softmax_cross_entropy_loss_reference(
+            x_raw,
+            y,
+            w_raw,
+            dtype=jnp.float32,
+            logit_soft_cap=1.7,
+        )
+        return jnp.sum(loss * g_loss + logsumexp * g_lse)
+
+    expected_x, expected_w = jax.grad(reference_cotangent_loss, argnums=(0, 1))(x, w)
+    actual_x, actual_w = pallas_gpu._backward_b_tiled_from_lse(
+        x,
+        y,
+        w,
+        lse,
+        g_loss,
+        g_lse,
+        b_block_size=4,
+        logit_soft_cap=1.7,
+        precision=None,
+    )
+
+    np.testing.assert_allclose(actual_x, expected_x, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(actual_w, expected_w, rtol=1e-5, atol=1e-5)
+
+
+def test_pallas_gpu_h100_full_vocab_policy_selects_b_tiled_path(monkeypatch: pytest.MonkeyPatch):
+    x = jax.ShapeDtypeStruct((8192, 16), jnp.bfloat16)
+    w = jax.ShapeDtypeStruct((16, 65536), jnp.bfloat16)
+
+    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
+    assert pallas_gpu._h100_full_vocab_b_tiled_block_size(x, w) == 8192
+    assert pallas_gpu._h100_full_vocab_b_tiled_block_size(x, w, return_argmax=True) is None
+    assert (
+        pallas_gpu._h100_full_vocab_b_tiled_block_size(
+            jax.ShapeDtypeStruct((8191, 16), jnp.bfloat16),
+            w,
+        )
+        is None
+    )
+    assert (
+        pallas_gpu._h100_full_vocab_b_tiled_block_size(
+            x,
+            jax.ShapeDtypeStruct((16, 65535), jnp.bfloat16),
+        )
+        is None
+    )
+
+    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia gb10")
+    assert pallas_gpu._h100_full_vocab_b_tiled_block_size(x, w) is None
+
+
 def test_fused_cross_entropy_pallas_gpu_custom_backward_grad_matches_xla():
     if jax.default_backend() != "gpu":
         pytest.skip("requires GPU backend")
