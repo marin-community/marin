@@ -162,29 +162,14 @@ def per_segment_loss(
     This code is designed to run in a jit-compiled function, meaning we have to careful of shapes
     """
 
-    assert packed_example.attn_mask.segment_ids is not None, "segment_ids must be set in the AttentionMask"
-
-    segment_ids = packed_example.attn_mask.segment_ids
-    if isinstance(segment_ids, tuple):
-        segment_ids = segment_ids[0]
-
-    assert (
-        segment_ids.ndim == 1
-    ), f"Expected segment_ids to be 1D, got {segment_ids.ndim}. Use vmap if you have multiple examples"
     Pos = packed_example.tokens.axes[0]
 
     # mask out padding etc
     masked_losses = losses * packed_example.loss_weight
 
-    # sum the losses for each segment
-    unique_segment_ids = _unique_segment_ids(max_Segments, segment_ids)
+    unique_segment_ids, segment_mask = _segment_membership(packed_example, max_Segments)
 
-    # Create a mask matrix where each row corresponds to a unique segment
-    segment_mask = unique_segment_ids == segment_ids.broadcast_axis(max_Segments)
-
-    segment_mask = segment_mask.astype(masked_losses.dtype)
-
-    segment_losses = hax.dot(segment_mask, masked_losses, axis=Pos)
+    segment_losses = hax.dot(segment_mask.astype(masked_losses.dtype), masked_losses, axis=Pos)
 
     return unique_segment_ids, segment_losses
 
@@ -195,6 +180,27 @@ def _unique_segment_ids(max_Segments, segment_ids):
     unique_segment_ids = jnp.unique(segment_ids.array, size=max_Segments.size, fill_value=-1)
     unique_segment_ids = hax.named(unique_segment_ids, max_Segments)
     return unique_segment_ids
+
+
+def _segment_membership(packed_example: LmExample, max_Segments: hax.Axis) -> tuple[hax.NamedArray, hax.NamedArray]:
+    """Return the unique segment ids and a boolean ``(max_Segments, Pos)`` membership mask.
+
+    ``segment_mask[s, p]`` is True iff position ``p`` belongs to the ``s``-th unique segment id.
+    Expects ``segment_ids`` to be 1-D; wrap callers in ``hax.vmap`` for batched examples.
+    """
+    assert packed_example.attn_mask.segment_ids is not None, "segment_ids must be set in the AttentionMask"
+
+    segment_ids = packed_example.attn_mask.segment_ids
+    if isinstance(segment_ids, tuple):
+        segment_ids = segment_ids[0]
+
+    assert (
+        segment_ids.ndim == 1
+    ), f"Expected segment_ids to be 1D, got {segment_ids.ndim}. Use vmap if you have multiple examples"
+
+    unique_segment_ids = _unique_segment_ids(max_Segments, segment_ids)
+    segment_mask = unique_segment_ids == segment_ids.broadcast_axis(max_Segments)
+    return unique_segment_ids, segment_mask
 
 
 def per_segment_correct(
@@ -211,30 +217,13 @@ def per_segment_correct(
     correct is a boolean array of the same shape as the losses array indicating whether the token was correct
     """
 
-    assert packed_example.attn_mask.segment_ids is not None, "segment_ids must be set in the AttentionMask"
-
-    segment_ids = packed_example.attn_mask.segment_ids
-    if isinstance(segment_ids, tuple):
-        segment_ids = segment_ids[0]
-
-    assert (
-        segment_ids.ndim == 1
-    ), f"Expected segment_ids to be 1D, got {segment_ids.ndim}. Use vmap if you have multiple examples"
-
     Pos = packed_example.tokens.axes[0]
 
     # mask out padding etc
     valid_positions = packed_example.loss_weight > 0
     masked_correct = hax.logical_or(correct, hax.logical_not(valid_positions))
 
-    # sum the losses for each segment
-    # Extract unique segment IDs with padding
-    unique_segment_ids = _unique_segment_ids(max_Segments, segment_ids)
-
-    # Create a mask matrix where each row corresponds to a unique segment
-    segment_mask = unique_segment_ids == segment_ids.broadcast_axis(max_Segments)
-
-    segment_mask = segment_mask.astype(masked_correct.dtype)
+    unique_segment_ids, segment_mask = _segment_membership(packed_example, max_Segments)
 
     segment_correct = hax.all(hax.where(segment_mask, masked_correct, True), axis=Pos)
 
