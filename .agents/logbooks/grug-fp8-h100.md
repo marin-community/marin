@@ -580,3 +580,34 @@ confirms the path.
   matcher claims `e5m2×e4m3`/HIGHEST but declines `e4m3²`/DEFAULT for the QDQ round-trip — a matcher rule
   (dtype/precision/DAG shape), not an ordering artifact. The manual fix sidesteps it: resident f8 is matched
   even at `e4m3²`/DEFAULT (GFP8-007/008).
+
+### 2026-06-23 — GFP8-010: S2 — PRECISION is the fwd/bwd gate; one-line fix for the existing op
+- **Hypothesis (the open "why" from GFP8-009):** does forcing the `e4m3×e4m3` operand-QDQ forward to
+  `precision=HIGHEST` make it fire `$f8` (like the backward grad dots), where `DEFAULT` declines?
+- **Method:** new `--path qdq_prec` = `in_qdq` operands + `lax.dot_general(precision=...)` (haliax's
+  `dot_general_with_precision` hardwires DEFAULT, so this rebuilds it at an explicit precision). d4096
+  forward-only; script `_s2_precision.sh`; job `/matt/grug-s2-precision`.
+- **Result — precision IS the gate:**
+
+  | layout | precision | `$f8` | f8e4m3 | GEMM | TFLOP/s | µs |
+  |--------|-----------|-------|--------|------|---------|-----|
+  | nn | default | **0** | 0 | bf16 `__cublas$lt$matmul` | 442.6 | 310 |
+  | nn | highest | **1** | 7 | `__cublas$lt$matmul$f8` | **610.9** | 225 |
+  | tn | highest | **1** | 6 | `__cublas$lt$matmul$f8` | 590.2 | 233 |
+
+  HIGHEST fires `$f8` (f8e4m3 survives); DEFAULT declines (stripped, bf16). The `e5m2` output-grad dtype is
+  **not** what made the backward fire — precision is.
+- **Root cause fully closed:** haliax `dot_general_with_precision` forces the **primal=DEFAULT**
+  (`_src/fp8.py:133`) and **tangent=HIGHEST** (`:146-149`). That asymmetry (copied from Flax) is exactly why
+  the forward declines and the backward fires. The f8 GemmRewriter (which runs before the strip, GFP8-009)
+  only claims HIGHEST-precision f8 dots here.
+- **Implication — one-line fix, no rewrite:** `qdq_prec` is an exact proxy for "the existing
+  `Fp8DotGeneralOp` with its forward primal at HIGHEST." So flipping that one `DEFAULT`→`HIGHEST` makes the
+  **existing** operand-QDQ op fire the forward — the manual custom_vjp arm (GFP8-006/007) is **not required**.
+  Bonus: operand-QDQ folds the scales into the cuBLASLt epilogue (no explicit output rescale like manual),
+  so within-job HIGHEST (610) beats the DEFAULT control (442) by +38% and beats the bf16 baseline (~534,
+  cross-job) — a real speedup, unlike the manual arm's d4096 tie (GFP8-007/008).
+- **Caveats / next:** (1) replicate the bf16-beating with a same-job bf16 baseline (cross-job here);
+  (2) confirm flipping the haliax primal precision doesn't regress other call sites/numerics; (3) verify the
+  full fwd+bwd op (primal HIGHEST) still fires `$f8` on both. Then the dense fix is a 1-line haliax change.
+- (Ops: the job exited non-zero — a cosmetic script-tail artifact; all three cells produced complete data.)
