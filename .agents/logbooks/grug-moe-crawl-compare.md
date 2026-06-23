@@ -62,3 +62,9 @@ Branch: `agent/grug-moe-crawl-compare`
   (main-d768 993→454 over ~1h). Added GRUG_CHECKPOINT_MINUTES env knob (default 10),
   relaunched 6 rungs with =3 + --max-retries 10. Resume from existing checkpoints.
 - New job names: focus/main d768-r5, d1024-r5; focus-d1280-r5, main-d1280-r6.
+
+### 2026-06-23 08:48 — root cause = cross-region egress; fixed via co-location
+- d768+ crashed at ~step 490 with TransferBudgetExceeded (cross-region guard), NOT preemption.
+- Cause: pinned MARIN_PREFIX=us-central2 while v5p is in us-central1/us-east5 → data+ckpt cross-region.
+- Fix: drop MARIN_PREFIX + TPU regions pins; STAGE=all; submit --reserve v5p-8. Inferred gs://marin-us-east5.
+- Job /held/grug-crawlcmp-all, W&B project marin_moe group crawl-compare-focus-vs-main.
