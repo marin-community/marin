@@ -188,6 +188,9 @@ class vLLMInferenceContext(BaseInferenceContext):
     def _get_renderer(model_name: str, tokenizer) -> Renderer:
         """Get the appropriate renderer based on model name."""
         model_name_lower = model_name.lower()
+        if "delphi" in model_name_lower:
+            # Delphi checkpoints are Qwen3-architecture but use the marin/Llama-3 chat template.
+            return Llama3Renderer(tokenizer)
         if "qwen" in model_name_lower:
             return Qwen3Renderer(tokenizer)
         elif "llama" in model_name_lower:
