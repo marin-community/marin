@@ -34,6 +34,27 @@ export function sqlTimestampUtc(at: Date): string {
   return at.toISOString().slice(0, 19).replace("T", " ");
 }
 
+// `arrow_cast(collected_at, 'Int64')` reads finelog's timestamp column out as
+// epoch MICROSECONDS (the namespace stores it at microsecond precision), so a
+// raw cast value fed to `new Date()` lands ~58000 years in the future. Every
+// chart/axis here works in millis, so normalize at the query boundary.
+export function microsToMillis(micros: number): number {
+  return Math.round(micros / 1000);
+}
+
+// Decode a finelog `labels` cell (a JSON object string the probes write via
+// json.dumps). A parse failure is a real anomaly — schema drift or truncation,
+// not an expected case — so log it rather than letting the row's labels
+// silently vanish; the empty fallback keeps one bad row from sinking a query.
+export function decodeLabels(raw: string): Record<string, string> {
+  try {
+    return JSON.parse(raw) as Record<string, string>;
+  } catch (err) {
+    console.warn(`finelog: unparseable labels ${JSON.stringify(raw.slice(0, 200))}: ${(err as Error).message}`);
+    return {};
+  }
+}
+
 export async function queryFinelog(sql: string): Promise<Record<string, unknown>[]> {
   const base = await activeFinelogUrl();
   // Hold a strong reference to the controller so the abort timer is not GC'd

@@ -13,7 +13,7 @@
 //     ratio, create→ready latency, outcome counts, and a per-pool breakdown
 //     (see infra/probes/src/provisioning.py for the metric vocabulary).
 
-import { queryFinelog, sqlTimestampUtc } from "./finelogQuery.js";
+import { decodeLabels, microsToMillis, queryFinelog, sqlTimestampUtc } from "./finelogQuery.js";
 
 const METRICS_NAMESPACE = "infra.canary.metrics";
 
@@ -92,9 +92,10 @@ export interface ProbesSnapshot {
   error?: string;
 }
 
-// Provisioning rows: friendly types, with collected_at as epoch-ms so Arrow
-// hands us a plain number rather than a timestamp object, and the JSON label
-// object kept as a string for per-row decode.
+// Provisioning rows: friendly types, with collected_at carried as a plain
+// number (epoch millis after asMetricRows normalizes the micros cast) rather
+// than a timestamp object, and the JSON label object kept as a string for
+// per-row decode.
 interface MetricRow {
   metric: string;
   value: number;
@@ -117,9 +118,10 @@ function emptyProvisioning(): ProvisioningSnapshot {
 }
 
 // SQL is Apache DataFusion (finelog's read engine), NOT DuckDB: no JSON
-// functions (labels are decoded in JS), and timestamps are read out as epoch
-// millis via arrow_cast(...,'Int64') so Arrow hands back a plain integer. The
-// labels blob doubles as the per-probe partition key — each health check
+// functions (labels are decoded in JS), and collected_at is read out as epoch
+// micros via arrow_cast(...,'Int64') so Arrow hands back a plain integer
+// (normalized to millis in asMetricRows/asCheckRows). The labels blob doubles
+// as the per-probe partition key — each health check
 // emits exactly `{"probe": "<name>"}`, so one labels value maps to one probe.
 const checksSql = (cutoff: string) => `
   WITH recent AS (
@@ -157,7 +159,7 @@ function asMetricRows(rows: Record<string, unknown>[]): MetricRow[] {
     metric: String(r.metric),
     value: Number(r.value),
     labels: String(r.labels ?? "{}"),
-    collected_ms: Number(r.collected_ms),
+    collected_ms: microsToMillis(Number(r.collected_ms)),
   }));
 }
 
@@ -166,7 +168,7 @@ function asCheckRows(rows: Record<string, unknown>[]): CheckRow[] {
     labels: String(r.labels ?? "{}"),
     metric: String(r.metric),
     value: Number(r.value),
-    collected_ms: Number(r.collected_ms),
+    collected_ms: microsToMillis(Number(r.collected_ms)),
   }));
 }
 
@@ -178,7 +180,7 @@ function parseChecks(rows: CheckRow[]): ProbeCheck[] {
   const up = new Map<string, { value: number; collectedMs: number }>();
   const latency = new Map<string, number>();
   for (const row of rows) {
-    const probe = safeLabels(row.labels).probe;
+    const probe = decodeLabels(row.labels).probe;
     if (!probe) continue;
     if (row.metric === METRIC_UP) up.set(probe, { value: row.value, collectedMs: row.collected_ms });
     else if (row.metric === METRIC_LATENCY_MS) latency.set(probe, row.value);
@@ -191,20 +193,6 @@ function parseChecks(rows: CheckRow[]): ProbeCheck[] {
       collectedAt: new Date(collectedMs).toISOString(),
     }))
     .sort((a, b) => a.probe.localeCompare(b.probe));
-}
-
-// Decode a row's JSON label blob. The probes write it via json.dumps, so a
-// parse failure is a real anomaly (schema drift / truncation), not an
-// expected case — log it rather than letting the row's scope/pool fields
-// silently vanish from the rollup. The empty fallback keeps one bad row from
-// sinking the whole snapshot.
-function safeLabels(raw: string): Record<string, string> {
-  try {
-    return JSON.parse(raw) as Record<string, string>;
-  } catch (err) {
-    console.warn(`probes: unparseable labels ${JSON.stringify(raw.slice(0, 200))}: ${(err as Error).message}`);
-    return {};
-  }
 }
 
 function blankFleet(): ProvisionFleet {
@@ -250,7 +238,7 @@ function parseProvisioning(rows: MetricRow[]): ProvisioningSnapshot {
   let windowHours: number | null = null;
 
   for (const row of rows) {
-    const labels = safeLabels(row.labels);
+    const labels = decodeLabels(row.labels);
     const quantile = labels.quantile;
     if (labels.scope === FLEET_SCOPE) {
       applyFleetMetric(fleet, row.metric, row.value, quantile);
