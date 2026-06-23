@@ -634,6 +634,9 @@ confirms the path.
   - **Load-bearing distinction (high, 2-1):** the canonical XLA-targeted pattern uses **materialized f8
     leaves** (cast up to FP16, scaled, dot on the wide type) — persistent-leaf — vs Flax/Haliax's **transient
     bf16→f8→bf16 round-trip** that `simplify-fp-conversions` can strip.
+    > **[corrected by GFP8-014]** "cast up to FP16, dot on the wide type" is WRONG for Flax's current direct
+    > path: it feeds **genuine f8 operands straight into `lax.dot_general`** (no upcast); only the *accumulator*
+    > (`preferred_element_type`) is wide. The direct path == our `manual` arm and runs at `precision=DEFAULT`.
   - **Regression boundary:** $f8 fusion broke at **JAX 0.4.30→0.4.31** (0.4.30 fires; 0.4.31+ falls to
     FP32/bf16). Output-requant non-fusion (#22313) is a *separate* earlier phenomenon.
 - **Reconciliation — we are ahead of the survey on mechanism.** The research's materialized-vs-transient axis
@@ -729,3 +732,44 @@ confirms the path.
   (larger GEMMs; keeping activations resident in f8 across consecutive matmuls / output-requant; or fusing the
   convert into the gemm prologue) rather than from merely making `$f8` appear. Re-measure at the real MoE expert
   GEMM shapes before sizing the win.
+
+### 2026-06-23 — GFP8-014: Flax direct-quant — provenance pinned, EQUALS our manual arm, stable since 2024
+- **Primary-source verification** (two agent passes over `google/flax` source/blame/PRs; main `dcfabd05`).
+- **Migration PRs (high):** the move off the operand-QDQ "trick" happened across:
+
+  | PR | merged | author | what |
+  |----|--------|--------|------|
+  | #3922 "Support direct quantization for FP8 matmul" | 2024-09-04 | wenscarl | **ADDED** the direct path (`Fp8DirectDotGeneralOp` → `fp8_scaled_dot_general`); merge `c44b9169` |
+  | #4229 "Fix scale dtype and refactor q_dot_dq" | 2024-10-01 | wenscarl | scale-dtype hardening + split into `in_q`/`quantized_dot`/`out_dq` |
+  | #4686 "[NVIDIA] Support FP8 Einsum Op" | 2025-04-09 | kaixih | **DEPRECATED** the old fake-quant `Fp8DotGeneralOp` (DeprecationWarning) + `Fp8Einsum` + `Fp8DotGeneral` alias |
+
+  - #3922 body: *"Historically, FP8 matmul quantization followed the pattern of fake quantization … quant →
+    dequant → dot. The XLA GemmWriter pass was designed to transform this pattern into a custom cublasLt call.
+    This PR proposes a departure … adopting direct quantization, which is **quant → dot → dequant**."*
+  - #4686 body (the brittleness motivation — matches our GFP8-004/013): *"the QDQ path relied on XLA pattern
+    matching, which could **silently fall back to high precision if the pattern was broken** — making it less
+    reliable and harder to debug."*
+- **Flax's current path EQUALS our `manual` arm (high):** `in_q` quantizes each operand to genuine
+  `float8_e4m3fn` (no upcast) → `quantized_dot` feeds the f8 arrays **straight into `lax.dot_general`** with
+  `precision=lax.Precision.DEFAULT`, `preferred_element_type=x.dtype` (wide accumulate) → `out_dq` dequantizes
+  the **output only** (`out * lhs_scale*rhs_scale`). Delayed scaling/amax retained; backward quantizes the grad
+  to `float8_e5m2` with HIGHEST grad dots. This is `dq(dot(q(x), q(w)))` — i.e. `manual_fp8_dot` line-for-line,
+  incl. the single post-dot scale multiply. **Corrects GFP8-011's "cast up to FP16, dot on the wide type"
+  (it does NOT upcast the operands).**
+- **Flax uses DEFAULT, not the precision flip (high):** the direct path runs `precision=DEFAULT` and explicitly
+  ignores caller precision — consistent with GFP8-013 (materialized f8 fires `$f8` at DEFAULT; precision is
+  irrelevant once operands are real f8). So the direct path does **not** depend on the GemmRewriter
+  reconstructing f8 from a fake-quant pattern — sidestepping the brittle precision-gate entirely.
+- **Stable since introduction (high):** verbatim diff of `fp8_ops.py` at #3922 merge (`c44b9169`) vs main
+  (`dcfabd05`) shows the direct-quant computation is **character-for-character identical** — the only changes
+  are the function split/renames (#4229/#4686), dead-param removal, and the #4229 `_fm32_to_float32` scale-dtype
+  fix, which is a **no-op for this op** (its scales are plain `float32`; the wrapper only engages for fm32
+  autodiff-accumulated scales). So the form has been settled for ~1.75 years.
+- **Phase-1 bottom line:** the durable dense fix = **port `Fp8DirectDotGeneralOp` (== our `manual` arm) to
+  haliax**, running at DEFAULT — a mature, stable, non-brittle target that is literally Flax's production path.
+  The `forward_precision="highest"` flip (GFP8-012/013) remains the **interim** on the existing op (one field,
+  but patches the deprecated fake-quant mechanism). Caveat: no maintainer statement *certifies* #4229's numerics
+  unchanged for the direct op; the no-op judgment is source-grounded inference.
+- **Sources:** Flax PRs #3922/#4229/#4686; `flax/linen/fp8_ops.py` @ `c44b9169` (introduced) and `dcfabd05`
+  (main): `in_q`/`quantized_dot`/`out_dq`/`fp8_scaled_dot_general`, fwd dot L335-341, out dequant L306-312,
+  e5m2 bwd L391-403.
