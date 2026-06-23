@@ -3,8 +3,12 @@
 
 """Dense matmul microbench for the Grug FP8-on-H100 spike.
 
-Benchmarks a single dense projection ``[M, K] @ [K, N]`` (forward + backward),
-emitting steady-state timing, the compiled HLO, and one machine-readable
+Benchmarks a single dense projection ``[M, K]`` × weight (contracting K) ->
+``[M, N]`` (forward + backward). ``--layout tn`` (default) stores the weight
+``[N, K]`` so K is minor on both operands — cuBLASLt FP8's required layout and
+what haliax ``Linear`` produces; ``--layout nn`` stores ``[K, N]`` and forces an
+XLA-inserted f8 transpose. The bench emits steady-state timing, the compiled
+HLO, and one machine-readable
 ``result_json`` line. ``--path bf16`` (default) is the baseline arm; ``--path
 qdq`` is S2's first FP8 arm — the existing haliax ``Fp8DotGeneralOp`` delayed-
 scaling path, re-measured to see whether XLA still fuses it to an f8 cuBLASLt
@@ -34,11 +38,30 @@ from jax import lax
 from haliax._src.fp8 import compute_scale, get_fp8_max, quantize
 from haliax.quantization import Fp8DotGeneralOp
 
-# Contract K (lhs dim 1, rhs dim 0); no batch dims. Shared with the FP8 paths
-# so the lowering differs only by dtype/precision, not the einsum.
-_DIMENSION_NUMBERS = (((1,), (0,)), ((), ()))
-
 _E4M3 = jnp.float8_e4m3fn
+
+
+def _dimension_numbers(layout: str):
+    """Contracting/batch dims for the layout (no batch dims).
+
+    cuBLASLt FP8 on Hopper requires "TN": the contracting dim K minor (contiguous)
+    on BOTH operands, else XLA inserts a transpose to canonicalize the f8 operands.
+    TN here mirrors haliax ``Linear`` (``out_first=True`` -> weight ``[Out, In]``,
+    activation and weight both contract ``In``, their last dim); NN contracts the
+    weight's major dim and forces the transpose. The einsum is otherwise identical
+    across paths, so the lowering differs only by dtype/precision/layout.
+    """
+    if layout == "tn":
+        return (((1,), (1,)), ((), ()))  # x[M,K] . w[N,K] -> [M,N]; K minor on both
+    if layout == "nn":
+        return (((1,), (0,)), ((), ()))  # x[M,K] . w[K,N] -> [M,N]; w's K is major
+    raise ValueError(f"unknown layout {layout!r}")
+
+
+def _weight_shape(layout: str, k: int, n: int) -> tuple[int, int]:
+    """Weight shape for the layout: TN stores ``[N, K]`` (K minor), NN stores ``[K, N]``."""
+    return (n, k) if layout == "tn" else (k, n)
+
 
 # H100 SXM dense (non-sparse) matmul peaks; FP8 (E4M3) is 2x the BF16 rate.
 _H100_SXM_BF16_TFLOPS_PER_S = 989.5e12
@@ -54,9 +77,9 @@ def _peak_tflops_per_s(is_fp8: bool) -> float | None:
     return None
 
 
-def dense_dot(x: jax.Array, w: jax.Array) -> jax.Array:
-    """Dense projection ``[M, K] @ [K, N] -> [M, N]``."""
-    return lax.dot_general(x, w, _DIMENSION_NUMBERS)
+def dense_dot(x: jax.Array, w: jax.Array, dimension_numbers) -> jax.Array:
+    """Dense projection contracting K -> ``[M, N]``."""
+    return lax.dot_general(x, w, dimension_numbers)
 
 
 def _delayed_scale(amax_history: jax.Array, scale: jax.Array) -> jax.Array:
@@ -64,7 +87,7 @@ def _delayed_scale(amax_history: jax.Array, scale: jax.Array) -> jax.Array:
     return compute_scale(jnp.max(amax_history), scale, get_fp8_max(_E4M3, jnp.float32))
 
 
-def manual_fp8_dot(x: jax.Array, w: jax.Array, op: Fp8DotGeneralOp) -> jax.Array:
+def manual_fp8_dot(x: jax.Array, w: jax.Array, op: Fp8DotGeneralOp, dimension_numbers) -> jax.Array:
     """Direct-f8 forward: dot genuine E4M3 operands, dequantize only the output.
 
     Unlike the QDQ path — which dequantizes each operand back to the compute dtype
@@ -81,11 +104,11 @@ def manual_fp8_dot(x: jax.Array, w: jax.Array, op: Fp8DotGeneralOp) -> jax.Array
     w_scale = _delayed_scale(op.kernel_amax_history, op.kernel_scale)
     qx = quantize(x, _E4M3, x_scale, comp_dtype)
     qw = quantize(w, _E4M3, w_scale, comp_dtype)
-    acc = lax.dot_general(qx, qw, _DIMENSION_NUMBERS, preferred_element_type=jnp.float32)
+    acc = lax.dot_general(qx, qw, dimension_numbers, preferred_element_type=jnp.float32)
     return (acc * (x_scale * w_scale).astype(jnp.float32)).astype(comp_dtype)
 
 
-def build_dot(path: str, amax_history_length: int):
+def build_dot(path: str, amax_history_length: int, dimension_numbers):
     """Return ``(dot_fn, op)`` for the requested lowering path.
 
     ``qdq`` calls the existing haliax ``Fp8DotGeneralOp`` verbatim: per-tensor
@@ -103,11 +126,11 @@ def build_dot(path: str, amax_history_length: int):
     state so the scales are the same live runtime operands as ``qdq``.
     """
     if path == "bf16":
-        return (lambda x, w: dense_dot(x, w)), None
+        return (lambda x, w: dense_dot(x, w, dimension_numbers)), None
     op = Fp8DotGeneralOp.init(amax_history_length=amax_history_length)
     if path == "manual":
-        return (lambda x, w, op: manual_fp8_dot(x, w, op)), op
-    return (lambda x, w, op: op(x, w, _DIMENSION_NUMBERS)), op
+        return (lambda x, w, op: manual_fp8_dot(x, w, op, dimension_numbers)), op
+    return (lambda x, w, op: op(x, w, dimension_numbers)), op
 
 
 def _configure_xla_dump_dir(xla_dump_dir: str) -> str:
@@ -149,6 +172,13 @@ def main() -> None:
         default="bf16",
         help="bf16 baseline; qdq = existing haliax Fp8DotGeneralOp; manual = direct-f8 dot (forward-only)",
     )
+    parser.add_argument(
+        "--layout",
+        choices=("tn", "nn"),
+        default="tn",
+        help="tn = cuBLASLt FP8 native (K minor on both, mirrors haliax Linear, no transpose); "
+        "nn forces an XLA-inserted f8 transpose",
+    )
     parser.add_argument("--amax-history-length", type=int, default=1024, help="delayed-scaling amax window (qdq)")
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--warmup", type=int, default=5)
@@ -173,16 +203,17 @@ def main() -> None:
     dtype = jnp.dtype(args.dtype)
     print("devices:", jax.devices())
 
+    dimension_numbers = _dimension_numbers(args.layout)
     key_x, key_w, key_c = jax.random.split(jax.random.PRNGKey(0), 3)
     x = jax.random.normal(key_x, (args.m, args.k), dtype=dtype)
-    w = jax.random.normal(key_w, (args.k, args.n), dtype=dtype)
+    w = jax.random.normal(key_w, _weight_shape(args.layout, args.k, args.n), dtype=dtype)
     # Backward through a random output cotangent, not a sum-loss's all-ones one:
     # a constant cotangent lets XLA fold an FP8 output-grad QDQ (dequant(quant(1.0))
     # is identity), which would stop a backward f8 matmul from ever lowering. The
     # scalar loss <out, cotangent> gives d(loss)/d(out) = cotangent.
     cotangent = jax.random.normal(key_c, (args.m, args.n), dtype=dtype)
 
-    dot, op = build_dot(args.path, args.amax_history_length)
+    dot, op = build_dot(args.path, args.amax_history_length, dimension_numbers)
     if op is not None:
         # Seed the delayed-scaling histories from the actual tensors so the scales
         # are realistic non-unit *runtime* operands (a warmed-up delayed-scaling
@@ -215,6 +246,7 @@ def main() -> None:
     fwd_compile, fwd_steady = _time_jitted(fwd, x, w, *extra, steps=args.steps, warmup=args.warmup)
     result = {
         "path": args.path,
+        "layout": args.layout,
         "m": args.m,
         "k": args.k,
         "n": args.n,
