@@ -5,8 +5,8 @@
 region-local temp storage, and cross-region read guards.
 
 A :class:`DataConfig` describes where a cluster's data lives: the
-region-to-bucket mirror set, the URL scheme, the per-user directory segment, and
-the temp TTL policy. :func:`data_config` returns the active config — the one
+region-to-bucket mirror set, the URL scheme, and the temp TTL policy.
+:func:`data_config` returns the active config — the one
 bound by :func:`use_data_config`, else the cluster named by ``MARIN_CLUSTER``
 (default ``marin``), loaded from ``config/<cluster>.yaml``. Every "where does
 data live" answer flows through it: :func:`marin_prefix` is
@@ -101,7 +101,6 @@ class DataConfig:
     Attributes:
         region_buckets: Region name -> bucket name for the cross-region mirror set.
         scheme: URL scheme for the cluster's storage (e.g. ``"gs"`` or ``"s3"``).
-        user_segment: Path segment under which per-user directories live.
         temp_path: Path segment for TTL-managed scratch data.
         ttl_days: Allowed TTL-day values for temp lifecycle rules.
         root: Explicit single-prefix root (e.g. ``"s3://marin-na/marin"``). Set
@@ -110,7 +109,6 @@ class DataConfig:
 
     region_buckets: Mapping[str, str]
     scheme: str = "gs"
-    user_segment: str = "users"
     temp_path: str = "tmp"
     ttl_days: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30)
     root: str | None = None
@@ -134,10 +132,6 @@ class DataConfig:
                 return f"{self.scheme}://{bucket}"
             return f"{self.scheme}://marin-{region}"
         return _DEFAULT_LOCAL_PREFIX
-
-    def user_home(self, user: str, *, base: str | None = None) -> str:
-        """Return the per-user home directory under ``user_segment``."""
-        return os.path.join(base or self.resolved_root(), self.user_segment, user)
 
 
 # The marin cluster's storage layout lives in ``config/marin.yaml`` (loaded as
@@ -219,7 +213,6 @@ def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
     return DataConfig(
         region_buckets=dict(data.get("region_buckets") or {}),
         scheme=str(data.get("scheme") or DataConfig.scheme),
-        user_segment=str(data.get("user_segment") or DataConfig.user_segment),
         temp_path=str(temp.get("path") or DataConfig.temp_path),
         ttl_days=tuple(raw_ttl) if raw_ttl is not None else DataConfig.ttl_days,
         root=str(root) if root is not None else None,

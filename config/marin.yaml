@@ -8,5 +8,4 @@ data:
     us-east5:     marin-us-east5
     us-west4:     marin-us-west4
     europe-west4: marin-eu-west4
-  user_segment: users
   temp: { path: tmp, ttl_days: [1, 2, 3, 4, 5, 6, 7, 14, 30] }

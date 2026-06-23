@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the cluster DataConfig: the active-config accessor, YAML loading and
-field-default parsing, prefix resolution, and per-user homes."""
+field-default parsing, and prefix resolution."""
 
 import pytest
 import rigging.filesystem as fs
@@ -82,7 +82,6 @@ def test_cluster_yaml_sets_given_fields_and_defaults_the_rest(tmp_path, monkeypa
     assert config.root == "s3://synth-na/data"
     assert config.ttl_days == (1, 5)
     # Fields absent from the YAML fall back to the DataConfig field defaults:
-    assert config.user_segment == "users"
     assert config.temp_path == "tmp"
 
 
@@ -140,16 +139,3 @@ def test_resolved_root_local_fallback(monkeypatch):
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
     monkeypatch.setattr(fs, "region_from_metadata", lambda: None)
     assert DataConfig(region_buckets={}).resolved_root() == "/tmp/marin"
-
-
-def test_user_home_joins_segment_and_user(monkeypatch):
-    """user_home joins resolved_root / user_segment / user."""
-    monkeypatch.delenv("MARIN_PREFIX", raising=False)
-    monkeypatch.setattr(fs, "region_from_metadata", lambda: "us-central1")
-    config = DataConfig(region_buckets={"us-central1": "marin-us-central1"})
-    assert config.user_home("alice") == "gs://marin-us-central1/users/alice"
-
-
-def test_user_home_respects_explicit_base():
-    """An explicit base overrides resolved_root() for user_home."""
-    assert DataConfig(region_buckets={}).user_home("bob", base="gs://b") == "gs://b/users/bob"

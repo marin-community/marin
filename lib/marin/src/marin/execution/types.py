@@ -14,7 +14,6 @@ import dataclasses
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import TYPE_CHECKING, Generic, TypeVar
 
 from fray.types import ResourceConfig
@@ -23,18 +22,6 @@ ConfigT_co = TypeVar("ConfigT_co", covariant=True)
 T_co = TypeVar("T_co", covariant=True)
 
 ExecutorFunction = Callable | None
-
-
-class OutputScope(StrEnum):
-    """Where a step's output path is rooted.
-
-    ``USER`` roots outputs under the running user's per-user home
-    (``{root}/{user_segment}/{user}/...``); ``SHARED`` roots them at the shared
-    top-level (``{root}/...``), the historical layout.
-    """
-
-    USER = "user"
-    SHARED = "shared"
 
 
 @dataclass(frozen=True)
@@ -61,10 +48,6 @@ class ExecutorStep(Generic[ConfigT_co]):
     If ``None``, behavior is determined by ``fn``: a ``RemoteCallable``
     submits as a Fray job; a plain callable runs inline in-process.
     """
-
-    output_scope: OutputScope | None = None
-    """Where this step's output path is rooted. ``None`` inherits the
-    executor's default scope (``SHARED``)."""
 
     def cd(self, name: str) -> InputName:
         """Refer to the `name` under `self`'s output_path."""
