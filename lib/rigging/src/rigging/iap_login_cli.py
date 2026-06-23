@@ -13,7 +13,13 @@ import webbrowser
 import click
 
 from rigging.auth import IapLoginRequired
-from rigging.iap_login import credentials_path, desktop_login, provider_for
+from rigging.iap_login import (
+    MARIN_DESKTOP_OAUTH_CLIENT,
+    credentials_path,
+    desktop_login,
+    provider_for,
+    read_desktop_client,
+)
 
 
 @click.group("marin-login")
@@ -26,14 +32,15 @@ def main() -> None:
 @click.option(
     "--client-secrets",
     "client_secrets",
-    required=True,
+    default=None,
     type=click.Path(exists=True, dir_okay=False),
-    help="Path to the Google desktop OAuth client secret JSON.",
+    help="Override the built-in Marin desktop OAuth client with a downloaded client-secret JSON.",
 )
-def login(name: str, client_secrets: str) -> None:
+def login(name: str, client_secrets: str | None) -> None:
     """Authenticate to an IAP-fronted Marin cluster and cache the refresh token.
 
-    NAME is the logical cluster/endpoint that tools look up (e.g. 'marin').
+    NAME is the logical cluster/endpoint that tools look up (e.g. 'marin'). Uses
+    the built-in Marin desktop OAuth client unless --client-secrets overrides it.
     Opens a browser if one is available; otherwise prints a URL to paste back
     (works over SSH).
     """
@@ -45,7 +52,8 @@ def login(name: str, client_secrets: str) -> None:
     except webbrowser.Error:
         headless = True
 
-    desktop_login(name, client_secrets, headless=headless)
+    client = read_desktop_client(client_secrets) if client_secrets else MARIN_DESKTOP_OAUTH_CLIENT
+    desktop_login(name, client, headless=headless)
     click.echo(f"Cached IAP credentials for '{name}' at {credentials_path(name)}")
 
 

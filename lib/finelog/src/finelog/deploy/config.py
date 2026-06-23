@@ -89,7 +89,7 @@ class FinelogConfig:
     remote_log_dir: str
     deployment: Deployment
     # Rigging transport URL clients use to reach this server through the controller proxy
-    # (e.g. `iap+https://iris-marin.oa.dev/proxy/system.log-server`); unset = fall back to SSH/k8s tunnel.
+    # (e.g. `iap+https://iris.oa.dev/proxy/system.log-server`); unset = fall back to SSH/k8s tunnel.
     client_url: str | None = None
 
 

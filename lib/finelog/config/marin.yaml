@@ -2,7 +2,7 @@ name: finelog-marin
 port: 10001
 image: ghcr.io/marin-community/finelog:latest
 remote_log_dir: gs://marin-us-central2/finelog/marin
-client_url: iap+https://iris-marin.oa.dev/proxy/system.log-server
+client_url: iap+https://iris.oa.dev/proxy/system.log-server
 deployment:
   gcp:
     project: hai-gcp-models

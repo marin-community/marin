@@ -177,12 +177,12 @@ def test_connect_iap_with_caller_supplied_provider():
     # The human/desktop path: iap+https with no audience defers the IAP token to
     # the caller, who supplies it as proxy-authorization via auth=IapAuth(...).
     endpoint = connect(
-        "iap+https://iris-marin.oa.dev/proxy/system.log-server",
+        "iap+https://iris.oa.dev/proxy/system.log-server",
         record_factory,
         auth=IapAuth(StaticTokenProvider("desktop-id-token")),
     )
 
-    assert endpoint.url == "https://iris-marin.oa.dev/proxy/system.log-server"
+    assert endpoint.url == "https://iris.oa.dev/proxy/system.log-server"
     assert [i.header for i in endpoint.interceptors] == ["proxy-authorization"]
 
 
