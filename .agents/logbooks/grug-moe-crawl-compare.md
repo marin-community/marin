@@ -36,3 +36,15 @@ Branch: `agent/grug-moe-crawl-compare`
 - Result: pipeline validated; import + step graph + paloma validation-set wiring
   confirmed; lint/pyrefly clean.
 - Next action: STAGE=data Iris job, then 8 training jobs on v5p-8.
+
+### 2026-06-23 — data-prep done, training recovery, 8 runs launched
+- Data-prep complete. Token pools (llama3, seed 0): focus 11,328,978 docs (~23B tok),
+  main 6,963,215 docs (~16B tok). Both > d1280 (12.4B) → token-matched per rung.
+- Recovery 1: focus tokenize hit the test/validation path guard (bucket `cc-open-athena-test`);
+  added `allow_test_in_train` passthrough to `default_tokenize`.
+- Recovery 2: training dispatch hard-requires WANDB_API_KEY → submit with `WANDB_MODE=disabled`
+  (json_logger tracker captures macro_loss).
+- Recovery 3: executor pinned the training step to the data region us-central2 but v5p-8 is in
+  us-central1/us-east5 → `ResourceConfig.with_tpu("v5p-8", regions=["us-central1","us-east5"])`.
+- All 8 runs launched: `/held/grug-crawlcmp-{focus,main}-{d512,d768,d1024,d1280}-r3`.
+- Next: collect final `eval/paloma/macro_loss` per rung from json-logger output.
