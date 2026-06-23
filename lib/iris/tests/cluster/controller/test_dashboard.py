@@ -11,7 +11,14 @@ from unittest.mock import Mock
 
 import pytest
 from iris.cluster.backends.k8s.fake import InMemoryK8sService
-from iris.cluster.backends.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE, K8sTaskProvider
+from iris.cluster.backends.k8s.tasks import (
+    _KUEUE_POD_GROUP_NAME,
+    _KUEUE_QUEUE_NAME,
+    _LABEL_MANAGED,
+    _LABEL_RUNTIME,
+    _RUNTIME_LABEL_VALUE,
+    K8sTaskProvider,
+)
 from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
@@ -1528,6 +1535,81 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path, l
     assert len(data["podStatuses"]) == 1
     assert data["podStatuses"][0]["podName"] == "iris-task-0"
     assert data["podStatuses"][0]["phase"] == "Running"
+
+    provider.close()
+
+
+def test_k8s_cluster_status_enriches_scheduling_gated_pods_with_kueue_workload(state, scheduler, tmp_path, log_client):
+    """SchedulingGated pod statuses include Kueue admission diagnostics."""
+    client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
+    queue_name = "iris-local"
+    provider.local_queue = queue_name
+    pod_group = "iris-pg-test-0"
+    workload_message = "gpu-quota-diagnostic-token"
+
+    k8s.seed_resource(
+        K8sResource.PODS,
+        "iris-task-0",
+        {
+            "kind": "Pod",
+            "metadata": {
+                "name": "iris-task-0",
+                "labels": {
+                    _LABEL_MANAGED: "true",
+                    _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+                    _KUEUE_POD_GROUP_NAME: pod_group,
+                    _KUEUE_QUEUE_NAME: queue_name,
+                    "iris.task_id": "job.0",
+                },
+            },
+            "spec": {"schedulingGates": [{"name": "kueue.x-k8s.io/admission"}]},
+            "status": {
+                "phase": "Pending",
+                "conditions": [
+                    {
+                        "type": "PodScheduled",
+                        "status": "False",
+                        "reason": "SchedulingGated",
+                        "message": "Scheduling is blocked due to non-empty scheduling gates",
+                    }
+                ],
+            },
+        },
+    )
+    k8s.seed_resource(
+        K8sResource.WORKLOADS,
+        pod_group,
+        {
+            "kind": "Workload",
+            "metadata": {"name": pod_group},
+            "spec": {"queueName": queue_name},
+            "status": {
+                "conditions": [
+                    {
+                        "type": "QuotaReserved",
+                        "status": "False",
+                        "reason": "Pending",
+                        "message": workload_message,
+                    }
+                ]
+            },
+        },
+    )
+
+    provider.reconcile(ControlSnapshot(worker_addresses={}, reconcile_rows=[], timeout_rows=[]))
+
+    resp = client.post(
+        "/iris.cluster.ControllerService/GetKubernetesClusterStatus",
+        json={},
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert resp.status_code == 200
+    status = resp.json()["podStatuses"][0]
+    assert status["reason"] == "SchedulingGated"
+    assert pod_group in status["message"]
+    assert queue_name in status["message"]
+    assert workload_message in status["message"]
 
     provider.close()
 
