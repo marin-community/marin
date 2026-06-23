@@ -21,9 +21,11 @@ import subprocess
 from pathlib import Path
 
 import click
-from rigging.filesystem import REGION_TO_DATA_BUCKET
+from rigging.filesystem import load_cluster_config
 
 logger = logging.getLogger("deploy")
+
+_MARIN_CONFIG = load_cluster_config("marin")
 
 IMAGE_NAME = "infra-probes"
 # The probes daemon writes its JSONL roll-ups under this bucket+prefix (see
@@ -31,7 +33,7 @@ IMAGE_NAME = "infra-probes"
 # when a stranded local file is re-uploaded after a restart, so the SA needs
 # create+get+delete — granted via objectUser, scoped by IAM condition to the
 # prefix so the canary can't touch the rest of this shared data bucket.
-RESULTS_BUCKET = REGION_TO_DATA_BUCKET["us-central1"]
+RESULTS_BUCKET = _MARIN_CONFIG.region_buckets["us-central1"]
 RESULTS_GCS_PREFIX = "infra/probes"
 RESULTS_HOST_PATH = "/var/lib/probes"
 # Build context / git repo root for `build`: this script lives in deploy/.

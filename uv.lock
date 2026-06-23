@@ -5229,6 +5229,7 @@ dependencies = [
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "google-auth" },
+    { name = "pyyaml" },
     { name = "s3fs" },
 ]
 
@@ -5252,6 +5253,7 @@ requires-dist = [
     { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "google-auth", specifier = ">=2.0.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'iap'", specifier = ">=1.0.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
 ]
 provides-extras = ["iap"]

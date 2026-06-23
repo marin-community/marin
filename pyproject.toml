@@ -235,7 +235,10 @@ ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]
-known-third-party = ["wandb"]
+# "config" is the local module in infra/tpu-ci/{setup,vm_manager}.py. The repo-root
+# config/ directory (cluster YAMLs) would otherwise make isort treat ``import config``
+# as first-party and reorder it, so pin it to the third-party group it already sits in.
+known-third-party = ["wandb", "config"]
 
 
 [tool.mypy]
