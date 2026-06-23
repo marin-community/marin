@@ -59,7 +59,7 @@ Single COS VM `infra-probes` (us-central1-b), one container, `restart=always`.
 ```bash
 cd infra/probes
 uv run deploy/deploy.py build    # build + push :sha and :latest
-uv run deploy/deploy.py apply    # roll the VM to :latest
+uv run deploy/deploy.py apply    # roll the VM to this HEAD's :sha image
 uv run deploy/deploy.py status   # VM state + recent logs
 ```
 
