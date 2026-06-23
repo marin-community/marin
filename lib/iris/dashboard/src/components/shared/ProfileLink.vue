@@ -126,7 +126,7 @@ async function openLatest() {
     }
     const ext = profileExtension(fetched[0].format)
     const ts = new Date(row.captured_at).toISOString().replace(/T/g, '_').replace(/:/g, '-').replace(/\.\d+Z$/, '')
-    const blob = new Blob([bytes], { type: 'application/octet-stream' })
+    const blob = new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
