@@ -455,9 +455,16 @@ confirms the path.
     ~0029 ⇒ consistent with `IsF8Type==false`, not the `TurnF8DotIntoF16Dot` decline branch). Matcher locus
     on `main`: `gemm_rewriter.cc` `MatchFp8Param` → `MultiplyAnyOrder(Convert(fp8_input), Broadcast(scale))`,
     `num_dequant_ops=2` (note: 0.10 path is `xla/service/gpu/gemm_rewriter.cc`, not `xla/backends/...`).
-  - **C4 (direct-f8 fix) design-intent CONFIRMED, 0.10 emission UNPROVEN:** the `quantize → dot → dequant`
-    form is Flax's own endorsed migration off brittle QDQ, but no source shows it emitting `$f8` on
-    0.10/H100 — the same brittleness *could* suppress it. Experimental burden remains → settle on the rig.
+  - **C4 (direct-f8 fix) — research over-reached; corrected by reading the threads.** The agent claimed the
+    `quantize → dot → dequant` form is "Flax's endorsed migration"; **it is not.** Reading JAX #24051 and
+    XLA #17887 directly: neither recommends q-dot-dq. The form Flax/haliax *ship* is the operand-QDQ that
+    regressed. The **documented** workarounds are epilogue nudges — a `relu` before scaling, and/or an
+    **output abs-max capture** (`jnp.max(jnp.abs(out))`) — which the reporter says bring the fusion back.
+    q-dot-dq is **our** hypothesis, unproven on 0.10/H100. Both issues read open/dormant, no maintainer fix.
+  - **Strong secondary lead from #24051 — missing forward output capture.** TE-style delayed scaling
+    captures the forward *output's* abs-max each step; our bench forward's `out_qdq` is **identity** (no
+    output capture/requant). So a live alternative discriminator: *the forward fails for lack of the output
+    abs-max-capture/requant epilogue the rewriter keys on.* Cheap second arm if the manual arm misses.
 - **Bottom line:** web research nailed the *what* (real 0.4.31+ XLA QDQ-pattern regression) but cannot pin
   the 0.10-tag line refs or run the decisive experiments — those are exactly C1/C2/C3/C4.
 - **Built — `--path manual` (forward-only), commit `3e58f5a55`:** the candidate fix as a bench arm. Feeds
@@ -470,12 +477,18 @@ confirms the path.
   (`(f8E4M3FN, f8E4M3FN) -> f32`), contrast qdq's bf16 operands. Numerics match qdq (rel err vs an fp32
   reference: manual 0.0367, qdq 0.0370). On CPU the operands upcast to f32 (no f8 matmul there) — the f8
   emission question is H100-only.
-- **Next action:** run `--path manual --forward-only` on H100 and grep the forward HLO for
-  `__cublas$lt$matmul$f8`. This is the decisive test of C4 and the candidate fix in one shot:
-  - fires `$f8` ⇒ the fix works; promote to a real haliax op with the e5m2 backward, wire into grug dense.
-  - falls back to bf16 ⇒ the 0.4.31+ brittleness suppresses even direct-f8; escalate to the C1/C2 source
-    read (pin `gpu_compiler.cc` pass order + `gemm_rewriter.cc` matcher at the 0.10 tag) and the factorial
-    probe over the surviving suspects (dequant-DAG shape, # runtime-scaled operands).
+- **Next action:** run `--path manual --forward-only` on H100. **Measure throughput + the operand dtype
+  feeding whatever GEMM XLA picks — not only a `$f8` grep.** There is no pattern-match-free f8 on
+  Hopper-via-XLA (the rewriter or a Triton f8 fusion must fire; else f8 operands upcast to bf16 at the dot,
+  correct but slow), and a Triton **f8** fusion would be a win the `$f8` grep alone misses (d3072's forward
+  already lands in a Triton fusion — a bf16 one, GFP8-004). Decision tree:
+  - f8 tensor-core GEMM (cuBLASLt `$f8` *or* Triton f8 fusion), TFLOP/s > bf16 ⇒ fix works; promote to a
+    real haliax op with the e5m2 backward, wire into grug dense.
+  - upcast to bf16 ⇒ direct-f8 alone is insufficient. Then test the **abs-max-capture arm** (add forward
+    output abs-max capture/requant, per #24051's documented workaround) before escalating to the C1/C2
+    0.10-source read (`gpu_compiler.cc` pass order + `gemm_rewriter.cc` matcher) and the factorial probe
+    over the surviving suspects (dequant-DAG shape, # runtime-scaled operands, epilogue consumer).
   - Command: `uv run iris --cluster=cw-us-east-02a job run --gpu H100x1 --enable-extra-resources --extra
     gpu -- python lib/levanter/scripts/bench/bench_dense_fp8.py --k 4096 --n 4096 --path manual
-    --forward-only` (grep logs for `$f8`; no storage needed).
+    --forward-only` (read `fwd_tflops_per_s` vs the bf16 baseline; inspect the forward HLO for the GEMM's
+    operand dtype; no storage needed).
