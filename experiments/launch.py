@@ -1,18 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Self-running launcher for experiment scripts.
+"""Helpers that let an experiment script launch itself onto a cluster.
 
-Run an experiment script directly, choosing where it executes::
+An experiment script (e.g. ``experiments/grug/base/launch.py``) wires its config
+and body to :func:`launch` / :func:`launch_executor` behind a draccus ``main``.
+Running *that script* then chooses where the body executes::
 
-    uv run python experiments/grug/base/launch.py --cluster=marin   # on the cluster
+    uv run python experiments/grug/base/launch.py --cluster=marin   # coordinator job on the cluster
     uv run python experiments/grug/base/launch.py --local           # in this process
 
-:func:`launch` runs the script's body in-process (``--local``, a dry run, or no
-``--cluster``), otherwise it ships the body to a small CPU *coordinator* job that
-drives the executor DAG (or direct submits) and spawns training as its children.
-The coordinator outlives this process, so closing the laptop never strands a run
-— its ``.success`` markers are written on the cluster. :func:`launch_executor` is
+:func:`launch` runs the script's body in-process (``--local``, a dry run, no
+``--cluster``, or when it is already running inside the coordinator we submitted),
+otherwise it ships the body to a small CPU *coordinator* job that drives the
+executor DAG (or direct submits) and spawns training as its children. The
+coordinator outlives this process, so closing the laptop never strands a run —
+its ``.success`` markers are written on the cluster. :func:`launch_executor` is
 the executor-step form of :func:`launch`; :func:`override_resources` applies
 ``--region`` / ``--tpu_type`` to a script's :class:`ResourceConfig`.
 """
@@ -153,7 +156,6 @@ def _submit_coordinator_job(config: LaunchConfig, body: Callable[..., None], arg
     assert config.cluster is not None
     env_vars = add_standard_env_vars(load_env_vars(None))
     resources = ResourceSpec(cpu=COORDINATOR_CPU, memory=COORDINATOR_MEMORY, disk=COORDINATOR_DISK)
-    logger.info("Launching coordinator on cluster %r for %s", config.cluster, body.__qualname__)
     with connect_to_cluster(config.cluster, workspace=_repo_root()) as client:
         job = client.submit(
             entrypoint=Entrypoint.from_callable(body, *args, **kwargs),
@@ -161,6 +163,12 @@ def _submit_coordinator_job(config: LaunchConfig, body: Callable[..., None], arg
             resources=resources,
             environment=EnvironmentSpec(env_vars=env_vars, extras=["cpu"]),
             constraints=_coordinator_constraints(config),
+        )
+        logger.warning(
+            "%s was submitted to cluster %r as coordinator job %s; it runs on the cluster, not in this process.",
+            body.__qualname__,
+            config.cluster,
+            job.job_id,
         )
         if config.detach:
             logger.info("Detached; the coordinator keeps running. Reconnect with: iris job logs -f %s", job.job_id)
