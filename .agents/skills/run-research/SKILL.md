@@ -5,29 +5,21 @@ description: "Multi-session research workflow: compose logbooks, experiment issu
 
 # Skill: Agent-Directed Research
 
-`run-research` is an "outer loop" representing a standard research workflow in computational science. There are several pieces inside the loop (or used as loop prologue/epilogue). Not all of these pieces are relevant to all projects. Listen to the user and use judgment.
-
-Use this for long-running, exploratory research where an agent iterates on
-benchmarks, experiments, and hypotheses over multiple sessions.
-There are often more specific versions of this skill for specific domains, e.g. `add-pallas-kernel`.
+Use this for long-running research where an agent iterates on benchmarks,
+experiments, and hypotheses over multiple sessions. Domain skills such as
+`add-pallas-kernel` may add constraints.
 
 ## General Principle: Open Development
 
-In Marin, we strive for "open development." All work should be documented in order to make the knowledge accessible to others.
-
-Generally, long-lived work should publish progress updates regularly throughout the development process. (By publish we typically mean updating the GitHub repo and associated issue(s). See below.)
-
-Exceptions of course occur. Don't share secrets like API keys. The user may request that a project not be published (until they are ready). However, assume openness by default.
-
-We instantiate this principle in the research workflow by maintaining a logbook, publishing updates to a coordinating issue, and keeping a durable record of experiments, observations, and conclusions. We also (often) produce a clean production branch with doc changes, reusable code, etc., when an experiment produces a useful result.
+Long-lived work should leave a durable record: a logbook, coordinating issue
+updates, and enough commands/config to reproduce results. Do not publish secrets
+or private work the user asks to hold back.
 
 ## Subskills
 
-Subskills include:
-
 - `.agents/skills/background-research/SKILL.md` for prior-work foraging,
   source ledgers, contradiction passes, and ranked hypothesis candidates.
-- `.agents/skills/task-logbook/SKILL.md` for append-only task or research logbooks including publishing of summaries/updates to GitHub issues.
+- `.agents/skills/task-logbook/SKILL.md` for logbooks and issue updates.
 - `.agents/skills/wandb-reporting/SKILL.md` for W&B project selection, run
   naming, report links, and artifact hygiene.
 - `.agents/skills/task-snapshot/SKILL.md` for commit/tag snapshots and stable
@@ -35,42 +27,39 @@ Subskills include:
 - `.agents/skills/update-docs/SKILL.md` for updating durable docs, runbooks,
   reports, or skill guidance when research changes behavior or practice.
 
-Layer domain skills on top for task-specific constraints. For example,
-`.agents/skills/add-pallas-kernel/SKILL.md` adds kernel-specific safety,
-correctness, and profiling rules while this skill keeps the research lifecycle. Domain skills may override or refine guidelines here. Users may also request only pieces of this.
+Layer domain skills on top for task-specific constraints.
 
 ## Core Artifacts
 
-1. A GitHub experiment issue with the `experiment` label.
-2. A logbook at `.agents/logbooks/<topic>.md` containing (compact) experiments, observations, and detailed analysis.
+1. A GitHub experiment issue. Agent-created experiment issues use the
+   `experiment` and `agent-generated` labels.
+2. A logbook at `.agents/logbooks/<topic>.md`.
 3. A living hypothesis queue in the logbook, derived from append-only entries
    and updated as hypotheses are proposed, blocked, falsified, or promoted.
-4. A long-lived branch, for example `research/<topic>` or `research/<user>/<issue>-topic` that contains the latest logbook,
-   research code, configs, small artifacts, test harnesses and the like. The target should be code and config sufficient to reproduce all results.
+4. A long-lived branch, for example `research/<topic>` or
+   `research/<user>/<issue>-<topic>`, with the logbook, research code, configs,
+   small artifacts, and test harnesses needed to reproduce results.
 5. One or more commit or tag snapshots for meaningful milestones.
 6. Often a "production" branch that gets PR'd and merged.
 
 ## Research Logbook
 
-The logbook is a central artifact for each research thread, capturing experiments, observations, and detailed analysis. Use the term **logbook** consistently in prose.
+Use the term **logbook** consistently. Follow `.agents/skills/task-logbook` for
+formatting and issue-update rules.
 
-See the `.agents/skills/task-logbook` skill for detailed instructions and formatting. The skill also describes how to keep the tracking issue up-to-date.
+## Branches
 
-
-## Two branch workflow
-
-Note that there are two branches in the artifacts above. One is a
-"messy" work-in-progress branch that contains the logbook, one-off experiment scripts, test harnesses, (small) artifacts, and so on. The other is a "clean" production branch that only contains the polished code and docs that are intended for long-term maintenance. The former is for the research process; the latter is for the product.
-
-Frequently you should only produce the "clean" production branch
-when you are ready to create a PR and know the final shape.
+Use a research branch for the logbook, one-off scripts, harnesses, and small
+artifacts. Extract a clean production branch only when the final code/docs shape
+is clear.
 
 ## Standard Workflow
 
 ### 1. Prologue
 
 1. Create or switch to a long-lived research branch. You may already be on one, or the user may have requested a specific branch name. Otherwise, pick a descriptive name like `research/<topic>` or `research/<user>/<issue>-<topic>`.
-2. Create an experiment issue unless scope or visibility needs human confirmation. If the user provides one, use it.
+2. Create an experiment issue with `file-issue` unless scope or visibility needs
+   human confirmation. If the user provides one, use it.
 3. Start the logbook and link both ways: logbook to issue URL, issue body to logbook path. See the skill.
 4. Pick a short experiment ID prefix for the series, for example `MOE-HC-001`, and
    use IDs like `MOE-HC-001` in logbook entries, run names, and issue comments.
@@ -85,8 +74,6 @@ when you are ready to create a PR and know the final shape.
 
 ### 2. Research Loop
 
-Research is not linear. Use this loop:
-
 1. **Forage:** gather prior work and local context.
 2. **Propose:** update the living hypothesis queue and pick the next test.
 3. **Run:** implement the smallest useful experiment and collect evidence.
@@ -96,23 +83,13 @@ Research is not linear. Use this loop:
    funnel.
 6. **Seal:** snapshot durable results or extract production work.
 
-Allowed backtracks:
-
-- From `interpret`, return to `propose`, `run`, or `forage`.
-- From `promote`, return to `interpret` or `run` if the claim is unclear or
-  under-supported.
-- From `seal`, start a new loop only for follow-up work.
-
 Every cycle should leave the durable record better than it found it.
 
 ### 2.1 Forage: Background Research
 
-Use the `background-research` skill. Do this at the beginning, after a
-significant change of direction, or whenever you hit a wall. Assume `medium` or
-`low` effort unless the decision is expensive. If available, use a subagent for
-the background pass.
-
-Ordinarily, the goal is to find related work that will inform next steps: methods to try, libraries to use, benchmarks to run, and so on.
+Use `background-research` at the beginning, after a significant change of
+direction, or whenever you hit a wall. Assume `medium` or `low` effort unless
+the decision is expensive.
 
 Use the background-research output to update the logbook's hypothesis queue:
 add new candidates, revise weak ones, mark known dead ends, and promote
@@ -121,17 +98,19 @@ and `task-logbook` decide what belongs in the issue versus the logbook.
 
 ### 2.2 Propose / Run / Interpret: Dev Work and Experiments
 
-For dev work, you should follow the usual `AGENTS.md` guidance and your own best practices, but with assumed lower quality bar. You are exploring and should not immediately worry about maintainability, backward compatibility, and the like. Operational security and cost controls remain valid concerns.
-For the research branch,  ad-hoc copy paste, environment variables, intrusive config knobs, one-off scripts should be used whenever convenient. Production-facing code
-should still maintain the same quality bar.
+For research-branch dev work, optimize for learning speed while preserving
+operational security and cost controls. Ad-hoc scripts, temporary config knobs,
+and copy/paste are acceptable there. Production-facing code keeps the usual
+`AGENTS.md` quality bar.
 
 For each non-trivial experiment:
 
-0. Do whatever dev work you need to do.
-1. Run the benchmark or experiment. Use the `babysit-job` for long-lived experiment.
-2. Append to the logbook exact commands, config, key outputs, interpretation, and next decision to the logbook. Follow the `task-logbook` skill for exact procedure including updating the tracking issue.
-3. Push dense scalar series, plots, or raw artifacts to W&B or other store when they are too large for useful issue comments.
-4. Follow `task-logbook` for issue-update promotion and cadence.
+1. Do the dev work needed for the experiment.
+2. Run the benchmark or experiment. Use `babysit-job` for long-lived runs.
+3. Append exact commands, config, key outputs, interpretation, and next decision
+   to the logbook. Follow `task-logbook` for issue updates.
+4. Push dense scalar series, plots, or raw artifacts to W&B or another store
+   when they are too large for issue comments.
 
 ### 3. Epilogue: Seal
 
@@ -145,8 +124,9 @@ Sealing should ordinarily only happen if the user requests it or the research ha
 4. Ensure the final logbook entry and snapshot links are present.
 5. Close the issue when the research thread is complete.
 
-If the research resulted in useful "production" changes. Begin extracting them into a separate "clean" branch that does not have the logbook (though may reference it by direct link to GitHub).
-Follow standard Marin development practices for the clean branch.
+If the research produced useful production changes, extract them into a clean
+branch that can link to the logbook but does not include it. Follow standard
+Marin development practices on that branch.
 
 Before closing the issue:
 
@@ -161,8 +141,8 @@ Before closing the issue:
 - Prefer short-lived code changes unless a persistent harness is clearly useful.
 - Keep benchmark harnesses configurable and minimal.
 - Record exact command lines for every headline number.
-- Treat failures and negative results as first-class data. Interesting negative results should be recorded in the logbook and highlighted in the issue. (Bugs or undertuning are not interesting. Dead-ends or excessive hp-sensitivity are.)
-
+- Treat failures and negative results as first-class data. Record dead ends and
+  excessive hyperparameter sensitivity; skip routine bugs or undertuning.
 
 ## See Also
 

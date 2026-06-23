@@ -11,7 +11,10 @@ experiment notes, or a compact handoff trail. For long-running research,
 
 ## Concepts
 
-This skill can be used in one of two modes: with or without a coordinating issue. Without a coordinating issue, this skill reduces to a particular set of conventions around appending progress update to a file. With a coordinating issue, you will be updating both the file and a Github issue.
+This skill has two modes:
+
+- No coordinating issue: append progress to the logbook.
+- Coordinating issue: update both the logbook and the GitHub issue.
 
 The core model is a funnel of interestingness:
 
@@ -22,22 +25,18 @@ The core model is a funnel of interestingness:
 Keep the detailed record in the logbook. Keep the issue useful to someone who
 did not follow the live session.
 
-Without a coordinating issue, just do the logbook itself without the "funnel."
-
 ## Location and Naming
 
 - Store logbooks under `.agents/logbooks/<topic>.md`.
-- Use a short, stable topic slug that can survive branch renames. Including the Github issue number is often a good choice.
+- Use a short, stable topic slug. Including the GitHub issue number is often a
+  good choice.
 - Link to the coordinating GitHub issue or PR near the top of the logbook when one exists.
 
 ## Logbook
 
-The logbook is a markdown file with optional yaml frontmatter. New logbooks should include the front matter
+New logbooks are Markdown files with YAML frontmatter.
 
 ### Logbook Template
-
-Not all keys below will be relevant. Baselines may not exist. Exclude them if they do not.
-
 
 ```md
 ---
@@ -81,7 +80,8 @@ entry, and leave unrelated local changes untouched. These commits are snapshots
 for traceability; they do not need to satisfy the full `commit` skill or
 pre-PR checklist until the work is promoted into a production PR.
 
-For research series, add a short experiment ID prefix such as `MOE-HC` and use IDs like `MOE-HC-001` in logbook entries, W&B run names, and issue comments.
+For research series, add a short experiment ID prefix such as `MOE-HC` and use
+IDs like `MOE-HC-001` in logbook entries, W&B run names, and issue comments.
 
 The author should ordinarily be the user who asked you to make the logbook. If there is no GitHub issue, omit it.
 
@@ -100,9 +100,8 @@ The author should ordinarily be the user who asked you to make the logbook. If t
 
 ### Living Indices
 
-Append-only does not mean every summary must be append-only. The entry log is
-the immutable record; short index sections near the top may be edited as the
-current state changes.
+The entry log is append-only. Short index sections near the top may be edited as
+the current state changes.
 
 Use living indices for:
 
@@ -137,26 +136,18 @@ Hypothesis queue shape:
 
 ## Coordinating Issue
 
-Ordinarily, there should be a coordinating issue associated with
-each logbook. The user (or supervisor agent) may have provided it. Otherwise, they may have requested you create one, or the outer workflow may typically require it.
-
-If so, create or use a coordinating GitHub issue when the work needs durable public
-coordination. Confirm timing with the human collaborator if scope or visibility is uncertain.
+Create or use a coordinating GitHub issue when the work needs durable public
+coordination. The user, supervisor agent, or outer workflow may provide one.
+Confirm timing with the human collaborator if scope or visibility is uncertain.
 
 Use the experiment body template in `.agents/skills/file-issue/SKILL.md` when
 creating a new coordinating experiment issue.
 
 ### Issue summary
 
-The issue summary should include a high-level summary, almost like an abstract: What is the problem trying to be solved? What is the goal? Why are we doing this? The target audience should typically be someone with limited knowledge of Marin but generally knowledgeable about the field should be able to read and understand it.
-
-Write for readers who know Marin/LLM systems generally but not the specific
-thread. Include enough framing and result interpretation for
-someone else to reproduce or critique the claim. Do not overclaim.
-
-As our understanding evolves or work progresses, the issue summary should be kept updated with the current big picture. For example if doing kernel work we might update it with "our kernel is x% of the baseline, but only y% of the target."
-
-When finished, it should be updated with our final status and understanding.
+Write the issue summary for readers who know Marin/LLM systems generally but
+not the specific thread. Keep it current with the problem, goal, status,
+evidence, and final outcome. Do not overclaim.
 
 Maintain the issue body as the public summary layer:
 
@@ -172,12 +163,13 @@ Use this funnel after each meaningful logbook entry:
 
 - **Logbook only:** detailed commands, raw outputs, routine observations,
   dead ends, local debugging notes, and dense analysis.
-- **Issue comment:** significant milestones, failures, relaunches of long running experiments, baseline
+- **Issue comment:** significant milestones, failures, relaunches of long-running experiments, baseline
   changes, surprising observations, decisions, and periodic long-running research heartbeats.
 - **Issue summary/body:** durable conclusions, current TL;DR or major status, stable baseline,
   decision log entries, negative-results index, and final outcome.
 
-Take into account all previous updates since the last logbook entry when making this decision: a single logbook entry may not rise to the level of significance but several together might.
+Consider all updates since the last issue comment; several small logbook entries
+may add up to a useful issue update.
 
 For long-running research, post an issue update at each significant milestone
 or every 6 hours of active work (either experiments in progress or agent work), whichever comes first. If no milestone occurred by the cadence
@@ -211,7 +203,8 @@ Issue comment template:
 
 #### Issue Reader Check
 
-For nontrivial updates, it is useful to ask a context-isolated subagent to review to make sure the update is understandable without thread or branch context.
+For nontrivial updates, a context-isolated subagent can check whether the update
+is understandable without thread or branch context.
 
 If available, start a subagent **without current thread context** (e.g. using
 `fork_context: false`). Use this prompt:

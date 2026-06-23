@@ -8,14 +8,11 @@ description: "Forage prior work before or during Marin research threads: search 
 Use this when a research, design, or experiment thread needs a compact prior-work
 pass before choosing hypotheses, drafting a design, or launching runs.
 
-Agents are already good at web search; this skill makes them search Marin's own scientific record, preserve provenance, and hand off experiment-ready hypotheses.
-
 ## Effort
 
-Pick an effort level and state it at the top of the output. These are
-approximate targets, not hard timers. Stop earlier when new sources no longer
-change the ranked hypotheses; go longer only when the user asks or the decision
-is expensive enough to justify it.
+State the effort level at the top of the output. Stop when new sources no
+longer change the ranked hypotheses; go longer only when the user asks or the
+decision is expensive enough to justify it.
 
 - `low` (3-7 min): current issue/logbook, obvious local refs, and a few external
   sources. Use for small follow-ups or when the user provides strong context.
@@ -32,9 +29,8 @@ effort must cite sources and distinguish evidence from speculation.
 
 ## Search Order
 
-Search internal and external sources in parallel when possible, but do not skip
+Search internal and external sources in parallel when useful, but do not skip
 the internal pass. Prefer durable artifacts over transient conversation.
-Parallelizing with subagents may be good here.
 
 1. Current issue, PR, research logbook, or design file.
 2. GitHub issues and PRs, especially experiment issues and linked comments.
@@ -58,7 +54,8 @@ experiment execution.
 
 Include:
 
-- Relevant files with line numbers; the design must reference real code.
+- Relevant code paths. Use pinned GitHub links for claims tied to a fixed
+  revision; use paths or section links for draft-local notes.
 - Related designs in `.agents/projects/`, with overlap and differences.
 - Related GitHub issues/PRs when known or discoverable.
 - Existing utilities or abstractions the proposal might reuse.
@@ -67,11 +64,9 @@ Include:
   workflow engine.
 - What surprised you and what remains unclear.
 
-For design-doc prior art, use `low` or `medium` effort by default. The goal is
-to surface obvious patterns and reviewer reference points, not to run a full
-literature review. Skip external prior art for narrow in-repo refactors,
-internal API tweaks, or designs where the category is novel to this repo rather
-than novel to the world.
+For design-doc prior art, use `low` or `medium` effort by default. Skip
+external prior art for narrow in-repo refactors, internal API tweaks, or designs
+where the category is novel to this repo rather than novel to the world.
 
 ## Source Handling
 
@@ -153,13 +148,8 @@ Use tables only for compact metadata. For claims, caveats, hypotheses, or any
 cell likely to contain prose, use block-style cards so GitHub remains readable.
 
 For research threads with a logbook, treat the hypothesis queue as a living
-index derived from append-only entries. New hypotheses can be added and old
-hypotheses can be revised, falsified, or promoted in the queue, but the evidence
-that caused each state change must remain linked to an append-only logbook
-entry, issue comment, W&B run, commit, or tag.
-
-Make heavy use of links to sources. Ideally link to the line, section, or page
-for specific claims.
+index derived from append-only entries. Link each queue change to the supporting
+logbook entry, issue comment, W&B run, commit, tag, or pinned source.
 
 ## Hypothesis Quality
 
