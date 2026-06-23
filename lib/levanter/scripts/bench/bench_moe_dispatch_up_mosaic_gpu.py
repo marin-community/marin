@@ -1,0 +1,322 @@
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Validate the experimental MoE dispatch-up Mosaic GPU subkernel."""
+
+import argparse
+import time
+from collections.abc import Callable
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax import shard_map
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+from levanter.kernels.pallas.moe_dispatch_up.mosaic_gpu import (
+    dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local,
+    compute_moe_up_mosaic_gpu_local,
+)
+from levanter.kernels.pallas.moe_dispatch_up.reference import (
+    MoeDispatchUpLayout,
+    dispatch_prepacked_moe_dispatch_up_reference,
+    compute_moe_up_from_layout_reference,
+    prepack_moe_dispatch_up_reference,
+)
+
+
+def _time_block(label: str, fn: Callable[[], jax.Array | MoeDispatchUpLayout]) -> tuple[object, float]:
+    start = time.perf_counter()
+    result = fn()
+    jax.block_until_ready(result)
+    elapsed = time.perf_counter() - start
+    print(f"{label}: {elapsed * 1e3:.3f} ms")
+    return result, elapsed
+
+
+def _make_inputs(
+    *,
+    ep_size: int,
+    tokens_per_rank: int,
+    experts_per_rank: int,
+    top_k: int,
+    hidden: int,
+    intermediate: int,
+    dtype: jnp.dtype,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    num_experts = ep_size * experts_per_rank
+    k_x, k_w = jax.random.split(jax.random.key(6597))
+    x_by_rank = jax.random.normal(k_x, (ep_size, tokens_per_rank, hidden), dtype=dtype)
+    rank_ids = jnp.arange(ep_size, dtype=jnp.int32)[:, None, None]
+    token_ids = jnp.arange(tokens_per_rank, dtype=jnp.int32)[None, :, None]
+    slot_ids = jnp.arange(top_k, dtype=jnp.int32)[None, None, :]
+    expert_ids = (rank_ids * experts_per_rank + token_ids + slot_ids) % num_experts
+    router_weights = jax.nn.softmax(
+        jnp.arange(ep_size * tokens_per_rank * top_k, dtype=jnp.float32).reshape(ep_size, tokens_per_rank, top_k),
+        axis=-1,
+    ).astype(dtype)
+    w_gate_up = jax.random.normal(k_w, (ep_size, experts_per_rank, hidden, 2 * intermediate), dtype=dtype)
+    return x_by_rank, expert_ids, router_weights, w_gate_up
+
+
+def _pallas_dispatch(
+    mesh: Mesh,
+    prepacked,
+    *,
+    recv_capacity: int,
+) -> MoeDispatchUpLayout:
+    def sharded(value: jax.Array, spec: P) -> jax.Array:
+        return jax.device_put(value, NamedSharding(mesh, spec))
+
+    def local_dispatch(
+        send_x,
+        send_row,
+        send_local_expert,
+        send_src_token_idx,
+        send_topk_slot,
+        send_router_weight,
+        send_count,
+        rows_per_expert,
+        expert_base,
+    ):
+        layout = dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local(
+            jnp.squeeze(send_x, axis=0),
+            jnp.squeeze(send_row, axis=0),
+            jnp.squeeze(send_local_expert, axis=0),
+            jnp.squeeze(send_src_token_idx, axis=0),
+            jnp.squeeze(send_topk_slot, axis=0),
+            jnp.squeeze(send_router_weight, axis=0),
+            jnp.squeeze(send_count, axis=0),
+            jnp.squeeze(rows_per_expert, axis=0),
+            jnp.squeeze(expert_base, axis=0),
+            axis_name="expert",
+            recv_capacity=recv_capacity,
+        )
+        return MoeDispatchUpLayout(
+            layout.recv_x[None, ...],
+            layout.recv_valid[None, ...],
+            layout.rows_per_expert[None, ...],
+            layout.expert_base[None, ...],
+            layout.recv_local_expert[None, ...],
+            layout.recv_src_rank[None, ...],
+            layout.recv_src_token_idx[None, ...],
+            layout.recv_topk_slot[None, ...],
+            layout.recv_router_weight[None, ...],
+            layout.overflow_count[None],
+        )
+
+    out_specs = MoeDispatchUpLayout(
+        P("expert", None, None),
+        P("expert", None),
+        P("expert", None),
+        P("expert", None),
+        P("expert", None),
+        P("expert", None),
+        P("expert", None),
+        P("expert", None),
+        P("expert", None),
+        P("expert"),
+    )
+    fn = jax.jit(
+        shard_map(
+            local_dispatch,
+            mesh=mesh,
+            in_specs=(
+                P("expert", None, None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None),
+                P("expert", None),
+                P("expert", None),
+            ),
+            out_specs=out_specs,
+            check_vma=False,
+        )
+    )
+    return fn(
+        sharded(prepacked.send_x_by_dst, P("expert", None, None, None)),
+        sharded(prepacked.send_row_by_dst, P("expert", None, None)),
+        sharded(prepacked.send_local_expert_by_dst, P("expert", None, None)),
+        sharded(prepacked.send_src_token_idx_by_dst, P("expert", None, None)),
+        sharded(prepacked.send_topk_slot_by_dst, P("expert", None, None)),
+        sharded(prepacked.send_router_weight_by_dst, P("expert", None, None)),
+        sharded(prepacked.send_count_by_dst, P("expert", None)),
+        sharded(prepacked.rows_per_expert, P("expert", None)),
+        sharded(prepacked.expert_base, P("expert", None)),
+    )
+
+
+def _pallas_w13_silu(mesh: Mesh, layout: MoeDispatchUpLayout, w_gate_up: jax.Array, args) -> jax.Array:
+    def sharded(value: jax.Array, spec: P) -> jax.Array:
+        return jax.device_put(value, NamedSharding(mesh, spec))
+
+    def local_w13(recv_x, rows_per_expert, local_w_gate_up):
+        h = compute_moe_up_mosaic_gpu_local(
+            jnp.squeeze(recv_x, axis=0),
+            jnp.squeeze(rows_per_expert, axis=0),
+            jnp.squeeze(local_w_gate_up, axis=0),
+            block_m=args.block_m,
+            block_n=args.block_n,
+            block_k=args.block_k,
+            max_concurrent_steps=args.num_stages,
+            grid_block_n=1,
+        )
+        return h[None, ...]
+
+    fn = jax.jit(
+        shard_map(
+            local_w13,
+            mesh=mesh,
+            in_specs=(P("expert", None, None), P("expert", None), P("expert", None, None, None)),
+            out_specs=P("expert", None, None),
+            check_vma=False,
+        )
+    )
+    return fn(
+        sharded(layout.recv_x, P("expert", None, None)),
+        sharded(layout.rows_per_expert, P("expert", None)),
+        sharded(w_gate_up, P("expert", None, None, None)),
+    )
+
+
+def _print_error_debug(
+    label: str,
+    actual: jax.Array,
+    expected: jax.Array,
+    layout: MoeDispatchUpLayout,
+    w_gate_up: jax.Array,
+) -> None:
+    actual_host = np.asarray(jax.device_get(actual)).astype(np.float32)
+    expected_host = np.asarray(jax.device_get(expected)).astype(np.float32)
+    err = np.abs(actual_host - expected_host)
+    flat_idx = int(np.argmax(err))
+    idx = np.unravel_index(flat_idx, err.shape)
+    rank, row, col = idx
+    layout_host = jax.tree.map(lambda x: np.asarray(jax.device_get(x)), layout)
+    weights_host = np.asarray(jax.device_get(w_gate_up)).astype(np.float32)
+    local_expert = int(layout_host.recv_local_expert[rank, row])
+    intermediate = weights_host.shape[-1] // 2
+    x = layout_host.recv_x[rank, row].astype(np.float32)
+    gate = float(x @ weights_host[rank, local_expert, :, col])
+    up = float(x @ weights_host[rank, local_expert, :, intermediate + col])
+    print(
+        f"{label}_max_error_at: {idx} "
+        f"actual={float(actual_host[idx]):.6g} "
+        f"expected={float(expected_host[idx]):.6g} "
+        f"valid={bool(layout_host.recv_valid[rank, row])} "
+        f"local_expert={local_expert} "
+        f"rows_per_expert={layout_host.rows_per_expert[rank].tolist()} "
+        f"gate={gate:.6g} up={up:.6g}"
+    )
+
+
+def _check_error(label: str, value: float, tolerance: float) -> None:
+    if value > tolerance:
+        raise AssertionError(f"{label}={value:.6g} exceeds tolerance {tolerance:.6g}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ep-size", type=int, default=8)
+    parser.add_argument("--tokens-per-rank", type=int, default=16)
+    parser.add_argument("--experts-per-rank", type=int, default=4)
+    parser.add_argument("--top-k", type=int, default=4)
+    parser.add_argument("--hidden", type=int, default=64)
+    parser.add_argument("--intermediate", type=int, default=64)
+    parser.add_argument("--block-m", type=int, default=64)
+    parser.add_argument("--block-n", type=int, default=64)
+    parser.add_argument("--block-k", type=int, default=64)
+    parser.add_argument("--num-stages", type=int, default=2)
+    parser.add_argument("--dtype", choices=("bf16", "fp32"), default="bf16")
+    parser.add_argument("--run-pallas", action="store_true")
+    parser.add_argument("--debug-errors", action="store_true")
+    parser.add_argument("--dispatch-atol", type=float, default=0.0)
+    parser.add_argument("--w13-atol", type=float, default=2.0)
+    args = parser.parse_args()
+
+    dtype = jnp.bfloat16 if args.dtype == "bf16" else jnp.float32
+    devices = jax.local_devices()
+    print(f"devices: {len(devices)} {[device.platform for device in devices]}")
+    print(
+        "shape: "
+        f"EP={args.ep_size} T/rank={args.tokens_per_rank} E/rank={args.experts_per_rank} "
+        f"K={args.top_k} H={args.hidden} I={args.intermediate} dtype={args.dtype}"
+    )
+
+    x_by_rank, expert_ids, router_weights, w_gate_up = _make_inputs(
+        ep_size=args.ep_size,
+        tokens_per_rank=args.tokens_per_rank,
+        experts_per_rank=args.experts_per_rank,
+        top_k=args.top_k,
+        hidden=args.hidden,
+        intermediate=args.intermediate,
+        dtype=dtype,
+    )
+    recv_capacity = args.ep_size * args.tokens_per_rank * args.top_k
+    num_experts = args.ep_size * args.experts_per_rank
+
+    prepacked, _ = _time_block(
+        "prepack/reference",
+        lambda: prepack_moe_dispatch_up_reference(
+            x_by_rank,
+            expert_ids,
+            router_weights,
+            num_experts=num_experts,
+            recv_capacity=recv_capacity,
+            send_capacity=args.tokens_per_rank * args.top_k,
+        ),
+    )
+    ref_layout, _ = _time_block(
+        "dispatch/reference",
+        lambda: dispatch_prepacked_moe_dispatch_up_reference(prepacked, recv_capacity=recv_capacity),
+    )
+    ref_h, _ = _time_block("w13_silu/reference", lambda: compute_moe_up_from_layout_reference(ref_layout, w_gate_up))
+
+    if not args.run_pallas:
+        return
+    if len(devices) < args.ep_size:
+        raise RuntimeError(f"Need at least {args.ep_size} local devices, found {len(devices)}")
+
+    mesh = Mesh(np.array(devices[: args.ep_size]), ("expert",), axis_types=(AxisType.Explicit,))
+    with jax.set_mesh(mesh):
+        pallas_layout, _ = _time_block(
+            "dispatch/mosaic_gpu", lambda: _pallas_dispatch(mesh, prepacked, recv_capacity=recv_capacity)
+        )
+        dispatch_err = jnp.max(
+            jnp.abs(pallas_layout.recv_x.astype(jnp.float32) - ref_layout.recv_x.astype(jnp.float32))
+        )
+        dispatch_err_float = float(dispatch_err)
+        print(f"dispatch_max_abs_error: {dispatch_err_float:.6g}")
+        valid_err = jnp.sum(pallas_layout.recv_valid != ref_layout.recv_valid, dtype=jnp.int32)
+        expert_err = jnp.sum(pallas_layout.recv_local_expert != ref_layout.recv_local_expert, dtype=jnp.int32)
+        src_rank_err = jnp.sum(pallas_layout.recv_src_rank != ref_layout.recv_src_rank, dtype=jnp.int32)
+        valid_err_int = int(valid_err)
+        expert_err_int = int(expert_err)
+        src_rank_err_int = int(src_rank_err)
+        print(
+            "dispatch_metadata_errors: "
+            f"valid={valid_err_int} local_expert={expert_err_int} src_rank={src_rank_err_int}"
+        )
+        _check_error("dispatch_max_abs_error", dispatch_err_float, args.dispatch_atol)
+        if valid_err_int != 0 or expert_err_int != 0 or src_rank_err_int != 0:
+            raise AssertionError(
+                "dispatch metadata mismatch: "
+                f"valid={valid_err_int} local_expert={expert_err_int} src_rank={src_rank_err_int}"
+            )
+
+        pallas_h, _ = _time_block(
+            "w13_silu/mosaic_gpu", lambda: _pallas_w13_silu(mesh, pallas_layout, w_gate_up, args)
+        )
+        h_err = jnp.max(jnp.abs(pallas_h.astype(jnp.float32) - ref_h.astype(jnp.float32)))
+        h_err_float = float(h_err)
+        print(f"w13_silu_max_abs_error: {h_err_float:.6g}")
+        if args.debug_errors:
+            _print_error_debug("w13_silu", pallas_h, ref_h, pallas_layout, w_gate_up)
+        _check_error("w13_silu_max_abs_error", h_err_float, args.w13_atol)
+
+
+if __name__ == "__main__":
+    main()

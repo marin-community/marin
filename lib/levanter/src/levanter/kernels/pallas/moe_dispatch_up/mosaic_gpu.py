@@ -1,0 +1,310 @@
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Mosaic GPU implementation of the MoE dispatch-up subkernel."""
+
+import functools
+import math
+
+import jax
+import jax.numpy as jnp
+from jax import lax
+from jax.experimental import pallas as pl
+from jax.experimental.pallas import mosaic_gpu as plgpu
+from jax.experimental.pallas.ops.gpu.ragged_dot_mgpu import GroupInfo
+
+from levanter.kernels.pallas.moe_dispatch_up.errors import MosaicGpuUnsupportedError
+from levanter.kernels.pallas.moe_dispatch_up.reference import (
+    MoeDispatchUpLayout,
+    MoeDispatchUpPrepackedSend,
+    dispatch_prepacked_moe_dispatch_up_reference,
+)
+
+
+def _require_mgpu_runtime() -> None:
+    gpu_devices = [device for device in jax.local_devices() if device.platform == "gpu"]
+    if len(gpu_devices) < 2:
+        raise MosaicGpuUnsupportedError(
+            "MoE dispatch-up Mosaic GPU dispatch requires at least two local GPU devices; "
+            f"found {len(gpu_devices)} GPU device(s)."
+        )
+
+
+def dispatch_prepacked_moe_dispatch_up_mosaic_gpu(
+    prepacked: MoeDispatchUpPrepackedSend,
+    *,
+    recv_capacity: int | None = None,
+) -> MoeDispatchUpLayout:
+    """Validation-slice dispatch entrypoint for the Pallas MGPU backend.
+
+    The API is intentionally separate from the reference implementation so the
+    remote-ref kernel can replace this body without changing callers or tests.
+    Until the CoreWeave validation kernel lands, explicit `mosaic_gpu` requests
+    fail fast on non-MGPU hosts and use the reference layout only as a local
+    bring-up path.
+    """
+
+    _require_mgpu_runtime()
+    return dispatch_prepacked_moe_dispatch_up_reference(prepacked, recv_capacity=recv_capacity)
+
+
+def dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local(
+    send_x_by_dst: jax.Array,
+    send_row_by_dst: jax.Array,
+    send_local_expert_by_dst: jax.Array,
+    send_src_token_idx_by_dst: jax.Array,
+    send_topk_slot_by_dst: jax.Array,
+    send_router_weight_by_dst: jax.Array,
+    send_count_by_dst: jax.Array,
+    rows_per_expert: jax.Array,
+    expert_base: jax.Array,
+    *,
+    axis_name: str,
+    recv_capacity: int | None = None,
+) -> MoeDispatchUpLayout:
+    """Shard-local MGPU remote-dispatch validation primitive.
+
+    This is milestone 1's deliberately conservative kernel: each source rank
+    receives prepacked rows for every destination rank, then remote-writes those
+    rows and metadata into the destination rank's output buffers. It is serial
+    by construction and meant to validate remote refs, semaphores, and layout
+    parity before introducing overlapped tiled copies.
+    """
+
+    _require_mgpu_runtime()
+    if send_x_by_dst.ndim != 3:
+        raise ValueError(f"send_x_by_dst must have shape [EP, S, D], got {send_x_by_dst.shape}")
+    ep_size, send_capacity, hidden = send_x_by_dst.shape
+    if recv_capacity is None:
+        recv_capacity = send_capacity
+
+    def kernel_body(
+        send_x_ref,
+        send_row_ref,
+        send_local_expert_ref,
+        send_src_token_idx_ref,
+        send_topk_slot_ref,
+        send_router_weight_ref,
+        send_count_ref,
+        recv_x_ref,
+        recv_valid_count_ref,
+        recv_local_expert_ref,
+        recv_src_rank_ref,
+        recv_src_token_idx_ref,
+        recv_topk_slot_ref,
+        recv_router_weight_ref,
+    ):
+        recv_sem = pl.get_global(plgpu.SemaphoreType.REGULAR)
+        src_rank = lax.axis_index(axis_name)
+
+        for recv_row in range(recv_capacity):
+            for hidden_idx in range(hidden):
+                recv_x_ref[recv_row, hidden_idx] = jnp.zeros((), dtype=recv_x_ref.dtype)
+            recv_valid_count_ref[recv_row] = jnp.int32(0)
+            recv_local_expert_ref[recv_row] = jnp.int32(0)
+            recv_src_rank_ref[recv_row] = jnp.int32(0)
+            recv_src_token_idx_ref[recv_row] = jnp.int32(0)
+            recv_topk_slot_ref[recv_row] = jnp.int32(0)
+            recv_router_weight_ref[recv_row] = jnp.zeros((), dtype=recv_router_weight_ref.dtype)
+
+        for peer_rank in range(ep_size):
+            pl.semaphore_signal(recv_sem, device_id=jnp.int32(peer_rank))
+        pl.semaphore_wait(recv_sem, value=ep_size, decrement=False)
+
+        for dst_rank in range(ep_size):
+            remote_recv_x = plgpu.remote_ref(recv_x_ref, jnp.int32(dst_rank))
+            remote_recv_valid_count = plgpu.remote_ref(recv_valid_count_ref, jnp.int32(dst_rank))
+            remote_recv_local_expert = plgpu.remote_ref(recv_local_expert_ref, jnp.int32(dst_rank))
+            remote_recv_src_rank = plgpu.remote_ref(recv_src_rank_ref, jnp.int32(dst_rank))
+            remote_recv_src_token_idx = plgpu.remote_ref(recv_src_token_idx_ref, jnp.int32(dst_rank))
+            remote_recv_topk_slot = plgpu.remote_ref(recv_topk_slot_ref, jnp.int32(dst_rank))
+            remote_recv_router_weight = plgpu.remote_ref(recv_router_weight_ref, jnp.int32(dst_rank))
+
+            for send_row in range(send_capacity):
+                dst_row = send_row_ref[dst_rank, send_row]
+                valid = (send_row < send_count_ref[dst_rank]) & (dst_row < recv_capacity)
+
+                @pl.when(valid)
+                def _copy_row():
+                    for hidden_idx in range(hidden):
+                        remote_recv_x[dst_row, hidden_idx] = send_x_ref[dst_rank, send_row, hidden_idx]
+                    remote_recv_valid_count[dst_row] = jnp.int32(1)
+                    remote_recv_local_expert[dst_row] = send_local_expert_ref[dst_rank, send_row]
+                    remote_recv_src_rank[dst_row] = src_rank
+                    remote_recv_src_token_idx[dst_row] = send_src_token_idx_ref[dst_rank, send_row]
+                    remote_recv_topk_slot[dst_row] = send_topk_slot_ref[dst_rank, send_row]
+                    remote_recv_router_weight[dst_row] = send_router_weight_ref[dst_rank, send_row]
+
+            pl.semaphore_signal(recv_sem, device_id=jnp.int32(dst_rank))
+
+        pl.semaphore_wait(recv_sem, value=2 * ep_size, decrement=False)
+
+    (
+        recv_x,
+        recv_valid_count,
+        recv_local_expert,
+        recv_src_rank,
+        recv_src_token_idx,
+        recv_topk_slot,
+        recv_router_weight,
+    ) = plgpu.kernel(
+        kernel_body,
+        out_shape=[
+            jax.ShapeDtypeStruct((recv_capacity, hidden), send_x_by_dst.dtype),
+            jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
+            jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
+            jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
+            jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
+            jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
+            jax.ShapeDtypeStruct((recv_capacity,), send_router_weight_by_dst.dtype),
+        ],
+        grid=(1,),
+        grid_names=("program",),
+        compiler_params=plgpu.CompilerParams(
+            lowering_semantics=plgpu.LoweringSemantics.Warpgroup,
+        ),
+    )(
+        send_x_by_dst,
+        send_row_by_dst,
+        send_local_expert_by_dst,
+        send_src_token_idx_by_dst,
+        send_topk_slot_by_dst,
+        send_router_weight_by_dst,
+        send_count_by_dst,
+    )
+    overflow_count = jnp.maximum(jnp.sum(rows_per_expert, dtype=jnp.int32) - recv_capacity, 0)
+    return MoeDispatchUpLayout(
+        recv_x,
+        recv_valid_count > 0,
+        rows_per_expert,
+        expert_base,
+        recv_local_expert,
+        recv_src_rank,
+        recv_src_token_idx,
+        recv_topk_slot,
+        recv_router_weight,
+        overflow_count,
+    )
+
+
+def compute_moe_up_mosaic_gpu_local(
+    recv_x: jax.Array,
+    rows_per_expert: jax.Array,
+    w_gate_up_local: jax.Array,
+    *,
+    block_m: int = 64,
+    block_n: int = 64,
+    block_k: int = 64,
+    max_concurrent_steps: int = 2,
+    grid_block_n: int = 1,
+) -> jax.Array:
+    """Local expert-major W13/SiLU kernel with a fused activation epilogue.
+
+    This consumes milestone 1's destination-owned `recv_x` layout. It computes
+    `gate = X @ W_gate`, `up = X @ W_up`, and stores only
+    `silu(gate) * up`, avoiding a global `[tokens, 2 * d_ff]` temporary.
+    """
+
+    _require_mgpu_runtime()
+    if recv_x.ndim != 2:
+        raise ValueError(f"recv_x must have shape [R, D], got {recv_x.shape}")
+    if w_gate_up_local.ndim != 3:
+        raise ValueError(f"w_gate_up_local must have shape [EL, D, 2I], got {w_gate_up_local.shape}")
+    recv_capacity, hidden = recv_x.shape
+    local_experts, hidden_2, gate_up = w_gate_up_local.shape
+    if hidden != hidden_2:
+        raise ValueError(f"recv_x hidden={hidden} must match w_gate_up_local hidden={hidden_2}")
+    if rows_per_expert.shape != (local_experts,):
+        raise ValueError(f"rows_per_expert must have shape ({local_experts},), got {rows_per_expert.shape}")
+    if gate_up % 2 != 0:
+        raise ValueError(f"w_gate_up_local last dimension must be even, got {gate_up}")
+    if hidden % block_k != 0:
+        raise ValueError(f"hidden={hidden} must be divisible by block_k={block_k}")
+    intermediate = gate_up // 2
+
+    def kernel_body(rows_per_expert_gmem, recv_x_gmem, w_gate_up_gmem, out_gmem):
+        grid_m = pl.cdiv(recv_capacity, block_m) + local_experts - 1
+        grid_n = pl.cdiv(intermediate, block_n)
+        grid = (grid_m * grid_n,)
+
+        @plgpu.nd_loop(grid, collective_axes="sm")
+        def mn_loop(loop_info: plgpu.NDLoopInfo):
+            mi, ni = plgpu.planar_snake(loop_info.index[0], (grid_m, grid_n), 1, grid_block_n)
+            group_info = GroupInfo.create(rows_per_expert_gmem, block_m, mi)
+
+            def acc_scope(gate_acc_ref, up_acc_ref):
+                def pipeline_body(_, x_smem, gate_w_smem, up_w_smem):
+                    plgpu.wgmma(gate_acc_ref, x_smem, gate_w_smem)
+                    plgpu.wgmma(up_acc_ref, x_smem, up_w_smem)
+
+                gate_w_ref = w_gate_up_gmem.at[group_info.group_id, :, pl.ds(0, intermediate)]
+                up_w_ref = w_gate_up_gmem.at[group_info.group_id, :, pl.ds(intermediate, intermediate)]
+                plgpu.emit_pipeline(
+                    pipeline_body,
+                    grid=(hidden // block_k,),
+                    in_specs=[
+                        plgpu.BlockSpec(
+                            (block_m, block_k),
+                            lambda k: (group_info.block, k),
+                            delay_release=1,
+                        ),
+                        plgpu.BlockSpec(
+                            (block_k, block_n),
+                            lambda k: (k, ni),
+                            delay_release=1,
+                        ),
+                        plgpu.BlockSpec(
+                            (block_k, block_n),
+                            lambda k: (k, ni),
+                            delay_release=1,
+                        ),
+                    ],
+                    max_concurrent_steps=max_concurrent_steps,
+                )(recv_x_gmem, gate_w_ref, up_w_ref)
+                return gate_acc_ref[...], up_acc_ref[...]
+
+            gate_acc, up_acc = pl.run_scoped(
+                acc_scope,
+                plgpu.ACC((block_m, block_n), jnp.float32),
+                plgpu.ACC((block_m, block_n), jnp.float32),
+            )
+
+            @functools.partial(pl.run_scoped, out_smem=plgpu.SMEM((block_m, block_n), dtype=out_gmem.dtype))
+            def store_scope(out_smem):
+                activated = jax.nn.silu(gate_acc) * up_acc
+                out_smem[...] = activated.astype(out_smem.dtype)
+                plgpu.commit_smem()
+
+                smem_start = group_info.start_within_block
+                remaining_rows = min(block_m, recv_capacity)
+                while remaining_rows > 0:
+                    const_rows_len = 1 << int(math.log2(remaining_rows))
+                    remaining_rows //= 2
+
+                    @pl.when(group_info.actual_size & const_rows_len != 0)
+                    def _():
+                        out_smem_slice = out_smem.at[pl.ds(smem_start, const_rows_len)]
+                        out_gmem_slice = out_gmem.at[
+                            pl.ds(group_info.block_start + smem_start, const_rows_len),
+                            pl.ds(ni * block_n, block_n),
+                        ]
+                        plgpu.copy_smem_to_gmem(out_smem_slice, out_gmem_slice)
+
+                    smem_start += group_info.actual_size & const_rows_len
+                plgpu.wait_smem_to_gmem(0, wait_read_only=True)
+
+    num_sms = jax.local_devices()[0].core_count
+    kernel = plgpu.kernel(
+        kernel_body,
+        out_shape=jax.ShapeDtypeStruct((recv_capacity, intermediate), recv_x.dtype),
+        grid=(num_sms,),
+        grid_names=("sm",),
+        compiler_params=plgpu.CompilerParams(
+            lowering_semantics=plgpu.LoweringSemantics.Warpgroup,
+        ),
+    )
+    out = kernel(rows_per_expert, recv_x, w_gate_up_local)
+    valid_rows = jnp.arange(recv_capacity, dtype=jnp.int32) < jnp.minimum(
+        jnp.sum(rows_per_expert, dtype=jnp.int32), recv_capacity
+    )
+    return jnp.where(valid_rows[:, None], out, jnp.zeros((), dtype=out.dtype))
