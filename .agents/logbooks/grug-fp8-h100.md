@@ -611,3 +611,40 @@ confirms the path.
   (2) confirm flipping the haliax primal precision doesn't regress other call sites/numerics; (3) verify the
   full fwd+bwd op (primal HIGHEST) still fires `$f8` on both. Then the dense fix is a 1-line haliax change.
 - (Ops: the job exited non-zero — a cosmetic script-tail artifact; all three cells produced complete data.)
+
+### 2026-06-23 — GFP8-011: deep-research — provenance + landscape (operand-QDQ is DEPRECATED upstream)
+- **Deep-research workflow** (102 agents, 86 claims → 25 adversarially verified, 25 confirmed / 0 killed; full
+  report in job `wmkzpm1f8`). Verified findings:
+  - **Provenance (high, 3-0):** operand-QDQ (`in_qdq`/`out_qdq`, `dot(dq(q(x)), dq(q(w)))` @ DEFAULT)
+    originated in **Flax `flax/linen/fp8_ops.py`, PR #3322** (wenscarl/shuw, commit `b309c8f25b` 2023-09-11,
+    merged 2023-09-27), deliberately targeting XLA's GemmRewriter (Philipp Hack, TF PR #58720, 2022-12-16,
+    RFC openxla/xla#22). **Haliax `Fp8DotGeneralOp` is a documented copy.** (Answers David's "came from Flax?"
+    — yes.)
+  - **Flax DEPRECATED it (high, 3-0):** `Fp8DotGeneralOp.__post_init__` emits a DeprecationWarning; Flax docs
+    call the XLA pattern-matching **"brittle, as the patterns could be easily broken by other XLA
+    optimizations."** Replaced by explicit ops (`in_q`/`out_dq`, `Fp8DotGeneral`/`Fp8DirectDotGeneralOp`,
+    `Fp8Einsum`) routing through `fp8_scaled_dot_general` with **materialized f8 operands**.
+  - **Production stacks bypass XLA fusion (high, 3-0):** NVIDIA TransformerEngine-JAX routes fwd + both bwd
+    GEMMs through its own cuBLASLt **FFI custom call** (`te_gemm_v2_ffi` / `nvte_cublas_gemm_v2`), NOT
+    QDQ-around-dot. AQT (google/aqt) is `dot_general`-level and INT8-centric.
+  - **Load-bearing distinction (high, 2-1):** the canonical XLA-targeted pattern uses **materialized f8
+    leaves** (cast up to FP16, scaled, dot on the wide type) — persistent-leaf — vs Flax/Haliax's **transient
+    bf16→f8→bf16 round-trip** that `simplify-fp-conversions` can strip.
+  - **Regression boundary:** $f8 fusion broke at **JAX 0.4.30→0.4.31** (0.4.30 fires; 0.4.31+ falls to
+    FP32/bf16). Output-requant non-fusion (#22313) is a *separate* earlier phenomenon.
+- **Reconciliation — we are ahead of the survey on mechanism.** The research's materialized-vs-transient axis
+  matches GFP8-007 (materialized/manual fires) vs GFP8-004 (transient qdq-fwd fails), but we proved MORE:
+  GFP8-009/010 show the actual gate is **precision** — transient+DEFAULT declines, transient+**HIGHEST fires**,
+  and materialized+DEFAULT also fires. So on 0.10 there are **two** independent ways to make the rewriter
+  claim it (materialize the f8, OR use HIGHEST); the sole failing case is transient+DEFAULT — exactly haliax's
+  forward primal.
+- **Strategic implication (Phase-1 decision-gate material):** the one-line precision flip (GFP8-010) is a real
+  short-term win but patches a mechanism Flax has **officially deprecated as brittle** — the very path that
+  broke at 0.4.31. Durable directions: (a) **materialized-f8 explicit op** (Flax's non-deprecated
+  `fp8_scaled_dot_general`; our manual arm is in this family) or (b) **TE-JAX cuBLASLt FFI** (production
+  reference; heavier integration). If we ship the precision flip, treat it as interim + pin jaxlib + add the
+  `$f8`-in-HLO regression test.
+- **Still open (research could not resolve):** does `jax.nn.scaled_dot_general` support delayed scaling on
+  Hopper or is it Blackwell-mxfp8-only (central to path C); FP8 mechanism in MaxText/Qwix/Praxis (uncovered).
+- **Sources:** Flax PR #3322; `flax/linen/fp8_ops.py`; flax fp8_basics docs; JAX #24051, #22313; TF #58720;
+  openxla/xla#22; NVIDIA/TransformerEngine (`te_gemm_v2_ffi`); google/aqt; NVIDIA/atex xla-fp8 tutorial.
