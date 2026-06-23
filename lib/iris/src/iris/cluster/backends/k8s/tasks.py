@@ -160,6 +160,19 @@ _CW_DEFAULT_TOPOLOGIES: dict[str, tuple[str, bool]] = {
     "nvlink.domain": (CW_LABEL_NVLINK_DOMAIN, True),
 }
 
+# Default PriorityClass names Iris creates at controller startup and uses when
+# the cluster config does not override priority_class_names. Override via
+# kubernetes_provider.priority_classes.
+IRIS_PRIORITY_CLASS_PRODUCTION = "iris-production"
+IRIS_PRIORITY_CLASS_INTERACTIVE = "iris-interactive"
+IRIS_PRIORITY_CLASS_BATCH = "iris-batch"
+
+_DEFAULT_PRIORITY_CLASS_NAMES: dict[int, str] = {
+    job_pb2.PRIORITY_BAND_PRODUCTION: IRIS_PRIORITY_CLASS_PRODUCTION,
+    job_pb2.PRIORITY_BAND_INTERACTIVE: IRIS_PRIORITY_CLASS_INTERACTIVE,
+    job_pb2.PRIORITY_BAND_BATCH: IRIS_PRIORITY_CLASS_BATCH,
+}
+
 
 def _job_path(task_id: JobName) -> str:
     """Return the raw (unsanitized) parent job path of a task wire ID.
@@ -345,9 +358,9 @@ class PodConfig:
     # conventions; a group_by with no entry carries no topology annotation.
     kueue_topologies: dict[str, tuple[str, bool]] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
     # PriorityBand -> Kubernetes PriorityClass name. Sets spec.priorityClassName.
-    # UNSPECIFIED is treated as INTERACTIVE. A band with no entry leaves the
-    # field unset (cluster default applies).
-    priority_class_names: dict[int, str] = field(default_factory=dict)
+    # UNSPECIFIED is treated as INTERACTIVE. Defaults to the iris-{band} classes
+    # Iris creates at startup; override via kubernetes_provider.priority_classes.
+    priority_class_names: dict[int, str] = field(default_factory=lambda: dict(_DEFAULT_PRIORITY_CLASS_NAMES))
 
 
 def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
@@ -1314,7 +1327,7 @@ class K8sTaskProvider:
     local_queue: str = ""
     kueue_priority_classes: dict[int, str] = field(default_factory=dict)
     kueue_topologies: dict[str, tuple[str, bool]] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
-    priority_class_names: dict[int, str] = field(default_factory=dict)
+    priority_class_names: dict[int, str] = field(default_factory=lambda: dict(_DEFAULT_PRIORITY_CLASS_NAMES))
     # Namespaces whose preemptible (negative-priority) GPU pods Iris evicts
     # when it has gang work for Kueue. Empty disables the feature; see
     # _evict_preemptible_blockers for the safety guards.

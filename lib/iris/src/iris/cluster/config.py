@@ -25,7 +25,7 @@ from rigging.timing import Duration
 
 from iris.cluster.backends.factory import create_provider_bundle
 from iris.cluster.backends.k8s.service import CloudK8sService
-from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, K8sTaskProvider
+from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, _DEFAULT_PRIORITY_CLASS_NAMES, K8sTaskProvider
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.backends.types import local_queue_name
 from iris.cluster.constraints import WellKnownAttribute
@@ -1162,7 +1162,8 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> TaskBackend:
                     f"valid bands: {sorted(_KUEUE_PRIORITY_BANDS)}"
                 )
             priority_classes[band] = wpc
-        pod_priority_classes: dict[int, str] = {}
+        # Start from the iris-{band} defaults; override with any explicit config.
+        pod_priority_classes: dict[int, str] = dict(_DEFAULT_PRIORITY_CLASS_NAMES)
         for band_name, pc_name in kp.priority_classes.items():
             band = _KUEUE_PRIORITY_BANDS.get(band_name)
             if band is None:
