@@ -124,6 +124,12 @@ LADDER: dict[str, tuple[int, float]] = {
     "d1280": (1280, 2.83e19),
 }
 
+# v5p lives in us-central1/us-east5 while the tokenized data is in us-central2.
+# Pin the TPU child to the v5p regions explicitly so the executor's data-region
+# inference (us-central2) does not leave it unschedulable; the run reads data
+# cross-region, matching the nemotron baseline.
+_V5P_REGIONS = ["us-central1", "us-east5"]
+
 
 def _tracker(crawl: str, scale: str) -> TrackerConfig:
     """W&B when ``WANDB_API_KEY`` is present, else a JSON logger fallback.
@@ -159,7 +165,7 @@ def build_train_step(crawl: str, scale: str) -> ExecutorStep:
             data=_crawl_data(crawl),
             output_path=this_output_path(),
             run_id=run_id,
-            resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+            resources=versioned(ResourceConfig.with_tpu("v5p-8", regions=_V5P_REGIONS)),
             steps=versioned(steps),
             batch_size=versioned(batch_size),
             seed=versioned(0),
