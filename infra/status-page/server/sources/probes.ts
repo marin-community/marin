@@ -102,10 +102,11 @@ interface MetricRow {
   collected_ms: number;
 }
 
-// Health-check rows: the probe label is projected into its own column by
-// checksSql, so there is no labels blob to decode here.
+// Health-check rows: same flat shape as MetricRow. The probe name lives in
+// the labels blob (`{"probe": "..."}`) and is decoded in JS — finelog's
+// DataFusion engine has no JSON functions to slice it server-side.
 interface CheckRow {
-  probe: string;
+  labels: string;
   metric: string;
   value: number;
   collected_ms: number;
@@ -115,28 +116,33 @@ function emptyProvisioning(): ProvisioningSnapshot {
   return { windowHours: null, collectedAt: null, fleet: null, pools: [] };
 }
 
+// SQL is Apache DataFusion (finelog's read engine), NOT DuckDB: no JSON
+// functions (labels are decoded in JS), and timestamps are read out as epoch
+// millis via arrow_cast(...,'Int64') so Arrow hands back a plain integer. The
+// labels blob doubles as the per-probe partition key — each health check
+// emits exactly `{"probe": "<name>"}`, so one labels value maps to one probe.
 const checksSql = (cutoff: string) => `
   WITH recent AS (
     SELECT
-      json_extract_string(labels, '$.probe') AS probe,
+      labels,
       metric,
       value,
       collected_at,
       ROW_NUMBER() OVER (
-        PARTITION BY json_extract_string(labels, '$.probe'), metric
+        PARTITION BY labels, metric
         ORDER BY collected_at DESC
       ) AS rn
     FROM "${METRICS_NAMESPACE}"
     WHERE metric IN ('${METRIC_UP}', '${METRIC_LATENCY_MS}')
       AND collected_at >= TIMESTAMP '${cutoff}'
   )
-  SELECT probe, metric, value::DOUBLE AS value, epoch_ms(collected_at)::BIGINT AS collected_ms
+  SELECT labels, metric, value, arrow_cast(collected_at, 'Int64') AS collected_ms
   FROM recent
-  WHERE rn = 1 AND probe IS NOT NULL
+  WHERE rn = 1
 `;
 
 const provisioningSql = (cutoff: string) => `
-  SELECT metric, value::DOUBLE AS value, labels, epoch_ms(collected_at)::BIGINT AS collected_ms
+  SELECT metric, value, labels, arrow_cast(collected_at, 'Int64') AS collected_ms
   FROM "${METRICS_NAMESPACE}"
   WHERE metric LIKE '${PROVISION_PREFIX}%'
     AND collected_at >= TIMESTAMP '${cutoff}'
@@ -157,7 +163,7 @@ function asMetricRows(rows: Record<string, unknown>[]): MetricRow[] {
 
 function asCheckRows(rows: Record<string, unknown>[]): CheckRow[] {
   return rows.map((r) => ({
-    probe: String(r.probe),
+    labels: String(r.labels ?? "{}"),
     metric: String(r.metric),
     value: Number(r.value),
     collected_ms: Number(r.collected_ms),
@@ -172,8 +178,10 @@ function parseChecks(rows: CheckRow[]): ProbeCheck[] {
   const up = new Map<string, { value: number; collectedMs: number }>();
   const latency = new Map<string, number>();
   for (const row of rows) {
-    if (row.metric === METRIC_UP) up.set(row.probe, { value: row.value, collectedMs: row.collected_ms });
-    else if (row.metric === METRIC_LATENCY_MS) latency.set(row.probe, row.value);
+    const probe = safeLabels(row.labels).probe;
+    if (!probe) continue;
+    if (row.metric === METRIC_UP) up.set(probe, { value: row.value, collectedMs: row.collected_ms });
+    else if (row.metric === METRIC_LATENCY_MS) latency.set(probe, row.value);
   }
   return [...up.entries()]
     .map(([probe, { value, collectedMs }]) => ({
