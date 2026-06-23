@@ -773,3 +773,41 @@ confirms the path.
 - **Sources:** Flax PRs #3922/#4229/#4686; `flax/linen/fp8_ops.py` @ `c44b9169` (introduced) and `dcfabd05`
   (main): `in_q`/`quantized_dot`/`out_dq`/`fp8_scaled_dot_general`, fwd dot L335-341, out dequant L306-312,
   e5m2 bwd L391-403.
+
+### 2026-06-23 — GFP8-016: S2 H100 — Fp8DirectDotGeneralOp FIRES $f8 fwd+bwd at DEFAULT, ≥ the precision-flip fix
+- **Job:** `/matt/grug-s2-gfp8015-direct-batch` (H100x1, d4096/TN, single-run). Validates the GFP8-015 port
+  of Flax's `Fp8DirectDotGeneralOp` to haliax (real fwd+bwd op) end-to-end on hardware. Same batch as
+  GFP8-013 plus arms E1/E2. Numbers are one-shot (no error bars).
+
+  | arm | path / precision | `$f8` | fwd TFLOP/s | bwd TFLOP/s | note |
+  |-----|------------------|-------|-------------|-------------|------|
+  | A3 | bf16 (real)              | 0 | 533 | — | bf16 baseline (this run's bf16 spans 533–553: A3/B1/B2) |
+  | A1 | qdq / default (fwd)      | 0 | 442 | — | legacy fwd fallback (bf16 gemm + dead QDQ converts) |
+  | A2 | qdq / **highest** (fwd)  | 1 | 595 | — | GFP8-012 precision-flip fix |
+  | C1 | qdq / highest, long warmup | 1 | 619 | — | autotune settled |
+  | **E1** | **direct (fwd)**     | **1** | **632** | — | **GFP8-015 op: fwd fires $f8 at DEFAULT, no flip** |
+  | **E2** | **direct (fwd+bwd)** | **3** | **625** | **719** | **fwd $f8 + 2 bwd E5M2 grad dots** |
+  | A4 | qdq / highest (fwd+bwd)  | 3 | 598 | 707 | precision-flip fix, fwd+bwd |
+  | A5 | qdq / default (fwd+bwd)  | 2 | 451 | 711 | bwd fires $f8, fwd does not |
+  | D1/D2 | manual (PET f32/none) | 1 | 521 / 580 | — | materialized-f8 forward-only proxy |
+  | B1/B2 | bf16 (default/highest) | 0 | 538 / 553 | — | mechanism A/B (precision doesn't change bf16 gemm) |
+- **Direct op validated end-to-end (high).** E1/E2 both emit `__cublas$lt$matmul$f8`; `f8e4m3` survives into
+  the optimized HLO (E1: 6, E2: 14) — the gemm consumes genuine f8 operands directly. **The forward fires
+  `$f8` at `precision=DEFAULT` with NO `forward_precision` flip** (the whole point of the direct path); the
+  backward fires `$f8` on the two E5M2 grad dots (E2 `$f8`=3 = 1 fwd + 2 bwd, matching A4). So Flax's
+  direct-quant path, ported as a real haliax fwd+bwd op (GFP8-015), works on H100.
+- **Direct ≥ the precision-flip fix, > bf16 (one-shot).** Direct fwd (632) is the fastest f8 forward measured:
+  vs the qdq/highest fix A2 (595) **+6%**, vs C1 long-warmup (619) +2%, vs bf16 A3 (533) **+19%**. fwd+bwd:
+  direct (625/719) ≈ qdq/highest A4 (598/707), slightly better fwd. Plausible cause: the direct path quantizes
+  each operand once (bf16→f8) and feeds it straight in, where the qdq/highest path round-trips bf16→f8→bf16 and
+  leans on XLA to re-fuse — likely leaving a residual convert the direct path avoids.
+- **Caveats.** Single-shot; run-to-run noise is real (bf16 alone spans 533–553 here). Robust claim: **direct
+  fires $f8 fwd+bwd at DEFAULT and is at least as fast as the precision-flip fix, and faster than bf16 at
+  d4096.** The +19%-over-bf16 here exceeds GFP8-013's +7% partly because this run's bf16 landed lower (533 vs
+  561). The quantization-convert overhead remains the ceiling (6 bf16→f8 converts on the fwd), consistent with
+  GFP8-013 — the headline MFU win still needs amortizing the quantization at real MoE expert-GEMM shapes.
+- **Phase-1 bottom line:** `Fp8DirectDotGeneralOp` is the preferred dense fix — it fires `$f8` without the
+  brittle precision flip (the mechanism Flax deprecated) AND measures ≥ the flip. Next: wire it into
+  `QuantizationConfig` as a selectable path, then re-measure both arms at the routed-MoE expert-GEMM shapes.
+- **Repro:** `uv run iris --cluster=cw-us-east-02a job run --gpu H100x1 --enable-extra-resources --extra gpu
+  --cpu 8 --memory 64GB -- bash lib/levanter/scripts/bench/_s2_h100_batch.sh` (arms E1/E2 = `--path direct`).
