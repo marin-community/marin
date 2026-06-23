@@ -16,7 +16,7 @@ every line item into a `CostEvent`, and appends the rows to the finelog
 CostEvent:
   ts            UTC midnight of the usage day (finelog ordering timestamp)
   usage_date    "YYYY-MM-DD" UTC usage day
-  provider      openai | anthropic | gcp | coreweave
+  provider      openai | anthropic | gcp | coreweave | together
   category      provider-natural grouping (api / a GCP service / compute / storage / ...)
   detail        finer grain: model, line item, SKU, region, instance type
   cost          amount in `currency`
@@ -84,6 +84,7 @@ Secrets are passed via the environment only — `config.yaml` holds the env-var
 | **anthropic** | Admin Cost Report `GET /v1/organizations/cost_report` | `ANTHROPIC_ADMIN_KEY` | Works. Needs an **Admin key** (`sk-ant-admin01-…`). Amounts arrive in cents → converted to USD. |
 | **gcp** | BigQuery billing export (`bq query`) | none (ADC / runner SA) | Disabled by default. The Cloud Billing API exposes no actual spend; detailed cost lives only in the BigQuery export. Enable once `billing_export_table` points at an export dataset the runner's service account can read. |
 | **coreweave** | Prometheus usage API (`observe.coreweave.com`) × rate card | `COREWEAVE_API_TOKEN` | Disabled by default, **estimate only**. CoreWeave has no dollar API; cost is `usage × rate_card` and tagged `amount_kind=estimated`. Fill in real `unit_rate`s and a token with the Observability Viewer role. |
+| **together** | none yet | `TOGETHER_API_KEY` (when available) | Disabled by default, **scaffold only**. Together has no programmatic cost API: spend lives only in the cookie-authenticated billing dashboard (Usage / draft invoice), and the API key is inference-only. `fetch` raises until Together ships a usage/cost endpoint; enabling it before then fails loudly. |
 
 Adding a provider: drop a `fetch(config, window) -> list[CostEvent]` module in
 `backends/`, register it in `backends/__init__.py`, and add a block to

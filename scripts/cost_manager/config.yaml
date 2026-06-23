@@ -65,6 +65,15 @@ providers:
     location: US
     billing_export_table: "hai-gcp-models.billing_export.gcp_billing_export_v1_XXXXXX_XXXXXX_XXXXXX"
 
+  # Together AI inference spend. Disabled: Together has no programmatic cost API
+  # — spend is reachable only through the cookie-authenticated billing dashboard,
+  # and the TOGETHER_API_KEY bearer surface is inference-only, so there is nothing
+  # for the runner to pull. Wired in (and naming its intended secret) so it
+  # activates the moment Together ships a usage/cost endpoint.
+  - name: together
+    enabled: false
+    api_key_env: TOGETHER_API_KEY
+
   # CoreWeave costs. CoreWeave has NO dollar-denominated API, so this estimates
   # cost from Prometheus usage metrics times a rate card (rows are tagged
   # amount_kind=estimated). Disabled until a real rate card is filled in.
