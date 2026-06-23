@@ -25,6 +25,9 @@ dependencies = [
     # marin-iris, which depends on it explicitly. `scripts/rust_mode.py dev` swaps
     # marin-finelog-server to a local source build.
     "marin-finelog",
+    # marin-cluster is the umbrella admin/login CLI above iris/finelog; install
+    # the [all] extra in the dev meta so its delegated verbs are wired.
+    "marin-cluster[all]",
     # top level deps. try to keep these small.
     "watchdog",
     # marin-dupekit is a native (maturin) package shipped as pre-built platform
@@ -121,6 +124,7 @@ members = [
     "lib/iris",
     "lib/fray",
     "lib/finelog",
+    "lib/cluster",
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
@@ -147,6 +151,7 @@ vllm = [
 marin-iris = { workspace = true }
 marin-fray = { workspace = true }
 marin-finelog = { workspace = true }
+marin-cluster = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
 marin-core = { workspace = true }
@@ -265,6 +270,7 @@ project-includes = [
     "lib/iris/src/**/*.py",
     "lib/iris/scripts/**/*.py",
     "lib/rigging/src/**/*.py",
+    "lib/cluster/src/**/*.py",
     "lib/zephyr/src/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
@@ -278,6 +284,7 @@ search-path = [
     "lib/levanter/src",
     "lib/haliax/src",
     "lib/rigging/src",
+    "lib/cluster/src",
     "lib/zephyr/src",
     "lib/fray/src",
     "lib/iris/src",
