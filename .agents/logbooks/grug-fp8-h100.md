@@ -553,3 +553,30 @@ confirms the path.
   2. **Isolate the GEMM:** time `dq(dot(f8,f8))` on *pre-quantized* f8 inputs (no in-loop quantize) vs the
      bf16 GEMM — confirms the f8 GEMM itself is ~2× and the overhead is quantize.
   3. **Larger M sweep** (M=8192/16384): make the GEMM more compute-bound vs the O(MK+NK) quantize.
+
+### 2026-06-23 — GFP8-009: S2 — pass ordering pinned: f8 GemmRewriter runs BEFORE simplify-fp-conversions
+- **Question (the C1/C2 left open in GFP8-005):** does the f8 GemmRewriter run *before* `simplify-fp-conversions`
+  (Story A: rewriter declines the forward, leaving orphans the strip removes) or *after* (Story B: the strip
+  folds the forward's f8 first, so the rewriter never sees it)?
+- **Method:** full `--xla_dump_hlo_pass_re=.*` dump of `--path qdq --layout nn` **fwd+bwd** at d4096; per
+  f8-bearing module, the ordered pass schedule + a verdict comparing the `$f8`-creation index vs
+  `simplify-fp-conversions`. Script `lib/levanter/scripts/bench/_s2_pass_order.sh`, job
+  `/matt/grug-s2-pass-order`.
+- **Result — Story A, definitively:**
+  - **Backward** (`module_45633`, fires `$f8`): `$f8` created at `0029...after_cublas-gemm-rewriter`
+    (dump index 30); `simplify-fp-conversions` runs **later** at `0034` (index 35). f8e4m3 count stays **3
+    across the strip** — the operands are folded into the `$f8` call, so the strip can't touch them.
+  - **Forward** (`module_11249`, never fires `$f8`): f8e4m3 = 2 through 0028, **stripped to 0 at
+    `0029...after_simplify-fp-conversions`**; `$f8` created at **no** pass.
+- **Mechanism (now fully pinned):** the cuBLAS f8 GemmRewriter runs first and **claims the backward**
+  (`e5m2×e4m3` grad dots → `$f8`, operands folded in → survive the later strip) but **declines the forward**
+  (`e4m3²` dot → no `$f8`, no module change → orphaned f8 round-trip → `simplify-fp-conversions` removes it).
+  `simplify-fp-conversions` is **cleanup of orphans**, not the decider — the decider is the rewriter's matcher.
+- **Observability note:** the forward's declined-rewriter pass produced **no dump** (no change → no file), as
+  predicted; the backward (identical pass schedule) is what reveals the rewriter's position. Also corrects the
+  earlier red herring (GFP8-005/discussion): the bf16 cuBLAS at forward-pass 0031 is a *separate, later*
+  rewrite on the already-bf16 dot, not the f8 rewriter.
+- **Resolves:** C1 (pass order) and C2 (declined-vs-never-seen) → **declined** (Story A). Still open: *why* the
+  matcher claims `e5m2×e4m3`/HIGHEST but declines `e4m3²`/DEFAULT for the QDQ round-trip — a matcher rule
+  (dtype/precision/DAG shape), not an ordering artifact. The manual fix sidesteps it: resident f8 is matched
+  even at `e4m3²`/DEFAULT (GFP8-007/008).
