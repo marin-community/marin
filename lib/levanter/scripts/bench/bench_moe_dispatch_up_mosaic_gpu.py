@@ -76,7 +76,7 @@ def _print_roofline(
     hidden: int,
     intermediate: int,
     dtype_bytes: int,
-    dispatch_ms: float,
+    dispatch_ms: float | None,
     w13_ms: float,
 ) -> None:
     routed_rows = ep_size * tokens_per_rank * top_k
@@ -87,7 +87,11 @@ def _print_roofline(
         + ep_size * experts_per_rank * hidden * (2 * intermediate) * dtype_bytes
         + routed_rows * intermediate * dtype_bytes
     )
-    dispatch_payload_gbs = dispatch_payload_bytes / (dispatch_ms / 1e3) / 1e9
+    dispatch_payload = f"{dispatch_payload_bytes / 1024:.1f} KiB"
+    if dispatch_ms is None:
+        dispatch_payload_bw = "not-run"
+    else:
+        dispatch_payload_bw = f"{dispatch_payload_bytes / (dispatch_ms / 1e3) / 1e9:.6f} GB/s"
     w13_tflops = w13_flops / (w13_ms / 1e3) / 1e12
     w13_intensity = w13_flops / w13_bytes
     w13_hbm_bound_tflops = 3.35e12 * w13_intensity / 1e12
@@ -96,8 +100,8 @@ def _print_roofline(
     print(
         "roofline: "
         f"routed_rows={routed_rows} "
-        f"dispatch_payload={dispatch_payload_bytes / 1024:.1f} KiB "
-        f"dispatch_payload_bw={dispatch_payload_gbs:.6f} GB/s "
+        f"dispatch_payload={dispatch_payload} "
+        f"dispatch_payload_bw={dispatch_payload_bw} "
         f"w13_flops={w13_flops / 1e6:.3f} MFLOP "
         f"w13_bytes={w13_bytes / 1024:.1f} KiB "
         f"w13_intensity={w13_intensity:.3f} flop/byte "
@@ -309,6 +313,11 @@ def main() -> None:
     parser.add_argument("--num-stages", type=int, default=2)
     parser.add_argument("--dtype", choices=("bf16", "fp32"), default="bf16")
     parser.add_argument("--run-pallas", action="store_true")
+    parser.add_argument(
+        "--pallas-w13-from-reference-layout",
+        action="store_true",
+        help="Run Mosaic GPU W13/SiLU against the reference dispatch layout, skipping Mosaic dispatch.",
+    )
     parser.add_argument("--debug-errors", action="store_true")
     parser.add_argument("--dispatch-atol", type=float, default=0.0)
     parser.add_argument("--w13-atol", type=float, default=2.0)
@@ -392,48 +401,52 @@ def main() -> None:
 
     mesh = Mesh(np.array(devices[: args.ep_size]), ("expert",), axis_types=(AxisType.Explicit,))
     with jax.set_mesh(mesh):
-        pallas_dispatch_fn = _pallas_dispatch_fn(mesh, recv_capacity=recv_capacity)
-        pallas_dispatch_args = _pallas_dispatch_args(mesh, prepacked)
-
-        def run_pallas_dispatch():
-            return pallas_dispatch_fn(*pallas_dispatch_args)
-
-        pallas_layout, _ = _time_block("dispatch/mosaic_gpu", run_pallas_dispatch)
         pallas_dispatch_steady_ms = None
-        if args.bench_iters > 0:
-            pallas_dispatch_steady_ms = _measure_steady_state(
-                "dispatch/mosaic_gpu",
-                run_pallas_dispatch,
-                warmup_steps=args.warmup_steps,
-                bench_iters=args.bench_iters,
-            )
-            if ref_dispatch_steady_ms is not None:
-                _print_speedup(
-                    "dispatch/mosaic_gpu_vs_reference_jit",
-                    ref_dispatch_steady_ms,
-                    pallas_dispatch_steady_ms,
+        if args.pallas_w13_from_reference_layout:
+            pallas_layout = ref_layout
+            print("dispatch/mosaic_gpu: skipped; using reference layout for W13/SiLU")
+        else:
+            pallas_dispatch_fn = _pallas_dispatch_fn(mesh, recv_capacity=recv_capacity)
+            pallas_dispatch_args = _pallas_dispatch_args(mesh, prepacked)
+
+            def run_pallas_dispatch():
+                return pallas_dispatch_fn(*pallas_dispatch_args)
+
+            pallas_layout, _ = _time_block("dispatch/mosaic_gpu", run_pallas_dispatch)
+            if args.bench_iters > 0:
+                pallas_dispatch_steady_ms = _measure_steady_state(
+                    "dispatch/mosaic_gpu",
+                    run_pallas_dispatch,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
                 )
-        dispatch_err = jnp.max(
-            jnp.abs(pallas_layout.recv_x.astype(jnp.float32) - ref_layout.recv_x.astype(jnp.float32))
-        )
-        dispatch_err_float = float(dispatch_err)
-        print(f"dispatch_max_abs_error: {dispatch_err_float:.6g}")
-        valid_err = jnp.sum(pallas_layout.recv_valid != ref_layout.recv_valid, dtype=jnp.int32)
-        expert_err = jnp.sum(pallas_layout.recv_local_expert != ref_layout.recv_local_expert, dtype=jnp.int32)
-        src_rank_err = jnp.sum(pallas_layout.recv_src_rank != ref_layout.recv_src_rank, dtype=jnp.int32)
-        valid_err_int = int(valid_err)
-        expert_err_int = int(expert_err)
-        src_rank_err_int = int(src_rank_err)
-        print(
-            "dispatch_metadata_errors: "
-            f"valid={valid_err_int} local_expert={expert_err_int} src_rank={src_rank_err_int}"
-        )
-        _check_error("dispatch_max_abs_error", dispatch_err_float, args.dispatch_atol)
-        if valid_err_int != 0 or expert_err_int != 0 or src_rank_err_int != 0:
-            raise AssertionError(
-                "dispatch metadata mismatch: "
+                if ref_dispatch_steady_ms is not None:
+                    _print_speedup(
+                        "dispatch/mosaic_gpu_vs_reference_jit",
+                        ref_dispatch_steady_ms,
+                        pallas_dispatch_steady_ms,
+                    )
+            dispatch_err = jnp.max(
+                jnp.abs(pallas_layout.recv_x.astype(jnp.float32) - ref_layout.recv_x.astype(jnp.float32))
+            )
+            dispatch_err_float = float(dispatch_err)
+            print(f"dispatch_max_abs_error: {dispatch_err_float:.6g}")
+            valid_err = jnp.sum(pallas_layout.recv_valid != ref_layout.recv_valid, dtype=jnp.int32)
+            expert_err = jnp.sum(pallas_layout.recv_local_expert != ref_layout.recv_local_expert, dtype=jnp.int32)
+            src_rank_err = jnp.sum(pallas_layout.recv_src_rank != ref_layout.recv_src_rank, dtype=jnp.int32)
+            valid_err_int = int(valid_err)
+            expert_err_int = int(expert_err)
+            src_rank_err_int = int(src_rank_err)
+            print(
+                "dispatch_metadata_errors: "
                 f"valid={valid_err_int} local_expert={expert_err_int} src_rank={src_rank_err_int}"
             )
+            _check_error("dispatch_max_abs_error", dispatch_err_float, args.dispatch_atol)
+            if valid_err_int != 0 or expert_err_int != 0 or src_rank_err_int != 0:
+                raise AssertionError(
+                    "dispatch metadata mismatch: "
+                    f"valid={valid_err_int} local_expert={expert_err_int} src_rank={src_rank_err_int}"
+                )
 
         pallas_w13_fn = _pallas_w13_silu_fn(mesh, args)
         pallas_w13_args = _pallas_w13_silu_args(mesh, pallas_layout, w_gate_up)
@@ -458,7 +471,7 @@ def main() -> None:
         if args.debug_errors:
             _print_error_debug("w13_silu", pallas_h, ref_h, pallas_layout, w_gate_up)
         _check_error("w13_silu_max_abs_error", h_err_float, args.w13_atol)
-        if pallas_dispatch_steady_ms is not None and pallas_w13_steady_ms is not None:
+        if pallas_w13_steady_ms is not None:
             _print_roofline(
                 ep_size=args.ep_size,
                 tokens_per_rank=args.tokens_per_rank,

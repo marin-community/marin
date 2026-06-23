@@ -136,3 +136,40 @@
 - Next action: Do not tune block sizes yet. First replace scalar dispatch with
   tiled SMEM-staged remote copies, then rerun this exact comparison. Only after
   that should we scale toward the May D2560 target.
+
+### 2026-06-23 - Relevant-shape W13 probe
+
+- Hypothesis: At the requested MoE shape (`H=2560`, `I=2560`, 256 global
+  experts, top-k 4), the local Mosaic GPU W13/SiLU kernel should become useful
+  even if the serial validation dispatch is not yet scalable.
+- Commands:
+  - Integrated dispatch+W13 probe: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 3600 --job-name 6597-moe-dispatch-up-relevant-h2560-i2560-e256 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --run-pallas --bench-iters 3 --warmup-steps 1`
+  - Split W13 probe: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 1800 --job-name 6597-moe-w13-relevant-h2560-i2560-e256-roofline -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --run-pallas --pallas-w13-from-reference-layout --bench-iters 5 --warmup-steps 2 --w13-atol 256`
+- Config: Single-node CoreWeave `cw-us-east-02a`, H100x8, explicit `expert`
+  mesh, bf16, `H=2560`, `I=2560`, `T/rank=8`, top-k 4, 32 local experts per
+  rank, 256 global experts.
+- Result:
+  - Integrated path reached JIT baselines but produced no Mosaic dispatch timing
+    after roughly nine minutes in dispatch compile/lowering; the job was
+    terminated before the 3600 s timeout.
+  - Integrated JIT baselines before termination: dispatch steady-state mean
+    0.784 ms; W13/SiLU steady-state mean 10.504 ms.
+  - Split W13 JIT baselines: dispatch steady-state mean 0.742 ms; W13/SiLU
+    steady-state mean 10.479 ms.
+  - Split Mosaic GPU W13/SiLU, using the reference dispatch layout:
+    compile-including 911 ms; steady-state mean 0.646 ms, min 0.640 ms,
+    max 0.655 ms; 16.23x faster than the JIT W13/SiLU baseline.
+  - W13/SiLU max bf16 absolute error was 128 at this accumulation size. The
+    performance probe used `--w13-atol 256`.
+  - Roofline summary, using the benchmark's H100 SXM assumptions: 256 routed
+    rows, dispatch payload 1280 KiB, W13 work 6.71 GFLOP, W13 bytes 6.25 GiB,
+    arithmetic intensity 1.0 flop/byte, measured W13 10.39 TFLOP/s, estimated
+    HBM-bound W13 roofline 26.79 TFLOP/s.
+- Interpretation: The W13/SiLU subkernel is now meaningfully faster than the
+  JIT baseline at the requested expert/hidden/intermediate shape, reaching about
+  39% of the simple HBM-bound roofline estimate. The integrated `moe_dispatch_up`
+  kernel is still blocked by the serial scalar remote dispatch lowering path, so
+  it cannot yet provide a full relevant-shape end-to-end timing.
+- Next action: Keep W13/SiLU as the viable fast subkernel and prioritize tiled
+  SMEM-staged remote dispatch. Rerun the integrated shape after dispatch no
+  longer lowers as a hidden-dimension scalar loop.
