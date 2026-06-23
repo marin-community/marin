@@ -56,3 +56,9 @@ Branch: `agent/grug-moe-crawl-compare`
   focus 4.627, main 4.420.
 - Each d512 run took 1 preemption, auto-resumed from checkpoint. Wall ~1h for ~0.6h compute.
 - Extraction: `iris job logs --max-lines N` (default tail is ~1000 lines; eval block needs a larger tail).
+
+### 2026-06-23 02:30 — preemption mitigation
+- Overnight v5p preemptions caused net-negative progress at 10-min checkpoints
+  (main-d768 993→454 over ~1h). Added GRUG_CHECKPOINT_MINUTES env knob (default 10),
+  relaunched 6 rungs with =3 + --max-retries 10. Resume from existing checkpoints.
+- New job names: focus/main d768-r5, d1024-r5; focus-d1280-r5, main-d1280-r6.
