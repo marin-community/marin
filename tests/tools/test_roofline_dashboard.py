@@ -75,7 +75,7 @@ def test_vocab_sized_rows_use_llama3_vocab_size() -> None:
     assert estimates["xent"].flops == pytest.approx(4.0 * model.global_batch_tokens * 128_256 / local_shard_devices)
 
 
-def test_attention_formula_covers_training_forward_remat_and_backward() -> None:
+def test_attention_formula_covers_training_forward_and_backward_without_remat() -> None:
     model = grug_moe_d2560_may_spec()
     long_layers = 6
     context_tokens = (model.num_layers - long_layers) * (model.sliding_window // 2) + long_layers * model.sliding_window
@@ -85,10 +85,11 @@ def test_attention_formula_covers_training_forward_remat_and_backward() -> None:
     estimates = {estimate.semantic_op: estimate for estimate in formula_estimates(model)}
 
     assert model.long_attention_every == 4
+    assert model.remat == "none"
     assert long_attention_layers(model) == long_layers
     assert attention_context_tokens(model) == context_tokens
-    assert attention_training_flops(model) == pytest.approx(4.0 * forward_flops)
-    assert estimates["attention_fa4"].flops == pytest.approx(4.0 * forward_flops / local_shard_devices)
+    assert attention_training_flops(model) == pytest.approx(3.0 * forward_flops)
+    assert estimates["attention_fa4"].flops == pytest.approx(3.0 * forward_flops / local_shard_devices)
     assert estimates["attention_fa4"].formula == (
         "4 * local_tokens * num_heads * head_dim * "
         "[(layers - long_attention_layers) * sliding_window/2 + "
@@ -97,7 +98,7 @@ def test_attention_formula_covers_training_forward_remat_and_backward() -> None:
     )
 
 
-def test_moe_formula_covers_training_forward_remat_and_backward() -> None:
+def test_moe_formula_covers_training_forward_and_backward_without_remat() -> None:
     model = grug_moe_d2560_may_spec()
     forward_flops = (
         6.0 * model.num_layers * model.global_batch_tokens * model.top_k * model.hidden_dim * model.intermediate_dim
@@ -105,17 +106,19 @@ def test_moe_formula_covers_training_forward_remat_and_backward() -> None:
     local_shard_devices = local_activation_shard_devices(model)
     estimates = {estimate.semantic_op: estimate for estimate in formula_estimates(model)}
 
-    assert estimates["moe_expert"].flops == pytest.approx(4.0 * forward_flops / local_shard_devices)
+    assert model.remat == "none"
+    assert estimates["moe_expert"].flops == pytest.approx(3.0 * forward_flops / local_shard_devices)
 
 
-def test_expert_all_to_all_formula_covers_layers_and_remat() -> None:
+def test_expert_all_to_all_formula_covers_layers_without_remat() -> None:
     model = grug_moe_d2560_may_spec()
     forward_bytes = model.num_layers * model.global_batch_tokens * model.hidden_dim * model.top_k * 2.0
     local_shard_devices = local_activation_shard_devices(model)
     estimates = {estimate.semantic_op: estimate for estimate in formula_estimates(model)}
 
-    assert moe_activation_collective_bytes(model) == pytest.approx(4.0 * forward_bytes)
-    assert estimates["expert_all_to_all"].bytes_accessed == pytest.approx(4.0 * forward_bytes / local_shard_devices)
+    assert model.remat == "none"
+    assert moe_activation_collective_bytes(model) == pytest.approx(3.0 * forward_bytes)
+    assert estimates["expert_all_to_all"].bytes_accessed == pytest.approx(3.0 * forward_bytes / local_shard_devices)
     assert estimates["expert_all_to_all"].formula == (
         "layers * local_tokens * hidden_dim * top_k * bf16_bytes * "
         "training_forward_equivalents(remat) / local_activation_shard_devices"

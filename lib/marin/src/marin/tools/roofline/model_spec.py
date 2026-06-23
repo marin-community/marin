@@ -148,7 +148,7 @@ def grug_moe_d2560_may_spec() -> ModelSpec:
         vocab_size=128_256,
         global_batch_sequences=16,
         global_batch_tokens=16 * 4096,
-        remat="recompute_all",
+        remat="none",
         attention_impl="gpu_fa4_cute",
         cross_entropy_impl="pallas",
         moe_impl="gmm",
