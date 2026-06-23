@@ -598,9 +598,9 @@ def _backward_b_tiled_from_lse(
 
         valid_rows = labels_block >= 0
         safe_labels = jnp.clip(labels_block, 0, v_dim - 1)
-        label_one_hot = jax.nn.one_hot(safe_labels, v_dim, dtype=jnp.float32)
-        label_one_hot = label_one_hot * valid_rows[:, None].astype(jnp.float32)
-        dlogits = dlogits - label_one_hot * g_loss_block[:, None]
+        row_indices = jnp.arange(b_block_size, dtype=jnp.int32)
+        label_grad = jnp.where(valid_rows, -g_loss_block, 0.0)
+        dlogits = dlogits.at[row_indices, safe_labels].add(label_grad)
 
         if logit_soft_cap is not None:
             cap = jnp.asarray(logit_soft_cap, dtype=jnp.float32)
