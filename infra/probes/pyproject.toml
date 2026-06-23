@@ -8,14 +8,18 @@ version = "0.1.0"
 description = "Synthetic infra monitoring: continuously exercises Iris and Finelog, records latency and error samples."
 requires-python = ">=3.12,<3.14"
 # marin-* libs ship to PyPI nightly (marin-release-libs-wheels.yaml for
-# iris/rigging, finelog-release-wheels.yaml for finelog). prerelease=allow lets
-# the `0.2.x.devYYYYMMDDhhmm` nightlies resolve; `uv lock -U` picks up the
-# latest. (The old GH `*-latest` rolling releases are abandoned/frozen.)
+# iris/rigging, finelog-release-wheels.yaml for finelog), only as
+# `0.2.x.devYYYYMMDDhhmm` prereleases; `uv lock -U` picks up the latest. (The
+# old GH `*-latest` rolling releases are abandoned/frozen.)
 dependencies = [
     "marin-iris    >= 0.2.0",
     "marin-finelog >= 0.2.0",
     "marin-rigging >= 0.2.0",
     "click >= 8.0",
+    # marin-iris pulls s3fs -> aiobotocore, which breaks at import under the
+    # httpx 1.0 prereleases (no httpx.TimeoutException). Pin to the 0.28 stable
+    # line; marin-iris only needs httpx >= 0.28.1.
+    "httpx >= 0.28.1, < 1",
 ]
 
 [project.scripts]
@@ -25,7 +29,10 @@ probes = "infra_probes:main"
 dev = ["pytest >= 8.4"]
 
 [tool.uv]
-prerelease = "allow"
+# if-necessary (not allow): take prereleases only for packages with no stable
+# release — the marin-* dev wheels — while pinning httpx/pydantic/etc to stable.
+# Global "allow" dragged in httpx 1.0.dev3, which broke aiobotocore at import.
+prerelease = "if-necessary"
 
 [tool.hatch.build.targets.wheel]
 # Ship the whole package; an explicit per-file list silently drops new modules
