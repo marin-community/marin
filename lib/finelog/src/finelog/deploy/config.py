@@ -17,6 +17,7 @@ from importlib.resources import files
 from pathlib import Path
 
 import yaml
+from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget
 
 USER_CONFIG_DIR = Path.home() / ".config" / "marin" / "finelog"
 
@@ -181,3 +182,24 @@ def derive_endpoint_uri(cfg: FinelogConfig) -> tuple[str, dict[str, str]]:
         f"k8s://{cfg.name}.{k8s.namespace}",
         {"port": str(cfg.port)},
     )
+
+
+def tunnel_target_for(cfg: FinelogConfig) -> TunnelTarget:
+    """Build a rigging tunnel target from a finelog deployment block.
+
+    The GCP path forwards ``deployment.gcp.service_account`` as the SSH
+    impersonation principal, matching the deploy CLI's own SSH calls, so this
+    target works wherever ``finelog deploy status`` does.
+    """
+    if cfg.deployment.gcp is not None:
+        gcp = cfg.deployment.gcp
+        return GcpSshForwardTarget(
+            project=gcp.project,
+            zone=gcp.zone,
+            instance=cfg.name,
+            port=cfg.port,
+            impersonate_service_account=gcp.service_account,
+        )
+    assert cfg.deployment.k8s is not None  # guaranteed by Deployment.__post_init__
+    k8s = cfg.deployment.k8s
+    return K8sPortForwardTarget(namespace=k8s.namespace, service=cfg.name, port=cfg.port)

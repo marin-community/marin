@@ -1,0 +1,87 @@
+# Cost-manager configuration: which providers to probe and where to write.
+#
+# Secrets are NEVER stored here — only the NAMES of the env vars that hold them
+# (`*_env`). Inject the real values via the environment (GitHub Actions secrets
+# in CI). See README.md for the full list of required secrets per provider.
+
+# Destination for the cost events.
+finelog:
+  # A finelog deploy-config name (lib/finelog/config/<name>.yaml). The runner
+  # opens an SSH/k8s tunnel to that server — works headlessly in CI with a
+  # service-account + SSH key. Alternatively set `url: http://host:port` for a
+  # direct connection (e.g. a tunnel opened by an earlier workflow step).
+  config: marin
+  namespace: cost.events
+
+# Trailing UTC days to (re)fetch each run. The current day is always partial;
+# re-fetching a few trailing days lets later runs correct earlier partial days
+# (readers take the latest snapshot per day — see README).
+lookback_days: 3
+
+# Optional Slack threshold alerts. Each rule sums a cost slice (an optional
+# provider/category filter) over `window` and pings Slack when it exceeds
+# max_usd. Pinging is best-effort: a breach is always logged, but the POST is
+# skipped on --dry-run and when `webhook_url_env` is unset, so local runs and
+# environments without the secret stay silent. The webhook decides the channel
+# (the repo's SLACK_WEBHOOK_URL); point webhook_url_env at a #marin-eng webhook.
+alerts:
+  webhook_url_env: SLACK_WEBHOOK_URL
+  rules:
+    # window: latest_day (most recent complete UTC day) | window_total (whole window).
+    - name: total-daily
+      window: latest_day  # no provider -> all providers combined
+      max_usd: 500
+    - name: openai-daily
+      provider: openai
+      window: latest_day
+      max_usd: 200
+    - name: anthropic-daily
+      provider: anthropic
+      window: latest_day
+      max_usd: 200
+
+providers:
+  # OpenAI organization costs (Costs API). Needs an ORG ADMIN key with the
+  # "Usage" permission — a project `sk-proj-...` key is rejected.
+  - name: openai
+    enabled: true
+    api_key_env: OPENAI_ADMIN_KEY
+    group_by: [line_item]  # split each day into per-feature rows -> CostEvent.detail
+
+  # Anthropic organization costs (Admin Cost Report). Needs an Admin key
+  # (`sk-ant-admin01-...`). Amounts arrive in cents and are converted to USD.
+  - name: anthropic
+    enabled: true
+    api_key_env: ANTHROPIC_ADMIN_KEY
+    group_by: [description]
+
+  # GCP costs from the BigQuery billing export. Disabled by default: the Cloud
+  # Billing API exposes no actual spend, so detailed cost requires the BigQuery
+  # billing export to be enabled. Enable once `billing_export_table` points at
+  # an export dataset the runner's service account can query.
+  - name: gcp
+    enabled: false
+    project: hai-gcp-models
+    location: US
+    billing_export_table: "hai-gcp-models.billing_export.gcp_billing_export_v1_XXXXXX_XXXXXX_XXXXXX"
+
+  # CoreWeave costs. CoreWeave has NO dollar-denominated API, so this estimates
+  # cost from Prometheus usage metrics times a rate card (rows are tagged
+  # amount_kind=estimated). Disabled until a real rate card is filled in.
+  - name: coreweave
+    enabled: false
+    prometheus_url: https://observe.coreweave.com
+    api_token_env: COREWEAVE_API_TOKEN
+    step_seconds: 3600
+    rate_card:
+      # Estimated $/instance-hour, grouped by instance type. Replace unit_rate
+      # values with the cluster's contracted rates.
+      - category: compute
+        query: "billing:instance:total"
+        detail_label: label_node_kubernetes_io_instance_type
+        unit_rate: 0.0
+      # Estimated $/GiB-hour of object storage.
+      - category: storage
+        query: "billing:object_storage_used_bytes:total / (1024*1024*1024)"
+        detail_label: region
+        unit_rate: 0.0
