@@ -208,13 +208,23 @@ def deepep_nvcc_path() -> str | None:
             distribution = importlib.metadata.distribution(distribution_name)
         except importlib.metadata.PackageNotFoundError:
             continue
-        for relative in ("nvidia/cuda_nvcc/bin/nvcc", "bin/nvcc"):
+        for relative in ("nvidia/cu13/bin/nvcc", "nvidia/cuda_nvcc/bin/nvcc", "bin/nvcc"):
             candidate = Path(distribution.locate_file(relative))
             if candidate.is_file():
                 return str(candidate)
 
     try:
         spec = importlib.util.find_spec("nvidia.cuda_nvcc")
+    except ModuleNotFoundError:
+        spec = None
+    if spec is not None and spec.submodule_search_locations:
+        for location in spec.submodule_search_locations:
+            candidate = Path(location) / "bin" / "nvcc"
+            if candidate.is_file():
+                return str(candidate)
+
+    try:
+        spec = importlib.util.find_spec("nvidia.cu13")
     except ModuleNotFoundError:
         spec = None
     if spec is not None and spec.submodule_search_locations:

@@ -90,6 +90,24 @@ def test_deepep_nvcc_path_falls_back_to_python_package(tmp_path: Path, monkeypat
     assert deepep_nvcc_path() == str(nvcc)
 
 
+def test_deepep_nvcc_path_accepts_nvidia_cuda_nvcc_wheel_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nvcc = tmp_path / "nvidia" / "cu13" / "bin" / "nvcc"
+    nvcc.parent.mkdir(parents=True)
+    nvcc.write_text("#!/bin/sh\n")
+
+    class FakeDistribution:
+        def locate_file(self, relative: str) -> Path:
+            return tmp_path / relative
+
+    monkeypatch.setattr(deepep_availability.shutil, "which", lambda name: None)
+    monkeypatch.setattr(deepep_availability, "_SYSTEM_NVCC_CANDIDATES", ())
+    monkeypatch.setattr(deepep_availability.importlib.metadata, "distribution", lambda name: FakeDistribution())
+
+    assert deepep_nvcc_path() == str(nvcc)
+
+
 def test_deepep_nvcc_path_falls_back_to_cuda_image_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     nvcc = tmp_path / "usr" / "local" / "cuda" / "bin" / "nvcc"
     nvcc.parent.mkdir(parents=True)
