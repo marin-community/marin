@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import jax
 import jax.numpy as jnp
@@ -99,6 +99,15 @@ def _gb10_xla_fallback_block_sizes(
 
 class PallasUnsupportedError(NotImplementedError):
     """Raised when the GPU fused cross-entropy backend cannot be used."""
+
+
+class _CustomBackwardResidual(NamedTuple):
+    x: jax.Array
+    labels: jax.Array
+    w: jax.Array
+    lse: jax.Array
+    full_vocab_b_block: int | None
+    backward_v_block: int
 
 
 def _validate_inputs(
@@ -326,21 +335,18 @@ def _linear_softmax_cross_entropy_loss_full_vocab_b_tiled(
         x_block = jax.lax.dynamic_slice(x_pad, (b_start, 0), (b_block_size, h_dim))
         labels_block = jax.lax.dynamic_slice(labels_pad, (b_start,), (b_block_size,))
 
-        logits = jax.lax.dot_general(
+        valid_rows = labels_block >= 0
+        safe_labels = jnp.clip(labels_block, 0, v_dim - 1)
+        reference_out = linear_softmax_cross_entropy_loss_reference(
             x_block,
+            safe_labels,
             w,
-            (((1,), (0,)), ((), ())),
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
             precision=precision,
         )
-        if dtype is not None:
-            logits = logits.astype(dtype)
-        logits = _apply_logit_soft_cap(logits, logit_soft_cap)
-
-        valid_rows = labels_block >= 0
-        lse_block = jax.nn.logsumexp(logits, axis=-1)
-        safe_labels = jnp.clip(labels_block, 0, v_dim - 1)
-        label_logits = jnp.take_along_axis(logits, safe_labels[:, None], axis=1).squeeze(-1)
-        loss_block = lse_block - label_logits
+        loss_block = reference_out[0]
+        lse_block = reference_out[1]
 
         loss_block = jnp.where(valid_rows, loss_block, 0.0).astype(out_dtype)
         lse_block = jnp.where(valid_rows, lse_block, 0.0).astype(out_dtype)
@@ -740,7 +746,15 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_fwd(
     # exactly the same policy decision as fwd without recomputing dispatch logic.
     full_vocab_b_block = _h100_full_vocab_b_tiled_block_size(x, w)
     backward_v_block = _custom_backward_v_block_size(x, w, block_sizes)
-    return (loss, lse), (x, labels, w, lse, full_vocab_b_block, backward_v_block)
+    residual = _CustomBackwardResidual(
+        x=x,
+        labels=labels,
+        w=w,
+        lse=lse,
+        full_vocab_b_block=full_vocab_b_block,
+        backward_v_block=backward_v_block,
+    )
+    return (loss, lse), residual
 
 
 def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_bwd(
@@ -751,30 +765,29 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_bwd(
     residuals,
     output_cotangent,
 ):
-    x, labels, w, lse, full_vocab_b_block, backward_v_block = residuals
     g_loss, g_lse = output_cotangent
 
-    if full_vocab_b_block is not None:
+    if residuals.full_vocab_b_block is not None:
         grad_x, grad_w = _backward_b_tiled_from_lse(
-            x,
-            labels,
-            w,
-            lse,
+            residuals.x,
+            residuals.labels,
+            residuals.w,
+            residuals.lse,
             g_loss,
             g_lse,
-            b_block_size=full_vocab_b_block,
+            b_block_size=residuals.full_vocab_b_block,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
         )
     else:
         grad_x, grad_w = _backward_streaming_from_lse(
-            x,
-            labels,
-            w,
-            lse,
+            residuals.x,
+            residuals.labels,
+            residuals.w,
+            residuals.lse,
             g_loss,
             g_lse,
-            v_block_size=backward_v_block,
+            v_block_size=residuals.backward_v_block,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
         )
