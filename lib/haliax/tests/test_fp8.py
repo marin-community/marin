@@ -15,6 +15,7 @@ import haliax as hax
 from haliax._src.fp8 import compute_scale
 from haliax.nn import Linear
 from haliax.quantization import (
+    Fp8DirectDotGeneralOp,
     Fp8DotGeneralOp,
     QuantizationConfig,
     apply_updates,
@@ -23,6 +24,11 @@ from haliax.quantization import (
 )
 
 _NN_DIMS = (((1,), (0,)), ((), ()))
+
+# Both delayed-scaling FP8 ops: the operand-QDQ op and Flax's direct-quant op. They
+# share the per-tensor scale/amax-history math (E4M3 fwd, E5M2 output grad), so the
+# numerics and the delayed-scaling state evolution are validated against both.
+_FP8_OPS = [Fp8DotGeneralOp, Fp8DirectDotGeneralOp]
 
 
 def _subjaxprs(value):
@@ -63,14 +69,13 @@ def _fp8_dot_loss(forward_precision):
     return loss, x, w
 
 
-def test_fp8_is_reasonable():
+@pytest.mark.parametrize("op_cls", _FP8_OPS)
+def test_fp8_is_reasonable(op_cls):
     In = hax.Axis("In", 8)
     Out = hax.Axis("Out", 8)
     linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), init_scale=0.1)
 
-    fp8_linear = Linear.init(
-        In, Out, key=jrandom.PRNGKey(0), dot_general=hax.quantization.Fp8DotGeneralOp.init(), init_scale=0.1
-    )
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=op_cls.init(), init_scale=0.1)
 
     input = hax.random.normal(jrandom.PRNGKey(3), In)
     output = linear(input)
@@ -83,12 +88,13 @@ def test_fp8_is_reasonable():
 
 
 # https://github.com/google/flax/blob/6f2b08e024c2fd2f8cec42a6c82408cb35412319/tests/linen/linen_test.py#L1222
-def test_fp_loop():
+@pytest.mark.parametrize("op_cls", _FP8_OPS)
+def test_fp_loop(op_cls):
     key, init_key, random_key = jrandom.split(jrandom.PRNGKey(seed=123), 3)
     Batch = hax.Axis("Batch", 16)
     In = hax.Axis("In", 16)
     Out = hax.Axis("Out", 32)
-    linear = Linear.init(In, Out, key=init_key, dot_general=Fp8DotGeneralOp.init())
+    linear = Linear.init(In, Out, key=init_key, dot_general=op_cls.init())
 
     def _roll_and_update(amax_h, update):
         return jnp.roll(amax_h, shift=-1, axis=0).at[0].set(update)
@@ -242,6 +248,18 @@ def test_fp8_forward_fuses_cublas_f8_on_gpu():
     # Canary: forward_precision=HIGHEST must make the operand-QDQ forward re-fuse to a
     # $f8 cuBLASLt matmul (GFP8-012). Alarms if a future jaxlib silently regresses to bf16.
     op = Fp8DotGeneralOp.init(forward_precision="highest")
+    x = jnp.ones((512, 512), jnp.bfloat16)
+    w = jnp.ones((512, 512), jnp.bfloat16)
+    hlo = jax.jit(lambda x, w: op(x, w, _NN_DIMS)).lower(x, w).compile().as_text()
+    assert "__cublas$lt$matmul$f8" in hlo
+
+
+@pytest.mark.skipif(jax.default_backend() != "gpu", reason="cuBLASLt $f8 only lowers on GPU")
+def test_fp8_direct_forward_fuses_cublas_f8_on_gpu():
+    # The direct-quant op feeds genuine f8 operands into the dot, so the forward must fire
+    # $f8 at DEFAULT precision — no forward_precision flip (GFP8-014). Backward fires $f8 too,
+    # but the forward is the regression we care about; assert it on the forward HLO alone.
+    op = Fp8DirectDotGeneralOp.init()
     x = jnp.ones((512, 512), jnp.bfloat16)
     w = jnp.ones((512, 512), jnp.bfloat16)
     hlo = jax.jit(lambda x, w: op(x, w, _NN_DIMS)).lower(x, w).compile().as_text()
