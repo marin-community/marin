@@ -23,6 +23,7 @@ from levanter.kernels.deepep.availability import (
     deepep_cache_root,
     deepep_cuda_arch_flag,
     deepep_layout_source,
+    deepep_nvcc_path,
     deepep_source_root,
 )
 
@@ -71,8 +72,13 @@ def _build_shared_library(out_path: Path) -> None:
     deepep_root = _deepep_source_root()
     layout_source = deepep_layout_source(deepep_root)
     jax_include = _jaxlib_include_dir()
+    nvcc = deepep_nvcc_path()
+    if nvcc is None:
+        raise RuntimeError(
+            "DeepEP layout FFI build requires nvcc. Install nvidia-cuda-nvcc or use a CUDA devel image with nvcc on PATH."
+        )
     cmd = [
-        "nvcc",
+        nvcc,
         "-std=c++17",
         "-shared",
         "-Xcompiler",

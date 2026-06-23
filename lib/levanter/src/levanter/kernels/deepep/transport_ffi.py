@@ -39,6 +39,7 @@ from levanter.kernels.deepep.availability import (
     deepep_cuda_arch,
     deepep_cuda_arch_flag,
     deepep_layout_source,
+    deepep_nvcc_path,
     deepep_nvshmem_config,
     deepep_rdma_include_dirs,
     deepep_source_root,
@@ -786,6 +787,15 @@ def _nvcc_common_flags(
     ]
 
 
+def _require_nvcc() -> str:
+    nvcc = deepep_nvcc_path()
+    if nvcc is None:
+        raise RuntimeError(
+            "DeepEP transport FFI build requires nvcc. Install nvidia-cuda-nvcc or use a CUDA devel image with nvcc on PATH."
+        )
+    return nvcc
+
+
 def _build_object_files(
     *,
     build_dir: Path,
@@ -797,7 +807,7 @@ def _build_object_files(
     objects_dir.mkdir(parents=True, exist_ok=True)
     common_flags = _nvcc_common_flags(deepep_root, compatibility_flags, build_mode=build_mode)
     compile_flags = [
-        "nvcc",
+        _require_nvcc(),
         *common_flags,
         "-rdc=true",
         "--ptxas-options=--register-usage-level=10",
@@ -855,7 +865,7 @@ def _device_link_objects(
         include_launch_compat=False,
     )
     cmd = [
-        "nvcc",
+        _require_nvcc(),
         *common_flags,
         "-dlink",
         *[str(path) for path in object_paths],
@@ -877,7 +887,7 @@ def _link_shared_library(
 ) -> None:
     all_object_paths = [*object_paths, *(extra_object_paths or [])]
     cmd = [
-        "nvcc",
+        _require_nvcc(),
         "-shared",
         "-Xcompiler",
         "-fPIC",

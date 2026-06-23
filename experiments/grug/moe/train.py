@@ -401,6 +401,15 @@ def _run_grug_local_worker_from_env() -> None:
     _run_grug_local(config)
 
 
+def _maybe_prebuild_deepep_intranode_libraries(model: GrugModelConfig) -> None:
+    if model.moe_implementation not in ("deepep", "deepep_composed"):
+        return
+    logger.info("Prebuilding DeepEP intranode FFI libraries")
+    layout_library = build_layout_library()
+    intranode_library = build_transport_library(TransportBuildMode.INTRANODE)
+    logger.info("DeepEP intranode prebuilt libraries: layout=%s intranode=%s", layout_library, intranode_library)
+
+
 @dataclass(frozen=True)
 class GrugTrainerConfig:
     """Runtime knobs for grug training."""
@@ -823,6 +832,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     _maybe_install_rdma_headers(config.model)
     _maybe_bootstrap_deepep_source(config.model)
+    _maybe_prebuild_deepep_intranode_libraries(config.model)
     trainer = config.trainer.trainer
     trainer.initialize()
     _maybe_initialize_deepep_internode_runtime(config)

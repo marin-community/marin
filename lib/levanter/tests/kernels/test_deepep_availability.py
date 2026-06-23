@@ -20,6 +20,7 @@ from levanter.kernels.deepep.availability import (
     INTERNODE_TRANSPORT_REQUIRED_FILES,
     TRANSPORT_REQUIRED_FILES,
     deepep_layout_source,
+    deepep_nvcc_path,
     deepep_nvshmem_config,
     deepep_nvshmem_status,
     deepep_preflight_status,
@@ -63,11 +64,30 @@ def _clear_fake_nvshmem_modules() -> None:
     sys.modules.pop("nvidia", None)
 
 
+def _clear_fake_nvcc_modules() -> None:
+    sys.modules.pop("nvidia.cuda_nvcc", None)
+    sys.modules.pop("nvidia", None)
+
+
 def test_deepep_layout_source_accepts_legacy_layout_path(tmp_path: Path) -> None:
     root = tmp_path / "DeepEP"
     layout_source = _write(root, "csrc/kernels/legacy/layout.cu")
 
     assert deepep_layout_source(root) == layout_source
+
+
+def test_deepep_nvcc_path_falls_back_to_python_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    package_dir = tmp_path / "nvidia" / "cuda_nvcc"
+    nvcc = package_dir / "bin" / "nvcc"
+    nvcc.parent.mkdir(parents=True)
+    (tmp_path / "nvidia" / "__init__.py").write_text("")
+    (package_dir / "__init__.py").write_text("")
+    nvcc.write_text("#!/bin/sh\n")
+    _clear_fake_nvcc_modules()
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(deepep_availability.shutil, "which", lambda name: None)
+
+    assert deepep_nvcc_path() == str(nvcc)
 
 
 def test_internode_dispatch_clean_buffer_size_hint_catches_d2560_topk2_regression() -> None:
@@ -367,6 +387,7 @@ def test_transport_internode_final_link_includes_nvshmem_device_archive(
     device_archive = tmp_path / "libnvshmem_device.a"
 
     monkeypatch.setattr(transport_ffi, "_cuda_arch_flag", lambda: ["--gpu-architecture=sm_90"])
+    monkeypatch.setattr(transport_ffi, "_require_nvcc", lambda: "/cuda/bin/nvcc")
     monkeypatch.setattr(
         transport_ffi,
         "_nvshmem_device_link_flags",
@@ -384,7 +405,7 @@ def test_transport_internode_final_link_includes_nvshmem_device_archive(
 
     assert commands == [
         [
-            "nvcc",
+            "/cuda/bin/nvcc",
             "-shared",
             "-Xcompiler",
             "-fPIC",

@@ -44,6 +44,7 @@ INTERNODE_RDMA_REQUIRED_HEADERS = ("infiniband/mlx5dv.h",)
 
 _SUPPORTED_ARCHES = ("sm_90", "sm_90a", "sm_100")
 _PREFERRED_NVSHMEM_DISTRIBUTIONS = ("nvidia-nvshmem-cu13", "nvidia-nvshmem-cu12")
+_PREFERRED_NVCC_DISTRIBUTIONS = ("nvidia-cuda-nvcc",)
 _NVSHMEM_CUDA13_MARKERS = ("cu13", "cuda13", "cuda-13", "r13.")
 _NVSHMEM_CUDA12_MARKERS = ("cu12", "cuda12", "cuda-12", "r12.")
 
@@ -185,6 +186,35 @@ def _nvshmem_python_package_roots() -> tuple[Path, ...]:
         fallback_roots.extend(Path(location) for location in spec.submodule_search_locations)
 
     return _dedupe_paths([*roots, *sorted(fallback_roots, key=_nvshmem_cuda_sort_key)])
+
+
+def deepep_nvcc_path() -> str | None:
+    """Return an nvcc executable path from PATH or installed NVIDIA CUDA wheels."""
+    path_nvcc = shutil.which("nvcc")
+    if path_nvcc is not None:
+        return path_nvcc
+
+    for distribution_name in _PREFERRED_NVCC_DISTRIBUTIONS:
+        try:
+            distribution = importlib.metadata.distribution(distribution_name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        for relative in ("nvidia/cuda_nvcc/bin/nvcc", "bin/nvcc"):
+            candidate = Path(distribution.locate_file(relative))
+            if candidate.is_file():
+                return str(candidate)
+
+    try:
+        spec = importlib.util.find_spec("nvidia.cuda_nvcc")
+    except ModuleNotFoundError:
+        spec = None
+    if spec is not None and spec.submodule_search_locations:
+        for location in spec.submodule_search_locations:
+            candidate = Path(location) / "bin" / "nvcc"
+            if candidate.is_file():
+                return str(candidate)
+
+    return None
 
 
 def _nvshmem_host_lib_candidates(base_dir: Path) -> tuple[Path, ...]:
@@ -416,9 +446,9 @@ def deepep_preflight_status(
         arch = os.environ.get(DEEPEP_CUDA_ARCH_ENV, "sm_90").strip()
         errors.append(str(exc))
 
-    nvcc_path = shutil.which("nvcc")
+    nvcc_path = deepep_nvcc_path()
     if nvcc_path is None:
-        errors.append("nvcc is not on PATH")
+        errors.append("nvcc is not available on PATH or from the nvidia-cuda-nvcc Python package")
 
     nvshmem_dir, nvshmem_host_lib, nvshmem_errors = deepep_nvshmem_status()
     nvshmem_device_lib = _nvshmem_device_lib_name(nvshmem_dir) if nvshmem_dir is not None else None
