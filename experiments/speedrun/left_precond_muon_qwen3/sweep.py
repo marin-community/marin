@@ -54,8 +54,10 @@ def _floats(env: str, default: str) -> tuple[float, ...]:
     return tuple(float(x) for x in os.environ.get(env, default).split(","))
 
 
-LR_MULTIPLIERS: tuple[float, ...] = _floats("LR_MULTS", "0.5,1.0,2.0")
-CLAMPS: tuple[float, ...] = _floats("CLAMPS", "1e-6,1e-4")
+# LR is the primary tuning axis (per the goal). clamp_rel is fixed near Shampoo's 1e-15 (only
+# numerically-zero directions truncated); 1e-8 included once to confirm insensitivity to mild truncation.
+LR_MULTIPLIERS: tuple[float, ...] = _floats("LR_MULTS", "0.5,1.0,2.0,4.0")
+CLAMPS: tuple[float, ...] = _floats("CLAMPS", "1e-15,1e-8")
 
 
 @dataclass(frozen=True)

@@ -53,7 +53,9 @@ class LeftPrecondMuonConfig(OptimizerConfig):
 
     # --- the new knobs (vs Muon) ---
     h_beta: float = 0.95  # EMA decay for the gradient second moment H = EMA(G Gᵀ)
-    clamp_rel: float = 1e-6  # truncated pseudo-inverse: zero eigenvalues below clamp_rel · λ_max
+    clamp_rel: float = 1e-15  # truncated pseudo-inverse: zero eigenvalues below clamp_rel · λ_max
+    # 1e-15 (= Shampoo / fb#265) truncates only numerically-zero directions; larger values
+    # aggressively drop real low-curvature directions (which hurts) — keep this tiny.
     ns_steps: int = 5  # Newton-Schulz steps for the polar factor
 
     # --- Muon-shared knobs ---
