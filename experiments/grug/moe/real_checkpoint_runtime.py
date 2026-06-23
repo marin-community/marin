@@ -116,14 +116,14 @@ def _version(package: str) -> str:
 
 
 def runtime_snapshot(*, include_jax_devices: bool, include_grugmoe_spec: bool = False) -> dict[str, Any]:
-    packages = {}
-    for package in ("marin-core", "vllm", "tpu-inference", "jax", "libtpu"):
-        packages[package] = {"version": _version(package), "direct_url": _direct_url(package)}
     snapshot: dict[str, Any] = {
         "argv": sys.argv,
         "cwd": os.getcwd(),
         "marin_sha": git_sha(),
-        "packages": packages,
+        "packages": {
+            package: {"version": _version(package), "direct_url": _direct_url(package)}
+            for package in ("marin-core", "vllm", "tpu-inference", "jax", "libtpu")
+        },
     }
     if include_grugmoe_spec:
         try:
@@ -176,23 +176,16 @@ def submit_tpu_job(
         ),
         max_retries_failure=0,
     )
-    print(
-        summary_label
-        + "="
-        + json.dumps(
-            {
-                "job_name": job_name,
-                "tpu_type": tpu_type,
-                "region": region,
-                "ram": ram,
-                "disk": disk,
-                **summary_fields,
-                "marin_sha": env_vars.get(MARIN_GIT_SHA_ENV),
-            },
-            sort_keys=True,
-        ),
-        flush=True,
-    )
+    summary = {
+        "job_name": job_name,
+        "tpu_type": tpu_type,
+        "region": region,
+        "ram": ram,
+        "disk": disk,
+        **summary_fields,
+        "marin_sha": env_vars.get(MARIN_GIT_SHA_ENV),
+    }
+    print(f"{summary_label}={json.dumps(summary, sort_keys=True)}", flush=True)
     job = current_client().submit(request)
     print("submitted_job_id=" + str(job.job_id), flush=True)
     job.wait(raise_on_failure=True)

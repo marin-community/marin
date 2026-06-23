@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import argparse
 import base64
 import importlib.metadata as md
 import importlib.util
@@ -16,8 +15,10 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+import click
 import numpy as np
 import requests
 from marin.evaluation.evaluators.evaluator import ModelConfig
@@ -34,6 +35,7 @@ _DEFAULT_MAX_SHARD_SIZE_BYTES = 256 * 1024 * 1024
 _DEFAULT_MAX_LOGPROB_DELTA = 5.0
 _DEFAULT_VLLM_DTYPE = "bfloat16"
 _VLLM_DTYPE_CHOICES = ("bfloat16", "float32")
+_PATH = click.Path(path_type=Path)
 
 
 def _direct_url(package: str) -> str:
@@ -475,61 +477,24 @@ def run(
     )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--phase", choices=("all", "export", "serve"), default="all")
-    parser.add_argument("--output-dir", type=Path, default=Path("/tmp/grugmoe-installed-vllm-smoke"))
-    parser.add_argument(
-        "--config-name",
-        choices=_CONFIG_NAMES,
-        default=_DEFAULT_CONFIG_NAME,
-        help="Artifact profile to export when --artifact-dir is not provided.",
-    )
-    parser.add_argument(
-        "--artifact-dir",
-        type=Path,
-        default=None,
-        help="Existing HF/safetensors artifact directory for --phase serve or --phase all.",
-    )
-    parser.add_argument(
-        "--reference-path",
-        type=Path,
-        default=None,
-        help=f"Optional reference JSON, defaults to OUTPUT_DIR/{_REFERENCE_JSON_NAME} after export.",
-    )
-    parser.add_argument("--max-shard-size", type=int, default=None)
-    parser.add_argument("--generation-tokens", type=int, default=1)
-    parser.add_argument("--server-port", type=int, default=8000)
-    parser.add_argument("--server-timeout-seconds", type=int, default=1800)
-    parser.add_argument(
-        "--vllm-dtype",
-        choices=_VLLM_DTYPE_CHOICES,
-        default=_DEFAULT_VLLM_DTYPE,
-        help="Installed vLLM dtype for the serve path.",
-    )
-    parser.add_argument(
-        "--return-routed-experts",
-        action="store_true",
-        help="Start vLLM with enable_return_routed_experts and assert returned routed-expert shape/range.",
-    )
-    parser.add_argument(
-        "--check-reference-continuation",
-        action="store_true",
-        help="Assert generated IDs match continuation_ids in the reference JSON.",
-    )
-    parser.add_argument(
-        "--check-reference-logprobs",
-        action="store_true",
-        help="Assert serving selected-token logprobs are close to the reference JSON.",
-    )
-    parser.add_argument("--max-logprob-delta", type=float, default=_DEFAULT_MAX_LOGPROB_DELTA)
-    parser.add_argument(
-        "--expected-generated-token-ids",
-        default=None,
-        help="Comma-separated deterministic continuation to assert instead of reading reference JSON.",
-    )
-    args = parser.parse_args()
-
+@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.option("--phase", type=click.Choice(("all", "export", "serve")), default="all")
+@click.option("--output-dir", type=_PATH, default=Path("/tmp/grugmoe-installed-vllm-smoke"))
+@click.option("--config-name", type=click.Choice(_CONFIG_NAMES), default=_DEFAULT_CONFIG_NAME)
+@click.option("--artifact-dir", type=_PATH, default=None)
+@click.option("--reference-path", type=_PATH, default=None)
+@click.option("--max-shard-size", type=int, default=None)
+@click.option("--generation-tokens", type=int, default=1)
+@click.option("--server-port", type=int, default=8000)
+@click.option("--server-timeout-seconds", type=int, default=1800)
+@click.option("--vllm-dtype", type=click.Choice(_VLLM_DTYPE_CHOICES), default=_DEFAULT_VLLM_DTYPE)
+@click.option("--return-routed-experts", is_flag=True)
+@click.option("--check-reference-continuation", is_flag=True)
+@click.option("--check-reference-logprobs", is_flag=True)
+@click.option("--max-logprob-delta", type=float, default=_DEFAULT_MAX_LOGPROB_DELTA)
+@click.option("--expected-generated-token-ids", default=None)
+def _main_command(**params: Any) -> None:
+    args = SimpleNamespace(**params)
     max_shard_size = args.max_shard_size
     if max_shard_size is None:
         max_shard_size = _default_max_shard_size(args.config_name)
@@ -578,5 +543,10 @@ def main() -> None:
         )
 
 
+def main(argv: list[str] | None = None) -> int:
+    _main_command.main(args=argv, standalone_mode=False)
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main(sys.argv[1:]))

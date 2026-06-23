@@ -38,7 +38,6 @@ from experiments.grug.moe.real_checkpoint_runtime import (
     DEFAULT_RAM,
     DEFAULT_REGION,
     DEFAULT_TPU_TYPE,
-    EUROPE_WEST4_GCS_PREFIX,
     MARIN_GIT_SHA_ENV,
     default_output_dir,
     exists,
@@ -46,6 +45,7 @@ from experiments.grug.moe.real_checkpoint_runtime import (
     join_path,
     read_json,
     remove_tree,
+    require_file,
     require_local_or_europe_west4,
     runtime_snapshot,
     submit_tpu_job,
@@ -515,11 +515,10 @@ def _first_text_difference(left: str, right: str) -> dict[str, Any] | None:
 def run_compare(config: CompareConfig) -> dict[str, Any]:
     _configure_runtime_environment(config)
     locality_paths = validate_locality(config)
-    if config.output_dir.startswith(EUROPE_WEST4_GCS_PREFIX) or os.path.exists(config.output_dir):
-        if exists(config.output_dir):
-            if not config.overwrite:
-                raise FileExistsError(f"{config.output_dir} already exists; pass --overwrite to regenerate it")
-            remove_tree(config.output_dir)
+    if exists(config.output_dir):
+        if not config.overwrite:
+            raise FileExistsError(f"{config.output_dir} already exists; pass --overwrite to regenerate it")
+        remove_tree(config.output_dir)
 
     _require_reference_inputs(config)
     vllm_payload = read_json(config.vllm_result_path)
@@ -616,9 +615,7 @@ def _require_reference_inputs(config: CompareConfig) -> None:
         ("tokenizer.json", join_path(config.tokenizer_path, "tokenizer.json")),
         ("vLLM result", config.vllm_result_path),
     ):
-        require_local_or_europe_west4(label, path)
-        if not exists(path):
-            raise FileNotFoundError(f"{label} not found at {path}")
+        require_file(label, path)
 
 
 def submit_compare(config: CompareConfig, *, tpu_type: str, region: str, ram: str, disk: str, job_name: str) -> None:

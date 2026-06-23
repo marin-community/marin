@@ -29,7 +29,6 @@ tpu-inference checkout.
 
 from __future__ import annotations
 
-import argparse
 import contextlib
 import dataclasses
 import gc
@@ -42,6 +41,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar
 
+import click
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -78,6 +78,7 @@ _DENSE_ATTENTION_MODE = "dense"
 _PRODUCTION_ATTENTION_MODE = "production"
 _PRODUCTION_ATTENTION_LOGITS_TOLERANCE = 5e-2
 _PRODUCTION_ATTENTION_LOGPROB_TOLERANCE = 5e-2
+_PATH = click.Path(path_type=Path)
 
 
 class _EmptyMesh:
@@ -1431,63 +1432,22 @@ def check_realistic_training_state_roundtrip(
     )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--tpu-inference-root",
-        type=Path,
-        default=None,
-        help="Optional path to an unpackaged tpu-inference checkout containing native GrugMoE.",
-    )
-    parser.add_argument(
-        "--component-only",
-        action="store_true",
-        help="Run only the MoE component parity check.",
-    )
-    parser.add_argument(
-        "--large-smoke",
-        action="store_true",
-        help="Also run a 1-5GB zero-weight sharded export/load smoke.",
-    )
-    parser.add_argument(
-        "--realistic-roundtrip",
-        action="store_true",
-        help="Run the seeded non-zero GrugTrainState checkpoint -> sharded HF -> native tpu-inference parity check.",
-    )
-    parser.add_argument(
-        "--production-attention-smoke",
-        action="store_true",
-        help=("Run the small production-attention KV-cache path against the dense reference."),
-    )
-    parser.add_argument(
-        "--realistic-config",
-        choices=("canary", "scaled", "small-diagnostic"),
-        default="canary",
-        help=(
-            "Use the full GRUG_MOE_TRIAL_MODEL canary config, a smaller config "
-            "that preserves its production MoE/GQA structure, or a compact diagnostic config."
-        ),
-    )
-    parser.add_argument(
-        "--realistic-output-dir",
-        type=Path,
-        default=None,
-        help="Directory to leave the realistic checkpoint and HF artifact in. Defaults to a new /tmp directory.",
-    )
-    parser.add_argument(
-        "--realistic-max-shard-size",
-        type=int,
-        default=None,
-        help="Forced max safetensors shard size for the realistic HF export.",
-    )
-    parser.add_argument(
-        "--realistic-generation-tokens",
-        type=int,
-        default=_REALISTIC_GENERATION_TOKENS,
-        help="Number of deterministic greedy full-forward tokens to generate in the realistic roundtrip.",
-    )
-    args = parser.parse_args()
-
+@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.option("--tpu-inference-root", type=_PATH, default=None)
+@click.option("--component-only", is_flag=True)
+@click.option("--large-smoke", is_flag=True)
+@click.option("--realistic-roundtrip", is_flag=True)
+@click.option("--production-attention-smoke", is_flag=True)
+@click.option(
+    "--realistic-config",
+    type=click.Choice(("canary", "scaled", "small-diagnostic")),
+    default="canary",
+)
+@click.option("--realistic-output-dir", type=_PATH, default=None)
+@click.option("--realistic-max-shard-size", type=int, default=None)
+@click.option("--realistic-generation-tokens", type=int, default=_REALISTIC_GENERATION_TOKENS)
+def _main_command(**params: Any) -> None:
+    args = SimpleNamespace(**params)
     tpu_inference_root = args.tpu_inference_root.resolve() if args.tpu_inference_root is not None else None
     tpu_grugmoe = load_tpu_grugmoe(tpu_inference_root)
     check_moe_component(tpu_grugmoe)
@@ -1513,5 +1473,10 @@ def main() -> None:
         )
 
 
+def main(argv: list[str] | None = None) -> int:
+    _main_command.main(args=argv, standalone_mode=False)
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main(sys.argv[1:]))
