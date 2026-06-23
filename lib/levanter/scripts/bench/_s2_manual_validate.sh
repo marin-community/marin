@@ -1,40 +1,31 @@
 #!/usr/bin/env bash
 # S2 validation: does the manual direct-f8 forward (dq(dot(q(x), q(w)))) fire an
-# f8 matmul on H100, where the operand-QDQ forward falls back to bf16? Decisive
-# signals: (1) does __cublas$lt$matmul$f8 appear; (2) does f8e4m3 SURVIVE to the
-# optimized module and feed the GEMM (vs qdq, whose f8 is stripped at pass 0029);
-# (3) forward TFLOP/s vs a bf16 baseline at the same shape (f8 ~ 2x bf16 peak).
+# f8 matmul on H100, where the operand-QDQ forward falls back to bf16? Reads the
+# decisive signals straight from the bench's compiled (optimized) forward HLO —
+# no per-pass dump needed: (1) does __cublas$lt$matmul$f8 appear; (2) does f8e4m3
+# survive into the optimized module and feed the GEMM (vs qdq, whose f8 is
+# stripped); (3) forward TFLOP/s vs a bf16 baseline at the same shape.
 set -euo pipefail
 
 K=4096; N=4096
-DM=/tmp/manual_dump
-rm -rf "$DM"
+M=/tmp/manual_fwd.txt
+B=/tmp/bf16_fwd.txt
 
-echo "=== MANUAL forward (d${K}) — pass dump ==="
+echo "=== MANUAL forward (d${K}) ==="
 python -u lib/levanter/scripts/bench/bench_dense_fp8.py \
-  --k "$K" --n "$N" --path manual --forward-only --steps 20 --warmup 5 \
-  --no-print-hlo --xla-dump-dir "$DM"
+  --k "$K" --n "$N" --path manual --forward-only --steps 20 --warmup 5 > "$M" 2>&1 \
+  || { echo "MANUAL run failed:"; tail -40 "$M"; exit 1; }
 
-FWD=$(grep -lE 'f8e4m3' "$DM"/*before_optimizations.txt | head -1)
-PREFIX=$(basename "$FWD" | sed 's/\.before_optimizations\.txt//')
-echo "forward module: $PREFIX ($(ls -1 "$DM/$PREFIX".*.txt | wc -l) pass files)"
+echo "--- result_json (manual) ---";        grep -F 'result_json' "$M" || true
+echo "--- \$f8 fired? (match count) ---";    grep -cF '__cublas$lt$matmul$f8' "$M" || true
+echo "--- f8e4m3 occurrences in compiled HLO (0 => stripped like qdq) ---"
+grep -cF 'f8e4m3' "$M" || true
+echo "--- matmul / custom-call / gemm-fusion lines (operand dtype = f8 vs bf16) ---"
+grep -nE 'custom-call\(|cublas|gemm_fusion|kind=kCustom|ROOT %.*dot\(|= f[0-9].*dot\(|= bf16.*dot\(' "$M" | head -25 || true
 
-echo "=== f8e4m3 count TRANSITIONS across passes (does f8 survive, unlike qdq?) ==="
-prev=""
-for f in $(ls -v "$DM/$PREFIX".*.txt); do
-  c=$(grep -cE 'f8e4m3' "$f" || true)
-  if [ "$c" != "$prev" ]; then printf "%3s  %s\n" "$c" "$(basename "$f")"; prev="$c"; fi
-done
-
-OPT=$(ls "$DM/$PREFIX"*after_optimizations.txt | head -1)
-echo "=== f8 cuBLASLt custom call in optimized module? ==="
-grep -F '__cublas$lt$matmul$f8' "$OPT" >/dev/null && echo "YES — \$f8 fired" || echo "NO \$f8"
-echo "=== GEMM / matmul lines in optimized module (operand dtype tells f8 vs bf16) ==="
-grep -nE 'custom-call|cublas|gemm_fusion|__triton|fusion\(.*kind=kCustom' "$OPT" | head -20 || true
-echo "=== f8e4m3 occurrences in optimized module (0 => stripped like qdq) ==="
-grep -cE 'f8e4m3' "$OPT" || true
-
-echo "=== BF16 baseline forward (d${K}) for throughput reference ==="
+echo "=== BF16 baseline forward (d${K}) ==="
 python -u lib/levanter/scripts/bench/bench_dense_fp8.py \
-  --k "$K" --n "$N" --path bf16 --forward-only --steps 20 --warmup 5 --no-print-hlo
-echo "=== DONE (compare fwd_tflops_per_s: manual vs bf16) ==="
+  --k "$K" --n "$N" --path bf16 --forward-only --steps 20 --warmup 5 --no-print-hlo > "$B" 2>&1 \
+  || { echo "BF16 run failed:"; tail -20 "$B"; exit 1; }
+echo "--- result_json (bf16) ---"; grep -F 'result_json' "$B" || true
+echo "=== DONE — compare manual vs bf16 fwd_tflops_per_s ==="
