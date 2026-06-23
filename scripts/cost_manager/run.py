@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,12 @@ import yaml
 from scripts.cost_manager.backends import BACKENDS
 from scripts.cost_manager.cost_event import CostEvent, CostFetchError, DateWindow, stamp_collected
 from scripts.cost_manager.finelog_sink import open_sink
+from scripts.cost_manager.slack_alert import (
+    evaluate_alerts,
+    format_slack_message,
+    parse_alert_rules,
+    post_slack_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +53,53 @@ def _load_config(path: Path) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError(f"{path}: expected a yaml mapping at top level")
     return raw
+
+
+def _handle_alerts(
+    config: dict[str, Any], events: list[CostEvent], window: DateWindow, today: dt.date, *, dry_run: bool
+) -> None:
+    """Evaluate threshold rules and ping Slack on any breach (best-effort).
+
+    No-op when no ``alerts.rules`` are configured. A breach is always logged at
+    WARNING so it shows in CI even without a webhook; the Slack POST is skipped
+    on a dry run, when the webhook env var is unset, and a POST failure never
+    fails the run.
+    """
+    alerts_cfg = config.get("alerts") or {}
+    rules = parse_alert_rules(alerts_cfg.get("rules", []))
+    if not rules:
+        return
+
+    breaches = evaluate_alerts(events, rules, window=window, today=today)
+    if not breaches:
+        logger.info("Cost alerts: %d rule(s) checked, none exceeded", len(rules))
+        return
+    for breach in breaches:
+        logger.warning(
+            "Cost threshold exceeded [%s]: %s (%s) $%.2f > $%.2f",
+            breach.rule_name,
+            breach.scope,
+            breach.window_label,
+            breach.observed_usd,
+            breach.threshold_usd,
+        )
+
+    message = format_slack_message(breaches)
+    if dry_run:
+        print("\n-- slack alert (dry-run, not posted) --")
+        print(message)
+        return
+
+    webhook_env = alerts_cfg.get("webhook_url_env", "SLACK_WEBHOOK_URL")
+    webhook_url = os.environ.get(webhook_env)
+    if not webhook_url:
+        logger.warning("Cost threshold exceeded but %s is unset — not posting to Slack", webhook_env)
+        return
+    try:
+        post_slack_message(webhook_url, message)
+        logger.info("Posted cost alert to Slack (%d breach(es))", len(breaches))
+    except Exception:
+        logger.exception("Failed to post cost alert to Slack")
 
 
 def _run_backends(
@@ -122,6 +176,8 @@ def main(
         sink.write(events)
         sink.flush()
     logger.info("Wrote %d cost events (dry_run=%s)", len(events), dry_run)
+
+    _handle_alerts(config, events, window, today, dry_run=dry_run)
 
     if failed:
         raise SystemExit(f"providers failed: {', '.join(failed)}")

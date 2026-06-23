@@ -45,6 +45,34 @@ WHERE rn = 1
 ORDER BY usage_date DESC, provider, cost DESC;
 ```
 
+## Slack threshold alerts (optional)
+
+The `alerts` block in `config.yaml` defines spend ceilings. Each rule sums a
+cost slice — an optional `provider`/`category` filter — over a `window`
+(`latest_day`, the most recent complete UTC day, or `window_total`, the whole
+fetch window) and fires when that sum exceeds `max_usd`:
+
+```yaml
+alerts:
+  webhook_url_env: SLACK_WEBHOOK_URL   # env var holding the incoming-webhook URL
+  rules:
+    - name: total-daily          # no provider -> all providers combined
+      window: latest_day
+      max_usd: 500
+    - name: openai-daily
+      provider: openai
+      window: latest_day
+      max_usd: 200
+```
+
+Alerting is best-effort and fully optional: a breach is always logged at
+WARNING, but the Slack POST is skipped on `--dry-run` and when the webhook env
+var is unset, so local runs and environments without the secret stay silent. A
+POST failure is logged and never fails the run. The webhook (a standard Slack
+incoming webhook, same `{"text": …}` contract as the repo's `notify-slack`
+action) determines the channel — point `webhook_url_env` at a webhook bound to
+`#marin-eng`. Remove the `alerts` block (or its `rules`) to disable.
+
 ## Providers and required secrets
 
 Secrets are passed via the environment only — `config.yaml` holds the env-var
@@ -93,6 +121,8 @@ to the finelog VM (the same mechanism as the storage report), then writes to
   `GCP_PROJECT_ID`, `IRIS_CI_GCP_SSH_KEY`, `IRIS_CI_GCP_SSH_KEY_PUB`.
 - Provider keys (add these): `OPENAI_ADMIN_KEY`, `ANTHROPIC_ADMIN_KEY`,
   `COREWEAVE_API_TOKEN`.
+- Optional, for threshold alerts: `SLACK_WEBHOOK_URL` (already configured for
+  other ops jobs). Unset → threshold breaches are logged but not posted.
 
 [#6550]: https://github.com/marin-community/marin/issues/6550
 [#6464]: https://github.com/marin-community/marin/issues/6464
