@@ -44,6 +44,8 @@ no checkpoints.
 | MAY359 | `none` | disabled | 24.60 | 0.5762s | B16 control; increasing batch from 8 to 16 improves throughput substantially. |
 | MAY360 | `offload_moe_output` | disabled | 24.82 | 0.5711s | B16 output-offload comparison; still matches `none` within run noise. |
 | MAY361 | `save_moe` | disabled | 24.94 | 0.5682s | B16 save control; also matches `none`, slightly faster in this run. |
+| MAY363 | `offload_moe_output` | readable profile | 24.29 / 21.85 / 21.89 / 24.05 | 0.5836 / 0.6488 / 0.6474 / 0.5894s | B16 readable profile. Semantic split: MoE 39.5%, xent 14.1%, FA4 11.3%, comm 7.8%. |
+| MAY378 | `none` | readable profile | 24.31 / 21.76 / 21.78 / 23.41 | 0.5831 / 0.6514 / 0.6509 / 0.6054s | B16 readable no-remat control. Semantic split: MoE 36.9%, xent 13.6%, FA4 11.2%, comm 8.7%. |
 
 Interpretation:
 
@@ -54,6 +56,10 @@ Interpretation:
 - `save_moe` is at worst a small tax for this guarded DeepEP path. At B8 it
   measured slightly slower than `none`; at B16 it measured slightly faster, so
   the practical conclusion is that its effect is in run-noise range for EP8.
+- The readable-profile B16 controls confirm the same conclusion. `none`
+  (MAY378) and `offload_moe_output` (MAY363) have nearly identical steady-step
+  timing and phase composition. The no-remat profile shifts a few points from
+  MoE time into all-reduce/copy/apply noise, not into a large new compute phase.
 - Current best EP8 DeepEP remat setting for pure throughput is `--remat none`,
   with `--remat offload_moe_output` as the first memory-headroom knob to try
   because it matched `none` in both B8 and B16 throughput runs.
@@ -116,6 +122,22 @@ MAY361:
   global_batch=16
   steady_mfu=24.94
   steady_step_duration=0.5682s
+
+MAY363:
+  parent=/dlwh/iris-run-job-20260623-005829
+  wandb=https://wandb.ai/marin-community/marin_moe/runs/MAY363-DEEPEP-EP8-OFFLOAD-OUTPUT-PROFILE-L26-B16-N1-20260623-0058
+  remat=offload_moe_output
+  global_batch=16
+  profile=scratch/profiles/may363/profile_report.md
+  steady_mfu_rows=24.285, 21.846, 21.894, 24.049
+
+MAY378:
+  parent=/dlwh/iris-run-job-20260623-031805
+  wandb=https://wandb.ai/marin-community/marin_moe/runs/MAY378-DEEPEP-EP8-NOREMAT-PROFILE-L26-B16-N1-20260623-0318
+  remat=none
+  global_batch=16
+  profile=scratch/profiles/may378/profile_report.md
+  steady_mfu_rows=24.307, 21.759, 21.775, 23.413
 ```
 
 Interpretation: the output tensor is a narrow enough boundary that host offload
