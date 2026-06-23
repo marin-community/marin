@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import warnings
+from typing import cast
 
 import jax
 import jax.numpy as jnp
@@ -9,9 +10,9 @@ import numpy as np
 import pytest
 
 from levanter.kernels.pallas import autotune_cache_utils
+from levanter.kernels.pallas.fused_cross_entropy_loss import batched_xla
 from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
-from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_gpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import tuned_block_sizes
 from levanter.kernels.pallas.fused_cross_entropy_loss import xla as fused_xla
 from levanter.kernels.pallas.fused_cross_entropy_loss.reference import (
@@ -471,6 +472,21 @@ def test_fused_cross_entropy_pallas_requires_tpu():
         )
 
 
+def test_fused_cross_entropy_pallas_gpu_name_points_to_batched_xla():
+    x = jnp.zeros((2, 3), dtype=jnp.float32)
+    w = jnp.zeros((3, 5), dtype=jnp.float32)
+    y = jnp.zeros((2,), dtype=jnp.int32)
+
+    with pytest.raises(ValueError, match='implementation="pallas_gpu" was renamed to "batched_xla"'):
+        fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x,
+            y,
+            w,
+            reduction=None,
+            implementation=cast(fused_api.Implementation, "pallas_gpu"),
+        )
+
+
 def test_infer_block_sizes_adapts_to_supported_divisors():
     block_sizes = infer_block_sizes(
         b=512,
@@ -698,10 +714,10 @@ def test_fused_cross_entropy_default_grad_matches_reference():
     ("implementation", "required_backend", "block_sizes"),
     [
         ("pallas_tpu", "tpu", fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)),
-        ("pallas_gpu", "gpu", None),
+        ("batched_xla", "gpu", None),
     ],
 )
-def test_fused_cross_entropy_pallas_matches_reference(
+def test_fused_cross_entropy_named_implementation_matches_reference(
     implementation: str,
     required_backend: str,
     block_sizes: fused_api.BlockSizes | None,
@@ -731,7 +747,7 @@ def test_fused_cross_entropy_pallas_matches_reference(
     assert jnp.allclose(loss, loss_ref, atol=1e-5, rtol=1e-5)
 
 
-def test_fused_cross_entropy_pallas_gpu_matches_reference_non_multiple():
+def test_fused_cross_entropy_batched_xla_matches_reference_non_multiple():
     if jax.default_backend() != "gpu":
         pytest.skip("requires GPU backend")
 
@@ -748,7 +764,7 @@ def test_fused_cross_entropy_pallas_gpu_matches_reference_non_multiple():
         y,
         w,
         reduction=None,
-        implementation="pallas_gpu",
+        implementation="batched_xla",
         block_sizes=block_sizes,
     )
 
@@ -761,7 +777,7 @@ def test_fused_cross_entropy_pallas_gpu_matches_reference_non_multiple():
     assert jnp.allclose(loss, loss_ref, atol=1e-5, rtol=1e-5)
 
 
-def test_fused_cross_entropy_pallas_gpu_return_argmax_matches_reference():
+def test_fused_cross_entropy_batched_xla_return_argmax_matches_reference():
     if jax.default_backend() != "gpu":
         pytest.skip("requires GPU backend")
 
@@ -780,7 +796,7 @@ def test_fused_cross_entropy_pallas_gpu_return_argmax_matches_reference():
         reduction=None,
         logsumexp_weight=0.0,
         logit_soft_cap=1.1,
-        implementation="pallas_gpu",
+        implementation="batched_xla",
         block_sizes=block_sizes,
         return_argmax=True,
     )
@@ -804,7 +820,7 @@ def test_fused_cross_entropy_pallas_gpu_return_argmax_matches_reference():
     assert jnp.array_equal(argmax, argmax_ref)
 
 
-def test_fused_cross_entropy_pallas_gpu_requires_gpu():
+def test_fused_cross_entropy_batched_xla_requires_gpu():
     if jax.default_backend() == "gpu":
         pytest.skip("requires non-GPU backend")
 
@@ -812,19 +828,19 @@ def test_fused_cross_entropy_pallas_gpu_requires_gpu():
     w = jnp.zeros((128, 128), dtype=jnp.float32)
     y = jnp.zeros((128,), dtype=jnp.int32)
 
-    with pytest.raises(pallas_gpu.PallasUnsupportedError):
+    with pytest.raises(batched_xla.BatchedXlaUnsupportedError):
         fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
             x,
             y,
             w,
             reduction=None,
-            implementation="pallas_gpu",
+            implementation="batched_xla",
         )
 
 
-def test_pallas_gpu_full_vocab_b_tiled_forward_matches_reference():
+def test_batched_xla_full_vocab_b_tiled_forward_matches_reference():
     if jax.default_backend() == "tpu":
-        pytest.skip("pallas_gpu full-vocab B-tiled helper is covered by CPU/GPU precision paths")
+        pytest.skip("batched_xla full-vocab B-tiled helper is covered by CPU/GPU precision paths")
 
     key = jax.random.PRNGKey(41)
     key_x, key_w, key_y = jax.random.split(key, 3)
@@ -839,7 +855,7 @@ def test_pallas_gpu_full_vocab_b_tiled_forward_matches_reference():
         dtype=jnp.float32,
         logit_soft_cap=1.7,
     )
-    actual_loss, actual_lse = pallas_gpu._linear_softmax_cross_entropy_loss_full_vocab_b_tiled(
+    actual_loss, actual_lse = batched_xla._linear_softmax_cross_entropy_loss_full_vocab_b_tiled(
         x,
         y,
         w,
@@ -853,9 +869,9 @@ def test_pallas_gpu_full_vocab_b_tiled_forward_matches_reference():
     np.testing.assert_allclose(actual_lse, expected_lse, rtol=1e-5, atol=1e-5)
 
 
-def test_pallas_gpu_backward_b_tiled_from_lse_matches_reference_gradients():
+def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
     if jax.default_backend() == "tpu":
-        pytest.skip("pallas_gpu custom backward helper is covered by CPU/GPU precision paths")
+        pytest.skip("batched_xla custom backward helper is covered by CPU/GPU precision paths")
 
     key = jax.random.PRNGKey(43)
     key_x, key_w, key_y, key_loss, key_lse = jax.random.split(key, 5)
@@ -878,7 +894,7 @@ def test_pallas_gpu_backward_b_tiled_from_lse_matches_reference_gradients():
         return jnp.sum(loss * g_loss + logsumexp * g_lse)
 
     expected_x, expected_w = jax.grad(reference_cotangent_loss, argnums=(0, 1))(x, w)
-    actual_x, actual_w = pallas_gpu._backward_b_tiled_from_lse(
+    actual_x, actual_w = batched_xla._backward_b_tiled_from_lse(
         x,
         y,
         w,
@@ -894,33 +910,33 @@ def test_pallas_gpu_backward_b_tiled_from_lse_matches_reference_gradients():
     np.testing.assert_allclose(actual_w, expected_w, rtol=1e-5, atol=1e-5)
 
 
-def test_pallas_gpu_h100_full_vocab_policy_selects_b_tiled_path(monkeypatch: pytest.MonkeyPatch):
+def test_batched_xla_h100_full_vocab_policy_selects_b_tiled_path(monkeypatch: pytest.MonkeyPatch):
     x = jax.ShapeDtypeStruct((8192, 16), jnp.bfloat16)
     w = jax.ShapeDtypeStruct((16, 65536), jnp.bfloat16)
 
-    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
-    assert pallas_gpu._h100_full_vocab_b_tiled_block_size(x, w) == 8192
-    assert pallas_gpu._h100_full_vocab_b_tiled_block_size(x, w, return_argmax=True) is None
+    monkeypatch.setattr(batched_xla, "_device_kind", lambda: "nvidia h100")
+    assert batched_xla._h100_full_vocab_b_tiled_block_size(x, w) == 8192
+    assert batched_xla._h100_full_vocab_b_tiled_block_size(x, w, return_argmax=True) is None
     assert (
-        pallas_gpu._h100_full_vocab_b_tiled_block_size(
+        batched_xla._h100_full_vocab_b_tiled_block_size(
             jax.ShapeDtypeStruct((8191, 16), jnp.bfloat16),
             w,
         )
         is None
     )
     assert (
-        pallas_gpu._h100_full_vocab_b_tiled_block_size(
+        batched_xla._h100_full_vocab_b_tiled_block_size(
             x,
             jax.ShapeDtypeStruct((16, 65535), jnp.bfloat16),
         )
         is None
     )
 
-    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia gb10")
-    assert pallas_gpu._h100_full_vocab_b_tiled_block_size(x, w) is None
+    monkeypatch.setattr(batched_xla, "_device_kind", lambda: "nvidia gb10")
+    assert batched_xla._h100_full_vocab_b_tiled_block_size(x, w) is None
 
 
-def test_fused_cross_entropy_pallas_gpu_custom_backward_grad_matches_xla():
+def test_fused_cross_entropy_batched_xla_custom_backward_grad_matches_xla():
     if jax.default_backend() != "gpu":
         pytest.skip("requires GPU backend")
     device_kind = jax.devices()[0].device_kind.lower()
@@ -934,10 +950,10 @@ def test_fused_cross_entropy_pallas_gpu_custom_backward_grad_matches_xla():
     w = jax.random.normal(key_w, (hidden, vocab), dtype=jnp.bfloat16)
     y = jax.random.randint(key_y, (batch,), 0, vocab, dtype=jnp.int32)
 
-    # Match the v-block used by GB10 pallas_gpu forward fallback for B>=1024, V>=65536.
+    # Match the v-block used by GB10 batched_xla forward fallback for B>=1024, V>=65536.
     xla_block_sizes = fused_api.BlockSizes(v_block_size=2048)
 
-    def loss_pallas(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
+    def loss_batched_xla(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
         return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
             x_raw,
             y,
@@ -945,7 +961,7 @@ def test_fused_cross_entropy_pallas_gpu_custom_backward_grad_matches_xla():
             reduction="mean",
             logsumexp_weight=0.2,
             dtype=jnp.float32,
-            implementation="pallas_gpu",
+            implementation="batched_xla",
         )
 
     def loss_xla(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
@@ -960,22 +976,22 @@ def test_fused_cross_entropy_pallas_gpu_custom_backward_grad_matches_xla():
             implementation="xla",
         )
 
-    gx_pallas, gw_pallas = jax.grad(loss_pallas, argnums=(0, 1))(x, w)
+    gx_batched_xla, gw_batched_xla = jax.grad(loss_batched_xla, argnums=(0, 1))(x, w)
     gx_xla, gw_xla = jax.grad(loss_xla, argnums=(0, 1))(x, w)
 
-    gx_max_abs = jnp.max(jnp.abs(gx_pallas.astype(jnp.float32) - gx_xla.astype(jnp.float32)))
-    gw_max_abs = jnp.max(jnp.abs(gw_pallas.astype(jnp.float32) - gw_xla.astype(jnp.float32)))
+    gx_max_abs = jnp.max(jnp.abs(gx_batched_xla.astype(jnp.float32) - gx_xla.astype(jnp.float32)))
+    gw_max_abs = jnp.max(jnp.abs(gw_batched_xla.astype(jnp.float32) - gw_xla.astype(jnp.float32)))
     assert gx_max_abs <= 5e-3
     assert gw_max_abs <= 5e-3
 
 
-def test_fused_cross_entropy_pallas_gpu_grad_tracing_non_gb10_path(
+def test_fused_cross_entropy_batched_xla_grad_tracing_non_gb10_path(
     monkeypatch: pytest.MonkeyPatch,
 ):
     if jax.default_backend() != "gpu":
         pytest.skip("requires GPU backend")
 
-    monkeypatch.setattr(pallas_gpu, "_device_kind", lambda: "nvidia h100")
+    monkeypatch.setattr(batched_xla, "_device_kind", lambda: "nvidia h100")
 
     batch, hidden, vocab = 13, 19, 37
     key = jax.random.PRNGKey(31)
@@ -986,7 +1002,7 @@ def test_fused_cross_entropy_pallas_gpu_grad_tracing_non_gb10_path(
     block_sizes = fused_api.BlockSizes(b_block_size=128, h_block_size=16, v_block_size=16)
 
     def loss_fn(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
-        loss, _ = pallas_gpu.linear_softmax_cross_entropy_loss_pallas_gpu(
+        loss, _ = batched_xla.linear_softmax_cross_entropy_loss_batched_xla(
             x_raw,
             y,
             w_raw,

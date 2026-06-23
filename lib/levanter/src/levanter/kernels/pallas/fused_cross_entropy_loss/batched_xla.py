@@ -97,7 +97,7 @@ def _gb10_xla_fallback_block_sizes(
     return None
 
 
-class PallasUnsupportedError(NotImplementedError):
+class BatchedXlaUnsupportedError(NotImplementedError):
     """Raised when the GPU fused cross-entropy backend cannot be used."""
 
 
@@ -119,21 +119,21 @@ def _validate_inputs(
     _validate_input_contract(x, labels, w)
 
     if block_sizes.b_block_size <= 0:
-        raise PallasUnsupportedError(f"b_block_size must be positive, got {block_sizes.b_block_size}.")
+        raise BatchedXlaUnsupportedError(f"b_block_size must be positive, got {block_sizes.b_block_size}.")
     if block_sizes.h_block_size <= 0:
-        raise PallasUnsupportedError(f"h_block_size must be positive, got {block_sizes.h_block_size}.")
+        raise BatchedXlaUnsupportedError(f"h_block_size must be positive, got {block_sizes.h_block_size}.")
     if block_sizes.v_block_size <= 0:
-        raise PallasUnsupportedError(f"v_block_size must be positive, got {block_sizes.v_block_size}.")
+        raise BatchedXlaUnsupportedError(f"v_block_size must be positive, got {block_sizes.v_block_size}.")
     if block_sizes.b_block_size < _GPU_MIN_B_BLOCK_SIZE:
-        raise PallasUnsupportedError(f"b_block_size must be at least {_GPU_MIN_B_BLOCK_SIZE} on GPU.")
+        raise BatchedXlaUnsupportedError(f"b_block_size must be at least {_GPU_MIN_B_BLOCK_SIZE} on GPU.")
     if block_sizes.h_block_size < 16:
-        raise PallasUnsupportedError("h_block_size must be at least 16 on GPU.")
+        raise BatchedXlaUnsupportedError("h_block_size must be at least 16 on GPU.")
     if block_sizes.v_block_size < 16:
-        raise PallasUnsupportedError("v_block_size must be at least 16 on GPU.")
+        raise BatchedXlaUnsupportedError("v_block_size must be at least 16 on GPU.")
     if block_sizes.b_block_size % 16 != 0:
-        raise PallasUnsupportedError("b_block_size must be a multiple of 16 on GPU.")
+        raise BatchedXlaUnsupportedError("b_block_size must be a multiple of 16 on GPU.")
     if block_sizes.h_block_size % 16 != 0:
-        raise PallasUnsupportedError("h_block_size must be a multiple of 16 on GPU.")
+        raise BatchedXlaUnsupportedError("h_block_size must be a multiple of 16 on GPU.")
 
 
 def _validate_input_contract(
@@ -142,26 +142,26 @@ def _validate_input_contract(
     w: Float[Array, "H V"],
 ) -> None:
     if jax.default_backend() != "gpu":
-        raise PallasUnsupportedError("Pallas fused cross-entropy requires GPU backend.")
+        raise BatchedXlaUnsupportedError("Batched XLA fused cross-entropy requires GPU backend.")
 
     if x.ndim != 2:
-        raise PallasUnsupportedError(f"x must be rank-2 [B, H], got shape {x.shape}.")
+        raise BatchedXlaUnsupportedError(f"x must be rank-2 [B, H], got shape {x.shape}.")
     if labels.ndim != 1:
-        raise PallasUnsupportedError(f"labels must be rank-1 [B], got shape {labels.shape}.")
+        raise BatchedXlaUnsupportedError(f"labels must be rank-1 [B], got shape {labels.shape}.")
     if w.ndim != 2:
-        raise PallasUnsupportedError(f"w must be rank-2 [H, V], got shape {w.shape}.")
+        raise BatchedXlaUnsupportedError(f"w must be rank-2 [H, V], got shape {w.shape}.")
     if x.shape[0] != labels.shape[0]:
-        raise PallasUnsupportedError(f"Batch mismatch: x has B={x.shape[0]}, labels has B={labels.shape[0]}.")
+        raise BatchedXlaUnsupportedError(f"Batch mismatch: x has B={x.shape[0]}, labels has B={labels.shape[0]}.")
     if x.shape[1] != w.shape[0]:
-        raise PallasUnsupportedError(f"Hidden mismatch: x has H={x.shape[1]}, w has H={w.shape[0]}.")
+        raise BatchedXlaUnsupportedError(f"Hidden mismatch: x has H={x.shape[1]}, w has H={w.shape[0]}.")
 
     if not jnp.issubdtype(labels.dtype, jnp.integer):
-        raise PallasUnsupportedError(f"labels must be integer dtype, got {labels.dtype}.")
+        raise BatchedXlaUnsupportedError(f"labels must be integer dtype, got {labels.dtype}.")
 
 
 def _zero_pad(x: jax.Array, *, axis: int, multiple: int, pad_value: float | int) -> jax.Array:
     if multiple <= 0:
-        raise PallasUnsupportedError(f"Padding multiple must be positive, got {multiple}.")
+        raise BatchedXlaUnsupportedError(f"Padding multiple must be positive, got {multiple}.")
     dim = x.shape[axis]
     pad = (-dim) % multiple
     if pad == 0:
@@ -180,11 +180,11 @@ def _validate_launch_feasibility(
     num_h_blocks: int,
 ) -> None:
     if not _is_power_of_two(h_block_size):
-        raise PallasUnsupportedError(
+        raise BatchedXlaUnsupportedError(
             "h_block_size must be a power of 2 for current GPU Triton lowering; " f"got h_block_size={h_block_size}."
         )
     if not _is_power_of_two(v_block_size):
-        raise PallasUnsupportedError(
+        raise BatchedXlaUnsupportedError(
             "v_block_size must be a power of 2 for current GPU Triton lowering; " f"got v_block_size={v_block_size}."
         )
 
@@ -193,7 +193,7 @@ def _validate_launch_feasibility(
     if max_weight_tile_bytes is not None:
         requested = h_block_size * v_block_size * jnp.dtype(w_dtype).itemsize
         if requested > max_weight_tile_bytes:
-            raise PallasUnsupportedError(
+            raise BatchedXlaUnsupportedError(
                 "Requested weight tile exceeds GPU shared-memory budget for this device: "
                 f"requested={requested} bytes, limit={max_weight_tile_bytes} bytes, "
                 f"h_block_size={h_block_size}, v_block_size={v_block_size}."
@@ -201,7 +201,7 @@ def _validate_launch_feasibility(
 
     max_h_tiles = _max_h_tiles_for_device(device_kind)
     if max_h_tiles is not None and num_h_blocks > max_h_tiles:
-        raise PallasUnsupportedError(
+        raise BatchedXlaUnsupportedError(
             "Kernel launch would require too many hidden-dimension dot tiles for this GPU and is likely to trigger "
             "pathological compile time. "
             f"num_h_blocks={num_h_blocks}, limit={max_h_tiles}, h_block_size={h_block_size}."
@@ -223,7 +223,7 @@ def _validate_launch_feasibility(
         "return_argmax",
     ],
 )
-def _linear_softmax_cross_entropy_loss_pallas_gpu_fa_style_streaming(
+def _linear_softmax_cross_entropy_loss_batched_xla_fa_style_streaming(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
@@ -399,7 +399,7 @@ def _h100_full_vocab_b_tiled_block_size(
         "return_argmax",
     ],
 )
-def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
+def _linear_softmax_cross_entropy_loss_batched_xla_impl(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
@@ -410,7 +410,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
     return_argmax: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
-    """GPU Pallas implementation returning per-example loss and logsumexp."""
+    """Batched XLA implementation returning per-example loss and logsumexp."""
     device_kind = _device_kind()
     is_gb10_bf16 = "gb10" in device_kind and x.dtype == jnp.bfloat16 and w.dtype == jnp.bfloat16
 
@@ -487,9 +487,9 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
 
     out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
 
-    # JAX 0.10 Mosaic GPU does not lower the tiled pallas_call dot_general path.
-    # Keep forward on the FA-style streaming path until Mosaic GPU supports this lowering.
-    fa_out = _linear_softmax_cross_entropy_loss_pallas_gpu_fa_style_streaming(
+    # Keep forward on the FA-style streaming path until Mosaic GPU lowers the
+    # tiled dot_general form this path originally targeted.
+    fa_out = _linear_softmax_cross_entropy_loss_batched_xla_fa_style_streaming(
         x_pad,
         labels_pad,
         w_pad,
@@ -714,7 +714,7 @@ def _backward_streaming_from_lse(
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(3, 4, 5, 6))
-def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
+def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
@@ -723,7 +723,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
-    return _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
+    return _linear_softmax_cross_entropy_loss_batched_xla_impl(
         x,
         labels,
         w,
@@ -734,7 +734,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
     )
 
 
-def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_fwd(
+def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward_fwd(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
@@ -743,7 +743,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_fwd(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
 ):
-    loss, lse = _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
+    loss, lse = _linear_softmax_cross_entropy_loss_batched_xla_impl(
         x,
         labels,
         w,
@@ -767,7 +767,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_fwd(
     return (loss, lse), residual
 
 
-def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_bwd(
+def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward_bwd(
     block_sizes: BlockSizes | None,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
@@ -805,9 +805,9 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_bwd(
     return grad_x, None, grad_w
 
 
-_linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward.defvjp(
-    _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_fwd,
-    _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_bwd,
+_linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward.defvjp(
+    _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward_fwd,
+    _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward_bwd,
 )
 
 
@@ -821,7 +821,7 @@ _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward.defvjp(
         "return_argmax",
     ],
 )
-def _linear_softmax_cross_entropy_loss_pallas_gpu_dispatch(
+def _linear_softmax_cross_entropy_loss_batched_xla_dispatch(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
@@ -833,7 +833,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_dispatch(
     return_argmax: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     if return_argmax:
-        return _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
+        return _linear_softmax_cross_entropy_loss_batched_xla_impl(
             x,
             labels,
             w,
@@ -843,7 +843,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_dispatch(
             precision=precision,
             return_argmax=True,
         )
-    return _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
+    return _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward(
         x,
         labels,
         w,
@@ -854,7 +854,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_dispatch(
     )
 
 
-def linear_softmax_cross_entropy_loss_pallas_gpu(
+def linear_softmax_cross_entropy_loss_batched_xla(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
@@ -879,7 +879,7 @@ def linear_softmax_cross_entropy_loss_pallas_gpu(
             return_argmax=return_argmax,
         )
 
-    return _linear_softmax_cross_entropy_loss_pallas_gpu_dispatch(
+    return _linear_softmax_cross_entropy_loss_batched_xla_dispatch(
         x,
         labels,
         w,
@@ -891,4 +891,4 @@ def linear_softmax_cross_entropy_loss_pallas_gpu(
     )
 
 
-__all__ = ["linear_softmax_cross_entropy_loss_pallas_gpu", "PallasUnsupportedError"]
+__all__ = ["linear_softmax_cross_entropy_loss_batched_xla", "BatchedXlaUnsupportedError"]
