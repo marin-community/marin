@@ -59,6 +59,19 @@ def _floats(env: str, default: str) -> tuple[float, ...]:
 LR_MULTIPLIERS: tuple[float, ...] = _floats("LR_MULTS", "0.5,1.0,2.0,4.0")
 CLAMPS: tuple[float, ...] = _floats("CLAMPS", "1e-15,1e-8")
 
+# Variant ablations (comma-separated). Each maps to optimizer flags:
+#   full       — U = H^{-1/2} polar(H^{-1/2} M)            (the base idea 4)
+#   inner_only — U = polar(H^{-1/2} M)                     (v1: drop the outer H^{-1/2})
+#   real_inv   — damped real inverse instead of truncated  (v2)
+#   fro_norm   — rescale U to Muon's Frobenius norm        (v3)
+VARIANT_FLAGS = {
+    "full": dict(outer_precond=True, real_inverse=False, normalize_fro=False),
+    "inner_only": dict(outer_precond=False, real_inverse=False, normalize_fro=False),
+    "real_inv": dict(outer_precond=True, real_inverse=True, normalize_fro=False),
+    "fro_norm": dict(outer_precond=True, real_inverse=False, normalize_fro=True),
+}
+VARIANTS: tuple[str, ...] = tuple(v.strip() for v in os.environ.get("VARIANTS", "full").split(","))
+
 
 @dataclass(frozen=True)
 class SizeSpec:
@@ -124,13 +137,14 @@ def _override_tracker(step: ExecutorStep) -> ExecutorStep:
 RUN_TAG: str = os.environ.get("RUN_TAG", "")
 
 
-def _build_step(multiplier: float, clamp_rel: float) -> ExecutorStep:
+def _build_step(multiplier: float, clamp_rel: float, variant: str) -> ExecutorStep:
     matrix_lr = SIZE.muon_lr * multiplier
     adam_lr = SIZE.adam_lr * multiplier
     optimizer = LeftPrecondMuonConfig(
         h_beta=0.95,
         clamp_rel=clamp_rel,
         ns_steps=5,
+        **VARIANT_FLAGS[variant],
         lr=matrix_lr,
         learning_rate=matrix_lr,
         adam_lr=adam_lr,
@@ -158,13 +172,14 @@ def _build_step(multiplier: float, clamp_rel: float) -> ExecutorStep:
         optimizer_config=optimizer,
     )
     tag = f"_{RUN_TAG}" if RUN_TAG else ""
-    run_id = f"qwen3_{SIZE.label}_leftprec{tag}_{_clamp_label(clamp_rel)}_{SEQ_LEN}_{_lr_label(multiplier)}"
+    vlabel = "" if variant == "full" else f"_{variant}"
+    run_id = f"qwen3_{SIZE.label}_leftprec{vlabel}{tag}_{_clamp_label(clamp_rel)}_{SEQ_LEN}_{_lr_label(multiplier)}"
     step = default_train(
         name=run_id,
         tokenized=fineweb_edu_subcache_10B,
         model_config=_to_qwen3_from_llama(SIZE.llama_cfg),
         train_config=train,
-        tags=["speedrun", "left_precond_muon", _clamp_label(clamp_rel), f"qwen3_{SIZE.label}"],
+        tags=["speedrun", "left_precond_muon", variant, _clamp_label(clamp_rel), f"qwen3_{SIZE.label}"],
         use_default_validation=True,
         eval_harness_tasks=(),
         wandb_name=run_id,
@@ -177,9 +192,17 @@ def main() -> None:
     if os.getenv("CI") is not None:
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
-    steps = [_build_step(m, c) for m in LR_MULTIPLIERS for c in CLAMPS]
-    logger.info("Left-precond Muon 130m sweep: %d runs (lr=%s clamps=%s)", len(steps), LR_MULTIPLIERS, CLAMPS)
-    executor_main(steps=steps, description="Qwen3-130m left-preconditioned Muon sweep (Ali idea 4): LR x clamp.")
+    steps = [_build_step(m, c, v) for v in VARIANTS for m in LR_MULTIPLIERS for c in CLAMPS]
+    logger.info(
+        "Left-precond Muon 130m sweep: %d runs (variants=%s lr=%s clamps=%s)",
+        len(steps),
+        VARIANTS,
+        LR_MULTIPLIERS,
+        CLAMPS,
+    )
+    executor_main(
+        steps=steps, description="Qwen3-130m left-preconditioned Muon sweep (Ali idea 4): variant x LR x clamp."
+    )
 
 
 if __name__ == "__main__":

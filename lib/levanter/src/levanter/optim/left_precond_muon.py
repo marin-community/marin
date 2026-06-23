@@ -58,6 +58,11 @@ class LeftPrecondMuonConfig(OptimizerConfig):
     # aggressively drop real low-curvature directions (which hurts) — keep this tiny.
     ns_steps: int = 5  # Newton-Schulz steps for the polar factor
 
+    # --- variants (ablations) ---
+    outer_precond: bool = True  # True: U = H^{-1/2} polar(H^{-1/2} M); False (v1): U = polar(H^{-1/2} M)
+    real_inverse: bool = False  # False: truncated pseudo-inverse; True (v2): damped real inverse (no truncation)
+    normalize_fro: bool = False  # True (v3): rescale U to Muon's Frobenius norm √(min(d_out,d_in))
+
     # --- Muon-shared knobs ---
     lr: float = 0.02
     adam_lr: float = 6e-4
@@ -87,6 +92,9 @@ class LeftPrecondMuonConfig(OptimizerConfig):
                         self.ns_steps,
                         self.matrix_epsilon,
                         self.use_kimi_scaling,
+                        self.outer_precond,
+                        self.real_inverse,
+                        self.normalize_fro,
                     )
                 ]
                 if self.weight_decay > 0:
@@ -137,11 +145,11 @@ class ScaleByLeftPrecondMuonState(NamedTuple):
     h_ema: optax.Updates  # per-matrix gradient second moment EMA, [..., d_out, d_out] (raw arrays)
 
 
-def _trunc_inv_sqrt(h, clamp_rel, eps):
-    """H^{-1/2} via truncated pseudo-inverse: zero eigenvalues below clamp_rel·λ_max (fb#265).
+def _inv_sqrt(h, clamp_rel, eps, real_inverse):
+    """H^{-1/2}. Eigenvalues normalized by the mean (scale-free; H ∝ I ⟹ H^{-1/2} = I).
 
-    Eigenvalues are normalized by the mean kept eigenvalue first, so the result is scale-free
-    (H ∝ I ⟹ H^{-1/2} = I) and the update stays Muon-scaled.
+    real_inverse=False: truncated pseudo-inverse — zero eigenvalues below clamp_rel·λ_max (fb#265).
+    real_inverse=True : damped real inverse — invert ALL eigenvalues (no truncation), eps-damped.
     """
     h = h.astype(jnp.float32)
     h = 0.5 * (h + h.T)
@@ -151,18 +159,30 @@ def _trunc_inv_sqrt(h, clamp_rel, eps):
     keep = w > clamp_rel * wmax + eps
     mean_kept = jnp.sum(jnp.where(keep, w, 0.0)) / jnp.maximum(jnp.sum(keep), 1.0)
     wn = w / (mean_kept + eps)
-    inv = jnp.where(keep, 1.0 / jnp.sqrt(wn + eps), 0.0)
+    if real_inverse:
+        inv = 1.0 / jnp.sqrt(wn + eps)  # invert all (no truncation)
+    else:
+        inv = jnp.where(keep, 1.0 / jnp.sqrt(wn + eps), 0.0)
     return (u * inv[None, :]) @ u.T
 
 
-def _left_precond_matrix(m, h, *, clamp_rel, ns_steps, eps, use_kimi_scaling):
-    """U = H^{-1/2} polar(H^{-1/2} M) for one weight M (d_out × d_in), H (d_out × d_out)."""
+def _left_precond_matrix(
+    m, h, *, clamp_rel, ns_steps, eps, use_kimi_scaling, outer_precond, real_inverse, normalize_fro
+):
+    """U for one weight M (d_out × d_in), H (d_out × d_out).
+
+    Full (idea 4): U = H^{-1/2} polar(H^{-1/2} M). outer_precond=False drops the outer factor.
+    """
     orig_dtype = m.dtype
     x = m.astype(jnp.float32)
-    hih = _trunc_inv_sqrt(h, clamp_rel, eps)  # (out, out)
+    hih = _inv_sqrt(h, clamp_rel, eps, real_inverse)  # (out, out)
     whitened = hih @ x  # H^{-1/2} M
     ortho = zeropower_via_newtonschulz5(whitened, steps=ns_steps, eps=eps, coefficient_type="quintic")
-    u = hih @ ortho  # H^{-1/2} polar(·)
+    u = (hih @ ortho) if outer_precond else ortho
+
+    if normalize_fro:
+        k = min(u.shape[0], u.shape[1])
+        u = u * (jnp.sqrt(jnp.float32(k)) / (jnp.linalg.norm(u) + eps))
 
     if not use_kimi_scaling:
         scale = jnp.sqrt(jnp.maximum(1.0, u.shape[0] / u.shape[1]))  # sqrt(Out/In)
@@ -172,7 +192,16 @@ def _left_precond_matrix(m, h, *, clamp_rel, ns_steps, eps, use_kimi_scaling):
 
 
 def scale_with_left_precond_muon(
-    momentum=0.95, nesterov=True, h_beta=0.95, clamp_rel=1e-6, ns_steps=5, eps=1e-7, use_kimi_scaling=False
+    momentum=0.95,
+    nesterov=True,
+    h_beta=0.95,
+    clamp_rel=1e-15,
+    ns_steps=5,
+    eps=1e-7,
+    use_kimi_scaling=False,
+    outer_precond=True,
+    real_inverse=False,
+    normalize_fro=False,
 ):
     momentum = float(momentum)
     h_beta = float(h_beta)
@@ -238,6 +267,9 @@ def scale_with_left_precond_muon(
                 ns_steps=ns_steps,
                 eps=eps,
                 use_kimi_scaling=use_kimi_scaling,
+                outer_precond=outer_precond,
+                real_inverse=real_inverse,
+                normalize_fro=normalize_fro,
             )
             new_arr = jax.vmap(fn)(arr, h) if arr.ndim == 3 else fn(arr, h)
             return dataclasses.replace(layer, weight=dataclasses.replace(w, array=new_arr))  # type: ignore
