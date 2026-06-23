@@ -10,15 +10,21 @@
 // on every Cloud Run restart (see README "Known limitations"). The canary now
 // owns this history durably in finelog, so the dashboard just queries it.
 
-import { decodeLabels, microsToMillis, queryFinelog, sqlTimestampUtc } from "./finelogQuery.js";
+import {
+  asCanaryRows,
+  CANARY_METRICS_NAMESPACE,
+  type CanaryMetricRow,
+  decodeLabels,
+  FLEET_SCOPE,
+  queryFinelog,
+  sqlTimestampUtc,
+} from "./finelogQuery.js";
 
-const METRICS_NAMESPACE = "infra.canary.metrics";
 const HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const METRIC_WORKER_HEALTHY = "worker_healthy";
 const METRIC_PROVISION_READY = "provision_ready";
 const METRIC_PROVISION_OUTCOMES = "provision_outcomes";
-const FLEET_SCOPE = "fleet";
 
 // Per-region healthy worker count at one sample time. Flat map keyed by region
 // so the frontend feeds recharts directly (each region → a <Line dataKey>).
@@ -51,28 +57,13 @@ export interface ProvisioningHistoryResponse {
   error?: string;
 }
 
-interface MetricRow {
-  metric: string;
-  value: number;
-  labels: string;
-  collected_us: number;
-}
-
-function asRows(rows: Record<string, unknown>[]): MetricRow[] {
-  return rows.map((r) => ({
-    metric: String(r.metric),
-    value: Number(r.value),
-    labels: String(r.labels ?? "{}"),
-    collected_us: Number(r.collected_us),
-  }));
-}
-
 // SQL is Apache DataFusion (finelog's read engine), NOT DuckDB: no JSON
 // functions (labels are decoded in JS), and collected_at is read out as epoch
-// micros via arrow_cast(...,'Int64') so Arrow hands back a plain integer.
+// micros via arrow_cast(...,'Int64') AS collected_us, which asCanaryRows
+// normalizes to millis.
 const workersSql = (cutoff: string) => `
-  SELECT labels, value, arrow_cast(collected_at, 'Int64') AS collected_us
-  FROM "${METRICS_NAMESPACE}"
+  SELECT metric, labels, value, arrow_cast(collected_at, 'Int64') AS collected_us
+  FROM "${CANARY_METRICS_NAMESPACE}"
   WHERE metric = '${METRIC_WORKER_HEALTHY}'
     AND collected_at >= TIMESTAMP '${cutoff}'
   ORDER BY collected_at
@@ -84,7 +75,7 @@ const workersSql = (cutoff: string) => `
 // pre-baked fleet-only provision_success_ratio.
 const provisioningSql = (cutoff: string) => `
   SELECT metric, value, labels, arrow_cast(collected_at, 'Int64') AS collected_us
-  FROM "${METRICS_NAMESPACE}"
+  FROM "${CANARY_METRICS_NAMESPACE}"
   WHERE metric IN ('${METRIC_PROVISION_READY}', '${METRIC_PROVISION_OUTCOMES}')
     AND collected_at >= TIMESTAMP '${cutoff}'
   ORDER BY collected_at
@@ -93,12 +84,12 @@ const provisioningSql = (cutoff: string) => `
 // Group the per-region worker_healthy rows by cycle timestamp. The fleet-total
 // rows (scope=fleet) are dropped — the chart plots per-region lines, matching
 // what the in-process buffer used to feed it.
-function parseWorkerSamples(rows: MetricRow[]): WorkerSample[] {
+function parseWorkerSamples(rows: CanaryMetricRow[]): WorkerSample[] {
   const byTime = new Map<number, Record<string, number>>();
   for (const row of rows) {
     const region = decodeLabels(row.labels).region;
     if (!region) continue;
-    const t = microsToMillis(row.collected_us);
+    const t = row.collectedMs;
     const regions = byTime.get(t) ?? {};
     regions[region] = row.value;
     byTime.set(t, regions);
@@ -126,13 +117,13 @@ function ratio({ ready, outcomes }: Counts): number | null {
 // preemptions (it counts resolved create attempts), so ready / outcomes is the
 // create-success ratio. The fleet rows (scope=fleet) carry the cluster total;
 // per-pool rows are summed across pools sharing a region.
-function parseProvisioningSamples(rows: MetricRow[]): ProvisioningHistorySample[] {
+function parseProvisioningSamples(rows: CanaryMetricRow[]): ProvisioningHistorySample[] {
   const fleetByTime = new Map<number, Counts>();
   const regionByTime = new Map<number, Map<string, Counts>>();
 
   for (const row of rows) {
     const labels = decodeLabels(row.labels);
-    const t = microsToMillis(row.collected_us);
+    const t = row.collectedMs;
     if (labels.scope === FLEET_SCOPE) {
       const counts = fleetByTime.get(t) ?? { ready: 0, outcomes: 0 };
       addCount(counts, row.metric, row.value);
@@ -164,24 +155,33 @@ function addCount(counts: Counts, metric: string, value: number): void {
   else if (metric === METRIC_PROVISION_OUTCOMES) counts.outcomes += value;
 }
 
-export async function workersHistory(): Promise<WorkersHistoryResponse> {
+interface HistoryResponse<T> {
+  samples: T[];
+  windowMs: number;
+  fetchedAt: string;
+  error?: string;
+}
+
+// Run a trailing-24h canary query and parse it into chart samples, with the
+// shared fetchedAt/cutoff/empty-on-error scaffold both history endpoints want.
+async function historyResponse<T>(
+  buildSql: (cutoff: string) => string,
+  parse: (rows: CanaryMetricRow[]) => T[],
+): Promise<HistoryResponse<T>> {
   const fetchedAt = new Date().toISOString();
   const cutoff = sqlTimestampUtc(new Date(Date.now() - HISTORY_WINDOW_MS));
   try {
-    const rows = await queryFinelog(workersSql(cutoff));
-    return { samples: parseWorkerSamples(asRows(rows)), windowMs: HISTORY_WINDOW_MS, fetchedAt };
+    const rows = await queryFinelog(buildSql(cutoff));
+    return { samples: parse(asCanaryRows(rows)), windowMs: HISTORY_WINDOW_MS, fetchedAt };
   } catch (err) {
     return { samples: [], windowMs: HISTORY_WINDOW_MS, fetchedAt, error: (err as Error).message };
   }
 }
 
-export async function provisioningHistory(): Promise<ProvisioningHistoryResponse> {
-  const fetchedAt = new Date().toISOString();
-  const cutoff = sqlTimestampUtc(new Date(Date.now() - HISTORY_WINDOW_MS));
-  try {
-    const rows = await queryFinelog(provisioningSql(cutoff));
-    return { samples: parseProvisioningSamples(asRows(rows)), windowMs: HISTORY_WINDOW_MS, fetchedAt };
-  } catch (err) {
-    return { samples: [], windowMs: HISTORY_WINDOW_MS, fetchedAt, error: (err as Error).message };
-  }
+export function workersHistory(): Promise<WorkersHistoryResponse> {
+  return historyResponse(workersSql, parseWorkerSamples);
+}
+
+export function provisioningHistory(): Promise<ProvisioningHistoryResponse> {
+  return historyResponse(provisioningSql, parseProvisioningSamples);
 }

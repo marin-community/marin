@@ -55,6 +55,35 @@ export function decodeLabels(raw: string): Record<string, string> {
   }
 }
 
+// The finelog namespace the infra/probes canary writes its flat metric samples
+// to (see infra/probes/src/infra_probes.py). Both the probes snapshot
+// (probes.ts) and the cluster-history charts (clusterHistory.ts) read from it.
+export const CANARY_METRICS_NAMESPACE = "infra.canary.metrics";
+
+// Label value marking a fleet-wide aggregate row (no pool/region labels).
+export const FLEET_SCOPE = "fleet";
+
+// One decoded row from the canary namespace. `collectedMs` is normalized from
+// the micros timestamp cast; `labels` stays a JSON object string for per-row
+// decode (DataFusion has no JSON functions to slice it server-side). Queries
+// feeding asCanaryRows must alias the cast `arrow_cast(collected_at, 'Int64')
+// AS collected_us`.
+export interface CanaryMetricRow {
+  metric: string;
+  value: number;
+  labels: string;
+  collectedMs: number;
+}
+
+export function asCanaryRows(rows: Record<string, unknown>[]): CanaryMetricRow[] {
+  return rows.map((r) => ({
+    metric: String(r.metric),
+    value: Number(r.value),
+    labels: String(r.labels ?? "{}"),
+    collectedMs: microsToMillis(Number(r.collected_us)),
+  }));
+}
+
 export async function queryFinelog(sql: string): Promise<Record<string, unknown>[]> {
   const base = await activeFinelogUrl();
   // Hold a strong reference to the controller so the abort timer is not GC'd
