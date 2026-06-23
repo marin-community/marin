@@ -492,3 +492,34 @@ confirms the path.
     gpu -- python lib/levanter/scripts/bench/bench_dense_fp8.py --k 4096 --n 4096 --path manual
     --forward-only` (read `fwd_tflops_per_s` vs the bf16 baseline; inspect the forward HLO for the GEMM's
     operand dtype; no storage needed).
+
+### 2026-06-23 — GFP8-007: S2 H100 result — manual direct-f8 forward FIRES `$f8` (no speedup at d4096)
+- **Hypothesis:** the manual arm `dq(dot(q(x), q(w)))` (genuine E4M3 operands into the dot, dequant on the
+  output) fires `__cublas$lt$matmul$f8` on the forward, where operand-QDQ (transient bf16→f8→bf16
+  round-trip, stripped at `simplify-fp-conversions`) does not.
+- **Command:** iris `cw-us-east-02a` H100x1, `bash lib/levanter/scripts/bench/_s2_manual_validate.sh`
+  (manual `--forward-only` + bf16 baseline, d4096). NOTE: finelog log server was down (`StatsError`,
+  cluster Workers 0/0) — output retrieved via a keep-alive pod + `iris task exec` (kubectl exec bypasses
+  finelog).
+- **Result — CONFIRMED, forward fires f8:**
+  - `__cublas$lt$matmul$f8` present (1 match); `f8e4m3` **survives** into the optimized module (8
+    occurrences) vs qdq's **0** (stripped at pass 0029).
+  - HLO: `%cublas-gemm.1 = (f32[4096,4096], s8[...]) custom-call(%input_transpose_fusion.1, ...,
+    %loop_multiply_fusion, %constant), custom_call_target="__cublas$lt$matmul$f8"`, `scale_mode:1` (live
+    delayed-scaling scales as runtime operands), `operand_precision=["DEFAULT","DEFAULT"]`.
+  - XLA inserts an f8 transpose (`%input_transpose_fusion.1 = f8e4m3fn[4096,4096]`) to satisfy cuBLASLt
+    TN-only — confirms PR #59515 (perf cost, not correctness gate).
+- **Result — throughput: NO speedup at d4096 (exploratory, single shape):**
+  - manual: **543.8 TFLOP/s** (252.7 µs/step, 27.5% of f8 peak 1978.9).
+  - bf16:   **533.8 TFLOP/s** (257.5 µs/step, 53.9% of bf16 peak 989.5).
+  - Essentially tied (~2%). The f8 GEMM fires but per-call quantize (x *and* w) + the inserted TN-transpose
+    (memory-bound bf16/f32) cancel the f8 compute win; the f8 path runs at only 27.5% of its peak.
+- **Interpretation:** necessary milestone reached — the direct-f8 form is the structural fix that unblocks
+  the forward rewrite (validates the GFP8-005/006 transient-round-trip-stripping diagnosis). But the 2× is
+  **not free**: at d4096 the QDQ + transpose overhead ≈ the GEMM savings. Realizing it needs: amortize
+  weight quantization (quantize once, not per forward), avoid the transpose (store f8 in TN layout / TE
+  column-major copy), fuse quantize into producers, and/or larger compute-bound shapes.
+- **Next action:** (a) shape sweep (larger M; d3072) to find where f8 wins; (b) measure with weight
+  quantized once (closer to training); (c) read the deep-research verdict on what TE-JAX/MaxText do —
+  likely cuBLASLt custom calls that avoid this overhead; (d) decide whether the XLA-fusion path can beat
+  bf16 here or whether TE-JAX/Pallas is required. Ops: report the finelog `StatsError` to infra.
