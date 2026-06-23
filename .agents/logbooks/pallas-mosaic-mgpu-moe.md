@@ -85,3 +85,25 @@
   by reverse dispatch from destination rows to source-rank token gradients.
 - Next action: Port the W13/SiLU VJP and reverse dispatch to Mosaic GPU, then
   profile the serial forward dispatch to prioritize tiled/staged copies.
+
+### 2026-06-23 - Steady-state perf harness kickoff
+
+- Hypothesis: Separating compile-including timings from steady-state timings
+  will make the serial dispatch bottleneck visible enough to guide the next
+  tiled/staged-copy implementation.
+- Command: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 1800 --job-name 6597-moe-dispatch-up-perf-1 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 64 --intermediate 64 --dtype bf16 --run-pallas --bench-iters 3 --warmup-steps 1`
+- Config: Single-node CoreWeave `cw-us-east-02a`, H100x8, explicit `expert`
+  mesh, bf16, `H=64`, `I=64`, `T/rank=8`, top-k 4, four local experts per
+  rank.
+- Result:
+  - Dispatch compile-including: 106.7 s.
+  - Dispatch steady-state: mean 1.897 ms, min 1.776 ms, max 2.000 ms.
+  - W13/SiLU compile-including: 615 ms.
+  - W13/SiLU steady-state: mean 0.201 ms, min 0.188 ms, max 0.213 ms.
+  - Correctness remained clean: dispatch max error 0, metadata errors 0,
+    W13/SiLU max bf16 error 2.
+- Interpretation: The deliberately serial validation dispatch is already the
+  dominant steady-state cost on this small shape. The next performance step
+  should replace scalar row writes with tiled SMEM-staged remote copies.
+- Next action: Implement tiled dispatch copy path and rerun the same steady-state
+  command for an apples-to-apples comparison.

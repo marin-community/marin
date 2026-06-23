@@ -34,6 +34,31 @@ def _time_block(label: str, fn: Callable[[], jax.Array | MoeDispatchUpLayout]) -
     return result, elapsed
 
 
+def _measure_steady_state(
+    label: str,
+    fn: Callable[[], jax.Array | MoeDispatchUpLayout],
+    *,
+    warmup_steps: int,
+    bench_iters: int,
+) -> None:
+    for _ in range(warmup_steps):
+        jax.block_until_ready(fn())
+
+    times = []
+    for _ in range(bench_iters):
+        start = time.perf_counter()
+        jax.block_until_ready(fn())
+        times.append(time.perf_counter() - start)
+    times_ms = np.asarray(times) * 1e3
+    print(
+        f"{label}/steady: "
+        f"mean={float(np.mean(times_ms)):.3f} ms "
+        f"min={float(np.min(times_ms)):.3f} ms "
+        f"max={float(np.max(times_ms)):.3f} ms "
+        f"iters={bench_iters}"
+    )
+
+
 def _make_inputs(
     *,
     ep_size: int,
@@ -59,15 +84,29 @@ def _make_inputs(
     return x_by_rank, expert_ids, router_weights, w_gate_up
 
 
-def _pallas_dispatch(
+def _sharded(mesh: Mesh, value: jax.Array, spec: P) -> jax.Array:
+    return jax.device_put(value, NamedSharding(mesh, spec))
+
+
+def _pallas_dispatch_args(mesh: Mesh, prepacked) -> tuple[jax.Array, ...]:
+    return (
+        _sharded(mesh, prepacked.send_x_by_dst, P("expert", None, None, None)),
+        _sharded(mesh, prepacked.send_row_by_dst, P("expert", None, None)),
+        _sharded(mesh, prepacked.send_local_expert_by_dst, P("expert", None, None)),
+        _sharded(mesh, prepacked.send_src_token_idx_by_dst, P("expert", None, None)),
+        _sharded(mesh, prepacked.send_topk_slot_by_dst, P("expert", None, None)),
+        _sharded(mesh, prepacked.send_router_weight_by_dst, P("expert", None, None)),
+        _sharded(mesh, prepacked.send_count_by_dst, P("expert", None)),
+        _sharded(mesh, prepacked.rows_per_expert, P("expert", None)),
+        _sharded(mesh, prepacked.expert_base, P("expert", None)),
+    )
+
+
+def _pallas_dispatch_fn(
     mesh: Mesh,
-    prepacked,
     *,
     recv_capacity: int,
-) -> MoeDispatchUpLayout:
-    def sharded(value: jax.Array, spec: P) -> jax.Array:
-        return jax.device_put(value, NamedSharding(mesh, spec))
-
+) -> Callable[..., MoeDispatchUpLayout]:
     def local_dispatch(
         send_x,
         send_row,
@@ -136,23 +175,18 @@ def _pallas_dispatch(
             check_vma=False,
         )
     )
-    return fn(
-        sharded(prepacked.send_x_by_dst, P("expert", None, None, None)),
-        sharded(prepacked.send_row_by_dst, P("expert", None, None)),
-        sharded(prepacked.send_local_expert_by_dst, P("expert", None, None)),
-        sharded(prepacked.send_src_token_idx_by_dst, P("expert", None, None)),
-        sharded(prepacked.send_topk_slot_by_dst, P("expert", None, None)),
-        sharded(prepacked.send_router_weight_by_dst, P("expert", None, None)),
-        sharded(prepacked.send_count_by_dst, P("expert", None)),
-        sharded(prepacked.rows_per_expert, P("expert", None)),
-        sharded(prepacked.expert_base, P("expert", None)),
+    return fn
+
+
+def _pallas_w13_silu_args(mesh: Mesh, layout: MoeDispatchUpLayout, w_gate_up: jax.Array) -> tuple[jax.Array, ...]:
+    return (
+        _sharded(mesh, layout.recv_x, P("expert", None, None)),
+        _sharded(mesh, layout.rows_per_expert, P("expert", None)),
+        _sharded(mesh, w_gate_up, P("expert", None, None, None)),
     )
 
 
-def _pallas_w13_silu(mesh: Mesh, layout: MoeDispatchUpLayout, w_gate_up: jax.Array, args) -> jax.Array:
-    def sharded(value: jax.Array, spec: P) -> jax.Array:
-        return jax.device_put(value, NamedSharding(mesh, spec))
-
+def _pallas_w13_silu_fn(mesh: Mesh, args) -> Callable[..., jax.Array]:
     def local_w13(recv_x, rows_per_expert, local_w_gate_up):
         h = compute_moe_up_mosaic_gpu_local(
             jnp.squeeze(recv_x, axis=0),
@@ -175,11 +209,7 @@ def _pallas_w13_silu(mesh: Mesh, layout: MoeDispatchUpLayout, w_gate_up: jax.Arr
             check_vma=False,
         )
     )
-    return fn(
-        sharded(layout.recv_x, P("expert", None, None)),
-        sharded(layout.rows_per_expert, P("expert", None)),
-        sharded(w_gate_up, P("expert", None, None, None)),
-    )
+    return fn
 
 
 def _print_error_debug(
@@ -235,6 +265,8 @@ def main() -> None:
     parser.add_argument("--debug-errors", action="store_true")
     parser.add_argument("--dispatch-atol", type=float, default=0.0)
     parser.add_argument("--w13-atol", type=float, default=2.0)
+    parser.add_argument("--warmup-steps", type=int, default=1)
+    parser.add_argument("--bench-iters", type=int, default=0)
     args = parser.parse_args()
 
     dtype = jnp.bfloat16 if args.dtype == "bf16" else jnp.float32
@@ -282,9 +314,20 @@ def main() -> None:
 
     mesh = Mesh(np.array(devices[: args.ep_size]), ("expert",), axis_types=(AxisType.Explicit,))
     with jax.set_mesh(mesh):
-        pallas_layout, _ = _time_block(
-            "dispatch/mosaic_gpu", lambda: _pallas_dispatch(mesh, prepacked, recv_capacity=recv_capacity)
-        )
+        pallas_dispatch_fn = _pallas_dispatch_fn(mesh, recv_capacity=recv_capacity)
+        pallas_dispatch_args = _pallas_dispatch_args(mesh, prepacked)
+
+        def run_pallas_dispatch():
+            return pallas_dispatch_fn(*pallas_dispatch_args)
+
+        pallas_layout, _ = _time_block("dispatch/mosaic_gpu", run_pallas_dispatch)
+        if args.bench_iters > 0:
+            _measure_steady_state(
+                "dispatch/mosaic_gpu",
+                run_pallas_dispatch,
+                warmup_steps=args.warmup_steps,
+                bench_iters=args.bench_iters,
+            )
         dispatch_err = jnp.max(
             jnp.abs(pallas_layout.recv_x.astype(jnp.float32) - ref_layout.recv_x.astype(jnp.float32))
         )
@@ -307,9 +350,20 @@ def main() -> None:
                 f"valid={valid_err_int} local_expert={expert_err_int} src_rank={src_rank_err_int}"
             )
 
-        pallas_h, _ = _time_block(
-            "w13_silu/mosaic_gpu", lambda: _pallas_w13_silu(mesh, pallas_layout, w_gate_up, args)
-        )
+        pallas_w13_fn = _pallas_w13_silu_fn(mesh, args)
+        pallas_w13_args = _pallas_w13_silu_args(mesh, pallas_layout, w_gate_up)
+
+        def run_pallas_w13():
+            return pallas_w13_fn(*pallas_w13_args)
+
+        pallas_h, _ = _time_block("w13_silu/mosaic_gpu", run_pallas_w13)
+        if args.bench_iters > 0:
+            _measure_steady_state(
+                "w13_silu/mosaic_gpu",
+                run_pallas_w13,
+                warmup_steps=args.warmup_steps,
+                bench_iters=args.bench_iters,
+            )
         h_err = jnp.max(jnp.abs(pallas_h.astype(jnp.float32) - ref_h.astype(jnp.float32)))
         h_err_float = float(h_err)
         print(f"w13_silu_max_abs_error: {h_err_float:.6g}")
