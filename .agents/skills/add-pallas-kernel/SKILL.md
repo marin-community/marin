@@ -5,15 +5,16 @@ description: Add, modify, or autotune a TPU/GPU Pallas kernel.
 
 # Skill: Add or Update a Pallas Kernel
 
-This is a specialization of `.agents/skills/run-research/SKILL.md`.
-
-Use `run-research` for the generic research lifecycle (branching, issue/logbook cadence, snapshot/tag discipline, reporting). This skill adds kernel-specific standards for numerics and gradient safety, backend/fallback API design, TPU/GPU performance diagnosis, and block-size autotuning.
+This skill adds kernel-specific standards for numerics, gradient safety,
+backend/fallback API design, TPU/GPU performance diagnosis, and block-size
+autotuning.
 
 ## How to apply this skill
 
-1. Load and follow `.agents/skills/run-research/SKILL.md` first.
+1. For long-running kernel research, load `.agents/skills/run-research/SKILL.md`
+   first.
 2. Apply the additional kernel rules in this document.
-3. Keep shared process details in `run-research`; keep this file focused on kernel-specific constraints.
+3. For atomic kernel changes, use only the task skills needed for the work.
 
 ## Kernel Deliverables
 
@@ -26,8 +27,6 @@ For a kernel `K`, produce:
 - **Autotuned block/tile sizes** for requested hardware/shape regimes.
 - A checked-in **tuned table module** for runtime selection (with explicit fallback behavior).
 - An **autotune-on-miss fallback path** that sweeps a bounded candidate set and caches winning configs.
-
-Use the research logbook and issue workflow from `run-research` for experiment history and milestone updates.
 
 ## Recommended Module Layout
 
@@ -137,6 +136,11 @@ Use the execution environment guidance and cadence from `run-research`; this sec
 
 Key iteration loop: `profile -> hypothesis -> change -> tests -> microbench -> profile`
 
+Run one-axis sweeps first, then interaction sweeps. Keep comparisons
+apples-to-apples: same shape, dtype, pass mode, backend, device count, and
+environment unless that axis is under test. Only move the baseline after enough
+repeated evidence, and note the change explicitly.
+
 Always report: compile-including timing (`time-to-first-step`), steady-state timing, and exact hardware type and shape/dtype grid.
 
 ## Autotuning Workflow
@@ -216,6 +220,23 @@ Tokamax kernels are useful references for API and kernel structure comparisons.
 - Compare numerics/perf on identical shapes/dtypes before drawing conclusions.
 - Parse `absl.flags` before accessing Tokamax modules that depend on flags.
 - Tokamax Mosaic kernels can OOM VMEM at larger shapes; reduce shape/tile sizes for controlled comparisons.
+
+## Rules
+
+- Separate measurement code from the production path whenever possible.
+- Prefer persistent remote shells/scripts for long sweeps.
+- Check accelerator contention before attributing regressions to code.
+- For long remote runs, track a monotonic progress signal and tail recent logs
+  for context.
+- Validate machine-readable extraction before publishing: expected row counts,
+  key uniqueness, and de-duplication.
+
+Ops hygiene checklist before claiming a regression:
+
+- No stale benchmark process is still occupying the accelerator.
+- Lockfiles/state are clean.
+- Comparison uses the same device count.
+- Command/config/env are identical except the tested axis.
 
 ## Further Reading
 
