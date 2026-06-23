@@ -200,7 +200,9 @@ down by in-flight builds.
 The Probes panel renders the synthetic-canary telemetry the
 `infra/probes/` daemon writes to the finelog `infra.canary.metrics`
 namespace (one flat `{metric, value, labels, collected_at}` row per
-sample). Two bounded DuckDB queries run against the **active
+sample). Two bounded SQL queries (Apache DataFusion, finelog's read
+engine — note: no JSON functions, so labels are decoded app-side) run
+against the **active
 environment's** finelog log-server through its `StatsService.Query`
 Connect RPC — the same JSON-over-HTTP shape the controller's
 `ExecuteRawQuery` uses, except the result is an Arrow IPC stream, which
