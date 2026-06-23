@@ -4,6 +4,7 @@
 """RPC-based cluster client implementation."""
 
 import logging
+import os
 import time
 import uuid
 from collections.abc import Iterable
@@ -58,7 +59,7 @@ MIN_STATE_POLL_INTERVAL = 0.1
 # upload, autoscaler feasibility, and connection overhead. Bump alongside
 # _JOB_REPLACEMENT_DRAIN_WAIT if that grows. Callers that configured a larger
 # RemoteClusterClient timeout keep theirs — this is a floor, not a ceiling.
-LAUNCH_JOB_TIMEOUT_FLOOR_MS = 180_000
+LAUNCH_JOB_TIMEOUT_FLOOR_MS = int(os.environ.get("IRIS_LAUNCH_JOB_TIMEOUT_MS", "180000"))
 
 
 class RemoteClusterClient:
