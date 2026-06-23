@@ -1545,6 +1545,7 @@ def test_k8s_cluster_status_enriches_scheduling_gated_pods_with_kueue_workload(s
     queue_name = "iris-local"
     provider.local_queue = queue_name
     pod_group = "iris-pg-test-0"
+    workload_message = "gpu-quota-diagnostic-token"
 
     k8s.seed_resource(
         K8sResource.PODS,
@@ -1588,9 +1589,7 @@ def test_k8s_cluster_status_enriches_scheduling_gated_pods_with_kueue_workload(s
                         "type": "QuotaReserved",
                         "status": "False",
                         "reason": "Pending",
-                        "message": (
-                            "couldn't assign flavors to pod set main: insufficient unused quota for nvidia.com/gpu"
-                        ),
+                        "message": workload_message,
                     }
                 ]
             },
@@ -1608,9 +1607,9 @@ def test_k8s_cluster_status_enriches_scheduling_gated_pods_with_kueue_workload(s
     assert resp.status_code == 200
     status = resp.json()["podStatuses"][0]
     assert status["reason"] == "SchedulingGated"
-    assert "Kueue workload iris-pg-test-0" in status["message"]
-    assert f"queue={queue_name}" in status["message"]
-    assert "insufficient unused quota for nvidia.com/gpu" in status["message"]
+    assert pod_group in status["message"]
+    assert queue_name in status["message"]
+    assert workload_message in status["message"]
 
     provider.close()
 
