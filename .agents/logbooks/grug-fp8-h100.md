@@ -582,6 +582,10 @@ confirms the path.
   even at `e4m3²`/DEFAULT (GFP8-007/008).
 
 ### 2026-06-23 — GFP8-010: S2 — PRECISION is the fwd/bwd gate; one-line fix for the existing op
+> **[corrected by GFP8-012]** Two claims below are overstated: (a) "precision **is the** gate" — precision
+> gates only the *transient* operand-QDQ round-trip; materialized f8 fires at DEFAULT too. (b) "**one-line**
+> fix" — the training forward value comes from the `custom_jvp` primal recompute (`:146`), not `:133`, so the
+> fix needs **both** lines; and the within-job +38% is at only 31% of f8 peak (possible partial fusion). See GFP8-012.
 - **Hypothesis (the open "why" from GFP8-009):** does forcing the `e4m3×e4m3` operand-QDQ forward to
   `precision=HIGHEST` make it fire `$f8` (like the backward grad dots), where `DEFAULT` declines?
 - **Method:** new `--path qdq_prec` = `in_qdq` operands + `lax.dot_general(precision=...)` (haliax's
@@ -648,3 +652,38 @@ confirms the path.
   Hopper or is it Blackwell-mxfp8-only (central to path C); FP8 mechanism in MaxText/Qwix/Praxis (uncovered).
 - **Sources:** Flax PR #3322; `flax/linen/fp8_ops.py`; flax fp8_basics docs; JAX #24051, #22313; TF #58720;
   openxla/xla#22; NVIDIA/TransformerEngine (`te_gemm_v2_ffi`); google/aqt; NVIDIA/atex xla-fp8 tutorial.
+
+### 2026-06-23 — GFP8-012: S2 — independent-review audit corrects GFP8-010 (gate wording + the fix is 2 lines)
+- **Why:** sanity-checked the GFP8-010 conclusions with two independent agents (codex; opencode/GLM-5.2),
+  each given the same neutrally-framed evidence brief + read access to `fp8.py`/`bench_dense_fp8.py`. Both
+  independently returned **"partially holds."** Then verified the load-bearing catch on CPU.
+- **Correction 1 — "precision is THE gate" overclaims.** Precision gates only the **transient**
+  bf16→f8→bf16 operand-QDQ pattern; the **materialized**-f8 manual arm (GFP8-007) fires `$f8` at DEFAULT.
+  Defensible restatement: *for the transient operand-QDQ round-trip, `precision=HIGHEST` is **necessary** to
+  re-fuse the forward into `$f8`; at DEFAULT the round-trip is stripped → bf16. For materialized f8, precision
+  is irrelevant.* (This is the "two independent triggers" point from GFP8-011, stated correctly.)
+- **Correction 2 — the fix is NOT one line (verified).** `dot_general_with_precision` is a `custom_jvp`; under
+  `value_and_grad` (Levanter training) the forward **value** is the jvp rule's primal **recompute** at
+  `_src/fp8.py:146` (DEFAULT), **not** the standalone primal at `:133`. CPU jaxpr check
+  (`value_and_grad(sum(Fp8DotGeneralOp(x,w)))`) shows the training trace's three dots =
+  `[(DEFAULT,DEFAULT), (HIGHEST,HIGHEST), (HIGHEST,HIGHEST)]` — the lone DEFAULT is `:146`; `:133` is not even
+  traced. So flipping only `:133` would green the **forward-only microbench yet do nothing in training.** The
+  dense fix must flip **both `:146` (training fwd value) and `:133` (eval/inference fwd).**
+- **Correction 3 — "numerically free" is unproven, and the win may be partial.** (a) On the **fallback** path
+  (fusion declines), HIGHEST on bf16 operands is untested vs DEFAULT. (b) GFP8-010's +38% within-job is only
+  **610/1979 ≈ 31% of f8 peak**, and f8/bf16 ≈ **1.38× not ~2×** — consistent with *partial* fusion (residual
+  `convert` prologue not absorbed) or under-settled autotune (warmup=5). `$f8`-in-HLO is **necessary, not
+  sufficient**, for "fully fused f8 tensor-core gemm."
+- **Confound found:** GFP8-007-vs-010 ("materialized fires at DEFAULT") varies *two* things — `manual_fp8_dot`
+  sets `preferred_element_type=f32`, `qdq_prec_dot` doesn't. Clean attribution needs manual-without-PET (or
+  qdq_prec-with-PET).
+- **Framing nit (GLM):** "undocumented heuristic" overstates — `precision` lowers to `precision_config`, a
+  *documented* HLO field XLA may legitimately key gemm-algorithm choice on; the JAX-level docstring is just
+  silent. Brittle/version-fragile stands (the f8-refusion policy is not a stable contract).
+- **Mechanism (still undetermined) — cheap disambiguator:** `--path bf16 --precision default` vs `highest`
+  (pure bf16, no QDQ). HIGHEST changes the bf16 lowering/throughput ⇒ bf16 rewriter preempts at DEFAULT (H1);
+  identical ⇒ f8 rewriter independently declines DEFAULT (H2). Also measures the fallback-path risk above.
+- **Actions:** added the `:133`+`:146` precision toggle behind an explicit `Fp8DotGeneralOp.forward_precision`
+  field (default unchanged) + an HLO-`$f8` regression test (both reviewers recommended the canary). H100 batch
+  queued: bf16 precision A/B (mechanism), profiler/HLO convert-check on the 1.38× (is it fully fused?), and the
+  `preferred_element_type` de-confound.
