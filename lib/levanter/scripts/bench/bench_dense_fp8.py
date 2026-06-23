@@ -12,9 +12,12 @@ HLO, and one machine-readable
 ``result_json`` line. ``--path bf16`` (default) is the baseline arm; ``--path
 qdq`` is S2's first FP8 arm — the existing haliax ``Fp8DotGeneralOp`` delayed-
 scaling path, re-measured to see whether XLA still fuses it to an f8 cuBLASLt
-matmul or silently falls back to BF16. ``--path manual`` (forward-only) is the
-direct-f8 arm: genuine E4M3 operands straight into the dot, dequant on the
-output — the candidate fix for the forward QDQ fallback.
+matmul or silently falls back to BF16. ``--path direct`` is the real
+``Fp8DirectDotGeneralOp`` (fwd+bwd): genuine E4M3 operands into the dot, E5M2
+output grad in the backward, dequant on the output — Flax's post-QDQ path, whose
+forward fires ``$f8`` at DEFAULT precision. ``--path manual`` (forward-only) is
+the same direct-f8 idea as a standalone forward, used earlier to isolate the
+forward fusion.
 
 The default shape is a hidden-dim-3072 projection at seq 4096; sweep ``--k``
 over 3072/4096 for the two benchmark dims. Run on an H100 via Iris and grep the
@@ -36,7 +39,7 @@ import jax.numpy as jnp
 from jax import lax
 
 from haliax._src.fp8 import compute_scale, get_fp8_max, in_qdq, quantize
-from haliax.quantization import Fp8DotGeneralOp
+from haliax.quantization import Fp8DirectDotGeneralOp, Fp8DotGeneralOp
 
 _E4M3 = jnp.float8_e4m3fn
 
@@ -148,6 +151,12 @@ def build_dot(path: str, amax_history_length: int, dimension_numbers, precision,
     """
     if path == "bf16":
         return (lambda x, w: dense_dot(x, w, dimension_numbers, precision)), None
+    # direct runs the real Fp8DirectDotGeneralOp (fwd+bwd): genuine f8 operands into the dot,
+    # E5M2 output grad in the backward, dequant the output — Flax's post-QDQ path (GFP8-014).
+    # Forward fires $f8 at DEFAULT (no precision flip), so --precision is irrelevant here.
+    if path == "direct":
+        op = Fp8DirectDotGeneralOp.init(amax_history_length=amax_history_length)
+        return (lambda x, w, op: op(x, w, dimension_numbers)), op
     # qdq runs the real Fp8DotGeneralOp (fwd+bwd); forward_precision=HIGHEST exercises
     # the GFP8-012 fix (forward fires $f8), DEFAULT reproduces the legacy fallback.
     op = Fp8DotGeneralOp.init(amax_history_length=amax_history_length, forward_precision=precision)
@@ -194,9 +203,10 @@ def main() -> None:
     parser.add_argument("--dtype", type=str, default="bfloat16", help="operand dtype (QDQ quantizes internally)")
     parser.add_argument(
         "--path",
-        choices=("bf16", "qdq", "manual", "qdq_prec"),
+        choices=("bf16", "qdq", "direct", "manual", "qdq_prec"),
         default="bf16",
-        help="bf16 baseline; qdq = existing haliax Fp8DotGeneralOp; manual = direct-f8 dot (forward-only); "
+        help="bf16 baseline; qdq = existing haliax Fp8DotGeneralOp; direct = Fp8DirectDotGeneralOp "
+        "(real fwd+bwd direct-quant op, Flax's post-QDQ path); manual = direct-f8 dot (forward-only); "
         "qdq_prec = operand-QDQ at an explicit --precision (forward-only)",
     )
     parser.add_argument(

@@ -56,6 +56,13 @@ echo "######## D. PET DE-CONFOUND (materialized f8) ########"
 run D1_manual_pet_f32    --path manual --forward-only
 run D2_manual_pet_none   --path manual --forward-only --manual-no-output-f32
 
+echo "######## E. DIRECT-QUANT OP (Fp8DirectDotGeneralOp, Flax post-QDQ path) ########"
+# The real fwd+bwd direct-quant op: forward must fire $f8 at DEFAULT (no precision flip),
+# backward fires $f8 on the E5M2 grad dots. Compare fwd TFLOP/s to A2 (qdq/highest) and the
+# A3 bf16 baseline; E1 forward-only isolates the forward $f8.
+run E1_direct_fwd        --path direct --forward-only
+run E2_direct_fwdbwd     --path direct
+
 echo "######## SUMMARY ########"
 for f in /tmp/s2b_*.txt; do
   printf '%-26s ' "$(basename "$f" .txt)"
