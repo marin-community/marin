@@ -29,14 +29,14 @@ from marin.execution.types import this_output_path
 
 EPIC_5005 = 5005
 PPL_CIRCUIT_COVERAGE_V2_ISSUE = 6070
-PPL_CIRCUIT_COVERAGE_V2_SOURCE = "generated_ppl_circuit_coverage_v2_compact_v1"
+PPL_CIRCUIT_COVERAGE_V2_SOURCE = "generated_ppl_circuit_coverage_v2_compact_v2"
 PPL_CIRCUIT_COVERAGE_V2_SEED = 6203
 EXAMPLES_PER_CONFIG = 1000
-LOCAL_SAMPLE_EXAMPLES_PER_CONFIG = 4
+LOCAL_SAMPLE_EXAMPLES_PER_CONFIG = 5
 RAW_SHARD_SUFFIX = ".jsonl.gz"
 PLAIN_TEXT_PRETRAINING_TARGET_TOKENS = 1_000_000_000
 PLAIN_TEXT_PRETRAINING_SHARDS = 256
-PLAIN_TEXT_PRETRAINING_SOURCE = "generated_ppl_circuit_coverage_v2_plain_text_compact_v1"
+PLAIN_TEXT_PRETRAINING_SOURCE = "generated_ppl_circuit_coverage_v2_plain_text_compact_v2"
 CHARS_PER_TOKEN_ESTIMATE = 4
 
 
@@ -242,6 +242,30 @@ def _string_text(rng: random.Random) -> str:
     return "".join(parts)
 
 
+_STRING_SLICING_SURFACES = (
+    "python_statement",
+    "slice_function",
+    "inline_subscript",
+    "pipe_fields",
+    "json_fields",
+)
+
+
+def _string_slicing_query(surface: str, text: str, start: int, stop: int, step: int) -> str:
+    text_json = _json_string(text)
+    if surface == "python_statement":
+        return f"text = {text_json}; text[{start}:{stop}:{step}] ->"
+    if surface == "slice_function":
+        return f"slice({text_json}, {start}, {stop}, {step}) ->"
+    if surface == "inline_subscript":
+        return f"{text_json}[{start}:{stop}:{step}] ->"
+    if surface == "pipe_fields":
+        return f"{text_json} | {start} | {stop} | {step} ->"
+    if surface == "json_fields":
+        return f'{{"text":{text_json},"start":{start},"stop":{stop},"step":{step}}} ->'
+    raise ValueError(f"Unknown string_slicing surface: {surface}")
+
+
 def _generate_string_slicing(
     slice_: PplCircuitCoverageV2Slice, row_index: int, rng: random.Random, seed: int
 ) -> dict[str, object]:
@@ -250,14 +274,16 @@ def _generate_string_slicing(
     stop = rng.randint(start + 1, len(text))
     step = rng.choice((1, 2))
     result = text[start:stop:step]
+    # Cycle deterministically so small samples cover every surface without advancing the task RNG.
+    surface = _STRING_SLICING_SURFACES[row_index % len(_STRING_SLICING_SURFACES)]
     input_text = (
         _few_shot_block(
             (
-                ('text = "abcdef"; text[1:5:2] ->', "'bd'"),
-                ('text = "marin"; text[0:4:1] ->', "'mari'"),
+                (_string_slicing_query(surface, "abcdef", 1, 5, 2), "'bd'"),
+                (_string_slicing_query(surface, "marin", 0, 4, 1), "'mari'"),
             )
         )
-        + f"text = {_json_string(text)}; text[{start}:{stop}:{step}] ->\n"
+        + f"{_string_slicing_query(surface, text, start, stop, step)}\n"
     )
     return _record(
         slice_=slice_,
@@ -265,7 +291,14 @@ def _generate_string_slicing(
         seed=seed,
         input_text=input_text,
         target=repr(result),
-        metadata={"operation": "slice", "text": text, "start": start, "stop": stop, "step": step},
+        metadata={
+            "operation": "slice",
+            "surface": surface,
+            "text": text,
+            "start": start,
+            "stop": stop,
+            "step": step,
+        },
     )
 
 
@@ -1504,13 +1537,13 @@ def materialize_ppl_circuit_coverage_v2_plain_text_pretraining_from_config(
 
 
 ppl_circuit_coverage_v2_raw_executor = ExecutorStep(
-    name=os.path.join("raw", "evals", "ppl_circuit_coverage_v2_compact_v1"),
+    name=os.path.join("raw", "evals", "ppl_circuit_coverage_v2_compact_v2"),
     fn=materialize_ppl_circuit_coverage_v2_raw_from_config,
     config=PplCircuitCoverageV2RawConfig(output_path=this_output_path()),
 )
 
 ppl_circuit_coverage_v2_plain_text_pretraining_executor = ExecutorStep(
-    name=os.path.join("raw", "pretraining", "ppl_circuit_coverage_v2_plain_text_1b_compact_v1"),
+    name=os.path.join("raw", "pretraining", "ppl_circuit_coverage_v2_plain_text_1b_compact_v2"),
     fn=materialize_ppl_circuit_coverage_v2_plain_text_pretraining_from_config,
     config=PplCircuitCoverageV2PlainTextPretrainingConfig(output_path=this_output_path()),
     resources=ResourceConfig.with_cpu(cpu=16, ram="64g", disk="200g"),
