@@ -29,6 +29,8 @@ import os
 
 from fray.cluster import ResourceConfig
 from levanter.data.text import BlockShuffleConfig, LmDataConfig, TextLmDatasetFormat
+from levanter.tracker import TrackerConfig
+from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.datakit.download.common_crawl_wet import (
     download_cc_wet_step,
@@ -120,6 +122,23 @@ LADDER: dict[str, tuple[int, float]] = {
 }
 
 
+def _tracker(crawl: str, scale: str) -> TrackerConfig:
+    """W&B when ``WANDB_API_KEY`` is present, else a JSON logger fallback.
+
+    The fallback keeps the run unblocked when no W&B key is plumbed through; the
+    same ``eval/paloma/macro_loss`` scalars are written to the run's logs either
+    way.
+    """
+    if os.environ.get("WANDB_API_KEY"):
+        return WandbConfig(
+            project="marin_moe",
+            tags=["moe", "crawl-compare", crawl, scale],
+            group="crawl-compare-focus-vs-main",
+            name=None,
+        )
+    return JsonLoggerConfig(logger_name="grug_moe_crawl_compare.metrics")
+
+
 def build_train_step(crawl: str, scale: str) -> ExecutorStep:
     if crawl not in TOKENIZE_STEPS:
         raise ValueError(f"CRAWL={crawl!r} must be one of {sorted(TOKENIZE_STEPS)}")
@@ -142,12 +161,7 @@ def build_train_step(crawl: str, scale: str) -> ExecutorStep:
             batch_size=versioned(batch_size),
             seed=versioned(0),
             mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-            tracker=WandbConfig(
-                project="marin_moe",
-                tags=["moe", "crawl-compare", crawl, scale],
-                group="crawl-compare-focus-vs-main",
-                name=None,
-            ),
+            tracker=_tracker(crawl, scale),
             optimizer=versioned(optimizer),
             grug_trainer=versioned(GrugTrainerConfig(z_loss_weight=1e-4, ema_beta=None, log_every=1)),
             eval=versioned(
