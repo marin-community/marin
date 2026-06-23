@@ -14,10 +14,7 @@ following benchmark.
 
 from __future__ import annotations
 
-import argparse
 import dataclasses
-import importlib.metadata as md
-import importlib.util
 import json
 import os
 import posixpath
@@ -28,12 +25,11 @@ import tempfile
 import time
 from contextlib import ExitStack
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
+import click
 import equinox as eqx
-import fsspec
 import haliax
 import jax
 import jax.numpy as jnp
@@ -53,8 +49,25 @@ from experiments.grug.moe.model import (
     _with_state_dict_prefix,
     canonical_grugmoe_tensor_names,
 )
+from experiments.grug.moe.real_checkpoint_runtime import (
+    DEFAULT_DISK,
+    DEFAULT_RAM,
+    DEFAULT_REGION,
+    DEFAULT_TPU_TYPE,
+    MARIN_GIT_SHA_ENV,
+    default_output_dir,
+    exists,
+    fs_path,
+    git_sha,
+    join_path,
+    remove_tree,
+    require_file,
+    require_local_or_europe_west4,
+    runtime_snapshot,
+    submit_tpu_job,
+    write_json,
+)
 
-EUROPE_WEST4_GCS_PREFIX = "gs://marin-eu-west4/"
 REAL_CHECKPOINT_PATH = "gs://marin-eu-west4/grug/moe_may_compute_opt_d512_ep1-05c39b/checkpoints/step-10980"
 LLAMA31_TOKENIZER_PATH = "gs://marin-eu-west4/tokenizers/meta-llama/Meta-Llama-3.1-8B/hf-hub-0.36.0"
 OUTPUT_ROOT = "gs://marin-eu-west4/tmp/ttl=14d/grugmoe-real-checkpoint-vllm-smoke"
@@ -69,14 +82,9 @@ DEFAULT_MAX_MODEL_LEN = 128
 DEFAULT_MAX_TOKENS = 8
 DEFAULT_SERVER_TIMEOUT_SECONDS = 1800
 DEFAULT_VLLM_DTYPE = "bfloat16"
-DEFAULT_REGION = "europe-west4"
-DEFAULT_TPU_TYPE = "v6e-4"
-DEFAULT_RAM = "64g"
-DEFAULT_DISK = "96g"
 _DEPENDENCY_GROUPS = ["eval", "tpu", "vllm"]
 _REAL_CHECKPOINT_HIDDEN_DIM = 512
 _VLLM_REGISTRY_PRELOAD_MODULE = "experiments.grug.moe.vllm_registry"
-_MARIN_GIT_SHA_ENV = "MARIN_GIT_SHA"
 _PRELOAD_MODULES_ENV = "MARIN_VLLM_PRELOAD_MODULES"
 
 
@@ -113,24 +121,6 @@ class StagedArtifact:
     staging: dict[str, Any]
 
 
-def join_path(base: str, *parts: str) -> str:
-    parsed = urlparse(base)
-    if parsed.scheme in {"", "file"}:
-        return os.path.join(base, *parts)
-    return posixpath.join(base.rstrip("/"), *parts)
-
-
-def require_local_or_europe_west4(label: str, path: str) -> None:
-    parsed = urlparse(path)
-    if parsed.scheme == "gs":
-        if path.startswith(EUROPE_WEST4_GCS_PREFIX):
-            return
-        raise ValueError(f"{label} must be under {EUROPE_WEST4_GCS_PREFIX}, got {path!r}")
-    if parsed.scheme in {"", "file"}:
-        return
-    raise ValueError(f"{label} must be a local path or {EUROPE_WEST4_GCS_PREFIX} path, got {path!r}")
-
-
 def validate_locality(config: SmokeConfig) -> dict[str, str]:
     paths = {
         "checkpoint_path": config.checkpoint_path,
@@ -146,37 +136,6 @@ def validate_locality(config: SmokeConfig) -> dict[str, str]:
     return paths
 
 
-def _fs_path(path: str):
-    fs, plain_path = fsspec.core.url_to_fs(path)
-    return fs, plain_path
-
-
-def _exists(path: str) -> bool:
-    fs, plain_path = _fs_path(path)
-    return fs.exists(plain_path)
-
-
-def _rm_tree(path: str) -> None:
-    fs, plain_path = _fs_path(path)
-    if fs.exists(plain_path):
-        fs.rm(plain_path, recursive=True)
-
-
-def _write_json(path: str, payload: dict[str, Any]) -> None:
-    parent = path.rsplit("/", 1)[0]
-    fs, plain_parent = _fs_path(parent)
-    fs.makedirs(plain_parent, exist_ok=True)
-    with fsspec.open(path, "w") as f:
-        json.dump(payload, f, indent=2, sort_keys=True)
-        f.write("\n")
-
-
-def _require_file(label: str, path: str) -> None:
-    require_local_or_europe_west4(label, path)
-    if not _exists(path):
-        raise FileNotFoundError(f"{label} not found at {path}")
-
-
 def _local_filesystem_path(path: str) -> str:
     parsed = urlparse(path)
     if parsed.scheme == "file":
@@ -188,7 +147,7 @@ def _local_filesystem_path(path: str) -> str:
 
 def _copy_tree_to_local(source_dir: str, local_dir: str) -> int:
     require_local_or_europe_west4("artifact_dir", source_dir)
-    fs, source_path = _fs_path(source_dir)
+    fs, source_path = fs_path(source_dir)
     if not fs.exists(source_path):
         raise FileNotFoundError(f"artifact_dir not found at {source_dir}")
     if os.path.exists(local_dir):
@@ -227,8 +186,8 @@ def stage_artifact_for_vllm(artifact_dir: str) -> StagedArtifact:
     local_root = tempfile.mkdtemp(prefix="grugmoe-real-checkpoint-vllm-artifact-")
     local_path = os.path.join(local_root, "artifact")
     copied_files = _copy_tree_to_local(artifact_dir, local_path)
-    _require_file("staged artifact config.json", join_path(local_path, "config.json"))
-    _require_file("staged artifact tokenizer.json", join_path(local_path, "tokenizer.json"))
+    require_file("staged artifact config.json", join_path(local_path, "config.json"))
+    require_file("staged artifact tokenizer.json", join_path(local_path, "tokenizer.json"))
     return StagedArtifact(
         vllm_model_path=local_path,
         staging={
@@ -238,54 +197,6 @@ def stage_artifact_for_vllm(artifact_dir: str) -> StagedArtifact:
             "copied_files": copied_files,
         },
     )
-
-
-def _direct_url(package: str) -> str:
-    try:
-        direct_url = md.distribution(package).read_text("direct_url.json")
-    except md.PackageNotFoundError:
-        return "not-installed"
-    return direct_url.strip() if direct_url else ""
-
-
-def _version(package: str) -> str:
-    try:
-        return md.version(package)
-    except md.PackageNotFoundError:
-        return "not-installed"
-
-
-def _git_sha() -> str:
-    env_sha = os.environ.get(_MARIN_GIT_SHA_ENV)
-    if env_sha:
-        return env_sha
-    try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    except (subprocess.CalledProcessError, OSError) as exc:
-        return f"unavailable:{exc!r}"
-
-
-def runtime_snapshot(*, include_jax_devices: bool) -> dict[str, Any]:
-    packages = {}
-    for package in ("marin-core", "vllm", "tpu-inference", "jax", "libtpu"):
-        packages[package] = {"version": _version(package), "direct_url": _direct_url(package)}
-    snapshot = {
-        "argv": sys.argv,
-        "cwd": os.getcwd(),
-        "marin_sha": _git_sha(),
-        "packages": packages,
-    }
-    if include_jax_devices:
-        snapshot.update(
-            {
-                "grugmoe_spec": repr(importlib.util.find_spec("tpu_inference.models.jax.grugmoe")),
-                "jax_process_index": jax.process_index(),
-                "jax_process_count": jax.process_count(),
-                "jax_local_device_count": jax.local_device_count(),
-                "jax_devices": [str(device) for device in jax.devices()],
-            }
-        )
-    return snapshot
 
 
 def real_checkpoint_model_config():
@@ -309,12 +220,12 @@ def real_checkpoint_model_config():
 
 def prepare_inputs(config: SmokeConfig) -> dict[str, Any]:
     locality_paths = validate_locality(config)
-    _require_file("checkpoint metadata", join_path(config.checkpoint_path, "metadata.json"))
-    _require_file("tokenizer.json", join_path(config.tokenizer_path, "tokenizer.json"))
+    require_file("checkpoint metadata", join_path(config.checkpoint_path, "metadata.json"))
+    require_file("tokenizer.json", join_path(config.tokenizer_path, "tokenizer.json"))
     return {
         "locality_paths": locality_paths,
         "model_config": dataclasses.asdict(real_checkpoint_model_config()),
-        "runtime": runtime_snapshot(include_jax_devices=config.phase == "export"),
+        "runtime": runtime_snapshot(include_jax_devices=config.phase == "export", include_grugmoe_spec=True),
     }
 
 
@@ -455,10 +366,10 @@ def _load_legacy_split_expert_checkpoint(config: SmokeConfig, model_cfg: GrugMod
 
 
 def export_artifact(config: SmokeConfig) -> None:
-    if _exists(config.output_dir):
+    if exists(config.output_dir):
         if not config.overwrite:
             raise FileExistsError(f"{config.output_dir} already exists; pass --overwrite to regenerate it")
-        _rm_tree(config.output_dir)
+        remove_tree(config.output_dir)
 
     model_cfg = real_checkpoint_model_config()
     mesh = compact_grug_mesh()
@@ -474,8 +385,8 @@ def export_artifact(config: SmokeConfig) -> None:
             save_tokenizer=True,
             max_shard_size=config.max_shard_size,
         )
-    _require_file("exported config.json", join_path(config.artifact_dir, "config.json"))
-    _require_file("exported tokenizer.json", join_path(config.artifact_dir, "tokenizer.json"))
+    require_file("exported config.json", join_path(config.artifact_dir, "config.json"))
+    require_file("exported tokenizer.json", join_path(config.artifact_dir, "tokenizer.json"))
 
 
 def configure_runtime_environment(config: SmokeConfig) -> None:
@@ -518,7 +429,7 @@ def _completion_payload(env: Any, config: SmokeConfig) -> dict[str, Any]:
 
 
 def serve_artifact(config: SmokeConfig) -> dict[str, Any]:
-    _require_file("artifact config.json", join_path(config.artifact_dir, "config.json"))
+    require_file("artifact config.json", join_path(config.artifact_dir, "config.json"))
     configure_runtime_environment(config)
     staged_artifact = stage_artifact_for_vllm(config.artifact_dir)
 
@@ -655,132 +566,121 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
             "instruction-following failure."
         ),
     }
-    _write_json(config.result_path, result)
+    write_json(config.result_path, result)
     print("grugmoe_real_checkpoint_vllm_smoke=" + json.dumps(result, sort_keys=True), flush=True)
     return result
 
 
 def submit_smoke(config: SmokeConfig, *, tpu_type: str, region: str, ram: str, disk: str, job_name: str) -> None:
-    # Fray is only needed for remote submission; local smoke phases should not import it.
-    from fray import current_client  # noqa: PLC0415
-    from fray.cluster import ResourceConfig  # noqa: PLC0415
-    from fray.types import Entrypoint, JobRequest, create_environment  # noqa: PLC0415
-    from marin.training.run_environment import env_vars_for_dependency_groups  # noqa: PLC0415
-
-    if region != DEFAULT_REGION:
-        raise ValueError(f"This smoke is pinned to {DEFAULT_REGION}; got {region!r}")
-    resources = ResourceConfig.with_tpu(tpu_type, regions=[region], ram=ram, disk=disk)
-    env_vars = env_vars_for_dependency_groups(
-        resources,
-        _DEPENDENCY_GROUPS,
-        {
-            _MARIN_GIT_SHA_ENV: _git_sha(),
+    submit_tpu_job(
+        config=config,
+        entrypoint=run_smoke,
+        dependency_groups=_DEPENDENCY_GROUPS,
+        base_env_vars={
+            MARIN_GIT_SHA_ENV: git_sha(),
             "MODEL_IMPL_TYPE": "auto",
             "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
             "JAX_COMPILATION_CACHE_DIR": config.cache_dir,
             "VLLM_XLA_CACHE_PATH": config.cache_dir,
             "PYTHONUNBUFFERED": "1",
         },
+        tpu_type=tpu_type,
+        region=region,
+        ram=ram,
+        disk=disk,
+        job_name=job_name,
+        summary_label="submitting_grugmoe_real_checkpoint_smoke",
+        summary_fields={
+            "output_dir": config.output_dir,
+            "artifact_dir": config.artifact_dir,
+            "cache_dir": config.cache_dir,
+        },
     )
-    request = JobRequest(
-        name=job_name,
-        entrypoint=Entrypoint.from_callable(run_smoke, args=(config,)),
-        resources=resources,
-        environment=create_environment(
-            extras=_DEPENDENCY_GROUPS,
-            env_vars=env_vars,
-        ),
-        max_retries_failure=0,
-    )
-    print(
-        "submitting_grugmoe_real_checkpoint_smoke="
-        + json.dumps(
-            {
-                "job_name": job_name,
-                "tpu_type": tpu_type,
-                "region": region,
-                "ram": ram,
-                "disk": disk,
-                "output_dir": config.output_dir,
-                "artifact_dir": config.artifact_dir,
-                "cache_dir": config.cache_dir,
-                "marin_sha": env_vars.get(_MARIN_GIT_SHA_ENV),
-            },
-            sort_keys=True,
-        ),
-        flush=True,
-    )
-    job = current_client().submit(request)
-    print("submitted_job_id=" + str(job.job_id), flush=True)
-    job.wait(raise_on_failure=True)
 
 
-def _default_output_dir() -> str:
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return join_path(OUTPUT_ROOT, stamp)
-
-
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--local", action="store_true", help="Run in this process instead of submitting a TPU job.")
-    parser.add_argument("--phase", choices=("all", "preflight", "export", "serve"), default="all")
-    parser.add_argument("--checkpoint-path", default=REAL_CHECKPOINT_PATH)
-    parser.add_argument("--tokenizer-path", default=LLAMA31_TOKENIZER_PATH)
-    parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--cache-dir", default=CACHE_ROOT)
-    parser.add_argument("--prompt", default=PROMPT)
-    parser.add_argument("--expected-output", default=DEFAULT_EXPECTED_OUTPUT)
-    parser.add_argument(
-        "--calibrate-output",
-        action="store_true",
-        help="Record the observed deterministic completion instead of asserting a preconfigured one.",
+@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.option("--local", is_flag=True, help="Run in this process instead of submitting a TPU job.")
+@click.option("--phase", type=click.Choice(("all", "preflight", "export", "serve")), default="all", show_default=True)
+@click.option("--checkpoint-path", default=REAL_CHECKPOINT_PATH, show_default=True)
+@click.option("--tokenizer-path", default=LLAMA31_TOKENIZER_PATH, show_default=True)
+@click.option("--output-dir", default=None)
+@click.option("--cache-dir", default=CACHE_ROOT, show_default=True)
+@click.option("--prompt", default=PROMPT, show_default=True)
+@click.option("--expected-output", default=DEFAULT_EXPECTED_OUTPUT, show_default=True)
+@click.option(
+    "--calibrate-output",
+    is_flag=True,
+    help="Record the observed deterministic completion instead of asserting a preconfigured one.",
+)
+@click.option("--overwrite", is_flag=True, help="Remove an existing output dir before export.")
+@click.option("--max-shard-size", type=int, default=DEFAULT_MAX_SHARD_SIZE, show_default=True)
+@click.option("--max-model-len", type=int, default=DEFAULT_MAX_MODEL_LEN, show_default=True)
+@click.option("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS, show_default=True)
+@click.option("--server-port", type=int, default=8000, show_default=True)
+@click.option("--server-timeout-seconds", type=int, default=DEFAULT_SERVER_TIMEOUT_SECONDS, show_default=True)
+@click.option("--vllm-dtype", type=click.Choice(("bfloat16", "float32")), default=DEFAULT_VLLM_DTYPE, show_default=True)
+@click.option("--tpu-type", default=DEFAULT_TPU_TYPE, show_default=True)
+@click.option("--region", default=DEFAULT_REGION, show_default=True)
+@click.option("--ram", default=DEFAULT_RAM, show_default=True)
+@click.option("--disk", default=DEFAULT_DISK, show_default=True)
+@click.option("--job-name", default="grugmoe-real-checkpoint-vllm-smoke", show_default=True)
+def _main_command(
+    *,
+    local: bool,
+    phase: str,
+    checkpoint_path: str,
+    tokenizer_path: str,
+    output_dir: str | None,
+    cache_dir: str,
+    prompt: str,
+    expected_output: str | None,
+    calibrate_output: bool,
+    overwrite: bool,
+    max_shard_size: int,
+    max_model_len: int,
+    max_tokens: int,
+    server_port: int,
+    server_timeout_seconds: int,
+    vllm_dtype: str,
+    tpu_type: str,
+    region: str,
+    ram: str,
+    disk: str,
+    job_name: str,
+) -> None:
+    config = SmokeConfig(
+        phase=phase,
+        checkpoint_path=checkpoint_path,
+        tokenizer_path=tokenizer_path,
+        output_dir=output_dir or default_output_dir(OUTPUT_ROOT),
+        cache_dir=cache_dir,
+        prompt=prompt,
+        expected_output=expected_output,
+        calibrate_output=calibrate_output,
+        overwrite=overwrite,
+        max_shard_size=max_shard_size,
+        max_model_len=max_model_len,
+        max_tokens=max_tokens,
+        server_port=server_port,
+        server_timeout_seconds=server_timeout_seconds,
+        vllm_dtype=vllm_dtype,
     )
-    parser.add_argument("--overwrite", action="store_true", help="Remove an existing output dir before export.")
-    parser.add_argument("--max-shard-size", type=int, default=DEFAULT_MAX_SHARD_SIZE)
-    parser.add_argument("--max-model-len", type=int, default=DEFAULT_MAX_MODEL_LEN)
-    parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
-    parser.add_argument("--server-port", type=int, default=8000)
-    parser.add_argument("--server-timeout-seconds", type=int, default=DEFAULT_SERVER_TIMEOUT_SECONDS)
-    parser.add_argument("--vllm-dtype", default=DEFAULT_VLLM_DTYPE, choices=("bfloat16", "float32"))
-    parser.add_argument("--tpu-type", default=DEFAULT_TPU_TYPE)
-    parser.add_argument("--region", default=DEFAULT_REGION)
-    parser.add_argument("--ram", default=DEFAULT_RAM)
-    parser.add_argument("--disk", default=DEFAULT_DISK)
-    parser.add_argument("--job-name", default="grugmoe-real-checkpoint-vllm-smoke")
-    return parser.parse_args(argv)
+    validate_locality(config)
+    if local:
+        run_smoke(config)
+        return
+    submit_smoke(
+        config,
+        tpu_type=tpu_type,
+        region=region,
+        ram=ram,
+        disk=disk,
+        job_name=job_name,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    config = SmokeConfig(
-        phase=args.phase,
-        checkpoint_path=args.checkpoint_path,
-        tokenizer_path=args.tokenizer_path,
-        output_dir=args.output_dir or _default_output_dir(),
-        cache_dir=args.cache_dir,
-        prompt=args.prompt,
-        expected_output=args.expected_output,
-        calibrate_output=args.calibrate_output,
-        overwrite=args.overwrite,
-        max_shard_size=args.max_shard_size,
-        max_model_len=args.max_model_len,
-        max_tokens=args.max_tokens,
-        server_port=args.server_port,
-        server_timeout_seconds=args.server_timeout_seconds,
-        vllm_dtype=args.vllm_dtype,
-    )
-    validate_locality(config)
-    if args.local:
-        run_smoke(config)
-    else:
-        submit_smoke(
-            config,
-            tpu_type=args.tpu_type,
-            region=args.region,
-            ram=args.ram,
-            disk=args.disk,
-            job_name=args.job_name,
-        )
+    _main_command.main(args=argv, standalone_mode=False)
     return 0
 
 

@@ -144,16 +144,19 @@ def test_executable_mlp_from_legacy_split_concatenates_gate_and_up_weights():
     np.testing.assert_array_equal(np.asarray(mlp.expert_mlp.w_down), np.full((2, 3, 2), 3.0))
 
 
-def test_main_submits_compare_job_with_fresh_default_reference(monkeypatch):
+def test_main_submits_compare_job_with_explicit_reference(monkeypatch):
     calls = []
 
     def fake_submit_compare(config, *, tpu_type, region, ram, disk, job_name):
         calls.append((config, tpu_type, region, ram, disk, job_name))
 
     monkeypatch.setattr(compare, "submit_compare", fake_submit_compare)
+    reference_path = "gs://marin-eu-west4/tmp/ttl=14d/grugmoe-real-checkpoint-vllm-smoke/test/result.json"
 
     result = compare.main(
         [
+            "--vllm-result-path",
+            reference_path,
             "--output-dir",
             "gs://marin-eu-west4/tmp/ttl=14d/grugmoe-real-checkpoint-levanter-vllm-compare/test",
             "--cache-dir",
@@ -166,7 +169,7 @@ def test_main_submits_compare_job_with_fresh_default_reference(monkeypatch):
     assert result == 0
     assert len(calls) == 1
     config, tpu_type, region, ram, disk, job_name = calls[0]
-    assert config.vllm_result_path == compare.VLLM_REFERENCE_RESULT_PATH
+    assert config.vllm_result_path == reference_path
     assert tpu_type == compare.DEFAULT_TPU_TYPE
     assert region == compare.DEFAULT_REGION
     assert ram == compare.DEFAULT_RAM

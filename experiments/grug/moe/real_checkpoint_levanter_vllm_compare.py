@@ -11,20 +11,17 @@ persisted vLLM result.
 
 from __future__ import annotations
 
-import argparse
 import dataclasses
-import importlib.util
 import json
 import os
 import sys
 import time
 from contextlib import ExitStack
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
+import click
 import equinox as eqx
-import fsspec
 import haliax
 import jax
 import jax.numpy as jnp
@@ -36,34 +33,36 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.utils.activation import ActivationFunctionEnum
 
 from experiments.grug.moe.model import MoEMLP
-from experiments.grug.moe.real_checkpoint_vllm_smoke import (
-    _MARIN_GIT_SHA_ENV,
+from experiments.grug.moe.real_checkpoint_runtime import (
     DEFAULT_DISK,
-    DEFAULT_MAX_TOKENS,
     DEFAULT_RAM,
     DEFAULT_REGION,
     DEFAULT_TPU_TYPE,
     EUROPE_WEST4_GCS_PREFIX,
+    MARIN_GIT_SHA_ENV,
+    default_output_dir,
+    exists,
+    git_sha,
+    join_path,
+    read_json,
+    remove_tree,
+    require_local_or_europe_west4,
+    runtime_snapshot,
+    submit_tpu_job,
+    write_json,
+)
+from experiments.grug.moe.real_checkpoint_vllm_smoke import (
+    DEFAULT_MAX_TOKENS,
     LLAMA31_TOKENIZER_PATH,
     PROMPT,
     REAL_CHECKPOINT_PATH,
-    _exists,
-    _git_sha,
     _load_legacy_split_expert_checkpoint,
-    _rm_tree,
-    _write_json,
-    join_path,
     real_checkpoint_model_config,
-    require_local_or_europe_west4,
-    runtime_snapshot,
 )
 from experiments.grug.moe.real_checkpoint_vllm_smoke import (
     SmokeConfig as VllmSmokeConfig,
 )
 
-VLLM_REFERENCE_RESULT_PATH = (
-    "gs://marin-eu-west4/tmp/ttl=14d/grugmoe-real-checkpoint-vllm-smoke/" "final-codex-20260620-fresh/result.json"
-)
 OUTPUT_ROOT = "gs://marin-eu-west4/tmp/ttl=14d/grugmoe-real-checkpoint-levanter-vllm-compare"
 CACHE_ROOT = "gs://marin-eu-west4/compilation-cache/grugmoe-real-checkpoint-levanter-vllm-compare"
 DEFAULT_DECODE_SEQ_LEN = 128
@@ -111,37 +110,10 @@ def validate_locality(config: CompareConfig) -> dict[str, str]:
     return paths
 
 
-def _read_json(path: str) -> dict[str, Any]:
-    require_local_or_europe_west4("json_path", path)
-    with fsspec.open(path, "r") as f:
-        payload = json.load(f)
-    if not isinstance(payload, dict):
-        raise TypeError(f"expected JSON object at {path}, got {type(payload).__name__}")
-    return payload
-
-
 def _configure_runtime_environment(config: CompareConfig) -> None:
     require_local_or_europe_west4("cache_dir", config.cache_dir)
     os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", config.cache_dir)
     os.environ.setdefault("PYTHONUNBUFFERED", "1")
-
-
-def _runtime_snapshot() -> dict[str, Any]:
-    snapshot = runtime_snapshot(include_jax_devices=False)
-    try:
-        grugmoe_spec = repr(importlib.util.find_spec("tpu_inference.models.jax.grugmoe"))
-    except ModuleNotFoundError as exc:
-        grugmoe_spec = f"unavailable:{exc!r}"
-    snapshot.update(
-        {
-            "grugmoe_spec": grugmoe_spec,
-            "jax_process_index": jax.process_index(),
-            "jax_process_count": jax.process_count(),
-            "jax_local_device_count": jax.local_device_count(),
-            "jax_devices": [str(device) for device in jax.devices()],
-        }
-    )
-    return snapshot
 
 
 def _restore_config(config: CompareConfig) -> VllmSmokeConfig:
@@ -544,13 +516,13 @@ def run_compare(config: CompareConfig) -> dict[str, Any]:
     _configure_runtime_environment(config)
     locality_paths = validate_locality(config)
     if config.output_dir.startswith(EUROPE_WEST4_GCS_PREFIX) or os.path.exists(config.output_dir):
-        if _exists(config.output_dir):
+        if exists(config.output_dir):
             if not config.overwrite:
                 raise FileExistsError(f"{config.output_dir} already exists; pass --overwrite to regenerate it")
-            _rm_tree(config.output_dir)
+            remove_tree(config.output_dir)
 
     _require_reference_inputs(config)
-    vllm_payload = _read_json(config.vllm_result_path)
+    vllm_payload = read_json(config.vllm_result_path)
     vllm_reference = _extract_vllm_reference(vllm_payload)
     expected_prompt_tokens = vllm_reference["prompt_token_count"]
     if expected_prompt_tokens is not None:
@@ -615,7 +587,7 @@ def run_compare(config: CompareConfig) -> dict[str, Any]:
         "max_new_tokens": config.max_new_tokens,
         "decode_seq_len": config.decode_seq_len,
         "locality_paths": locality_paths,
-        "runtime": _runtime_snapshot(),
+        "runtime": runtime_snapshot(include_jax_devices=True, include_grugmoe_spec=True),
         "model_config": dataclasses.asdict(model_cfg),
         "tokenization": tokenization,
         "levanter_result": levanter_result,
@@ -631,7 +603,7 @@ def run_compare(config: CompareConfig) -> dict[str, Any]:
         "elapsed_seconds": total_elapsed,
         "sharp_edges": [_DEFAULT_OUTPUT_SHARP_EDGE, _SPLASH_PADDING_SHARP_EDGE],
     }
-    _write_json(config.result_path, result)
+    write_json(config.result_path, result)
     print("grugmoe_levanter_vllm_compare=" + json.dumps(result, sort_keys=True), flush=True)
     if config.fail_on_mismatch and not comparison["passed"]:
         raise AssertionError("Levanter/JAX output did not match vLLM reference; see result JSON for divergence")
@@ -645,120 +617,100 @@ def _require_reference_inputs(config: CompareConfig) -> None:
         ("vLLM result", config.vllm_result_path),
     ):
         require_local_or_europe_west4(label, path)
-        if not _exists(path):
+        if not exists(path):
             raise FileNotFoundError(f"{label} not found at {path}")
 
 
 def submit_compare(config: CompareConfig, *, tpu_type: str, region: str, ram: str, disk: str, job_name: str) -> None:
-    # Fray is only needed for remote submission; local compare phases should not import it.
-    from fray import current_client  # noqa: PLC0415
-    from fray.cluster import ResourceConfig  # noqa: PLC0415
-    from fray.types import Entrypoint, JobRequest, create_environment  # noqa: PLC0415
-    from marin.training.run_environment import env_vars_for_dependency_groups  # noqa: PLC0415
-
-    if region != DEFAULT_REGION:
-        raise ValueError(f"This smoke is pinned to {DEFAULT_REGION}; got {region!r}")
-    resources = ResourceConfig.with_tpu(tpu_type, regions=[region], ram=ram, disk=disk)
-    env_vars = env_vars_for_dependency_groups(
-        resources,
-        _DEPENDENCY_GROUPS,
-        {
-            _MARIN_GIT_SHA_ENV: _git_sha(),
+    submit_tpu_job(
+        config=config,
+        entrypoint=run_compare,
+        dependency_groups=_DEPENDENCY_GROUPS,
+        base_env_vars={
+            MARIN_GIT_SHA_ENV: git_sha(),
             "JAX_COMPILATION_CACHE_DIR": config.cache_dir,
             "PYTHONUNBUFFERED": "1",
         },
+        tpu_type=tpu_type,
+        region=region,
+        ram=ram,
+        disk=disk,
+        job_name=job_name,
+        summary_label="submitting_grugmoe_levanter_vllm_compare",
+        summary_fields={
+            "vllm_result_path": config.vllm_result_path,
+            "output_dir": config.output_dir,
+            "result_path": config.result_path,
+            "cache_dir": config.cache_dir,
+        },
     )
-    request = JobRequest(
-        name=job_name,
-        entrypoint=Entrypoint.from_callable(run_compare, args=(config,)),
-        resources=resources,
-        environment=create_environment(
-            extras=_DEPENDENCY_GROUPS,
-            env_vars=env_vars,
-        ),
-        max_retries_failure=0,
-    )
-    print(
-        "submitting_grugmoe_levanter_vllm_compare="
-        + json.dumps(
-            {
-                "job_name": job_name,
-                "tpu_type": tpu_type,
-                "region": region,
-                "ram": ram,
-                "disk": disk,
-                "vllm_result_path": config.vllm_result_path,
-                "output_dir": config.output_dir,
-                "result_path": config.result_path,
-                "cache_dir": config.cache_dir,
-                "marin_sha": env_vars.get(_MARIN_GIT_SHA_ENV),
-            },
-            sort_keys=True,
-        ),
-        flush=True,
-    )
-    job = current_client().submit(request)
-    print("submitted_job_id=" + str(job.job_id), flush=True)
-    job.wait(raise_on_failure=True)
 
 
-def _default_output_dir() -> str:
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return join_path(OUTPUT_ROOT, stamp)
-
-
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint-path", default=REAL_CHECKPOINT_PATH)
-    parser.add_argument("--tokenizer-path", default=LLAMA31_TOKENIZER_PATH)
-    parser.add_argument("--vllm-result-path", default=VLLM_REFERENCE_RESULT_PATH)
-    parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--cache-dir", default=CACHE_ROOT)
-    parser.add_argument("--prompt", default=PROMPT)
-    parser.add_argument("--max-new-tokens", type=int, default=DEFAULT_MAX_TOKENS)
-    parser.add_argument("--decode-seq-len", type=int, default=DEFAULT_DECODE_SEQ_LEN)
-    parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument("--fail-on-mismatch", action="store_true")
-    parser.add_argument("--tpu-type", default=DEFAULT_TPU_TYPE)
-    parser.add_argument("--region", default=DEFAULT_REGION)
-    parser.add_argument("--ram", default=DEFAULT_RAM)
-    parser.add_argument("--disk", default=DEFAULT_DISK)
-    parser.add_argument("--job-name", default="grugmoe-real-checkpoint-levanter-vllm-compare")
-    parser.add_argument(
-        "--local",
-        action="store_true",
-        help="Run in this process instead of submitting a TPU job.",
+@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.option("--checkpoint-path", default=REAL_CHECKPOINT_PATH, show_default=True)
+@click.option("--tokenizer-path", default=LLAMA31_TOKENIZER_PATH, show_default=True)
+@click.option("--vllm-result-path", required=True)
+@click.option("--output-dir", default=None)
+@click.option("--cache-dir", default=CACHE_ROOT, show_default=True)
+@click.option("--prompt", default=PROMPT, show_default=True)
+@click.option("--max-new-tokens", type=int, default=DEFAULT_MAX_TOKENS, show_default=True)
+@click.option("--decode-seq-len", type=int, default=DEFAULT_DECODE_SEQ_LEN, show_default=True)
+@click.option("--overwrite", is_flag=True)
+@click.option("--fail-on-mismatch", is_flag=True)
+@click.option("--tpu-type", default=DEFAULT_TPU_TYPE, show_default=True)
+@click.option("--region", default=DEFAULT_REGION, show_default=True)
+@click.option("--ram", default=DEFAULT_RAM, show_default=True)
+@click.option("--disk", default=DEFAULT_DISK, show_default=True)
+@click.option("--job-name", default="grugmoe-real-checkpoint-levanter-vllm-compare", show_default=True)
+@click.option("--local", is_flag=True, help="Run in this process instead of submitting a TPU job.")
+def _main_command(
+    *,
+    checkpoint_path: str,
+    tokenizer_path: str,
+    vllm_result_path: str,
+    output_dir: str | None,
+    cache_dir: str,
+    prompt: str,
+    max_new_tokens: int,
+    decode_seq_len: int,
+    overwrite: bool,
+    fail_on_mismatch: bool,
+    tpu_type: str,
+    region: str,
+    ram: str,
+    disk: str,
+    job_name: str,
+    local: bool,
+) -> None:
+    if region != DEFAULT_REGION:
+        raise ValueError(f"This smoke is pinned to {DEFAULT_REGION}; got {region!r}")
+    config = CompareConfig(
+        checkpoint_path=checkpoint_path,
+        tokenizer_path=tokenizer_path,
+        vllm_result_path=vllm_result_path,
+        output_dir=output_dir or default_output_dir(OUTPUT_ROOT),
+        cache_dir=cache_dir,
+        prompt=prompt,
+        max_new_tokens=max_new_tokens,
+        decode_seq_len=decode_seq_len,
+        overwrite=overwrite,
+        fail_on_mismatch=fail_on_mismatch,
     )
-    return parser.parse_args(argv)
+    if local:
+        run_compare(config)
+        return
+    submit_compare(
+        config,
+        tpu_type=tpu_type,
+        region=region,
+        ram=ram,
+        disk=disk,
+        job_name=job_name,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    if args.region != DEFAULT_REGION:
-        raise ValueError(f"This smoke is pinned to {DEFAULT_REGION}; got {args.region!r}")
-    config = CompareConfig(
-        checkpoint_path=args.checkpoint_path,
-        tokenizer_path=args.tokenizer_path,
-        vllm_result_path=args.vllm_result_path,
-        output_dir=args.output_dir or _default_output_dir(),
-        cache_dir=args.cache_dir,
-        prompt=args.prompt,
-        max_new_tokens=args.max_new_tokens,
-        decode_seq_len=args.decode_seq_len,
-        overwrite=args.overwrite,
-        fail_on_mismatch=args.fail_on_mismatch,
-    )
-    if args.local:
-        run_compare(config)
-    else:
-        submit_compare(
-            config,
-            tpu_type=args.tpu_type,
-            region=args.region,
-            ram=args.ram,
-            disk=args.disk,
-            job_name=args.job_name,
-        )
+    _main_command.main(args=argv, standalone_mode=False)
     return 0
 
 

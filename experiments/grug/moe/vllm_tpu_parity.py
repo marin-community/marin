@@ -164,7 +164,7 @@ def _patch_tpu_single_rank(tpu_grugmoe):
         pp_utils.get_pp_group = old_pp_utils_get_pp_group
 
 
-def _load_tpu_grugmoe(tpu_inference_root: Path | None):
+def load_tpu_grugmoe(tpu_inference_root: Path | None = None):
     if tpu_inference_root is not None:
         root = str(tpu_inference_root)
         if root not in sys.path:
@@ -1489,7 +1489,7 @@ def main() -> None:
     args = parser.parse_args()
 
     tpu_inference_root = args.tpu_inference_root.resolve() if args.tpu_inference_root is not None else None
-    tpu_grugmoe = _load_tpu_grugmoe(tpu_inference_root)
+    tpu_grugmoe = load_tpu_grugmoe(tpu_inference_root)
     check_moe_component(tpu_grugmoe)
     if not args.component_only:
         check_full_forward(tpu_grugmoe)
