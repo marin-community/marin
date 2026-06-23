@@ -68,14 +68,18 @@ def cli(ctx: click.Context, project: str, region: str, zone: str, vm_name: str, 
     }
 
 
+def _git_sha() -> str:
+    return _run(
+        ["git", "-C", str(PROBES_DIR), "rev-parse", "--short", "HEAD"],
+        capture_output=True,
+    ).stdout.strip()
+
+
 @cli.command()
 @click.pass_obj
 def build(cfg: dict[str, str]) -> None:
     """Build the image, tag with git sha and 'latest', push to Artifact Registry."""
-    sha = _run(
-        ["git", "-C", str(PROBES_DIR), "rev-parse", "--short", "HEAD"],
-        capture_output=True,
-    ).stdout.strip()
+    sha = _git_sha()
     image_sha = f"{cfg['registry']}:{sha}"
     image_latest = f"{cfg['registry']}:latest"
 
@@ -102,9 +106,15 @@ def build(cfg: dict[str, str]) -> None:
 @cli.command()
 @click.pass_obj
 def apply(cfg: dict[str, str]) -> None:
-    """Roll the prod VM to the 'latest' image."""
-    image_latest = f"{cfg['registry']}:latest"
-    logger.info("Rolling VM %s (%s) to %s", cfg["vm_name"], cfg["zone"], image_latest)
+    """Roll the prod VM to the current git sha's image.
+
+    Deploys the immutable ``:<sha>`` tag, not ``:latest``: konlet keeps running a
+    locally-cached ``:latest`` when update-container is handed the same mutable
+    ref, so a same-tag roll silently runs the old image. A distinct ``:<sha>``
+    ref forces the pull. Build the matching image first (``build`` at this HEAD).
+    """
+    image_sha = f"{cfg['registry']}:{_git_sha()}"
+    logger.info("Rolling VM %s (%s) to %s", cfg["vm_name"], cfg["zone"], image_sha)
     _run(
         [
             "gcloud",
@@ -114,7 +124,7 @@ def apply(cfg: dict[str, str]) -> None:
             cfg["vm_name"],
             f"--project={cfg['project']}",
             f"--zone={cfg['zone']}",
-            f"--container-image={image_latest}",
+            f"--container-image={image_sha}",
         ]
     )
 
