@@ -40,7 +40,7 @@ def _measure_steady_state(
     *,
     warmup_steps: int,
     bench_iters: int,
-) -> None:
+) -> float:
     for _ in range(warmup_steps):
         jax.block_until_ready(fn())
 
@@ -56,6 +56,53 @@ def _measure_steady_state(
         f"min={float(np.min(times_ms)):.3f} ms "
         f"max={float(np.max(times_ms)):.3f} ms "
         f"iters={bench_iters}"
+    )
+    return float(np.mean(times_ms))
+
+
+def _print_speedup(label: str, baseline_ms: float, candidate_ms: float) -> None:
+    print(
+        f"{label}_speedup: "
+        f"{baseline_ms / candidate_ms:.3f}x baseline={baseline_ms:.3f} ms candidate={candidate_ms:.3f} ms"
+    )
+
+
+def _print_roofline(
+    *,
+    ep_size: int,
+    tokens_per_rank: int,
+    experts_per_rank: int,
+    top_k: int,
+    hidden: int,
+    intermediate: int,
+    dtype_bytes: int,
+    dispatch_ms: float,
+    w13_ms: float,
+) -> None:
+    routed_rows = ep_size * tokens_per_rank * top_k
+    dispatch_payload_bytes = routed_rows * hidden * dtype_bytes
+    w13_flops = 2 * routed_rows * hidden * (2 * intermediate)
+    w13_bytes = (
+        routed_rows * hidden * dtype_bytes
+        + ep_size * experts_per_rank * hidden * (2 * intermediate) * dtype_bytes
+        + routed_rows * intermediate * dtype_bytes
+    )
+    dispatch_payload_gbs = dispatch_payload_bytes / (dispatch_ms / 1e3) / 1e9
+    w13_tflops = w13_flops / (w13_ms / 1e3) / 1e12
+    w13_intensity = w13_flops / w13_bytes
+    w13_hbm_bound_tflops = 3.35e12 * w13_intensity / 1e12
+    h100_bf16_peak_tflops = 989.0
+    w13_roofline_tflops = min(h100_bf16_peak_tflops * ep_size, w13_hbm_bound_tflops * ep_size)
+    print(
+        "roofline: "
+        f"routed_rows={routed_rows} "
+        f"dispatch_payload={dispatch_payload_bytes / 1024:.1f} KiB "
+        f"dispatch_payload_bw={dispatch_payload_gbs:.6f} GB/s "
+        f"w13_flops={w13_flops / 1e6:.3f} MFLOP "
+        f"w13_bytes={w13_bytes / 1024:.1f} KiB "
+        f"w13_intensity={w13_intensity:.3f} flop/byte "
+        f"w13_measured={w13_tflops:.6f} TFLOP/s "
+        f"w13_h100_sxm_roofline_estimate={w13_roofline_tflops:.3f} TFLOP/s"
     )
 
 
@@ -306,6 +353,37 @@ def main() -> None:
         lambda: dispatch_prepacked_moe_dispatch_up_reference(prepacked, recv_capacity=recv_capacity),
     )
     ref_h, _ = _time_block("w13_silu/reference", lambda: compute_moe_up_from_layout_reference(ref_layout, w_gate_up))
+    ref_dispatch_steady_ms = None
+    ref_w13_steady_ms = None
+    if args.bench_iters > 0:
+        ref_dispatch_fn = jax.jit(
+            lambda prepacked_arg: dispatch_prepacked_moe_dispatch_up_reference(
+                prepacked_arg,
+                recv_capacity=recv_capacity,
+            )
+        )
+        ref_w13_fn = jax.jit(compute_moe_up_from_layout_reference)
+
+        def run_ref_dispatch():
+            return ref_dispatch_fn(prepacked)
+
+        def run_ref_w13():
+            return ref_w13_fn(ref_layout, w_gate_up)
+
+        _time_block("dispatch/reference_jit", run_ref_dispatch)
+        ref_dispatch_steady_ms = _measure_steady_state(
+            "dispatch/reference_jit",
+            run_ref_dispatch,
+            warmup_steps=args.warmup_steps,
+            bench_iters=args.bench_iters,
+        )
+        _time_block("w13_silu/reference_jit", run_ref_w13)
+        ref_w13_steady_ms = _measure_steady_state(
+            "w13_silu/reference_jit",
+            run_ref_w13,
+            warmup_steps=args.warmup_steps,
+            bench_iters=args.bench_iters,
+        )
 
     if not args.run_pallas:
         return
@@ -321,13 +399,20 @@ def main() -> None:
             return pallas_dispatch_fn(*pallas_dispatch_args)
 
         pallas_layout, _ = _time_block("dispatch/mosaic_gpu", run_pallas_dispatch)
+        pallas_dispatch_steady_ms = None
         if args.bench_iters > 0:
-            _measure_steady_state(
+            pallas_dispatch_steady_ms = _measure_steady_state(
                 "dispatch/mosaic_gpu",
                 run_pallas_dispatch,
                 warmup_steps=args.warmup_steps,
                 bench_iters=args.bench_iters,
             )
+            if ref_dispatch_steady_ms is not None:
+                _print_speedup(
+                    "dispatch/mosaic_gpu_vs_reference_jit",
+                    ref_dispatch_steady_ms,
+                    pallas_dispatch_steady_ms,
+                )
         dispatch_err = jnp.max(
             jnp.abs(pallas_layout.recv_x.astype(jnp.float32) - ref_layout.recv_x.astype(jnp.float32))
         )
@@ -357,19 +442,34 @@ def main() -> None:
             return pallas_w13_fn(*pallas_w13_args)
 
         pallas_h, _ = _time_block("w13_silu/mosaic_gpu", run_pallas_w13)
+        pallas_w13_steady_ms = None
         if args.bench_iters > 0:
-            _measure_steady_state(
+            pallas_w13_steady_ms = _measure_steady_state(
                 "w13_silu/mosaic_gpu",
                 run_pallas_w13,
                 warmup_steps=args.warmup_steps,
                 bench_iters=args.bench_iters,
             )
+            if ref_w13_steady_ms is not None:
+                _print_speedup("w13_silu/mosaic_gpu_vs_reference_jit", ref_w13_steady_ms, pallas_w13_steady_ms)
         h_err = jnp.max(jnp.abs(pallas_h.astype(jnp.float32) - ref_h.astype(jnp.float32)))
         h_err_float = float(h_err)
         print(f"w13_silu_max_abs_error: {h_err_float:.6g}")
         if args.debug_errors:
             _print_error_debug("w13_silu", pallas_h, ref_h, pallas_layout, w_gate_up)
         _check_error("w13_silu_max_abs_error", h_err_float, args.w13_atol)
+        if pallas_dispatch_steady_ms is not None and pallas_w13_steady_ms is not None:
+            _print_roofline(
+                ep_size=args.ep_size,
+                tokens_per_rank=args.tokens_per_rank,
+                experts_per_rank=args.experts_per_rank,
+                top_k=args.top_k,
+                hidden=args.hidden,
+                intermediate=args.intermediate,
+                dtype_bytes=2 if dtype == jnp.bfloat16 else 4,
+                dispatch_ms=pallas_dispatch_steady_ms,
+                w13_ms=pallas_w13_steady_ms,
+            )
 
 
 if __name__ == "__main__":

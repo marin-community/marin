@@ -107,3 +107,32 @@
   should replace scalar row writes with tiled SMEM-staged remote copies.
 - Next action: Implement tiled dispatch copy path and rerun the same steady-state
   command for an apples-to-apples comparison.
+
+### 2026-06-23 - Baseline and roofline comparison
+
+- Hypothesis: On the validation shape, JIT reference baselines and roofline math
+  will show whether Mosaic GPU is compute-limited or dominated by the current
+  scalar remote-write validation structure.
+- Command: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 1800 --job-name 6597-moe-dispatch-up-perf-2 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 64 --intermediate 64 --dtype bf16 --run-pallas --bench-iters 5 --warmup-steps 2`
+- Config: Single-node CoreWeave `cw-us-east-02a`, H100x8, explicit `expert`
+  mesh, bf16, `H=64`, `I=64`, `T/rank=8`, top-k 4, four local experts per
+  rank. This is still the validation shape, not the May D2560 shape.
+- Result:
+  - JIT reference dispatch steady-state: mean 0.638 ms.
+  - Mosaic GPU dispatch steady-state: mean 1.796 ms, or 0.355x reference.
+  - JIT reference W13/SiLU steady-state: mean 0.160 ms.
+  - Mosaic GPU W13/SiLU steady-state: mean 0.214 ms, or 0.751x reference.
+  - Correctness remained clean: dispatch max error 0, metadata errors 0,
+    W13/SiLU max bf16 error 2.
+  - Roofline summary, using H100 SXM order-of-magnitude peaks: 256 routed rows,
+    dispatch payload 32 KiB, dispatch payload bandwidth 0.018 GB/s, W13 work
+    4.19 MFLOP, W13 measured 0.0196 TFLOP/s, estimated W13 roofline
+    190.6 TFLOP/s.
+- Interpretation: The current Mosaic GPU kernels are not near hardware limits.
+  Dispatch is dominated by serial scalar remote writes and synchronization, not
+  payload bandwidth. W13/SiLU is far below roofline because this shape is tiny
+  and launch/scheduling overhead dominates. The JIT reference remains faster on
+  both subphases for this validation shape.
+- Next action: Do not tune block sizes yet. First replace scalar dispatch with
+  tiled SMEM-staged remote copies, then rerun this exact comparison. Only after
+  that should we scale toward the May D2560 target.
