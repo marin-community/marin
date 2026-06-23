@@ -41,6 +41,8 @@ from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import JobName, TaskAttempt
 from iris.cluster.worker.stats import IrisTaskStat
 from iris.rpc import job_pb2
+from iris.test_util import wait_for_condition
+from rigging.timing import Duration
 
 from .conftest import make_batch, make_kueue_provider, make_run_req, populate_node, populate_pod
 
@@ -532,86 +534,53 @@ def test_sync_survives_node_list_failure(provider, k8s):
 # ---------------------------------------------------------------------------
 
 
-def _collect_resources_once(provider) -> None:
-    """Drive one synchronous resource-collection pass.
+def test_resource_stats_only_for_running_tasks(provider, k8s, task_stats_table):
+    """reconcile registers running pods (not terminal ones) so the background
+    collector emits IrisTaskStat rows only for running tasks."""
+    running = RunningTaskEntry(task_id=JobName.from_wire("/job/run"), attempt_id=0)
+    terminal = RunningTaskEntry(task_id=JobName.from_wire("/job/done"), attempt_id=0)
+    running_pod = _pod_name(running.task_id, running.attempt_id)
+    terminal_pod = _pod_name(terminal.task_id, terminal.attempt_id)
 
-    reconcile() registers the running-pod set with the background collector;
-    this runs a single collection against that set without waiting on (or
-    racing) the collector's poll thread.
-    """
-    assert provider._resource_collector is not None, "reconcile should have started the collector"
-    provider._resource_collector._collect_once()
+    populate_pod(k8s, running_pod, "Running")
+    populate_pod(k8s, terminal_pod, "Succeeded")
+    k8s.set_top_pod(running_pod, PodResourceUsage(cpu_millicores=500, memory_bytes=1024 * 1024 * 1024))
+    k8s.set_top_pod(terminal_pod, PodResourceUsage(cpu_millicores=999, memory_bytes=1024))
 
+    provider.reconcile(make_batch(running_tasks=[running, terminal]))
+    # The collector samples all tracked pods in one pass, so once the running
+    # pod's row lands a full cycle has run — the terminal pod's absence is real.
+    wait_for_condition(lambda: bool(task_stats_table.writes), timeout=Duration.from_seconds(5.0))
 
-def test_resource_stats_from_kubectl_top(provider, k8s, task_stats_table):
-    """Running pods emit IrisTaskStat rows via the ResourceCollector."""
-
-    task_id = JobName.from_wire("/job/0")
-    attempt_id = 0
-    pod_name = _pod_name(task_id, attempt_id)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
-
-    populate_pod(k8s, pod_name, "Running")
-    k8s.set_top_pod(pod_name, PodResourceUsage(cpu_millicores=500, memory_bytes=1024 * 1024 * 1024))
-
-    # reconcile registers the pod; then collect once.
-    provider.reconcile(make_batch(running_tasks=[entry]))
-    _collect_resources_once(provider)
-
-    rows = [row for batch_rows in task_stats_table.writes for row in batch_rows]
-    assert rows, "ResourceCollector did not write any IrisTaskStat rows"
+    rows = [row for batch_rows in list(task_stats_table.writes) for row in batch_rows]
     assert all(isinstance(r, IrisTaskStat) for r in rows)
-    latest = rows[-1]
-    assert latest.task_id == task_id.to_wire()
-    assert latest.attempt_id == attempt_id
-    assert latest.worker_id == pod_name
-    assert latest.cpu_millicores == 500
-    assert latest.memory_mb == 1024
+    assert {r.worker_id for r in rows} == {running_pod}, "only the running pod should be sampled"
+    row = next(r for r in rows if r.worker_id == running_pod)
+    assert row.task_id == running.task_id.to_wire()
+    assert row.cpu_millicores == 500
+    assert row.memory_mb == 1024
 
 
-def test_resource_stats_skipped_when_metrics_unavailable(provider, k8s, task_stats_table):
-    """No IrisTaskStat row is written when a pod has no metrics sample."""
-    task_id = JobName.from_wire("/job/0")
-    attempt_id = 0
-    pod_name = _pod_name(task_id, attempt_id)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
+def test_resource_collector_skips_pod_without_metrics_sample(k8s, task_stats_table):
+    """A tracked pod with no metrics sample produces no row."""
+    k8s.set_top_pod("pod-a", None)
 
-    populate_pod(k8s, pod_name, "Running")
-    k8s.set_top_pod(pod_name, None)
-
-    provider.reconcile(make_batch(running_tasks=[entry]))
-    _collect_resources_once(provider)
+    collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
+    collector.close()  # stop the background loop; drive one collection synchronously
+    collector.set_pods({("/job/0", 0): "pod-a"})
+    collector.collect_once()
 
     assert task_stats_table.writes == []
 
 
-def test_resource_stats_skipped_when_top_pods_raises(provider, k8s, task_stats_table):
-    """A raising bulk metrics query is swallowed; no IrisTaskStat row is written."""
-    task_id = JobName.from_wire("/job/0")
-    attempt_id = 0
-    pod_name = _pod_name(task_id, attempt_id)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
-
-    populate_pod(k8s, pod_name, "Running")
+def test_resource_collector_swallows_metrics_query_failure(k8s, task_stats_table):
+    """A raising bulk metrics query is swallowed; no row is written."""
     k8s.inject_persistent_failure("top_pods", RuntimeError("metrics-server unavailable"))
 
-    provider.reconcile(make_batch(running_tasks=[entry]))
-    _collect_resources_once(provider)
-
-    assert task_stats_table.writes == []
-
-
-def test_resource_stats_skipped_for_non_running_pods(provider, k8s, task_stats_table):
-    """Terminal pods are not registered with the resource collector, so no rows land."""
-    task_id = JobName.from_wire("/job/0")
-    attempt_id = 0
-    pod_name = _pod_name(task_id, attempt_id)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
-
-    populate_pod(k8s, pod_name, "Succeeded")
-
-    provider.reconcile(make_batch(running_tasks=[entry]))
-    _collect_resources_once(provider)
+    collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
+    collector.close()
+    collector.set_pods({("/job/0", 0): "pod-a"})
+    collector.collect_once()
 
     assert task_stats_table.writes == []
 
@@ -1140,21 +1109,21 @@ def test_log_collector_set_pods_preserves_cursor_state(k8s, log_client):
 
 
 def test_resource_collector_set_pods_replaces_active_set(k8s, task_stats_table):
-    """set_pods() replaces the tracked pod set wholesale."""
+    """set_pods() replaces the tracked pod set wholesale: a pod dropped from the
+    set stops being sampled on the next collection."""
+    k8s.set_top_pod("pod-a", PodResourceUsage(cpu_millicores=100, memory_bytes=128 * 1024 * 1024))
+    k8s.set_top_pod("pod-b", PodResourceUsage(cpu_millicores=100, memory_bytes=128 * 1024 * 1024))
 
     collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
-    key_a = ("/job/0", 0)
-    key_b = ("/job/1", 0)
+    collector.close()  # stop the background loop; drive collections synchronously
 
-    collector.set_pods({key_a: "pod-a", key_b: "pod-b"})
-    with collector._lock:
-        assert collector._pods == {key_a: "pod-a", key_b: "pod-b"}
+    collector.set_pods({("/job/0", 0): "pod-a", ("/job/1", 0): "pod-b"})
+    collector.collect_once()
+    assert {r.worker_id for r in task_stats_table.writes[-1]} == {"pod-a", "pod-b"}
 
-    collector.set_pods({key_b: "pod-b"})
-    with collector._lock:
-        assert collector._pods == {key_b: "pod-b"}
-
-    collector.close()
+    collector.set_pods({("/job/1", 0): "pod-b"})
+    collector.collect_once()
+    assert {r.worker_id for r in task_stats_table.writes[-1]} == {"pod-b"}
 
 
 def test_resource_collector_writes_iris_task_rows(k8s, task_stats_table):
@@ -1166,7 +1135,7 @@ def test_resource_collector_writes_iris_task_rows(k8s, task_stats_table):
     # Stop the background loop so we drive a single collection deterministically.
     collector.close()
     collector.set_pods({("/job/0", 3): "pod-a"})
-    collector._collect_once()
+    collector.collect_once()
 
     rows = [row for batch_rows in task_stats_table.writes for row in batch_rows]
     assert rows, "no rows emitted"
@@ -1194,7 +1163,7 @@ def test_resource_collector_uses_one_bulk_query_for_many_pods(k8s, task_stats_ta
     collector.close()
     collector.set_pods(pods)
     calls_before = k8s.top_pods_call_count
-    collector._collect_once()
+    collector.collect_once()
 
     assert k8s.top_pods_call_count - calls_before == 1, "expected exactly one bulk metrics query"
     assert len(task_stats_table.writes) == 1, "expected a single batched write"

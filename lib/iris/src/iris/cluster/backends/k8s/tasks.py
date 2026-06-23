@@ -1174,10 +1174,15 @@ class ResourceCollector:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            self._collect_once()
+            self.collect_once()
             self._stop.wait(timeout=self._poll_interval)
 
-    def _collect_once(self) -> None:
+    def collect_once(self) -> None:
+        """Sample every tracked pod once and append a stat row per pod with usage.
+
+        Runs each ``poll_interval`` on the background thread; also the unit of
+        collection tests drive directly.
+        """
         with self._lock:
             snapshot = list(self._pods.items())
         if not snapshot:

@@ -54,9 +54,7 @@ def provider(k8s, log_client, task_stats_table):
         log_client=log_client,
         task_stats_table=task_stats_table,
         log_poll_interval=1.0,
-        # Long enough that the background collector never fires mid-test; resource
-        # tests drive a collection pass synchronously instead of racing the thread.
-        resource_poll_interval=3600.0,
+        resource_poll_interval=0.05,
         cluster_scan_interval=0.0,
     )
     yield p
