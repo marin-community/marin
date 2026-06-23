@@ -100,7 +100,7 @@ _CANARY_TPU_HIDDEN_DIM = 768
 CANARY_OUTPUT_SUBDIR = "canary"
 
 # TTL for R2 canary outputs. Lifecycle rules on the bucket delete them after this
-# many days; must be one of rigging.filesystem.ALLOWED_TTL_DAYS.
+# many days; must be one of config/marin.yaml (data.temp.ttl_days).
 CANARY_OUTPUT_TTL_DAYS = 7
 
 
