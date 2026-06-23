@@ -316,7 +316,7 @@ def _linear_softmax_cross_entropy_loss_full_vocab_b_tiled(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
-    """Forward pass over batch tiles, materializing one [B_tile, V] logits tile at a time."""
+    """Return per-example loss and logsumexp with bounded peak logits memory."""
     b_dim, h_dim = x.shape
     v_dim = w.shape[1]
     out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
@@ -551,7 +551,7 @@ def _backward_b_tiled_from_lse(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
-    """Backward pass over batch tiles using full-vocab GEMMs per tile."""
+    """Return input and weight gradients from saved forward logsumexp."""
     b_dim, h_dim = x.shape
     v_dim = w.shape[1]
 
