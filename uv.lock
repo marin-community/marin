@@ -6008,6 +6008,9 @@ dependencies = [
 deepep = [
     { name = "marin-levanter", extra = ["deepep"] },
 ]
+gpu = [
+    { name = "marin-levanter", extra = ["gpu"], marker = "(extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-vllm') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra != 'extra-10-marin-core-tpu' and extra != 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu')" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -6019,11 +6022,12 @@ requires-dist = [
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-levanter", editable = "lib/levanter" },
     { name = "marin-levanter", extras = ["deepep"], marker = "extra == 'deepep'", editable = "lib/levanter" },
+    { name = "marin-levanter", extras = ["gpu"], marker = "extra == 'gpu'", editable = "lib/levanter" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "watchdog" },
 ]
-provides-extras = ["deepep"]
+provides-extras = ["gpu", "deepep"]
 
 [[package]]
 name = "marin-zephyr"

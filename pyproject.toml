@@ -37,6 +37,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gpu = ["marin-levanter[gpu]"]
 deepep = ["marin-levanter[deepep]"]
 
 [tool.uv]
