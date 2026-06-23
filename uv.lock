@@ -6002,6 +6002,11 @@ dependencies = [
     { name = "watchdog" },
 ]
 
+[package.optional-dependencies]
+deepep = [
+    { name = "marin-levanter", extra = ["deepep"] },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "marin-core", editable = "lib/marin" },
@@ -6011,10 +6016,12 @@ requires-dist = [
     { name = "marin-haliax", editable = "lib/haliax" },
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-levanter", editable = "lib/levanter" },
+    { name = "marin-levanter", extras = ["deepep"], marker = "extra == 'deepep'", editable = "lib/levanter" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "watchdog" },
 ]
+provides-extras = ["deepep"]
 
 [[package]]
 name = "marin-zephyr"

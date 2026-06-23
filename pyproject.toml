@@ -36,6 +36,9 @@ dependencies = [
     "marin-dupekit >= 0.1.2.dev202606060824",
 ]
 
+[project.optional-dependencies]
+deepep = ["marin-levanter[deepep]"]
+
 [tool.uv]
 fork-strategy = "fewest"
 # "explicit": allow pre-releases only for packages whose declared specifier
