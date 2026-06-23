@@ -21,37 +21,87 @@ autotuning.
 For a kernel `K`, produce:
 
 - A readable **vanilla JAX reference** with the target public API.
-- A **Pallas kernel implementation** plus wrapper with the same API.
 - A **correctness harness** validating value parity vs reference, gradient parity on small shapes, and CPU + accelerator numerics where applicable.
-- A **performance harness** with steady-state timing on representative shape/dtype grids.
+- A **Pallas kernel implementation** plus wrapper with the same API.
+- A **roofline** estimate for the kernel for the relevant hardware type(s).
+- A **performance harness** with steady-state timing on representative shape/dtype grids and progress against the roofline.
 - **Autotuned block/tile sizes** for requested hardware/shape regimes.
 - A checked-in **tuned table module** for runtime selection (with explicit fallback behavior).
 - An **autotune-on-miss fallback path** that sweeps a bounded candidate set and caches winning configs.
 
-## Recommended Module Layout
+The general flow is: Make it right, make it fast, make it usable, make it easy to use.
+
+## Correctness Workflow
+
+### 1) Start from a reference
+
+Use an existing in-repo implementation, pseudocode, a PyTorch reference, or a JAX baseline. The baseline must be obvious and stable, not clever. If the naive baseline would materialize huge intermediates, use a streaming/blockwise baseline with identical math.
+
+### 2) Write value + grad harness
+
+Minimum checks: value parity over a shape/dtype grid, gradient parity on small shapes, backend numerics on CPU and accelerator backends as applicable. Report pointwise deviation metrics (max/mean absolute diff), not only `allclose`. Use explicit shape/dtype annotations for public APIs and references (e.g. `jaxtyping`) where available.
+
+### 3) Promote long-lived checks to pytest
+
+For in-tree kernels, add/extend tests under `lib/levanter/tests/kernels/`. Compare the default implementation against the reference on small CPU shapes and accelerator-aligned shapes for fast paths.
+
+
+## Pallas Kernel workflow
+
+Once the reference is correct, design the Pallas kernel implementation. Use the reference as a correctness oracle and a performance baseline.
+You should ordinarily have other kernels for inspiration. See [kernel sources](./kernel-sources.md) for a curated list of locations.
+Unless you have an especially good inspiration to start from, start by reimplementing the reference in Pallas.
+
+Check correctness against the correctness harness and the reference implementation.
+
+Once the kernel is correct, run a performance harness on representative shapes/dtypes and compare against the roofline. If the kernel is not close to the roofline, investigate compiler dumps and pressure signals for bottlenecks. See [performance loop](./performance-loop.md) for guidance. Continue iterating until you have achieved a performance target or have documented limitations.
+
+
+## API conventions
+
+
+### Recommended Module Layout
 
 Tokamax-style decomposition is preferred for maintainability:
 
+- `__init__.py`: public API, imports from `api.py`.
 - `reference.py`: readable vanilla JAX oracle.
-- `xla.py`: default implementation (often same math as reference).
-- `pallas_tpu.py`: TPU Pallas implementation.
-- `pallas_gpu.py`: optional GPU Pallas implementation.
 - `api.py`: stable user-facing entrypoint with `implementation=` override and fallback order.
+
+Then any variants:
+
+- `xla.py`: default implementation, if different from reference.
+- `pallas_tpu.py`: TPU Pallas implementation.
+- `pallas_mgpu.py`: GPU Pallas Mosaic implementation.
 
 Reference template: `lib/levanter/src/levanter/kernels/pallas/template_kernel.py`
 
-## API and Safety Rules
 
-### Batching convention
+### Top-level API
 
-Prefer one true batched kernel:
+Usually something like:
 
-- Implement the core kernel for batched inputs.
-- Normalize single-example inputs by temporarily adding a leading batch dimension.
-- Reshape leading axes into one batch axis when needed, then restore on output.
-- Preserve explicit parallel-dimension semantics on at least one axis (usually batch) for TPU kernels.
+```
+
+Implementation: TypeAlias = typing.Literal["reference", "xla", "pallas_tpu", ...]
+
+class BlockSizes(Protocol):
+    # possibly empty, possibly dataclass if all implementations share the same block-size config
+    b_block_size: int
+    h_block_size: int
+    v_block_size: int
+
+def template(
+    x: Float[Array, "B H V"]
+    *,
+    implementation: Implementation | Sequence[Implementation | Callable[..., jax.Array]] | None = None,
+    block_sizes: BlockSizes | dict[Implementation, BlockSizes] | None = None,
+) -> jax.Array:
+```
 
 ### Block size config
+
+Use a protocol or union of dataclasses to expose implementation-specific block-size choices. Each implementation should have its own block-size class if they differ.
 
 Expose tile choices via a dataclass with explicit defaults:
 
@@ -67,9 +117,11 @@ class BlockSizes:
         return cls()
 ```
 
+
 Rules:
 
-- Validate TPU-specific alignment constraints (e.g. multiples of 128) in the TPU backend.
+- Block sizes are typically specific to different implementations. Better to have one block-size class per backend unless they are identical.
+- Validate backend-alignment constraints (e.g. multiples of 128 in the TPU backend).
 - Keep reference/XLA paths usable even when TPU constraints are not met.
 - If Mosaic reports a layout mismatch for a batched integer operand (e.g. labels), align the batch block size to the XLA tile size for that TPU generation or raise a clear pre-lowering error.
 - If a legacy `block_size` arg exists, map it clearly to the new config and raise on conflicting inputs.
@@ -85,23 +137,11 @@ Rules:
 
 Prefer a canonical kernel input shape and make callers normalize to it:
 
+- Implement the core kernel for batched inputs.
+- Preserve explicit parallel-dimension semantics on at least one axis (usually batch) for TPU kernels. <-- move to tpu file>
 - Define one canonical shape contract (e.g. rank-2/1/2 forms).
 - Expect callers to flatten or reshape batch axes before kernel invocation.
 - If you provide wrapper reshaping helpers, keep them thin and explicit at API boundaries.
-
-## Correctness Workflow
-
-### 1) Start from a reference
-
-Use an existing in-repo implementation, pseudocode, a PyTorch reference, or an Optax/JAX baseline. The baseline must be obvious and stable, not clever. If the naive baseline would materialize huge intermediates, use a streaming/blockwise baseline with identical math.
-
-### 2) Write value + grad harness
-
-Minimum checks: value parity over a shape/dtype grid, gradient parity on small shapes, backend numerics on CPU and accelerator backends as applicable. Report pointwise deviation metrics (max/mean absolute diff), not only `allclose`. Use explicit shape/dtype annotations for public APIs and references (e.g. `jaxtyping`) where available.
-
-### 3) Promote long-lived checks to pytest
-
-For in-tree kernels, add/extend tests under `lib/levanter/tests/kernels/`. Compare the default implementation against the reference on small CPU shapes and accelerator-aligned shapes for fast paths.
 
 ## Cost Estimate Requirement
 
@@ -141,7 +181,7 @@ apples-to-apples: same shape, dtype, pass mode, backend, device count, and
 environment unless that axis is under test. Only move the baseline after enough
 repeated evidence, and note the change explicitly.
 
-Always report: compile-including timing (`time-to-first-step`), steady-state timing, and exact hardware type and shape/dtype grid.
+Always report: compile-including timing (`time-to-first-step`), steady-state timing, block sizes, and exact hardware type and shape/dtype grid.
 
 ## Autotuning Workflow
 
@@ -151,7 +191,7 @@ Keep tuning explicit and reviewable.
 2. Define target shape/hardware buckets.
 3. Benchmark every `(bucket, config)` pair and capture timing + failures.
 4. Store raw results as artifacts (CSV/JSON; W&B artifact preferred).
-5. Derive a best-config table keyed by `(tpu_type, dtype, shape_bucket[, invariants])`.
+5. Derive a best-config table keyed by `(device_type, dtype, shape_bucket[, invariants])`.
 6. Check in a Python tuned-table module with bucket definitions, best configs, an `infer_block_sizes(...)` helper, and default fallback to `BlockSizes.get_default()`.
 
 Do not key tuned tables by every exact shape; keep buckets stable and reviewable.
@@ -202,6 +242,7 @@ Prefer structural fixes before broad tile sweeps when decomposition variants ind
 
 - Values match reference within tolerance on the tested grid.
 - Gradients match reference on small shapes.
+- Roofline performance is within expected bounds, or limitations are explicitly documented.
 - Performance improves on at least one realistic target shape, or limitations are explicitly documented.
 - Tuned table is checked in for requested hardware/shape regimes.
 - Research artifacts (logbook updates, issue summary, snapshot links) follow the `run-research` workflow.
