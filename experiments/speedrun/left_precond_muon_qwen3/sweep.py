@@ -72,6 +72,11 @@ VARIANT_FLAGS = {
 }
 VARIANTS: tuple[str, ...] = tuple(v.strip() for v in os.environ.get("VARIANTS", "full").split(","))
 
+# Damping λ on mean-normalized H eigenvalues: (w/mean + λ)^{-1/2}. λ=0 = un-damped (over-amplifies
+# tiny eigenvalues); larger λ bounds it, λ→∞ ⟹ Muon. Swept (esp. for inner_only) to test whether a
+# damped inner whitening beats Muon.
+DAMPINGS: tuple[float, ...] = _floats("DAMPINGS", "0.0")
+
 
 @dataclass(frozen=True)
 class SizeSpec:
@@ -137,13 +142,14 @@ def _override_tracker(step: ExecutorStep) -> ExecutorStep:
 RUN_TAG: str = os.environ.get("RUN_TAG", "")
 
 
-def _build_step(multiplier: float, clamp_rel: float, variant: str) -> ExecutorStep:
+def _build_step(multiplier: float, clamp_rel: float, variant: str, damping: float = 0.0) -> ExecutorStep:
     matrix_lr = SIZE.muon_lr * multiplier
     adam_lr = SIZE.adam_lr * multiplier
     optimizer = LeftPrecondMuonConfig(
         h_beta=0.95,
         clamp_rel=clamp_rel,
         ns_steps=5,
+        damping=damping,
         **VARIANT_FLAGS[variant],
         lr=matrix_lr,
         learning_rate=matrix_lr,
@@ -173,7 +179,8 @@ def _build_step(multiplier: float, clamp_rel: float, variant: str) -> ExecutorSt
     )
     tag = f"_{RUN_TAG}" if RUN_TAG else ""
     vlabel = "" if variant == "full" else f"_{variant}"
-    run_id = f"qwen3_{SIZE.label}_leftprec{vlabel}{tag}_{_clamp_label(clamp_rel)}_{SEQ_LEN}_{_lr_label(multiplier)}"
+    dlabel = "" if damping == 0.0 else f"_dmp{f'{damping:g}'.replace('.', '_')}"
+    run_id = f"qwen3_{SIZE.label}_leftprec{vlabel}{dlabel}{tag}_{_clamp_label(clamp_rel)}_{SEQ_LEN}_{_lr_label(multiplier)}"
     step = default_train(
         name=run_id,
         tokenized=fineweb_edu_subcache_10B,
@@ -192,13 +199,14 @@ def main() -> None:
     if os.getenv("CI") is not None:
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
-    steps = [_build_step(m, c, v) for v in VARIANTS for m in LR_MULTIPLIERS for c in CLAMPS]
+    steps = [_build_step(m, c, v, d) for v in VARIANTS for m in LR_MULTIPLIERS for c in CLAMPS for d in DAMPINGS]
     logger.info(
-        "Left-precond Muon 130m sweep: %d runs (variants=%s lr=%s clamps=%s)",
+        "Left-precond Muon 130m sweep: %d runs (variants=%s lr=%s clamps=%s dampings=%s)",
         len(steps),
         VARIANTS,
         LR_MULTIPLIERS,
         CLAMPS,
+        DAMPINGS,
     )
     executor_main(
         steps=steps, description="Qwen3-130m left-preconditioned Muon sweep (Ali idea 4): variant x LR x clamp."

@@ -57,6 +57,8 @@ class LeftPrecondMuonConfig(OptimizerConfig):
     # 1e-15 (= Shampoo / fb#265) truncates only numerically-zero directions; larger values
     # aggressively drop real low-curvature directions (which hurts) — keep this tiny.
     ns_steps: int = 5  # Newton-Schulz steps for the polar factor
+    damping: float = 0.0  # additive damping λ on mean-normalized eigenvalues: (w/mean + λ)^{-1/2}.
+    # λ=0 over-amplifies tiny eigenvalues; larger λ bounds the amplification; λ→∞ ⟹ plain Muon.
 
     # --- variants (ablations) ---
     outer_precond: bool = True  # True: U = H^{-1/2} polar(H^{-1/2} M); False (v1): U = polar(H^{-1/2} M)
@@ -95,6 +97,7 @@ class LeftPrecondMuonConfig(OptimizerConfig):
                         self.outer_precond,
                         self.real_inverse,
                         self.normalize_fro,
+                        self.damping,
                     )
                 ]
                 if self.weight_decay > 0:
@@ -145,11 +148,13 @@ class ScaleByLeftPrecondMuonState(NamedTuple):
     h_ema: optax.Updates  # per-matrix gradient second moment EMA, [..., d_out, d_out] (raw arrays)
 
 
-def _inv_sqrt(h, clamp_rel, eps, real_inverse):
+def _inv_sqrt(h, clamp_rel, eps, real_inverse, damping):
     """H^{-1/2}. Eigenvalues normalized by the mean (scale-free; H ∝ I ⟹ H^{-1/2} = I).
 
     real_inverse=False: truncated pseudo-inverse — zero eigenvalues below clamp_rel·λ_max (fb#265).
-    real_inverse=True : damped real inverse — invert ALL eigenvalues (no truncation), eps-damped.
+    real_inverse=True : damped real inverse — invert ALL eigenvalues (no truncation).
+    damping λ floors the (mean-normalized) eigenvalues: (w/mean + λ)^{-1/2}, bounding the
+    amplification of tiny eigenvalues; λ→∞ ⟹ H^{-1/2} ∝ I ⟹ plain Muon.
     """
     h = h.astype(jnp.float32)
     h = 0.5 * (h + h.T)
@@ -160,14 +165,14 @@ def _inv_sqrt(h, clamp_rel, eps, real_inverse):
     mean_kept = jnp.sum(jnp.where(keep, w, 0.0)) / jnp.maximum(jnp.sum(keep), 1.0)
     wn = w / (mean_kept + eps)
     if real_inverse:
-        inv = 1.0 / jnp.sqrt(wn + eps)  # invert all (no truncation)
+        inv = 1.0 / jnp.sqrt(wn + damping + eps)  # invert all (no truncation)
     else:
-        inv = jnp.where(keep, 1.0 / jnp.sqrt(wn + eps), 0.0)
+        inv = jnp.where(keep, 1.0 / jnp.sqrt(wn + damping + eps), 0.0)
     return (u * inv[None, :]) @ u.T
 
 
 def _left_precond_matrix(
-    m, h, *, clamp_rel, ns_steps, eps, use_kimi_scaling, outer_precond, real_inverse, normalize_fro
+    m, h, *, clamp_rel, ns_steps, eps, use_kimi_scaling, outer_precond, real_inverse, normalize_fro, damping
 ):
     """U for one weight M (d_out × d_in), H (d_out × d_out).
 
@@ -175,7 +180,7 @@ def _left_precond_matrix(
     """
     orig_dtype = m.dtype
     x = m.astype(jnp.float32)
-    hih = _inv_sqrt(h, clamp_rel, eps, real_inverse)  # (out, out)
+    hih = _inv_sqrt(h, clamp_rel, eps, real_inverse, damping)  # (out, out)
     whitened = hih @ x  # H^{-1/2} M
     ortho = zeropower_via_newtonschulz5(whitened, steps=ns_steps, eps=eps, coefficient_type="quintic")
     u = (hih @ ortho) if outer_precond else ortho
@@ -202,6 +207,7 @@ def scale_with_left_precond_muon(
     outer_precond=True,
     real_inverse=False,
     normalize_fro=False,
+    damping=0.0,
 ):
     momentum = float(momentum)
     h_beta = float(h_beta)
@@ -270,6 +276,7 @@ def scale_with_left_precond_muon(
                 outer_precond=outer_precond,
                 real_inverse=real_inverse,
                 normalize_fro=normalize_fro,
+                damping=damping,
             )
             new_arr = jax.vmap(fn)(arr, h) if arr.ndim == 3 else fn(arr, h)
             return dataclasses.replace(layer, weight=dataclasses.replace(w, array=new_arr))  # type: ignore
