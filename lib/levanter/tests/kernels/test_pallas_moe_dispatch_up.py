@@ -202,6 +202,55 @@ def test_moe_dispatch_up_reference_is_differentiable():
     assert jnp.isfinite(grad).all()
 
 
+def test_moe_dispatch_up_backward_reference_matches_autodiff():
+    ep_size = 2
+    tokens_per_rank = 4
+    experts_per_rank = 2
+    top_k = 2
+    hidden = 3
+    intermediate = 5
+    num_experts = ep_size * experts_per_rank
+    recv_capacity = ep_size * tokens_per_rank * top_k
+    key = jax.random.key(6597)
+    k_x, k_w, k_g = jax.random.split(key, 3)
+    x_by_rank = jax.random.normal(k_x, (ep_size, tokens_per_rank, hidden), dtype=jnp.float32)
+    w_gate_up = jax.random.normal(k_w, (ep_size, experts_per_rank, hidden, 2 * intermediate), dtype=jnp.float32)
+    rank_ids = jnp.arange(ep_size, dtype=jnp.int32)[:, None, None]
+    token_ids = jnp.arange(tokens_per_rank, dtype=jnp.int32)[None, :, None]
+    slot_ids = jnp.arange(top_k, dtype=jnp.int32)[None, None, :]
+    expert_ids = (rank_ids * experts_per_rank + token_ids + slot_ids) % num_experts
+    router_weights = jax.nn.softmax(
+        jnp.arange(ep_size * tokens_per_rank * top_k, dtype=jnp.float32).reshape(ep_size, tokens_per_rank, top_k),
+        axis=-1,
+    )
+    grad_dispatch_up = jax.random.normal(k_g, (ep_size, recv_capacity, intermediate), dtype=jnp.float32)
+
+    def loss(x_arg, w_arg):
+        dispatch_up, _layout = dispatch_up_api.moe_dispatch_up(
+            x_arg,
+            expert_ids,
+            router_weights,
+            w_arg,
+            num_experts=num_experts,
+            recv_capacity=recv_capacity,
+        )
+        return jnp.sum(dispatch_up * grad_dispatch_up)
+
+    autodiff_grad_x, autodiff_grad_w = jax.grad(loss, argnums=(0, 1))(x_by_rank, w_gate_up)
+    explicit_grad_x, explicit_grad_w = dispatch_up_api.moe_dispatch_up_bwd_reference(
+        x_by_rank,
+        expert_ids,
+        router_weights,
+        w_gate_up,
+        grad_dispatch_up,
+        num_experts=num_experts,
+        recv_capacity=recv_capacity,
+    )
+
+    np.testing.assert_allclose(np.asarray(explicit_grad_x), np.asarray(autodiff_grad_x), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(explicit_grad_w), np.asarray(autodiff_grad_w), rtol=1e-5, atol=1e-5)
+
+
 def test_explicit_mosaic_gpu_dispatch_requires_local_gpu_mesh():
     if len([device for device in jax.local_devices() if device.platform == "gpu"]) >= 2:
         pytest.skip("local host has an MGPU runtime")

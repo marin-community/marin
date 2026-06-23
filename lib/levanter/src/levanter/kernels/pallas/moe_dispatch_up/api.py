@@ -15,6 +15,7 @@ from levanter.kernels.pallas.moe_dispatch_up.reference import (
     MoeDispatchUpPrepackedSend,
     compute_moe_up_from_layout_reference,
     dispatch_prepacked_moe_dispatch_up_reference,
+    moe_dispatch_up_reference_bwd,
     moe_dispatch_up_layout_reference as _moe_dispatch_up_layout_reference,
     prepack_moe_dispatch_up_reference,
 )
@@ -136,6 +137,29 @@ def moe_dispatch_up_layout_reference(
         x_by_rank,
         expert_ids_by_rank,
         router_weights_by_rank,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        recv_capacity=recv_capacity,
+    )
+
+
+def moe_dispatch_up_bwd_reference(
+    x_by_rank: jax.Array,
+    expert_ids_by_rank: jax.Array,
+    router_weights_by_rank: jax.Array,
+    w_gate_up_by_rank: jax.Array,
+    grad_dispatch_up: jax.Array,
+    *,
+    num_experts: int,
+    capacity_factor: float = 1.25,
+    recv_capacity: int | None = None,
+) -> tuple[jax.Array, jax.Array]:
+    return moe_dispatch_up_reference_bwd(
+        x_by_rank,
+        expert_ids_by_rank,
+        router_weights_by_rank,
+        w_gate_up_by_rank,
+        grad_dispatch_up,
         num_experts=num_experts,
         capacity_factor=capacity_factor,
         recv_capacity=recv_capacity,

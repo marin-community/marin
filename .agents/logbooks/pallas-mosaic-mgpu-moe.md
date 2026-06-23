@@ -70,3 +70,18 @@
   deliberately serial validation primitive, not a performance implementation.
 - Next action: Replace serial scalar remote writes with tiled/staged copies and
   add backward/custom-VJP coverage before Grug integration.
+
+### 2026-06-23 - Backward oracle kickoff
+
+- Hypothesis: A hand-written VJP for dispatch + W13/SiLU can match JAX autodiff
+  on small routed shapes and serve as the target contract for a Mosaic GPU
+  backward kernel.
+- Command: `uv run --package marin-levanter --group test pytest lib/levanter/tests/kernels/test_pallas_moe_dispatch_up.py -q`
+- Config: CPU reference, EP2, top-k 2, two local experts per rank, explicit
+  receive capacity larger than per-sender send capacity.
+- Result: 9 tests passed. The explicit backward oracle matches autodiff for
+  gradients with respect to source activations and W13 weights.
+- Interpretation: Backward can be decomposed into local W13/SiLU VJP followed
+  by reverse dispatch from destination rows to source-rank token gradients.
+- Next action: Port the W13/SiLU VJP and reverse dispatch to Mosaic GPU, then
+  profile the serial forward dispatch to prioritize tiled/staged copies.

@@ -306,3 +306,127 @@ def compute_moe_up_from_layout_reference(
             expert_h = jax.nn.silu(gate.astype(jnp.float32)).astype(gate.dtype) * up
             h = h.at[dst_rank].add(expert_h * mask[:, None])
     return h
+
+
+def compute_moe_up_from_layout_reference_bwd(
+    layout: MoeDispatchUpLayout,
+    w_gate_up_by_rank: jax.Array,
+    grad_dispatch_up: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Backward oracle for the W13/SiLU part of `moe_dispatch_up`.
+
+    Returns gradients for `layout.recv_x` and `w_gate_up_by_rank`.
+    Metadata in `layout` is treated as non-differentiable routing state.
+    """
+
+    if grad_dispatch_up.shape[:2] != layout.recv_x.shape[:2]:
+        raise ValueError(
+            "grad_dispatch_up must share EP and recv row dimensions with layout.recv_x; "
+            f"got {grad_dispatch_up.shape} vs {layout.recv_x.shape}"
+        )
+    if w_gate_up_by_rank.ndim != 4:
+        raise ValueError(f"w_gate_up_by_rank must have shape [EP, EL, D, 2I], got {w_gate_up_by_rank.shape}")
+
+    ep_size, recv_capacity, hidden = layout.recv_x.shape
+    local_experts = w_gate_up_by_rank.shape[1]
+    intermediate = w_gate_up_by_rank.shape[3] // 2
+    if grad_dispatch_up.shape != (ep_size, recv_capacity, intermediate):
+        raise ValueError(
+            "grad_dispatch_up must have shape [EP, R, I] matching W13 output; "
+            f"got {grad_dispatch_up.shape}, expected {(ep_size, recv_capacity, intermediate)}"
+        )
+
+    grad_recv_x = jnp.zeros_like(layout.recv_x)
+    grad_w_gate_up = jnp.zeros_like(w_gate_up_by_rank)
+    for dst_rank in range(ep_size):
+        for local_expert in range(local_experts):
+            mask = (layout.recv_local_expert[dst_rank] == local_expert) & layout.recv_valid[dst_rank]
+            x = layout.recv_x[dst_rank]
+            weights = w_gate_up_by_rank[dst_rank, local_expert]
+            gate_up = x @ weights
+            gate, up = jnp.split(gate_up, [intermediate], axis=-1)
+            grad_h = grad_dispatch_up[dst_rank] * mask[:, None]
+
+            gate_f32 = gate.astype(jnp.float32)
+            sigmoid_gate = jax.nn.sigmoid(gate_f32)
+            silu_gate = (gate_f32 * sigmoid_gate).astype(gate.dtype)
+            silu_grad = (sigmoid_gate * (1 + gate_f32 * (1 - sigmoid_gate))).astype(gate.dtype)
+            grad_gate = grad_h * up * silu_grad
+            grad_up = grad_h * silu_gate
+            grad_gate_up = jnp.concatenate([grad_gate, grad_up], axis=-1)
+
+            grad_recv_x = grad_recv_x.at[dst_rank].add(grad_gate_up @ weights.T)
+            grad_w_gate_up = grad_w_gate_up.at[dst_rank, local_expert].add(x.T @ grad_gate_up)
+    return grad_recv_x, grad_w_gate_up
+
+
+def dispatch_moe_dispatch_up_grad_reference(
+    prepacked: MoeDispatchUpPrepackedSend,
+    grad_recv_x: jax.Array,
+    *,
+    tokens_per_rank: int,
+    recv_capacity: int | None = None,
+) -> jax.Array:
+    """Route dispatched-row gradients back to source-rank token gradients."""
+
+    send_x = prepacked.send_x_by_dst
+    ep_size, _, send_capacity, hidden = send_x.shape
+    if recv_capacity is None:
+        recv_capacity = send_capacity
+    if grad_recv_x.shape != (ep_size, recv_capacity, hidden):
+        raise ValueError(
+            "grad_recv_x must have shape [EP, recv_capacity, hidden]; "
+            f"got {grad_recv_x.shape}, expected {(ep_size, recv_capacity, hidden)}"
+        )
+
+    grad_x_by_rank = jnp.zeros((ep_size, tokens_per_rank, hidden), dtype=grad_recv_x.dtype)
+    send_positions = jnp.arange(send_capacity, dtype=jnp.int32)
+    for src_rank in range(ep_size):
+        for dst_rank in range(ep_size):
+            valid_send = send_positions < prepacked.send_count_by_dst[src_rank, dst_rank]
+            row = prepacked.send_row_by_dst[src_rank, dst_rank]
+            valid_recv = valid_send & (row < recv_capacity)
+            safe_row = jnp.where(valid_recv, row, 0)
+            token_idx = prepacked.send_src_token_idx_by_dst[src_rank, dst_rank]
+            grad_x_by_rank = grad_x_by_rank.at[src_rank, token_idx].add(
+                grad_recv_x[dst_rank, safe_row] * valid_recv[:, None]
+            )
+    return grad_x_by_rank
+
+
+def moe_dispatch_up_reference_bwd(
+    x_by_rank: jax.Array,
+    expert_ids_by_rank: jax.Array,
+    router_weights_by_rank: jax.Array,
+    w_gate_up_by_rank: jax.Array,
+    grad_dispatch_up: jax.Array,
+    *,
+    num_experts: int,
+    capacity_factor: float = 1.25,
+    recv_capacity: int | None = None,
+) -> tuple[jax.Array, jax.Array]:
+    """Backward oracle for dispatch + W13/SiLU.
+
+    Returns gradients for `x_by_rank` and `w_gate_up_by_rank`. Expert ids and
+    router weights are routing metadata for this subkernel and are not
+    differentiated here.
+    """
+
+    prepacked = prepack_moe_dispatch_up_reference(
+        x_by_rank,
+        expert_ids_by_rank,
+        router_weights_by_rank,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        recv_capacity=recv_capacity,
+    )
+    actual_recv_capacity = recv_capacity if recv_capacity is not None else prepacked.send_x_by_dst.shape[2]
+    layout = dispatch_prepacked_moe_dispatch_up_reference(prepacked, recv_capacity=actual_recv_capacity)
+    grad_recv_x, grad_w_gate_up = compute_moe_up_from_layout_reference_bwd(layout, w_gate_up_by_rank, grad_dispatch_up)
+    grad_x_by_rank = dispatch_moe_dispatch_up_grad_reference(
+        prepacked,
+        grad_recv_x,
+        tokens_per_rank=x_by_rank.shape[1],
+        recv_capacity=actual_recv_capacity,
+    )
+    return grad_x_by_rank, grad_w_gate_up
