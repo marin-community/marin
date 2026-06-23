@@ -339,6 +339,7 @@ message Controller {
   message ListEndpointsRequest {
     string prefix = 1;               // Prefix to match: "abc123/" or "abc123/my-actor"
     bool exact = 2;                  // If true, match prefix as an exact name instead
+    repeated string task_ids = 3;    // Wire-format task IDs; when set, only endpoints registered by these tasks are returned (ANDed with prefix/exact).
   }
 
   message ListEndpointsResponse {

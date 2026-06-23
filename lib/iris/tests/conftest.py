@@ -37,7 +37,7 @@ def embedded_log_server(tmp_path):
     buffer never flushes to a readable segment — written logs would never be
     queryable; a disk-backed store serves reads.) Function-scoped so every test
     gets an isolated store. Tests talk to it over the normal RPC contract via
-    ``finelog.client.LogClient`` or ``finelog.client.proxy.LogServiceProxy``
+    ``finelog.client.LogClient`` or the generated ``LogServiceClientSync``
     against ``embedded_log_server.address``. Skips when the native extension is
     unavailable (e.g. a pure-Python install).
     """

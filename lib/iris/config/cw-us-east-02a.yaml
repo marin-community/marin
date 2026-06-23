@@ -14,12 +14,18 @@
 #   1. Set R2 object storage credentials (required for s3:// storage URIs):
 #        export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
 #        export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
-#      `iris cluster start` turns these into the iris-s3-credentials Secret.
+#      `iris cluster start` turns these into the iris-task-env Secret.
 #   2. Point kubectl/iris at the region kubeconfig:
 #        export KUBECONFIG=~/.kube/coreweave-iris-gpu   # context marin-gpu_US-EAST-02A
 #   3. Start / inspect the cluster:
 #        uv run iris --cluster=cw-us-east-02a cluster start
 #        uv run iris --cluster=cw-us-east-02a cluster status
+
+# External finelog log server (in-cluster k8s Deployment, namespace `iris`).
+# Resolves to k8s://finelog-cw-use02a.iris; see lib/finelog/config/cw-us-east-02a.yaml.
+# Without this the controller falls back to an in-process MemStore (logs lost on
+# restart). Deploy the server first: `uv run finelog deploy up cw-us-east-02a`.
+log_server_config: cw-us-east-02a
 
 platform:
   label_prefix: cw-use02a

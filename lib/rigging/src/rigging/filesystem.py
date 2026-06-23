@@ -1,17 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Marin filesystem helpers: prefix resolution, region-local temp storage,
-and cross-region read guards.
+"""Marin filesystem: the cluster data config, storage-prefix/region resolution,
+region-local temp storage, and cross-region read guards.
 
-Provides a unified API for resolving the marin storage prefix and building
-GCS paths with lifecycle-managed TTL prefixes. Lifecycle rules on the
+A :class:`DataConfig` describes where a cluster's data lives: the
+region-to-bucket mirror set, the URL scheme, and the temp TTL policy.
+:func:`data_config` returns the active config — the one
+bound by :func:`use_data_config`, else the cluster named by ``MARIN_CLUSTER``
+(default ``marin``), loaded from ``config/<cluster>.yaml``. Every "where does
+data live" answer flows through it: :func:`marin_prefix` is
+``data_config().resolved_root()``, and :func:`marin_temp_bucket`, the mirror
+filesystem, and the region helpers all read its fields. Lifecycle rules on the
 ``marin-{region}`` buckets are managed by ``infra/configure_buckets.py``.
 
-Resolution chain for the storage prefix:
+Prefix resolution chain (:meth:`DataConfig.resolved_root`):
   1. ``MARIN_PREFIX`` environment variable
-  2. GCS instance metadata → ``gs://marin-{region}``
-  3. ``/tmp/marin`` (local fallback)
+  2. an explicit ``root`` (single-prefix clusters, e.g. R2)
+  3. the region-local bucket ``region_buckets[<gcs metadata region>]``
+  4. ``gs://marin-{region}`` for a detected-but-unmapped region
+  5. ``/tmp/marin`` (local fallback)
 
 Cross-region transfer budget:
   ``TransferBudget`` tracks cumulative cross-region GCS bytes across all
@@ -36,50 +44,236 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from pathlib import PurePath
 from typing import Any, cast
 
 import fsspec
+import yaml
 from fsspec.callbacks import DEFAULT_CALLBACK, Callback
 from fsspec.implementations.local import LocalFileSystem
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from google.cloud import storage
 
+from rigging.config_discovery import resolve_cluster_config
 from rigging.distributed_lock import create_lock, default_worker_id
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
-_GCP_METADATA_ZONE_URL = "http://metadata.google.internal/computeMetadata/v1/instance/zone"
 
+def _bundled_cluster_config_dir() -> str | None:
+    """Bundled cluster-config dir for an installed (wheel) rigging.
+
+    Populated by the ``force-include`` in ``lib/rigging/pyproject.toml`` at
+    ``rigging/clusters``. Returns ``None`` for a source/editable checkout, where
+    the repo-root ``config/`` entry resolves against the marin workspace root.
+    Mirrors ``iris.cli.connect._bundled_iris_config_dir``.
+    """
+    bundled = pathlib.Path(__file__).resolve().parent / "clusters"
+    return str(bundled) if bundled.is_dir() else None
+
+
+# Cluster config search dirs, highest priority first: a per-user override, the
+# repo-root ``config/`` directory (in-tree checkout), then the bundled copy for
+# installed wheels. Relative paths resolve against the marin workspace root via
+# :func:`rigging.config_discovery.resolve_cluster_config`.
+MARIN_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
+    p
+    for p in (
+        "~/.config/marin/clusters",
+        "config",
+        _bundled_cluster_config_dir(),
+    )
+    if p is not None
+)
+
+_MARIN_PREFIX_ENV = "MARIN_PREFIX"
+_MARIN_CLUSTER_ENV = "MARIN_CLUSTER"
+_GCP_METADATA_ZONE_URL = "http://metadata.google.internal/computeMetadata/v1/instance/zone"
 _DEFAULT_LOCAL_PREFIX = "/tmp/marin"
 
-# Special-case overrides for primary Marin buckets that do not follow the
-# default `marin-{region}` naming convention.
-_REGION_TO_MARIN_BUCKET_OVERRIDES: dict[str, str] = {
-    "europe-west4": "marin-eu-west4",
-}
 
-# All known primary marin data buckets, keyed by region.
-# Used by the mirror filesystem to scan for files across regions, and by
-# `marin_temp_bucket` to address the region-local TTL-managed scratch area.
-REGION_TO_DATA_BUCKET: dict[str, str] = {
-    "us-central1": "marin-us-central1",
-    "us-central2": "marin-us-central2",
-    "us-east1": "marin-us-east1",
-    "us-east5": "marin-us-east5",
-    "us-west4": "marin-us-west4",
-    "europe-west4": "marin-eu-west4",
-}
+@dataclasses.dataclass(frozen=True)
+class DataConfig:
+    """Where a cluster's data lives — the single source for storage layout.
 
-# Region aliases that resolve to the same physical region (e.g. the "eu-west4"
-# label that some legacy paths and metadata tools surface).
-_REGION_ALIASES: dict[str, str] = {
-    "eu-west4": "europe-west4",
-}
+    Attributes:
+        region_buckets: Region name -> bucket name for the cross-region mirror set.
+        scheme: URL scheme for the cluster's storage (e.g. ``"gs"`` or ``"s3"``).
+        temp_path: Path segment for TTL-managed scratch data.
+        ttl_days: Allowed TTL-day values for temp lifecycle rules.
+        root: Explicit single-prefix root (e.g. ``"s3://marin-na/marin"``). Set
+            only for clusters that do not use region-local bucket selection.
+    """
 
-# Cloudflare R2 data buckets (S3-compatible, ``s3://`` scheme).
+    region_buckets: Mapping[str, str]
+    scheme: str = "gs"
+    temp_path: str = "tmp"
+    ttl_days: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30)
+    root: str | None = None
+
+    def resolved_root(self) -> str:
+        """Resolve the storage root for this config. Never returns ``None``.
+
+        Precedence: ``MARIN_PREFIX`` env > ``self.root`` > region-local bucket
+        from ``region_buckets[<gcs metadata region>]`` > ``{scheme}://marin-{region}``
+        for a detected-but-unmapped region > :data:`_DEFAULT_LOCAL_PREFIX`.
+        """
+        env_prefix = os.environ.get(_MARIN_PREFIX_ENV)
+        if env_prefix:
+            return env_prefix
+        if self.root is not None:
+            return self.root
+        region = region_from_metadata()
+        if region is not None:
+            bucket = self.region_buckets.get(region)
+            if bucket is not None:
+                return f"{self.scheme}://{bucket}"
+            return f"{self.scheme}://marin-{region}"
+        return _DEFAULT_LOCAL_PREFIX
+
+
+# The marin cluster's storage layout lives in ``config/marin.yaml`` (loaded as
+# the default below). This in-code config is only a degraded fallback for when
+# no config file is discoverable — e.g. an installed package running outside a
+# marin checkout. Such contexts set ``MARIN_PREFIX`` (which wins in
+# ``resolved_root``) or detect a region (constructing ``gs://marin-{region}``),
+# so an empty ``region_buckets`` is sufficient.
+_DEFAULT_CLUSTER = "marin"
+_FALLBACK_DATA_CONFIG: DataConfig = DataConfig(region_buckets={})
+
+_active_data_config: contextvars.ContextVar[DataConfig | None] = contextvars.ContextVar(
+    "marin_data_config", default=None
+)
+
+
+def data_config() -> DataConfig:
+    """Return the active :class:`DataConfig`.
+
+    Resolution: the config bound by :func:`use_data_config` (a context-local
+    override), else the cluster named by ``MARIN_CLUSTER`` (default ``marin``)
+    loaded from its ``config/<cluster>.yaml``.
+    """
+    override = _active_data_config.get()
+    if override is not None:
+        return override
+    return load_cluster_config()
+
+
+@contextlib.contextmanager
+def use_data_config(config: DataConfig) -> Generator[DataConfig, None, None]:
+    """Bind *config* as the active :class:`DataConfig` for the duration of the block."""
+    token = _active_data_config.set(config)
+    try:
+        yield config
+    finally:
+        _active_data_config.reset(token)
+
+
+def load_cluster_config(cluster: str | None = None) -> DataConfig:
+    """Load a cluster's :class:`DataConfig` from its ``config/<cluster>.yaml``.
+
+    The cluster name is ``cluster`` arg > ``MARIN_CLUSTER`` env > ``marin``. A
+    parsed ``data:`` block becomes the config; other keys (e.g. ``iris:``) are
+    ignored. When the default ``marin`` config cannot be found (e.g. an installed
+    package outside a checkout), returns :data:`_FALLBACK_DATA_CONFIG`; a missing
+    *named* cluster raises ``FileNotFoundError``. Cached; call
+    :func:`reset_data_config_cache` in tests after changing env or config files.
+    """
+    name = cluster or os.environ.get(_MARIN_CLUSTER_ENV) or _DEFAULT_CLUSTER
+    return _load_cluster_config_cached(name)
+
+
+@functools.cache
+def _load_cluster_config_cached(cluster: str) -> DataConfig:
+    try:
+        config_path = resolve_cluster_config(cluster, MARIN_CLUSTER_CONFIG_DIRS)
+    except FileNotFoundError:
+        if cluster == _DEFAULT_CLUSTER:
+            return _FALLBACK_DATA_CONFIG
+        raise
+    with config_path.open("rb") as f:
+        document = yaml.safe_load(f) or {}
+    data = document.get("data")
+    if not data:
+        return _FALLBACK_DATA_CONFIG
+    return _parse_data_config(data)
+
+
+def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
+    """Build a :class:`DataConfig` from a parsed ``data:`` config block.
+
+    Keys absent from the block fall back to the :class:`DataConfig` field
+    defaults, so per-field defaults are defined once on the dataclass.
+    """
+    temp = data.get("temp") or {}
+    raw_ttl = temp.get("ttl_days")
+    root = data.get("root")
+    return DataConfig(
+        region_buckets=dict(data.get("region_buckets") or {}),
+        scheme=str(data.get("scheme") or DataConfig.scheme),
+        temp_path=str(temp.get("path") or DataConfig.temp_path),
+        ttl_days=tuple(raw_ttl) if raw_ttl is not None else DataConfig.ttl_days,
+        root=str(root) if root is not None else None,
+    )
+
+
+def reset_data_config_cache() -> None:
+    """Clear the :func:`load_cluster_config` cache. For tests."""
+    _load_cluster_config_cached.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# Region + prefix resolution
+# ---------------------------------------------------------------------------
+
+
+def region_from_metadata() -> str | None:
+    """Derive the GCP region from the instance metadata server, or ``None``."""
+    try:
+        req = urllib.request.Request(_GCP_METADATA_ZONE_URL, headers={"Metadata-Flavor": "Google"})
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            zone = resp.read().decode().strip().split("/")[-1]
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        return None
+    if "-" not in zone:
+        return None
+    return zone.rsplit("-", 1)[0]
+
+
+def region_from_prefix(prefix: str) -> str | None:
+    """Extract the canonical GCP region from a ``gs://marin-{region}/…`` prefix.
+
+    Bucket names are normalized through the active config's ``region_buckets``
+    (e.g. ``gs://marin-eu-west4`` -> ``europe-west4``); unknown ``marin-``
+    buckets fall back to stripping the ``marin-`` prefix.
+    """
+    m = re.match(r"gs://([^/]+)", prefix)
+    if not m:
+        return None
+    bucket = m.group(1)
+    for region, region_bucket in data_config().region_buckets.items():
+        if region_bucket == bucket:
+            return region
+    if bucket.startswith("marin-"):
+        return bucket[len("marin-") :]
+    return None
+
+
+def marin_region() -> str | None:
+    """Return the current GCP region, from instance metadata or ``MARIN_PREFIX``."""
+    return region_from_metadata() or region_from_prefix(os.environ.get(_MARIN_PREFIX_ENV, ""))
+
+
+def marin_prefix() -> str:
+    """Return the active cluster's storage prefix (``data_config().resolved_root()``)."""
+    return data_config().resolved_root()
+
+
+# Cloudflare R2 data buckets (S3-compatible, ``s3://`` scheme). Cross-cluster S3
+# detection that is not part of any single cluster's profile, so it stays
+# explicit here.
 R2_DATA_BUCKETS: frozenset[str] = frozenset({"marin-na"})
 
 # Finite botocore timeouts/retries for every S3/R2 filesystem we build.
@@ -92,41 +286,10 @@ _S3_CONNECT_TIMEOUT = 30
 _S3_READ_TIMEOUT = 120
 _S3_RETRY_MAX_ATTEMPTS = 5
 
-# Allowed TTL-day values. Each value N corresponds to a lifecycle rule on every
-# ``marin-{region}`` bucket that deletes objects under ``tmp/ttl=Nd/`` after N
-# days. Keep in sync with ``infra/configure_buckets.py``.
-ALLOWED_TTL_DAYS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30)
-
-# Path prefix under each ``marin-{region}`` bucket where TTL-managed scratch
-# data lives. Lifecycle rules live under ``{TEMP_PATH_PREFIX}/ttl=Nd/``.
-TEMP_PATH_PREFIX: str = "tmp"
-
-# Reverse lookup: bucket name → canonical GCP region.
-# Derived from REGION_TO_DATA_BUCKET so that region_from_prefix can return
-# canonical region names even when the bucket uses abbreviated naming
-# (e.g. "marin-eu-west4" → "europe-west4" instead of "eu-west4").
-_BUCKET_TO_REGION: dict[str, str] = {bucket: region for region, bucket in REGION_TO_DATA_BUCKET.items()}
-
 
 # ---------------------------------------------------------------------------
-# Low-level region helpers
+# Temp storage
 # ---------------------------------------------------------------------------
-
-
-def region_from_metadata() -> str | None:
-    """Derive GCP region from the instance metadata server, or ``None``."""
-    try:
-        req = urllib.request.Request(
-            _GCP_METADATA_ZONE_URL,
-            headers={"Metadata-Flavor": "Google"},
-        )
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            zone = resp.read().decode().strip().split("/")[-1]
-    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
-        return None
-    if "-" not in zone:
-        return None
-    return zone.rsplit("-", 1)[0]
 
 
 def _s3_bucket_from_prefix(prefix: str | None) -> str | None:
@@ -143,55 +306,9 @@ def _s3_bucket_from_prefix(prefix: str | None) -> str | None:
     return bucket if bucket in R2_DATA_BUCKETS else None
 
 
-def region_from_prefix(prefix: str) -> str | None:
-    """Extract the canonical GCP region from a ``gs://marin-{region}/…`` prefix.
-
-    Uses ``_BUCKET_TO_REGION`` to normalize abbreviated bucket names
-    (e.g. ``gs://marin-eu-west4`` → ``europe-west4``).
-    """
-    m = re.match(r"gs://([^/]+)", prefix)
-    if not m:
-        return None
-    bucket = m.group(1)
-    if bucket in _BUCKET_TO_REGION:
-        return _BUCKET_TO_REGION[bucket]
-    # Fall back to stripping the "marin-" prefix.
-    if bucket.startswith("marin-"):
-        return bucket[len("marin-") :]
-    return None
-
-
 # ---------------------------------------------------------------------------
 # High-level API
 # ---------------------------------------------------------------------------
-
-
-def marin_prefix() -> str:
-    """Return the marin storage prefix. Never returns ``None``.
-
-    Resolution order:
-      1. ``MARIN_PREFIX`` environment variable
-      2. GCS instance metadata → ``gs://marin-{region}``
-      3. ``/tmp/marin``
-    """
-    prefix = os.environ.get("MARIN_PREFIX")
-    if prefix:
-        return prefix
-    region = region_from_metadata()
-    if region:
-        bucket = _REGION_TO_MARIN_BUCKET_OVERRIDES.get(region, f"marin-{region}")
-        return f"gs://{bucket}"
-    return _DEFAULT_LOCAL_PREFIX
-
-
-def marin_region() -> str | None:
-    """Return the current GCP region, if detectable.
-
-    Resolution order:
-      1. GCS instance metadata server
-      2. Infer from ``MARIN_PREFIX`` environment variable
-    """
-    return region_from_metadata() or region_from_prefix(os.environ.get("MARIN_PREFIX", ""))
 
 
 def _append_path_prefix(path: str, prefix: str) -> str:
@@ -200,23 +317,23 @@ def _append_path_prefix(path: str, prefix: str) -> str:
     return path
 
 
-def _resolve_ttl_days(ttl_days: int) -> int:
-    """Map *ttl_days* to the smallest configured value that is ``>= ttl_days``.
+def _resolve_ttl_days(ttl_days: int, allowed: tuple[int, ...]) -> int:
+    """Map *ttl_days* to the smallest *allowed* value that is ``>= ttl_days``.
 
-    Requests above the largest configured value clamp to that maximum (with
+    Requests above the largest allowed value clamp to that maximum (with
     a warning) — temp data is by definition disposable, so capping the TTL
     is preferable to forcing the caller to handle an exception. Logs a
     warning whenever the requested value is rounded.
     """
     if ttl_days <= 0:
-        raise ValueError(f"ttl_days={ttl_days} must be positive. Allowed values: {ALLOWED_TTL_DAYS}.")
-    if ttl_days in ALLOWED_TTL_DAYS:
+        raise ValueError(f"ttl_days={ttl_days} must be positive. Allowed values: {allowed}.")
+    if ttl_days in allowed:
         return ttl_days
-    for n in ALLOWED_TTL_DAYS:
+    for n in allowed:
         if n > ttl_days:
             logger.warning("ttl_days=%d not configured; rounding up to %d", ttl_days, n)
             return n
-    capped = max(ALLOWED_TTL_DAYS)
+    capped = max(allowed)
     logger.warning("ttl_days=%d exceeds the configured maximum; clamping to %d", ttl_days, capped)
     return capped
 
@@ -244,16 +361,17 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
     under ``tmp/ttl=Nd/`` after *N* days.
 
     Args:
-        ttl_days: Lifecycle TTL in days.  Values not in
-            :data:`ALLOWED_TTL_DAYS` are rounded up to the nearest configured
-            value (with a warning); values above the maximum clamp to it.
-            Non-positive values raise :class:`ValueError`.
+        ttl_days: Lifecycle TTL in days.  Values not in the active config's
+            ``ttl_days`` are rounded up to the nearest configured value (with a
+            warning); values above the maximum clamp to it.  Non-positive values
+            raise :class:`ValueError`.
         prefix: Optional sub-path appended after the TTL directory.
         source_prefix: Optional path used to choose the temp bucket region.
             Useful when configuring a remote job from a launcher that may be in
             a different region than the job output path.
     """
-    ttl_days = _resolve_ttl_days(ttl_days)
+    cfg = data_config()
+    ttl_days = _resolve_ttl_days(ttl_days, cfg.ttl_days)
 
     mp = marin_prefix()
 
@@ -270,10 +388,9 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
         s3_bucket = _s3_bucket_from_prefix(mp)
 
     if region:
-        canonical = _REGION_ALIASES.get(region, region)
-        bucket = REGION_TO_DATA_BUCKET.get(canonical)
+        bucket = cfg.region_buckets.get(region)
         if bucket:
-            path = f"gs://{bucket}/{TEMP_PATH_PREFIX}/ttl={ttl_days}d"
+            path = f"gs://{bucket}/{cfg.temp_path}/ttl={ttl_days}d"
             return _append_path_prefix(path, prefix)
 
     # R2 is single-bucket and non-regional. Place temp at the bucket root so the
@@ -281,12 +398,12 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
     # applies — note the runtime marin prefix on R2 is `s3://marin-na/marin`,
     # so we deliberately strip the `marin/` data subdir here.
     if s3_bucket:
-        path = f"s3://{s3_bucket}/{TEMP_PATH_PREFIX}/ttl={ttl_days}d"
+        path = f"s3://{s3_bucket}/{cfg.temp_path}/ttl={ttl_days}d"
         return _append_path_prefix(path, prefix)
 
     if "://" not in mp:
         mp = f"file://{mp}"
-    path = f"{mp}/{TEMP_PATH_PREFIX}"
+    path = f"{mp}/{cfg.temp_path}"
     return _append_path_prefix(path, prefix)
 
 
@@ -965,8 +1082,8 @@ def atomic_rename(output_path: str, fs: Any = None) -> Generator[str, None, None
 
 
 def _all_data_bucket_prefixes() -> list[str]:
-    """Return gs:// prefixes for all known marin data buckets."""
-    return [f"gs://{bucket}" for bucket in REGION_TO_DATA_BUCKET.values()]
+    """Return gs:// prefixes for all of the active cluster's data buckets."""
+    return [f"gs://{bucket}" for bucket in data_config().region_buckets.values()]
 
 
 def _mirror_remote_prefixes(local_prefix: str) -> list[str]:

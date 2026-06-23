@@ -8,7 +8,7 @@ import webbrowser
 import pytest
 from click.testing import CliRunner
 from rigging import iap_login_cli
-from rigging.auth import IapLoginRequired
+from rigging.auth import IapLoginRequired, StaticTokenProvider
 from rigging.iap_login import (
     IapCredentials,
     credentials_path,
@@ -43,7 +43,7 @@ def test_load_missing_returns_none(home):
 
 
 def test_provider_for_missing_raises_with_login_hint(home):
-    with pytest.raises(IapLoginRequired, match="marin-login never-logged-in"):
+    with pytest.raises(IapLoginRequired, match="marin-login login never-logged-in"):
         provider_for("never-logged-in")
 
 
@@ -64,7 +64,7 @@ def test_provider_for_threads_cached_credentials_and_login_hint(home, monkeypatc
     assert captured["client_secret"] == "secret"
     assert captured["refresh_token"] == "rtok"
     # The provider carries a name-specific remedy for the refresh-failure path.
-    assert "marin-login marin" in captured["login_hint"]
+    assert "marin-login login marin" in captured["login_hint"]
 
 
 def test_desktop_login_caches_refresh_token(home, tmp_path, monkeypatch):
@@ -95,7 +95,7 @@ def test_desktop_login_rejects_web_client_secret(home, tmp_path):
         desktop_login("marin", str(secret_file))
 
 
-def test_cli_threads_args_and_detects_headless(home, tmp_path, monkeypatch):
+def test_cli_login_threads_args_and_detects_headless(home, tmp_path, monkeypatch):
     secret_file = tmp_path / "desktop.json"
     secret_file.write_text("{}")
 
@@ -109,7 +109,27 @@ def test_cli_threads_args_and_detects_headless(home, tmp_path, monkeypatch):
     # No browser on the box -> the CLI should pick the headless paste flow.
     monkeypatch.setattr("rigging.iap_login_cli.webbrowser.get", lambda *a: (_ for _ in ()).throw(webbrowser.Error()))
 
-    result = CliRunner().invoke(iap_login_cli.main, ["marin", "--client-secrets", str(secret_file)])
+    result = CliRunner().invoke(iap_login_cli.main, ["login", "marin", "--client-secrets", str(secret_file)])
 
     assert result.exit_code == 0, result.output
     assert captured == {"name": "marin", "client_secrets": str(secret_file), "headless": True}
+
+
+def test_cli_print_token_writes_only_token(monkeypatch):
+    def fake_provider(name: str) -> StaticTokenProvider:
+        assert name == "marin"
+        return StaticTokenProvider("iap-id-token")
+
+    monkeypatch.setattr("rigging.iap_login_cli.provider_for", fake_provider)
+
+    result = CliRunner().invoke(iap_login_cli.main, ["print-token", "marin"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "iap-id-token\n"
+
+
+def test_cli_print_token_without_login_reports_login_command(home):
+    result = CliRunner().invoke(iap_login_cli.main, ["print-token", "marin"])
+
+    assert result.exit_code == 1
+    assert "marin-login login marin --client-secrets <desktop.json>" in result.output

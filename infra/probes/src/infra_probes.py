@@ -16,20 +16,25 @@ import uuid
 from pathlib import Path
 
 import click
+from cluster import collect_jobs, collect_workers
 from finelog.client.log_client import FlushResult, LogClient
 from finelog.rpc import logging_pb2
+from iris.cli.connect import rpc_client
 from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.constraints import zone_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.rpc import job_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from provisioning import collect_provisioning
-from rigging.filesystem import REGION_TO_DATA_BUCKET
+from rigging.filesystem import load_cluster_config
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration
 from runner import Collector, CollectorRunner, MetricSink, health_collector
 from sinks import FinelogTableSink, JsonlGcsSink
 
 logger = logging.getLogger(__name__)
+
+_MARIN_CONFIG = load_cluster_config("marin")
 
 # Iris advertises the finelog log-server under this logical name in its endpoint
 # registry; resolve it to a concrete address via list_endpoints (same name the
@@ -47,6 +52,15 @@ DEFAULT_ZONES = ("europe-west4-b", "us-west4-a")
 PROVISION_WINDOW_HOURS = 3.0
 PROVISION_CADENCE = 900.0
 PROVISION_TIMEOUT = 60.0
+
+# Cluster-state gauges. Workers is a single ListWorkers RPC paged client-side;
+# jobs is one raw-SQL GROUP BY. Both are sub-second, so the cadences are about
+# freshness (workers churn faster than the 24h job window) and the timeouts only
+# cover a slow/hung controller.
+WORKERS_CADENCE = 60.0
+WORKERS_TIMEOUT = 30.0
+JOBS_CADENCE = 120.0
+JOBS_TIMEOUT = 30.0
 
 # The iris worker unconditionally runs `uv sync --all-packages --no-group dev`
 # against the job's bundle, which fails without a pyproject.toml (and without a
@@ -83,7 +97,7 @@ FINELOG_READBACK_POLL_INTERVAL = 0.25
 # the VM's /var/lib/probes host mount; finished daily files roll up to GCS in the
 # same region as the VM (no cross-region egress).
 PROBE_RESULTS_DIR = Path("/var/lib/probes")
-PROBE_RESULTS_GCS_PREFIX = f"gs://{REGION_TO_DATA_BUCKET['us-central1']}/infra/probes"
+PROBE_RESULTS_GCS_PREFIX = f"gs://{_MARIN_CONFIG.region_buckets['us-central1']}/infra/probes"
 PROBE_RESULTS_NAMESPACE = "infra.canary.metrics"
 
 
@@ -181,8 +195,13 @@ def build_sinks(finelog: LogClient) -> list[MetricSink]:
     return sinks
 
 
-def build_collectors(iris: RemoteClusterClient, finelog: LogClient, zones: tuple[str, ...]) -> list[Collector]:
-    """Health checks plus the provisioning gauge, each on its own cadence."""
+def build_collectors(
+    iris: RemoteClusterClient,
+    finelog: LogClient,
+    query_client: ControllerServiceClientSync,
+    zones: tuple[str, ...],
+) -> list[Collector]:
+    """Health checks plus the provisioning/workers/jobs gauges, each on its own cadence."""
     collectors = [
         health_collector("controller-ping", lambda: probe_controller_ping(iris), timeout=5.0, cadence=60.0),
         health_collector("finelog-write", lambda: probe_finelog_write(finelog), timeout=15.0, cadence=60.0),
@@ -191,6 +210,18 @@ def build_collectors(iris: RemoteClusterClient, finelog: LogClient, zones: tuple
             collect=lambda: collect_provisioning(finelog, window_hours=PROVISION_WINDOW_HOURS),
             timeout=PROVISION_TIMEOUT,
             cadence=PROVISION_CADENCE,
+        ),
+        Collector(
+            name="workers",
+            collect=lambda: collect_workers(iris),
+            timeout=WORKERS_TIMEOUT,
+            cadence=WORKERS_CADENCE,
+        ),
+        Collector(
+            name="jobs",
+            collect=lambda: collect_jobs(query_client),
+            timeout=JOBS_TIMEOUT,
+            cadence=JOBS_CADENCE,
         ),
     ]
     for zone in zones:
@@ -221,9 +252,12 @@ def main(iris_endpoint: str, zones: tuple[str, ...]) -> None:
         LOG_SERVER_ENDPOINT_NAME,
         resolver=lambda name: resolve_finelog_address(iris, name),
     )
+    # Dedicated connect client for the jobs gauge's raw-SQL RPC; null-auth cluster,
+    # so no credentials. RemoteClusterClient doesn't surface ExecuteRawQuery.
+    query_client = rpc_client(iris_endpoint)
 
     runner = CollectorRunner(sinks=build_sinks(finelog))
-    for collector in build_collectors(iris, finelog, zones):
+    for collector in build_collectors(iris, finelog, query_client, zones):
         runner.add(collector)
     runner.run()
 

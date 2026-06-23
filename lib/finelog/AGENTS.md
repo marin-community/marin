@@ -16,9 +16,7 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 - `src/finelog/store/` — `MemStore` (in-memory) and `DuckDBLogStore` (Parquet + DuckDB)
 - `src/finelog/server/` — `LogServiceImpl`, `StatsServiceImpl`, ASGI builder, CLI launcher
 - `src/finelog/client/` — `LogClient` (single user-facing entry; covers logs and stats),
-  `RemoteLogHandler`, error types in `errors.py`. `proxy.py` hosts
-  `LogServiceProxy`, an internal server-side adapter used when iris mounts the
-  log service as a forwarding proxy; not re-exported.
+  `RemoteLogHandler`, error types in `errors.py`.
 - `tests/` — store + server tests
 - `deploy/` — Dockerfile, k8s manifests, GCP snippets
 

@@ -203,6 +203,36 @@ iris key create --name ci-bot         # create API key
 iris key list / iris key revoke       # manage API keys
 ```
 
+### Calling the IAP endpoint with `curl`
+
+Use the desktop OAuth client configured as an IAP programmatic client. The
+first command opens a browser and stores a long-lived refresh token in
+`~/.config/marin/iap/marin.json`:
+
+```bash
+uv run marin-login login marin --client-secrets /path/to/desktop.json
+```
+
+Mint a short-lived IAP ID token from the cached credentials and send it in
+`Proxy-Authorization`:
+
+```bash
+IAP_TOKEN="$(uv run marin-login print-token marin)"
+curl --fail-with-body \
+  --header "Proxy-Authorization: Bearer ${IAP_TOKEN}" \
+  https://iris-marin.oa.dev/proxy/system.log-server/health
+```
+
+`Proxy-Authorization` is reserved for IAP. Keep `Authorization` available for
+an Iris JWT when a controller route requires one. When
+`auth.iap.signed_header_audience` is configured, the controller accepts the
+identity assertion added by IAP and resolves the caller's Iris role by email.
+
+The path proxy encodes `/` in an endpoint name as `.`. The finelog endpoint
+`/system/log-server` is therefore `system.log-server` in the public URL.
+`/proxy/system/finelog` addresses an endpoint named `/system` with a `finelog`
+subpath and does not reach the controller's finelog server.
+
 ## Troubleshooting
 
 | Symptom | Diagnostic |

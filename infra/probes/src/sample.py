@@ -17,10 +17,18 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime
+from typing import ClassVar
 
 
 @dataclass(frozen=True)
 class Sample:
+    # The finelog ordering key. register_table requires the schema to declare a
+    # key_column naming an existing column (or carry an implicit `timestamp_ms`
+    # column). Our time axis is collected_at, so name it explicitly — the server
+    # checks presence, not type, and accepts a TIMESTAMP_MS column. Without this
+    # the metrics table never registers and FinelogTableSink drops every row.
+    key_column: ClassVar[str] = "collected_at"
+
     # labels is a JSON object string (e.g. '{"zone":"us-east5-a"}') rather than a
     # dict so the finelog schema is a flat STRING column and the JSONL stays one
     # line per sample; DuckDB's json_extract slices it at query time.

@@ -5,9 +5,34 @@
 
 from __future__ import annotations
 
+import base64
+import json
+
+import click
 import pytest
-from finelog.deploy._k8s import _K8S_MANIFEST_DIR, _MANIFESTS, _render_manifest
+from finelog.deploy._k8s import (
+    _K8S_MANIFEST_DIR,
+    _MANIFESTS,
+    _build_s3_secret_manifest,
+    _render_manifest,
+    _s3_secret_name,
+)
 from finelog.deploy.config import Deployment, FinelogConfig, K8sDeployment
+
+
+def _s3_cfg(**k8s_overrides) -> FinelogConfig:
+    k8s = {
+        "namespace": "iris",
+        "object_storage_endpoint": "https://acct.r2.cloudflarestorage.com",
+    }
+    k8s.update(k8s_overrides)
+    return FinelogConfig(
+        name="finelog-cw",
+        port=10001,
+        image="img",
+        remote_log_dir="s3://bucket/finelog/cw",
+        deployment=Deployment(gcp=None, k8s=K8sDeployment(**k8s)),
+    )
 
 
 @pytest.fixture
@@ -70,6 +95,59 @@ def test_render_pvc_omits_storage_class_when_unset() -> None:
     rendered = _render_manifest(_K8S_MANIFEST_DIR / "01-pvc.yaml.tmpl", cfg)
     assert "storageClassName" in rendered  # appears in the comment fallback
     assert "<cluster default>" in rendered
+
+
+def test_s3_secret_minted_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "SEKRIT")
+    cfg = _s3_cfg()
+    manifest = json.loads(_build_s3_secret_manifest(cfg))
+    data = {k: base64.b64decode(v).decode() for k, v in manifest["data"].items()}
+    # The R2->AWS name mapping + injected region are the actual logic the Rust
+    # server's from_env() depends on; the rest of the manifest is boilerplate.
+    assert data == {
+        "AWS_ACCESS_KEY_ID": "AKID",
+        "AWS_SECRET_ACCESS_KEY": "SEKRIT",
+        "AWS_ENDPOINT_URL": "https://acct.r2.cloudflarestorage.com",
+        "AWS_REGION": "auto",
+        "AWS_DEFAULT_REGION": "auto",
+    }
+
+
+def test_no_secret_for_non_s3_archive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "SEKRIT")
+    cfg = FinelogConfig(
+        name="finelog",
+        port=10001,
+        image="img",
+        remote_log_dir="gs://bucket/logs",
+        deployment=Deployment(gcp=None, k8s=K8sDeployment(namespace="iris")),
+    )
+    assert _build_s3_secret_manifest(cfg) is None
+
+
+def test_s3_secret_requires_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "SEKRIT")
+    with pytest.raises(click.ClickException, match="object_storage_endpoint"):
+        _build_s3_secret_manifest(_s3_cfg(object_storage_endpoint=None))
+
+
+def test_s3_secret_requires_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("R2_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("R2_SECRET_ACCESS_KEY", raising=False)
+    with pytest.raises(click.ClickException, match="R2_ACCESS_KEY_ID"):
+        _build_s3_secret_manifest(_s3_cfg())
+
+
+def test_deployment_envfrom_matches_minted_secret_name() -> None:
+    # The template's envFrom secret name is a hardcoded `{{ name }}-env` literal,
+    # independent of the `_s3_secret_name` helper that names the minted Secret —
+    # this guards the two from drifting (a mismatch silently breaks auth).
+    cfg = _s3_cfg()
+    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
+    assert f"name: {_s3_secret_name(cfg)}" in rendered
 
 
 def test_manifest_dir_exists() -> None:
