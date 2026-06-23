@@ -41,6 +41,29 @@ def _build_pip_install_args(pip_packages: Sequence[str]) -> str:
     return " ".join(shlex.quote(pkg) for pkg in packages)
 
 
+def _stage_cuda_toolchain_command() -> str:
+    """Expose CUDA tools installed by PyPI packages in the task venv."""
+    return (
+        "cuda_dir='';"
+        " for d in .venv/lib/python*/site-packages/nvidia/cu13; do"
+        ' [ -d "$d" ] && cuda_dir="$d" && break;'
+        " done;"
+        ' if [ -n "$cuda_dir" ]; then'
+        ' export PATH="$PWD/$cuda_dir/bin:$PATH";'
+        ' case "${XLA_FLAGS:-}" in'
+        ' *"--xla_gpu_cuda_data_dir="*) ;;'
+        ' *) export XLA_FLAGS="${XLA_FLAGS:+$XLA_FLAGS }--xla_gpu_cuda_data_dir=$PWD/$cuda_dir" ;;'
+        " esac;"
+        ' libdevice="$cuda_dir/nvvm/libdevice/libdevice.10.bc";'
+        ' if [ -f "$libdevice" ]; then'
+        " mkdir -p cuda_sdk_lib/nvvm/libdevice;"
+        ' cp -f "$libdevice" cuda_sdk_lib/nvvm/libdevice/libdevice.10.bc;'
+        ' cp -f "$libdevice" libdevice.10.bc;'
+        " fi;"
+        " fi"
+    )
+
+
 def build_runtime_entrypoint(
     entrypoint: Entrypoint,
     env_config: job_pb2.EnvironmentConfig,
@@ -80,6 +103,7 @@ def build_runtime_entrypoint(
         )
     else:
         setup_commands.append(f"uv sync {quiet_flag} {frozen_flag} {link_mode_flag} {python_flag}".strip())
+    setup_commands.append(_stage_cuda_toolchain_command())
     # In rust-dev mode, uv sync creates .pth links for editable path sources but
     # doesn't invoke the build backend (maturin), so native extensions are missing.
     # The RUST-DEV SOURCES block is the only place we use `editable = true`; when

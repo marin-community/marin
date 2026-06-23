@@ -259,6 +259,13 @@ Marin's `gpu` extra installs the JAX CUDA 13 wheel stack from PyPI. CoreWeave
 GPU nodes must expose NVIDIA driver 580 or newer; `nvidia-smi` should report
 CUDA 13.x.
 
+Iris task bootstrap exposes the PyPI CUDA 13 toolchain after `uv sync`: it adds
+the venv's `nvidia/cu13/bin` directory to `PATH`, sets `XLA_FLAGS` with
+`--xla_gpu_cuda_data_dir` when that flag is not already present, and stages
+`libdevice.10.bc` under `cuda_sdk_lib/nvvm/libdevice/` plus `/app`. This keeps
+JAX/Pallas Mosaic kernels working without per-job shell setup for `ptxas`,
+`nvlink`, or `libdevice.10.bc`.
+
 ### Grug MoE Canary Warm-Node Multinode Smoke
 
 For a realistic Grug MoE multinode smoke, use the GPU path in

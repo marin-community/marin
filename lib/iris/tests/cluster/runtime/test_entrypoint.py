@@ -53,6 +53,23 @@ def test_build_runtime_entrypoint_includes_pip_packages():
     assert "memray" in setup
 
 
+def test_build_runtime_entrypoint_stages_cuda_toolchain_after_uv_sync():
+    ep = _make_entrypoint(["python", "train.py"])
+    env = _make_env_config(extras=["gpu"])
+    rt = build_runtime_entrypoint(ep, env)
+
+    setup_commands = list(rt.setup_commands)
+    sync_index = next(i for i, command in enumerate(setup_commands) if command.startswith("uv sync"))
+    cuda_index = next(i for i, command in enumerate(setup_commands) if "nvidia/cu13" in command)
+    cuda_command = setup_commands[cuda_index]
+
+    assert cuda_index == sync_index + 1
+    assert 'export PATH="$PWD/$cuda_dir/bin:$PATH"' in cuda_command
+    assert "--xla_gpu_cuda_data_dir=$PWD/$cuda_dir" in cuda_command
+    assert "cuda_sdk_lib/nvvm/libdevice/libdevice.10.bc" in cuda_command
+    assert 'cp -f "$libdevice" libdevice.10.bc' in cuda_command
+
+
 def test_build_runtime_entrypoint_with_python_version():
     ep = _make_entrypoint(["python", "app.py"])
     env = _make_env_config(python_version="3.11")
