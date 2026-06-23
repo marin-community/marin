@@ -299,6 +299,29 @@ def test_moe_psum_rows_are_observed_only_collective(tmp_path: Path) -> None:
     assert rows["moe_expert"].track_summed_observed_time is None
 
 
+def test_dense_mlp_attributes_entire_dense_mlp_subtree(tmp_path: Path) -> None:
+    profile_path = tmp_path / "kernel_stats.json"
+    _write_single_xprof_row(
+        profile_path,
+        op_name=("jit(train_step)/forward_backward/Block/Block._mlp_update/" "DenseMLP.dense_mlp/wi/dot_general:"),
+        kernel_name="cutlass_gemm",
+        total_duration_us=14_000.0,
+        occurrences=16,
+    )
+
+    report = build_report(
+        hardware_name="coreweave_h100",
+        model_preset_name="grug_moe_d2560_may",
+        profile=str(profile_path),
+    )
+
+    rows = {row.semantic_op: row for row in report.rows}
+    dense = rows["dense_mlp"]
+    assert dense.track_summed_observed_time == pytest.approx(14_000e-6)
+    assert dense.observed_count == 16
+    assert "uncategorized" not in rows
+
+
 def test_scatter_add_allreduce_is_observed_only_collective(tmp_path: Path) -> None:
     profile_path = tmp_path / "kernel_stats.json"
     _write_single_xprof_row(

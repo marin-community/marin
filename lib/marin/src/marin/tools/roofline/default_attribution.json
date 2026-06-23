@@ -87,7 +87,7 @@
     {
       "semantic_op": "dense_mlp",
       "match": {
-        "op_name_regex": "DenseMLP/"
+        "op_name_regex": "DenseMLP"
       }
     },
     {
