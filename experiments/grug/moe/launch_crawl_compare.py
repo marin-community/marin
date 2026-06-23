@@ -16,13 +16,18 @@ largest rung's token budget (d1280 = 1.24e10), so every rung sees the same
 number of fresh tokens from either corpus. Ingestion reuses the Common Crawl
 WET path (:mod:`marin.datakit.download.common_crawl_wet`).
 
-Two stages, selected by the ``STAGE`` env var, so the shared data prep runs once
-before the eight training jobs fan out (one v5p-8 per job):
+Selected by the ``STAGE`` env var:
 
-    STAGE=data                      # ingest + tokenize both corpora
+    STAGE=all                       # ingest + tokenize + all 8 rungs, one DAG (default use)
+    STAGE=data                      # ingest + tokenize both corpora only
     STAGE=train CRAWL=focus SCALE=d512   # one rung on one corpus
 
-Submit each as its own Iris job (see ``agent.md`` for the command).
+Submit with the TPU type and let the region be inferred — do NOT pass
+``-e MARIN_PREFIX`` or ``--region``. Pinning the prefix to a non-TPU region puts
+the data/checkpoints across regions from the v5p, which trips rigging's
+cross-region transfer-budget guard mid-run. ``STAGE=all`` runs the whole graph in
+one executor invocation so the inference co-locates ingest, tokenize, and the
+eight trainings in the same TPU-capable region.
 """
 
 import os
@@ -124,12 +129,6 @@ LADDER: dict[str, tuple[int, float]] = {
     "d1280": (1280, 2.83e19),
 }
 
-# v5p lives in us-central1/us-east5 while the tokenized data is in us-central2.
-# Pin the TPU child to the v5p regions explicitly so the executor's data-region
-# inference (us-central2) does not leave it unschedulable; the run reads data
-# cross-region, matching the nemotron baseline.
-_V5P_REGIONS = ["us-central1", "us-east5"]
-
 
 def _tracker(crawl: str, scale: str) -> TrackerConfig:
     """W&B when ``WANDB_API_KEY`` is present, else a JSON logger fallback.
@@ -165,7 +164,7 @@ def build_train_step(crawl: str, scale: str) -> ExecutorStep:
             data=_crawl_data(crawl),
             output_path=this_output_path(),
             run_id=run_id,
-            resources=versioned(ResourceConfig.with_tpu("v5p-8", regions=_V5P_REGIONS)),
+            resources=versioned(ResourceConfig.with_tpu("v5p-8")),
             steps=versioned(steps),
             batch_size=versioned(batch_size),
             seed=versioned(0),
@@ -186,8 +185,27 @@ def build_train_step(crawl: str, scale: str) -> ExecutorStep:
     )
 
 
+def all_steps() -> list[ExecutorStep]:
+    """Both tokenize steps plus all 8 ladder rungs, as one DAG.
+
+    Running the whole graph in a single executor invocation lets the region
+    inference co-locate ingest, tokenize, and training in the same TPU-capable
+    region — so nothing crosses regions. Do not pin MARIN_PREFIX or TPU regions.
+    """
+    return [
+        *TOKENIZE_STEPS.values(),
+        *(build_train_step(crawl, scale) for crawl in TOKENIZE_STEPS for scale in LADDER),
+    ]
+
+
 def main() -> None:
     stage = os.environ.get("STAGE", "train")
+    if stage == "all":
+        executor_main(
+            steps=all_steps(),
+            description="grug-MoE crawl-compare: ingest+tokenize+train full focus-vs-main ladder.",
+        )
+        return
     if stage == "data":
         executor_main(
             steps=list(TOKENIZE_STEPS.values()),
@@ -195,7 +213,7 @@ def main() -> None:
         )
         return
     if stage != "train":
-        raise ValueError(f"STAGE={stage!r} must be 'data' or 'train'")
+        raise ValueError(f"STAGE={stage!r} must be 'all', 'data', or 'train'")
 
     crawl = os.environ["CRAWL"]
     scale = os.environ["SCALE"]
