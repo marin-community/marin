@@ -551,3 +551,44 @@ does not produce a usable throughput point. It changes the visible error from a
 direct fused `recv_x` allocation failure to an NCCL group CUDA OOM during
 `train/loss` blocking, but the fused assignment-gradient path still does not fit
 cleanly enough for the remat comparison.
+
+May362 ran the minimum practical batch control for the same scatter/fused path:
+
+```text
+script=scratch/launch_may362_deepep_ep16_savemoe_l26_b16_scatter_archive_n2_throughput.sh
+parent=/dlwh/iris-run-job-20260622-232840
+child=/dlwh/iris-run-job-20260622-232840/grug-train-MAY362-DEEPEP-EP16-SAVEMOE-FUSEDASSIGN-SCATTERCOLLAPSE-ARCHIVE-L26-B16-N2-20260622-2328
+wandb=marin-community/marin_moe/MAY362-DEEPEP-EP16-SAVEMOE-FUSEDASSIGN-SCATTERCOLLAPSE-ARCHIVE-L26-B16-N2-20260622-2328
+shape=2 H100x8 nodes, EP16, global batch 16, 1 sequence/device
+moe=deepep_internode
+remat=save_moe
+profiler=disabled
+collapse=scatter
+assignment_gradient=fused
+```
+
+Result:
+
+- May362 used the source archive, reached W&B, initialized all 16 DeepEP ranks,
+  confirmed the EP16 mesh, and dispatched step 0.
+- It produced no W&B metric rows. The W&B run ended `failed` with no
+  `_timestamp`, `global_step`, `train/loss`, or throughput metrics.
+- After dispatch, `train/loss` failed with the same internode recv-counter
+  timeout class seen in May348/May354:
+
+```text
+jax.errors.JaxRuntimeError: INTERNAL: DeepEP internode JAX dispatch timed out waiting for recv counters
+DEEPEP_INTERNODE_COUNTER_TIMEOUT {"rank":5,"call_sequence":-1,"num_recv_tokens":-1,"num_rdma_recv_tokens":-1,"num_local_experts":16,"expert_counters":[-1,...,-1]}
+```
+
+- Iris began retrying the same child after one failed attempt. The retrying
+  child and parent were stopped to avoid burning the two-node slot on the same
+  failing configuration.
+
+Interpretation: reducing the scatter/fused EP16 `save_moe` control to B16
+removes the visible CUDA OOM/NCCL OOM class from B32/B64, but it still does not
+produce a usable throughput point. At minimum batch the blocker becomes the
+DeepEP internode recv-counter synchronization failure, not remat overhead. EP16
+therefore remains blocked for this remat comparison; the usable throughput
+evidence in this report is the EP8 path, where B16 with `none`,
+`save_moe`, and `offload_moe_output` all cluster around 24.6-24.9 MFU.
