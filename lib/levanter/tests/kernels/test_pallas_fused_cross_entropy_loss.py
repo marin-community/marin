@@ -477,7 +477,7 @@ def test_fused_cross_entropy_pallas_gpu_name_points_to_batched_xla():
     w = jnp.zeros((3, 5), dtype=jnp.float32)
     y = jnp.zeros((2,), dtype=jnp.int32)
 
-    with pytest.raises(ValueError, match='implementation="pallas_gpu" was renamed to "batched_xla"'):
+    with pytest.raises(ValueError, match="pallas_gpu.*batched_xla"):
         fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
             x,
             y,

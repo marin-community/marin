@@ -24,6 +24,10 @@ from .tuned_block_sizes import (
 )
 from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import linear_softmax_cross_entropy_loss_xla
+from .batched_xla import (
+    BatchedXlaUnsupportedError,
+    linear_softmax_cross_entropy_loss_batched_xla,
+)
 
 
 Implementation: TypeAlias = Literal[
@@ -68,16 +72,8 @@ try:
 except ImportError:
     PallasUnsupportedError = NotImplementedError  # type: ignore[assignment]
 
-try:
-    from .batched_xla import (
-        BatchedXlaUnsupportedError,
-        linear_softmax_cross_entropy_loss_batched_xla,
-    )
-
-    IMPLEMENTATIONS["batched_xla"] = linear_softmax_cross_entropy_loss_batched_xla
-    _CANONICAL_BACKEND_IMPLEMENTATIONS["batched_xla"] = linear_softmax_cross_entropy_loss_batched_xla
-except ImportError:
-    BatchedXlaUnsupportedError = NotImplementedError  # type: ignore[assignment]
+IMPLEMENTATIONS["batched_xla"] = linear_softmax_cross_entropy_loss_batched_xla
+_CANONICAL_BACKEND_IMPLEMENTATIONS["batched_xla"] = linear_softmax_cross_entropy_loss_batched_xla
 
 
 @lru_cache(maxsize=1)
