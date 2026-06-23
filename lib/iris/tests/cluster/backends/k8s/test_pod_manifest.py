@@ -112,6 +112,22 @@ def test_build_pod_manifest_fields():
     assert container["resources"]["requests"]["memory"] == str(4 * 1024**3)
 
 
+def test_build_pod_manifest_defaults_image_when_no_override():
+    req = make_run_req("/test-job/0")
+    manifest = _build_pod_manifest(req, pod_config(default_image="myrepo/iris:latest"))
+    assert manifest["spec"]["containers"][0]["image"] == "myrepo/iris:latest"
+
+
+def test_build_pod_manifest_honors_task_image_override():
+    """RunTaskRequest.task_image overrides the task container image. The init
+    container keeps default_image (see _build_init_container_spec) since it runs
+    iris's own bundle_fetch tooling."""
+    req = make_run_req("/test-job/0")
+    req.task_image = "myrepo/custom:v9"
+    manifest = _build_pod_manifest(req, pod_config(default_image="myrepo/iris:latest"))
+    assert manifest["spec"]["containers"][0]["image"] == "myrepo/custom:v9"
+
+
 def test_build_pod_manifest_env_vars():
     req = make_run_req("/test-job/0")
     req.environment.env_vars["MY_VAR"] = "hello"
