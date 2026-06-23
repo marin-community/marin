@@ -532,8 +532,19 @@ def test_sync_survives_node_list_failure(provider, k8s):
 # ---------------------------------------------------------------------------
 
 
+def _collect_resources_once(provider) -> None:
+    """Drive one synchronous resource-collection pass.
+
+    reconcile() registers the running-pod set with the background collector;
+    this runs a single collection against that set without waiting on (or
+    racing) the collector's poll thread.
+    """
+    assert provider._resource_collector is not None, "reconcile should have started the collector"
+    provider._resource_collector._collect_once()
+
+
 def test_resource_stats_from_kubectl_top(provider, k8s, task_stats_table):
-    """Running pods emit IrisTaskStat rows via the background ResourceCollector."""
+    """Running pods emit IrisTaskStat rows via the ResourceCollector."""
 
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -543,12 +554,9 @@ def test_resource_stats_from_kubectl_top(provider, k8s, task_stats_table):
     populate_pod(k8s, pod_name, "Running")
     k8s.set_top_pod(pod_name, PodResourceUsage(cpu_millicores=500, memory_bytes=1024 * 1024 * 1024))
 
-    batch = make_batch(running_tasks=[entry])
-    # First sync registers the pod with the ResourceCollector.
-    provider.reconcile(batch)
-    # Wait for background collector to fetch and write.
-    time.sleep(2)
-    # No more sync needed — the row has already been written to the table.
+    # reconcile registers the pod; then collect once.
+    provider.reconcile(make_batch(running_tasks=[entry]))
+    _collect_resources_once(provider)
 
     rows = [row for batch_rows in task_stats_table.writes for row in batch_rows]
     assert rows, "ResourceCollector did not write any IrisTaskStat rows"
@@ -562,7 +570,7 @@ def test_resource_stats_from_kubectl_top(provider, k8s, task_stats_table):
 
 
 def test_resource_stats_skipped_when_metrics_unavailable(provider, k8s, task_stats_table):
-    """No IrisTaskStat row is written when kubectl top returns None."""
+    """No IrisTaskStat row is written when a pod has no metrics sample."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
     pod_name = _pod_name(task_id, attempt_id)
@@ -571,28 +579,24 @@ def test_resource_stats_skipped_when_metrics_unavailable(provider, k8s, task_sta
     populate_pod(k8s, pod_name, "Running")
     k8s.set_top_pod(pod_name, None)
 
-    batch = make_batch(running_tasks=[entry])
-    provider.reconcile(batch)
-    time.sleep(2)
+    provider.reconcile(make_batch(running_tasks=[entry]))
+    _collect_resources_once(provider)
 
     assert task_stats_table.writes == []
 
 
 def test_resource_stats_skipped_when_top_pods_raises(provider, k8s, task_stats_table):
-    """No IrisTaskStat row is written when the bulk metrics query raises."""
+    """A raising bulk metrics query is swallowed; no IrisTaskStat row is written."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
     pod_name = _pod_name(task_id, attempt_id)
     entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
 
     populate_pod(k8s, pod_name, "Running")
-    # Persistent: the background collector retries on its own cadence, so a
-    # one-shot failure would be consumed and later polls would succeed.
-    k8s.inject_failure("top_pods", RuntimeError("metrics-server unavailable"), persistent=True)
+    k8s.inject_persistent_failure("top_pods", RuntimeError("metrics-server unavailable"))
 
-    batch = make_batch(running_tasks=[entry])
-    provider.reconcile(batch)
-    time.sleep(2)
+    provider.reconcile(make_batch(running_tasks=[entry]))
+    _collect_resources_once(provider)
 
     assert task_stats_table.writes == []
 
@@ -606,9 +610,8 @@ def test_resource_stats_skipped_for_non_running_pods(provider, k8s, task_stats_t
 
     populate_pod(k8s, pod_name, "Succeeded")
 
-    batch = make_batch(running_tasks=[entry])
-    provider.reconcile(batch)
-    time.sleep(2)
+    provider.reconcile(make_batch(running_tasks=[entry]))
+    _collect_resources_once(provider)
 
     assert task_stats_table.writes == []
 

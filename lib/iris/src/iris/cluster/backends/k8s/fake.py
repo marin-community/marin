@@ -474,17 +474,17 @@ class InMemoryK8sService:
 
     # -- Failure injection --
 
-    def inject_failure(self, operation: str, error: Exception, *, persistent: bool = False) -> None:
-        """Inject a failure for *operation*.
+    def inject_failure(self, operation: str, error: Exception) -> None:
+        """Inject a one-shot failure consumed by the next call to *operation*."""
+        self._injected_failures[operation] = error
 
-        One-shot by default (consumed by the next call); ``persistent=True``
-        raises on every call until cleared — needed for operations a background
-        loop retries on its own cadence.
+    def inject_persistent_failure(self, operation: str, error: Exception) -> None:
+        """Fail every call to *operation* until cleared.
+
+        Needed for operations a background loop retries on its own cadence,
+        where a one-shot failure would be consumed by the first poll.
         """
-        if persistent:
-            self._persistent_failures[operation] = error
-        else:
-            self._injected_failures[operation] = error
+        self._persistent_failures[operation] = error
 
     def clear_failure(self, operation: str) -> None:
         self._injected_failures.pop(operation, None)

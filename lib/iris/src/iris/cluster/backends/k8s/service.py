@@ -687,15 +687,12 @@ class CloudK8sService:
     # -- top_pods ------------------------------------------------------------
 
     def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]:
-        """Bulk pod CPU/memory usage via a single metrics.k8s.io list call.
+        """Return CPU/memory usage for every pod, keyed by pod name.
 
         Lists ``PodMetrics`` for the namespace (optionally scoped by ``labels``)
-        in one request and returns a ``pod_name -> PodResourceUsage`` map. One
-        request covers every pod, so resource collection over N pods costs a
-        single API round-trip instead of N per-pod GETs.
-
-        A 404 means the metrics API is unavailable (metrics-server absent);
-        returns an empty map rather than raising so collection degrades quietly.
+        via the metrics.k8s.io list endpoint. A 404 means the metrics API is
+        unavailable (metrics-server absent); returns an empty map rather than
+        raising so callers degrade quietly.
         """
         logger.info("k8s: top_pods labels=%s", labels)
         kwargs = self._request_timeout_kwargs()

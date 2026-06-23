@@ -1134,16 +1134,14 @@ class LogCollector:
 
 
 class ResourceCollector:
-    """Background resource usage collector that writes to ``iris.task`` stats.
+    """Background thread that samples running pods' CPU/memory usage.
 
-    Same set_pods() pattern as LogCollector: the sync loop declares the
-    authoritative set of running pods once per cycle. Each tick the collector
-    issues a single bulk metrics list (``kubectl top`` equivalent) scoped to the
-    managed-pod labels, then appends one ``IrisTaskStat`` row per tracked pod
-    that has a sample — to the same table the worker daemon writes to on the
-    GCE/TPU path, so the dashboard's ``iris.task`` queries cover both runtimes
-    uniformly. One API round-trip covers every pod, so cost is independent of
-    pod count and no per-pod thread fan-out is needed.
+    The reconcile loop declares the authoritative set of running pods via
+    ``set_pods()`` once per cycle. Each ``poll_interval`` the collector samples
+    those pods via one bulk metrics query and appends an ``IrisTaskStat`` row
+    per pod to the ``iris.task`` table — the same table the worker daemon writes
+    to on the GCE/TPU path, so the dashboard's ``iris.task`` queries cover both
+    runtimes uniformly.
 
     ``poll_interval`` defaults to the metrics-server scrape resolution (15s);
     polling faster only re-reads the same sample.
