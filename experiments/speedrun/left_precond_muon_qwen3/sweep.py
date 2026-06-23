@@ -77,6 +77,9 @@ VARIANTS: tuple[str, ...] = tuple(v.strip() for v in os.environ.get("VARIANTS", 
 # damped inner whitening beats Muon.
 DAMPINGS: tuple[float, ...] = _floats("DAMPINGS", "0.0")
 
+# Whitening exponent p in (w/mean+λ)^{-p}: 0.5 = H^{-1/2}, 0.25 = H^{-1/4} (gentler).
+INV_POWERS: tuple[float, ...] = _floats("INV_POWERS", "0.5")
+
 
 @dataclass(frozen=True)
 class SizeSpec:
@@ -142,7 +145,9 @@ def _override_tracker(step: ExecutorStep) -> ExecutorStep:
 RUN_TAG: str = os.environ.get("RUN_TAG", "")
 
 
-def _build_step(multiplier: float, clamp_rel: float, variant: str, damping: float = 0.0) -> ExecutorStep:
+def _build_step(
+    multiplier: float, clamp_rel: float, variant: str, damping: float = 0.0, inv_power: float = 0.5
+) -> ExecutorStep:
     matrix_lr = SIZE.muon_lr * multiplier
     adam_lr = SIZE.adam_lr * multiplier
     optimizer = LeftPrecondMuonConfig(
@@ -150,6 +155,7 @@ def _build_step(multiplier: float, clamp_rel: float, variant: str, damping: floa
         clamp_rel=clamp_rel,
         ns_steps=5,
         damping=damping,
+        inv_power=inv_power,
         **VARIANT_FLAGS[variant],
         lr=matrix_lr,
         learning_rate=matrix_lr,
@@ -180,7 +186,8 @@ def _build_step(multiplier: float, clamp_rel: float, variant: str, damping: floa
     tag = f"_{RUN_TAG}" if RUN_TAG else ""
     vlabel = "" if variant == "full" else f"_{variant}"
     dlabel = "" if damping == 0.0 else f"_dmp{f'{damping:g}'.replace('.', '_')}"
-    run_id = f"qwen3_{SIZE.label}_leftprec{vlabel}{dlabel}{tag}_{_clamp_label(clamp_rel)}_{SEQ_LEN}_{_lr_label(multiplier)}"
+    plabel = "" if inv_power == 0.5 else f"_p{f'{inv_power:g}'.replace('.', '_')}"
+    run_id = f"qwen3_{SIZE.label}_leftprec{vlabel}{plabel}{dlabel}{tag}_{_clamp_label(clamp_rel)}_{SEQ_LEN}_{_lr_label(multiplier)}"
     step = default_train(
         name=run_id,
         tokenized=fineweb_edu_subcache_10B,
@@ -199,14 +206,22 @@ def main() -> None:
     if os.getenv("CI") is not None:
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
-    steps = [_build_step(m, c, v, d) for v in VARIANTS for m in LR_MULTIPLIERS for c in CLAMPS for d in DAMPINGS]
+    steps = [
+        _build_step(m, c, v, d, p)
+        for v in VARIANTS
+        for m in LR_MULTIPLIERS
+        for c in CLAMPS
+        for d in DAMPINGS
+        for p in INV_POWERS
+    ]
     logger.info(
-        "Left-precond Muon 130m sweep: %d runs (variants=%s lr=%s clamps=%s dampings=%s)",
+        "Left-precond Muon 130m sweep: %d runs (variants=%s lr=%s clamps=%s dampings=%s inv_powers=%s)",
         len(steps),
         VARIANTS,
         LR_MULTIPLIERS,
         CLAMPS,
         DAMPINGS,
+        INV_POWERS,
     )
     executor_main(
         steps=steps, description="Qwen3-130m left-preconditioned Muon sweep (Ali idea 4): variant x LR x clamp."

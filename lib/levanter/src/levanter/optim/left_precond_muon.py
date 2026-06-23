@@ -57,8 +57,9 @@ class LeftPrecondMuonConfig(OptimizerConfig):
     # 1e-15 (= Shampoo / fb#265) truncates only numerically-zero directions; larger values
     # aggressively drop real low-curvature directions (which hurts) — keep this tiny.
     ns_steps: int = 5  # Newton-Schulz steps for the polar factor
-    damping: float = 0.0  # additive damping λ on mean-normalized eigenvalues: (w/mean + λ)^{-1/2}.
+    damping: float = 0.0  # additive damping λ on mean-normalized eigenvalues: (w/mean + λ)^{-p}.
     # λ=0 over-amplifies tiny eigenvalues; larger λ bounds the amplification; λ→∞ ⟹ plain Muon.
+    inv_power: float = 0.5  # whitening exponent p in (w/mean+λ)^{-p}: 0.5 = H^{-1/2}, 0.25 = H^{-1/4} (gentler).
 
     # --- variants (ablations) ---
     outer_precond: bool = True  # True: U = H^{-1/2} polar(H^{-1/2} M); False (v1): U = polar(H^{-1/2} M)
@@ -98,6 +99,7 @@ class LeftPrecondMuonConfig(OptimizerConfig):
                         self.real_inverse,
                         self.normalize_fro,
                         self.damping,
+                        self.inv_power,
                     )
                 ]
                 if self.weight_decay > 0:
@@ -148,13 +150,14 @@ class ScaleByLeftPrecondMuonState(NamedTuple):
     h_ema: optax.Updates  # per-matrix gradient second moment EMA, [..., d_out, d_out] (raw arrays)
 
 
-def _inv_sqrt(h, clamp_rel, eps, real_inverse, damping):
-    """H^{-1/2}. Eigenvalues normalized by the mean (scale-free; H ∝ I ⟹ H^{-1/2} = I).
+def _inv_sqrt(h, clamp_rel, eps, real_inverse, damping, inv_power):
+    """H^{-p}. Eigenvalues normalized by the mean (scale-free; H ∝ I ⟹ H^{-p} ∝ I).
 
     real_inverse=False: truncated pseudo-inverse — zero eigenvalues below clamp_rel·λ_max (fb#265).
-    real_inverse=True : damped real inverse — invert ALL eigenvalues (no truncation).
-    damping λ floors the (mean-normalized) eigenvalues: (w/mean + λ)^{-1/2}, bounding the
-    amplification of tiny eigenvalues; λ→∞ ⟹ H^{-1/2} ∝ I ⟹ plain Muon.
+    real_inverse=True : invert ALL eigenvalues (no truncation).
+    damping λ floors the (mean-normalized) eigenvalues: (w/mean + λ)^{-p}, bounding the
+    amplification of tiny eigenvalues; λ→∞ ⟹ H^{-p} ∝ I ⟹ plain Muon.
+    inv_power p: 0.5 = H^{-1/2}, 0.25 = H^{-1/4} (gentler whitening).
     """
     h = h.astype(jnp.float32)
     h = 0.5 * (h + h.T)
@@ -164,15 +167,13 @@ def _inv_sqrt(h, clamp_rel, eps, real_inverse, damping):
     keep = w > clamp_rel * wmax + eps
     mean_kept = jnp.sum(jnp.where(keep, w, 0.0)) / jnp.maximum(jnp.sum(keep), 1.0)
     wn = w / (mean_kept + eps)
-    if real_inverse:
-        inv = 1.0 / jnp.sqrt(wn + damping + eps)  # invert all (no truncation)
-    else:
-        inv = jnp.where(keep, 1.0 / jnp.sqrt(wn + damping + eps), 0.0)
+    pw = (wn + damping + eps) ** (-inv_power)
+    inv = pw if real_inverse else jnp.where(keep, pw, 0.0)
     return (u * inv[None, :]) @ u.T
 
 
 def _left_precond_matrix(
-    m, h, *, clamp_rel, ns_steps, eps, use_kimi_scaling, outer_precond, real_inverse, normalize_fro, damping
+    m, h, *, clamp_rel, ns_steps, eps, use_kimi_scaling, outer_precond, real_inverse, normalize_fro, damping, inv_power
 ):
     """U for one weight M (d_out × d_in), H (d_out × d_out).
 
@@ -180,7 +181,7 @@ def _left_precond_matrix(
     """
     orig_dtype = m.dtype
     x = m.astype(jnp.float32)
-    hih = _inv_sqrt(h, clamp_rel, eps, real_inverse, damping)  # (out, out)
+    hih = _inv_sqrt(h, clamp_rel, eps, real_inverse, damping, inv_power)  # (out, out)
     whitened = hih @ x  # H^{-1/2} M
     ortho = zeropower_via_newtonschulz5(whitened, steps=ns_steps, eps=eps, coefficient_type="quintic")
     u = (hih @ ortho) if outer_precond else ortho
@@ -208,6 +209,7 @@ def scale_with_left_precond_muon(
     real_inverse=False,
     normalize_fro=False,
     damping=0.0,
+    inv_power=0.5,
 ):
     momentum = float(momentum)
     h_beta = float(h_beta)
@@ -277,6 +279,7 @@ def scale_with_left_precond_muon(
                 real_inverse=real_inverse,
                 normalize_fro=normalize_fro,
                 damping=damping,
+                inv_power=inv_power,
             )
             new_arr = jax.vmap(fn)(arr, h) if arr.ndim == 3 else fn(arr, h)
             return dataclasses.replace(layer, weight=dataclasses.replace(w, array=new_arr))  # type: ignore
