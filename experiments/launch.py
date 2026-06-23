@@ -169,14 +169,18 @@ def _submit_coordinator_job(config: LaunchConfig, body: Callable[..., None], arg
             environment=EnvironmentSpec(env_vars=env_vars, extras=["cpu"]),
             constraints=_coordinator_constraints(config),
         )
+        # WARNING, not INFO, and with the follow command inline: a bare
+        # ``python launch.py`` does not configure logging, so only WARNING is
+        # visible — and a detached user needs the reconnect command.
         logger.warning(
-            "%s was submitted to cluster %r as coordinator job %s; it runs on the cluster, not in this process.",
+            "%s was submitted to cluster %r as coordinator job %s; it runs on the cluster, not in this "
+            "process. Follow it with: iris job logs -f %s",
             body.__qualname__,
             config.cluster,
             job.job_id,
+            job.job_id,
         )
         if not config.follow:
-            logger.info("Coordinator is running; follow its logs with: iris job logs -f %s", job.job_id)
             return 0
         return stream_until_complete(client, job)
 
