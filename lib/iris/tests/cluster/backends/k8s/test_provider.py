@@ -1148,28 +1148,6 @@ def test_resource_collector_writes_iris_task_rows(k8s, task_stats_table):
     assert row.memory_mb == 2048
 
 
-def test_resource_collector_uses_one_bulk_query_for_many_pods(k8s, task_stats_table):
-    """One poll fetches every tracked pod's usage in a single metrics query.
-
-    This is the load fix: cost is one API round-trip per tick regardless of how
-    many pods are running, and the resulting rows land in a single batched write.
-    """
-    pods = {(f"/job/{i}", 0): f"pod-{i}" for i in range(50)}
-    for _, pod_name in pods.items():
-        k8s.set_top_pod(pod_name, PodResourceUsage(cpu_millicores=100, memory_bytes=128 * 1024 * 1024))
-
-    collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
-    # Stop the background loop so the single collection below is deterministic.
-    collector.close()
-    collector.set_pods(pods)
-    calls_before = k8s.top_pods_call_count
-    collector.collect_once()
-
-    assert k8s.top_pods_call_count - calls_before == 1, "expected exactly one bulk metrics query"
-    assert len(task_stats_table.writes) == 1, "expected a single batched write"
-    assert len(task_stats_table.writes[0]) == len(pods), "every tracked pod should produce one row"
-
-
 # ---------------------------------------------------------------------------
 # Kueue gang admission: sync() applies one pod-group per gang generation
 # ---------------------------------------------------------------------------

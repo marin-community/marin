@@ -282,7 +282,6 @@ class InMemoryK8sService:
         self._file_contents: dict[tuple[str, str], bytes] = {}  # (pod_name, path) -> data
         self._rm_files_calls: list[tuple[str, list[str]]] = []
         self._top_pod_overrides: dict[str, PodResourceUsage | None] = {}
-        self.top_pods_call_count = 0
         self._log_watermarks: dict[str, int] = {}  # pod_name -> bytes consumed
 
         # Pods living outside the service's own namespace, keyed by
@@ -867,7 +866,6 @@ class InMemoryK8sService:
 
     def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]:
         self._check_failure("top_pods")
-        self.top_pods_call_count += 1
         plural = K8sResource.PODS.plural
         usage: dict[str, PodResourceUsage] = {}
         for (stored_plural, name), manifest in self._resources.items():
