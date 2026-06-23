@@ -38,6 +38,7 @@ from levanter.kernels.deepep.availability import (
     deepep_cache_root,
     deepep_cuda_arch,
     deepep_cuda_arch_flag,
+    deepep_cuda_include_dirs,
     deepep_layout_source,
     deepep_nvcc_path,
     deepep_nvshmem_config,
@@ -104,7 +105,7 @@ _INTERNODE_ASSIGNMENT_GRADIENT_FFI = "ffi"
 _INTERNODE_ASSIGNMENT_GRADIENT_FUSED = "fused"
 _DEFAULT_INTERNODE_QPS_PER_RANK = 24
 _DEFAULT_INTERNODE_SOURCE_META_BYTES = 8
-_BUILD_CACHE_SCHEMA_VERSION = "transport_ffi_raw_dlink_v41"
+_BUILD_CACHE_SCHEMA_VERSION = "transport_ffi_raw_dlink_v42"
 _LIBRARY_DLOPEN_MODE = getattr(os, "RTLD_NOW", 0) | getattr(ctypes, "RTLD_GLOBAL", 0)
 _SM100_TMA_DISPATCH_THREADS = 512
 _UPSTREAM_DISPATCH_THREADS = 768
@@ -681,6 +682,7 @@ def _build_artifact(build_mode: TransportBuildMode = TransportBuildMode.INTRANOD
     key.update(_launch_compat_header().read_bytes())
     key.update(Path(__file__).read_bytes())
     key.update(str(_jaxlib_include_dir()).encode("utf-8"))
+    key.update(" ".join(str(path) for path in deepep_cuda_include_dirs()).encode("utf-8"))
     key.update(str(deepep_root).encode("utf-8"))
     key.update(_BUILD_CACHE_SCHEMA_VERSION.encode("utf-8"))
     key.update(build_mode.value.encode("utf-8"))
@@ -778,6 +780,7 @@ def _nvcc_common_flags(
         *_cuda_arch_flag(),
         "-I",
         str(_jaxlib_include_dir()),
+        *[flag for include_dir in deepep_cuda_include_dirs() for flag in ("-I", str(include_dir))],
         "-I",
         str(deepep_root),
         "-I",
@@ -993,6 +996,7 @@ def _build_with_torch_extension(
             ],
             extra_include_paths=[
                 str(_jaxlib_include_dir()),
+                *[str(path) for path in deepep_cuda_include_dirs()],
                 str(deepep_root),
                 str(deepep_root / "csrc"),
             ],
@@ -1041,7 +1045,17 @@ def _load_torch_extension_python_module(artifact: BuildArtifact):
                 "",
                 f"MODULE_NAME = {artifact.module_name!r}",
                 f"SOURCES = {([str(_python_extension_source()), str(_ffi_source()), *[str(path) for path in _prepared_cuda_sources(build_dir, deepep_root, build_mode)[1:]]])!r}",
-                f"INCLUDE_DIRS = {[str(_jaxlib_include_dir()), str(deepep_root), str(deepep_root / 'csrc')]!r}",
+                (
+                    "INCLUDE_DIRS = "
+                    + repr(
+                        [
+                            str(_jaxlib_include_dir()),
+                            *[str(path) for path in deepep_cuda_include_dirs()],
+                            str(deepep_root),
+                            str(deepep_root / "csrc"),
+                        ]
+                    )
+                ),
                 f"CXX_FLAGS = {['-O3', f'-D{_PYEXT_MODULE_NAME_MACRO}={artifact.module_name}']!r}",
                 (
                     "NVCC_FLAGS = "

@@ -51,6 +51,7 @@ from levanter.kernels.deepep.availability import (
     DEEPEP_CUDA_ARCH_ENV,
     DEEPEP_KNOWN_GOOD_COMMIT,
     DEEPEP_SRC_ENV,
+    deepep_cuda_include_dirs,
     deepep_nvcc_path,
 )
 from levanter.kernels.deepep.layout_ffi import build_layout_library
@@ -90,6 +91,8 @@ _DEFAULT_DEEPEP_INTERNODE_RDMA_BYTES = 256 * 1024 * 1024
 _DEEPEP_GRUG_COORDINATOR_PORT = 8476
 _DEEPEP_SOURCE_MARKER_FILE = "csrc/config.hpp"
 _DEEPEP_NVCC_PIP_PACKAGE = "nvidia-cuda-nvcc>=13.2.78; sys_platform == 'linux'"
+_DEEPEP_CUDA_CCCL_PIP_PACKAGE = "nvidia-cuda-cccl-cu12>=12.9.27; sys_platform == 'linux'"
+_DEEPEP_BUILD_PIP_PACKAGES = (_DEEPEP_NVCC_PIP_PACKAGE, _DEEPEP_CUDA_CCCL_PIP_PACKAGE)
 
 
 def _maybe_install_rdma_headers(model: GrugModelConfig) -> None:
@@ -415,21 +418,27 @@ def _maybe_prebuild_deepep_intranode_libraries(model: GrugModelConfig) -> None:
 
 
 def _ensure_deepep_nvcc_available() -> None:
-    if (nvcc := deepep_nvcc_path()) is not None:
+    if (nvcc := deepep_nvcc_path()) is not None and _deepep_cccl_headers_available():
         logger.info("DeepEP nvcc available at %s", nvcc)
         return
 
     uv = shutil.which("uv")
     if uv is not None:
-        cmd = [uv, "pip", "install", "--link-mode", "symlink", _DEEPEP_NVCC_PIP_PACKAGE]
+        cmd = [uv, "pip", "install", "--link-mode", "symlink", *_DEEPEP_BUILD_PIP_PACKAGES]
     else:
-        cmd = [sys.executable, "-m", "pip", "install", _DEEPEP_NVCC_PIP_PACKAGE]
-    logger.info("DeepEP nvcc missing; installing %s", _DEEPEP_NVCC_PIP_PACKAGE)
+        cmd = [sys.executable, "-m", "pip", "install", *_DEEPEP_BUILD_PIP_PACKAGES]
+    logger.info("DeepEP nvcc missing; installing %s", ", ".join(_DEEPEP_BUILD_PIP_PACKAGES))
     subprocess.run(cmd, check=True)
     importlib.invalidate_caches()
     if (nvcc := deepep_nvcc_path()) is None:
         raise RuntimeError("Installed nvidia-cuda-nvcc, but DeepEP still cannot resolve nvcc")
+    if not _deepep_cccl_headers_available():
+        raise RuntimeError("Installed DeepEP CUDA build packages, but DeepEP still cannot resolve CCCL headers")
     logger.info("DeepEP nvcc available after install at %s", nvcc)
+
+
+def _deepep_cccl_headers_available() -> bool:
+    return any((include_dir / "nv" / "target").is_file() for include_dir in deepep_cuda_include_dirs())
 
 
 def _deepep_environment_extras(model: GrugModelConfig) -> tuple[str, ...]:
@@ -440,7 +449,7 @@ def _deepep_environment_extras(model: GrugModelConfig) -> tuple[str, ...]:
 
 def _deepep_environment_pip_packages(model: GrugModelConfig) -> tuple[str, ...]:
     if model.moe_implementation in ("deepep", "deepep_composed", "deepep_internode"):
-        return (_DEEPEP_NVCC_PIP_PACKAGE,)
+        return _DEEPEP_BUILD_PIP_PACKAGES
     return ()
 
 

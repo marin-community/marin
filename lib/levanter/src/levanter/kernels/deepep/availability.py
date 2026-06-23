@@ -45,6 +45,7 @@ INTERNODE_RDMA_REQUIRED_HEADERS = ("infiniband/mlx5dv.h",)
 _SUPPORTED_ARCHES = ("sm_90", "sm_90a", "sm_100")
 _PREFERRED_NVSHMEM_DISTRIBUTIONS = ("nvidia-nvshmem-cu13", "nvidia-nvshmem-cu12")
 _PREFERRED_NVCC_DISTRIBUTIONS = ("nvidia-cuda-nvcc",)
+_PREFERRED_CUDA_INCLUDE_DISTRIBUTIONS = ("nvidia-cuda-cccl-cu13", "nvidia-cuda-cccl-cu12")
 _NVSHMEM_CUDA13_MARKERS = ("cu13", "cuda13", "cuda-13", "r13.")
 _NVSHMEM_CUDA12_MARKERS = ("cu12", "cuda12", "cuda-12", "r12.")
 _SYSTEM_NVCC_CANDIDATES = (
@@ -234,6 +235,50 @@ def deepep_nvcc_path() -> str | None:
                 return str(candidate)
 
     return None
+
+
+def _cuda_include_dirs_from_distribution(distribution_name: str) -> tuple[Path, ...]:
+    try:
+        distribution = importlib.metadata.distribution(distribution_name)
+    except importlib.metadata.PackageNotFoundError:
+        return ()
+    candidates = (
+        Path(distribution.locate_file("nvidia/cuda_cccl/include")),
+        Path(distribution.locate_file("nvidia/cu13/include")),
+        Path(distribution.locate_file("nvidia/cuda_nvcc/include")),
+        Path(distribution.locate_file("include")),
+    )
+    return tuple(path for path in candidates if path.is_dir())
+
+
+def deepep_cuda_include_dirs() -> tuple[Path, ...]:
+    """Return CUDA include roots needed by DeepEP nvcc builds.
+
+    The CUDA 13 nvcc wheel provides compiler headers such as ``cuda_fp16.h`` but
+    does not currently ship CCCL headers such as ``nv/target``. CUDA 12 CCCL
+    wheels do, so keep CCCL discovery separate from nvcc discovery and pass the
+    resolved include roots explicitly to nvcc.
+    """
+    dirs: list[Path] = []
+
+    nvcc = deepep_nvcc_path()
+    if nvcc is not None:
+        include_dir = Path(nvcc).resolve().parent.parent / "include"
+        if include_dir.is_dir():
+            dirs.append(include_dir)
+
+    for distribution_name in _PREFERRED_CUDA_INCLUDE_DISTRIBUTIONS:
+        dirs.extend(_cuda_include_dirs_from_distribution(distribution_name))
+
+    for path in (
+        Path("/usr/local/cuda/include"),
+        Path("/usr/local/cuda-13/include"),
+        Path("/usr/local/cuda-12/include"),
+    ):
+        if path.is_dir():
+            dirs.append(path)
+
+    return _dedupe_paths(dirs)
 
 
 def _nvshmem_host_lib_candidates(base_dir: Path) -> tuple[Path, ...]:

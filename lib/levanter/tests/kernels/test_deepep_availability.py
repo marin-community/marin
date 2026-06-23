@@ -26,6 +26,7 @@ from levanter.kernels.deepep.availability import (
     deepep_preflight_status,
     missing_deepep_rdma_headers,
     deepep_source_root,
+    deepep_cuda_include_dirs,
 )
 
 
@@ -116,6 +117,33 @@ def test_deepep_nvcc_path_falls_back_to_cuda_image_path(tmp_path: Path, monkeypa
     monkeypatch.setattr(deepep_availability, "_SYSTEM_NVCC_CANDIDATES", (nvcc,))
 
     assert deepep_nvcc_path() == str(nvcc)
+
+
+def test_deepep_cuda_include_dirs_find_nvcc_and_cccl_wheel_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nvcc = tmp_path / "nvidia" / "cu13" / "bin" / "nvcc"
+    nvcc.parent.mkdir(parents=True)
+    nvcc.write_text("#!/bin/sh\n")
+    nvcc_include = tmp_path / "nvidia" / "cu13" / "include"
+    nvcc_include.mkdir()
+    cccl_include = tmp_path / "nvidia" / "cuda_cccl" / "include"
+    (cccl_include / "nv").mkdir(parents=True)
+    (cccl_include / "nv" / "target").write_text("// target\n")
+
+    class FakeDistribution:
+        def locate_file(self, relative: str) -> Path:
+            return tmp_path / relative
+
+    def distribution(name: str) -> FakeDistribution:
+        if name in {"nvidia-cuda-cccl-cu13", "nvidia-cuda-cccl-cu12"}:
+            return FakeDistribution()
+        raise deepep_availability.importlib.metadata.PackageNotFoundError
+
+    monkeypatch.setattr(deepep_availability, "deepep_nvcc_path", lambda: str(nvcc))
+    monkeypatch.setattr(deepep_availability.importlib.metadata, "distribution", distribution)
+
+    assert deepep_cuda_include_dirs() == (nvcc_include, cccl_include)
 
 
 def test_internode_dispatch_clean_buffer_size_hint_catches_d2560_topk2_regression() -> None:
@@ -387,10 +415,13 @@ def test_transport_internode_flags_enable_nvshmem(tmp_path: Path, monkeypatch: p
     package_dir = _write_fake_nvshmem_package(tmp_path)
     _clear_fake_nvshmem_modules()
     root = tmp_path / "DeepEP"
+    cuda_include = tmp_path / "cuda" / "include"
+    cuda_include.mkdir(parents=True)
     _write_transport_sources(root)
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.delenv("NVSHMEM_DIR", raising=False)
     monkeypatch.setenv(DEEPEP_CUDA_ARCH_ENV, "sm_90")
+    monkeypatch.setattr(transport_ffi, "deepep_cuda_include_dirs", lambda: (cuda_include,))
 
     intranode_flags = transport_ffi._nvcc_common_flags(root, [], build_mode=transport_ffi.TransportBuildMode.INTRANODE)
     internode_flags = transport_ffi._nvcc_common_flags(root, [], build_mode=transport_ffi.TransportBuildMode.INTERNODE)
@@ -399,7 +430,9 @@ def test_transport_internode_flags_enable_nvshmem(tmp_path: Path, monkeypatch: p
 
     assert "-DDISABLE_NVSHMEM" in intranode_flags
     assert "-DDISABLE_NVSHMEM" not in internode_flags
+    assert str(cuda_include) in intranode_flags
     assert str(package_dir / "include") in internode_flags
+    assert str(cuda_include) in internode_flags
     assert str(package_dir / "lib") in internode_link_flags
     assert "-l:libnvshmem_host.so.3" in internode_link_flags
     assert str(package_dir / "lib" / "libnvshmem_device.a") in internode_device_link_flags

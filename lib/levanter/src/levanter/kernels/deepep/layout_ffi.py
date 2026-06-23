@@ -22,13 +22,14 @@ from levanter.kernels.deepep.availability import (
     LAYOUT_REQUIRED_FILES,
     deepep_cache_root,
     deepep_cuda_arch_flag,
+    deepep_cuda_include_dirs,
     deepep_layout_source,
     deepep_nvcc_path,
     deepep_source_root,
 )
 
 _TARGET_NAME = "levanter_deepep_get_dispatch_layout"
-_BUILD_CACHE_SCHEMA_VERSION = "layout_ffi_int32_topk_v2"
+_BUILD_CACHE_SCHEMA_VERSION = "layout_ffi_int32_topk_v3"
 
 
 def _jaxlib_include_dir() -> Path:
@@ -59,6 +60,7 @@ def _shared_library_path() -> Path:
         key.update(str(path).encode("utf-8"))
         key.update(path.read_bytes())
     key.update(str(_jaxlib_include_dir()).encode("utf-8"))
+    key.update(" ".join(str(path) for path in deepep_cuda_include_dirs()).encode("utf-8"))
     key.update(str(deepep_root).encode("utf-8"))
     key.update(" ".join(deepep_cuda_arch_flag()).encode("utf-8"))
     key.update(_BUILD_CACHE_SCHEMA_VERSION.encode("utf-8"))
@@ -89,6 +91,7 @@ def _build_shared_library(out_path: Path) -> None:
         *deepep_cuda_arch_flag(),
         "-I",
         str(jax_include),
+        *[flag for include_dir in deepep_cuda_include_dirs() for flag in ("-I", str(include_dir))],
         "-I",
         str(deepep_root),
         "-I",
