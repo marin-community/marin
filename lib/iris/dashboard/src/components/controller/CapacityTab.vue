@@ -24,6 +24,7 @@ import type {
 import { timestampMs, formatRelativeTime, bandDisplayName, bandColor } from '@/utils/formatting'
 import { buildSliceView, type SliceJob, type SliceStatus, type SliceView } from '@/utils/slices'
 import SliceList from '@/components/controller/SliceList.vue'
+import FleetOverview from '@/components/controller/FleetOverview.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import LoadingSpinner from '@/components/shared/LoadingSpinner.vue'
@@ -123,15 +124,28 @@ const routing = computed(() => autoscaler.value?.lastRoutingDecision ?? null)
 const unmetEntries = computed(() => routing.value?.unmetEntries ?? [])
 const actions = computed(() => (autoscaler.value?.recentActions ?? []).slice().reverse())
 
-// SliceList wants a worker_id → jobs map; the pool-keyed view has no per-host job
-// join (it lived in the dropped Fleet Overview), so pass empty. Status
-// classification does not use it.
-const NO_WORKER_JOBS: Map<string, SliceJob[]> = new Map()
+// worker_id → jobs running on that host, from the scheduler running buckets the
+// users table already fetches. SliceList renders these as per-job links in the
+// expanded slice rows; status classification does not depend on it.
+const sliceWorkerJobs = computed<Map<string, SliceJob[]>>(() => {
+  const map = new Map<string, SliceJob[]>()
+  for (const bucket of (schedulerData.value?.runningBuckets ?? []) as RunningTaskBucket[]) {
+    if (!bucket.workerId || !bucket.jobId) continue
+    if (!map.has(bucket.workerId)) map.set(bucket.workerId, [])
+    map.get(bucket.workerId)!.push({
+      jobId: bucket.jobId,
+      userId: bucket.userId,
+      taskCount: bucket.count,
+      hostCount: 1,
+    })
+  }
+  return map
+})
 
 // One view-model per slice, shared by the summary strip, the per-group badges, and
 // the expanded list — so the row summary can never disagree with the detail.
 const allSliceViews = computed<SliceView[]>(() =>
-  groups.value.flatMap(g => (g.slices ?? []).map(s => buildSliceView(s, NO_WORKER_JOBS, nowMs.value)))
+  groups.value.flatMap(g => (g.slices ?? []).map(s => buildSliceView(s, sliceWorkerJobs.value, nowMs.value)))
 )
 function countSliceStatus(views: SliceView[], status: SliceStatus): number {
   return views.reduce((n, v) => n + (v.status === status ? 1 : 0), 0)
@@ -299,7 +313,7 @@ function groupDemand(name: string): number { return group(name)?.currentDemand ?
 // Per-group slice view-models, built from the same buildSliceView the expanded
 // list uses, so the row summary and the detail rows can never disagree.
 function groupSliceViews(name: string): SliceView[] {
-  return groupSlices(name).map(s => buildSliceView(s, NO_WORKER_JOBS, nowMs.value))
+  return groupSlices(name).map(s => buildSliceView(s, sliceWorkerJobs.value, nowMs.value))
 }
 
 interface SliceStatusCount { status: SliceStatus; count: number; style: SliceStatusStyle }
@@ -682,6 +696,9 @@ function sliceIdShort(sliceId?: string): string {
       </div>
     </section>
 
+    <!-- ===== Fleet overview — what we have, where ===== -->
+    <FleetOverview :groups="groups" :running-buckets="schedulerData?.runningBuckets ?? []" />
+
     <!-- ===== Pools — capacity & routing ===== -->
     <section>
       <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">
@@ -864,7 +881,7 @@ function sliceIdShort(sliceId?: string): string {
                 <!-- Slice detail (expanded) -->
                 <tr v-if="expandedSlices.has(gs.group) && groupHasSlices(gs.group) && !collapsedPools.has(section.pool)" class="bg-surface-sunken">
                   <td colspan="8" class="px-6 py-3">
-                    <SliceList :slices="groupSlices(gs.group)" :worker-jobs="NO_WORKER_JOBS" :now="nowMs" />
+                    <SliceList :slices="groupSlices(gs.group)" :worker-jobs="sliceWorkerJobs" :now="nowMs" />
                   </td>
                 </tr>
               </template>
