@@ -28,8 +28,8 @@ from pathlib import Path
 
 import click
 import requests
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient, Job
+from iris.client.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import IrisConfig
 from iris.cluster.constraints import region_constraint
