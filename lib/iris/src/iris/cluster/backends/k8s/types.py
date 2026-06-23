@@ -32,6 +32,7 @@ class K8sResource(Enum):
     NAMESPACES = ("", "v1", False, "namespaces", "Namespace")
     NODES = ("", "v1", False, "nodes", "Node")
     SERVICE_ACCOUNTS = ("", "v1", True, "serviceaccounts", "ServiceAccount")
+    PERSISTENT_VOLUME_CLAIMS = ("", "v1", True, "persistentvolumeclaims", "PersistentVolumeClaim")
 
     # Apps v1
     DEPLOYMENTS = ("apps", "v1", True, "deployments", "Deployment")

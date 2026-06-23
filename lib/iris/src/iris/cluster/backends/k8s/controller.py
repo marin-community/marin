@@ -55,6 +55,8 @@ _KUBECTL_TIMEOUT = 1800.0
 
 _CONTROLLER_CPU_REQUEST = "4"
 _CONTROLLER_MEMORY_REQUEST = "16Gi"
+_CONTROLLER_STATE_PVC_NAME = "iris-controller-state"
+_CONTROLLER_STATE_PVC_SIZE = "50Gi"
 
 
 # S3-compatible endpoints that require virtual-hosted-style addressing where the
@@ -126,19 +128,15 @@ def _build_controller_deployment(
         "requests": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
         "limits": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
     }
-    # `--fresh` wipes the controller's SQLite, so the new pod must NOT overlap
-    # with the OLD one — otherwise a job submitted in the rollout surge window
-    # lands on the OLD controller, then the NEW empty-DB controller deletes
-    # the runner pod as "stray" on its first reconcile (#5590). Setting
-    # `strategy.type: Recreate` here, combined with deleting the existing
-    # Deployment in start_controller (because SSA can't clear the
-    # API-server-defaulted rollingUpdate field), guarantees the old pod is
-    # gone before the new one starts. Non-fresh restarts omit `strategy` so
-    # the API server defaults to RollingUpdate and in-place upgrades stay
-    # zero-downtime.
+    # The controller SQLite DB lives on a PersistentVolumeClaim, so two
+    # controller pods must never mount the same local state dir at once. We
+    # guarantee that by tearing the old Deployment down and waiting for it to
+    # fully disappear before applying the new one (see start_controller); the
+    # Recreate strategy is belt-and-suspenders for any in-place apply path.
     deploy_spec: dict = {
         "replicas": 1,
         "selector": {"matchLabels": {"app": "iris-controller"}},
+        "strategy": {"type": "Recreate"},
         "template": {
             "metadata": {"labels": {"app": "iris-controller"}},
             "spec": {
@@ -195,13 +193,14 @@ def _build_controller_deployment(
                 ],
                 "volumes": [
                     {"name": "config", "configMap": {"name": "iris-cluster-config"}},
-                    {"name": "local-state", "emptyDir": {}},
+                    {
+                        "name": "local-state",
+                        "persistentVolumeClaim": {"claimName": _CONTROLLER_STATE_PVC_NAME},
+                    },
                 ],
             },
         },
     }
-    if fresh:
-        deploy_spec["strategy"] = {"type": "Recreate"}
     return {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -211,6 +210,23 @@ def _build_controller_deployment(
             "labels": {"app": "iris-controller"},
         },
         "spec": deploy_spec,
+    }
+
+
+def _build_controller_state_pvc(*, namespace: str) -> dict:
+    """Build the PVC that stores the controller SQLite state."""
+    return {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "name": _CONTROLLER_STATE_PVC_NAME,
+            "namespace": namespace,
+            "labels": {"app": "iris-controller"},
+        },
+        "spec": {
+            "accessModes": ["ReadWriteOnce"],
+            "resources": {"requests": {"storage": _CONTROLLER_STATE_PVC_SIZE}},
+        },
     }
 
 
@@ -320,6 +336,8 @@ class K8sControllerProvider:
         self.ensure_nodepools(config)
         self.ensure_kueue_queues(config)
         self.ensure_priority_classes()
+        self._kubectl.apply_json(_build_controller_state_pvc(namespace=self._namespace))
+        logger.info("PersistentVolumeClaim %s applied", _CONTROLLER_STATE_PVC_NAME)
 
         deploy_manifest = _build_controller_deployment(
             namespace=self._namespace,
@@ -329,18 +347,17 @@ class K8sControllerProvider:
             task_env_secret=projects_task_env_secret(config),
             fresh=fresh,
         )
-        if fresh:
-            # SSA preserves the API-server-defaulted spec.strategy.rollingUpdate
-            # field, so an apply that switches type to Recreate fails validation
-            # ("rollingUpdate may not be specified when type is Recreate").
-            # Delete the existing Deployment first and wait for it to be gone
-            # so the apply creates a fresh object with no leftover strategy
-            # fields. This also enforces no-overlap with the OLD controller
-            # pod, avoiding the stray-pod race in #5590.
-            self._delete_controller_deployment_and_wait()
+        # Always stop the old controller before starting the new one. The
+        # SQLite state PVC is ReadWriteOnce and a rolling update could briefly
+        # mount it from two pods on the same node, corrupting the DB. Iris
+        # restarts are fast and clients tolerate a short controller outage, so a
+        # clean stop/start is simpler and safer than any overlap-avoidance hack.
+        # The PVC is intentionally retained across the restart so the new
+        # controller reuses the local DB (a --fresh controller wipes its DB
+        # directory itself after starting).
+        self._delete_controller_deployment_and_wait()
         self._kubectl.apply_json(deploy_manifest)
-        self._kubectl.rollout_restart(K8sResource.DEPLOYMENTS, "iris-controller")
-        logger.info("Controller Deployment iris-controller applied (rollout restarted)")
+        logger.info("Controller Deployment iris-controller applied")
 
         svc_manifest = {
             "apiVersion": "v1",
@@ -397,6 +414,7 @@ class K8sControllerProvider:
         self._kubectl.delete(K8sResource.SERVICES, service_name)
         self._kubectl.delete(K8sResource.PDBS, "iris-controller-pdb")
         self._kubectl.delete(K8sResource.CONFIGMAPS, "iris-cluster-config")
+        self._kubectl.delete(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME)
         if self.uses_s3_storage(config) or config.defaults.inject_env:
             self._kubectl.delete(K8sResource.SECRETS, TASK_ENV_SECRET_NAME)
 
