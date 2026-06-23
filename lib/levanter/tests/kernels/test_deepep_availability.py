@@ -27,6 +27,7 @@ from levanter.kernels.deepep.availability import (
     missing_deepep_rdma_headers,
     deepep_source_root,
     deepep_cuda_include_dirs,
+    deepep_cuda_library_dirs,
 )
 
 
@@ -144,6 +145,25 @@ def test_deepep_cuda_include_dirs_find_nvcc_and_cccl_wheel_layout(
     monkeypatch.setattr(deepep_availability.importlib.metadata, "distribution", distribution)
 
     assert deepep_cuda_include_dirs() == (nvcc_include, cccl_include)
+
+
+def test_deepep_cuda_library_dirs_find_runtime_wheel_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime_lib = tmp_path / "nvidia" / "cuda_runtime" / "lib"
+    runtime_lib.mkdir(parents=True)
+    (runtime_lib / "libcudart.so.12").write_text("")
+
+    class FakeDistribution:
+        def locate_file(self, relative: str) -> Path:
+            return tmp_path / relative
+
+    def distribution(name: str) -> FakeDistribution:
+        if name in {"nvidia-cuda-runtime-cu13", "nvidia-cuda-runtime-cu12"}:
+            return FakeDistribution()
+        raise deepep_availability.importlib.metadata.PackageNotFoundError
+
+    monkeypatch.setattr(deepep_availability.importlib.metadata, "distribution", distribution)
+
+    assert deepep_cuda_library_dirs() == (runtime_lib,)
 
 
 def test_internode_dispatch_clean_buffer_size_hint_catches_d2560_topk2_regression() -> None:
@@ -436,6 +456,30 @@ def test_transport_internode_flags_enable_nvshmem(tmp_path: Path, monkeypatch: p
     assert str(package_dir / "lib") in internode_link_flags
     assert "-l:libnvshmem_host.so.3" in internode_link_flags
     assert str(package_dir / "lib" / "libnvshmem_device.a") in internode_device_link_flags
+
+
+def test_transport_link_includes_cuda_runtime_library_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cuda_lib = tmp_path / "cuda" / "lib"
+    cuda_lib.mkdir(parents=True)
+    out_path = tmp_path / "libdeepep_transport_ffi.so"
+    object_path = tmp_path / "object.o"
+    dlink_object = tmp_path / "dlink.o"
+    commands: list[list[str]] = []
+    monkeypatch.setattr(transport_ffi, "_require_nvcc", lambda: "/cuda/bin/nvcc")
+    monkeypatch.setattr(transport_ffi, "deepep_cuda_library_dirs", lambda: (cuda_lib,))
+    monkeypatch.setattr(transport_ffi.subprocess, "run", lambda cmd, check: commands.append(cmd))
+
+    transport_ffi._link_shared_library(
+        out_path=out_path,
+        object_paths=[object_path],
+        dlink_object=dlink_object,
+        build_mode=transport_ffi.TransportBuildMode.INTRANODE,
+    )
+
+    assert commands
+    assert "-L" in commands[0]
+    assert str(cuda_lib) in commands[0]
+    assert "-rpath" in commands[0]
 
 
 def test_transport_internode_final_link_includes_nvshmem_device_archive(

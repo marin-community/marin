@@ -39,6 +39,7 @@ from levanter.kernels.deepep.availability import (
     deepep_cuda_arch,
     deepep_cuda_arch_flag,
     deepep_cuda_include_dirs,
+    deepep_cuda_library_dirs,
     deepep_layout_source,
     deepep_nvcc_path,
     deepep_nvshmem_config,
@@ -105,7 +106,7 @@ _INTERNODE_ASSIGNMENT_GRADIENT_FFI = "ffi"
 _INTERNODE_ASSIGNMENT_GRADIENT_FUSED = "fused"
 _DEFAULT_INTERNODE_QPS_PER_RANK = 24
 _DEFAULT_INTERNODE_SOURCE_META_BYTES = 8
-_BUILD_CACHE_SCHEMA_VERSION = "transport_ffi_raw_dlink_v42"
+_BUILD_CACHE_SCHEMA_VERSION = "transport_ffi_raw_dlink_v43"
 _LIBRARY_DLOPEN_MODE = getattr(os, "RTLD_NOW", 0) | getattr(ctypes, "RTLD_GLOBAL", 0)
 _SM100_TMA_DISPATCH_THREADS = 512
 _UPSTREAM_DISPATCH_THREADS = 768
@@ -683,6 +684,7 @@ def _build_artifact(build_mode: TransportBuildMode = TransportBuildMode.INTRANOD
     key.update(Path(__file__).read_bytes())
     key.update(str(_jaxlib_include_dir()).encode("utf-8"))
     key.update(" ".join(str(path) for path in deepep_cuda_include_dirs()).encode("utf-8"))
+    key.update(" ".join(str(path) for path in deepep_cuda_library_dirs()).encode("utf-8"))
     key.update(str(deepep_root).encode("utf-8"))
     key.update(_BUILD_CACHE_SCHEMA_VERSION.encode("utf-8"))
     key.update(build_mode.value.encode("utf-8"))
@@ -889,6 +891,12 @@ def _link_shared_library(
     extra_object_paths: list[Path] | None = None,
 ) -> None:
     all_object_paths = [*object_paths, *(extra_object_paths or [])]
+    cuda_library_flags = [flag for library_dir in deepep_cuda_library_dirs() for flag in ("-L", str(library_dir))]
+    cuda_rpath_flags = [
+        flag
+        for library_dir in deepep_cuda_library_dirs()
+        for flag in ("-Xlinker", "-rpath", "-Xlinker", str(library_dir))
+    ]
     cmd = [
         _require_nvcc(),
         "-shared",
@@ -896,11 +904,13 @@ def _link_shared_library(
         "-fPIC",
         "--cudart=shared",
         *_cuda_arch_flag(),
+        *cuda_library_flags,
         *[str(path) for path in all_object_paths],
         str(dlink_object),
         *_nvshmem_device_link_flags(build_mode),
         "-lcuda",
         *_nvshmem_link_flags(build_mode),
+        *cuda_rpath_flags,
         "-o",
         str(out_path),
     ]
@@ -1085,7 +1095,21 @@ def _load_torch_extension_python_module(artifact: BuildArtifact):
                 "                'nvcc': NVCC_FLAGS,",
                 "                'nvcc_dlink': NVCC_DLINK_FLAGS,",
                 "            },",
-                f"            extra_link_args={['-lcuda', *_nvshmem_torch_link_flags(build_mode)]!r},",
+                (
+                    "            extra_link_args="
+                    + repr(
+                        [
+                            *[
+                                flag
+                                for library_dir in deepep_cuda_library_dirs()
+                                for flag in ("-L", str(library_dir), f"-Wl,-rpath,{library_dir}")
+                            ],
+                            "-lcuda",
+                            *_nvshmem_torch_link_flags(build_mode),
+                        ]
+                    )
+                    + ","
+                ),
                 "            dlink=True,",
                 "        )",
                 "    ],",

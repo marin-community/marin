@@ -46,6 +46,7 @@ _SUPPORTED_ARCHES = ("sm_90", "sm_90a", "sm_100")
 _PREFERRED_NVSHMEM_DISTRIBUTIONS = ("nvidia-nvshmem-cu13", "nvidia-nvshmem-cu12")
 _PREFERRED_NVCC_DISTRIBUTIONS = ("nvidia-cuda-nvcc",)
 _PREFERRED_CUDA_INCLUDE_DISTRIBUTIONS = ("nvidia-cuda-cccl-cu13", "nvidia-cuda-cccl-cu12")
+_PREFERRED_CUDA_RUNTIME_DISTRIBUTIONS = ("nvidia-cuda-runtime-cu13", "nvidia-cuda-runtime-cu12")
 _NVSHMEM_CUDA13_MARKERS = ("cu13", "cuda13", "cuda-13", "r13.")
 _NVSHMEM_CUDA12_MARKERS = ("cu12", "cuda12", "cuda-12", "r12.")
 _SYSTEM_NVCC_CANDIDATES = (
@@ -269,6 +270,8 @@ def deepep_cuda_include_dirs() -> tuple[Path, ...]:
 
     for distribution_name in _PREFERRED_CUDA_INCLUDE_DISTRIBUTIONS:
         dirs.extend(_cuda_include_dirs_from_distribution(distribution_name))
+    for distribution_name in _PREFERRED_CUDA_RUNTIME_DISTRIBUTIONS:
+        dirs.extend(_cuda_include_dirs_from_distribution(distribution_name))
 
     for path in (
         Path("/usr/local/cuda/include"),
@@ -278,6 +281,35 @@ def deepep_cuda_include_dirs() -> tuple[Path, ...]:
         if path.is_dir():
             dirs.append(path)
 
+    return _dedupe_paths(dirs)
+
+
+def _cuda_library_dirs_from_distribution(distribution_name: str) -> tuple[Path, ...]:
+    try:
+        distribution = importlib.metadata.distribution(distribution_name)
+    except importlib.metadata.PackageNotFoundError:
+        return ()
+    candidates = (
+        Path(distribution.locate_file("nvidia/cuda_runtime/lib")),
+        Path(distribution.locate_file("nvidia/cu13/lib")),
+        Path(distribution.locate_file("nvidia/cuda_nvcc/lib")),
+        Path(distribution.locate_file("lib")),
+    )
+    return tuple(path for path in candidates if path.is_dir())
+
+
+def deepep_cuda_library_dirs() -> tuple[Path, ...]:
+    """Return CUDA library roots needed by DeepEP nvcc links."""
+    dirs: list[Path] = []
+    for distribution_name in _PREFERRED_CUDA_RUNTIME_DISTRIBUTIONS:
+        dirs.extend(_cuda_library_dirs_from_distribution(distribution_name))
+    for path in (
+        Path("/usr/local/cuda/lib64"),
+        Path("/usr/local/cuda-13/lib64"),
+        Path("/usr/local/cuda-12/lib64"),
+    ):
+        if path.is_dir():
+            dirs.append(path)
     return _dedupe_paths(dirs)
 
 
