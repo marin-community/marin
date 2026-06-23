@@ -108,9 +108,10 @@ WANDB_API_KEY="$WANDB_API_KEY" \
 ```
 
 The script submits a small CPU *coordinator* job that runs `executor_main` and
-spawns the accelerated sub-jobs via Fray; your terminal only streams its logs, so
-the run survives your machine disconnecting (reconnect with `iris job logs -f
-<id>`, or `--detach` to return right after submitting).
+spawns the accelerated sub-jobs via Fray, then returns right after submitting; the
+coordinator keeps running, so the run survives your machine disconnecting (follow
+it with `iris job logs -f <id>`, or pass `--follow=true` to stream until it
+finishes).
 
 The coordinator resolves the marin prefix in its own region and bakes each step's
 output path from it, so outputs land in the coordinator's regional bucket — no

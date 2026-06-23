@@ -7,8 +7,8 @@ An experiment script (e.g. ``experiments/grug/base/launch.py``) wires its config
 and body to :func:`launch` / :func:`launch_executor` behind a draccus ``main``.
 Running *that script* then chooses where the body executes::
 
-    uv run python experiments/grug/base/launch.py --cluster=marin   # coordinator job on the cluster
-    uv run python experiments/grug/base/launch.py --local           # in this process
+    uv run python experiments/grug/base/launch.py --cluster=marin                # submit to the cluster, return
+    uv run python experiments/grug/base/launch.py --cluster=marin --follow=true  # ... and stream its logs
 
 :func:`launch` runs the script's body in-process (``--local``, a dry run, no
 ``--cluster``, or when it is already running inside the coordinator we submitted),
@@ -75,11 +75,11 @@ class LaunchConfig:
     local: bool = False
     """Force local in-process execution even when ``--cluster`` is given."""
 
-    detach: bool = False
-    """Submit the coordinator job and return immediately instead of streaming
-    its logs. The coordinator — and the training it spawns — keeps running on
-    the cluster; reconnect with ``iris job logs -f <id>``. Default streams and
-    blocks until the run finishes."""
+    follow: bool = False
+    """Stream the coordinator's logs and block until the run finishes. By default
+    the launcher returns right after submitting; the coordinator — and the training
+    it spawns — keeps running on the cluster regardless, so follow it later with
+    ``iris job logs -f <id>``."""
 
     executor: ExecutorMainConfig = field(default_factory=ExecutorMainConfig)
     """Embedded executor flags (``--executor.dry_run``, ``--executor.prefix``, ...)."""
@@ -107,10 +107,10 @@ def launch(config: LaunchConfig, body: Callable[..., None], *args, **kwargs) -> 
     It runs in-process when staying local (``--local``, a dry run, or no
     ``--cluster``) or when already inside the coordinator we submitted. Otherwise
     it ships ``body`` to a small CPU *coordinator* job that runs it on the cluster
-    and spawns training as its children, then streams that job's logs and exits
-    with its status (``--detach`` returns right after submit). Because ``body``
-    runs on the cluster, the executor DAG and its ``.success`` markers survive the
-    laptop disconnecting.
+    and spawns training as its children, then returns right after submitting
+    (``--follow=true`` instead streams that job's logs and exits with its status).
+    Because ``body`` runs on the cluster, the executor DAG and its ``.success``
+    markers survive the laptop disconnecting.
 
     To be shipped, ``body`` must be importable on the worker (a top-level
     function) and its ``args``/``kwargs`` cloudpickle-able.
@@ -122,9 +122,14 @@ def launch(config: LaunchConfig, body: Callable[..., None], *args, **kwargs) -> 
 
 
 def _coordinator_job_name(body: Callable[..., None]) -> str:
-    """A collision-free coordinator job name derived from the body callable."""
+    """A collision-free coordinator job name derived from the body callable.
+
+    Running an experiment script directly makes ``body`` a ``__main__`` function;
+    ``__main__`` is not a useful label, so fall back to the bare function name.
+    """
     module = body.__module__.rsplit(".", 1)[-1]
-    return f"{module}-{body.__name__}-{uuid.uuid4().hex[:8]}"
+    stem = body.__name__ if module == "__main__" else f"{module}-{body.__name__}"
+    return f"{stem}-{uuid.uuid4().hex[:8]}"
 
 
 def _coordinator_constraints(config: LaunchConfig) -> list[Constraint] | None:
@@ -170,8 +175,8 @@ def _submit_coordinator_job(config: LaunchConfig, body: Callable[..., None], arg
             config.cluster,
             job.job_id,
         )
-        if config.detach:
-            logger.info("Detached; the coordinator keeps running. Reconnect with: iris job logs -f %s", job.job_id)
+        if not config.follow:
+            logger.info("Coordinator is running; follow its logs with: iris job logs -f %s", job.job_id)
             return 0
         return stream_until_complete(client, job)
 

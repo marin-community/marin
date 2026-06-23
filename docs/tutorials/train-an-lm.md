@@ -158,9 +158,10 @@ WANDB_API_KEY="$WANDB_API_KEY" \
   uv run python experiments/${YOUR_EXPERIMENT_SCRIPT}.py --cluster=marin
 ```
 
-The run executes on the cluster, not your laptop — your terminal just streams
-logs, so a disconnect won't kill it (reconnect with `iris job logs -f <id>`, or
-pass `--detach` to return right after submitting). Checkpoints land in the
+The run executes on the cluster, not your laptop — the script returns right after
+submitting and the coordinator keeps running, so a disconnect won't kill it (follow
+it with `iris job logs -f <id>`, or pass `--follow=true` to stream until it
+finishes). Checkpoints land in the
 cluster's regional bucket, so there's no `MARIN_PREFIX` to set. See
 [the executor docs](../explanations/executor.md) for what `--cluster` does under
 the hood.

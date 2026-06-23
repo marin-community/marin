@@ -171,9 +171,9 @@ def test_launch_laptop_with_cluster_bootstraps_and_skips_body(monkeypatch):
     assert ran == []
 
 
-@pytest.mark.parametrize(("detach", "expect_stream"), [(False, True), (True, False)])
-def test_submit_coordinator_job_detach_controls_streaming(monkeypatch, detach, expect_stream):
-    # --detach submits the coordinator without streaming; the default streams.
+@pytest.mark.parametrize(("follow", "expect_stream"), [(True, True), (False, False)])
+def test_submit_coordinator_job_follow_controls_streaming(monkeypatch, follow, expect_stream):
+    # The launcher returns right after submitting; --follow streams instead.
     # Pins the CPU-only coordinator extras and exercises the real
     # Entrypoint.from_callable packing of the body.
     class _FakeJob:
@@ -196,7 +196,7 @@ def test_submit_coordinator_job_detach_controls_streaming(monkeypatch, detach, e
     monkeypatch.setattr(launch, "load_env_vars", lambda flags: {})
     monkeypatch.setattr(launch, "add_standard_env_vars", lambda env: env)
 
-    rc = launch._submit_coordinator_job(LaunchConfig(cluster="marin", detach=detach), _noop_body, (), {})
+    rc = launch._submit_coordinator_job(LaunchConfig(cluster="marin", follow=follow), _noop_body, (), {})
     assert rc == 0
     assert submitted["extras"] == ["cpu"]
     # No --region/--zone, so the coordinator is unconstrained.
