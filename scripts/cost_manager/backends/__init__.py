@@ -12,7 +12,7 @@ to :data:`BACKENDS`.
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from scripts.cost_manager.backends import anthropic, coreweave, gcp, openai
+from scripts.cost_manager.backends import anthropic, coreweave, gcp, openai, together
 from scripts.cost_manager.cost_event import CostEvent, DateWindow
 
 ProviderFetcher = Callable[[Mapping[str, Any], DateWindow], list[CostEvent]]
@@ -22,4 +22,5 @@ BACKENDS: dict[str, ProviderFetcher] = {
     "anthropic": anthropic.fetch,
     "gcp": gcp.fetch,
     "coreweave": coreweave.fetch,
+    "together": together.fetch,
 }
