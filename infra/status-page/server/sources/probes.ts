@@ -185,10 +185,16 @@ function parseChecks(rows: CheckRow[]): ProbeCheck[] {
     .sort((a, b) => a.probe.localeCompare(b.probe));
 }
 
+// Decode a row's JSON label blob. The probes write it via json.dumps, so a
+// parse failure is a real anomaly (schema drift / truncation), not an
+// expected case — log it rather than letting the row's scope/pool fields
+// silently vanish from the rollup. The empty fallback keeps one bad row from
+// sinking the whole snapshot.
 function safeLabels(raw: string): Record<string, string> {
   try {
     return JSON.parse(raw) as Record<string, string>;
-  } catch {
+  } catch (err) {
+    console.warn(`probes: unparseable labels ${JSON.stringify(raw.slice(0, 200))}: ${(err as Error).message}`);
     return {};
   }
 }
