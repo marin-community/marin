@@ -1542,7 +1542,8 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path, l
 def test_k8s_cluster_status_enriches_scheduling_gated_pods_with_kueue_workload(state, scheduler, tmp_path, log_client):
     """SchedulingGated pod statuses include Kueue admission diagnostics."""
     client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
-    provider.local_queue = "iris-local"
+    queue_name = "iris-local"
+    provider.local_queue = queue_name
     pod_group = "iris-pg-test-0"
 
     k8s.seed_resource(
@@ -1556,7 +1557,7 @@ def test_k8s_cluster_status_enriches_scheduling_gated_pods_with_kueue_workload(s
                     _LABEL_MANAGED: "true",
                     _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
                     _KUEUE_POD_GROUP_NAME: pod_group,
-                    _KUEUE_QUEUE_NAME: "iris-local",
+                    _KUEUE_QUEUE_NAME: queue_name,
                     "iris.task_id": "job.0",
                 },
             },
@@ -1580,7 +1581,7 @@ def test_k8s_cluster_status_enriches_scheduling_gated_pods_with_kueue_workload(s
         {
             "kind": "Workload",
             "metadata": {"name": pod_group},
-            "spec": {"queueName": "iris-local"},
+            "spec": {"queueName": queue_name},
             "status": {
                 "conditions": [
                     {
@@ -1608,7 +1609,7 @@ def test_k8s_cluster_status_enriches_scheduling_gated_pods_with_kueue_workload(s
     status = resp.json()["podStatuses"][0]
     assert status["reason"] == "SchedulingGated"
     assert "Kueue workload iris-pg-test-0" in status["message"]
-    assert "queue=iris-local" in status["message"]
+    assert f"queue={queue_name}" in status["message"]
     assert "insufficient unused quota for nvidia.com/gpu" in status["message"]
 
     provider.close()
