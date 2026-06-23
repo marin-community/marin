@@ -275,6 +275,7 @@ class InMemoryK8sService:
         )
         self._resources: dict[tuple[str, str], dict] = {}  # (kind, name) -> manifest
         self._injected_failures: dict[str, Exception] = {}
+        self._persistent_failures: dict[str, Exception] = {}
         self._logs: dict[str, str] = {}  # pod_name -> log text
         self._events: list[dict] = []
         self._exec_responses: dict[str, list[ExecResult]] = {}
@@ -473,11 +474,20 @@ class InMemoryK8sService:
     # -- Failure injection --
 
     def inject_failure(self, operation: str, error: Exception) -> None:
-        """Inject a one-shot failure for the next call to *operation*."""
+        """Inject a one-shot failure consumed by the next call to *operation*."""
         self._injected_failures[operation] = error
+
+    def inject_persistent_failure(self, operation: str, error: Exception) -> None:
+        """Fail every call to *operation* until cleared.
+
+        Needed for operations a background loop retries on its own cadence,
+        where a one-shot failure would be consumed by the first poll.
+        """
+        self._persistent_failures[operation] = error
 
     def clear_failure(self, operation: str) -> None:
         self._injected_failures.pop(operation, None)
+        self._persistent_failures.pop(operation, None)
 
     # -- Node pool management --
 
@@ -610,7 +620,7 @@ class InMemoryK8sService:
         self._file_contents[(pod_name, path)] = data
 
     def set_top_pod(self, pod_name: str, result: PodResourceUsage | None) -> None:
-        """Configure a specific top_pod result for a pod."""
+        """Configure a pod's reported resource usage (None = metrics absent)."""
         self._top_pod_overrides[pod_name] = result
 
     def seed_resource(self, resource: K8sResource, name: str, manifest: dict) -> None:
@@ -628,6 +638,8 @@ class InMemoryK8sService:
     # -- Protocol methods --
 
     def _check_failure(self, operation: str) -> None:
+        if err := self._persistent_failures.get(operation):
+            raise err
         if err := self._injected_failures.pop(operation, None):
             raise err
 
@@ -852,13 +864,26 @@ class InMemoryK8sService:
                 results.append(event)
         return results
 
-    def top_pod(self, pod_name: str) -> PodResourceUsage | None:
-        self._check_failure("top_pod")
-        if pod_name in self._top_pod_overrides:
-            return self._top_pod_overrides[pod_name]
-        if any(name == pod_name for (_, name) in self._resources):
-            return PodResourceUsage(cpu_millicores=100, memory_bytes=256 * 1024 * 1024)
-        return None
+    def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]:
+        self._check_failure("top_pods")
+        plural = K8sResource.PODS.plural
+        usage: dict[str, PodResourceUsage] = {}
+        for (stored_plural, name), manifest in self._resources.items():
+            if stored_plural != plural:
+                continue
+            if labels:
+                res_labels = manifest.get("metadata", {}).get("labels", {})
+                if not all(res_labels.get(k) == v for k, v in labels.items()):
+                    continue
+            usage[name] = PodResourceUsage(cpu_millicores=100, memory_bytes=256 * 1024 * 1024)
+        # Per-pod overrides win regardless of the label scope; a None override
+        # means "metrics absent" and drops the pod from the result.
+        for name, override in self._top_pod_overrides.items():
+            if override is None:
+                usage.pop(name, None)
+            else:
+                usage[name] = override
+        return usage
 
     def read_file(
         self,
