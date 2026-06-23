@@ -8,7 +8,9 @@ emitting steady-state timing, the compiled HLO, and one machine-readable
 ``result_json`` line. ``--path bf16`` (default) is the baseline arm; ``--path
 qdq`` is S2's first FP8 arm — the existing haliax ``Fp8DotGeneralOp`` delayed-
 scaling path, re-measured to see whether XLA still fuses it to an f8 cuBLASLt
-matmul or silently falls back to BF16.
+matmul or silently falls back to BF16. ``--path manual`` (forward-only) is the
+direct-f8 arm: genuine E4M3 operands straight into the dot, dequant on the
+output — the candidate fix for the forward QDQ fallback.
 
 The default shape is a hidden-dim-3072 projection at seq 4096; sweep ``--k``
 over 3072/4096 for the two benchmark dims. Run on an H100 via Iris and grep the
@@ -29,11 +31,14 @@ import jax
 import jax.numpy as jnp
 from jax import lax
 
+from haliax._src.fp8 import compute_scale, get_fp8_max, quantize
 from haliax.quantization import Fp8DotGeneralOp
 
 # Contract K (lhs dim 1, rhs dim 0); no batch dims. Shared with the FP8 paths
 # so the lowering differs only by dtype/precision, not the einsum.
 _DIMENSION_NUMBERS = (((1,), (0,)), ((), ()))
+
+_E4M3 = jnp.float8_e4m3fn
 
 # H100 SXM dense (non-sparse) matmul peaks; FP8 (E4M3) is 2x the BF16 rate.
 _H100_SXM_BF16_TFLOPS_PER_S = 989.5e12
@@ -54,6 +59,32 @@ def dense_dot(x: jax.Array, w: jax.Array) -> jax.Array:
     return lax.dot_general(x, w, _DIMENSION_NUMBERS)
 
 
+def _delayed_scale(amax_history: jax.Array, scale: jax.Array) -> jax.Array:
+    """Live per-tensor E4M3 scale from a delayed-scaling amax window (mirrors in_qdq)."""
+    return compute_scale(jnp.max(amax_history), scale, get_fp8_max(_E4M3, jnp.float32))
+
+
+def manual_fp8_dot(x: jax.Array, w: jax.Array, op: Fp8DotGeneralOp) -> jax.Array:
+    """Direct-f8 forward: dot genuine E4M3 operands, dequantize only the output.
+
+    Unlike the QDQ path — which dequantizes each operand back to the compute dtype
+    *before* the dot, leaving an f8->bf16 round-trip that ``simplify-fp-conversions``
+    strips on the forward — here the E4M3 operands flow straight into ``dot_general``
+    and only the f32 accumulator is rescaled by ``x_scale * w_scale``. This is the
+    pattern XLA's FP8 GemmRewriter is meant to fuse into ``__cublas$lt$matmul$f8``.
+
+    Scales are computed live from ``op``'s delayed-scaling histories exactly as
+    ``in_qdq`` does, so this is apples-to-apples with ``--path qdq``.
+    """
+    comp_dtype = w.dtype
+    x_scale = _delayed_scale(op.input_amax_history, op.input_scale)
+    w_scale = _delayed_scale(op.kernel_amax_history, op.kernel_scale)
+    qx = quantize(x, _E4M3, x_scale, comp_dtype)
+    qw = quantize(w, _E4M3, w_scale, comp_dtype)
+    acc = lax.dot_general(qx, qw, _DIMENSION_NUMBERS, preferred_element_type=jnp.float32)
+    return (acc * (x_scale * w_scale).astype(jnp.float32)).astype(comp_dtype)
+
+
 def build_dot(path: str, amax_history_length: int):
     """Return ``(dot_fn, op)`` for the requested lowering path.
 
@@ -66,10 +97,16 @@ def build_dot(path: str, amax_history_length: int):
     over the (constant) amax history and bakes scale=const into the f8 call —
     which is the real-training delayed-scaling case faked into a trivially-easier
     one for the rewriter. ``op`` is ``None`` for bf16.
+
+    ``manual`` is S2's direct-f8 arm (forward-only): genuine E4M3 operands into the
+    dot, dequant on the output (see ``manual_fp8_dot``). It reuses the same ``op``
+    state so the scales are the same live runtime operands as ``qdq``.
     """
     if path == "bf16":
         return (lambda x, w: dense_dot(x, w)), None
     op = Fp8DotGeneralOp.init(amax_history_length=amax_history_length)
+    if path == "manual":
+        return (lambda x, w, op: manual_fp8_dot(x, w, op)), op
     return (lambda x, w, op: op(x, w, _DIMENSION_NUMBERS)), op
 
 
@@ -108,9 +145,9 @@ def main() -> None:
     parser.add_argument("--dtype", type=str, default="bfloat16", help="operand dtype (QDQ quantizes internally)")
     parser.add_argument(
         "--path",
-        choices=("bf16", "qdq"),
+        choices=("bf16", "qdq", "manual"),
         default="bf16",
-        help="bf16 baseline, or qdq = existing haliax Fp8DotGeneralOp delayed-scaling path",
+        help="bf16 baseline; qdq = existing haliax Fp8DotGeneralOp; manual = direct-f8 dot (forward-only)",
     )
     parser.add_argument("--amax-history-length", type=int, default=1024, help="delayed-scaling amax window (qdq)")
     parser.add_argument("--steps", type=int, default=20)
@@ -124,6 +161,11 @@ def main() -> None:
         "--profiler-dir", type=str, default=None, help="dir for a jax.profiler trace of the timed runs"
     )
     args = parser.parse_args()
+
+    # The manual arm exists to answer the open *forward* question (does a direct-f8
+    # dot fire $f8 where QDQ falls back?); its backward is not the e5m2 grad path.
+    if args.path == "manual" and not args.forward_only:
+        parser.error("--path manual is forward-only; pass --forward-only")
 
     # Dump flags must be set before the backend initializes (first JAX op below).
     xla_dump_dir = _configure_xla_dump_dir(args.xla_dump_dir) if args.xla_dump_dir else None
