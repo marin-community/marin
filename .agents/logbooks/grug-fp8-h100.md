@@ -523,3 +523,33 @@ confirms the path.
   quantized once (closer to training); (c) read the deep-research verdict on what TE-JAX/MaxText do —
   likely cuBLASLt custom calls that avoid this overhead; (d) decide whether the XLA-fusion path can beat
   bf16 here or whether TE-JAX/Pallas is required. Ops: report the finelog `StatsError` to infra.
+
+### 2026-06-23 — GFP8-008: S2 H100 — TN layout removes the transpose but does NOT change timing
+- **Hypothesis:** the d4096 manual f8 forward ties bf16 (GFP8-007) because of the XLA-inserted TN
+  transpose; storing the weight `[N,K]` (TN, K minor on both — mirrors haliax `Linear`) should drop the
+  transpose and recover the f8 win.
+- **Change:** `--layout {tn,nn}` (default tn) in `bench_dense_fp8.py` (GFP8-008 commit). A/B script
+  `_s2_tn_vs_nn.sh`, job `/matt/grug-s2-tn-nn2`, d4096 forward-only.
+- **Result:**
+
+  | arm | layout | `$f8` | `input_transpose_fusion` | TFLOP/s | µs |
+  |-----|--------|-------|--------------------------|---------|-----|
+  | manual | tn | 1 | **0** | 544.5 | 252.4 |
+  | manual | nn | 1 | **4** | 546.7 | 251.4 |
+  | bf16   | tn | 0 | 0 | 534.1 | 257.3 |
+
+  - TN **removes the transpose** (`input_transpose_fusion` 0 vs 4); cuBLASLt now consumes the quantized
+    operands directly (`custom-call(%loop_convert_fusion.1, %loop_convert_fusion, ...)`) vs NN's
+    `custom-call(%input_transpose_fusion.1, ...)`.
+  - **Timing is unchanged**: TN ≈ NN ≈ bf16 (~252 µs). Removing the transpose changed nothing.
+- **Interpretation (refines GFP8-007):** the transpose is **not** the bottleneck — XLA fuses/overlaps it,
+  so it is effectively free. The entire f8 overhead is the **per-call quantize** of *both* operands
+  (divide-by-scale, clip, convert-to-f8) + output dequant + scale reductions — memory-bound work that is
+  identical under TN and NN and ≈ the f8 GEMM's compute savings, so f8 ties bf16 either way. GFP8-007's
+  "+ transpose" attribution was wrong; it's quantize-bound.
+- **Next action — find the real f8 win:**
+  1. **Amortize weight quant** (biggest realistic lever): quantize `w` once (pre-quantized f8 input),
+     quantize only `x` per call — mirrors training, where weights are quantized once per step.
+  2. **Isolate the GEMM:** time `dq(dot(f8,f8))` on *pre-quantized* f8 inputs (no in-loop quantize) vs the
+     bf16 GEMM — confirms the f8 GEMM itself is ~2× and the overhead is quantize.
+  3. **Larger M sweep** (M=8192/16384): make the GEMM more compute-bound vs the O(MK+NK) quantize.
