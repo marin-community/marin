@@ -77,9 +77,10 @@ def _peak_tflops_per_s(is_fp8: bool) -> float | None:
     return None
 
 
-def dense_dot(x: jax.Array, w: jax.Array, dimension_numbers) -> jax.Array:
-    """Dense projection contracting K -> ``[M, N]``."""
-    return lax.dot_general(x, w, dimension_numbers)
+def dense_dot(x: jax.Array, w: jax.Array, dimension_numbers, precision=None) -> jax.Array:
+    """Dense projection contracting K -> ``[M, N]``. ``precision`` lets the bf16 baseline
+    run the mechanism A/B (DEFAULT vs HIGHEST on pure bf16, no QDQ)."""
+    return lax.dot_general(x, w, dimension_numbers, precision=precision)
 
 
 def _delayed_scale(amax_history: jax.Array, scale: jax.Array) -> jax.Array:
@@ -87,7 +88,9 @@ def _delayed_scale(amax_history: jax.Array, scale: jax.Array) -> jax.Array:
     return compute_scale(jnp.max(amax_history), scale, get_fp8_max(_E4M3, jnp.float32))
 
 
-def manual_fp8_dot(x: jax.Array, w: jax.Array, op: Fp8DotGeneralOp, dimension_numbers) -> jax.Array:
+def manual_fp8_dot(
+    x: jax.Array, w: jax.Array, op: Fp8DotGeneralOp, dimension_numbers, preferred_element_type=jnp.float32
+) -> jax.Array:
     """Direct-f8 forward: dot genuine E4M3 operands, dequantize only the output.
 
     Unlike the QDQ path — which dequantizes each operand back to the compute dtype
@@ -104,8 +107,10 @@ def manual_fp8_dot(x: jax.Array, w: jax.Array, op: Fp8DotGeneralOp, dimension_nu
     w_scale = _delayed_scale(op.kernel_amax_history, op.kernel_scale)
     qx = quantize(x, _E4M3, x_scale, comp_dtype)
     qw = quantize(w, _E4M3, w_scale, comp_dtype)
-    acc = lax.dot_general(qx, qw, dimension_numbers, preferred_element_type=jnp.float32)
-    return (acc * (x_scale * w_scale).astype(jnp.float32)).astype(comp_dtype)
+    acc = lax.dot_general(qx, qw, dimension_numbers, preferred_element_type=preferred_element_type)
+    # Cast post-dot so the rescale is f32 regardless of the dot's accumulator dtype
+    # (preferred_element_type=None leaves acc in f8); the dot's PET is the tested variable.
+    return (acc.astype(jnp.float32) * (x_scale * w_scale).astype(jnp.float32)).astype(comp_dtype)
 
 
 def qdq_prec_dot(x: jax.Array, w: jax.Array, op: Fp8DotGeneralOp, dimension_numbers, precision) -> jax.Array:
@@ -124,7 +129,7 @@ def qdq_prec_dot(x: jax.Array, w: jax.Array, op: Fp8DotGeneralOp, dimension_numb
     return lax.dot_general(x_qdq, w_qdq, dimension_numbers, precision=precision)
 
 
-def build_dot(path: str, amax_history_length: int, dimension_numbers, precision):
+def build_dot(path: str, amax_history_length: int, dimension_numbers, precision, manual_output_f32: bool = True):
     """Return ``(dot_fn, op)`` for the requested lowering path.
 
     ``qdq`` calls the existing haliax ``Fp8DotGeneralOp`` verbatim: per-tensor
@@ -142,10 +147,13 @@ def build_dot(path: str, amax_history_length: int, dimension_numbers, precision)
     state so the scales are the same live runtime operands as ``qdq``.
     """
     if path == "bf16":
-        return (lambda x, w: dense_dot(x, w, dimension_numbers)), None
-    op = Fp8DotGeneralOp.init(amax_history_length=amax_history_length)
+        return (lambda x, w: dense_dot(x, w, dimension_numbers, precision)), None
+    # qdq runs the real Fp8DotGeneralOp (fwd+bwd); forward_precision=HIGHEST exercises
+    # the GFP8-012 fix (forward fires $f8), DEFAULT reproduces the legacy fallback.
+    op = Fp8DotGeneralOp.init(amax_history_length=amax_history_length, forward_precision=precision)
     if path == "manual":
-        return (lambda x, w, op: manual_fp8_dot(x, w, op, dimension_numbers)), op
+        pet = jnp.float32 if manual_output_f32 else None
+        return (lambda x, w, op: manual_fp8_dot(x, w, op, dimension_numbers, pet)), op
     if path == "qdq_prec":
         return (lambda x, w, op: qdq_prec_dot(x, w, op, dimension_numbers, precision)), op
     return (lambda x, w, op: op(x, w, dimension_numbers)), op
@@ -195,7 +203,15 @@ def main() -> None:
         "--precision",
         choices=("default", "highest"),
         default="default",
-        help="dot precision for --path qdq_prec (tests whether HIGHEST gates the f8 forward fusion)",
+        help="forward-dot precision. qdq_prec: the explicit-precision proxy; qdq: the real "
+        "Fp8DotGeneralOp.forward_precision (HIGHEST = the GFP8-012 fix, fwd+bwd); bf16: the "
+        "mechanism A/B (does HIGHEST change the pure-bf16 lowering?)",
+    )
+    parser.add_argument(
+        "--manual-no-output-f32",
+        action="store_true",
+        help="drop preferred_element_type=f32 from --path manual (de-confounds 'materialized f8 fuses at "
+        "DEFAULT' from the output-accumulator dtype)",
     )
     parser.add_argument(
         "--layout",
@@ -239,7 +255,13 @@ def main() -> None:
     # scalar loss <out, cotangent> gives d(loss)/d(out) = cotangent.
     cotangent = jax.random.normal(key_c, (args.m, args.n), dtype=dtype)
 
-    dot, op = build_dot(args.path, args.amax_history_length, dimension_numbers, precision)
+    dot, op = build_dot(
+        args.path,
+        args.amax_history_length,
+        dimension_numbers,
+        precision,
+        manual_output_f32=not args.manual_no_output_f32,
+    )
     if op is not None:
         # Seed the delayed-scaling histories from the actual tensors so the scales
         # are realistic non-unit *runtime* operands (a warmed-up delayed-scaling
@@ -274,6 +296,7 @@ def main() -> None:
         "path": args.path,
         "layout": args.layout,
         "precision": args.precision,
+        "manual_output_f32": not args.manual_no_output_f32,
         "m": args.m,
         "k": args.k,
         "n": args.n,
