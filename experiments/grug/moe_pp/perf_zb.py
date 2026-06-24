@@ -38,7 +38,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from experiments.grug.moe.model import Transformer
 from experiments.grug.moe_pp.benchmark import _config, _param_count, init_distributed, peak_hbm_gib
 from experiments.grug.moe_pp.oracle import oracle_loss
-from experiments.grug.moe_pp.pipeline_zb import Schedule, _stage_submesh, orthogonalize_tree, zb_build
+from experiments.grug.moe_pp.pipeline_zb import Schedule, TransportMode, _stage_submesh, orthogonalize_tree, zb_build
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +78,12 @@ def main() -> int:
     schedule = Schedule(os.environ.get("MOE_PP_SCHED", "zb"))
     remat = os.environ.get("MOE_PP_REMAT", "1") == "1"
     muon = os.environ.get("MOE_PP_MUON", "0") == "1"
-    async_transport = os.environ.get("MOE_PP_ASYNC_XPORT", "0") == "1"
-    ppermute_transport = os.environ.get("MOE_PP_PPERMUTE", "0") == "1"
+    if os.environ.get("MOE_PP_PPERMUTE", "0") == "1":
+        transport = TransportMode.PPERMUTE
+    elif os.environ.get("MOE_PP_ASYNC_XPORT", "0") == "1":
+        transport = TransportMode.ASYNC
+    else:
+        transport = TransportMode.INLINE
     hidden_dim = int(os.environ.get("MOE_PP_HIDDEN", "1536"))
     num_layers = int(os.environ.get("MOE_PP_LAYERS", "24"))
     num_experts = int(os.environ.get("MOE_PP_EXPERTS", "8"))
@@ -174,8 +178,7 @@ def main() -> int:
         schedule=schedule,
         remat=remat,
         muon=muon,
-        async_transport=async_transport,
-        ppermute_transport=ppermute_transport,
+        transport=transport,
     )
     pp_sec, pp_out = _time(lambda: step(tokens, weight), warmup=warmup, iters=iters)
     pp_loss = float(np.asarray(pp_out[0]))
@@ -189,12 +192,11 @@ def main() -> int:
         fsdp_hbm,
     )
     logger.info(
-        "PERF zb_pipeline mode: schedule=%s remat=%s muon=%s async_transport=%s ppermute=%s",
+        "PERF zb_pipeline mode: schedule=%s remat=%s muon=%s transport=%s",
         schedule.value,
         remat,
         muon,
-        async_transport,
-        ppermute_transport,
+        transport.value,
     )
     logger.info(
         "PERF zb_pipeline     : %.4f s/step  %9.0f tok/s  loss=%.4f  peak_hbm=%.1f GiB  microbatch=%d (%d tok/call)",

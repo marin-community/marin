@@ -350,6 +350,25 @@ class Schedule(StrEnum):
     ZERO_BUBBLE = "zb"
 
 
+class TransportMode(StrEnum):
+    """How a runtime activation crosses the one stage boundary that splits the two hosts.
+
+    Single-host pipelines never cross, so the mode is moot. Multi-host:
+
+    * ``INLINE`` -- a host-staged ``device_get`` -> ``broadcast_one_to_all`` -> rebuild, run
+      synchronously on the dispatch thread (it blocks there until the hop completes).
+    * ``ASYNC`` -- the same host-staged broadcast, run on a :class:`_TransportWorker` side
+      thread so the main thread keeps dispatching; both hosts submit in identical ``op_order``
+      so the broadcasts stay paired.
+    * ``PPERMUTE`` -- on-device ``ppermute`` (NCCL send/recv -> GPUDirect RDMA over the
+      fabric), no host round-trip. The fast path (see :func:`_build_ppermute_hop`).
+    """
+
+    INLINE = "inline"
+    ASYNC = "async"
+    PPERMUTE = "ppermute"
+
+
 def pipeline_schedule(num_stages: int, num_microbatches: int, *, split_w: bool) -> list[tuple[str, int, int]]:
     """Wavefront op order: a list of ``(kind, microbatch, stage)`` to dispatch.
 
@@ -458,8 +477,7 @@ def zb_build(
     schedule: Schedule = Schedule.ZERO_BUBBLE,
     remat: bool = True,
     muon: bool = False,
-    async_transport: bool = False,
-    ppermute_transport: bool = False,
+    transport: TransportMode = TransportMode.INLINE,
 ):
     """Place params on per-stage sub-meshes and compile the stage fns ONCE.
 
@@ -477,13 +495,10 @@ def zb_build(
     Stages own disjoint device slices of ``expert_per_stage * data_per_stage`` devices
     each (so ``num_stages * expert_per_stage * data_per_stage == device_count``).
 
-    ``ppermute_transport`` moves each cross-host boundary hop on-device with ``ppermute``
-    (NCCL send/recv -> GPUDirect RDMA over the fabric) -- no host round-trip. The fast path.
-
-    ``async_transport`` (multi-host only, host-staged fallback when ``ppermute`` is off) runs
-    each cross-host hop's ``device_get``+broadcast on a side thread so the main thread keeps
-    dispatching other microbatches; both hosts submit hops in identical ``op_order`` so the
-    broadcasts stay paired. No effect single-host (intra-host hops stay inline).
+    ``transport`` selects how the one cross-host boundary hop moves (see
+    :class:`TransportMode`): ``PPERMUTE`` (on-device, the fast path), ``ASYNC`` (host-staged
+    broadcast off the dispatch thread), or ``INLINE`` (host-staged broadcast inline). No
+    effect single-host -- intra-host hops are always a local ``device_put``.
     """
     devices = jax.devices()
     dps = expert_per_stage * data_per_stage
@@ -548,7 +563,7 @@ def zb_build(
     # On-device ppermute hops: one per cross-host boundary (keyed by its low stage), carrying
     # both the forward and backward crossing on a single clique. Compiled once, reused.
     ppermute_hops: dict[int, Callable[[jax.Array, int], jax.Array]] = {}
-    if ppermute_transport and _multihost():
+    if transport == TransportMode.PPERMUTE and _multihost():
         for s in range(num_stages - 1):
             if _crosses_host(submeshes[s], submeshes[s + 1]):
                 ppermute_hops[s] = _build_ppermute_hop(submeshes[s], submeshes[s + 1])
@@ -635,7 +650,7 @@ def zb_build(
         # flight; the consuming op resolves the future just-in-time. Both hosts submit in
         # identical ``op_order`` so the broadcasts stay paired. ``worker`` is None when the flag
         # is off, single-host, or ppermute is on, so ``_send`` collapses to the inline path.
-        worker = _TransportWorker() if (async_transport and _multihost() and not ppermute_transport) else None
+        worker = _TransportWorker() if (transport == TransportMode.ASYNC and _multihost()) else None
 
         def _send(x: jax.Array, dst: Mesh, src: Mesh, src_stage: int, dst_stage: int) -> jax.Array | Future:
             if not _crosses_host(src, dst):
