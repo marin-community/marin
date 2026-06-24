@@ -56,7 +56,7 @@ _EP: int = 1
 _SLICE: str = "v4-1024"
 _LOGIT_Z_LOSS_WEIGHT: float = 1e-4
 _CHECKPOINT_EVERY: int = 3_000
-_STEPS_PER_EVAL: int = 2_000
+_STEPS_PER_EVAL: int = 3_000
 
 _heuristic = MoeMuonHHeuristic(min_lr_ratio=0.05)
 _model_base = _heuristic.build_model_config(_DIM, seq_len=_SEQ)
@@ -122,9 +122,13 @@ step = ExecutorStep(
         ),
         eval=versioned(
             GrugEvalConfig(
-                eval_batch_size=128,
+                # eval_batch_size must be divisible by data axis size = 512 on
+                # v4-1024 (128 doesn't fit). 512 * 1 = 512 examples per dataset
+                # matches the 8k-seqlen june_prep d=1024 long-run setting
+                # (128 * 4 = 512 examples).
+                eval_batch_size=512,
                 steps_per_eval=_STEPS_PER_EVAL,
-                max_eval_batches=8,
+                max_eval_batches=1,
                 eval_current=True,
                 eval_ema=False,
             )
