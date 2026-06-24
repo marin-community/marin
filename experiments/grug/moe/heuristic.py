@@ -113,8 +113,7 @@ class MoeHeuristic:
     max_grad_norm: float = 1.0
 
     # --- Schedule ---
-    min_lr_ratio: float = 0.0
-    warmup: float = 0.1
+    min_lr_ratio: float = 0.05
     lr_schedule: str = "linear"
     decay: float | None = None
 
