@@ -56,13 +56,13 @@ def discover_hf_checkpoints(base_path: str) -> list[str]:
     return checkpoints
 
 
-# Generous ceiling for a single-checkpoint cross-region copy. The default
-# TransferBudget (10 GB) would otherwise abort on any model larger than ~10 GB
-# (llama-3.1-8B in bf16 is ~16 GB).
-_MIRROR_LOCALIZE_BUDGET_GB = 1024
+# Default to pre-seeded-only model localization: resolve local mirror files, but
+# fail before copying any non-local checkpoint bytes. Callers that explicitly
+# want model copy-on-read can pass a positive budget_gb.
+_MIRROR_LOCALIZE_BUDGET_GB = 0.0
 
 
-def localize_mirror_path(path: str) -> str:
+def localize_mirror_path(path: str, budget_gb: float = _MIRROR_LOCALIZE_BUDGET_GB) -> str:
     """Resolve a mirror:// checkpoint path to a concrete local-region gs:// URL.
 
     Copies the checkpoint into the local-region bucket if it isn't there yet
@@ -80,7 +80,7 @@ def localize_mirror_path(path: str) -> str:
         raise RuntimeError(f"cannot localize {path!r}: region={region!r} has no marin data bucket")
     rel = path[len("mirror://") :]
     mirror_fs = fsspec.filesystem("mirror")
-    with mirror_budget(_MIRROR_LOCALIZE_BUDGET_GB):
+    with mirror_budget(budget_gb):
         for f in mirror_fs.find(rel):
             mirror_fs.info(f)  # per-file copy-on-read into the local-region bucket
     return f"gs://{REGION_TO_DATA_BUCKET[region]}/{rel}"

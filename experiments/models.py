@@ -18,6 +18,7 @@ executor_main([download_step])
 
 from dataclasses import dataclass
 
+from fray.cluster import ResourceConfig
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.utils import get_directory_friendly_name
@@ -32,7 +33,7 @@ class ModelConfig:
 MODEL_OUTPUT_SUBDIR = "models"
 
 
-def download_model_step(model_config: ModelConfig) -> ExecutorStep:
+def download_model_step(model_config: ModelConfig, worker_resources: ResourceConfig | None = None) -> ExecutorStep:
     model_name = get_directory_friendly_name(model_config.hf_repo_id)
     model_revision = get_directory_friendly_name(model_config.hf_revision)
     download_step = ExecutorStep(
@@ -44,6 +45,7 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
             gcs_output_path=this_output_path(),
             wait_for_completion=True,
             hf_repo_type_prefix="",
+            worker_resources=worker_resources,
         ),
         # must override because it because if we don't then it will end in a hash
         # if it ends in a hash, then we cannot determine the local path
