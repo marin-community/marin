@@ -923,3 +923,44 @@ confirms the path.
   (the GFP8-018 B-lite: explicit mixed-f8 dtype + `block_k` retune). Next: that, benchmarked vs Triton bf16 447.
 - **Repro:** `uv run iris --cluster=cw-us-east-02a job run --gpu H100x1 --enable-extra-resources --extra gpu
   --cpu 4 --memory 128GB --disk 64GB -- bash lib/levanter/scripts/bench/_s5_xla_validate.sh`.
+
+### 2026-06-24 — GFP8-020: S5 H100 — B-lite is DEAD: Pallas-Triton can't do an f8-MMA ragged dot
+- **Why:** GFP8-018's verdict was "B-lite first" — fix the mixed-f8 backward dtype + retune `block_k`/warps/
+  stages on the *existing* Pallas-Triton kernel, escalate to a full rewrite only if tuned f8 still loses bf16.
+  This is that experiment: one controlled job, identical real Grug shape (T8192/D2048/F5632/E8) and step count
+  across every arm, Triton forced, swept against the bf16 production baseline.
+- **Code:** `_ragged_cast` + `_ragged_dot` in `nn/ragged_dot.py`; env knobs `RAGGED_DOT_BLOCK_K/BLOCK_N/
+  NUM_WARPS/NUM_STAGES/F8_COMPUTE` (same A/B mechanism as `RAGGED_DOT_IMPL`). Jobs
+  `/matt/iris-run-job-20260624-185232` (sweep) + `…-185708` (e4m3 completion).
+- **The dtype "fix" took two tries, and the second try exposed the wall.** (1) `jnp.result_type(e5m2,e4m3)`
+  raised → bypass it. (2) But `pl.dot` *itself* infers its out dtype via `jnp.promote_types(a,b)`
+  (`pallas/primitives.py:530`) and dies the same way *before* the tensor-core op. So `_ragged_dot` calls
+  `lax.dot_general(..., preferred_element_type=f32)` directly — `pl.dot`'s own lowering minus the promotion
+  guard. (3) That still fails on the GPU: the **Pallas→Triton `dot_general` lowering hard-rejects mixed f8** —
+  `lowering.py:2385: "a and b must have the same element type, but got: f8E5M2 and f8E4M3FN"`. Unlike XLA
+  (GFP8-019) and unlike raw Triton `tl.dot`, this jax/jaxlib's pallas.triton requires both dot operands to
+  share one f8 type. (4) Forcing same-type **e4m3** on the backward (quantize the grad to e4m3 too) then dies
+  in XLA codegen: `RuntimeError: bad optional access`, deterministic across block_k∈{32,64,128}.
+- **Numbers (Triton, real shape, identical steps; TF/s):**
+
+  | path | dtype on dot | fwd+bwd | fwd-only | vs bf16 | status |
+  |------|--------------|---------|----------|---------|--------|
+  | bf16 | bf16 | **454** | **418** | — | production baseline |
+  | fp8  | e4m3×e4m3 (same-type f8) | — | **261** (k64; 239 k32 / 251 k128) | **0.62× fwd** | fwd lowers+runs; **bwd: RuntimeError bad optional access** |
+  | fp8  | e5m2×e4m3 (mixed f8) | — | — | — | **does not lower** (ValueError mixed f8) |
+  | fp8  | f8 storage, **bf16** MMA (`F8_COMPUTE=bf16`) | 272 | — | **0.60×** | only f8 fwd+bwd that *runs*; no f8 MMA on the dot |
+
+- **Conclusion — the A/B line is now settled by evidence, against B-lite.** Three independent walls on the
+  Pallas-Triton path, none movable by tuning: (a) mixed-f8 dot unsupported → the natural E5M2-grad backward is
+  impossible; (b) same-type-e4m3 backward crashes the compiler; (c) where f8 *does* run (forward), it is **1.6×
+  slower than bf16** and block_k/warps/stages barely move it (239↔261) — i.e. the lowering is **not engaging an
+  efficient f8 wgmma** (smaller operands yet slower ⇒ upcast-before-MMA or a non-f8 dot path). The only f8
+  fwd+bwd that executes is f8-storage/bf16-compute at 272, which by construction uses no f8 tensor cores and
+  still loses to bf16's 454. **Quantize-around the existing kernel cannot win; tuning it cannot win.**
+- **What this means for the win condition.** To beat the production bf16 Triton kernel (454) with f8 needs a
+  kernel that controls the MMA dtype directly — genuine **option B**, and specifically NOT via pallas.triton's
+  `dot_general`. Candidate backends: `pallas.mosaic_gpu` (explicit Hopper `wgmma`, supports f8 incl. mixed
+  e4m3/e5m2) or a raw Triton-DSL kernel. XLA-fp8 remains the only *working* f8 ragged path (GFP8-019, ~2× within
+  XLA) but XLA ragged is ~4.6× slower than Triton overall, so it is a correct baseline, not a production win.
+- **Repro:** `… job run --gpu H100x1 --enable-extra-resources --extra gpu --cpu 4 --memory 64GB --disk 64GB --
+  bash lib/levanter/scripts/bench/_s5_tune_validate.sh` (sweep) and `… _s5_e4m3_complete.sh` (e4m3 backward).
