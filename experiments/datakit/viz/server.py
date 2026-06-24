@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import functools
 import logging
+import math
 import random
 from pathlib import Path
 
@@ -57,6 +58,35 @@ def _quality_range_label(quality_bucket: int, thresholds: list[float]) -> str:
     hi = "1.0" if quality_bucket >= len(thresholds) else f"{thresholds[quality_bucket]:g}"
     upper = "]" if quality_bucket >= len(thresholds) else ")"
     return f"[{lo}, {hi}{upper}"
+
+
+def _run_indices(total: int, n: int, runs: int, seed: int) -> list[int]:
+    """Pick ``n`` row indices as ``runs`` random *contiguous* windows.
+
+    Reading contiguous rows keeps each window inside one (or few) tensorstore
+    data chunks, so a window of length ``L`` costs ~1 chunk fetch instead of
+    ``L``. Several windows at random offsets restore the spread that a single
+    contiguous slice would lose; ``get_batch_sync`` issues all their chunk reads
+    in one ``ts.Batch`` (concurrently). Fewer ``runs`` => longer windows =>
+    faster but less diverse; more ``runs`` => the opposite.
+    """
+    n = max(1, min(n, total))
+    runs = max(1, min(runs, n))
+    run_len = math.ceil(n / runs)
+    rng = random.Random(seed)
+    max_start = max(0, total - run_len)
+    n_starts = min(runs, max_start + 1)
+    starts = sorted(rng.sample(range(max_start + 1), n_starts))
+    picked: list[int] = []
+    seen: set[int] = set()
+    for start in starts:
+        for i in range(start, min(start + run_len, total)):
+            if i not in seen:
+                seen.add(i)
+                picked.append(i)
+            if len(picked) >= n:
+                return sorted(picked)
+    return sorted(picked)
 
 
 def _bucket_view(bucket: BucketCacheStats, thresholds: list[float]) -> dict:
@@ -111,14 +141,15 @@ class StoreViz:
         logger.info("opening bucket cache %s", path)
         return TreeCache.load(path, _EXEMPLAR, CacheMetadata.empty())
 
-    def samples(self, cluster_id: int, quality_bucket: int, n: int, seed: int) -> dict:
+    def samples(self, cluster_id: int, quality_bucket: int, n: int, seed: int, runs: int) -> dict:
         key = (cluster_id, quality_bucket)
         if key not in self._buckets:
             raise HTTPException(status_code=404, detail=f"no bucket cluster={cluster_id} quality={quality_bucket}")
         cache = self._cache(cluster_id, quality_bucket)
         total = len(cache)
-        n = max(1, min(n, total))
-        indices = sorted(random.Random(seed).sample(range(total), n))
+        # Contiguous windows fetched in one batched (parallel) read -- random
+        # point reads over a remote jagged store are pathologically slow.
+        indices = _run_indices(total, n=n, runs=runs, seed=seed)
         rows = cache.get_batch_sync(indices)
         samples = []
         for idx, row in zip(indices, rows, strict=True):
@@ -140,6 +171,7 @@ class StoreViz:
             "total_elements": self._buckets[key].total_elements,
             "total_tokens": self._buckets[key].total_tokens,
             "seed": seed,
+            "runs": min(max(1, runs), len(samples)) if samples else 0,
             "n_returned": len(samples),
             "samples": samples,
         }
@@ -157,8 +189,8 @@ def build_app(viz: StoreViz) -> FastAPI:
         return JSONResponse(viz.summary())
 
     @app.get("/api/bucket/{cluster_id}/{quality_bucket}/samples")
-    def bucket_samples(cluster_id: int, quality_bucket: int, n: int = 20, seed: int = 0) -> JSONResponse:
-        return JSONResponse(viz.samples(cluster_id, quality_bucket, n=n, seed=seed))
+    def bucket_samples(cluster_id: int, quality_bucket: int, n: int = 20, seed: int = 0, runs: int = 4) -> JSONResponse:
+        return JSONResponse(viz.samples(cluster_id, quality_bucket, n=n, seed=seed, runs=runs))
 
     return app
 
