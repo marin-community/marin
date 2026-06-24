@@ -253,6 +253,16 @@ def _build_ppermute_hop(low_mesh: Mesh, high_mesh: Mesh):
     def _hop(a: jax.Array) -> jax.Array:
         return jax.lax.ppermute(a, "pp", [(0, 1), (1, 0)])
 
+    # The off-source slice is filled with zeros the ppermute immediately overwrites, so their
+    # value is irrelevant -- allocate once per (shape, device) and reuse across all crossings.
+    zero_cache: dict = {}
+
+    def _zeros_on(d, bshard, dtype):
+        key = (d.id, bshard, dtype)
+        if key not in zero_cache:
+            zero_cache[key] = jax.device_put(jnp.zeros(bshard, dtype), d)
+        return zero_cache[key]
+
     def transport(x: jax.Array, from_pp: int) -> jax.Array:
         pid = jax.process_index()
         to_pp = 1 - from_pp
@@ -264,7 +274,7 @@ def _build_ppermute_hop(low_mesh: Mesh, high_mesh: Mesh):
         is_source = pid in procs[from_pp]
         on_dev = {s.device: s.data.reshape((1, *s.data.shape)) for s in x.addressable_shards} if is_source else {}
         shards = [
-            on_dev[d] if d in on_dev else jax.device_put(jnp.zeros(bshard, x.dtype), d)
+            on_dev[d] if d in on_dev else _zeros_on(d, bshard, x.dtype)
             for d in boundary.devices.flat
             if d.process_index == pid
         ]
