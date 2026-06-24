@@ -230,9 +230,6 @@ ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 # Bloom filter tests deliberately compare an object with itself to exercise its
 # reflexive comparison operators (==, <=, >=, ...), so PLR0124 is expected here.
 "lib/dupekit/tests/test_bloom.py" = ["PLR0124"]
-# The SWE tracer is injected into third-party sandbox images, which can still
-# be older than Marin's own supported Python floor.
-"experiments/swe_rebench_trace/tracer.py" = ["UP036"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]
