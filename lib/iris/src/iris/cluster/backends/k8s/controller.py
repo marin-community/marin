@@ -393,18 +393,7 @@ class K8sControllerProvider:
         return self.start_controller(config)
 
     def _delete_controller_deployment_and_wait(self) -> None:
-        """Delete the controller Deployment and wait until its Pods are gone.
-
-        Deleting the Deployment with background cascade deletion removes the
-        Deployment object immediately while the controller Pod keeps
-        Terminating — running its SIGTERM handler (final checkpoint) and
-        holding the SQLite file on the ReadWriteOnce state PVC open. That PVC
-        permits multiple Pods on the same node to mount it at once, so a new
-        --fresh controller started during this window wipes the DB directory
-        out from under the old process and crashes with EBUSY (Device or
-        resource busy). We must therefore wait for the old Pod to disappear,
-        not merely the Deployment object, before applying the new Deployment.
-        """
+        """Wait for the old controller to completely be stopped so we can reuse the PV."""
         self._kubectl.delete(K8sResource.DEPLOYMENTS, "iris-controller")
         deadline = Deadline.from_seconds(_DEPLOYMENT_DELETE_TIMEOUT)
         while not self._shutdown_event.is_set():
