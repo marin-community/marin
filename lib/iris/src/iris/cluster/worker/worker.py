@@ -12,6 +12,7 @@ from pathlib import Path
 
 import uvicorn
 from finelog.client import LogClient, RemoteLogHandler, Table
+from rigging.auth import BearerTokenInjector, StaticTokenProvider
 from rigging.timing import Deadline, Duration, ExponentialBackoff, RateLimiter
 
 from iris.chaos import chaos
@@ -55,7 +56,6 @@ from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2, controller_pb2, job_pb2, worker_pb2
-from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import timestamp_to_proto
@@ -259,9 +259,9 @@ class Worker:
         #   3. The uvicorn server must be up before we register with the
         #      controller, so the controller's first ping lands on a ready
         #      worker. Lifecycle thread is spawned last for that reason.
-        interceptors: tuple[AuthTokenInjector, ...] = ()
+        interceptors: tuple[BearerTokenInjector, ...] = ()
         if self._config.controller_address and self._config.auth_token:
-            interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
+            interceptors = (BearerTokenInjector(StaticTokenProvider(self._config.auth_token), "authorization"),)
 
         if self._config.controller_address:
             self._log_client = LogClient.connect(

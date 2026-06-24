@@ -16,10 +16,10 @@ import click
 from google.protobuf import json_format
 from google.protobuf.descriptor import FieldDescriptor
 from google.protobuf.message import Message
+from rigging.credentials import ClientCredentials
 
 from iris.cli.connect import require_controller_url
 from iris.rpc import actor_connect, controller_connect, worker_connect
-from iris.rpc.auth import ClientCredentials
 
 PROTO_TYPE_TO_CLICK: dict[int, click.ParamType] = {
     FieldDescriptor.TYPE_STRING: click.STRING,

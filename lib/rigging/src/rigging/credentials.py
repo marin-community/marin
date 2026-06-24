@@ -1,0 +1,162 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Resolve the client credentials for talking to a Marin cluster.
+
+This is the *consumer* convention behind "one login": given a cluster's auth
+shape, assemble the bearer material a client must attach, drawn from the standard
+sources in a fixed order. It never runs an interactive flow — acquiring a token
+(the browser OAuth + JWT exchange) is the job of the layer above
+(``marin_cluster.login``); this module only locates whatever that produced and
+hands back ready-to-attach interceptors.
+
+App-token resolution order (the ``Authorization`` bearer):
+
+1. ``$MARIN_CLUSTER_TOKEN`` — an explicit override for CI / headless runs.
+2. The per-cluster credential file written by ``marin-cluster login``.
+3. An ambient provider implied by the cluster's auth provider — a GCP access
+   token for a ``gcp`` cluster, a configured static token for a ``static`` one.
+   An ``iap`` cluster has no ambient app token (its Iris JWT comes only from
+   login, i.e. step 2), and a ``none`` cluster sends nothing (loopback trust).
+
+IAP edge-token resolution (the ``Proxy-Authorization`` bearer, IAP clusters only):
+the cached desktop-OAuth refresh token (the human path) is preferred; failing
+that, an ambient service-account ID token for a configured programmatic audience
+(the in-cluster / CI path). The desktop client that re-mints from a refresh token
+is the app's public identity (:data:`~rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT`),
+overridable per cluster.
+"""
+
+import os
+from dataclasses import dataclass
+
+from rigging.auth import (
+    MARIN_DESKTOP_OAUTH_CLIENT,
+    BearerTokenInjector,
+    GcpAccessTokenProvider,
+    IapRefreshTokenProvider,
+    IapServiceAccountTokenProvider,
+    OAuthClient,
+    StaticTokenProvider,
+    TokenProvider,
+)
+from rigging.cluster_manifest import AuthProvider, ClusterAuth
+from rigging.credential_store import load_credentials
+
+MARIN_CLUSTER_TOKEN_ENV = "MARIN_CLUSTER_TOKEN"
+
+
+@dataclass(frozen=True)
+class ClientCredentials:
+    """Bearer material for outgoing RPCs to a Marin service.
+
+    Bundles the app-auth provider (attached on ``Authorization``) and, for an
+    IAP-fronted cluster, the IAP edge provider (``Proxy-Authorization``). Passing
+    both as one value keeps a call site from attaching one and forgetting the
+    other — the failure where a command works on a tunneled cluster but is
+    rejected by IAP because it never sent the edge token.
+    """
+
+    token_provider: TokenProvider | None = None
+    iap_provider: TokenProvider | None = None
+
+    def interceptors(self) -> tuple:
+        """The client-side interceptor chain for these credentials.
+
+        The app token rides in ``Authorization``; the IAP edge token in
+        ``Proxy-Authorization`` so the app header stays free for the service's own
+        JWT. Either may be absent (loopback trust sends neither).
+        """
+        chain: tuple = ()
+        if self.token_provider is not None:
+            chain += (BearerTokenInjector(self.token_provider, "authorization"),)
+        if self.iap_provider is not None:
+            chain += (BearerTokenInjector(self.iap_provider, "proxy-authorization"),)
+        return chain
+
+
+def _login_hint(cluster: str) -> str:
+    """The canonical 'log in again' remedy for ``cluster``."""
+    return f"run `marin-cluster --cluster {cluster} login` to authenticate"
+
+
+def iap_edge_provider(
+    cluster: str,
+    *,
+    desktop_client: OAuthClient = MARIN_DESKTOP_OAUTH_CLIENT,
+) -> IapRefreshTokenProvider | None:
+    """Build the IAP edge provider from ``cluster``'s cached desktop-OAuth login.
+
+    Pairs the refresh token cached by ``marin-cluster login`` with ``cluster``'s
+    desktop client to silently re-mint the OIDC ID token IAP requires. Returns
+    None when the user has not logged in (so a pre-login command degrades to a
+    clear UNAUTHENTICATED error rather than crashing on a missing credential).
+    """
+    record = load_credentials(cluster)
+    if record is None or record.edge_refresh_token is None:
+        return None
+    return IapRefreshTokenProvider(
+        desktop_client.client_id,
+        desktop_client.client_secret,
+        record.edge_refresh_token,
+        login_hint=_login_hint(cluster),
+    )
+
+
+def _desktop_client(auth: ClusterAuth) -> OAuthClient:
+    """The cluster's desktop OAuth client, falling back to the Marin app default."""
+    iap = auth.iap
+    if iap is not None and iap.desktop_oauth_client_id and iap.desktop_oauth_client_secret:
+        return OAuthClient(iap.desktop_oauth_client_id, iap.desktop_oauth_client_secret)
+    return MARIN_DESKTOP_OAUTH_CLIENT
+
+
+def _app_provider(cluster: str, auth: ClusterAuth, static_token: str | None, token_env: str) -> TokenProvider | None:
+    """Resolve the app-auth provider: env override, then the login file, then ambient."""
+    override = os.environ.get(token_env)
+    if override:
+        return StaticTokenProvider(override)
+
+    record = load_credentials(cluster)
+    if record is not None and record.app_token is not None:
+        return StaticTokenProvider(record.app_token)
+
+    if auth.provider is AuthProvider.GCP:
+        return GcpAccessTokenProvider()
+    if auth.provider is AuthProvider.STATIC and static_token:
+        return StaticTokenProvider(static_token)
+    # IAP clusters get their Iris JWT only from login (the file path above);
+    # `none` clusters authenticate by transport (loopback / tunnel trust).
+    return None
+
+
+def _edge_provider(cluster: str, auth: ClusterAuth) -> TokenProvider | None:
+    """Resolve the IAP edge provider: cached human login, then ambient service account."""
+    if auth.provider is not AuthProvider.IAP or auth.iap is None:
+        return None
+    human = iap_edge_provider(cluster, desktop_client=_desktop_client(auth))
+    if human is not None:
+        return human
+    audiences = auth.iap.programmatic_audiences
+    if audiences:
+        return IapServiceAccountTokenProvider(audiences[0])
+    return None
+
+
+def credentials_for(
+    cluster: str,
+    auth: ClusterAuth,
+    *,
+    static_token: str | None = None,
+    token_env: str = MARIN_CLUSTER_TOKEN_ENV,
+) -> ClientCredentials:
+    """Assemble the :class:`ClientCredentials` for ``cluster`` from the standard sources.
+
+    ``auth`` is the cluster's resolved auth shape (provider + IAP params). A
+    ``static`` cluster passes its configured client token as ``static_token``.
+    See the module docstring for the full resolution order.
+    """
+    return ClientCredentials(
+        token_provider=_app_provider(cluster, auth, static_token, token_env),
+        iap_provider=_edge_provider(cluster, auth),
+    )

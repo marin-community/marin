@@ -21,8 +21,20 @@ import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 _CREDENTIALS_DIR = Path.home() / ".config" / "marin" / "credentials"
+
+
+def cluster_name_from_url(url: str) -> str:
+    """Derive a filesystem-safe cluster name from a controller URL.
+
+    Used to key the store when only a raw ``--controller-url`` is given, with no
+    named cluster (``http://localhost:10000`` -> ``localhost-10000``).
+    """
+    parsed = urlparse(url)
+    host = parsed.hostname or "unknown"
+    return f"{host}-{parsed.port}" if parsed.port else host
 
 
 @dataclass(frozen=True)

@@ -21,6 +21,7 @@ from typing import Any
 import uvicorn
 from finelog.client import LogClient, RemoteLogHandler
 from finelog.embedded import require_embedded_server
+from rigging.auth import BearerTokenInjector, StaticTokenProvider
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
 
@@ -88,7 +89,7 @@ from iris.cluster.types import (
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import AuthTokenInjector, ControllerAuthPolicy, StaticTokenProvider, TokenVerifier
+from iris.rpc.auth import ControllerAuthPolicy, TokenVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +258,7 @@ def _log_client_interceptors(config: "ControllerConfig") -> tuple:
     token = config.auth.worker_token if config.auth and config.auth.worker_token else None
     if not token:
         return ()
-    return (AuthTokenInjector(StaticTokenProvider(token)),)
+    return (BearerTokenInjector(StaticTokenProvider(token), "authorization"),)
 
 
 class Controller:

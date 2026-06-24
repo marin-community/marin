@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -12,6 +13,7 @@ from rigging.auth import (
     IapLoginRequired,
     IapRefreshTokenProvider,
     IapServiceAccountTokenProvider,
+    read_desktop_client,
 )
 
 
@@ -209,3 +211,11 @@ def test_iap_refresh_token_provider_raises_login_required_when_refresh_fails(mon
     # The raw google-auth error becomes an actionable, self-contained IapLoginRequired.
     with pytest.raises(IapLoginRequired, match="marin-login login marin"):
         provider.get_token()
+
+
+def test_read_desktop_client_rejects_web_client_secret(tmp_path):
+    secret_file = tmp_path / "web_secret.json"
+    secret_file.write_text(json.dumps({"web": {"client_id": "cid", "client_secret": "secret"}}))
+
+    with pytest.raises(ValueError, match="desktop"):
+        read_desktop_client(str(secret_file))

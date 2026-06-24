@@ -1,33 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import datetime
 from dataclasses import dataclass
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 from connectrpc._headers import Headers
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cli.main import create_client_token_provider
 from iris.cluster.controller import writes
 from iris.cluster.controller.auth import JwtTokenManager, create_api_key, revoke_api_key
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.token_store import ClusterCredential
 from iris.rpc.auth import (
     DASHBOARD_ROLE,
     LOOPBACK_IDENTITY,
     AuthInterceptor,
     AuthRequest,
-    AuthTokenInjector,
     AuthzAction,
-    GcpAccessTokenProvider,
     GcpAccessTokenVerifier,
     IapAssertionVerifier,
     IapIdTokenVerifier,
     NullAuthInterceptor,
-    ProxyAuthTokenInjector,
-    StaticTokenProvider,
     StaticTokenVerifier,
     VerifiedIdentity,
     _extract_cookie,
@@ -36,13 +29,11 @@ from iris.rpc.auth import (
     authorize_method,
     authorize_resource_owner,
     build_request_authenticators,
-    client_interceptors,
     get_verified_identity,
     get_verified_user,
     require_identity,
     resolve_auth,
 )
-from iris.rpc.config_pb2 import AuthConfig
 from rigging.timing import Timestamp
 
 
@@ -175,78 +166,6 @@ def test_static_token_verifier_invalid():
     v = StaticTokenVerifier({"tok": "user1"})
     with pytest.raises(ValueError, match="Invalid token"):
         v.verify("bad")
-
-
-def test_token_injector_adds_auth_header():
-    provider = StaticTokenProvider("my-token")
-    injector = AuthTokenInjector(provider)
-    ctx = _make_ctx({})
-    captured_headers = []
-
-    def handler(req, ctx):
-        captured_headers.append(dict(ctx.request_headers()))
-        return "ok"
-
-    result = injector.intercept_unary_sync(handler, "request", ctx)
-    assert result == "ok"
-    assert captured_headers[0]["authorization"] == "Bearer my-token"
-
-
-def test_proxy_auth_injector_uses_proxy_authorization_header():
-    """The IAP token rides in Proxy-Authorization so IAP consumes it, leaving
-    Authorization free for the Iris JWT."""
-    injector = ProxyAuthTokenInjector(StaticTokenProvider("iap-id-token"))
-    ctx = _make_ctx({})
-    captured = []
-
-    def handler(req, ctx):
-        captured.append(dict(ctx.request_headers()))
-        return "ok"
-
-    assert injector.intercept_unary_sync(handler, "request", ctx) == "ok"
-    assert captured[0]["proxy-authorization"] == "Bearer iap-id-token"
-    assert "authorization" not in captured[0]
-
-
-def test_proxy_auth_injector_skips_when_no_token():
-    injector = ProxyAuthTokenInjector(StaticTokenProvider(""))
-    ctx = _make_ctx({})
-    captured = []
-
-    def handler(req, ctx):
-        captured.append(dict(ctx.request_headers()))
-        return "ok"
-
-    injector.intercept_unary_sync(handler, "request", ctx)
-    assert "proxy-authorization" not in captured[0]
-
-
-def _headers_after(token_provider, iap_provider):
-    """Run the composed client interceptors and return the headers they set."""
-    ctx = _make_ctx({})
-    for interceptor in client_interceptors(token_provider, iap_provider):
-        interceptor.intercept_unary_sync(lambda req, c: None, "request", ctx)
-    return dict(ctx.request_headers())
-
-
-def test_client_interceptors_attach_each_token_to_its_own_header():
-    """Each provider drives exactly its own header, so the two layers never collide."""
-    jwt = StaticTokenProvider("jwt-tok")
-    iap = StaticTokenProvider("iap-tok")
-
-    both = _headers_after(jwt, iap)
-    assert both["authorization"] == "Bearer jwt-tok"
-    assert both["proxy-authorization"] == "Bearer iap-tok"
-
-    jwt_only = _headers_after(jwt, None)
-    assert jwt_only["authorization"] == "Bearer jwt-tok"
-    assert "proxy-authorization" not in jwt_only
-
-    iap_only = _headers_after(None, iap)
-    assert iap_only["proxy-authorization"] == "Bearer iap-tok"
-    assert "authorization" not in iap_only
-
-    assert _headers_after(None, None) == {}
 
 
 def _verify_oauth2_token_returning(payload):
@@ -527,19 +446,6 @@ def test_gcp_access_token_verifier_rejects_no_project_access():
             verifier.verify("valid-token")
 
 
-def test_gcp_access_token_provider_refreshes_credentials():
-    mock_creds = MagicMock()
-    mock_creds.token = "fresh-access-token"
-    mock_creds.expiry = None
-
-    provider = GcpAccessTokenProvider()
-    with patch("google.auth.default", return_value=(mock_creds, "project-id")):
-        token = provider.get_token()
-
-    assert token == "fresh-access-token"
-    mock_creds.refresh.assert_called_once()
-
-
 # ---------------------------------------------------------------------------
 # NullAuthInterceptor
 # ---------------------------------------------------------------------------
@@ -599,47 +505,6 @@ def test_null_auth_interceptor_resets_context_on_error():
 
     assert get_verified_user() is None
     assert get_verified_identity() is None
-
-
-# ---------------------------------------------------------------------------
-# CLI token provider factory
-# ---------------------------------------------------------------------------
-
-
-def test_create_client_token_provider_gcp(tmp_path, monkeypatch):
-    # Isolate from real token store
-    monkeypatch.setattr("iris.cli.main.load_token", lambda *a, **kw: None)
-    monkeypatch.setattr("iris.cli.main.load_any_token", lambda *a, **kw: None)
-
-    config = AuthConfig(gcp={"project_id": "my-project"})
-    provider = create_client_token_provider(config)
-
-    # Verify it actually produces a GCP token when called
-    mock_creds = MagicMock()
-    mock_creds.token = "gcp-access-token"
-    mock_creds.expiry = None
-    with patch("google.auth.default", return_value=(mock_creds, "my-project")):
-        assert provider.get_token() == "gcp-access-token"
-
-
-def test_create_client_token_provider_uses_stored_token(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "iris.cli.main.load_token",
-        lambda name, **kw: ClusterCredential(url="http://x", token="stored-tok") if name == "mycluster" else None,
-    )
-    monkeypatch.setattr("iris.cli.main.load_any_token", lambda **kw: None)
-
-    config = AuthConfig(gcp={"project_id": "my-project"})
-    provider = create_client_token_provider(config, cluster_name="mycluster")
-    assert provider.get_token() == "stored-tok"
-
-
-def test_create_client_token_provider_none_when_no_provider(monkeypatch):
-    monkeypatch.setattr("iris.cli.main.load_token", lambda *a, **kw: None)
-    monkeypatch.setattr("iris.cli.main.load_any_token", lambda *a, **kw: None)
-
-    config = AuthConfig()
-    assert create_client_token_provider(config) is None
 
 
 # ---------------------------------------------------------------------------
@@ -728,32 +593,6 @@ def test_jwt_token_manager_worker_role(jwt_manager):
     identity = jwt_manager.verify(token)
     assert identity.user_id == "system:worker"
     assert identity.role == "worker"
-
-
-# ---------------------------------------------------------------------------
-# Streaming interceptor guards
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# GcpAccessTokenProvider caching
-# ---------------------------------------------------------------------------
-
-
-def test_gcp_access_token_provider_caches_token():
-    mock_creds = MagicMock()
-    mock_creds.token = "cached-token"
-    mock_creds.expiry = datetime.datetime.now(tz=datetime.UTC) + datetime.timedelta(hours=1)
-
-    provider = GcpAccessTokenProvider()
-    with patch("google.auth.default", return_value=(mock_creds, "project-id")):
-        token1 = provider.get_token()
-        token2 = provider.get_token()
-
-    assert token1 == "cached-token"
-    assert token2 == "cached-token"
-    # refresh should only be called once due to caching
-    mock_creds.refresh.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

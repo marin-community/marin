@@ -21,8 +21,10 @@ without the IAP extra or iris installed.
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from rigging.auth import StaticTokenProvider
 from rigging.cluster_manifest import AuthProvider, IapAuth
 from rigging.credential_store import CredentialRecord, delete_credentials, save_credentials
+from rigging.credentials import ClientCredentials
 
 from marin_cluster.config import ClusterConfig
 
@@ -101,7 +103,6 @@ def _iris_exchange(endpoint: str, id_token: str) -> LoginResult:
     try:
         from iris.cli.connect import rpc_client  # noqa: PLC0415  (optional iris install)
         from iris.rpc import job_pb2  # noqa: PLC0415
-        from iris.rpc.auth import ClientCredentials, StaticTokenProvider  # noqa: PLC0415
     except ImportError as e:
         raise ImportError("exchanging an IAP token for an app token needs iris; install `marin-cluster[iris]`") from e
 

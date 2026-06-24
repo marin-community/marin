@@ -412,35 +412,21 @@ def _set_iris_budget(cfg: ClusterConfig, email: str, budget_limit: int, max_band
     """
     try:
         from iris.rpc import controller_pb2  # noqa: PLC0415  (optional iris install)
-        from iris.rpc.auth import ClientCredentials, StaticTokenProvider  # noqa: PLC0415
         from iris.rpc.controller_connect import ControllerServiceClientSync  # noqa: PLC0415
         from iris.rpc.proto_display import priority_band_value  # noqa: PLC0415
     except ImportError as e:
         raise ImportError("setting an Iris budget needs iris; install `marin-cluster[iris]`") from e
 
-    from rigging.auth import IapRefreshTokenProvider  # noqa: PLC0415  (optional IAP extra)
-    from rigging.credential_store import load_credentials  # noqa: PLC0415
+    from rigging.credentials import credentials_for  # noqa: PLC0415
 
     auth = cfg.auth
     if auth.iap is None or not auth.iap.url:
         raise click.ClickException(
             f"cluster {cfg.name!r} has no auth.iap.url; the Iris budget step needs an IAP-fronted controller"
         )
-    record = load_credentials(cfg.name)
-    if record is None or not record.app_token:
+    credentials = credentials_for(cfg.name, auth)
+    if credentials.token_provider is None:
         raise click.ClickException(f"no cached credentials for cluster {cfg.name!r}; run `marin-cluster login` first")
-
-    iap_provider = None
-    if record.edge_refresh_token and auth.iap.desktop_oauth_client_id and auth.iap.desktop_oauth_client_secret:
-        iap_provider = IapRefreshTokenProvider(
-            auth.iap.desktop_oauth_client_id,
-            auth.iap.desktop_oauth_client_secret,
-            record.edge_refresh_token,
-        )
-    credentials = ClientCredentials(
-        token_provider=StaticTokenProvider(record.app_token),
-        iap_provider=iap_provider,
-    )
     client = ControllerServiceClientSync(auth.iap.url, interceptors=credentials.interceptors())
     with client:
         client.set_user_budget(

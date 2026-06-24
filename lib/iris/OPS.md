@@ -207,18 +207,18 @@ iris key list / iris key revoke       # manage API keys
 ### Calling the IAP endpoint with `curl`
 
 The built-in Marin desktop OAuth client is configured as an IAP programmatic
-client. The first command opens a browser and stores a long-lived refresh token
-in `~/.config/marin/iap/marin.json`:
+client. The first command opens a browser and caches a long-lived refresh token
+in `~/.config/marin/credentials/marin.json`:
 
 ```bash
-uv run marin-login login marin
+uv run marin-cluster --cluster marin login
 ```
 
 Mint a short-lived IAP ID token from the cached credentials and send it in
 `Proxy-Authorization`:
 
 ```bash
-IAP_TOKEN="$(uv run marin-login print-token marin)"
+IAP_TOKEN="$(uv run python -c 'from rigging.credentials import iap_edge_provider; print(iap_edge_provider("marin").get_token())')"
 curl --fail-with-body \
   --header "Proxy-Authorization: Bearer ${IAP_TOKEN}" \
   https://iris.oa.dev/proxy/system.log-server/health
