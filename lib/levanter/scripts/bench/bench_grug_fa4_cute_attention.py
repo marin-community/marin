@@ -14,7 +14,7 @@ import jax
 import jax.numpy as jnp
 
 from levanter.grug.attention._fa4_cute import (
-    _packed_segment_backward_block_sparse_indices,
+    _packed_segment_backward_block_sparse_indices_with_full,
     _packed_segment_causal_lower_bounds,
 )
 from levanter.grug.attention._fa4_cute_backend import (
@@ -57,6 +57,7 @@ class BenchResult:
     forward_sol: float
     backward_sol: float
     pass_mode: str
+    native_mask_mode: str
 
 
 def _dtype(name: str) -> jnp.dtype:
@@ -360,11 +361,13 @@ def run(args: argparse.Namespace) -> BenchResult:
             sm90_config = config.sm90_backward
             if sm90_config is None:
                 raise NotImplementedError("--backend cute-native direct backward requires an SM90 native config.")
-            mask_block_cnt, mask_block_idx = _packed_segment_backward_block_sparse_indices(
-                lower_bounds,
-                valid,
-                tile_m=sm90_config.tile[0],
-                tile_n=sm90_config.tile[1],
+            mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx = (
+                _packed_segment_backward_block_sparse_indices_with_full(
+                    lower_bounds,
+                    valid,
+                    tile_m=sm90_config.tile[0],
+                    tile_n=sm90_config.tile[1],
+                )
             )
             return segmented_flash_attention_backward_sm90_native(
                 q_arg,
@@ -377,16 +380,20 @@ def run(args: argparse.Namespace) -> BenchResult:
                 valid,
                 mask_block_cnt,
                 mask_block_idx,
+                full_block_cnt,
+                full_block_idx,
                 softmax_scale=softmax_scale,
                 kernel_config=config,
-                window_size_left=None,
+                window_size_left=args.sliding_window - 1 if args.native_mask_mode == "builtin-local" else None,
             )
 
     else:
         raise ValueError(f"Unsupported backend {args.backend}.")
 
     forward_jit = jax.jit(forward)
-    backward_with_forward_jit = jax.jit(lambda q_arg, k_arg, v_arg, d_arg: jax.vjp(forward, q_arg, k_arg, v_arg)[1](d_arg))
+    backward_with_forward_jit = jax.jit(
+        lambda q_arg, k_arg, v_arg, d_arg: jax.vjp(forward, q_arg, k_arg, v_arg)[1](d_arg)
+    )
 
     if args.pass_mode == "forward":
         forward_jit = jax.jit(direct_forward)
@@ -441,7 +448,7 @@ def run(args: argparse.Namespace) -> BenchResult:
             backward_with_forward_ms=float("nan"),
         )
 
-    y = jax.block_until_ready(forward_jit(q, k, v))
+    jax.block_until_ready(forward_jit(q, k, v))
     _, pullback = jax.vjp(forward_jit, q, k, v)
     backward_jit = jax.jit(lambda d_arg: pullback(d_arg))
     jax.block_until_ready(backward_jit(dout))
@@ -511,6 +518,7 @@ def _result(
         forward_sol=flops_forward / (forward_ms * 1e-3) / 1e12 / peak_tflops,
         backward_sol=flops_backward / (backward_ms * 1e-3) / 1e12 / peak_tflops,
         pass_mode=args.pass_mode,
+        native_mask_mode=args.native_mask_mode,
     )
 
 
@@ -542,6 +550,7 @@ def main() -> None:
     parser.add_argument("--sm90-atom-layout-n-dkv", type=int)
     parser.add_argument("--sm90-atom-layout-m-dq", type=int)
     parser.add_argument("--sm90-dq-single-wg")
+    parser.add_argument("--native-mask-mode", choices=("grug", "builtin-local"), default="grug")
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--iterations", type=int, default=10)
     parser.add_argument("--seed", type=int, default=0)

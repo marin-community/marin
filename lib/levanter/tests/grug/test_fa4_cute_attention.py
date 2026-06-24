@@ -89,6 +89,36 @@ def test_packed_segment_backward_block_sparse_indices_are_q_direction():
     )
 
 
+def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
+    segment_ids = jnp.zeros((1, 8), dtype=jnp.int32)
+    lower_bounds, valid = fa4_cute._packed_segment_causal_lower_bounds(
+        segment_ids,
+        batch_size=1,
+        seq_len=8,
+        sliding_window=None,
+    )
+
+    mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx = (
+        fa4_cute._packed_segment_backward_block_sparse_indices_with_full(
+            lower_bounds,
+            valid,
+            tile_m=2,
+            tile_n=2,
+        )
+    )
+
+    np.testing.assert_array_equal(mask_block_cnt, jnp.array([[[1, 1, 1, 1]]], dtype=jnp.int32))
+    np.testing.assert_array_equal(
+        mask_block_idx,
+        jnp.array([[[[0, 0, 0, 0], [1, 0, 0, 0], [2, 0, 0, 0], [3, 0, 0, 0]]]], dtype=jnp.int32),
+    )
+    np.testing.assert_array_equal(full_block_cnt, jnp.array([[[3, 2, 1, 0]]], dtype=jnp.int32))
+    np.testing.assert_array_equal(
+        full_block_idx,
+        jnp.array([[[[1, 2, 3, 0], [2, 3, 0, 0], [3, 0, 0, 0], [0, 0, 0, 0]]]], dtype=jnp.int32),
+    )
+
+
 def test_sm90_native_backward_boundary_passes_sparse_metadata(monkeypatch):
     captured: dict[str, object] = {"calls": []}
 
@@ -130,7 +160,15 @@ def test_sm90_native_backward_boundary_passes_sparse_metadata(monkeypatch):
 
     def fake_postprocess_launcher(*args, **kwargs):
         del args
-        captured.setdefault("postprocess_tiles", []).append((kwargs["tile_m"], kwargs["atom_layout_m"]))
+        captured.setdefault("postprocess_configs", []).append(
+            (
+                kwargs["arch"],
+                kwargs["tile_m"],
+                kwargs["atom_layout_m"],
+                kwargs.get("cluster_size"),
+                kwargs.get("use_2cta_instrs"),
+            )
+        )
         return object()
 
     monkeypatch.setattr(fa4_cute_backend, "_import_cutlass_cute", lambda: modules)
@@ -152,11 +190,13 @@ def test_sm90_native_backward_boundary_passes_sparse_metadata(monkeypatch):
     valid = jnp.ones((1, 8), dtype=jnp.bool_)
     config = fa4_cute_config.flash4_cute_kernel_config(128, arch=90)
     assert config.sm90_backward is not None
-    mask_block_cnt, mask_block_idx = fa4_cute._packed_segment_backward_block_sparse_indices(
-        lower_bounds,
-        valid,
-        tile_m=config.sm90_backward.tile[0],
-        tile_n=config.sm90_backward.tile[1],
+    mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx = (
+        fa4_cute._packed_segment_backward_block_sparse_indices_with_full(
+            lower_bounds,
+            valid,
+            tile_m=config.sm90_backward.tile[0],
+            tile_n=config.sm90_backward.tile[1],
+        )
     )
 
     dq, dk, dv = fa4_cute_backend.segmented_flash_attention_backward_sm90_native(
@@ -170,6 +210,8 @@ def test_sm90_native_backward_boundary_passes_sparse_metadata(monkeypatch):
         valid,
         mask_block_cnt,
         mask_block_idx,
+        full_block_cnt,
+        full_block_idx,
         softmax_scale=1.0,
         kernel_config=config,
     )
@@ -180,14 +222,18 @@ def test_sm90_native_backward_boundary_passes_sparse_metadata(monkeypatch):
     preprocess_call, backward_call, dq_postprocess_call, dk_postprocess_call, dv_postprocess_call = calls
     assert captured["launcher_config"] == config.sm90_backward
     assert captured["preprocess_tile_m"] == config.sm90_backward.tile[0]
-    assert captured["postprocess_tiles"] == [(64, 1), (128, 2), (128, 2)]
+    assert captured["postprocess_configs"] == [
+        (90, 64, 1, 1, False),
+        (90, 64, 1, 1, None),
+        (90, 64, 1, 1, None),
+    ]
     assert preprocess_call["input_spec_len"] == 3
     assert preprocess_call["compile_options"] is None
     assert preprocess_call["call_arg_shapes"] == [out.shape, dout.shape, lse.shape]
-    assert backward_call["input_spec_len"] == 10
+    assert backward_call["input_spec_len"] == 12
     assert backward_call["compile_options"] is None
     assert backward_call["input_output_aliases"] is None
-    assert backward_call["call_arg_shapes"][-2:] == [(1, 4, 1), (1, 4, 1, 1)]
+    assert backward_call["call_arg_shapes"][-4:] == [(1, 4, 1), (1, 4, 1, 1), (1, 4, 1), (1, 4, 1, 1)]
     output_shape_dtype = backward_call["output_shape_dtype"]
     assert isinstance(output_shape_dtype, tuple)
     assert len(output_shape_dtype) == 3
@@ -198,6 +244,58 @@ def test_sm90_native_backward_boundary_passes_sparse_metadata(monkeypatch):
     assert dq_postprocess_call["call_arg_shapes"] == [(1, 4, 64 * 128)]
     assert dk_postprocess_call["call_arg_shapes"] == [(1, 1, 128 * 128)]
     assert dv_postprocess_call["call_arg_shapes"] == [(1, 1, 128 * 128)]
+    assert dq.shape == q.shape
+    assert dk.shape == k.shape
+    assert dv.shape == v.shape
+
+
+def test_segmented_backward_routes_hopper_d128_gqa_to_native(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_native(*args, **kwargs):
+        q_arg, k_arg, v_arg = args[:3]
+        mask_block_cnt, mask_block_idx = args[8:10]
+        full_block_cnt, full_block_idx = args[10:12]
+        captured["mask_block_cnt_shape"] = mask_block_cnt.shape
+        captured["mask_block_idx_shape"] = mask_block_idx.shape
+        captured["full_block_cnt_shape"] = full_block_cnt.shape
+        captured["full_block_idx_shape"] = full_block_idx.shape
+        captured["window_size_left"] = kwargs["window_size_left"]
+        return jnp.zeros_like(q_arg), jnp.zeros_like(k_arg), jnp.zeros_like(v_arg)
+
+    monkeypatch.setattr(fa4_cute_backend, "_import_cutlass_cute", lambda: object())
+    monkeypatch.setattr(fa4_cute_backend, "segmented_flash_attention_backward_sm90_native", fake_native)
+
+    q = jnp.ones((1, 8, 4, 128), dtype=jnp.bfloat16)
+    k = jnp.ones((1, 8, 1, 128), dtype=jnp.bfloat16)
+    v = jnp.ones((1, 8, 1, 128), dtype=jnp.bfloat16)
+    out = jnp.ones_like(q)
+    dout = jnp.ones_like(q)
+    lse = jnp.ones((1, 4, 8), dtype=jnp.float32)
+    lower_bounds = jnp.zeros((1, 8), dtype=jnp.int32)
+    valid = jnp.ones((1, 8), dtype=jnp.bool_)
+    config = fa4_cute_config.flash4_cute_kernel_config(128, arch=90)
+
+    dq, dk, dv = fa4_cute_backend.segmented_flash_attention_backward(
+        q,
+        k,
+        v,
+        out,
+        dout,
+        lse,
+        lower_bounds,
+        valid,
+        softmax_scale=1.0,
+        kernel_config=config,
+    )
+
+    assert captured == {
+        "mask_block_cnt_shape": (1, 1, 1),
+        "mask_block_idx_shape": (1, 1, 1, 1),
+        "full_block_cnt_shape": (1, 1, 1),
+        "full_block_idx_shape": (1, 1, 1, 1),
+        "window_size_left": None,
+    }
     assert dq.shape == q.shape
     assert dk.shape == k.shape
     assert dv.shape == v.shape

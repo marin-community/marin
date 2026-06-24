@@ -152,6 +152,35 @@ def segmented_flash_attention_backward(
     except Exception as exc:
         raise _optional_dependency_error() from exc
 
+    qhead_per_kvhead = q.shape[2] // k.shape[2]
+    if kernel_config.sm90_backward is not None and qhead_per_kvhead > 1 and q.shape[-1] == 128:
+        sm90_config = kernel_config.sm90_backward
+        mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx = (
+            _packed_segment_backward_block_sparse_indices_with_full(
+                lower_bounds,
+                valid,
+                tile_m=sm90_config.tile[0],
+                tile_n=sm90_config.tile[1],
+            )
+        )
+        return segmented_flash_attention_backward_sm90_native(
+            q,
+            k,
+            v,
+            out,
+            dout,
+            lse,
+            lower_bounds,
+            valid,
+            mask_block_cnt,
+            mask_block_idx,
+            full_block_cnt,
+            full_block_idx,
+            softmax_scale=softmax_scale,
+            kernel_config=kernel_config,
+            window_size_left=None,
+        )
+
     backward_tile = kernel_config.backward_tile
     num_threads = kernel_config.num_threads
     launcher = segmented_flash_attention_backward_launcher(
@@ -159,13 +188,12 @@ def segmented_flash_attention_backward(
         dtype=q.dtype,
         head_dim=q.shape[-1],
         head_dim_v=v.shape[-1],
-        qhead_per_kvhead=q.shape[2] // k.shape[2],
+        qhead_per_kvhead=qhead_per_kvhead,
         tile_m=backward_tile[0],
         tile_n=backward_tile[1],
         num_threads=num_threads,
         compute_arch=kernel_config.backward_arch,
     )
-    qhead_per_kvhead = q.shape[2] // k.shape[2]
     input_spec, output_spec = _cutlass_attention_backward_specs(
         modules,
         vector_elems=8,
@@ -195,17 +223,14 @@ def segmented_flash_attention_backward_sm90_native(
     valid: jax.Array,
     mask_block_cnt: jax.Array,
     mask_block_idx: jax.Array,
+    full_block_cnt: jax.Array | None = None,
+    full_block_idx: jax.Array | None = None,
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
     window_size_left: int | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """Experimental native SM90 segmented backward boundary.
-
-    This path is intentionally not used by the production custom VJP. It is a
-    compile/perf probe for the upstream SM90 schedule while we work out the
-    exact accumulator layout contract needed by the postprocess step.
-    """
+    """Run the native SM90 segmented backward path for D128 GQA kernels."""
     _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale)
     _validate_backward_inputs(q, k, v, out, dout, lse)
     sm90_config = kernel_config.sm90_backward
@@ -219,7 +244,20 @@ def segmented_flash_attention_backward_sm90_native(
         tile_m=sm90_config.tile[0],
         tile_n=sm90_config.tile[1],
     )
+    if full_block_cnt is None:
+        full_block_cnt = jnp.zeros_like(mask_block_cnt)
+    if full_block_idx is None:
+        full_block_idx = jnp.zeros_like(mask_block_idx)
+    _validate_backward_block_sparse_metadata(
+        q,
+        k,
+        full_block_cnt,
+        full_block_idx,
+        tile_m=sm90_config.tile[0],
+        tile_n=sm90_config.tile[1],
+    )
     mask_block_cnt, mask_block_idx = _broadcast_backward_block_sparse_metadata(q, mask_block_cnt, mask_block_idx)
+    full_block_cnt, full_block_idx = _broadcast_backward_block_sparse_metadata(q, full_block_cnt, full_block_idx)
     try:
         modules = _import_cutlass_cute()
     except Exception as exc:
@@ -279,18 +317,27 @@ def segmented_flash_attention_backward_sm90_native(
         valid.astype(jnp.int32),
         mask_block_cnt,
         mask_block_idx,
+        full_block_cnt,
+        full_block_idx,
     )
     postprocess_input_spec, postprocess_output_spec = _cutlass_attention_backward_sm90_postprocess_specs(
         modules,
         vector_elems=8,
     )
+    postprocess_arch = 90
+    postprocess_tile_m = 64
+    postprocess_atom_layout_m = 1
     dq_postprocess = modules.cjax.cutlass_call(
         flash_attention_backward_postprocess_launcher(
             modules,
             dtype=q.dtype,
             head_dim=q.shape[-1],
-            tile_m=sm90_config.tile[0],
-            atom_layout_m=sm90_config.atom_layout_m_dq,
+            tile_m=postprocess_tile_m,
+            atom_layout_m=postprocess_atom_layout_m,
+            arch=postprocess_arch,
+            cluster_size=1,
+            use_2cta_instrs=False,
+            accum_is_gmem=True,
         ),
         output_shape_dtype=(jax.ShapeDtypeStruct(q.shape, q.dtype),),
         input_spec=postprocess_input_spec,
@@ -303,8 +350,11 @@ def segmented_flash_attention_backward_sm90_native(
             modules,
             dtype=k.dtype,
             head_dim=k.shape[-1],
-            tile_m=sm90_config.tile[1],
-            atom_layout_m=sm90_config.atom_layout_n_dkv,
+            tile_m=postprocess_tile_m,
+            atom_layout_m=postprocess_atom_layout_m,
+            arch=postprocess_arch,
+            cluster_size=1,
+            accum_is_gmem=True,
         ),
         output_shape_dtype=(jax.ShapeDtypeStruct(k.shape, k.dtype),),
         input_spec=postprocess_input_spec,
@@ -317,8 +367,11 @@ def segmented_flash_attention_backward_sm90_native(
             modules,
             dtype=v.dtype,
             head_dim=v.shape[-1],
-            tile_m=sm90_config.tile[1],
-            atom_layout_m=sm90_config.atom_layout_n_dkv,
+            tile_m=postprocess_tile_m,
+            atom_layout_m=postprocess_atom_layout_m,
+            arch=postprocess_arch,
+            cluster_size=1,
+            accum_is_gmem=True,
         ),
         output_shape_dtype=(jax.ShapeDtypeStruct(v.shape, v.dtype),),
         input_spec=postprocess_input_spec,
@@ -407,6 +460,8 @@ def _cutlass_attention_backward_sm90_accum_specs(
         metadata_spec,
         sparse_cnt_spec,
         sparse_idx_spec,
+        sparse_cnt_spec,
+        sparse_idx_spec,
     )
     return input_spec, (scratch_spec, scratch_spec, scratch_spec)
 
@@ -428,6 +483,97 @@ def _cutlass_attention_backward_sm90_postprocess_specs(
     scratch_spec = tensor_spec(mode=(0, 1, 2), static=True)
     qkv_spec = tensor_spec(mode=(0, 1, 2, 3), divisibility=(1, 1, 1, vector_elems), static=True)
     return (scratch_spec,), (qkv_spec,)
+
+
+def _packed_segment_backward_block_sparse_indices(
+    lower_bounds: jax.Array,
+    valid: jax.Array,
+    *,
+    tile_m: int,
+    tile_n: int,
+) -> tuple[jax.Array, jax.Array]:
+    """Build upstream-style backward Q-block sparse metadata for Grug masks."""
+    mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx = (
+        _packed_segment_backward_block_sparse_indices_with_full(
+            lower_bounds,
+            valid,
+            tile_m=tile_m,
+            tile_n=tile_n,
+        )
+    )
+    partial_block_cnt = mask_block_cnt
+    mask_block_cnt = partial_block_cnt + full_block_cnt
+    max_count = mask_block_idx.shape[-1]
+    positions = jnp.arange(max_count, dtype=jnp.int32)
+    partial_idx = jnp.where(positions[None, None, None, :] < partial_block_cnt[..., None], mask_block_idx, max_count)
+    full_idx = jnp.where(positions[None, None, None, :] < full_block_cnt[..., None], full_block_idx, max_count)
+    combined = jnp.sort(jnp.concatenate([partial_idx, full_idx], axis=-1), axis=-1)
+    mask_block_idx = jnp.where(combined[..., :max_count] < max_count, combined[..., :max_count], 0)
+    return mask_block_cnt, mask_block_idx
+
+
+def _packed_segment_backward_block_sparse_indices_with_full(
+    lower_bounds: jax.Array,
+    valid: jax.Array,
+    *,
+    tile_m: int,
+    tile_n: int,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Build partial and full upstream-style backward Q-block sparse metadata."""
+    if tile_m <= 0 or tile_n <= 0:
+        raise ValueError(f"tile_m and tile_n must be positive, got {tile_m=} {tile_n=}")
+    if lower_bounds.ndim != 2 or valid.ndim != 2:
+        raise ValueError(f"lower_bounds and valid must have shape [B, S], got {lower_bounds.shape=} {valid.shape=}")
+    if lower_bounds.shape != valid.shape:
+        raise ValueError(f"lower_bounds and valid must have matching shape, got {lower_bounds.shape=} {valid.shape=}")
+
+    batch_size, seq_len = lower_bounds.shape
+    num_m_blocks = (seq_len + tile_m - 1) // tile_m
+    num_n_blocks = (seq_len + tile_n - 1) // tile_n
+    padded_q_len = num_m_blocks * tile_m
+    q_positions = jnp.arange(padded_q_len, dtype=jnp.int32).reshape(num_m_blocks, tile_m)
+    lower_padded = jnp.pad(
+        lower_bounds,
+        ((0, 0), (0, padded_q_len - seq_len)),
+        mode="constant",
+        constant_values=seq_len,
+    ).reshape(batch_size, num_m_blocks, tile_m)
+    valid_padded = jnp.pad(
+        valid,
+        ((0, 0), (0, padded_q_len - seq_len)),
+        mode="constant",
+        constant_values=False,
+    ).reshape(batch_size, num_m_blocks, tile_m)
+
+    n_starts = jnp.arange(num_n_blocks, dtype=jnp.int32) * tile_n
+    n_ends = jnp.minimum(n_starts + tile_n, seq_len) - 1
+    has_contributor = jnp.any(
+        valid_padded[:, None, :, :]
+        & (q_positions[None, None, :, :] >= n_starts[None, :, None, None])
+        & (lower_padded[:, None, :, :] <= n_ends[None, :, None, None]),
+        axis=-1,
+    )
+    all_queries_valid = jnp.all(valid_padded, axis=-1)
+    tile_starts = q_positions[:, 0]
+    tile_lower_bounds = jnp.max(lower_padded, axis=-1)
+    is_full = (
+        has_contributor
+        & all_queries_valid[:, None, :]
+        & (n_ends[None, :, None] <= tile_starts[None, None, :])
+        & (n_starts[None, :, None] >= tile_lower_bounds[:, None, :])
+    )
+    is_partial = has_contributor & ~is_full
+
+    block_indices = jnp.arange(num_m_blocks, dtype=jnp.int32)
+    partial_indices = jnp.where(is_partial, block_indices[None, None, :], num_m_blocks)
+    full_indices = jnp.where(is_full, block_indices[None, None, :], num_m_blocks)
+    sorted_partial_indices = jnp.sort(partial_indices, axis=-1)
+    sorted_full_indices = jnp.sort(full_indices, axis=-1)
+    mask_block_cnt = jnp.sum(is_partial.astype(jnp.int32), axis=-1)[:, None, :]
+    full_block_cnt = jnp.sum(is_full.astype(jnp.int32), axis=-1)[:, None, :]
+    mask_block_idx = jnp.where(sorted_partial_indices < num_m_blocks, sorted_partial_indices, 0)[:, None, :, :]
+    full_block_idx = jnp.where(sorted_full_indices < num_m_blocks, sorted_full_indices, 0)[:, None, :, :]
+    return mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx
 
 
 def _cutlass_attention_backward_output_shapes(

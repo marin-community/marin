@@ -528,3 +528,173 @@
   - The production-safe path remains the explicit SM90 compatibility path; it is correct and faster than legacy, but only about `13-15% SoL` on May208-shape microbench.
 - Next action:
   - If continuing toward `50% SoL`, do a bounded tuning sweep of the correct compatibility path while separately prototyping a local SM90 postprocess adapter. Do not use the native path for training until the tiny H100 parity gate passes.
+
+### 2026-06-23 20:22 - Native SM90 postprocess/gmem fix passes parity and is routed for May208
+- Hypothesis:
+  - The native SM90 mainloop was producing usable accumulators, but the wrapper was feeding them through the wrong split-call postprocess/memory-space contract. Reusing the arch-90 postprocess with the SM90-compatible tile/atom layout and forcing split-call accumulators back to gmem before postprocess might make the native path correct.
+- Command:
+  - Added optional `cluster_size`, `use_2cta_instrs`, and `accum_is_gmem` knobs to `flash_attention_backward_postprocess_launcher(...)`.
+  - Changed `segmented_flash_attention_backward_sm90_native(...)` to run arch-90 postprocess with `tile_m=64`, `AtomLayoutMdQ=1`, `cluster_size=1`, and `accum_is_gmem=True`.
+  - Moved `_packed_segment_backward_block_sparse_indices(...)` into `_fa4_cute_backend.py` and routed production `segmented_flash_attention_backward(...)` to the native SM90 path for GQA, `head_dim=128` only. MHA and other head dims continue to use the compatibility fallback.
+  - Ran focused CPU-safe tests:
+    `uv run --directory lib/levanter --group test pytest tests/grug/test_fa4_cute_attention.py tests/grug/test_attention.py -q`.
+  - Ran H100 jobs:
+    - `/dlwh/fa4-cute-sm90-post90-gmem-smoke`
+    - `/dlwh/fa4-cute-sm90-post90-parity`
+    - `/dlwh/fa4-cute-sm90-post90-may208`
+    - `/dlwh/fa4-cute-sm90-native-full-may208`
+    - `/dlwh/fa4-cute-sm90-production-parity`
+    - `/dlwh/fa4-cute-sm90-may208-native-vs-compat`
+- Result:
+  - The initial arch-90 postprocess attempt failed MLIR verification because `flash_bwd_postprocess.py` expected a gmem accumulator source and saw a generic memref. Casting the split-call accumulator input to a gmem tensor fixed the verifier failure.
+  - Tiny direct native backward parity against JAX now matches the compatibility backend:
+    - compatibility vs JAX: `dq rel=0.00478`, `dk rel=0.00528`, `dv rel=0.00456`.
+    - native vs JAX: `dq rel=0.00478`, `dk rel=0.00528`, `dv rel=0.00456`.
+  - Production `gpu_fa4_cute_attention` custom-VJP parity for D128 GQA also passes:
+    - `dq rel=0.00459`, `dk rel=0.00516`, `dv rel=0.00449`.
+  - Full May208-shape native-vs-compatibility backward comparison also matches tightly:
+    - `dq rel=2.13e-05`, `dk rel=1.00e-05`, `dv rel=8.24e-06`.
+  - May208-shape direct native backward, `B=1,S=4096,Hq=20,Hkv=5,D=128,window=2048`:
+    - `0.640741 ms`, `251.408 TFLOP/s`, `25.42% SoL`.
+  - May208-shape production full benchmark through `--backend cute --pass full`:
+    - forward `0.481672 ms`, `133.774 TFLOP/s`, `13.53% SoL`.
+    - backward `0.636287 ms`, `253.168 TFLOP/s`, `25.60% SoL`.
+    - backward-with-forward `1.043764 ms`.
+  - Focused tests: `24 passed, 3 skipped`.
+- Interpretation:
+  - The fast native SM90 path is now correct for the May208-relevant D128 GQA route and is wired into production selection for that route.
+  - The corrected native path is slower than the earlier wrong-gradient direct number (`~0.493 ms`) but still materially faster than the correct compatibility baseline (`~1.10 ms` backward, `~1.51 ms` backward-with-forward).
+  - This does not reach the original `50% SoL` target; it raises the correct backward path from about `14.8% SoL` to about `25.6% SoL`. Further improvement likely needs either reducing split-call/postprocess overhead or a local fused SM90 mainloop+postprocess ABI.
+- Next action:
+  - Run full pre-commit.
+  - For another performance pass, profile the corrected native full path to quantify preprocess/postprocess and split-call overhead before attempting more kernel work.
+
+### 2026-06-23 20:50 - Full-block metadata improves correct native path, but tuning does not reach 50% SoL
+- Hypothesis:
+  - The corrected native SM90 path still applies the Grug fine mask to every scheduled Q/K tile. Splitting backward block-sparse metadata into partial and full blocks should let upstream skip mask work on fully covered blocks and recover some May208 throughput.
+- Command:
+  - Added `_packed_segment_backward_block_sparse_indices_with_full(...)` and routed the production D128 GQA SM90 path through partial and full block metadata.
+  - Updated the native benchmark path to pass both sparse lists into `segmented_flash_attention_backward_sm90_native(...)`.
+  - Ran component timing, stage sweeps, full-block parity/perf, built-in-local upper-bound, and tile sweeps on H100:
+    - `/dlwh/fa4-cute-sm90-component-timing`
+    - `/dlwh/fa4-cute-sm90-stage-sweep`
+    - `/dlwh/fa4-cute-sm90-fullblocks-may208`
+    - `/dlwh/fa4-cute-sm90-fullblocks-parity`
+    - `/dlwh/fa4-cute-sm90-builtin-local-upper`
+    - `/dlwh/fa4-cute-sm90-tile-sweep`
+  - Ran focused CPU-safe tests:
+    `uv run --directory lib/levanter --group test pytest tests/grug/test_fa4_cute_attention.py tests/grug/test_attention.py -q`.
+- Result:
+  - Full-block metadata keeps May208-shape native-vs-compatibility parity tight:
+    - `dq rel=2.10e-05`, `dk rel=2.97e-05`, `dv rel=2.01e-05`.
+  - May208 production full benchmark with full-block metadata:
+    - forward `0.483080 ms`, `133.384 TFLOP/s`, `13.47% SoL`.
+    - backward `0.524739 ms`, `306.986 TFLOP/s`, `31.04% SoL`.
+    - backward-with-forward `0.930608 ms`.
+  - Component timing says the native mainloop is still the largest piece:
+    - preprocess `0.117054 ms`, mainloop `0.567776 ms`, dQ post `0.098026 ms`, dK post `0.060067 ms`, dV post `0.058411 ms`.
+    - The standalone component sum overestimates the end-to-end path, but the mainloop alone is above the approximate `0.326 ms` backward time needed for `50% SoL`.
+  - Stage sweep did not find a better setting:
+    - default `0.640086 ms`, `25.45% SoL`.
+    - `PdS_stage=1`: `0.660997 ms`.
+    - `dO_stage=1`: `0.646084 ms`.
+    - all stages 1: `0.774596 ms`.
+    - `dQ_single_wg`: `0.653109 ms`.
+    - `Q_stage=1` and `PdS_stage=3` were invalid under upstream assertions.
+  - Built-in local-mask single-segment upper bound is correct but still below target:
+    - built-in local `0.489715 ms`, `33.26% SoL`.
+    - custom full-block path in the same run `0.523483 ms`, `31.11% SoL`.
+  - Tile sweep did not improve the routed full-block path:
+    - `64x128`: `0.547632 ms`, `29.74% SoL`.
+    - `128x128`: invalid, `330752` bytes shared memory exceeds `232448` byte SM90a limit.
+    - `128x64`: invalid, `265216` bytes shared memory exceeds `232448` byte SM90a limit.
+    - `64x64`: `0.731031 ms`, `22.28% SoL`.
+  - Focused tests after the full-block metadata changes: `25 passed, 3 skipped`.
+- Interpretation:
+  - The fast path is now correct and materially faster than the compatibility baseline: May208 backward moved from about `1.10 ms` / `14.8% SoL` to about `0.525 ms` / `31.0% SoL`.
+  - It still misses the original `50% SoL` target by a large margin. The best existing-kernel upper bound found in this wrapper is about `33% SoL`, so another small config knob is unlikely to close the gap.
+  - The next credible route to `50% SoL` is deeper kernel work: reduce split-call/postprocess overhead, fuse or locally control the SM90 mainloop+postprocess ABI, or write a more specialized Grug local-window/GQA backward schedule instead of wrapping the installed upstream kernel as-is.
+- Next action:
+  - Run full pre-commit after these final edits.
+  - Keep the current production route limited to the verified D128 GQA SM90 case; leave MHA and other head dims on the compatibility fallback.
+
+### 2026-06-23 20:58 - Goal audit against upstream-local path
+- Hypothesis:
+  - The remaining completion route is the "90% of upstream perf in our context" clause. For the May208 per-device context, the closest upstream comparator that compiles in this JAX wrapper is the same native SM90 backward kernel using upstream's built-in local-window mask instead of Grug's lower-bound mask.
+- Command:
+  - Added `--native-mask-mode {grug,builtin-local}` to `lib/levanter/scripts/bench/bench_grug_fa4_cute_attention.py` for direct native-backward comparison.
+  - Ran `/dlwh/fa4-cute-sm90-goal-audit`:
+    - production full benchmark, May208 D128 GQA, window 2048.
+    - direct native backward with Grug mask.
+    - direct native backward with built-in local mask.
+    - a tiny D128 JAX-reference absolute-error audit.
+  - Ran `/dlwh/fa4-cute-sm90-upstream-atol`:
+    - direct Grug-mask native backward vs built-in-local native backward on tiny D128 and May208 D128.
+- Result:
+  - May208 production full benchmark:
+    - forward `0.478742 ms`, `134.592 TFLOP/s`, `13.61% SoL`.
+    - backward `0.522865 ms`, `308.086 TFLOP/s`, `31.15% SoL`.
+    - backward-with-forward `0.930058 ms`.
+  - May208 direct native backward:
+    - Grug mask: `0.545956 ms`, `295.056 TFLOP/s`, `29.83% SoL`.
+    - built-in local mask: `0.504048 ms`, `319.587 TFLOP/s`, `32.31% SoL`.
+    - Direct Grug-mask perf is `92.3%` of the built-in-local upstream path. Production VJP backward timing is `96.4%` of the same direct built-in-local timing.
+  - Direct Grug-mask backward vs built-in-local backward absolute differences:
+    - tiny D128: `dq/dk/dv max_abs=0.0`.
+    - May208 D128: `dq max_abs=0.000488`, `dk max_abs=0.000061`, `dv max_abs=0.000977`; all are below `0.01`.
+  - Tiny D128 comparison against materialized JAX float32 reference has good relative norms but does not satisfy strict max-abs `0.01` for every tensor:
+    - output `max_abs=0.015625`, rel `0.00343`.
+    - `dq max_abs=0.0078125`, rel `0.00478`.
+    - `dk max_abs=0.03125`, rel `0.00528`.
+    - `dv max_abs=0.0625`, rel `0.00456`.
+- Interpretation:
+  - Against the available upstream-local FA4/CuTe path in this exact single-segment May208 context, the routed Grug D128 GQA native path satisfies both goal clauses: max absolute error below `0.01` and at least `90%` of upstream-local performance.
+  - Against a materialized JAX float32 reference, strict max-abs `0.01` is too tight for BF16 output/gradient tensors with standard-normal inputs; the evidence there supports BF16-relative correctness rather than a strict absolute bound.
+  - The routed production path still does not satisfy the alternate `50% SoL` clause; it is about `31% SoL`.
+- Next action:
+  - Run focused tests and full pre-commit after the benchmark-harness/logbook edits.
+
+### 2026-06-23 21:01 - JAX strict-atol miss is shared with upstream FA4
+- Hypothesis:
+  - The strict `0.01` max-absolute misses against materialized JAX may be a BF16 reference-casting artifact rather than a Grug kernel error.
+- Command:
+  - Ran `/dlwh/fa4-cute-sm90-jax-atol-diagnose` on tiny D128 GQA, comparing the production FA4 path against:
+    - materialized JAX float32-logit reference.
+    - the same JAX output rounded to BF16.
+    - JAX gradients through both the unrounded and BF16-rounded reference output.
+- Result:
+  - Output vs JAX float32 reference and output vs JAX BF16-rounded reference are identical:
+    - `max_abs=0.015625`, `relative_norm=0.00343`.
+  - Gradient errors also do not come from rounding the reference output:
+    - `dq max_abs=0.0078125`, rel `0.00478`.
+    - `dk max_abs=0.03125`, rel `0.00528`.
+    - `dv max_abs=0.0625`, rel `0.00456`.
+    - JAX unrounded-reference gradients vs JAX BF16-rounded-output gradients are exactly equal for this case.
+- Interpretation:
+  - The strict `0.01` max-abs mismatch against materialized JAX is not a wrapper-specific regression and not a reference-cast artifact. It is the same FA4 numerical contract shared with the upstream-local SM90 path.
+  - The actionable correctness target for the performance goal is therefore upstream-local FA4/CuTe parity in the same May208 context, which the Grug path satisfies with max abs below `0.001`.
+  - The wrapper now satisfies "within `0.01` atol and at least `90%` of upstream perf" when "correctness" is interpreted against the available upstream-local FA4/CuTe implementation. It does not satisfy strict `0.01` max-abs against materialized JAX, and it does not satisfy the alternate `50% SoL` clause.
+- Next action:
+  - Run focused tests and full pre-commit.
+
+### 2026-06-23 21:08 - B=8 per-device batch scaling probe
+- Hypothesis:
+  - The low B=1 May208-shard SoL may be dominated by occupancy/split-call overhead; increasing per-device batch to B=8 should raise the upstream-local ceiling if the kernel is throughput-limited by small grid size.
+- Command:
+  - Ran `/dlwh/fa4-cute-sm90-b8-audit` on H100:
+    `B=8,S=4096,Hq=20,Hkv=5,D=128,window=2048`, BF16, warmup 3, iterations 10.
+  - Compared production full, direct Grug-mask native backward, and direct built-in-local native backward.
+- Result:
+  - Production full:
+    - forward `2.907771 ms`, `177.277 TFLOP/s`, `17.92% SoL`.
+    - backward `3.142215 ms`, `410.125 TFLOP/s`, `41.47% SoL`.
+    - backward-with-forward `5.984770 ms`.
+  - Direct Grug-mask native backward:
+    - `3.150109 ms`, `409.097 TFLOP/s`, `41.36% SoL`.
+  - Direct built-in-local native backward:
+    - `3.015097 ms`, `427.416 TFLOP/s`, `43.22% SoL`.
+  - Production backward is `95.95%` of the B=8 built-in-local upstream path.
+- Interpretation:
+  - Batching helps materially: direct built-in-local improves from about `32.3% SoL` at B=1 to `43.2% SoL` at B=8.
+  - The current Grug path remains close to the upstream-local path at B=8, so the wrapper overhead is not the main remaining gap.
+  - Even at B=8, this available upstream-local JAX/CuTe path is still below the alternate `50% SoL` target.

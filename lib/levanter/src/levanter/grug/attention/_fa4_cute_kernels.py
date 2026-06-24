@@ -1307,13 +1307,15 @@ def segmented_flash_attention_backward_sm90_launcher(
         valid: cute.Tensor,
         mask_block_cnt: cute.Tensor,
         mask_block_idx: cute.Tensor,
+        full_block_cnt: cute.Tensor,
+        full_block_idx: cute.Tensor,
         dq_accum: cute.Tensor,
         dk_accum: cute.Tensor,
         dv_accum: cute.Tensor,
         *,
         softmax_scale: cutlass.Float32,
     ):
-        blocksparse_tensors = BlockSparseTensors(mask_block_cnt, mask_block_idx)
+        blocksparse_tensors = BlockSparseTensors(mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx)
         if cutlass.const_expr(qhead_per_kvhead > 1):
             zero_fill(dq_accum, stream)
             zero_fill(dk_accum, stream)
@@ -1416,6 +1418,9 @@ def flash_attention_backward_postprocess_launcher(
     atom_layout_m: int,
     arch: int = 120,
     num_threads: int = 128,
+    cluster_size: int | None = None,
+    use_2cta_instrs: bool | None = None,
+    accum_is_gmem: bool = False,
 ) -> Any:
     """Build an FA4 backward accumulator postprocess launcher."""
     deps = _import_cute_dependencies(modules)
@@ -1432,6 +1437,11 @@ def flash_attention_backward_postprocess_launcher(
 
     postprocess_module = importlib.import_module("flash_attn.cute.flash_bwd_postprocess")
     FlashAttentionBackwardPostprocess = postprocess_module.FlashAttentionBackwardPostprocess
+    postprocess_kwargs: dict[str, Any] = {}
+    if cluster_size is not None:
+        postprocess_kwargs["cluster_size"] = cluster_size
+    if use_2cta_instrs is not None:
+        postprocess_kwargs["use_2cta_instrs"] = use_2cta_instrs
     postprocess = FlashAttentionBackwardPostprocess(
         cute_dtype,
         head_dim,
@@ -1439,7 +1449,18 @@ def flash_attention_backward_postprocess_launcher(
         tile_m,
         num_threads=num_threads,
         AtomLayoutMdQ=atom_layout_m,
+        **postprocess_kwargs,
     )
+
+    @cute.jit
+    def _as_gmem_tensor(tensor: cute.Tensor) -> cute.Tensor:
+        ptr = cute.make_ptr(
+            tensor.element_type,
+            tensor.iterator.toint(),
+            cute.AddressSpace.gmem,
+            assumed_align=256,
+        )
+        return cute.make_tensor(ptr, tensor.layout)
 
     @cute.jit
     def _launch_flash_attention_backward_postprocess(
@@ -1449,6 +1470,8 @@ def flash_attention_backward_postprocess_launcher(
         *,
         softmax_scale: cutlass.Float32,
     ):
+        if cutlass.const_expr(accum_is_gmem):
+            accum = _as_gmem_tensor(accum)
         postprocess(accum, out, softmax_scale, None, None, stream)
 
     return _launch_flash_attention_backward_postprocess
