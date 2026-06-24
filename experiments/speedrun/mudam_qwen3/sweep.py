@@ -111,8 +111,8 @@ def _build_step(lr: float, side: str) -> ExecutorStep:
     optimizer = MudamConfig(
         momentum=0.95,
         shampoo_beta=0.95,
-        beta1=0.95,
-        beta2=0.95,
+        beta1=0.8,
+        beta2=0.98,
         epsilon=1e-15,
         weight_decay=0.1,
         max_grad_norm=1.0,
