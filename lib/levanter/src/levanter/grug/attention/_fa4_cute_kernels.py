@@ -1493,7 +1493,7 @@ def _patch_jax_array_list_tvm_ffi_converter() -> None:
         converter_module = importlib.import_module("cutlass.cute._tvm_ffi_args_spec_converter")
         jax_types_module = importlib.import_module("cutlass.jax.types")
         tvm_ffi_builder_module = importlib.import_module("cutlass.base_dsl.tvm_ffi_builder")
-    except Exception:
+    except ModuleNotFoundError:
         return
 
     JaxArrayList = jax_types_module.JaxArrayList

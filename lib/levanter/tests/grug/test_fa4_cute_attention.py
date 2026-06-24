@@ -217,7 +217,6 @@ def test_sm90_native_backward_boundary_passes_sparse_metadata(monkeypatch):
     )
 
     calls = captured["calls"]
-    assert isinstance(calls, list)
     assert len(calls) == 5
     preprocess_call, backward_call, dq_postprocess_call, dk_postprocess_call, dv_postprocess_call = calls
     assert captured["launcher_config"] == config.sm90_backward
@@ -350,7 +349,7 @@ def test_sm90_native_backward_launcher_uses_upstream_sm90_with_grug_mask(monkeyp
             return SimpleNamespace(BlockSparseTensors=tuple)
         if name == "flash_attn.cute.utils":
             return SimpleNamespace(ssa_to_scalar=lambda value: value, scalar_to_ssa=lambda value, dtype: value)
-        raise AssertionError(f"unexpected import: {name}")
+        raise ModuleNotFoundError(name)
 
     monkeypatch.setattr(fa4_cute_kernels, "_import_cute_dependencies", fake_dependencies)
     monkeypatch.setattr(fa4_cute_kernels.importlib, "import_module", fake_import_module)

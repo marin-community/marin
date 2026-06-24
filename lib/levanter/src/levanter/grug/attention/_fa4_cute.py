@@ -102,11 +102,17 @@ def _packed_segment_backward_block_sparse_indices_with_full(
     tile_m: int,
     tile_n: int,
 ) -> tuple[Int[Array, "B 1 N"], Int[Array, "B 1 N M"], Int[Array, "B 1 N"], Int[Array, "B 1 N M"]]:
-    return _backend_packed_segment_backward_block_sparse_indices_with_full(
+    sparse_metadata = _backend_packed_segment_backward_block_sparse_indices_with_full(
         lower_bounds,
         valid,
         tile_m=tile_m,
         tile_n=tile_n,
+    )
+    return (
+        sparse_metadata.partial_block_cnt,
+        sparse_metadata.partial_block_idx,
+        sparse_metadata.full_block_cnt,
+        sparse_metadata.full_block_idx,
     )
 
 

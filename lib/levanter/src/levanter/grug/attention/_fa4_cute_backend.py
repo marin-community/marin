@@ -37,6 +37,14 @@ class _CutlassCuteModules:
     cuda: Any
 
 
+@dataclass(frozen=True)
+class _BackwardBlockSparseMetadata:
+    partial_block_cnt: jax.Array
+    partial_block_idx: jax.Array
+    full_block_cnt: jax.Array
+    full_block_idx: jax.Array
+
+
 def _import_cutlass_cute() -> _CutlassCuteModules:
     cute = importlib.import_module("cutlass.cute")
     cjax = importlib.import_module("cutlass.jax")
@@ -142,8 +150,8 @@ def segmented_flash_attention_backward(
 
     This is intentionally a separate CUTLASS call from the forward path because
     upstream FA4 backward is a preprocess + main-kernel + postprocess pipeline.
-    The current launcher raises until those kernels are ported, while tests can
-    fake ``cutlass_call`` to lock down the JAX custom-VJP contract.
+    SM90 D128 GQA routes to the native Hopper path; other cases use the
+    SM120-compatible segmented launcher.
     """
     _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale)
     _validate_backward_inputs(q, k, v, out, dout, lse)
@@ -155,13 +163,11 @@ def segmented_flash_attention_backward(
     qhead_per_kvhead = q.shape[2] // k.shape[2]
     if kernel_config.sm90_backward is not None and qhead_per_kvhead > 1 and q.shape[-1] == 128:
         sm90_config = kernel_config.sm90_backward
-        mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx = (
-            _packed_segment_backward_block_sparse_indices_with_full(
-                lower_bounds,
-                valid,
-                tile_m=sm90_config.tile[0],
-                tile_n=sm90_config.tile[1],
-            )
+        sparse_metadata = _packed_segment_backward_block_sparse_indices_with_full(
+            lower_bounds,
+            valid,
+            tile_m=sm90_config.tile[0],
+            tile_n=sm90_config.tile[1],
         )
         return segmented_flash_attention_backward_sm90_native(
             q,
@@ -172,10 +178,10 @@ def segmented_flash_attention_backward(
             lse,
             lower_bounds,
             valid,
-            mask_block_cnt,
-            mask_block_idx,
-            full_block_cnt,
-            full_block_idx,
+            sparse_metadata.partial_block_cnt,
+            sparse_metadata.partial_block_idx,
+            sparse_metadata.full_block_cnt,
+            sparse_metadata.full_block_idx,
             softmax_scale=softmax_scale,
             kernel_config=kernel_config,
             window_size_left=None,
@@ -286,7 +292,7 @@ def segmented_flash_attention_backward_sm90_native(
         modules,
         vector_elems=8,
     )
-    preprocess_output_shape_dtype = _cutlass_attention_backward_sm90_preprocess_output_shapes(q, v, sm90_config.tile)
+    preprocess_output_shape_dtype = _cutlass_attention_backward_sm90_preprocess_output_shapes(q, sm90_config.tile)
     preprocess_call = modules.cjax.cutlass_call(
         preprocess_launcher,
         output_shape_dtype=preprocess_output_shape_dtype,
@@ -493,20 +499,26 @@ def _packed_segment_backward_block_sparse_indices(
     tile_n: int,
 ) -> tuple[jax.Array, jax.Array]:
     """Build upstream-style backward Q-block sparse metadata for Grug masks."""
-    mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx = (
-        _packed_segment_backward_block_sparse_indices_with_full(
-            lower_bounds,
-            valid,
-            tile_m=tile_m,
-            tile_n=tile_n,
-        )
+    sparse_metadata = _packed_segment_backward_block_sparse_indices_with_full(
+        lower_bounds,
+        valid,
+        tile_m=tile_m,
+        tile_n=tile_n,
     )
-    partial_block_cnt = mask_block_cnt
-    mask_block_cnt = partial_block_cnt + full_block_cnt
-    max_count = mask_block_idx.shape[-1]
+    partial_block_cnt = sparse_metadata.partial_block_cnt
+    mask_block_cnt = partial_block_cnt + sparse_metadata.full_block_cnt
+    max_count = sparse_metadata.partial_block_idx.shape[-1]
     positions = jnp.arange(max_count, dtype=jnp.int32)
-    partial_idx = jnp.where(positions[None, None, None, :] < partial_block_cnt[..., None], mask_block_idx, max_count)
-    full_idx = jnp.where(positions[None, None, None, :] < full_block_cnt[..., None], full_block_idx, max_count)
+    partial_idx = jnp.where(
+        positions[None, None, None, :] < partial_block_cnt[..., None],
+        sparse_metadata.partial_block_idx,
+        max_count,
+    )
+    full_idx = jnp.where(
+        positions[None, None, None, :] < sparse_metadata.full_block_cnt[..., None],
+        sparse_metadata.full_block_idx,
+        max_count,
+    )
     combined = jnp.sort(jnp.concatenate([partial_idx, full_idx], axis=-1), axis=-1)
     mask_block_idx = jnp.where(combined[..., :max_count] < max_count, combined[..., :max_count], 0)
     return mask_block_cnt, mask_block_idx
@@ -518,7 +530,7 @@ def _packed_segment_backward_block_sparse_indices_with_full(
     *,
     tile_m: int,
     tile_n: int,
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+) -> _BackwardBlockSparseMetadata:
     """Build partial and full upstream-style backward Q-block sparse metadata."""
     if tile_m <= 0 or tile_n <= 0:
         raise ValueError(f"tile_m and tile_n must be positive, got {tile_m=} {tile_n=}")
@@ -573,7 +585,12 @@ def _packed_segment_backward_block_sparse_indices_with_full(
     full_block_cnt = jnp.sum(is_full.astype(jnp.int32), axis=-1)[:, None, :]
     mask_block_idx = jnp.where(sorted_partial_indices < num_m_blocks, sorted_partial_indices, 0)[:, None, :, :]
     full_block_idx = jnp.where(sorted_full_indices < num_m_blocks, sorted_full_indices, 0)[:, None, :, :]
-    return mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx
+    return _BackwardBlockSparseMetadata(
+        partial_block_cnt=mask_block_cnt,
+        partial_block_idx=mask_block_idx,
+        full_block_cnt=full_block_cnt,
+        full_block_idx=full_block_idx,
+    )
 
 
 def _cutlass_attention_backward_output_shapes(
@@ -614,7 +631,6 @@ def _cutlass_attention_backward_output_shapes(
 
 def _cutlass_attention_backward_sm90_preprocess_output_shapes(
     q: jax.Array,
-    v: jax.Array,
     backward_tile: tuple[int, int],
 ) -> tuple[jax.ShapeDtypeStruct, ...]:
     batch, seq_len, q_heads, head_dim = q.shape
@@ -658,7 +674,7 @@ def fa4_cute_attention_forward(
     """FA4/CuTe attention boundary with packed causal metadata.
 
     Forward uses the CUTLASS/CuTe JAX FFI path. Backward is routed through a custom VJP so JAX does not
-    attempt to autodiff through ``cutlass_call``; it currently raises a targeted implementation error.
+    attempt to autodiff through ``cutlass_call``.
     """
     if sm_scale is None:
         sm_scale = float(q.shape[-1] ** -0.5)
