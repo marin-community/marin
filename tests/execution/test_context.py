@@ -10,7 +10,7 @@ import pickle
 
 import pytest
 from marin.execution import context as ctx_mod
-from marin.execution.context import current_executor_context, executor_context
+from marin.execution.context import audit_construction, current_executor_context, executor_context
 from marin.execution.types import ExecutorStep
 
 
@@ -25,11 +25,11 @@ def _no_executor_context():
 
 
 @pytest.fixture(autouse=True)
-def _reset_warned_sites():
-    """Per-site warn dedup is process-global; clear it so each test starts fresh."""
-    ctx_mod._warned_sites.clear()
+def _reset_warned_names():
+    """Per-name warn dedup is process-global; clear it so each test starts fresh."""
+    ctx_mod._warned_names.clear()
     yield
-    ctx_mod._warned_sites.clear()
+    ctx_mod._warned_names.clear()
 
 
 def _guard_warnings(caplog) -> list[logging.LogRecord]:
@@ -38,10 +38,10 @@ def _guard_warnings(caplog) -> list[logging.LogRecord]:
 
 def test_context_active_inside_block():
     assert current_executor_context() is not None  # autouse fixture
-    with executor_context(prefix="gs://marin-us-central1") as c:
-        assert c.prefix == "gs://marin-us-central1"
     with _no_executor_context():
         assert current_executor_context() is None
+        with executor_context():
+            assert current_executor_context() is not None
 
 
 def test_construction_outside_context_warns(caplog):
@@ -51,10 +51,10 @@ def test_construction_outside_context_warns(caplog):
     assert len(_guard_warnings(caplog)) == 1
 
 
-def test_construction_outside_context_warns_once_per_site(caplog):
+def test_construction_outside_context_warns_once_per_name(caplog):
     with _no_executor_context(), caplog.at_level(logging.WARNING, logger="marin.execution.context"):
         for _ in range(3):
-            ExecutorStep(name="dup", fn=None, config=None)  # same source line every iteration
+            ExecutorStep(name="dup", fn=None, config=None)
     assert len(_guard_warnings(caplog)) == 1
 
 
@@ -69,6 +69,16 @@ def test_construction_inside_context_is_silent(caplog):
         with executor_context():
             ExecutorStep(name="quiet", fn=None, config=None)
     assert _guard_warnings(caplog) == []
+
+
+def test_audit_collects_without_warning(caplog):
+    with _no_executor_context(), caplog.at_level(logging.WARNING, logger="marin.execution.context"):
+        with audit_construction() as records:
+            ExecutorStep(name="audited", fn=None, config=None)
+    assert [r.name for r in records] == ["audited"]
+    assert records[0].kind == "ExecutorStep"
+    assert records[0].site is not None and records[0].site.filename == __file__
+    assert _guard_warnings(caplog) == []  # audit suppresses the warning
 
 
 def test_pickle_and_deepcopy_do_not_trip_guard(monkeypatch):

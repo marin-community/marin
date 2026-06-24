@@ -43,9 +43,9 @@ resolves â€” most damagingly the region-specific prefix from `marin_prefix()` â€
 into the pipeline, so a run launched into a different region disagrees with the
 frozen path and trips the cross-region guard.
 
-`executor_context()` marks a legitimate build phase. `executor_main`,
-`materialize`, and `compute_output_path` open one automatically, so the standard
-recipe is already covered:
+`executor_context()` marks a legitimate build phase. The executor opens one
+around graph resolution, so the recommended recipe is to build your steps inside
+the same context:
 
 ```python
 from marin.execution import executor_context
@@ -58,12 +58,13 @@ if __name__ == "__main__":
         executor_main(steps=build_steps())
 ```
 
-Constructing an `ExecutorStep` / `StepSpec` outside any context logs a warning
-naming the offending `file:line`. Set `MARIN_EXECUTOR_STRICT=1` to turn the
-warning into a hard error. Output paths built without an explicit prefix stay
-*prefix-relative* and are anchored under the **run** prefix by the executor, so
-a step built in one region runs correctly in another. Set an explicit
-`output_path_prefix` only to deliberately pin a step to a fixed bucket.
+Constructing an `ExecutorStep` / `StepSpec` outside any context logs a warning;
+run `scripts/audit_executor_construction.py` to list every such site. Set
+`MARIN_EXECUTOR_STRICT=1` to turn the warning into a hard error. Output paths
+built without an explicit prefix stay *prefix-relative* and are anchored under
+the **run** prefix by the executor, so a step built in one region runs correctly
+in another. Set an explicit `output_path_prefix` only to deliberately pin a step
+to a fixed bucket.
 
 ## Mirrored inputs
 

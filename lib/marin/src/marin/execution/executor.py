@@ -1160,10 +1160,11 @@ class Executor:
         if max_concurrent is not None and max_concurrent < 1:
             raise ValueError(f"max_concurrent must be a positive integer, got {max_concurrent}")
 
-        # _resolve_steps rebuilds StepSpecs (via dataclasses.replace and fresh
-        # construction), which trips the build-phase guard; run the whole walk
-        # inside a context anchored on this run's prefix.
-        with executor_context(prefix=self.prefix):
+        # Building the graph rebuilds StepSpecs (via dataclasses.replace and fresh
+        # construction), which the build-phase guard requires inside a context.
+        # Scope it to graph resolution only: step *execution* below is not a build
+        # phase, so a step fn that constructs steps at run time is still caught.
+        with executor_context():
             # Gather all the steps, compute versions and output paths for all of them.
             logger.info(f"### Inspecting the {len(steps)} provided steps ###")
             for step in steps:
@@ -1189,18 +1190,19 @@ class Executor:
                 logger.info("### Writing metadata ###")
                 self.write_infos()
 
-            logger.info(f"### Launching {len(steps_to_run)} steps ###")
-            if max_concurrent is not None:
-                logger.info(f"### Max concurrent steps: {max_concurrent} ###")
-
             resolved_steps = self._resolve_steps(steps_to_run)
-            StepRunner().run(
-                resolved_steps,
-                dry_run=dry_run,
-                force_run_failed=force_run_failed,
-                max_concurrent=max_concurrent,
-            )
-            return self.output_paths
+
+        logger.info(f"### Launching {len(steps_to_run)} steps ###")
+        if max_concurrent is not None:
+            logger.info(f"### Max concurrent steps: {max_concurrent} ###")
+
+        StepRunner().run(
+            resolved_steps,
+            dry_run=dry_run,
+            force_run_failed=force_run_failed,
+            max_concurrent=max_concurrent,
+        )
+        return self.output_paths
 
     def _resolve_steps(self, steps: list[ExecutorStep]) -> list[StepSpec]:
         """Convert computed ExecutorStep state into a flat list of StepSpec."""
@@ -1640,7 +1642,7 @@ def compute_output_path(
         prefix=resolved_prefix,
         executor_info_base_path=executor_info_base_path,
     )
-    with executor_context(prefix=resolved_prefix):
+    with executor_context():
         step = ExecutorStep(
             name=name,
             fn=_noop_step_fn,
