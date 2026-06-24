@@ -65,11 +65,10 @@ def dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local(
 ) -> MoeDispatchUpLayout:
     """Shard-local MGPU remote-dispatch validation primitive.
 
-    This is milestone 1's deliberately conservative kernel: each source rank
-    receives prepacked rows for every destination rank, then remote-writes those
-    rows and metadata into the destination rank's output buffers. It is serial
-    by construction and meant to validate remote refs, semaphores, and layout
-    parity before introducing overlapped tiled copies.
+    The default `scratch` mode writes routed rows into destination-owned
+    symmetric scratch, then locally compacts them into the expert-major receive
+    layout. `row_vector` and `scalar` remain as direct remote-write diagnostic
+    modes for comparison.
     """
 
     _require_mgpu_runtime()
@@ -78,8 +77,22 @@ def dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local(
     ep_size, send_capacity, hidden = send_x_by_dst.shape
     if recv_capacity is None:
         recv_capacity = send_capacity
-    if copy_mode not in ("scalar", "row_vector"):
-        raise ValueError(f"copy_mode must be 'scalar' or 'row_vector', got {copy_mode!r}")
+    if copy_mode not in ("scalar", "row_vector", "scratch"):
+        raise ValueError(f"copy_mode must be 'scalar', 'row_vector', or 'scratch', got {copy_mode!r}")
+    if copy_mode == "scratch":
+        return _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_scratch_local(
+            send_x_by_dst,
+            send_row_by_dst,
+            send_local_expert_by_dst,
+            send_src_token_idx_by_dst,
+            send_topk_slot_by_dst,
+            send_router_weight_by_dst,
+            send_count_by_dst,
+            rows_per_expert,
+            expert_base,
+            axis_name=axis_name,
+            recv_capacity=recv_capacity,
+        )
 
     def kernel_body(
         send_x_ref,
@@ -211,6 +224,168 @@ def dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local(
         ],
         grid=(1,),
         grid_names=("program",),
+        compiler_params=plgpu.CompilerParams(
+            lowering_semantics=plgpu.LoweringSemantics.Warpgroup,
+        ),
+    )(
+        send_x_by_dst,
+        send_row_by_dst,
+        send_local_expert_by_dst,
+        send_src_token_idx_by_dst,
+        send_topk_slot_by_dst,
+        send_router_weight_by_dst,
+        send_count_by_dst,
+    )
+    overflow_count = jnp.maximum(jnp.sum(rows_per_expert, dtype=jnp.int32) - recv_capacity, 0)
+    return MoeDispatchUpLayout(
+        recv_x,
+        recv_valid_count > 0,
+        rows_per_expert,
+        expert_base,
+        recv_local_expert,
+        recv_src_rank,
+        recv_src_token_idx,
+        recv_topk_slot,
+        recv_router_weight,
+        overflow_count,
+    )
+
+
+def _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_scratch_local(
+    send_x_by_dst: jax.Array,
+    send_row_by_dst: jax.Array,
+    send_local_expert_by_dst: jax.Array,
+    send_src_token_idx_by_dst: jax.Array,
+    send_topk_slot_by_dst: jax.Array,
+    send_router_weight_by_dst: jax.Array,
+    send_count_by_dst: jax.Array,
+    rows_per_expert: jax.Array,
+    expert_base: jax.Array,
+    *,
+    axis_name: str,
+    recv_capacity: int,
+) -> MoeDispatchUpLayout:
+    """Dispatch through symmetric scratch with one program per peer row."""
+
+    ep_size, send_capacity, hidden = send_x_by_dst.shape
+
+    def kernel_body(
+        send_x_ref,
+        send_row_ref,
+        send_local_expert_ref,
+        send_src_token_idx_ref,
+        send_topk_slot_ref,
+        send_router_weight_ref,
+        send_count_ref,
+        recv_x_ref,
+        recv_valid_count_ref,
+        recv_local_expert_ref,
+        recv_src_rank_ref,
+        recv_src_token_idx_ref,
+        recv_topk_slot_ref,
+        recv_router_weight_ref,
+        scratch_x_ref,
+        scratch_count_ref,
+        scratch_dst_row_ref,
+        scratch_local_expert_ref,
+        scratch_src_token_idx_ref,
+        scratch_topk_slot_ref,
+        scratch_router_weight_ref,
+    ):
+        recv_sem = pl.get_global(plgpu.SemaphoreType.REGULAR)
+        src_rank = lax.axis_index(axis_name)
+        peer_rank = pl.program_id(0)
+        send_row = pl.program_id(1)
+        linear_row = peer_rank * send_capacity + send_row
+
+        @pl.when(linear_row < recv_capacity)
+        def _zero_recv_row():
+            recv_x_ref.at[linear_row, pl.ds(0, hidden)][...] = jnp.zeros((hidden,), dtype=recv_x_ref.dtype)
+            recv_valid_count_ref[linear_row] = jnp.int32(0)
+            recv_local_expert_ref[linear_row] = jnp.int32(0)
+            recv_src_rank_ref[linear_row] = jnp.int32(0)
+            recv_src_token_idx_ref[linear_row] = jnp.int32(0)
+            recv_topk_slot_ref[linear_row] = jnp.int32(0)
+            recv_router_weight_ref[linear_row] = jnp.zeros((), dtype=recv_router_weight_ref.dtype)
+
+        remote_scratch_x = plgpu.remote_ref(scratch_x_ref, jnp.int32(peer_rank))
+        remote_scratch_count = plgpu.remote_ref(scratch_count_ref, jnp.int32(peer_rank))
+        remote_scratch_dst_row = plgpu.remote_ref(scratch_dst_row_ref, jnp.int32(peer_rank))
+        remote_scratch_local_expert = plgpu.remote_ref(scratch_local_expert_ref, jnp.int32(peer_rank))
+        remote_scratch_src_token_idx = plgpu.remote_ref(scratch_src_token_idx_ref, jnp.int32(peer_rank))
+        remote_scratch_topk_slot = plgpu.remote_ref(scratch_topk_slot_ref, jnp.int32(peer_rank))
+        remote_scratch_router_weight = plgpu.remote_ref(scratch_router_weight_ref, jnp.int32(peer_rank))
+
+        @pl.when(send_row == 0)
+        def _write_count():
+            remote_scratch_count[src_rank] = send_count_ref[peer_rank]
+
+        dst_row = send_row_ref[peer_rank, send_row]
+        send_valid = (send_row < send_count_ref[peer_rank]) & (dst_row < recv_capacity)
+
+        @pl.when(send_valid)
+        def _copy_row_to_scratch():
+            remote_scratch_x.at[src_rank, send_row, pl.ds(0, hidden)][...] = send_x_ref.at[
+                peer_rank, send_row, pl.ds(0, hidden)
+            ][...]
+            remote_scratch_dst_row[src_rank, send_row] = dst_row
+            remote_scratch_local_expert[src_rank, send_row] = send_local_expert_ref[peer_rank, send_row]
+            remote_scratch_src_token_idx[src_rank, send_row] = send_src_token_idx_ref[peer_rank, send_row]
+            remote_scratch_topk_slot[src_rank, send_row] = send_topk_slot_ref[peer_rank, send_row]
+            remote_scratch_router_weight[src_rank, send_row] = send_router_weight_ref[peer_rank, send_row]
+
+        pl.semaphore_signal(recv_sem, device_id=jnp.int32(peer_rank))
+        pl.semaphore_wait(recv_sem, value=ep_size * send_capacity, decrement=False)
+
+        dst_row = scratch_dst_row_ref[peer_rank, send_row]
+        recv_valid = (send_row < scratch_count_ref[peer_rank]) & (dst_row < recv_capacity)
+
+        @pl.when(recv_valid)
+        def _compact_row():
+            scratch_row = scratch_x_ref.at[peer_rank, send_row, pl.ds(0, hidden)]
+            recv_x_ref.at[dst_row, pl.ds(0, hidden)][...] = scratch_row[...]
+            recv_valid_count_ref[dst_row] = jnp.int32(1)
+            recv_local_expert_ref[dst_row] = scratch_local_expert_ref[peer_rank, send_row]
+            recv_src_rank_ref[dst_row] = jnp.int32(peer_rank)
+            recv_src_token_idx_ref[dst_row] = scratch_src_token_idx_ref[peer_rank, send_row]
+            recv_topk_slot_ref[dst_row] = scratch_topk_slot_ref[peer_rank, send_row]
+            recv_router_weight_ref[dst_row] = scratch_router_weight_ref[peer_rank, send_row]
+
+    (
+        recv_x,
+        recv_valid_count,
+        recv_local_expert,
+        recv_src_rank,
+        recv_src_token_idx,
+        recv_topk_slot,
+        recv_router_weight,
+        _scratch_x,
+        _scratch_count,
+        _scratch_dst_row,
+        _scratch_local_expert,
+        _scratch_src_token_idx,
+        _scratch_topk_slot,
+        _scratch_router_weight,
+    ) = plgpu.kernel(
+        kernel_body,
+        out_shape=[
+            jax.ShapeDtypeStruct((recv_capacity, hidden), send_x_by_dst.dtype),
+            jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
+            jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
+            jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
+            jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
+            jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
+            jax.ShapeDtypeStruct((recv_capacity,), send_router_weight_by_dst.dtype),
+            jax.ShapeDtypeStruct((ep_size, send_capacity, hidden), send_x_by_dst.dtype),
+            jax.ShapeDtypeStruct((ep_size,), jnp.int32),
+            jax.ShapeDtypeStruct((ep_size, send_capacity), jnp.int32),
+            jax.ShapeDtypeStruct((ep_size, send_capacity), jnp.int32),
+            jax.ShapeDtypeStruct((ep_size, send_capacity), jnp.int32),
+            jax.ShapeDtypeStruct((ep_size, send_capacity), jnp.int32),
+            jax.ShapeDtypeStruct((ep_size, send_capacity), send_router_weight_by_dst.dtype),
+        ],
+        grid=(ep_size, send_capacity),
+        grid_names=("peer", "row"),
         compiler_params=plgpu.CompilerParams(
             lowering_semantics=plgpu.LoweringSemantics.Warpgroup,
         ),

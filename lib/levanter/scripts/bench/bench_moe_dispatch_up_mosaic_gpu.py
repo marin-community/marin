@@ -361,8 +361,8 @@ def main() -> None:
     parser.add_argument("--run-pallas", action="store_true")
     parser.add_argument(
         "--dispatch-copy-mode",
-        choices=("scalar", "row_vector"),
-        default="row_vector",
+        choices=("scalar", "row_vector", "scratch"),
+        default="scratch",
         help="Mosaic GPU dispatch copy implementation.",
     )
     parser.add_argument(

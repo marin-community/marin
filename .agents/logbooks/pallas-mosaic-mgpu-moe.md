@@ -272,3 +272,56 @@
 - Next action: Use `row_vector` as the default validation dispatch path for the
   milestone branch. For the perf phase, prototype a scratch-mediated dispatch
   modeled after collective matmul's remote-ref exchange.
+
+### 2026-06-24 - Symmetric scratch dispatch prototype
+
+- Hypothesis: A destination-owned symmetric scratch exchange, following the
+  remote-ref pattern in JAX's `collective_matmul_mgpu.py`, should reduce the
+  direct final-buffer remote-write bottleneck and provide the right structure
+  for eventual dispatch/W13 overlap. The communication remains sparse
+  all-to-all: each source writes only rows routed to a destination rank.
+- Commands:
+  - Serial scratch H128 probe: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 1800 --job-name dlwh-6597-moe-dispatch-scratch-h128 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --run-pallas --dispatch-copy-mode scratch --bench-iters 2 --warmup-steps 1`
+  - Serial scratch-count H128/relevant probes: same command shape, with per-row
+    valid scratch metadata replaced by one per-source scratch count.
+  - Parallel scratch H128 probe: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 1800 --job-name dlwh-6597-moe-dispatch-scratch-parallel-h128 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --run-pallas --dispatch-copy-mode scratch_parallel --bench-iters 2 --warmup-steps 1`
+  - Parallel scratch relevant probe: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 2400 --job-name dlwh-6597-moe-dispatch-scratch-parallel-h2560-grug -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --run-pallas --dispatch-copy-mode scratch_parallel --bench-iters 3 --warmup-steps 1`
+- Config: Single-node CoreWeave `cw-us-east-02a`, H100x8, explicit `expert`
+  mesh. H128 probes used bf16 standard-normal weights and are dispatch
+  correctness/perf probes; the relevant probe used Grug-truncated weights at
+  `H=2560`, `I=2560`, `T/rank=8`, top-k 4, 32 local experts per rank, 256
+  global experts.
+- Result:
+  - Serial scratch H128 compiled and matched dispatch exactly, but dispatch
+    steady-state was 1.793 ms versus 0.723 ms for the JIT reference. The later
+    W13 failure was the known standard-normal max-error tolerance issue.
+  - Replacing per-row scratch-valid flags with one per-source scratch count did
+    not improve H128 dispatch: 1.795 ms versus 0.683 ms for the JIT reference.
+  - Count-based serial scratch at the relevant Grug shape matched dispatch
+    exactly and preserved W13 parity, but dispatch was 1.800 ms versus 0.747 ms
+    for the JIT reference.
+  - Parallel scratch, using one Pallas program per `(peer_rank, send_row)`,
+    improved H128 dispatch to 1.539 ms versus 0.721 ms for the JIT reference.
+  - Parallel scratch at the relevant Grug shape matched dispatch exactly:
+    dispatch max error 0, metadata errors 0. Steady-state dispatch was
+    1.512 ms versus 0.745 ms for the JIT reference.
+  - After renaming the best variant to the checked-in `scratch` mode, a final
+    H128 Grug smoke passed with dispatch max error 0, metadata errors 0, and
+    W13 max abs error 0.0078125.
+  - Relevant integrated W13/SiLU remained correct: steady-state mean 0.657 ms
+    versus 10.478 ms for the JIT baseline, max abs error 0.015625.
+  - Relevant roofline summary for the parallel scratch run: dispatch payload
+    1280 KiB, dispatch payload bandwidth 0.867 GB/s, W13 measured
+    10.21 TFLOP/s, estimated HBM-bound W13 roofline 26.79 TFLOP/s.
+- Interpretation: The scratch implementation now follows the symmetric
+  remote-ref exchange shape and validates the sparse all-to-all semantics, but
+  it is still not close enough to the JIT dispatch baseline to justify overlap.
+  The best current dispatch is 1.512 ms versus 0.745 ms, roughly 2.0x slower and
+  outside the requested within-30% threshold. Parallelizing per row helped
+  compile time and steady-state time, but the design still pays for separate
+  scratch writes, local compaction, and a full fan-in semaphore before W13.
+- Next action: Do not implement overlap yet. Keep the parallel scratch path as
+  the default `scratch` validation mode and use it as the structural base for a
+  later overlapped prototype only after dispatch is improved, likely by
+  coarsening row programs into larger transfer tiles or fusing compaction with
+  W13 consumption.
