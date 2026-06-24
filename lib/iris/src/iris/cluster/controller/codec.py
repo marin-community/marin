@@ -49,8 +49,12 @@ def proto_to_json(msg) -> str:
 
 @functools.lru_cache(maxsize=_CODEC_CACHE_SIZE)
 def proto_from_json(json_str: str, proto_cls):
-    """Deserialize a JSON string into a new protobuf message of *proto_cls*."""
-    return json_format.ParseDict(json.loads(json_str), proto_cls())
+    """Deserialize a JSON string into a new protobuf message of *proto_cls*.
+
+    Ignores unknown fields so jobs persisted before a field was removed still
+    replay across a controller restart.
+    """
+    return json_format.ParseDict(json.loads(json_str), proto_cls(), ignore_unknown_fields=True)
 
 
 # ---------------------------------------------------------------------------

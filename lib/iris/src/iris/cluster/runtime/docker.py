@@ -30,7 +30,7 @@ from pathlib import Path
 from rigging.timing import Timestamp
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.env import write_workdir_files
+from iris.cluster.runtime.env import VENV_PATH, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
@@ -92,8 +92,8 @@ class _DockerProfileDispatch:
     """
 
     container_id: str
-    pyspy_bin: str = "/app/.venv/bin/py-spy"
-    memray_bin: str = "/app/.venv/bin/memray"
+    pyspy_bin: str = f"{VENV_PATH}/bin/py-spy"
+    memray_bin: str = f"{VENV_PATH}/bin/memray"
 
     @contextmanager
     def scratch(self, *suffixes: str) -> Iterator[tuple[str, ...]]:
@@ -132,6 +132,16 @@ class _DockerProfileDispatch:
             )
         except (subprocess.SubprocessError, OSError) as e:
             logger.warning("SIGCONT sweep failed for container %s: %s", self.container_id, e)
+
+
+def _resolve_profiler_bin(container_id: str, venv_bin: str, fallback: str) -> str:
+    """Prefer the venv-installed profiler, falling back to PATH for BYO images.
+
+    iris installs py-spy/memray into ``$IRIS_VENV``, but a bring-your-own image
+    with no venv may carry them on PATH instead.
+    """
+    probe = subprocess.run(["docker", "exec", container_id, "test", "-x", venv_bin], capture_output=True, timeout=5)
+    return venv_bin if probe.returncode == 0 else fallback
 
 
 # Network sysctl tuning for containers with their own network namespace (#3066).
@@ -459,9 +469,9 @@ class DockerContainerHandle:
             self._docker_remove(build_container_id)
 
     def _generate_setup_script(self) -> str:
-        """Generate a bash script that runs setup commands."""
+        """Generate a bash script that runs each setup command as its own step."""
         lines = ["#!/bin/bash", "set -e"]
-        lines.extend(self.config.entrypoint.setup_commands)
+        lines.extend(render_setup_steps(self.config.entrypoint.setup_commands))
         return "\n".join(lines) + "\n"
 
     def _write_setup_script(self, script: str) -> None:
@@ -478,22 +488,19 @@ class DockerContainerHandle:
         Non-blocking - returns immediately after starting the container.
         Use status() to monitor execution progress.
         """
-        # Build the run command: activate venv then exec user command
         quoted_cmd = " ".join(shlex.quote(arg) for arg in self.config.entrypoint.run_command.argv)
 
-        # If we had setup_commands, the venv exists and we should activate it
-        if self.config.entrypoint.setup_commands:
-            run_script = f"""#!/bin/bash
+        # Run from the workdir (matching the k8s task script) and activate the venv
+        # only when a setup script left one, so a bring-your-own-env command runs in
+        # the image as-is instead of failing on a missing .venv.
+        run_script = f"""#!/bin/bash
 set -e
-cd /app
-source .venv/bin/activate
+cd "$IRIS_WORKDIR"
+[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"
 exec {quoted_cmd}
 """
-            self._write_run_script(run_script)
-            command = ["bash", "/app/_run.sh"]
-        else:
-            # No setup, run command directly
-            command = list(self.config.entrypoint.run_command.argv)
+        self._write_run_script(run_script)
+        command = ["bash", "/app/_run.sh"]
 
         self._run_container_id = self._docker_create(
             command=command,
@@ -552,7 +559,11 @@ exec {quoted_cmd}
         if not container_id:
             raise RuntimeError("Cannot profile: no running container")
 
-        dispatch = _DockerProfileDispatch(container_id)
+        dispatch = _DockerProfileDispatch(
+            container_id,
+            pyspy_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/py-spy", "py-spy"),
+            memray_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/memray", "memray"),
+        )
         if profile_type.HasField("threads"):
             return capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
         elif profile_type.HasField("cpu"):

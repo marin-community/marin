@@ -24,6 +24,34 @@ logger = logging.getLogger(__name__)
 IRIS_SLICE_COUNT = "IRIS_SLICE_COUNT"
 IRIS_TASKS_PER_SLICE = "IRIS_TASKS_PER_SLICE"
 
+# Container paths shared across runtimes: the bundle unpacks into WORKDIR_PATH and
+# the setup script populates the venv at VENV_PATH (which the run phase activates).
+WORKDIR_PATH = "/app"
+VENV_PATH = f"{WORKDIR_PATH}/.venv"
+
+# Heredoc delimiter for materializing a setup script to disk. Distinctive enough
+# that a real setup script will not contain it as a standalone line.
+_SETUP_STEP_DELIMITER = "__IRIS_SETUP_STEP__"
+
+
+def render_setup_steps(scripts: Sequence[str]) -> list[str]:
+    """Render bash lines that run each setup script as a separate step.
+
+    Each script is written to its own file and run in a fresh ``bash`` with a
+    banner, rather than concatenated, so a failure points at the exact step. The
+    caller's ``set -e`` stops the sequence on the first non-zero step.
+    """
+    lines: list[str] = []
+    total = len(scripts)
+    for index, script in enumerate(scripts, start=1):
+        step_file = f"/tmp/iris-setup-step-{index}.sh"
+        lines.append(f"cat > {step_file} <<'{_SETUP_STEP_DELIMITER}'")
+        lines.append(script.rstrip("\n"))
+        lines.append(_SETUP_STEP_DELIMITER)
+        lines.append(f'echo "[iris setup] step {index}/{total}"')
+        lines.append(f"bash {step_file}")
+    return lines
+
 
 def normalize_workdir_relative_path(path: str) -> str:
     """Return a normalized relative path safe to write under a task workdir."""
@@ -126,18 +154,20 @@ def build_common_iris_env(
 
     # Standard paths and binaries
     env["IRIS_BIND_HOST"] = "0.0.0.0"
-    env["IRIS_WORKDIR"] = "/app"
+    env["IRIS_WORKDIR"] = WORKDIR_PATH
     env["IRIS_PYTHON"] = "python"
+    # Canonical venv the setup script populates and the run phase activates.
+    # UV_PROJECT_ENVIRONMENT points uv (sync/pip install) at the same path so a
+    # custom setup script does not have to depend on uv's cwd-relative default.
+    env["IRIS_VENV"] = VENV_PATH
+    env["UV_PROJECT_ENVIRONMENT"] = VENV_PATH
     env["UV_PYTHON_INSTALL_DIR"] = "/uv/cache/python"
     env["CARGO_TARGET_DIR"] = "/root/.cargo/target"
 
-    # Propagate extras and pip_packages so child jobs can inherit them
-    extras = list(environment.extras)
-    if extras:
-        env["IRIS_JOB_EXTRAS"] = json.dumps(extras)
-    pip_packages = list(environment.pip_packages)
-    if pip_packages:
-        env["IRIS_JOB_PIP_PACKAGES"] = json.dumps(pip_packages)
+    # Propagate the resolved setup scripts so child jobs reproduce the parent's
+    # environment. Always set (even when empty) so a child can tell a no-setup
+    # parent (bring-your-own image) from a top-level submission with no parent.
+    env["IRIS_JOB_SETUP_SCRIPTS"] = json.dumps(list(environment.setup_scripts))
 
     # Serialize user env vars for child job inheritance via IRIS_JOB_ENV
     user_env_vars = dict(environment.env_vars)

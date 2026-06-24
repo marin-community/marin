@@ -51,7 +51,12 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
+from iris.cluster.runtime.env import (
+    VENV_PATH,
+    build_common_iris_env,
+    normalize_workdir_relative_path,
+    render_setup_steps,
+)
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
@@ -375,10 +380,12 @@ class PodConfig:
 
 
 def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
-    """Build a shell script that runs setup_commands then the run_command."""
+    """Build a shell script that runs the setup steps then the run_command."""
     lines = ["set -e", "ulimit -c 0", "mkdir -p /app", "cd /app"]
-    for cmd in run_req.entrypoint.setup_commands:
-        lines.append(cmd)
+    lines.extend(render_setup_steps(run_req.entrypoint.setup_commands))
+    # Activate the venv the setup script populated. Conditional on it existing so
+    # a custom or no-setup script that brings its own environment runs as-is.
+    lines.append('[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"')
     if run_req.entrypoint.run_command.argv:
         lines.append("exec " + shlex.join(run_req.entrypoint.run_command.argv))
     return "\n".join(lines)
@@ -1367,7 +1374,7 @@ class _K8sProfileDispatch:
         return self.kubectl.read_file(self.pod_name, path, container="task")
 
     def _venv_exec(self, cmd: list[str], *, timeout: int) -> ExecResult:
-        shell_cmd = ["bash", "-lc", f"source /app/.venv/bin/activate 2>/dev/null; {shlex.join(cmd)}"]
+        shell_cmd = ["bash", "-lc", f"source {VENV_PATH}/bin/activate 2>/dev/null; {shlex.join(cmd)}"]
         result = self.kubectl.exec(self.pod_name, shell_cmd, container="task", timeout=timeout)
         return ExecResult(result.returncode, (result.stdout or "").encode("utf-8"), result.stderr or "")
 
