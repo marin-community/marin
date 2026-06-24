@@ -122,8 +122,15 @@ def _triton_default_block_sizes(m: int, k: int, n: int) -> tuple[int, int, int]:
     return block_m, block_n, block_k
 
 
-def _triton_default_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
-    """Raw Pallas-Triton grouped matmul for the default ragged-dot layout."""
+def _triton_default_pallas_call(
+    lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array, out_dtype: jnp.dtype | None = None
+) -> jax.Array:
+    """Raw Pallas-Triton grouped matmul for the default ragged-dot layout.
+
+    ``out_dtype`` overrides the output (and store-cast) dtype; defaults to ``lhs.dtype``.
+    The f8 path passes a wider ``out_dtype`` so the f32 accumulator is not truncated back
+    to the f8 operand dtype on store.
+    """
     m, k = lhs.shape
     num_groups, _, n = rhs.shape
 
@@ -133,7 +140,7 @@ def _triton_default_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax
 
     return pl.pallas_call(
         lambda a, b, lo, hi, out: _triton_ragged_dot_kernel(a, b, lo, hi, out, block_m=block_m, block_k=block_k),
-        out_shape=jax.ShapeDtypeStruct((m, n), lhs.dtype),
+        out_shape=jax.ShapeDtypeStruct((m, n), out_dtype or lhs.dtype),
         in_specs=[
             pl.no_block_spec,
             pl.BlockSpec((None, k, block_n), lambda _, j, e: (e, 0, j)),
@@ -184,6 +191,7 @@ def _triton_ragged_contracting_dim_pallas_call(
     lhs: jax.Array,
     rhs: jax.Array,
     group_sizes: jax.Array,
+    out_dtype: jnp.dtype | None = None,
 ) -> jax.Array:
     """Raw Pallas-Triton grouped matmul for drhs-style ragged contraction."""
     k, m = lhs.shape
@@ -206,7 +214,7 @@ def _triton_ragged_contracting_dim_pallas_call(
                 block_m=block_m,
                 block_k=block_k,
             ),
-            out_shape=jax.ShapeDtypeStruct((m, n), lhs.dtype),
+            out_shape=jax.ShapeDtypeStruct((m, n), out_dtype or lhs.dtype),
             in_specs=[
                 pl.BlockSpec((k, block_m), lambda i, j: (0, i)),
                 pl.BlockSpec((k, block_n), lambda i, j: (0, j)),
@@ -249,14 +257,15 @@ def _triton_pallas_call(
     rhs: jax.Array,
     group_sizes: jax.Array,
     ragged_dot_dimension_numbers: jax.lax.RaggedDotDimensionNumbers = _DEFAULT_DIM_NUMS,
+    out_dtype: jnp.dtype | None = None,
 ) -> jax.Array:
     """Raw Pallas-Triton grouped matmul for supported ragged-dot layouts."""
     if ragged_dot_dimension_numbers == _DEFAULT_DIM_NUMS:
-        return _triton_default_pallas_call(lhs, rhs, group_sizes)
+        return _triton_default_pallas_call(lhs, rhs, group_sizes, out_dtype)
     if ragged_dot_dimension_numbers == _DLHS_DIM_NUMS:
-        return _triton_default_pallas_call(lhs, rhs.mT, group_sizes)
+        return _triton_default_pallas_call(lhs, rhs.mT, group_sizes, out_dtype)
     if ragged_dot_dimension_numbers == _DRHS_DIM_NUMS:
-        return _triton_ragged_contracting_dim_pallas_call(lhs, rhs, group_sizes)
+        return _triton_ragged_contracting_dim_pallas_call(lhs, rhs, group_sizes, out_dtype)
     raise NotImplementedError(f"Unsupported ragged dot dimension numbers for Triton: {ragged_dot_dimension_numbers}")
 
 
