@@ -65,6 +65,10 @@ ALPHAS: tuple[float, ...] = _floats("ALPHAS", "1.0,1.5")
 NORMALIZE: bool = os.environ.get("NORMALIZE", "true").lower() in ("1", "true", "yes")
 # lambda tracks the LR schedule: lambda_t = (swept lambda = peak) * lr_t / peak_lr.
 LAMBDA_TRACKS_LR: bool = os.environ.get("LAMBDA_TRACKS_LR", "false").lower() in ("1", "true", "yes")
+# msign Newton-Schulz coefficients. polar_express (8-step schedule) is more precise than quintic (5);
+# use BACKEND_STEPS=8 to run the full polar_express schedule (truncating to 5 drops the fine-polish steps).
+COEFF_TYPE: str = os.environ.get("COEFF_TYPE", "polar_express")
+BACKEND_STEPS: int = int(os.environ.get("BACKEND_STEPS", "8"))
 RUN_TAG: str = os.environ.get("RUN_TAG", "")
 
 
@@ -134,7 +138,8 @@ def _build_step(lam: float, k: int, alpha: float) -> ExecutorStep:
         epsilon=1e-15,
         muon_epsilon=1e-5,
         max_grad_norm=1.0,
-        coefficient_type="quintic",
+        backend_steps=BACKEND_STEPS,
+        coefficient_type=COEFF_TYPE,
         curvature_beta=0.95,
         curvature_lambda=lam,
         curvature_alpha=alpha,
@@ -154,7 +159,8 @@ def _build_step(lam: float, k: int, alpha: float) -> ExecutorStep:
         learning_rate=SIZE.learning_rate,
         optimizer_config=optimizer,
     )
-    tag = f"_{RUN_TAG}" if RUN_TAG else ""
+    cf = {"polar_express": "pe", "quintic": "qx", "simple": "sm", "aol": "aol"}.get(COEFF_TYPE, COEFF_TYPE)
+    tag = f"_{cf}{BACKEND_STEPS}{('_' + RUN_TAG) if RUN_TAG else ''}"
     if lam == 0.0:
         clabel = "_lam0"  # MuonH control (alpha/K/normalize irrelevant)
     else:
