@@ -21,6 +21,7 @@ from levanter.grug._moe.ep_common import (
     _expert_prefix_keep_mask,
     _local_permute_from_counts,
     _permute_by_global_expert,
+    _prefix_cap_counts,
     _shard_a2a_params,
 )
 from levanter.grug._moe.ep_padded_all_to_all import _dispatch_fixed_buckets
@@ -944,6 +945,77 @@ def _padded_a2a_dispatch_up_fn(
     )
 
 
+def _ring_gather_dispatch_up_fn(
+    mesh: Mesh,
+    args,
+    *,
+    local_capacity: int,
+) -> Callable[..., tuple[jax.Array, jax.Array]]:
+    def local_dispatch_up(x_local, selected_experts_local, local_w_gate_up):
+        x_local = jnp.squeeze(x_local, axis=0)
+        selected_experts_local = jnp.squeeze(selected_experts_local, axis=0)
+        local_w_gate_up = jnp.squeeze(local_w_gate_up, axis=0)
+        local_experts = local_w_gate_up.shape[0]
+
+        x_global = lax.all_gather(x_local, "expert", tiled=True)
+        selected_experts_global = lax.all_gather(selected_experts_local, "expert", tiled=True)
+
+        tokens = x_global.shape[0]
+        topk = selected_experts_global.shape[1]
+        assignments = tokens * topk
+        if local_capacity < local_experts:
+            raise ValueError(f"local_capacity={local_capacity} must be >= local_experts={local_experts}")
+
+        expert_start = lax.axis_index("expert") * local_experts
+        local_expert = selected_experts_global.reshape(assignments) - expert_start
+        local_mask = (local_expert >= 0) & (local_expert < local_experts)
+
+        local_expert = jnp.where(local_mask, local_expert, 0)
+        expert_ids = jnp.arange(local_experts, dtype=jnp.int32)
+        counts = jnp.sum(
+            (local_expert[:, None] == expert_ids[None, :]).astype(jnp.int32) * local_mask[:, None].astype(jnp.int32),
+            axis=0,
+            dtype=jnp.int32,
+        )
+        accepted_counts = _prefix_cap_counts(counts, capacity=local_capacity)
+        accepted_total = jnp.sum(accepted_counts, dtype=jnp.int32)
+        valid = jnp.arange(local_capacity, dtype=jnp.int32) < accepted_total
+
+        flat_pos = jnp.arange(assignments, dtype=jnp.int32)
+        order_key = local_expert * assignments + flat_pos
+        max_order_key = local_experts * assignments
+        selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
+        _, local_idx = lax.top_k(selection_key, local_capacity)
+
+        token_local = local_idx // topk
+        x_take = jnp.take(x_global, token_local, axis=0)
+        x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
+        # Keep the capacity buffer in the output shape, but do not charge W13
+        # for padded rows in this dispatch-up-only benchmark.
+        group_sizes = accepted_counts
+
+        w13_out = ragged_dot(
+            x_dispatch,
+            local_w_gate_up,
+            group_sizes,
+            implementation=args.ragged_dot_impl,
+        )
+        gate, up = jnp.split(w13_out, 2, axis=-1)
+        h = jax.nn.silu(gate.astype(jnp.float32)).astype(gate.dtype) * up
+        dropped_total = lax.psum(jnp.sum(counts, dtype=jnp.int32) - accepted_total, "expert")
+        return jnp.where(valid[:, None], h, jnp.zeros((), dtype=h.dtype))[None, ...], dropped_total[None]
+
+    return jax.jit(
+        shard_map(
+            local_dispatch_up,
+            mesh=mesh,
+            in_specs=(P("expert", None, None), P("expert", None, None), P("expert", None, None, None)),
+            out_specs=(P("expert", None, None), P("expert")),
+            check_vma=False,
+        )
+    )
+
+
 def _synthetic_layout(
     mesh: Mesh,
     *,
@@ -1237,6 +1309,11 @@ def main() -> None:
         help="Benchmark fixed-bucket all_to_all dispatch followed by ragged_dot W13/SiLU.",
     )
     parser.add_argument(
+        "--run-ring-gather-dispatch-up",
+        action="store_true",
+        help="Benchmark all-gather/ring-style dispatch followed by ragged_dot W13/SiLU.",
+    )
+    parser.add_argument(
         "--synthetic-layout",
         action="store_true",
         help="Skip routing/prepack and benchmark W13/SiLU on a synthetic expert-major layout.",
@@ -1358,7 +1435,12 @@ def main() -> None:
     prepacked = None
     if (
         args.skip_reference_checks
-        and (args.run_ragged_a2a_dispatch_up or args.run_ragged_a2a_breakdown or args.run_padded_a2a_dispatch_up)
+        and (
+            args.run_ragged_a2a_dispatch_up
+            or args.run_ragged_a2a_breakdown
+            or args.run_padded_a2a_dispatch_up
+            or args.run_ring_gather_dispatch_up
+        )
         and not args.run_pallas
     ):
         print("prepack/reference: skipped")
@@ -1426,6 +1508,7 @@ def main() -> None:
         and not args.run_ragged_a2a_dispatch_up
         and not args.run_ragged_a2a_breakdown
         and not args.run_padded_a2a_dispatch_up
+        and not args.run_ring_gather_dispatch_up
     ):
         return
     if len(devices) < args.ep_size:
@@ -1679,6 +1762,37 @@ def main() -> None:
                 )
             if padded_a2a_steady_ms is not None:
                 print(f"dispatch_up/padded_a2a_ragged_dot_end_to_end_ms: {padded_a2a_steady_ms:.3f}")
+
+        if args.run_ring_gather_dispatch_up:
+            ring_gather_fn = _ring_gather_dispatch_up_fn(
+                mesh,
+                args,
+                local_capacity=recv_capacity,
+            )
+            ring_gather_args = (
+                _sharded(mesh, x_by_rank, P("expert", None, None)),
+                _sharded(mesh, expert_ids, P("expert", None, None)),
+                _sharded(mesh, w_gate_up, P("expert", None, None, None)),
+            )
+
+            def run_ring_gather_dispatch_up():
+                return ring_gather_fn(*ring_gather_args)
+
+            ring_gather_result, _ = _time_block("dispatch_up/ring_gather_ragged_dot", run_ring_gather_dispatch_up)
+            _, ring_gather_dropped = ring_gather_result
+            ring_gather_dropped_int = int(jnp.max(ring_gather_dropped))
+            print(f"dispatch_up/ring_gather_dropped_total: {ring_gather_dropped_int}")
+            ring_gather_steady_ms = None
+            if args.bench_iters > 0:
+                ring_gather_steady_ms = _measure_steady_state(
+                    "dispatch_up/ring_gather_ragged_dot",
+                    run_ring_gather_dispatch_up,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
+                )
+            print("dispatch_up/ring_gather_ragged_dot/reference_check: skipped")
+            if ring_gather_steady_ms is not None:
+                print(f"dispatch_up/ring_gather_ragged_dot_end_to_end_ms: {ring_gather_steady_ms:.3f}")
 
         if not args.run_pallas:
             return

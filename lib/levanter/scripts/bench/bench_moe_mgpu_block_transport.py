@@ -139,6 +139,64 @@ def _remote_block_copy_local(
     return scratch
 
 
+def _remote_neighbor_copy_local(
+    send_x: jax.Array,
+    *,
+    axis_name: str,
+    block_rows: int,
+    block_cols: int,
+) -> jax.Array:
+    if send_x.ndim != 2:
+        raise ValueError(f"send_x must have shape [R, H], got {send_x.shape}")
+    if block_rows < 1:
+        raise ValueError(f"block_rows must be positive, got {block_rows}")
+    if block_cols < 1:
+        raise ValueError(f"block_cols must be positive, got {block_cols}")
+    rows, hidden = send_x.shape
+    if rows % block_rows != 0:
+        raise ValueError(f"rows={rows} must be divisible by block_rows={block_rows}")
+    if hidden % block_cols != 0:
+        raise ValueError(f"hidden={hidden} must be divisible by block_cols={block_cols}")
+    row_blocks = rows // block_rows
+    col_blocks = hidden // block_cols
+    tiles = row_blocks * col_blocks
+
+    def kernel_body(send_ref, recv_ref):
+        recv_sem = pl.get_global(plgpu.SemaphoreType.REGULAR)
+        src_rank = lax.axis_index(axis_name)
+        axis_size = lax.axis_size(axis_name)
+        dst_rank = lax.rem(src_rank + jnp.int32(1), jnp.int32(axis_size))
+        remote_recv_ref = plgpu.remote_ref(recv_ref, dst_rank)
+        tile = pl.program_id(0)
+        row_block = tile // col_blocks
+        col_block = tile - row_block * col_blocks
+        row_start = row_block * block_rows
+        col_start = col_block * block_cols
+
+        @functools.partial(
+            pl.run_scoped,
+            tile_smem=plgpu.SMEM((block_rows, block_cols), dtype=send_ref.dtype),
+            barrier=plgpu.Barrier(),
+        )
+        def copy_scope(tile_smem, barrier):
+            src_slice = send_ref.at[pl.ds(row_start, block_rows), pl.ds(col_start, block_cols)]
+            plgpu.copy_gmem_to_smem(src_slice, tile_smem, barrier)
+            plgpu.barrier_wait(barrier)
+            dst_slice = remote_recv_ref.at[pl.ds(row_start, block_rows), pl.ds(col_start, block_cols)]
+            plgpu.copy_smem_to_gmem(tile_smem, dst_slice)
+            plgpu.wait_smem_to_gmem(0, wait_read_only=False)
+
+        pl.semaphore_signal(recv_sem, device_id=dst_rank)
+        pl.semaphore_wait(recv_sem, value=tiles, decrement=False)
+
+    return plgpu.kernel(
+        kernel_body,
+        out_shape=jax.ShapeDtypeStruct((rows, hidden), send_x.dtype),
+        grid=(tiles,),
+        grid_names=("tile",),
+    )(send_x)
+
+
 def _block_copy_fn(
     mesh: Mesh,
     *,
@@ -169,6 +227,27 @@ def _block_copy_fn(
     )
 
 
+def _neighbor_copy_fn(mesh: Mesh, *, block_rows: int, block_cols: int) -> Callable[[jax.Array], jax.Array]:
+    def local_copy(send_x):
+        recv = _remote_neighbor_copy_local(
+            jnp.squeeze(send_x, axis=0),
+            axis_name="expert",
+            block_rows=block_rows,
+            block_cols=block_cols,
+        )
+        return recv[None, ...]
+
+    return jax.jit(
+        shard_map(
+            local_copy,
+            mesh=mesh,
+            in_specs=P("expert", None, None),
+            out_specs=P("expert", None, None),
+            check_vma=False,
+        )
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ep-size", type=int, default=8)
@@ -182,6 +261,7 @@ def main() -> None:
     parser.add_argument("--skip-reference-checks", action="store_true")
     parser.add_argument("--use-scratch-output", action="store_true")
     parser.add_argument("--loop-tiles", action="store_true")
+    parser.add_argument("--fixed-neighbor", action="store_true")
     args = parser.parse_args()
 
     dtype = jnp.bfloat16 if args.dtype == "bf16" else jnp.float32
@@ -193,12 +273,53 @@ def main() -> None:
     )
     print(f"use_scratch_output={args.use_scratch_output}")
     print(f"loop_tiles={args.loop_tiles}")
+    print(f"fixed_neighbor={args.fixed_neighbor}")
     if len(devices) < args.ep_size:
         raise RuntimeError(f"Need at least {args.ep_size} local devices, found {len(devices)}")
 
     mesh = Mesh(np.array(devices[: args.ep_size]), ("expert",), axis_types=(AxisType.Explicit,))
     send_sharding = NamedSharding(mesh, P("expert", None, None, None))
+    neighbor_send_sharding = NamedSharding(mesh, P("expert", None, None))
     with jax.set_mesh(mesh):
+        if args.fixed_neighbor:
+            send_neighbor = jax.random.normal(
+                jax.random.key(6597),
+                (args.ep_size, args.rows, args.hidden),
+                dtype=dtype,
+                out_sharding=neighbor_send_sharding,
+            )
+            expected_neighbor_host = None
+            if not args.skip_reference_checks:
+                expected_neighbor_host = np.roll(np.asarray(send_neighbor), shift=1, axis=0)
+
+            neighbor_copy_fn = _neighbor_copy_fn(mesh, block_rows=args.block_rows, block_cols=args.block_cols)
+
+            def run_neighbor_copy():
+                return neighbor_copy_fn(send_neighbor)
+
+            actual_neighbor, _ = _time_block("transport/fixed_neighbor_copy", run_neighbor_copy)
+            if args.bench_iters > 0:
+                steady_ms = _measure_steady_state(
+                    "transport/fixed_neighbor_copy",
+                    run_neighbor_copy,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
+                )
+                dtype_bytes = 2 if dtype == jnp.bfloat16 else 4
+                payload_bytes = args.ep_size * args.rows * args.hidden * dtype_bytes
+                print(f"transport_payload={payload_bytes / 1024 / 1024:.3f} MiB")
+                print(f"transport_bandwidth={payload_bytes / (steady_ms / 1e3) / 1e9:.6f} GB/s")
+
+            if expected_neighbor_host is not None:
+                actual_neighbor_host = np.asarray(actual_neighbor)
+                max_abs_float = float(
+                    np.max(np.abs(actual_neighbor_host.astype(np.float32) - expected_neighbor_host.astype(np.float32)))
+                )
+                print(f"transport_max_abs_error: {max_abs_float:.6g}")
+                if max_abs_float != 0.0:
+                    raise AssertionError(f"transport max abs error {max_abs_float:.6g}")
+            return
+
         send_x = jax.random.normal(
             jax.random.key(6597),
             (args.ep_size, args.ep_size, args.rows, args.hidden),

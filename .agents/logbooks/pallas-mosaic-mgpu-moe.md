@@ -801,3 +801,53 @@
 - Next action: Prototype a fixed-neighbor ring/all-gather dispatch layout for
   dispatch-up, using the ragged collective baseline as the correctness oracle
   and preserving built-in `ragged_dot` for W13.
+
+### 2026-06-24 - Fixed-neighbor and ring-gather dispatch-up probes
+
+- Hypothesis: A fixed-neighbor transport pattern might avoid the arbitrary-peer
+  Mosaic GPU remote-ref lowering failure, and an all-gather-style dispatch-up
+  path might be a better built-in-collective baseline than ragged all-to-all for
+  the relevant Grug MoE shape.
+- Changes:
+  - Added `--fixed-neighbor` to `bench_moe_mgpu_block_transport.py`. It copies
+    each rank's `[rows, hidden]` payload to `(rank + 1) % EP` with Pallas
+    Mosaic GPU remote refs, then checks against `np.roll` when reference checks
+    are enabled.
+  - Added `--run-ring-gather-dispatch-up` to
+    `bench_moe_dispatch_up_mosaic_gpu.py`. It mirrors Grug's `ep_ring`
+    dispatch-up structure: all-gather token/routing inputs, select this rank's
+    local expert assignments, run `ragged_dot(auto)` W13/SiLU, and report
+    dropped assignments.
+  - For dispatch-up-only timing, the ring-gather path keeps the buffered output
+    capacity but passes only accepted rows to `ragged_dot`, so 10-25% capacity
+    buffers do not charge padded GMM compute.
+- Commands:
+  - Local validation: `uv run --package marin-levanter python -m py_compile lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py lib/levanter/scripts/bench/bench_moe_mgpu_block_transport.py`
+  - Local checks: `./infra/pre-commit.py --changed-files --fix`
+  - Fixed-neighbor H128 correctness: `... --job-name dlwh-6597-moe-fixed-neighbor-h128 -- ... bench_moe_mgpu_block_transport.py --ep-size 8 --rows 32 --hidden 128 --block-rows 16 --block-cols 128 --dtype bf16 --fixed-neighbor --bench-iters 2 --warmup-steps 1`
+  - Fixed-neighbor H2560 bulk probe: `... --job-name dlwh-6597-moe-fixed-neighbor-h2560-rows2560 -- ... --rows 2560 --hidden 2560 --block-rows 32 --block-cols 256 --fixed-neighbor --skip-reference-checks --bench-iters 2 --warmup-steps 1`
+  - Ring-gather H128 smoke: `... --job-name dlwh-6597-moe-ring-gather-up-h128-nopad-gmm -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --recv-capacity-factor 1.25 --run-ring-gather-dispatch-up --skip-reference-checks --ragged-dot-impl auto --bench-iters 1 --warmup-steps 1`
+  - Ring-gather T/rank=4096 buffer sweep: `... --job-name dlwh-6597-moe-ring-gather-up-t4096-nopad-sweep -- ... for factor in 1.0 1.1 1.25; do ... --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --recv-capacity-factor $factor --run-ring-gather-dispatch-up --skip-reference-checks --ragged-dot-impl auto --bench-iters 2 --warmup-steps 1; done`
+- Result:
+  - Fixed-neighbor H128 was correct: max abs error `0`, steady `1.492 ms` for
+    `0.062 MiB`.
+  - Fixed-neighbor H2560 bulk copy was still `1.486 ms` for `100 MiB`, or
+    `70.6 GB/s`. The lowering works, but the launch/synchronization floor makes
+    a seven-hop ring unattractive versus built-in collectives.
+  - Ring-gather H128 25% capacity smoke lowered and ran at `0.340 ms`, dropped
+    `0`.
+  - Ring-gather T/rank=4096, H=I=2560, E=256, topk=4, Grug-truncated weights:
+    - 0% buffer (`recv_capacity=16384`): dropped `0`, steady `1.816 ms`.
+    - 10% buffer (`recv_capacity=18023`): dropped `0`, steady `1.856 ms`.
+    - 25% buffer (`recv_capacity=20480`): dropped `0`, steady `1.861 ms`.
+- Interpretation: The fixed-neighbor Pallas transport is a useful lowering
+  proof but not a viable ring transport as written. The all-gather/ring-style
+  dispatch-up path using built-in collective transport and built-in
+  `ragged_dot` reaches the <2 ms target across the realistic 0-25% buffer
+  range on the relevant large shape. This is not yet a drop-in production
+  subkernel because the benchmark reports the receiver-local W13 layout and
+  skips reference row-order checks; the next correctness step is to return the
+  metadata needed to compare or combine the ring-gather dispatch-up output.
+- Next action: Productionize the ring-gather dispatch-up path behind the
+  Mosaic/Grug MoE backend boundary, with an explicit correctness check for the
+  receiver-local row metadata or a full combine path.
