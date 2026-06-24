@@ -261,6 +261,22 @@ Marin's `gpu` extra installs the JAX CUDA 13 wheel stack from PyPI. CoreWeave
 GPU nodes must expose NVIDIA driver 580 or newer; `nvidia-smi` should report
 CUDA 13.x.
 
+The `gpu` extra also pulls the CUDA toolchain wheels (`ptxas`/`nvlink` from
+`nvidia-cuda-nvcc`, `libdevice.10.bc` from `nvidia-nvvm`) into the task venv. A
+GPU job's setup scripts then expose them (see
+`iris.cluster.setup.cuda_toolchain_setup_script`): the toolchain binaries are
+symlinked into the venv's `bin` (already on `PATH` once the venv is activated),
+and `libdevice.10.bc` is staged into XLA's default CUDA data dir
+(`./cuda_sdk_lib`) and the working directory, where XLA and Mosaic probe.
+JAX/Pallas Mosaic GPU kernels therefore compile without per-job
+`ptxas`/`nvlink`/`libdevice` setup. The staging is a no-op unless the venv
+carries the toolchain, so CPU/TPU jobs and bring-your-own images are untouched.
+
+This staging is appended only to the default setup for a job that requests the
+`gpu` extra. A job that supplies its own `setup_scripts` (run verbatim) or
+installs JAX another way must stage the toolchain itself — call
+`cuda_toolchain_setup_script()` in its setup.
+
 ### Grug MoE Canary Warm-Node Multinode Smoke
 
 For a realistic Grug MoE multinode smoke, use the GPU path in
