@@ -487,7 +487,9 @@ def _build_logship_sidecar(
         "image": logship_image,
         "imagePullPolicy": "IfNotPresent",
         "restartPolicy": "Always",
-        "command": ["python", "-m", "iris.cluster.backends.k8s.logship"],
+        # iris is installed in the image's .venv (resolved relative to the image
+        # WORKDIR), so launch the same interpreter the controller container does.
+        "command": [".venv/bin/python", "-m", "iris.cluster.backends.k8s.logship"],
         "env": env,
         "volumeMounts": [{"name": _LOGSHIP_VOLUME_NAME, "mountPath": _NODE_POD_LOG_DIR, "readOnly": True}],
         "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}},
