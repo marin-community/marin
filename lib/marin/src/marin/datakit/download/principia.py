@@ -7,10 +7,11 @@ GPT-OSS-generated math problems with answers. Each row has a problem statement,
 answer, topic, and answer type. We render these into a single document.
 """
 
-from zephyr import counters
+from fray import ResourceConfig
+from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import run_document_transform, text_document
+from marin.datakit.download.rollout_transforms import text_document
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "facebook/principia-collection"
@@ -43,13 +44,14 @@ def row_to_doc(row: dict) -> list[dict]:
 
 
 def transform(input_path: str, output_path: str) -> None:
-    run_document_transform(
-        input_path=input_path,
-        output_path=output_path,
-        row_to_doc=row_to_doc,
-        name="principia-transform",
-        ram="4g",
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet)
+        .flat_map(row_to_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
+    ctx = ZephyrContext(name="principia-transform", resources=ResourceConfig(cpu=1, ram="4g"))
+    ctx.execute(pipeline)
 
 
 def download_principia_step() -> StepSpec:

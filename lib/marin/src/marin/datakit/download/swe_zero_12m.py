@@ -9,15 +9,11 @@
 ``exit_status`` (``Submitted``, ``incomplete``, etc.).
 """
 
-from zephyr import counters
+from fray import ResourceConfig
+from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import (
-    load_parquet_batched,
-    render_role_message,
-    run_document_transform,
-    text_document,
-)
+from marin.datakit.download.rollout_transforms import load_parquet_batched, render_role_message, text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -38,14 +34,14 @@ def row_to_doc(row: dict) -> list[dict]:
 
 
 def transform(input_path: str, output_path: str) -> None:
-    run_document_transform(
-        input_path=input_path,
-        output_path=output_path,
-        row_to_doc=row_to_doc,
-        name="swe-zero-12m-transform",
-        ram="32g",
-        loader=load_parquet_batched,
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet_batched)
+        .flat_map(row_to_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
+    ctx = ZephyrContext(name="swe-zero-12m-transform", resources=ResourceConfig(cpu=1, ram="32g"))
+    ctx.execute(pipeline)
 
 
 def download_swe_zero_12m_step() -> StepSpec:

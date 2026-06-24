@@ -16,10 +16,10 @@ missing or empty. Pages are joined with a blank line.
 
 from __future__ import annotations
 
-from zephyr import counters
+from fray import ResourceConfig
+from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import run_document_transform
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -54,14 +54,14 @@ def row_to_doc(row: dict) -> list[dict]:
 
 def transform(input_path: str, output_path: str) -> None:
     """Join per-page text into scalar ``text`` + emit Dolma-shaped parquet shards."""
-    run_document_transform(
-        input_path=input_path,
-        output_path=output_path,
-        row_to_doc=row_to_doc,
-        name="institutional-books-transform",
-        ram="8g",
-        file_glob="data/*.parquet",
+    pipeline = (
+        Dataset.from_files(f"{input_path}/data/*.parquet")
+        .flat_map(load_parquet)
+        .flat_map(row_to_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
+    ctx = ZephyrContext(name="institutional-books-transform", resources=ResourceConfig(cpu=1, ram="8g"))
+    ctx.execute(pipeline)
 
 
 def download_institutional_books_step() -> StepSpec:
