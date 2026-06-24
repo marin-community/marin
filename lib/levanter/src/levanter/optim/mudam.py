@@ -153,11 +153,17 @@ class MudamConfig(OptimizerConfig):
                 optimizer = optax.chain(*components)
                 return optimizer
 
-            transformations = {
-                "muon_left": muon_transform(prefer_input_side=False),
-                "muon_right": muon_transform(prefer_input_side=True),
-                "adamw": adamw_transform(),
-            }
+            # Only include the muon group(s) the mask actually routes to — otherwise
+            # multi_transform inits the unused group on an all-masked tree, which crashes
+            # Mudam's raw shape inference on MaskedNode leaves.
+            transformations = {"adamw": adamw_transform()}
+            if self.prefer_embedding_side:
+                transformations["muon_left"] = muon_transform(prefer_input_side=False)
+                transformations["muon_right"] = muon_transform(prefer_input_side=True)
+            elif self.prefer_input_side:
+                transformations["muon_right"] = muon_transform(prefer_input_side=True)
+            else:
+                transformations["muon_left"] = muon_transform(prefer_input_side=False)
 
             return optax.multi_transform(
                 transformations,
@@ -922,15 +928,10 @@ def init_conditioner(
     if len(p_shape) == 1:
         return ([jnp.zeros((p_shape[0], p_shape[0]), dtype=dtype)], [PartitionSpec()])
 
-    # sharding purpose
-    mesh = hax.partitioning._get_mesh()
-    if mesh.devices.shape == ():
-        mesh = None
-    # get fsdp mesh axis
-    if mesh is not None:
-        fsdp_axis_name = hax.partitioning.ResourceAxis.DATA
-        fsdp_axis = mesh.axis_names.index(fsdp_axis_name)
-        fsdp_size = mesh.devices.shape[fsdp_axis]
+    # sharding purpose. NOTE: replicate the (small) GG conditioners — robust to JAX AbstractMesh
+    # during optimizer init (mesh.devices is unavailable on AbstractMesh). Fine at 130m.
+    mesh = None
+    fsdp_axis_name = hax.partitioning.ResourceAxis.DATA
 
     sharding_out = [PartitionSpec(None)] * len(p_shape)
     preconditioner_types = _get_preconditioner_types(p_shape, max_precond_dim, prefer_input_side, force_full_rank)
