@@ -68,7 +68,7 @@ def _ragged_dot_layout(
     raise RuntimeError(f"No ragged_dot implementation selected (last error: {last_exc})")
 
 
-@partial(custom_vjp, nondiff_argnums=(9, 10))
+@partial(custom_vjp, nondiff_argnums=(9, 10, 11))
 def quantized_ragged_dot(
     lhs,
     q_lhs,
@@ -81,10 +81,15 @@ def quantized_ragged_dot(
     group_sizes,
     preferred_element_type,
     implementation,
+    grad_dtype,
 ):
     """Forward f8 grouped matmul on already-quantized operands; the custom_vjp carries the
-    E5M2 output-grad backward. Full-precision ``lhs``/``rhs`` are passed only to route their
-    gradients (the forward consumes the quantized operands)."""
+    ``grad_dtype`` output-grad backward. Full-precision ``lhs``/``rhs`` are passed only to route
+    their gradients (the forward consumes the quantized operands).
+
+    ``grad_dtype`` selects the backward gradient format: E5M2 (the Transformer-Engine hybrid
+    recipe, default) or E4M3 (the all-E4M3 recipe; with coarse per-tensor scaling this is the
+    DeepSeek-style format *without* its fine-grained scaling — see logbook GFP8-023)."""
     return _ragged_dot_layout(q_lhs, q_rhs, group_sizes, _DEFAULT_DIM_NUMS, preferred_element_type, implementation)
 
 
@@ -100,19 +105,20 @@ def quantized_ragged_dot_fwd(
     group_sizes,
     preferred_element_type,
     implementation,
+    grad_dtype,
 ):
     out = _ragged_dot_layout(q_lhs, q_rhs, group_sizes, _DEFAULT_DIM_NUMS, preferred_element_type, implementation)
     res = (q_lhs, lhs_scale, q_rhs, rhs_scale, out_grad_scale, out_grad_amax_history, group_sizes)
     return out, res
 
 
-def quantized_ragged_dot_bwd(preferred_element_type, implementation, res, g):
+def quantized_ragged_dot_bwd(preferred_element_type, implementation, grad_dtype, res, g):
     q_lhs, lhs_scale, q_rhs, rhs_scale, out_grad_scale, out_grad_amax_history, group_sizes = res
 
     new_out_grad_scale, new_out_grad_amax_history = _new_scale_and_history(
-        g, jnp.float8_e5m2, out_grad_scale, out_grad_amax_history
+        g, grad_dtype, out_grad_scale, out_grad_amax_history
     )
-    q_g = quantize(g, jnp.float8_e5m2, new_out_grad_scale, preferred_element_type)
+    q_g = quantize(g, grad_dtype, new_out_grad_scale, preferred_element_type)
 
     # dlhs[M,K] = dout[M,N] @ rhs[G,K,N]^T  (f8 operands, dequantized by the rhs and grad scales)
     grad_lhs = _ragged_dot_layout(q_g, q_rhs, group_sizes, _DLHS_DIM_NUMS, preferred_element_type, implementation)
@@ -141,6 +147,7 @@ def fp8_scaled_ragged_dot(
     rhs_amax_history,
     grad_amax_history,
     quantize_compute_type,
+    grad_dtype=jnp.float8_e5m2,
     implementation: Implementation = "auto",
 ):
     """``ragged_dot`` drop-in for per-tensor delayed-scaling FP8 (direct quantization).
@@ -154,6 +161,8 @@ def fp8_scaled_ragged_dot(
             output gradient (delayed-scaling state).
         lhs_amax_history, rhs_amax_history, grad_amax_history: amax windows for the same.
         quantize_compute_type: dtype operands are cast to before E4M3 quantization.
+        grad_dtype: backward output-grad format — ``float8_e5m2`` (hybrid recipe, default) or
+            ``float8_e4m3fn`` (all-E4M3 recipe).
         implementation: ragged-dot backend (see :func:`haliax.nn.ragged_dot.ragged_dot`).
 
     Returns:
@@ -179,6 +188,7 @@ def fp8_scaled_ragged_dot(
         group_sizes,
         preferred_element_type,
         implementation,
+        grad_dtype,
     )
     y = out_dq(preferred_element_type, new_lhs_scale, new_rhs_scale, y)
     if pad:

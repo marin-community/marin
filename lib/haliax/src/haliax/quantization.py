@@ -293,6 +293,8 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
     kernel_amax_history: jnp.ndarray
     compute_dtype: DTypeLike | None = eqx.field(static=True)
     implementation: Implementation = eqx.field(static=True, default="auto")
+    # Backward output-grad format: E5M2 (Transformer-Engine hybrid, default) or E4M3 (all-E4M3).
+    grad_dtype: DTypeLike = eqx.field(static=True, default=jnp.float8_e5m2)
 
     @classmethod
     def init(
@@ -300,6 +302,7 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
         amax_history_length: int = 1024,
         compute_dtype: DTypeLike | None = None,
         implementation: Implementation = "auto",
+        grad_dtype: DTypeLike = jnp.float8_e5m2,
     ):
         return cls(
             input_scale=jnp.ones(1, dtype=jnp.float32),
@@ -310,6 +313,7 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
             kernel_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
             compute_dtype=compute_dtype,
             implementation=implementation,
+            grad_dtype=grad_dtype,
         )
 
     def __call__(self, lhs, rhs, group_sizes):
@@ -327,6 +331,7 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
             rhs_amax_history=self.kernel_amax_history,
             grad_amax_history=self.output_grad_amax_history,
             quantize_compute_type=comp_dtype,
+            grad_dtype=self.grad_dtype,
             implementation=self.implementation,
         )
 

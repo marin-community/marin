@@ -1086,3 +1086,39 @@ no dissent). The backward's mixed e4m3×e5m2 GEMM is NOT a hardware wall:
   emitter (thread separate a/b element types through `wgmma_m64` → template `.{a_el_ty}.{b_el_ty}`, drop
   the line-359 check). Quick interim alternative (no fork): cast the e5m2 grad→e4m3 before the wgmma
   (JAX's own trick), trading the e5m2 range for zero kernel surgery. A/B the two numerically.
+
+### 2026-06-24 — GFP8-023: M0 step 1 — grad-dtype knob + CPU numerics (E4M3 grads ≥ E5M2 for benign-to-moderate range)
+- **Context:** M0 = the no-kernel-fork starting point of the Mosaic FP8 backward (all-E4M3, coarse
+  per-tensor scaling). It shares DeepSeek's *dtype* (E4M3 grads) but NOT its fine-grained scaling, so
+  it's the cheap precursor, not the validated DeepSeek recipe (= Path B). First increment settles the
+  one M0 question that is CPU-answerable: how much does the all-E4M3 backward cost vs the E5M2 hybrid?
+  (Quantization error is backend-independent, so CPU XLA gives the same numerics an H100 run would; only
+  speed needs H100.)
+- **Change:** threaded a `grad_dtype` knob (default `float8_e5m2` = unchanged behavior) through
+  `fp8_ragged.py` (`quantized_ragged_dot` nondiff arg + `fp8_scaled_ragged_dot`) and `Fp8RaggedDotOp`
+  (static field + `init`). E5M2 default path unchanged: all 6 `test_fp8_ragged.py` pass; pyrefly clean.
+- **Probe:** `bench_ragged_fp8_grad_numerics.py` — backprops the MoE expert MLP (two grouped GEMMs +
+  gated act), reports rel-Frobenius error of (dx, dw13, dw2) vs a bf16 reference for grad_dtype ∈
+  {E5M2, E4M3}, across injected output-cotangent distributions of increasing dynamic range. CPU/XLA,
+  T2048 D256 F128 E8.
+- **Result (rel-err vs bf16; dx / dw13 / dw2):**
+
+  | cotangent (dyn. range) | E5M2 | E4M3 |
+  |---|---|---|
+  | gaussian (~1×) | .094 / .094 / .081 | **.068 / .069 / .067** |
+  | moderate (~2–3 decades) | .094 / .094 / .080 | **.068 / .068 / .066** |
+  | heavytail (~7 decades, extreme) | .965 / .968 / .969 | .999 / .999 / .999 |
+
+- **Finding:** for benign-to-moderate gradient dynamic range, **E4M3 grads are ~28% MORE accurate than
+  E5M2** (extra mantissa bit wins; the narrower range doesn't bite) — consistent with DeepSeek's rationale
+  for going all-E4M3. Only under extreme (~7-decade) spread do BOTH per-tensor formats collapse (E4M3
+  marginally worse), and that's a *scaling-granularity* failure, not a format one → the fix there is
+  fine-grained scaling (Path B), not E5M2 (Path A). So M0 (all-E4M3 coarse) is numerically competitive-
+  to-better for realistic gradients; the dynamic-range worry about E4M3 grads only materializes in a
+  regime where E5M2 also fails.
+- **Caveat:** synthetic cotangents. Real Grug gradient tails are unknown; decisive numerics need a real
+  short training run or captured grads. But the first-order signal favors M0, and weakens the case for
+  Path A (E5M2) as a numerics play.
+- **Next (M0 step 2):** wire a `"mosaic"` branch into `_ragged_dot_layout` dispatching the three grouped
+  GEMMs to the stock kernels (fwd/dgrad → `ragged_dot_mgpu`; wgrad → `transposed_ragged_dot_mgpu`), then
+  the end-to-end fwd+bwd speed run on H100 (the only thing left that needs the GPU).
