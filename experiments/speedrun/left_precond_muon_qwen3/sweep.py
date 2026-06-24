@@ -76,6 +76,11 @@ VARIANT_LRS: dict[str, tuple[float, ...]] = {
 VARIANTS: tuple[str, ...] = tuple(
     v.strip() for v in os.environ.get("VARIANTS", "inner_only,full,full_fro,full_outer_msign").split(",")
 )
+# Override the per-variant LR list for ALL launched variants (e.g. to resume a single failed run after a
+# preemption/SIGSEGV without re-launching its siblings). Same RUN_TAG ⟹ same run_id ⟹ resumes the checkpoint.
+LR_OVERRIDE: tuple[float, ...] | None = (
+    tuple(float(x) for x in os.environ["LR_OVERRIDE"].split(",")) if os.environ.get("LR_OVERRIDE") else None
+)
 
 
 @dataclass(frozen=True)
@@ -194,7 +199,7 @@ def main() -> None:
     if os.getenv("CI") is not None:
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
-    steps = [_build_step(m, v) for v in VARIANTS for m in VARIANT_LRS[v]]
+    steps = [_build_step(m, v) for v in VARIANTS for m in (LR_OVERRIDE or VARIANT_LRS[v])]
     logger.info(
         "Left-precond Muon 130m sweep (solver=%s qk_steps=%d): %d runs (%s)",
         SOLVER,
