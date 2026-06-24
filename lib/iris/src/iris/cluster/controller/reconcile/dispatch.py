@@ -69,6 +69,7 @@ def _build_run_request_fields(
     task_id: str = "",
     attempt_id: int = 0,
     priority: int = 0,
+    container_profile: int = 0,
 ) -> job_pb2.RunTaskRequest:
     """Build a RunTaskRequest carrying the per-job fields shared by the template
     and per-attempt construction paths.
@@ -91,6 +92,7 @@ def _build_run_request_fields(
         task_id=task_id,
         attempt_id=attempt_id,
         priority=priority,
+        container_profile=container_profile,
     )
 
 
@@ -128,6 +130,7 @@ def run_request_template(
         ports_json=job.ports_json,
         constraints_json=job.constraints_json,
         task_image=job.task_image,
+        container_profile=job.container_profile,
     )
     for filename, data in reads.get_workdir_files(snap, job_id).items():
         template.entrypoint.workdir_files[filename] = data
@@ -156,6 +159,7 @@ def build_run_request(
         attempt_id=attempt_id,
         # Priority selects the Kueue WorkloadPriorityClass on the direct path.
         priority=row.priority_band,
+        container_profile=row.container_profile,
     )
     # Load inline workdir files from the job_workdir_files table.
     for filename, data in reads.get_workdir_files(cur, row.job_id).items():
