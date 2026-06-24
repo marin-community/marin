@@ -633,3 +633,71 @@
 - Next action: Revisit block movement with a minimal standalone remote block
   copy kernel or an all-gather-style pipeline before reintroducing it into the
   MoE dispatch benchmark.
+
+### 2026-06-24 - Block transport TMA and built-in GMM capacity probes
+
+- Hypothesis: A coalesced SMEM-mediated remote block transport could replace
+  the row-wise MoE dispatch transport, then feed built-in grouped matmul with
+  realistic 0-25% capacity buffers.
+- Changes:
+  - Added `bench_moe_mgpu_block_transport.py`, a standalone transport probe
+    that copies packed `[source, destination, rows, hidden]` blocks through
+    SMEM to remote refs and checks the all-to-all transpose on small shapes.
+  - Added hidden-column tiling, scratch-output mode, and loop-tile mode to
+    isolate Mosaic GPU TMA lowering constraints.
+- Commands:
+  - Local validation: `uv run --package marin-levanter python -m py_compile lib/levanter/scripts/bench/bench_moe_mgpu_block_transport.py`
+  - Local checks: `./infra/pre-commit.py --changed-files --fix`
+  - H128 direct transport: `... --job-name dlwh-6597-moe-block-transport-h128-hostcheck -- ... bench_moe_mgpu_block_transport.py --ep-size 8 --rows 32 --hidden 128 --block-rows 16 --dtype bf16 --bench-iters 2 --warmup-steps 1`
+  - H128 column-tiled/flat/loop/scratch variants:
+    `dlwh-6597-moe-block-transport-h128-coltile`,
+    `dlwh-6597-moe-block-transport-h128-flattiles`,
+    `dlwh-6597-moe-block-transport-h128-scratchout`,
+    `dlwh-6597-moe-block-transport-h128-looptiles`.
+  - Large packed transport failures used the relevant T/rank=4096, topk=4,
+    25% send-buffer shape: `rows=2560`, `hidden=2560`, `block_cols=256`,
+    jobs `dlwh-6597-moe-block-transport-t4096buf125-b64`,
+    `dlwh-6597-moe-block-transport-t4096buf125-b32`,
+    `dlwh-6597-moe-block-transport-t4096buf125-flat-b32c256`,
+    `dlwh-6597-moe-block-transport-t4096buf125-scratch-b32c256`, and
+    `dlwh-6597-moe-block-transport-t4096buf125-loop-b32c256`.
+  - Built-in grouped matmul capacity probes:
+    `dlwh-6597-moe-ragged-dot-synth-t4096-buf125` and
+    `dlwh-6597-moe-ragged-dot-synth-t4096-buf100-110`, with
+    `JAX_OPTIMIZATION_LEVEL=O1` and XLA flags
+    `--xla_gpu_triton_gemm_any=True --xla_gpu_enable_latency_hiding_scheduler=true`.
+- Result:
+  - H128 transport is correct for all retained variants. Direct host-check:
+    max error 0, steady mean 1.545 ms for 0.5 MiB. Flattened column-tiled:
+    max error 0, steady mean 1.409 ms. Scratch-output: max error 0, steady
+    mean 1.456 ms. Loop-tiles: max error 0, steady mean 1.619 ms.
+  - Large direct block copy with `block_rows=64` exceeded SMEM:
+    `smem_bytes=327688 > max_smem_bytes=232448`.
+  - Large `block_rows=32`, untiled hidden copy failed because Mosaic async
+    copies require each dimension to be <=256 elements: shape `(1, 32, 2560)`.
+  - Large column-tiled copies failed TMA lowering when the remote peer id or
+    remote TMA descriptor depended on grid ids: failures reported
+    `Failed to recompute the async_copy peer id on the host` for
+    `gpu.block_id z`, then `gpu.block_id y`, and loop-tiles reduced this to
+    `gpu.block_id x` because the peer id was still `program_id(0)`.
+  - Writing to a separate scratch output did not change the large TMA failure.
+  - Built-in `ragged_dot(auto)` W13/SiLU on the relevant H=I=2560,
+    E=256, topk=4, T/rank=4096 synthetic receive layout:
+    - 0% buffer (`recv_capacity=16384`, 512 rows/expert): 1.145 ms steady,
+      3001 TFLOP/s measured, AI 426.7 flop/byte.
+    - ~10% buffer (`recv_capacity=18048`, 564 rows/expert): 1.402 ms steady,
+      2700 TFLOP/s measured, AI 462.2 flop/byte.
+    - 25% buffer (`recv_capacity=20480`, 640 rows/expert): 1.363 ms steady,
+      3150 TFLOP/s measured, AI 512.0 flop/byte.
+- Interpretation: Direct arbitrary-peer Mosaic GPU remote TMA copies are not a
+  viable dispatch transport with the current structure because the peer id must
+  be host-recomputable and cannot come from a grid/program id. The JAX
+  all-gather matmul avoids this by sending to a fixed neighbor derived from
+  `axis_index`, so an overlapped Pallas transport would need a ring/all-gather
+  style schedule or multiple fixed-peer kernels. For the target shape, built-in
+  grouped matmul is already around 1.1-1.4 ms across realistic 0-25% buffers;
+  the path to <2 ms end-to-end depends on using an efficient collective
+  transport rather than replacing NCCL with arbitrary-peer Pallas TMA.
+- Next action: Keep built-in `ragged_dot` as the W13 consumer and switch the
+  dispatch/transport plan to either a built-in collective all-to-all/all-gather
+  route or an all-gather-style fixed-neighbor ring if overlap is still required.
