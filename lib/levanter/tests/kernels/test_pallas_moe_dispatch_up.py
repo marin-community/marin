@@ -63,6 +63,46 @@ def test_moe_dispatch_up_layout_reference_uses_expert_major_source_rank_order():
         np.array([[0, 3], [0, 3]], dtype=np.int32),
     )
     np.testing.assert_array_equal(
+        np.asarray(prepacked.send_expert_count_by_dst),
+        np.array(
+            [
+                [[2, 1], [1, 2]],
+                [[1, 2], [2, 1]],
+            ],
+            dtype=np.int32,
+        ),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(prepacked.send_expert_base_by_dst),
+        np.array(
+            [
+                [[0, 2], [0, 1]],
+                [[0, 1], [0, 2]],
+            ],
+            dtype=np.int32,
+        ),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(prepacked.recv_source_expert_count),
+        np.array(
+            [
+                [[2, 1], [1, 2]],
+                [[1, 2], [2, 1]],
+            ],
+            dtype=np.int32,
+        ),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(prepacked.recv_source_expert_base),
+        np.array(
+            [
+                [[0, 3], [2, 4]],
+                [[0, 3], [1, 5]],
+            ],
+            dtype=np.int32,
+        ),
+    )
+    np.testing.assert_array_equal(
         np.asarray(layout.recv_valid),
         np.ones((2, 6), dtype=np.bool_),
     )

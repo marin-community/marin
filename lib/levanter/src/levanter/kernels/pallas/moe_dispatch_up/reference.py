@@ -37,6 +37,10 @@ class MoeDispatchUpPrepackedSend(NamedTuple):
     send_count_by_dst: jax.Array
     rows_per_expert: jax.Array
     expert_base: jax.Array
+    send_expert_base_by_dst: jax.Array
+    send_expert_count_by_dst: jax.Array
+    recv_source_expert_base: jax.Array
+    recv_source_expert_count: jax.Array
     overflow_count: jax.Array
 
 
@@ -143,6 +147,13 @@ def prepack_moe_dispatch_up_reference(
     counts = _counts_by_destination_source_expert(expert_ids_by_rank, num_experts=num_experts)
     rows_per_expert = jnp.sum(counts, axis=2, dtype=jnp.int32)
     expert_base = jnp.cumsum(rows_per_expert, axis=1, dtype=jnp.int32) - rows_per_expert
+    send_expert_count_by_dst = jnp.transpose(counts, (2, 0, 1))
+    send_expert_base_by_dst = jnp.cumsum(send_expert_count_by_dst, axis=2, dtype=jnp.int32) - send_expert_count_by_dst
+    recv_source_expert_count = jnp.transpose(counts, (0, 2, 1))
+    recv_source_expert_base = jnp.transpose(
+        expert_base[:, :, None] + jnp.cumsum(counts, axis=2, dtype=jnp.int32) - counts,
+        (0, 2, 1),
+    )
     rows_per_rank = jnp.sum(rows_per_expert, axis=1, dtype=jnp.int32)
     overflow_count = jnp.sum(jnp.maximum(rows_per_rank - recv_capacity, 0), dtype=jnp.int32)
 
@@ -202,6 +213,10 @@ def prepack_moe_dispatch_up_reference(
         send_count,
         rows_per_expert,
         expert_base,
+        send_expert_base_by_dst,
+        send_expert_count_by_dst,
+        recv_source_expert_base,
+        recv_source_expert_count,
         overflow_count,
     )
 

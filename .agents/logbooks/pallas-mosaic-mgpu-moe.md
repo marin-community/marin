@@ -360,3 +360,29 @@
   Mosaic work on dispatch/overlap only where it can improve end-to-end time.
   Benchmark capacity should be expressed as a per-rank routed-token factor:
   1.0 for no buffer and roughly 1.1-1.25 for normal imbalance.
+
+### 2026-06-24 - Source/expert readiness metadata
+
+- Hypothesis: The overlapped dispatch/W13 kernel needs explicit
+  `(src_rank, local_expert)` row ranges before Mosaic semaphores can signal
+  readiness at the granularity described in the spec. Encoding those ranges in
+  the prepacked reference representation should make the later Pallas scheduler
+  less error-prone.
+- Commands:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/kernels/test_pallas_moe_dispatch_up.py -q`
+  - `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py --synthetic-layout --ep-size 1 --tokens-per-rank 8 --experts-per-rank 2 --top-k 2 --hidden 8 --intermediate 8 --dtype fp32 --weight-init grug_truncated --w13-impl ragged_dot --ragged-dot-impl xla --bench-iters 1 --warmup-steps 1`
+  - `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py --ep-size 1 --tokens-per-rank 8 --experts-per-rank 2 --top-k 2 --hidden 8 --intermediate 8 --dtype fp32 --weight-init grug_truncated --w13-impl ragged_dot --ragged-dot-impl xla --bench-iters 1 --warmup-steps 1`
+- Config: CPU smoke shapes only. The new metadata records source-side send
+  ranges `[src_rank, dst_rank, local_expert]` and destination receive ranges
+  `[dst_rank, src_rank, local_expert]`.
+- Result: Kernel tests passed (`11 passed`). Synthetic and routed benchmark
+  smokes completed successfully. The hand-authored routing test now pins exact
+  send and receive range matrices for a two-rank, two-local-expert example.
+- Interpretation: This does not implement overlap yet, but it establishes the
+  static range contract required by the spec's `ready[src_rank, local_expert]`
+  design. The next Mosaic step is to use these ranges in a scratch/ready
+  dispatch variant whose producer signals per source/expert range instead of a
+  single full-buffer fan-in.
+- Next action: Add the Mosaic source/expert ready dispatch variant, validate it
+  against the existing layout reference, then attach W13 scheduling to those
+  ready ranges.
