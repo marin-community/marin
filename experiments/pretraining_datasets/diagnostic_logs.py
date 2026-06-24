@@ -7,7 +7,7 @@ from marin.datakit.download.diagnostic_logs import ghalogs_public_normalize_step
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 ghalogs_normalized = ghalogs_public_normalize_steps()[-1].as_executor_step()
 

@@ -8,7 +8,7 @@ from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 svg_normalized = svgfind_creativecommons_normalize_steps()[-1].as_executor_step()
 
