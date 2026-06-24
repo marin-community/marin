@@ -53,8 +53,26 @@ _SELECTED_IMPL_LOGGED: set[str] = set()
 _AUTOTUNE_ON_MISS_ENV_VAR = "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS"
 _AUTOTUNE_KERNEL_NAME = "fused_cross_entropy_loss"
 _AUTOTUNE_CACHE_FILENAME = "block_sizes_v1.json"
-_AUTOTUNE_BLOCK_SIZE_CACHE: dict[str, BlockSizes] = {}
+
+
+class _NoViableCandidate:
+    """Sentinel cached for a key whose autotune sweep found no viable candidate.
+
+    Persisting this negative result keeps a backend where the kernel cannot
+    compile (e.g. batched_xla with no viable block size) from re-sweeping and
+    re-failing every candidate on every process startup. The cache key embeds a
+    hash of the kernel jaxpr, so a kernel fix produces a new key and re-triggers
+    tuning rather than reading this stale negative entry.
+    """
+
+
+_NO_VIABLE_CANDIDATE = _NoViableCandidate()
+_AUTOTUNE_NEGATIVE_CACHE_MARKER = "no_viable_candidate"
+
+_AutotuneCacheEntry = BlockSizes | _NoViableCandidate
+_AUTOTUNE_BLOCK_SIZE_CACHE: dict[str, _AutotuneCacheEntry] = {}
 _AUTOTUNE_CACHE_LOADED = False
+_AUTOTUNE_NO_CACHE_DIR_WARNED = False
 _AUTOTUNE_COMPILE_HIT_THRESHOLD_S = 0.20
 _VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 
@@ -153,6 +171,25 @@ def _kernel_autotune_cache_url() -> str | None:
     )
 
 
+def _warn_autotune_cache_disabled_once() -> None:
+    """Warn once when an autotune sweep runs with no compilation cache configured.
+
+    Without ``jax_compilation_cache_dir`` set (e.g. an Iris job that did not pick
+    up ``MARIN_PREFIX``), the autotune cache silently no-ops and every process
+    re-sweeps on startup. Surfacing this makes the otherwise-invisible miss
+    diagnosable.
+    """
+    global _AUTOTUNE_NO_CACHE_DIR_WARNED
+    if _AUTOTUNE_NO_CACHE_DIR_WARNED:
+        return
+    _AUTOTUNE_NO_CACHE_DIR_WARNED = True
+    logger.warning(
+        "Fused CE autotune is sweeping but no JAX compilation cache dir is configured "
+        "(jax_compilation_cache_dir / JAX_COMPILATION_CACHE_DIR unset); results will not persist "
+        "and every process will re-sweep on startup."
+    )
+
+
 def _ensure_autotune_cache_loaded() -> None:
     global _AUTOTUNE_CACHE_LOADED
     if _AUTOTUNE_CACHE_LOADED:
@@ -165,6 +202,9 @@ def _ensure_autotune_cache_loaded() -> None:
         payload = autotune_cache_utils.load_json(cache_url)
         for key, entry in payload.items():
             if not isinstance(key, str) or not isinstance(entry, dict):
+                continue
+            if entry.get(_AUTOTUNE_NEGATIVE_CACHE_MARKER) is True:
+                _AUTOTUNE_BLOCK_SIZE_CACHE[key] = _NO_VIABLE_CANDIDATE
                 continue
             b = entry.get("b_block_size")
             h = entry.get("h_block_size")
@@ -182,14 +222,16 @@ def _persist_autotune_cache() -> None:
     if cache_url is None:
         return
     try:
-        payload = {
-            key: {
-                "b_block_size": value.b_block_size,
-                "h_block_size": value.h_block_size,
-                "v_block_size": value.v_block_size,
-            }
-            for key, value in _AUTOTUNE_BLOCK_SIZE_CACHE.items()
-        }
+        payload: dict[str, dict[str, object]] = {}
+        for key, value in _AUTOTUNE_BLOCK_SIZE_CACHE.items():
+            if isinstance(value, _NoViableCandidate):
+                payload[key] = {_AUTOTUNE_NEGATIVE_CACHE_MARKER: True}
+            else:
+                payload[key] = {
+                    "b_block_size": value.b_block_size,
+                    "h_block_size": value.h_block_size,
+                    "v_block_size": value.v_block_size,
+                }
         autotune_cache_utils.write_json(cache_url, payload)
     except Exception as exc:
         logger.debug("Unable to persist fused CE autotune cache to %s: %s", cache_url, exc)
@@ -414,8 +456,21 @@ def _autotune_block_sizes_on_miss(
     )
     cached = _AUTOTUNE_BLOCK_SIZE_CACHE.get(cache_key)
     if cached is not None:
+        if isinstance(cached, _NoViableCandidate):
+            logger.info(
+                "Fused CE autotune negative-cache hit for %s; no viable block-size candidate. "
+                "Skipping sweep and falling back.",
+                impl_name,
+            )
+            raise ExceptionGroup(
+                f"Fused CE autotune found no viable block-size candidates for {impl_name} (negative-cached)",
+                [RuntimeError("autotune previously found no viable candidate for this key")],
+            )
         logger.info("Fused CE autotune cache hit for %s. Using cached block sizes %s.", impl_name, cached)
         return cached
+
+    if _kernel_autotune_cache_url() is None:
+        _warn_autotune_cache_disabled_once()
 
     candidates = _candidate_block_sizes(impl_name, inferred, x=x, w=w, dtype=dtype)
     logger.info(
@@ -447,6 +502,11 @@ def _autotune_block_sizes_on_miss(
             best = candidate
 
     if best is None:
+        # Negative-cache the failure so we don't re-sweep every failing candidate
+        # on the next process start. The jaxpr-derived cache key invalidates this
+        # entry automatically if the kernel changes.
+        _AUTOTUNE_BLOCK_SIZE_CACHE[cache_key] = _NO_VIABLE_CANDIDATE
+        _persist_autotune_cache()
         raise ExceptionGroup(
             f"Fused CE autotune found no viable block-size candidates for {impl_name}",
             errors or [RuntimeError(f"No candidates generated for {impl_name}.")],

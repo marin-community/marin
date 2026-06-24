@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 import warnings
 from typing import cast
 
@@ -1408,6 +1409,98 @@ def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
     assert winner_1 == faster
     assert winner_2 == faster
     assert calls["bench"] == 3
+
+
+def _run_autotune_miss(impl_name: str = "pallas_tpu", *, vocab: int = 16):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, vocab), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+
+    def fake_impl(x_raw, labels_raw, w_raw, **kwargs):
+        del labels_raw, kwargs
+        logits = jnp.einsum("bh,hv->bv", x_raw, w_raw)
+        return jnp.sum(logits, axis=-1), jnp.zeros((x_raw.shape[0],), dtype=jnp.float32)
+
+    return fused_api._autotune_block_sizes_on_miss(
+        impl_name=impl_name,
+        fn=fake_impl,
+        x=x,
+        labels=y,
+        w=w,
+        inferred=inferred,
+        dtype=jnp.float32,
+        logit_soft_cap=None,
+        precision=None,
+        return_argmax=False,
+    )
+
+
+def test_pallas_autotune_negative_caches_no_viable_candidate(monkeypatch: pytest.MonkeyPatch):
+    """A sweep where every candidate fails is negative-cached, so a second call does not re-sweep."""
+    calls = {"bench": 0}
+    monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
+    monkeypatch.setattr(fused_api, "_ensure_autotune_cache_loaded", lambda: None)
+    monkeypatch.setattr(fused_api, "_persist_autotune_cache", lambda: None)
+    monkeypatch.setattr(
+        fused_api,
+        "_candidate_block_sizes",
+        lambda impl_name, inferred_block_sizes, **kwargs: [inferred_block_sizes],
+    )
+
+    def failing_benchmark(**kwargs):
+        calls["bench"] += 1
+        raise RuntimeError("candidate cannot compile on this backend")
+
+    monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", failing_benchmark)
+    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
+
+    for _ in range(2):
+        with pytest.raises(ExceptionGroup, match="no viable block-size candidates"):
+            _run_autotune_miss()
+
+    # Second call short-circuits on the negative cache instead of re-sweeping.
+    assert calls["bench"] == 1
+
+
+def test_autotune_negative_cache_round_trips(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """A negative-cache entry persists to disk and reloads as the sentinel."""
+    monkeypatch.setattr(autotune_cache_utils, "get_jax_compilation_cache_dir", lambda: str(tmp_path))
+    key = "pallas_tpu|tpu|tpu v5|4|8|16|float32|float32|float32|None|None|False|jaxpr=abc"
+
+    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
+    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE[key] = fused_api._NO_VIABLE_CANDIDATE
+    fused_api._persist_autotune_cache()
+
+    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
+    fused_api._AUTOTUNE_CACHE_LOADED = False
+    fused_api._ensure_autotune_cache_loaded()
+
+    assert fused_api._AUTOTUNE_BLOCK_SIZE_CACHE[key] is fused_api._NO_VIABLE_CANDIDATE
+    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
+
+
+def test_autotune_warns_once_when_no_compilation_cache_dir(monkeypatch: pytest.MonkeyPatch, caplog):
+    """A sweep with no compilation cache dir logs a single diagnostic warning."""
+    monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
+    monkeypatch.setattr(fused_api, "_ensure_autotune_cache_loaded", lambda: None)
+    monkeypatch.setattr(fused_api, "_persist_autotune_cache", lambda: None)
+    monkeypatch.setattr(fused_api, "_kernel_autotune_cache_url", lambda: None)
+    monkeypatch.setattr(
+        fused_api,
+        "_candidate_block_sizes",
+        lambda impl_name, inferred_block_sizes, **kwargs: [inferred_block_sizes],
+    )
+    monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", lambda **kwargs: 1.0)
+    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
+    monkeypatch.setattr(fused_api, "_AUTOTUNE_NO_CACHE_DIR_WARNED", False)
+
+    with caplog.at_level(logging.WARNING, logger=fused_api.__name__):
+        _run_autotune_miss(vocab=16)
+        _run_autotune_miss(vocab=32)  # distinct cache key → second sweep, but no second warning
+
+    warnings_logged = [r for r in caplog.records if "no JAX compilation cache dir" in r.getMessage()]
+    assert len(warnings_logged) == 1
 
 
 def test_fused_ce_autotune_cache_url_uses_jax_cache_subdir(monkeypatch: pytest.MonkeyPatch):

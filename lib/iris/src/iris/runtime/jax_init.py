@@ -24,6 +24,8 @@ from iris.cluster.client.job_info import get_job_info
 
 logger = logging.getLogger(__name__)
 
+_COMPILATION_CACHE_SUBDIR = "compilation-cache"
+
 _JAX_ENV_KEYS = (
     "IRIS_TASK_ID",
     "IRIS_NUM_TASKS",
@@ -58,6 +60,61 @@ def _log_jax_bootstrap_inputs(job_info, *, port: int, endpoint_name: str) -> Non
         port,
         env_snapshot or "none",
     )
+
+
+def _guard_remote_xla_subcache(jax_module, cache_dir: str) -> None:
+    """Disable XLA's per-fusion autotune sub-cache when the compile cache is remote.
+
+    JAX places XLA sub-caches (autotune, kernel) as subdirectories of the
+    compilation cache dir, but they use XLA's C++ ``tsl::Env`` which only
+    supports local paths and crashes on ``gs://``/``s3://``. The sub-cache is
+    ephemeral (skipped entirely on a JAX cache hit), so we disable it rather
+    than redirect it. Mirrors Marin's ``resolve_training_env`` so Iris jobs that
+    don't route through Marin get the same protection.
+    """
+    if "://" not in cache_dir:
+        return
+    if os.environ.get("JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"):
+        return
+    os.environ["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] = "none"
+    jax_module.config.update("jax_persistent_cache_enable_xla_caches", "none")
+    logger.info("XLA sub-caches disabled (compilation cache is remote: %s)", cache_dir)
+
+
+def configure_jax_compilation_cache() -> None:
+    """Ensure a region-local JAX compilation cache dir is configured for this job.
+
+    Iris jobs that don't route through Marin's ``resolve_training_env`` (custom
+    training runs, perf scripts) otherwise get no compilation cache at all, so
+    every process re-runs XLA compilation and kernel autotune sweeps on each
+    start. We default the cache to a ``compilation-cache`` subdirectory of
+    ``MARIN_PREFIX`` — which each cluster sets to its in-region bucket, so the
+    cache stays region-local and incurs no cross-region egress.
+
+    If the cache dir is already set (by Marin, the trainer config, or the user)
+    we leave it untouched. If neither the cache dir nor ``MARIN_PREFIX`` is set,
+    we log a warning so the silent disable is diagnosable rather than invisible.
+    """
+    import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
+
+    existing = os.environ.get("JAX_COMPILATION_CACHE_DIR")
+    if existing:
+        _guard_remote_xla_subcache(jax, existing)
+        return
+
+    marin_prefix = os.environ.get("MARIN_PREFIX")
+    if not marin_prefix:
+        logger.warning(
+            "JAX compilation cache disabled: neither JAX_COMPILATION_CACHE_DIR nor MARIN_PREFIX is set. "
+            "XLA compilation and kernel autotune results will not persist across runs."
+        )
+        return
+
+    cache_dir = f"{marin_prefix.rstrip('/')}/{_COMPILATION_CACHE_SUBDIR}"
+    os.environ["JAX_COMPILATION_CACHE_DIR"] = cache_dir
+    jax.config.update("jax_compilation_cache_dir", cache_dir)
+    logger.info("JAX compilation cache: %s", cache_dir)
+    _guard_remote_xla_subcache(jax, cache_dir)
 
 
 def _poll_for_coordinator(
@@ -122,6 +179,11 @@ def initialize_jax(
         poll_interval: Initial backoff delay for polling (seconds).
     """
     import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
+
+    # Configure the compilation cache before any compile happens. This runs
+    # regardless of the distributed-init path below (TPU, single-task, or the
+    # endpoint dance) so every Iris job benefits, not just Marin-launched ones.
+    configure_jax_compilation_cache()
 
     # Idempotent: skip if jax.distributed has already been initialized. This
     # lets a caller that must touch JAX before levanter.initialize (e.g. via

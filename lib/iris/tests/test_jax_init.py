@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass, field
 from unittest.mock import MagicMock, patch
 
@@ -13,7 +15,11 @@ pytest.importorskip("jax")
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
-from iris.runtime.jax_init import _poll_for_coordinator, initialize_jax
+from iris.runtime.jax_init import (
+    _poll_for_coordinator,
+    configure_jax_compilation_cache,
+    initialize_jax,
+)
 
 
 @dataclass
@@ -205,6 +211,64 @@ def test_initialize_jax_poll_timeout(
         initialize_jax(poll_timeout=0.1, poll_interval=0.01)
 
     mock_jax_init.assert_not_called()
+
+
+def test_configure_compilation_cache_derives_from_marin_prefix() -> None:
+    """With no cache dir set, the cache defaults to a region-local MARIN_PREFIX subdir."""
+    with patch.dict(os.environ, {}, clear=False), patch("jax.config.update") as mock_update:
+        os.environ.pop("JAX_COMPILATION_CACHE_DIR", None)
+        os.environ.pop("JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES", None)
+        os.environ["MARIN_PREFIX"] = "s3://marin-na/marin"
+
+        configure_jax_compilation_cache()
+
+        assert os.environ["JAX_COMPILATION_CACHE_DIR"] == "s3://marin-na/marin/compilation-cache"
+        mock_update.assert_any_call("jax_compilation_cache_dir", "s3://marin-na/marin/compilation-cache")
+        # Remote cache => XLA sub-caches disabled (they only support local paths).
+        assert os.environ["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] == "none"
+        mock_update.assert_any_call("jax_persistent_cache_enable_xla_caches", "none")
+
+
+def test_configure_compilation_cache_respects_existing_dir() -> None:
+    """An already-configured cache dir is left untouched, but the remote guard still applies."""
+    with patch.dict(os.environ, {}, clear=False), patch("jax.config.update") as mock_update:
+        os.environ["JAX_COMPILATION_CACHE_DIR"] = "gs://explicit/cache"
+        os.environ.pop("JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES", None)
+        os.environ["MARIN_PREFIX"] = "s3://marin-na/marin"
+
+        configure_jax_compilation_cache()
+
+        assert os.environ["JAX_COMPILATION_CACHE_DIR"] == "gs://explicit/cache"
+        assert os.environ["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] == "none"
+        mock_update.assert_called_once_with("jax_persistent_cache_enable_xla_caches", "none")
+
+
+def test_configure_compilation_cache_local_dir_keeps_xla_subcache() -> None:
+    """A local cache dir does not disable the XLA sub-cache (local paths work fine there)."""
+    with patch.dict(os.environ, {}, clear=False), patch("jax.config.update") as mock_update:
+        os.environ.pop("JAX_COMPILATION_CACHE_DIR", None)
+        os.environ.pop("JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES", None)
+        os.environ["MARIN_PREFIX"] = "/local/scratch"
+
+        configure_jax_compilation_cache()
+
+        assert os.environ["JAX_COMPILATION_CACHE_DIR"] == "/local/scratch/compilation-cache"
+        assert "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES" not in os.environ
+        mock_update.assert_called_once_with("jax_compilation_cache_dir", "/local/scratch/compilation-cache")
+
+
+def test_configure_compilation_cache_warns_when_unconfigured(caplog: pytest.LogCaptureFixture) -> None:
+    """With neither cache dir nor MARIN_PREFIX set, the silent disable is surfaced as a warning."""
+    with patch.dict(os.environ, {}, clear=False), patch("jax.config.update") as mock_update:
+        os.environ.pop("JAX_COMPILATION_CACHE_DIR", None)
+        os.environ.pop("MARIN_PREFIX", None)
+
+        with caplog.at_level(logging.WARNING, logger="iris.runtime.jax_init"):
+            configure_jax_compilation_cache()
+
+        assert "JAX compilation cache disabled" in caplog.text
+        assert "JAX_COMPILATION_CACHE_DIR" not in os.environ
+        mock_update.assert_not_called()
 
 
 def test_poll_for_coordinator_default_interval() -> None:
