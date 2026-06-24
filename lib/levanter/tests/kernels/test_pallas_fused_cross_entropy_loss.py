@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import os
+import time
 import warnings
 from typing import cast
 
@@ -1191,7 +1193,7 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
 
     monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", fake_benchmark)
     monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
-    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
+    monkeypatch.setattr(fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(url_fn=lambda: None))
 
     def run_from_shard_map(x_shard, y_shard, w_shard):
         return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
@@ -1361,8 +1363,7 @@ def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
 
     calls = {"bench": 0}
     monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
-    monkeypatch.setattr(fused_api, "_ensure_autotune_cache_loaded", lambda: None)
-    monkeypatch.setattr(fused_api, "_persist_autotune_cache", lambda: None)
+    monkeypatch.setattr(fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(url_fn=lambda: None))
     monkeypatch.setattr(
         fused_api,
         "_candidate_block_sizes",
@@ -1375,7 +1376,6 @@ def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
         return 1.0 if candidate.v_block_size == 256 else 2.0
 
     monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", fake_benchmark)
-    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
 
     def fake_impl(x_raw, labels_raw, w_raw, **kwargs):
         del x_raw, labels_raw, w_raw, kwargs
@@ -1440,8 +1440,7 @@ def test_pallas_autotune_negative_caches_no_viable_candidate(monkeypatch: pytest
     """A sweep where every candidate fails is negative-cached, so a second call does not re-sweep."""
     calls = {"bench": 0}
     monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
-    monkeypatch.setattr(fused_api, "_ensure_autotune_cache_loaded", lambda: None)
-    monkeypatch.setattr(fused_api, "_persist_autotune_cache", lambda: None)
+    monkeypatch.setattr(fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(url_fn=lambda: None))
     monkeypatch.setattr(
         fused_api,
         "_candidate_block_sizes",
@@ -1453,7 +1452,6 @@ def test_pallas_autotune_negative_caches_no_viable_candidate(monkeypatch: pytest
         raise RuntimeError("candidate cannot compile on this backend")
 
     monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", failing_benchmark)
-    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
 
     for _ in range(2):
         with pytest.raises(ExceptionGroup, match="no viable block-size candidates"):
@@ -1463,42 +1461,50 @@ def test_pallas_autotune_negative_caches_no_viable_candidate(monkeypatch: pytest
     assert calls["bench"] == 1
 
 
-def test_autotune_negative_cache_round_trips(monkeypatch: pytest.MonkeyPatch, tmp_path):
-    """A negative-cache entry persists to disk and reloads as the sentinel."""
-    monkeypatch.setattr(autotune_cache_utils, "get_jax_compilation_cache_dir", lambda: str(tmp_path))
-    key = "pallas_tpu|tpu|tpu v5|4|8|16|float32|float32|float32|None|None|False|jaxpr=abc"
+def test_autotune_cache_round_trips_winner_and_negative_entries(tmp_path):
+    """Winner and no-viable-candidate entries persist via flush() and reload as equal values."""
+    url = str(tmp_path / "block_sizes.json")
+    winner_key = "winner-key"
+    negative_key = "negative-key"
+    winner = fused_api.BlockSizes(b_block_size=128, h_block_size=256, v_block_size=512)
 
-    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
-    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE[key] = fused_api._NO_VIABLE_CANDIDATE
-    fused_api._persist_autotune_cache()
+    cache = fused_api.AutotuneBlockSizeCache(url_fn=lambda: url)
+    cache.put(winner_key, winner)
+    cache.put(negative_key, fused_api._NO_VIABLE_CANDIDATE)
+    cache.flush()
 
-    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
-    fused_api._AUTOTUNE_CACHE_LOADED = False
-    fused_api._ensure_autotune_cache_loaded()
-
-    assert fused_api._AUTOTUNE_BLOCK_SIZE_CACHE[key] is fused_api._NO_VIABLE_CANDIDATE
-    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
+    reloaded = fused_api.AutotuneBlockSizeCache(url_fn=lambda: url)
+    assert reloaded.get(winner_key) == winner
+    assert reloaded.get(negative_key) is fused_api._NO_VIABLE_CANDIDATE
+    assert reloaded.get("absent-key") is None
 
 
-def test_autotune_warns_once_when_no_compilation_cache_dir(monkeypatch: pytest.MonkeyPatch, caplog):
-    """A sweep with no compilation cache dir logs a single diagnostic warning."""
-    monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
-    monkeypatch.setattr(fused_api, "_ensure_autotune_cache_loaded", lambda: None)
-    monkeypatch.setattr(fused_api, "_persist_autotune_cache", lambda: None)
-    monkeypatch.setattr(fused_api, "_kernel_autotune_cache_url", lambda: None)
-    monkeypatch.setattr(
-        fused_api,
-        "_candidate_block_sizes",
-        lambda impl_name, inferred_block_sizes, **kwargs: [inferred_block_sizes],
-    )
-    monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", lambda **kwargs: 1.0)
-    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
-    monkeypatch.setattr(fused_api, "_AUTOTUNE_NO_CACHE_DIR_WARNED", False)
+def test_autotune_cache_background_thread_persists_without_explicit_flush(tmp_path):
+    """put() alone eventually writes the cache file via the background flush thread."""
+    url = str(tmp_path / "block_sizes.json")
+    cache = fused_api.AutotuneBlockSizeCache(url_fn=lambda: url, flush_delay=0.01)
+    cache.put("k", fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256))
+
+    deadline = time.monotonic() + 5.0
+    while not os.path.exists(url) and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+    assert os.path.exists(url), "background thread did not flush the cache file"
+    reloaded = fused_api.AutotuneBlockSizeCache(url_fn=lambda: url)
+    assert reloaded.get("k") == fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
+
+
+def test_autotune_cache_warns_once_without_cache_url(caplog):
+    """With no cache URL, the cache stays in-memory and warns exactly once across many puts."""
+    cache = fused_api.AutotuneBlockSizeCache(url_fn=lambda: None)
+    winner = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
 
     with caplog.at_level(logging.WARNING, logger=fused_api.__name__):
-        _run_autotune_miss(vocab=16)
-        _run_autotune_miss(vocab=32)  # distinct cache key → second sweep, but no second warning
+        cache.put("k1", winner)
+        cache.put("k2", winner)
 
+    # Still served from memory despite no persistence.
+    assert cache.get("k1") == winner
     warnings_logged = [r for r in caplog.records if "no JAX compilation cache dir" in r.getMessage()]
     assert len(warnings_logged) == 1
 
