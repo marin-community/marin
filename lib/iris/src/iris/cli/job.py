@@ -55,7 +55,6 @@ from iris.rpc.auth import ClientCredentials
 from iris.rpc.proto_display import (
     CONTAINER_PROFILE_NAMES,
     PRIORITY_BAND_NAMES,
-    container_profile_value,
     job_state_friendly,
     priority_band_value,
     task_state_friendly,
@@ -649,7 +648,7 @@ def run_iris_job(
 
     profile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED
     if container_profile is not None:
-        profile = container_profile_value(container_profile)
+        profile = job_pb2.ContainerProfile.Value(container_profile)
         logger.info(f"Container profile: {container_profile}")
 
     return _submit_and_wait_job(
@@ -875,8 +874,8 @@ Examples:
     type=click.Choice(CONTAINER_PROFILE_NAMES, case_sensitive=False),
     default=None,
     help=(
-        "Container security profile (default: default). 'restricted' hardens the "
-        "container; 'docker_access' and 'privileged' are elevated and require admin."
+        "Container security profile (default: CONTAINER_PROFILE_DEFAULT). RESTRICTED hardens "
+        "the container; DOCKER_ACCESS and PRIVILEGED are elevated and require admin."
     ),
 )
 @click.option(

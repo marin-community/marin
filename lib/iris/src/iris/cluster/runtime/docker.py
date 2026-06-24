@@ -193,13 +193,10 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
 
 
 def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
-    """Docker security flags for a container security profile.
+    """Docker security flags (privilege, capabilities, docker-socket mount).
 
-    Decides privilege, capabilities, and the docker-socket mount in one place.
-    Composes on top of device passthrough: a TPU run requires ``--privileged``
-    for device access regardless of profile, so on TPU the RESTRICTED/DEFAULT
-    profiles cannot fully sandbox the container — the effective profile is
-    privileged. The caller logs the effective profile.
+    A TPU run requires ``--privileged`` for device access regardless of profile,
+    so on TPU even RESTRICTED/DEFAULT run privileged.
     """
     resolved = resolve_container_profile(profile)
     privileged = resolved == job_pb2.CONTAINER_PROFILE_PRIVILEGED or is_tpu_run
@@ -208,9 +205,6 @@ def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
     if privileged:
         flags.append("--privileged")
     else:
-        # Hardened default for unprivileged containers: drop all capabilities and
-        # block privilege escalation. Docker's default seccomp profile already
-        # applies and is not overridden.
         flags.extend(["--security-opt", "no-new-privileges", "--cap-drop", "ALL"])
 
     # SYS_PTRACE lets py-spy attach via `docker exec`. RESTRICTED deliberately
@@ -615,8 +609,6 @@ exec {quoted_cmd}
         ]
         is_tpu_run = include_devices and _has_tpu_device(config)
 
-        # Profile-driven security flags (privilege, capabilities, docker socket).
-        # On a TPU run the device forces --privileged regardless of profile.
         cmd.extend(_security_flags(config.container_profile, is_tpu_run))
         logger.info(
             "Container security profile %s (tpu_run=%s) for task %s",

@@ -118,8 +118,8 @@ message Controller {
     string client_revision_date = 36;
 
     // Requested container security profile. UNSPECIFIED => DEFAULT. Elevated
-    // profiles (DOCKER_ACCESS, PRIVILEGED) require authorization at submission
-    // (admin role, or an explicit null-auth opt-in); see service.LaunchJob.
+    // profiles (DOCKER_ACCESS, PRIVILEGED) require the admin role at submission
+    // when auth is enabled; see service.LaunchJob.
     iris.job.ContainerProfile container_profile = 37;
   }
 

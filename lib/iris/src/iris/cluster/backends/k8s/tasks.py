@@ -499,9 +499,9 @@ def _build_pdb_manifest(
 def _security_context(profile: int, has_tpu: bool) -> dict:
     """Build the container ``securityContext`` for a container security profile.
 
-    DOCKER_ACCESS is rejected: k8s nodes run containerd, not a docker daemon, so
-    there is no host docker socket to mount. Silently returning a weaker context
-    would fake nested-container isolation the pod does not have, so we fail fast.
+    DOCKER_ACCESS is rejected: k8s nodes run containerd, so there is no host
+    docker socket to mount, and a weaker context would fake isolation the pod
+    does not have.
     """
     resolved = resolve_container_profile(profile)
 
@@ -513,11 +513,6 @@ def _security_context(profile: int, has_tpu: bool) -> dict:
         )
 
     if resolved == job_pb2.CONTAINER_PROFILE_RESTRICTED:
-        # Hardened ("restricted-ish"): drop all caps, block privilege escalation,
-        # RuntimeDefault seccomp. Not full PSS Restricted (runAsNonRoot is not
-        # forced, since many task images run as root). Device caps are NOT added,
-        # so RESTRICTED+TPU loses the SYS_RESOURCE memlock cap — RESTRICTED is not
-        # intended for TPU tasks.
         return {
             "capabilities": {"drop": ["ALL"], "add": []},
             "allowPrivilegeEscalation": False,
@@ -630,9 +625,7 @@ def _build_pod_manifest(
     if config.env_secret_name:
         container["envFrom"] = [{"secretRef": {"name": config.env_secret_name, "optional": True}}]
 
-    # Container security profile -> securityContext (capabilities, privileged).
-    # DEFAULT keeps today's SYS_PTRACE (+SYS_RESOURCE on TPU); RESTRICTED hardens;
-    # PRIVILEGED elevates. DOCKER_ACCESS is rejected on this backend.
+    # Raises for DOCKER_ACCESS, which this backend rejects (see _security_context).
     container["securityContext"] = _security_context(run_req.container_profile, has_tpu)
 
     if resources:

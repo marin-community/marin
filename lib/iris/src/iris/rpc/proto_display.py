@@ -129,16 +129,6 @@ PRIORITY_BAND_NAMES: list[str] = [priority_band_name(b) for b in PRIORITY_BAND_V
 # ---------------------------------------------------------------------------
 
 
-def container_profile_name(profile: int) -> str:
-    """Human-friendly lowercase name for a ContainerProfile proto value."""
-    return job_pb2.ContainerProfile.Name(profile).removeprefix("CONTAINER_PROFILE_").lower()
-
-
-def container_profile_value(name: str) -> int:
-    """Proto int value from a human-friendly profile name like 'privileged'."""
-    return job_pb2.ContainerProfile.Value(f"CONTAINER_PROFILE_{name.upper()}")
-
-
 # User-selectable profiles, ordered ascending by privilege.
 CONTAINER_PROFILE_VALUES: list[int] = [
     job_pb2.CONTAINER_PROFILE_RESTRICTED,
@@ -147,22 +137,11 @@ CONTAINER_PROFILE_VALUES: list[int] = [
     job_pb2.CONTAINER_PROFILE_PRIVILEGED,
 ]
 
-CONTAINER_PROFILE_NAMES: list[str] = [container_profile_name(p) for p in CONTAINER_PROFILE_VALUES]
+CONTAINER_PROFILE_NAMES: list[str] = [job_pb2.ContainerProfile.Name(p) for p in CONTAINER_PROFILE_VALUES]
 
 
 def resolve_container_profile(profile: int) -> int:
-    """Resolve UNSPECIFIED (0) to the DEFAULT profile; pass others through."""
+    """Resolve UNSPECIFIED to the DEFAULT profile; pass others through."""
     if profile == job_pb2.CONTAINER_PROFILE_UNSPECIFIED:
         return job_pb2.CONTAINER_PROFILE_DEFAULT
     return profile
-
-
-def container_profile_is_elevated(profile: int) -> bool:
-    """Whether a profile requires authorization to use.
-
-    Elevated profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent.
-    RESTRICTED and DEFAULT are unprivileged. The numeric comparison is only an
-    elevation predicate, not a relative-danger ordering between the two elevated
-    profiles — DOCKER_ACCESS and PRIVILEGED are distinct dangerous capabilities.
-    """
-    return resolve_container_profile(profile) > job_pb2.CONTAINER_PROFILE_DEFAULT

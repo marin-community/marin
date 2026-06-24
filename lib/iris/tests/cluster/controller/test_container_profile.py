@@ -4,10 +4,10 @@
 """Authorization and persistence for container security profiles.
 
 Elevated profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent, so
-``launch_job`` gates them: admin-only when an auth provider is configured, and
-fail-closed in null-auth mode unless explicitly opted in. RESTRICTED and DEFAULT
-are unprivileged and need no authorization. The accepted profile is persisted on
-``job_config`` and stamped onto each dispatched ``RunTaskRequest``.
+``launch_job`` gates them on the admin role when an auth provider is configured.
+RESTRICTED and DEFAULT are unprivileged and need no authorization. The accepted
+profile is persisted on ``job_config`` and stamped onto each dispatched
+``RunTaskRequest``.
 """
 
 import pytest

@@ -6,12 +6,13 @@ settings instead of exposing individual docker/k8s knobs. Four profiles exist
 
 | Profile | Selected via | Behavior |
 |---|---|---|
-| `RESTRICTED` | `--container-profile restricted` | Hardened: drops all Linux capabilities, blocks privilege escalation, keeps the default seccomp profile. No profiling cap. For untrusted/sandboxed workloads. |
-| `DEFAULT` | default (or `--container-profile default`) | Today's behavior: `SYS_PTRACE` for profiling (plus `SYS_RESOURCE` on TPU). The everyday training/eval pod. |
-| `DOCKER_ACCESS` | `--container-profile docker_access` | DEFAULT **plus** the host docker socket (`/var/run/docker.sock`) — lets the container drive the host Docker daemon to build images or run sibling containers. **Elevated.** |
-| `PRIVILEGED` | `--container-profile privileged` | Full `--privileged` / `securityContext.privileged` with broad capabilities. Needed to run nested runtimes inside the container (e.g. a gVisor `runsc` sandbox). **Elevated.** |
+| `CONTAINER_PROFILE_RESTRICTED` | `--container-profile CONTAINER_PROFILE_RESTRICTED` | Hardened: drops all Linux capabilities, blocks privilege escalation, keeps the default seccomp profile. No profiling cap. For untrusted/sandboxed workloads. |
+| `CONTAINER_PROFILE_DEFAULT` | default (or `--container-profile CONTAINER_PROFILE_DEFAULT`) | `SYS_PTRACE` for profiling (plus `SYS_RESOURCE` on TPU). The everyday training/eval pod. |
+| `CONTAINER_PROFILE_DOCKER_ACCESS` | `--container-profile CONTAINER_PROFILE_DOCKER_ACCESS` | DEFAULT **plus** the host docker socket (`/var/run/docker.sock`) — lets the container drive the host Docker daemon to build images or run sibling containers. **Elevated.** |
+| `CONTAINER_PROFILE_PRIVILEGED` | `--container-profile CONTAINER_PROFILE_PRIVILEGED` | Full `--privileged` / `securityContext.privileged` with broad capabilities. Needed to run nested runtimes inside the container (e.g. a gVisor `runsc` sandbox). **Elevated.** |
 
-`UNSPECIFIED` (the wire default) resolves to `DEFAULT`.
+`CONTAINER_PROFILE_UNSPECIFIED` (the wire default) resolves to
+`CONTAINER_PROFILE_DEFAULT`. The CLI choice is case-insensitive.
 
 ## Elevated profiles require authorization
 
@@ -67,7 +68,7 @@ container is created.
 ## Running gVisor inside a container
 
 To run a gVisor (`runsc`) sandbox to isolate an untrusted child workload, submit
-with `--container-profile privileged` and run `runsc` (or
+with `--container-profile CONTAINER_PROFILE_PRIVILEGED` and run `runsc` (or
 `docker run --runtime=runsc ...`) inside your container. The parent must be
 privileged because `runsc` creates user/mount namespaces. (Running the *whole*
 pod under a gVisor `RuntimeClass` is a separate, operator-side feature and

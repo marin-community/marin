@@ -637,8 +637,8 @@ class IrisClient:
                 jobs that need a custom runtime (e.g. an image with runsc/skopeo
                 for sandboxing untrusted child workloads).
             container_profile: Container security profile. UNSPECIFIED resolves to
-                DEFAULT. Elevated profiles (DOCKER_ACCESS, PRIVILEGED) require
-                authorization at submission (admin role, or a null-auth opt-in).
+                DEFAULT. Elevated profiles (DOCKER_ACCESS, PRIVILEGED) require the
+                admin role at submission when auth is enabled.
 
         Returns:
             Job handle for the submitted job

@@ -99,8 +99,6 @@ from iris.rpc.auth import (
     require_identity,
 )
 from iris.rpc.proto_display import (
-    container_profile_is_elevated,
-    container_profile_name,
     job_state_friendly,
     priority_band_name,
     resolve_container_profile,
@@ -890,6 +888,14 @@ class ControllerProtocol(Protocol):
     def run_template_cache(self) -> RunTemplateCache: ...
 
 
+def _profile_is_elevated(profile: int) -> bool:
+    """Whether a container profile is host-root-equivalent and so requires admin."""
+    return resolve_container_profile(profile) in (
+        job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS,
+        job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+    )
+
+
 def _inject_resource_constraints(
     request: controller_pb2.Controller.LaunchJobRequest,
 ) -> controller_pb2.Controller.LaunchJobRequest:
@@ -1096,23 +1102,16 @@ class ControllerServiceImpl:
                     f"registered correctly.",
                 )
 
-        # Container security profile authorization.
-        #
         # Elevated profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent
-        # and require the admin role. The check runs only when an auth provider
-        # is configured (a trusted-loopback caller resolves to admin, the
-        # intended host-trust path). In null-auth mode there is no provider and
-        # every caller is the anonymous admin, so the gate is a no-op — the
-        # operator has already opted into an untrusted cluster. This mirrors the
-        # PRODUCTION priority-band gate above. RESTRICTED and DEFAULT are
-        # unprivileged and need no authorization.
-        if container_profile_is_elevated(request.container_profile):
+        # and require the admin role. The check only runs when an auth provider is
+        # configured; a trusted-loopback caller resolves to admin.
+        if _profile_is_elevated(request.container_profile):
             if self._auth.provider:
                 authorize(AuthzAction.SET_CONTAINER_PROFILE)
             logger.info(
                 "Job %s using elevated container profile %s",
                 job_id.to_wire(),
-                container_profile_name(request.container_profile),
+                job_pb2.ContainerProfile.Name(request.container_profile),
             )
 
         # DOCKER_ACCESS mounts the host docker socket, which only the docker

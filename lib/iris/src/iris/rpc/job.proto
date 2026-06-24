@@ -588,11 +588,10 @@ enum PriorityBand {
 
 // Named container security posture. Selects a bundle of container/pod security
 // settings instead of exposing individual docker/k8s knobs. The two elevated
-// profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent and require
-// authorization at submission (see service.LaunchJob); RESTRICTED and DEFAULT
-// are unprivileged and need none. Numeric order is used only to detect
-// elevation (rank > DEFAULT), not as a relative-danger ladder: DOCKER_ACCESS
-// and PRIVILEGED are distinct dangerous capabilities, neither implies the other.
+// profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent and require admin
+// authorization at submission (see service.LaunchJob); RESTRICTED and DEFAULT are
+// unprivileged and need none. DOCKER_ACCESS and PRIVILEGED are distinct
+// capabilities — neither implies the other.
 enum ContainerProfile {
   CONTAINER_PROFILE_UNSPECIFIED = 0;    // resolves to DEFAULT
   CONTAINER_PROFILE_RESTRICTED = 1;     // hardened: drop ALL caps, no-new-privileges, default seccomp
