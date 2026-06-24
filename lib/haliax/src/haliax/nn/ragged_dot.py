@@ -42,6 +42,43 @@ _AUTO_FALLBACK_EXCEPTIONS = (NotImplementedError, RuntimeError)
 _HAS_WARNED_AUTO_FALLBACK = False
 _TRITON_DEFAULT_BLOCK_N = 128
 _TRITON_BLACKWELL_BLOCK_N = 256
+_TRITON_DEFAULT_BLOCK_K = 32
+_TRITON_DEFAULT_NUM_WARPS = 4
+_TRITON_DEFAULT_NUM_STAGES = 4
+
+
+def _env_int(name: str, default: int) -> int:
+    """Experiment knob: integer env override for Triton tile/scheduling params.
+
+    Same A/B-benchmarking mechanism as ``RAGGED_DOT_IMPL`` below; lets a single built
+    image sweep block sizes / warps / stages across separate processes without a rebuild.
+    """
+    value = os.environ.get(name)
+    return int(value) if value is not None else default
+
+
+# f8 compute mode for the mixed-dtype grad-dots (E5M2 output grad x E4M3 operand):
+#   "passthrough" → feed f8 operands straight to pl.dot (mixed-f8 MMA on Hopper)
+#   "e4m3"        → cast both to E4M3 (single-type f8 MMA)
+#   "bf16"        → upcast both to bf16 (no f8 MMA; A/B control)
+_F8_COMPUTE_MODE = os.environ.get("RAGGED_DOT_F8_COMPUTE", "passthrough")
+
+
+def _ragged_cast(a: jax.Array, b: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """Cast a dot's operands to a common compute dtype before ``pl.dot``.
+
+    For two 8-bit-float operands we skip ``jnp.result_type`` — which has no promotion
+    path for (E5M2, E4M3) and raises — and (by default) feed them straight to ``pl.dot``
+    so the f8 MMA engages. Non-f8 operands keep the original promotion behavior.
+    """
+    if a.dtype.itemsize == 1 and b.dtype.itemsize == 1:
+        if _F8_COMPUTE_MODE == "bf16":
+            return a.astype(jnp.bfloat16), b.astype(jnp.bfloat16)
+        if _F8_COMPUTE_MODE == "e4m3":
+            return a.astype(jnp.float8_e4m3fn), b.astype(jnp.float8_e4m3fn)
+        return a, b
+    dtype = jnp.result_type(a, b)
+    return a.astype(dtype), b.astype(dtype)
 
 
 def _is_blackwell_gpu_backend() -> bool:
@@ -105,8 +142,8 @@ def _triton_ragged_dot_kernel(
             span_k = pl.ds(start_k, block_k)
             a = plgpu.load(a_ref.at[span_m, span_k])
             b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])])
-            dtype = jnp.result_type(a, b)
-            return acc + pl.dot(a.astype(dtype), b.astype(dtype))
+            a, b = _ragged_cast(a, b)
+            return acc + pl.dot(a, b)
 
         num_k_blocks = pl.cdiv(k, block_k)
         acc = jax.lax.fori_loop(0, num_k_blocks, body, acc)
@@ -116,9 +153,9 @@ def _triton_ragged_dot_kernel(
 
 def _triton_default_block_sizes(m: int, k: int, n: int) -> tuple[int, int, int]:
     block_m = min(128, int(pl.next_power_of_2(m)))
-    max_block_n = _TRITON_BLACKWELL_BLOCK_N if _is_blackwell_gpu_backend() else _TRITON_DEFAULT_BLOCK_N
-    block_n = min(max_block_n, int(pl.next_power_of_2(n)))
-    block_k = min(32, int(pl.next_power_of_2(k)))
+    default_block_n = _TRITON_BLACKWELL_BLOCK_N if _is_blackwell_gpu_backend() else _TRITON_DEFAULT_BLOCK_N
+    block_n = min(_env_int("RAGGED_DOT_BLOCK_N", default_block_n), int(pl.next_power_of_2(n)))
+    block_k = min(_env_int("RAGGED_DOT_BLOCK_K", _TRITON_DEFAULT_BLOCK_K), int(pl.next_power_of_2(k)))
     return block_m, block_n, block_k
 
 
@@ -149,7 +186,10 @@ def _triton_default_pallas_call(
         ],
         out_specs=pl.BlockSpec((m, block_n), lambda _, j, __: (0, j)),
         grid=(pl.cdiv(m, block_m), pl.cdiv(n, block_n), num_groups),
-        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=4),
+        compiler_params=plgpu.CompilerParams(
+            num_warps=_env_int("RAGGED_DOT_NUM_WARPS", _TRITON_DEFAULT_NUM_WARPS),
+            num_stages=_env_int("RAGGED_DOT_NUM_STAGES", _TRITON_DEFAULT_NUM_STAGES),
+        ),
     )(lhs, rhs, cum_rows[:-1], cum_rows[1:])
 
 
@@ -177,8 +217,8 @@ def _triton_ragged_contracting_dim_dot_kernel(
             other = 0.0
         a = plgpu.load(a_ref.at[span_k], mask=mask, other=other)
         b = plgpu.load(b_ref.at[span_k], mask=mask, other=other)
-        dtype = jnp.result_type(a, b)
-        return acc + pl.dot(a.astype(dtype).T, b.astype(dtype))
+        a, b = _ragged_cast(a, b)
+        return acc + pl.dot(a.T, b)
 
     num_k_blocks = jnp.maximum(pl.cdiv(jnp.int32(hi - lo), jnp.int32(block_k)), jnp.int32(1))
     acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
@@ -198,8 +238,8 @@ def _triton_ragged_contracting_dim_pallas_call(
     _, n = rhs.shape
 
     block_m = min(128, int(pl.next_power_of_2(m)))
-    block_n = min(128, int(pl.next_power_of_2(n)))
-    block_k = min(32, int(pl.next_power_of_2(k)))
+    block_n = min(_env_int("RAGGED_DOT_BLOCK_N", _TRITON_DEFAULT_BLOCK_N), int(pl.next_power_of_2(n)))
+    block_k = min(_env_int("RAGGED_DOT_BLOCK_K", _TRITON_DEFAULT_BLOCK_K), int(pl.next_power_of_2(k)))
 
     cum_rows = jnp.cumulative_sum(group_sizes, include_initial=True)
 
@@ -223,7 +263,10 @@ def _triton_ragged_contracting_dim_pallas_call(
             ],
             out_specs=pl.BlockSpec((block_m, block_n), lambda i, j: (i, j)),
             grid=(pl.cdiv(m, block_m), pl.cdiv(n, block_n)),
-            compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=4),
+            compiler_params=plgpu.CompilerParams(
+                num_warps=_env_int("RAGGED_DOT_NUM_WARPS", _TRITON_DEFAULT_NUM_WARPS),
+                num_stages=_env_int("RAGGED_DOT_NUM_STAGES", _TRITON_DEFAULT_NUM_STAGES),
+            ),
         )(lhs, rhs, lo, hi)
 
     return jax.vmap(one_group, in_axes=(None, None, 0, 0))(lhs, rhs, cum_rows[:-1], cum_rows[1:])

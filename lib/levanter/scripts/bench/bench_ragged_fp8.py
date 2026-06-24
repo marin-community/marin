@@ -33,6 +33,7 @@ dispatched tokens (seq 4096, top-2). Run on an H100 via Iris and grep the logs:
 
 import argparse
 import json
+import os
 import re
 import time
 from collections.abc import Callable
@@ -43,6 +44,16 @@ import numpy as np
 
 from haliax.nn.ragged_dot import Implementation, ragged_dot
 from haliax.quantization import Fp8RaggedDotOp
+
+# Triton kernel tuning knobs (env-driven; see haliax.nn.ragged_dot). Echoed into
+# result_json so each swept arm is self-attributing.
+_TUNE_ENV_KEYS = (
+    "RAGGED_DOT_BLOCK_K",
+    "RAGGED_DOT_BLOCK_N",
+    "RAGGED_DOT_NUM_WARPS",
+    "RAGGED_DOT_NUM_STAGES",
+    "RAGGED_DOT_F8_COMPUTE",
+)
 
 # H100 SXM dense matmul peaks; FP8 (E4M3) is 2x the BF16 rate.
 _H100_SXM_BF16_TFLOPS_PER_S = 989.5e12
@@ -224,6 +235,7 @@ def main() -> None:
         "rel_frob_vs_bf16": rel_frob_vs_bf16,
         "f8_reaches_gemm": scan["f8_reaches_gemm"] if scan else None,
         "total_f8_mentions": scan["total_f8_mentions"] if scan else None,
+        "tune": {k: os.environ.get(k) for k in _TUNE_ENV_KEYS},
     }
     print("result_json " + json.dumps(result))
 
