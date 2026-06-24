@@ -36,16 +36,11 @@ from haliax.partitioning import set_mesh
 from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe.model import Transformer
-from experiments.grug.moe_pp.benchmark import _config, _param_count, init_distributed
+from experiments.grug.moe_pp.benchmark import _config, _param_count, init_distributed, peak_hbm_gib
 from experiments.grug.moe_pp.oracle import oracle_loss
 from experiments.grug.moe_pp.pipeline_zb import Schedule, _stage_submesh, orthogonalize_tree, zb_build
 
 logger = logging.getLogger(__name__)
-
-
-def _peak_hbm_gib() -> float:
-    peaks = [(d.memory_stats() or {}).get("peak_bytes_in_use", 0) for d in jax.local_devices()]
-    return max(peaks, default=0) / 2**30
 
 
 def _replicate(x, mesh):
@@ -156,7 +151,7 @@ def main() -> int:
 
             fsdp_sec, fsdp_out = _time(lambda: fsdp_grad(arrays), warmup=warmup, iters=iters)
             fsdp_loss = float(np.asarray(fsdp_out[0]))
-            fsdp_hbm = _peak_hbm_gib()
+            fsdp_hbm = peak_hbm_gib()
 
     # --- device-group pipeline (zb_build re-places per stage). Multi-host: init under a
     # mesh of THIS process's local devices (identical params on every process via the
@@ -180,7 +175,7 @@ def main() -> int:
     )
     pp_sec, pp_out = _time(lambda: step(tokens, weight), warmup=warmup, iters=iters)
     pp_loss = float(np.asarray(pp_out[0]))
-    pp_hbm = _peak_hbm_gib()
+    pp_hbm = peak_hbm_gib()
 
     logger.info(
         "PERF fsdp_baseline   : %.4f s/step  %9.0f tok/s  loss=%.4f  peak_hbm=%.1f GiB",

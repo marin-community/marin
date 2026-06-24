@@ -62,8 +62,6 @@ from experiments.grug.moe.model import Transformer
 
 EXPERT_AXIS = "expert"
 DATA_AXIS = "data"
-_GRUG_MESH_AXIS_NAMES = ("stage", "replica_dcn", "data", "expert", "model")
-
 STAGE_AXIS = "stage"
 
 # The inline ring-EP pipeline manualizes both batch-sharding axes (expert + data) so
@@ -194,7 +192,7 @@ def ep_pipeline_mesh(*, stage: int, expert: int, replica: int, data: int, model:
     # manual region the xla ragged_dot path lowers too (no Explicit-axis sharding-rule
     # error), so this mesh works under both RAGGED_DOT_IMPL=xla and megablox.
     axis_types = (AxisType.Explicit,) * 5
-    return Mesh(devices, _GRUG_MESH_AXIS_NAMES, axis_types=axis_types)
+    return Mesh(devices, grug_sharding._GRUG_MESH_AXIS_NAMES, axis_types=axis_types)
 
 
 def _inline_ring_moe_mlp(
@@ -722,7 +720,7 @@ def _ep_pipeline_loss_microbatched(
         mesh=mesh,
         in_specs=(stage_in_specs, embed_in_specs, stage_spec, token_spec, token_spec),
         out_specs=P(),
-        axis_names=frozenset(_GRUG_MESH_AXIS_NAMES),
+        axis_names=frozenset(grug_sharding._GRUG_MESH_AXIS_NAMES),
         check_vma=False,
     )(stage_block_arrays, embed_arrays, layer_masks, token_microbatches, weight_microbatches)
 

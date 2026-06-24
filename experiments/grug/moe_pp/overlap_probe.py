@@ -3,7 +3,7 @@
 
 """Isolate why the device-group pipeline serializes: does JAX overlap GPUs at all?
 
-Three micro-probes, independent of the grug model:
+Five micro-probes (1-3 use bare matmuls; 4-5 model the pipeline's dispatch shape):
 
 1. **2-GPU overlap** -- dispatch a heavy kernel on dev0 and dev1, block on both.
    If wall time ~= one kernel, the two GPUs overlap (async works); if ~= two
@@ -15,6 +15,10 @@ Three micro-probes, independent of the grug model:
 3. **8-GPU chain vs fanout** -- a dependent chain dev0->..->dev7 (transport each
    hop) vs 8 independent kernels; the ratio shows whether transported dependencies
    pipeline.
+4. **microbatch-major dispatch** -- M microbatches x stages, dispatched mb-major,
+   vs the pipelined-ideal and serial bounds; the overlap efficiency.
+5. **grug submesh + set_mesh** -- probe 4's shape but on real per-stage grug
+   submeshes under ``set_mesh``, to catch overhead the bare matmuls miss.
 
     iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --extra gpu \\
       -- python -m experiments.grug.moe_pp.overlap_probe

@@ -64,6 +64,12 @@ logger = logging.getLogger(__name__)
 LR = 3e-3
 
 
+def peak_hbm_gib() -> float:
+    """Max ``peak_bytes_in_use`` across local devices, in GiB (0 where unavailable, e.g. CPU)."""
+    peaks = [(d.memory_stats() or {}).get("peak_bytes_in_use", 0) for d in jax.local_devices()]
+    return max(peaks, default=0) / 2**30
+
+
 def init_distributed() -> None:
     """Bring up JAX distributed for a multi-host TPU slice (no-op on one host).
 

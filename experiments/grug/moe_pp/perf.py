@@ -37,16 +37,11 @@ from haliax.partitioning import set_mesh
 from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe.model import Transformer
-from experiments.grug.moe_pp.benchmark import _config, _param_count, init_distributed
+from experiments.grug.moe_pp.benchmark import _config, _param_count, init_distributed, peak_hbm_gib
 from experiments.grug.moe_pp.oracle import oracle_loss
 from experiments.grug.moe_pp.pipeline_manual import manual_pp_value_and_grad
 
 logger = logging.getLogger(__name__)
-
-
-def _peak_hbm_gib() -> float:
-    peaks = [(d.memory_stats() or {}).get("peak_bytes_in_use", 0) for d in jax.local_devices()]
-    return max(peaks, default=0) / 2**30
 
 
 def _time_fwd_bwd(grad_fn, arg, *, warmup: int, iters: int) -> tuple[float, float]:
@@ -129,9 +124,9 @@ def main() -> int:
             return loss, (g_eh, g_blocks)
 
         fsdp_sec, fsdp_loss = _time_fwd_bwd(fsdp_grad, arrays, warmup=warmup, iters=iters)
-        fsdp_hbm = _peak_hbm_gib()
+        fsdp_hbm = peak_hbm_gib()
         mpp_sec, mpp_loss = _time_fwd_bwd(mpp_grad, model, warmup=warmup, iters=iters)
-        mpp_hbm = _peak_hbm_gib()
+        mpp_hbm = peak_hbm_gib()
 
     logger.info(
         "PERF fsdp_baseline : %.4f s/step  %9.0f tok/s  loss=%.4f  peak_hbm=%.1f GiB",

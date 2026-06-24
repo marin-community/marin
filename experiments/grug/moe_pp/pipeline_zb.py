@@ -398,7 +398,7 @@ def zb_build(
     def step(token_ids: jax.Array, loss_weight: jax.Array) -> tuple[jax.Array | float, tuple | None, list]:
         """Run one pipelined forward+backward over the global batch; returns ``(loss, g_eh, g_blocks)``.
 
-        With ``wb_split`` the F/B/W ops follow the zero-bubble ``schedule``; otherwise a
+        For a non-GPipe ``schedule`` the F/B/W ops follow the wavefront; otherwise a
         GPipe forward sweep then combined backward. Either way the loss/grads match the
         non-pipelined oracle over the same global batch by construction (same embed /
         masks / blocks / head / router z-loss, averaged over microbatches), to float

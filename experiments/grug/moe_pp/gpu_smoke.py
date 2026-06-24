@@ -9,7 +9,7 @@ Runs :func:`experiments.grug.moe_pp.pipeline_manual.manual_pp_value_and_grad`
 for the GPU port:
 
 1. **Does the production ``ring`` EP lower + execute on GPU?** If this runs, yes --
-   so the Lever-2 GPU Pallas EP is a perf option, not a correctness requirement.
+   so a GPU Pallas EP kernel is a perf option, not a correctness requirement.
 2. **Does the manual per-stage backward avoid the OOM at scale?** There is NO
    ``stage`` mesh axis, so the ``[num_stages, ...]`` weight-grad buffer that
    whole-program autodiff through a stage-manual ``shard_map`` materializes
@@ -35,16 +35,10 @@ from haliax.partitioning import set_mesh
 from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe.model import Transformer
-from experiments.grug.moe_pp.benchmark import _config, _param_count, init_distributed
+from experiments.grug.moe_pp.benchmark import _config, _param_count, init_distributed, peak_hbm_gib
 from experiments.grug.moe_pp.pipeline_manual import manual_pp_value_and_grad
 
 logger = logging.getLogger(__name__)
-
-
-def _peak_hbm_gib() -> float:
-    """Max ``peak_bytes_in_use`` across local devices, in GiB (0 where unavailable, e.g. CPU)."""
-    peaks = [(d.memory_stats() or {}).get("peak_bytes_in_use", 0) for d in jax.local_devices()]
-    return max(peaks, default=0) / 2**30
 
 
 def main() -> int:
@@ -118,14 +112,14 @@ def main() -> int:
             loss, grad_sq = step(model)
             loss.block_until_ready()
             logger.info(
-                "iter %d: loss=%.4f grad_sq=%.3e peak_hbm=%.1f GiB", i, float(loss), float(grad_sq), _peak_hbm_gib()
+                "iter %d: loss=%.4f grad_sq=%.3e peak_hbm=%.1f GiB", i, float(loss), float(grad_sq), peak_hbm_gib()
             )
 
     logger.info(
         "RESULT: manual PP fwd+bwd ran on %s WITHOUT OOM (ring EP lowered). ~%.1fB model, peak_hbm=%.1f GiB",
         platform,
         total_b,
-        _peak_hbm_gib(),
+        peak_hbm_gib(),
     )
     return 0
 

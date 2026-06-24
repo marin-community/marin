@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Gradient parity for the manually threaded pipeline (Lever 1) vs the oracle.
+"""Gradient parity for the manually threaded pipeline vs the oracle.
 
 Compares :func:`experiments.grug.moe_pp.pipeline_manual.manual_pp_value_and_grad`
 -- the Python-driven per-stage ``jax.vjp`` backward, NO ``stage`` mesh axis --
