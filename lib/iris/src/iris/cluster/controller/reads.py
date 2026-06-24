@@ -96,6 +96,9 @@ class PendingDispatchRow:
     # must mirror the band Iris actually enforces, and tasks.priority_band is
     # never UNSPECIFIED(0), so the provider's plain .get() resolves correctly.
     priority_band: int  # job_pb2.PriorityBand, effective
+    # Requested container security profile (job_config). UNSPECIFIED(0) resolves
+    # to DEFAULT when the backend applies it.
+    container_profile: int  # job_pb2.ContainerProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -520,6 +523,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             job_config_table.c.existing_job_policy,
             job_config_table.c.priority_band,
             job_config_table.c.task_image,
+            job_config_table.c.container_profile,
             job_config_table.c.submit_argv_json,
             job_config_table.c.fail_if_exists,
         )
@@ -1405,6 +1409,7 @@ PENDING_DISPATCH_COLS = (
     # Effective band (tasks), not the immutable requested band (job_config):
     # see PendingDispatchRow.priority_band.
     tasks_table.c.priority_band,
+    job_config_table.c.container_profile,
 )
 
 
@@ -1432,6 +1437,7 @@ def pending_dispatch_row(r) -> PendingDispatchRow:
         has_coscheduling=bool(r.has_coscheduling),
         coscheduling_group_by=str(r.coscheduling_group_by),
         priority_band=int(r.priority_band),
+        container_profile=int(r.container_profile),
     )
 
 

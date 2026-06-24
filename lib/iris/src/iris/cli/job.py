@@ -53,6 +53,7 @@ from iris.cluster.types import (
 from iris.rpc import job_pb2
 from iris.rpc.auth import ClientCredentials
 from iris.rpc.proto_display import (
+    CONTAINER_PROFILE_NAMES,
     PRIORITY_BAND_NAMES,
     job_state_friendly,
     priority_band_value,
@@ -563,6 +564,7 @@ def run_iris_job(
     priority: str | None = None,
     preemptible: bool | None = None,
     task_image: str | None = None,
+    container_profile: str | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -646,6 +648,11 @@ def run_iris_job(
         priority_band = priority_band_value(priority)
         logger.info(f"Priority band: {priority}")
 
+    profile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED
+    if container_profile is not None:
+        profile = job_pb2.ContainerProfile.Value(container_profile)
+        logger.info(f"Container profile: {container_profile}")
+
     return _submit_and_wait_job(
         controller_url=controller_url,
         job_name=job_name,
@@ -664,6 +671,7 @@ def run_iris_job(
         coscheduling=coscheduling,
         user=user,
         priority_band=priority_band,
+        container_profile=profile,
         credentials=credentials,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
@@ -689,6 +697,7 @@ def _submit_and_wait_job(
     coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+    container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -716,6 +725,7 @@ def _submit_and_wait_job(
         timeout=Duration.from_seconds(timeout) if timeout else None,
         user=user,
         priority_band=priority_band,
+        container_profile=container_profile,
         submit_argv=submit_argv,
         task_image=task_image,
     )
@@ -881,6 +891,15 @@ Examples:
     ),
 )
 @click.option(
+    "--container-profile",
+    type=click.Choice(CONTAINER_PROFILE_NAMES, case_sensitive=False),
+    default=None,
+    help=(
+        "Container security profile (default: CONTAINER_PROFILE_DEFAULT). RESTRICTED hardens "
+        "the container; DOCKER_ACCESS and PRIVILEGED are elevated and require admin."
+    ),
+)
+@click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
     help="Terminate the job on Ctrl+C (default: terminate). Tunnel failures never kill the job.",
@@ -911,6 +930,7 @@ def run(
     priority: str | None,
     preemptible: bool | None,
     task_image: str | None,
+    container_profile: str | None,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
@@ -968,6 +988,7 @@ def run(
             priority=priority,
             preemptible=preemptible,
             task_image=task_image,
+            container_profile=container_profile,
             credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,

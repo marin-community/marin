@@ -122,3 +122,26 @@ PRIORITY_BAND_VALUES: list[int] = [
 ]
 
 PRIORITY_BAND_NAMES: list[str] = [priority_band_name(b) for b in PRIORITY_BAND_VALUES]
+
+
+# ---------------------------------------------------------------------------
+# ContainerProfile helpers
+# ---------------------------------------------------------------------------
+
+
+# User-selectable profiles, ordered ascending by privilege.
+CONTAINER_PROFILE_VALUES: list[int] = [
+    job_pb2.CONTAINER_PROFILE_RESTRICTED,
+    job_pb2.CONTAINER_PROFILE_DEFAULT,
+    job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS,
+    job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+]
+
+CONTAINER_PROFILE_NAMES: list[str] = [job_pb2.ContainerProfile.Name(p) for p in CONTAINER_PROFILE_VALUES]
+
+
+def resolve_container_profile(profile: int) -> int:
+    """Resolve UNSPECIFIED to the DEFAULT profile; pass others through."""
+    if profile == job_pb2.CONTAINER_PROFILE_UNSPECIFIED:
+        return job_pb2.CONTAINER_PROFILE_DEFAULT
+    return profile

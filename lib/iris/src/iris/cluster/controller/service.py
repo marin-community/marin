@@ -98,7 +98,12 @@ from iris.rpc.auth import (
     get_verified_identity,
     require_identity,
 )
-from iris.rpc.proto_display import job_state_friendly, priority_band_name, task_state_friendly
+from iris.rpc.proto_display import (
+    job_state_friendly,
+    priority_band_name,
+    resolve_container_profile,
+    task_state_friendly,
+)
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -883,6 +888,14 @@ class ControllerProtocol(Protocol):
     def run_template_cache(self) -> RunTemplateCache: ...
 
 
+def _profile_is_elevated(profile: int) -> bool:
+    """Whether a container profile is host-root-equivalent and so requires admin."""
+    return resolve_container_profile(profile) in (
+        job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS,
+        job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+    )
+
+
 def _inject_resource_constraints(
     request: controller_pb2.Controller.LaunchJobRequest,
 ) -> controller_pb2.Controller.LaunchJobRequest:
@@ -1088,6 +1101,33 @@ class ControllerServiceImpl:
                     f"either to be added to the researcher list or to confirm your username is "
                     f"registered correctly.",
                 )
+
+        # Elevated profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent
+        # and require the admin role. The check only runs when an auth provider is
+        # configured; a trusted-loopback caller resolves to admin.
+        if _profile_is_elevated(request.container_profile):
+            if self._auth.provider:
+                authorize(AuthzAction.SET_CONTAINER_PROFILE)
+            logger.info(
+                "Job %s using elevated container profile %s",
+                job_id.to_wire(),
+                job_pb2.ContainerProfile.Name(request.container_profile),
+            )
+
+        # DOCKER_ACCESS mounts the host docker socket, which only the docker
+        # worker backend has. Reject it at submit on a cluster backend (k8s nodes
+        # run containerd, no host socket) so the job never lands — the k8s
+        # manifest builder would otherwise raise mid-reconcile and stall dispatch.
+        if (
+            resolve_container_profile(request.container_profile) == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
+            and BackendCapability.WORKER_DAEMON not in self._controller.capabilities
+        ):
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                "Container profile docker_access requires the docker worker backend (it mounts the "
+                "host docker socket); this cluster's backend does not support it. Use a privileged "
+                "profile with an in-pod runtime, or submit to a docker-worker cluster.",
+            )
 
         # Cap the number of non-terminal tasks a single user may hold at once.
         # A burst of eval submissions once materialized enough tasks to OOM the

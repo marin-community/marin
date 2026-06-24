@@ -139,6 +139,7 @@ class RemoteClusterClient:
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+        container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         submit_argv: list[str] | None = None,
     ) -> JobName:
         if replicas < 1:
@@ -165,6 +166,7 @@ class RemoteClusterClient:
             existing_job_policy=existing_job_policy,
             task_image=task_image or "",
             priority_band=priority_band,
+            container_profile=container_profile,
             submit_argv=submit_argv or [],
             client_revision_date=client_revision_date(),
         )
