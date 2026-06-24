@@ -29,6 +29,7 @@ from huggingface_hub import snapshot_download
 from iris.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.tpu_topology import get_tpu_topology
+from levanter.model_cache import cache_to_prefix
 from rigging.connect import proxy_path
 from rigging.filesystem import marin_temp_bucket
 from rigging.log_setup import configure_logging
@@ -149,27 +150,20 @@ def resolve_model_path(model: str, cache_ttl_days: int) -> str:
 
     Object-store paths are served directly. HF ids are mirrored once to a region-local
     GCS cache (``marin_temp_bucket``); a later serve of the same model reads the cached
-    snapshot from same-region GCS instead of re-downloading from HuggingFace. On a cache
-    miss the freshly downloaded local snapshot is served (fast local read) and uploaded
-    for next time.
+    snapshot from same-region GCS instead of re-downloading from HuggingFace. The mirror
+    is populated under a distributed lock (:func:`levanter.model_cache.cache_to_prefix`),
+    so concurrent serves of the same model do not all hit HuggingFace at once: the first
+    worker downloads while the rest block until the cache is populated.
     """
     if cache_ttl_days <= 0 or _is_object_store_path(model):
         return model
 
-    cache_path = marin_temp_bucket(cache_ttl_days, f"{_MODEL_CACHE_PREFIX}/{_model_cache_slug(model)}").rstrip("/")
-    fs, _ = fsspec.core.url_to_fs(cache_path)
-    if fs.exists(f"{cache_path}/{_CACHE_COMPLETE_MARKER}"):
-        logger.info("quick-serve model cache hit: %s", cache_path)
-        return cache_path
-
-    logger.info("quick-serve model cache miss; downloading %s and mirroring to %s", model, cache_path)
-    local_dir = tempfile.mkdtemp(prefix="quick_serve_model_")
-    snapshot_download(model, local_dir=local_dir)
-    fs.put(f"{local_dir.rstrip('/')}/", f"{cache_path}/", recursive=True)
-    # Marker last: its presence is the cache-hit signal, so a crashed upload won't read as complete.
-    with fs.open(f"{cache_path}/{_CACHE_COMPLETE_MARKER}", "w") as marker:
-        marker.write("ok")
-    return local_dir
+    cache_path = marin_temp_bucket(cache_ttl_days, f"{_MODEL_CACHE_PREFIX}/{_model_cache_slug(model)}")
+    return cache_to_prefix(
+        cache_path,
+        lambda local_dir: snapshot_download(model, local_dir=local_dir),
+        complete_marker=_CACHE_COMPLETE_MARKER,
+    )
 
 
 def detect_chat_support(vllm_base_url: str, model_id: str) -> bool:
