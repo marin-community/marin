@@ -10,7 +10,6 @@ Provides ContainerRuntime protocol and implementations:
 
 from iris.cluster.runtime.docker import DockerImageBuilder, DockerRuntime
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
-from iris.cluster.runtime.setup import default_setup_script, resolve_setup_script
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerHandle,
@@ -36,6 +35,4 @@ __all__ = [
     "ImageBuilder",
     "ImageInfo",
     "build_runtime_entrypoint",
-    "default_setup_script",
-    "resolve_setup_script",
 ]

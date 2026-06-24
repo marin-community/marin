@@ -25,7 +25,7 @@ from iris.client.client import (
 )
 from iris.client.resolver import ClusterResolver
 from iris.client.worker_pool import WorkerPool, WorkerPoolConfig
-from iris.cluster.runtime.setup import default_setup_script
+from iris.cluster.setup import default_setup_script
 
 __all__ = [
     "ClusterResolver",

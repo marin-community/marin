@@ -104,13 +104,15 @@ See https://github.com/marin-community/marin/issues/3859 for context.
 ## Task Setup
 
 Before running the command, the worker runs a **setup script** to prepare the
-environment. The runtime is pure mechanism — it runs whatever script it is given;
-the policy (what the script does) lives in `iris.cluster.runtime.setup`.
+environment. Execution is pure mechanism: the worker runs whatever script it is
+handed and never decides anything. The script is resolved on the **client** side
+in `EnvironmentSpec.to_proto()`; the builder lives in `iris.cluster.setup`
+(`default_setup_script`, re-exported from `iris.client` and `fray`), out of the
+execution path.
 
 - **Default**: `EnvironmentSpec(setup_script=None)` builds the standard uv-sync
-  script via `default_setup_script(...)`. `sync_packages` scopes the sync to
-  specific workspace members (default: `--all-packages`):
-  `EnvironmentSpec(sync_packages=["marin-core"], extras=["tpu"])`.
+  script. `sync_packages` scopes the sync to specific workspace members (default:
+  `--all-packages`): `EnvironmentSpec(sync_packages=["marin-core"], extras=["tpu"])`.
 - **Custom**: `EnvironmentSpec(setup_script="...")` runs the string verbatim. Build
   the default and extend it: `default_setup_script(packages=["marin-core"]) + "\n…"`.
 - **Bring-your-own-env / no sync**: `EnvironmentSpec(setup_script="")` skips setup
@@ -130,9 +132,9 @@ setup script's `export FOO=bar` does **not** reach the running command — use
 `env_vars` for runtime environment. Setup scripts should only mutate the shared
 `/app` workdir (e.g. create the venv).
 
-A custom setup script is inherited by child jobs only when the parent explicitly set
-one (so a BYO parent's children stay BYO); default-mode parents' children rebuild the
-default from their own (or inherited) extras/pip/sync_packages.
+Child jobs inherit the parent's `extras`/`pip_packages` and rebuild their own
+default script from them; a custom `setup_script` is not inherited, so a child that
+needs a bring-your-own-env setup passes its own.
 
 See https://github.com/marin-community/marin/issues/6595 for context.
 

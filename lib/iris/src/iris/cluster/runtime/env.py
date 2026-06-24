@@ -136,21 +136,14 @@ def build_common_iris_env(
     env["UV_PYTHON_INSTALL_DIR"] = "/uv/cache/python"
     env["CARGO_TARGET_DIR"] = "/root/.cargo/target"
 
-    # Propagate the setup inputs so child jobs can inherit them. A custom setup
-    # script is propagated only when the parent explicitly chose CUSTOM mode, so
-    # children of a bring-your-own-env parent stay BYO while children of a default
-    # parent rebuild the default script from inherited extras/pip/sync_packages.
+    # Propagate extras and pip_packages so child jobs can inherit them and rebuild
+    # their own setup script from the inherited inputs.
     extras = list(environment.extras)
     if extras:
         env["IRIS_JOB_EXTRAS"] = json.dumps(extras)
     pip_packages = list(environment.pip_packages)
     if pip_packages:
         env["IRIS_JOB_PIP_PACKAGES"] = json.dumps(pip_packages)
-    sync_packages = list(environment.sync_packages)
-    if sync_packages:
-        env["IRIS_JOB_SYNC_PACKAGES"] = json.dumps(sync_packages)
-    if environment.setup_mode == job_pb2.SETUP_MODE_CUSTOM:
-        env["IRIS_JOB_SETUP_SCRIPT"] = environment.setup_script
 
     # Serialize user env vars for child job inheritance via IRIS_JOB_ENV
     user_env_vars = dict(environment.env_vars)

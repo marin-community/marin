@@ -27,6 +27,7 @@ import cloudpickle
 import humanfriendly
 from rigging.timing import Timestamp
 
+from iris.cluster.setup import default_setup_script
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -624,7 +625,7 @@ class EnvironmentSpec:
     - ``setup_script`` set to a string runs it verbatim before the command, with
       the task's ``IRIS_*`` env available; ``""`` means no setup (the image is
       used as-is). Build the default and tweak it via
-      ``iris.cluster.runtime.default_setup_script``.
+      ``iris.cluster.setup.default_setup_script``.
 
     Note: To specify workspace for bundle creation, use IrisClient.remote(workspace=...).
     """
@@ -636,7 +637,12 @@ class EnvironmentSpec:
     sync_packages: Sequence[str] | None = None
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
-        """Convert to wire format with sensible defaults applied."""
+        """Convert to wire format, resolving the setup script.
+
+        The default (``setup_script=None``) is built here, in Python, where the
+        ``None``/``""``/custom distinction is unambiguous; the worker receives one
+        already-resolved script and never decides anything.
+        """
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
@@ -648,17 +654,23 @@ class EnvironmentSpec:
 
         py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
 
-        cfg = job_pb2.EnvironmentConfig(
+        setup_script = self.setup_script
+        if setup_script is None:
+            setup_script = default_setup_script(
+                extras=list(self.extras or []),
+                pip_packages=list(self.pip_packages or []),
+                python_version=py_version,
+                packages=list(self.sync_packages or []) or None,
+                quiet=not merged_env_vars.get("IRIS_DEBUG_UV_SYNC"),
+            )
+
+        return job_pb2.EnvironmentConfig(
             pip_packages=list(self.pip_packages or []),
             env_vars=merged_env_vars,
             extras=list(self.extras or []),
             python_version=py_version,
-            sync_packages=list(self.sync_packages or []),
+            setup_script=setup_script,
         )
-        if self.setup_script is not None:
-            cfg.setup_mode = job_pb2.SETUP_MODE_CUSTOM
-            cfg.setup_script = self.setup_script
-        return cfg
 
 
 class Namespace(str):

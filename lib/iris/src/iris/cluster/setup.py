@@ -3,24 +3,20 @@
 
 """Build the per-task setup script that prepares a worker's environment.
 
-The setup script runs once on the worker before the user's command, with the
-task's ``IRIS_*`` environment available (see ``build_common_iris_env``). It is a
-plain bash string so callers can inspect, extend, or replace it.
+This is a client-side helper: the submitter resolves a setup script and ships it
+to the worker, which runs it verbatim before the command (the worker never builds
+or interprets it). ``default_setup_script`` renders the standard ``uv sync`` flow;
+a caller that wants a different environment — a pre-baked image, a scoped sync, or
+no setup at all — passes its own ``setup_script`` and bypasses this entirely.
 
-``default_setup_script`` renders the standard ``uv sync`` flow. A caller that
-wants a different environment — a pre-baked image, a scoped sync, or no setup at
-all — sets ``setup_script`` on the environment config and bypasses the default
-entirely (``EnvironmentConfig.setup_mode == SETUP_MODE_CUSTOM``).
-
-The script creates and populates the venv at ``$IRIS_VENV``; it does not activate
-it. The run phase activates ``$IRIS_VENV`` if it exists, so a custom or empty
-script that leaves no venv simply runs in the image's own environment.
+The script runs with the task's ``IRIS_*`` environment available (see
+``build_common_iris_env``) and creates the venv at ``$IRIS_VENV`` without
+activating it. The run phase activates ``$IRIS_VENV`` if it exists, so a custom or
+empty script that leaves no venv simply runs in the image's own environment.
 """
 
 import shlex
 from collections.abc import Sequence
-
-from iris.rpc import job_pb2
 
 # Always installed so callable entrypoints (cloudpickle) and the profiler attach
 # paths (py-spy/memray) work without the user declaring them.
@@ -116,21 +112,3 @@ def default_setup_script(
         pip_cmd,
     ]
     return "\n".join(lines) + "\n"
-
-
-def resolve_setup_script(env: job_pb2.EnvironmentConfig) -> str:
-    """Resolve the setup script for an environment config.
-
-    A ``SETUP_MODE_CUSTOM`` config uses ``setup_script`` verbatim (including the
-    empty string, which means a no-setup bring-your-own-environment job).
-    Otherwise the default uv-based script is built from the declared inputs.
-    """
-    if env.setup_mode == job_pb2.SETUP_MODE_CUSTOM:
-        return env.setup_script
-    return default_setup_script(
-        extras=list(env.extras),
-        pip_packages=list(env.pip_packages),
-        python_version=env.python_version or None,
-        packages=list(env.sync_packages) or None,
-        quiet=not env.env_vars.get("IRIS_DEBUG_UV_SYNC"),
-    )
