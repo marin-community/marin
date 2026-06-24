@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from fray.types import ResourceConfig
 from rigging.filesystem import marin_prefix
 
+from marin.execution.context import check_build_context
 from marin.execution.types import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
 
 
@@ -78,6 +79,9 @@ class StepSpec:
     plain callable runs inline in the runner thread.
     """
 
+    def __post_init__(self):
+        check_build_context("StepSpec", self.name)
+
     @cached_property
     def dep_paths(self) -> list[str]:
         """Physical and resolved output paths of all dependencies."""
@@ -117,11 +121,28 @@ class StepSpec:
             return self.override_output_path
         return f"{prefix}/{self.name_with_hash}"
 
+    @property
+    def executor_override_path(self) -> str:
+        """Prefix-relative identity to pin as an ``ExecutorStep``'s override path.
+
+        Without an explicit ``output_path_prefix``, this stays relative so the
+        :class:`~marin.execution.executor.Executor` anchors it under the *run*
+        prefix (region-portable) instead of freezing the build environment's
+        region. An explicit ``output_path_prefix`` or an absolute
+        ``override_output_path`` is a deliberate pin and kept as-is.
+        """
+        if self.output_path_prefix is not None:
+            return self.output_path
+        if self.override_output_path is not None:
+            return self.override_output_path
+        return self.name_with_hash
+
     def as_executor_step(self) -> ExecutorStep:
         """Convert to an ``ExecutorStep`` for use in ``Executor.run()`` pipelines.
 
-        The resulting ``ExecutorStep`` preserves this step's output path and
-        caching identity via ``override_output_path``. Round-tripping through
+        The resulting ``ExecutorStep`` preserves this step's caching identity via
+        a prefix-relative ``override_output_path`` (:attr:`executor_override_path`),
+        which the executor anchors under the run prefix. Round-tripping through
         ``resolve_executor_step`` returns the original ``StepSpec``.
         """
         dep_steps = [dep.as_executor_step() for dep in self.deps]
@@ -136,7 +157,7 @@ class StepSpec:
             name=self.name,
             fn=self.fn,
             config=config,
-            override_output_path=self.output_path,
+            override_output_path=self.executor_override_path,
             resources=self.resources,
         )
         # ExecutorStep is frozen; object.__setattr__ stashes the original

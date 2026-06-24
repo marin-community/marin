@@ -6,6 +6,7 @@ import tempfile
 import pytest
 from fray import LocalClient, set_current_client
 from marin.execution.artifact_registry import FilesystemArtifactRegistry, use_default_registry
+from marin.execution.context import executor_context
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
@@ -48,4 +49,16 @@ def _isolate_artifact_registry(tmp_path_factory):
     """
     temp_root = str(tmp_path_factory.mktemp("artifact_registry"))
     with use_default_registry(FilesystemArtifactRegistry(temp_root)):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _executor_build_context():
+    """Treat each test body as an executor build phase.
+
+    Tests construct ``ExecutorStep`` / ``StepSpec`` directly; without an active
+    context the build-phase guard would warn (or raise under
+    ``MARIN_EXECUTOR_STRICT``) on every such construction.
+    """
+    with executor_context():
         yield

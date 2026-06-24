@@ -330,6 +330,50 @@ def test_step_spec_as_executor_step_round_trip():
     assert resolved.resources == step.resources
 
 
+def test_as_executor_step_prefixless_override_is_region_relative(monkeypatch):
+    """A prefix-less StepSpec must hand the executor a *relative* override.
+
+    Regression for marin-community/marin#6614: building a download-style step
+    (no ``output_path_prefix``, relative ``override_output_path``) under one
+    region used to freeze that region into the ExecutorStep, so a run in another
+    region tripped the cross-region guard. The override must stay relative so the
+    Executor anchors it under the *run* prefix.
+    """
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-west4")
+    step = StepSpec(name="raw/dolma", override_output_path="raw/dolma")
+
+    # The physical path (used by a direct StepRunner) is still absolute.
+    assert step.output_path == "gs://marin-us-west4/raw/dolma"
+    # But the executor override is region-relative — no bucket frozen in.
+    assert step.as_executor_step().override_output_path == "raw/dolma"
+
+    no_override = StepSpec(name="raw/foo")
+    assert no_override.as_executor_step().override_output_path == no_override.name_with_hash
+
+
+def test_as_executor_step_resolves_under_run_prefix_not_build_prefix(monkeypatch):
+    """End-to-end #6614: a step built in us-west4 resolves under the us-central1 run."""
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-west4")
+    build_step = StepSpec(name="raw/dolma", override_output_path="raw/dolma").as_executor_step()
+
+    executor = Executor(
+        prefix="gs://marin-us-central1",
+        executor_info_base_path="gs://marin-us-central1/experiments",
+    )
+    executor.compute_version(build_step, is_pseudo_dep=False)
+
+    # Anchored under the RUN region, not the us-west4 build region.
+    assert executor.output_paths[build_step] == "gs://marin-us-central1/raw/dolma"
+
+    # The round-tripped StepSpec that StepRunner executes pins the run-region path.
+    resolved = resolve_executor_step(
+        build_step,
+        config={},
+        output_path=executor.output_paths[build_step],
+    )
+    assert resolved.output_path == "gs://marin-us-central1/raw/dolma"
+
+
 def _build_three_level_dag(prefix: str) -> tuple[StepSpec, StepSpec, StepSpec]:
     """download → normalize → tokenize, all rooted at ``prefix``."""
     download = StepSpec(

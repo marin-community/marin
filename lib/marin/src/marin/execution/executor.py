@@ -112,6 +112,7 @@ from rigging.filesystem import (
 )
 from rigging.log_setup import configure_logging
 
+from marin.execution.context import executor_context
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
@@ -639,15 +640,14 @@ def resolve_executor_step(
     # Short-circuit for StepSpec -> ExecutorStep -> StepSpec round-trip.
     original: StepSpec | None = getattr(step, "_original_step_spec", None)
     if original is not None:
-        # ``as_executor_step()`` pins ``override_output_path=original.output_path``
-        # on the ExecutorStep so the executor preserves the original placement.
-        # Mirror that pin on the resolved StepSpec — otherwise replacing deps
-        # with executor-built stubs (which lack the originals' ``hash_attrs``)
-        # would change ``name_with_hash`` and silently shift ``output_path``.
+        # Pin the executor-computed ``output_path`` — already anchored under the
+        # run prefix — rather than ``original.output_path`` (which resolves the
+        # build environment's region). Otherwise the StepSpec handed to
+        # ``StepRunner`` would write under the build region, not the run region.
         return dataclasses.replace(
             original,
             deps=deps or list(original.deps),
-            override_output_path=original.output_path,
+            override_output_path=output_path,
             resources=original.resources,
         )
 
@@ -1160,43 +1160,47 @@ class Executor:
         if max_concurrent is not None and max_concurrent < 1:
             raise ValueError(f"max_concurrent must be a positive integer, got {max_concurrent}")
 
-        # Gather all the steps, compute versions and output paths for all of them.
-        logger.info(f"### Inspecting the {len(steps)} provided steps ###")
-        for step in steps:
-            if isinstance(step, InputName):  # Interpret InputName as the underlying step
-                step = step.step
-            if step is not None:
-                self.compute_version(step, is_pseudo_dep=False)
+        # _resolve_steps rebuilds StepSpecs (via dataclasses.replace and fresh
+        # construction), which trips the build-phase guard; run the whole walk
+        # inside a context anchored on this run's prefix.
+        with executor_context(prefix=self.prefix):
+            # Gather all the steps, compute versions and output paths for all of them.
+            logger.info(f"### Inspecting the {len(steps)} provided steps ###")
+            for step in steps:
+                if isinstance(step, InputName):  # Interpret InputName as the underlying step
+                    step = step.step
+                if step is not None:
+                    self.compute_version(step, is_pseudo_dep=False)
 
-        self.get_infos()
-        logger.info(f"### Reading {len(self.steps)} statuses ###")
+            self.get_infos()
+            logger.info(f"### Reading {len(self.steps)} statuses ###")
 
-        if run_only is not None:
-            steps_to_run = self._compute_transitive_deps(self.steps, run_only)
-        else:
-            steps_to_run = [step for step in self.steps if not self.is_pseudo_dep[step]]
+            if run_only is not None:
+                steps_to_run = self._compute_transitive_deps(self.steps, run_only)
+            else:
+                steps_to_run = [step for step in self.steps if not self.is_pseudo_dep[step]]
 
-        if steps_to_run != self.steps:
-            logger.info(f"### Running {len(steps_to_run)} steps out of {len(self.steps)} ###")
+            if steps_to_run != self.steps:
+                logger.info(f"### Running {len(steps_to_run)} steps out of {len(self.steps)} ###")
 
-        if dry_run:
-            logger.info("### Skipping metadata write (dry run) ###")
-        else:
-            logger.info("### Writing metadata ###")
-            self.write_infos()
+            if dry_run:
+                logger.info("### Skipping metadata write (dry run) ###")
+            else:
+                logger.info("### Writing metadata ###")
+                self.write_infos()
 
-        logger.info(f"### Launching {len(steps_to_run)} steps ###")
-        if max_concurrent is not None:
-            logger.info(f"### Max concurrent steps: {max_concurrent} ###")
+            logger.info(f"### Launching {len(steps_to_run)} steps ###")
+            if max_concurrent is not None:
+                logger.info(f"### Max concurrent steps: {max_concurrent} ###")
 
-        resolved_steps = self._resolve_steps(steps_to_run)
-        StepRunner().run(
-            resolved_steps,
-            dry_run=dry_run,
-            force_run_failed=force_run_failed,
-            max_concurrent=max_concurrent,
-        )
-        return self.output_paths
+            resolved_steps = self._resolve_steps(steps_to_run)
+            StepRunner().run(
+                resolved_steps,
+                dry_run=dry_run,
+                force_run_failed=force_run_failed,
+                max_concurrent=max_concurrent,
+            )
+            return self.output_paths
 
     def _resolve_steps(self, steps: list[ExecutorStep]) -> list[StepSpec]:
         """Convert computed ExecutorStep state into a flat list of StepSpec."""
@@ -1636,12 +1640,13 @@ def compute_output_path(
         prefix=resolved_prefix,
         executor_info_base_path=executor_info_base_path,
     )
-    step = ExecutorStep(
-        name=name,
-        fn=_noop_step_fn,
-        config=config,
-        override_output_path=override_output_path,
-    )
+    with executor_context(prefix=resolved_prefix):
+        step = ExecutorStep(
+            name=name,
+            fn=_noop_step_fn,
+            config=config,
+            override_output_path=override_output_path,
+        )
     executor.compute_version(step, is_pseudo_dep=False)
     return executor.output_paths[step]
 
