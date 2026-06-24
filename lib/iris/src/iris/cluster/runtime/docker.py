@@ -133,6 +133,16 @@ class _DockerProfileDispatch:
             logger.warning("SIGCONT sweep failed for container %s: %s", self.container_id, e)
 
 
+def _resolve_profiler_bin(container_id: str, venv_bin: str, fallback: str) -> str:
+    """Prefer the venv-installed profiler, falling back to PATH for BYO images.
+
+    iris installs py-spy/memray into ``$IRIS_VENV``, but a bring-your-own image
+    with no venv may carry them on PATH instead.
+    """
+    probe = subprocess.run(["docker", "exec", container_id, "test", "-x", venv_bin], capture_output=True, timeout=5)
+    return venv_bin if probe.returncode == 0 else fallback
+
+
 # Network sysctl tuning for containers with their own network namespace (#3066).
 # Host-network containers inherit host settings (configured at VM bootstrap).
 _NETWORK_SYSCTLS: dict[str, str] = {
@@ -449,26 +459,19 @@ class DockerContainerHandle:
         Non-blocking - returns immediately after starting the container.
         Use status() to monitor execution progress.
         """
-        # Build the run command: activate the venv (if one exists) then exec the
-        # user command.
         quoted_cmd = " ".join(shlex.quote(arg) for arg in self.config.entrypoint.run_command.argv)
 
-        # When a setup script ran it left a venv at $IRIS_VENV, which we activate.
-        # Activation is conditional on the venv existing so a custom or no-setup
-        # script that brings its own environment runs in the image as-is instead
-        # of failing on a missing .venv.
-        if self.config.entrypoint.setup_commands:
-            run_script = f"""#!/bin/bash
+        # Run from the workdir (matching the k8s task script) and activate the venv
+        # only when a setup script left one, so a bring-your-own-env command runs in
+        # the image as-is rather than failing on a missing .venv.
+        run_script = f"""#!/bin/bash
 set -e
 cd "$IRIS_WORKDIR"
 [ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"
 exec {quoted_cmd}
 """
-            self._write_run_script(run_script)
-            command = ["bash", "/app/_run.sh"]
-        else:
-            # No setup, run command directly
-            command = list(self.config.entrypoint.run_command.argv)
+        self._write_run_script(run_script)
+        command = ["bash", "/app/_run.sh"]
 
         self._run_container_id = self._docker_create(
             command=command,
@@ -527,7 +530,11 @@ exec {quoted_cmd}
         if not container_id:
             raise RuntimeError("Cannot profile: no running container")
 
-        dispatch = _DockerProfileDispatch(container_id)
+        dispatch = _DockerProfileDispatch(
+            container_id,
+            pyspy_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/py-spy", "py-spy"),
+            memray_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/memray", "memray"),
+        )
         if profile_type.HasField("threads"):
             return capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
         elif profile_type.HasField("cpu"):
