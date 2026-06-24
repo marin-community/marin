@@ -898,3 +898,40 @@
   ring-gather dispatch-up path first, or redesign Mosaic dispatch around a
   streaming fixed-neighbor schedule that avoids the `EP x send_capacity x H`
   scratch/prepack shape.
+
+### 2026-06-23 23:31 PT - Production helper extraction for ring-gather dispatch-up
+
+- Hypothesis: The fast ring-gather dispatch-up benchmark path should share the
+  Grug EP ring helper instead of carrying a duplicate all-gather/select/GMM
+  implementation. This makes the measured 0-25% buffer behavior correspond to
+  the production `moe_mlp` backend path.
+- Changes:
+  - Extracted `_dispatch_up_ep_ring_local` in
+    `lib/levanter/src/levanter/grug/_moe/ep_ring.py`.
+  - The helper returns receiver-local `x_dispatch`, accepted `group_sizes`,
+    `token_local`, `weight_dispatch`, a `valid` row mask, and dropped-assignment
+    count.
+  - Updated `bench_moe_dispatch_up_mosaic_gpu.py` so
+    `--run-ring-gather-dispatch-up` calls `_dispatch_up_ep_ring_local` and uses
+    the explicit `valid` mask for capacity padding.
+- Commands:
+  - Local syntax: `uv run --package marin-levanter python -m py_compile lib/levanter/src/levanter/grug/_moe/ep_ring.py lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py`
+  - Local tests: `uv run --package marin-levanter pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'ring or a2a_backend_matches_ring or ep_path_lowers'`
+  - Local checks: `./infra/pre-commit.py --changed-files --fix`
+  - CoreWeave H128 correctness: `... --job-name dlwh-6597-moe-ring-gather-prod-helper-h128-correctness -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --run-ring-gather-dispatch-up --ragged-dot-impl auto --bench-iters 1 --warmup-steps 1`
+  - CoreWeave T/rank=4096, 25% buffer smoke: `... --job-name dlwh-6597-moe-ring-gather-prod-helper-t4096-buf125 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --run-ring-gather-dispatch-up --skip-reference-checks --ragged-dot-impl auto --bench-iters 2 --warmup-steps 1`
+- Result:
+  - Local Grug MoE focused tests: `9 passed, 4 skipped`.
+  - Changed-file precommit: clean, including Pyrefly.
+  - H128 correctness on H100x8: dropped `0`, max abs error `1.90735e-06`,
+    steady `0.381 ms`.
+  - T/rank=4096, H=I=2560, E=256, topk=4, 25% buffer on H100x8: dropped `0`,
+    steady `1.859 ms` (`min=1.843`, `max=1.876`, `iters=2`).
+- Interpretation: The production helper extraction preserves the previous
+  benchmark behavior and keeps the realistic 25% imbalance-buffer case under
+  the 2 ms target. For normal routing imbalance policy, 10-25% remains the
+  relevant validation range; 0% is useful as a balanced-routing stress case.
+- Next action: Commit the helper extraction, then wire the helper behind the
+  Mosaic/Grug backend selection boundary or continue toward a true overlapped
+  Mosaic dispatch/W13 implementation if avoiding the built-in collective is
+  still required.

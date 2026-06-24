@@ -5,6 +5,7 @@
 
 import math
 from collections.abc import Callable
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -21,22 +22,28 @@ from levanter.grug._moe.ep_common import _prefix_cap_counts
 from levanter.grug.sharding import _batch_axes
 
 
-def _moe_mlp_ep_ring_local(
-    x_local: Float[Array, "TL D"],
-    selected_experts_local: Int[Array, "TL K"],
-    combine_weights_local: Float[Array, "TL K"],
-    moe_w13_local: Float[Array, "EL D I2"],
-    moe_w2_local: Float[Array, "EL I D"],
+class RingDispatchUp(NamedTuple):
+    """Receiver-local rows and metadata for ring-style expert dispatch-up."""
+
+    x_dispatch: jax.Array
+    group_sizes: jax.Array
+    token_local: jax.Array
+    weight_dispatch: jax.Array
+    valid: jax.Array
+    dropped_local: jax.Array
+
+
+def _dispatch_up_ep_ring_local(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
     *,
-    activation_fn: Callable[[jax.Array], jax.Array],
+    local_experts: int,
     num_experts: int,
     capacity_factor: float,
-    remat_mode: str = "none",
-) -> tuple[Float[Array, "TL D"], Int[Array, ""]]:
-    """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
-    del remat_mode
-    # #2710 ring EP strategy: gather tokens and their selected-expert routing
-    # assignments across expert shards, then psum-scatter back to local tokens.
+) -> RingDispatchUp:
+    """All-gather tokens and pack this rank's local expert rows for W13."""
+
     with jax.named_scope("moe_ep_ring/gather_inputs"):
         x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
         selected_experts_global = jax.lax.all_gather(selected_experts_local, "expert", tiled=True)
@@ -49,7 +56,6 @@ def _moe_mlp_ep_ring_local(
         expert_flat = selected_experts_global.reshape(assignments)
         weight_flat = combine_weights_global.reshape(assignments)
 
-        local_experts = moe_w13_local.shape[0]
         if num_experts % local_experts != 0:
             raise ValueError(
                 f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
@@ -102,12 +108,46 @@ def _moe_mlp_ep_ring_local(
 
     with jax.named_scope("moe_ep_ring/group_sizes"):
         group_sizes = accepted_counts
-        # `local_idx` pads by appending invalid rows at the end; keep GMM segment
-        # boundaries aligned by attributing padding to the final expert segment.
-        group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
+
+    return RingDispatchUp(
+        x_dispatch=x_dispatch,
+        group_sizes=group_sizes,
+        token_local=token_local,
+        weight_dispatch=weight_dispatch,
+        valid=valid,
+        dropped_local=dropped_local,
+    )
+
+
+def _moe_mlp_ep_ring_local(
+    x_local: Float[Array, "TL D"],
+    selected_experts_local: Int[Array, "TL K"],
+    combine_weights_local: Float[Array, "TL K"],
+    moe_w13_local: Float[Array, "EL D I2"],
+    moe_w2_local: Float[Array, "EL I D"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+    remat_mode: str = "none",
+) -> tuple[Float[Array, "TL D"], Int[Array, ""]]:
+    """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
+    del remat_mode
+    local_experts = moe_w13_local.shape[0]
+    dispatch = _dispatch_up_ep_ring_local(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        local_experts=local_experts,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+    )
 
     with jax.named_scope("moe_expert_mlp/w13_ragged_dot"):
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+        w13_out = tree_checkpoint_name(
+            ragged_dot(dispatch.x_dispatch, moe_w13_local, dispatch.group_sizes),
+            _CHECKPOINT_EXPERT_HIDDEN,
+        )
     with jax.named_scope("moe_expert_mlp/split_gate_up"):
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
@@ -115,16 +155,23 @@ def _moe_mlp_ep_ring_local(
         hidden = activation_fn(gate) * up
     with jax.named_scope("moe_expert_mlp/w2_ragged_dot"):
         out_dispatch = tree_checkpoint_name(
-            ragged_dot(hidden, moe_w2_local, group_sizes),
+            ragged_dot(hidden, moe_w2_local, dispatch.group_sizes),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
     with jax.named_scope("moe_ep_ring/combine_scatter_add"):
-        out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")
+        out_global = (
+            jnp.zeros(
+                (x_local.shape[0] * (num_experts // local_experts), x_local.shape[1]),
+                dtype=out_dispatch.dtype,
+            )
+            .at[dispatch.token_local]
+            .add(out_dispatch * dispatch.weight_dispatch[:, None], mode="drop")
+        )
     with jax.named_scope("moe_ep_ring/psum_scatter_output"):
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
         out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
     with jax.named_scope("moe_ep_ring/psum_dropped_assignments"):
-        dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+        dropped_total = jax.lax.psum(dispatch.dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total

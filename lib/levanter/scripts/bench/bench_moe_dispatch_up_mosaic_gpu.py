@@ -21,10 +21,10 @@ from levanter.grug._moe.ep_common import (
     _expert_prefix_keep_mask,
     _local_permute_from_counts,
     _permute_by_global_expert,
-    _prefix_cap_counts,
     _shard_a2a_params,
 )
 from levanter.grug._moe.ep_padded_all_to_all import _dispatch_fixed_buckets
+from levanter.grug._moe.ep_ring import _dispatch_up_ep_ring_local
 from levanter.kernels.pallas.moe_dispatch_up.mosaic_gpu import (
     dispatch_prepacked_moe_dispatch_up_mosaic_gpu_direct_ready_local,
     dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local,
@@ -1056,65 +1056,45 @@ def _ring_gather_dispatch_up_fn(
     *,
     local_capacity: int,
 ) -> Callable[..., tuple[jax.Array, jax.Array]]:
-    def local_dispatch_up(x_local, selected_experts_local, local_w_gate_up):
+    num_experts = args.ep_size * args.experts_per_rank
+    capacity_factor = local_capacity / (args.tokens_per_rank * args.top_k)
+
+    def local_dispatch_up(x_local, selected_experts_local, combine_weights_local, local_w_gate_up):
         x_local = jnp.squeeze(x_local, axis=0)
         selected_experts_local = jnp.squeeze(selected_experts_local, axis=0)
+        combine_weights_local = jnp.squeeze(combine_weights_local, axis=0)
         local_w_gate_up = jnp.squeeze(local_w_gate_up, axis=0)
         local_experts = local_w_gate_up.shape[0]
 
-        x_global = lax.all_gather(x_local, "expert", tiled=True)
-        selected_experts_global = lax.all_gather(selected_experts_local, "expert", tiled=True)
-
-        tokens = x_global.shape[0]
-        topk = selected_experts_global.shape[1]
-        assignments = tokens * topk
-        if local_capacity < local_experts:
-            raise ValueError(f"local_capacity={local_capacity} must be >= local_experts={local_experts}")
-
-        expert_start = lax.axis_index("expert") * local_experts
-        local_expert = selected_experts_global.reshape(assignments) - expert_start
-        local_mask = (local_expert >= 0) & (local_expert < local_experts)
-
-        local_expert = jnp.where(local_mask, local_expert, 0)
-        expert_ids = jnp.arange(local_experts, dtype=jnp.int32)
-        counts = jnp.sum(
-            (local_expert[:, None] == expert_ids[None, :]).astype(jnp.int32) * local_mask[:, None].astype(jnp.int32),
-            axis=0,
-            dtype=jnp.int32,
+        dispatch = _dispatch_up_ep_ring_local(
+            x_local,
+            selected_experts_local,
+            combine_weights_local,
+            local_experts=local_experts,
+            num_experts=num_experts,
+            capacity_factor=capacity_factor,
         )
-        accepted_counts = _prefix_cap_counts(counts, capacity=local_capacity)
-        accepted_total = jnp.sum(accepted_counts, dtype=jnp.int32)
-        valid = jnp.arange(local_capacity, dtype=jnp.int32) < accepted_total
-
-        flat_pos = jnp.arange(assignments, dtype=jnp.int32)
-        order_key = local_expert * assignments + flat_pos
-        max_order_key = local_experts * assignments
-        selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
-        _, local_idx = lax.top_k(selection_key, local_capacity)
-
-        token_local = local_idx // topk
-        x_take = jnp.take(x_global, token_local, axis=0)
-        x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
-        # Keep the capacity buffer in the output shape, but do not charge W13
-        # for padded rows in this dispatch-up-only benchmark.
-        group_sizes = accepted_counts
-
         w13_out = ragged_dot(
-            x_dispatch,
+            dispatch.x_dispatch,
             local_w_gate_up,
-            group_sizes,
+            dispatch.group_sizes,
             implementation=args.ragged_dot_impl,
         )
         gate, up = jnp.split(w13_out, 2, axis=-1)
         h = jax.nn.silu(gate.astype(jnp.float32)).astype(gate.dtype) * up
-        dropped_total = lax.psum(jnp.sum(counts, dtype=jnp.int32) - accepted_total, "expert")
-        return jnp.where(valid[:, None], h, jnp.zeros((), dtype=h.dtype))[None, ...], dropped_total[None]
+        dropped_total = lax.psum(dispatch.dropped_local, "expert")
+        return jnp.where(dispatch.valid[:, None], h, jnp.zeros((), dtype=h.dtype))[None, ...], dropped_total[None]
 
     return jax.jit(
         shard_map(
             local_dispatch_up,
             mesh=mesh,
-            in_specs=(P("expert", None, None), P("expert", None, None), P("expert", None, None, None)),
+            in_specs=(
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None, None),
+            ),
             out_specs=(P("expert", None, None), P("expert")),
             check_vma=False,
         )
@@ -1883,6 +1863,7 @@ def main() -> None:
             ring_gather_args = (
                 _sharded(mesh, x_by_rank, P("expert", None, None)),
                 _sharded(mesh, expert_ids, P("expert", None, None)),
+                _sharded(mesh, router_weights, P("expert", None, None)),
                 _sharded(mesh, w_gate_up, P("expert", None, None, None)),
             )
 
