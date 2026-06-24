@@ -52,11 +52,11 @@ def test_gpu_fa4_cute_supports_hopper_kernel_config(monkeypatch):
 def test_sm90_native_backward_config_matches_upstream_sparse_q_rule():
     dense_noncausal = fa4_cute_config.sm90_flash4_cute_backward_config(
         128,
-        is_causal_or_local=False,
+        schedule=fa4_cute_config.Sm90BackwardSchedule.DENSE,
     )
     sparse_noncausal = fa4_cute_config.sm90_flash4_cute_backward_config(
         128,
-        is_causal_or_local=False,
+        schedule=fa4_cute_config.Sm90BackwardSchedule.DENSE,
         sparse_block_size_q=128,
     )
 
@@ -98,23 +98,21 @@ def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
         sliding_window=None,
     )
 
-    mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx = (
-        fa4_cute._packed_segment_backward_block_sparse_indices_with_full(
-            lower_bounds,
-            valid,
-            tile_m=2,
-            tile_n=2,
-        )
+    sparse_metadata = fa4_cute_backend._packed_segment_backward_block_sparse_indices_with_full(
+        lower_bounds,
+        valid,
+        tile_m=2,
+        tile_n=2,
     )
 
-    np.testing.assert_array_equal(mask_block_cnt, jnp.array([[[1, 1, 1, 1]]], dtype=jnp.int32))
+    np.testing.assert_array_equal(sparse_metadata.partial_block_cnt, jnp.array([[[1, 1, 1, 1]]], dtype=jnp.int32))
     np.testing.assert_array_equal(
-        mask_block_idx,
+        sparse_metadata.partial_block_idx,
         jnp.array([[[[0, 0, 0, 0], [1, 0, 0, 0], [2, 0, 0, 0], [3, 0, 0, 0]]]], dtype=jnp.int32),
     )
-    np.testing.assert_array_equal(full_block_cnt, jnp.array([[[3, 2, 1, 0]]], dtype=jnp.int32))
+    np.testing.assert_array_equal(sparse_metadata.full_block_cnt, jnp.array([[[3, 2, 1, 0]]], dtype=jnp.int32))
     np.testing.assert_array_equal(
-        full_block_idx,
+        sparse_metadata.full_block_idx,
         jnp.array([[[[1, 2, 3, 0], [2, 3, 0, 0], [3, 0, 0, 0], [0, 0, 0, 0]]]], dtype=jnp.int32),
     )
 
@@ -190,13 +188,11 @@ def test_sm90_native_backward_boundary_passes_sparse_metadata(monkeypatch):
     valid = jnp.ones((1, 8), dtype=jnp.bool_)
     config = fa4_cute_config.flash4_cute_kernel_config(128, arch=90)
     assert config.sm90_backward is not None
-    mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx = (
-        fa4_cute._packed_segment_backward_block_sparse_indices_with_full(
-            lower_bounds,
-            valid,
-            tile_m=config.sm90_backward.tile[0],
-            tile_n=config.sm90_backward.tile[1],
-        )
+    sparse_metadata = fa4_cute_backend._packed_segment_backward_block_sparse_indices_with_full(
+        lower_bounds,
+        valid,
+        tile_m=config.sm90_backward.tile[0],
+        tile_n=config.sm90_backward.tile[1],
     )
 
     dq, dk, dv = fa4_cute_backend.segmented_flash_attention_backward_sm90_native(
@@ -208,10 +204,10 @@ def test_sm90_native_backward_boundary_passes_sparse_metadata(monkeypatch):
         lse,
         lower_bounds,
         valid,
-        mask_block_cnt,
-        mask_block_idx,
-        full_block_cnt,
-        full_block_idx,
+        sparse_metadata.partial_block_cnt,
+        sparse_metadata.partial_block_idx,
+        sparse_metadata.full_block_cnt,
+        sparse_metadata.full_block_idx,
         softmax_scale=1.0,
         kernel_config=config,
     )
@@ -354,7 +350,10 @@ def test_sm90_native_backward_launcher_uses_upstream_sm90_with_grug_mask(monkeyp
     monkeypatch.setattr(fa4_cute_kernels, "_import_cute_dependencies", fake_dependencies)
     monkeypatch.setattr(fa4_cute_kernels.importlib, "import_module", fake_import_module)
 
-    config = fa4_cute_config.sm90_flash4_cute_backward_config(128, is_causal_or_local=True)
+    config = fa4_cute_config.sm90_flash4_cute_backward_config(
+        128,
+        schedule=fa4_cute_config.Sm90BackwardSchedule.CAUSAL_OR_LOCAL,
+    )
 
     launcher = fa4_cute_kernels.segmented_flash_attention_backward_sm90_launcher(
         object(),

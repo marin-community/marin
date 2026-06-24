@@ -12,7 +12,6 @@ from jaxtyping import Array, Bool, Float, Int
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute_backend import (
     _packed_segment_backward_block_sparse_indices as _backend_packed_segment_backward_block_sparse_indices,
-    _packed_segment_backward_block_sparse_indices_with_full as _backend_packed_segment_backward_block_sparse_indices_with_full,
     fa4_cute_attention_forward,
 )
 from levanter.grug.attention._fa4_cute_config import flash4_cute_kernel_config
@@ -92,27 +91,6 @@ def _packed_segment_backward_block_sparse_indices(
         valid,
         tile_m=tile_m,
         tile_n=tile_n,
-    )
-
-
-def _packed_segment_backward_block_sparse_indices_with_full(
-    lower_bounds: Int[Array, "B S"],
-    valid: Bool[Array, "B S"],
-    *,
-    tile_m: int,
-    tile_n: int,
-) -> tuple[Int[Array, "B 1 N"], Int[Array, "B 1 N M"], Int[Array, "B 1 N"], Int[Array, "B 1 N M"]]:
-    sparse_metadata = _backend_packed_segment_backward_block_sparse_indices_with_full(
-        lower_bounds,
-        valid,
-        tile_m=tile_m,
-        tile_n=tile_n,
-    )
-    return (
-        sparse_metadata.partial_block_cnt,
-        sparse_metadata.partial_block_idx,
-        sparse_metadata.full_block_cnt,
-        sparse_metadata.full_block_idx,
     )
 
 

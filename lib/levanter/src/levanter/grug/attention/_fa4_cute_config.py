@@ -2,6 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from enum import StrEnum
+
+
+class Sm90BackwardSchedule(StrEnum):
+    DENSE = "dense"
+    CAUSAL_OR_LOCAL = "causal_or_local"
 
 
 @dataclass(frozen=True)
@@ -63,7 +69,7 @@ def flash4_cute_kernel_config(
         sm90_backward = sm90_flash4_cute_backward_config(
             head_dim,
             head_dim_v=head_dim,
-            is_causal_or_local=True,
+            schedule=Sm90BackwardSchedule.CAUSAL_OR_LOCAL,
         )
         return Flash4CuteKernelConfig(
             forward_tile=(128, 128 if head_dim <= 64 else 64),
@@ -79,16 +85,10 @@ def sm90_flash4_cute_backward_config(
     head_dim: int,
     *,
     head_dim_v: int | None = None,
-    is_causal_or_local: bool,
+    schedule: Sm90BackwardSchedule,
     sparse_block_size_q: int | None = None,
 ) -> Flash4CuteSm90BackwardConfig:
-    """Return the upstream FA4 SM90 backward schedule target.
-
-    This is the native Hopper producer/consumer WGMMA schedule used by the
-    D128 GQA backward route. It is separate from
-    ``Flash4CuteKernelConfig.backward_tile`` because MHA and non-native fallback
-    cases still use the SM120-compatible segmented launcher.
-    """
+    """Return the upstream FA4 SM90 backward schedule target."""
     head_dim_v = head_dim if head_dim_v is None else head_dim_v
     if head_dim <= 64:
         return Flash4CuteSm90BackwardConfig(
@@ -122,7 +122,7 @@ def sm90_flash4_cute_backward_config(
             dq_single_wg=True,
         )
     if head_dim <= 128:
-        tile_m = 64 if is_causal_or_local else 80
+        tile_m = 64 if schedule == Sm90BackwardSchedule.CAUSAL_OR_LOCAL else 80
         if sparse_block_size_q is not None and sparse_block_size_q % tile_m != 0:
             tile_m = 64
         return Flash4CuteSm90BackwardConfig(

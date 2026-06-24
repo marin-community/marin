@@ -432,20 +432,6 @@ def _cutlass_attention_backward_specs(
     )
 
 
-def _cutlass_attention_backward_sm90_specs(
-    modules: _CutlassCuteModules, *, vector_elems: int, qhead_per_kvhead: int
-) -> tuple[tuple[Any, ...], Any]:
-    input_spec, output_spec = _cutlass_attention_backward_specs(
-        modules,
-        vector_elems=vector_elems,
-        qhead_per_kvhead=qhead_per_kvhead,
-    )
-    tensor_spec = modules.cjax.TensorSpec
-    sparse_cnt_spec = tensor_spec(mode=(0, 1, 2), static=True)
-    sparse_idx_spec = tensor_spec(mode=(0, 1, 2, 3), static=True)
-    return (*input_spec, sparse_cnt_spec, sparse_idx_spec), output_spec
-
-
 def _cutlass_attention_backward_sm90_accum_specs(
     modules: _CutlassCuteModules, *, vector_elems: int
 ) -> tuple[tuple[Any, ...], Any]:
