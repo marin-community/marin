@@ -426,27 +426,54 @@ def _gh_paginated(args: list[str]) -> list:
     return out
 
 
-def list_merged_prs(repo: str, days: int, limit: int) -> list[dict]:
-    since = (dt.datetime.now(dt.UTC) - dt.timedelta(days=days)).strftime("%Y-%m-%d")
-    search = f"is:pr is:merged merged:>={since} repo:{repo}"
-    data = _gh_json(
-        [
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            "--state",
-            "merged",
-            "--search",
-            search,
-            "--limit",
-            str(limit),
-            "--json",
-            "number,title,mergedAt,author,headRefOid,baseRefOid",
-        ]
-    )
-    # gh returns a list of {number, title, mergedAt, author{login}, headRefOid, baseRefOid}
-    return data  # type: ignore[return-value]
+def _parse_github_timestamp(value: str) -> dt.datetime:
+    return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _pr_from_rest_pull(pull: dict) -> dict:
+    user = pull.get("user") or {}
+    return {
+        "number": pull["number"],
+        "title": pull["title"],
+        "mergedAt": pull["merged_at"],
+        "author": {"login": user.get("login"), "type": user.get("type")},
+        "headRefOid": (pull.get("head") or {})["sha"],
+        "baseRefOid": (pull.get("base") or {})["sha"],
+    }
+
+
+def list_merged_prs(repo: str, days: int, limit: int | None) -> list[dict]:
+    since = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
+    prs: list[dict] = []
+    page = 1
+
+    while limit is None or len(prs) < limit:
+        pulls = _gh_json(
+            [
+                "api",
+                f"repos/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100&page={page}",
+            ]
+        )
+        if not pulls:
+            break
+        assert isinstance(pulls, list)
+
+        for pull in pulls:
+            merged_at = pull.get("merged_at")
+            if merged_at is None:
+                continue
+            if _parse_github_timestamp(merged_at) < since:
+                continue
+            prs.append(_pr_from_rest_pull(pull))
+            if limit is not None and len(prs) >= limit:
+                break
+
+        last_updated_at = pulls[-1].get("updated_at")
+        if last_updated_at is not None and _parse_github_timestamp(last_updated_at) < since:
+            break
+        page += 1
+
+    return prs
 
 
 def _is_bot(author: dict | None, bot_logins: set[str]) -> bool:
@@ -1041,7 +1068,7 @@ def cli() -> None:
 @cli.command()
 @click.option("--repo", default=DEFAULT_REPO, show_default=True)
 @click.option("--days", type=int, default=1, show_default=True, help="Look back N days of merged PRs")
-@click.option("--limit", type=int, default=100, show_default=True, help="Max PRs to process")
+@click.option("--limit", type=click.IntRange(min=1), default=None, help="Max PRs to process; omit for all PRs")
 @click.option("--model", default=DEFAULT_MODEL, show_default=True, help="Claude model alias or id for the classifier")
 @click.option(
     "--agent-command",
