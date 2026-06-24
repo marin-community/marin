@@ -330,6 +330,26 @@ def test_step_spec_as_executor_step_round_trip():
     assert resolved.resources == step.resources
 
 
+def test_prefixless_step_resolves_under_run_prefix(monkeypatch):
+    """A prefix-less StepSpec built in us-west4 resolves under the us-central1 run.
+
+    ``as_executor_step()`` must hand the executor a *relative* override rather than
+    an absolute build-region path; otherwise the run-region output disagrees with
+    the frozen path and the cross-region guard trips. ``output_path`` itself stays
+    absolute for direct ``StepRunner`` use.
+    """
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-west4")
+    step = StepSpec(name="raw/dolma", override_output_path="raw/dolma")
+    assert step.output_path == "gs://marin-us-west4/raw/dolma"
+
+    build_step = step.as_executor_step()
+    assert build_step.override_output_path == "raw/dolma"  # relative, no region frozen in
+
+    executor = Executor(prefix="gs://marin-us-central1", executor_info_base_path="gs://marin-us-central1/experiments")
+    executor.compute_version(build_step, is_pseudo_dep=False)
+    assert executor.output_paths[build_step] == "gs://marin-us-central1/raw/dolma"
+
+
 def _build_three_level_dag(prefix: str) -> tuple[StepSpec, StepSpec, StepSpec]:
     """download → normalize → tokenize, all rooted at ``prefix``."""
     download = StepSpec(

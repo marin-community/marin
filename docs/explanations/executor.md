@@ -35,6 +35,35 @@ Coordination between multiple pipelines is handled via lease files. This
 prevents duplicate execution if, for example, 2 Executor pipelines share common
 ancestor steps.
 
+## Build phase: constructing steps
+
+Steps should be built during an executor **build phase**, not at module-import
+scope. A step built at import time freezes whatever the importing environment
+resolves — most damagingly the region-specific prefix from `marin_prefix()` —
+into the pipeline, so a run launched into a different region disagrees with the
+frozen path and trips the cross-region guard.
+
+`executor_context()` marks a legitimate build phase. The executor opens one
+around graph resolution, so the recommended recipe is to build your steps inside
+the same context:
+
+```python
+from marin.execution import executor_context
+
+def build_steps():
+    return [default_train(...), default_tokenize(...)]
+
+if __name__ == "__main__":
+    with executor_context():
+        executor_main(steps=build_steps())
+```
+
+Constructing an `ExecutorStep` / `StepSpec` outside any context logs a warning.
+Output paths built without an explicit prefix stay *prefix-relative* and are
+anchored under the **run** prefix by the executor, so a step built in one region
+runs correctly in another. Set an explicit `output_path_prefix` only to
+deliberately pin a step to a fixed bucket.
+
 ## Mirrored inputs
 
 Some datasets live in a specific regional bucket (e.g.
