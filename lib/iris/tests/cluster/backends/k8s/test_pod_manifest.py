@@ -466,18 +466,20 @@ def test_zero_timeout_no_deadline():
 
 
 def test_build_pod_manifest_includes_standard_volumes():
-    """Pod manifest includes all 5 standard volumes plus dshm (6 total)."""
+    """Pod manifest includes the 5 standard volumes, dshm, and the log-shipper
+    varlogpods hostPath; the task container mounts the 6 task volumes (not
+    varlogpods, which is the sidecar's)."""
     req = make_run_req("/test-job/0", attempt_id=1)
     manifest = _build_pod_manifest(req, pod_config())
 
     spec = manifest["spec"]
     container = spec["containers"][0]
 
+    task_volume_names = {"workdir", "tmpfs", "uv-cache", "cargo-registry", "cargo-target", "dshm"}
     volume_names = {v["name"] for v in spec["volumes"]}
     mount_names = {m["name"] for m in container["volumeMounts"]}
-    expected_names = {"workdir", "tmpfs", "uv-cache", "cargo-registry", "cargo-target", "dshm"}
-    assert volume_names == expected_names
-    assert mount_names == expected_names
+    assert volume_names == task_volume_names | {"varlogpods"}
+    assert mount_names == task_volume_names
 
     mount_paths = {m["mountPath"] for m in container["volumeMounts"]}
     assert "/app" in mount_paths

@@ -45,15 +45,13 @@ def task_stats_table() -> FakeStatsTable:
 
 
 @pytest.fixture
-def provider(k8s, log_client, task_stats_table):
+def provider(k8s, task_stats_table):
     p = K8sTaskProvider(
         kubectl=k8s,
         namespace="iris",
         default_image="myrepo/iris:latest",
         cache_dir="/cache",
-        log_client=log_client,
         task_stats_table=task_stats_table,
-        log_poll_interval=1.0,
         resource_poll_interval=0.05,
         cluster_scan_interval=0.0,
     )

@@ -18,7 +18,6 @@ import shlex
 import threading
 import time
 from collections.abc import Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -26,9 +25,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from finelog.client.log_client import Table
-from finelog.rpc import logging_pb2
-from finelog.types import LogWriterProtocol, str_to_log_level
-from rigging.log_setup import parse_log_level
+from finelog.types import LogWriterProtocol
 from rigging.timing import Timestamp
 
 from iris.cluster.backends.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
@@ -37,7 +34,6 @@ from iris.cluster.backends.k8s.service import K8sService
 from iris.cluster.backends.k8s.types import (
     K8sResource,
     KubectlError,
-    KubectlLogLine,
     parse_k8s_quantity,
     parse_k8s_timestamp,
 )
@@ -55,7 +51,6 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.log_keys import task_log_key
 from iris.cluster.runtime.env import (
     VENV_PATH,
     build_common_iris_env,
@@ -72,7 +67,7 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
-from iris.cluster.types import JobName, TaskAttempt, WorkerId, get_gpu_count
+from iris.cluster.types import JobName, WorkerId, get_gpu_count
 from iris.cluster.worker.stats import IrisTaskStat, build_task_stat
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import resolve_container_profile
@@ -94,6 +89,17 @@ _RUNTIME_LABEL_VALUE = "iris-kubernetes"
 
 # Extended resource name for NVIDIA GPUs in pod requests/limits.
 _GPU_RESOURCE = "nvidia.com/gpu"
+
+# Name of the task container in the pod. Exit-code/error extraction matches the
+# task status by this name rather than by position in containerStatuses.
+_TASK_CONTAINER_NAME = "task"
+
+# Native log-shipping sidecar (initContainer + restartPolicy: Always). It reads
+# the task container's CRI log file from the node and pushes to finelog, so the
+# controller never pulls pod logs through the apiserver.
+_LOGSHIP_CONTAINER_NAME = "log-shipper"
+_LOGSHIP_VOLUME_NAME = "varlogpods"
+_NODE_POD_LOG_DIR = "/var/log/pods"
 
 # Max pod name length is 253 chars in k8s. We stay well under it.
 _MAX_POD_NAME_LEN = 63
@@ -343,6 +349,11 @@ class PodConfig:
 
     namespace: str
     default_image: str
+    # Image for the log-shipper sidecar. The task default_image is a bare runtime
+    # that only gains the iris package after the task's own `uv sync`, so the
+    # sidecar instead runs the iris controller image (iris + finelog installed),
+    # which can launch `python -m iris.cluster.backends.k8s.logship` directly.
+    logship_image: str = ""
     cache_dir: str = "/cache"
     service_account: str = ""
     host_network: bool = False
@@ -451,6 +462,46 @@ def _build_init_container_spec(
     ]
 
     return init_containers, extra_volumes, configmap_name
+
+
+def _build_logship_sidecar(
+    task_id_wire: str,
+    controller_address: str | None,
+    logship_image: str,
+) -> dict:
+    """Build the native log-shipping sidecar container spec.
+
+    A native sidecar (initContainer with ``restartPolicy: Always``) so it starts
+    before the task container and is excluded from the pod-phase computation —
+    the pod still reaches Succeeded/Failed when only the task container exits,
+    and the kubelet terminates the sidecar after it. The sidecar tails the task
+    container's CRI log file from the node (mounted read-only via the
+    ``varlogpods`` hostPath) and pushes lines to finelog. It resolves the log
+    server via the controller and pushes unauthenticated — the finelog log
+    service performs no auth, matching the controller's own writes.
+
+    Runs ``logship_image`` (the iris controller image) rather than the task
+    image, which lacks the iris package until the task's own dependency sync.
+    """
+    env: list[dict] = [
+        {"name": "IRIS_TASK_ID", "value": task_id_wire},
+        {"name": "IRIS_POD_NAMESPACE", "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}}},
+        {"name": "IRIS_POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}},
+    ]
+    if controller_address:
+        env.append({"name": "IRIS_CONTROLLER_ADDRESS", "value": controller_address})
+    return {
+        "name": _LOGSHIP_CONTAINER_NAME,
+        "image": logship_image,
+        "imagePullPolicy": "IfNotPresent",
+        "restartPolicy": "Always",
+        # iris is installed in the image's .venv (resolved relative to the image
+        # WORKDIR), so launch the same interpreter the controller container does.
+        "command": [".venv/bin/python", "-m", "iris.cluster.backends.k8s.logship"],
+        "env": env,
+        "volumeMounts": [{"name": _LOGSHIP_VOLUME_NAME, "mountPath": _NODE_POD_LOG_DIR, "readOnly": True}],
+        "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}},
+    }
 
 
 def _is_coordinator_task(run_req: job_pb2.RunTaskRequest) -> bool:
@@ -695,9 +746,27 @@ def _build_pod_manifest(
             anno_key: node_label,
         }
 
+    # Native log-shipping sidecar: ships the task container's node-side CRI log
+    # file to finelog. As an initContainer with restartPolicy: Always it is
+    # excluded from pod-phase computation, so completion detection (which keys on
+    # pod.status.phase) is unaffected. The hostPath volume gives it read-only
+    # access to the node's pod log directory.
+    logship = _build_logship_sidecar(
+        iris_env["IRIS_TASK_ID"],
+        config.controller_address,
+        config.logship_image,
+    )
+    volumes.append(
+        {
+            "name": _LOGSHIP_VOLUME_NAME,
+            "hostPath": {"path": _NODE_POD_LOG_DIR, "type": "Directory"},
+        }
+    )
+
     spec: dict = {
         "restartPolicy": "Never",
         "containers": [container],
+        "initContainers": [logship],
         "volumes": volumes,
     }
 
@@ -746,13 +815,20 @@ def _build_pod_manifest(
     }
 
 
-def _kubectl_log_line_to_log_entry(kll: KubectlLogLine, attempt_id: int) -> logging_pb2.LogEntry:
-    level_name = parse_log_level(kll.data)
-    level = str_to_log_level(level_name)
-    entry = logging_pb2.LogEntry(source=kll.stream, data=kll.data, attempt_id=attempt_id, level=level)
-    # finelog's LogEntry.timestamp is a finelog.logging.Timestamp; assign epoch_ms directly.
-    entry.timestamp.epoch_ms = Timestamp.from_seconds(kll.timestamp.timestamp()).epoch_ms()
-    return entry
+def _task_container_status(pod: dict) -> dict | None:
+    """Return the task container's status, matched by name.
+
+    Returns None when the pod has no container statuses yet. Matching by name
+    rather than by position keeps exit-code extraction pinned to the task
+    container; falls back to the first status if none is named ``task``.
+    """
+    statuses = pod.get("status", {}).get("containerStatuses", [])
+    if not statuses:
+        return None
+    for status in statuses:
+        if status.get("name") == _TASK_CONTAINER_NAME:
+            return status
+    return statuses[0]
 
 
 def _is_infrastructure_failure(pod: dict) -> bool:
@@ -762,12 +838,12 @@ def _is_infrastructure_failure(pod: dict) -> bool:
     by the application itself, so it should be classified as a worker/preemption
     failure rather than an application failure.
     """
-    statuses = pod.get("status", {}).get("containerStatuses", [])
-    if not statuses:
+    status = _task_container_status(pod)
+    if status is None:
         # Pod-level eviction: the pod status reason indicates infrastructure.
         pod_reason = pod.get("status", {}).get("reason", "")
         return pod_reason in _INFRASTRUCTURE_FAILURE_REASONS
-    terminated = statuses[0].get("state", {}).get("terminated", {})
+    terminated = status.get("state", {}).get("terminated", {})
     return terminated.get("reason", "") in _INFRASTRUCTURE_FAILURE_REASONS
 
 
@@ -820,10 +896,10 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
 
 
 def _extract_exit_code(pod: dict) -> int | None:
-    """Extract exit code from the first container's terminated state."""
-    statuses = pod.get("status", {}).get("containerStatuses", [])
-    if statuses:
-        terminated = statuses[0].get("state", {}).get("terminated", {})
+    """Extract exit code from the task container's terminated state."""
+    status = _task_container_status(pod)
+    if status is not None:
+        terminated = status.get("state", {}).get("terminated", {})
         code = terminated.get("exitCode")
         if isinstance(code, int):
             return code
@@ -831,11 +907,11 @@ def _extract_exit_code(pod: dict) -> int | None:
 
 
 def _extract_error(pod: dict) -> str | None:
-    """Extract error reason/message from pod container statuses."""
-    statuses = pod.get("status", {}).get("containerStatuses", [])
-    if not statuses:
+    """Extract error reason/message from the task container's status."""
+    status = _task_container_status(pod)
+    if status is None:
         return pod.get("status", {}).get("reason") or None
-    terminated = statuses[0].get("state", {}).get("terminated", {})
+    terminated = status.get("state", {}).get("terminated", {})
     reason = terminated.get("reason", "")
     message = terminated.get("message", "")
     if reason == "Completed":
@@ -1161,118 +1237,6 @@ class ClusterState:
         )
 
 
-@dataclass
-class _LogPod:
-    """A pod tracked by LogCollector for incremental log fetching."""
-
-    pod_name: str
-    task_id: JobName
-    attempt_id: int
-    last_timestamp: datetime | None = None
-    consecutive_failures: int = 0
-
-
-class LogCollector:
-    """Background log fetcher that pushes entries to the LogService.
-
-    Runs on its own daemon thread with a bounded ThreadPoolExecutor.
-    The sync loop calls set_pods() once per cycle with the authoritative
-    set of pods to track. The collector diffs against its internal state,
-    does a final fetch for removed pods, and starts tracking new ones.
-    This avoids drift between what the sync loop thinks is tracked and
-    what the collector is actually polling.
-    """
-
-    _DEFAULT_LIMIT_BYTES: int = 100_000
-
-    def __init__(
-        self,
-        kubectl: K8sService,
-        log_client: LogWriterProtocol,
-        concurrency: int = 8,
-        poll_interval: float = 15.0,
-        limit_bytes: int | None = _DEFAULT_LIMIT_BYTES,
-    ):
-        self._kubectl = kubectl
-        self._log_client = log_client
-        self._poll_interval = poll_interval
-        self._limit_bytes = limit_bytes
-        self._pods: dict[str, _LogPod] = {}
-        self._lock = threading.Lock()
-        self._pod_locks: dict[str, threading.Lock] = {}
-        self._stop = threading.Event()
-        self._executor = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="log-collect")
-        self._thread = threading.Thread(target=self._run, daemon=True, name="log-collector")
-        self._thread.start()
-
-    def set_pods(self, pods: dict[str, _LogPod]) -> None:
-        """Declare the authoritative set of pods to collect logs for.
-
-        New keys are added. Keys absent from `pods` are removed after a
-        synchronous final log fetch. Existing keys are preserved (keeping
-        their cursor state).
-        """
-        with self._lock:
-            removed_keys = self._pods.keys() - pods.keys()
-            removed = [(key, self._pods[key], self._pod_locks.get(key)) for key in removed_keys]
-            for key in removed_keys:
-                del self._pods[key]
-                self._pod_locks.pop(key, None)
-            for key, pod in pods.items():
-                if key not in self._pods:
-                    self._pods[key] = pod
-                    self._pod_locks[key] = threading.Lock()
-
-        # Final fetch for removed pods (outside lock to avoid holding it during I/O).
-        for _key, pod, pod_lock in removed:
-            if pod_lock is not None:
-                with pod_lock:
-                    self._fetch_and_store(pod)
-
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            with self._lock:
-                snapshot = list(self._pods.items())
-            for key, pod in snapshot:
-                with self._lock:
-                    pod_lock = self._pod_locks.get(key)
-                if pod_lock is not None:
-                    self._executor.submit(self._guarded_fetch, key, pod, pod_lock)
-            self._stop.wait(timeout=self._poll_interval)
-
-    def _guarded_fetch(self, key: str, pod: _LogPod, pod_lock: threading.Lock) -> None:
-        if not pod_lock.acquire(blocking=False):
-            return
-        try:
-            self._fetch_and_store(pod)
-        finally:
-            pod_lock.release()
-
-    def _fetch_and_store(self, pod: _LogPod) -> bool:
-        """Fetch logs since last timestamp and advance. Must be called under pod lock."""
-        try:
-            result = self._kubectl.stream_logs(
-                pod.pod_name, container="task", since_time=pod.last_timestamp, limit_bytes=self._limit_bytes
-            )
-            if result.lines:
-                entries = [_kubectl_log_line_to_log_entry(kll, pod.attempt_id) for kll in result.lines]
-                key = task_log_key(TaskAttempt(task_id=pod.task_id, attempt_id=pod.attempt_id))
-                self._log_client.write_batch(key, entries)
-            pod.last_timestamp = result.last_timestamp
-            pod.consecutive_failures = 0
-            return True
-        except Exception as e:
-            pod.consecutive_failures += 1
-            if pod.consecutive_failures <= 1:
-                logger.warning("LogCollector: fetch failed for pod %s: %s", pod.pod_name, e)
-            return False
-
-    def close(self) -> None:
-        self._stop.set()
-        self._executor.shutdown(wait=False)
-        self._thread.join(timeout=5)
-
-
 class ResourceCollector:
     """Background thread that samples running pods' CPU/memory usage.
 
@@ -1443,6 +1407,8 @@ class K8sTaskProvider:
     kubectl: K8sService
     namespace: str
     default_image: str
+    # Iris controller image, used for the log-shipper sidecar (see PodConfig).
+    logship_image: str = ""
     cache_dir: str = "/cache"
     service_account: str = ""
     host_network: bool = False
@@ -1458,7 +1424,6 @@ class K8sTaskProvider:
     # when it has gang work for Kueue. Empty disables the feature; see
     # _evict_preemptible_blockers for the safety guards.
     preempt_namespaces: list[str] = field(default_factory=list)
-    log_client: LogWriterProtocol | None = None
     # Pre-resolved iris.task Table handle. The controller injects this after
     # constructing the LogClient (see controller.py); when None — e.g. tests
     # without finelog — the resource collector is disabled.
@@ -1466,10 +1431,6 @@ class K8sTaskProvider:
     # Pre-resolved iris.profile Table handle injected by the controller
     # alongside task_stats_table. None in test mode.
     profile_table: Table | None = None
-    # Log fetch fan-out: logs have no bulk API, so each pod is streamed on its
-    # own worker thread.
-    poll_concurrency: int = 32
-    log_poll_interval: float = 15.0
     # Resource-usage poll cadence. Defaults to the metrics-server scrape
     # resolution (15s) — sampling faster only re-reads the same value. One bulk
     # metrics list per tick covers every managed pod (see ResourceCollector).
@@ -1484,7 +1445,6 @@ class K8sTaskProvider:
     # K8s provisions its own capacity (cluster autoscaler + Kueue); no Iris autoscaler.
     autoscaler: Autoscaler | None = field(default=None, init=False, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
-    _log_collector: LogCollector | None = field(default=None, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_gc_time: float = field(default=0.0, init=False, repr=False)
@@ -1503,13 +1463,6 @@ class K8sTaskProvider:
                 poll_interval=self.resource_poll_interval,
             )
         return self._resource_collector
-
-    def _ensure_log_collector(self) -> LogCollector | None:
-        if self._log_collector is None and self.log_client is not None:
-            self._log_collector = LogCollector(
-                self.kubectl, self.log_client, concurrency=self.poll_concurrency, poll_interval=self.log_poll_interval
-            )
-        return self._log_collector
 
     def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
         """No-op: Kueue owns placement, so Iris makes no scheduling decisions."""
@@ -1699,16 +1652,16 @@ class K8sTaskProvider:
     ) -> None:
         """Inject the finelog handles the controller resolves after connecting.
 
-        K8s pods have no worker daemon, so the backend collects logs and writes
-        per-pod resource samples + profiles directly to finelog.
+        K8s task pods ship their own logs via the log-shipper sidecar rather than
+        through a worker daemon, so ``log_client`` is unused here: the sidecar
+        resolves its own connection to the log server (which performs no auth).
+        The backend writes per-pod resource samples + profiles to the injected
+        tables directly.
         """
-        self.log_client = log_client
         self.task_stats_table = task_stats_table
         self.profile_table = profile_table
 
     def close(self) -> None:
-        if self._log_collector is not None:
-            self._log_collector.close()
         if self._resource_collector is not None:
             self._resource_collector.close()
 
@@ -1726,6 +1679,7 @@ class K8sTaskProvider:
         return PodConfig(
             namespace=self.namespace,
             default_image=self.default_image,
+            logship_image=self.logship_image,
             cache_dir=self.cache_dir,
             service_account=self.service_account,
             host_network=self.host_network,
@@ -1774,8 +1728,12 @@ class K8sTaskProvider:
             }
             self.kubectl.apply_json(cm)
 
+        # Prepend the workdir-staging init containers before the log-shipper
+        # native sidecar already on the manifest: staging must run to completion
+        # first; the native sidecar starts before the task container regardless
+        # of its position in the list.
         if init_containers:
-            manifest["spec"]["initContainers"] = init_containers
+            manifest["spec"]["initContainers"] = init_containers + manifest["spec"]["initContainers"]
         if extra_volumes:
             manifest["spec"]["volumes"].extend(extra_volumes)
 
@@ -1998,39 +1956,33 @@ class K8sTaskProvider:
         gang_pod_names: list[str] = []
         gang_pod_groups: set[str] = set()
         gang_task_hashes: set[str] = set()
-        for phase in ("Succeeded", "Failed"):
-            pods = self.kubectl.list_json(
-                K8sResource.PODS,
-                labels=_MANAGED_POD_LABELS,
-                field_selector=f"status.phase={phase}",
-            )
-            for pod in pods:
-                meta = pod.get("metadata", {})
-                created = meta.get("creationTimestamp", "")
-                if not created:
-                    continue
-                ts = parse_k8s_timestamp(created).timestamp()
-                task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
-                pod_group = meta.get("labels", {}).get(_KUEUE_POD_GROUP_NAME)
-                # Gang sweep: a deletionTimestamp means a prior delete is
-                # wedged on the Kueue finalizer; otherwise the shorter gang
-                # retention applies. Handled pods are excluded from the 1h
-                # sweep below. Pods whose group still has live members are
-                # deferred wholesale (not even age-swept): a partial delete
-                # would wedge on the finalizer, and releasing the shared
-                # Workload would evict the running siblings.
-                if pod_group and pod_group in active_gang_groups:
-                    continue
-                if pod_group and (meta.get("deletionTimestamp") or ts < gang_cutoff):
-                    gang_pod_names.append(meta["name"])
-                    gang_pod_groups.add(pod_group)
-                    if task_hash:
-                        gang_task_hashes.add(task_hash)
-                    continue
-                if ts < cutoff:
-                    old_pod_names.append(meta["name"])
-                    if task_hash:
-                        old_task_hashes.add(task_hash)
+        for pod in self._list_terminal_pods():
+            meta = pod.get("metadata", {})
+            created = meta.get("creationTimestamp", "")
+            if not created:
+                continue
+            ts = parse_k8s_timestamp(created).timestamp()
+            task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
+            pod_group = meta.get("labels", {}).get(_KUEUE_POD_GROUP_NAME)
+            # Gang sweep: a deletionTimestamp means a prior delete is
+            # wedged on the Kueue finalizer; otherwise the shorter gang
+            # retention applies. Handled pods are excluded from the 1h
+            # sweep below. Pods whose group still has live members are
+            # deferred wholesale (not even age-swept): a partial delete
+            # would wedge on the finalizer, and releasing the shared
+            # Workload would evict the running siblings.
+            if pod_group and pod_group in active_gang_groups:
+                continue
+            if pod_group and (meta.get("deletionTimestamp") or ts < gang_cutoff):
+                gang_pod_names.append(meta["name"])
+                gang_pod_groups.add(pod_group)
+                if task_hash:
+                    gang_task_hashes.add(task_hash)
+                continue
+            if ts < cutoff:
+                old_pod_names.append(meta["name"])
+                if task_hash:
+                    old_task_hashes.add(task_hash)
 
         if gang_pod_names:
             # force (gracePeriodSeconds=0): these pods are already terminal, so
@@ -2064,24 +2016,39 @@ class K8sTaskProvider:
                 len(old_task_hashes - safe_hashes),
             )
 
+    def _list_terminal_pods(self) -> list[dict]:
+        """Bulk-list managed pods in a terminal phase (Succeeded or Failed)."""
+        pods: list[dict] = []
+        # Field selectors AND their comma-separated terms, so a single
+        # status.phase==Succeeded,status.phase==Failed matches nothing (a pod is
+        # never both); list each terminal phase separately.
+        for phase in ("Succeeded", "Failed"):
+            pods.extend(
+                self.kubectl.list_json(
+                    K8sResource.PODS,
+                    labels=_MANAGED_POD_LABELS,
+                    field_selector=f"status.phase={phase}",
+                )
+            )
+        return pods
+
     def _poll_pods(self, running: list[RunningTaskEntry], cached_pods: list[dict]) -> list[TaskUpdate]:
         """Poll pod phases for all running tasks.
 
-        Uses the pre-fetched pod list (active pods only, terminal pods excluded
-        by field selector). For entries missing from the cached list, does a
-        targeted get_json to check if the pod completed — this avoids the grace-
-        period-to-FAILED path for legitimately Succeeded pods.
+        Uses the pre-fetched active-pods list (terminal pods excluded by field
+        selector). Running tasks whose pod has left that list have either
+        completed (phase moved to Succeeded/Failed) or vanished; they are
+        resolved with a single bulk terminal-pods list rather than a per-pod
+        get_json each, so the reconcile thread issues only bulk LISTs even when a
+        whole gang finishes in one cycle. A pod absent from both lists falls to
+        the grace-period path below.
 
-        Log fetching and resource usage collection are handled by background
-        LogCollector and ResourceCollector threads. After building updates,
-        this method calls set_pods() on each collector with the authoritative
-        set of non-terminal pods, so the collectors can never drift.
+        Task logs are shipped by the per-pod log-shipper sidecar, not pulled
+        here. This method drives task state and registers running pods with the
+        ResourceCollector, calling set_pods() once with the authoritative set of
+        running pods so the collector can never drift.
         """
         if not running:
-            # No running tasks — clear all collectors.
-            log_collector = self._ensure_log_collector()
-            if log_collector is not None:
-                log_collector.set_pods({})
             if self._resource_collector is not None:
                 self._resource_collector.set_pods({})
             return []
@@ -2089,22 +2056,24 @@ class K8sTaskProvider:
         pods_by_name: dict[str, dict] = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
         updates: list[TaskUpdate] = []
 
-        # Build up the authoritative pod sets for collectors.
-        log_pods: dict[str, _LogPod] = {}
+        # Resolve running tasks whose pod has left the active list (completed or
+        # vanished) with one bulk terminal-pods list instead of a per-pod GET
+        # each. Lazy: only fetched on cycles where at least one pod is missing,
+        # so steady-state cycles add no call. setdefault keeps the active entry
+        # if a name somehow appears in both.
+        if any(_pod_name(entry.task_id, entry.attempt_id) not in pods_by_name for entry in running):
+            for pod in self._list_terminal_pods():
+                pods_by_name.setdefault(pod.get("metadata", {}).get("name", ""), pod)
+
         # (task_id_wire, attempt_id) -> pod_name. Resource samples are
         # appended directly to iris.task by the collector; the controller no
         # longer multiplexes them through TaskUpdate.
         resource_pods: dict[tuple[str, int], str] = {}
-        terminal_log_pods: dict[str, _LogPod] = {}  # pods that completed this cycle
 
         for entry in running:
             pod_name = _pod_name(entry.task_id, entry.attempt_id)
             cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
             pod = pods_by_name.get(pod_name)
-
-            if pod is None:
-                # Pod not in active list — may have completed or truly vanished.
-                pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
 
             if pod is None:
                 count = self._pod_not_found_counts.get(cursor_key, 0) + 1
@@ -2138,28 +2107,11 @@ class K8sTaskProvider:
             self._pod_not_found_counts.pop(cursor_key, None)
             update = _task_update_from_pod(entry, pod)
             phase = pod.get("status", {}).get("phase", "")
-
-            if phase not in ("Succeeded", "Failed"):
-                log_pods[cursor_key] = _LogPod(pod_name=pod_name, task_id=entry.task_id, attempt_id=entry.attempt_id)
-                if phase == "Running":
-                    resource_pods[(entry.task_id.to_wire(), entry.attempt_id)] = pod_name
-            else:
-                terminal_log_pods[cursor_key] = _LogPod(
-                    pod_name=pod_name, task_id=entry.task_id, attempt_id=entry.attempt_id
-                )
+            if phase == "Running":
+                resource_pods[(entry.task_id.to_wire(), entry.attempt_id)] = pod_name
 
             updates.append(update)
 
-        # Sync collectors with the authoritative pod sets.
-        # set_pods() does a final log fetch for pods that drop out of the set.
-        # For pods that completed this cycle, we include them first so they're
-        # added (if not already tracked), then call set_pods again without them
-        # to trigger the final fetch on removal.
-        log_collector = self._ensure_log_collector()
-        if log_collector is not None:
-            if terminal_log_pods:
-                log_collector.set_pods({**log_pods, **terminal_log_pods})
-            log_collector.set_pods(log_pods)
         resource_collector = self._ensure_resource_collector()
         if resource_collector is not None:
             resource_collector.set_pods(resource_pods)
