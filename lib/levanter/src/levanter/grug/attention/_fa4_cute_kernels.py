@@ -63,6 +63,8 @@ import math
 from types import SimpleNamespace
 from typing import Any, Callable
 
+from levanter.grug.attention._fa4_cute_config import Flash4CuteSm90BackwardConfig
+
 
 def _module_attr(modules: Any, name: str) -> Any:
     if isinstance(modules, dict):
@@ -113,6 +115,34 @@ def _validate_config(
         raise ValueError(f"num_threads must be a positive multiple of 32, got {num_threads}")
     if (tile_m * 2) % num_threads != 0:
         raise ValueError(f"tile_m * 2 must be divisible by num_threads, got {tile_m=} {num_threads=}")
+
+
+def _validate_sm90_native_config(
+    *,
+    head_dim: int,
+    head_dim_v: int,
+    qhead_per_kvhead: int,
+    config: Flash4CuteSm90BackwardConfig,
+) -> None:
+    if head_dim <= 0 or head_dim_v <= 0:
+        raise ValueError(f"head_dim and head_dim_v must be positive, got {head_dim=} {head_dim_v=}")
+    if head_dim_v != head_dim:
+        raise NotImplementedError(
+            f"native SM90 segmented FA4/CuTe requires head_dim_v == head_dim, got {head_dim_v=} {head_dim=}"
+        )
+    if qhead_per_kvhead <= 0:
+        raise ValueError(f"qhead_per_kvhead must be positive, got {qhead_per_kvhead}")
+    tile_m, tile_n = config.tile
+    if tile_m <= 0 or tile_n <= 0:
+        raise ValueError(f"SM90 tile dimensions must be positive, got {config.tile=}")
+    if config.num_warp_groups <= 0:
+        raise ValueError(f"SM90 num_warp_groups must be positive, got {config.num_warp_groups}")
+    expected_threads = (config.num_warp_groups + 1) * 128
+    if config.num_threads != expected_threads:
+        raise ValueError(
+            "SM90 producer/consumer schedule expects one producer warpgroup plus configured consumer warpgroups, "
+            f"got {config.num_threads=} and {config.num_warp_groups=}."
+        )
 
 
 def segmented_flash_attention_forward_launcher(
@@ -903,6 +933,7 @@ def segmented_flash_attention_backward_launcher(
     tile_m: int = 64,
     tile_n: int = 64,
     num_threads: int = 128,
+    compute_arch: int | None = None,
 ) -> Any:
     """Build the FA4/CuTe segmented backward launcher.
 
@@ -945,9 +976,13 @@ def segmented_flash_attention_backward_launcher(
     SegmentedFlashAttentionBackwardSm80 = segmented_bwd_module.SegmentedFlashAttentionBackwardSm80
     SegmentedFlashAttentionBackwardSm120 = segmented_bwd_module.SegmentedFlashAttentionBackwardSm120
 
-    is_sm120_config = tile_m == 64 and tile_n == 64 and num_threads == 128
-    arch = 120 if is_sm120_config else 80
-    if arch == 120:
+    path_arch, postprocess_arch = _segmented_backward_arches(
+        compute_arch=compute_arch,
+        tile_m=tile_m,
+        tile_n=tile_n,
+        num_threads=num_threads,
+    )
+    if path_arch == 120:
         num_stages_q = 2 if head_dim <= 64 else 1
         num_stages_do = 2 if head_dim <= 64 else 1
         atom_layout_m_sdp = 4
@@ -974,7 +1009,7 @@ def segmented_flash_attention_backward_launcher(
     dq_postprocess = FlashAttentionBackwardPostprocess(
         cute_dtype,
         head_dim,
-        arch,
+        postprocess_arch,
         tile_m,
         num_threads=postprocess_threads,
         AtomLayoutMdQ=atom_layout_m_dq,
@@ -982,7 +1017,7 @@ def segmented_flash_attention_backward_launcher(
     dk_postprocess = FlashAttentionBackwardPostprocess(
         cute_dtype,
         head_dim,
-        arch,
+        postprocess_arch,
         tile_n,
         num_threads=postprocess_threads,
         AtomLayoutMdQ=atom_layout_n_dkv,
@@ -990,7 +1025,7 @@ def segmented_flash_attention_backward_launcher(
     dv_postprocess = FlashAttentionBackwardPostprocess(
         cute_dtype,
         head_dim_v,
-        arch,
+        postprocess_arch,
         tile_n,
         num_threads=postprocess_threads,
         AtomLayoutMdQ=atom_layout_n_dkv,
@@ -1064,8 +1099,39 @@ def segmented_flash_attention_backward_launcher(
         softmax_scale: cutlass.Float32,
     ):
         preprocess(out, dout, dpsum, lse, lse_log2, dq_accum, None, None, None, stream)
-        zero_fill(dk_accum, stream)
-        zero_fill(dv_accum, stream)
+        if cutlass.const_expr(qhead_per_kvhead == 1):
+            backward(
+                q,
+                k,
+                v,
+                dout,
+                lse_log2,
+                dpsum,
+                dq_accum,
+                dk,
+                dv,
+                lower_bounds,
+                valid,
+                softmax_scale,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                stream,
+            )
+            dq_postprocess(dq_accum, dq, softmax_scale, None, None, stream)
+            return
+
+        if cutlass.const_expr(qhead_per_kvhead > 1):
+            zero_fill(dk_accum, stream)
+            zero_fill(dv_accum, stream)
         backward(
             q,
             k,
@@ -1099,7 +1165,390 @@ def segmented_flash_attention_backward_launcher(
     return _launch_segmented_flash_attention_backward
 
 
+def segmented_flash_attention_backward_sm90_launcher(
+    modules: Any,
+    *,
+    dtype: Any,
+    head_dim: int,
+    head_dim_v: int,
+    qhead_per_kvhead: int,
+    config: Flash4CuteSm90BackwardConfig,
+    window_size_left: int | None = None,
+) -> Any:
+    """Build the native Hopper segmented backward mainloop launcher.
+
+    The SM90 mainloop TMA-loads ``LSE log2`` and ``dPsum`` from gmem, so this
+    launcher expects a separate preprocess call to materialize those tensors
+    before it runs.
+    """
+    _validate_sm90_native_config(
+        head_dim=head_dim,
+        head_dim_v=head_dim_v,
+        qhead_per_kvhead=qhead_per_kvhead,
+        config=config,
+    )
+    use_builtin_sliding_window = window_size_left is not None
+
+    deps = _import_cute_dependencies(modules)
+    cutlass = deps.cutlass
+    cute = deps.cute
+    cuda = deps.cuda
+
+    if str(dtype) == "bfloat16":
+        cute_dtype = cutlass.BFloat16
+    elif str(dtype) == "float16":
+        cute_dtype = cutlass.Float16
+    else:
+        raise TypeError(f"native SM90 segmented FA4/CuTe backward expects bf16/fp16, got {dtype}")
+
+    flash_bwd_sm90_module = importlib.import_module("flash_attn.cute.flash_bwd_sm90")
+    block_sparsity_module = importlib.import_module("flash_attn.cute.block_sparsity")
+    utils_module = importlib.import_module("flash_attn.cute.utils")
+
+    FlashAttentionBackwardSm90 = flash_bwd_sm90_module.FlashAttentionBackwardSm90
+    BlockSparseTensors = block_sparsity_module.BlockSparseTensors
+    _patch_jax_array_list_tvm_ffi_converter()
+    _allow_tuple_aux_tensors_for_nested_sm90(FlashAttentionBackwardSm90)
+
+    @cute.jit
+    def _grug_segment_mask_mod(
+        batch_idx: cutlass.Int32,
+        head_idx: cutlass.Int32,
+        q_idx: cutlass.Int32,
+        kv_idx: cutlass.Int32,
+        seqlen_info: Any,
+        aux_tensors: Any,
+    ) -> Any:
+        del head_idx, seqlen_info
+        batch_idx = utils_module.ssa_to_scalar(batch_idx)
+        q_idx = utils_module.ssa_to_scalar(q_idx)
+        kv_idx = utils_module.ssa_to_scalar(kv_idx)
+        lower_bounds, valid = aux_tensors
+        query_valid = valid[batch_idx, q_idx] != 0
+        query_lower_bound = lower_bounds[batch_idx, q_idx]
+        key_after_lower_bound = cute.elem_less(query_lower_bound, kv_idx + 1)
+        key_before_query = cute.elem_less(kv_idx, q_idx + 1)
+        mask_value = query_valid and key_after_lower_bound and key_before_query
+        return utils_module.scalar_to_ssa(mask_value, cutlass.Boolean)
+
+    tile_m, tile_n = config.tile
+    backward = FlashAttentionBackwardSm90(
+        cute_dtype,
+        head_dim,
+        head_dim_v,
+        qhead_per_kvhead=qhead_per_kvhead,
+        is_causal=False,
+        is_local=use_builtin_sliding_window,
+        deterministic=False,
+        tile_m=tile_m,
+        tile_n=tile_n,
+        Q_stage=config.num_stages_q,
+        dO_stage=config.num_stages_do,
+        PdS_stage=config.num_stages_pds,
+        SdP_swapAB=config.sdp_swap_ab,
+        dKV_swapAB=config.dkv_swap_ab,
+        dQ_swapAB=config.dq_swap_ab,
+        AtomLayoutMSdP=config.atom_layout_m_sdp,
+        AtomLayoutNdKV=config.atom_layout_n_dkv,
+        AtomLayoutMdQ=config.atom_layout_m_dq,
+        num_threads=config.num_threads,
+        V_in_regs=False,
+        score_mod=None,
+        score_mod_bwd=None,
+        mask_mod=None if use_builtin_sliding_window else _grug_segment_mask_mod,
+        has_aux_tensors=not use_builtin_sliding_window,
+        subtile_factor=1,
+        dQ_single_wg=config.dq_single_wg,
+    )
+
+    class _Float32ZeroFill:
+        def __init__(self, num_threads: int):
+            self._num_threads = num_threads
+
+        @cute.jit
+        def __call__(self, tensor: cute.Tensor, stream: cuda.CUstream):
+            self.kernel(tensor).launch(
+                grid=[cute.ceil_div(cute.size(tensor), self._num_threads), 1, 1],
+                block=[self._num_threads, 1, 1],
+                stream=stream,
+            )
+
+        @cute.kernel
+        def kernel(self, tensor: cute.Tensor):
+            tidx, _, _ = cute.arch.thread_idx()
+            bidx, _, _ = cute.arch.block_idx()
+            flat = cute.make_tensor(tensor.iterator, cute.make_layout(cute.size(tensor)))
+            idx = bidx * self._num_threads + tidx
+            if idx < cute.size(flat):
+                flat[idx] = cutlass.Float32(0.0)
+
+    zero_fill = _Float32ZeroFill(config.num_threads)
+
+    @cute.jit
+    def _as_gmem_tensor(tensor: cute.Tensor) -> cute.Tensor:
+        ptr = cute.make_ptr(
+            tensor.element_type,
+            tensor.iterator.toint(),
+            cute.AddressSpace.gmem,
+            assumed_align=256,
+        )
+        return cute.make_tensor(ptr, tensor.layout)
+
+    @cute.jit
+    def _launch_segmented_flash_attention_backward_sm90(
+        stream: cuda.CUstream,
+        q: cute.Tensor,
+        k: cute.Tensor,
+        v: cute.Tensor,
+        dout: cute.Tensor,
+        lse_log2: cute.Tensor,
+        dpsum: cute.Tensor,
+        lower_bounds: cute.Tensor,
+        valid: cute.Tensor,
+        mask_block_cnt: cute.Tensor,
+        mask_block_idx: cute.Tensor,
+        full_block_cnt: cute.Tensor,
+        full_block_idx: cute.Tensor,
+        dq_accum: cute.Tensor,
+        dk_accum: cute.Tensor,
+        dv_accum: cute.Tensor,
+        *,
+        softmax_scale: cutlass.Float32,
+    ):
+        blocksparse_tensors = BlockSparseTensors(mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx)
+        if cutlass.const_expr(qhead_per_kvhead > 1):
+            zero_fill(dq_accum, stream)
+            zero_fill(dk_accum, stream)
+            zero_fill(dv_accum, stream)
+        lse_log2_gmem = _as_gmem_tensor(lse_log2)
+        dpsum_gmem = _as_gmem_tensor(dpsum)
+        dq_accum_gmem = _as_gmem_tensor(dq_accum)
+        dk_accum_gmem = _as_gmem_tensor(dk_accum)
+        dv_accum_gmem = _as_gmem_tensor(dv_accum)
+        if cutlass.const_expr(use_builtin_sliding_window):
+            backward(
+                q,
+                k,
+                v,
+                dout,
+                lse_log2_gmem,
+                dpsum_gmem,
+                dq_accum_gmem,
+                dk_accum_gmem,
+                dv_accum_gmem,
+                softmax_scale,
+                window_size_left=window_size_left,
+                window_size_right=0,
+                blocksparse_tensors=blocksparse_tensors,
+                stream=stream,
+            )
+        else:
+            backward(
+                q,
+                k,
+                v,
+                dout,
+                lse_log2_gmem,
+                dpsum_gmem,
+                dq_accum_gmem,
+                dk_accum_gmem,
+                dv_accum_gmem,
+                softmax_scale,
+                aux_tensors=(lower_bounds, valid),
+                blocksparse_tensors=blocksparse_tensors,
+                stream=stream,
+            )
+
+    return _launch_segmented_flash_attention_backward_sm90
+
+
+def segmented_flash_attention_backward_sm90_preprocess_launcher(
+    modules: Any,
+    *,
+    dtype: Any,
+    head_dim: int,
+    head_dim_v: int,
+    tile_m: int,
+) -> Any:
+    """Build the native Hopper backward preprocess launcher."""
+    deps = _import_cute_dependencies(modules)
+    cutlass = deps.cutlass
+    cute = deps.cute
+    cuda = deps.cuda
+
+    if str(dtype) == "bfloat16":
+        cute_dtype = cutlass.BFloat16
+    elif str(dtype) == "float16":
+        cute_dtype = cutlass.Float16
+    else:
+        raise TypeError(f"native SM90 FA4/CuTe preprocess expects bf16/fp16, got {dtype}")
+
+    preprocess_module = importlib.import_module("flash_attn.cute.flash_bwd_preprocess")
+    FlashAttentionBackwardPreprocess = preprocess_module.FlashAttentionBackwardPreprocess
+    preprocess = FlashAttentionBackwardPreprocess(
+        cute_dtype,
+        head_dim,
+        head_dim_v,
+        tile_m,
+        num_threads=128,
+        use_padded_offsets=False,
+    )
+
+    @cute.jit
+    def _launch_flash_attention_backward_sm90_preprocess(
+        stream: cuda.CUstream,
+        out: cute.Tensor,
+        dout: cute.Tensor,
+        lse: cute.Tensor,
+        dpsum: cute.Tensor,
+        lse_log2: cute.Tensor,
+        dq_accum: cute.Tensor,
+    ):
+        preprocess(out, dout, dpsum, lse, lse_log2, dq_accum, None, None, None, stream)
+
+    return _launch_flash_attention_backward_sm90_preprocess
+
+
+def flash_attention_backward_postprocess_launcher(
+    modules: Any,
+    *,
+    dtype: Any,
+    head_dim: int,
+    tile_m: int,
+    atom_layout_m: int,
+    arch: int = 120,
+    num_threads: int = 128,
+    cluster_size: int | None = None,
+    use_2cta_instrs: bool | None = None,
+    accum_is_gmem: bool = False,
+) -> Any:
+    """Build an FA4 backward accumulator postprocess launcher."""
+    deps = _import_cute_dependencies(modules)
+    cutlass = deps.cutlass
+    cute = deps.cute
+    cuda = deps.cuda
+
+    if str(dtype) == "bfloat16":
+        cute_dtype = cutlass.BFloat16
+    elif str(dtype) == "float16":
+        cute_dtype = cutlass.Float16
+    else:
+        raise TypeError(f"FA4/CuTe postprocess expects bf16/fp16, got {dtype}")
+
+    postprocess_module = importlib.import_module("flash_attn.cute.flash_bwd_postprocess")
+    FlashAttentionBackwardPostprocess = postprocess_module.FlashAttentionBackwardPostprocess
+    postprocess_kwargs: dict[str, Any] = {}
+    if cluster_size is not None:
+        postprocess_kwargs["cluster_size"] = cluster_size
+    if use_2cta_instrs is not None:
+        postprocess_kwargs["use_2cta_instrs"] = use_2cta_instrs
+    postprocess = FlashAttentionBackwardPostprocess(
+        cute_dtype,
+        head_dim,
+        arch,
+        tile_m,
+        num_threads=num_threads,
+        AtomLayoutMdQ=atom_layout_m,
+        **postprocess_kwargs,
+    )
+
+    @cute.jit
+    def _as_gmem_tensor(tensor: cute.Tensor) -> cute.Tensor:
+        ptr = cute.make_ptr(
+            tensor.element_type,
+            tensor.iterator.toint(),
+            cute.AddressSpace.gmem,
+            assumed_align=256,
+        )
+        return cute.make_tensor(ptr, tensor.layout)
+
+    @cute.jit
+    def _launch_flash_attention_backward_postprocess(
+        stream: cuda.CUstream,
+        accum: cute.Tensor,
+        out: cute.Tensor,
+        *,
+        softmax_scale: cutlass.Float32,
+    ):
+        if cutlass.const_expr(accum_is_gmem):
+            accum = _as_gmem_tensor(accum)
+        postprocess(accum, out, softmax_scale, None, None, stream)
+
+    return _launch_flash_attention_backward_postprocess
+
+
+def _allow_tuple_aux_tensors_for_nested_sm90(backward_cls: Any) -> None:
+    """Let nested CuTe JIT calls pass aux tensors after list literals become tuples."""
+    for method_name in ("__call__", "kernel"):
+        method = getattr(backward_cls, method_name, None)
+        for target in (method, getattr(method, "__wrapped__", None)):
+            annotations = getattr(target, "__annotations__", None)
+            if annotations is not None and "aux_tensors" in annotations:
+                annotations["aux_tensors"] = Any
+
+
+def _patch_jax_array_list_tvm_ffi_converter() -> None:
+    """Teach the installed TVM-FFI converter about CUTLASS JAX wrapper args."""
+    try:
+        converter_module = importlib.import_module("cutlass.cute._tvm_ffi_args_spec_converter")
+        jax_types_module = importlib.import_module("cutlass.jax.types")
+        tvm_ffi_builder_module = importlib.import_module("cutlass.base_dsl.tvm_ffi_builder")
+    except Exception:
+        return
+
+    JaxArrayList = jax_types_module.JaxArrayList
+    tvm_spec = tvm_ffi_builder_module.spec
+    if getattr(converter_module._convert_single_arg, "_levanter_jax_array_list_patch", False):
+        return
+
+    original_convert_single_arg = converter_module._convert_single_arg
+
+    def _patched_convert_single_arg(arg: Any, arg_name: str, arg_type: Any, ctx: Any) -> Any:
+        if isinstance(arg, JaxArrayList):
+            tuple_params = [tvm_spec.DataPointer(f"{arg_name}[{idx}]") for idx, _array in enumerate(arg.arrays)]
+            return tvm_spec.TupleParam(arg_name, tuple_params)
+        return original_convert_single_arg(arg, arg_name, arg_type, ctx)
+
+    _patched_convert_single_arg._levanter_jax_array_list_patch = True
+    converter_module._convert_single_arg = _patched_convert_single_arg
+
+
+def _segmented_backward_arches(
+    *,
+    compute_arch: int | None,
+    tile_m: int,
+    tile_n: int,
+    num_threads: int,
+) -> tuple[int, int]:
+    is_sm120_config = tile_m == 64 and tile_n == 64 and num_threads == 128
+    if compute_arch is None:
+        inferred_arch = 120 if is_sm120_config else 80
+        return inferred_arch, inferred_arch
+
+    arch_family = compute_arch // 10
+    if arch_family == 8:
+        return 80, 80
+    if arch_family == 9:
+        if not is_sm120_config:
+            raise NotImplementedError(
+                "SM90 segmented FA4/CuTe backward requires the Hopper 64x64/128-thread path, "
+                f"got tile_m={tile_m}, tile_n={tile_n}, num_threads={num_threads}."
+            )
+        return 120, 120
+    if arch_family in (10, 12):
+        if not is_sm120_config:
+            raise NotImplementedError(
+                f"SM{compute_arch} segmented FA4/CuTe backward requires the 64x64/128-thread path, "
+                f"got tile_m={tile_m}, tile_n={tile_n}, num_threads={num_threads}."
+            )
+        return 120, 120
+    raise NotImplementedError(f"segmented FA4/CuTe backward does not support SM{compute_arch}.")
+
+
 __all__ = [
+    "flash_attention_backward_postprocess_launcher",
     "segmented_flash_attention_backward_launcher",
+    "segmented_flash_attention_backward_sm90_launcher",
+    "segmented_flash_attention_backward_sm90_preprocess_launcher",
     "segmented_flash_attention_forward_launcher",
 ]
