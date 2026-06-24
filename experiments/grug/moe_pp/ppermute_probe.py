@@ -122,6 +122,42 @@ def main() -> int:
         bc_sec / pp_sec if pp_sec else float("nan"),
         ok,
     )
+
+    # The real boundary touches only 4 of the 16 GPUs: stage 3's two (last of host 0) and
+    # stage 4's two (first of host 1). Does a shard_map over that 4-device SUBSET lower and
+    # run under multi-controller? If so the pipeline can ppermute the exact 2->2 hop without
+    # dragging the other 12 GPUs into the collective.
+    if pc == 2 and ld >= 2:
+        devs = jax.devices()
+        boundary = np.array([devs[ld - 2], devs[ld - 1], devs[ld], devs[ld + 1]]).reshape(2, 2)
+        bmesh = Mesh(boundary, ("pp", "data"))
+        bx = _build_pp_array(bmesh, ACT, float(pid))
+
+        @functools.partial(shard_map, mesh=bmesh, in_specs=P("pp", "data"), out_specs=P("pp", "data"))
+        def bhop(a):
+            return jax.lax.ppermute(a, "pp", [(0, 1), (1, 0)])
+
+        bhop = jax.jit(bhop)
+        try:
+            by = jax.block_until_ready(bhop(bx))
+            bgot = float(np.asarray(jax.device_get(by[pid])).flat[0])
+            bok = abs(bgot - float((pid - 1) % 2)) < 1e-6
+            for _ in range(3):
+                bhop(bx)
+            jax.block_until_ready(bhop(bx))
+            t0 = time.perf_counter()
+            for _ in range(iters):
+                bout = bhop(bx)
+            jax.block_until_ready(bout)
+            bsec = (time.perf_counter() - t0) / iters
+            logger.info(
+                "PERF process %d SUBSET(4-dev boundary): ppermute=%.3f ms | correct=%s",
+                pid,
+                bsec * 1e3,
+                bok,
+            )
+        except Exception as exc:  # the multi-controller subset question -- record the failure mode
+            logger.info("SUBSET(4-dev boundary) process %d FAILED to lower/run: %r", pid, exc)
     return 0
 
 
