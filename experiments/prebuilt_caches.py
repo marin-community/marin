@@ -21,7 +21,7 @@ my_model = default_train(..., tokenized=fineweb_edu_subcache_10B, ...)
 
 from marin.processing.tokenize.download_pretokenized import download_pretokenized_cache
 
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 fineweb_edu_10B_repo_id = "marin-community/fineweb-edu-pretokenized-10B"
 fineweb_edu_10M_repo_id = "marin-community/fineweb-edu-pretokenized-10M"

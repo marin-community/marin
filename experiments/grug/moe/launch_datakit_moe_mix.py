@@ -22,7 +22,7 @@ from experiments.defaults import default_validation_sets
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, run_grug_moe_trial
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 _STORE_PREFIX = "datakit/store_8ac06c74"
 # Large enough that the smallest nonzero CSV weights still receive at least

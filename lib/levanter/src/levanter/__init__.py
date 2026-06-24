@@ -12,11 +12,14 @@ __all__ = [
     "distributed",
     "eval",
     "eval_harness",
+    "model_cache",
     "models",
     "optim",
     "tracker",
     "trainer",
     "grug",
+    "cache_to_prefix",
+    "cache_hf_model",
     "current_tracker",
     "initialize",
 ]
@@ -27,11 +30,13 @@ import levanter.checkpoint as checkpoint
 import levanter.config as config
 import levanter.data as data
 import levanter.distributed as distributed
+import levanter.model_cache as model_cache
 import levanter.models as models
 import levanter.optim as optim
 import levanter.tracker as tracker
 import levanter.trainer as trainer
 import levanter.grug as grug
+from levanter.model_cache import cache_hf_model, cache_to_prefix
 from levanter.tracker import current_tracker
 from levanter.trainer import initialize
 

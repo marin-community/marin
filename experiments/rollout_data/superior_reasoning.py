@@ -15,7 +15,7 @@ from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 
 def build_steps() -> list[StepSpec]:

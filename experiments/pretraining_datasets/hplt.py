@@ -16,7 +16,7 @@ from marin.execution.types import ExecutorStep, output_path_of, this_output_path
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 HPLT_DATASETS = {
     "all": ["*.parquet"],
