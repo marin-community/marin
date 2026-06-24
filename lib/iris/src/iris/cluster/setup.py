@@ -125,6 +125,44 @@ def default_setup_script(
     return "\n".join(lines) + "\n"
 
 
+def wants_gpu_extra(extras: Sequence[str]) -> bool:
+    """Whether any requested extra is the ``gpu`` extra (``extra`` or ``package:extra``)."""
+    return any((e.split(":", 1)[1] if ":" in e else e) == "gpu" for e in extras)
+
+
+def cuda_toolchain_setup_script() -> str:
+    """Render a setup script that exposes the venv's CUDA toolchain for JAX/Pallas.
+
+    ``jax[cuda13]`` installs the CUDA compiler wheels into the venv — ptxas/nvlink
+    (``nvidia-cuda-nvcc``) under ``nvidia/cu*/bin`` and ``libdevice.10.bc``
+    (``nvidia-nvvm``) under ``nvidia/cu*/nvvm/libdevice`` — but nothing exposes
+    them, so JAX reports "No PTX compilation provider" and Mosaic GPU lowering
+    cannot find ``libdevice.10.bc``.
+
+    Symlinks the toolchain binaries into the venv's ``bin`` (already on ``PATH``
+    once the venv is activated) and stages ``libdevice.10.bc`` into XLA's default
+    CUDA data dir (``./cuda_sdk_lib``) and the working directory — the locations
+    XLA and Mosaic probe — so no run-phase env injection is needed. Keyed on a
+    ``ptxas`` under ``nvidia/cu*`` so it spans CUDA major versions and is a no-op
+    when no toolchain is installed.
+    """
+    return r"""set -e
+cuda_bin=""
+for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin; do
+  if [ -x "$_d/ptxas" ]; then cuda_bin="$_d"; break; fi
+done
+if [ -z "$cuda_bin" ]; then echo 'no CUDA toolchain to stage'; exit 0; fi
+echo 'staging CUDA toolchain'
+ln -sf "$cuda_bin"/* "$IRIS_VENV/bin/"
+_libdevice="$(dirname "$cuda_bin")/nvvm/libdevice/libdevice.10.bc"
+if [ -f "$_libdevice" ]; then
+  mkdir -p "$IRIS_WORKDIR/cuda_sdk_lib/nvvm/libdevice"
+  cp -f "$_libdevice" "$IRIS_WORKDIR/cuda_sdk_lib/nvvm/libdevice/libdevice.10.bc"
+  cp -f "$_libdevice" "$IRIS_WORKDIR/libdevice.10.bc"
+fi
+"""
+
+
 def iris_runtime_setup_script(*, quiet: bool = True) -> str:
     """Render the script that installs iris's own runtime deps into ``$IRIS_VENV``.
 
