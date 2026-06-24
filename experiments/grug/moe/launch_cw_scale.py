@@ -204,13 +204,9 @@ def build_scale_step() -> ExecutorStep:
     )
 
 
-def scale_moe_step() -> ExecutorStep:
-    return build_scale_step()
-
-
 def main():
     with executor_context():
-        executor_main(steps=[scale_moe_step()])
+        executor_main(steps=[build_scale_step()])
 
 
 if __name__ == "__main__":

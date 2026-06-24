@@ -14,7 +14,7 @@ from experiments.llama import llama3_tokenizer
 
 
 def downloads() -> dict[str, ExecutorStep]:
-    """Raw Dolmino download. Some consumers import this."""
+    """Raw Dolmino download steps keyed by dataset name."""
     return {"dolmino": download_dolmino_step().as_executor_step().cd("bb54cab")}
 
 
