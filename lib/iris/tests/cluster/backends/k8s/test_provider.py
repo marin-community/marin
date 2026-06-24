@@ -1,16 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for K8sTaskProvider: sync lifecycle, logs, capacity, scheduling, profiling."""
+"""Tests for K8sTaskProvider: sync lifecycle, capacity, scheduling, profiling."""
 
 from __future__ import annotations
 
-import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from finelog.rpc import logging_pb2
-from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.backends.k8s.tasks import (
     _GANG_GC_MAX_AGE_SECONDS,
     _GC_MAX_AGE_SECONDS,
@@ -27,9 +24,7 @@ from iris.cluster.backends.k8s.tasks import (
     _POD_NOT_FOUND_GRACE_CYCLES,
     _RUNTIME_LABEL_VALUE,
     K8sTaskProvider,
-    LogCollector,
     ResourceCollector,
-    _LogPod,
     _pod_name,
     _sanitize_label_value,
     _task_hash,
@@ -37,20 +32,13 @@ from iris.cluster.backends.k8s.tasks import (
 from iris.cluster.backends.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
 from iris.cluster.controller.backend import TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.log_keys import task_log_key
-from iris.cluster.types import JobName, TaskAttempt
+from iris.cluster.types import JobName
 from iris.cluster.worker.stats import IrisTaskStat
 from iris.rpc import job_pb2
 from iris.test_util import wait_for_condition
 from rigging.timing import Duration
 
 from .conftest import make_batch, make_kueue_provider, make_run_req, populate_node, populate_pod
-
-
-def _fetch_logs(log_service: LogServiceClientSync, key: str, max_lines: int = 100) -> list[logging_pb2.LogEntry]:
-    resp = log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=key, max_lines=max_lines))
-    return list(resp.entries)
-
 
 # ---------------------------------------------------------------------------
 # sync(): tasks_to_run
@@ -285,27 +273,6 @@ def test_pod_not_found_grace_resets_when_pod_reappears(provider, k8s):
     assert result.updates[0].new_state == job_pb2.TASK_STATE_FAILED
 
 
-def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceClientSync, log_client):
-    task_id = JobName.from_wire("/job/0")
-    attempt_id = 0
-    pod_name = _pod_name(task_id, attempt_id)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
-
-    populate_pod(k8s, pod_name, "Succeeded")
-    k8s.set_logs(pod_name, "task complete\n")
-
-    batch = make_batch(running_tasks=[entry])
-    result = provider.reconcile(batch)
-
-    assert result.updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
-    # set_pods() removal does a synchronous final fetch that enqueues the entries
-    # on the (buffered) log client; flush forces them to the server before we read.
-    log_client.flush(timeout=5.0)
-    key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
-    logs = _fetch_logs(log_service, key)
-    assert any(e.data == "task complete" for e in logs)
-
-
 def test_completed_pod_resolved_via_bulk_list_without_per_pod_get(provider, k8s, monkeypatch):
     """A running task whose pod went terminal is read from the bulk terminal-pods
     list, never a per-pod GET — so a whole gang completing in one cycle costs one
@@ -335,84 +302,6 @@ def test_sync_empty_batch(provider):
     batch = make_batch()
     result = provider.reconcile(batch)
     assert result.updates == []
-
-
-# ---------------------------------------------------------------------------
-# Incremental log polling
-# ---------------------------------------------------------------------------
-
-
-def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_service: LogServiceClientSync):
-    """Running pods get incremental logs via the background LogCollector."""
-    task_id = JobName.from_wire("/job/0")
-    attempt_id = 0
-    pod_name = _pod_name(task_id, attempt_id)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
-
-    populate_pod(k8s, pod_name, "Running")
-    k8s.set_logs(pod_name, "hello from running pod\n")
-
-    batch = make_batch(running_tasks=[entry])
-    result = provider.reconcile(batch)
-
-    assert len(result.updates) == 1
-    assert result.updates[0].new_state == job_pb2.TASK_STATE_RUNNING
-    # Logs are collected by the background LogCollector thread.
-    # Give it time to run one cycle.
-    time.sleep(3)
-    key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
-    logs = _fetch_logs(log_service, key)
-    assert len(logs) >= 1
-    assert logs[0].data == "hello from running pod"
-
-
-def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_service: LogServiceClientSync):
-    """LogCollector advances byte offsets: repeated fetches don't duplicate."""
-    task_id = JobName.from_wire("/job/0")
-    attempt_id = 0
-    pod_name = _pod_name(task_id, attempt_id)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
-
-    populate_pod(k8s, pod_name, "Running")
-    k8s.set_logs(pod_name, "line 1\n")
-
-    # First sync: LogCollector starts tracking the pod.
-    provider.reconcile(make_batch(running_tasks=[entry]))
-    time.sleep(3)
-    key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
-    logs = _fetch_logs(log_service, key)
-    assert len(logs) == 1
-    assert logs[0].data == "line 1"
-
-    # Append new content and let collector run again.
-    k8s.set_logs(pod_name, "line 1\nline 2\n")
-    provider.reconcile(make_batch(running_tasks=[entry]))
-    time.sleep(3)
-    logs = _fetch_logs(log_service, key)
-    assert len(logs) == 2
-    assert logs[1].data == "line 2"
-
-
-def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServiceClientSync, log_client):
-    """Completed pods get a final log fetch when removed from the collector's tracked set."""
-    task_id = JobName.from_wire("/job/0")
-    attempt_id = 0
-    pod_name = _pod_name(task_id, attempt_id)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
-
-    populate_pod(k8s, pod_name, "Succeeded")
-    k8s.set_logs(pod_name, "line 1\nline 2\nline 3\n")
-
-    result = provider.reconcile(make_batch(running_tasks=[entry]))
-
-    assert result.updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
-    # set_pods() removal does a synchronous final fetch that enqueues the entries
-    # on the (buffered) log client; flush forces them to the server before we read.
-    log_client.flush(timeout=5.0)
-    key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
-    logs = _fetch_logs(log_service, key)
-    assert len(logs) == 3
-    assert logs[0].data == "line 1"
 
 
 # ---------------------------------------------------------------------------
@@ -810,6 +699,19 @@ def test_no_configmap_when_no_workdir_files(provider, k8s):
     assert pods[0]["kind"] == "Pod"
 
 
+def test_apply_pod_orders_staging_before_logship_sidecar(provider, k8s):
+    """The workdir-staging init container runs before the log-shipper native
+    sidecar so staging completes first; the sidecar stays in initContainers."""
+    req = make_run_req("/my-job/task-0")
+    req.entrypoint.workdir_files["script.py"] = b"print('hi')"
+
+    provider._apply_pod(req)
+
+    pod = k8s.list_json(K8sResource.PODS)[0]
+    names = [c["name"] for c in pod["spec"]["initContainers"]]
+    assert names == ["stage-workdir", "log-shipper"]
+
+
 # ---------------------------------------------------------------------------
 # PodDisruptionBudget for coordinator tasks
 # ---------------------------------------------------------------------------
@@ -1064,73 +966,6 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
 # ---------------------------------------------------------------------------
 # Collector set_pods
 # ---------------------------------------------------------------------------
-
-
-def test_log_collector_set_pods_adds_and_removes(k8s, log_client):
-    """LogCollector.set_pods() adds new pods and removes absent ones."""
-
-    collector = LogCollector(k8s, log_client, concurrency=1)
-    task_a = JobName.from_wire("/job/0")
-    task_b = JobName.from_wire("/job/1")
-    key_a = f"{task_a.to_wire()}:0"
-    key_b = f"{task_b.to_wire()}:0"
-
-    collector.set_pods(
-        {
-            key_a: _LogPod(pod_name="pod-a", task_id=task_a, attempt_id=0),
-            key_b: _LogPod(pod_name="pod-b", task_id=task_b, attempt_id=0),
-        }
-    )
-    with collector._lock:
-        assert key_a in collector._pods
-        assert key_b in collector._pods
-
-    # Remove pod A, keep pod B.
-    collector.set_pods(
-        {
-            key_b: _LogPod(pod_name="pod-b", task_id=task_b, attempt_id=0),
-        }
-    )
-    with collector._lock:
-        assert key_a not in collector._pods
-        assert key_b in collector._pods
-
-    # Clear all.
-    collector.set_pods({})
-    with collector._lock:
-        assert len(collector._pods) == 0
-
-    collector.close()
-
-
-def test_log_collector_set_pods_preserves_cursor_state(k8s, log_client):
-    """set_pods() preserves last_timestamp for pods that remain tracked."""
-
-    collector = LogCollector(k8s, log_client, concurrency=1)
-    task_id = JobName.from_wire("/job/0")
-    key = f"{task_id.to_wire()}:0"
-
-    collector.set_pods(
-        {
-            key: _LogPod(pod_name="pod-0", task_id=task_id, attempt_id=0),
-        }
-    )
-
-    # Simulate the collector having advanced the cursor.
-    marker = datetime(2026, 1, 1, tzinfo=UTC)
-    with collector._lock:
-        collector._pods[key].last_timestamp = marker
-
-    # Re-declare the same pod — cursor should be preserved.
-    collector.set_pods(
-        {
-            key: _LogPod(pod_name="pod-0", task_id=task_id, attempt_id=0),
-        }
-    )
-    with collector._lock:
-        assert collector._pods[key].last_timestamp == marker
-
-    collector.close()
 
 
 def test_resource_collector_set_pods_replaces_active_set(k8s, task_stats_table):
