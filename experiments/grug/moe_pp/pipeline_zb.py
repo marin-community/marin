@@ -213,38 +213,46 @@ def _crosses_host(src: Mesh, dst: Mesh) -> bool:
     return _mesh_procs(src) != _mesh_procs(dst)
 
 
-def _build_ppermute_hop(src_mesh: Mesh, dst_mesh: Mesh):
-    """Compile an on-device activation hop ``src_mesh -> dst_mesh`` via ``ppermute``.
+def _build_ppermute_hop(low_mesh: Mesh, high_mesh: Mesh):
+    """Compile the on-device activation hop across one cross-host stage boundary.
 
-    Returns ``transport(x) -> y`` that moves the batch-sharded activation ``x`` (on
-    ``src_mesh``) onto ``dst_mesh`` with a single NCCL send/recv -- GPUDirect RDMA over the
-    fabric, no host round-trip. The two stage slices are laid out as the two ``pp`` ranks of
-    a small boundary mesh; the activation is assembled there from ``x``'s on-device shards
-    (a reshape, never ``device_get``), ``ppermute``d one hop, and the arriving rank relabeled
-    onto ``dst_mesh``. Both processes call it (it is a collective); the source process holds
-    the real ``x`` and the destination a placeholder, mirroring :func:`_transport`.
+    The two stage slices are the ``pp=0`` (``low_mesh``) and ``pp=1`` (``high_mesh``) ranks of
+    a single boundary mesh, so ONE NCCL clique and one compiled ``ppermute`` carry both
+    directions: the forward activation (low->high) and the backward cotangent (high->low). A
+    single clique is deliberate -- two separate communicators over the same GPUs can deadlock
+    on init-order across hosts.
+
+    Returns ``transport(x, from_pp) -> y``. ``from_pp`` is the ``pp`` rank holding the live
+    data (0 forward, 1 backward); that rank fills its slice from ``x``'s on-device shards (a
+    reshape, never ``device_get``), the other supplies zeros, the ``ppermute`` swaps the two,
+    and the arriving rank rebuilds the result onto its stage submesh from its local shards.
+    Reassembling from local shards (not indexing ``by[to_pp]``) keeps the relabel host-local;
+    a slice index would let XLA insert a cross-host gather the other process never joins.
+    Every process calls it (it is a collective), mirroring :func:`_transport`.
     """
-    src_devs = list(src_mesh.devices.flat)
-    dst_devs = list(dst_mesh.devices.flat)
-    dps = len(src_devs)
-    boundary = Mesh(np.array(src_devs + dst_devs, dtype=object).reshape(2, dps), ("pp", "data"))
+    low_devs = list(low_mesh.devices.flat)
+    high_devs = list(high_mesh.devices.flat)
+    dps = len(low_devs)
+    boundary = Mesh(np.array(low_devs + high_devs, dtype=object).reshape(2, dps), ("pp", "data"))
     bspec = P("pp", "data")
-    src_procs = {d.process_index for d in src_devs}
-    dst_procs = {d.process_index for d in dst_devs}
+    meshes = (low_mesh, high_mesh)
+    procs = ({d.process_index for d in low_devs}, {d.process_index for d in high_devs})
 
     @jax.jit
     @functools.partial(shard_map, mesh=boundary, in_specs=bspec, out_specs=bspec)
     def _hop(a: jax.Array) -> jax.Array:
         return jax.lax.ppermute(a, "pp", [(0, 1), (1, 0)])
 
-    def transport(x: jax.Array) -> jax.Array:
+    def transport(x: jax.Array, from_pp: int) -> jax.Array:
         pid = jax.process_index()
+        to_pp = 1 - from_pp
         bshape = (2, *x.shape)
         bsharding = NamedSharding(boundary, bspec)
         bshard = bsharding.shard_shape(bshape)
-        # Source process: each local shard of x, reshaped (+leading pp dim) in place, lands at
-        # pp=0. Destination process: zeros at pp=1. Every process supplies only its own shards.
-        on_dev = {s.device: s.data.reshape((1, *s.data.shape)) for s in x.addressable_shards} if pid in src_procs else {}
+        # Source rank: each local shard of x, reshaped (+leading pp dim) in place. Other rank
+        # (and any local device off the source slice): zeros. Each process supplies only its own.
+        is_source = pid in procs[from_pp]
+        on_dev = {s.device: s.data.reshape((1, *s.data.shape)) for s in x.addressable_shards} if is_source else {}
         shards = [
             on_dev[d] if d in on_dev else jax.device_put(jnp.zeros(bshard, x.dtype), d)
             for d in boundary.devices.flat
@@ -252,9 +260,13 @@ def _build_ppermute_hop(src_mesh: Mesh, dst_mesh: Mesh):
         ]
         bx = jax.make_array_from_single_device_arrays(bshape, bsharding, shards)
         by = _hop(bx)
-        if pid in dst_procs:
-            return jax.device_put(by[1], NamedSharding(dst_mesh, grug_model._batch_spec()))
-        return _make_global(None, dst_mesh, grug_model._batch_spec(), x.shape, x.dtype)
+        dst_mesh = meshes[to_pp]
+        dst_sharding = NamedSharding(dst_mesh, grug_model._batch_spec())
+        if pid in procs[to_pp]:
+            arrived = {s.device: s.data.reshape(s.data.shape[1:]) for s in by.addressable_shards}
+            out_shards = [arrived[d] for d in dst_mesh.devices.flat if d.process_index == pid]
+            return jax.make_array_from_single_device_arrays(x.shape, dst_sharding, out_shards)
+        return _make_global(None, dst_mesh, dst_sharding.spec, x.shape, x.dtype)
 
     return transport
 
@@ -537,13 +549,13 @@ def zb_build(
     use_channel = p2p_transport and _multihost() and not ppermute_transport
     channel = HostChannel(1 - jax.process_index()) if use_channel else None
 
-    # On-device ppermute hops, compiled once per directed cross-host boundary and reused.
-    ppermute_hops: dict[tuple[int, int], Callable[[jax.Array], jax.Array]] = {}
+    # On-device ppermute hops: one per cross-host boundary (keyed by its low stage), carrying
+    # both the forward and backward crossing on a single clique. Compiled once, reused.
+    ppermute_hops: dict[int, Callable[[jax.Array, int], jax.Array]] = {}
     if ppermute_transport and _multihost():
         for s in range(num_stages - 1):
             if _crosses_host(submeshes[s], submeshes[s + 1]):
-                ppermute_hops[(s, s + 1)] = _build_ppermute_hop(submeshes[s], submeshes[s + 1])
-                ppermute_hops[(s + 1, s)] = _build_ppermute_hop(submeshes[s + 1], submeshes[s])
+                ppermute_hops[s] = _build_ppermute_hop(submeshes[s], submeshes[s + 1])
 
     def step(token_ids: jax.Array, loss_weight: jax.Array) -> tuple[jax.Array | float, tuple | None, list]:
         """Run one pipelined forward+backward over the global batch; returns ``(loss, g_eh, g_blocks)``.
@@ -634,10 +646,11 @@ def zb_build(
         def _send(x: jax.Array, dst: Mesh, src: Mesh, src_stage: int, dst_stage: int) -> jax.Array | Future:
             if not _crosses_host(src, dst):
                 return _transport(x, dst)
-            hop = ppermute_hops.get((src_stage, dst_stage))
+            hop = ppermute_hops.get(min(src_stage, dst_stage))
             if hop is not None:
                 # On-device ppermute: a jax.Array that XLA overlaps with compute -- no thread.
-                return hop(x)
+                # from_pp=0 forward (source is the low stage), 1 backward (source is the high).
+                return hop(x, 0 if src_stage < dst_stage else 1)
             if worker is not None:
                 return worker.submit(x, dst, grug_model._batch_spec())
             return _transport(x, dst, channel=channel)
