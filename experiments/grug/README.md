@@ -27,7 +27,7 @@
 
 ## Variant notes
 
-Variant-specific guidance (including modular-opt notes) lives in `experiments/grug/variants.md`.
+Variant-specific guidance lives in `experiments/grug/variants.md`.
 
 ## Quickstart launch
 
