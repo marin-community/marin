@@ -326,7 +326,7 @@ def _manifest_record(slice_: MachineRecordPplSlice, index: int, rng: random.Rand
         )
         target = (
             f'{index}.0"\n'
-            'requires-python = ">=3.11"\n'
+            'requires-python = ">=3.12"\n'
             'dependencies = ["pydantic>=2", "rich>=13"]\n\n'
             "[tool.pytest.ini_options]\n"
             'addopts = "-q"\n'

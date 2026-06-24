@@ -21,7 +21,7 @@ Three goals:
    (default 5,000,000). After the cap is hit the tracer disables itself and
    sets a flag the consumer can read.
 
-3. **3.12 → sys.monitoring, 3.10/3.11 → sys.settrace**: PEP 669 monitoring
+3. **3.12+ → sys.monitoring, pre-3.12 → sys.settrace**: PEP 669 monitoring
    has lower overhead and a richer event vocabulary on 3.12+. The fallback
    path uses sys.settrace and emits a similar event shape.
 
@@ -96,7 +96,7 @@ def _path_in_roots(path: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# sys.settrace path (Python 3.10 / 3.11)
+# sys.settrace path (pre-3.12 Python)
 # ---------------------------------------------------------------------------
 
 
@@ -175,7 +175,7 @@ def _enable_monitoring() -> None:
 
     def on_raise(code, instruction_offset, exception):
         if not _path_in_roots(code.co_filename):
-            return DISABLE
+            return None
         _emit(
             {
                 "e": "exception",

@@ -32,6 +32,7 @@ class K8sResource(Enum):
     NAMESPACES = ("", "v1", False, "namespaces", "Namespace")
     NODES = ("", "v1", False, "nodes", "Node")
     SERVICE_ACCOUNTS = ("", "v1", True, "serviceaccounts", "ServiceAccount")
+    PERSISTENT_VOLUME_CLAIMS = ("", "v1", True, "persistentvolumeclaims", "PersistentVolumeClaim")
 
     # Apps v1
     DEPLOYMENTS = ("apps", "v1", True, "deployments", "Deployment")
@@ -43,6 +44,9 @@ class K8sResource(Enum):
     # RBAC v1
     CLUSTER_ROLES = ("rbac.authorization.k8s.io", "v1", False, "clusterroles", "ClusterRole")
     CLUSTER_ROLE_BINDINGS = ("rbac.authorization.k8s.io", "v1", False, "clusterrolebindings", "ClusterRoleBinding")
+
+    # Scheduling v1
+    PRIORITY_CLASSES = ("scheduling.k8s.io", "v1", False, "priorityclasses", "PriorityClass")
 
     # CoreWeave custom resources
     NODE_POOLS = ("compute.coreweave.com", "v1alpha1", False, "nodepools", "NodePool")

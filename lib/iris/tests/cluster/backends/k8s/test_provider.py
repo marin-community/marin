@@ -5,13 +5,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
-from finelog.client.proxy import LogServiceProxy
 from finelog.rpc import logging_pb2
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.backends.k8s.tasks import (
     _GANG_GC_MAX_AGE_SECONDS,
     _GC_MAX_AGE_SECONDS,
@@ -42,12 +41,14 @@ from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import JobName, TaskAttempt
 from iris.cluster.worker.stats import IrisTaskStat
 from iris.rpc import job_pb2
+from iris.test_util import wait_for_condition
+from rigging.timing import Duration
 
 from .conftest import make_batch, make_kueue_provider, make_run_req, populate_node, populate_pod
 
 
-def _fetch_logs(log_service: LogServiceProxy, key: str, max_lines: int = 100) -> list[logging_pb2.LogEntry]:
-    resp = asyncio.run(log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=key, max_lines=max_lines), ctx=None))
+def _fetch_logs(log_service: LogServiceClientSync, key: str, max_lines: int = 100) -> list[logging_pb2.LogEntry]:
+    resp = log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=key, max_lines=max_lines))
     return list(resp.entries)
 
 
@@ -284,7 +285,7 @@ def test_pod_not_found_grace_resets_when_pod_reappears(provider, k8s):
     assert result.updates[0].new_state == job_pb2.TASK_STATE_FAILED
 
 
-def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceProxy, log_client):
+def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceClientSync, log_client):
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
     pod_name = _pod_name(task_id, attempt_id)
@@ -316,7 +317,7 @@ def test_sync_empty_batch(provider):
 # ---------------------------------------------------------------------------
 
 
-def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_service: LogServiceProxy):
+def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_service: LogServiceClientSync):
     """Running pods get incremental logs via the background LogCollector."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -340,7 +341,7 @@ def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_servi
     assert logs[0].data == "hello from running pod"
 
 
-def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_service: LogServiceProxy):
+def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_service: LogServiceClientSync):
     """LogCollector advances byte offsets: repeated fetches don't duplicate."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -367,7 +368,7 @@ def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_service: LogS
     assert logs[1].data == "line 2"
 
 
-def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServiceProxy, log_client):
+def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServiceClientSync, log_client):
     """Completed pods get a final log fetch when removed from the collector's tracked set."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -533,81 +534,53 @@ def test_sync_survives_node_list_failure(provider, k8s):
 # ---------------------------------------------------------------------------
 
 
-def test_resource_stats_from_kubectl_top(provider, k8s, task_stats_table):
-    """Running pods emit IrisTaskStat rows via the background ResourceCollector."""
+def test_resource_stats_only_for_running_tasks(provider, k8s, task_stats_table):
+    """reconcile registers running pods (not terminal ones) so the background
+    collector emits IrisTaskStat rows only for running tasks."""
+    running = RunningTaskEntry(task_id=JobName.from_wire("/job/run"), attempt_id=0)
+    terminal = RunningTaskEntry(task_id=JobName.from_wire("/job/done"), attempt_id=0)
+    running_pod = _pod_name(running.task_id, running.attempt_id)
+    terminal_pod = _pod_name(terminal.task_id, terminal.attempt_id)
 
-    task_id = JobName.from_wire("/job/0")
-    attempt_id = 0
-    pod_name = _pod_name(task_id, attempt_id)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
+    populate_pod(k8s, running_pod, "Running")
+    populate_pod(k8s, terminal_pod, "Succeeded")
+    k8s.set_top_pod(running_pod, PodResourceUsage(cpu_millicores=500, memory_bytes=1024 * 1024 * 1024))
+    k8s.set_top_pod(terminal_pod, PodResourceUsage(cpu_millicores=999, memory_bytes=1024))
 
-    populate_pod(k8s, pod_name, "Running")
-    k8s.set_top_pod(pod_name, PodResourceUsage(cpu_millicores=500, memory_bytes=1024 * 1024 * 1024))
+    provider.reconcile(make_batch(running_tasks=[running, terminal]))
+    # The collector samples all tracked pods in one pass, so once the running
+    # pod's row lands a full cycle has run — the terminal pod's absence is real.
+    wait_for_condition(lambda: bool(task_stats_table.writes), timeout=Duration.from_seconds(5.0))
 
-    batch = make_batch(running_tasks=[entry])
-    # First sync registers the pod with the ResourceCollector.
-    provider.reconcile(batch)
-    # Wait for background collector to fetch and write.
-    time.sleep(6)
-    # No more sync needed — the row has already been written to the table.
-
-    rows = [row for batch_rows in task_stats_table.writes for row in batch_rows]
-    assert rows, "ResourceCollector did not write any IrisTaskStat rows"
+    rows = [row for batch_rows in list(task_stats_table.writes) for row in batch_rows]
     assert all(isinstance(r, IrisTaskStat) for r in rows)
-    latest = rows[-1]
-    assert latest.task_id == task_id.to_wire()
-    assert latest.attempt_id == attempt_id
-    assert latest.worker_id == pod_name
-    assert latest.cpu_millicores == 500
-    assert latest.memory_mb == 1024
+    assert {r.worker_id for r in rows} == {running_pod}, "only the running pod should be sampled"
+    row = next(r for r in rows if r.worker_id == running_pod)
+    assert row.task_id == running.task_id.to_wire()
+    assert row.cpu_millicores == 500
+    assert row.memory_mb == 1024
 
 
-def test_resource_stats_skipped_when_metrics_unavailable(provider, k8s, task_stats_table):
-    """No IrisTaskStat row is written when kubectl top returns None."""
-    task_id = JobName.from_wire("/job/0")
-    attempt_id = 0
-    pod_name = _pod_name(task_id, attempt_id)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
+def test_resource_collector_skips_pod_without_metrics_sample(k8s, task_stats_table):
+    """A tracked pod with no metrics sample produces no row."""
+    k8s.set_top_pod("pod-a", None)
 
-    populate_pod(k8s, pod_name, "Running")
-    k8s.set_top_pod(pod_name, None)
-
-    batch = make_batch(running_tasks=[entry])
-    provider.reconcile(batch)
-    time.sleep(6)
+    collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
+    collector.close()  # stop the background loop; drive one collection synchronously
+    collector.set_pods({("/job/0", 0): "pod-a"})
+    collector.collect_once()
 
     assert task_stats_table.writes == []
 
 
-def test_resource_stats_skipped_when_top_pod_raises(provider, k8s, task_stats_table):
-    """No IrisTaskStat row is written when kubectl top raises an exception."""
-    task_id = JobName.from_wire("/job/0")
-    attempt_id = 0
-    pod_name = _pod_name(task_id, attempt_id)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
+def test_resource_collector_swallows_metrics_query_failure(k8s, task_stats_table):
+    """A raising bulk metrics query is swallowed; no row is written."""
+    k8s.inject_persistent_failure("top_pods", RuntimeError("metrics-server unavailable"))
 
-    populate_pod(k8s, pod_name, "Running")
-    k8s.inject_failure("top_pod", RuntimeError("metrics-server unavailable"))
-
-    batch = make_batch(running_tasks=[entry])
-    provider.reconcile(batch)
-    time.sleep(6)
-
-    assert task_stats_table.writes == []
-
-
-def test_resource_stats_skipped_for_non_running_pods(provider, k8s, task_stats_table):
-    """Terminal pods are not registered with the resource collector, so no rows land."""
-    task_id = JobName.from_wire("/job/0")
-    attempt_id = 0
-    pod_name = _pod_name(task_id, attempt_id)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=attempt_id)
-
-    populate_pod(k8s, pod_name, "Succeeded")
-
-    batch = make_batch(running_tasks=[entry])
-    provider.reconcile(batch)
-    time.sleep(6)
+    collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
+    collector.close()
+    collector.set_pods({("/job/0", 0): "pod-a"})
+    collector.collect_once()
 
     assert task_stats_table.writes == []
 
@@ -909,7 +882,7 @@ def _seed_configmap(k8s, name: str, task_hash: str, created: str) -> None:
 
 
 def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
     recent_ts = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -942,7 +915,7 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
 def test_gc_respects_interval(provider, k8s):
     """_maybe_gc_terminal_resources should only run every _GC_INTERVAL_SECONDS."""
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # Trigger GC once to set _last_gc_time to now.
@@ -1025,7 +998,7 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
     remove the active attempt's configmap and PDB protection.
     """
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     shared_hash = "shared_hash_12345"
@@ -1119,7 +1092,7 @@ def test_log_collector_set_pods_preserves_cursor_state(k8s, log_client):
     )
 
     # Simulate the collector having advanced the cursor.
-    marker = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    marker = datetime(2026, 1, 1, tzinfo=UTC)
     with collector._lock:
         collector._pods[key].last_timestamp = marker
 
@@ -1136,32 +1109,33 @@ def test_log_collector_set_pods_preserves_cursor_state(k8s, log_client):
 
 
 def test_resource_collector_set_pods_replaces_active_set(k8s, task_stats_table):
-    """set_pods() replaces the tracked pod set wholesale."""
+    """set_pods() replaces the tracked pod set wholesale: a pod dropped from the
+    set stops being sampled on the next collection."""
+    k8s.set_top_pod("pod-a", PodResourceUsage(cpu_millicores=100, memory_bytes=128 * 1024 * 1024))
+    k8s.set_top_pod("pod-b", PodResourceUsage(cpu_millicores=100, memory_bytes=128 * 1024 * 1024))
 
-    collector = ResourceCollector(k8s, task_stats_table, concurrency=1)
-    key_a = ("/job/0", 0)
-    key_b = ("/job/1", 0)
+    collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
+    collector.close()  # stop the background loop; drive collections synchronously
 
-    collector.set_pods({key_a: "pod-a", key_b: "pod-b"})
-    with collector._lock:
-        assert collector._pods == {key_a: "pod-a", key_b: "pod-b"}
+    collector.set_pods({("/job/0", 0): "pod-a", ("/job/1", 0): "pod-b"})
+    collector.collect_once()
+    assert {r.worker_id for r in task_stats_table.writes[-1]} == {"pod-a", "pod-b"}
 
-    collector.set_pods({key_b: "pod-b"})
-    with collector._lock:
-        assert collector._pods == {key_b: "pod-b"}
-
-    collector.close()
+    collector.set_pods({("/job/1", 0): "pod-b"})
+    collector.collect_once()
+    assert {r.worker_id for r in task_stats_table.writes[-1]} == {"pod-b"}
 
 
 def test_resource_collector_writes_iris_task_rows(k8s, task_stats_table):
-    """A successful kubectl top read appends one IrisTaskStat row to the Table."""
+    """A successful bulk metrics read appends one IrisTaskStat row to the Table."""
 
     k8s.set_top_pod("pod-a", PodResourceUsage(cpu_millicores=750, memory_bytes=2 * 1024 * 1024 * 1024))
 
-    collector = ResourceCollector(k8s, task_stats_table, concurrency=1)
-    collector.set_pods({("/job/0", 3): "pod-a"})
-    time.sleep(6)
+    collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
+    # Stop the background loop so we drive a single collection deterministically.
     collector.close()
+    collector.set_pods({("/job/0", 3): "pod-a"})
+    collector.collect_once()
 
     rows = [row for batch_rows in task_stats_table.writes for row in batch_rows]
     assert rows, "no rows emitted"
@@ -1313,7 +1287,7 @@ def _seed_gang_pod(
 def test_gc_sweeps_finalizer_wedged_gang_pod(provider, k8s):
     """A Failed gang pod wedged in deletion on the Kueue finalizer is swept by GC
     (finalizer stripped, pod removed, Workload deleted) regardless of age."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     recent_ts = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     group = "wedged-gang-group"
     _seed_gang_pod(
@@ -1337,7 +1311,7 @@ def test_gc_sweeps_crashed_gang_pods_on_short_retention(provider, k8s):
     """A Failed gang pod older than the gang retention (but younger than the 1h
     plain-pod retention) is swept along with its Workload; a non-gang Failed pod
     of the same age keeps the 1h debugging window."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     age_ts = (now - timedelta(seconds=_GANG_GC_MAX_AGE_SECONDS + 60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     group = "crashed-gang-group"
     _seed_gang_pod(k8s, "crashed-gang-pod", group, age_ts)
@@ -1356,7 +1330,7 @@ def test_gc_skips_gang_with_active_sibling(provider, k8s):
     Pending/Running sibling of the same pod group exists: releasing the shared
     Workload would evict the live siblings. Once the gang has no live members,
     the next GC pass sweeps it."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     age_ts = (now - timedelta(seconds=_GANG_GC_MAX_AGE_SECONDS + 60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     group = "skewed-gang-group"
     _seed_gang_pod(k8s, "early-failed-gang-pod", group, age_ts, finalizers=[_KUEUE_MANAGED_FINALIZER])

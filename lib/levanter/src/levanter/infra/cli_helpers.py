@@ -10,25 +10,44 @@ import warnings
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import draccus
 import yaml
 from google.cloud import storage
 
 
+USER_CONFIG_PATH = Path(".config/marin/config.yaml")
+LOCAL_CONFIG_PATH = Path(".levanter.yaml")
+# Legacy checkout-local file, distinct from the XDG user config directory.
+DEPRECATED_LOCAL_CONFIG_PATH = Path(".config")
+
+
 @dataclass(frozen=True)
 class CliConfig:
+    autodelete: bool | None = None
+    capacity_type: str | None = None
     project: str | None = None
+    region: str | None = None
     zone: str | None = None
     tpu: str | None = None
+    tpu_name: str | None = None
+    tpu_type: str | None = None
+    node_count: int | None = None
+    version: str | None = None
+    retries: int | None = None
+    run_id: str | None = None
     repository: str | None = None
     image: str | None = None
+    image_name: str | None = None
     tag: str | None = None
     github_user: str | None = None
     github_token: str | None = None
+    docker_base_image: str | None = None
     docker_file: str | None = None
+    docker_registry: str | None = None
     extra_context: str | None = None
+    foreground: bool | None = None
     docker_target: str | None = None
     docker_repository: str | None = None
     subnetwork: str | None = None
@@ -101,15 +120,41 @@ def add_arg(parser: argparse.ArgumentParser, config: CliConfig, flags: list[str]
 
 
 def load_config() -> CliConfig:
-    if os.path.exists(".levanter.yaml"):
-        d = yaml.load(open(".levanter.yaml", "r"), Loader=yaml.SafeLoader)
-    elif os.path.exists(".config"):
-        warnings.warn("Using deprecated .config file. Please rename to .levanter.yaml")
-        d = yaml.load(open(".config", "r"), Loader=yaml.SafeLoader)
-    else:
-        d = {}
+    config_dict = _load_yaml_mapping(Path.home() / USER_CONFIG_PATH)
 
-    return draccus.decode(CliConfig, d)
+    if LOCAL_CONFIG_PATH.exists():
+        config_dict = _merge_config_dicts(config_dict, _load_yaml_mapping(LOCAL_CONFIG_PATH))
+    elif DEPRECATED_LOCAL_CONFIG_PATH.exists():
+        warnings.warn("Using deprecated .config file. Please rename to .levanter.yaml")
+        config_dict = _merge_config_dicts(config_dict, _load_yaml_mapping(DEPRECATED_LOCAL_CONFIG_PATH))
+
+    return draccus.decode(CliConfig, config_dict)
+
+
+def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+
+    with path.open("r") as f:
+        data = yaml.load(f, Loader=yaml.SafeLoader)
+
+    if data is None:
+        return {}
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected YAML mapping in {path}")
+
+    return data
+
+
+def _merge_config_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = base.copy()
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_config_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def get_git_commit():

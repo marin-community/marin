@@ -24,7 +24,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rigging.timing import Timestamp
@@ -223,7 +223,7 @@ def _parse_docker_log_line(line: str) -> tuple[datetime, str]:
                 return ts, line[z_idx + 2 :]
             except ValueError:
                 pass
-    return datetime.now(timezone.utc), line
+    return datetime.now(UTC), line
 
 
 def _parse_memory_size(size_str: str) -> int:

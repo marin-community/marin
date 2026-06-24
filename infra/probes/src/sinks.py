@@ -1,17 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sinks that persist each ProbeResult beyond the stdout log line:
+"""Sinks that persist each Sample beyond the stdout log line:
 
-- ``JsonlGcsSink`` — append every result to a per-UTC-day local JSONL file;
-  on the first result of a new day (and for files stranded by a restart),
+- ``JsonlGcsSink`` — append every sample to a per-UTC-day local JSONL file;
+  on the first sample of a new day (and for files stranded by a restart),
   gzip the finished file, upload it to GCS under ``dt=<date>/``, and delete
   the local copy.
-- ``FinelogTableSink`` — write every result as a row into a dedicated finelog
+- ``FinelogTableSink`` — write every sample as a row into a dedicated finelog
   namespace.
 
-Sinks are best-effort telemetry: the runner calls them after logging and
-swallows their failures, so a sink fault never disrupts probing.
+Both satisfy the runner's ``MetricSink`` protocol structurally. Sinks are
+best-effort telemetry: the runner calls them after logging and swallows their
+failures, so a sink fault never disrupts collection.
 """
 
 from __future__ import annotations
@@ -23,37 +24,36 @@ import shutil
 import threading
 from datetime import date
 from pathlib import Path
-from typing import Protocol, TextIO
+from typing import TextIO
 
 from finelog.client.log_client import LogClient, Table
-from result import ProbeResult
 from rigging.filesystem import open_url
+from sample import Sample
 
 logger = logging.getLogger(__name__)
 
 
-class ProbeSink(Protocol):
-    def record(self, result: ProbeResult) -> None: ...
-
-
-def result_to_json(result: ProbeResult) -> str:
-    """Serialize a result to a single JSON object (one JSONL line)."""
+def sample_to_json(sample: Sample) -> str:
+    """Serialize a sample to a single JSON object (one JSONL line). Labels are
+    re-parsed into a nested object so the JSONL is queryable without a second
+    decode."""
+    assert sample.collected_at is not None, "runner stamps collected_at before record"
     return json.dumps(
         {
-            "name": result.name,
-            "is_success": result.is_success,
-            "started_at": result.started_at.isoformat(timespec="milliseconds"),
-            "wall_time": result.wall_time,
+            "metric": sample.metric,
+            "value": sample.value,
+            "labels": json.loads(sample.labels),
+            "collected_at": sample.collected_at.isoformat(timespec="milliseconds"),
         }
     )
 
 
 class JsonlGcsSink:
-    """Append results to a daily local JSONL file, rolling finished days up to
-    GCS. The file is keyed by the result's UTC date; on a date change the prior
+    """Append samples to a daily local JSONL file, rolling finished days up to
+    GCS. The file is keyed by the sample's UTC date; on a date change the prior
     file (and any stranded files from a previous process) is gzipped, uploaded
     to ``<gcs_prefix>/dt=<date>/probes-<date>.jsonl.gz``, and removed locally.
-    Thread-safe: probes record concurrently."""
+    Thread-safe: collectors record concurrently."""
 
     def __init__(self, local_dir: Path, gcs_prefix: str) -> None:
         self._dir = local_dir
@@ -63,9 +63,10 @@ class JsonlGcsSink:
         self._fh: TextIO | None = None
         self._dir.mkdir(parents=True, exist_ok=True)
 
-    def record(self, result: ProbeResult) -> None:
-        day = result.started_at.date()
-        line = result_to_json(result) + "\n"
+    def record(self, sample: Sample) -> None:
+        assert sample.collected_at is not None, "runner stamps collected_at before record"
+        day = sample.collected_at.date()
+        line = sample_to_json(sample) + "\n"
         with self._lock:
             if self._day != day:
                 self._roll_to(day)
@@ -101,16 +102,16 @@ class JsonlGcsSink:
             shutil.copyfileobj(src, out)
         gz.unlink()
         path.unlink()
-        logger.info("rolled probe results to %s", dest)
+        logger.info("rolled probe samples to %s", dest)
 
 
 class FinelogTableSink:
-    """Write each result as a row into a dedicated finelog namespace. ProbeResult
+    """Write each sample as a row into a dedicated finelog namespace. ``Sample``
     is the table schema directly: get_table derives the columns from it and
     Table.write reads its fields."""
 
     def __init__(self, finelog: LogClient, namespace: str) -> None:
-        self._table: Table = finelog.get_table(namespace, ProbeResult)
+        self._table: Table = finelog.get_table(namespace, Sample)
 
-    def record(self, result: ProbeResult) -> None:
-        self._table.write([result])
+    def record(self, sample: Sample) -> None:
+        self._table.write([sample])

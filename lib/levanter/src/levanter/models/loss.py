@@ -19,6 +19,19 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import (
 DEFAULT_REDUCTION = cast(hax.ReductionFunction, hax.mean)
 
 
+def next_token_loss_weight(Pos: hax.Axis, loss_weight: Optional[NamedArray]) -> NamedArray:
+    """Build the per-position loss weight for next-token prediction.
+
+    The final position has no next token to predict, so it is always masked out. A
+    caller-supplied ``loss_weight`` is multiplied by this mask (in its own dtype); when
+    none is given the mask itself is returned as float32.
+    """
+    not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))  # type: ignore
+    if loss_weight is not None:
+        return loss_weight * not_last_mask.astype(loss_weight.dtype)
+    return not_last_mask.astype(jnp.float32)
+
+
 def maybe_fused_next_token_loss(
     Pos: hax.AxisSelector,
     Embed: hax.AxisSelector,
@@ -62,13 +75,10 @@ def maybe_fused_next_token_loss(
     # Shift target tokens to predict the next token
     target_y = hax.roll(true_ids, -1, Pos)
 
-    # Create a mask that excludes the last token
-    not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))  # type: ignore
+    # When a loss_weight is supplied, the fused kernel runs the loss in its dtype.
     if loss_weight is not None:
         dtype = loss_weight.dtype
-        loss_weight = loss_weight.astype(dtype) * not_last_mask.astype(dtype)
-    else:
-        loss_weight = not_last_mask.astype(jnp.float32)
+    loss_weight = next_token_loss_weight(Pos, loss_weight)
 
     # Compute the loss with optional block-wise processing
     return fused_cross_entropy_loss_and_logsumexp_penalty(
@@ -119,13 +129,7 @@ def next_token_loss(
     target_y = hax.roll(true_ids, -1, Pos)
     target_y_full = hax.nn.one_hot(target_y, Vocab, dtype=logits.dtype)
 
-    # Create a mask that excludes the last token
-    not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
-    if loss_weight is not None:
-        dtype = loss_weight.dtype
-        loss_weight = loss_weight.astype(dtype) * not_last_mask.astype(dtype)
-    else:
-        loss_weight = not_last_mask.astype(jnp.float32)
+    loss_weight = next_token_loss_weight(Pos, loss_weight)
 
     return cross_entropy_and_logsumexp_penalty(
         Vocab=Vocab,

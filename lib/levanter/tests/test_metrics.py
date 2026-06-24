@@ -10,6 +10,7 @@ import optax
 import pytest
 
 from levanter.callbacks import eval_loss_loop
+from levanter.callbacks._metrics import compute_instant_throughput
 from levanter.metrics import (
     Metric,
     ReductionType,
@@ -153,6 +154,39 @@ def test_unwrap_metrics():
     assert jnp.allclose(result["num_tokens"], 1024)
     assert jnp.allclose(result["nested"]["max_logit"], 5.0)
     assert result["plain_value"] == 42.0
+
+
+def test_compute_instant_throughput_rates_and_mfu():
+    """Rates, model FLOPs/sec, and MFU all derive from one step's duration."""
+    t = compute_instant_throughput(
+        batch_size=256,
+        step_duration=0.5,
+        tokens_per_example=4096,
+        flops_per_example=1e12,
+        theoretical_flops=1e15,
+    )
+    assert t.examples_per_second == 512.0  # 256 / 0.5
+    assert t.tokens_per_second == 4096 * 512.0
+    assert t.model_flops_per_second == 1e12 / 0.5 * 256
+    # mfu = model_flops_per_second / theoretical_flops * 100
+    assert jnp.allclose(t.mfu, (1e12 / 0.5 * 256) / 1e15 * 100.0)
+
+
+def test_compute_instant_throughput_without_flops_has_no_mfu():
+    t = compute_instant_throughput(batch_size=128, step_duration=2.0, tokens_per_example=1024)
+    assert t.examples_per_second == 64.0
+    assert t.tokens_per_second == 1024 * 64.0
+    assert t.model_flops_per_second is None
+    assert t.mfu is None
+
+
+def test_compute_instant_throughput_zero_duration_is_empty():
+    """A zero-duration step yields no rates instead of dividing by zero."""
+    t = compute_instant_throughput(batch_size=128, step_duration=0.0, tokens_per_example=1024, flops_per_example=1e12)
+    assert t.examples_per_second is None
+    assert t.tokens_per_second is None
+    assert t.model_flops_per_second is None
+    assert t.mfu is None
 
 
 class SimpleModel(eqx.Module):

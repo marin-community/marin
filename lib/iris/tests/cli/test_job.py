@@ -197,10 +197,10 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
             captured.update(kwargs)
             return FakeJob()
 
-    def fake_remote(controller_url, workspace, token_provider):
+    def fake_remote(controller_url, *, workspace, credentials=None):
         captured["controller_url"] = controller_url
         captured["workspace"] = workspace
-        captured["token_provider"] = token_provider
+        captured["credentials"] = credentials
         return FakeClient()
 
     monkeypatch.setattr("iris.cli.job.IrisClient.remote", fake_remote)
@@ -215,7 +215,7 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
             "python",
             "train.py",
         ],
-        obj={"controller_url": "http://controller.test", "config": None, "token_provider": None},
+        obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
     )
 
     assert result.exit_code == 0, result.output

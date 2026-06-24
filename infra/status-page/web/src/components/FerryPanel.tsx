@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { useFerry } from "../hooks/useFerry";
 import type { FerryGroupStatus, FerryRun, FerryTierStatus } from "../api";
+import { formatRelative } from "./chartUtils";
 
 // Diagonal gray/red stripe marks cancelled runs — they count as failures
 // for success-rate math but carry a distinct cause worth surfacing.
@@ -76,19 +77,6 @@ function formatDuration(seconds: number | null): string {
   if (minutes < 60) return `${minutes}m ${remSec}s`;
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${minutes % 60}m`;
-}
-
-function formatRelative(iso: string): string {
-  const delta = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(delta)) return iso;
-  const seconds = Math.round(delta / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
 }
 
 // One tier's run strip: latest-run line, success rate, and the last-N-runs

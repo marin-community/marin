@@ -1272,6 +1272,30 @@ class TestCheckRoutingFeasibility:
         autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
         assert autoscaler.job_feasibility(self._tpu_constraints()) is None
 
+    def test_infeasible_disk_exceeds_group_capacity(self):
+        """Rejects when the requested disk exceeds every matching group's per-VM capacity.
+
+        A 300GB-disk request on a pool advertising 100GB matches the device
+        constraints but can never be packed, so route_demand would mark it
+        unmet every tick. The submit-time gate must reject it instead of letting
+        it sit pending forever.
+        """
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=1)
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        resources = job_pb2.ResourceSpecProto(disk_bytes=300 * 1024**3)
+        resources.device.tpu.variant = "v5p-8"
+        result = autoscaler.job_feasibility(self._tpu_constraints(), resources=resources)
+        assert result is not None
+        assert "disk" in result
+
+    def test_feasible_disk_within_group_capacity(self):
+        """Disk within the group's advertised per-VM capacity stays feasible."""
+        config = make_scale_group_config(name="tpu-group", max_slices=5, num_vms=1)
+        autoscaler = self._make_autoscaler({"tpu-group": ScalingGroup(config, make_mock_platform())})
+        resources = job_pb2.ResourceSpecProto(disk_bytes=50 * 1024**3)
+        resources.device.tpu.variant = "v5p-8"
+        assert autoscaler.job_feasibility(self._tpu_constraints(), resources=resources) is None
+
     def test_infeasible_wrong_device_type(self):
         """Rejects when no group has the requested device type."""
         config = make_scale_group_config(

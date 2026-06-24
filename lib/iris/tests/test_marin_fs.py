@@ -38,7 +38,8 @@ def _mock_urlopen(zone_bytes: bytes) -> MagicMock:
 
 def test_region_from_metadata_parses_zone():
     with patch(
-        "rigging.filesystem.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-central2-b")
+        "rigging.filesystem.urllib.request.urlopen",
+        return_value=_mock_urlopen(b"projects/12345/zones/us-central2-b"),
     ):
         assert region_from_metadata() == "us-central2"
 
@@ -121,7 +122,8 @@ def test_marin_region_none_when_unresolvable():
 
 def test_marin_temp_bucket_from_metadata():
     with patch(
-        "rigging.filesystem.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-central2-b")
+        "rigging.filesystem.urllib.request.urlopen",
+        return_value=_mock_urlopen(b"projects/12345/zones/us-central2-b"),
     ):
         assert marin_temp_bucket(ttl_days=30, prefix="compilation-cache") == (
             "gs://marin-us-central2/tmp/ttl=30d/compilation-cache"
@@ -215,7 +217,7 @@ def test_marin_temp_bucket_unknown_s3_bucket_falls_back_to_flat_path():
 
 
 def test_marin_temp_bucket_falls_back_to_marin_prefix_when_no_region():
-    # Unknown region in MARIN_PREFIX → no entry in REGION_TO_DATA_BUCKET → falls back to marin_prefix/tmp
+    # Unknown region in MARIN_PREFIX → no entry in DataConfig.region_buckets → falls back to marin_prefix/tmp
     with (
         patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-antarctica-south1/scratch"}),
@@ -241,7 +243,8 @@ def test_marin_temp_bucket_no_prefix():
 
 def test_marin_temp_bucket_strips_prefix_slashes():
     with patch(
-        "rigging.filesystem.urllib.request.urlopen", return_value=_mock_urlopen(b"projects/12345/zones/us-central1-a")
+        "rigging.filesystem.urllib.request.urlopen",
+        return_value=_mock_urlopen(b"projects/12345/zones/us-central1-a"),
     ):
         assert marin_temp_bucket(ttl_days=3, prefix="/foo/bar/") == "gs://marin-us-central1/tmp/ttl=3d/foo/bar"
 

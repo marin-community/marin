@@ -23,12 +23,6 @@ class FakeWorker:
     def get_shared(self, name: str):
         raise NotImplementedError
 
-    def increment_counter(self, name: str, value: int = 1, stage: str | None = None) -> None:
-        if name in self._counters:
-            self._counters[name].value += value
-        else:
-            self._counters[name] = CounterEntry(value, stage=stage)
-
     def set_counter(self, name: str, value: int | float, stage: str | None = None) -> None:
         if name in self._counters:
             entry = self._counters[name]
@@ -279,13 +273,13 @@ def test_aggregation_mixed():
     assert coord.get_counters() == {"total": 30, "peak": 100}
 
 
-def test_aggregation_conflict_keeps_first_and_warns(caplog):
-    """Conflicting aggregations keep the first-seen mode and warn, never raising.
+def test_aggregation_conflict_drops_counter_and_warns(caplog):
+    """Conflicting aggregations drop the counter and warn, never raising.
 
     Stats collection must not be able to fault the execution path, so a counter
     that disagrees on aggregation across snapshots (only possible via user
-    ``set_aggregation`` misuse) resolves to the first-seen mode rather than
-    raising.
+    ``set_aggregation`` misuse) is omitted from the result rather than
+    producing a semantically wrong value or raising.
     """
     coord = _make_coordinator(
         [
@@ -295,8 +289,8 @@ def test_aggregation_conflict_keeps_first_and_warns(caplog):
     )
     with caplog.at_level(logging.WARNING):
         result = coord.get_counters()
-    # First-seen aggregation (MAX) wins over the later MIN.
-    assert result == {"x": 2}
+    # Conflicting aggregations (MAX vs MIN) — drop x to avoid garbage.
+    assert "x" not in result
     assert any("conflicting aggregations" in r.message for r in caplog.records)
 
 

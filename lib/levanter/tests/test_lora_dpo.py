@@ -12,7 +12,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 
 from levanter.data.text import DpoExample
-from levanter.dpo import _logp_sum, dpo_loss_from_logps
+from levanter.dpo import logp_sum, dpo_loss_from_logps
 from levanter.layers.attention import AttentionMask
 from levanter.adaptor.lora import (
     LoraConfig,
@@ -108,11 +108,11 @@ def test_lora_dpo_loss_computes_correctly():
 
     key_chosen, key_rejected = jrandom.split(loss_key)
 
-    logp_pi_chosen = _logp_sum(loraized, example.chosen, key=key_chosen)
-    logp_pi_rejected = _logp_sum(loraized, example.rejected, key=key_rejected)
+    logp_pi_chosen = logp_sum(loraized, example.chosen, key=key_chosen)
+    logp_pi_rejected = logp_sum(loraized, example.rejected, key=key_rejected)
 
-    logp_ref_chosen = jax.lax.stop_gradient(_logp_sum(reference_model, example.chosen, key=key_chosen))
-    logp_ref_rejected = jax.lax.stop_gradient(_logp_sum(reference_model, example.rejected, key=key_rejected))
+    logp_ref_chosen = jax.lax.stop_gradient(logp_sum(reference_model, example.chosen, key=key_chosen))
+    logp_ref_rejected = jax.lax.stop_gradient(logp_sum(reference_model, example.rejected, key=key_rejected))
 
     delta_pi = logp_pi_chosen - logp_pi_rejected
     delta_ref = logp_ref_chosen - logp_ref_rejected
@@ -250,11 +250,11 @@ def test_zero_init_b_dpo_loss_starts_near_log2():
 
     key_chosen, key_rejected = jrandom.split(loss_key)
 
-    logp_pi_chosen = _logp_sum(loraized, example.chosen, key=key_chosen)
-    logp_pi_rejected = _logp_sum(loraized, example.rejected, key=key_rejected)
+    logp_pi_chosen = logp_sum(loraized, example.chosen, key=key_chosen)
+    logp_pi_rejected = logp_sum(loraized, example.rejected, key=key_rejected)
 
-    logp_ref_chosen = jax.lax.stop_gradient(_logp_sum(reference_model, example.chosen, key=key_chosen))
-    logp_ref_rejected = jax.lax.stop_gradient(_logp_sum(reference_model, example.rejected, key=key_rejected))
+    logp_ref_chosen = jax.lax.stop_gradient(logp_sum(reference_model, example.chosen, key=key_chosen))
+    logp_ref_rejected = jax.lax.stop_gradient(logp_sum(reference_model, example.rejected, key=key_rejected))
 
     delta_pi = logp_pi_chosen - logp_pi_rejected
     delta_ref = logp_ref_chosen - logp_ref_rejected

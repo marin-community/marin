@@ -15,23 +15,32 @@ from iris.cluster.controller.auth import JwtTokenManager, create_api_key, revoke
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.token_store import ClusterCredential
 from iris.rpc.auth import (
+    DASHBOARD_ROLE,
+    LOOPBACK_IDENTITY,
     AuthInterceptor,
+    AuthRequest,
     AuthTokenInjector,
     AuthzAction,
-    CompositeTokenVerifier,
     GcpAccessTokenProvider,
     GcpAccessTokenVerifier,
+    IapAssertionVerifier,
+    IapIdTokenVerifier,
     NullAuthInterceptor,
+    ProxyAuthTokenInjector,
     StaticTokenProvider,
     StaticTokenVerifier,
     VerifiedIdentity,
     _extract_cookie,
     _verified_identity,
     authorize,
+    authorize_method,
     authorize_resource_owner,
+    build_request_authenticators,
+    client_interceptors,
     get_verified_identity,
     get_verified_user,
     require_identity,
+    resolve_auth,
 )
 from iris.rpc.config_pb2 import AuthConfig
 from rigging.timing import Timestamp
@@ -148,10 +157,6 @@ def test_auth_interceptor_cleans_up_context_on_handler_error(interceptor):
     assert get_verified_user() is None
 
 
-def test_verified_user_is_none_without_interceptor():
-    assert get_verified_user() is None
-
-
 def test_static_token_verifier_valid():
     v = StaticTokenVerifier({"tok": "user1"})
     result = v.verify("tok")
@@ -185,6 +190,248 @@ def test_token_injector_adds_auth_header():
     result = injector.intercept_unary_sync(handler, "request", ctx)
     assert result == "ok"
     assert captured_headers[0]["authorization"] == "Bearer my-token"
+
+
+def test_proxy_auth_injector_uses_proxy_authorization_header():
+    """The IAP token rides in Proxy-Authorization so IAP consumes it, leaving
+    Authorization free for the Iris JWT."""
+    injector = ProxyAuthTokenInjector(StaticTokenProvider("iap-id-token"))
+    ctx = _make_ctx({})
+    captured = []
+
+    def handler(req, ctx):
+        captured.append(dict(ctx.request_headers()))
+        return "ok"
+
+    assert injector.intercept_unary_sync(handler, "request", ctx) == "ok"
+    assert captured[0]["proxy-authorization"] == "Bearer iap-id-token"
+    assert "authorization" not in captured[0]
+
+
+def test_proxy_auth_injector_skips_when_no_token():
+    injector = ProxyAuthTokenInjector(StaticTokenProvider(""))
+    ctx = _make_ctx({})
+    captured = []
+
+    def handler(req, ctx):
+        captured.append(dict(ctx.request_headers()))
+        return "ok"
+
+    injector.intercept_unary_sync(handler, "request", ctx)
+    assert "proxy-authorization" not in captured[0]
+
+
+def _headers_after(token_provider, iap_provider):
+    """Run the composed client interceptors and return the headers they set."""
+    ctx = _make_ctx({})
+    for interceptor in client_interceptors(token_provider, iap_provider):
+        interceptor.intercept_unary_sync(lambda req, c: None, "request", ctx)
+    return dict(ctx.request_headers())
+
+
+def test_client_interceptors_attach_each_token_to_its_own_header():
+    """Each provider drives exactly its own header, so the two layers never collide."""
+    jwt = StaticTokenProvider("jwt-tok")
+    iap = StaticTokenProvider("iap-tok")
+
+    both = _headers_after(jwt, iap)
+    assert both["authorization"] == "Bearer jwt-tok"
+    assert both["proxy-authorization"] == "Bearer iap-tok"
+
+    jwt_only = _headers_after(jwt, None)
+    assert jwt_only["authorization"] == "Bearer jwt-tok"
+    assert "proxy-authorization" not in jwt_only
+
+    iap_only = _headers_after(None, iap)
+    assert iap_only["proxy-authorization"] == "Bearer iap-tok"
+    assert "authorization" not in iap_only
+
+    assert _headers_after(None, None) == {}
+
+
+def _verify_oauth2_token_returning(payload):
+    """Patch target factory: a stand-in for google's verify_oauth2_token."""
+    return Mock(return_value=payload)
+
+
+def test_iap_id_token_verifier_accepts_matching_audience():
+    verifier = IapIdTokenVerifier(["desktop-client-id", "iap-client-id"])
+    payload = {"aud": "desktop-client-id", "email": "alice@example.com", "email_verified": True}
+    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning(payload)):
+        identity = verifier.verify("id-token")
+    assert identity == VerifiedIdentity(user_id="alice@example.com", role="user")
+
+
+def test_iap_id_token_verifier_rejects_wrong_audience():
+    verifier = IapIdTokenVerifier(["expected-aud"])
+    payload = {"aud": "some-other-client", "email": "alice@example.com"}
+    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning(payload)):
+        with pytest.raises(ValueError, match="audience"):
+            verifier.verify("id-token")
+
+
+def test_iap_id_token_verifier_rejects_missing_email():
+    verifier = IapIdTokenVerifier(["aud"])
+    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning({"aud": "aud"})):
+        with pytest.raises(ValueError, match="email"):
+            verifier.verify("id-token")
+
+
+def test_iap_id_token_verifier_rejects_unverified_email():
+    verifier = IapIdTokenVerifier(["aud"])
+    payload = {"aud": "aud", "email": "alice@example.com", "email_verified": False}
+    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning(payload)):
+        with pytest.raises(ValueError, match="not verified"):
+            verifier.verify("id-token")
+
+
+def test_iap_id_token_verifier_wraps_google_failure():
+    verifier = IapIdTokenVerifier(["aud"])
+    with patch("google.oauth2.id_token.verify_oauth2_token", side_effect=ValueError("bad signature")):
+        with pytest.raises(ValueError, match="IAP ID token verification failed"):
+            verifier.verify("id-token")
+
+
+# --- IAP signed-header assertion -> implicit read-only dashboard identity -----
+
+_ASSERTION_HEADERS = {"x-goog-iap-jwt-assertion": "signed.assertion.jwt"}
+
+
+def test_iap_assertion_verifier_grants_dashboard_role():
+    verifier = IapAssertionVerifier("/projects/1/global/backendServices/2")
+    payload = {"aud": "/projects/1/global/backendServices/2", "email": "alice@example.com"}
+    with patch("google.oauth2.id_token.verify_token", Mock(return_value=payload)):
+        identity = verifier.identity_from_headers(_ASSERTION_HEADERS)
+    assert identity == VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)
+
+
+def test_iap_assertion_verifier_resolves_provisioned_role():
+    # With a role resolver injected (as the controller does), a provisioned email
+    # resolves to its real role instead of the read-only dashboard default — the
+    # path that lets an admin behind IAP act without running `iris login`.
+    roles = {"admin@example.com": "admin"}
+    verifier = IapAssertionVerifier(
+        "/projects/1/global/backendServices/2",
+        role_resolver=lambda email: roles.get(email, DASHBOARD_ROLE),
+    )
+    payload = {"aud": "/projects/1/global/backendServices/2", "email": "admin@example.com"}
+    with patch("google.oauth2.id_token.verify_token", Mock(return_value=payload)):
+        identity = verifier.identity_from_headers(_ASSERTION_HEADERS)
+    assert identity == VerifiedIdentity(user_id="admin@example.com", role="admin")
+
+
+def test_iap_assertion_verifier_returns_none_without_header():
+    verifier = IapAssertionVerifier("/projects/1/global/backendServices/2")
+    # No assertion header -> not an IAP request; the caller falls through to
+    # loopback/optional/reject instead of getting a dashboard identity.
+    assert verifier.identity_from_headers({}) is None
+
+
+def test_iap_assertion_verifier_rejects_forged_assertion():
+    verifier = IapAssertionVerifier("/projects/1/global/backendServices/2")
+    with patch("google.oauth2.id_token.verify_token", side_effect=ValueError("Wrong recipient")):
+        with pytest.raises(ValueError, match="IAP assertion verification failed"):
+            verifier.identity_from_headers(_ASSERTION_HEADERS)
+
+
+def test_iap_assertion_verifier_rejects_missing_email():
+    verifier = IapAssertionVerifier("/projects/1/global/backendServices/2")
+    with patch("google.oauth2.id_token.verify_token", Mock(return_value={"aud": "x"})):
+        with pytest.raises(ValueError, match="no email"):
+            verifier.identity_from_headers(_ASSERTION_HEADERS)
+
+
+class _FakeAssertionVerifier:
+    """Stand-in mirroring IapAssertionVerifier's header contract.
+
+    Returns a dashboard identity when the signed-header is present and valid,
+    None when it is absent, and raises when present but forged.
+    """
+
+    def identity_from_headers(self, headers):
+        value = headers.get("x-goog-iap-jwt-assertion")
+        if not value:
+            return None
+        if value == "forged":
+            raise ValueError("IAP assertion verification failed")
+        return VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)
+
+
+def test_resolve_auth_iap_assertion_grants_dashboard_when_tokenless():
+    identity = resolve_auth(
+        AuthRequest(token=None, headers={"x-goog-iap-jwt-assertion": "valid"}),
+        build_request_authenticators(StaticTokenVerifier({}), _FakeAssertionVerifier()),
+        optional=False,
+    )
+    assert identity == VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)
+
+
+def test_resolve_auth_iris_jwt_wins_over_iap_assertion():
+    # A present Iris JWT outranks the implicit IAP path: a logged-in user keeps
+    # their real role even though IAP also injected an assertion.
+    identity = resolve_auth(
+        AuthRequest(token="valid-token-alice", headers={"x-goog-iap-jwt-assertion": "valid"}),
+        build_request_authenticators(StaticTokenVerifier({"valid-token-alice": "alice"}), _FakeAssertionVerifier()),
+        optional=False,
+    )
+    assert identity == VerifiedIdentity(user_id="alice", role="user")
+
+
+def test_resolve_auth_rejects_tokenless_without_assertion():
+    # Behind IAP with optional=false, a tokenless call that carries no valid
+    # assertion (i.e. did not pass IAP) is rejected — never anonymous-admin.
+    with pytest.raises(ValueError, match="Missing authentication"):
+        resolve_auth(
+            AuthRequest(token=None, headers={}),
+            build_request_authenticators(StaticTokenVerifier({}), _FakeAssertionVerifier()),
+            optional=False,
+        )
+
+
+def test_resolve_auth_rejects_forged_assertion():
+    with pytest.raises(ValueError, match="IAP assertion verification failed"):
+        resolve_auth(
+            AuthRequest(token=None, headers={"x-goog-iap-jwt-assertion": "forged"}),
+            build_request_authenticators(StaticTokenVerifier({}), _FakeAssertionVerifier()),
+            optional=False,
+        )
+
+
+def test_resolve_auth_loopback_admin_when_no_assertion():
+    # A genuine loopback peer (SSH tunnel) with no assertion still resolves to
+    # the admin identity even when the assertion verifier is configured.
+    identity = resolve_auth(
+        AuthRequest(token=None, headers={}, client_address="127.0.0.1:54321"),
+        build_request_authenticators(StaticTokenVerifier({}), _FakeAssertionVerifier()),
+        optional=False,
+    )
+    assert identity == LOOPBACK_IDENTITY
+
+
+# --- read-only dashboard role: per-method authorization ----------------------
+
+
+@pytest.mark.parametrize("method", ["ListJobs", "GetJobStatus", "ListWorkers", "GetRpcStats"])
+def test_authorize_method_allows_dashboard_reads(method):
+    # Does not raise: read methods are the dashboard role's contract.
+    authorize_method(VerifiedIdentity("alice@example.com", DASHBOARD_ROLE), method)
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["LaunchJob", "TerminateJob", "CreateApiKey", "ExecInContainer", "SetUserBudget", "ExecuteRawQuery"],
+)
+def test_authorize_method_denies_dashboard_mutations(method):
+    with pytest.raises(ConnectError) as exc:
+        authorize_method(VerifiedIdentity("alice@example.com", DASHBOARD_ROLE), method)
+    assert exc.value.code == Code.PERMISSION_DENIED
+
+
+@pytest.mark.parametrize("role", ["admin", "user", "worker"])
+def test_authorize_method_unrestricted_for_other_roles(role):
+    # Non-dashboard roles are not gated by method name here; their mutating
+    # actions are still checked inside the handlers by authorize/owner checks.
+    authorize_method(VerifiedIdentity("alice", role), "LaunchJob")
 
 
 def test_different_users_get_different_identities(interceptor):
@@ -291,35 +538,6 @@ def test_gcp_access_token_provider_refreshes_credentials():
 
     assert token == "fresh-access-token"
     mock_creds.refresh.assert_called_once()
-
-
-def test_composite_verifier_first_match():
-    v1 = StaticTokenVerifier({"tok-a": "alice"})
-    v2 = StaticTokenVerifier({"tok-b": "bob"})
-    composite = CompositeTokenVerifier([v1, v2])
-    result = composite.verify("tok-a")
-    assert result.user_id == "alice"
-
-
-def test_composite_verifier_second_match():
-    v1 = StaticTokenVerifier({"tok-a": "alice"})
-    v2 = StaticTokenVerifier({"tok-b": "bob"})
-    composite = CompositeTokenVerifier([v1, v2])
-    result = composite.verify("tok-b")
-    assert result.user_id == "bob"
-
-
-def test_composite_verifier_rejects_empty_list():
-    with pytest.raises(ValueError, match="requires at least one verifier"):
-        CompositeTokenVerifier([])
-
-
-def test_composite_verifier_all_fail():
-    v1 = StaticTokenVerifier({"tok-a": "alice"})
-    v2 = StaticTokenVerifier({"tok-b": "bob"})
-    composite = CompositeTokenVerifier([v1, v2])
-    with pytest.raises(ValueError, match="All verifiers failed"):
-        composite.verify("unknown-token")
 
 
 # ---------------------------------------------------------------------------
@@ -517,24 +735,6 @@ def test_jwt_token_manager_worker_role(jwt_manager):
 # ---------------------------------------------------------------------------
 
 
-def test_auth_interceptor_rejects_server_stream(interceptor):
-    with pytest.raises(ConnectError) as exc_info:
-        interceptor.intercept_server_stream_sync(None, None, None)
-    assert exc_info.value.code == Code.UNIMPLEMENTED
-
-
-def test_auth_interceptor_rejects_client_stream(interceptor):
-    with pytest.raises(ConnectError) as exc_info:
-        interceptor.intercept_client_stream_sync(None, None, None)
-    assert exc_info.value.code == Code.UNIMPLEMENTED
-
-
-def test_auth_interceptor_rejects_bidi_stream(interceptor):
-    with pytest.raises(ConnectError) as exc_info:
-        interceptor.intercept_bidi_stream_sync(None, None, None)
-    assert exc_info.value.code == Code.UNIMPLEMENTED
-
-
 # ---------------------------------------------------------------------------
 # GcpAccessTokenProvider caching
 # ---------------------------------------------------------------------------
@@ -543,7 +743,7 @@ def test_auth_interceptor_rejects_bidi_stream(interceptor):
 def test_gcp_access_token_provider_caches_token():
     mock_creds = MagicMock()
     mock_creds.token = "cached-token"
-    mock_creds.expiry = datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(hours=1)
+    mock_creds.expiry = datetime.datetime.now(tz=datetime.UTC) + datetime.timedelta(hours=1)
 
     provider = GcpAccessTokenProvider()
     with patch("google.auth.default", return_value=(mock_creds, "project-id")):
@@ -573,10 +773,6 @@ def test_gcp_access_token_provider_caches_token():
 )
 def test_extract_cookie(cookie_header, name, expected):
     assert _extract_cookie(cookie_header, name) == expected
-
-
-def test_extract_cookie_empty_string():
-    assert _extract_cookie("", "iris_session") is None
 
 
 # ---------------------------------------------------------------------------

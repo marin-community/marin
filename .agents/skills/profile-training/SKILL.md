@@ -61,6 +61,35 @@ uv run ... \
 Keep the profiler window short when enabling HLO protobuf collection — it
 enlarges artifacts and can increase profile upload/finalization time.
 
+Known-good TensorBoard scope recipe from CoreWeave Grug MoE profiling:
+`trainer.profiler.enabled=true`, `trainer.profiler.start_step=3`,
+`trainer.profiler.num_steps=2`, `trainer.profiler.perfetto_link=false`,
+`trainer.profiler.profile_options.host_tracer_level=1`,
+`trainer.profiler.profile_options.python_tracer_level=0`, and
+`trainer.profiler.profile_options.enable_hlo_proto=true` preserved useful
+`jax.named_scope` / `named_call` regions in TensorBoard for
+`GM2560-MAY-120S4096-W2048-B8-R1-E8M1-FA4PROFILE-S3B-N1-cw-20260617-2353`.
+Leave `device_tracer_level` unset unless device timelines are specifically
+needed; this profile still had useful hierarchical host/XLA metadata.
+
+On GPU, command buffers can collapse or suppress the visible name stack in
+TensorBoard/Perfetto. For profile-readability runs, disable command buffers:
+
+```bash
+export XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_enable_command_buffer=''"
+```
+
+This hurts performance, so use it only when the goal is semantic trace
+attribution; leave it out of throughput comparisons unless command-buffer
+behavior is the axis being tested.
+
+For GPU throughput runs, keep profile-readability flags separate from XLA code
+generation and scheduling flags. Start from JAX's GPU performance guide,
+especially the code generation flags section:
+<https://docs.jax.dev/en/latest/gpu_performance_tips.html#code-generation-flags>.
+The exact set of useful XLA flags is `jaxlib`-version dependent, so record the
+full `XLA_FLAGS` value with each profile or W&B run.
+
 For better profile readability, use `haliax.jax_utils.named_call` and
 `jax.named_scope` liberally in model code; these names flow into trace
 annotations and make region-level summaries far more actionable.
@@ -68,6 +97,8 @@ annotations and make region-level summaries far more actionable.
 Reference:
 - `lib/levanter/docs/Performance-Guide.md`
 - `.agents/skills/add-pallas-kernel/`
+- JAX GPU performance tips:
+  <https://docs.jax.dev/en/latest/gpu_performance_tips.html>
 
 ## Ingest to Structured Summary
 Pick a download location for pulled profile artifacts: `/tmp` for

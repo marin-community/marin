@@ -10,7 +10,6 @@ k8s API via kubectl, launching one Pod per task attempt.
 from __future__ import annotations
 
 import base64
-import concurrent.futures
 import hashlib
 import json
 import logging
@@ -22,7 +21,7 @@ from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -69,7 +68,7 @@ from iris.cluster.runtime.profile import (
     wrap_with_kill_watchdog,
 )
 from iris.cluster.types import JobName, TaskAttempt, WorkerId, get_gpu_count
-from iris.cluster.worker.stats import build_task_stat
+from iris.cluster.worker.stats import IrisTaskStat, build_task_stat
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.time_proto import timestamp_to_proto
 
@@ -158,6 +157,19 @@ _KUEUE_MANAGED_FINALIZER = "kueue.x-k8s.io/managed"
 _CW_DEFAULT_TOPOLOGIES: dict[str, tuple[str, bool]] = {
     "leafgroup": (CW_LABEL_LEAFGROUP, False),
     "nvlink.domain": (CW_LABEL_NVLINK_DOMAIN, True),
+}
+
+# Default PriorityClass names Iris creates at controller startup and uses when
+# the cluster config does not override priority_class_names. Override via
+# kubernetes_provider.priority_classes.
+IRIS_PRIORITY_CLASS_PRODUCTION = "iris-production"
+IRIS_PRIORITY_CLASS_INTERACTIVE = "iris-interactive"
+IRIS_PRIORITY_CLASS_BATCH = "iris-batch"
+
+_DEFAULT_PRIORITY_CLASS_NAMES: dict[int, str] = {
+    job_pb2.PRIORITY_BAND_PRODUCTION: IRIS_PRIORITY_CLASS_PRODUCTION,
+    job_pb2.PRIORITY_BAND_INTERACTIVE: IRIS_PRIORITY_CLASS_INTERACTIVE,
+    job_pb2.PRIORITY_BAND_BATCH: IRIS_PRIORITY_CLASS_BATCH,
 }
 
 
@@ -344,6 +356,10 @@ class PodConfig:
     # coscheduling group_by -> (node label, required?). Defaults to CoreWeave
     # conventions; a group_by with no entry carries no topology annotation.
     kueue_topologies: dict[str, tuple[str, bool]] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
+    # PriorityBand -> Kubernetes PriorityClass name. Sets spec.priorityClassName.
+    # UNSPECIFIED is treated as INTERACTIVE. Defaults to the iris-{band} classes
+    # Iris creates at startup; override via kubernetes_provider.priority_classes.
+    priority_class_names: dict[int, str] = field(default_factory=lambda: dict(_DEFAULT_PRIORITY_CLASS_NAMES))
 
 
 def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
@@ -490,6 +506,9 @@ def _build_pod_manifest(
 
     namespace = config.namespace
     default_image = config.default_image
+    # Per-task image override (RunTaskRequest.task_image). The init container
+    # keeps default_image since it runs iris's own bundle_fetch tooling.
+    task_image = run_req.task_image or default_image
     cache_dir = config.cache_dir
     service_account = config.service_account
     host_network = config.host_network
@@ -559,7 +578,7 @@ def _build_pod_manifest(
 
     container: dict = {
         "name": "task",
-        "image": default_image,
+        "image": task_image,
         "imagePullPolicy": "IfNotPresent",
         "env": env_list,
         "workingDir": "/app",
@@ -670,6 +689,15 @@ def _build_pod_manifest(
     # ever runs. The controller's own timeout accounting governs these.
     if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not kueue_enabled:
         spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
+
+    # Stamp the native k8s PriorityClass so the scheduler knows how to
+    # preempt/queue this pod relative to others. UNSPECIFIED defaults to
+    # INTERACTIVE (the normal user work band). A band with no configured
+    # class name leaves priorityClassName unset (cluster default applies).
+    effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
+    priority_class_name = config.priority_class_names.get(effective_band)
+    if priority_class_name:
+        spec["priorityClassName"] = priority_class_name
 
     return {
         "apiVersion": "v1",
@@ -864,9 +892,72 @@ def _is_preemptible_blocker(pod: dict) -> bool:
     return _pod_gpu_request(pod) > 0
 
 
-def _build_pod_statuses(pods: list[dict]) -> list[controller_pb2.Controller.KubernetesPodStatus]:
+def _kueue_workloads_by_name(workloads: list[dict]) -> dict[str, dict]:
+    result = {}
+    for workload in workloads:
+        name = workload.get("metadata", {}).get("name", "")
+        if name:
+            result[name] = workload
+    return result
+
+
+def _format_kueue_condition(cond: dict) -> str:
+    """Render one Kueue Workload condition as a compact diagnostic."""
+    condition_type = cond.get("type", "Condition")
+    status = cond.get("status", "")
+    reason = cond.get("reason", "")
+    message = cond.get("message", "")
+
+    prefix = condition_type
+    if status and status != "False":
+        prefix = f"{prefix}={status}"
+    if reason:
+        prefix = f"{prefix} ({reason})"
+    return f"{prefix}: {message}" if message else prefix
+
+
+def _format_kueue_workload_status(pod: dict, workload: dict | None) -> str:
+    """Return Kueue admission context for a gated pod."""
+    pod_group = pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME, "")
+    if workload is None:
+        return f"Kueue workload {pod_group!r} not found yet; waiting for Kueue to create/admit the pod group"
+
+    spec = workload.get("spec", {})
+    status = workload.get("status", {})
+    details = []
+
+    cluster_queue = status.get("admission", {}).get("clusterQueue", "")
+    queue_name = spec.get("queueName", "")
+    if queue_name and cluster_queue:
+        details.append(f"queue={queue_name}, clusterQueue={cluster_queue}")
+    elif queue_name:
+        details.append(f"queue={queue_name}")
+    elif cluster_queue:
+        details.append(f"clusterQueue={cluster_queue}")
+
+    conditions = status.get("conditions", [])
+    waiting_conditions = [
+        _format_kueue_condition(cond)
+        for cond in conditions
+        if cond.get("status") != "True" and (cond.get("reason") or cond.get("message"))
+    ]
+    if waiting_conditions:
+        details.extend(waiting_conditions)
+    elif status.get("admission"):
+        details.append("admitted by Kueue; waiting for scheduler gate removal")
+    else:
+        details.append("waiting for Kueue admission")
+
+    workload_name = workload.get("metadata", {}).get("name", pod_group)
+    return f"Kueue workload {workload_name}: " + "; ".join(details)
+
+
+def _build_pod_statuses(
+    pods: list[dict], workloads: list[dict] | None = None
+) -> list[controller_pb2.Controller.KubernetesPodStatus]:
     """Build pod status protos from raw kubectl pod objects."""
     statuses = []
+    workloads_by_name = _kueue_workloads_by_name(workloads or [])
     for pod in pods:
         meta = pod.get("metadata", {})
         pod_name = meta.get("name", "")
@@ -900,6 +991,10 @@ def _build_pod_statuses(pods: list[dict]) -> list[controller_pb2.Controller.Kube
                         except (ValueError, AttributeError):
                             pass
                     break
+        if reason == "SchedulingGated" and labels.get(_KUEUE_POD_GROUP_NAME):
+            pod_group = labels[_KUEUE_POD_GROUP_NAME]
+            kueue_status = _format_kueue_workload_status(pod, workloads_by_name.get(pod_group))
+            message = f"{message}; {kueue_status}" if message else kueue_status
 
         ps = controller_pb2.Controller.KubernetesPodStatus(
             pod_name=pod_name,
@@ -969,20 +1064,24 @@ class ClusterState:
         self._lock = threading.Lock()
         self._pods: list[dict] = []
         self._nodes: list[dict] = []
+        self._workloads: list[dict] = []
         self._node_pools: list[controller_pb2.Controller.NodePoolStatus] = []
 
     def update(
         self,
         pods: list[dict],
         nodes: list[dict],
+        workloads: list[dict],
         node_pools: list[controller_pb2.Controller.NodePoolStatus],
     ) -> None:
         """Atomically replace all cluster state from a completed sync cycle."""
         new_pods = sorted(pods, key=lambda p: p.get("metadata", {}).get("name", ""))
         new_nodes = sorted(nodes, key=lambda n: n.get("metadata", {}).get("name", ""))
+        new_workloads = sorted(workloads, key=lambda w: w.get("metadata", {}).get("name", ""))
         with self._lock:
             self._pods = new_pods
             self._nodes = new_nodes
+            self._workloads = new_workloads
             self._node_pools = list(node_pools)
 
     def to_status_response(self, namespace: str) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
@@ -990,6 +1089,7 @@ class ClusterState:
         with self._lock:
             pods = self._pods[:]
             nodes = self._nodes[:]
+            workloads = self._workloads[:]
             node_pools = self._node_pools[:]
 
         total_nodes = len(nodes)
@@ -1016,7 +1116,7 @@ class ClusterState:
             schedulable_nodes=schedulable_nodes,
             allocatable_cpu=f"{total_cpu_mc / 1000:.1f} cores" if total_cpu_mc else "0 cores",
             allocatable_memory=_format_bytes(total_memory_bytes),
-            pod_statuses=_build_pod_statuses(pods),
+            pod_statuses=_build_pod_statuses(pods, workloads),
             provider_version="iris-kubernetes/v1",
             node_pools=node_pools,
         )
@@ -1135,25 +1235,36 @@ class LogCollector:
 
 
 class ResourceCollector:
-    """Background resource usage collector that writes to ``iris.task`` stats.
+    """Background thread that samples running pods' CPU/memory usage.
 
-    Same set_pods() pattern as LogCollector: the sync loop declares the
-    authoritative set of running pods once per cycle. Each tick, the collector
-    fans out to ``kubectl top`` per pod and appends one ``IrisTaskStat`` row
-    per successful read to the supplied stats Table — the same table the
-    worker daemon writes to on the GCE/TPU path, so the dashboard's
-    ``iris.task`` queries cover both runtimes uniformly.
+    The reconcile loop declares the authoritative set of running pods via
+    ``set_pods()`` once per cycle. Each ``poll_interval`` the collector samples
+    those pods via one bulk metrics query and appends an ``IrisTaskStat`` row
+    per pod to the ``iris.task`` table — the same table the worker daemon writes
+    to on the GCE/TPU path, so the dashboard's ``iris.task`` queries cover both
+    runtimes uniformly.
+
+    ``poll_interval`` defaults to the metrics-server scrape resolution (15s);
+    polling faster only re-reads the same sample.
     """
 
-    def __init__(self, kubectl: K8sService, task_stats_table: Table, *, concurrency: int = 8):
+    def __init__(
+        self,
+        kubectl: K8sService,
+        task_stats_table: Table,
+        *,
+        labels: dict[str, str] | None = None,
+        poll_interval: float = 15.0,
+    ):
         self._kubectl = kubectl
         self._table = task_stats_table
+        self._labels = labels
+        self._poll_interval = poll_interval
         # (task_id_wire, attempt_id) -> pod_name. Tuple keys carry the
         # identity needed to build IrisTaskStat without parsing strings.
         self._pods: dict[tuple[str, int], str] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
-        self._executor = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="resource-collect")
         self._thread = threading.Thread(target=self._run, daemon=True, name="resource-collector")
         self._thread.start()
 
@@ -1164,47 +1275,52 @@ class ResourceCollector:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            with self._lock:
-                snapshot = list(self._pods.items())
-            if snapshot:
-                futures = [self._executor.submit(self._fetch_one, key, pod_name) for key, pod_name in snapshot]
-                for f in concurrent.futures.as_completed(futures):
-                    try:
-                        f.result()
-                    except Exception:
-                        pass
-            self._stop.wait(timeout=5.0)
+            self.collect_once()
+            self._stop.wait(timeout=self._poll_interval)
 
-    def _fetch_one(self, key: tuple[str, int], pod_name: str) -> None:
+    def collect_once(self) -> None:
+        """Sample every tracked pod once and append a stat row per pod with usage.
+
+        Runs each ``poll_interval`` on the background thread; also the unit of
+        collection tests drive directly.
+        """
+        with self._lock:
+            snapshot = list(self._pods.items())
+        if not snapshot:
+            return
         try:
-            top = self._kubectl.top_pod(pod_name)
+            usage_by_pod = self._kubectl.top_pods(labels=self._labels)
         except Exception as e:
-            logger.debug("ResourceCollector: top_pod raised for pod %s: %s", pod_name, e)
-            return
-        if top is None:
+            logger.debug("ResourceCollector: top_pods raised: %s", e)
             return
 
-        task_id_wire, attempt_id = key
-        usage = job_pb2.ResourceUsage(
-            cpu_millicores=top.cpu_millicores,
-            memory_mb=top.memory_bytes // (1024 * 1024),
-        )
-        stat = build_task_stat(
-            task_id=task_id_wire,
-            attempt_id=attempt_id,
-            # Pod name is the per-attempt platform identity on k8s, mirroring
-            # worker_id on the GCE/TPU path.
-            worker_id=pod_name,
-            usage=usage,
-        )
+        stats: list[IrisTaskStat] = []
+        for (task_id_wire, attempt_id), pod_name in snapshot:
+            top = usage_by_pod.get(pod_name)
+            if top is None:
+                continue
+            stats.append(
+                build_task_stat(
+                    task_id=task_id_wire,
+                    attempt_id=attempt_id,
+                    # Pod name is the per-attempt platform identity on k8s,
+                    # mirroring worker_id on the GCE/TPU path.
+                    worker_id=pod_name,
+                    usage=job_pb2.ResourceUsage(
+                        cpu_millicores=top.cpu_millicores,
+                        memory_mb=top.memory_bytes // (1024 * 1024),
+                    ),
+                )
+            )
+        if not stats:
+            return
         try:
-            self._table.write([stat])
+            self._table.write(stats)
         except Exception:
             logger.debug("ResourceCollector: write to iris.task failed", exc_info=True)
 
     def close(self) -> None:
         self._stop.set()
-        self._executor.shutdown(wait=False)
         self._thread.join(timeout=5)
 
 
@@ -1298,6 +1414,7 @@ class K8sTaskProvider:
     local_queue: str = ""
     kueue_priority_classes: dict[int, str] = field(default_factory=dict)
     kueue_topologies: dict[str, tuple[str, bool]] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
+    priority_class_names: dict[int, str] = field(default_factory=lambda: dict(_DEFAULT_PRIORITY_CLASS_NAMES))
     # Namespaces whose preemptible (negative-priority) GPU pods Iris evicts
     # when it has gang work for Kueue. Empty disables the feature; see
     # _evict_preemptible_blockers for the safety guards.
@@ -1310,8 +1427,14 @@ class K8sTaskProvider:
     # Pre-resolved iris.profile Table handle injected by the controller
     # alongside task_stats_table. None in test mode.
     profile_table: Table | None = None
+    # Log fetch fan-out: logs have no bulk API, so each pod is streamed on its
+    # own worker thread.
     poll_concurrency: int = 32
     log_poll_interval: float = 15.0
+    # Resource-usage poll cadence. Defaults to the metrics-server scrape
+    # resolution (15s) — sampling faster only re-reads the same value. One bulk
+    # metrics list per tick covers every managed pod (see ResourceCollector).
+    resource_poll_interval: float = 15.0
     # Cluster-wide kubectl scans (pod list, stray-pod GC, pod poll, node refresh)
     # are coarse-grained: the controller ticks reconcile at poll_interval (1s),
     # but these LISTs run at most once per cluster_scan_interval to bound kubectl
@@ -1335,7 +1458,10 @@ class K8sTaskProvider:
             return None
         if self._resource_collector is None:
             self._resource_collector = ResourceCollector(
-                self.kubectl, self.task_stats_table, concurrency=self.poll_concurrency
+                self.kubectl,
+                self.task_stats_table,
+                labels=_MANAGED_POD_LABELS,
+                poll_interval=self.resource_poll_interval,
             )
         return self._resource_collector
 
@@ -1436,8 +1562,17 @@ class K8sTaskProvider:
             logger.warning("Failed to query node resources: %s", e)
             nodes = []
 
+        if self.local_queue:
+            try:
+                workloads = self.kubectl.list_json(K8sResource.WORKLOADS)
+            except Exception as e:
+                logger.warning("Failed to query Kueue workloads: %s", e)
+                workloads = []
+        else:
+            workloads = []
+
         node_pools = _fetch_node_pools(self.kubectl, self.managed_label)
-        self._cluster_state.update(managed_pods, nodes, node_pools)
+        self._cluster_state.update(managed_pods, nodes, workloads, node_pools)
 
         self._maybe_gc_terminal_resources(managed_pods)
 
@@ -1562,6 +1697,7 @@ class K8sTaskProvider:
             local_queue=self.local_queue,
             kueue_priority_classes=self.kueue_priority_classes,
             kueue_topologies=self.kueue_topologies,
+            priority_class_names=self.priority_class_names,
         )
 
     def _apply_pod(self, run_req: job_pb2.RunTaskRequest) -> None:
@@ -1780,7 +1916,7 @@ class K8sTaskProvider:
         short-retention sweep of terminal gang pods that strips the Kueue pod
         finalizer and deletes the pod-group Workloads they would otherwise pin.
         """
-        now = datetime.now(timezone.utc).timestamp()
+        now = datetime.now(UTC).timestamp()
         cutoff = now - _GC_MAX_AGE_SECONDS
         gang_cutoff = now - _GANG_GC_MAX_AGE_SECONDS
 

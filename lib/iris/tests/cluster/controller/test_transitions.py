@@ -10,7 +10,6 @@ They focus on:
 - Final state verification rather than intermediate steps
 """
 
-import asyncio
 import threading
 
 import pytest
@@ -46,12 +45,12 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table, workers_table
+from iris.cluster.controller.schema import jobs_table, slices_table, task_attempts_table, tasks_table, workers_table
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
 
 from tests.cluster.controller._test_support import ControllerTestState, create_attempt_for_test
@@ -2162,9 +2161,9 @@ def test_log_service_direct_push(state, log_service):
     log_entry = logging_pb2.LogEntry(source="stdout", data="hello world")
     log_entry.timestamp.epoch_ms = 1000
     push_req = logging_pb2.PushLogsRequest(key=log_key, entries=[log_entry])
-    asyncio.run(log_service.push_logs(push_req, None))
+    log_service.push_logs(push_req)
 
-    fetch_resp = asyncio.run(log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=log_key), None))
+    fetch_resp = log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=log_key))
     assert len(fetch_resp.entries) == 1
     assert fetch_resp.entries[0].data == "hello world"
 
@@ -2183,9 +2182,9 @@ def test_log_service_accumulates_pushes(state, log_service):
     for i in range(3):
         entry = logging_pb2.LogEntry(source="stdout", data=f"line {i}")
         entry.timestamp.epoch_ms = 1000 + i
-        asyncio.run(log_service.push_logs(logging_pb2.PushLogsRequest(key=log_key, entries=[entry]), None))
+        log_service.push_logs(logging_pb2.PushLogsRequest(key=log_key, entries=[entry]))
 
-    fetch_resp = asyncio.run(log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=log_key), None))
+    fetch_resp = log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=log_key))
     assert len(fetch_resp.entries) == 3
     assert [e.data for e in fetch_resp.entries] == ["line 0", "line 1", "line 2"]
 
@@ -3575,6 +3574,7 @@ def test_prune_old_terminal_jobs(state):
         state._worker_attrs,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
+        slice_retention=Duration.from_seconds(86400),
     )
 
     assert result.jobs_deleted == 1
@@ -3610,6 +3610,7 @@ def test_prune_old_inactive_workers(state):
         state._worker_attrs,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
+        slice_retention=Duration.from_seconds(86400),
     )
 
     assert result.workers_deleted == 1
@@ -3627,10 +3628,98 @@ def test_prune_noop_when_nothing_old(state):
         state._worker_attrs,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
+        slice_retention=Duration.from_seconds(86400),
     )
 
     assert result == PruneResult()
     assert result.total == 0
+
+
+def _insert_slice(state, slice_id, *, scale_group, worker_ids, created_at_ms, lifecycle="ready"):
+    with state._db.transaction() as cur:
+        cur.execute(
+            insert(slices_table).values(
+                slice_id=slice_id,
+                scale_group=scale_group,
+                lifecycle=lifecycle,
+                worker_ids=worker_ids,
+                created_at_ms=created_at_ms,
+                error_message="",
+            )
+        )
+
+
+def _query_slice(state, slice_id):
+    with state._db.read_snapshot() as snap:
+        return snap.execute(select(slices_table.c.slice_id).where(slices_table.c.slice_id == slice_id)).first()
+
+
+def test_prune_orphaned_slices(state):
+    """Old slices with no backing worker row are pruned; recent or worker-backed slices are kept.
+
+    The orphan-slice sweep keys off ``workers.slice_id`` (the authoritative
+    liveness signal), is independent of whether the scale group still exists in
+    config, and is age-gated so a freshly-booting slice that hasn't registered
+    its workers yet survives.
+    """
+    now_ms = Timestamp.now().epoch_ms()
+
+    # (1) Old slice, no worker references it, in a scale group that is gone from
+    #     config — exactly the "stranded by a rename" case. Should be deleted.
+    _insert_slice(state, "orphan-old", scale_group="retired_group-zone", worker_ids=[], created_at_ms=1000)
+
+    # (2) Recent slice with no workers yet (still booting). Should be kept by the grace age.
+    _insert_slice(state, "fresh-booting", scale_group="retired_group-zone", worker_ids=[], created_at_ms=now_ms)
+
+    # (3) Old slice still backed by a live worker row. Should be kept regardless of age.
+    register_worker(
+        state, "w-live", "host:9001", make_worker_metadata(), slice_id="live-old", scale_group="some_group-zone"
+    )
+    _insert_slice(state, "live-old", scale_group="some_group-zone", worker_ids=["w-live"], created_at_ms=1000)
+
+    result = prune_old_data(
+        state._db,
+        state._health,
+        state._endpoints,
+        state._worker_attrs,
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        slice_retention=Duration.from_seconds(3600),
+        pause_between_s=0.0,
+    )
+
+    assert result.slices_deleted == 1
+    assert _query_slice(state, "orphan-old") is None  # pruned (old + no worker)
+    assert _query_slice(state, "fresh-booting") is not None  # kept (within grace)
+    assert _query_slice(state, "live-old") is not None  # kept (worker row references it)
+
+
+def test_prune_keeps_slice_with_live_worker_despite_empty_worker_ids(state):
+    """Regression: liveness is ``workers.slice_id``, not the slice's ``worker_ids`` JSON.
+
+    A slice whose ``worker_ids`` list is stale/empty but which a live ``workers``
+    row still points at (via ``workers.slice_id``) must NOT be pruned — deleting
+    it would orphan a worker that is still running tasks.
+    """
+    register_worker(
+        state, "w-attached", "host:9002", make_worker_metadata(), slice_id="slice-empty-json", scale_group="g-zone"
+    )
+    # JSON worker_ids is empty even though w-attached references the slice.
+    _insert_slice(state, "slice-empty-json", scale_group="g-zone", worker_ids=[], created_at_ms=1000)
+
+    result = prune_old_data(
+        state._db,
+        state._health,
+        state._endpoints,
+        state._worker_attrs,
+        job_retention=Duration.from_seconds(86400),
+        worker_retention=Duration.from_seconds(86400),
+        slice_retention=Duration.from_seconds(3600),
+        pause_between_s=0.0,
+    )
+
+    assert result.slices_deleted == 0
+    assert _query_slice(state, "slice-empty-json") is not None  # kept (worker row references it)
 
 
 def test_dispatch_propagates_task_image(state):
@@ -3691,6 +3780,7 @@ def test_prune_old_data_short_circuits_when_nothing_prunable(state):
         state._worker_attrs,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
+        slice_retention=Duration.from_seconds(86400),
     )
 
     assert result == PruneResult()

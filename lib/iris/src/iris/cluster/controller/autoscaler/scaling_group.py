@@ -140,6 +140,12 @@ class SliceState:
     # controller restart), which the per-worker counters never observe.
     # Memory-only.
     no_worker_probes: int = 0
+    # Timestamp of the first describe in the current run of UNKNOWN observations,
+    # cleared whenever the slice resolves to a concrete state (e.g. READY). The
+    # unresolvable-timeout is measured from here, NOT from created_at, so a single
+    # transient UNKNOWN never terminates a long-running or freshly-adopted slice.
+    # Memory-only.
+    unknown_since: Timestamp | None = None
     error_message: str = ""
 
 
@@ -446,6 +452,25 @@ class ScalingGroup:
         return None
 
     @property
+    def device_type(self) -> DeviceType:
+        """Accelerator device type (TPU/GPU/CPU) for this scale group."""
+        if not self._config.HasField("resources"):
+            return DeviceType.CPU
+        accel = self._config.resources.device_type
+        if accel == config_pb2.ACCELERATOR_TYPE_GPU:
+            return DeviceType.GPU
+        if accel == config_pb2.ACCELERATOR_TYPE_TPU:
+            return DeviceType.TPU
+        return DeviceType.CPU
+
+    @property
+    def accelerator_variant(self) -> str:
+        """Accelerator variant (e.g. ``v6e``); ``""`` when unset or CPU."""
+        if self._config.HasField("resources"):
+            return self._config.resources.device_variant
+        return ""
+
+    @property
     def current_demand(self) -> int:
         """Current demand level."""
         return self._current_demand
@@ -530,6 +555,7 @@ class ScalingGroup:
                 state.worker_urls = dict(worker_urls or {})
                 state.ping_failures = {}
                 state.quiet_since = None
+                state.unknown_since = None  # resolved: reset the unresolvable-timeout clock
         if state is not None:
             logger.info(
                 "slice ready group=%s slice=%s n_workers=%d worker_ids=%s",
@@ -558,6 +584,23 @@ class ScalingGroup:
                 registered,
                 error_message,
             )
+
+    def note_slice_unknown(self, slice_id: str, timestamp: Timestamp) -> Duration:
+        """Record an UNKNOWN describe and return how long the slice has been continuously UNKNOWN.
+
+        The first UNKNOWN observation stamps ``unknown_since``; it is cleared the
+        moment the slice resolves (``mark_slice_ready``). Callers compare the
+        returned duration against the unresolvable-timeout so that one transient
+        UNKNOWN — common for a long-running or freshly-adopted slice — never
+        terminates it, while a slice genuinely stuck UNKNOWN still fails.
+        """
+        with self._slices_lock:
+            state = self._slices.get(slice_id)
+            if state is None:
+                return Duration.from_ms(0)
+            if state.unknown_since is None:
+                state.unknown_since = timestamp
+            return Duration.from_ms(timestamp.epoch_ms() - state.unknown_since.epoch_ms())
 
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.
@@ -1011,7 +1054,7 @@ class ScalingGroup:
         if device_type == DeviceType.CPU:
             return True  # CPU jobs can run on ANY group
 
-        group_type = self._get_device_type()
+        group_type = self.device_type
         if group_type != device_type:
             return False
 
@@ -1027,7 +1070,7 @@ class ScalingGroup:
         used for worker matching to also work for scaling group routing.
         """
         attrs: dict[str, AttributeValue] = {}
-        attrs[WellKnownAttribute.DEVICE_TYPE] = AttributeValue(self._get_device_type().value)
+        attrs[WellKnownAttribute.DEVICE_TYPE] = AttributeValue(self.device_type.value)
         if self._config.HasField("resources") and self._config.resources.device_variant:
             attrs[WellKnownAttribute.DEVICE_VARIANT] = AttributeValue(self._config.resources.device_variant.lower())
         if self._config.HasField("resources"):
@@ -1059,17 +1102,6 @@ class ScalingGroup:
             if not evaluate_constraint(attrs.get(c.key), c):
                 return False
         return True
-
-    def _get_device_type(self) -> DeviceType:
-        """Get device type from resources."""
-        if not self._config.HasField("resources"):
-            return DeviceType.CPU
-        accel = self._config.resources.device_type
-        if accel == config_pb2.ACCELERATOR_TYPE_GPU:
-            return DeviceType.GPU
-        elif accel == config_pb2.ACCELERATOR_TYPE_TPU:
-            return DeviceType.TPU
-        return DeviceType.CPU
 
     def availability(self, timestamp: Timestamp | None = None) -> AvailabilityState:
         """Compute current availability state for waterfall routing.

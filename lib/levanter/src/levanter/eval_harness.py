@@ -57,7 +57,7 @@ from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.utils import INVALID
 from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config
-from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
+from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty, next_token_loss_weight
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.py_utils import set_global_rng_seeds
@@ -270,8 +270,7 @@ class _LmEvalHarnessWorker:
             Pos = pred_embeddings.resolve_axis(self.EvalPos.name)
 
             target_y = hax.roll(packed_example.tokens, -1, Pos)
-            not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
-            loss_weight = packed_example.loss_weight.astype(jnp.float32) * not_last_mask.astype(jnp.float32)
+            loss_weight = next_token_loss_weight(Pos, packed_example.loss_weight.astype(jnp.float32))
 
             loss, pred_targets = fused_cross_entropy_loss_and_logsumexp_penalty(
                 pred_embeddings,

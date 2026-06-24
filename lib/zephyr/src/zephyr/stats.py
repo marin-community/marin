@@ -23,7 +23,7 @@ import logging
 import time
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from finelog.client import LogClient, Table
@@ -54,6 +54,11 @@ ZEPHYR_WORKER_MEM_AVERAGE_KEY = "zephyr/worker/mem_average_bytes"
 """Average resident-set size of the runner process in bytes"""
 ZEPHYR_WORKER_MEM_PEAK_KEY = "zephyr/worker/mem_peak_bytes"
 """Monotonically increasing peak RSS seen across all sampling intervals"""
+
+
+def per_second(total: float, elapsed: float) -> float:
+    """Rate of ``total`` over ``elapsed`` seconds, or 0.0 when no time has passed."""
+    return total / elapsed if elapsed > 0 else 0.0
 
 
 class ZephyrWorkerStatStatus(enum.StrEnum):
@@ -166,27 +171,25 @@ class StatsWriter:
         total_shards: int,
         status: ZephyrWorkerStatStatus,
     ) -> None:
-        """Build and emit a ZephyrStageStat row from raw counter snapshots.
+        """Build and emit a ZephyrStageStat row from aggregated stage counters.
 
-        ``completed_counters`` — one dict per finished shard (used for both
-        throughput and resource aggregation).  ``inflight_counters`` — one
-        dict per still-running shard (throughput only; resource stats are
-        excluded because they haven't reached the END sample yet).
-        Pass ``status=ZephyrWorkerStatStatus.FAILED`` when emitting for a failed stage.
+        ``stage_counters`` is the coordinator's reduced view of all shard
+        counters for this stage (throughput plus resource usage). Pass
+        ``status=ZephyrWorkerStatStatus.FAILED`` when emitting for a failed stage.
         """
         if self._stage_table is None:
             return
 
         total_items = stage_counters.get(ZEPHYR_STAGE_ITEM_COUNT_KEY, 0)
         total_bytes = stage_counters.get(ZEPHYR_STAGE_BYTES_PROCESSED_KEY, 0)
-        item_rate = total_items / elapsed if elapsed > 0 else 0.0
-        byte_rate = total_bytes / elapsed if elapsed > 0 else 0.0
+        item_rate = per_second(total_items, elapsed)
+        byte_rate = per_second(total_bytes, elapsed)
 
         stat = ZephyrStageStat(
             execution_id=execution_id,
             stage_name=stage_name,
             status=status,
-            ts=datetime.now(timezone.utc).replace(tzinfo=None),
+            ts=datetime.now(UTC).replace(tzinfo=None),
             elapsed=elapsed,
             items=total_items,
             bytes_processed=total_bytes,
@@ -218,14 +221,14 @@ class StatsWriter:
         elapsed = time.monotonic() - start_time
         items = counters.get(ZEPHYR_STAGE_ITEM_COUNT_KEY, 0)
         bytes_processed = counters.get(ZEPHYR_STAGE_BYTES_PROCESSED_KEY, 0)
-        item_rate = items / elapsed if elapsed > 0 else 0.0
-        byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
+        item_rate = per_second(items, elapsed)
+        byte_rate = per_second(bytes_processed, elapsed)
         stat = ZephyrWorkerStat(
             execution_id=execution_id,
             stage_name=stage_name,
             shard_idx=shard_idx,
             status=status,
-            ts=datetime.now(timezone.utc).replace(tzinfo=None),
+            ts=datetime.now(UTC).replace(tzinfo=None),
             items=items,
             bytes_processed=bytes_processed,
             item_rate=item_rate,

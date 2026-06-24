@@ -338,6 +338,12 @@ def main(config: TrainLmConfig):
         trainer.add_hook(
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example), every=1
         )
+        trainer.add_hook(
+            callbacks.iris_status_reporter(
+                Pos.size, trainer.config.batch_schedule, trainer.config.num_train_steps, flops_per_example
+            ),
+            every=10,
+        )
 
         if isinstance(train_dataset, MixtureDataset):
             last_stage = -1

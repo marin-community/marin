@@ -26,7 +26,7 @@ from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import cloudpickle
@@ -97,7 +97,7 @@ class ShardFailureKind(enum.StrEnum):
 
 def _generate_execution_id() -> str:
     """Generate unique ID for this execution to avoid conflicts."""
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"{ts}-{uuid.uuid4().hex[:8]}"
 
 
@@ -792,8 +792,8 @@ class ZephyrCoordinator:
 
         If snapshots disagree on a counter's aggregation (only possible for
         user counters that reuse a name with different ``set_aggregation``
-        modes), the first-seen mode wins and a warning is logged — stats
-        collection never raises into the execution path.
+        modes), the counter is omitted from the result and a warning is
+        logged — stats collection never raises into the execution path.
         """
         with self._lock:
             if worker_id is not None:
@@ -806,25 +806,29 @@ class ZephyrCoordinator:
 
         aggregations: dict[str, Aggregation] = {}
         values: dict[str, list[int | float]] = {}
+        conflicted: set[str] = set()
         for snap in all_snaps:
             for k, entry in snap.counters.items():
                 if stage is not None and entry.stage != stage:
                     continue
                 if k in aggregations:
                     if aggregations[k] != entry.aggregation:
-                        logger.warning(
-                            "Counter %r has conflicting aggregations: %r vs %r; keeping %r",
-                            k,
-                            aggregations[k],
-                            entry.aggregation,
-                            aggregations[k],
-                        )
+                        if k not in conflicted:
+                            logger.warning(
+                                "Counter %r has conflicting aggregations: %r vs %r; dropping",
+                                k,
+                                aggregations[k],
+                                entry.aggregation,
+                            )
+                            conflicted.add(k)
                 else:
                     aggregations[k] = entry.aggregation
                 values.setdefault(k, []).append(entry.value)
 
         result: dict[str, int | float] = {}
         for k, vals in values.items():
+            if k in conflicted:
+                continue
             match aggregations.get(k, Aggregation.SUM):
                 case Aggregation.SUM:
                     result[k] = sum(vals)

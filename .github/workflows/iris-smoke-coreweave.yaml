@@ -6,7 +6,7 @@ on:
     paths:
       - "lib/iris/**"
       - ".github/workflows/iris-smoke-coreweave.yaml"
-      - "scripts/workflows/iris_monitor.py"
+      - "scripts/ci/iris_monitor.py"
   workflow_dispatch:
 
 permissions:
@@ -97,7 +97,7 @@ jobs:
 
       - name: Connect to iris-ci controller
         run: |
-          uv run python scripts/workflows/iris_monitor.py coreweave-controller \
+          uv run python scripts/ci/iris_monitor.py coreweave-controller \
             --namespace "$IRIS_NAMESPACE" \
             --kubeconfig "$HOME/.kube/coreweave-iris" \
             --log-path "$RUNNER_TEMP/iris-cw-port-forward.log"
@@ -109,7 +109,7 @@ jobs:
           JAX_TRACEBACK_FILTERING: off
           # When set, the marin-on-iris test uploads fixtures and writes
           # intermediate data to S3 (R2) so remote Zephyr pods can access them.
-          MARIN_CI_S3_PREFIX: s3://marin-na/temp/ci
+          MARIN_CI_S3_PREFIX: s3://marin-na/tmp/ttl=3d/ci
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
@@ -127,7 +127,7 @@ jobs:
           WANDB_MODE: disabled
           WANDB_API_KEY: ""
           JAX_TRACEBACK_FILTERING: off
-          MARIN_CI_S3_PREFIX: s3://marin-na/temp/ci
+          MARIN_CI_S3_PREFIX: s3://marin-na/tmp/ttl=3d/ci
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
@@ -148,7 +148,7 @@ jobs:
           fi
           # No job submitted in this lane, so the iris.job_id selector matches
           # nothing — continue-on-error tolerates the empty kubernetes-pods.json.
-          uv run python scripts/workflows/iris_monitor.py collect \
+          uv run python scripts/ci/iris_monitor.py collect \
             --job-id "ci-smoke" \
             --controller-url "$IRIS_CONTROLLER_URL" \
             --provider coreweave \

@@ -85,7 +85,7 @@ class TraceResult:
     test_cmd: str
     runtime: str  # "runsc"
     tracer: str  # "sys.monitoring" | "sys.settrace" | "unknown"
-    sandbox_python: str  # e.g. "3.11.8"; empty if no metadata record was emitted
+    sandbox_python: str  # e.g. "3.12.8"; empty if no metadata record was emitted
     returncode: int
     duration_s: float
     stdout: str

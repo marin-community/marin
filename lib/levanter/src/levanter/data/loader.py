@@ -172,12 +172,6 @@ class DataLoader(Iterable[Ex]):
 
         return local_indices
 
-    def global_data_indices_by_device_for_step(self, step: int) -> dict[jax.Device, range]:
-        local_indices = self.local_data_indices_by_device_for_step(step)
-        offset = self.scheduler.global_data_offset_by_step(step)
-
-        return {device: range(offset + r.start, offset + r.stop, r.step) for device, r in local_indices.items()}
-
     def rounded_batch_size_at_step(self, step: int) -> int:
         return self._round_batch_size(self.scheduler.batch_size_at_step(step))
 

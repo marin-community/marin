@@ -182,7 +182,7 @@ def _execute_shard_subprocess(task_file: str, result_file: str, num_workers: int
         )
         sampler.start()
 
-        result_or_error = _run_stage_with_ctx(task, chunk_prefix, execution_id, ctx)
+        result_or_error = _run_stage_with_ctx(task, chunk_prefix, execution_id)
         _task_failed = False
     except Exception as e:
         # Cloudpickling an exception drops ``__traceback__``, so a naive

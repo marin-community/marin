@@ -7,6 +7,7 @@ import { stateToName, stateDisplayName } from '@/types/status'
 import type {
   JobStatus, TaskStatus, LaunchJobRequest, JobQuery,
   GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
+  EndpointInfo, ListEndpointsResponse,
 } from '@/types/rpc'
 import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
@@ -20,6 +21,7 @@ import InfoRow from '@/components/shared/InfoRow.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
+import EndpointLink from '@/components/shared/EndpointLink.vue'
 import { useMediaQuery } from '@/composables/useMediaQuery'
 
 // Tailwind's `sm` breakpoint is 640px. Cards on mobile, table on desktop.
@@ -38,6 +40,8 @@ const FAILED_TERMINAL_STATES = new Set(['failed', 'worker_failed', 'cosched_fail
 const job = ref<JobStatus | null>(null)
 const jobRequest = ref<LaunchJobRequest | null>(null)
 const tasks = ref<TaskStatus[]>([])
+// Endpoints registered by this job's tasks, grouped by wire-format task id.
+const endpointsByTask = ref<Map<string, EndpointInfo[]>>(new Map())
 const childJobsByParent = ref<Map<string, JobStatus[]>>(new Map())
 const expandedChildJobs = ref<Set<string>>(new Set())
 const loadingChildJobs = ref<Set<string>>(new Set())
@@ -227,6 +231,49 @@ const runningResourceRange = computed<RunningResourceRange | null>(() => {
   }
 })
 
+async function fetchEndpoints(gen: number) {
+  const taskIds = tasks.value.map(t => t.taskId)
+  if (taskIds.length === 0) {
+    endpointsByTask.value = new Map()
+    return
+  }
+  // Endpoint links are an enhancement; a fetch failure should never block the
+  // task table, so swallow the error and leave the prior grouping in place.
+  try {
+    const resp = await controllerRpcCall<ListEndpointsResponse>('ListEndpoints', { taskIds })
+    if (gen !== fetchGeneration) return  // superseded by a newer fetchData()
+    const grouped = new Map<string, EndpointInfo[]>()
+    for (const ep of resp.endpoints ?? []) {
+      if (!ep.taskId) continue
+      const list = grouped.get(ep.taskId)
+      if (list) list.push(ep)
+      else grouped.set(ep.taskId, [ep])
+    }
+    endpointsByTask.value = grouped
+  } catch (e) {
+    console.warn('ListEndpoints failed', e)
+  }
+}
+
+function taskEndpoints(taskId: string): EndpointInfo[] {
+  return endpointsByTask.value.get(taskId) ?? []
+}
+
+// The desktop table drops the wide, usually-empty Status column and the cramped
+// per-task endpoint stack into a subtle second row rendered only when there is
+// something to show: a non-zero exit, a live status summary, a failure error, or
+// registered endpoints.
+function taskHasStatusDetail(t: TaskStatus): boolean {
+  if (taskExitNonZero(t)) return true
+  const name = stateToName(t.state)
+  if (taskStatusTextSummary(t.taskId) && !TERMINAL_STATES.has(name)) return true
+  return Boolean(t.error) && FAILED_TERMINAL_STATES.has(name)
+}
+
+function taskHasDetailRow(t: TaskStatus): boolean {
+  return taskHasStatusDetail(t) || taskEndpoints(t.taskId).length > 0
+}
+
 async function fetchData() {
   const gen = ++fetchGeneration
   error.value = null
@@ -250,6 +297,9 @@ async function fetchData() {
     if (tasks.value.length > 0) {
       void fetchTaskStats()
       void fetchStatusText()
+      void fetchEndpoints(gen)
+    } else {
+      endpointsByTask.value = new Map()
     }
 
     const parentIds = [props.jobId, ...expandedChildJobs.value]
@@ -289,6 +339,7 @@ watch(() => props.jobId, () => {
   job.value = null
   jobRequest.value = null
   tasks.value = []
+  endpointsByTask.value = new Map()
   childJobsByParent.value = new Map()
   expandedChildJobs.value = new Set()
   loadingChildJobs.value = new Set()
@@ -1177,6 +1228,15 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             <MarkdownRenderer v-if="taskStatusTextSummary(task.taskId) && !TERMINAL_STATES.has(stateToName(task.state))" :content="taskStatusTextSummary(task.taskId)" class="text-text-secondary" />
             <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
           </div>
+          <div v-if="taskEndpoints(task.taskId).length" class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+            <EndpointLink
+              v-for="ep in taskEndpoints(task.taskId)"
+              :key="ep.endpointId ?? ep.name"
+              :name="ep.name"
+              short
+              class="text-[11px]"
+            />
+          </div>
           <div v-if="stateToName(task.state) === 'running'" class="mt-2 flex gap-1">
             <button
               class="px-2 py-0.5 text-[11px] font-semibold rounded bg-status-purple text-white hover:opacity-80 disabled:opacity-50"
@@ -1202,19 +1262,22 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         </div>
       </div>
 
-      <!-- Desktop: table -->
+      <!-- Desktop: table.
+           table-fixed only kicks in at lg, where every column is visible; below
+           lg the auto layout sizes the reduced column set to content so nothing
+           collides. Status text and registered endpoints live in a subtle second
+           row (see taskHasDetailRow) instead of dedicated columns. -->
       <div v-else class="overflow-x-auto">
-        <table class="w-full border-collapse md:table-fixed">
-          <colgroup class="hidden md:table-column-group">
-            <col class="w-[4%]" />   <!-- Task -->
-            <col class="w-[9%]" />   <!-- State -->
+        <table class="w-full border-collapse lg:table-fixed">
+          <colgroup class="hidden lg:table-column-group">
+            <col class="w-[5%]" />   <!-- Task -->
+            <col class="w-[12%]" />  <!-- State -->
             <col />                  <!-- Worker -->
-            <col class="w-[11%]" />  <!-- Memory / Peak -->
-            <col class="w-[5%]" />   <!-- CPU -->
-            <col class="w-[11%]" />  <!-- Started -->
-            <col class="w-[7%]" />   <!-- Duration -->
-            <col class="w-[19%]" />  <!-- Status (exit code or status text) -->
-            <col class="w-[9%]" />   <!-- Profiling -->
+            <col class="w-[13%]" />  <!-- Memory / Peak -->
+            <col class="w-[6%]" />   <!-- CPU -->
+            <col class="w-[14%]" />  <!-- Started -->
+            <col class="w-[8%]" />   <!-- Duration -->
+            <col class="w-[15%]" />  <!-- Profiling -->
           </colgroup>
           <thead>
             <tr class="border-b border-surface-border">
@@ -1235,91 +1298,122 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               <th class="hidden sm:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('duration')">
                 Duration <span v-if="sortColumn === 'duration'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
-              <th class="hidden lg:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Status</th>
               <th class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Profiling</th>
             </tr>
           </thead>
           <tbody>
-            <tr
-              v-for="task in paginatedTasks"
-              :key="task.taskId"
-              class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
-            >
-              <td class="px-2 sm:px-3 py-2 text-[13px] font-mono">
-                <RouterLink
-                  :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}`"
-                  class="text-accent hover:underline"
-                >
-                  {{ taskIndex(task.taskId) }}
-                </RouterLink>
-              </td>
-              <td class="px-2 sm:px-3 py-2 text-[13px]">
-                <StatusBadge :status="task.state" size="sm" />
-                <div v-if="task.pendingReason" class="text-xs text-status-warning mt-0.5 max-w-xs truncate" :title="task.pendingReason">
-                  {{ task.pendingReason }}
-                </div>
-              </td>
-              <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px] truncate" :title="task.workerId ?? ''">
-                <RouterLink
-                  v-if="task.workerId"
-                  :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}`"
-                  class="text-accent hover:underline font-mono text-xs"
-                >
-                  {{ task.workerId }}
-                </RouterLink>
-                <span v-else class="text-text-muted">&mdash;</span>
-              </td>
-              <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono">
-                <template v-if="taskMemBytes(task.taskId) || taskPeakMemBytes(task.taskId)">
-                  {{ taskMemBytes(task.taskId) ? formatBytes(taskMemBytes(task.taskId)) : '-' }}
-                  <span class="text-text-muted">/</span>
-                  {{ taskPeakMemBytes(task.taskId) ? formatBytes(taskPeakMemBytes(task.taskId)) : '-' }}
-                </template>
-                <span v-else class="text-text-muted">-</span>
-              </td>
-              <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono">
-                {{ formatCpuMillicores(taskCpuMillicores(task.taskId)) }}
-              </td>
-              <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono text-text-secondary">
-                {{ formatTimestamp(task.startedAt) }}
-              </td>
-              <td class="hidden sm:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono text-text-secondary">
-                {{ taskDuration(task) }}
-              </td>
-              <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-xs max-w-xs">
-                <span v-if="taskExitNonZero(task)" class="text-status-danger font-mono">
-                  exit {{ task.exitCode }}
-                </span>
-                <MarkdownRenderer v-else-if="taskStatusTextSummary(task.taskId) && !TERMINAL_STATES.has(stateToName(task.state))" :content="taskStatusTextSummary(task.taskId)" />
-                <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger break-anywhere" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
-                <span v-else class="text-text-muted">—</span>
-              </td>
-              <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px]">
-                <div v-if="stateToName(task.state) === 'running'" class="flex gap-1">
-                  <button
-                    class="px-2 py-0.5 text-[11px] font-semibold rounded bg-status-purple text-white hover:opacity-80 disabled:opacity-50"
-                    :disabled="profilingTaskId === task.taskId"
-                    @click="handleProfile(task.taskId, 'cpu', 'SPEEDSCOPE')"
-                  >
-                    {{ profilingTaskId === task.taskId ? '⏳' : 'CPU' }}
-                  </button>
-                  <button
-                    class="px-2 py-0.5 text-[11px] font-semibold rounded bg-status-success text-white hover:opacity-80 disabled:opacity-50"
-                    :disabled="profilingTaskId === task.taskId"
-                    @click="handleProfile(task.taskId, 'memory', 'RAW')"
-                  >
-                    {{ profilingTaskId === task.taskId ? '⏳' : 'MEM' }}
-                  </button>
+            <template v-for="task in paginatedTasks" :key="task.taskId">
+              <tr
+                class="hover:bg-surface-raised transition-colors"
+                :class="{ 'border-b border-surface-border-subtle': !taskHasDetailRow(task) }"
+              >
+                <td class="px-2 sm:px-3 py-2 text-[13px] font-mono align-top">
                   <RouterLink
-                    :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}/threads`"
-                    class="px-2 py-0.5 text-[11px] font-semibold rounded bg-accent text-white hover:opacity-80 inline-block text-center no-underline"
+                    :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}`"
+                    class="text-accent hover:underline"
                   >
-                    THR
+                    {{ taskIndex(task.taskId) }}
                   </RouterLink>
-                </div>
-                <span v-else class="text-text-muted">&mdash;</span>
-              </td>
-            </tr>
+                </td>
+                <td class="px-2 sm:px-3 py-2 text-[13px] align-top">
+                  <StatusBadge :status="task.state" size="sm" />
+                  <div v-if="task.pendingReason" class="text-xs text-status-warning mt-0.5 max-w-xs truncate" :title="task.pendingReason">
+                    {{ task.pendingReason }}
+                  </div>
+                </td>
+                <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px] max-w-[150px] lg:max-w-none truncate align-top" :title="task.workerId ?? ''">
+                  <RouterLink
+                    v-if="task.workerId"
+                    :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}`"
+                    class="text-accent hover:underline font-mono text-xs"
+                  >
+                    {{ task.workerId }}
+                  </RouterLink>
+                  <span v-else class="text-text-muted">&mdash;</span>
+                </td>
+                <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono align-top">
+                  <template v-if="taskMemBytes(task.taskId) || taskPeakMemBytes(task.taskId)">
+                    {{ taskMemBytes(task.taskId) ? formatBytes(taskMemBytes(task.taskId)) : '-' }}
+                    <span class="text-text-muted">/</span>
+                    {{ taskPeakMemBytes(task.taskId) ? formatBytes(taskPeakMemBytes(task.taskId)) : '-' }}
+                  </template>
+                  <span v-else class="text-text-muted">-</span>
+                </td>
+                <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono align-top">
+                  {{ formatCpuMillicores(taskCpuMillicores(task.taskId)) }}
+                </td>
+                <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono text-text-secondary align-top">
+                  {{ formatTimestamp(task.startedAt) }}
+                </td>
+                <td class="hidden sm:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono text-text-secondary align-top">
+                  {{ taskDuration(task) }}
+                </td>
+                <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px] align-top">
+                  <div
+                    v-if="stateToName(task.state) === 'running'"
+                    class="inline-flex items-center rounded-md border border-surface-border divide-x divide-surface-border overflow-hidden"
+                  >
+                    <button
+                      class="px-1.5 py-1 text-[11px] font-semibold text-status-purple hover:bg-status-purple-bg transition-colors disabled:opacity-50"
+                      :disabled="profilingTaskId === task.taskId"
+                      title="CPU profile (10s)"
+                      @click="handleProfile(task.taskId, 'cpu', 'SPEEDSCOPE')"
+                    >
+                      {{ profilingTaskId === task.taskId ? '⏳' : 'CPU' }}
+                    </button>
+                    <button
+                      class="px-1.5 py-1 text-[11px] font-semibold text-status-success hover:bg-status-success-bg transition-colors disabled:opacity-50"
+                      :disabled="profilingTaskId === task.taskId"
+                      title="Memory profile (10s)"
+                      @click="handleProfile(task.taskId, 'memory', 'RAW')"
+                    >
+                      {{ profilingTaskId === task.taskId ? '⏳' : 'MEM' }}
+                    </button>
+                    <RouterLink
+                      :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}/threads`"
+                      class="px-1.5 py-1 text-[11px] font-semibold text-accent hover:bg-accent-subtle no-underline transition-colors"
+                      title="Thread dump"
+                    >
+                      THR
+                    </RouterLink>
+                  </div>
+                  <span v-else class="text-text-muted">&mdash;</span>
+                </td>
+              </tr>
+              <!-- Subtle detail row: status summary and/or registered endpoints. -->
+              <tr
+                v-if="taskHasDetailRow(task)"
+                class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+              >
+                <td class="px-2 sm:px-3" />
+                <td colspan="7" class="px-2 sm:px-3 pb-2 pt-0 text-[11px]">
+                  <div class="space-y-1">
+                    <div v-if="taskHasStatusDetail(task)" class="flex items-baseline gap-2">
+                      <span class="shrink-0 inline-flex items-center gap-1 text-text-muted uppercase tracking-wider text-[10px] font-semibold">
+                        <span aria-hidden="true">↳</span>Status
+                      </span>
+                      <span class="min-w-0">
+                        <span v-if="taskExitNonZero(task)" class="text-status-danger font-mono">exit {{ task.exitCode }}</span>
+                        <MarkdownRenderer v-else-if="taskStatusTextSummary(task.taskId) && !TERMINAL_STATES.has(stateToName(task.state))" :content="taskStatusTextSummary(task.taskId)" class="text-text-secondary" />
+                        <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger break-anywhere" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
+                      </span>
+                    </div>
+                    <div v-if="taskEndpoints(task.taskId).length" class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <span class="shrink-0 inline-flex items-center gap-1 text-text-muted uppercase tracking-wider text-[10px] font-semibold">
+                        <span aria-hidden="true">↳</span>Endpoints
+                      </span>
+                      <EndpointLink
+                        v-for="ep in taskEndpoints(task.taskId)"
+                        :key="ep.endpointId ?? ep.name"
+                        :name="ep.name"
+                        short
+                        class="text-[11px]"
+                      />
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </template>
           </tbody>
         </table>
       </div>

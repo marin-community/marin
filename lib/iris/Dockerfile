@@ -96,10 +96,12 @@ COPY lib/zephyr/pyproject.toml ./lib/zephyr/pyproject.toml
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --package marin-iris --no-install-workspace
 
-# Now copy full source for rigging, finelog, and iris, then install. finelog's
-# wheel build force-includes its config/ dir, so copy that too (the editable
-# build reads it).
+# Now copy full source for rigging, finelog, and iris, then install. rigging's
+# wheel force-includes the repo-root config/ cluster YAMLs (-> rigging/clusters)
+# and finelog's force-includes lib/finelog/config/, so copy both: the editable
+# builds read them.
 COPY lib/rigging/src/ ./lib/rigging/src/
+COPY config/ ./config/
 COPY lib/finelog/src/ ./lib/finelog/src/
 COPY lib/finelog/config/ ./lib/finelog/config/
 COPY lib/iris/src/ ./lib/iris/src/
@@ -140,8 +142,8 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 # ── Stage: controller ────────────────────────────────────────────────
 FROM deps AS controller
 
-# Controller-only deps: duckdb, pyarrow, kubernetes (marin-iris's `controller`
-# extra). --inexact keeps the py-spy/memray installed above from being pruned.
+# Controller-only deps: kubernetes (marin-iris's `controller` extra).
+# --inexact keeps the py-spy/memray installed above from being pruned.
 RUN uv sync --frozen --package marin-iris --extra controller --inexact
 
 LABEL org.opencontainers.image.description="Iris controller image"

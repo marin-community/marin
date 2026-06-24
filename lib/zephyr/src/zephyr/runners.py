@@ -111,12 +111,6 @@ class _InProcessWorkerContext:
                 self._shared_data_cache[name] = cloudpickle.loads(f.read())
         return self._shared_data_cache[name]
 
-    def increment_counter(self, name: str, value: int = 1, stage: str | None = None) -> None:
-        if name in self._counters:
-            self._counters[name].value += value
-        else:
-            self._counters[name] = CounterEntry(value, stage=stage)
-
     def set_counter(self, name: str, value: int | float, stage: str | None = None) -> None:
         if name in self._counters:
             entry = self._counters[name]
@@ -165,8 +159,8 @@ class _InProcessWorkerContext:
 _T = TypeVar("_T")
 
 
-def _wrap_stage_stats(gen: Iterator[_T], stage_name: str, ctx: _InProcessWorkerContext) -> Iterator[_T]:
-    """Yield items from ``gen`` while recording item count and byte size into ``ctx``."""
+def _wrap_stage_stats(gen: Iterator[_T]) -> Iterator[_T]:
+    """Yield items from ``gen`` while recording item count and byte size into the current stage's counters."""
     stage_counters = counters.current_stage()
     for item in gen:
         stage_counters.update_counter(ZEPHYR_STAGE_ITEM_COUNT_KEY, 1)
@@ -248,13 +242,13 @@ def _run_stage_with_ctx(
     task: ShardTask,
     chunk_prefix: str,
     execution_id: str,
-    ctx: _InProcessWorkerContext,
 ) -> TaskResult:
-    """Run one ShardTask inside the given worker context, writing stage output to disk.
+    """Run one ShardTask in the active worker context, writing stage output to disk.
 
-    Shared between ``InlineRunner.execute`` and the subprocess child entry —
-    once the right ctx is in place (and ``_worker_ctx_var`` is set), the
-    actual per-shard work is identical.
+    Shared between ``InlineRunner.execute`` and the subprocess child entry. The
+    caller must set ``_worker_ctx_var`` first; counter recording reads it via
+    ``counters.current_stage()``. Once that ctx is in place the actual per-shard
+    work is identical.
     """
     stage_ctx = StageContext(
         shard=task.shard,
@@ -267,11 +261,7 @@ def _run_stage_with_ctx(
     external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
     scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
     return _write_stage_output(
-        _wrap_stage_stats(
-            run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir),
-            task.stage_name,
-            ctx,
-        ),
+        _wrap_stage_stats(run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir)),
         source_shard=task.shard_idx,
         stage_dir=stage_dir,
         shard_idx=task.shard_idx,
@@ -337,7 +327,7 @@ class InlineRunner:
         sampler.start()
         _task_failed = False
         try:
-            result = _run_stage_with_ctx(task, chunk_prefix, execution_id, ctx)
+            result = _run_stage_with_ctx(task, chunk_prefix, execution_id)
         except Exception:
             _task_failed = True
             raise

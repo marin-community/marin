@@ -20,8 +20,8 @@
 // whole-VM granularity anyway, which made the "available" number a
 // thin proxy for "idle VMs × resources" on a busy cluster.
 //
-// History lives in a separate ring buffer (server/history.ts); this
-// file only ever returns the current snapshot.
+// History lives in finelog, queried by server/sources/clusterHistory.ts;
+// this file only ever returns the current snapshot.
 
 import { getControllerUrl } from "./discovery.js";
 
@@ -80,14 +80,6 @@ export interface WorkersSnapshot {
   byRegion: WorkerRegionCount[];
   fetchedAt: string;
   error?: string;
-}
-
-export interface WorkerSample {
-  t: number; // epoch millis
-  // Per-region healthy worker count at the sample time. Flat map keyed
-  // by region name so the frontend can feed recharts directly (each
-  // region becomes a <Line dataKey={region} />).
-  regions: Record<string, number>;
 }
 
 function emptyResources(): WorkerResourceTotals {

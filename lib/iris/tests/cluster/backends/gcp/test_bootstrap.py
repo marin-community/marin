@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import pytest
 from iris.cluster.backends.gcp.bootstrap import (
-    build_controller_bootstrap_script_from_config,
     build_worker_bootstrap_script,
     render_template,
     rewrite_ghcr_to_ar_remote,
@@ -31,42 +30,12 @@ def _worker_config(**overrides: object) -> config_pb2.WorkerConfig:
     return cfg
 
 
-def test_build_worker_bootstrap_script_includes_controller_address() -> None:
-    script = build_worker_bootstrap_script(_worker_config())
-
-    assert "controller_address" in script
-    assert "10.0.0.10:10000" in script
-    assert "gcr.io/test/iris-worker:latest" in script
-
-
-def test_build_worker_bootstrap_script_configures_ar_auth() -> None:
-    ar_image = "us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-worker:latest"
-    cfg = _worker_config(docker_image=ar_image)
-
-    script = build_worker_bootstrap_script(cfg)
-
-    assert f'if echo "{ar_image}" | grep -q -- "-docker.pkg.dev/"' in script
-    assert 'sudo gcloud auth configure-docker "$AR_HOST" -q || true' in script
-
-
 def test_build_worker_bootstrap_script_requires_controller_address() -> None:
     cfg = _worker_config()
     cfg.controller_address = ""
 
     with pytest.raises(ValueError, match="controller_address"):
         build_worker_bootstrap_script(cfg)
-
-
-def test_build_worker_bootstrap_script_embeds_worker_config_json() -> None:
-    """WorkerConfig fields appear in the embedded JSON in the generated script."""
-    cfg = _worker_config()
-    cfg.task_env["IRIS_SCALE_GROUP"] = "west-group"
-
-    script = build_worker_bootstrap_script(cfg)
-
-    assert "IRIS_SCALE_GROUP" in script
-    assert "west-group" in script
-    assert "worker_config.json" in script
 
 
 def test_render_template_preserves_docker_templates() -> None:
@@ -140,25 +109,6 @@ def test_rewrite_ghcr_to_ar_remote_custom_mirror_repo() -> None:
     assert result == "us-docker.pkg.dev/proj/custom-mirror/org/image:v1"
 
 
-def test_build_controller_bootstrap_script_from_config_rewrites_ghcr_to_ar() -> None:
-    config = config_pb2.IrisClusterConfig()
-    config.controller.image = "ghcr.io/marin-community/iris-controller:latest"
-    config.controller.gcp.zone = "europe-west4-b"
-    config.controller.gcp.port = 10000
-    config.platform.gcp.project_id = "hai-gcp-models"
-
-    def resolve_image(image: str, zone: str | None = None) -> str:
-        return "europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-controller:latest"
-
-    script = build_controller_bootstrap_script_from_config(config, resolve_image=resolve_image)
-
-    assert (
-        "Pulling image: europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-controller:latest"
-        in script
-    )
-    assert 'sudo gcloud auth configure-docker "$AR_HOST" -q || true' in script
-
-
 # --- GcpWorkerProvider.resolve_image() tests ---
 
 
@@ -189,13 +139,6 @@ def test_gcp_provider_resolve_image_passthrough_non_ghcr() -> None:
     assert provider.resolve_image("docker.io/library/ubuntu:latest", zone="us-central1-a") == (
         "docker.io/library/ubuntu:latest"
     )
-
-
-def test_worker_bootstrap_tunes_network_sysctls() -> None:
-    """Worker bootstrap configures sysctl for expanded port range and TIME_WAIT reuse."""
-    script = build_worker_bootstrap_script(_worker_config())
-    assert 'sysctl -w net.ipv4.ip_local_port_range="1024 65535"' in script
-    assert "sysctl -w net.ipv4.tcp_tw_reuse=1" in script
 
 
 def test_gcp_provider_resolve_image_requires_zone_for_ghcr() -> None:

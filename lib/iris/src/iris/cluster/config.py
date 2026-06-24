@@ -25,7 +25,7 @@ from rigging.timing import Duration
 
 from iris.cluster.backends.factory import create_provider_bundle
 from iris.cluster.backends.k8s.service import CloudK8sService
-from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, K8sTaskProvider
+from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, _DEFAULT_PRIORITY_CLASS_NAMES, K8sTaskProvider
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.backends.types import local_queue_name
 from iris.cluster.constraints import WellKnownAttribute
@@ -1162,6 +1162,16 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> TaskBackend:
                     f"valid bands: {sorted(_KUEUE_PRIORITY_BANDS)}"
                 )
             priority_classes[band] = wpc
+        # Start from the iris-{band} defaults; override with any explicit config.
+        pod_priority_classes: dict[int, str] = dict(_DEFAULT_PRIORITY_CLASS_NAMES)
+        for band_name, pc_name in kp.priority_classes.items():
+            band = _KUEUE_PRIORITY_BANDS.get(band_name)
+            if band is None:
+                raise ValueError(
+                    f"Unknown priority band {band_name!r} in kubernetes_provider.priority_classes; "
+                    f"valid bands: {sorted(_KUEUE_PRIORITY_BANDS)}"
+                )
+            pod_priority_classes[band] = pc_name
         # Empty topologies falls back to the CoreWeave-convention defaults (the
         # provider would otherwise be handed an empty map, suppressing them).
         topologies = {group_by: (topo.node_label, topo.required) for group_by, topo in kp.kueue.topologies.items()}
@@ -1188,6 +1198,7 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> TaskBackend:
             kueue_priority_classes=priority_classes,
             kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
             preempt_namespaces=list(kp.preempt_namespaces),
+            priority_class_names=pod_priority_classes,
         )
     if which == "worker_provider":
         return RpcTaskBackend(stub_factory=RpcWorkerStubFactory())

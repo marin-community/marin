@@ -6,8 +6,10 @@
 //   GET /api/iris            — iris controller reachability (15s cache)
 //   GET /api/control-plane/health — active env Iris + finelog health history
 //   GET /api/workers         — current iris worker counts (15s cache)
-//   GET /api/workers/history — in-memory 24h worker count ring buffer
+//   GET /api/workers/history — 24h per-region worker count from finelog (60s cache)
+//   GET /api/provisioning/history — 24h provisioning success ratio from finelog (60s cache)
 //   GET /api/jobs            — iris job counts for last 24h by state (60s cache)
+//   GET /api/probes          — synthetic-canary checks + provisioning from finelog (60s cache)
 //   GET /api/health          — liveness probe, no upstream calls
 //   GET /*                   — static assets from web/dist (production only)
 //
@@ -18,7 +20,13 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { TTLCache } from "./cache.js";
-import { IrisPingHistory, ServiceHealthHistory, WorkerHistory } from "./history.js";
+import { IrisPingHistory, ServiceHealthHistory } from "./history.js";
+import {
+  provisioningHistory,
+  workersHistory,
+  type ProvisioningHistoryResponse,
+  type WorkersHistoryResponse,
+} from "./sources/clusterHistory.js";
 import {
   FERRY_GROUPS,
   fetchTierStatus,
@@ -28,6 +36,7 @@ import {
 import { fetchBuildsOnMain, type BuildsResponse } from "./sources/githubCommits.js";
 import { irisStatus, pingIris, type IrisPingResult } from "./sources/iris.js";
 import { jobsSnapshot, type JobsSnapshot } from "./sources/jobs.js";
+import { probesSnapshot, type ProbesSnapshot } from "./sources/probes.js";
 import {
   serviceHealthResponse,
   serviceHealthSample,
@@ -45,6 +54,14 @@ const ferryCache = new TTLCache<FerryTierStatus>(60_000);
 const buildCache = new TTLCache<BuildsResponse>(60_000);
 const workersCache = new TTLCache<WorkersSnapshot>(15_000);
 const jobsCache = new TTLCache<JobsSnapshot>(60_000);
+// Worker (60s cadence) and provisioning (15min cadence) history come from the
+// canary's finelog rows; a 60s shield keeps finelog query load low without
+// lagging the worker series.
+const workersHistoryCache = new TTLCache<WorkersHistoryResponse>(60_000);
+const provisioningHistoryCache = new TTLCache<ProvisioningHistoryResponse>(60_000);
+// Probe metrics turn over slowly — health checks every ≤5min, provisioning
+// every 15min — so a 60s shield is plenty and keeps finelog query load low.
+const probesCache = new TTLCache<ProbesSnapshot>(60_000);
 
 // Iris controller ping sampler. We probe /health on a fixed cadence and
 // keep a rolling 1h window of successful samples so /api/iris can report
@@ -57,33 +74,13 @@ const IRIS_PING_CAPACITY = Math.ceil(IRIS_PING_WINDOW_MS / IRIS_PING_INTERVAL_MS
 const irisPingHistory = new IrisPingHistory(IRIS_PING_CAPACITY);
 let lastIrisPing: IrisPingResult | null = null;
 
-// Ring buffer for worker-count history. Sized so the buffer holds 24h of
-// samples at the configured cadence. The sampler runs on a fixed interval
-// below — not lazily off request traffic — so history keeps ticking even
-// when nobody's watching the dashboard.
+// In-process sampler cadence + buffer sizing for the control-plane latency
+// history (worker-count history now lives in finelog — see clusterHistory.ts).
 const SAMPLE_INTERVAL_MS = 30_000;
 const HISTORY_CAPACITY = Math.ceil((24 * 60 * 60 * 1000) / SAMPLE_INTERVAL_MS);
-const workerHistory = new WorkerHistory(HISTORY_CAPACITY);
 const serviceHealthHistory = new ServiceHealthHistory(HISTORY_CAPACITY);
 const SERVICE_HEALTH_WINDOW_MS = 24 * 60 * 60 * 1000;
 let lastServiceHealth: ServiceHealthSnapshot[] = [];
-
-async function sampleWorkers(): Promise<void> {
-  const snapshot = await workersCache.get("workers", () => workerSnapshot());
-  if (snapshot.error) {
-    console.error("worker sampler: snapshot error:", snapshot.error);
-    // Don't pollute history with zeros when the controller is unreachable.
-    return;
-  }
-  const regions: Record<string, number> = {};
-  for (const r of snapshot.byRegion) {
-    regions[r.region] = r.healthy;
-  }
-  workerHistory.push({
-    t: Date.parse(snapshot.fetchedAt),
-    regions,
-  });
-}
 
 async function sampleIrisPing(): Promise<void> {
   const result = await pingIris();
@@ -106,15 +103,6 @@ async function sampleServiceHealth(): Promise<void> {
 
 // Kick off immediately, then on a fixed cadence. unref() lets the process
 // exit cleanly during tests without waiting on the timer.
-void sampleWorkers().catch((err) => {
-  console.error("worker sampler error", err);
-});
-setInterval(() => {
-  void sampleWorkers().catch((err) => {
-    console.error("worker sampler error", err);
-  });
-}, SAMPLE_INTERVAL_MS).unref();
-
 void sampleIrisPing().catch((err) => {
   console.error("iris ping sampler error", err);
 });
@@ -175,12 +163,25 @@ app.get("/api/workers", async (c) => {
   return c.json(snapshot);
 });
 
-app.get("/api/workers/history", (c) => {
-  return c.json({ samples: workerHistory.samples() });
+app.get("/api/workers/history", async (c) => {
+  const snapshot = await workersHistoryCache.get("workers-history", () => workersHistory());
+  return c.json(snapshot);
+});
+
+app.get("/api/provisioning/history", async (c) => {
+  const snapshot = await provisioningHistoryCache.get("provisioning-history", () =>
+    provisioningHistory(),
+  );
+  return c.json(snapshot);
 });
 
 app.get("/api/jobs", async (c) => {
   const snapshot = await jobsCache.get("jobs", () => jobsSnapshot());
+  return c.json(snapshot);
+});
+
+app.get("/api/probes", async (c) => {
+  const snapshot = await probesCache.get("probes", () => probesSnapshot());
   return c.json(snapshot);
 });
 

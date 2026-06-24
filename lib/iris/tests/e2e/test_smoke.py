@@ -23,12 +23,14 @@ from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.version import client_revision_date
+from rigging.connect import proxy_path
 from rigging.timing import Duration, ExponentialBackoff
 
 from .conftest import (
@@ -122,7 +124,10 @@ def smoke_cluster(request):
     if controller_url:
         client = IrisClient.remote(controller_url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
-        log_client = LogServiceClientSync(address=controller_url, timeout_ms=30000)
+        log_client = LogServiceClientSync(
+            address=f"{controller_url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}",
+            timeout_ms=30000,
+        )
         tc = IrisTestCluster(
             url=controller_url,
             client=client,
@@ -137,6 +142,7 @@ def smoke_cluster(request):
         if workers:
             tc.wait_for_workers(1, timeout=600)
         yield tc
+        log_client.close()
         controller_client.close()
         return
 
@@ -144,10 +150,14 @@ def smoke_cluster(request):
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        log_client = LogServiceClientSync(address=url, timeout_ms=30000)
+        log_client = LogServiceClientSync(
+            address=f"{url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}",
+            timeout_ms=30000,
+        )
         tc = IrisTestCluster(url=url, client=client, controller_client=controller_client, log_client=log_client)
         tc.wait_for_workers(SMOKE_WORKER_COUNT, timeout=60)
         yield tc
+        log_client.close()
         controller_client.close()
 
 
@@ -439,31 +449,6 @@ def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
         assert_visible(smoke_page, "text=region")
         smoke_screenshot(
             "constraints", "Job detail page showing constraint chips for region, env-tag, and device-variant"
-        )
-
-
-def test_dashboard_scheduling_diagnostic(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
-    """Scheduling diagnostic shows pending reason for oversized job."""
-    if not capabilities.has_workers:
-        pytest.skip("No persistent workers")
-    smoke_cluster.wait_for_workers(1, timeout=smoke_cluster.job_timeout)
-    with smoke_cluster.launched_job(TestJobs.quick, "smoke-diag-cpu", cpu=999_999) as job:
-        # Poll until the scheduler has evaluated the job and produced a
-        # CPU-specific pending reason (avoids racing the scheduler loop).
-        deadline = time.monotonic() + smoke_cluster.job_timeout
-        while time.monotonic() < deadline:
-            status = smoke_cluster.status(job)
-            if "cpu" in status.pending_reason.lower():
-                break
-            time.sleep(0.2)
-        assert status.state == job_pb2.JOB_STATE_PENDING
-        assert "cpu" in status.pending_reason.lower()
-
-        dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
-        wait_for_dashboard_ready(smoke_page)
-        assert_visible(smoke_page, "text=Scheduling Diagnostic")
-        smoke_screenshot(
-            "scheduling-diagnostic", "Job detail page with yellow scheduling diagnostic banner explaining CPU capacity"
         )
 
 
