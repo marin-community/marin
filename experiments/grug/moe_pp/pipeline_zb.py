@@ -113,6 +113,11 @@ def orthogonalize_tree(tree):
 _TRACE = os.environ.get("MOE_PP_TRACE") == "1"
 _t: dict = {}
 
+# Diagnostic: when MOE_PP_NULL_XPORT=1, each cross-host boundary hop returns a local zeros
+# array (no collective) instead of moving the activation. Gradients are wrong, but the step's
+# op graph keeps its shape, so the step time isolates everything-but-the-cross-host-transport.
+_NULL_XPORT = os.environ.get("MOE_PP_NULL_XPORT") == "1"
+
 
 def _stage_submesh(group_devices, *, expert: int, data: int) -> Mesh:
     """A grug sub-mesh ``(stage, replica_dcn, data, expert, model)`` over one device slice."""
@@ -202,6 +207,11 @@ def _transport(
         send = full if pid == src else np.zeros(x.shape, x.dtype)
         full = multihost_utils.broadcast_one_to_all(send, is_source=(pid == src))
     return _make_global(full if pid in dst_procs else None, mesh, spec, x.shape, x.dtype)
+
+
+def _tree_sum(trees: list):
+    """Sum a non-empty list of like-structured pytrees leafwise."""
+    return functools.reduce(lambda a, b: jax.tree_util.tree_map(jnp.add, a, b), trees)
 
 
 def _mesh_procs(mesh: Mesh) -> frozenset[int]:
@@ -646,6 +656,11 @@ def zb_build(
         def _send(x: jax.Array, dst: Mesh, src: Mesh, src_stage: int, dst_stage: int) -> jax.Array | Future:
             if not _crosses_host(src, dst):
                 return _transport(x, dst)
+            if _NULL_XPORT:
+                spec = grug_model._batch_spec()
+                if _local(dst):
+                    return jax.device_put(jnp.zeros(x.shape, x.dtype), NamedSharding(dst, spec))
+                return _make_global(None, dst, spec, x.shape, x.dtype)
             hop = ppermute_hops.get(min(src_stage, dst_stage))
             if hop is not None:
                 # On-device ppermute: a jax.Array that XLA overlaps with compute -- no thread.
@@ -716,8 +731,10 @@ def zb_build(
                 jax.block_until_ready((ce_mb, z_mb, g_head_mb, g_embed_mb, w_grads))
                 _t["sched"] = time.perf_counter()
 
-            for m in range(num_microbatches):
-                g_eh = _accum_embed_head(g_embed_mb[m], g_head_mb[m], g_eh)
+            # Sum the embed/head weight-grads across microbatches LOCALLY, then cross the host
+            # boundary once. The head grad is the [hidden, vocab] unembedding (~hundreds of MB);
+            # accumulating per microbatch would broadcast it num_microbatches times.
+            g_eh = _accum_embed_head(_tree_sum(g_embed_mb), _tree_sum(g_head_mb), None)
             for s in range(num_stages):
                 if not _local(submeshes[s]):
                     continue
@@ -780,16 +797,19 @@ def zb_build(
                         g_blocks[layer] = muon_fn(g_blocks[layer])
 
         # Loss (deferred reduction; the backward seeds are constants, so this never gates it).
-        # The per-stage router z-loss scalars are gathered onto the head mesh before summing;
+        # Sum each stage's router z-loss across microbatches LOCALLY, then cross to the head mesh
+        # once per stage (was a broadcast per microbatch x stage -- M*P crossings for scalars).
         # multi-host then broadcasts the final scalar so every process can read it.
-        per_mb_loss = []
-        for m in range(num_microbatches):
-            # Gather every stage's z scalar onto the head mesh (a broadcast on both processes);
-            # only the head's host owns the result, so reduce it there.
-            z_on_head = [_transport(z, meshL, _REPLICATED) for z in z_mb[m]]
-            if _local(meshL):
-                per_mb_loss.append(ce_mb[m] + coef * (jnp.sum(jnp.stack(z_on_head)) / num_layers))
-        loss = jnp.mean(jnp.stack(per_mb_loss)) if _local(meshL) else None
+        z_stage_on_head = [
+            _transport(functools.reduce(jnp.add, (z_mb[m][s] for m in range(num_microbatches))), meshL, _REPLICATED)
+            for s in range(num_stages)
+        ]
+        if _local(meshL):
+            ce_total = functools.reduce(jnp.add, ce_mb)
+            z_total = jnp.sum(jnp.stack(z_stage_on_head))
+            loss = (ce_total + coef * z_total / num_layers) / num_microbatches
+        else:
+            loss = None
         if _multihost():
             src = np.asarray(jax.device_get(loss) if _local(meshL) else 0.0, np.float32)
             loss = float(multihost_utils.broadcast_one_to_all(src, is_source=_local(meshL)))
