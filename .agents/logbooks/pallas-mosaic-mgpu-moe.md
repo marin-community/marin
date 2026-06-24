@@ -200,3 +200,34 @@
   not indicate a routing or matmul correctness bug.
 - Next action: Keep Grug-style random inputs as the default comparison for
   relevant-shape correctness claims, and continue prioritizing tiled dispatch.
+
+### 2026-06-24 - XLA baseline flag check
+
+- Hypothesis: Enabling Triton GEMM and latency-hiding scheduler flags, and then
+  lowering JAX optimization level to O1, may speed up the JIT W13/SiLU baseline
+  enough to narrow the Mosaic GPU advantage.
+- Commands:
+  - Invalid first attempt: `XLA_FLAGS="-O1 --xla_gpu_triton_gemm_any=True --xla_gpu_enable_latency_hiding_scheduler=true --xla_gpu_cuda_data_dir=..." ...`
+  - Valid subset: `XLA_FLAGS="--xla_gpu_triton_gemm_any=True --xla_gpu_enable_latency_hiding_scheduler=true --xla_gpu_cuda_data_dir=..." ...`
+  - Corrected O1: `JAX_OPTIMIZATION_LEVEL=O1 XLA_FLAGS="--xla_gpu_triton_gemm_any=True --xla_gpu_enable_latency_hiding_scheduler=true --xla_gpu_cuda_data_dir=..." ...`
+- Config: Same split W13/SiLU probe as the Grug-consistent relevant-shape check:
+  single-node CoreWeave `cw-us-east-02a`, H100x8, bf16, `H=2560`, `I=2560`,
+  `T/rank=8`, top-k 4, 32 local experts per rank, 256 global experts,
+  `--weight-init grug_truncated`, reference dispatch layout.
+- Result:
+  - `-O1` inside `XLA_FLAGS` failed at startup: `Unknown flag in XLA_FLAGS: -O1`.
+  - Valid subset run: JIT W13/SiLU steady-state mean 10.526 ms; Mosaic GPU
+    W13/SiLU steady-state mean 0.647 ms; speedup 16.27x.
+  - Corrected O1 run: JIT W13/SiLU steady-state mean 10.492 ms; Mosaic GPU
+    W13/SiLU steady-state mean 0.637 ms; speedup 16.47x.
+  - Correctness stayed unchanged: max abs 0.015625, mean abs 2.28e-05,
+    RMS abs 1.77e-04, max relative 0.0141.
+  - Corrected O1 roofline summary: measured W13 10.54 TFLOP/s, estimated
+    HBM-bound W13 roofline 26.79 TFLOP/s.
+- Interpretation: These flags do not materially improve the JIT W13/SiLU
+  baseline for this split relevant-shape probe. The corrected O1 run improved
+  the baseline by roughly 0.3%, which is within run-to-run noise for this
+  benchmark. The Mosaic GPU W13/SiLU timing is also essentially unchanged.
+- Next action: Stop pursuing these XLA flags for this microbench. For baseline
+  pressure, compare against Grug's production MoE implementation directly; for
+  Mosaic work, continue with tiled dispatch.
