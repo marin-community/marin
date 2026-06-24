@@ -431,13 +431,17 @@ def _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_scratch_ready_local(
     axis_name: str,
     recv_capacity: int,
     ready_block_m: int = 64,
+    rows_per_program: int = 1,
 ) -> tuple[MoeDispatchUpLayout, jax.Array, jax.Array]:
     """Scratch dispatch that exposes clipped ready rows per source/expert."""
 
+    if rows_per_program < 1:
+        raise ValueError(f"rows_per_program must be positive, got {rows_per_program}")
     ep_size, send_capacity, hidden = send_x_by_dst.shape
     local_experts = rows_per_expert.shape[0]
     recv_blocks = math.ceil(recv_capacity / ready_block_m)
-    grid_rows = max(send_capacity, local_experts, recv_blocks)
+    send_programs = math.ceil(send_capacity / rows_per_program)
+    grid_rows = max(send_programs, local_experts, recv_blocks)
     ready_rows = jnp.minimum(jnp.sum(rows_per_expert, dtype=jnp.int32), jnp.int32(recv_capacity))
 
     def kernel_body(
@@ -474,17 +478,23 @@ def _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_scratch_ready_local(
         src_rank = lax.axis_index(axis_name)
         peer_rank = pl.program_id(0)
         row_or_expert = pl.program_id(1)
-        linear_row = peer_rank * send_capacity + row_or_expert
+        send_program_start = row_or_expert * rows_per_program
 
-        @pl.when((row_or_expert < send_capacity) & (linear_row < recv_capacity))
-        def _zero_recv_row():
-            recv_x_ref.at[linear_row, pl.ds(0, hidden)][...] = jnp.zeros((hidden,), dtype=recv_x_ref.dtype)
-            recv_valid_count_ref[linear_row] = jnp.int32(0)
-            recv_local_expert_ref[linear_row] = jnp.int32(0)
-            recv_src_rank_ref[linear_row] = jnp.int32(0)
-            recv_src_token_idx_ref[linear_row] = jnp.int32(0)
-            recv_topk_slot_ref[linear_row] = jnp.int32(0)
-            recv_router_weight_ref[linear_row] = jnp.zeros((), dtype=recv_router_weight_ref.dtype)
+        @pl.when(row_or_expert < send_programs)
+        def _zero_recv_rows():
+            for row_offset in range(rows_per_program):
+                send_row = send_program_start + row_offset
+                linear_row = peer_rank * send_capacity + send_row
+
+                @pl.when((send_row < send_capacity) & (linear_row < recv_capacity))
+                def _zero_recv_row():
+                    recv_x_ref.at[linear_row, pl.ds(0, hidden)][...] = jnp.zeros((hidden,), dtype=recv_x_ref.dtype)
+                    recv_valid_count_ref[linear_row] = jnp.int32(0)
+                    recv_local_expert_ref[linear_row] = jnp.int32(0)
+                    recv_src_rank_ref[linear_row] = jnp.int32(0)
+                    recv_src_token_idx_ref[linear_row] = jnp.int32(0)
+                    recv_topk_slot_ref[linear_row] = jnp.int32(0)
+                    recv_router_weight_ref[linear_row] = jnp.zeros((), dtype=recv_router_weight_ref.dtype)
 
         @pl.when(row_or_expert < local_experts)
         def _zero_ready_count():
@@ -513,44 +523,52 @@ def _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_scratch_ready_local(
             # per-source/expert completion instead of whole-buffer completion.
             _ = send_expert_base_ref[peer_rank, row_or_expert] + send_expert_count_ref[peer_rank, row_or_expert]
 
-        @pl.when(row_or_expert < send_capacity)
-        def _copy_source_row():
-            dst_row = send_row_ref[peer_rank, row_or_expert]
-            send_valid = (row_or_expert < send_count_ref[peer_rank]) & (dst_row < recv_capacity)
+        @pl.when(row_or_expert < send_programs)
+        def _copy_source_rows():
+            for row_offset in range(rows_per_program):
+                send_row = send_program_start + row_offset
+                safe_send_row = jnp.minimum(send_row, jnp.int32(send_capacity - 1))
+                dst_row = send_row_ref[peer_rank, safe_send_row]
+                send_valid = (send_row < send_count_ref[peer_rank]) & (dst_row < recv_capacity)
 
-            @pl.when(send_valid)
-            def _copy_row_to_scratch():
-                remote_scratch_x.at[src_rank, row_or_expert, pl.ds(0, hidden)][...] = send_x_ref.at[
-                    peer_rank, row_or_expert, pl.ds(0, hidden)
-                ][...]
-                remote_scratch_dst_row[src_rank, row_or_expert] = dst_row
-                remote_scratch_local_expert[src_rank, row_or_expert] = send_local_expert_ref[peer_rank, row_or_expert]
-                remote_scratch_src_token_idx[src_rank, row_or_expert] = send_src_token_idx_ref[
-                    peer_rank, row_or_expert
-                ]
-                remote_scratch_topk_slot[src_rank, row_or_expert] = send_topk_slot_ref[peer_rank, row_or_expert]
-                remote_scratch_router_weight[src_rank, row_or_expert] = send_router_weight_ref[
-                    peer_rank, row_or_expert
-                ]
+                @pl.when(send_valid)
+                def _copy_row_to_scratch():
+                    remote_scratch_x.at[src_rank, safe_send_row, pl.ds(0, hidden)][...] = send_x_ref.at[
+                        peer_rank, safe_send_row, pl.ds(0, hidden)
+                    ][...]
+                    remote_scratch_dst_row[src_rank, safe_send_row] = dst_row
+                    remote_scratch_local_expert[src_rank, safe_send_row] = send_local_expert_ref[
+                        peer_rank, safe_send_row
+                    ]
+                    remote_scratch_src_token_idx[src_rank, safe_send_row] = send_src_token_idx_ref[
+                        peer_rank, safe_send_row
+                    ]
+                    remote_scratch_topk_slot[src_rank, safe_send_row] = send_topk_slot_ref[peer_rank, safe_send_row]
+                    remote_scratch_router_weight[src_rank, safe_send_row] = send_router_weight_ref[
+                        peer_rank, safe_send_row
+                    ]
 
         pl.semaphore_signal(recv_sem, device_id=jnp.int32(peer_rank))
         pl.semaphore_wait(recv_sem, value=ep_size * grid_rows, decrement=False)
 
-        @pl.when(row_or_expert < send_capacity)
-        def _compact_source_row():
-            dst_row = scratch_dst_row_ref[peer_rank, row_or_expert]
-            recv_valid = (row_or_expert < scratch_count_ref[peer_rank]) & (dst_row < recv_capacity)
+        @pl.when(row_or_expert < send_programs)
+        def _compact_source_rows():
+            for row_offset in range(rows_per_program):
+                send_row = send_program_start + row_offset
+                safe_send_row = jnp.minimum(send_row, jnp.int32(send_capacity - 1))
+                dst_row = scratch_dst_row_ref[peer_rank, safe_send_row]
+                recv_valid = (send_row < scratch_count_ref[peer_rank]) & (dst_row < recv_capacity)
 
-            @pl.when(recv_valid)
-            def _compact_row():
-                scratch_row = scratch_x_ref.at[peer_rank, row_or_expert, pl.ds(0, hidden)]
-                recv_x_ref.at[dst_row, pl.ds(0, hidden)][...] = scratch_row[...]
-                recv_valid_count_ref[dst_row] = jnp.int32(1)
-                recv_local_expert_ref[dst_row] = scratch_local_expert_ref[peer_rank, row_or_expert]
-                recv_src_rank_ref[dst_row] = jnp.int32(peer_rank)
-                recv_src_token_idx_ref[dst_row] = scratch_src_token_idx_ref[peer_rank, row_or_expert]
-                recv_topk_slot_ref[dst_row] = scratch_topk_slot_ref[peer_rank, row_or_expert]
-                recv_router_weight_ref[dst_row] = scratch_router_weight_ref[peer_rank, row_or_expert]
+                @pl.when(recv_valid)
+                def _compact_row():
+                    scratch_row = scratch_x_ref.at[peer_rank, safe_send_row, pl.ds(0, hidden)]
+                    recv_x_ref.at[dst_row, pl.ds(0, hidden)][...] = scratch_row[...]
+                    recv_valid_count_ref[dst_row] = jnp.int32(1)
+                    recv_local_expert_ref[dst_row] = scratch_local_expert_ref[peer_rank, safe_send_row]
+                    recv_src_rank_ref[dst_row] = jnp.int32(peer_rank)
+                    recv_src_token_idx_ref[dst_row] = scratch_src_token_idx_ref[peer_rank, safe_send_row]
+                    recv_topk_slot_ref[dst_row] = scratch_topk_slot_ref[peer_rank, safe_send_row]
+                    recv_router_weight_ref[dst_row] = scratch_router_weight_ref[peer_rank, safe_send_row]
 
         pl.semaphore_signal(recv_sem, device_id=src_rank)
         pl.semaphore_wait(recv_sem, value=2 * ep_size * grid_rows, decrement=False)
@@ -658,6 +676,7 @@ def dispatch_prepacked_moe_dispatch_up_mosaic_gpu_ready_local(
     axis_name: str,
     recv_capacity: int,
     ready_block_m: int = 64,
+    rows_per_program: int = 1,
 ) -> tuple[MoeDispatchUpLayout, jax.Array, jax.Array]:
     """Scratch dispatch plus source/expert ready counts for overlap bring-up."""
 
@@ -704,6 +723,7 @@ def dispatch_prepacked_moe_dispatch_up_mosaic_gpu_ready_local(
         axis_name=axis_name,
         recv_capacity=recv_capacity,
         ready_block_m=ready_block_m,
+        rows_per_program=rows_per_program,
     )
 
 

@@ -271,6 +271,7 @@ def _pallas_dispatch_ready_fn(
     *,
     recv_capacity: int,
     ready_block_m: int,
+    rows_per_program: int,
 ) -> Callable[..., tuple[MoeDispatchUpLayout, jax.Array, jax.Array]]:
     def local_dispatch(
         send_x,
@@ -304,6 +305,7 @@ def _pallas_dispatch_ready_fn(
             axis_name="expert",
             recv_capacity=recv_capacity,
             ready_block_m=ready_block_m,
+            rows_per_program=rows_per_program,
         )
         return (
             MoeDispatchUpLayout(
@@ -595,6 +597,20 @@ def _resolve_recv_capacity(args, *, synthetic_layout: bool) -> tuple[int, float 
     return math.ceil(default_capacity_factor * routed_rows_per_rank), default_capacity_factor
 
 
+def _resolve_send_capacity(args) -> tuple[int, float | None]:
+    if args.send_capacity is not None and args.send_capacity_factor is not None:
+        raise ValueError("Specify at most one of --send-capacity and --send-capacity-factor")
+
+    if args.send_capacity is not None:
+        return args.send_capacity, None
+
+    if args.send_capacity_factor is not None:
+        balanced_rows_per_destination = args.tokens_per_rank * args.top_k / args.ep_size
+        return math.ceil(args.send_capacity_factor * balanced_rows_per_destination), args.send_capacity_factor
+
+    return args.tokens_per_rank * args.top_k, None
+
+
 def _run_synthetic_layout_benchmark(args, dtype: jnp.dtype, devices: list[jax.Device]) -> None:
     if len(devices) < args.ep_size:
         raise RuntimeError(f"Need at least {args.ep_size} local devices, found {len(devices)}")
@@ -786,6 +802,21 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--send-capacity",
+        type=int,
+        default=None,
+        help="Rows per source/destination pair. Overrides --send-capacity-factor.",
+    )
+    parser.add_argument(
+        "--send-capacity-factor",
+        type=float,
+        default=None,
+        help=(
+            "Capacity multiplier for balanced T*K/EP rows per source/destination pair. "
+            "Defaults to T*K for conservative skew tolerance."
+        ),
+    )
+    parser.add_argument(
         "--w13-impl",
         choices=("mosaic_gpu", "mosaic_gpu_block_ready", "mosaic_gpu_ready", "ragged_dot", "both"),
         default="mosaic_gpu",
@@ -809,9 +840,20 @@ def main() -> None:
         help="Mosaic GPU dispatch copy implementation.",
     )
     parser.add_argument(
+        "--dispatch-rows-per-program",
+        type=int,
+        default=1,
+        help="Send rows handled by each scratch_ready dispatch program.",
+    )
+    parser.add_argument(
         "--pallas-w13-from-reference-layout",
         action="store_true",
         help="Run Mosaic GPU W13/SiLU against the reference dispatch layout, skipping Mosaic dispatch.",
+    )
+    parser.add_argument(
+        "--skip-reference-checks",
+        action="store_true",
+        help="Skip reference dispatch/W13 construction and correctness checks for large candidate-only perf runs.",
     )
     parser.add_argument("--debug-errors", action="store_true")
     parser.add_argument("--dispatch-atol", type=float, default=0.0)
@@ -832,6 +874,8 @@ def main() -> None:
     if args.synthetic_layout:
         _run_synthetic_layout_benchmark(args, dtype, devices)
         return
+    if args.skip_reference_checks and args.pallas_w13_from_reference_layout:
+        raise ValueError("--skip-reference-checks cannot be used with --pallas-w13-from-reference-layout")
 
     x_by_rank, expert_ids, router_weights, w_gate_up = _make_inputs(
         ep_size=args.ep_size,
@@ -849,6 +893,11 @@ def main() -> None:
         print(f"recv_capacity: {recv_capacity} from factor={recv_capacity_factor:g}")
     else:
         print(f"recv_capacity: {recv_capacity}")
+    send_capacity, send_capacity_factor = _resolve_send_capacity(args)
+    if send_capacity_factor is not None:
+        print(f"send_capacity: {send_capacity} from factor={send_capacity_factor:g}")
+    else:
+        print(f"send_capacity: {send_capacity}")
     num_experts = args.ep_size * args.experts_per_rank
 
     prepacked, _ = _time_block(
@@ -859,45 +908,53 @@ def main() -> None:
             router_weights,
             num_experts=num_experts,
             recv_capacity=recv_capacity,
-            send_capacity=args.tokens_per_rank * args.top_k,
+            send_capacity=send_capacity,
         ),
     )
-    ref_layout, _ = _time_block(
-        "dispatch/reference",
-        lambda: dispatch_prepacked_moe_dispatch_up_reference(prepacked, recv_capacity=recv_capacity),
-    )
-    ref_h, _ = _time_block("w13_silu/reference", lambda: compute_moe_up_from_layout_reference(ref_layout, w_gate_up))
     ref_dispatch_steady_ms = None
     ref_w13_steady_ms = None
-    if args.bench_iters > 0:
-        ref_dispatch_fn = jax.jit(
-            lambda prepacked_arg: dispatch_prepacked_moe_dispatch_up_reference(
-                prepacked_arg,
-                recv_capacity=recv_capacity,
+    ref_layout = None
+    ref_h = None
+    if args.skip_reference_checks:
+        print("reference_checks: skipped")
+    else:
+        ref_layout, _ = _time_block(
+            "dispatch/reference",
+            lambda: dispatch_prepacked_moe_dispatch_up_reference(prepacked, recv_capacity=recv_capacity),
+        )
+        ref_h, _ = _time_block(
+            "w13_silu/reference",
+            lambda: compute_moe_up_from_layout_reference(ref_layout, w_gate_up),
+        )
+        if args.bench_iters > 0:
+            ref_dispatch_fn = jax.jit(
+                lambda prepacked_arg: dispatch_prepacked_moe_dispatch_up_reference(
+                    prepacked_arg,
+                    recv_capacity=recv_capacity,
+                )
             )
-        )
-        ref_w13_fn = jax.jit(compute_moe_up_from_layout_reference)
+            ref_w13_fn = jax.jit(compute_moe_up_from_layout_reference)
 
-        def run_ref_dispatch():
-            return ref_dispatch_fn(prepacked)
+            def run_ref_dispatch():
+                return ref_dispatch_fn(prepacked)
 
-        def run_ref_w13():
-            return ref_w13_fn(ref_layout, w_gate_up)
+            def run_ref_w13():
+                return ref_w13_fn(ref_layout, w_gate_up)
 
-        _time_block("dispatch/reference_jit", run_ref_dispatch)
-        ref_dispatch_steady_ms = _measure_steady_state(
-            "dispatch/reference_jit",
-            run_ref_dispatch,
-            warmup_steps=args.warmup_steps,
-            bench_iters=args.bench_iters,
-        )
-        _time_block("w13_silu/reference_jit", run_ref_w13)
-        ref_w13_steady_ms = _measure_steady_state(
-            "w13_silu/reference_jit",
-            run_ref_w13,
-            warmup_steps=args.warmup_steps,
-            bench_iters=args.bench_iters,
-        )
+            _time_block("dispatch/reference_jit", run_ref_dispatch)
+            ref_dispatch_steady_ms = _measure_steady_state(
+                "dispatch/reference_jit",
+                run_ref_dispatch,
+                warmup_steps=args.warmup_steps,
+                bench_iters=args.bench_iters,
+            )
+            _time_block("w13_silu/reference_jit", run_ref_w13)
+            ref_w13_steady_ms = _measure_steady_state(
+                "w13_silu/reference_jit",
+                run_ref_w13,
+                warmup_steps=args.warmup_steps,
+                bench_iters=args.bench_iters,
+            )
 
     if not args.run_pallas:
         return
@@ -910,12 +967,17 @@ def main() -> None:
         pallas_ready_count = None
         pallas_ready_block_count = None
         if args.pallas_w13_from_reference_layout:
+            if ref_layout is None:
+                raise AssertionError("reference layout is required for --pallas-w13-from-reference-layout")
             pallas_layout = ref_layout
             print("dispatch/mosaic_gpu: skipped; using reference layout for W13/SiLU")
         else:
             if args.dispatch_copy_mode == "scratch_ready":
                 pallas_dispatch_fn = _pallas_dispatch_ready_fn(
-                    mesh, recv_capacity=recv_capacity, ready_block_m=args.block_m
+                    mesh,
+                    recv_capacity=recv_capacity,
+                    ready_block_m=args.block_m,
+                    rows_per_program=args.dispatch_rows_per_program,
                 )
                 pallas_dispatch_args = _pallas_dispatch_ready_args(mesh, prepacked)
             else:
@@ -945,21 +1007,24 @@ def main() -> None:
                         ref_dispatch_steady_ms,
                         pallas_dispatch_steady_ms,
                     )
-            dispatch_err = jnp.max(
-                jnp.abs(pallas_layout.recv_x.astype(jnp.float32) - ref_layout.recv_x.astype(jnp.float32))
-            )
-            dispatch_err_float = float(dispatch_err)
-            print(f"dispatch_max_abs_error: {dispatch_err_float:.6g}")
-            valid_err = jnp.sum(pallas_layout.recv_valid != ref_layout.recv_valid, dtype=jnp.int32)
-            expert_err = jnp.sum(pallas_layout.recv_local_expert != ref_layout.recv_local_expert, dtype=jnp.int32)
-            src_rank_err = jnp.sum(pallas_layout.recv_src_rank != ref_layout.recv_src_rank, dtype=jnp.int32)
-            valid_err_int = int(valid_err)
-            expert_err_int = int(expert_err)
-            src_rank_err_int = int(src_rank_err)
-            print(
-                "dispatch_metadata_errors: "
-                f"valid={valid_err_int} local_expert={expert_err_int} src_rank={src_rank_err_int}"
-            )
+            if ref_layout is None:
+                print("dispatch/reference_check: skipped")
+            else:
+                dispatch_err = jnp.max(
+                    jnp.abs(pallas_layout.recv_x.astype(jnp.float32) - ref_layout.recv_x.astype(jnp.float32))
+                )
+                dispatch_err_float = float(dispatch_err)
+                print(f"dispatch_max_abs_error: {dispatch_err_float:.6g}")
+                valid_err = jnp.sum(pallas_layout.recv_valid != ref_layout.recv_valid, dtype=jnp.int32)
+                expert_err = jnp.sum(pallas_layout.recv_local_expert != ref_layout.recv_local_expert, dtype=jnp.int32)
+                src_rank_err = jnp.sum(pallas_layout.recv_src_rank != ref_layout.recv_src_rank, dtype=jnp.int32)
+                valid_err_int = int(valid_err)
+                expert_err_int = int(expert_err)
+                src_rank_err_int = int(src_rank_err)
+                print(
+                    "dispatch_metadata_errors: "
+                    f"valid={valid_err_int} local_expert={expert_err_int} src_rank={src_rank_err_int}"
+                )
             if pallas_ready_count is not None:
                 expected_ready_count = _sharded(
                     mesh, _expected_ready_count(prepacked, recv_capacity), P("expert", None, None)
@@ -978,12 +1043,13 @@ def main() -> None:
                 print(f"dispatch_ready_block_count_max_abs_error: {ready_block_count_err_int}")
                 if ready_block_count_err_int != 0:
                     raise AssertionError(f"dispatch ready-block-count mismatch: max_abs={ready_block_count_err_int}")
-            _check_error("dispatch_max_abs_error", dispatch_err_float, args.dispatch_atol)
-            if valid_err_int != 0 or expert_err_int != 0 or src_rank_err_int != 0:
-                raise AssertionError(
-                    "dispatch metadata mismatch: "
-                    f"valid={valid_err_int} local_expert={expert_err_int} src_rank={src_rank_err_int}"
-                )
+            if ref_layout is not None:
+                _check_error("dispatch_max_abs_error", dispatch_err_float, args.dispatch_atol)
+                if valid_err_int != 0 or expert_err_int != 0 or src_rank_err_int != 0:
+                    raise AssertionError(
+                        "dispatch metadata mismatch: "
+                        f"valid={valid_err_int} local_expert={expert_err_int} src_rank={src_rank_err_int}"
+                    )
 
         if args.w13_impl == "both":
             raise ValueError("--w13-impl=both is only supported with --synthetic-layout")
@@ -1030,13 +1096,16 @@ def main() -> None:
             )
             if ref_w13_steady_ms is not None:
                 _print_speedup(f"{w13_label}_vs_reference_jit", ref_w13_steady_ms, pallas_w13_steady_ms)
-        h_err = jnp.max(jnp.abs(pallas_h.astype(jnp.float32) - ref_h.astype(jnp.float32)))
-        h_err_float = float(h_err)
-        print(f"w13_silu_max_abs_error: {h_err_float:.6g}")
-        _print_error_summary("w13_silu", pallas_h, ref_h)
-        if args.debug_errors:
-            _print_error_debug("w13_silu", pallas_h, ref_h, pallas_layout, w_gate_up)
-        _check_error("w13_silu_max_abs_error", h_err_float, args.w13_atol)
+        if ref_h is None:
+            print("w13_silu/reference_check: skipped")
+        else:
+            h_err = jnp.max(jnp.abs(pallas_h.astype(jnp.float32) - ref_h.astype(jnp.float32)))
+            h_err_float = float(h_err)
+            print(f"w13_silu_max_abs_error: {h_err_float:.6g}")
+            _print_error_summary("w13_silu", pallas_h, ref_h)
+            if args.debug_errors:
+                _print_error_debug("w13_silu", pallas_h, ref_h, pallas_layout, w_gate_up)
+            _check_error("w13_silu_max_abs_error", h_err_float, args.w13_atol)
         if pallas_w13_steady_ms is not None:
             _print_roofline(
                 ep_size=args.ep_size,

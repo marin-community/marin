@@ -524,3 +524,48 @@
   readiness at receive-block completion and feeding a non-fragmented W13
   consumer. Keep benchmark capacity factors at 1.0 for no-buffer probes and
   1.1-1.25 for realistic imbalance.
+
+### 2026-06-24 - Candidate-only built-in GMM probes
+
+- Hypothesis: The large-token path should use the built-in grouped matmul
+  (`ragged_dot(auto)`) for W13 and focus Mosaic work on dispatch/overlap. The
+  benchmark needs candidate-only execution and realistic per-peer send capacity
+  before it can probe those shapes without pure-reference overhead or 8x
+  send-buffer over-allocation.
+- Changes:
+  - Added `--skip-reference-checks` for candidate-only perf runs after
+    correctness has been established on smaller shapes.
+  - Added `--send-capacity` / `--send-capacity-factor`, where the factor is
+    applied to balanced `T*K/EP` source/destination traffic. The default remains
+    conservative `T*K` for skewed smoke tests.
+  - Added `--dispatch-rows-per-program` for `scratch_ready`, so one Pallas
+    program can copy a small block of send rows instead of exactly one row.
+- Commands:
+  - Local validation: `uv run --package marin-levanter python -m py_compile lib/levanter/src/levanter/kernels/pallas/moe_dispatch_up/mosaic_gpu.py lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py`
+  - Local smoke: `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py --ep-size 1 --tokens-per-rank 32 --experts-per-rank 2 --top-k 2 --hidden 8 --intermediate 8 --dtype fp32 --send-capacity-factor 1.0 --skip-reference-checks`
+  - H128 row-blocked dispatch smoke: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 1800 --job-name dlwh-6597-moe-scratch-ready-rows16-h128 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --weight-init grug_truncated --run-pallas --dispatch-copy-mode scratch_ready --dispatch-rows-per-program 16 --w13-impl mosaic_gpu_block_ready --bench-iters 1 --warmup-steps 1`
+  - Stopped medium row-program candidate: `... --job-name dlwh-6597-moe-ragged-dot-t4096-candidate -- ... --tokens-per-rank 4096 --experts-per-rank 32 --hidden 2560 --intermediate 2560 --recv-capacity-factor 1.25 --send-capacity-factor 1.25 --dispatch-copy-mode scratch_ready --w13-impl ragged_dot --ragged-dot-impl auto --skip-reference-checks`
+  - Stopped medium row-blocked candidate: same shape with
+    `--dispatch-rows-per-program 16`, job
+    `dlwh-6597-moe-ragged-dot-t4096-rows16`.
+- Result:
+  - Local compile/smoke and `./infra/pre-commit.py --changed-files --fix`
+    passed.
+  - H128 rows16: dispatch max error 0, metadata errors 0, source/expert
+    ready-count max error 0, block-ready-count max error 0. Dispatch
+    steady-state mean 1.637 ms. Block-ready W13/SiLU steady-state mean
+    0.183 ms, max abs error 0.0078125.
+  - T/rank=4096 candidate setup used `recv_capacity=20480` and
+    `send_capacity=2560` from 25% buffers. Prepack completed in about 22 s.
+    Both row-program and rows16 scratch dispatch attempts produced no dispatch
+    timing after several minutes and were stopped to avoid burning H100 time.
+- Interpretation: Using built-in GMM for W13 is still the right direction, but
+  the current scratch dispatch transport is the large-shape blocker. Batching
+  rows per Pallas program preserves correctness but does not fix the fundamental
+  cost of copying every 2560-wide row through remote scratch and then compacting
+  it. The next overlap prototype should avoid this row-wise remote scratch
+  transport, likely by writing/coalescing receive blocks directly and signaling
+  block readiness, or by using a collective-style primitive closer to the JAX
+  all-gather matmul pattern.
+- Next action: Replace the scratch row-copy transport with block/coalesced
+  receive writes before rerunning T/rank=4096 or the full T/rank=32768 shape.
