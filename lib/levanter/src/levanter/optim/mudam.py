@@ -135,7 +135,10 @@ class MudamConfig(OptimizerConfig):
                     )
                 )
                 if self.weight_decay > 0:
-                    components.append(optax.add_decayed_weights(self.weight_decay, self.build_weight_decay_mask()))
+                    # No mask: the muon group is only Linear weights (norms/biases are routed to
+                    # adamw), so decay applies to all of them — and build_weight_decay_mask() crashes
+                    # on the masked qk_norm NamedArrays (MaskedNode) that land in this group.
+                    components.append(optax.add_decayed_weights(self.weight_decay))
                 components.append(optax.scale(-learning_rate))
                 optimizer = optax.chain(*components)
                 return optimizer
