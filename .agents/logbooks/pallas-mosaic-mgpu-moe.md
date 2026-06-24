@@ -231,3 +231,44 @@
 - Next action: Stop pursuing these XLA flags for this microbench. For baseline
   pressure, compare against Grug's production MoE implementation directly; for
   Mosaic work, continue with tiled dispatch.
+
+### 2026-06-24 - Vectorized remote dispatch validation
+
+- Hypothesis: The relevant-shape integrated dispatch hang is caused by scalar
+  hidden-dimension remote writes in the validation dispatch kernel, not by a
+  semantic routing bug. Replacing the inner scalar loop with a row-slice remote
+  copy should compile at `H=2560` and preserve dispatch correctness.
+- Commands:
+  - H128 row-vector probe: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 1800 --job-name dlwh-6597-moe-dispatch-row-vector-h128 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --run-pallas --dispatch-copy-mode row_vector --bench-iters 2 --warmup-steps 1`
+  - H128 SMEM probe: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 1800 --job-name dlwh-6597-moe-dispatch-row-smem-h128 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --run-pallas --dispatch-copy-mode row_smem --bench-iters 2 --warmup-steps 1`
+  - Relevant-shape row-vector probe: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 2400 --job-name dlwh-6597-moe-dispatch-row-vector-h2560-grug -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --run-pallas --dispatch-copy-mode row_vector --bench-iters 3 --warmup-steps 1`
+- Result:
+  - H128 row-vector dispatch compiled and matched the reference exactly:
+    dispatch max error 0, metadata errors 0. Steady-state dispatch was
+    1.753 ms versus 0.739 ms for the JIT reference.
+  - H128 SMEM copy failed in ptxas with `Entry function ... uses too much
+    parameter space (0x8080 bytes, 0x7ffc max)`. An earlier H64 SMEM attempt
+    also failed before the peer copy because lane lowering requires vector
+    element counts that are multiples of 128. This path was removed instead of
+    retaining dead diagnostic code.
+  - Relevant-shape row-vector dispatch compiled in 16.1 s and ran correctly:
+    dispatch max error 0, metadata errors 0. Steady-state dispatch was
+    1.739 ms versus 0.783 ms for the JIT reference.
+  - Relevant-shape integrated W13/SiLU stayed correct under Grug weights:
+    Mosaic GPU W13/SiLU steady-state mean 0.639 ms versus 10.518 ms for the
+    JIT baseline, with max abs error 0.015625.
+  - Relevant-shape roofline summary: 256 routed rows, dispatch payload
+    1280 KiB, dispatch payload bandwidth 0.754 GB/s, W13 measured
+    10.51 TFLOP/s, estimated HBM-bound W13 roofline 26.79 TFLOP/s.
+- Interpretation: The dispatch correctness issue was the scalar lowering path,
+  not the routing data. Row-vector remote stores make the current milestone-1
+  integrated path compile and validate at the requested `H=2560`, `I=2560`,
+  256-expert, top-k 4 shape. It is still slower than the JIT reference dispatch
+  because each routed row is copied serially and synchronized coarsely. The JAX
+  `collective_matmul_mgpu.py` pattern points to the next production design:
+  structured symmetric scratch/ring exchange or multimem-style collectives,
+  then local compaction/W13, rather than per-row direct remote writes into the
+  final receive buffer.
+- Next action: Use `row_vector` as the default validation dispatch path for the
+  milestone branch. For the perf phase, prototype a scratch-mediated dispatch
+  modeled after collective matmul's remote-ref exchange.

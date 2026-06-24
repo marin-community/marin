@@ -61,6 +61,7 @@ def dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local(
     *,
     axis_name: str,
     recv_capacity: int | None = None,
+    copy_mode: str = "row_vector",
 ) -> MoeDispatchUpLayout:
     """Shard-local MGPU remote-dispatch validation primitive.
 
@@ -77,6 +78,8 @@ def dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local(
     ep_size, send_capacity, hidden = send_x_by_dst.shape
     if recv_capacity is None:
         recv_capacity = send_capacity
+    if copy_mode not in ("scalar", "row_vector"):
+        raise ValueError(f"copy_mode must be 'scalar' or 'row_vector', got {copy_mode!r}")
 
     def kernel_body(
         send_x_ref,
@@ -97,45 +100,93 @@ def dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local(
         recv_sem = pl.get_global(plgpu.SemaphoreType.REGULAR)
         src_rank = lax.axis_index(axis_name)
 
-        for recv_row in range(recv_capacity):
-            for hidden_idx in range(hidden):
-                recv_x_ref[recv_row, hidden_idx] = jnp.zeros((), dtype=recv_x_ref.dtype)
-            recv_valid_count_ref[recv_row] = jnp.int32(0)
-            recv_local_expert_ref[recv_row] = jnp.int32(0)
-            recv_src_rank_ref[recv_row] = jnp.int32(0)
-            recv_src_token_idx_ref[recv_row] = jnp.int32(0)
-            recv_topk_slot_ref[recv_row] = jnp.int32(0)
-            recv_router_weight_ref[recv_row] = jnp.zeros((), dtype=recv_router_weight_ref.dtype)
+        def _zero_metadata():
+            for recv_row in range(recv_capacity):
+                recv_valid_count_ref[recv_row] = jnp.int32(0)
+                recv_local_expert_ref[recv_row] = jnp.int32(0)
+                recv_src_rank_ref[recv_row] = jnp.int32(0)
+                recv_src_token_idx_ref[recv_row] = jnp.int32(0)
+                recv_topk_slot_ref[recv_row] = jnp.int32(0)
+                recv_router_weight_ref[recv_row] = jnp.zeros((), dtype=recv_router_weight_ref.dtype)
+
+        def _zero_recv_x_scalar():
+            for recv_row in range(recv_capacity):
+                for hidden_idx in range(hidden):
+                    recv_x_ref[recv_row, hidden_idx] = jnp.zeros((), dtype=recv_x_ref.dtype)
+
+        def _zero_recv_x_vector():
+            for recv_row in range(recv_capacity):
+                recv_x_ref.at[recv_row, pl.ds(0, hidden)][...] = jnp.zeros((hidden,), dtype=recv_x_ref.dtype)
+
+        def _copy_rows_scalar():
+            for dst_rank in range(ep_size):
+                remote_recv_x = plgpu.remote_ref(recv_x_ref, jnp.int32(dst_rank))
+                remote_recv_valid_count = plgpu.remote_ref(recv_valid_count_ref, jnp.int32(dst_rank))
+                remote_recv_local_expert = plgpu.remote_ref(recv_local_expert_ref, jnp.int32(dst_rank))
+                remote_recv_src_rank = plgpu.remote_ref(recv_src_rank_ref, jnp.int32(dst_rank))
+                remote_recv_src_token_idx = plgpu.remote_ref(recv_src_token_idx_ref, jnp.int32(dst_rank))
+                remote_recv_topk_slot = plgpu.remote_ref(recv_topk_slot_ref, jnp.int32(dst_rank))
+                remote_recv_router_weight = plgpu.remote_ref(recv_router_weight_ref, jnp.int32(dst_rank))
+
+                for send_row in range(send_capacity):
+                    dst_row = send_row_ref[dst_rank, send_row]
+                    valid = (send_row < send_count_ref[dst_rank]) & (dst_row < recv_capacity)
+
+                    @pl.when(valid)
+                    def _copy_row():
+                        for hidden_idx in range(hidden):
+                            remote_recv_x[dst_row, hidden_idx] = send_x_ref[dst_rank, send_row, hidden_idx]
+                        remote_recv_valid_count[dst_row] = jnp.int32(1)
+                        remote_recv_local_expert[dst_row] = send_local_expert_ref[dst_rank, send_row]
+                        remote_recv_src_rank[dst_row] = src_rank
+                        remote_recv_src_token_idx[dst_row] = send_src_token_idx_ref[dst_rank, send_row]
+                        remote_recv_topk_slot[dst_row] = send_topk_slot_ref[dst_rank, send_row]
+                        remote_recv_router_weight[dst_row] = send_router_weight_ref[dst_rank, send_row]
+
+                pl.semaphore_signal(recv_sem, device_id=jnp.int32(dst_rank))
+
+        def _copy_rows_vector():
+            for dst_rank in range(ep_size):
+                remote_recv_x = plgpu.remote_ref(recv_x_ref, jnp.int32(dst_rank))
+                remote_recv_valid_count = plgpu.remote_ref(recv_valid_count_ref, jnp.int32(dst_rank))
+                remote_recv_local_expert = plgpu.remote_ref(recv_local_expert_ref, jnp.int32(dst_rank))
+                remote_recv_src_rank = plgpu.remote_ref(recv_src_rank_ref, jnp.int32(dst_rank))
+                remote_recv_src_token_idx = plgpu.remote_ref(recv_src_token_idx_ref, jnp.int32(dst_rank))
+                remote_recv_topk_slot = plgpu.remote_ref(recv_topk_slot_ref, jnp.int32(dst_rank))
+                remote_recv_router_weight = plgpu.remote_ref(recv_router_weight_ref, jnp.int32(dst_rank))
+
+                for send_row in range(send_capacity):
+                    dst_row = send_row_ref[dst_rank, send_row]
+                    valid = (send_row < send_count_ref[dst_rank]) & (dst_row < recv_capacity)
+
+                    @pl.when(valid)
+                    def _copy_row():
+                        remote_recv_x.at[dst_row, pl.ds(0, hidden)][...] = send_x_ref.at[
+                            dst_rank, send_row, pl.ds(0, hidden)
+                        ][...]
+                        remote_recv_valid_count[dst_row] = jnp.int32(1)
+                        remote_recv_local_expert[dst_row] = send_local_expert_ref[dst_rank, send_row]
+                        remote_recv_src_rank[dst_row] = src_rank
+                        remote_recv_src_token_idx[dst_row] = send_src_token_idx_ref[dst_rank, send_row]
+                        remote_recv_topk_slot[dst_row] = send_topk_slot_ref[dst_rank, send_row]
+                        remote_recv_router_weight[dst_row] = send_router_weight_ref[dst_rank, send_row]
+
+                pl.semaphore_signal(recv_sem, device_id=jnp.int32(dst_rank))
+
+        _zero_metadata()
+        if copy_mode == "scalar":
+            _zero_recv_x_scalar()
+        else:
+            _zero_recv_x_vector()
 
         for peer_rank in range(ep_size):
             pl.semaphore_signal(recv_sem, device_id=jnp.int32(peer_rank))
         pl.semaphore_wait(recv_sem, value=ep_size, decrement=False)
 
-        for dst_rank in range(ep_size):
-            remote_recv_x = plgpu.remote_ref(recv_x_ref, jnp.int32(dst_rank))
-            remote_recv_valid_count = plgpu.remote_ref(recv_valid_count_ref, jnp.int32(dst_rank))
-            remote_recv_local_expert = plgpu.remote_ref(recv_local_expert_ref, jnp.int32(dst_rank))
-            remote_recv_src_rank = plgpu.remote_ref(recv_src_rank_ref, jnp.int32(dst_rank))
-            remote_recv_src_token_idx = plgpu.remote_ref(recv_src_token_idx_ref, jnp.int32(dst_rank))
-            remote_recv_topk_slot = plgpu.remote_ref(recv_topk_slot_ref, jnp.int32(dst_rank))
-            remote_recv_router_weight = plgpu.remote_ref(recv_router_weight_ref, jnp.int32(dst_rank))
-
-            for send_row in range(send_capacity):
-                dst_row = send_row_ref[dst_rank, send_row]
-                valid = (send_row < send_count_ref[dst_rank]) & (dst_row < recv_capacity)
-
-                @pl.when(valid)
-                def _copy_row():
-                    for hidden_idx in range(hidden):
-                        remote_recv_x[dst_row, hidden_idx] = send_x_ref[dst_rank, send_row, hidden_idx]
-                    remote_recv_valid_count[dst_row] = jnp.int32(1)
-                    remote_recv_local_expert[dst_row] = send_local_expert_ref[dst_rank, send_row]
-                    remote_recv_src_rank[dst_row] = src_rank
-                    remote_recv_src_token_idx[dst_row] = send_src_token_idx_ref[dst_rank, send_row]
-                    remote_recv_topk_slot[dst_row] = send_topk_slot_ref[dst_rank, send_row]
-                    remote_recv_router_weight[dst_row] = send_router_weight_ref[dst_rank, send_row]
-
-            pl.semaphore_signal(recv_sem, device_id=jnp.int32(dst_rank))
+        if copy_mode == "scalar":
+            _copy_rows_scalar()
+        else:
+            _copy_rows_vector()
 
         pl.semaphore_wait(recv_sem, value=2 * ep_size, decrement=False)
 

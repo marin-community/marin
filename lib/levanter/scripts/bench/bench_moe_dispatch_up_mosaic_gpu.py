@@ -167,6 +167,7 @@ def _pallas_dispatch_fn(
     mesh: Mesh,
     *,
     recv_capacity: int,
+    copy_mode: str,
 ) -> Callable[..., MoeDispatchUpLayout]:
     def local_dispatch(
         send_x,
@@ -191,6 +192,7 @@ def _pallas_dispatch_fn(
             jnp.squeeze(expert_base, axis=0),
             axis_name="expert",
             recv_capacity=recv_capacity,
+            copy_mode=copy_mode,
         )
         return MoeDispatchUpLayout(
             layout.recv_x[None, ...],
@@ -358,6 +360,12 @@ def main() -> None:
     parser.add_argument("--dtype", choices=("bf16", "fp32"), default="bf16")
     parser.add_argument("--run-pallas", action="store_true")
     parser.add_argument(
+        "--dispatch-copy-mode",
+        choices=("scalar", "row_vector"),
+        default="row_vector",
+        help="Mosaic GPU dispatch copy implementation.",
+    )
+    parser.add_argument(
         "--pallas-w13-from-reference-layout",
         action="store_true",
         help="Run Mosaic GPU W13/SiLU against the reference dispatch layout, skipping Mosaic dispatch.",
@@ -453,7 +461,9 @@ def main() -> None:
             pallas_layout = ref_layout
             print("dispatch/mosaic_gpu: skipped; using reference layout for W13/SiLU")
         else:
-            pallas_dispatch_fn = _pallas_dispatch_fn(mesh, recv_capacity=recv_capacity)
+            pallas_dispatch_fn = _pallas_dispatch_fn(
+                mesh, recv_capacity=recv_capacity, copy_mode=args.dispatch_copy_mode
+            )
             pallas_dispatch_args = _pallas_dispatch_args(mesh, prepacked)
 
             def run_pallas_dispatch():
