@@ -1347,3 +1347,36 @@
   chunks step-by-step instead of waiting for a completed all-to-all result.
 - Next action: Build the first ordered cumulative-semaphore compact ring-step
   Mosaic prototype on H128, then target cap 64/80 once correctness is stable.
+
+### 2026-06-24 11:58 PT - Ordered compact ring transport prototype
+
+- Hypothesis: A compact source/expert ring transport using cumulative GMEM
+  semaphore thresholds can reproduce compact all-to-all layout and become the
+  producer side of the overlapped W13 kernel.
+- Change:
+  - Added `compact_source_expert_ring_transport_mosaic_gpu_local`.
+  - Added `--run-compact-ring-transport` to compare the Mosaic ring-step
+    transport against `lax.all_to_all` compact transport.
+  - The transport uses one cumulative regular semaphore and waits with
+    `decrement=False`, matching the local JAX collective-matmul pattern.
+- Commands:
+  - H128 correctness: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 1800 --job-name dlwh-6597-moe-compact-ring-transport-h128-rowvec -- python lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --run-compact-ring-transport --bench-iters 1 --warmup-steps 1`
+  - Target cap64: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 2400 --job-name dlwh-6597-moe-compact-ring-transport-target-cap64-rowvec --env-vars JAX_OPTIMIZATION_LEVEL O1 --env-vars XLA_FLAGS "--xla_gpu_triton_gemm_any=True --xla_gpu_enable_latency_hiding_scheduler=true" -- python lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.0 --source-expert-capacity 64 --run-compact-ring-transport --skip-reference-checks --bench-iters 3 --warmup-steps 1`
+- Results:
+  - H128 ring transport matched compact all-to-all exactly: `x` max abs error
+    `0`, count max abs error `0`; steady `1.439 ms`.
+  - Initial target cap64 attempt with 256-column tiled row copies failed during
+    Mosaic layout inference with a recursion error.
+  - Switching to a single row-vector remote assignment fixed target lowering.
+  - Target cap64 ring transport matched compact all-to-all exactly: `x` max abs
+    error `0`, count max abs error `0`; steady mean `1.792 ms` (min `1.752`,
+    max `1.848`).
+- Interpretation: The ordered cumulative-semaphore transport is correct at the
+  target shape, so the synchronization substrate is proven. However, the raw
+  ring row-vector transport is much slower than built-in compact all-to-all
+  transport (`~0.56 ms` at cap64). A successful overlap kernel must either
+  overlap this transport aggressively with W13 or replace the row-vector copy
+  with a bulk/pipelined copy path that avoids the layout-inference blow-up.
+- Next action: Insert W13 consumption into the ordered ring step on H128 first.
+  If the target transport remains too expensive, revisit the transport copy as
+  a separate bulk-copy optimization before tuning for `<2 ms`.

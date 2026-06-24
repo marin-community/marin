@@ -26,6 +26,7 @@ from levanter.grug._moe.ep_common import (
 from levanter.grug._moe.ep_padded_all_to_all import _dispatch_fixed_buckets
 from levanter.grug._moe.ep_ring import _dispatch_up_ep_ring_local
 from levanter.kernels.pallas.moe_dispatch_up.mosaic_gpu import (
+    compact_source_expert_ring_transport_mosaic_gpu_local,
     dispatch_prepacked_moe_dispatch_up_mosaic_gpu_direct_ready_local,
     dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local,
     dispatch_prepacked_moe_dispatch_up_mosaic_gpu_ready_local,
@@ -926,6 +927,32 @@ def _compact_a2a_transport_fn(mesh: Mesh) -> Callable[..., tuple[jax.Array, jax.
             "expert",
             split_axis=0,
             concat_axis=0,
+        )
+        return source_expert_x[None, ...], source_expert_count[None, ...]
+
+    return jax.jit(
+        shard_map(
+            local_transport,
+            mesh=mesh,
+            in_specs=(
+                P("expert", None, None, None, None),
+                P("expert", None, None),
+            ),
+            out_specs=(
+                P("expert", None, None, None, None),
+                P("expert", None, None),
+            ),
+            check_vma=False,
+        )
+    )
+
+
+def _compact_ring_transport_fn(mesh: Mesh) -> Callable[..., tuple[jax.Array, jax.Array]]:
+    def local_transport(send_x_by_dst_expert, send_count_by_dst_expert):
+        source_expert_x, source_expert_count = compact_source_expert_ring_transport_mosaic_gpu_local(
+            jnp.squeeze(send_x_by_dst_expert, axis=0),
+            jnp.squeeze(send_count_by_dst_expert, axis=0),
+            axis_name="expert",
         )
         return source_expert_x[None, ...], source_expert_count[None, ...]
 
@@ -1944,6 +1971,11 @@ def main() -> None:
         help="Benchmark compact source/expert all-to-all transport and merged Mosaic W13 separately.",
     )
     parser.add_argument(
+        "--run-compact-ring-transport",
+        action="store_true",
+        help="Benchmark ordered ring-step Mosaic transport for compact source/expert payloads.",
+    )
+    parser.add_argument(
         "--compact-a2a-return-compact-output",
         action="store_true",
         help="Return compact source/expert W13 output instead of scattering back to destination-major rows.",
@@ -2114,6 +2146,7 @@ def main() -> None:
             or args.run_ring_gather_mosaic_dispatch_up
             or args.run_compact_a2a_mosaic_dispatch_up
             or args.run_compact_a2a_breakdown
+            or args.run_compact_ring_transport
         )
         and not args.run_pallas
     ):
@@ -2190,6 +2223,7 @@ def main() -> None:
         and not args.run_compact_source_expert_dispatch_up
         and not args.run_compact_a2a_mosaic_dispatch_up
         and not args.run_compact_a2a_breakdown
+        and not args.run_compact_ring_transport
     ):
         return
     if len(devices) < args.ep_size:
@@ -2685,6 +2719,75 @@ def main() -> None:
                     "dispatch_up/compact_a2a_breakdown_sum_ms: "
                     f"{compact_transport_steady_ms + compact_merged_w13_steady_ms:.3f}"
                 )
+
+        if args.run_compact_ring_transport:
+            source_expert_capacity, source_expert_capacity_factor = _resolve_source_expert_capacity(args)
+            compact_prepacked, _ = _time_block(
+                "prepack/source_expert_reference",
+                lambda: prepack_moe_dispatch_up_source_expert_reference(
+                    x_by_rank,
+                    expert_ids,
+                    router_weights,
+                    num_experts=num_experts,
+                    recv_capacity=recv_capacity,
+                    source_expert_capacity=source_expert_capacity,
+                ),
+            )
+            inferred_source_expert_capacity = compact_prepacked.send_x_by_dst_expert.shape[3]
+            if source_expert_capacity_factor is None:
+                print(f"source_expert_capacity: {inferred_source_expert_capacity}")
+            else:
+                print(
+                    "source_expert_capacity: "
+                    f"{inferred_source_expert_capacity} from factor={source_expert_capacity_factor:g}"
+                )
+            print(f"source_expert_overflow_count: {int(jax.device_get(compact_prepacked.overflow_count))}")
+            _print_source_expert_load_stats(compact_prepacked, args, send_capacity=send_capacity)
+            compact_transport_args = (
+                _sharded(mesh, compact_prepacked.send_x_by_dst_expert, P("expert", None, None, None, None)),
+                _sharded(mesh, compact_prepacked.send_count_by_dst_expert, P("expert", None, None)),
+            )
+
+            compact_transport_fn = _compact_a2a_transport_fn(mesh)
+            expected_transport, _ = _time_block(
+                "dispatch/compact_a2a_transport_for_ring_check",
+                lambda: compact_transport_fn(*compact_transport_args),
+            )
+            expected_source_expert_x, expected_source_expert_count = expected_transport
+
+            compact_ring_transport_fn = _compact_ring_transport_fn(mesh)
+
+            def run_compact_ring_transport():
+                return compact_ring_transport_fn(*compact_transport_args)
+
+            ring_transport_result, _ = _time_block(
+                "dispatch/compact_ring_transport",
+                run_compact_ring_transport,
+            )
+            ring_source_expert_x, ring_source_expert_count = ring_transport_result
+            if args.bench_iters > 0:
+                ring_transport_steady_ms = _measure_steady_state(
+                    "dispatch/compact_ring_transport",
+                    run_compact_ring_transport,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
+                )
+            else:
+                ring_transport_steady_ms = None
+
+            ring_x_err = jnp.max(
+                jnp.abs(ring_source_expert_x.astype(jnp.float32) - expected_source_expert_x.astype(jnp.float32))
+            )
+            ring_count_err = jnp.max(jnp.abs(ring_source_expert_count - expected_source_expert_count))
+            ring_x_err_float = float(ring_x_err)
+            ring_count_err_int = int(ring_count_err)
+            print(f"dispatch_compact_ring_transport_x_max_abs_error: {ring_x_err_float:.6g}")
+            print(f"dispatch_compact_ring_transport_count_max_abs_error: {ring_count_err_int}")
+            _check_error("dispatch_compact_ring_transport_x_max_abs_error", ring_x_err_float, 0.0)
+            if ring_count_err_int != 0:
+                raise AssertionError(f"compact ring transport count mismatch: max_abs={ring_count_err_int}")
+            if ring_transport_steady_ms is not None:
+                print(f"dispatch/compact_ring_transport_end_to_end_ms: {ring_transport_steady_ms:.3f}")
 
         if args.run_compact_source_expert_dispatch:
             source_expert_capacity, source_expert_capacity_factor = _resolve_source_expert_capacity(args)

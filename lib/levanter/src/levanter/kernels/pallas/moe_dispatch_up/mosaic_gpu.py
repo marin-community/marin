@@ -1441,6 +1441,72 @@ def dispatch_prepacked_moe_dispatch_up_mosaic_gpu_source_expert_tiled_local(
     )
 
 
+def compact_source_expert_ring_transport_mosaic_gpu_local(
+    send_x_by_dst_expert: jax.Array,
+    send_count_by_dst_expert: jax.Array,
+    *,
+    axis_name: str,
+) -> tuple[jax.Array, jax.Array]:
+    """Ordered ring-step transport for compact source/expert MoE payloads."""
+
+    _require_mgpu_runtime()
+    if send_x_by_dst_expert.ndim != 4:
+        raise ValueError("send_x_by_dst_expert must have shape [EP, EL, C, D], " f"got {send_x_by_dst_expert.shape}")
+    ep_size, local_experts, source_expert_capacity, hidden = send_x_by_dst_expert.shape
+    if send_count_by_dst_expert.shape != (ep_size, local_experts):
+        raise ValueError(
+            "send_count_by_dst_expert must have shape "
+            f"{(ep_size, local_experts)}, got {send_count_by_dst_expert.shape}"
+        )
+    num_sms = jax.local_devices()[0].core_count
+    rows_per_destination = local_experts * source_expert_capacity
+
+    def kernel_body(send_x_ref, send_count_ref, recv_x_ref, recv_count_ref):
+        received_sem = pl.get_global(plgpu.SemaphoreType.REGULAR)
+        src_rank = lax.axis_index(axis_name)
+        sm = pl.program_id(0)
+
+        for step in range(ep_size):
+            dst_rank = lax.rem(src_rank + step, jnp.int32(ep_size))
+            remote_recv_x = plgpu.remote_ref(recv_x_ref, dst_rank)
+            remote_recv_count = plgpu.remote_ref(recv_count_ref, dst_rank)
+
+            @pl.when(sm == 0)
+            def _copy_counts():
+                for local_expert in range(local_experts):
+                    remote_recv_count[src_rank, local_expert] = send_count_ref[dst_rank, local_expert]
+
+            for row_start in range(0, rows_per_destination, num_sms):
+                linear_row = row_start + sm
+
+                @pl.when(linear_row < rows_per_destination)
+                def _copy_row():
+                    local_expert = linear_row // source_expert_capacity
+                    source_expert_row = linear_row - local_expert * source_expert_capacity
+                    remote_recv_x.at[src_rank, local_expert, source_expert_row, pl.ds(0, hidden)][...] = send_x_ref.at[
+                        dst_rank, local_expert, source_expert_row, pl.ds(0, hidden)
+                    ][...]
+
+            pl.semaphore_signal(received_sem, device_id=dst_rank)
+            pl.semaphore_wait(received_sem, value=(step + 1) * num_sms, decrement=False)
+
+    return plgpu.kernel(
+        kernel_body,
+        out_shape=[
+            jax.ShapeDtypeStruct(
+                (ep_size, local_experts, source_expert_capacity, hidden),
+                send_x_by_dst_expert.dtype,
+            ),
+            jax.ShapeDtypeStruct((ep_size, local_experts), jnp.int32),
+        ],
+        grid=(num_sms,),
+        grid_names=("sm",),
+        compiler_params=plgpu.CompilerParams(
+            lowering_semantics=plgpu.LoweringSemantics.Warpgroup,
+        ),
+    )(send_x_by_dst_expert, send_count_by_dst_expert)
+
+
 def compute_moe_up_mosaic_gpu_local(
     recv_x: jax.Array,
     rows_per_expert: jax.Array,
