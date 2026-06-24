@@ -58,9 +58,8 @@ if __name__ == "__main__":
         executor_main(steps=build_steps())
 ```
 
-Constructing an `ExecutorStep` / `StepSpec` outside any context logs a warning;
-run `scripts/audit_executor_construction.py` to list every such site. Set
-`MARIN_EXECUTOR_STRICT=1` to turn the warning into a hard error. Output paths
+Constructing an `ExecutorStep` / `StepSpec` outside any context logs a warning.
+Set `MARIN_EXECUTOR_STRICT=1` to turn the warning into a hard error. Output paths
 built without an explicit prefix stay *prefix-relative* and are anchored under
 the **run** prefix by the executor, so a step built in one region runs correctly
 in another. Set an explicit `output_path_prefix` only to deliberately pin a step

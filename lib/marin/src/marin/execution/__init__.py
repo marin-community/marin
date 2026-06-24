@@ -3,7 +3,6 @@
 
 from .context import (
     ExecutorContext,
-    audit_construction,
     current_executor_context,
     executor_context,
 )

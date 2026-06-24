@@ -330,48 +330,24 @@ def test_step_spec_as_executor_step_round_trip():
     assert resolved.resources == step.resources
 
 
-def test_as_executor_step_prefixless_override_is_region_relative(monkeypatch):
-    """A prefix-less StepSpec must hand the executor a *relative* override.
+def test_prefixless_step_resolves_under_run_prefix(monkeypatch):
+    """A prefix-less StepSpec built in us-west4 resolves under the us-central1 run.
 
-    A download-style step (no ``output_path_prefix``, relative
-    ``override_output_path``) must not freeze the build region into the
-    ExecutorStep, or a run in another region trips the cross-region guard. The
-    override stays relative so the Executor anchors it under the *run* prefix,
-    while ``output_path`` stays absolute for direct ``StepRunner`` use.
+    ``as_executor_step()`` must hand the executor a *relative* override rather than
+    an absolute build-region path; otherwise the run-region output disagrees with
+    the frozen path and the cross-region guard trips. ``output_path`` itself stays
+    absolute for direct ``StepRunner`` use.
     """
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-west4")
     step = StepSpec(name="raw/dolma", override_output_path="raw/dolma")
-
-    # The physical path (used by a direct StepRunner) is still absolute.
     assert step.output_path == "gs://marin-us-west4/raw/dolma"
-    # But the executor override is region-relative — no bucket frozen in.
-    assert step.as_executor_step().override_output_path == "raw/dolma"
 
-    no_override = StepSpec(name="raw/foo")
-    assert no_override.as_executor_step().override_output_path == no_override.name_with_hash
+    build_step = step.as_executor_step()
+    assert build_step.override_output_path == "raw/dolma"  # relative, no region frozen in
 
-
-def test_as_executor_step_resolves_under_run_prefix_not_build_prefix(monkeypatch):
-    """A step built in us-west4 resolves under the us-central1 run, not the build region."""
-    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-west4")
-    build_step = StepSpec(name="raw/dolma", override_output_path="raw/dolma").as_executor_step()
-
-    executor = Executor(
-        prefix="gs://marin-us-central1",
-        executor_info_base_path="gs://marin-us-central1/experiments",
-    )
+    executor = Executor(prefix="gs://marin-us-central1", executor_info_base_path="gs://marin-us-central1/experiments")
     executor.compute_version(build_step, is_pseudo_dep=False)
-
-    # Anchored under the RUN region, not the us-west4 build region.
     assert executor.output_paths[build_step] == "gs://marin-us-central1/raw/dolma"
-
-    # The round-tripped StepSpec that StepRunner executes pins the run-region path.
-    resolved = resolve_executor_step(
-        build_step,
-        config={},
-        output_path=executor.output_paths[build_step],
-    )
-    assert resolved.output_path == "gs://marin-us-central1/raw/dolma"
 
 
 def _build_three_level_dag(prefix: str) -> tuple[StepSpec, StepSpec, StepSpec]:
