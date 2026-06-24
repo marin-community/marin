@@ -72,6 +72,7 @@ button:hover { background: #f0f4fb; } button.primary { background: var(--accent)
     <h2>samples</h2>
     <div class="controls">
       <label>n <input type="number" id="n" value="20" min="1" max="500" style="width:70px"></label>
+      <label title="number of contiguous windows the n samples are drawn from; fewer = faster, more = more diverse">windows <input type="number" id="runs" value="4" min="1" max="100" style="width:60px"></label>
       <label>seed <input type="number" id="seed" value="0" style="width:70px"></label>
       <button id="resample" class="primary">resample</button>
       <input type="search" id="filter" placeholder="filter samples by text…">
@@ -147,12 +148,13 @@ async function loadSamples() {
   if (!SELECTED) return;
   const { c, q } = SELECTED;
   const n = +document.getElementById('n').value, seed = +document.getElementById('seed').value;
+  const runs = +document.getElementById('runs').value;
   const panel = document.getElementById('samples');
   panel.innerHTML = '<div class="placeholder spin">drawing samples…</div>';
   try {
-    const d = await getJSON(`/api/bucket/${c}/${q}/samples?n=${n}&seed=${seed}`);
+    const d = await getJSON(`/api/bucket/${c}/${q}/samples?n=${n}&seed=${seed}&runs=${runs}`);
     let html = `<div class="bhdr"><span class="big">cluster ${d.cluster_id} · q${d.quality_bucket} ${d.quality_range}</span>
-      <span class="m">${fmt(d.total_elements)} docs · ${fmt(d.total_tokens)} tokens · showing ${d.n_returned} (seed ${d.seed})</span></div>`;
+      <span class="m">${fmt(d.total_elements)} docs · ${fmt(d.total_tokens)} tokens · showing ${d.n_returned} in ${d.runs} window(s) (seed ${d.seed})</span></div>`;
     for (const s of d.samples) {
       html += `<div class="sample"><div class="shdr"><span>#${s.index}</span><span>${fmt(s.n_tokens)} tokens${s.truncated ? ' (truncated)' : ''}</span></div>
         <pre>${escapeHtml(s.text)}</pre></div>`;
@@ -181,6 +183,7 @@ document.getElementById('resample').addEventListener('click', () => {
   document.getElementById('seed').value = Math.floor(Math.random() * 1e6); loadSamples();
 });
 document.getElementById('n').addEventListener('change', loadSamples);
+document.getElementById('runs').addEventListener('change', loadSamples);
 document.getElementById('seed').addEventListener('change', loadSamples);
 document.getElementById('filter').addEventListener('input', applyFilter);
 
