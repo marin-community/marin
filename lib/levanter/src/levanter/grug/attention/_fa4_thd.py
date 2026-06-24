@@ -341,8 +341,8 @@ def _upstream_fa4_thd_forward_launcher(
             out,
             lse,
             softmax_scale,
-            cu_seqlens,
-            cu_seqlens,
+            mCuSeqlensQ=cu_seqlens,
+            mCuSeqlensK=cu_seqlens,
             stream=stream,
         )
 
@@ -503,8 +503,8 @@ def _upstream_fa4_thd_backward_launcher(
             dk_accum,
             dv_accum,
             softmax_scale,
-            cu_seqlens,
-            cu_seqlens,
+            mCuSeqlensQ=cu_seqlens,
+            mCuSeqlensK=cu_seqlens,
             stream=stream,
         )
         dq_postprocess(dq_accum, dq, softmax_scale, cu_seqlens, None, stream)
@@ -552,6 +552,7 @@ def fa4_thd_attention_forward(
         input_spec=input_spec,
         output_spec=output_spec,
         use_static_tensors=True,
+        compile_options="--enable-tvm-ffi",
         softmax_scale=softmax_scale,
     )
     return call(q, k, v, cu_seqlens)
@@ -593,6 +594,7 @@ def fa4_thd_attention_backward(
         input_spec=input_spec,
         output_spec=output_spec,
         use_static_tensors=True,
+        compile_options="--enable-tvm-ffi",
         softmax_scale=softmax_scale,
     )
     dq, dk, dv, *_scratch = call(q, k, v, out, dout, lse, cu_seqlens)

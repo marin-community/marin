@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -275,6 +277,64 @@ def test_gpu_fa4_thd_hopper_backward_passes_smem_safe_options_to_kernel():
     assert captured_kwargs["SdP_swapAB"] is True
     assert captured_kwargs["AtomLayoutNdKV"] == 2
     assert captured_kwargs["num_threads"] == 384
+
+
+def test_gpu_fa4_thd_cutlass_call_uses_tvm_ffi_compile_option(monkeypatch):
+    captured_forward: dict[str, object] = {}
+    captured_backward: dict[str, object] = {}
+
+    class FakeCjax:
+        @staticmethod
+        def TensorSpec(*args, **kwargs):
+            del args, kwargs
+            return object()
+
+        @staticmethod
+        def cutlass_call(*args, **kwargs):
+            del args
+            target = captured_backward if len(kwargs["output_shape_dtype"]) == 8 else captured_forward
+            target.update(kwargs)
+
+            def call(*call_args):
+                q = call_args[0]
+                k = call_args[1]
+                v = call_args[2]
+                if len(kwargs["output_shape_dtype"]) == 8:
+                    return (
+                        jnp.zeros_like(q),
+                        jnp.zeros_like(k),
+                        jnp.zeros_like(v),
+                        *[jnp.zeros(shape.shape, shape.dtype) for shape in kwargs["output_shape_dtype"][3:]],
+                    )
+                return q, jnp.zeros((q.shape[1], q.shape[0]), dtype=jnp.float32)
+
+            return call
+
+    modules = SimpleNamespace(cjax=FakeCjax)
+    monkeypatch.setattr(fa4_thd, "_import_upstream_fa4_cute", lambda: modules)
+    monkeypatch.setattr(fa4_thd, "_upstream_fa4_thd_forward_launcher", lambda *args, **kwargs: object())
+    monkeypatch.setattr(fa4_thd, "_upstream_fa4_thd_backward_launcher", lambda *args, **kwargs: object())
+
+    q = jnp.ones((8, 2, 128), dtype=jnp.bfloat16)
+    k = jnp.ones((8, 1, 128), dtype=jnp.bfloat16)
+    v = jnp.ones((8, 1, 128), dtype=jnp.bfloat16)
+    out = jnp.ones((8, 2, 128), dtype=jnp.bfloat16)
+    dout = jnp.ones((8, 2, 128), dtype=jnp.bfloat16)
+    lse = jnp.ones((2, 8), dtype=jnp.float32)
+    cu_seqlens = jnp.array([0, 8], dtype=jnp.int32)
+    kernel_config = fa4_thd.Flash4CuteKernelConfig(
+        forward_tile=(128, 128),
+        backward_tile=(64, 128),
+        num_threads=384,
+    )
+
+    fa4_thd.fa4_thd_attention_forward(q, k, v, cu_seqlens, softmax_scale=1.0, kernel_config=kernel_config)
+    fa4_thd.fa4_thd_attention_backward(
+        q, k, v, out, dout, lse, cu_seqlens, softmax_scale=1.0, kernel_config=kernel_config
+    )
+
+    assert captured_forward["compile_options"] == "--enable-tvm-ffi"
+    assert captured_backward["compile_options"] == "--enable-tvm-ffi"
 
 
 def test_attention_rejects_unknown_implementation():

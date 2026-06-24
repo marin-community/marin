@@ -76,6 +76,55 @@ def _packed_segment_causal_lower_bounds(
     return jnp.where(valid, lower_bounds, seq_len), valid
 
 
+def _packed_segment_backward_block_sparse_indices(
+    lower_bounds: Int[Array, "B S"],
+    valid: Bool[Array, "B S"],
+    *,
+    tile_m: int,
+    tile_n: int,
+) -> tuple[Int[Array, "B 1 N"], Int[Array, "B 1 N M"]]:
+    """Build upstream-style backward Q-block sparse metadata for Grug masks."""
+    if tile_m <= 0 or tile_n <= 0:
+        raise ValueError(f"tile_m and tile_n must be positive, got {tile_m=} {tile_n=}")
+    if lower_bounds.ndim != 2 or valid.ndim != 2:
+        raise ValueError(f"lower_bounds and valid must have shape [B, S], got {lower_bounds.shape=} {valid.shape=}")
+    if lower_bounds.shape != valid.shape:
+        raise ValueError(f"lower_bounds and valid must have matching shape, got {lower_bounds.shape=} {valid.shape=}")
+
+    batch_size, seq_len = lower_bounds.shape
+    num_m_blocks = (seq_len + tile_m - 1) // tile_m
+    num_n_blocks = (seq_len + tile_n - 1) // tile_n
+    padded_q_len = num_m_blocks * tile_m
+    q_positions = jnp.arange(padded_q_len, dtype=jnp.int32).reshape(num_m_blocks, tile_m)
+    lower_padded = jnp.pad(
+        lower_bounds,
+        ((0, 0), (0, padded_q_len - seq_len)),
+        mode="constant",
+        constant_values=seq_len,
+    ).reshape(batch_size, num_m_blocks, tile_m)
+    valid_padded = jnp.pad(
+        valid,
+        ((0, 0), (0, padded_q_len - seq_len)),
+        mode="constant",
+        constant_values=False,
+    ).reshape(batch_size, num_m_blocks, tile_m)
+
+    n_starts = jnp.arange(num_n_blocks, dtype=jnp.int32) * tile_n
+    n_ends = jnp.minimum(n_starts + tile_n, seq_len) - 1
+    has_contributor = jnp.any(
+        valid_padded[:, None, :, :]
+        & (q_positions[None, None, :, :] >= n_starts[None, :, None, None])
+        & (lower_padded[:, None, :, :] <= n_ends[None, :, None, None]),
+        axis=-1,
+    )
+    block_indices = jnp.arange(num_m_blocks, dtype=jnp.int32)
+    padded_indices = jnp.where(has_contributor, block_indices[None, None, :], num_m_blocks)
+    sorted_indices = jnp.sort(padded_indices, axis=-1)
+    mask_block_cnt = jnp.sum(has_contributor.astype(jnp.int32), axis=-1)[:, None, :]
+    mask_block_idx = jnp.where(sorted_indices < num_m_blocks, sorted_indices, 0)[:, None, :, :]
+    return mask_block_cnt, mask_block_idx
+
+
 def _packed_self_attention_segment_ids(
     q: jax.Array,
     k: jax.Array,
