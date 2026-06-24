@@ -977,3 +977,42 @@ confirms the path.
   not a production win. **Independent review of this evidence (codex + glm-5.2) requested before concluding.**
 - **Repro:** `… job run --gpu H100x1 --enable-extra-resources --extra gpu --cpu 4 --memory 64GB --disk 64GB --
   bash lib/levanter/scripts/bench/_s5_tune_validate.sh` (sweep) and `… _s5_e4m3_complete.sh` (e4m3 backward).
+
+### 2026-06-24 — GFP8-021: S5 H100 — corrected regime (real trial model) + autotune CONFIRMS fp8 loses
+- **Why:** GFP8-017..020 benched hidden=2048/intermediate=5632/8-expert — the `GrugModelConfig` *class
+  defaults*, NOT the heuristic-derived `GRUG_MOE_TRIAL_MODEL` that PR #5350 actually ran. The real trial
+  model is hidden=**1024**, intermediate=**512**, **64** experts, top_k=4 (resolved from the live config).
+  F is 11× smaller and there are 8× more experts — a far more memory-bound, many-small-GEMM regime. Also
+  redid the bench per the (rebased) `add-pallas-kernel` skill: representative shape grid + bounded
+  block/tile autotune + JSON artifact + best-config table, instead of one guessed shape.
+- **Setup:** `tune_ragged_fp8.py` (driver) + `bench_ragged_fp8.py` (added `RAGGED_DOT_BLOCK_M` knob). Two
+  buckets = one device's view of the grouped GEMM under the two plausible layouts, both M=65536/device:
+  `ep8` (8 local experts, ~8192 tok/expert, expert-parallel) and `dp64` (64 experts, ~1024 tok/expert,
+  data-parallel). 8-config block/tile grid per (bucket, path); each (bucket,path,config) an isolated
+  subprocess so smem-OOM / XLA-crash configs are recorded, not fatal. Job `/matt/iris-run-job-20260624-194400`.
+- **Result — autotuned, real regime (TF/s):**
+
+  | bucket | bf16 fwd | fp8 fwd | fp8/bf16 fwd | bf16 fwd+bwd (bar) | fp8 fwd+bwd |
+  |--------|---------|---------|--------------|--------------------|-------------|
+  | ep8 (8exp)  | 341.8 | 227.6 | **0.67×** | 472.7 | FAIL (mixed-f8 unsupported / e4m3 XLA crash) |
+  | dp64 (64exp) | 253.0 | 152.3 | **0.60×** | 351.1 | FAIL (same two walls) |
+
+  Best bf16 fwd+bwd config: ep8 `bm128/bn256/bk64/w8/s3`; dp64 `bm128/bn128/bk32/w4/s4`. fp8 numerics
+  rel_frob ≈ 0.066 (consistent). Per-config spread is wide (e.g. ep8 bf16 fwd+bwd 260→473), so tuning
+  *does* matter at this regime — but it lifts bf16 and fp8 together and never flips the ordering.
+- **Verdict — the shape error was real but did NOT change the conclusion.** Even at the correct,
+  representative trial-model shape, autotuned: (1) fp8 forward is **0.60–0.67× bf16** — still slower; (2)
+  the f8 backward hits the **same two shape-independent walls** (mixed-f8 dot rejected by the pallas-triton
+  lowering; same-type-e4m3 backward crashes XLA codegen). fp8 forward reaches only ~11.5% of the f8 peak
+  vs bf16's ~35% of the bf16 peak: these small (F=512) GEMMs are memory/overhead-bound, so f8's compute
+  advantage has no room to show — and is even less likely to help here than at the (wrongly) compute-heavy
+  shape. **Quantize-around + autotune the existing pallas-triton kernel does not beat bf16 at the regime
+  that matters.** A real f8 win still requires a kernel with direct MMA-dtype control (mosaic_gpu / raw
+  Triton), per GFP8-020.
+- **Infra note:** the rebase onto main (for the updated skill) bumped requires-python to 3.12 in pyproject
+  AND uv.lock, but the cluster's `:latest` iris-task image is a stale **3.11.14** build → uv refused the
+  bundle at env setup. Ran by restoring the pre-rebase 3.11 dep context (lock + pyprojects + .python-version)
+  into the bundle as uncommitted edits (code provably runs on 3.11), reverted after. This 3.11-image-vs-
+  3.12-main lag will block any H100 job off current main until the task image is rebuilt.
+- **Repro:** `… job run --gpu H100x1 --enable-extra-resources --extra gpu --cpu 4 --memory 64GB --disk 64GB
+  -- bash lib/levanter/scripts/bench/_s5_tune_grid.sh` (from a 3.11-compatible bundle until the image updates).
