@@ -8,24 +8,28 @@ bandwidth. :func:`cache_to_prefix` mirrors a snapshot once to a shared cache
 prefix (typically a region-local TTL bucket from
 :func:`rigging.filesystem.marin_temp_bucket`) under a distributed lock, so
 concurrent workers do not all hammer HuggingFace at the same time: the first
-worker downloads and uploads while the rest **block** until the cache is
-populated, then read the snapshot from the nearby cache.
+worker populates the cache while the rest **block** until it is complete, then
+read the snapshot from the nearby cache.
 
-The download is injected as a callback so this module stays free of any
-``huggingface_hub`` dependency; callers bind ``snapshot_download`` (or any other
-populator) themselves.
+The populate step streams **directly into the cache filesystem** — there is no
+full local copy of the snapshot. :func:`cache_hf_model` is the easy path for the
+common case (mirror an HF repo by id), downloading and uploading one file at a
+time so a multi-hundred-GB repo never has to fit on local disk. :func:`cache_to_prefix`
+takes an arbitrary populate callback for callers that need a custom source.
 """
 
 from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Generator
 
 import fsspec
+from huggingface_hub import hf_hub_download, list_repo_files
 from rigging.distributed_lock import HEARTBEAT_INTERVAL, DistributedLease, LeaseLostError, create_lock
 
 logger = logging.getLogger(__name__)
@@ -34,26 +38,30 @@ DEFAULT_COMPLETE_MARKER = ".cache_complete"
 """Marker written last after a full upload; its presence is the cache-hit signal."""
 
 _LOCK_SUFFIX = ".lock"
-# How often losers re-check the completion marker while the winner downloads.
+# How often losers re-check the completion marker while the winner populates.
 _DEFAULT_POLL_INTERVAL = 10.0
+
+# A populate callback streams the snapshot into ``cache_path`` on the given
+# filesystem. It must write every file but NOT the completion marker (the cache
+# writes that last so a crashed populate never reads as a hit).
+Populate = Callable[[fsspec.AbstractFileSystem, str], None]
 
 
 def cache_to_prefix(
     cache_path: str,
-    download: Callable[[str], None],
+    populate: Populate,
     *,
     complete_marker: str = DEFAULT_COMPLETE_MARKER,
     poll_interval: float = _DEFAULT_POLL_INTERVAL,
 ) -> str:
-    """Populate *cache_path* once under a distributed lock and return a loadable path.
+    """Populate *cache_path* once under a distributed lock and return it.
 
     Fast path: if the completion marker already exists, return ``cache_path``
     immediately. Otherwise acquire a distributed lock keyed on ``cache_path``:
 
-    - The **winner** downloads into a fresh local temp dir via ``download``,
-      uploads the result to ``cache_path``, writes the marker last (so a crashed
-      upload never reads as a hit), and returns the **local temp dir** — a fast
-      local read that avoids re-reading what it just uploaded.
+    - The **winner** runs ``populate`` (which streams files straight into the
+      cache filesystem), writes the marker last (so a crashed populate never
+      reads as a hit), and returns ``cache_path``.
     - **Losers** block, polling for the marker every ``poll_interval`` seconds,
       then return ``cache_path`` once the winner finishes. If the holder dies
       without completing (its lease goes stale), a loser takes over and becomes
@@ -62,15 +70,15 @@ def cache_to_prefix(
     Args:
         cache_path: Destination prefix for the mirrored snapshot (any fsspec
             path, e.g. ``gs://…`` or a local directory).
-        download: Callback that populates the local directory passed to it with
-            the files to cache. Typically binds ``snapshot_download``.
+        populate: Callback ``(fs, cache_path) -> None`` that streams the snapshot
+            into ``cache_path`` on filesystem ``fs``. Use :func:`cache_hf_model`
+            for the common HF-repo case instead of writing one by hand.
         complete_marker: Filename (relative to ``cache_path``) written last to
             mark the cache complete.
         poll_interval: Seconds a blocked worker waits between marker re-checks.
 
     Returns:
-        A path that the caller can load the snapshot from: the local temp dir for
-        the worker that populated the cache, or ``cache_path`` otherwise.
+        ``cache_path`` — a path the caller can load the snapshot from.
     """
     cache_path = cache_path.rstrip("/")
     fs, _ = fsspec.core.url_to_fs(cache_path)
@@ -95,21 +103,71 @@ def cache_to_prefix(
             logger.info("model cache populated while acquiring lock: %s", cache_path)
             return cache_path
         with _heartbeat(lock):
-            return _populate(fs, cache_path, marker, download)
+            _populate(fs, cache_path, marker, populate)
+        return cache_path
     finally:
         lock.release()
 
 
-def _populate(fs: fsspec.AbstractFileSystem, cache_path: str, marker: str, download: Callable[[str], None]) -> str:
-    """Download to a local temp dir, mirror it to *cache_path*, then write *marker*."""
-    logger.info("model cache miss; downloading to populate %s", cache_path)
-    local_dir = tempfile.mkdtemp(prefix="model_cache_")
-    download(local_dir)
-    fs.put(f"{local_dir.rstrip('/')}/", f"{cache_path}/", recursive=True)
-    # Marker last: its presence is the cache-hit signal, so a crashed upload won't read as complete.
+def cache_hf_model(
+    cache_path: str,
+    model_id: str,
+    *,
+    revision: str | None = None,
+    complete_marker: str = DEFAULT_COMPLETE_MARKER,
+    poll_interval: float = _DEFAULT_POLL_INTERVAL,
+) -> str:
+    """Mirror HuggingFace repo *model_id* to *cache_path* once under a distributed lock.
+
+    The easy path over :func:`cache_to_prefix`: streams the repo into the cache
+    one file at a time (see :func:`_stream_hf_snapshot`), so the snapshot never
+    has to fit on local disk. Returns ``cache_path``.
+
+    Args:
+        cache_path: Destination prefix for the mirrored snapshot.
+        model_id: HuggingFace repo id, e.g. ``Qwen/Qwen3-0.6B``.
+        revision: Optional git revision (branch, tag, or commit) to mirror.
+        complete_marker: Filename written last to mark the cache complete.
+        poll_interval: Seconds a blocked worker waits between marker re-checks.
+    """
+    return cache_to_prefix(
+        cache_path,
+        lambda fs, dest: _stream_hf_snapshot(fs, dest, model_id, revision),
+        complete_marker=complete_marker,
+        poll_interval=poll_interval,
+    )
+
+
+def _stream_hf_snapshot(fs: fsspec.AbstractFileSystem, dest: str, model_id: str, revision: str | None) -> None:
+    """Copy every file of HF repo *model_id* into *dest*, one file at a time.
+
+    Each file is downloaded to a scratch dir, uploaded to ``dest``, then deleted
+    before the next download, so peak local disk is one file rather than the full
+    repo.
+    """
+    filenames = list_repo_files(model_id, revision=revision)
+    logger.info("streaming %d files from HF repo %s into %s", len(filenames), model_id, dest)
+    with tempfile.TemporaryDirectory(prefix="hf_stream_") as scratch:
+        for filename in filenames:
+            local_path = hf_hub_download(model_id, filename, revision=revision, local_dir=scratch)
+            remote_path = f"{dest}/{filename}"
+            # Local/posix-backed fsspec filesystems don't auto-create parents; object
+            # stores treat this as a no-op since they have no real directories.
+            fs.makedirs(remote_path.rsplit("/", 1)[0], exist_ok=True)
+            fs.put_file(local_path, remote_path)
+            os.remove(local_path)
+
+
+def _populate(fs: fsspec.AbstractFileSystem, cache_path: str, marker: str, populate: Populate) -> None:
+    """Stream the snapshot into *cache_path* via *populate*, then write *marker*."""
+    logger.info("model cache miss; populating %s", cache_path)
+    # Object stores have no real directories, but local/posix-backed fsspec
+    # filesystems need the prefix to exist before files are written into it.
+    fs.makedirs(cache_path, exist_ok=True)
+    populate(fs, cache_path)
+    # Marker last: its presence is the cache-hit signal, so a crashed populate won't read as complete.
     with fs.open(marker, "w") as handle:
         handle.write("ok")
-    return local_dir
 
 
 @contextlib.contextmanager

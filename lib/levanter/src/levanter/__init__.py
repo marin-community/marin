@@ -19,6 +19,7 @@ __all__ = [
     "trainer",
     "grug",
     "cache_to_prefix",
+    "cache_hf_model",
     "current_tracker",
     "initialize",
 ]
@@ -35,7 +36,7 @@ import levanter.optim as optim
 import levanter.tracker as tracker
 import levanter.trainer as trainer
 import levanter.grug as grug
-from levanter.model_cache import cache_to_prefix
+from levanter.model_cache import cache_hf_model, cache_to_prefix
 from levanter.tracker import current_tracker
 from levanter.trainer import initialize
 

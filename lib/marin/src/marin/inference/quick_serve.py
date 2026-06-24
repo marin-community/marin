@@ -25,11 +25,10 @@ from dataclasses import dataclass, field
 
 import fsspec
 import requests
-from huggingface_hub import snapshot_download
 from iris.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.tpu_topology import get_tpu_topology
-from levanter.model_cache import cache_to_prefix
+from levanter.model_cache import cache_hf_model
 from rigging.connect import proxy_path
 from rigging.filesystem import marin_temp_bucket
 from rigging.log_setup import configure_logging
@@ -159,11 +158,7 @@ def resolve_model_path(model: str, cache_ttl_days: int) -> str:
         return model
 
     cache_path = marin_temp_bucket(cache_ttl_days, f"{_MODEL_CACHE_PREFIX}/{_model_cache_slug(model)}")
-    return cache_to_prefix(
-        cache_path,
-        lambda local_dir: snapshot_download(model, local_dir=local_dir),
-        complete_marker=_CACHE_COMPLETE_MARKER,
-    )
+    return cache_hf_model(cache_path, model, complete_marker=_CACHE_COMPLETE_MARKER)
 
 
 def detect_chat_support(vllm_base_url: str, model_id: str) -> bool:
