@@ -163,11 +163,10 @@ def _has_tpu_device(config: ContainerConfig) -> bool:
 def _build_device_flags(config: ContainerConfig) -> list[str]:
     """Build Docker device flags based on resource configuration.
 
-    Detects TPU resources and returns appropriate Docker flags for TPU passthrough
-    (large shared memory, locked-memory ulimit, SYS_RESOURCE for memlock). The
-    ``--privileged`` flag a TPU also needs is emitted by ``_security_flags`` so
-    privilege is decided in one place. Returns empty list if no special device
-    configuration is needed.
+    Detects TPU resources and returns the Docker flags for TPU passthrough: large
+    shared memory, the locked-memory ulimit, and the SYS_RESOURCE capability for
+    memlock. Privilege (``--privileged``) is handled by the security-profile flags,
+    not here. Returns an empty list when no special device configuration is needed.
     """
     flags: list[str] = []
 
