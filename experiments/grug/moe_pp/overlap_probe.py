@@ -110,6 +110,35 @@ def main() -> int:
         fanout * 1e3,
         chain / fanout,
     )
+
+    # --- probe 4: M microbatches x P stages, mb-major dispatch (EXACTLY the pipeline pattern) ---
+    # Each microbatch is a transported chain dev0->..->dev(P-1). Dispatched mb-by-mb without
+    # blocking. If the runtime fills the pipeline, wall time ~ (M+P-1) kernels; if it serializes,
+    # ~ M*P kernels.
+    m_count = 8
+    t = time.perf_counter()
+    for _ in range(iters):
+        finals = []
+        for _m in range(m_count):
+            h = a[0]
+            for s in range(p):
+                h = jax.device_put(h, devs[s])
+                h = heavy(h)
+            finals.append(h)
+        jax.block_until_ready(finals)
+    pipe = (time.perf_counter() - t) / iters
+    ideal = (m_count + p - 1) * one_kernel
+    serial = m_count * p * one_kernel
+    logger.info(
+        "PROBE4 %dmb x %dstage mb-major=%.0fms | pipelined-ideal=%.0fms serial=%.0fms | %s (overlap eff=%.0f%%)",
+        m_count,
+        p,
+        pipe * 1e3,
+        ideal * 1e3,
+        serial * 1e3,
+        "PIPELINES" if pipe < 0.6 * serial else "SERIALIZES",
+        100.0 * (serial - pipe) / (serial - ideal),
+    )
     return 0
 
 
