@@ -265,6 +265,12 @@ def segmented_flash_attention_backward_sm90_native(
     except Exception as exc:
         raise _optional_dependency_error() from exc
 
+    # Upstream SM90 backward is not exposed as a single JAX custom call in this
+    # integration. Its mainloop consumes dPsum and log2 LSE from preprocess, and
+    # its postprocess expects gmem-backed accumulator buffers with the SM90
+    # accumulator layout. Keeping these as separate cutlass_call boundaries
+    # preserves that ABI and avoids decoding SM90 accumulators with the older
+    # segmented fallback postprocess contract.
     preprocess_launcher = segmented_flash_attention_backward_sm90_preprocess_launcher(
         modules,
         dtype=q.dtype,

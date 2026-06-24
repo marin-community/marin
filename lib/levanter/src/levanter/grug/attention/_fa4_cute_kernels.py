@@ -1485,6 +1485,12 @@ def flash_attention_backward_postprocess_launcher(
 
 def _allow_tuple_aux_tensors_for_nested_sm90(backward_cls: Any) -> None:
     """Let nested CuTe JIT calls pass aux tensors after list literals become tuples."""
+    # The installed upstream SM90 kernel annotates aux_tensors as a CuTe list
+    # type. CUTLASS JAX lowers Python list literals through TVM-FFI as tuples,
+    # then the nested CuTe JIT type-checks that value against the annotation and
+    # rejects the Grug lower_bounds/valid pair before codegen. Relaxing only this
+    # annotation keeps upstream's kernel body intact while allowing the two aux
+    # arrays to flow through the nested mask_mod call.
     for method_name in ("__call__", "kernel"):
         method = getattr(backward_cls, method_name, None)
         for target in (method, getattr(method, "__wrapped__", None)):
@@ -1495,6 +1501,12 @@ def _allow_tuple_aux_tensors_for_nested_sm90(backward_cls: Any) -> None:
 
 def _patch_jax_array_list_tvm_ffi_converter() -> None:
     """Teach the installed TVM-FFI converter about CUTLASS JAX wrapper args."""
+    # BlockSparseTensors carries JAX arrays inside CUTLASS's JaxArrayList helper.
+    # The installed TVM-FFI converter predates that wrapper and treats it as an
+    # unknown object, so the SM90 call boundary cannot pass Grug partial/full
+    # block-sparse metadata. Convert it to the TupleParam form TVM already
+    # understands; the patch is idempotent and limited to this missing wrapper
+    # type.
     try:
         converter_module = importlib.import_module("cutlass.cute._tvm_ffi_args_spec_converter")
         jax_types_module = importlib.import_module("cutlass.jax.types")
