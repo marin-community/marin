@@ -51,7 +51,6 @@ from levanter.optim.util import NEWTON_SCHULZ_COEFFICIENTS
 
 from experiments.grug.moe import model as grug_model
 from experiments.grug.moe.model import Transformer
-from experiments.grug.moe_pp.host_transport import HostChannel
 from experiments.grug.moe_pp.pipeline_manual import (
     _embed_forward,
     _embed_head_tuple,
@@ -174,33 +173,22 @@ def _put_act(x, mesh: Mesh) -> jax.Array:
     return _make_global(x, mesh, spec, x.shape, x.dtype)
 
 
-def _transport(
-    x: jax.Array, mesh: Mesh, spec: P = grug_model._batch_spec(), *, channel: HostChannel | None = None
-) -> jax.Array:
+def _transport(x: jax.Array, mesh: Mesh, spec: P = grug_model._batch_spec()) -> jax.Array:
     """Move a runtime global array ``x`` onto ``mesh`` (batch sharding by default).
 
     Single-host: a plain ``device_put``. Multi-host: each stage sub-mesh lives entirely
     on one process, so ``x`` is fully addressable on the process(es) owning its devices;
     that process pulls it to the host, and when the target is on a different process the
-    data crosses the wire. Every process then builds its local shards. Only the one
-    host-boundary hop actually crosses; intra-host hops stay local.
-
-    The cross-host hop uses ``broadcast_one_to_all`` (a global psum) by default, or a
-    direct point-to-point send over ``channel`` when one is supplied -- the channel skips
-    the global collective and its per-call overhead.
+    data crosses the wire via ``broadcast_one_to_all``. Every process then builds its local
+    shards. Only the one host-boundary hop actually crosses; intra-host hops stay local. The
+    on-device :func:`_build_ppermute_hop` carries the boundary activation without this host
+    round-trip; ``_transport`` remains for intra-host moves and the embed/head/loss reductions.
     """
     if not _multihost():
         return jax.device_put(x, NamedSharding(mesh, spec))
     pid = jax.process_index()
     src_procs = {d.process_index for d in x.sharding.device_set}
     dst_procs = {d.process_index for d in mesh.devices.flat}
-    if src_procs != dst_procs and channel is not None:
-        if pid in src_procs:
-            channel.send(np.asarray(jax.device_get(x)))
-            full = None
-        else:
-            full = channel.recv(x.shape, x.dtype) if pid in dst_procs else None
-        return _make_global(full, mesh, spec, x.shape, x.dtype)
     full = np.asarray(jax.device_get(x)) if pid in src_procs else None
     if src_procs != dst_procs:
         src = min(src_procs)
@@ -305,8 +293,7 @@ class _TransportWorker:
     ordered -- the invariant that makes interleaved dispatch safe across hosts.
     """
 
-    def __init__(self, channel: HostChannel | None = None) -> None:
-        self._channel = channel
+    def __init__(self) -> None:
         self._q: queue.Queue = queue.Queue()
         self._thread = threading.Thread(target=self._run, name="moe-pp-transport", daemon=True)
         self._thread.start()
@@ -323,7 +310,7 @@ class _TransportWorker:
                 return
             fut, x, mesh, spec = job
             try:
-                fut.set_result(_transport(x, mesh, spec, channel=self._channel))
+                fut.set_result(_transport(x, mesh, spec))
             except BaseException as exc:  # surface to the consumer's .result()
                 fut.set_exception(exc)
 
@@ -472,7 +459,6 @@ def zb_build(
     remat: bool = True,
     muon: bool = False,
     async_transport: bool = False,
-    p2p_transport: bool = False,
     ppermute_transport: bool = False,
 ):
     """Place params on per-stage sub-meshes and compile the stage fns ONCE.
@@ -491,18 +477,13 @@ def zb_build(
     Stages own disjoint device slices of ``expert_per_stage * data_per_stage`` devices
     each (so ``num_stages * expert_per_stage * data_per_stage == device_count``).
 
-    ``async_transport`` (multi-host only) runs each cross-host boundary hop on a side
-    thread so the main thread keeps dispatching other microbatches while the hop's
-    ``device_get``+broadcast is in flight; both hosts submit hops in identical ``op_order``
-    so the broadcasts stay paired. No effect single-host (intra-host hops stay inline).
+    ``ppermute_transport`` moves each cross-host boundary hop on-device with ``ppermute``
+    (NCCL send/recv -> GPUDirect RDMA over the fabric) -- no host round-trip. The fast path.
 
-    ``p2p_transport`` (two-host only) sends each cross-host hop point-to-point over a TCP
-    :class:`HostChannel` instead of ``broadcast_one_to_all``, skipping the global psum and
-    its per-call overhead. Composes with ``async_transport`` (the worker uses the channel).
-
-    ``ppermute_transport`` moves each cross-host hop on-device with ``ppermute`` (NCCL
-    send/recv -> GPUDirect RDMA over the fabric) -- no host round-trip at all. This is the
-    fast path; it supersedes ``p2p_transport``/``broadcast`` (both host-staged) when set.
+    ``async_transport`` (multi-host only, host-staged fallback when ``ppermute`` is off) runs
+    each cross-host hop's ``device_get``+broadcast on a side thread so the main thread keeps
+    dispatching other microbatches; both hosts submit hops in identical ``op_order`` so the
+    broadcasts stay paired. No effect single-host (intra-host hops stay inline).
     """
     devices = jax.devices()
     dps = expert_per_stage * data_per_stage
@@ -563,11 +544,6 @@ def zb_build(
     use_schedule = schedule is not Schedule.GPIPE
     op_order = pipeline_schedule(num_stages, num_microbatches, split_w=split_w) if use_schedule else []
     muon_fn = jax.jit(orthogonalize_tree) if muon else None
-
-    # Direct host<->host channel for the cross-host hop (rendezvous once here; reused across
-    # step calls). Both processes build it symmetrically, so the rendezvous pairs up.
-    use_channel = p2p_transport and _multihost() and not ppermute_transport
-    channel = HostChannel(1 - jax.process_index()) if use_channel else None
 
     # On-device ppermute hops: one per cross-host boundary (keyed by its low stage), carrying
     # both the forward and backward crossing on a single clique. Compiled once, reused.
@@ -654,14 +630,12 @@ def zb_build(
             g_eh_m = jax.tree_util.tree_map(jnp.add, g_embed_m, g_head_on0)
             return g_eh_m if prev is None else jax.tree_util.tree_map(jnp.add, prev, g_eh_m)
 
-        # Cross-host boundary hops run on a side thread (``async_transport``) so the main
-        # thread keeps dispatching other microbatches while the hop is in flight; the
-        # consuming op resolves the future just-in-time. The hop itself goes over the direct
-        # ``channel`` when ``p2p_transport`` is on, else ``broadcast_one_to_all``. Intra-host
-        # hops stay inline ``_transport`` (a host-staged device move -- threading them only
-        # adds handoff latency). ``worker``/``channel`` are None when their flag is off or
-        # single-host, so ``_send`` collapses to the synchronous broadcast path.
-        worker = _TransportWorker(channel) if (async_transport and _multihost() and not ppermute_transport) else None
+        # Host-staged fallback (``ppermute`` off): run each cross-host broadcast on a side
+        # thread so the main thread keeps dispatching other microbatches while the hop is in
+        # flight; the consuming op resolves the future just-in-time. Both hosts submit in
+        # identical ``op_order`` so the broadcasts stay paired. ``worker`` is None when the flag
+        # is off, single-host, or ppermute is on, so ``_send`` collapses to the inline path.
+        worker = _TransportWorker() if (async_transport and _multihost() and not ppermute_transport) else None
 
         def _send(x: jax.Array, dst: Mesh, src: Mesh, src_stage: int, dst_stage: int) -> jax.Array | Future:
             if not _crosses_host(src, dst):
@@ -678,7 +652,7 @@ def zb_build(
                 return hop(x, 0 if src_stage < dst_stage else 1)
             if worker is not None:
                 return worker.submit(x, dst, grug_model._batch_spec())
-            return _transport(x, dst, channel=channel)
+            return _transport(x, dst)
 
         if use_schedule:
             # Wavefront: one interleaved dispatch following ``op_order``. F/B/W ops stream
