@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from fray.types import ResourceConfig
 from rigging.filesystem import marin_prefix
 
+from marin.execution.context import check_build_context
 from marin.execution.types import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
 
 
@@ -78,6 +79,9 @@ class StepSpec:
     plain callable runs inline in the runner thread.
     """
 
+    def __post_init__(self):
+        check_build_context("StepSpec", self.name)
+
     @cached_property
     def dep_paths(self) -> list[str]:
         """Physical and resolved output paths of all dependencies."""
@@ -120,9 +124,8 @@ class StepSpec:
     def as_executor_step(self) -> ExecutorStep:
         """Convert to an ``ExecutorStep`` for use in ``Executor.run()`` pipelines.
 
-        The resulting ``ExecutorStep`` preserves this step's output path and
-        caching identity via ``override_output_path``. Round-tripping through
-        ``resolve_executor_step`` returns the original ``StepSpec``.
+        Round-tripping through ``resolve_executor_step`` returns the original
+        ``StepSpec``.
         """
         dep_steps = [dep.as_executor_step() for dep in self.deps]
 
@@ -132,11 +135,19 @@ class StepSpec:
             deps=dep_steps,
         )
 
+        # ExecutorStep carries only override_output_path. An explicit prefix (or an
+        # absolute override) is a deliberate pin, kept as an absolute path; otherwise
+        # stay relative so the executor anchors under the run prefix, not the build region.
+        if self.output_path_prefix is not None:
+            override_output_path = self.output_path
+        else:
+            override_output_path = self.override_output_path or self.name_with_hash
+
         result = ExecutorStep(
             name=self.name,
             fn=self.fn,
             config=config,
-            override_output_path=self.output_path,
+            override_output_path=override_output_path,
             resources=self.resources,
         )
         # ExecutorStep is frozen; object.__setattr__ stashes the original

@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 
 from fray.types import ResourceConfig
 
+from marin.execution.context import check_build_context
+
 ConfigT_co = TypeVar("ConfigT_co", covariant=True)
 T_co = TypeVar("T_co", covariant=True)
 
@@ -48,6 +50,9 @@ class ExecutorStep(Generic[ConfigT_co]):
     If ``None``, behavior is determined by ``fn``: a ``RemoteCallable``
     submits as a Fray job; a plain callable runs inline in-process.
     """
+
+    def __post_init__(self):
+        check_build_context("ExecutorStep", self.name)
 
     def cd(self, name: str) -> InputName:
         """Refer to the `name` under `self`'s output_path."""
