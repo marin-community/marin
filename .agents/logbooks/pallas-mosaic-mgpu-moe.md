@@ -446,3 +446,37 @@
 - Next action: For the large-token shape, prototype block-level readiness with
   expert-major coalescing, or keep W13 as the built-in grouped matmul and focus
   on overlapping dispatch with the non-fragmented expert-major consumer.
+
+### 2026-06-24 - Coalesced block-ready dispatch metadata
+
+- Hypothesis: A coalesced `ready_block_count[recv_block]` surface can represent
+  row/block readiness without fragmenting W13 by source rank. This keeps the
+  readiness contract aligned with expert-major W13 block scheduling.
+- Commands:
+  - Failed first H128 attempt: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 1800 --job-name dlwh-6597-moe-block-ready-h128 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --weight-init grug_truncated --run-pallas --dispatch-copy-mode scratch_ready --bench-iters 1 --warmup-steps 1`
+  - Fixed H128 smoke: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 1800 --job-name dlwh-6597-moe-block-ready-h128-2 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --weight-init grug_truncated --run-pallas --dispatch-copy-mode scratch_ready --bench-iters 1 --warmup-steps 1`
+  - H2560 relevant-shape smoke: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 2400 --job-name dlwh-6597-moe-block-ready-h2560-grug -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --run-pallas --dispatch-copy-mode scratch_ready --bench-iters 2 --warmup-steps 1`
+- Config: Single-node CoreWeave `cw-us-east-02a`, H100x8, explicit `expert`
+  mesh, Grug-truncated weights, top-k 4, `T/rank=8`, capacity factor 1.25.
+  Block-ready counts use the W13 `block_m` tile height.
+- Result:
+  - The first H128 attempt failed during Pallas lowering because the kernel
+    captured non-scalar `rows_per_expert` constants while computing
+    block-ready counts. Passing the total ready row count as an explicit scalar
+    input fixed the issue.
+  - Fixed H128: dispatch max error 0, metadata errors 0, source/expert
+    ready-count max error 0, block-ready-count max error 0. W13 max abs error
+    0.0078125.
+  - H2560: dispatch max error 0, metadata errors 0, source/expert ready-count
+    max error 0, block-ready-count max error 0. Dispatch steady-state mean
+    1.713 ms, W13 steady-state mean 0.613 ms, W13 max abs error 0.015625.
+- Interpretation: The Mosaic dispatch path now emits both fine-grained
+  source/expert readiness and coalesced receive-block readiness. The latter
+  preserves the expert-major W13 schedule and avoids the severe fragmentation
+  observed in the source/expert ready-range W13 consumer. The path still marks
+  blocks after a full dispatch barrier; the next step is to move block-ready
+  signaling earlier, at row/block copy completion, and have W13 wait on those
+  block signals.
+- Next action: Replace the full-kernel ready marking with a row/block
+  coordinator that signals block readiness as soon as each receive block is
+  complete, then run W13 from the block-ready schedule.

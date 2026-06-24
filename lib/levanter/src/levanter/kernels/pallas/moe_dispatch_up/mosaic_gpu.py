@@ -430,12 +430,15 @@ def _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_scratch_ready_local(
     *,
     axis_name: str,
     recv_capacity: int,
-) -> tuple[MoeDispatchUpLayout, jax.Array]:
+    ready_block_m: int = 64,
+) -> tuple[MoeDispatchUpLayout, jax.Array, jax.Array]:
     """Scratch dispatch that exposes clipped ready rows per source/expert."""
 
     ep_size, send_capacity, hidden = send_x_by_dst.shape
     local_experts = rows_per_expert.shape[0]
-    grid_rows = max(send_capacity, local_experts)
+    recv_blocks = math.ceil(recv_capacity / ready_block_m)
+    grid_rows = max(send_capacity, local_experts, recv_blocks)
+    ready_rows = jnp.minimum(jnp.sum(rows_per_expert, dtype=jnp.int32), jnp.int32(recv_capacity))
 
     def kernel_body(
         send_x_ref,
@@ -449,6 +452,7 @@ def _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_scratch_ready_local(
         send_expert_count_ref,
         recv_source_expert_base_ref,
         recv_source_expert_count_ref,
+        ready_rows_ref,
         recv_x_ref,
         recv_valid_count_ref,
         recv_local_expert_ref,
@@ -457,6 +461,7 @@ def _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_scratch_ready_local(
         recv_topk_slot_ref,
         recv_router_weight_ref,
         ready_count_ref,
+        ready_block_count_ref,
         scratch_x_ref,
         scratch_count_ref,
         scratch_dst_row_ref,
@@ -484,6 +489,10 @@ def _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_scratch_ready_local(
         @pl.when(row_or_expert < local_experts)
         def _zero_ready_count():
             ready_count_ref[peer_rank, row_or_expert] = jnp.int32(0)
+
+        @pl.when((peer_rank == 0) & (row_or_expert < recv_blocks))
+        def _zero_ready_block_count():
+            ready_block_count_ref[row_or_expert] = jnp.int32(0)
 
         remote_scratch_x = plgpu.remote_ref(scratch_x_ref, jnp.int32(peer_rank))
         remote_scratch_count = plgpu.remote_ref(scratch_count_ref, jnp.int32(peer_rank))
@@ -553,6 +562,12 @@ def _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_scratch_ready_local(
             remaining_capacity = jnp.maximum(jnp.int32(recv_capacity) - base, jnp.int32(0))
             ready_count_ref[peer_rank, row_or_expert] = jnp.minimum(count, remaining_capacity)
 
+        @pl.when((peer_rank == 0) & (row_or_expert < recv_blocks))
+        def _mark_ready_block_count():
+            block_start = row_or_expert * ready_block_m
+            remaining_rows = jnp.maximum(ready_rows_ref[()] - block_start, jnp.int32(0))
+            ready_block_count_ref[row_or_expert] = jnp.minimum(remaining_rows, jnp.int32(ready_block_m))
+
     (
         recv_x,
         recv_valid_count,
@@ -562,6 +577,7 @@ def _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_scratch_ready_local(
         recv_topk_slot,
         recv_router_weight,
         ready_count,
+        ready_block_count,
         _scratch_x,
         _scratch_count,
         _scratch_dst_row,
@@ -580,6 +596,7 @@ def _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_scratch_ready_local(
             jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
             jax.ShapeDtypeStruct((recv_capacity,), send_router_weight_by_dst.dtype),
             jax.ShapeDtypeStruct((ep_size, local_experts), jnp.int32),
+            jax.ShapeDtypeStruct((recv_blocks,), jnp.int32),
             jax.ShapeDtypeStruct((ep_size, send_capacity, hidden), send_x_by_dst.dtype),
             jax.ShapeDtypeStruct((ep_size,), jnp.int32),
             jax.ShapeDtypeStruct((ep_size, send_capacity), jnp.int32),
@@ -605,6 +622,7 @@ def _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_scratch_ready_local(
         send_expert_count_by_dst,
         recv_source_expert_base,
         recv_source_expert_count,
+        ready_rows,
     )
     overflow_count = jnp.maximum(jnp.sum(rows_per_expert, dtype=jnp.int32) - recv_capacity, 0)
     layout = MoeDispatchUpLayout(
@@ -619,7 +637,7 @@ def _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_scratch_ready_local(
         recv_router_weight,
         overflow_count,
     )
-    return layout, ready_count
+    return layout, ready_count, ready_block_count
 
 
 def dispatch_prepacked_moe_dispatch_up_mosaic_gpu_ready_local(
@@ -639,7 +657,8 @@ def dispatch_prepacked_moe_dispatch_up_mosaic_gpu_ready_local(
     *,
     axis_name: str,
     recv_capacity: int,
-) -> tuple[MoeDispatchUpLayout, jax.Array]:
+    ready_block_m: int = 64,
+) -> tuple[MoeDispatchUpLayout, jax.Array, jax.Array]:
     """Scratch dispatch plus source/expert ready counts for overlap bring-up."""
 
     _require_mgpu_runtime()
@@ -684,6 +703,7 @@ def dispatch_prepacked_moe_dispatch_up_mosaic_gpu_ready_local(
         recv_source_expert_count,
         axis_name=axis_name,
         recv_capacity=recv_capacity,
+        ready_block_m=ready_block_m,
     )
 
 

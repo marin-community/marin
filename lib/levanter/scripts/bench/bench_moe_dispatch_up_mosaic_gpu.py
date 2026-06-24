@@ -181,6 +181,12 @@ def _expected_ready_count(prepacked, recv_capacity: int) -> jax.Array:
     return jnp.minimum(prepacked.recv_source_expert_count, remaining_capacity)
 
 
+def _expected_ready_block_count(prepacked, recv_capacity: int, block_m: int) -> jax.Array:
+    total_ready_rows = jnp.minimum(jnp.sum(prepacked.rows_per_expert, axis=1, dtype=jnp.int32), recv_capacity)
+    block_starts = jnp.arange(math.ceil(recv_capacity / block_m), dtype=jnp.int32) * block_m
+    return jnp.minimum(jnp.maximum(total_ready_rows[:, None] - block_starts[None, :], 0), block_m)
+
+
 def _pallas_dispatch_fn(
     mesh: Mesh,
     *,
@@ -263,7 +269,8 @@ def _pallas_dispatch_ready_fn(
     mesh: Mesh,
     *,
     recv_capacity: int,
-) -> Callable[..., tuple[MoeDispatchUpLayout, jax.Array]]:
+    ready_block_m: int,
+) -> Callable[..., tuple[MoeDispatchUpLayout, jax.Array, jax.Array]]:
     def local_dispatch(
         send_x,
         send_row,
@@ -279,7 +286,7 @@ def _pallas_dispatch_ready_fn(
         recv_source_expert_base,
         recv_source_expert_count,
     ):
-        layout, ready_count = dispatch_prepacked_moe_dispatch_up_mosaic_gpu_ready_local(
+        layout, ready_count, ready_block_count = dispatch_prepacked_moe_dispatch_up_mosaic_gpu_ready_local(
             jnp.squeeze(send_x, axis=0),
             jnp.squeeze(send_row, axis=0),
             jnp.squeeze(send_local_expert, axis=0),
@@ -295,6 +302,7 @@ def _pallas_dispatch_ready_fn(
             jnp.squeeze(recv_source_expert_count, axis=0),
             axis_name="expert",
             recv_capacity=recv_capacity,
+            ready_block_m=ready_block_m,
         )
         return (
             MoeDispatchUpLayout(
@@ -310,6 +318,7 @@ def _pallas_dispatch_ready_fn(
                 layout.overflow_count[None],
             ),
             ready_count[None, ...],
+            ready_block_count[None, ...],
         )
 
     out_specs = (
@@ -326,6 +335,7 @@ def _pallas_dispatch_ready_fn(
             P("expert"),
         ),
         P("expert", None, None),
+        P("expert", None),
     )
     fn = jax.jit(
         shard_map(
@@ -853,12 +863,15 @@ def main() -> None:
     with jax.set_mesh(mesh):
         pallas_dispatch_steady_ms = None
         pallas_ready_count = None
+        pallas_ready_block_count = None
         if args.pallas_w13_from_reference_layout:
             pallas_layout = ref_layout
             print("dispatch/mosaic_gpu: skipped; using reference layout for W13/SiLU")
         else:
             if args.dispatch_copy_mode == "scratch_ready":
-                pallas_dispatch_fn = _pallas_dispatch_ready_fn(mesh, recv_capacity=recv_capacity)
+                pallas_dispatch_fn = _pallas_dispatch_ready_fn(
+                    mesh, recv_capacity=recv_capacity, ready_block_m=args.block_m
+                )
                 pallas_dispatch_args = _pallas_dispatch_ready_args(mesh, prepacked)
             else:
                 pallas_dispatch_fn = _pallas_dispatch_fn(
@@ -871,7 +884,7 @@ def main() -> None:
 
             pallas_dispatch_result, _ = _time_block("dispatch/mosaic_gpu", run_pallas_dispatch)
             if args.dispatch_copy_mode == "scratch_ready":
-                pallas_layout, pallas_ready_count = pallas_dispatch_result
+                pallas_layout, pallas_ready_count, pallas_ready_block_count = pallas_dispatch_result
             else:
                 pallas_layout = pallas_dispatch_result
             if args.bench_iters > 0:
@@ -911,6 +924,15 @@ def main() -> None:
                 print(f"dispatch_ready_count_max_abs_error: {ready_count_err_int}")
                 if ready_count_err_int != 0:
                     raise AssertionError(f"dispatch ready-count mismatch: max_abs={ready_count_err_int}")
+            if pallas_ready_block_count is not None:
+                expected_ready_block_count = _sharded(
+                    mesh, _expected_ready_block_count(prepacked, recv_capacity, args.block_m), P("expert", None)
+                )
+                ready_block_count_err = jnp.max(jnp.abs(pallas_ready_block_count - expected_ready_block_count))
+                ready_block_count_err_int = int(ready_block_count_err)
+                print(f"dispatch_ready_block_count_max_abs_error: {ready_block_count_err_int}")
+                if ready_block_count_err_int != 0:
+                    raise AssertionError(f"dispatch ready-block-count mismatch: max_abs={ready_block_count_err_int}")
             _check_error("dispatch_max_abs_error", dispatch_err_float, args.dispatch_atol)
             if valid_err_int != 0 or expert_err_int != 0 or src_rank_err_int != 0:
                 raise AssertionError(
