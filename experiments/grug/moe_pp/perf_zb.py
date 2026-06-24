@@ -69,6 +69,8 @@ def main() -> int:
     expert_per_stage = int(os.environ.get("MOE_PP_EPS", "1"))
     data_per_stage = int(os.environ.get("MOE_PP_DPS", "1"))
     num_microbatches = int(os.environ.get("MOE_PP_NMICRO", "8"))
+    wb_split = os.environ.get("MOE_PP_WB", "1") == "1"
+    remat = os.environ.get("MOE_PP_REMAT", "1") == "1"
     hidden_dim = int(os.environ.get("MOE_PP_HIDDEN", "1536"))
     num_layers = int(os.environ.get("MOE_PP_LAYERS", "24"))
     num_experts = int(os.environ.get("MOE_PP_EXPERTS", "8"))
@@ -110,25 +112,30 @@ def main() -> int:
 
     tokens = jax.random.randint(jax.random.PRNGKey(1), (global_batch, seq_len), 0, vocab_size, dtype=jnp.int32)
     weight = jnp.ones((global_batch, seq_len), jnp.float32)
+    skip_fsdp = os.environ.get("MOE_PP_SKIP_FSDP", "0") == "1"
 
     # --- FSDP/EP baseline: full mesh, one jitted value_and_grad ---
     fsdp_expert = expert_per_stage * data_per_stage if expert_per_stage > 1 else 1
     fsdp_mesh = compact_grug_mesh(
         expert_axis_size=fsdp_expert, replica_axis_size=1, model_axis_size=1, stage_axis_size=1
     )
+    fsdp_sec = fsdp_loss = fsdp_hbm = float("nan")
     with set_mesh(fsdp_mesh):
         model = Transformer.init(cfg, key=jax.random.PRNGKey(0))
-        arrays, static = eqx.partition(model, eqx.is_array)
-        fsdp_tokens = jax.device_put(tokens, jax.sharding.NamedSharding(fsdp_mesh, jax.sharding.PartitionSpec()))
-        fsdp_weight = jax.device_put(weight, jax.sharding.NamedSharding(fsdp_mesh, jax.sharding.PartitionSpec()))
+        if not skip_fsdp:
+            arrays, static = eqx.partition(model, eqx.is_array)
+            fsdp_tokens = jax.device_put(tokens, jax.sharding.NamedSharding(fsdp_mesh, jax.sharding.PartitionSpec()))
+            fsdp_weight = jax.device_put(weight, jax.sharding.NamedSharding(fsdp_mesh, jax.sharding.PartitionSpec()))
 
-        @jax.jit
-        def fsdp_grad(arrays):
-            return jax.value_and_grad(lambda p: oracle_loss(eqx.combine(p, static), fsdp_tokens, fsdp_weight))(arrays)
+            @jax.jit
+            def fsdp_grad(arrays):
+                return jax.value_and_grad(lambda p: oracle_loss(eqx.combine(p, static), fsdp_tokens, fsdp_weight))(
+                    arrays
+                )
 
-        fsdp_sec, fsdp_out = _time(lambda: fsdp_grad(arrays), warmup=warmup, iters=iters)
-        fsdp_loss = float(np.asarray(fsdp_out[0]))
-        fsdp_hbm = _peak_hbm_gib()
+            fsdp_sec, fsdp_out = _time(lambda: fsdp_grad(arrays), warmup=warmup, iters=iters)
+            fsdp_loss = float(np.asarray(fsdp_out[0]))
+            fsdp_hbm = _peak_hbm_gib()
 
     # --- device-group pipeline (init under any full mesh; zb_build re-places per stage) ---
     with set_mesh(fsdp_mesh):
@@ -139,6 +146,8 @@ def main() -> int:
         num_microbatches=num_microbatches,
         expert_per_stage=expert_per_stage,
         data_per_stage=data_per_stage,
+        wb_split=wb_split,
+        remat=remat,
     )
     pp_sec, pp_out = _time(lambda: step(tokens, weight), warmup=warmup, iters=iters)
     pp_loss = float(np.asarray(pp_out[0]))
@@ -151,12 +160,15 @@ def main() -> int:
         fsdp_loss,
         fsdp_hbm,
     )
+    logger.info("PERF zb_pipeline mode: wb_split=%s remat=%s", wb_split, remat)
     logger.info(
-        "PERF zb_pipeline     : %.4f s/step  %9.0f tok/s  loss=%.4f  peak_hbm=%.1f GiB",
+        "PERF zb_pipeline     : %.4f s/step  %9.0f tok/s  loss=%.4f  peak_hbm=%.1f GiB  microbatch=%d (%d tok/call)",
         pp_sec,
         tokens_per_step / pp_sec,
         pp_loss,
         pp_hbm,
+        global_batch // num_microbatches,
+        (global_batch // num_microbatches) * seq_len,
     )
     logger.info(
         "PERF zb / fsdp = %.2fx step time | GPipe bubble ~%.0f%% ((P-1)/(M+P-1), P=%d M=%d)",

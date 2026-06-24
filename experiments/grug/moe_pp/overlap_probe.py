@@ -27,8 +27,12 @@ import time
 
 import jax
 import jax.numpy as jnp
+from haliax.partitioning import set_mesh
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 
 from experiments.grug.moe_pp.benchmark import init_distributed
+from experiments.grug.moe_pp.pipeline_zb import _stage_submesh
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +142,39 @@ def main() -> int:
         serial * 1e3,
         "PIPELINES" if pipe < 0.6 * serial else "SERIALIZES",
         100.0 * (serial - pipe) / (serial - ideal),
+    )
+
+    # --- probe 5: same pipeline pattern but with the REAL grug submesh + set_mesh + explicit-mesh
+    # transport (jax.set_mesh under an Explicit-axis 1-device mesh). Isolates whether those wrappers
+    # (not the kernels) are what serialize the real pipeline. ---
+    submeshes = [_stage_submesh([devs[s]], expert=1, data=1) for s in range(p)]
+    heavy_j = jax.jit(_heavy)
+    repl = [NamedSharding(submeshes[s], P()) for s in range(p)]
+    x0 = jax.device_put(jnp.ones((N, N), jnp.float32), repl[0])
+    for s in range(p):
+        with set_mesh(submeshes[s]):
+            jax.block_until_ready(heavy_j(jax.device_put(jnp.ones((N, N), jnp.float32), repl[s])))
+    t = time.perf_counter()
+    for _ in range(iters):
+        finals = []
+        for _m in range(m_count):
+            h = x0
+            for s in range(p):
+                if s > 0:
+                    h = jax.device_put(h, repl[s])
+                with set_mesh(submeshes[s]):
+                    h = heavy_j(h)
+            finals.append(h)
+        jax.block_until_ready(finals)
+    pipe5 = (time.perf_counter() - t) / iters
+    logger.info(
+        "PROBE5 %dmb x %dstage submesh+set_mesh=%.0fms | pipelined-ideal=%.0fms serial=%.0fms | %s",
+        m_count,
+        p,
+        pipe5 * 1e3,
+        ideal * 1e3,
+        serial * 1e3,
+        "PIPELINES" if pipe5 < 0.6 * serial else "SERIALIZES (set_mesh/explicit-mesh transport is the culprit)",
     )
     return 0
 

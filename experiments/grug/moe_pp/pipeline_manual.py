@@ -54,17 +54,21 @@ def _embed_forward(embed_head_arrays: tuple, embed_head_static: tuple, token_ids
     return embed_gated_norm(embed_norm(hidden))
 
 
-def _stage_forward(block_arrays_slice, block_static, hidden: jax.Array, stage_masks) -> tuple[jax.Array, jax.Array]:
+def _stage_forward(
+    block_arrays_slice, block_static, hidden: jax.Array, stage_masks, remat: bool = True
+) -> tuple[jax.Array, jax.Array]:
     """Run one stage's slice of real ``Block``s; return ``(hidden, router_z_sum)``.
 
     ``block_arrays_slice`` is the tuple of this stage's per-block array pytrees and
     ``stage_masks`` the matching per-layer ``AttentionMask`` objects. The router
     z-loss is summed across this stage's layers so the driver can aggregate it.
 
-    Each block is wrapped in ``jax.checkpoint``: the backward recomputes the block
-    forward (attention scores, the MoE dispatch/GMM intermediates) instead of saving
-    them for the whole pipeline depth, so only the residual stream at block
-    boundaries is held. Remat is value-identical, so the grads are unchanged.
+    With ``remat`` each block is wrapped in ``jax.checkpoint``: the backward recomputes
+    the block forward (attention scores, the MoE dispatch/GMM intermediates) instead of
+    saving them, so only the residual stream at block boundaries is held -- required at
+    the memory-bound (40B GPU) scale. With ``remat=False`` the forward residuals are
+    kept, so a single combined backward differentiates without recompute (FSDP-parity
+    FLOPs); use this when memory allows. Remat is value-identical, so grads are unchanged.
     """
     z = jnp.zeros((), jnp.float32)
     for block_arrays, mask in zip(block_arrays_slice, stage_masks, strict=True):
@@ -73,7 +77,8 @@ def _stage_forward(block_arrays_slice, block_static, hidden: jax.Array, stage_ma
             block = eqx.combine(b_arrays, block_static)
             return block(h, _mask)
 
-        hidden, router_stats = jax.checkpoint(_apply_block)(block_arrays, hidden)
+        apply = jax.checkpoint(_apply_block) if remat else _apply_block
+        hidden, router_stats = apply(block_arrays, hidden)
         z = z + router_stats["router_z_loss"].astype(jnp.float32)
     return hidden, z
 
