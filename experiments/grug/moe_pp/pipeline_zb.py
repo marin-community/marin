@@ -29,7 +29,10 @@ backward sweep, two separate fills with nothing covering the bubble.
 from __future__ import annotations
 
 import os
+import queue
+import threading
 import time
+from concurrent.futures import Future
 from enum import StrEnum
 
 import equinox as eqx
@@ -184,6 +187,60 @@ def _transport(x: jax.Array, mesh: Mesh, spec: P = grug_model._batch_spec()) -> 
     return _make_global(full if pid in dst_procs else None, mesh, spec, x.shape, x.dtype)
 
 
+def _mesh_procs(mesh: Mesh) -> frozenset[int]:
+    return frozenset(int(d.process_index) for d in mesh.devices.flat)
+
+
+def _crosses_host(src: Mesh, dst: Mesh) -> bool:
+    """Whether moving an activation from ``src`` to ``dst`` traverses the host boundary."""
+    return _mesh_procs(src) != _mesh_procs(dst)
+
+
+class _TransportWorker:
+    """Run cross-host boundary hops on a side thread so the main thread keeps dispatching.
+
+    The synchronous boundary hop (``device_get`` then a cross-host ``broadcast``) blocks
+    the single dispatch thread, serializing the pipeline at the host boundary. This worker
+    moves that hop off-thread: the main thread submits the hop and gets a :class:`Future`,
+    continues issuing other microbatches' stage compute, and blocks on the future only when
+    it reaches the op that consumes the transported activation.
+
+    Both hosts own one worker and submit hops in identical 1f1b ``op_order``; the worker
+    processes its queue FIFO, so the two hosts' ``broadcast`` collectives stay paired and
+    ordered -- the invariant that makes interleaved dispatch safe across hosts.
+    """
+
+    def __init__(self) -> None:
+        self._q: queue.Queue = queue.Queue()
+        self._thread = threading.Thread(target=self._run, name="moe-pp-transport", daemon=True)
+        self._thread.start()
+
+    def submit(self, x: jax.Array, mesh: Mesh, spec: P) -> Future:
+        fut: Future = Future()
+        self._q.put((fut, x, mesh, spec))
+        return fut
+
+    def _run(self) -> None:
+        while True:
+            job = self._q.get()
+            if job is None:
+                return
+            fut, x, mesh, spec = job
+            try:
+                fut.set_result(_transport(x, mesh, spec))
+            except BaseException as exc:  # surface to the consumer's .result()
+                fut.set_exception(exc)
+
+    def close(self) -> None:
+        self._q.put(None)
+        self._thread.join()
+
+
+def _resolve(v):
+    """Block for a transported value if it is a pending :class:`Future`, else pass through."""
+    return v.result() if isinstance(v, Future) else v
+
+
 # Op kinds in the wavefront schedule. F = stage forward, B = input-grad (the critical
 # path, threaded upstream), W = weight-grad (deferrable, fills bubbles). When the
 # backward is not split, B is the combined vjp and carries the weight-grad itself.
@@ -318,6 +375,7 @@ def zb_build(
     schedule: Schedule = Schedule.ZERO_BUBBLE,
     remat: bool = True,
     muon: bool = False,
+    async_transport: bool = False,
 ):
     """Place params on per-stage sub-meshes and compile the stage fns ONCE.
 
@@ -334,6 +392,11 @@ def zb_build(
 
     Stages own disjoint device slices of ``expert_per_stage * data_per_stage`` devices
     each (so ``num_stages * expert_per_stage * data_per_stage == device_count``).
+
+    ``async_transport`` (multi-host only) runs each cross-host boundary hop on a side
+    thread so the main thread keeps dispatching other microbatches while the hop's
+    ``device_get``+broadcast is in flight; both hosts submit hops in identical ``op_order``
+    so the broadcasts stay paired. No effect single-host (intra-host hops stay inline).
     """
     devices = jax.devices()
     dps = expert_per_stage * data_per_stage
@@ -472,58 +535,75 @@ def zb_build(
             g_eh_m = jax.tree_util.tree_map(jnp.add, g_embed_m, g_head_on0)
             return g_eh_m if prev is None else jax.tree_util.tree_map(jnp.add, prev, g_eh_m)
 
+        # Cross-host boundary hops run on a side thread (``async_transport``) so the main
+        # thread keeps dispatching other microbatches while the ``device_get``+broadcast is
+        # in flight; the consuming op resolves the future just-in-time. Intra-host hops stay
+        # inline ``_transport`` (a cheap async ``device_put`` -- threading them only adds
+        # handoff latency). ``worker`` is None single-host or when async is off, so ``_send``
+        # collapses to the synchronous path.
+        worker = _TransportWorker() if (async_transport and _multihost()) else None
+
+        def _send(x: jax.Array, dst: Mesh, src: Mesh) -> jax.Array | Future:
+            if worker is not None and _crosses_host(src, dst):
+                return worker.submit(x, dst, grug_model._batch_spec())
+            return _transport(x, dst)
+
         if use_schedule:
             # Wavefront: one interleaved dispatch following ``op_order``. F/B/W ops stream
             # across the stages; reductions are deferred so the single Python dispatch
             # thread never stalls (an in-loop tree_map serializes the GPUs). With
             # ``split_w`` the B op is input-grad only and W ops carry the weight-grad;
             # otherwise B is the combined vjp and writes the weight-grad itself.
-            for kind, m, s in op_order:
-                if kind == _F:
-                    if s == 0 and _local(mesh0):
-                        with set_mesh(mesh0):
-                            saved_x[m][0] = embed_fwd(eh0, tok_mb[m])
-                    if _local(submeshes[s]):
-                        with set_mesh(submeshes[s]):
-                            h_out, z_mb[m][s] = stage_fns[s].forward(stage_params[s], saved_x[m][s])
-                    else:
-                        h_out, z_mb[m][s] = _act_ph(submeshes[s]), _scalar_ph(submeshes[s])
-                    if s < num_stages - 1:
-                        saved_x[m][s + 1] = _transport(h_out, submeshes[s + 1])
-                    else:
-                        head_h[m] = h_out
-                        if _local(meshL):
-                            with set_mesh(meshL):
-                                ce_mb[m] = head_fwd(ehL, h_out, labels_mb[m], weight_mb[m])
+            try:
+                for kind, m, s in op_order:
+                    if kind == _F:
+                        if s == 0 and _local(mesh0):
+                            with set_mesh(mesh0):
+                                saved_x[m][0] = embed_fwd(eh0, tok_mb[m])
+                        if _local(submeshes[s]):
+                            with set_mesh(submeshes[s]):
+                                h_out, z_mb[m][s] = stage_fns[s].forward(stage_params[s], _resolve(saved_x[m][s]))
                         else:
-                            ce_mb[m] = _scalar_ph(meshL)
-                elif kind == _B:
-                    if s == num_stages - 1:
-                        if _local(meshL):
-                            with set_mesh(meshL):
-                                g_head_mb[m], dy = head_bwd(ehL, head_h[m], labels_mb[m], weight_mb[m], inv_m)
-                            saved_dy[m][s] = dy
+                            h_out, z_mb[m][s] = _act_ph(submeshes[s]), _scalar_ph(submeshes[s])
+                        if s < num_stages - 1:
+                            saved_x[m][s + 1] = _send(h_out, submeshes[s + 1], submeshes[s])
                         else:
-                            g_head_mb[m], saved_dy[m][s] = ehL, _act_ph(meshL)
-                    if _local(submeshes[s]):
-                        with set_mesh(submeshes[s]):
-                            if split_w:
-                                dx = stage_fns[s].b(stage_params[s], saved_x[m][s], saved_dy[m][s], dz)
+                            head_h[m] = h_out
+                            if _local(meshL):
+                                with set_mesh(meshL):
+                                    ce_mb[m] = head_fwd(ehL, h_out, labels_mb[m], weight_mb[m])
                             else:
-                                w_grads[m][s], dx = stage_fns[s].backward(
-                                    stage_params[s], saved_x[m][s], saved_dy[m][s], dz
-                                )
-                    else:
-                        dx = _act_ph(submeshes[s])
-                    if s > 0:
-                        saved_dy[m][s - 1] = _transport(dx, submeshes[s - 1])
-                    elif _local(mesh0):
-                        with set_mesh(mesh0):
-                            (g_embed_mb[m],) = embed_bwd(eh0, tok_mb[m], dx)
-                else:  # _W (emitted only when split_w)
-                    if _local(submeshes[s]):
-                        with set_mesh(submeshes[s]):
-                            w_grads[m][s] = stage_fns[s].w(stage_params[s], saved_x[m][s], saved_dy[m][s], dz)
+                                ce_mb[m] = _scalar_ph(meshL)
+                    elif kind == _B:
+                        if s == num_stages - 1:
+                            if _local(meshL):
+                                with set_mesh(meshL):
+                                    g_head_mb[m], dy = head_bwd(ehL, head_h[m], labels_mb[m], weight_mb[m], inv_m)
+                                saved_dy[m][s] = dy
+                            else:
+                                g_head_mb[m], saved_dy[m][s] = ehL, _act_ph(meshL)
+                        if _local(submeshes[s]):
+                            x_s, dy_s = _resolve(saved_x[m][s]), _resolve(saved_dy[m][s])
+                            with set_mesh(submeshes[s]):
+                                if split_w:
+                                    dx = stage_fns[s].b(stage_params[s], x_s, dy_s, dz)
+                                else:
+                                    w_grads[m][s], dx = stage_fns[s].backward(stage_params[s], x_s, dy_s, dz)
+                        else:
+                            dx = _act_ph(submeshes[s])
+                        if s > 0:
+                            saved_dy[m][s - 1] = _send(dx, submeshes[s - 1], submeshes[s])
+                        elif _local(mesh0):
+                            with set_mesh(mesh0):
+                                (g_embed_mb[m],) = embed_bwd(eh0, tok_mb[m], dx)
+                    else:  # _W (emitted only when split_w)
+                        if _local(submeshes[s]):
+                            x_s, dy_s = _resolve(saved_x[m][s]), _resolve(saved_dy[m][s])
+                            with set_mesh(submeshes[s]):
+                                w_grads[m][s] = stage_fns[s].w(stage_params[s], x_s, dy_s, dz)
+            finally:
+                if worker is not None:
+                    worker.close()
 
             if _TRACE:
                 jax.block_until_ready((ce_mb, z_mb, g_head_mb, g_embed_mb, w_grads))
