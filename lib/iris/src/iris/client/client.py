@@ -674,7 +674,7 @@ class IrisClient:
                     pip_packages=environment.pip_packages or parent_pip,
                     env_vars=child_env,
                     extras=environment.extras or parent_extras,
-                    setup_script=environment.setup_script,
+                    setup_scripts=environment.setup_scripts,
                     sync_packages=environment.sync_packages,
                 )
             else:

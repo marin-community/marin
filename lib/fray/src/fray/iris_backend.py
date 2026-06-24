@@ -159,7 +159,7 @@ def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | No
         pip_packages=list(env.pip_packages) if env is not None else [],
         env_vars=env_vars,
         extras=list(env.extras) if env is not None else [],
-        setup_script=env.setup_script if env is not None else None,
+        setup_scripts=list(env.setup_scripts) if env is not None and env.setup_scripts is not None else None,
         sync_packages=list(env.sync_packages) if env is not None else [],
     )
 

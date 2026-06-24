@@ -3,38 +3,32 @@
 
 """Tests for RuntimeEntrypoint assembly from an Entrypoint + EnvironmentConfig."""
 
+import pytest
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint
 from iris.rpc import job_pb2
 
 
-def _make_entrypoint(command: list[str]) -> Entrypoint:
-    return Entrypoint(command=command, workdir_files={})
+@pytest.mark.parametrize(
+    "setup_scripts, expected_setup_commands",
+    [
+        (["a", "b"], ["a", "b"]),  # resolved scripts pass through in order
+        (["a", "  ", ""], ["a"]),  # whitespace-only scripts are dropped
+        ([], []),  # no setup => no build phase; command runs in the image as-is
+    ],
+)
+def test_setup_scripts_become_setup_commands(setup_scripts, expected_setup_commands):
+    ep = Entrypoint(command=["python", "train.py"], workdir_files={})
+    rt = build_runtime_entrypoint(ep, job_pb2.EnvironmentConfig(setup_scripts=setup_scripts))
 
-
-def test_resolved_setup_script_lands_in_setup_commands():
-    ep = _make_entrypoint(["python", "train.py"])
-    env = job_pb2.EnvironmentConfig(setup_script="uv sync --all-packages\n")
-    rt = build_runtime_entrypoint(ep, env)
-
-    assert list(rt.setup_commands) == ["uv sync --all-packages\n"]
-    assert list(rt.run_command.argv) == ["python", "train.py"]
-
-
-def test_empty_setup_script_leaves_setup_commands_empty():
-    ep = _make_entrypoint(["python", "train.py"])
-    env = job_pb2.EnvironmentConfig(setup_script="")
-    rt = build_runtime_entrypoint(ep, env)
-
-    # No setup => no build phase; the command runs in the image as-is.
-    assert list(rt.setup_commands) == []
+    assert list(rt.setup_commands) == expected_setup_commands
     assert list(rt.run_command.argv) == ["python", "train.py"]
 
 
 def test_workdir_files_and_refs_propagate():
     refs = {"_callable.pkl": "sha256abc", "weights.bin": "sha256def"}
     ep = Entrypoint(command=["python", "run.py"], workdir_files={"small.txt": b"hi"}, workdir_file_refs=refs)
-    rt = build_runtime_entrypoint(ep, job_pb2.EnvironmentConfig(setup_script="uv sync\n"))
+    rt = build_runtime_entrypoint(ep, job_pb2.EnvironmentConfig(setup_scripts=["uv sync\n"]))
 
     assert dict(rt.workdir_files) == {"small.txt": b"hi"}
     assert dict(rt.workdir_file_refs) == refs

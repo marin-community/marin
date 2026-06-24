@@ -8,9 +8,9 @@ the user's actual command. This lets each runtime handle them appropriately:
 - DockerRuntime runs the setup script in a build container to create the venv
 - ProcessRuntime skips setup since the host env is already configured
 
-The setup script is already resolved client-side (``EnvironmentConfig.setup_script``);
-this only carries it into ``setup_commands`` as a single element (or empty for no
-setup). Nothing here interprets it.
+The setup scripts are already resolved client-side (``EnvironmentConfig.setup_scripts``);
+this only carries them into ``setup_commands`` (empty for no setup). Nothing here
+interprets them.
 """
 
 from iris.cluster.types import Entrypoint
@@ -23,15 +23,14 @@ def build_runtime_entrypoint(
 ) -> job_pb2.RuntimeEntrypoint:
     """Build a RuntimeEntrypoint from a user Entrypoint + env config.
 
-    Carries the resolved ``env_config.setup_script`` into ``setup_commands``. The
+    Carries the resolved ``env_config.setup_scripts`` into ``setup_commands``. The
     run_command is the user's original command, kept separate so runtimes that
     don't need setup can skip it cleanly.
     """
     rt = job_pb2.RuntimeEntrypoint()
-    # A whitespace-only script means "no setup": leave setup_commands empty so the
-    # build phase is skipped and the command runs in the image as-is.
-    if env_config.setup_script.strip():
-        rt.setup_commands[:] = [env_config.setup_script]
+    # Drop whitespace-only scripts so an empty setup leaves setup_commands empty:
+    # the build phase is skipped and the command runs in the image as-is.
+    rt.setup_commands[:] = [s for s in env_config.setup_scripts if s.strip()]
     rt.run_command.argv[:] = entrypoint.command
     for k, v in entrypoint.workdir_files.items():
         rt.workdir_files[k] = v

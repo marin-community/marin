@@ -30,7 +30,7 @@ from pathlib import Path
 from rigging.timing import Timestamp
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.env import VENV_PATH, write_workdir_files
+from iris.cluster.runtime.env import VENV_PATH, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
@@ -430,9 +430,9 @@ class DockerContainerHandle:
             self._docker_remove(build_container_id)
 
     def _generate_setup_script(self) -> str:
-        """Generate a bash script that runs setup commands."""
+        """Generate a bash script that runs each setup command as its own step."""
         lines = ["#!/bin/bash", "set -e"]
-        lines.extend(self.config.entrypoint.setup_commands)
+        lines.extend(render_setup_steps(self.config.entrypoint.setup_commands))
         return "\n".join(lines) + "\n"
 
     def _write_setup_script(self, script: str) -> None:

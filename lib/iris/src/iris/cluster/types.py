@@ -27,7 +27,7 @@ import cloudpickle
 import humanfriendly
 from rigging.timing import Timestamp
 
-from iris.cluster.setup import default_setup_script
+from iris.cluster.setup import default_setup_script, iris_runtime_setup_script
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -620,12 +620,16 @@ class EnvironmentSpec:
     - WANDB_API_KEY: from os.environ (if set)
 
     Setup:
-    - ``setup_script=None`` builds the default uv-sync script. ``sync_packages``
+    - ``setup_scripts=None`` builds the default uv-sync script. ``sync_packages``
       scopes that sync to specific workspace members (default: all members).
-    - ``setup_script`` set to a string runs it verbatim before the command, with
-      the task's ``IRIS_*`` env available; ``""`` means no setup (the image is
-      used as-is). Build the default and tweak it via
+    - ``setup_scripts`` set to a list runs those scripts verbatim before the
+      command, with the task's ``IRIS_*`` env available; ``[]`` means no setup (the
+      image is used as-is). Build the default and tweak it via
       ``iris.cluster.setup.default_setup_script``.
+
+    Whenever any setup runs (default or custom), iris appends its own
+    ``iris_runtime_setup_script`` so cloudpickle/profiler support is always
+    present; it is skipped only for the no-setup (``[]``) case.
 
     Note: To specify workspace for bundle creation, use IrisClient.remote(workspace=...).
     """
@@ -633,15 +637,16 @@ class EnvironmentSpec:
     pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
-    setup_script: str | None = None
+    setup_scripts: Sequence[str] | None = None
     sync_packages: Sequence[str] | None = None
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
-        """Convert to wire format, resolving the setup script.
+        """Convert to wire format, resolving the setup scripts.
 
-        ``setup_script=None`` builds the default uv-sync script from
-        extras/pip/sync_packages; an explicit string (including ``""``) is used
-        verbatim.
+        ``setup_scripts=None`` builds the default uv-sync script from
+        extras/pip/sync_packages; a list is used verbatim. Either way, iris's own
+        runtime-deps script is appended so iris features keep working. ``[]`` runs
+        no setup at all.
         """
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
@@ -653,23 +658,29 @@ class EnvironmentSpec:
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
         py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        quiet = not merged_env_vars.get("IRIS_DEBUG_UV_SYNC")
 
-        setup_script = self.setup_script
-        if setup_script is None:
-            setup_script = default_setup_script(
-                extras=list(self.extras or []),
-                pip_packages=list(self.pip_packages or []),
-                python_version=py_version,
-                packages=list(self.sync_packages or []) or None,
-                quiet=not merged_env_vars.get("IRIS_DEBUG_UV_SYNC"),
-            )
+        if self.setup_scripts is None:
+            user_scripts = [
+                default_setup_script(
+                    extras=list(self.extras or []),
+                    pip_packages=list(self.pip_packages or []),
+                    python_version=py_version,
+                    packages=list(self.sync_packages or []) or None,
+                    quiet=quiet,
+                )
+            ]
+        else:
+            user_scripts = [s for s in self.setup_scripts if s.strip()]
+
+        setup_scripts = [*user_scripts, iris_runtime_setup_script(quiet=quiet)] if user_scripts else []
 
         return job_pb2.EnvironmentConfig(
             pip_packages=list(self.pip_packages or []),
             env_vars=merged_env_vars,
             extras=list(self.extras or []),
             python_version=py_version,
-            setup_script=setup_script,
+            setup_scripts=setup_scripts,
         )
 
 

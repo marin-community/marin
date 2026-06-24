@@ -29,6 +29,29 @@ IRIS_TASKS_PER_SLICE = "IRIS_TASKS_PER_SLICE"
 WORKDIR_PATH = "/app"
 VENV_PATH = f"{WORKDIR_PATH}/.venv"
 
+# Heredoc delimiter for materializing a setup script to disk. Distinctive enough
+# that a real setup script will not contain it as a standalone line.
+_SETUP_STEP_DELIMITER = "__IRIS_SETUP_STEP__"
+
+
+def render_setup_steps(scripts: Sequence[str]) -> list[str]:
+    """Render bash lines that run each setup script as a separate step.
+
+    Each script is written to its own file and run in a fresh ``bash`` with a
+    banner, rather than concatenated, so a failure points at the exact step. The
+    caller's ``set -e`` stops the sequence on the first non-zero step.
+    """
+    lines: list[str] = []
+    total = len(scripts)
+    for index, script in enumerate(scripts, start=1):
+        step_file = f"/tmp/iris-setup-step-{index}.sh"
+        lines.append(f"cat > {step_file} <<'{_SETUP_STEP_DELIMITER}'")
+        lines.append(script.rstrip("\n"))
+        lines.append(_SETUP_STEP_DELIMITER)
+        lines.append(f'echo "[iris setup] step {index}/{total}"')
+        lines.append(f"bash {step_file}")
+    return lines
+
 
 def normalize_workdir_relative_path(path: str) -> str:
     """Return a normalized relative path safe to write under a task workdir."""

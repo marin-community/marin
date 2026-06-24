@@ -103,29 +103,36 @@ See https://github.com/marin-community/marin/issues/3859 for context.
 
 ## Task Setup
 
-Before running the command, the worker runs a **setup script** to prepare the
-environment. Execution is pure mechanism: the worker runs whatever script it is
-handed and never decides anything. The script is resolved on the **client** side
-in `EnvironmentSpec.to_proto()`; the builder lives in `iris.cluster.setup`
-(`default_setup_script`, re-exported from `iris.client` and `fray`), out of the
-execution path.
+Before running the command, the worker runs a **list of setup scripts** to prepare
+the environment. Execution is pure mechanism: the worker runs whatever scripts it
+is handed, one at a time, and never decides anything. The list is resolved on the
+**client** side in `EnvironmentSpec.to_proto()`; the builders live in
+`iris.cluster.setup` (`default_setup_script`, `iris_runtime_setup_script`,
+re-exported from `iris.client` and `fray`), out of the execution path.
 
-- **Default**: `EnvironmentSpec(setup_script=None)` builds the standard uv-sync
+The list is always `[<user setup…>, iris_runtime_setup_script()]`: iris's own deps
+(cloudpickle for callable entrypoints, py-spy/memray for the profiler) are a
+separate, final step rather than spliced into the user's script — never conflated.
+That step is best-effort: it installs into `$IRIS_VENV` only if a venv exists and
+swallows failures, so a non-Python image is left untouched.
+
+- **Default**: `EnvironmentSpec(setup_scripts=None)` builds the standard uv-sync
   script. `sync_packages` scopes the sync to specific workspace members (default:
   `--all-packages`): `EnvironmentSpec(sync_packages=["marin-core"], extras=["tpu"])`.
-- **Custom**: `EnvironmentSpec(setup_script="...")` runs the string verbatim. Build
-  the default and extend it: `default_setup_script(packages=["marin-core"]) + "\n…"`.
-- **Bring-your-own-env / no sync**: `EnvironmentSpec(setup_script="")` skips setup
-  entirely — the image is used as-is (the escape hatch from a forced full-workspace
-  `uv sync`). Callable entrypoints (`Entrypoint.from_callable`) then require
-  `cloudpickle` to already be in the image.
+- **Custom**: `EnvironmentSpec(setup_scripts=["…", "…"])` runs those verbatim, then
+  the iris step. Build the default and extend it:
+  `EnvironmentSpec(setup_scripts=[default_setup_script(packages=["marin-core"]) + "\n…"])`.
+- **Bring-your-own-env / no setup**: `EnvironmentSpec(setup_scripts=[])` skips
+  everything (no user setup, no iris step) — the image is used as-is. Callable
+  entrypoints (`Entrypoint.from_callable`) then require `cloudpickle` in the image.
 
-The script runs with the task's `IRIS_*` env available, so it can parameterize
+Each script runs with the task's `IRIS_*` env available, so it can parameterize
 itself: `IRIS_WORKDIR` (workspace root), `IRIS_VENV` / `UV_PROJECT_ENVIRONMENT`
 (canonical venv the run phase activates), `IRIS_PYTHON`, `IRIS_BUNDLE_ID`,
 `IRIS_JOB_EXTRAS` / `IRIS_JOB_PIP_PACKAGES` (JSON; absent ⇒ treat as `[]`),
-`IRIS_TASK_RESOURCES`. The script should create the venv at `$IRIS_VENV`; the run
-phase activates it only if it exists.
+`IRIS_TASK_RESOURCES`. A setup script should create the venv at `$IRIS_VENV`; the
+run phase activates it only if it exists. Backends run each script as its own step
+(`render_setup_steps`) so a failure points at the exact script.
 
 Caveat: on Docker, setup runs in a *separate build container* from the command, so a
 setup script's `export FOO=bar` does **not** reach the running command — use
@@ -133,7 +140,7 @@ setup script's `export FOO=bar` does **not** reach the running command — use
 `/app` workdir (e.g. create the venv).
 
 Child jobs inherit the parent's `extras`/`pip_packages` and rebuild their own
-default script from them; a custom `setup_script` is not inherited, so a child that
+default script from them; custom `setup_scripts` are not inherited, so a child that
 needs a bring-your-own-env setup passes its own.
 
 See https://github.com/marin-community/marin/issues/6595 for context.

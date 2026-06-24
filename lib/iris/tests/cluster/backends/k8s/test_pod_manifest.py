@@ -653,18 +653,17 @@ def test_iris_env_overrides_user_env():
     assert env_by_name["IRIS_TASK_ID"] == "/test-job/0"
 
 
-def test_task_script_includes_setup_commands():
-    """Setup commands appear in the task script before the run command."""
+def test_task_script_runs_each_setup_command_before_exec():
+    """Each setup command runs as its own step, before the run command."""
     req = make_run_req("/test-job/0")
     req.entrypoint.setup_commands.extend(["pip install foo", "export BAR=1"])
     script = _build_task_script(req)
     lines = script.split("\n")
-    assert "set -e" in lines
-    assert "pip install foo" in lines
-    assert "export BAR=1" in lines
-    setup_idx = lines.index("pip install foo")
+    # render_setup_steps materializes each command to its own file and runs it.
+    step_runs = [i for i, l in enumerate(lines) if l.startswith("bash /tmp/iris-setup-step-")]
     exec_idx = next(i for i, l in enumerate(lines) if l.startswith("exec "))
-    assert setup_idx < exec_idx
+    assert len(step_runs) == 2
+    assert max(step_runs) < exec_idx
 
 
 def test_task_script_exec_run_command():

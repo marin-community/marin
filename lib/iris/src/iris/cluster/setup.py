@@ -1,26 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the per-task setup script that prepares a worker's environment.
+"""Build the per-task setup scripts that prepare a worker's environment.
 
-This is a client-side helper: the submitter resolves a setup script and ships it
-to the worker, which runs it verbatim before the command (the worker never builds
-or interprets it). ``default_setup_script`` renders the standard ``uv sync`` flow;
-a caller that wants a different environment — a pre-baked image, a scoped sync, or
-no setup at all — passes its own ``setup_script`` and bypasses this entirely.
+These are client-side helpers: the submitter resolves the scripts and ships them
+to the worker, which runs them in order before the command (the worker never
+builds or interprets them). The default environment is two distinct scripts so
+iris's own requirements stay separate from the user's project setup:
 
-The script runs with the task's ``IRIS_*`` environment available (see
-``build_common_iris_env``) and creates the venv at ``$IRIS_VENV`` without
+- ``default_setup_script`` syncs the user's workspace (``uv sync`` + extras + pip).
+- ``iris_runtime_setup_script`` installs iris's own runtime deps (cloudpickle for
+  callable entrypoints, py-spy/memray for the profiler) into the same venv.
+
+A caller that wants a different environment passes its own scripts and bypasses
+both — a custom user script is never mixed with iris's runtime deps. An empty list
+means no setup at all (bring-your-own image).
+
+The scripts run with the task's ``IRIS_*`` environment available (see
+``build_common_iris_env``) and populate the venv at ``$IRIS_VENV`` without
 activating it. The run phase activates ``$IRIS_VENV`` if it exists, so a custom or
-empty script that leaves no venv simply runs in the image's own environment.
+empty setup that leaves no venv simply runs in the image's own environment.
 """
 
 import shlex
 from collections.abc import Sequence
 
-# Always installed so callable entrypoints (cloudpickle) and the profiler attach
-# paths (py-spy/memray) work without the user declaring them.
-_ALWAYS_PIP = ("cloudpickle", "py-spy", "memray")
+# Iris's own runtime deps: cloudpickle for callable entrypoints, py-spy/memray for
+# the profiler attach paths. Installed separately from the user's project so they
+# are never conflated with user-declared dependencies.
+_IRIS_RUNTIME_DEPS = ("cloudpickle", "py-spy", "memray")
 
 
 def _uv_sync_target(packages: Sequence[str] | None) -> str:
@@ -76,7 +84,6 @@ def default_setup_script(
     link_mode_flag = "--link-mode symlink"
     target = _uv_sync_target(packages)
     extra_flags = _extra_flags(extras)
-    pip_args = " ".join(shlex.quote(p) for p in (*_ALWAYS_PIP, *pip_packages))
 
     sync_cmd = " ".join(
         part
@@ -92,7 +99,6 @@ def default_setup_script(
         ]
         if part
     )
-    pip_cmd = " ".join(part for part in ["uv pip install", quiet_flag, link_mode_flag, pip_args] if part)
 
     lines = [
         'cd "$IRIS_WORKDIR"',
@@ -108,7 +114,30 @@ def default_setup_script(
         f' uv pip install {quiet_flag} -e "$(dirname "$crate")";'
         " done;"
         " fi",
-        "echo 'installing pip deps'",
-        pip_cmd,
     ]
+    if pip_packages:
+        pip_args = " ".join(shlex.quote(p) for p in pip_packages)
+        pip_cmd = " ".join(part for part in ["uv pip install", quiet_flag, link_mode_flag, pip_args] if part)
+        lines += ["echo 'installing pip deps'", pip_cmd]
     return "\n".join(lines) + "\n"
+
+
+def iris_runtime_setup_script(*, quiet: bool = True) -> str:
+    """Render the script that installs iris's own runtime deps into ``$IRIS_VENV``.
+
+    Installs cloudpickle (callable entrypoints) and py-spy/memray (the profiler)
+    so iris features work without the user declaring them. This is best-effort and
+    never fails the job: it is skipped unless a venv exists (so a bring-your-own
+    image is left untouched rather than getting a stray shadowing venv) and a
+    failed install only warns. A task running in a non-Python image is unaffected.
+    """
+    quiet_flag = "--quiet" if quiet else ""
+    pkgs = " ".join(shlex.quote(p) for p in _IRIS_RUNTIME_DEPS)
+    pip_cmd = " ".join(part for part in ["uv pip install", quiet_flag, "--link-mode symlink", pkgs] if part)
+    return (
+        'cd "$IRIS_WORKDIR" 2>/dev/null || true\n'
+        'if [ -d "$IRIS_VENV" ]; then\n'
+        "  echo 'installing iris runtime deps'\n"
+        f"  {pip_cmd} || echo '[iris setup] runtime deps install failed; continuing'\n"
+        "fi\n"
+    )
