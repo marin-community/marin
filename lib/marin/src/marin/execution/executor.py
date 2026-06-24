@@ -639,15 +639,18 @@ def resolve_executor_step(
     # Short-circuit for StepSpec -> ExecutorStep -> StepSpec round-trip.
     original: StepSpec | None = getattr(step, "_original_step_spec", None)
     if original is not None:
-        # ``as_executor_step()`` pins ``override_output_path=original.output_path``
-        # on the ExecutorStep so the executor preserves the original placement.
-        # Mirror that pin on the resolved StepSpec — otherwise replacing deps
-        # with executor-built stubs (which lack the originals' ``hash_attrs``)
-        # would change ``name_with_hash`` and silently shift ``output_path``.
+        # ``as_executor_step()`` pins a (possibly relative) override on the
+        # ExecutorStep; the executor has already resolved it against the
+        # run-region prefix into ``output_path``. Pin that resolved value here
+        # rather than re-deriving ``original.output_path`` — the latter freezes
+        # the import environment's ``marin_prefix()`` and would shift placement
+        # for cross-region runs. Pinning it absolute also keeps the resolved
+        # StepSpec stable when deps are replaced with executor-built stubs
+        # (which lack the originals' ``hash_attrs`` and would change the hash).
         return dataclasses.replace(
             original,
             deps=deps or list(original.deps),
-            override_output_path=original.output_path,
+            override_output_path=output_path,
             resources=original.resources,
         )
 

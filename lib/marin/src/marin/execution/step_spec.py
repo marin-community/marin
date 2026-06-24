@@ -117,6 +117,24 @@ class StepSpec:
             return self.override_output_path
         return f"{prefix}/{self.name_with_hash}"
 
+    @cached_property
+    def executor_override_path(self) -> str:
+        """The ``override_output_path`` to pin on the converted ``ExecutorStep``.
+
+        Region-portable counterpart to :attr:`output_path`. When this StepSpec
+        has no explicit ``output_path_prefix``, this returns a *relative* path
+        (so the executor joins it with the run-region prefix lazily on the
+        worker) instead of freezing the import environment's ``marin_prefix()``.
+        With an explicit prefix or an already-absolute override, it matches
+        :attr:`output_path` exactly.
+        """
+        if self.override_output_path is not None and not _is_relative_path(self.override_output_path):
+            return self.override_output_path
+        suffix = self.override_output_path if self.override_output_path is not None else self.name_with_hash
+        if self.output_path_prefix is not None:
+            return f"{self.output_path_prefix}/{suffix}"
+        return suffix
+
     def as_executor_step(self) -> ExecutorStep:
         """Convert to an ``ExecutorStep`` for use in ``Executor.run()`` pipelines.
 
@@ -136,7 +154,7 @@ class StepSpec:
             name=self.name,
             fn=self.fn,
             config=config,
-            override_output_path=self.output_path,
+            override_output_path=self.executor_override_path,
             resources=self.resources,
         )
         # ExecutorStep is frozen; object.__setattr__ stashes the original

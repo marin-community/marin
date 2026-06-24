@@ -330,6 +330,40 @@ def test_step_spec_as_executor_step_round_trip():
     assert resolved.resources == step.resources
 
 
+def test_step_spec_as_executor_step_resolves_region_lazily(monkeypatch):
+    """A StepSpec converted with no explicit prefix must not freeze the import
+    region: the executor should place it under the run-region prefix.
+
+    Regression for marin-community/marin#6614: ``as_executor_step()`` pinned an
+    absolute override resolved from the import-time ``marin_prefix()``, and the
+    round-trip re-pinned that frozen path — so a run launched into a different
+    region tripped the cross-region guard.
+    """
+    # Simulate module import under us-central1: build the StepSpec and force its
+    # ``output_path`` cached_property to resolve there.
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
+    step = StepSpec(name="uncheatable_eval", hash_attrs={"source": "wikipedia_english"})
+    assert step.output_path.startswith("gs://marin-us-central1/")
+
+    executor_step = step.as_executor_step()
+    # The pinned override must be relative (region-portable), not the frozen path.
+    assert executor_step.override_output_path == step.name_with_hash
+    assert not executor_step.override_output_path.startswith("gs://")
+
+    # "Launch" into us-east5: both the executor-computed path and the round-trip
+    # StepSpec must follow the run region, not the frozen import region.
+    executor = Executor(
+        prefix="gs://marin-us-east5",
+        executor_info_base_path="gs://marin-us-east5/experiments",
+    )
+    executor.compute_version(executor_step, is_pseudo_dep=False)
+    run_path = executor.output_paths[executor_step]
+    assert run_path == f"gs://marin-us-east5/{step.name_with_hash}"
+
+    resolved = resolve_executor_step(executor_step, config={}, output_path=run_path, deps=[])
+    assert resolved.output_path == run_path
+
+
 def _build_three_level_dag(prefix: str) -> tuple[StepSpec, StepSpec, StepSpec]:
     """download → normalize → tokenize, all rooted at ``prefix``."""
     download = StepSpec(
