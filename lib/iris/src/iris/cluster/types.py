@@ -27,7 +27,7 @@ import cloudpickle
 import humanfriendly
 from rigging.timing import Timestamp
 
-from iris.cluster.setup import default_setup_script, iris_runtime_setup_script
+from iris.cluster.setup import default_setup_script
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -641,12 +641,12 @@ class EnvironmentSpec:
     sync_packages: Sequence[str] | None = None
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
-        """Convert to wire format, resolving the setup scripts.
+        """Convert to wire format, resolving the user setup scripts.
 
         ``setup_scripts=None`` builds the default uv-sync script from
-        extras/pip/sync_packages; a list is used verbatim. Either way, iris's own
-        runtime-deps script is appended so iris features keep working. ``[]`` runs
-        no setup at all.
+        extras/pip/sync_packages; a list is used verbatim; ``[]`` is no setup. The
+        wire carries only this user list — iris appends its own runtime-deps script
+        when assembling the command (see ``build_runtime_entrypoint``).
         """
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
@@ -657,31 +657,21 @@ class EnvironmentSpec:
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
-        py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-        quiet = not merged_env_vars.get("IRIS_DEBUG_UV_SYNC")
-
         if self.setup_scripts is None:
-            user_scripts = [
+            py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+            setup_scripts = [
                 default_setup_script(
                     extras=list(self.extras or []),
                     pip_packages=list(self.pip_packages or []),
                     python_version=py_version,
                     packages=list(self.sync_packages or []) or None,
-                    quiet=quiet,
+                    quiet=not merged_env_vars.get("IRIS_DEBUG_UV_SYNC"),
                 )
             ]
         else:
-            user_scripts = [s for s in self.setup_scripts if s.strip()]
+            setup_scripts = [s for s in self.setup_scripts if s.strip()]
 
-        setup_scripts = [*user_scripts, iris_runtime_setup_script(quiet=quiet)] if user_scripts else []
-
-        return job_pb2.EnvironmentConfig(
-            pip_packages=list(self.pip_packages or []),
-            env_vars=merged_env_vars,
-            extras=list(self.extras or []),
-            python_version=py_version,
-            setup_scripts=setup_scripts,
-        )
+        return job_pb2.EnvironmentConfig(env_vars=merged_env_vars, setup_scripts=setup_scripts)
 
 
 class Namespace(str):

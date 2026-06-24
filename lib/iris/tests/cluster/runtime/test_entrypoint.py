@@ -5,23 +5,27 @@
 
 import pytest
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
+from iris.cluster.setup import iris_runtime_setup_script
 from iris.cluster.types import Entrypoint
 from iris.rpc import job_pb2
 
 
 @pytest.mark.parametrize(
-    "setup_scripts, expected_setup_commands",
+    "setup_scripts, expected_user_commands",
     [
-        (["a", "b"], ["a", "b"]),  # resolved scripts pass through in order
+        (["a", "b"], ["a", "b"]),  # user scripts pass through in order
         (["a", "  ", ""], ["a"]),  # whitespace-only scripts are dropped
-        ([], []),  # no setup => no build phase; command runs in the image as-is
+        ([], []),  # no setup => no build phase at all (not even the iris script)
     ],
 )
-def test_setup_scripts_become_setup_commands(setup_scripts, expected_setup_commands):
+def test_setup_scripts_become_setup_commands(setup_scripts, expected_user_commands):
     ep = Entrypoint(command=["python", "train.py"], workdir_files={})
     rt = build_runtime_entrypoint(ep, job_pb2.EnvironmentConfig(setup_scripts=setup_scripts))
 
-    assert list(rt.setup_commands) == expected_setup_commands
+    # iris appends its own runtime-deps script as the final step whenever any user
+    # setup runs, so its features work regardless of what the user setup does.
+    expected = [*expected_user_commands, iris_runtime_setup_script()] if expected_user_commands else []
+    assert list(rt.setup_commands) == expected
     assert list(rt.run_command.argv) == ["python", "train.py"]
 
 

@@ -106,11 +106,13 @@ See https://github.com/marin-community/marin/issues/3859 for context.
 Before running the command, the worker runs a **list of setup scripts** to prepare
 the environment. Execution is pure mechanism: the worker runs whatever scripts it
 is handed, one at a time, and never decides anything. The list is resolved on the
-**client** side in `EnvironmentSpec.to_proto()`; the builders live in
-`iris.cluster.setup` (`default_setup_script`, `iris_runtime_setup_script`,
-re-exported from `iris.client` and `fray`), out of the execution path.
+**client** side: `EnvironmentSpec.to_proto()` resolves the user scripts (the default
+uv-sync, or your list) onto the wire, and `build_runtime_entrypoint` appends iris's
+own deps as a final step. The builders live in `iris.cluster.setup`
+(`default_setup_script`, `iris_runtime_setup_script`, re-exported from `iris.client`
+and `fray`), out of the execution path.
 
-The list is always `[<user setup…>, iris_runtime_setup_script()]`: iris's own deps
+What runs is `[<user setup…>, iris_runtime_setup_script()]`: iris's own deps
 (cloudpickle for callable entrypoints, py-spy/memray for the profiler) are a
 separate, final step rather than spliced into the user's script — never conflated.
 That step is best-effort: it installs into `$IRIS_VENV` only if a venv exists and
@@ -129,7 +131,6 @@ swallows failures, so a non-Python image is left untouched.
 Each script runs with the task's `IRIS_*` env available, so it can parameterize
 itself: `IRIS_WORKDIR` (workspace root), `IRIS_VENV` / `UV_PROJECT_ENVIRONMENT`
 (canonical venv the run phase activates), `IRIS_PYTHON`, `IRIS_BUNDLE_ID`,
-`IRIS_JOB_EXTRAS` / `IRIS_JOB_PIP_PACKAGES` (JSON; absent ⇒ treat as `[]`),
 `IRIS_TASK_RESOURCES`. A setup script should create the venv at `$IRIS_VENV`; the
 run phase activates it only if it exists. Backends run each script as its own step
 (`render_setup_steps`) so a failure points at the exact script.
@@ -139,9 +140,11 @@ setup script's `export FOO=bar` does **not** reach the running command — use
 `env_vars` for runtime environment. Setup scripts should only mutate the shared
 `/app` workdir (e.g. create the venv).
 
-Child jobs inherit the parent's `extras`/`pip_packages` and rebuild their own
-default script from them; custom `setup_scripts` are not inherited, so a child that
-needs a bring-your-own-env setup passes its own.
+Child jobs inherit the parent's resolved `setup_scripts` so they land in the same
+environment. A child that specifies its own setup — explicit `setup_scripts`, or
+builder inputs like `extras`/`sync_packages` — takes control and does not inherit;
+one that specifies only `env_vars` (or nothing) reuses the parent's. Inheritance
+rides on `IRIS_JOB_SETUP_SCRIPTS` (JSON; absent ⇒ no parent).
 
 See https://github.com/marin-community/marin/issues/6595 for context.
 
