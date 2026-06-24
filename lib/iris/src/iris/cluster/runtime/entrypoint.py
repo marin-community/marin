@@ -3,14 +3,10 @@
 
 """Assemble a user-facing Entrypoint + EnvironmentConfig into a RuntimeEntrypoint.
 
-The RuntimeEntrypoint separates the setup script (environment preparation) from
-the user's actual command. This lets each runtime handle them appropriately:
-- DockerRuntime runs the setup script in a build container to create the venv
-- ProcessRuntime skips setup since the host env is already configured
-
-The setup scripts are already resolved client-side (``EnvironmentConfig.setup_scripts``);
-this only carries them into ``setup_commands`` (empty for no setup). Nothing here
-interprets them.
+The RuntimeEntrypoint keeps the setup script separate from the user's command so
+each runtime can handle setup as it needs (DockerRuntime runs it in a build
+container; ProcessRuntime skips it). Setup scripts are resolved client-side in
+``EnvironmentConfig.setup_scripts`` and carried through verbatim.
 """
 
 from iris.cluster.types import Entrypoint

@@ -3,31 +3,26 @@
 
 """Build the per-task setup scripts that prepare a worker's environment.
 
-These are client-side helpers: the submitter resolves the scripts and ships them
-to the worker, which runs them in order before the command (the worker never
-builds or interprets them). The default environment is two distinct scripts so
-iris's own requirements stay separate from the user's project setup:
+Client-side helpers: the submitter resolves the scripts and ships them to the
+worker, which runs them in order before the command. The default environment is
+two distinct scripts so iris's requirements stay separate from the user's project:
 
 - ``default_setup_script`` syncs the user's workspace (``uv sync`` + extras + pip).
-- ``iris_runtime_setup_script`` installs iris's own runtime deps (cloudpickle for
+- ``iris_runtime_setup_script`` installs iris's runtime deps (cloudpickle for
   callable entrypoints, py-spy/memray for the profiler) into the same venv.
 
-A caller that wants a different environment passes its own scripts and bypasses
-both — a custom user script is never mixed with iris's runtime deps. An empty list
-means no setup at all (bring-your-own image).
+A caller can pass its own scripts to bypass both; an empty list means no setup at
+all (bring-your-own image).
 
-The scripts run with the task's ``IRIS_*`` environment available (see
-``build_common_iris_env``) and populate the venv at ``$IRIS_VENV`` without
-activating it. The run phase activates ``$IRIS_VENV`` if it exists, so a custom or
-empty setup that leaves no venv simply runs in the image's own environment.
+The scripts run with the task's ``IRIS_*`` environment available and populate the
+venv at ``$IRIS_VENV`` without activating it. The run phase activates ``$IRIS_VENV``
+if it exists, so a setup that leaves no venv runs in the image's own environment.
 """
 
 import shlex
 from collections.abc import Sequence
 
-# Iris's own runtime deps: cloudpickle for callable entrypoints, py-spy/memray for
-# the profiler attach paths. Installed separately from the user's project so they
-# are never conflated with user-declared dependencies.
+# cloudpickle for callable entrypoints, py-spy/memray for the profiler attach paths.
 _IRIS_RUNTIME_DEPS = ("cloudpickle", "py-spy", "memray")
 
 
@@ -126,10 +121,9 @@ def iris_runtime_setup_script(*, quiet: bool = True) -> str:
     """Render the script that installs iris's own runtime deps into ``$IRIS_VENV``.
 
     Installs cloudpickle (callable entrypoints) and py-spy/memray (the profiler)
-    so iris features work without the user declaring them. This is best-effort and
-    never fails the job: it is skipped unless a venv exists (so a bring-your-own
-    image is left untouched rather than getting a stray shadowing venv) and a
-    failed install only warns. A task running in a non-Python image is unaffected.
+    so iris features work without the user declaring them. Best-effort: skipped
+    unless a venv exists (a bring-your-own image is left untouched) and a failed
+    install only warns, so it never fails the job.
     """
     quiet_flag = "--quiet" if quiet else ""
     pkgs = " ".join(shlex.quote(p) for p in _IRIS_RUNTIME_DEPS)

@@ -463,7 +463,7 @@ class DockerContainerHandle:
 
         # Run from the workdir (matching the k8s task script) and activate the venv
         # only when a setup script left one, so a bring-your-own-env command runs in
-        # the image as-is rather than failing on a missing .venv.
+        # the image as-is instead of failing on a missing .venv.
         run_script = f"""#!/bin/bash
 set -e
 cd "$IRIS_WORKDIR"
