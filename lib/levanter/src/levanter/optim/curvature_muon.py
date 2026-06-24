@@ -11,14 +11,17 @@ Per matrix ``W`` (oriented so rows ≥ cols), the orthogonal update direction ap
 via the inner Newton–Schulz fixed point
 
     X⁽⁰⁾   = msign(N_t)
-    X⁽ᵏ⁺¹⁾ = msign( N_t + (c_t I − λ P_t) X⁽ᵏ⁾ ),     c_t = α·λ·λ̂_max(P_t)  (one power iteration)
+    X⁽ᵏ⁺¹⁾ = msign( N_t + λ·(√e_max·I − P_t/√e_max)·X⁽ᵏ⁾ ),   e_max = λ_max(P_t)  (power iteration)
 
-``msign`` is the usual Muon Newton–Schulz orthogonalization. The curvature enters only through matmuls
-and one power iteration — no eigendecomposition. The resulting ``X_t`` is then mapped through the MuonH
-hyperball (scale-invariant, constant-Frobenius-norm) reparam instead of the ``√(Out/In)`` scaling.
+``msign`` is the usual Muon Newton–Schulz orthogonalization. The operator ``√e_max·I − P_t/√e_max`` is
+**PSD** (eigenvalues ``(e_max − p_i)/√e_max ≥ 0``: ``√e_max`` in flat directions, ``0`` in the top-curvature
+one), so the fixed point is a contraction — **stable at any λ, no α shift needed**. And ``P/√e_max`` has
+gradient units (``P ~ G²`` ⟹ ``P/√e_max ~ G``), matching ``N``, so **λ is dimensionless** (no ``‖N‖``
+factor) and its LR coupling is unambiguous. Curvature enters only through matmuls + a power iteration —
+no eigendecomposition. ``X_t`` is then mapped through the MuonH hyperball (scale-invariant,
+constant-Frobenius-norm) reparam instead of ``√(Out/In)`` scaling.
 
-λ = 0 ⟹ c_t = 0 and this is exactly MuonH (Nesterov Muon + hyperball). K = 1 is a single curvature-
-corrected polishing step on top of Muon.
+λ = 0 ⟹ exactly MuonH (Nesterov Muon + hyperball). K = 1 is a single curvature-corrected polishing step.
 """
 
 import dataclasses
@@ -60,14 +63,15 @@ class CurvatureMuonConfig(OptimizerConfig):
     max_grad_norm: float = 1.0
     coefficient_type: CoefficientType = "quintic"
     # --- curvature knobs ---
+    # Inner fixed point: X = msign( N + λ·(√e_max·I − P/√e_max)·X ), P = EMA(G Gᵀ), e_max = λ_max(P).
+    # The operator √e_max·I − P/√e_max is PSD (eigenvalues (e_max−p_i)/√e_max ≥ 0; 0 in the top-curvature
+    # direction, √e_max in flat ones), so the iteration is a contraction — stable at any λ (no α needed).
+    # P/√e_max has gradient units (P~G², so P/√e_max~G), matching N, so λ is dimensionless and its LR
+    # coupling is clean (no ‖N‖ factor). λ=0 ⟹ MuonH.
     curvature_beta: float = 0.95  # ρ, EMA decay of P = EMA(G Gᵀ)
     curvature_lambda: float = 0.0  # λ, curvature strength (0 ⟹ MuonH)
-    curvature_alpha: float = 1.5  # α ≥ 1, shift safety so the operator ⪰ 0
     inner_steps: int = 1  # K, inner fixed-point iterations
-    # The literal spec's operator (c I − λ P) = λ·λ̂_max·(α I − P/λ̂_max) is in 1/gradient units, so a
-    # fixed λ is scale-fragile. normalize_curvature renders it dimensionless per-matrix by using the
-    # coefficient λ·‖N‖ instead of λ·λ̂_max (operator = λ‖N‖(α I − P/λ̂_max)), so λ~O(1) is meaningful.
-    normalize_curvature: bool = True
+    power_iters: int = 8  # power-iteration steps for the e_max(P) estimate (warm-started from stored q)
     # If set, the curvature strength tracks the LR schedule: lambda_t = curvature_lambda * lr_t / peak_lr.
     # So curvature is strongest at peak LR and fades during warmup / cosine decay (curvature_lambda = peak).
     lambda_tracks_lr: bool = False
@@ -91,9 +95,8 @@ class CurvatureMuonConfig(OptimizerConfig):
                         self.coefficient_type,
                         self.curvature_beta,
                         self.curvature_lambda,
-                        self.curvature_alpha,
                         self.inner_steps,
-                        self.normalize_curvature,
+                        self.power_iters,
                         self.learning_rate,
                         self.lambda_tracks_lr,
                     )
@@ -148,12 +151,15 @@ class ScaleByCurvatureMuonState(NamedTuple):
     power_vec: optax.Updates  # q, flattened-linear tree of [..., M]
 
 
-def _curv_direction_2d(g, n, p, q, *, rho, lam_static, lam_coef, alpha, steps, eps, ctype, inner_steps, normalize):
+_EMAX_MARGIN = 1.05  # inflate the (lower-bound) Rayleigh e_max estimate so the operator stays strictly PSD
+
+
+def _curv_direction_2d(g, n, p, q, *, rho, lam_static, lam_coef, steps, eps, ctype, inner_steps, power_iters):
     """One matrix. g, n: [out, in] (gradient, Nesterov signal). p: [M, M], q: [M], M = max(out, in).
 
-    lam_static (python float) is the on/off / peak strength used for the static branch; lam_coef is the
-    actual coefficient (may be a traced scalar when it tracks the LR schedule).
-    Returns (new_p, new_q, x) with x in the original [out, in] orientation.
+    Inner fixed point X = msign( N + λ·(√e_max·I − P/√e_max)·X ). lam_static (python float) gates on/off;
+    lam_coef is the actual coefficient (a traced scalar when it tracks the LR schedule).
+    e_max(P) via a warm-started multi-step power iteration. Returns (new_p, new_q, x) in [out, in] orient.
     """
     out, inn = g.shape
     transpose = out < inn
@@ -161,20 +167,18 @@ def _curv_direction_2d(g, n, p, q, *, rho, lam_static, lam_coef, alpha, steps, e
     n_t = n.T if transpose else n
 
     new_p = rho * p + (1.0 - rho) * (g_t @ g_t.T)  # [M, M]
-    pq = new_p @ q
-    new_q = pq / (jnp.linalg.norm(pq) + eps)
-    ell = jnp.dot(new_q, new_p @ new_q)  # Rayleigh estimate of λ_max(P)
+    new_q = q
+    for _ in range(int(power_iters)):
+        pq = new_p @ new_q
+        new_q = pq / (jnp.linalg.norm(pq) + eps)
+    # Rayleigh quotient lower-bounds λ_max; inflate by the margin so √e_max·I − P/√e_max is strictly PSD.
+    emax = jnp.dot(new_q, new_p @ new_q) * _EMAX_MARGIN
+    se = jnp.sqrt(emax) + eps
 
     x = zeropower_via_newtonschulz5(n_t, steps=steps, eps=eps, coefficient_type=ctype)
     if lam_static > 0.0:
         eye = jnp.eye(new_p.shape[0], dtype=new_p.dtype)
-        if normalize:
-            # dimensionless: operator = λ·‖N‖·(α I − P/λ̂_max)
-            coef = lam_coef * jnp.linalg.norm(n_t)
-            operator = coef * (alpha * eye - new_p / (ell + eps))
-        else:
-            # literal spec: (c I − λ P), c = α λ λ̂_max
-            operator = (alpha * lam_coef * ell) * eye - lam_coef * new_p
+        operator = lam_coef * (se * eye - new_p / se)  # PSD: λ(√e_max I − P/√e_max)
         for _ in range(int(inner_steps)):
             x = zeropower_via_newtonschulz5(n_t + operator @ x, steps=steps, eps=eps, coefficient_type=ctype)
 
@@ -191,9 +195,8 @@ def scale_with_curvature_muon(
     coefficient_type="quintic",
     curvature_beta=0.95,
     curvature_lambda=0.0,
-    curvature_alpha=1.5,
     inner_steps=1,
-    normalize_curvature=True,
+    power_iters=8,
     peak_lr=0.02,
     lambda_tracks_lr=False,
 ):
@@ -201,8 +204,6 @@ def scale_with_curvature_muon(
     mu = float(momentum)
     rho = float(curvature_beta)
     lam = float(curvature_lambda)  # static peak strength (also the on/off switch)
-    alpha = float(curvature_alpha)
-    normalize = bool(normalize_curvature)
     peak_lr = float(peak_lr)
     tracks_lr = bool(lambda_tracks_lr)
 
@@ -268,12 +269,11 @@ def scale_with_curvature_muon(
                 rho=rho,
                 lam_static=lam,
                 lam_coef=lam_coef,
-                alpha=alpha,
                 steps=steps,
                 eps=muon_eps,
                 ctype=coefficient_type,
                 inner_steps=inner_steps,
-                normalize=normalize,
+                power_iters=power_iters,
             )
             new_p, new_q, x = jax.vmap(fn)(g, n, p, q) if g.ndim == 3 else fn(g, n, p, q)
             new_w = dataclasses.replace(n_layer.weight, array=x)
