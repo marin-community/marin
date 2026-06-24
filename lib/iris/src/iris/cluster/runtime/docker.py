@@ -55,6 +55,7 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import config_pb2, job_pb2
+from iris.rpc.proto_display import resolve_container_profile
 
 logger = logging.getLogger(__name__)
 
@@ -162,8 +163,10 @@ def _has_tpu_device(config: ContainerConfig) -> bool:
 def _build_device_flags(config: ContainerConfig) -> list[str]:
     """Build Docker device flags based on resource configuration.
 
-    Detects TPU resources and returns appropriate Docker flags for TPU passthrough.
-    Returns empty list if no special device configuration is needed.
+    Detects TPU resources and returns the Docker flags for TPU passthrough: large
+    shared memory, the locked-memory ulimit, and the SYS_RESOURCE capability for
+    memlock. Privilege (``--privileged``) is handled by the security-profile flags,
+    not here. Returns an empty list when no special device configuration is needed.
     """
     flags: list[str] = []
 
@@ -178,7 +181,6 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
     if has_tpu:
         flags.extend(
             [
-                "--privileged",
                 "--shm-size=100g",
                 "--cap-add=SYS_RESOURCE",
                 "--ulimit",
@@ -186,6 +188,33 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
             ]
         )
         logger.info("TPU device flags: %s", flags)
+
+    return flags
+
+
+def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
+    """Docker security flags (privilege, capabilities, docker-socket mount).
+
+    A TPU run requires ``--privileged`` for device access regardless of profile,
+    so on TPU even RESTRICTED/DEFAULT run privileged.
+    """
+    resolved = resolve_container_profile(profile)
+    privileged = resolved == job_pb2.CONTAINER_PROFILE_PRIVILEGED or is_tpu_run
+
+    flags: list[str] = []
+    if privileged:
+        flags.append("--privileged")
+    else:
+        flags.extend(["--security-opt", "no-new-privileges", "--cap-drop", "ALL"])
+
+    # SYS_PTRACE lets py-spy attach via `docker exec`. RESTRICTED deliberately
+    # omits it; every other profile adds it back (a privileged container nominally
+    # has it, but exec'd processes don't reliably inherit it).
+    if resolved != job_pb2.CONTAINER_PROFILE_RESTRICTED:
+        flags.extend(["--cap-add", "SYS_PTRACE"])
+
+    if resolved == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS:
+        flags.extend(["-v", "/var/run/docker.sock:/var/run/docker.sock"])
 
     return flags
 
@@ -580,8 +609,13 @@ exec {quoted_cmd}
         ]
         is_tpu_run = include_devices and _has_tpu_device(config)
 
-        if not is_tpu_run:
-            cmd.extend(["--security-opt", "no-new-privileges"])
+        cmd.extend(_security_flags(config.container_profile, is_tpu_run))
+        logger.info(
+            "Container security profile %s (tpu_run=%s) for task %s",
+            job_pb2.ContainerProfile.Name(resolve_container_profile(config.container_profile)),
+            is_tpu_run,
+            config.task_id,
+        )
 
         # Run as the owner of bind-mounted directories
         user_flag = _detect_mount_user(self._resolved_mounts)
@@ -598,12 +632,6 @@ exec {quoted_cmd}
         if config.network_mode != "host":
             for key, value in _NETWORK_SYSCTLS.items():
                 cmd.extend(["--sysctl", f"{key}={value}"])
-
-        if not is_tpu_run:
-            cmd.extend(["--cap-drop", "ALL"])
-        # Always add SYS_PTRACE so py-spy can attach via docker exec regardless of TPU/CPU.
-        # TPU containers use --privileged but docker exec processes don't reliably inherit it.
-        cmd.extend(["--cap-add", "SYS_PTRACE"])
 
         # Device flags (TPU passthrough etc) - only for run container
         if include_devices:

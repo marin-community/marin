@@ -116,6 +116,11 @@ message Controller {
     // Nested submissions (is_root == false) are exempt. Empty string is
     // interpreted as FEATURE_INTRODUCTION_DATE — see service.py.
     string client_revision_date = 36;
+
+    // Requested container security profile. UNSPECIFIED => DEFAULT. Elevated
+    // profiles (DOCKER_ACCESS, PRIVILEGED) require the admin role at submission
+    // when auth is enabled; see service.LaunchJob.
+    iris.job.ContainerProfile container_profile = 37;
   }
 
   message LaunchJobResponse {
