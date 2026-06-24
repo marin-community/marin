@@ -1,35 +1,22 @@
 {
   "added_variants": [
-    "moe_pp",
-    "moe_zb"
+    "moe_pp"
   ],
   "base_sha": "792df2bcba18cb2c9ea07e4f185cadf68e99c08d",
-  "head_sha": "277ed63a9391e0f04761fd09d90ec03f01cd6534",
-  "report_count": 2,
+  "head_sha": "74d9ef649119c601a8b1bf944db13e56eb5db6c3",
+  "report_count": 1,
   "reports": [
     {
       "closest_variant": "modular_opt",
-      "distance_score": 4101,
+      "distance_score": 2425,
       "report_relpath": "moe_pp/index.html",
       "status_counts": {
-        "added": 9,
+        "added": 4,
         "changed": 0,
         "removed": 3,
         "unchanged": 1
       },
       "variant": "moe_pp"
-    },
-    {
-      "closest_variant": "modular_opt",
-      "distance_score": 3470,
-      "report_relpath": "moe_zb/index.html",
-      "status_counts": {
-        "added": 8,
-        "changed": 2,
-        "removed": 1,
-        "unchanged": 1
-      },
-      "variant": "moe_zb"
     }
   ]
 }
