@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 
 if "XLA_FLAGS" not in os.environ:
@@ -44,13 +45,14 @@ import numpy as np
 import optax
 from haliax.partitioning import set_mesh
 from iris.runtime.jax_init import initialize_jax
-from jax.sharding import NamedSharding, reshard
-from jax.sharding import PartitionSpec as P
+from jax.sharding import NamedSharding
 from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 from experiments.grug.moe_pp.oracle import oracle_loss
 from experiments.grug.moe_pp.pipeline import (
+    _embed_in_specs,
+    _is_pspec,
     _stage_in_specs,
     ep_pipeline_mesh,
     pipeline_value_and_grad_ep_microbatched,
@@ -160,20 +162,22 @@ def bench_pipeline(
     Runs the inline ring-EP pipeline (:func:`pipeline_value_and_grad_ep_microbatched`)
     under an :func:`ep_pipeline_mesh` -- ``stage`` / ``expert`` / ``data`` all manual so
     the megablox GMM lowers on TPU and the FSDP weight-grad reduce over ``data`` is
-    inserted by the single shard_map's transpose. The model is initialized under a
-    ``compact_grug_mesh(stage_axis_size=stage)`` (the init-time weight sharding) and the
-    value_and_grad runs under the EP mesh. The global batch is ``num_microbatches *
-    microbatch``; each microbatch's batch dim shards over both ``expert`` and ``data``.
+    inserted by the single shard_map's transpose. Init, stacking, and placement all run
+    under the EP mesh inside one ``jax.jit`` whose ``out_shardings`` are the pipeline's
+    FSDP in-specs, so XLA materializes the params already ZeRO-3-sharded on the run mesh
+    -- there is NO cross-``Mesh`` reshard that would fully replicate the stacked expert
+    weights on one device. The global batch is ``num_microbatches * microbatch``; each
+    microbatch's batch dim shards over both ``expert`` and ``data``.
     """
-    init_mesh = compact_grug_mesh(expert_axis_size=expert, replica_axis_size=1, model_axis_size=1, stage_axis_size=stage)
     run_mesh = ep_pipeline_mesh(stage=stage, expert=expert, replica=1, data=data)
     weight_microbatches = jnp.ones((num_microbatches, microbatch, seq_len), dtype=jnp.float32)
     optimizer = optax.adamw(LR)
 
-    with set_mesh(init_mesh):
+    def _init_full():
+        """Init the model and split off its stacked blocks + embed/head arrays."""
         model = Transformer.init(cfg, key=jax.random.PRNGKey(seed))
         stage_arrays, block_static = stack_blocks_for_stages(model, stage)
-        embed_arrays, _ = eqx.partition(
+        embed_arrays, embed_static = eqx.partition(
             (
                 model.token_embed,
                 model.embed_norm,
@@ -184,44 +188,39 @@ def bench_pipeline(
             ),
             eqx.is_array,
         )
+        return embed_arrays, stage_arrays, block_static, embed_static, model
 
     with set_mesh(run_mesh):
-        # The params, optimizer state, and grads must all live on the run mesh: the EP
-        # value_and_grad reshards its inputs to the run mesh internally and returns grads
-        # there, so reshard the init-mesh params to the run mesh's in-specs (embed/head
-        # replicated, blocks stage-sharded with expert-sharded MLP weights) up front so
-        # optax never mixes the all-Explicit init aval mesh with the run mesh.
-        stage_in_specs = _stage_in_specs(stage_arrays)
-        embed_in_specs = jax.tree_util.tree_map(lambda _: P(), embed_arrays)
-        embed_arrays = jax.tree_util.tree_map(
-            lambda x, spec: reshard(x, NamedSharding(run_mesh, spec)), embed_arrays, embed_in_specs
+        # Trace init once to learn the leaf structure, the (static) block / embed trees, and
+        # a model template for the step closure. These static leaves carry no arrays, so
+        # eval_shape returns them intact; the abstract `model_template` is only ever used as
+        # the `eqx.tree_at` target whose embed/head leaves are replaced (its abstract blocks
+        # are read only for `len`).
+        embed_shapes, stage_shapes, block_static, embed_static, model_template = jax.eval_shape(_init_full)
+        stage_in_specs = _stage_in_specs(stage_shapes)
+        embed_in_specs = _embed_in_specs(embed_shapes)
+
+        def _to_sharding(spec):
+            return NamedSharding(run_mesh, spec)
+
+        out_shardings = (
+            jax.tree_util.tree_map(_to_sharding, embed_in_specs, is_leaf=_is_pspec),
+            jax.tree_util.tree_map(_to_sharding, stage_in_specs, is_leaf=_is_pspec),
         )
-        stage_arrays = jax.tree_util.tree_map(
-            lambda x, spec: reshard(x, NamedSharding(run_mesh, spec)), stage_arrays, stage_in_specs
-        )
-        # The trainable leaves are the replicated embed/norm/head tuple and the
-        # stage-sharded stacked blocks -- the exact two grad groups the EP pipeline
-        # value_and_grad returns.
+
+        # Init + stack + place in ONE jitted program whose out_shardings are the FSDP
+        # in-specs: XLA materializes the params already ZeRO-3-sharded on the run mesh, so
+        # there is no cross-`Mesh` reshard that fully replicates the stacked expert weights.
+        embed_arrays, stage_arrays = jax.jit(lambda: _init_full()[:2], out_shardings=out_shardings)()
+        # The trainable leaves are the embed/norm/head tuple and the stacked blocks -- the
+        # exact two grad groups the EP pipeline value_and_grad returns, already FSDP-sharded.
         params = (embed_arrays, stage_arrays)
         opt_state = optimizer.init(params)
 
         @jax.jit
         def step(params, opt_state, tokens):
             embed_arrays, stage_arrays = params
-            host = eqx.combine(
-                embed_arrays,
-                eqx.partition(
-                    (
-                        model.token_embed,
-                        model.embed_norm,
-                        model.embed_gated_norm,
-                        model.final_norm,
-                        model.final_gated_norm,
-                        model.output_proj,
-                    ),
-                    eqx.is_array,
-                )[1],
-            )
+            host = eqx.combine(embed_arrays, embed_static)
             # Rebuild a Transformer carrying the (possibly updated) embed/norm/head
             # leaves so the pipeline reads the current head params.
             updated_model = eqx.tree_at(
@@ -233,7 +232,7 @@ def bench_pipeline(
                     t.final_gated_norm,
                     t.output_proj,
                 ),
-                model,
+                model_template,
                 host,
             )
             loss, g_embed, g_stage = pipeline_value_and_grad_ep_microbatched(
@@ -261,6 +260,33 @@ def bench_pipeline(
             )
 
         last_loss = jnp.zeros(())
+
+        compiled_step = step.lower(params, opt_state, data_fn(0)).compile()
+        ma = compiled_step.memory_analysis()
+        logger.info(
+            "STEP_MEMORY temp=%.2fGiB args=%.2fGiB output=%.2fGiB host_temp=%.2fGiB",
+            ma.temp_size_in_bytes / 2**30,
+            ma.argument_size_in_bytes / 2**30,
+            ma.output_size_in_bytes / 2**30,
+            getattr(ma, "host_temp_size_in_bytes", 0) / 2**30,
+        )
+        hlo_text = compiled_step.as_text()
+        floor = int(os.environ.get("BIG_BUF_FLOOR_MB", "4096")) * 2**20
+        big = []
+        for line in hlo_text.splitlines():
+            m = re.search(r"= (f32|bf16)\[([\d,]+)\]", line)
+            if not m:
+                continue
+            dims = [int(x) for x in m.group(2).split(",") if x]
+            n = 1
+            for d in dims:
+                n *= d
+            bytes_ = n * (2 if m.group(1) == "bf16" else 4)
+            if bytes_ >= floor:
+                big.append((bytes_, line.strip()[:240]))
+        big.sort(reverse=True)
+        for bytes_, line in big[:10]:
+            logger.info("BIG_BUF %.3fGiB %s", bytes_ / 2**30, line)
 
         def step_fn(state, tokens):
             nonlocal last_loss
